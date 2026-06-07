@@ -1,0 +1,104 @@
+{
+  "watchlist": [
+    {
+      "id": "perm-train-acela-2171",
+      "identifier": "2171",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2173",
+      "identifier": "2173",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2167",
+      "identifier": "2167",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2163",
+      "identifier": "2163",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2121",
+      "identifier": "2121",
+      "route_name": "Acela",
+      "origin": "NYP",
+      "destination": "WAS",
+      "notes": "Recurring daily NYP-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2159",
+      "identifier": "2159",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-acela-2155",
+      "identifier": "2155",
+      "route_name": "Acela",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-regional-175",
+      "identifier": "175",
+      "route_name": "Northeast Regional",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela/Regional",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-regional-137",
+      "identifier": "137",
+      "route_name": "Northeast Regional",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela/Regional",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-regioanl-173",
+      "identifier": "173",
+      "route_name": "Northeast Regional",
+      "origin": "BOS",
+      "destination": "WAS",
+      "notes": "Recurring daily BOS-WAS Acela/Regional",
+      "added": "2026-05-27",
+      "added_by": "operator"
+    }
+  ]
+}
