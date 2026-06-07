@@ -1,0 +1,17 @@
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-poller" \
+      org.opencontainers.image.description="Corporate Travel DC Dispatch — poller + skill scheduler"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+COPY src/ .
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+
+CMD ["python3", "-m", "poller.main"]
