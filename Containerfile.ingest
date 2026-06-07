@@ -1,0 +1,25 @@
+FROM python:3.13-slim
+LABEL org.opencontainers.image.title="corporatetraveldc-ingest" \
+      org.opencontainers.image.description="Corporate Travel DC Dispatch — SWIM NMS + NWWS-OI push ingest"
+
+WORKDIR /app
+
+# Install common dependencies first (cached layer).
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+# Install ingest-specific dependencies (solace-pubsubplus, etc.).
+# Copied before COPY src/ so this layer is cached independently.
+COPY src/ingest/requirements.txt ingest-requirements.txt
+RUN pip install --no-cache-dir -r ingest-requirements.txt
+
+# Install CA certs needed for TLS to ems2.swim.faa.gov.
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY src/ .
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+CMD ["python3", "-m", "ingest.main"]
