@@ -1,0 +1,122 @@
+{
+  "watchlist": [
+    {
+      "id": "perm-flight-ual357",
+      "identifier": "UAL357",
+      "origin": "KSFO",
+      "destination": "KIAD",
+      "route_name": "United SFO-IAD",
+      "notes": "Bellweather flight. United A320. SFO T3 dep ~21:30 PDT / IAD arr ~05:53 EDT.",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-25-3200",
+      "identifier": "25-3200",
+      "origin": "KADW",
+      "route_name": "VC-25B",
+      "notes": "New AF1. Hex: af83e8",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-98-0002",
+      "identifier": "98-0002",
+      "origin": "KADW",
+      "route_name": "VC-25A",
+      "notes": "AF2. Hex: adfeb8",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-82-8000",
+      "identifier": "82-8000",
+      "origin": "KADW",
+      "route_name": "VC-25A",
+      "notes": "AF1 Backup. Hex: adfdf8",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-92-9000",
+      "identifier": "92-9000",
+      "origin": "KADW",
+      "route_name": "VC-25A",
+      "notes": "AF1. Hex: adfdf9",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-98-0001",
+      "identifier": "98-0001",
+      "origin": "KADW",
+      "route_name": "VC-25A",
+      "notes": "AF2/SAM — VP Vance and Rubio. Hex: adfeb7",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-05-0730",
+      "identifier": "05-0730",
+      "origin": "KADW",
+      "route_name": "C-40C",
+      "notes": "SPAR/DoS — normally Dept of State. Hex: ae17ef",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-n757af",
+      "identifier": "N757AF",
+      "origin": "KADW",
+      "route_name": "757",
+      "notes": "Trump Force 1. Hex: aa3410",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-99-0003",
+      "identifier": "99-0003",
+      "origin": "KADW",
+      "route_name": "VC-25A",
+      "notes": "AF2 Backup. Hex: adfeb9",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-hex-af3ff9",
+      "identifier": "af3ff9",
+      "origin": "KADW",
+      "route_name": "E4B/E4C",
+      "notes": "Nightwatch — ADW/Offutt. Tail unknown — hex lookup pending.",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-hex-ac5801",
+      "identifier": "ac5801",
+      "origin": "KADW",
+      "route_name": "VC-25C",
+      "notes": "New AF2 Trainer. Tail unknown — hex lookup pending.",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-hex-ac544a",
+      "identifier": "ac544a",
+      "origin": "KADW",
+      "route_name": "VC-25C",
+      "notes": "AF2 New Trainer. Tail unknown — hex lookup pending.",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-flight-hex-3c4b24",
+      "identifier": "3c4b24",
+      "origin": "KADW",
+      "route_name": "VC-25C",
+      "notes": "New AF1 Trainer. Tail unknown — hex lookup pending.",
+      "added": "2026-05-29",
+      "added_by": "operator"
+    }
+  ]
+}
