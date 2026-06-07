@@ -44,7 +44,7 @@ def _is_tailscale_request(request: Request) -> bool:
     ts_suffix = config.tailscale_domain_suffix()
     if ts_header and ts_suffix and ts_header.endswith(ts_suffix):
         return True
-    # Also accept X-Forwarded-For from Tailscale CGNAT range <TAILSCALE_IP>/10.
+    # Also accept X-Forwarded-For from Tailscale CGNAT range 100.64.0.0/10.
     forwarded_for = request.headers.get("X-Forwarded-For", "")
     if forwarded_for.startswith("100."):
         return True
