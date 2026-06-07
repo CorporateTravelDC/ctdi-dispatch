@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<msg:Message xmlns:msg="http://www.fixm.aero/messaging/4.2"
+             xmlns:fx="http://www.fixm.aero/flight/4.2"
+             xmlns:fb="http://www.fixm.aero/base/4.2"
+             xmlns:nas="http://www.fixm.aero/nas/4.2"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <msg:flight>
+    <fx:gufi>AAA01234-5678-9abc-def0-000000000001</fx:gufi>
+    <nas:nasFlightInfo source="FH">
+      <nas:acid>JIA5438</nas:acid>
+      <nas:flightStatus>ACTIVE</nas:flightStatus>
+    </nas:nasFlightInfo>
+    <fx:departure>
+      <fb:aerodrome>
+        <fb:icaoIdentifier>KCVG</fb:icaoIdentifier>
+      </fb:aerodrome>
+    </fx:departure>
+    <fx:arrival>
+      <fb:aerodrome>
+        <fb:icaoIdentifier>KPHL</fb:icaoIdentifier>
+      </fb:aerodrome>
+    </fx:arrival>
+    <fx:aircraft>
+      <fx:aircraftType>
+        <fb:icaoAircraftTypeDesignator>CRJ9</fb:icaoAircraftTypeDesignator>
+      </fx:aircraftType>
+    </fx:aircraft>
+  </msg:flight>
+</msg:Message>
