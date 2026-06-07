@@ -21,7 +21,7 @@ build/
 # Logs
 *.log
 
-# Home directory artifacts — must never be committed
+# Home directory artifacts — these must never be committed again
 .config/
 .claude/
 .bashrc
@@ -30,9 +30,11 @@ build/
 .gitconfig
 .local/
 
-# OS / editor
+# OS
 .DS_Store
 Thumbs.db
+
+# Editor
 .vscode/
 *.swp
 *~
