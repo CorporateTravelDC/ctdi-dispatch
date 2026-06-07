@@ -1,0 +1,38 @@
+# Secrets — never commit
+*.env
+!*.env.example
+dispatch-secrets.env
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Home directory artifacts — must never be committed
+.config/
+.claude/
+.bashrc
+.bash_logout
+.profile
+.gitconfig
+.local/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+*~
