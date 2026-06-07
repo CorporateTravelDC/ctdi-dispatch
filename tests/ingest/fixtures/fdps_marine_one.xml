@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<msg:Message xmlns:msg="http://www.fixm.aero/messaging/4.2"
+             xmlns:fx="http://www.fixm.aero/flight/4.2"
+             xmlns:fb="http://www.fixm.aero/base/4.2"
+             xmlns:nas="http://www.fixm.aero/nas/4.2"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <msg:flight>
+    <fx:gufi>POTUS-0000-0000-0000-000000000001</fx:gufi>
+    <nas:nasFlightInfo source="TH">
+      <nas:acid>MARINE1</nas:acid>
+      <nas:flightStatus>ACTIVE</nas:flightStatus>
+    </nas:nasFlightInfo>
+    <fx:enRoute>
+      <fx:positionReport>
+        <fb:position>
+          <fb:pos>38.9000 -77.0200</fb:pos>
+        </fb:position>
+        <fb:altitude>
+          <fb:value>500</fb:value>
+        </fb:altitude>
+        <fb:speed>
+          <fb:value>140</fb:value>
+        </fb:speed>
+        <fb:ssrCode>5000</fb:ssrCode>
+      </fx:positionReport>
+    </fx:enRoute>
+  </msg:flight>
+</msg:Message>
