@@ -1,0 +1,17 @@
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-pusher" \
+      org.opencontainers.image.description="Corporate Travel DC Dispatch — ntfy alert pusher"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+COPY src/ .
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+
+CMD ["python3", "-m", "pusher.main"]
