@@ -137,14 +137,6 @@ systemctl --user enable --now corporatetraveldc-pusher
 curl http://127.0.0.1:8000/healthz
 ```
 
-## Security note
-
-> **Git history advisory:** The private source repository contains a prior commit
-> where `~/.config/gh/config.yml` was accidentally included. Those tokens have
-> been revoked. The private repo history will be cleaned via BFG Repo Cleaner or
-> recreated from clean source before any production re-deployment.
-> This public PoC contains only clean `src/` code — no home directory artifacts.
-
 ## Endpoint naming
 
 All CS Executive Services endpoints follow `[oneword][-xxx|regional].csexecutiveservices.com`.
