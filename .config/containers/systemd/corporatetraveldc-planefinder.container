@@ -1,0 +1,27 @@
+[Unit]
+Description=Corporate Travel DC - PlaneFinder feeder
+After=network-online.target
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-ultrafeeder.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-planefinder:latest
+ContainerName=corporatetraveldc-planefinder
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=BEASTHOST=host.containers.internal
+Environment=BEASTPORT=30005
+Environment=SHARECODE=68c5c71646b90
+Environment=LAT=38.87485
+Environment=LONG=-77.14410
+Environment=ALT=279
+PublishPort=127.0.0.1:30053:30053
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

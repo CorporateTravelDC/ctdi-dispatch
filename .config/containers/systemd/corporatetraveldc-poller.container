@@ -1,0 +1,31 @@
+# corporatetraveldc-poller.container
+# Quadlet — ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-poller
+
+[Unit]
+Description=Corporate Travel DC — poller + skill scheduler
+After=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+
+# All persistent state: DB, SR-1 log, SR-2 hashes, brief/summary text
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+
+# Trigger queue — poller reads trigger files dropped by web admin endpoints
+Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
+
+# Permanent watchlist files — poller's WatchlistFileWatcher hot-reloads these
+Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ATCSCC ops plan snapshot daily at 07:00 ET
+Requires=corporatetraveldc-daily-opsplan.service
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

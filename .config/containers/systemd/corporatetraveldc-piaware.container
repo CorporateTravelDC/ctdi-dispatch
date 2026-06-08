@@ -1,0 +1,26 @@
+[Unit]
+Description=Corporate Travel DC - FlightAware piaware feeder
+After=network-online.target
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-ultrafeeder.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-piaware:latest
+ContainerName=corporatetraveldc-piaware
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=BEASTHOST=host.containers.internal
+Environment=BEASTPORT=30005
+Environment=FEEDER_ID=807b07ce-059d-457f-ba8b-d75725679565
+Environment=LAT=38.87485
+Environment=LONG=-77.14410
+Environment=ALT_M=85
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

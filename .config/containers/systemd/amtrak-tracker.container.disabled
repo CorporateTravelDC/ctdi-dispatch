@@ -1,0 +1,52 @@
+[Unit]
+Description=corporatetraveldc amtrak-tracker
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-amtrak-tracker:latest
+
+# Shared volume with the dispatch ingest bridge
+# host path: /var/lib/amtrak-tracker → container path: /data
+Volume=/var/lib/amtrak-tracker:/data:Z
+
+# Environment
+Environment=OUTPUT_PATH=/data/state.json
+Environment=FILTER_STATION=WAS
+Environment=POLL_INTERVAL_SECS=300
+
+# Logging
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target
+
+# ---------------------------------------------------------------------------
+# DEPLOY NOTES
+#
+# 1. Build the image on the Pi:
+#    cd /opt/corporatetraveldc/amtrak-tracker
+#    podman build -t localhost/corporatetraveldc-amtrak-tracker:latest .
+#
+# 2. Create the shared volume directory:
+#    sudo mkdir -p /var/lib/amtrak-tracker
+#    sudo chown corporatetraveldc:corporatetraveldc /var/lib/amtrak-tracker
+#
+# 3. Install and enable the Quadlet:
+#    cp amtrak-tracker.container ~/.config/containers/systemd/
+#    systemctl --user daemon-reload
+#    systemctl --user enable --now amtrak-tracker
+#
+# 4. Verify it's writing state:
+#    systemctl --user status amtrak-tracker
+#    cat /var/lib/amtrak-tracker/state.json | python3 -m json.tool | head -30
+#
+# 5. Verify the ingest bridge picks it up:
+#    sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
+#      "SELECT train_id, route, status, delay_minutes FROM amtrak_trains ORDER BY delay_minutes DESC LIMIT 10;"
+# ---------------------------------------------------------------------------
