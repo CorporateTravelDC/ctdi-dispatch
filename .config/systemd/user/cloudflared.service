@@ -1,0 +1,13 @@
+[Unit]
+Description=Cloudflare Tunnel — corporatetraveldc dispatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/cloudflared tunnel --config /home/corporatetraveldc/.cloudflared/config.yml run
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
