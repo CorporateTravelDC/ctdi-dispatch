@@ -2,7 +2,7 @@
 FAA NOTAM fetcher — FAA NOTAM Search API v2
 https://api.faa.gov/notamSearch/api/v1/notams
 
-Requires FAA_NOTAM_API_KEY in dispatch-secrets.env.
+Requires FAA_NOTAM_API_KEY and FAA_NOTAM_API_SECRET in dispatch-secrets.env.
 Free registration at https://api.faa.gov
 
 Fetches NOTAMs for DC-area airports and airspace.
@@ -36,8 +36,11 @@ DC_LOCATIONS = [
 PAGE_SIZE = 50
 
 
-def _api_key() -> str | None:
+def _api_key() -> str:
     return config.get("FAA_NOTAM_API_KEY", "")
+
+def _api_secret() -> str:
+    return config.get("FAA_NOTAM_API_SECRET", "")
 
 
 def _parse_notam_time(ts: str | None) -> float | None:
@@ -69,6 +72,7 @@ def fetch_notams_for_location(location: str, api_key: str) -> list[dict]:
     headers = {
         "accept": "application/json",
         "client_id": api_key,
+        "client_secret": _api_secret(),
     }
     try:
         resp = requests.get(NOTAM_URL, params=params, headers=headers,
