@@ -1,0 +1,25 @@
+[Unit]
+Description=Corporate Travel DC - FlightRadar24 feeder
+After=network-online.target
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-ultrafeeder.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-flightradar24:latest
+ContainerName=corporatetraveldc-fr24feed
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=BEASTHOST=host.containers.internal
+Environment=BEASTPORT=30005
+Environment=FR24KEY=fec943a17ae7a17d
+Environment=MLAT=yes
+PublishPort=8754:8754
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

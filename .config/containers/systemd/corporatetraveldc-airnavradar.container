@@ -1,0 +1,26 @@
+[Unit]
+Description=Corporate Travel DC - AirNav RadarBox feeder
+After=network-online.target
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-ultrafeeder.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-airnavradar:latest
+ContainerName=corporatetraveldc-airnavradar
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=BEASTHOST=host.containers.internal
+Environment=BEASTPORT=30005
+Environment=SHARING_KEY=e3b00e8697f7d4f28a53bb6ab32824c0
+Environment=LAT=38.87485
+Environment=LONG=-77.14410
+Environment=ALT=279
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

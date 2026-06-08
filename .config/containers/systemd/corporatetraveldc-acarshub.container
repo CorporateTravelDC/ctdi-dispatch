@@ -1,0 +1,52 @@
+# corporatetraveldc-acarshub.container
+# ACARS web UI. Subscribes to acarsrouter ZMQ ACARS output (port 45550).
+# Overlays ADS-B targets from UltraFeeder tar1090.
+# Serves browser UI on port 9081 (→ acars.csexecutiveservices.com via nginx).
+[Unit]
+Description=Corporate Travel DC — acarshub ACARS web UI
+After=network-online.target
+After=corporatetraveldc-acarsrouter.service
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-acarsrouter.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-acarshub:latest
+ContainerName=corporatetraveldc-acarshub
+Network=acars-net
+
+# Persist ACARS message database across restarts
+Volume=/var/lib/corporatetraveldc/acarshub:/run/acars:z
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+# ACARS input — ZMQ from acarsrouter (no inbound port needed)
+Environment=ENABLE_ACARS=true
+Environment=ENABLE_VDLM=true
+Environment=VDLM_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45555
+Environment=ACARS_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45550
+
+# ADS-B overlay from UltraFeeder tar1090
+Environment=ENABLE_ADSB=true
+Environment=ADSB_URL=http://host.containers.internal:8080/data/aircraft.json
+Environment=ADSB_LAT=38.8816
+Environment=ADSB_LON=-77.0910
+
+# IATA override for common mismatches in US ops
+Environment=IATA_OVERRIDE=UP|UPS|United Parcel Service
+
+# Prune DB after 14 days (default 7 — bump slightly for dispatch use)
+Environment=DB_SAVE_DAYS=14
+
+# Web UI on port 9081
+PublishPort=127.0.0.1:9081:80
+
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target
