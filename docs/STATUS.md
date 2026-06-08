@@ -13,12 +13,29 @@
 | corporatetraveldc-poller | running | fetchers + skill scheduler |
 | corporatetraveldc-pusher | running | ntfy alert sender |
 | corporatetraveldc-ingest | running | SWIM pending creds; idling |
-| amtrak-tracker | running | 46 trains at WAS live |
+| amtrak-tracker | running | 44 trains tracked, 6 delayed |
 | ntfy | running | port 2586, auth enforced |
 | corporatetraveldc-ultrafeeder | installed | awaiting SDR dongle (ADSB1090) |
 | corporatetraveldc-acarsrouter | installed | awaiting SDR dongle (ACARS0130) |
 | corporatetraveldc-acarshub | installed | awaiting hardware |
 | corporatetraveldc-dumpvdl2 | installed | awaiting hardware |
+
+## Feed Status (REST fallback)
+| Feed | Status | Notes |
+|------|--------|-------|
+| atcscc_opsplan | OK | ~50 min cycle; NAS programs current (EWR/LAS closures active) |
+| metar | OK | Fresh — KBWI 3,300 OVC/10SM; KDCA 3,200 OVC/10SM |
+| nas | OK | Fresh |
+| nws | OK | Fresh |
+| tfr | OK | Active TFRs returning |
+| amtrak | OK | Live — 44 trains, 6 delayed (#41 Floridian +362min worst) |
+| notam | awaiting_credentials | FAA NOTAM API key not provisioned |
+| push:fdps | stale | FAA NMS creds pending — SWIM feed idle |
+| push:fns | stale | FAA NMS creds pending |
+| push:itws | stale | FAA NMS creds pending |
+| push:stdds | stale | FAA NMS creds pending |
+| push:tbfm | stale | FAA NMS creds pending |
+| push:tfms | stale | FAA NMS creds pending |
 
 ## Cloudflare Tunnel
 - **Tunnel:** `dispatch` (`28bde9a2-0bb2-4cca-a207-9b759c4739f1`)
@@ -38,9 +55,10 @@
 ## Recent commits
 | Commit | Summary |
 |--------|---------|
-| `37eeb31` | Add cloudflared tunnel systemd service |
-| `e5d5f9b` | Deploy all Quadlet units, amtrak-tracker image, CLAUDE.md, docs |
-| `89f8a76` | Clean: remove home directory artifacts |
+| `d3ca0cc` | Update STATUS.md — 2026-06-08 session |
+| `37d9313` | Add cloudflared tunnel systemd service |
+| `1b2ea8f` | Deploy all Quadlet units, amtrak-tracker image, CLAUDE.md, docs |
+| `123e8ed` | Clean: remove home directory artifacts |
 
 ## ntfy topics (10)
 `tfr-alert` · `hot-alerts` · `flight-alerts` · `train-alerts` · `dispatch` · `dispatch-debriefs` · `cps` · `wx-alerts` · `ops-brief` · `ops-health`
