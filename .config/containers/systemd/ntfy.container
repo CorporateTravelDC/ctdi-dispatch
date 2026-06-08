@@ -1,0 +1,17 @@
+[Unit]
+Description=ntfy push notification server
+After=network-online.target
+
+[Container]
+Image=docker.io/binwiederhier/ntfy
+PublishPort=2586:2586
+Volume=/etc/ntfy/server.yml:/etc/ntfy/server.yml:ro,Z
+Volume=/var/lib/ntfy:/var/lib/ntfy:Z
+Exec=serve
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

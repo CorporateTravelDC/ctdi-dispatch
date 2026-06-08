@@ -1,0 +1,32 @@
+[Unit]
+Description=Corporate Travel DC - ACARS message router
+After=network-online.target
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/acars_router:latest
+ContainerName=corporatetraveldc-acarsrouter
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# Inbound
+Environment=AR_LISTEN_UDP_ACARS=5550
+Environment=AR_RECV_ZMQ_VDLM2=corporatetraveldc-dumpvdl2:45555
+# Serve local
+Environment=AR_SERVE_TCP_ACARS=9080
+Environment=AR_SERVE_ZMQ_ACARS=45550
+Environment=AR_SERVE_ZMQ_VDLM2=45555
+# AcarsDrama: VDL2 active; ACARS configured but inactive until acarsdec re-enabled
+Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555
+Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550
+Environment=AR_OVERRIDE_STATION_NAME=corporatetraveldc-kdca-vdl2
+Network=acars-net
+PublishPort=9080:9080
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

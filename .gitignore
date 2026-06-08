@@ -1,40 +1,72 @@
-# Secrets — never commit
-*.env
-!*.env.example
-dispatch-secrets.env
-
-# Database
-*.db
-*.db-shm
-*.db-wal
-
-# Python
+venv/
 __pycache__/
 *.pyc
 *.pyo
-.venv/
-venv/
 *.egg-info/
+.eggs/
 dist/
 build/
 
-# Logs
-*.log
+# Credentials and keys — never commit
+.ssh/
+.pki/
+.proton-bridge-credentials
+.cloudflared/
+.Xauthority
+.claude/.credentials.json
+.claude/dispatch/admin-tokens
+.config/gh/hosts.yml
+.config/rpi-connect-auth
+.config/rpcc/
+.config/com.raspberrypi.connect/
+.linkedin-mcp/
 
-# Home directory artifacts — these must never be committed again
-.config/
-.claude/
-.bashrc
-.bash_logout
-.profile
-.gitconfig
+# Browser data (Claude desktop / Chromium / Firefox)
+.config/Claude/
+.config/chromium/
+.config/mozilla/
+
+# Binary desktop databases
+.config/dconf/
+
+# Large binaries / installers
+*.deb
+*.flatpakref
+
+# Ephemeral Claude Code runtime data
+.claude/plugins/cache/
+.claude/backups/
+.claude/cache/
+.claude/file-history/
+.claude/history.jsonl
+.claude/mcp-needs-auth-cache.json
+.claude/paste-cache/
+.claude/projects/*/[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+.claude/projects/**/*.jsonl
+.claude/projects/*/subagents/
+.claude/plugins/cache/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/stats-cache.json
+.claude/.last-cleanup
+.claude/.last-update-result.json
+
+# Shell / system ephemera
+.bash_history
+.viminfo
+.wget-hsts
+.xsession-errors
+.xsession-errors.old
+.sudo_as_admin_successful
+.dmrc
+
+# Package manager caches
+.cache/
+.npm/
+.var/
 .local/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
-.vscode/
-*.swp
-*~
+# Personal / ephemeral outputs
+Documents/
+*claudecodeprompt*.md
+*claude-code-prompt*.md

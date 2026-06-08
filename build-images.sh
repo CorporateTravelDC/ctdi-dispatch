@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-images.sh — builds all three Corporate Travel DC Dispatch container images
+# build-images.sh — builds all five Corporate Travel DC Dispatch container images
 # Run as corporatetraveldc Safe to re-run (rebuilds from cache where possible).
 # After running, reload Quadlets: systemctl --user daemon-reload
 
@@ -25,7 +25,7 @@ log "Build context: ${SCRIPT_DIR}"
 log "Build date: ${BUILD_DATE}"
 log ""
 
-for service in web poller pusher ingest; do
+for service in web poller pusher ingest amtrak-tracker; do
     cf="Containerfile.${service}"
     tag="localhost/corporatetraveldc-${service}:latest"
     [[ -f "${cf}" ]] || die "${cf} not found"
@@ -41,7 +41,7 @@ for service in web poller pusher ingest; do
     log ""
 done
 
-log "All four images built successfully."
+log "All five images built successfully."
 log ""
 log "Next steps:"
 log "  1. systemctl --user daemon-reload"

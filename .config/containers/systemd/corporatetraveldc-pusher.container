@@ -1,0 +1,29 @@
+# corporatetraveldc-pusher.container
+# Quadlet — ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-pusher
+#
+# NOTE: pusher calls ntfy. NTFY_URL in dispatch.env must be reachable from
+# inside this container. Use http://host.containers.internal:2586 if ntfy
+# is on the same host.
+
+[Unit]
+Description=Corporate Travel DC — ntfy alert pusher
+After=network-online.target
+After=corporatetraveldc-poller.service
+Wants=corporatetraveldc-poller.service
+
+[Container]
+Image=localhost/corporatetraveldc-pusher:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
