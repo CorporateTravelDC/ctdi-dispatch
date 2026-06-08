@@ -1,0 +1,13 @@
+[Unit]
+Description=Corporate Travel DC — freshness audit skill (06:00 ET)
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/freshness_audit.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
