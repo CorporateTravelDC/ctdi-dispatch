@@ -2,15 +2,7 @@
 
 ---
 
-## ~~TASK 1 — FAA SWIM NMS Credentials Request Email~~ ✅ DONE 2026-06-05
-
-Final version accounts for NMS Split architecture. AIM already working.
-Feeds requested: FDPS, STDDS, TFMS, TBFM, ITWS.
-Send via https://swim.faa.gov — include read-only GitHub token on request.
-
----
-
-## TASK 2 — `docs/ARCHITECTURE.md` — Deferred to next week
+## TASK 1 — `docs/ARCHITECTURE.md` — Deferred to next week
 
 Re-read key source files before writing (repo may have changed):
 src/web/main.py, src/poller/main.py, src/pusher/main.py,
