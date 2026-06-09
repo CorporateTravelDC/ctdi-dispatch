@@ -1,0 +1,42 @@
+# corporatetraveldc-dumphfdl-0011.container.disabled
+# HFDL decoder -- 11 MHz expansion band (stub)
+# Coverage: CONUS domestic + North Atlantic day routes
+# Active frequencies: 11184, 11385 kHz
+#
+# Requires powered USB hub -- second dedicated HF-capable dongle
+# Serial: HFDL0011
+#
+# Enable when hardware available:
+#   mv corporatetraveldc-dumphfdl-0011.container.disabled corporatetraveldc-dumphfdl-0011.container
+#   systemctl --user daemon-reload
+#   systemctl --user start corporatetraveldc-dumphfdl-0011.service
+
+[Unit]
+Description=Corporate Travel DC - HFDL decoder 11 MHz (CONUS/NAT expansion)
+After=network-online.target
+After=podman-user-wait-network-online.service
+After=corporatetraveldc-dumphfdl-0008.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-dumphfdl:latest
+# AddDevice=/dev/rtl_sdr_hfdl0011:/dev/rtl_sdr_hfdl0011
+Volume=/dev/bus/usb:/dev/bus/usb:ro
+Environment=FEED_ID=corporatetraveldc-kdca-hfdl0011
+Environment=RTL_SERIAL=HFDL0011
+Environment=TZ=America/New_York
+Environment=ZMQ_MODE=server
+Environment=ZMQ_ENDPOINT=tcp://0.0.0.0:45561
+Environment=SERVER=hfdlgateway.net
+Environment=SERVER_PORT=5556
+Environment=FREQUENCIES=11184;11385
+AutoUpdate=local
+Network=acars-net
+Label=io.containers.autoupdate=registry
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+WantedBy=default.target
