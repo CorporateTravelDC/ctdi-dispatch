@@ -23,6 +23,8 @@ import time
 import requests
 
 from common import config, db
+from common.push_dedup import PushDedup, content_hash
+from poller.fetchers.metar import parse_wind_dir
 
 log = logging.getLogger(__name__)
 
@@ -67,32 +69,15 @@ def send_test_alert(message: str) -> bool:
                      title="corporatetraveldc test")
 
 
-_TFR_DEDUP_SECS = 3600   # Re-fire same TFR at most once per hour
-_WX_DEDUP_SECS  = 3600   # Re-fire same wx alert at most once per hour
+# Dedup instances -- one per logical alert channel
+_tfr_dedup   = PushDedup("tfr")
+_wx_dedup    = PushDedup("wx")
+_route_dedup = PushDedup("route")
 
-
-def _dedup_state(name: str) -> pathlib.Path:
-    return pathlib.Path(config.state_dir()) / f"pusher-{name}-dedup.json"
-
-
-def _load_dedup(name: str) -> dict:
-    p = _dedup_state(name)
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _save_dedup(name: str, state: dict) -> None:
-    p = _dedup_state(name)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state))
-
-
-def _content_hash(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()[:12]
+# Wind-change thresholds
+_WX_SPEED_THRESHOLD_KT  = 10   # alert on >= 10kt speed change
+_WX_DIR_THRESHOLD_DEG   = 45   # alert on >= 45 degree direction shift
+_WX_HOT_PUSH_KT         = 30   # hot push (bypass dedup) at CPS NO-GO limit
 
 
 def push_vip_tfrs() -> int:
@@ -103,8 +88,6 @@ def push_vip_tfrs() -> int:
     """
     tfrs = db.get_active_tfrs()
     pushed = 0
-    dedup = _load_dedup("tfr")
-    now = time.time()
 
     for t in tfrs:
         if not t["is_vip"]:
@@ -115,14 +98,10 @@ def push_vip_tfrs() -> int:
             "Check dispatch for routing impact."
         )
         message = narrative[:1000]
-        content_h = _content_hash(message)
         key = t["tfr_id"]
-        last = dedup.get(key, {})
+        h = content_hash(message)
 
-        # Fire if: first time, or content changed, or >1 hour since last push
-        content_changed = last.get("hash") != content_h
-        hour_elapsed = (now - last.get("ts", 0)) >= _TFR_DEDUP_SECS
-        if not content_changed and not hour_elapsed and last.get("ts"):
+        if not _tfr_dedup.should_push(key, h, hot=True):  # VIP = always hot
             continue
 
         success = send_ntfy(
@@ -139,10 +118,9 @@ def push_vip_tfrs() -> int:
         )
         if success:
             db.mark_tfr_notified(t["tfr_id"])
-            dedup[key] = {"ts": now, "hash": content_h}
+            _tfr_dedup.record(key, h)
             pushed += 1
 
-    _save_dedup("tfr", dedup)
     return pushed
 
 def push_cps_update() -> None:
@@ -365,6 +343,116 @@ def push_watchlist_retries() -> int:
 
     return retried
 
+
+# Primary DC-area stations for wind-change monitoring
+_WX_STATIONS = ("KDCA", "KIAD", "KBWI")
+
+
+def push_wx_change() -> bool:
+    """
+    Push a weather alert when wind changes meaningfully since last push.
+
+    Thresholds (any primary station):
+      >= 10kt speed delta  -> standard alert, topic "cps", priority 3
+      >= 45deg direction shift -> standard alert, topic "cps", priority 3
+      >= 30kt speed (CPS NO-GO limit) -> hot push, topic "hot-alerts", priority 5
+
+    1-hour dedup on non-hot pushes. Hot push bypasses dedup entirely.
+    """
+    metars = db.get_metar_snapshot()
+    if not metars:
+        return False
+
+    primaries = {m["station"]: m for m in metars if m["station"] in _WX_STATIONS}
+    if not primaries:
+        return False
+
+    now = time.time()
+    triggered = False
+    hot = False
+    trigger_reason = []
+
+    for station, m in primaries.items():
+        curr_speed = m.get("wind_kt") or 0
+        curr_dir = parse_wind_dir(m.get("raw_metar", ""))
+        last = _wx_dedup.get_raw(station)
+        last_speed = last.get("wind_kt", 0) or 0
+        last_dir = last.get("wind_dir_deg")  # None on first run
+
+        # Hot push threshold -- CPS NO-GO
+        if curr_speed >= _WX_HOT_PUSH_KT:
+            hot = True
+            triggered = True
+            trigger_reason.append(f"{station} {curr_speed}kt (CPS limit)")
+            continue
+
+        # Speed delta
+        if abs(curr_speed - last_speed) >= _WX_SPEED_THRESHOLD_KT:
+            triggered = True
+            delta = curr_speed - last_speed
+            sign = "+" if delta > 0 else ""
+            trigger_reason.append(f"{station} wind {sign}{delta}kt ({last_speed}->{curr_speed}kt)")
+            continue
+
+        # Direction delta (circular)
+        if curr_dir is not None and last_dir is not None:
+            dir_delta = min(abs(curr_dir - last_dir), 360 - abs(curr_dir - last_dir))
+            if dir_delta >= _WX_DIR_THRESHOLD_DEG:
+                triggered = True
+                trigger_reason.append(
+                    f"{station} wind shift {dir_delta}deg ({last_dir}->{curr_dir}deg)")
+
+        # 1-hour routine update if no other trigger
+        if not triggered:
+            last_ts = max(
+                (_wx_dedup.get_raw(s).get("ts", 0) for s in _WX_STATIONS),
+                default=0
+            )
+            if (now - last_ts) >= 3600 and any(
+                    (m.get("wind_kt") or 0) > 0 for m in primaries.values()):
+                triggered = True
+                trigger_reason.append("1hr routine wx update")
+
+    if not triggered:
+        return False
+
+    # Build message
+    wx_lines = []
+    for st in _WX_STATIONS:
+        m = primaries.get(st)
+        if not m:
+            continue
+        speed = m.get("wind_kt", 0) or 0
+        wd = parse_wind_dir(m.get("raw_metar", ""))
+        dir_str = f"/{wd:03d}deg" if wd is not None else "/VRB"
+        ceil_str = f"{m['ceiling_ft']}ft" if m.get("ceiling_ft") else "CLR"
+        wx_lines.append(
+            f"{st}: {speed}kt{dir_str} ceil={ceil_str} vis={m.get('visibility_sm','?')}SM"
+        )
+
+    reason_str = "; ".join(trigger_reason)
+    message = (
+        f"{'WIND ALERT' if hot else 'WX UPDATE'}: {reason_str}\n"
+        + "\n".join(wx_lines)
+    )
+    priority = 5 if hot else 3
+    topic = "hot-alerts" if hot else "cps"
+    title = "Wind Alert -- CPS Threshold" if hot else "WX Change"
+
+    success = send_ntfy(topic, message, priority=priority, title=title)
+    if success:
+        for station, m in primaries.items():
+            _wx_dedup.set_raw(station, {
+                "wind_kt": m.get("wind_kt") or 0,
+                "wind_dir_deg": parse_wind_dir(m.get("raw_metar", "")),
+                "ceiling_ft": m.get("ceiling_ft"),
+                "visibility_sm": m.get("visibility_sm"),
+            })
+        log.info("push_wx_change: %s (hot=%s)", reason_str, hot)
+
+    return success
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -385,6 +473,7 @@ async def main() -> None:
             if vip_count:
                 log.info("Pushed %d VIP TFR alerts", vip_count)
             push_cps_update()
+            push_wx_change()
             flight_count = push_flight_watchlist_landings()
             if flight_count:
                 log.info("Pushed %d flight landing alerts", flight_count)
