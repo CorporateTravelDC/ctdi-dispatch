@@ -1,0 +1,28 @@
+# corporatetraveldc-ingest.container
+# Install to ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-ingest
+[Unit]
+Description=Corporate Travel DC â ingest (SWIM + NWWS-OI + Amtrak, push-primary)
+After=network-online.target
+# ntfy is a sibling user unit, so this ordering is valid (unlike the old
+# system-level native unit, which could not see user services).
+After=ntfy.service
+Wants=ntfy.service
+
+[Container]
+Image=localhost/corporatetraveldc-ingest:latest
+# Same shared state the poller/web use â ingest writes via common.db.
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Permanent watchlist files â read-only in ingest container.
+Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
