@@ -1,0 +1,42 @@
+# corporatetraveldc-dumphfdl-0017.container.disabled
+# HFDL decoder -- 17 MHz expansion band (stub)
+# Coverage: Daytime long-haul CONUS, Pacific, Caribbean routes
+# Active frequencies: 17901, 21934 kHz
+#
+# Requires powered USB hub -- third dedicated HF-capable dongle
+# Serial: HFDL0017
+#
+# Enable when hardware available:
+#   mv corporatetraveldc-dumphfdl-0017.container.disabled corporatetraveldc-dumphfdl-0017.container
+#   systemctl --user daemon-reload
+#   systemctl --user start corporatetraveldc-dumphfdl-0017.service
+
+[Unit]
+Description=Corporate Travel DC - HFDL decoder 17 MHz (CONUS/Pacific expansion)
+After=network-online.target
+After=podman-user-wait-network-online.service
+After=corporatetraveldc-dumphfdl-0008.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-dumphfdl:latest
+# AddDevice=/dev/rtl_sdr_hfdl0017:/dev/rtl_sdr_hfdl0017
+Volume=/dev/bus/usb:/dev/bus/usb:ro
+Environment=FEED_ID=corporatetraveldc-kdca-hfdl0017
+Environment=RTL_SERIAL=HFDL0017
+Environment=TZ=America/New_York
+Environment=ZMQ_MODE=server
+Environment=ZMQ_ENDPOINT=tcp://0.0.0.0:45562
+Environment=SERVER=hfdlgateway.net
+Environment=SERVER_PORT=5556
+Environment=FREQUENCIES=17901;21934
+AutoUpdate=local
+Network=acars-net
+Label=io.containers.autoupdate=registry
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+WantedBy=default.target
