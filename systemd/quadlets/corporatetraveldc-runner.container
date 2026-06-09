@@ -1,0 +1,30 @@
+# corporatetraveldc-runner.container
+# Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-runner
+
+[Unit]
+Description=Corporate Travel DC -- dispatch-runner PWA (port 8001)
+After=network-online.target
+After=podman-user-wait-network-online.service
+After=corporatetraveldc-web.service
+Wants=corporatetraveldc-web.service
+
+[Container]
+Image=localhost/corporatetraveldc-runner:latest
+PublishPort=127.0.0.1:8001:8001
+PublishPort=100.94.80.100:8001:8001
+Environment=DISPATCH_BASE_URL=http://127.0.0.1:8000
+Environment=ULTRAFEEDER_URL=http://127.0.0.1:8080/data/aircraft.json
+Environment=SSE_INTERVAL_SEC=30
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+Network=host
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+WantedBy=default.target
