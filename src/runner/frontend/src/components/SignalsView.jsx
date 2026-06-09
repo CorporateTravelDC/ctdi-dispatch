@@ -8,7 +8,7 @@ const SIGNAL_TYPES = [
 
 const SOURCE_LABELS = {
   'local':           'LOCAL',
-  'airframes.io':    'AIRFRAMES',
+  'acarsdrama.com':  'JUMPSEAT',
   'marinetraffic.com': 'MARINETRAFFIC',
   'none':            'NONE',
 }
