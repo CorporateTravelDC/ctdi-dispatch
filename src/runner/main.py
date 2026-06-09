@@ -3,7 +3,9 @@ dispatch-runner -- internal operational PWA backend.
 FastAPI on port 8001. Tailscale-gated. Serves React static build + API proxy.
 
 Signal proxy fallback chain:
-  VDL2 / ACARS / HFDL: local acarshub (:9081) -> jumpseat.acarsdrama.com/api (Jumpseat token)
+  VDL2 / ACARS / HFDL: local acarshub (:9081)
+                        -> api.jumpseat.acarsdrama.com/v1 (acarsdrama Jumpseat)
+                        -> api.airframes.io (airframes.io, secondary fallback)
   AIS:                  local AIS-catcher (:8110) -> MarineTraffic API
   All external fallbacks: 250nm radius centered on KDCA (38.8816, -77.0910)
 """
@@ -28,15 +30,25 @@ ULTRAFEEDER_URL    = os.getenv("ULTRAFEEDER_URL",           "http://127.0.0.1:80
 ACARSHUB_URL       = os.getenv("ACARSHUB_URL",             "http://127.0.0.1:9081")
 AIS_CATCHER_URL    = os.getenv("AIS_CATCHER_URL",          "http://127.0.0.1:8110")
 AIRPLANES_LIVE     = "https://api.airplanes.live/v2"
-AIRFRAMES_BASE     = os.getenv("ACARSDRAMA_BASE_URL",      "https://jumpseat.acarsdrama.com/api")
-# Token env var: ACARSDRAMA_JUMPSEAT_TOKEN (preferred) or legacy AIRFRAMES_JUMPSEAT_TOKEN
-AIRFRAMES_TOKEN    = (os.getenv("ACARSDRAMA_JUMPSEAT_TOKEN") or
+
+# acarsdrama Jumpseat -- primary external fallback for VDL2/ACARS/HFDL
+# Endpoint: https://api.jumpseat.acarsdrama.com/v1/messages/search
+# Auth: Authorization: Bearer sk_adjs_...
+# source param: vdl2 | acars | hfdl | messages (all types)
+ACARSDRAMA_BASE    = os.getenv("ACARSDRAMA_BASE_URL",       "https://api.jumpseat.acarsdrama.com/v1")
+ACARSDRAMA_TOKEN   = (os.getenv("ACARSDRAMA_JUMPSEAT_TOKEN") or
                       os.getenv("AIRFRAMES_JUMPSEAT_TOKEN") or "")
-MARINETRAFFIC_BASE = os.getenv("MARINETRAFFIC_BASE_URL",   "https://services.marinetraffic.com/api")
-MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",    "")
+
+# airframes.io -- secondary external fallback (keep both)
+# Only used if acarsdrama is unavailable or returns no results
+AIRFRAMES_BASE     = os.getenv("AIRFRAMES_BASE_URL",        "https://api.airframes.io")
+AIRFRAMES_TOKEN    = os.getenv("AIRFRAMES_TOKEN",            "")
+
+MARINETRAFFIC_BASE = os.getenv("MARINETRAFFIC_BASE_URL",    "https://services.marinetraffic.com/api")
+MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",     "")
 TAILSCALE_CIDR     = ipaddress.ip_network("100.64.0.0/10")
-STATIC_DIR         = os.getenv("STATIC_DIR",               "/app/static")
-SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",     "30"))
+STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
+SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
 # Default center: KDCA
 DEFAULT_LAT  = 38.8816
@@ -75,36 +87,19 @@ def _bbox(lat: float, lon: float, dist_nm: int) -> dict:
         "MAXLON": round(lon + d, 4),
     }
 
-def _airframes_headers() -> dict:
-    """
-    Auth for jumpseat.acarsdrama.com/api.
-    Sends both Authorization: Bearer and X-Jumpseat-Token headers since
-    the exact scheme is not confirmed in docs -- one will be accepted,
-    the other ignored. Adjust if the API returns 401.
-    """
-    h = {"User-Agent": "corporatetraveldc/1.0",
-         "Accept": "application/json"}
-    if AIRFRAMES_TOKEN:
-        h["Authorization"] = f"Bearer {AIRFRAMES_TOKEN}"
-        h["X-Jumpseat-Token"] = AIRFRAMES_TOKEN
+def _acarsdrama_headers() -> dict:
+    """Auth header for api.jumpseat.acarsdrama.com -- Bearer sk_adjs_..."""
+    h = {"User-Agent": "corporatetraveldc/1.0", "Accept": "application/json"}
+    if ACARSDRAMA_TOKEN:
+        h["Authorization"] = f"Bearer {ACARSDRAMA_TOKEN}"
     return h
 
-
-def _airframes_url(endpoint: str) -> str:
-    """
-    Build endpoint URL for acarsdrama Jumpseat API.
-    Base: https://jumpseat.acarsdrama.com/api
-    Endpoint paths (verify against API docs -- adjust ACARSDRAMA_*_PATH env vars):
-      vdl2  -> /vdl2  or /messages?type=vdl2
-      acars -> /acars or /messages?type=acars
-      hfdl  -> /hfdl  or /messages?type=hfdl
-    """
-    path_map = {
-        "vdl2":  os.getenv("ACARSDRAMA_VDL2_PATH",  "/vdl2"),
-        "acars": os.getenv("ACARSDRAMA_ACARS_PATH",  "/acars"),
-        "hfdl":  os.getenv("ACARSDRAMA_HFDL_PATH",   "/hfdl"),
-    }
-    return AIRFRAMES_BASE.rstrip("/") + path_map.get(endpoint, f"/{endpoint}")
+def _airframes_headers() -> dict:
+    """Auth header for api.airframes.io (secondary fallback)."""
+    h = {"User-Agent": "corporatetraveldc/1.0", "Accept": "application/json"}
+    if AIRFRAMES_TOKEN:
+        h["Authorization"] = f"Bearer {AIRFRAMES_TOKEN}"
+    return h
 
 # ── Auth middleware ----------------------------------------------------------
 
@@ -174,16 +169,42 @@ async def _acarshub_messages(msg_type: str, since: int) -> list:
         else:  # acars
             return [m for m in messages if m.get("msgtype", "").upper() == "ACARS"]
 
+async def _acarsdrama_messages(source: str, since: int,
+                                lat: float, lon: float, dist: int) -> list:
+    """
+    Fetch from acarsdrama Jumpseat API (primary external fallback).
+    Endpoint: GET /v1/messages/search
+    Params:
+      source: vdl2 | acars | hfdl | messages
+      lat, lon, radius: geographic filter (nm)
+      limit: max results (default 100)
+      since: epoch timestamp for incremental fetches
+    """
+    if not ACARSDRAMA_TOKEN:
+        return []
+    url = f"{ACARSDRAMA_BASE}/messages/search"
+    params = {"source": source, "lat": lat, "lon": lon,
+              "radius": dist, "limit": 100}
+    if since:
+        params["since"] = since
+    async with httpx.AsyncClient() as c:
+        r = await c.get(url, params=params,
+                        headers=_acarsdrama_headers(), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        # Response shape: {messages: [...]} or [{...}, ...]
+        return data.get("messages") or (data if isinstance(data, list) else [])
+
+
 async def _airframes_messages(endpoint: str, since: int,
                                lat: float, lon: float, dist: int) -> list:
     """
-    Fallback to airframes.io API (Jumpseat token required).
-    endpoint: "vdl2" | "acars" | "hfdl"
-    Returns list of message dicts.
+    Fetch from airframes.io API (secondary external fallback).
+    Only called when both local acarshub and acarsdrama are unavailable.
     """
     if not AIRFRAMES_TOKEN:
         return []
-    url = _airframes_url(endpoint)
+    url = f"{AIRFRAMES_BASE.rstrip('/')}/{endpoint}"
     params = {"lat": lat, "lon": lon, "radius": dist}
     if since:
         params["since"] = since
@@ -192,7 +213,7 @@ async def _airframes_messages(endpoint: str, since: int,
                         headers=_airframes_headers(), timeout=10)
         r.raise_for_status()
         data = r.json()
-        return data.get("messages") or data if isinstance(data, list) else []
+        return data.get("messages") or (data if isinstance(data, list) else [])
 
 # ── VDL2 endpoint -----------------------------------------------------------
 
@@ -207,15 +228,19 @@ async def vdl2_messages(
     try:
         msgs = await _acarshub_messages("vdl2", since)
         return {"source": "local", "messages": msgs, "count": len(msgs)}
-    except Exception as local_err:
-        log.debug("VDL2 local unavailable: %s -- trying acarsdrama.com", local_err)
+    except Exception as e:
+        log.debug("VDL2 local unavailable: %s -- trying acarsdrama", e)
+    try:
+        msgs = await _acarsdrama_messages("vdl2", since, lat, lon, dist)
+        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.debug("VDL2 acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("vdl2", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-    except Exception as ext_err:
-        log.warning("VDL2 acarsdrama.com unavailable: %s", ext_err)
-    return {"source": "none", "messages": [], "count": 0,
-            "detail": "Local acarshub and airframes.io both unavailable"}
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.warning("VDL2 all sources unavailable: %s", e)
+    return {"source": "none", "messages": [], "count": 0}
 
 # ── ACARS endpoint ----------------------------------------------------------
 
@@ -230,13 +255,18 @@ async def acars_messages(
     try:
         msgs = await _acarshub_messages("acars", since)
         return {"source": "local", "messages": msgs, "count": len(msgs)}
-    except Exception as local_err:
-        log.debug("ACARS local unavailable: %s -- trying acarsdrama.com", local_err)
+    except Exception as e:
+        log.debug("ACARS local unavailable: %s -- trying acarsdrama", e)
+    try:
+        msgs = await _acarsdrama_messages("acars", since, lat, lon, dist)
+        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.debug("ACARS acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("acars", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-    except Exception as ext_err:
-        log.warning("ACARS acarsdrama.com unavailable: %s", ext_err)
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.warning("ACARS all sources unavailable: %s", e)
     return {"source": "none", "messages": [], "count": 0}
 
 # ── HFDL endpoint -----------------------------------------------------------
@@ -252,15 +282,20 @@ async def hfdl_messages(
     try:
         msgs = await _acarshub_messages("hfdl", since)
         return {"source": "local", "messages": msgs, "count": len(msgs)}
-    except Exception as local_err:
-        log.debug("HFDL local unavailable: %s -- trying acarsdrama.com", local_err)
+    except Exception as e:
+        log.debug("HFDL local unavailable: %s -- trying acarsdrama", e)
+    try:
+        msgs = await _acarsdrama_messages("hfdl", since, lat, lon, dist)
+        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.debug("HFDL acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("hfdl", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-    except Exception as ext_err:
-        log.warning("HFDL acarsdrama.com unavailable: %s", ext_err)
-    return {"source": "none", "messages": [], "count": 0,
-            "detail": "hardware_pending" if not AIRFRAMES_TOKEN else "unavailable"}
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+    except Exception as e:
+        log.warning("HFDL all sources unavailable: %s", e)
+    hw = "hardware_pending" if not ACARSDRAMA_TOKEN and not AIRFRAMES_TOKEN else "unavailable"
+    return {"source": "none", "messages": [], "count": 0, "detail": hw}
 
 # ── AIS endpoint ------------------------------------------------------------
 
