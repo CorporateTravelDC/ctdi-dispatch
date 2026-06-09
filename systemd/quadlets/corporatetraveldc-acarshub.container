@@ -21,7 +21,7 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 
 # ACARS input â ZMQ from acarsrouter (no inbound port needed)
-Environment=ENABLE_ACARS=true
+Environment=ENABLE_ACARS=false
 Environment=ENABLE_VDLM=true
 Environment=VDLM_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45555
 Environment=ACARS_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45550
