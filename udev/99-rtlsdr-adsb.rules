@@ -2,3 +2,19 @@
 # Requires serial programmed: sudo rtl_eeprom -d <index> -s ADSB1090 && sudo rtl_eeprom -d <index> -w
 # Vendor 0bda = Realtek, Product 2838 = RTL2838
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="ADSB1090", SYMLINK+="rtl_sdr_adsb", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="ACARS0130", SYMLINK+="rtl_sdr_acars", MODE="0666", GROUP="plugdev"
+
+# -- Future hardware placeholders (powered USB hub expansion) ---------------
+# Serial convention: {TYPE}{CENTERFREQ_4DIGIT}
+#
+# HFDL 8 MHz primary (NAT/Oceanic) -- program then uncomment:
+# SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="HFDL0008", SYMLINK+="rtl_sdr_hfdl0008", MODE="0666", GROUP="plugdev"
+#
+# HFDL 11 MHz expansion (CONUS/NAT day routes) -- powered hub dongle 2:
+# SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="HFDL0011", SYMLINK+="rtl_sdr_hfdl0011", MODE="0666", GROUP="plugdev"
+#
+# HFDL 17 MHz expansion (CONUS/Pacific daytime) -- powered hub dongle 3:
+# SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="HFDL0017", SYMLINK+="rtl_sdr_hfdl0017", MODE="0666", GROUP="plugdev"
+#
+# AIS 162 MHz vessel decoder -- program then uncomment:
+# SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="AIS0162", SYMLINK+="rtl_sdr_ais0162", MODE="0666", GROUP="plugdev"
