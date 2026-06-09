@@ -118,6 +118,27 @@ def parse_metar(raw: str) -> MetarRecord:
     )
 
 
+
+def parse_wind_dir(raw_metar: str) -> int | None:
+    """
+    Extract wind direction (degrees true) from a raw METAR string.
+    Returns None for variable winds (VRB) or unparseable input.
+    Exported for use by pusher wind-change detection without DB schema changes.
+    """
+    import re
+    for part in raw_metar.split():
+        m = re.match(r"^(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT$", part)
+        if m:
+            dir_str = m.group(1)
+            if dir_str == "VRB":
+                return None
+            try:
+                return int(dir_str)
+            except ValueError:
+                return None
+    return None
+
+
 def fetch(stations: list[str] = DC_STATIONS) -> list[MetarRecord]:
     """Fetch METARs for the given station list."""
     url = ADDS_URL.format(stations=",".join(stations))
