@@ -1,0 +1,37 @@
+# corporatetraveldc-ais-catcher.container.disabled
+# AIS vessel decoder -- 162 MHz (Ch 87B 161.975 / Ch 88B 162.025 MHz duplex)
+#
+# Serial: AIS0162 -- any standard RTL-SDR covers 162 MHz
+# Decoded data on port 8110 for dispatch-runner map vessel overlay
+# Feed targets via dispatch-secrets.env:
+#   AIS_AISHUB_ID, AIS_MARINETRAFFIC_KEY, AIS_VESSELFI_KEY
+#
+# Enable:
+#   mv corporatetraveldc-ais-catcher.container.disabled corporatetraveldc-ais-catcher.container
+#   systemctl --user daemon-reload
+#   systemctl --user start corporatetraveldc-ais-catcher.service
+
+[Unit]
+Description=Corporate Travel DC - AIS-catcher vessel decoder (162 MHz)
+After=network-online.target
+After=podman-user-wait-network-online.service
+
+[Container]
+Image=ghcr.io/jvde-github/ais-catcher:latest
+# AddDevice=/dev/rtl_sdr_ais0162:/dev/rtl_sdr_ais0162
+Volume=/dev/bus/usb:/dev/bus/usb:ro
+Environment=RTLSDR_SERIAL=AIS0162
+Environment=TZ=America/New_York
+PublishPort=127.0.0.1:8110:8110
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+Label=io.containers.autoupdate=registry
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+WantedBy=default.target
