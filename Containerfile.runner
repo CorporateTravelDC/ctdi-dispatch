@@ -1,0 +1,30 @@
+# dispatch-runner -- multi-stage build
+# Stage 1: Node 20 Alpine -- builds React/Vite frontend
+FROM node:20-alpine AS frontend-builder
+WORKDIR /build
+COPY src/runner/frontend/package*.json ./
+RUN npm ci --silent
+COPY src/runner/frontend/ .
+RUN npm run build
+
+# Stage 2: Python 3.13 slim -- FastAPI runtime
+FROM python:3.13-slim
+LABEL org.opencontainers.image.title="corporatetraveldc-runner"
+LABEL org.opencontainers.image.description="Corporate Travel DC Dispatch -- runner PWA"
+LABEL service="runner"
+
+WORKDIR /app
+COPY src/runner/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/runner/main.py .
+COPY --from=frontend-builder /build/dist ./static
+
+ENV STATIC_DIR=/app/static
+ENV DISPATCH_BASE_URL=http://127.0.0.1:8000
+ENV ULTRAFEEDER_URL=http://127.0.0.1:8080/data/aircraft.json
+ENV SSE_INTERVAL_SEC=30
+
+EXPOSE 8001
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", \
+     "--proxy-headers", "--forwarded-allow-ips=*", "--log-level", "info"]
