@@ -1,0 +1,14 @@
+# One-shot container â run by systemd timer at 00:00, 06:00, 12:00, 18:00 ET
+[Unit]
+Description=Corporate Travel DC â 6-hour ops brief (00/06/12/18 ET)
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/ops_brief.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=180
