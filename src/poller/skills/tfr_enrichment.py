@@ -5,6 +5,7 @@ Fallback: structured raw TFR/METAR summary pushed to ntfy if API unavailable.
 import argparse, logging, sys, time
 import anthropic, requests
 from common import config, db
+from common.push_dedup import PushDedup, content_hash as _ch
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
@@ -25,52 +26,20 @@ Given a list of active TFRs and current METAR conditions, produce a concise oper
 Be direct and specific. Maximum 300 words. No preamble."""
 
 
-import hashlib
-import json
 import time
 
-_TFR_DEDUP_SECS = 3600
-
-
-def _tfr_dedup_path():
-    import pathlib
-    return pathlib.Path(config.state_dir()) / "pusher-tfr-dedup.json"
-
-
-def _load_tfr_dedup():
-    p = _tfr_dedup_path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _save_tfr_dedup(state):
-    p = _tfr_dedup_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state))
-
-
-def _content_hash(text):
-    return hashlib.md5(text.encode()).hexdigest()[:12]
+_tfr_skill_dedup = PushDedup("tfr")
 
 
 def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -> None:
-    """Fire to tfr-alert with 1-hour dedup (shared state with pusher).
-    Fires immediately if content changed; otherwise suppressed for 1 hour.
+    """Fire to tfr-alert with 1-hour dedup via shared PushDedup.
+    stable_key (TFR IDs + VIP flags) prevents Claude narrative variation
+    from bypassing the hour gate. VIP pushes are always hot (no suppression).
     """
-    dedup = _load_tfr_dedup()
-    now = time.time()
     key = f"enrichment_{SKILL_NAME}"
-    # Use stable_key (TFR IDs + VIP flags) if provided; fall back to text hash.
-    # This prevents Claude narrative variation from bypassing the hour gate.
-    content_h = _content_hash(stable_key) if stable_key else _content_hash(text)
-    last = dedup.get(key, {})
-    content_changed = last.get("hash") != content_h
-    hour_elapsed = (now - last.get("ts", 0)) >= _TFR_DEDUP_SECS
-    if not content_changed and not hour_elapsed and last.get("ts"):
+    h = _ch(stable_key) if stable_key else _ch(text)
+    hot = "vip=True" in stable_key or "vip=1" in stable_key
+    if not _tfr_skill_dedup.should_push(key, h, hot=hot):
         log.debug("%s: tfr-alert suppressed (dedup, same content <1h)", SKILL_NAME)
         return
     try:
@@ -79,8 +48,7 @@ def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -
         headers = {"Authorization": f"Bearer {token}", "Priority": str(priority), "Title": title}
         requests.post(f"{base}/tfr-alert", data=text.encode(), headers=headers, timeout=10)
         requests.post(f"{base}/hot-alerts", data=text.encode(), headers=headers, timeout=10)
-        dedup[key] = {"ts": now, "hash": content_h}
-        _save_tfr_dedup(dedup)
+        _tfr_skill_dedup.record(key, h)
     except Exception as e:
         log.warning("%s: ntfy push failed: %s", SKILL_NAME, e)
 
