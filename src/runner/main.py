@@ -169,22 +169,26 @@ async def _acarshub_messages(msg_type: str, since: int) -> list:
         else:  # acars
             return [m for m in messages if m.get("msgtype", "").upper() == "ACARS"]
 
-async def _acarsdrama_messages(source: str, since: int,
+async def _acarsdrama_messages(protocol_filter: str, since: int,
                                 lat: float, lon: float, dist: int) -> list:
     """
     Fetch from acarsdrama Jumpseat API (primary external fallback).
     Endpoint: GET /v1/messages/search
-    Params:
-      source: vdl2 | acars | hfdl | messages
-      lat, lon, radius: geographic filter (nm)
-      limit: max results (default 100)
-      since: epoch timestamp for incremental fetches
+    Confirmed params (2026-06-09 test):
+      source=messages  -- only valid source value; returns all protocol types
+      lat, lon, radius -- geographic filter (nm)
+      limit            -- max results per page
+    Response: {"items": [{..., "protocol": "VDLM2"|"ACARS"|"HFDL", ...}]}
+    We filter client-side by protocol field since source= has no type filter.
+    protocol_filter: "VDLM2" | "ACARS" | "HFDL" | "" (empty = all types)
+    Multiple external sources are additive (feeder rate benefits), not
+    purely sequential fallback -- both acarsdrama and airframes may run.
     """
     if not ACARSDRAMA_TOKEN:
         return []
     url = f"{ACARSDRAMA_BASE}/messages/search"
-    params = {"source": source, "lat": lat, "lon": lon,
-              "radius": dist, "limit": 100}
+    params = {"source": "messages", "lat": lat, "lon": lon,
+              "radius": dist, "limit": 200}
     if since:
         params["since"] = since
     async with httpx.AsyncClient() as c:
@@ -192,8 +196,12 @@ async def _acarsdrama_messages(source: str, since: int,
                         headers=_acarsdrama_headers(), timeout=10)
         r.raise_for_status()
         data = r.json()
-        # Response shape: {messages: [...]} or [{...}, ...]
-        return data.get("messages") or (data if isinstance(data, list) else [])
+        items = data.get("items") or []
+        if protocol_filter:
+            pf = protocol_filter.upper()
+            items = [m for m in items
+                     if (m.get("protocol") or "").upper() == pf]
+        return items
 
 
 async def _airframes_messages(endpoint: str, since: int,
@@ -231,7 +239,7 @@ async def vdl2_messages(
     except Exception as e:
         log.debug("VDL2 local unavailable: %s -- trying acarsdrama", e)
     try:
-        msgs = await _acarsdrama_messages("vdl2", since, lat, lon, dist)
+        msgs = await _acarsdrama_messages("VDLM2", since, lat, lon, dist)
         return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("VDL2 acarsdrama unavailable: %s -- trying airframes.io", e)
@@ -258,7 +266,7 @@ async def acars_messages(
     except Exception as e:
         log.debug("ACARS local unavailable: %s -- trying acarsdrama", e)
     try:
-        msgs = await _acarsdrama_messages("acars", since, lat, lon, dist)
+        msgs = await _acarsdrama_messages("ACARS", since, lat, lon, dist)
         return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("ACARS acarsdrama unavailable: %s -- trying airframes.io", e)
@@ -285,7 +293,7 @@ async def hfdl_messages(
     except Exception as e:
         log.debug("HFDL local unavailable: %s -- trying acarsdrama", e)
     try:
-        msgs = await _acarsdrama_messages("hfdl", since, lat, lon, dist)
+        msgs = await _acarsdrama_messages("HFDL", since, lat, lon, dist)
         return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("HFDL acarsdrama unavailable: %s -- trying airframes.io", e)
