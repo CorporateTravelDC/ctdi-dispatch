@@ -1,0 +1,4 @@
+# RTL-SDR ADS-B dongle -- creates /dev/rtl_sdr_adsb symlink
+# Requires serial programmed: sudo rtl_eeprom -d <index> -s ADSB1090 && sudo rtl_eeprom -d <index> -w
+# Vendor 0bda = Realtek, Product 2838 = RTL2838
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="ADSB1090", SYMLINK+="rtl_sdr_adsb", MODE="0666", GROUP="plugdev"
