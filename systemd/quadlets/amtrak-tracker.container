@@ -1,0 +1,40 @@
+# amtrak-tracker.container
+# Push-primary Amtrak NEC status tracker for Washington Union Station (WAS).
+# Polls amtraker.com every POLL_INTERVAL_SECS, writes to amtrak_status table,
+# and stamps push:amtrak heartbeat so the poller's REST fallback stays idle.
+#
+# Belt-and-suspenders: if this container goes down, the poller's amtrak fetcher
+# (push_feed="amtrak" in FETCH_SCHEDULE) resumes direct amtraker.com polling
+# automatically once the heartbeat ages out (>90s).
+#
+# Manage: systemctl --user {start,stop,status,restart} amtrak-tracker
+
+[Unit]
+Description=Corporate Travel DC â Amtrak NEC push-primary tracker (WAS)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-amtrak-tracker:latest
+
+# Shared DB â tracker writes amtrak_status and stamps push:amtrak heartbeat
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+
+# Config (DISPATCH_DB, NTFY_URL, etc.) and secrets
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+# Tracker-specific overrides (can be set in dispatch.env instead)
+Environment=FILTER_STATION=WAS
+Environment=POLL_INTERVAL_SECS=300
+Environment=HISTORY_HOURS=24
+
+AutoUpdate=local
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target
