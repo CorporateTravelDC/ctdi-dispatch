@@ -6,12 +6,15 @@ import argparse, logging, sys, time
 import anthropic
 import requests
 from common import config, db
+from common.push_dedup import PushDedup, content_hash
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "route-impact"
 MODEL = "claude-sonnet-4-6"
+
+_route_dedup = PushDedup("route")
 
 SYSTEM_PROMPT = """You are a ground-transportation dispatch analyst for executive chauffeur operations
 in the Washington DC metropolitan area. You have deep knowledge of:
@@ -103,13 +106,27 @@ def main(force: bool = False) -> None:
         if status in ("ok", "fallback") and narrative:
             priority = 5 if vip_ids else 4
             title = f"Route Impact {'— VIP ACTIVE' if vip_ids else 'Update'}"
-            try:
-                base = config.ntfy_url()
-                token = config.ntfy_token()
-                hdrs = {"Authorization": f"Bearer {token}", "Priority": str(priority), "Title": title}
-                requests.post(f"{base}/hot-alerts", data=narrative.encode(), headers=hdrs, timeout=10)
-            except Exception as e:
-                log.warning("%s: hot-alerts push failed: %s", SKILL_NAME, e)
+            # VIP routes always hot-push (bypass 1hr dedup).
+            # Non-VIP route updates: 1hr content dedup -- suppress if same
+            # TFR/NAS set produced the same narrative within the last hour.
+            h = content_hash(
+                "|".join(t["id"] for t in sorted(inputs["tfrs"], key=lambda x: x["id"]))
+                + "|" + str(bool(vip_ids))
+            )
+            hot = bool(vip_ids)
+            if _route_dedup.should_push("route-impact", h, hot=hot):
+                try:
+                    base = config.ntfy_url()
+                    token = config.ntfy_token()
+                    hdrs = {"Authorization": f"Bearer {token}",
+                            "Priority": str(priority), "Title": title}
+                    requests.post(f"{base}/hot-alerts",
+                                  data=narrative.encode(), headers=hdrs, timeout=10)
+                    _route_dedup.record("route-impact", h)
+                except Exception as e:
+                    log.warning("%s: hot-alerts push failed: %s", SKILL_NAME, e)
+            else:
+                log.debug("%s: hot-alerts suppressed (dedup, same TFR set <1h)", SKILL_NAME)
 
     finally:
         log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result,
