@@ -84,7 +84,6 @@ def _is_trusted(request: Request) -> bool:
     if direct in ("127.0.0.1", "::1"):
         return True
     return _is_tailscale(_client_ip(request))
-        return False
 
 def _nm_to_deg(nm: float) -> float:
     """Approximate degrees latitude/longitude per nautical mile."""
