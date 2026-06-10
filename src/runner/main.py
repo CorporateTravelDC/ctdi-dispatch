@@ -74,51 +74,36 @@ def _is_tailscale(ip: str) -> bool:
         return False
 
 
+_TRUSTED_NETS = [
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+]
+
+
 def _is_trusted(request: Request) -> bool:
-    """
-    Trust two origins:
-    1. 127.0.0.1 -- came via cloudflared tunnel; CF Access is the boundary.
-    2. 100.64.0.0/10 -- direct Tailscale connection.
-    """
     direct = request.client.host if request.client else ""
-    if direct in ("127.0.0.1", "::1"):
-        return True
-    return _is_tailscale(_client_ip(request))
+    xff = _client_ip(request)
+    for candidate in filter(None, [direct, xff]):
+        try:
+            addr = ipaddress.ip_address(candidate)
+            if any(addr in net for net in _TRUSTED_NETS):
+                return True
+        except ValueError:
+            pass
+    log.warning("runner: untrusted direct=%s xff=%s path=%s", direct, xff, request.url.path)
+    return False
 
-def _nm_to_deg(nm: float) -> float:
-    """Approximate degrees latitude/longitude per nautical mile."""
-    return nm / 60.0
-
-def _bbox(lat: float, lon: float, dist_nm: int) -> dict:
-    """Bounding box dict for MarineTraffic area queries."""
-    d = _nm_to_deg(dist_nm)
-    return {
-        "MINLAT": round(lat - d, 4),
-        "MAXLAT": round(lat + d, 4),
-        "MINLON": round(lon - d, 4),
-        "MAXLON": round(lon + d, 4),
-    }
-
-def _acarsdrama_headers() -> dict:
-    """Auth header for api.jumpseat.acarsdrama.com -- Bearer sk_adjs_..."""
-    h = {"User-Agent": "corporatetraveldc/1.0", "Accept": "application/json"}
-    if ACARSDRAMA_TOKEN:
-        h["Authorization"] = f"Bearer {ACARSDRAMA_TOKEN}"
-    return h
-
-def _airframes_headers() -> dict:
-    """Auth header for api.airframes.io (secondary fallback)."""
-    h = {"User-Agent": "corporatetraveldc/1.0", "Accept": "application/json"}
-    if AIRFRAMES_TOKEN:
-        h["Authorization"] = f"Bearer {AIRFRAMES_TOKEN}"
-    return h
-
-# ── Auth middleware ----------------------------------------------------------
 
 @app.middleware("http")
 async def tailscale_gate(request: Request, call_next):
     if request.url.path in ("/healthz",):
         return await call_next(request)
+    if not _is_trusted(request):
+        return JSONResponse(status_code=403, content={"detail": "access denied"})
+    return await call_next(request)
     if not _is_trusted(request):
         raise HTTPException(status_code=403, detail="Tailscale or tunnel access only")
     return await call_next(request)
