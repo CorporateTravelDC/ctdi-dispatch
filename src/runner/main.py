@@ -16,7 +16,8 @@ import json
 import logging
 import math
 import os
-from typing import Optional
+import re
+from typing import Any, Optional
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -55,8 +56,12 @@ STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
 # ── Dispatch AI chat --------------------------------------------------------
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY",         "")
-DISPATCH_CHAT_MODEL = os.getenv("DISPATCH_CHAT_MODEL",      "claude-haiku-4-5-20251001")
+# Resolution order: local data → Ollama (local LLM) → Anthropic (remote, fallback).
+# No query is gated on any LLM being available — local data always answers.
+ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY",        "")
+DISPATCH_CHAT_MODEL = os.getenv("DISPATCH_CHAT_MODEL",       "claude-haiku-4-5-20251001")
+OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL",           "")   # e.g. http://127.0.0.1:11434
+OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL",              "llama3")
 
 # Default center: KDCA
 DEFAULT_LAT  = 38.8816
@@ -360,126 +365,345 @@ class AskRequest(BaseModel):
     history: list[dict] = []
 
 
-async def _build_dispatch_context() -> str:
-    """Gather current live dispatch state for the AI system prompt."""
+# Topic keyword patterns — used by the local resolver to classify queries.
+# A query matching any of these patterns gets a structured local answer
+# built directly from dispatch feed data, no LLM required.
+_TOPIC_RX: dict[str, re.Pattern] = {
+    "cps":     re.compile(r'\b(cps|go[\s\-]?no[\s\-]?go|hems)\b', re.I),
+    "weather": re.compile(r'\b(weather|metar|wind|ceiling|vis|wx)\b', re.I),
+    "tfr":     re.compile(r'\b(tfr|flight[\s\-]?restrict|potus|marine[\s\-]?one|vip[\s\-]?air)\b', re.I),
+    "amtrak":  re.compile(r'\b(amtrak|train|was\b|union[\s\-]?sta)\b', re.I),
+    "notam":   re.compile(r'\bnotams?\b', re.I),
+    "alerts":  re.compile(r'\b(alert|warning|advisory|nws)\b', re.I),
+    "feeds":   re.compile(r'\b(feed|health|nominal|degrad|error)\b', re.I),
+    "brief":   re.compile(r'\b(brief|summary|status|situation|sitrep)\b', re.I),
+}
+
+
+async def _build_context_rich() -> dict[str, Any]:
+    """
+    Fetch all dispatch feed data in parallel. Returns a structured dict keyed
+    by topic. Never raises — missing feeds produce no entry (caller handles).
+    This is the canonical data source; LLMs get a stringified view of this,
+    but the raw dict is available for local resolution without LLM involvement.
+    """
+    endpoints = {
+        "cps":     "api/v1/cps",
+        "weather": "api/v1/weather",
+        "tfr":     "api/v1/tfr",
+        "feeds":   "api/v1/feeds",
+        "alerts":  "api/v1/alerts",
+        "notam":   "api/v1/notams",
+        "amtrak":  "api/v1/amtrak",
+        "brief":   "api/v1/brief",
+    }
+    ctx: dict[str, Any] = {}
+    async with httpx.AsyncClient(timeout=5) as c:
+        tasks = {
+            topic: asyncio.create_task(c.get(f"{DISPATCH_BASE}/{path}"))
+            for topic, path in endpoints.items()
+        }
+        for topic, task in tasks.items():
+            try:
+                r = await task
+                if r.status_code == 200:
+                    ctx[topic] = r.json()
+            except Exception:
+                pass
+    return ctx
+
+
+def _context_to_str(ctx: dict[str, Any]) -> str:
+    """Flatten rich context dict to a string block for LLM injection."""
     parts: list[str] = []
-    async with httpx.AsyncClient() as c:
 
-        # CPS
-        try:
-            r = await c.get(f"{DISPATCH_BASE}/api/v1/cps", timeout=5)
-            if r.status_code == 200:
-                cps = r.json()
-                parts.append(
-                    f"CPS: {cps.get('score','?')} / {cps.get('label','?')} — "
-                    f"{cps.get('narrative','')}"
-                )
-        except Exception:
-            parts.append("CPS: unavailable")
+    if "cps" in ctx:
+        cps = ctx["cps"]
+        parts.append(
+            f"CPS: {cps.get('score','?')} / {cps.get('label','?')} — "
+            f"{cps.get('narrative','')}"
+        )
 
-        # Weather (METAR)
-        try:
-            r = await c.get(f"{DISPATCH_BASE}/api/v1/weather", timeout=5)
-            if r.status_code == 200:
-                wx = r.json()
-                stations = wx.get("stations") or {}
-                wx_lines = []
-                for icao, data in list(stations.items())[:5]:
-                    raw = (data.get("raw_text") or "").strip()
-                    if raw:
-                        wx_lines.append(f"  {icao}: {raw}")
-                if wx_lines:
-                    parts.append("WEATHER (METAR):\n" + "\n".join(wx_lines))
-        except Exception:
-            parts.append("WEATHER: unavailable")
+    if "weather" in ctx:
+        stations = ctx["weather"].get("stations") or {}
+        wx_lines = [
+            f"  {icao}: {(d.get('raw_text') or '').strip()}"
+            for icao, d in list(stations.items())[:6]
+            if d.get("raw_text")
+        ]
+        if wx_lines:
+            parts.append("WEATHER (METAR):\n" + "\n".join(wx_lines))
 
-        # Active TFRs
-        try:
-            r = await c.get(f"{DISPATCH_BASE}/api/v1/tfr", timeout=5)
-            if r.status_code == 200:
-                tfrs = r.json()
-                if isinstance(tfrs, list) and tfrs:
-                    vip = [t for t in tfrs if t.get("is_vip")]
-                    ids = ", ".join(
-                        t.get("notam_id") or t.get("id") or "?"
-                        for t in tfrs[:5]
-                    )
-                    parts.append(
-                        f"TFRS: {len(tfrs)} active ({len(vip)} VIP/POTUS) — {ids}"
-                    )
-                else:
-                    parts.append("TFRS: none active")
-        except Exception:
-            parts.append("TFRS: unavailable")
+    if "tfr" in ctx:
+        tfrs = ctx["tfr"]
+        if isinstance(tfrs, list) and tfrs:
+            vip = [t for t in tfrs if t.get("is_vip")]
+            ids = ", ".join(t.get("notam_id") or t.get("id") or "?" for t in tfrs[:6])
+            parts.append(f"TFRS: {len(tfrs)} active ({len(vip)} VIP/POTUS) — {ids}")
+        else:
+            parts.append("TFRS: none active")
 
-        # Feed health
-        try:
-            r = await c.get(f"{DISPATCH_BASE}/api/v1/feeds", timeout=5)
-            if r.status_code == 200:
-                feeds = r.json()
-                errors = [
-                    k for k, v in feeds.items()
-                    if isinstance(v, dict) and v.get("error")
-                ]
-                stale = [
-                    k for k, v in feeds.items()
-                    if isinstance(v, dict)
-                    and not v.get("error")
-                    and (v.get("age_seconds") or 0) > (v.get("stale_threshold_seconds") or 900)
-                ]
-                if errors:
-                    parts.append(f"FEED ERRORS: {', '.join(errors)}")
-                elif stale:
-                    parts.append(f"FEEDS STALE: {', '.join(stale)}")
-                else:
-                    parts.append("FEEDS: all nominal")
-        except Exception:
-            parts.append("FEEDS: unavailable")
+    if "feeds" in ctx:
+        feed_list = ctx["feeds"].get("feeds") if isinstance(ctx["feeds"], dict) else ctx["feeds"]
+        if isinstance(feed_list, list):
+            errors = [
+                f.get("feed_name") for f in feed_list
+                if f.get("error") and "pending" not in str(f.get("error", ""))
+            ]
+            stale  = [
+                f.get("feed_name") for f in feed_list
+                if (f.get("age_seconds") or 0) > 900 and not f.get("error")
+            ]
+            if errors:
+                parts.append(f"FEED ERRORS: {', '.join(filter(None, errors))}")
+            elif stale:
+                parts.append(f"FEEDS STALE: {', '.join(filter(None, stale))}")
+            else:
+                parts.append("FEEDS: nominal")
 
-        # NWS alerts
-        try:
-            r = await c.get(f"{DISPATCH_BASE}/api/v1/alerts", timeout=5)
-            if r.status_code == 200:
-                alerts = r.json()
-                if isinstance(alerts, list) and alerts:
-                    headlines = "; ".join(
-                        a.get("headline") or a.get("event") or "?"
-                        for a in alerts[:3]
-                    )
-                    parts.append(f"NWS ALERTS ({len(alerts)}): {headlines}")
-        except Exception:
-            pass  # non-critical
+    if "alerts" in ctx:
+        alerts = ctx["alerts"]
+        if isinstance(alerts, list) and alerts:
+            headlines = "; ".join(
+                a.get("headline") or a.get("event") or "?" for a in alerts[:3]
+            )
+            parts.append(f"NWS ALERTS ({len(alerts)}): {headlines}")
+
+    if "amtrak" in ctx:
+        amtrak = ctx["amtrak"]
+        summary = amtrak.get("summary", "")
+        if summary:
+            parts.append(f"AMTRAK/WAS: {summary}")
+
+    if "notam" in ctx:
+        notams = ctx["notam"]
+        if isinstance(notams, list) and notams:
+            parts.append(f"NOTAMS: {len(notams)} active")
 
     return "\n".join(parts)
+
+
+def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
+    """
+    Try to answer the query purely from local dispatch data.
+    Returns a formatted string if the query matches a known topic,
+    or None if LLM synthesis is needed for a general/free-form query.
+
+    This is Tier 0 — it runs before any LLM is consulted. If the query
+    can be answered here, it is — instantly, from local data, with no
+    network dependency beyond the dispatch spine itself.
+    """
+    matched = [t for t, rx in _TOPIC_RX.items() if rx.search(query)]
+    if not matched:
+        return None  # general query — pass to LLM tier
+
+    parts: list[str] = []
+
+    if "cps" in matched and "cps" in ctx:
+        cps = ctx["cps"]
+        score = cps.get("score", "?")
+        label = cps.get("label", "")
+        narr  = cps.get("narrative", "")
+        parts.append(f"CPS: {score}{(' — ' + label) if label else ''}")
+        if narr:
+            parts.append(narr)
+        factors = cps.get("factors") or {}
+        if factors:
+            parts.append("Factors: " + ", ".join(f"{k}={v}" for k, v in factors.items()))
+
+    if "weather" in matched and "weather" in ctx:
+        stations = ctx["weather"].get("stations") or {}
+        wx_lines = [
+            f"  {icao}: {(d.get('raw_text') or '').strip()}"
+            for icao, d in stations.items()
+            if d.get("raw_text")
+        ]
+        if wx_lines:
+            parts.append("METAR:\n" + "\n".join(wx_lines))
+        else:
+            parts.append("METAR: no data")
+
+    if "tfr" in matched and "tfr" in ctx:
+        tfrs = ctx["tfr"]
+        if isinstance(tfrs, list):
+            if tfrs:
+                vip = [t for t in tfrs if t.get("is_vip")]
+                parts.append(f"TFRs active: {len(tfrs)} ({len(vip)} VIP/POTUS)")
+                for t in tfrs[:8]:
+                    nid  = t.get("notam_id") or t.get("id") or "?"
+                    area = (t.get("area") or "")[:60]
+                    eff  = t.get("effective") or ""
+                    parts.append(f"  {nid}: {area}{(' eff '+eff) if eff else ''}".strip())
+            else:
+                parts.append("TFRs: none active")
+
+    if "amtrak" in matched and "amtrak" in ctx:
+        amtrak = ctx["amtrak"]
+        summary = amtrak.get("summary", "")
+        parts.append(f"Amtrak/WAS: {summary}" if summary else "Amtrak: no data")
+
+    if "notam" in matched and "notam" in ctx:
+        notams = ctx["notam"]
+        if isinstance(notams, list) and notams:
+            parts.append(f"NOTAMs: {len(notams)} active")
+            for n in notams[:5]:
+                nid  = n.get("notam_id") or n.get("id") or "?"
+                text = (n.get("text") or n.get("message") or "")[:100]
+                parts.append(f"  {nid}: {text}")
+        else:
+            parts.append("NOTAMs: none active")
+
+    if "alerts" in matched and "alerts" in ctx:
+        alerts = ctx["alerts"]
+        if isinstance(alerts, list) and alerts:
+            parts.append(f"NWS Alerts: {len(alerts)}")
+            for a in alerts[:5]:
+                headline = a.get("headline") or a.get("event") or "?"
+                parts.append(f"  {headline}")
+        else:
+            parts.append("NWS Alerts: none active")
+
+    if "feeds" in matched and "feeds" in ctx:
+        feed_list = (
+            ctx["feeds"].get("feeds")
+            if isinstance(ctx["feeds"], dict)
+            else ctx["feeds"]
+        )
+        if isinstance(feed_list, list):
+            errors = [
+                f.get("feed_name") for f in feed_list
+                if f.get("error") and "pending" not in str(f.get("error", ""))
+            ]
+            stale = [
+                f.get("feed_name") for f in feed_list
+                if (f.get("age_seconds") or 0) > 900 and not f.get("error")
+            ]
+            nominal = [
+                f.get("feed_name") for f in feed_list
+                if not f.get("error") and (f.get("age_seconds") or 0) <= 900
+            ]
+            if errors:
+                parts.append(f"Feed errors: {', '.join(filter(None, errors))}")
+            if stale:
+                parts.append(f"Feeds stale: {', '.join(filter(None, stale))}")
+            if not errors and not stale:
+                parts.append(f"Feeds nominal: {len(nominal)} active")
+
+    if "brief" in matched and "brief" in ctx:
+        brief = ctx["brief"]
+        if isinstance(brief, dict):
+            text = brief.get("text") or brief.get("summary") or brief.get("brief") or ""
+            if text:
+                parts.append(f"Brief:\n{text[:600]}")
+            else:
+                # flatten whatever keys exist
+                parts.append("Brief: " + json.dumps(brief, default=str)[:300])
+        elif isinstance(brief, str):
+            parts.append(f"Brief:\n{brief[:600]}")
+
+    return "\n".join(parts) if parts else None
+
+
+async def _llm_stream(system: str, messages: list[dict]):
+    """
+    Async generator — yields raw SSE data lines.
+    Priority: Ollama (local, no key needed) → Anthropic (remote, fallback).
+    Yields {"type":"no_llm"} if neither backend is configured.
+    """
+    # ── Tier 1: Ollama (local LLM, preferred) ────────────────────────────────
+    if OLLAMA_BASE_URL:
+        try:
+            payload = {
+                "model":    OLLAMA_MODEL,
+                "stream":   True,
+                "messages": [{"role": "system", "content": system}] + messages,
+            }
+            async with httpx.AsyncClient(timeout=120) as c:
+                async with c.stream(
+                    "POST",
+                    f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                    json=payload,
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            obj     = json.loads(line)
+                            content = obj.get("message", {}).get("content", "")
+                            if content:
+                                yield f"data: {json.dumps({'type': 'text', 'text': content})}\n\n"
+                            if obj.get("done"):
+                                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                                return
+                        except Exception:
+                            pass
+            return
+        except Exception as e:
+            log.warning("Ollama unavailable (%s) — falling back to Anthropic", e)
+
+    # ── Tier 2: Anthropic (remote, optional) ─────────────────────────────────
+    if ANTHROPIC_API_KEY:
+        try:
+            client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            async with client.messages.stream(
+                model=DISPATCH_CHAT_MODEL,
+                max_tokens=1024,
+                system=system,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+        except Exception as e:
+            log.error("Anthropic backend error: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+            return
+
+    # ── No LLM configured ────────────────────────────────────────────────────
+    yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
 
 
 @app.post("/api/ask")
 async def ask_dispatch(req: AskRequest):
     """
-    Streaming dispatch AI chat endpoint.
-    Gathers live dispatch context, then streams an Anthropic response via SSE.
-    Events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
-    If ANTHROPIC_API_KEY is missing or invalid the error arrives as an SSE error event —
-    the endpoint never hard-blocks so the panel always loads.
+    Local-first dispatch chat. Resolution order:
+
+    1. Fetch all dispatch feed data (always — unconditional, no LLM needed).
+    2. Run local resolver: if the query matches a known topic (CPS, weather,
+       TFRs, Amtrak, NOTAMs, alerts, feeds, brief), build a structured
+       answer directly from the data — zero LLM, zero external dependency.
+    3. If an LLM is configured (Ollama preferred, Anthropic fallback),
+       synthesize a natural-language response using the full data as context.
+    4. If no LLM is available, stream the local structured answer directly.
+
+    The LLM is a synthesis layer, not a gatekeeper. Every query returns
+    something useful as long as the dispatch spine is reachable.
+
+    SSE events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
     """
-    ctx = await _build_dispatch_context()
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ctx       = await _build_context_rich()
+    local     = _local_answer(req.message, ctx)
+    has_llm   = bool(OLLAMA_BASE_URL or ANTHROPIC_API_KEY)
+    ctx_str   = _context_to_str(ctx)
+    now       = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    system_prompt = f"""You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm specializing in automotive detailing, brand strategy, executive chauffeur transportation, and IT security. The operator is Corey Sheldon (WA1EM Extra class, ARES NoVA District 10, Skywarn L0344).
+    system_prompt = f"""You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: automotive detailing, brand strategy, executive chauffeur transportation, and IT security. Operator: Corey Sheldon (WA1EM Extra, ARES NoVA District 10, Skywarn L0344).
 
-You have access to live operational data from the dispatch system. Answer questions about weather, airspace, TFRs, flight status, NOTAMs, ground operations, HEMS go/no-go, and executive transportation planning. Be concise and operationally focused. Think like a professional dispatcher.
+All live operational data below comes from a local dispatch spine running on-premises. It is the authoritative source. Do not speculate beyond it. Answer questions about weather, airspace, TFRs, flight status, NOTAMs, ground operations, HEMS go/no-go, and executive transportation planning.
 
 CURRENT DISPATCH STATE ({now}):
-{ctx}
+{ctx_str if ctx_str else "No data available from dispatch spine."}
 
 OPERATOR CONTEXT:
-- Location: Arlington County, VA (15 min outside DC / KDCA)
-- Primary airspace concern: DC FRZ/SFRA, P-56A/B, concentric rings (50/100/150/250nm)
-- Ground operations: Executive chauffeur, Corporate Car Worldwide + Uber Black
-- Emergency/radio: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715
-- Pi-based dispatch spine on Tailscale (csexecutiveservices.ts.net)
+- Location: Arlington County, VA / KDCA (15 min)
+- Airspace: DC FRZ/SFRA, P-56A/B, concentric rings 50/100/150/250nm
+- Ground ops: Corporate Car Worldwide + Uber Black
+- Emergency: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715
+- Dispatch spine: Pi 5, Tailscale (csexecutiveservices.ts.net)
 
-Respond in plain text. No markdown headers or bullet symbols. Keep responses tactical and brief unless elaboration is explicitly requested. For go/no-go HEMS questions, always cite the CPS score and narrative above."""
+Respond in plain text. No markdown. Brief and tactical unless elaboration requested. For HEMS go/no-go, always cite CPS score and narrative."""
 
     messages: list[dict] = []
     for h in req.history[-20:]:
@@ -488,27 +712,38 @@ Respond in plain text. No markdown headers or bullet symbols. Keep responses tac
     messages.append({"role": "user", "content": req.message})
 
     async def stream_response():
-        try:
-            client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-            async with client.messages.stream(
-                model=DISPATCH_CHAT_MODEL,
-                max_tokens=1024,
-                system=system_prompt,
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+        nonlocal local
+        if not has_llm:
+            # No LLM available — serve local data directly, always useful.
+            answer = local or ctx_str or "Dispatch spine unreachable — no data available."
+            yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except Exception as e:
-            log.error("dispatch ask error: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+            return
+
+        # LLM available — synthesize with full context injected.
+        # If LLM is unavailable mid-stream, fall through to local answer.
+        got_any = False
+        async for chunk in _llm_stream(system_prompt, messages):
+            if '"type": "no_llm"' in chunk or '"type":"no_llm"' in chunk:
+                # Backend reported no LLM — fall back to local data
+                answer = local or ctx_str or "Dispatch spine unreachable."
+                yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+            got_any = True
+            yield chunk
+
+        if not got_any:
+            answer = local or ctx_str or "No response from any backend."
+            yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(
         stream_response(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
+            "Connection":    "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )

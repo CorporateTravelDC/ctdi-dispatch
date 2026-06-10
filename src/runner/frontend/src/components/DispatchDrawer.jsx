@@ -9,30 +9,28 @@ function Message({ msg }) {
   )
 }
 
-export default function DispatchDrawer({ liveState }) {
-  const [open, setOpen]           = useState(false)
-  const [history, setHistory]     = useState([])
-  const [input, setInput]         = useState('')
-  const [streaming, setStreaming] = useState(false)
+// open / setOpen are lifted to App so the topbar DISP button can control the drawer
+export default function DispatchDrawer({ liveState, open, setOpen }) {
+  const [history, setHistory]       = useState([])
+  const [input, setInput]           = useState('')
+  const [streaming, setStreaming]   = useState(false)
   const [streamText, setStreamText] = useState('')
-  const [error, setError]         = useState(null)
+  const [error, setError]           = useState(null)
 
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
   const cps = liveState?.cps
 
-  // Auto-scroll when new content arrives
+  // Auto-scroll on new content
   useEffect(() => {
     if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [history, streamText, open])
 
-  // Focus input when drawer opens
+  // Focus textarea when drawer opens
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 120)
   }, [open])
-
-  const openDrawer = useCallback(() => setOpen(true), [])
 
   const send = useCallback(async () => {
     const msg = input.trim()
@@ -94,15 +92,12 @@ export default function DispatchDrawer({ liveState }) {
     }
 
     inputRef.current?.focus()
-  }, [input, streaming, history])
+  }, [input, streaming, history, setOpen])
 
   const handleKey = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
     if (e.key === 'Escape') setOpen(false)
-  }, [send])
+  }, [send, setOpen])
 
   const clearHistory = () => {
     setHistory([])
@@ -113,17 +108,19 @@ export default function DispatchDrawer({ liveState }) {
 
   const cpsClass = cps?.score?.toLowerCase() || 'unknown'
 
+  if (!open) return null  // drawer closed — nothing rendered; topbar DISP button is the entry point
+
   return (
-    <div className={`dd-drawer${open ? ' dd-open' : ''}`}>
-      {/* ── Collapsed strip / always-visible header ── */}
-      <div className="dd-strip" onClick={!open ? openDrawer : undefined}>
+    <div className="dd-drawer dd-open">
+      {/* ── Header strip ── */}
+      <div className="dd-strip">
         <button
           className="dd-toggle"
-          onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
-          title={open ? 'Collapse' : 'Expand dispatch chat'}
-          aria-label="Toggle dispatch chat"
+          onClick={() => setOpen(false)}
+          title="Collapse dispatch panel"
+          aria-label="Close dispatch panel"
         >
-          {open ? '▼' : '▲'}
+          ▼
         </button>
 
         <span className="dd-strip-label">DISP QUERY</span>
@@ -134,94 +131,61 @@ export default function DispatchDrawer({ liveState }) {
           </span>
         )}
 
-        {/* Inline quick-send input (always visible, sends and opens drawer) */}
-        <input
-          ref={!open ? inputRef : undefined}
-          type="text"
-          className="dd-quick-input"
-          value={open ? '' : input}
-          onChange={e => { if (!open) setInput(e.target.value) }}
-          onFocus={() => { if (!open) setOpen(true) }}
-          onKeyDown={!open ? handleKey : undefined}
-          placeholder={streaming ? 'receiving...' : 'enter query'}
-          disabled={streaming}
-          onClick={e => e.stopPropagation()}
-          readOnly={open}
-          tabIndex={open ? -1 : 0}
-        />
+        {history.length > 0 && (
+          <button className="dd-clr-btn" onClick={clearHistory}>CLR</button>
+        )}
+      </div>
 
-        {!open && (
+      {/* ── Message log ── */}
+      <div className="dd-body">
+        <div className="dd-log">
+          {history.length === 0 && !streaming && (
+            <div className="dd-empty">
+              Ask anything — weather, TFRs, HEMS go/no-go, flight status,
+              Amtrak at WAS, route impact, NOTAMs, ADS-B.
+            </div>
+          )}
+
+          {history.map((m, i) => <Message key={i} msg={m} />)}
+
+          {streaming && (
+            <div className="dd-msg dd-msg-assistant">
+              <span className="dd-msg-role">DISP</span>
+              <span className="dd-msg-text">
+                {streamText
+                  ? <>{streamText}<span className="dd-cursor">▊</span></>
+                  : <span className="dd-thinking">receiving...</span>
+                }
+              </span>
+            </div>
+          )}
+
+          {error && <div className="dd-error">ERROR: {error}</div>}
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="dd-input-row">
+          <textarea
+            ref={inputRef}
+            className="dd-input"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="enter query — shift+enter for newline, esc to close"
+            disabled={streaming}
+            rows={2}
+            autoComplete="off"
+            spellCheck="false"
+          />
           <button
             className={`dd-send-btn${streaming ? ' busy' : ''}`}
-            onClick={e => { e.stopPropagation(); send() }}
+            onClick={send}
             disabled={streaming || !input.trim()}
           >
             {streaming ? '···' : 'SND'}
           </button>
-        )}
-
-        {open && history.length > 0 && (
-          <button
-            className="dd-clr-btn"
-            onClick={e => { e.stopPropagation(); clearHistory() }}
-          >
-            CLR
-          </button>
-        )}
-      </div>
-
-      {/* ── Expanded log area ── */}
-      {open && (
-        <div className="dd-body">
-          <div className="dd-log">
-            {history.length === 0 && !streaming && (
-              <div className="dd-empty">
-                Ask anything — weather, TFRs, HEMS go/no-go, flight status,
-                Amtrak at WAS, route impact, NOTAMs, ADS-B.
-              </div>
-            )}
-
-            {history.map((m, i) => <Message key={i} msg={m} />)}
-
-            {streaming && (
-              <div className="dd-msg dd-msg-assistant">
-                <span className="dd-msg-role">DISP</span>
-                <span className="dd-msg-text">
-                  {streamText
-                    ? <>{streamText}<span className="dd-cursor">▊</span></>
-                    : <span className="dd-thinking">receiving...</span>
-                  }
-                </span>
-              </div>
-            )}
-
-            {error && <div className="dd-error">ERROR: {error}</div>}
-            <div ref={bottomRef} />
-          </div>
-
-          <div className="dd-input-row">
-            <textarea
-              ref={inputRef}
-              className="dd-input"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKey}
-              placeholder="enter query — shift+enter for newline, esc to collapse"
-              disabled={streaming}
-              rows={2}
-              autoComplete="off"
-              spellCheck="false"
-            />
-            <button
-              className={`dd-send-btn${streaming ? ' busy' : ''}`}
-              onClick={send}
-              disabled={streaming || !input.trim()}
-            >
-              {streaming ? '···' : 'SND'}
-            </button>
-          </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }
