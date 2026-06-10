@@ -412,6 +412,12 @@ def main(force: bool = False) -> None:
         (state / "ops-brief.txt").write_text(full_text)
         (state / "daily-brief.txt").write_text(full_text)
 
+        # Archive to DB for brief history (BriefView 7-day history)
+        try:
+            db.archive_brief(full_text, brief_type="ops", source="skill")
+        except Exception as arch_err:
+            log.warning("brief archive failed: %s", arch_err)
+
         _send_ntfy_dual(full_text, concise, title)
 
     finally:
