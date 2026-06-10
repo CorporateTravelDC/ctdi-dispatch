@@ -41,7 +41,21 @@ for service in web poller pusher ingest amtrak-tracker; do
     log ""
 done
 
-log "All five images built successfully."
+log "All five core images built successfully."
+# -- dispatch-runner (multi-stage: Node 20 frontend + Python 3.13 backend) ---
+log "Building localhost/corporatetraveldc-runner:latest..."
+if podman build \
+    -f Containerfile.runner \
+    -t localhost/corporatetraveldc-runner:latest \
+    .; then
+    log "  localhost/corporatetraveldc-runner:latest: OK"
+else
+    log "  localhost/corporatetraveldc-runner:latest: FAILED"
+    exit 1
+fi
+log ""
+log "All images built successfully (including runner)."
+
 log ""
 log "Next steps:"
 log "  1. systemctl --user daemon-reload"
