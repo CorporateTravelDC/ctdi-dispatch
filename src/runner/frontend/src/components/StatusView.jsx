@@ -2,15 +2,23 @@ import { useState, useEffect } from 'react'
 
 function FeedRow({ name, feed }) {
   if (!feed) return null
-  const age = feed.age_seconds ?? null
-  const stale = age !== null && age > (feed.stale_threshold_seconds || 900)
-  const cls = age === null ? 'unknown' : stale ? 'stale' : 'fresh'
+  const age       = feed.age_seconds ?? null
+  const threshold = feed.stale_threshold_seconds || 900
+  const covered   = !!feed.push_covered  // REST staleness expected; push is live
+  const hasError  = feed.error && !feed.error.startsWith('pending_credentials')
+  const stale     = !covered && (age === null || age > threshold) && !hasError
+  const cls = covered ? 'push-covered'
+            : age === null ? 'unknown'
+            : stale || hasError ? 'stale'
+            : 'fresh'
   return (
     <tr className={`feed-row ${cls}`}>
       <td className="feed-name">{name}</td>
       <td>{age !== null ? `${Math.round(age)}s` : '--'}</td>
-      <td>{feed.error || 'ok'}</td>
-      <td className={`feed-dot ${cls}`} />
+      <td>
+        {covered ? 'push-covered' : feed.error || 'ok'}
+      </td>
+      <td><div className={`feed-dot ${cls}`} /></td>
     </tr>
   )
 }
