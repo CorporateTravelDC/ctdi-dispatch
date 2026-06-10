@@ -17,13 +17,14 @@ import logging
 import math
 import os
 import re
+import sqlite3
+import time
 from typing import Any, Optional
 
 import httpx
-from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -56,16 +57,15 @@ STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
 # ── Dispatch AI chat --------------------------------------------------------
-# Resolution order: local data → Ollama (local LLM) → Anthropic (remote, fallback).
-# No query is gated on any LLM being available — local data always answers.
-_raw_anthropic_key  = os.getenv("ANTHROPIC_API_KEY", "")
-# Reject placeholder values — real keys start with 'sk-ant-' and are 40+ chars
-ANTHROPIC_API_KEY   = _raw_anthropic_key if (
-    _raw_anthropic_key.startswith("sk-ant-") and len(_raw_anthropic_key) >= 40
-) else ""
-DISPATCH_CHAT_MODEL = os.getenv("DISPATCH_CHAT_MODEL",       "claude-haiku-4-5-20251001")
-OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL",           "")   # e.g. http://127.0.0.1:11434
-OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL",              "llama3")
+# Resolution order: local data → Ollama (local LLM, always local, no external deps).
+# Two context-switched models:
+#   CHAT  model: llama3.2:3b  — dispatch drawer conversations
+#   OSINT model: mistral       — EP/marketing narrative generation (in osint_monitor)
+# Operator may override per-request via message prefix "/model <name> <query>".
+OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://127.0.0.1:11434
+OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "llama3.2:3b") # dispatch drawer default
+OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "mistral")      # OSINT narrative default
+OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
 
 # Default center: KDCA
 DEFAULT_LAT  = 38.8816
@@ -416,6 +416,7 @@ async def ais_vessels(
 class AskRequest(BaseModel):
     message: str
     history: list[dict] = []
+    model:   Optional[str] = None  # operator override; None → use OLLAMA_CHAT_MODEL
 
 
 # Topic keyword patterns — used by the local resolver to classify queries.
@@ -657,20 +658,24 @@ def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
     return "\n".join(parts) if parts else None
 
 
-async def _llm_stream(system: str, messages: list[dict]):
+async def _llm_stream(system: str, messages: list[dict], model: str | None = None):
     """
-    Async generator — yields raw SSE data lines.
-    Priority: Ollama (local, no key needed) → Anthropic (remote, fallback).
-    Yields {"type":"no_llm"} if neither backend is configured.
+    Async generator — yields raw SSE data lines from Ollama.
+    model: explicit override; falls back to OLLAMA_CHAT_MODEL if None.
+    Yields {"type":"no_llm"} if Ollama is not configured.
+    Yields {"type":"model_info","model":"..."} as first event so the frontend
+    can display which model serviced the request.
     """
-    # ── Tier 1: Ollama (local LLM, preferred) ────────────────────────────────
+    # ── Ollama (local LLM, only backend) ─────────────────────────────────────
     if OLLAMA_BASE_URL:
+        resolved_model = model or OLLAMA_CHAT_MODEL
         try:
             payload = {
-                "model":    OLLAMA_MODEL,
+                "model":    resolved_model,
                 "stream":   True,
                 "messages": [{"role": "system", "content": system}] + messages,
             }
+            yield f"data: {json.dumps({'type': 'model_info', 'model': resolved_model})}\n\n"
             async with httpx.AsyncClient(timeout=120) as c:
                 async with c.stream(
                     "POST",
@@ -693,28 +698,9 @@ async def _llm_stream(system: str, messages: list[dict]):
                             pass
             return
         except Exception as e:
-            log.warning("Ollama unavailable (%s) — falling back to Anthropic", e)
+            log.warning("Ollama unavailable (%s) — no LLM fallback", e)
 
-    # ── Tier 2: Anthropic (remote, optional) ─────────────────────────────────
-    if ANTHROPIC_API_KEY:
-        try:
-            client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-            async with client.messages.stream(
-                model=DISPATCH_CHAT_MODEL,
-                max_tokens=1024,
-                system=system,
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            return
-        except Exception as e:
-            log.error("Anthropic backend error: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-            return
-
-    # ── No LLM configured ────────────────────────────────────────────────────
+    # ── No LLM configured or Ollama unreachable ───────────────────────────────
     yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
 
 
@@ -736,70 +722,131 @@ async def ask_dispatch(req: AskRequest):
 
     SSE events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
     """
-    ctx       = await _build_context_rich()
-    local     = _local_answer(req.message, ctx)
-    has_llm   = bool(OLLAMA_BASE_URL or ANTHROPIC_API_KEY)
-    ctx_str   = _context_to_str(ctx)
-    now       = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    has_llm = bool(OLLAMA_BASE_URL)
 
-    system_prompt = f"""You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: automotive detailing, brand strategy, executive chauffeur transportation, and IT security. Operator: Corey Sheldon (WA1EM Extra, ARES NoVA District 10, Skywarn L0344).
+    # ── Operator model override: "/model <name> <rest-of-message>" ────────────
+    # Stripping before history insertion so the model directive doesn't
+    # pollute future context (the assistant still sees the real query).
+    raw_message  = req.message.strip()
+    model_override: str | None = req.model  # from JSON body takes priority
+    _MODEL_PREFIX = re.compile(r'^/model\s+(\S+)\s*(.*)', re.S)
+    _mx = _MODEL_PREFIX.match(raw_message)
+    if _mx:
+        model_override = _mx.group(1).strip()
+        raw_message    = _mx.group(2).strip() or raw_message  # keep full msg if no remainder
+    effective_model = model_override or OLLAMA_CHAT_MODEL
 
-All live operational data below comes from a local dispatch spine running on-premises. It is the authoritative source. Do not speculate beyond it. Answer questions about weather, airspace, TFRs, flight status, NOTAMs, ground operations, HEMS go/no-go, and executive transportation planning.
-
-CURRENT DISPATCH STATE ({now}):
-{ctx_str if ctx_str else "No data available from dispatch spine."}
-
-OPERATOR CONTEXT:
-- Location: Arlington County, VA / KDCA (15 min)
-- Airspace: DC FRZ/SFRA, P-56A/B, concentric rings 50/100/150/250nm
-- Ground ops: Corporate Car Worldwide + Uber Black
-- Emergency: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715
-- Dispatch spine: Pi 5, Tailscale (csexecutiveservices.ts.net)
-
-Respond in plain text. No markdown. Brief and tactical unless elaboration requested. For HEMS go/no-go, always cite CPS score and narrative."""
-
-    messages: list[dict] = []
-    for h in req.history[-20:]:
-        if h.get("role") in ("user", "assistant") and h.get("content"):
-            messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": req.message})
+    # Load history from persistent DB (last 40 turns, chronological).
+    messages = await asyncio.to_thread(_chat_load_history, 40)
+    messages.append({"role": "user", "content": raw_message})
 
     async def stream_response():
-        nonlocal local
+        # Emit keep-alive comment immediately — flushes Cloudflare/proxy buffer
+        # before context fetch (up to 5s with parallel dispatch requests).
+        yield ": keep-alive\n\n"
+
+        ctx     = await _build_context_rich()
+        local   = _local_answer(raw_message, ctx)
+        ctx_str = _context_to_str(ctx)
+        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        system_prompt = (
+            "You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: "
+            "automotive detailing, brand strategy, executive chauffeur transportation, and IT security. "
+            "Operator: Corey Sheldon (WA1EM Extra, ARES NoVA District 10, Skywarn L0344).\n\n"
+            "All live operational data below comes from a local dispatch spine running on-premises. "
+            "It is the authoritative source. Do not speculate beyond it.\n\n"
+            f"CURRENT DISPATCH STATE ({now}):\n"
+            f"{ctx_str if ctx_str else 'No data available from dispatch spine.'}\n\n"
+            "OPERATOR CONTEXT:\n"
+            "- Location: Arlington County, VA / KDCA (15 min)\n"
+            "- Airspace: DC FRZ/SFRA, P-56A/B, concentric rings 50/100/150/250nm\n"
+            "- Ground ops: Corporate Car Worldwide + Uber Black\n"
+            "- Emergency: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715\n"
+            "- Dispatch spine: Pi 5, Tailscale (csexecutiveservices.ts.net)\n\n"
+            "Respond in plain text. No markdown. Brief and tactical unless elaboration requested. "
+            "For HEMS go/no-go, always cite CPS score and narrative."
+        )
+
+        # Accumulate assistant text for DB persistence.
+        assistant_parts: list[str] = []
+
+        def _capture(chunk: str) -> None:
+            """Extract text payload from SSE chunk and append to assistant_parts."""
+            try:
+                payload = json.loads(chunk.split("data: ", 1)[1].rstrip())
+                if payload.get("type") == "text":
+                    assistant_parts.append(payload["text"])
+            except Exception:
+                pass
+
         if not has_llm:
             # No LLM available — serve local data directly, always useful.
             answer = local or ctx_str or "Dispatch spine unreachable — no data available."
+            assistant_parts.append(answer)
             yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            await asyncio.to_thread(_chat_save_exchange, raw_message, answer)
             return
 
         # LLM available — synthesize with full context injected.
         # If LLM is unavailable mid-stream, fall through to local answer.
         got_any = False
-        async for chunk in _llm_stream(system_prompt, messages):
+        async for chunk in _llm_stream(system_prompt, messages, model=effective_model):
             if '"type": "no_llm"' in chunk or '"type":"no_llm"' in chunk:
                 # Backend reported no LLM — fall back to local data
                 answer = local or ctx_str or "Dispatch spine unreachable."
+                assistant_parts.append(answer)
                 yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                await asyncio.to_thread(
+                    _chat_save_exchange, raw_message, "".join(assistant_parts)
+                )
                 return
             got_any = True
+            _capture(chunk)
             yield chunk
 
         if not got_any:
             answer = local or ctx_str or "No response from any backend."
+            assistant_parts.append(answer)
             yield f"data: {json.dumps({'type': 'text', 'text': answer})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        # Persist the full exchange (using stripped raw_message, not the /model directive).
+        full_response = "".join(assistant_parts)
+        if full_response:
+            await asyncio.to_thread(_chat_save_exchange, raw_message, full_response)
 
     return StreamingResponse(
         stream_response(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "Connection":    "keep-alive",
-            "X-Accel-Buffering": "no",
+            "Cache-Control":      "no-cache",
+            "Connection":         "keep-alive",
+            "X-Accel-Buffering":  "no",
+            "X-Dispatch-Model":   effective_model,
         },
     )
+
+
+# ── Dispatch chat history endpoints ─────────────────────────────────────────
+
+@app.get("/api/chat/history")
+async def chat_history(limit: int = 80):
+    """Return persisted chat history (newest `limit` messages, chronological)."""
+    msgs = await asyncio.to_thread(_chat_load_history, limit)
+    return {"messages": msgs, "count": len(msgs)}
+
+
+@app.delete("/api/chat/history")
+async def chat_history_clear():
+    """Erase all chat history from the persistent DB."""
+    def _clear():
+        with sqlite3.connect(CHAT_DB_PATH) as c:
+            c.execute("DELETE FROM chat_messages")
+    await asyncio.to_thread(_clear)
+    return {"status": "cleared"}
 
 
 # ── Dispatch API transparent proxy -----------------------------------------
@@ -825,9 +872,93 @@ async def proxy_dispatch(path: str, request: Request):
                              "Content-Type": request.headers.get(
                                  "Content-Type", "application/json")},
                     timeout=10)
+        ct = r.headers.get("content-type", "")
+        if "text/plain" in ct:
+            return PlainTextResponse(r.text, status_code=r.status_code)
         return r.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Dispatch unavailable: {e}")
+
+# ── User layer config (cross-device persistence) ----------------------------
+# Stored at /var/lib/corporatetraveldc/runner-layer-config.json.
+# Gated behind CF Access for the domain — no additional token auth needed
+# for a single-operator deployment. The frontend sends Bearer token only when
+# it has one; this endpoint works either way.
+
+_CONFIG_PATH = os.path.join(os.getenv("STATE_DIR", "/var/lib/corporatetraveldc"),
+                            "runner-layer-config.json")
+CHAT_DB_PATH = os.path.join(os.getenv("STATE_DIR", "/var/lib/corporatetraveldc"),
+                            "dispatch-chat.db")
+
+
+# ── Persistent dispatch chat DB ─────────────────────────────────────────────
+
+def _chat_db_init() -> None:
+    """Create chat_messages table on first run."""
+    with sqlite3.connect(CHAT_DB_PATH) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS chat_messages (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            role     TEXT    NOT NULL CHECK(role IN ('user','assistant')),
+            content  TEXT    NOT NULL,
+            ts       REAL    NOT NULL
+        )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_messages(ts)")
+
+
+def _chat_load_history(limit: int = 40) -> list[dict]:
+    """Return last `limit` messages in chronological order."""
+    with sqlite3.connect(CHAT_DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            "SELECT role, content FROM chat_messages ORDER BY ts DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def _chat_save_exchange(user_msg: str, assistant_msg: str) -> None:
+    """Persist one user/assistant exchange atomically."""
+    now = time.time()
+    with sqlite3.connect(CHAT_DB_PATH) as c:
+        c.execute(
+            "INSERT INTO chat_messages (role, content, ts) VALUES (?, ?, ?)",
+            ("user", user_msg, now - 0.001),
+        )
+        c.execute(
+            "INSERT INTO chat_messages (role, content, ts) VALUES (?, ?, ?)",
+            ("assistant", assistant_msg, now),
+        )
+
+
+@app.on_event("startup")
+async def startup_event():
+    await asyncio.to_thread(_chat_db_init)
+
+@app.get("/api/v1/config")
+async def get_user_config():
+    """Return persisted layer config, or empty object if none saved yet."""
+    try:
+        with open(_CONFIG_PATH) as f:
+            return JSONResponse(json.load(f))
+    except FileNotFoundError:
+        return JSONResponse({})
+    except Exception as e:
+        log.warning("runner: config read failed: %s", e)
+        return JSONResponse({})
+
+@app.put("/api/v1/config")
+async def put_user_config(request: Request):
+    """Persist layer config from request body (JSON)."""
+    try:
+        body = await request.json()
+        os.makedirs(os.path.dirname(_CONFIG_PATH), exist_ok=True)
+        with open(_CONFIG_PATH, "w") as f:
+            json.dump(body, f)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        log.warning("runner: config write failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ── SSE state stream --------------------------------------------------------
 
@@ -867,8 +998,31 @@ async def sse_stream(request: Request):
                                       "X-Accel-Buffering": "no"})
 
 # ── Static SPA (must be last) -----------------------------------------------
+# index.html: never cache (ensures browser always fetches fresh shell)
+# /assets/*:  content-hashed filenames → immutable long-lived cache
 
 import os as _os
+from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class StaticCacheMiddleware(BaseHTTPMiddleware):
+    """Add correct Cache-Control headers to static SPA files."""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.endswith(".html") or path.endswith("sw.js") \
+                or path.endswith("manifest.webmanifest"):
+            # Entry points: always revalidate
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"]         = "no-cache"
+            response.headers["Expires"]        = "0"
+        elif "/assets/" in path and (path.endswith(".js") or path.endswith(".css")):
+            # Vite-hashed assets: safe to cache forever
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+app.add_middleware(StaticCacheMiddleware)
+
 if _os.path.isdir(STATIC_DIR):
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 else:

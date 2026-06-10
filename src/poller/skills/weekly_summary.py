@@ -1,7 +1,7 @@
 """
 weekly-summary — SR-1 compliant. SR-2 exempt (time-bounded weekly window).
 
-Model: claude-sonnet-4-6
+Model: ollama/mistral (OSINT-tier)
 Schedule: Sunday 18:00 ET (corporatetraveldc-weekly-summary.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes the past week; inputs always new.
@@ -9,11 +9,10 @@ SR-2: Not applicable — summarizes the past week; inputs always new.
 Produces a weekly operational summary pushed to ntfy topic "ops-brief" at priority 3.
 """
 
+import os
 import argparse
 import logging
 import time
-
-import anthropic
 
 from common import config, db
 from common.sr1_log import log_usage
@@ -21,7 +20,11 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "weekly-summary"
-MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "mistral")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 SYSTEM_PROMPT = """You are producing a weekly operational summary for an executive chauffeur
 operation in the Washington DC metropolitan area.
@@ -91,25 +94,12 @@ def build_weekly_content() -> str:
 
 def main(force: bool = False) -> None:
     gate_result = "new"
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
     status = "error"
 
     try:
-        content = build_weekly_content()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=700,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"This week's operational data:\n\n{content}"}],
-        )
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
+        summary = build_weekly_content()
         status = "ok"
-
-        summary = response.content[0].text
-        log.info("%s: weekly summary generated, %d+%d tokens",
-                 SKILL_NAME, input_tokens, output_tokens)
+        log.info("%s: weekly summary generated (deterministic)", SKILL_NAME)
 
         import pathlib
         p = pathlib.Path(config.state_dir()) / "weekly-summary.txt"
@@ -117,7 +107,7 @@ def main(force: bool = False) -> None:
         p.write_text(summary)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":

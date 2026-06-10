@@ -2,17 +2,20 @@
 route-impact — SR-1 + SR-2 compliant.
 Fallback: structured raw TFR/NAS impact text written to hot_alerts if API unavailable.
 """
+import os
 import argparse, logging, sys, time
-import anthropic
-import requests
-from common import config, db
+from common import db, ntfy_push as _ntfy
 from common.push_dedup import PushDedup, content_hash
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "route-impact"
-MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "mistral")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 _route_dedup = PushDedup("route")
 
@@ -76,34 +79,18 @@ def main(force: bool = False) -> None:
         log.debug("%s: inputs unchanged — skipping", SKILL_NAME)
         sys.exit(0)
 
-    input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     status = "error"
 
     try:
-        narrative = None
-        try:
-            client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-            response = client.messages.create(
-                model=MODEL, max_tokens=500,
-                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": build_user_message(inputs)}],
-            )
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-            cache_write_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-            status = "ok"
-            narrative = response.content[0].text
-        except anthropic.APIError as e:
-            log.warning("%s: API unavailable (%s) — using fallback", SKILL_NAME, e)
-            status = "fallback"
-            narrative = _fallback_narrative(inputs)
+        # Deterministic path — no API dependency.
+        narrative = _fallback_narrative(inputs)
+        status = "ok"
 
         vip_ids = [t["id"] for t in inputs["tfrs"] if t["vip"]]
         db.insert_route_narrative(narrative, [t["id"] for t in inputs["tfrs"]], vip_ids)
-        log.info("%s: %s — %d+%d tokens", SKILL_NAME, status, input_tokens, output_tokens)
+        log.info("%s: %s — %d VIP TFRs", SKILL_NAME, status, len(vip_ids))
 
-        if status in ("ok", "fallback") and narrative:
+        if narrative:
             priority = 5 if vip_ids else 4
             title = f"Route Impact {'— VIP ACTIVE' if vip_ids else 'Update'}"
             # VIP routes always hot-push (bypass 1hr dedup).
@@ -115,22 +102,14 @@ def main(force: bool = False) -> None:
             )
             hot = bool(vip_ids)
             if _route_dedup.should_push("route-impact", h, hot=hot):
-                try:
-                    base = config.ntfy_url()
-                    token = config.ntfy_token()
-                    hdrs = {"Authorization": f"Bearer {token}",
-                            "Priority": str(priority), "Title": title}
-                    requests.post(f"{base}/hot-alerts",
-                                  data=narrative.encode(), headers=hdrs, timeout=10)
-                    _route_dedup.record("route-impact", h)
-                except Exception as e:
-                    log.warning("%s: hot-alerts push failed: %s", SKILL_NAME, e)
+                _ntfy.send("hot-alerts", narrative, title=title, priority=priority,
+                           tags="car,rotating_light" if vip_ids else "car")
+                _route_dedup.record("route-impact", h)
             else:
                 log.debug("%s: hot-alerts suppressed (dedup, same TFR set <1h)", SKILL_NAME)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result,
-                  cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":

@@ -2,16 +2,20 @@
 tfr-enrichment — SR-1 + SR-2 compliant.
 Fallback: structured raw TFR/METAR summary pushed to ntfy if API unavailable.
 """
+import os
 import argparse, logging, sys, time
-import anthropic, requests
-from common import config, db
+from common import db
 from common.push_dedup import PushDedup, content_hash as _ch
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "tfr-enrichment"
-MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "mistral")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 SYSTEM_PROMPT = """You are a dispatch assistant for an executive chauffeur operation in the Washington DC
 metropolitan area. You have operational knowledge of DC-area airspace, VIP movement patterns,
@@ -28,11 +32,13 @@ Be direct and specific. Maximum 300 words. No preamble."""
 
 import time
 
+from common import ntfy_push as _ntfy
+
 _tfr_skill_dedup = PushDedup("tfr")
 
 
 def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -> None:
-    """Fire to tfr-alert with 1-hour dedup via shared PushDedup.
+    """Fire to tfr-alert + hot-alerts with 1-hour dedup via shared PushDedup.
     stable_key (TFR IDs + VIP flags) prevents Claude narrative variation
     from bypassing the hour gate. VIP pushes are always hot (no suppression).
     """
@@ -42,15 +48,9 @@ def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -
     if not _tfr_skill_dedup.should_push(key, h, hot=hot):
         log.debug("%s: tfr-alert suppressed (dedup, same content <1h)", SKILL_NAME)
         return
-    try:
-        base = config.ntfy_url()
-        token = config.ntfy_token().split(":")[0]
-        headers = {"Authorization": f"Bearer {token}", "Priority": str(priority), "Title": title}
-        requests.post(f"{base}/tfr-alert", data=text.encode(), headers=headers, timeout=10)
-        requests.post(f"{base}/hot-alerts", data=text.encode(), headers=headers, timeout=10)
-        _tfr_skill_dedup.record(key, h)
-    except Exception as e:
-        log.warning("%s: ntfy push failed: %s", SKILL_NAME, e)
+    _ntfy.send("tfr-alert",  text, title=title, priority=priority, tags="rotating_light")
+    _ntfy.send("hot-alerts", text, title=title, priority=priority, tags="rotating_light")
+    _tfr_skill_dedup.record(key, h)
 
 
 def build_inputs() -> dict:
@@ -113,28 +113,12 @@ def main(force: bool = False) -> None:
         log.debug("%s: inputs unchanged — skipping", SKILL_NAME)
         sys.exit(0)
 
-    input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     status = "error"
 
     try:
-        narrative = None
-        try:
-            client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-            response = client.messages.create(
-                model=MODEL, max_tokens=600,
-                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": build_user_message(inputs)}],
-            )
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-            cache_write_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-            status = "ok"
-            narrative = response.content[0].text
-        except anthropic.APIError as e:
-            log.warning("%s: API unavailable (%s) — using fallback narrative", SKILL_NAME, e)
-            status = "fallback"
-            narrative = _fallback_narrative(inputs)
+        # Deterministic fallback is now the primary path — no API dependency.
+        narrative = _fallback_narrative(inputs)
+        status = "ok"
 
         vip_ids = [t["id"] for t in inputs["tfr_ids"] if t["vip"]]
         all_ids = [t["id"] for t in inputs["tfr_ids"]]
@@ -155,8 +139,7 @@ def main(force: bool = False) -> None:
             _push_ntfy(narrative, title, priority=priority, stable_key=stable)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result,
-                  cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":

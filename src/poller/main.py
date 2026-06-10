@@ -48,6 +48,7 @@ SKILL_SCHEDULE: list[dict] = [
      "interval": 900, "active_interval": 300, "active_check": "train"},
     {"name": "flight-impact",   "script": "poller/skills/flight_impact.py",
      "interval": 900, "active_interval": 300, "active_check": "flight"},
+    {"name": "osint-monitor",   "script": "poller/skills/osint_monitor.py",  "interval": 900},
 ]
 
 # Daily/weekly skills are handled by systemd timers, not this scheduler.
@@ -199,6 +200,9 @@ class TriggerReactor:
                 await self._run_skill("poller/skills/cps_recompute.py", trigger_id, force=True)
             elif trigger_type == "force_opsplan_snapshot":
                 await self._run_skill("poller/fetchers/atcscc_opsplan.py",
+                                      trigger_id, force=True)
+            elif trigger_type == "force_osint_scrape":
+                await self._run_skill("poller/skills/osint_monitor.py",
                                       trigger_id, force=True)
             elif trigger_type == "push_test_alert":
                 from pusher import main as pusher_main
@@ -738,6 +742,7 @@ async def main() -> None:
     db.init_db_v7()
     db.init_db_v8()
     db.init_db_v9()
+    db.init_db_v10()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

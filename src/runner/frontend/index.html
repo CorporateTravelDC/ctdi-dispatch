@@ -2,9 +2,25 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="CSEX Dispatch" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)"  content="#040812" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#edf2fb" />
   <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
   <title>CS Executive Services — Dispatch</title>
+  <!-- Prevent FOUC: apply theme before first paint -->
+  <script>
+    (function () {
+      var saved  = localStorage.getItem('ctdc_theme');
+      var system = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      var theme  = saved || system;
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.style.colorScheme = theme;
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>
