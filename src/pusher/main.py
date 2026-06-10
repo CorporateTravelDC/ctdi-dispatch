@@ -23,6 +23,7 @@ import time
 import requests
 
 from common import config, db
+from common import ntfy_push
 from common.push_dedup import PushDedup, content_hash
 from poller.fetchers.metar import parse_wind_dir
 
@@ -31,36 +32,10 @@ log = logging.getLogger(__name__)
 PUSH_INTERVAL = 30  # Check every 30 seconds.
 
 
-def _ntfy_headers(priority: int, title: str, topic: str) -> dict:
-    headers = {
-        "Content-Type": "text/plain; charset=utf-8",
-        "X-Priority": str(priority),
-        "X-Title": title.encode("utf-8").decode("latin-1", errors="replace"),
-        "X-Tags": "satellite",
-    }
-    token = config.ntfy_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
 def send_ntfy(topic: str, message: str, priority: int = 3,
               title: str = "corporatetraveldc") -> bool:
-    """Send a push notification via ntfy. Returns True on success."""
-    url = f"{config.ntfy_url()}/{topic}"
-    try:
-        resp = requests.post(
-            url,
-            data=message.encode("utf-8"),
-            headers=_ntfy_headers(priority, title, topic),
-            timeout=10,
-        )
-        resp.raise_for_status()
-        log.info("ntfy push OK: topic=%s priority=%d", topic, priority)
-        return True
-    except Exception as e:
-        log.error("ntfy push FAILED: topic=%s error=%s", topic, e)
-        return False
+    """Send a push notification via ntfy. Delegates to common.ntfy_push."""
+    return ntfy_push.send(topic, message, title=title, priority=priority)
 
 
 def send_test_alert(message: str) -> bool:

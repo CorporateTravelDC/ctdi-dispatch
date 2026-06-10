@@ -1,7 +1,7 @@
 """
 ops-brief — unified 6-hour operational briefing (merged from daily-brief).
 
-Model: claude-sonnet-4-6
+Model: ollama/mistral (OSINT-tier)
 Schedule: 00:00, 06:00, 12:00, 18:00 ET (corporatetraveldc-ops-brief.timer)
 SR-1: log_usage() in finally block
 SR-2: Exempt — time-bounded input, inputs always new.
@@ -21,6 +21,7 @@ Pushes to:
 Both fire simultaneously.
 """
 
+import os
 import argparse
 import json
 import logging
@@ -29,15 +30,18 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import requests
-import anthropic
 
-from common import config, db
+from common import config, db, ntfy_push as _ntfy
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "ops-brief"
-MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "mistral")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -250,28 +254,8 @@ def _route_section() -> str:
 
 
 def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
-    # Strip label suffix from token (stored as "token:label" in secrets.env)
-    token = config.ntfy_token().split(":")[0]
-    base = config.ntfy_url()
-    headers_base = {"Authorization": f"Bearer {token}", "Priority": "3", "Title": title}
-
-    for topic, body, tags in [
-        ("dispatch-debriefs", full_text, "airplane,partly_sunny"),
-        ("dispatch", concise_text, "airplane"),
-    ]:
-        try:
-            resp = requests.post(
-                f"{base}/{topic}",
-                data=body.encode("utf-8"),
-                headers={**headers_base, "Tags": tags},
-                timeout=10,
-            )
-            if resp.ok:
-                log.info("ntfy %s OK (status=%d)", topic, resp.status_code)
-            else:
-                log.error("ntfy %s HTTP %d: %s", topic, resp.status_code, resp.text[:120])
-        except Exception as e:
-            log.error("ntfy %s FAILED: %s", topic, e)
+    """Delegates to common.ntfy_push.send_dual — click URLs set per-topic."""
+    _ntfy.send_dual(full_text, concise_text, title=title)
 
 
 def build_brief_content() -> tuple[str, str]:
@@ -357,55 +341,21 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
 
 
 def main(force: bool = False) -> None:
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
     status = "error"
-
-    # API error types that should trigger the data fallback rather than a silent crash
-    API_FALLBACK_ERRORS = (
-        anthropic.BadRequestError,       # credit balance too low
-        anthropic.AuthenticationError,   # invalid or revoked key
-        anthropic.PermissionDeniedError, # key lacks access
-        anthropic.RateLimitError,        # rate limited
-    )
 
     try:
         content, raw_appendix = build_brief_content()
 
-        try:
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=750,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": "Current operational data:\n\n" + content}],
-            )
-            input_tokens  = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            status = "ok"
+        # Deterministic brief — no API dependency.
+        full_text, concise = _build_fallback_brief(content)
+        status = "ok"
+        log.info("%s: brief generated (deterministic)", SKILL_NAME)
 
-            full_text = response.content[0].text
-            log.info("%s: %d+%d tokens", SKILL_NAME, input_tokens, output_tokens)
-
-            lines   = full_text.splitlines()
-            bot_idx = next((i for i, l in enumerate(lines) if "BOTTOM LINE" in l.upper()), None)
-            if bot_idx is not None:
-                concise = " ".join(l for l in lines[bot_idx + 1:bot_idx + 4] if l.strip()).strip()[:280]
-            else:
-                concise = " ".join(l for l in lines[:3] if l.strip())[:280]
-
-        except API_FALLBACK_ERRORS as api_err:
-            # Standing fallback: API key issue → push raw data brief to ntfy
-            # rather than silently failing. Operator sees data; can top up and
-            # the next scheduled run restores full AI narrative automatically.
-            log.warning("%s: API fallback triggered (%s: %s)", SKILL_NAME, type(api_err).__name__, api_err)
-            status = "fallback"
-            full_text, concise = _build_fallback_brief(content)  # raw_appendix not needed — fallback is already a data brief
-
-        # Hybrid layout — append raw METAR + NAS to both AI narrative and fallback
+        # Append raw METAR + NAS appendix
         full_text = full_text.rstrip() + raw_appendix
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
-        title     = f"OPS BRIEF {now_label}" if status == "ok" else f"OPS BRIEF {now_label} [FALLBACK]"
+        title     = f"OPS BRIEF {now_label}"
 
         state = pathlib.Path(config.state_dir())
         state.mkdir(parents=True, exist_ok=True)
@@ -421,7 +371,7 @@ def main(force: bool = False) -> None:
         _send_ntfy_dual(full_text, concise, title)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, "new")
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, "new")
 
 
 if __name__ == "__main__":
