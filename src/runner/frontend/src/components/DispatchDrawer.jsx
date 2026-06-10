@@ -60,6 +60,7 @@ export default function DispatchDrawer({ liveState, open, setOpen }) {
       const decoder = new TextDecoder()
       let buf = ''
       let accumulated = ''
+      let finished = false
 
       while (true) {
         const { done, value } = await reader.read()
@@ -69,21 +70,32 @@ export default function DispatchDrawer({ liveState, open, setOpen }) {
         buf = lines.pop()
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
-          try {
-            const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'text') {
-              accumulated += ev.text
-              setStreamText(accumulated)
-            } else if (ev.type === 'done') {
-              setHistory(prev => [...prev, { role: 'assistant', content: accumulated }])
-              setStreamText('')
-              setStreaming(false)
-              accumulated = ''
-            } else if (ev.type === 'error') {
-              throw new Error(ev.detail)
-            }
-          } catch (_) {}
+          let ev
+          try { ev = JSON.parse(line.slice(6)) } catch (_) { continue }
+          if (ev.type === 'text') {
+            accumulated += ev.text
+            setStreamText(accumulated)
+          } else if (ev.type === 'done') {
+            setHistory(prev => [...prev, { role: 'assistant', content: accumulated }])
+            setStreamText('')
+            setStreaming(false)
+            accumulated = ''
+            finished = true
+          } else if (ev.type === 'error') {
+            throw new Error(ev.detail || 'stream error')
+          } else if (ev.type === 'no_llm') {
+            // local-only answer already sent as text events; done event follows
+          }
         }
+      }
+
+      // Stream closed without a done event (server-side early exit or network drop)
+      if (!finished) {
+        if (accumulated) {
+          setHistory(prev => [...prev, { role: 'assistant', content: accumulated }])
+        }
+        setStreamText('')
+        setStreaming(false)
       }
     } catch (e) {
       setError(e.message)
