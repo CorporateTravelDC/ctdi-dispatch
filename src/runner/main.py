@@ -104,9 +104,6 @@ async def tailscale_gate(request: Request, call_next):
     if not _is_trusted(request):
         return JSONResponse(status_code=403, content={"detail": "access denied"})
     return await call_next(request)
-    if not _is_trusted(request):
-        raise HTTPException(status_code=403, detail="Tailscale or tunnel access only")
-    return await call_next(request)
 
 # ── Health -------------------------------------------------------------------
 
