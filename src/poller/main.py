@@ -289,7 +289,7 @@ class WatchlistSweep:
         """
         Check active flight watchlist entries for OOOI events and delays.
         Data source priority:
-          1. FlightAware AeroAPI  (if FLIGHTAWARE_API_KEY set)
+          1. FlightAware AeroAPI  (if FLIGHTAWARE_AEROAPI_KEY set)
           2. airplanes.live       (free, no key needed — primary live source)
           3. FDPS flight_events   (SWIM cache — when NMS provisioned)
         Triggers: OUT, OFF, ON, IN, delay >15min, delay >30min, diversion.
@@ -302,7 +302,7 @@ class WatchlistSweep:
             if not entries:
                 return
 
-            api_key = _os.environ.get("FLIGHTAWARE_API_KEY", "")
+            api_key = _os.environ.get("FLIGHTAWARE_AEROAPI_KEY", "")
             for entry in entries:
                 ident = entry["identifier"]
                 try:
