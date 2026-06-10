@@ -54,9 +54,10 @@ echo "Target:      ${ENV_FILE}"
 echo ""
 
 # -- acarsdrama Jumpseat (VDL2/ACARS/HFDL external source)
+# ~/.secrets/acarsdrama.token  ->  ACARSDRAMA_JUMPSEAT_TOKEN (sk_adjs_...)
 set_env "ACARSDRAMA_JUMPSEAT_TOKEN" "$(read_secret acarsdrama)"
 
-# -- airframes.io (secondary external source)
+# -- airframes.io (secondary external fallback for VDL2/ACARS/HFDL)
 set_env "AIRFRAMES_TOKEN" "$(read_secret airframes)"
 
 # -- MarineTraffic API key (AIS fallback)
@@ -71,6 +72,22 @@ set_env "NTFY_TOKEN" "$(read_secret ntfy)"
 # -- Anthropic API key
 set_env "ANTHROPIC_API_KEY" "$(read_secret anthropic)"
 
+# -- FlightAware AeroAPI (piaware feeder + watchlist enrichment)
+# ~/.secrets/flightaware.token  ->  FLIGHTAWARE_API_KEY
+set_env "FLIGHTAWARE_API_KEY" "$(read_secret flightaware)"
+
+# -- AirNav RadarBox feeder sharing key
+# ~/.secrets/airnavradar.token  ->  AIRNAVRADAR_SHARING_KEY
+set_env "AIRNAVRADAR_SHARING_KEY" "$(read_secret airnavradar)"
+
+# -- FlightRadar24 feeder sharing key
+# ~/.secrets/flightradar24.token  ->  FR24_SHARING_KEY
+set_env "FR24_SHARING_KEY" "$(read_secret flightradar24)"
+
+# -- PlaneFinder feeder sharing key
+# ~/.secrets/planefinder.token  ->  PLANEFINDER_SHARING_KEY
+set_env "PLANEFINDER_SHARING_KEY" "$(read_secret planefinder)"
+
 # -- AIS feeder keys
 set_env "AIS_AISHUB_ID"          "$(read_secret aishub)"
 set_env "AIS_MARINETRAFFIC_KEY"  "$(read_secret marinetraffic)"
@@ -81,4 +98,9 @@ echo "=== Done ==="
 echo "Restart containers to pick up changes:"
 echo "  systemctl --user restart corporatetraveldc-runner.service"
 echo "  systemctl --user restart corporatetraveldc-web.service"
+echo "  systemctl --user restart corporatetraveldc-web.service"
 echo "  systemctl --user restart corporatetraveldc-poller.service"
+echo "  systemctl --user restart corporatetraveldc-ingest.service"
+echo "  systemctl --user restart corporatetraveldc-fr24feed.service"
+echo "  systemctl --user restart corporatetraveldc-airnavradar.service"
+echo "  systemctl --user restart corporatetraveldc-planefinder.service"

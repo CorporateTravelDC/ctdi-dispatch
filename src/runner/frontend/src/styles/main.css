@@ -182,75 +182,116 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .sig-source.external { color: var(--go);     border-color: var(--go); }
 .sig-source.none     { color: var(--muted);  border-color: var(--border); }
 
-/* ── Dispatch AI chat panel ─────────────────────────────────────────────── */
-.disp-panel {
-  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+/* ── Dispatch drawer (bottom strip / slide-up chat) ─────────────────────── */
+/*
+ * Collapsed: 44px strip at the bottom of the flex layout.
+ * Expanded:  grows to 42vh, revealing message log above the input row.
+ * The .content flex area shrinks naturally — no fixed/absolute overlay.
+ */
+.dd-drawer {
+  flex-shrink: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Collapsed height — strip only */
+  max-height: 44px;
+  transition: max-height 0.22s ease-out;
 }
-.disp-header {
-  display: flex; align-items: center; gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background: var(--panel); border-bottom: 1px solid var(--border);
+.dd-drawer.dd-open {
+  max-height: 42vh;
+}
+
+/* Strip — always visible row */
+.dd-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.75rem;
+  height: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+.dd-drawer.dd-open .dd-strip { cursor: default; }
+
+.dd-toggle {
+  background: none; border: none; color: var(--cyan); font-size: 0.65rem;
+  cursor: pointer; padding: 0.2rem; flex-shrink: 0; font-family: var(--font);
+}
+.dd-strip-label {
+  font-size: 0.7rem; letter-spacing: 0.15em; color: var(--cyan); font-weight: bold;
   flex-shrink: 0;
 }
-.disp-title {
-  font-size: 0.75rem; letter-spacing: 0.15em; color: var(--cyan); font-weight: bold;
+.dd-quick-input {
+  flex: 1; min-width: 0;
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--font); font-size: 0.78rem; padding: 0.25rem 0.5rem;
+  border-radius: 2px; outline: none;
 }
-.disp-feed-warn {
-  font-size: 0.65rem; color: var(--nogo); border: 1px solid var(--nogo);
-  padding: 0.1rem 0.35rem; border-radius: 2px; letter-spacing: 0.08em;
-}
-.disp-clear-btn {
-  margin-left: auto; background: none; border: 1px solid var(--border);
-  color: var(--muted); font-family: var(--font); font-size: 0.65rem;
-  padding: 0.15rem 0.5rem; border-radius: 2px; cursor: pointer; letter-spacing: 0.08em;
-}
-.disp-clear-btn:hover { color: var(--text); border-color: var(--cyan); }
+.dd-quick-input:focus  { border-color: var(--cyan); }
+.dd-quick-input:disabled { opacity: 0.45; }
+/* In open state the quick-input is hidden (drawer has full input below) */
+.dd-drawer.dd-open .dd-quick-input { display: none; }
 
-.disp-log {
-  flex: 1; overflow-y: auto; padding: 1rem;
-  display: flex; flex-direction: column; gap: 0.8rem;
-}
-.disp-empty {
-  color: var(--muted); font-size: 0.8rem;
-  text-align: center; padding: 2.5rem 1.5rem; line-height: 1.7;
-  border: 1px dashed var(--border); border-radius: 4px;
-}
-.disp-msg {
-  display: flex; gap: 0.75rem; font-size: 0.8rem; line-height: 1.6;
-}
-.disp-msg-role {
-  font-size: 0.65rem; letter-spacing: 0.1em; padding-top: 0.15rem;
-  flex-shrink: 0; min-width: 3.2rem; font-weight: bold;
-}
-.disp-msg-user   .disp-msg-role { color: var(--cyan); }
-.disp-msg-assistant .disp-msg-role { color: var(--orange); }
-.disp-msg-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.disp-thinking { color: var(--muted); font-style: italic; }
-.disp-cursor   { opacity: 0.9; animation: blink 1s step-end infinite; }
-@keyframes blink { 50% { opacity: 0; } }
-.disp-error {
-  font-size: 0.75rem; color: var(--nogo);
-  border: 1px solid var(--nogo); padding: 0.4rem 0.7rem; border-radius: 2px;
-}
-
-.disp-input-row {
-  display: flex; gap: 0.5rem; padding: 0.75rem 1rem;
-  background: var(--panel); border-top: 1px solid var(--border);
-  flex-shrink: 0; align-items: flex-end;
-}
-.disp-input {
-  flex: 1; background: var(--bg); border: 1px solid var(--border);
-  color: var(--text); font-family: var(--font); font-size: 0.8rem;
-  padding: 0.4rem 0.6rem; border-radius: 2px; resize: none; line-height: 1.4;
-}
-.disp-input:focus { outline: none; border-color: var(--cyan); }
-.disp-input:disabled { opacity: 0.5; }
-.disp-send-btn {
+.dd-send-btn {
   background: var(--panel); border: 1px solid var(--cyan); color: var(--cyan);
-  font-family: var(--font); font-size: 0.75rem; letter-spacing: 0.1em;
-  padding: 0.4rem 0.9rem; border-radius: 2px; cursor: pointer; height: fit-content;
-  min-width: 3.5rem;
+  font-family: var(--font); font-size: 0.7rem; letter-spacing: 0.08em;
+  padding: 0.25rem 0.65rem; border-radius: 2px; cursor: pointer; flex-shrink: 0;
+  min-width: 3rem;
 }
-.disp-send-btn:hover:not(:disabled) { background: var(--cyan); color: var(--bg); }
-.disp-send-btn:disabled { opacity: 0.35; cursor: default; }
-.disp-send-btn.busy { border-color: var(--muted); color: var(--muted); }
+.dd-send-btn:hover:not(:disabled) { background: var(--cyan); color: var(--bg); }
+.dd-send-btn:disabled { opacity: 0.35; cursor: default; }
+.dd-send-btn.busy { border-color: var(--muted); color: var(--muted); }
+
+.dd-clr-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  font-family: var(--font); font-size: 0.65rem; padding: 0.15rem 0.45rem;
+  border-radius: 2px; cursor: pointer; letter-spacing: 0.08em; flex-shrink: 0;
+  margin-left: auto;
+}
+.dd-clr-btn:hover { color: var(--text); border-color: var(--cyan); }
+
+/* Expanded body (log + input) */
+.dd-body {
+  display: flex; flex-direction: column; flex: 1; overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+.dd-log {
+  flex: 1; overflow-y: auto; padding: 0.75rem 1rem;
+  display: flex; flex-direction: column; gap: 0.7rem;
+}
+.dd-empty {
+  color: var(--muted); font-size: 0.78rem;
+  text-align: center; padding: 1.5rem 1rem; line-height: 1.7;
+}
+.dd-msg {
+  display: flex; gap: 0.7rem; font-size: 0.78rem; line-height: 1.6;
+}
+.dd-msg-role {
+  font-size: 0.63rem; letter-spacing: 0.1em; padding-top: 0.15rem;
+  flex-shrink: 0; min-width: 3rem; font-weight: bold;
+}
+.dd-msg-user      .dd-msg-role { color: var(--cyan); }
+.dd-msg-assistant .dd-msg-role { color: var(--orange); }
+.dd-msg-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.dd-thinking { color: var(--muted); font-style: italic; }
+.dd-cursor   { opacity: 0.9; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.dd-error {
+  font-size: 0.73rem; color: var(--nogo);
+  border: 1px solid var(--nogo); padding: 0.3rem 0.6rem; border-radius: 2px;
+}
+.dd-input-row {
+  display: flex; gap: 0.5rem; padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border); flex-shrink: 0; align-items: flex-end;
+}
+.dd-input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); font-family: var(--font); font-size: 0.78rem;
+  padding: 0.35rem 0.55rem; border-radius: 2px; resize: none; line-height: 1.4;
+}
+.dd-input:focus { outline: none; border-color: var(--cyan); }
+.dd-input:disabled { opacity: 0.5; }
