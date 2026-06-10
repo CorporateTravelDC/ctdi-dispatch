@@ -46,6 +46,11 @@ export default function App() {
           <NavLink to="/tfr" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>TFR</NavLink>
           <NavLink to="/signals" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>SIGNALS</NavLink>
           <NavLink to="/brief" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>BRIEF</NavLink>
+          <button
+            className={`nav-link disp-topbar-btn${dispOpen ? ' active' : ''}`}
+            onClick={() => setDispOpen(o => !o)}
+            title="Dispatch query panel"
+          >DISP</button>
           <NavLink to="/admin" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>ADMIN</NavLink>
         </div>
         <div className="topbar-right">
@@ -55,14 +60,6 @@ export default function App() {
             title={adsbMode === 'local' ? 'UltraFeeder (local antenna)' : 'airplanes.live (full area)'}
           >
             ADS-B: {adsbMode.toUpperCase()}
-          </button>
-          {/* DISP toggle — always in topbar, reachable on mobile */}
-          <button
-            className={`disp-topbar-btn${dispOpen ? ' active' : ''}`}
-            onClick={() => setDispOpen(o => !o)}
-            title="Dispatch query panel"
-          >
-            DISP
           </button>
           <CpsIndicator cps={liveState?.cps} />
         </div>
