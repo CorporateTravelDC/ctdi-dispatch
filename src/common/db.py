@@ -1661,3 +1661,181 @@ def get_brief_by_id(brief_id: int) -> dict | None:
             "SELECT * FROM brief_archive WHERE id=?", (brief_id,)
         ).fetchone()
         return dict(row) if row else None
+
+
+# ── Schema V10 — OSINT scopes and items ───────────────────────────────────────
+
+SCHEMA_V10 = """
+CREATE TABLE IF NOT EXISTS osint_scopes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    label           TEXT    NOT NULL,
+    scope_type      TEXT    NOT NULL DEFAULT 'keyword',
+    query_terms     TEXT    NOT NULL,
+    feed_urls       TEXT    NOT NULL DEFAULT '',
+    push_threshold  TEXT    NOT NULL DEFAULT 'HIGH',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      REAL    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS osint_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_id        INTEGER REFERENCES osint_scopes(id) ON DELETE CASCADE,
+    title           TEXT    NOT NULL,
+    url             TEXT    NOT NULL,
+    source_name     TEXT,
+    published_at    REAL,
+    ingested_at     REAL    NOT NULL,
+    score           INTEGER NOT NULL DEFAULT 0,
+    score_label     TEXT    NOT NULL DEFAULT 'LOW',
+    narrative       TEXT,
+    pushed_at       REAL,
+    content_hash    TEXT    UNIQUE NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_osint_items_scope
+    ON osint_items(scope_id);
+CREATE INDEX IF NOT EXISTS idx_osint_items_score
+    ON osint_items(score DESC);
+CREATE INDEX IF NOT EXISTS idx_osint_items_ingested
+    ON osint_items(ingested_at DESC);
+"""
+
+
+def init_db_v10() -> None:
+    """Apply v10 schema — OSINT scopes and items."""
+    with conn() as c:
+        c.executescript(SCHEMA_V10)
+
+
+# ── OSINT scope helpers ────────────────────────────────────────────────────────
+
+def osint_add_scope(label: str, scope_type: str, query_terms: str,
+                    feed_urls: str = "", push_threshold: str = "HIGH") -> int:
+    """Create a new OSINT scope. Returns the new id."""
+    import time as _time
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO osint_scopes
+               (label, scope_type, query_terms, feed_urls, push_threshold, enabled, created_at)
+               VALUES (?,?,?,?,?,1,?)""",
+            (label, scope_type, query_terms, feed_urls, push_threshold, _time.time()),
+        )
+        return cur.lastrowid
+
+
+def osint_get_scopes(enabled_only: bool = True) -> list[dict]:
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        if enabled_only:
+            rows = c.execute(
+                "SELECT * FROM osint_scopes WHERE enabled=1 ORDER BY label"
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM osint_scopes ORDER BY label"
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def osint_get_scope(scope_id: int) -> dict | None:
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute("SELECT * FROM osint_scopes WHERE id=?", (scope_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def osint_update_scope(scope_id: int, **kwargs) -> bool:
+    """Update specific fields on a scope. Allowed: label, scope_type, query_terms,
+    feed_urls, push_threshold, enabled."""
+    allowed = {"label", "scope_type", "query_terms", "feed_urls", "push_threshold", "enabled"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with conn() as c:
+        c.execute(f"UPDATE osint_scopes SET {set_clause} WHERE id=?",
+                  (*updates.values(), scope_id))
+    return True
+
+
+def osint_delete_scope(scope_id: int) -> bool:
+    with conn() as c:
+        c.execute("DELETE FROM osint_scopes WHERE id=?", (scope_id,))
+    return True
+
+
+# ── OSINT item helpers ─────────────────────────────────────────────────────────
+
+def osint_save_item(scope_id: int, title: str, url: str, source_name: str | None,
+                    published_at: float | None, score: int, score_label: str,
+                    narrative: str | None, content_hash: str) -> bool:
+    """
+    Persist one scored OSINT item. Returns True if new, False if already exists.
+    Uses INSERT OR IGNORE so duplicate content_hash is a silent no-op.
+    """
+    import time as _time
+    with conn() as c:
+        cur = c.execute(
+            """INSERT OR IGNORE INTO osint_items
+               (scope_id, title, url, source_name, published_at,
+                ingested_at, score, score_label, narrative, content_hash)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (scope_id, title, url, source_name, published_at,
+             _time.time(), score, score_label, narrative, content_hash),
+        )
+        return cur.rowcount > 0
+
+
+def osint_get_feed(scope_id: int | None = None, min_score: int = 0,
+                   limit: int = 50) -> list[dict]:
+    """Return recent OSINT items, newest first. Optionally filtered by scope."""
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        if scope_id is not None:
+            rows = c.execute(
+                """SELECT i.*, s.label AS scope_label
+                   FROM osint_items i JOIN osint_scopes s ON s.id=i.scope_id
+                   WHERE i.scope_id=? AND i.score>=?
+                   ORDER BY i.ingested_at DESC LIMIT ?""",
+                (scope_id, min_score, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                """SELECT i.*, s.label AS scope_label
+                   FROM osint_items i JOIN osint_scopes s ON s.id=i.scope_id
+                   WHERE i.score>=?
+                   ORDER BY i.ingested_at DESC LIMIT ?""",
+                (min_score, limit),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def osint_get_unpushed(min_score: int = 7) -> list[dict]:
+    """Items that have never been pushed and meet the score threshold."""
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            """SELECT i.*, s.label AS scope_label, s.push_threshold
+               FROM osint_items i JOIN osint_scopes s ON s.id=i.scope_id
+               WHERE i.pushed_at IS NULL
+                 AND i.score >= ?
+                 AND s.enabled = 1
+               ORDER BY i.score DESC, i.ingested_at DESC""",
+            (min_score,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def osint_mark_pushed(item_id: int) -> None:
+    import time as _time
+    with conn() as c:
+        c.execute("UPDATE osint_items SET pushed_at=? WHERE id=?",
+                  (_time.time(), item_id))
+
+
+def osint_prune_items(max_age_days: int = 30) -> int:
+    """Delete items older than max_age_days. Returns count deleted."""
+    import time as _time
+    cutoff = _time.time() - (max_age_days * 86400)
+    with conn() as c:
+        cur = c.execute("DELETE FROM osint_items WHERE ingested_at < ?", (cutoff,))
+    return cur.rowcount
