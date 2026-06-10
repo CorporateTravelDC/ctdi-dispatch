@@ -72,9 +72,13 @@ set_env "NTFY_TOKEN" "$(read_secret ntfy)"
 # -- Anthropic API key
 set_env "ANTHROPIC_API_KEY" "$(read_secret anthropic)"
 
-# -- FlightAware AeroAPI (piaware feeder + watchlist enrichment)
-# ~/.secrets/flightaware.token  ->  FLIGHTAWARE_API_KEY
-set_env "FLIGHTAWARE_API_KEY" "$(read_secret flightaware)"
+# -- FlightAware feeder sharing key (piaware station key)
+# ~/.secrets/flightaware.token  ->  FLIGHTAWARE_FEEDER_KEY
+set_env "FLIGHTAWARE_FEEDER_KEY" "$(read_secret flightaware)"
+
+# -- FlightAware AeroAPI key (REST API, watchlist enrichment, flight data)
+# ~/.secrets/flightaware-aeroapi.token  ->  FLIGHTAWARE_AEROAPI_KEY
+set_env "FLIGHTAWARE_AEROAPI_KEY" "$(read_secret flightaware-aeroapi)"
 
 # -- AirNav RadarBox feeder sharing key
 # ~/.secrets/airnavradar.token  ->  AIRNAVRADAR_SHARING_KEY
