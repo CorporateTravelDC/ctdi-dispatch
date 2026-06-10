@@ -24,6 +24,7 @@ function useSSE() {
 
 export default function App() {
   const liveState = useSSE()
+  const [dispOpen, setDispOpen] = useState(false)
   const [adsbMode, setAdsbMode] = useState(
     () => localStorage.getItem('adsbMode') || 'local'
   )
@@ -55,6 +56,14 @@ export default function App() {
           >
             ADS-B: {adsbMode.toUpperCase()}
           </button>
+          {/* DISP toggle — always in topbar, reachable on mobile */}
+          <button
+            className={`disp-topbar-btn${dispOpen ? ' active' : ''}`}
+            onClick={() => setDispOpen(o => !o)}
+            title="Dispatch query panel"
+          >
+            DISP
+          </button>
           <CpsIndicator cps={liveState?.cps} />
         </div>
       </nav>
@@ -68,7 +77,8 @@ export default function App() {
           <Route path="/admin" element={<AdminView />} />
         </Routes>
       </main>
-      <DispatchDrawer liveState={liveState} />
+      {/* Drawer: position:fixed at bottom — visible on all screen sizes */}
+      <DispatchDrawer liveState={liveState} open={dispOpen} setOpen={setDispOpen} />
     </div>
   )
 }
