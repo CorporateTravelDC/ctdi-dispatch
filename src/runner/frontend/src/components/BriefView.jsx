@@ -23,10 +23,10 @@ export default function BriefView() {
   // Load current brief + history index on mount
   useEffect(() => {
     Promise.all([
-      fetch('/api/dispatch/api/v1/brief').then(r => r.text()),
+      fetch('/api/dispatch/api/v1/brief').then(r => r.ok ? r.text() : null),
       fetch('/api/dispatch/api/v1/brief/history?limit=7').then(r => r.json()).catch(() => []),
     ]).then(([text, hist]) => {
-      setBrief(text)
+      setBrief(text || null)
       setHistory(Array.isArray(hist) ? hist : [])
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -37,7 +37,7 @@ export default function BriefView() {
     if (selected === null) { setArchText(null); return }
     setArchLoading(true)
     fetch(`/api/dispatch/api/v1/brief/${selected}`)
-      .then(r => r.text())
+      .then(r => r.ok ? r.text() : Promise.reject(r.status))
       .then(t => { setArchText(t); setArchLoading(false) })
       .catch(() => { setArchText('Failed to load brief.'); setArchLoading(false) })
   }, [selected])

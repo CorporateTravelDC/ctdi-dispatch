@@ -2,6 +2,8 @@
 
 Real-time executive travel intelligence platform for the Washington, DC area. Monitors commercial flights (via FAA SWIM), Amtrak trains, weather, and airspace restrictions — and delivers push alerts the moment something changes. Runs as four rootless Podman containers managed by systemd Quadlets.
 
+📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS.
+
 ---
 
 ## Status
@@ -12,7 +14,8 @@ Real-time executive travel intelligence platform for the Washington, DC area. Mo
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
 | FAA SWIM NMS push feeds | Pending FAA credential provisioning |
-| Anthropic API skills | Pending credits |
+| Local LLM (Ollama) | llama3.2:3b (chat) + mistral (OSINT) — both warm |
+| Dispatch Drawer | Streaming chat with per-request model selector |
 
 ---
 
@@ -177,6 +180,49 @@ Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/sk
 
 ---
 
+## Supported Platforms
+
+> Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)** — feature matrix, per-platform notes, and package compatibility table.
+
+The server stack (Python services + Ollama) runs on any of the platforms below. The web UI is accessible from any modern browser, including iPhone and iPad via Cloudflare Tunnel or Tailscale.
+
+### Platform support matrix
+
+| Platform | Architecture | Server stack | Containers | Local Ollama | Install script |
+|---|---|---|---|---|---|
+| **Linux x86_64** | AMD64 | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
+| **Linux ARM64** (Pi 5, SBCs) | aarch64 | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
+| **macOS Apple Silicon** | arm64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
+| **macOS Intel** | x86_64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
+| **Windows x64** | AMD64 | ✅ via WSL2 | Docker Desktop / Podman Desktop | ✅ native | `install/install-windows.ps1` |
+| **Android ARM64** (tablet/kiosk) | aarch64 | ✅ bare Python | ❌ (Termux) | ✅ (Termux) | `install/install-android.sh` |
+| **iOS / iPadOS** (iPhone, iPad) | arm64 | ❌ (web client only) | ❌ | ❌ | — browse to deployment URL |
+
+### Notes by platform
+
+**Linux (x86_64 / ARM64)** — primary deployment target. Full Podman rootless container stack with systemd Quadlets. Fedora preferred; Debian/Ubuntu/Arch also supported by the installer. The `solace-pubsubplus` SWIM ingest library has prebuilt wheels for x86_64; ARM64 requires a source build.
+
+**macOS (Apple Silicon / Intel)** — full Python stack runs natively; Podman Machine or Docker Desktop provides the container layer. `solace-pubsubplus` (FAA SWIM NMS) is Linux-only — SWIM push feeds require running in a Linux VM or forwarding from a Pi. REST poll fallback covers all feeds automatically.
+
+**Windows x64** — the installer sets up WSL2 (Ubuntu or Fedora) and runs the Linux stack inside it. Ollama installs natively on Windows and is accessible from WSL2 at the host IP. Full container support via Docker Desktop or Podman Desktop.
+
+**Android ARM64 (tablet / kiosk)** — runs via Termux (install from F-Droid). All REST feeds and Ollama work; SWIM push ingest (`solace-pubsubplus`) is not supported. Use `Termux:Boot` for auto-start on reboot. Recommended models for constrained memory: `llama3.2:3b` (2.0 GB) or `phi3.5` (2.2 GB). For a tablet kiosk, point the browser at your Pi's Cloudflare Tunnel URL instead of running the server locally.
+
+**iOS / iPadOS (iPhone, iPad)** — no server-side install supported. Browse to `https://dispatch.csexecutiveservices.com` from Safari (or your Cloudflare Tunnel URL). Add to Home Screen for a PWA-like experience. The SSE event stream (`/api/v1/events`) works in Safari for live updates.
+
+### Python package compatibility
+
+| Package | Linux x86_64 | Linux ARM64 | macOS | Windows (WSL2) | Android (Termux) |
+|---|---|---|---|---|---|
+| `fastapi` / `uvicorn` / `pydantic` | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel |
+| `requests` / `httpx` / `slixmpp` | ✅ pure | ✅ pure | ✅ pure | ✅ pure | ✅ pure |
+| `lxml` | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel | ⚠ source build |
+| `solace-pubsubplus` (SWIM ingest) | ✅ wheel | ⚠ source build | ❌ Linux-only | ✅ in WSL2 | ❌ not supported |
+
+Packages marked ⚠ require build tools (`gcc`, `libxml2-dev`) but complete successfully with the installer.
+
+---
+
 ## Installation
 
 ### Prerequisites
@@ -187,6 +233,16 @@ Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/sk
 
 ### First-time setup
 
+**Quick install (Linux / macOS):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch/main/install/install.sh | bash
+# Windows: run install\install-windows.ps1 as Administrator in PowerShell
+# Android: run install/install-android.sh inside Termux
+```
+
+**Manual install:**
+
 ```bash
 # Clone the repo
 git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git /opt/corporatetraveldc
@@ -195,7 +251,8 @@ cd /opt/corporatetraveldc
 # Copy and populate secrets
 cp dispatch-secrets.env.example /etc/corporatetraveldc/dispatch-secrets.env
 chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
-# Edit dispatch-secrets.env and fill in ANTHROPIC_API_KEY, DISPATCH_TOKEN_SECRET, NTFY_TOKEN
+# Edit dispatch-secrets.env — add FAA_NOTAM_API_KEY, NTFY_TOKEN, and any data source credentials
+# No LLM API key required — all inference runs locally via Ollama
 
 # Build all four images
 bash build-images.sh
@@ -257,15 +314,122 @@ python -m pytest tests/ -x --tb=short
 
 ### Skill runtime rules
 
-Every skill that calls the Anthropic API must follow two rules:
+Every automated skill must follow two rules:
 
-**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block — always, including on error. Usage is logged to `/var/lib/corporatetraveldc/api-usage.csv`.
+**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block — always, including on error. Usage is logged to `/var/lib/corporatetraveldc/api-usage.csv`. The `model` field reflects the resolved Ollama model (or `"deterministic"` for skills that don't call an LLM).
 
-**SR-2** (`src/common/sr2_gate.py`): call `hash_gate()` before the API call. Hash only content-bearing fields (never timestamps). If gate returns `"skipped"`, call `sys.exit(0)` immediately. Support `--force` flag to bypass.
+**SR-2** (`src/common/sr2_gate.py`): call `hash_gate()` before any expensive computation or LLM call. Hash only content-bearing fields (never timestamps). If gate returns `"skipped"`, call `sys.exit(0)` immediately. Support `--force` flag to bypass.
 
 ### Schema migrations
 
 `src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … `SCHEMA_V8`). Each version is applied at startup via `init_db_v{N}()`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
+
+---
+
+## Local LLM — Ollama
+
+**This platform is designed to run entirely on local hardware.** No external LLM API key is required — all inference runs on-device via [Ollama](https://ollama.com). The only credentials in `dispatch-secrets.env` are for data sources (FAA, Amtrak, ntfy), not for AI providers.
+
+### Design
+
+```
+dispatch containers
+        │
+        │  OLLAMA_BASE_URL=http://host.containers.internal:11434
+        ▼
+  Ollama daemon (host)  ◄──  llama3.2:3b (chat)  +  mistral (OSINT)
+        │
+        └─ GPU / CPU inference — no external API calls, no data leaves the machine
+```
+
+Two model slots are loaded simultaneously (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=24h`). The `ollama-warmup.service` systemd oneshot fires a 1-token probe for each model on every boot so they are in RAM before the first real request.
+
+### Supported models
+
+| Model | Tag | Disk | Min RAM | Best for | Config var |
+|---|---|---|---|---|---|
+| **Llama 3.2 3B** | `llama3.2:3b` | 2.0 GB | 4 GB | Chat — fast, default | `OLLAMA_CHAT_MODEL` |
+| **Mistral 7B** | `mistral` | 4.1 GB | 8 GB | OSINT instruction-following, default | `OLLAMA_OSINT_MODEL` |
+| **Phi 3.5 Mini** | `phi3.5` | 2.2 GB | 4 GB | Ultralight chat — Pi 5 8 GB, tablet/kiosk | `OLLAMA_CHAT_MODEL` |
+| **Llama 3.1 8B** | `llama3.1:8b` | 4.7 GB | 8 GB | Chat upgrade — x86_64 or high-RAM ARM64 | `OLLAMA_CHAT_MODEL` |
+| **Gemma 2 9B** | `gemma2:9b` | 5.5 GB | 10 GB | Reasoning / deep analysis — x86_64 preferred | `OLLAMA_OSINT_MODEL` |
+| **Qwen 2.5 7B** | `qwen2.5:7b` | 4.7 GB | 8 GB | Multilingual OSINT — x86_64 preferred | `OLLAMA_OSINT_MODEL` |
+
+Default deployment (Pi 5 16 GB) uses `llama3.2:3b` + `mistral`. Swap to lighter models (`phi3.5` for both) on an 8 GB Pi or Android tablet.
+
+### LLM configuration — which files
+
+No code changes are required to swap models. Everything is driven by env vars:
+
+```
+/etc/corporatetraveldc/dispatch.env          ← model names; edit freely, non-secret
+/etc/corporatetraveldc/dispatch-secrets.env  ← data source credentials only (not LLM keys)
+/opt/corporatetraveldc/Modelfile.chat        ← operator system prompt for chat model (.gitignored)
+/opt/corporatetraveldc/Modelfile.osint       ← operator system prompt for OSINT model (.gitignored)
+```
+
+**To switch models** — edit `dispatch.env`:
+
+```bash
+# Lightweight setup (8 GB RAM, tablet/kiosk)
+OLLAMA_CHAT_MODEL=phi3.5
+OLLAMA_OSINT_MODEL=phi3.5
+
+# Upgrade path (16+ GB RAM, x86_64)
+OLLAMA_CHAT_MODEL=llama3.1:8b
+OLLAMA_OSINT_MODEL=qwen2.5:7b
+```
+
+Then rebuild and restart: `bash build-images.sh && systemctl --user restart corporatetraveldc-{web,poller}`
+
+**Custom operator context** — each deployment can bake in its own system prompt via Modelfiles (`.gitignored`; copy from `.template` files in the repo root):
+
+```bash
+cp Modelfile.chat.template Modelfile.chat    # fill in operator context
+cp Modelfile.osint.template Modelfile.osint  # fill in operator context
+bash build-models.sh                         # creates csexec-chat + csexec-osint
+```
+
+Then set `OLLAMA_CHAT_MODEL=csexec-chat` and `OLLAMA_OSINT_MODEL=csexec-osint` in `dispatch.env`.
+
+### Cloud LLM alternatives (optional)
+
+The platform is fully self-contained without cloud APIs. If you want to wire in a cloud provider as an optional fallback, add its key to `dispatch-secrets.env` and update the relevant skill's `OLLAMA_BASE_URL` / model env var to point at the provider's OpenAI-compatible endpoint. No official cloud provider is integrated by default.
+
+### Context-switched routing
+
+- **Chat queries** (Dispatch Drawer `/api/ask`) → `OLLAMA_CHAT_MODEL` — low latency, warm in RAM
+- **OSINT narratives** (`osint_monitor` skill) → `OLLAMA_OSINT_MODEL` — instruction-following for EP/marketing output
+
+### Operator model override
+
+In the Dispatch Drawer, click the model badge in the header to select a model for the session, or type `/model <name>` in chat. To revert: click badge → Reset, or type `/model reset`. The server echoes the resolved model in an SSE `model_info` event and the `X-Dispatch-Model` response header; the drawer labels each assistant reply with the model that serviced it.
+
+Alternatively, supply `"model": "<name>"` in the `POST /api/ask` JSON body for a single-request override.
+
+### Network security
+
+Ollama binds to `0.0.0.0:11434` but is firewalled to Tailscale (`tailscale0`) and loopback. Rules are persisted in `/etc/iptables/rules.v4` and restored at boot by `iptables-restore.service`. Containers reach the host via `host.containers.internal:11434`.
+
+### Install / re-pull models
+
+```bash
+# Check what's present
+ollama list
+
+# Pull (run as corporatetraveldc)
+ollama pull llama3.2:3b
+ollama pull mistral
+
+# Or pull any supported model from the table above
+ollama pull phi3.5       # lightweight, 4 GB RAM
+ollama pull llama3.1:8b  # chat upgrade
+ollama pull gemma2:9b    # reasoning
+ollama pull qwen2.5:7b   # multilingual OSINT
+
+# Verify both warm models are loaded in RAM
+curl http://127.0.0.1:11434/api/ps
+```
 
 ---
 
@@ -299,7 +463,7 @@ systemctl --user restart corporatetraveldc-ingest
 | `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL, ~432 KB) |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret platform config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Credentials (mode 0600) |
-| `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 Anthropic usage log |
+| `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 skill usage log (model + token counts) |
 | `/var/lib/corporatetraveldc/skill-state/` | SR-2 hash gate state |
 | `/run/corporatetraveldc/triggers/` | Admin trigger files |
 | `/opt/corporatetraveldc/watchlists/` | Permanent watchlist YAML files |

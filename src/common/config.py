@@ -43,8 +43,6 @@ def get(key: str, default: str = "") -> str:
 
 # ── Named accessors ────────────────────────────────────────────────────────────
 
-def anthropic_api_key() -> str:
-    return require("ANTHROPIC_API_KEY")
 
 def ntfy_url() -> str:
     return get("NTFY_URL", "http://localhost:8080")
