@@ -4,31 +4,31 @@ credentials-file: /etc/cloudflared/28bde9a2-0bb2-4cca-a207-9b759c4739f1.json
 ingress:
   # dispatch â CF Access gated (Tailscale + auth required)
   - hostname: dispatch.csexecutiveservices.com
-    service: http://localhost:8000
+    service: http://127.0.0.1:8000
 
   # ops â PWA frontend, open over tunnel
   - hostname: ops.csexecutiveservices.com
-    service: http://localhost:8000
+    service: http://127.0.0.1:8000
 
   # dispatch-runner
   - hostname: dispatch-runner.csexecutiveservices.com
-    service: http://localhost:8001
+    service: http://127.0.0.1:8001
 
   # adsb â UltraFeeder tar1090
   - hostname: adsb.csexecutiveservices.com
-    service: http://localhost:8080
+    service: http://127.0.0.1:8080
 
   # acars â acarshub
   - hostname: acars.csexecutiveservices.com
-    service: http://localhost:9081
+    service: http://127.0.0.1:9081
 
   # ntfy
   - hostname: ntfy.csexecutiveservices.com
-    service: http://localhost:2586
+    service: http://127.0.0.1:2586
 
   # pihole â CF Access gated (Tailscale + auth required)
   - hostname: pihole.csexecutiveservices.com
-    service: http://localhost:8091
+    service: http://127.0.0.1:8091
 
   # apex and www â no content yet
   - hostname: csexecutiveservices.com
