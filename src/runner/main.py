@@ -23,7 +23,7 @@ import httpx
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -116,10 +116,12 @@ def _is_trusted(request: Request) -> bool:
 
 @app.middleware("http")
 async def tailscale_gate(request: Request, call_next):
-    if request.url.path in ("/healthz",):
-        return await call_next(request)
-    if not _is_trusted(request):
-        return JSONResponse(status_code=403, content={"detail": "access denied"})
+    # Admin routes require a trusted source (Tailscale / localhost).
+    # All other routes (UI, API data, chat) are open — CF tunnel + CF Access
+    # handles edge auth for dispatch-runner.csexecutiveservices.com.
+    if request.url.path.startswith("/admin"):
+        if not _is_trusted(request):
+            return JSONResponse(status_code=403, content={"detail": "access denied"})
     return await call_next(request)
 
 # ── Health -------------------------------------------------------------------
