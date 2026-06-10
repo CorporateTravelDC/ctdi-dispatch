@@ -9,7 +9,7 @@ ntfy topics:
   tfr-alert   — VIP/POTUS TFR — priority 5 (max)
   cps         — CPS score change — priority 3
   ops-brief   — daily/weekly brief — priority 3
-  ops-health  — freshness audit — priority 2
+  ops-health  — freshness audit / test alerts — priority 3
 """
 
 import asyncio
@@ -64,8 +64,9 @@ def send_ntfy(topic: str, message: str, priority: int = 3,
 
 
 def send_test_alert(message: str) -> bool:
-    """Admin-triggered test alert. Priority 2 — cannot match VIP priority by design."""
-    return send_ntfy("ops-health", f"[TEST] {message}", priority=2,
+    """Admin-triggered test alert. Priority 3 (default) — generates popup on phone.
+    Intentionally below VIP priority (5) and high-priority alerts (4)."""
+    return send_ntfy("ops-health", f"[TEST] {message}", priority=3,
                      title="corporatetraveldc test")
 
 
