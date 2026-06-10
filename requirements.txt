@@ -9,9 +9,6 @@ sse-starlette>=1.6.5
 # HTTP client (fetchers + pusher)
 requests>=2.32.0
 
-# Anthropic API (skills)
-anthropic>=0.28.0
-
 # Push ingest (NWWS-OI/XMPP, Amtrak HTTP, XML parsing)
 # python-qpid-proton is ingest-only; installed in Containerfile.ingest
 slixmpp>=1.8

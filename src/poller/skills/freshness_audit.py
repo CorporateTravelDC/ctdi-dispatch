@@ -1,7 +1,7 @@
 """
 freshness-audit — SR-1 compliant. SR-2 exempt (time-bounded).
 
-Model: claude-haiku-4-5-20251001
+Model: ollama/llama3.2:3b (chat-tier)
 Schedule: 06:00 ET daily (corporatetraveldc-freshness-audit.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes a time window; always new inputs.
@@ -10,11 +10,10 @@ Audits per-feed freshness against stale thresholds.
 Pushes to ntfy topic "ops-health" at priority 2.
 """
 
+import os
 import argparse
 import logging
 import time
-
-import anthropic
 
 from common import config, db
 from common.sr1_log import log_usage
@@ -22,7 +21,11 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "freshness-audit"
-MODEL = "claude-haiku-4-5-20251001"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_CHAT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "llama3.2:3b")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 # Stale thresholds in seconds — per SKILL.md feed freshness reference.
 STALE_THRESHOLDS = {
@@ -62,52 +65,55 @@ def build_audit_data() -> list[dict]:
     return result
 
 
+def _build_audit_report(audit_data: list[dict]) -> str:
+    """Generate deterministic freshness audit report."""
+    stale_count = sum(1 for f in audit_data if f["stale"])
+    fail_count  = sum(1 for f in audit_data if f["consecutive_failures"] > 0)
+
+    if stale_count == 0 and fail_count == 0:
+        overall = "OK"
+    elif stale_count > len(audit_data) // 2 or fail_count > 2:
+        overall = "CRITICAL"
+    else:
+        overall = "DEGRADED"
+
+    lines = [f"Feed health: {overall} ({len(audit_data)} feeds, "
+             f"{stale_count} stale, {fail_count} with failures)"]
+
+    stale_feeds = [f for f in audit_data if f["stale"]]
+    if stale_feeds:
+        lines.append("Stale feeds:")
+        for f in stale_feeds:
+            age = f"{f['age_seconds']}s" if f["age_seconds"] else "unknown"
+            err = f" [{f['error'][:60]}]" if f["error"] else ""
+            lines.append(f"  {f['feed']}: {age} lag, {f['consecutive_failures']} failures{err}")
+    else:
+        lines.append("All feeds current.")
+
+    return "\n".join(lines)
+
+
 def main(force: bool = False) -> None:
     gate_result = "new"
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
     status = "error"
 
     try:
         audit_data = build_audit_data()
         stale_count = sum(1 for f in audit_data if f["stale"])
-        fail_count = sum(1 for f in audit_data if f["consecutive_failures"] > 0)
+        fail_count  = sum(1 for f in audit_data if f["consecutive_failures"] > 0)
 
-        feed_lines = [
-            f"  {f['feed']}: age={f['age_seconds']}s stale={f['stale']} "
-            f"failures={f['consecutive_failures']}"
-            + (f" err={f['error'][:60]}" if f["error"] else "")
-            for f in audit_data
-        ]
-
-        content = (
-            f"Feed health snapshot ({len(audit_data)} feeds, "
-            f"{stale_count} stale, {fail_count} with failures):\n"
-            + "\n".join(feed_lines)
-        )
-
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=300,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
-        )
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
+        report = _build_audit_report(audit_data)
         status = "ok"
+        log.info("%s: audit complete — %d stale, %d failures",
+                 SKILL_NAME, stale_count, fail_count)
 
-        report = response.content[0].text
-        log.info("%s: audit complete — %d stale, %d failures, %d+%d tokens",
-                 SKILL_NAME, stale_count, fail_count, input_tokens, output_tokens)
-
-        # Write to state file.
         import pathlib
         p = pathlib.Path(config.state_dir()) / "freshness-audit.txt"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(report)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":

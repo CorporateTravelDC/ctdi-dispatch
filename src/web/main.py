@@ -77,6 +77,7 @@ async def startup() -> None:
     db.init_db_v7()
     db.init_db_v8()
     db.init_db_v9()
+    db.init_db_v10()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -518,6 +519,81 @@ async def get_opsplan_range(
         "count": len(plans),
     })
 
+# ── OSINT (Tier 0 — read; Tier 0 — write scopes behind same gate as watchlist) ──
+
+class OsintScopeRequest(BaseModel):
+    label:          str
+    scope_type:     str = "keyword"
+    query_terms:    str
+    feed_urls:      str = ""
+    push_threshold: str = "HIGH"
+
+
+@app.get("/api/v1/osint/feed")
+async def osint_feed(
+    scope_id: Optional[int] = Query(default=None),
+    min_score: int = Query(default=0, ge=0, le=10),
+    limit: int = Query(default=50, le=200),
+) -> JSONResponse:
+    """Recent OSINT items, newest first. Filter by scope_id and/or min_score."""
+    items = db.osint_get_feed(scope_id=scope_id, min_score=min_score, limit=limit)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@app.get("/api/v1/osint/scopes")
+async def osint_list_scopes() -> JSONResponse:
+    """Return all OSINT scopes (enabled and disabled)."""
+    scopes = db.osint_get_scopes(enabled_only=False)
+    return JSONResponse({"scopes": scopes, "count": len(scopes)})
+
+
+@app.post("/api/v1/osint/scopes", status_code=201)
+async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
+    """Create a new OSINT monitoring scope."""
+    allowed_types = {
+        # Generic
+        "keyword", "person", "org", "topic", "geo",
+        # Executive-protection context — get DC-area geo boost + EP narrative framing
+        "ep_threat", "ep_principal", "ep_venue", "executive_protection",
+        # Marketing / brand-intelligence context — CS ExecSvcs brand narrative framing
+        "brand_monitor", "market_intel", "competitor", "marketing",
+    }
+    if body.scope_type not in allowed_types:
+        raise HTTPException(400, f"scope_type must be one of {sorted(allowed_types)}")
+    allowed_thresholds = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+    if body.push_threshold not in allowed_thresholds:
+        raise HTTPException(400, f"push_threshold must be one of {sorted(allowed_thresholds)}")
+    scope_id = db.osint_add_scope(
+        label=body.label.strip(),
+        scope_type=body.scope_type,
+        query_terms=body.query_terms.strip(),
+        feed_urls=body.feed_urls.strip(),
+        push_threshold=body.push_threshold,
+    )
+    return JSONResponse({"id": scope_id, "status": "created"})
+
+
+@app.patch("/api/v1/osint/scopes/{scope_id}")
+async def osint_update_scope(
+    scope_id: int,
+    body: dict,
+) -> JSONResponse:
+    """Partially update a scope (label, query_terms, feed_urls, push_threshold, enabled)."""
+    if not db.osint_get_scope(scope_id):
+        raise HTTPException(404, f"Scope {scope_id} not found")
+    db.osint_update_scope(scope_id, **body)
+    return JSONResponse({"id": scope_id, "status": "updated"})
+
+
+@app.delete("/api/v1/osint/scopes/{scope_id}")
+async def osint_delete_scope(scope_id: int) -> JSONResponse:
+    """Delete an OSINT scope and all its items."""
+    if not db.osint_get_scope(scope_id):
+        raise HTTPException(404, f"Scope {scope_id} not found")
+    db.osint_delete_scope(scope_id)
+    return JSONResponse({"id": scope_id, "status": "deleted"})
+
+
 # ── Tier 1 — CERT / Tailscale ─────────────────────────────────────────────────
 
 @app.get("/api/v1/radio")
@@ -744,6 +820,20 @@ async def force_opsplan_snapshot(
          "plan_date": plan_date or "today"},
         status_code=202,
     )
+
+
+@app.post("/admin/force-osint-scrape")
+async def force_osint_scrape(
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Force an immediate OSINT scrape pass across all enabled scopes."""
+    trigger_id = str(uuid.uuid4())
+    trigger_dir = pathlib.Path(config.trigger_dir())
+    trigger_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"id": trigger_id, "type": "force_osint_scrape", "payload": {}}
+    (trigger_dir / f"{trigger_id}.json").write_text(json.dumps(payload))
+    db.insert_trigger(trigger_id, "force_osint_scrape", {})
+    return JSONResponse({"trigger_id": trigger_id, "status": "accepted"}, status_code=202)
 
 
 @app.post("/admin/push-test-alert")
