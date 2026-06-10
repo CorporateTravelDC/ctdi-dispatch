@@ -1,7 +1,7 @@
 """
 daily-brief — SR-1 compliant. SR-2 exempt (time-bounded input; always new).
 
-Model: claude-sonnet-4-6
+Model: ollama/mistral (OSINT-tier)
 Schedule: 05:00 ET daily (corporatetraveldc-daily-brief.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — this skill summarizes a time window; inputs are always new.
@@ -10,12 +10,11 @@ Produces a morning operational brief covering weather, TFRs, CPS, open items.
 Pushes to ntfy topic "ops-brief" at priority 3.
 """
 
+import os
 import argparse
 import json
 import logging
 import time
-
-import anthropic
 
 from common import config, db
 from common.sr1_log import log_usage
@@ -23,7 +22,11 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "daily-brief"
-MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "mistral")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 SYSTEM_PROMPT = """You are producing a morning operational brief for an executive chauffeur
 operation in the Washington DC metropolitan area. The operator also serves as a credentialed
@@ -84,36 +87,21 @@ def build_brief_content() -> str:
 
 
 def main(force: bool = False) -> None:
-    # SR-2 explicitly exempt for daily-brief — time-bounded, inputs always new.
-    gate_result = "new"  # Always new for time-bounded brief.
-
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
+    gate_result = "new"
     status = "error"
 
     try:
-        content = build_brief_content()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=600,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"Current operational data:\n\n{content}"}],
-        )
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
+        brief_text = build_brief_content()
         status = "ok"
+        log.info("%s: brief generated (deterministic)", SKILL_NAME)
 
-        brief_text = response.content[0].text
-        log.info("%s: brief generated, %d+%d tokens", SKILL_NAME, input_tokens, output_tokens)
-
-        # Write to state file for /api/v1/brief endpoint.
         import pathlib
         brief_path = pathlib.Path(config.state_dir()) / "daily-brief.txt"
         brief_path.parent.mkdir(parents=True, exist_ok=True)
         brief_path.write_text(brief_text)
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":
