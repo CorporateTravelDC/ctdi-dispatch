@@ -162,25 +162,72 @@ async def adsb_live(
 
 # ── Signal proxy helpers -----------------------------------------------------
 
+def _acarsdrama_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {ACARSDRAMA_TOKEN}",
+        "X-API-Key": ACARSDRAMA_TOKEN,
+        "Accept": "application/json",
+    }
+
+def _airframes_headers() -> dict:
+    return {
+        "X-Airframes-Token": AIRFRAMES_TOKEN,
+        "Accept": "application/json",
+    }
+
+def _normalize_jumpseat_msg(m: dict) -> dict:
+    """
+    Normalize a Jumpseat API message to the canonical frontend schema.
+
+    Jumpseat field → canonical field:
+      timestamp (ISO8601)  → timestamp (preserved) + time (HH:MM:SS UTC)
+      registration         → callsign (primary identifier)
+      flightNumber         → flight (stripped if literal "null")
+      cleanedText          → text
+      directionLabel       → direction
+      stationLocation      → location
+      aircraft.icaoType    → icao_type
+      aircraft.friendlyType→ aircraft_type
+      isAutomated          → automated
+    """
+    ts_raw = m.get("timestamp", "")
+    time_str = ""
+    try:
+        dt = datetime.datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        time_str = dt.strftime("%H:%M:%S")
+    except Exception:
+        time_str = ts_raw[11:19] if len(ts_raw) >= 19 else ts_raw
+
+    reg    = m.get("registration") or ""
+    flight = m.get("flightNumber") or ""
+    if flight in ("null", "None", "N/A"):
+        flight = ""
+    callsign = reg or flight or "?"
+
+    aircraft = m.get("aircraft") or {}
+    return {
+        "id":           m.get("id"),
+        "timestamp":    ts_raw,
+        "time":         time_str,
+        "callsign":     callsign,
+        "flight":       flight,
+        "registration": reg,
+        "protocol":     m.get("protocol", ""),
+        "direction":    m.get("directionLabel") or m.get("direction", ""),
+        "location":     m.get("stationLocation", ""),
+        "icao_type":    aircraft.get("icaoType") or "",
+        "aircraft_type": aircraft.get("friendlyType") or "",
+        "text":         (m.get("cleanedText") or "").strip(),
+        "automated":    bool(m.get("isAutomated")),
+    }
+
 async def _acarshub_messages(msg_type: str, since: int) -> list:
     """
-    Fetch messages from local acarshub REST API.
-    msg_type: "vdl2" | "acars" | "hfdl"
-    Returns list of message dicts or raises.
+    acarshub serves its UI via HTTP but message data via WebSocket only.
+    Its /api/* paths return HTML (the SPA shell), not JSON.
+    Raises immediately so callers fall through to acarsdrama Jumpseat.
     """
-    url = f"{ACARSHUB_URL}/api/0/all"
-    async with httpx.AsyncClient() as c:
-        r = await c.get(url, params={"since_message": since}, timeout=6)
-        r.raise_for_status()
-        data = r.json()
-        # acarshub returns {messages: [...], offset: N}
-        messages = data.get("messages") or data if isinstance(data, list) else []
-        if msg_type == "vdl2":
-            return [m for m in messages if m.get("msgtype", "").upper() in ("VDL2", "VDL-2")]
-        elif msg_type == "hfdl":
-            return [m for m in messages if m.get("msgtype", "").upper() == "HFDL"]
-        else:  # acars
-            return [m for m in messages if m.get("msgtype", "").upper() == "ACARS"]
+    raise NotImplementedError("acarshub is WebSocket-only; use Jumpseat fallback")
 
 async def _acarsdrama_messages(protocol_filter: str, since: int,
                                 lat: float, lon: float, dist: int) -> list:
@@ -214,7 +261,7 @@ async def _acarsdrama_messages(protocol_filter: str, since: int,
             pf = protocol_filter.upper()
             items = [m for m in items
                      if (m.get("protocol") or "").upper() == pf]
-        return items
+        return [_normalize_jumpseat_msg(m) for m in items]
 
 
 async def _airframes_messages(endpoint: str, since: int,
