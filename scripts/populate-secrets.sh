@@ -3,7 +3,10 @@
 # Reads ~/.secrets/{name}.{token,key} files and writes values into
 # /etc/corporatetraveldc/dispatch-secrets.env.
 #
-# Convention: ~/.secrets/{logicalname}.token or ~/.secrets/{logicalname}.key
+# Convention (enforced):
+#   {service}.token  = feeder sharing/auth key for that service's feeder daemon
+#   {service}.key    = REST API key for that same service
+# When a service has both, use read_secret with explicit extension (2nd arg).
 # Run as corporatetraveldc after adding or rotating any credential.
 # Safe to re-run -- overwrites only the keys it knows about.
 #
@@ -16,15 +19,24 @@ DRY_RUN=0
 [ "$1" = "--dry-run" ] && DRY_RUN=1
 
 read_secret() {
+    # Usage: read_secret <name> [token|key]
+    # If extension is supplied, reads that exact file.
+    # If omitted, tries .token then .key (legacy fallback).
     local name="$1"
+    local ext_hint="$2"
+    if [ -n "$ext_hint" ]; then
+        local f="${SECRETS_DIR}/${name}.${ext_hint}"
+        [ -f "$f" ] || return 1
+        cat "$f" | tr -d '[:space:]'
+        return
+    fi
     local file=""
-    # Try .token first, then .key
     for ext in token key; do
-        f="${SECRETS_DIR}/${name}.${ext}"
+        local f="${SECRETS_DIR}/${name}.${ext}"
         [ -f "$f" ] && file="$f" && break
     done
     [ -z "$file" ] && return 1
-    cat "$f" | tr -d '[:space:]'
+    cat "$file" | tr -d '[:space:]'
 }
 
 set_env() {
@@ -74,11 +86,11 @@ set_env "ANTHROPIC_API_KEY" "$(read_secret anthropic)"
 
 # -- FlightAware feeder sharing key (piaware station key)
 # ~/.secrets/flightaware.token  ->  FLIGHTAWARE_FEEDER_KEY
-set_env "FLIGHTAWARE_FEEDER_KEY" "$(read_secret flightaware)"
+set_env "FLIGHTAWARE_FEEDER_KEY" "$(read_secret flightaware token)"
 
 # -- FlightAware AeroAPI key (REST API, watchlist enrichment, flight data)
-# ~/.secrets/flightaware-aeroapi.token  ->  FLIGHTAWARE_AEROAPI_KEY
-set_env "FLIGHTAWARE_AEROAPI_KEY" "$(read_secret flightaware-aeroapi)"
+# ~/.secrets/flightaware.key  ->  FLIGHTAWARE_AEROAPI_KEY
+set_env "FLIGHTAWARE_AEROAPI_KEY" "$(read_secret flightaware key)"
 
 # -- AirNav RadarBox feeder sharing key
 # ~/.secrets/airnavradar.token  ->  AIRNAVRADAR_SHARING_KEY
