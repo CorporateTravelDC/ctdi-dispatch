@@ -18,7 +18,7 @@ COPY src/runner/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/runner/main.py .
-COPY --from=frontend-builder /build/dist ./static
+COPY --from=frontend-builder /static ./static
 
 ENV STATIC_DIR=/app/static
 ENV DISPATCH_BASE_URL=http://127.0.0.1:8000
