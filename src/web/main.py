@@ -75,6 +75,8 @@ async def startup() -> None:
     db.init_db_v5()
     db.init_db_v6()
     db.init_db_v7()
+    db.init_db_v8()
+    db.init_db_v9()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -158,15 +160,44 @@ async def get_feeds() -> JSONResponse:
     """Feed freshness — Tier 0."""
     feeds = db.get_feed_states()
     now = time.time()
+
+    # Per-feed stale thresholds (seconds) — 2× poll interval as default.
+    # Matches the values used in /healthz so stale logic is consistent.
+    stale_thresholds: dict[str, int] = {
+        "metar": 900, "tfr": 900, "nas": 900,
+        "nws": 2700, "notam": 900, "runsheet": 900,
+        "atcscc_opsplan": 7200,
+        "push:nws": 300, "push:fdps": 300, "push:stdds": 300,
+        "push:fns": 300, "push:itws": 300,
+        "push:amtrak": 300,
+    }
+    # REST feeds covered by a push source — stale REST is expected when push is live.
+    push_covers: dict[str, str] = {"nws": "push:nws"}
+    feed_by_name = {f["feed_name"]: f for f in feeds}
+
     result = []
     for f in feeds:
+        name = f["feed_name"]
         age = int(now - f["fetched_at"]) if f["fetched_at"] else None
+        threshold = stale_thresholds.get(name, 3600)
+
+        # Determine if this polling feed is covered by a healthy push source.
+        push_name = push_covers.get(name)
+        push_covered = False
+        if push_name:
+            push = feed_by_name.get(push_name)
+            if push and push["fetched_at"] and not push["error"]:
+                push_age = int(now - push["fetched_at"])
+                push_covered = push_age <= 300
+
         result.append({
-            "feed_name": f["feed_name"],
-            "fetched_at": f["fetched_at"],
-            "age_seconds": age,
-            "error": f["error"],
-            "consecutive_failures": f["consecutive_failures"],
+            "feed_name":              name,
+            "fetched_at":             f["fetched_at"],
+            "age_seconds":            age,
+            "stale_threshold_seconds": threshold,
+            "push_covered":           push_covered,
+            "error":                  f["error"],
+            "consecutive_failures":   f["consecutive_failures"],
         })
     return JSONResponse({"feeds": result})
 
@@ -220,6 +251,22 @@ async def get_brief() -> PlainTextResponse:
     if not brief_path.exists():
         return PlainTextResponse("No brief available yet.")
     return PlainTextResponse(brief_path.read_text())
+
+
+@app.get("/api/v1/brief/history")
+async def get_brief_history(limit: int = 7) -> JSONResponse:
+    """Return metadata for the last `limit` briefs (default 7). Tier 0."""
+    entries = db.get_brief_history(min(max(limit, 1), 30))
+    return JSONResponse(entries)
+
+
+@app.get("/api/v1/brief/{brief_id}")
+async def get_brief_by_id(brief_id: int) -> PlainTextResponse:
+    """Return the full content of an archived brief by ID. Tier 0."""
+    row = db.get_brief_by_id(brief_id)
+    if not row:
+        return PlainTextResponse("Brief not found.", status_code=404)
+    return PlainTextResponse(row["content"])
 
 
 @app.get("/api/v1/route")

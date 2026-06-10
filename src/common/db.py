@@ -1611,3 +1611,53 @@ def get_active_flight_events(airports: list[str] | None = None,
                 ORDER BY arrival_time ASC
             """, (cutoff,)).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── v9: brief_archive ─────────────────────────────────────────────────────────
+
+SCHEMA_V9 = """
+CREATE TABLE IF NOT EXISTS brief_archive (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at TEXT NOT NULL,          -- ISO-8601 UTC
+    brief_type   TEXT NOT NULL DEFAULT 'ops',  -- 'ops' | 'daily'
+    content      TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'skill'  -- 'skill' | 'manual'
+);
+CREATE INDEX IF NOT EXISTS idx_brief_archive_ts ON brief_archive (generated_at DESC);
+"""
+
+
+def init_db_v9() -> None:
+    """Apply v9 schema — brief_archive table."""
+    with conn() as c:
+        c.executescript(SCHEMA_V9)
+
+
+def archive_brief(content: str, brief_type: str = "ops",
+                  source: str = "skill") -> None:
+    """Store a brief in brief_archive. Called by ops_brief skill after write."""
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    with conn() as c:
+        c.execute(
+            "INSERT INTO brief_archive (generated_at, brief_type, content, source) VALUES (?,?,?,?)",
+            (now, brief_type, content, source)
+        )
+
+
+def get_brief_history(limit: int = 7) -> list[dict]:
+    """Return the last `limit` briefs, newest first."""
+    with conn() as c:
+        rows = c.execute(
+            "SELECT id, generated_at, brief_type, source FROM brief_archive ORDER BY generated_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_brief_by_id(brief_id: int) -> dict | None:
+    """Return a single archived brief by ID."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT * FROM brief_archive WHERE id=?", (brief_id,)
+        ).fetchone()
+        return dict(row) if row else None
