@@ -6,6 +6,7 @@ import TfrView from './components/TfrView.jsx'
 import BriefView from './components/BriefView.jsx'
 import AdminView from './components/AdminView.jsx'
 import SignalsView from './components/SignalsView.jsx'
+import DispatchView from './components/DispatchView.jsx'
 import CpsIndicator from './components/CpsIndicator.jsx'
 
 function useSSE() {
@@ -44,6 +45,7 @@ export default function App() {
           <NavLink to="/tfr" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>TFR</NavLink>
           <NavLink to="/signals" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>SIGNALS</NavLink>
           <NavLink to="/brief" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>BRIEF</NavLink>
+          <NavLink to="/dispatch" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>DISPATCH</NavLink>
           <NavLink to="/admin" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>ADMIN</NavLink>
         </div>
         <div className="topbar-right">
@@ -64,6 +66,7 @@ export default function App() {
           <Route path="/tfr" element={<TfrView />} />
           <Route path="/signals" element={<SignalsView />} />
           <Route path="/brief" element={<BriefView />} />
+          <Route path="/dispatch" element={<DispatchView liveState={liveState} />} />
           <Route path="/admin" element={<AdminView />} />
         </Routes>
       </main>
