@@ -10,17 +10,21 @@ Signal proxy fallback chain:
   All external fallbacks: 250nm radius centered on KDCA (38.8816, -77.0910)
 """
 import asyncio
+import datetime
 import ipaddress
 import json
 import logging
 import math
 import os
+from typing import Optional
 
 import httpx
+from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +53,10 @@ MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",     "")
 TAILSCALE_CIDR     = ipaddress.ip_network("100.64.0.0/10")
 STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
+
+# ── Dispatch AI chat --------------------------------------------------------
+ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY",         "")
+DISPATCH_CHAT_MODEL = os.getenv("DISPATCH_CHAT_MODEL",      "claude-haiku-4-5-20251001")
 
 # Default center: KDCA
 DEFAULT_LAT  = 38.8816
@@ -344,6 +352,171 @@ async def ais_vessels(
         log.warning("AIS MarineTraffic unavailable: %s", ext_err)
 
     return {"source": "none", "vessels": [], "count": 0}
+
+# ── Dispatch AI chat --------------------------------------------------------
+
+class AskRequest(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+async def _build_dispatch_context() -> str:
+    """Gather current live dispatch state for the AI system prompt."""
+    parts: list[str] = []
+    async with httpx.AsyncClient() as c:
+
+        # CPS
+        try:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/cps", timeout=5)
+            if r.status_code == 200:
+                cps = r.json()
+                parts.append(
+                    f"CPS: {cps.get('score','?')} / {cps.get('label','?')} — "
+                    f"{cps.get('narrative','')}"
+                )
+        except Exception:
+            parts.append("CPS: unavailable")
+
+        # Weather (METAR)
+        try:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/weather", timeout=5)
+            if r.status_code == 200:
+                wx = r.json()
+                stations = wx.get("stations") or {}
+                wx_lines = []
+                for icao, data in list(stations.items())[:5]:
+                    raw = (data.get("raw_text") or "").strip()
+                    if raw:
+                        wx_lines.append(f"  {icao}: {raw}")
+                if wx_lines:
+                    parts.append("WEATHER (METAR):\n" + "\n".join(wx_lines))
+        except Exception:
+            parts.append("WEATHER: unavailable")
+
+        # Active TFRs
+        try:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/tfr", timeout=5)
+            if r.status_code == 200:
+                tfrs = r.json()
+                if isinstance(tfrs, list) and tfrs:
+                    vip = [t for t in tfrs if t.get("is_vip")]
+                    ids = ", ".join(
+                        t.get("notam_id") or t.get("id") or "?"
+                        for t in tfrs[:5]
+                    )
+                    parts.append(
+                        f"TFRS: {len(tfrs)} active ({len(vip)} VIP/POTUS) — {ids}"
+                    )
+                else:
+                    parts.append("TFRS: none active")
+        except Exception:
+            parts.append("TFRS: unavailable")
+
+        # Feed health
+        try:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/feeds", timeout=5)
+            if r.status_code == 200:
+                feeds = r.json()
+                errors = [
+                    k for k, v in feeds.items()
+                    if isinstance(v, dict) and v.get("error")
+                ]
+                stale = [
+                    k for k, v in feeds.items()
+                    if isinstance(v, dict)
+                    and not v.get("error")
+                    and (v.get("age_seconds") or 0) > (v.get("stale_threshold_seconds") or 900)
+                ]
+                if errors:
+                    parts.append(f"FEED ERRORS: {', '.join(errors)}")
+                elif stale:
+                    parts.append(f"FEEDS STALE: {', '.join(stale)}")
+                else:
+                    parts.append("FEEDS: all nominal")
+        except Exception:
+            parts.append("FEEDS: unavailable")
+
+        # NWS alerts
+        try:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/alerts", timeout=5)
+            if r.status_code == 200:
+                alerts = r.json()
+                if isinstance(alerts, list) and alerts:
+                    headlines = "; ".join(
+                        a.get("headline") or a.get("event") or "?"
+                        for a in alerts[:3]
+                    )
+                    parts.append(f"NWS ALERTS ({len(alerts)}): {headlines}")
+        except Exception:
+            pass  # non-critical
+
+    return "\n".join(parts)
+
+
+@app.post("/api/ask")
+async def ask_dispatch(req: AskRequest):
+    """
+    Streaming dispatch AI chat endpoint.
+    Gathers live dispatch context, then streams an Anthropic response via SSE.
+    Events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
+    """
+    if not ANTHROPIC_API_KEY or len(ANTHROPIC_API_KEY) < 20:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY not configured — add real key to ~/.secrets/anthropic.token and re-run populate-secrets.sh",
+        )
+
+    ctx = await _build_dispatch_context()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    system_prompt = f"""You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm specializing in automotive detailing, brand strategy, executive chauffeur transportation, and IT security. The operator is Corey Sheldon (WA1EM Extra class, ARES NoVA District 10, Skywarn L0344).
+
+You have access to live operational data from the dispatch system. Answer questions about weather, airspace, TFRs, flight status, NOTAMs, ground operations, HEMS go/no-go, and executive transportation planning. Be concise and operationally focused. Think like a professional dispatcher.
+
+CURRENT DISPATCH STATE ({now}):
+{ctx}
+
+OPERATOR CONTEXT:
+- Location: Arlington County, VA (15 min outside DC / KDCA)
+- Primary airspace concern: DC FRZ/SFRA, P-56A/B, concentric rings (50/100/150/250nm)
+- Ground operations: Executive chauffeur, Corporate Car Worldwide + Uber Black
+- Emergency/radio: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715
+- Pi-based dispatch spine on Tailscale (csexecutiveservices.ts.net)
+
+Respond in plain text. No markdown headers or bullet symbols. Keep responses tactical and brief unless elaboration is explicitly requested. For go/no-go HEMS questions, always cite the CPS score and narrative above."""
+
+    messages: list[dict] = []
+    for h in req.history[-20:]:
+        if h.get("role") in ("user", "assistant") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": req.message})
+
+    async def stream_response():
+        try:
+            client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            async with client.messages.stream(
+                model=DISPATCH_CHAT_MODEL,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            log.error("dispatch ask error: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(
+        stream_response(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 # ── Dispatch API transparent proxy -----------------------------------------
 
