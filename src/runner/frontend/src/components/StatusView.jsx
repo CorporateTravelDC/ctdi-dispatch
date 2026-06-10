@@ -21,7 +21,16 @@ export default function StatusView({ liveState }) {
 
   useEffect(() => {
     fetch('/api/dispatch/api/v1/feeds')
-      .then(r => r.json()).then(setFeeds).catch(() => {})
+      .then(r => r.json())
+      .then(data => {
+        // API returns {feeds: [{feed_name, age_seconds, error, ...}, ...]}
+        // Normalize to {name: feedObj} for FeedRow
+        const list = Array.isArray(data) ? data : (data?.feeds ?? [])
+        const keyed = {}
+        list.forEach(f => { if (f.feed_name) keyed[f.feed_name] = f })
+        setFeeds(keyed)
+      })
+      .catch(() => {})
   }, [liveState])
 
   const factorColor = v =>
