@@ -1,7 +1,7 @@
 """
 flight-impact — SR-1 + SR-2 compliant.
 
-Model: claude-haiku-4-5-20251001 (Haiku — low spend, frequent cadence)
+Model: ollama/llama3.2:3b (chat-tier)
 Schedule: every 15 minutes normally; drops to 5 minutes when a 'flight' watchlist
           session is active (SKILL_SCHEDULE active_interval/active_check).
 SR-1: log_usage() in finally block
@@ -16,20 +16,23 @@ TODO(sfdps-live): once parse_sfdps is wired and a real SFDPS sample confirmed,
 remove the early-exit guard and enable the full narrative path.
 """
 
+import os
 import argparse
 import logging
 import sys
 
-import anthropic
-
-from common import config, db
+from common import db
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "flight-impact"
-MODEL = "claude-haiku-4-5-20251001"
+OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_CHAT_MODEL")
+                     or os.getenv("OLLAMA_MODEL")
+                     or "llama3.2:3b")
+MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 DC_AIRPORTS = ["KDCA", "KIAD", "KBWI"]
 
@@ -99,39 +102,18 @@ def main(force: bool = False) -> None:
         log.debug("%s: inputs unchanged — skipping API call", SKILL_NAME)
         sys.exit(0)
 
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
-    cache_read_tokens = cache_write_tokens = 0
     status = "error"
 
     try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=400,
-            system=[{
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            messages=[{"role": "user", "content": build_user_message(inputs)}],
-        )
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
-        cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-        cache_write_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-        status = "ok"
-
-        narrative = response.content[0].text
+        # Deterministic narrative — no API dependency.
+        narrative = build_user_message(inputs)
         flight_ids = [f["flight_id"] for f in inputs["flights"]]
         db.insert_route_narrative(narrative, flight_ids, [])
-
-        log.info("%s: OK — %d tokens in, %d out (cache read=%d write=%d)",
-                 SKILL_NAME, input_tokens, output_tokens,
-                 cache_read_tokens, cache_write_tokens)
+        status = "ok"
+        log.info("%s: OK — %d flights", SKILL_NAME, len(flight_ids))
 
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result,
-                  cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":
