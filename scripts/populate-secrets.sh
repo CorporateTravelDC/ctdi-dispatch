@@ -65,9 +65,13 @@ echo "Target:      ${ENV_FILE}"
 [ "$DRY_RUN" -eq 1 ] && echo "Mode:        DRY RUN"
 echo ""
 
-# -- acarsdrama Jumpseat (VDL2/ACARS/HFDL external source)
-# ~/.secrets/acarsdrama.token  ->  ACARSDRAMA_JUMPSEAT_TOKEN (sk_adjs_...)
-set_env "ACARSDRAMA_JUMPSEAT_TOKEN" "$(read_secret acarsdrama)"
+# -- acarsdrama feeder sharing key
+# ~/.secrets/acarsdrama.token  ->  ACARSDRAMA_FEEDER_KEY
+set_env "ACARSDRAMA_FEEDER_KEY" "$(read_secret acarsdrama token)"
+
+# -- acarsdrama Jumpseat privileged API key (VDL2/ACARS/HFDL enrichment)
+# ~/.secrets/jumpseat.token  ->  ACARSDRAMA_JUMPSEAT_TOKEN
+set_env "ACARSDRAMA_JUMPSEAT_TOKEN" "$(read_secret jumpseat token)"
 
 # -- airframes.io (secondary external fallback for VDL2/ACARS/HFDL)
 set_env "AIRFRAMES_TOKEN" "$(read_secret airframes)"
