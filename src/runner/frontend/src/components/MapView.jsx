@@ -1,3 +1,5 @@
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 // DC-area static airspace GeoJSON (approximate)
@@ -40,7 +42,6 @@ export default function MapView({ adsbMode, liveState }) {
   // Initialise map once
   useEffect(() => {
     if (leafletRef.current) return
-    const L = window.L
     const map = L.map(mapRef.current, {
       center: KDCA,
       zoom: 8,
@@ -96,8 +97,7 @@ export default function MapView({ adsbMode, liveState }) {
       if (!r.ok) throw new Error(r.statusText)
       const data = await r.json()
       const aircraft = data.aircraft || data.ac || []
-      const L = window.L
-      aircraftLayerRef.current.clearLayers()
+        aircraftLayerRef.current.clearLayers()
       let count = 0
       aircraft.forEach(ac => {
         const lat = ac.lat
@@ -132,8 +132,7 @@ export default function MapView({ adsbMode, liveState }) {
       if (!r.ok) return
       const tfrs = await r.json()
       if (!Array.isArray(tfrs)) return
-      const L = window.L
-      tfrLayerRef.current.clearLayers()
+        tfrLayerRef.current.clearLayers()
       tfrs.forEach(tfr => {
         // TFRs from the dispatch API include a center point and radius
         const lat = tfr.center_lat
