@@ -459,13 +459,9 @@ async def ask_dispatch(req: AskRequest):
     Streaming dispatch AI chat endpoint.
     Gathers live dispatch context, then streams an Anthropic response via SSE.
     Events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
+    If ANTHROPIC_API_KEY is missing or invalid the error arrives as an SSE error event —
+    the endpoint never hard-blocks so the panel always loads.
     """
-    if not ANTHROPIC_API_KEY or len(ANTHROPIC_API_KEY) < 20:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY not configured — add real key to ~/.secrets/anthropic.token and re-run populate-secrets.sh",
-        )
-
     ctx = await _build_dispatch_context()
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
