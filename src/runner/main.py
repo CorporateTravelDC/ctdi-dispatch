@@ -58,7 +58,11 @@ SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 # ── Dispatch AI chat --------------------------------------------------------
 # Resolution order: local data → Ollama (local LLM) → Anthropic (remote, fallback).
 # No query is gated on any LLM being available — local data always answers.
-ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY",        "")
+_raw_anthropic_key  = os.getenv("ANTHROPIC_API_KEY", "")
+# Reject placeholder values — real keys start with 'sk-ant-' and are 40+ chars
+ANTHROPIC_API_KEY   = _raw_anthropic_key if (
+    _raw_anthropic_key.startswith("sk-ant-") and len(_raw_anthropic_key) >= 40
+) else ""
 DISPATCH_CHAT_MODEL = os.getenv("DISPATCH_CHAT_MODEL",       "claude-haiku-4-5-20251001")
 OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL",           "")   # e.g. http://127.0.0.1:11434
 OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL",              "llama3")
