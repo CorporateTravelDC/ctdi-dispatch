@@ -1,75 +1,58 @@
 """
-cps-recompute — SR-1 + SR-2 compliant.
+cps-recompute — SR-1 + SR-2 compliant. API-free deterministic rule engine.
 
-Model: claude-haiku-4-5-20251001 (Haiku — lower spend; hourly schedule)
 Schedule: hourly at :05 (corporatetraveldc-cps-recompute.timer)
 SR-1: log_usage() in finally block
 SR-2: hash_gate() on raw numeric METAR inputs + active NAS programs
 
 Produces a CPS (Critical Predictability State) traffic-light score
-mapped to Part 135.609 HEMS minimums.
+mapped to Part 135.609 HEMS minimums using a deterministic rule engine.
+No AI API calls. Always produces a result.
 Writes result to cps_scores table; pusher fires ntfy topic "cps".
 """
 
 import argparse
-import json
 import logging
 import sys
 
-import anthropic
-
-from common import config, db
+from common import db
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
 
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "cps-recompute"
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "deterministic"   # no model; kept for SR-1 log_usage signature
 
 # Part 135.609 HEMS VFR minimums (DC area / Class B):
 #   Ceiling >= 1000 ft, Visibility >= 3 SM, Wind <= 30 kt
 CPS_MINIMUMS = {"ceiling_ft": 1000, "visibility_sm": 3.0, "wind_kt": 30}
 
-SYSTEM_PROMPT = """You are evaluating HEMS (helicopter EMS) flight condition scores
-for the Washington DC metropolitan area against FAA Part 135.609 VFR minimums.
+# Primary observation stations for DC-area HEMS scoring (in priority order)
+PRIMARY_STATIONS = ("KDCA", "KIAD", "KBWI")
 
-Minimums: ceiling ≥ 1000 ft, visibility ≥ 3 SM, winds ≤ 30 kt.
-
-Given weather observations and NAS delay programs, output ONLY valid JSON:
-{
-  "score": "GREEN" | "YELLOW" | "RED",
-  "label": "GO" | "MARGINAL" | "NO-GO",
-  "factors": {
-    "ceiling": "ok" | "marginal" | "violated",
-    "visibility": "ok" | "marginal" | "violated",
-    "wind": "ok" | "marginal" | "violated",
-    "precip": "ok" | "marginal" | "violated",
-    "airspace": "ok" | "marginal" | "violated",
-    "gdp": "ok" | "marginal" | "violated"
-  },
-  "narrative": "One sentence summary of limiting factor(s)"
-}
-
-GREEN/GO: all factors ok.
-YELLOW/MARGINAL: any factor marginal (ceiling 1000-1500, vis 3-5, wind 25-30).
-RED/NO-GO: any factor violated.
-Output JSON only. No preamble."""
+# Precip codes that violate or degrade minimums
+PRECIP_VIOLATED = frozenset({
+    "TS", "TSRA", "TSGR", "TSPL", "TSSN", "FZRA", "FZDZ", "FZFG",
+    "SN", "SG", "PL", "IC", "GR", "GS",
+})
+PRECIP_MARGINAL = frozenset({
+    "RA", "DZ", "BR", "FG", "HZ", "FU", "VA", "SHRA", "RASN",
+})
 
 
 def build_inputs() -> dict:
     metars = db.get_metar_snapshot()
     nas = db.get_active_nas_programs()
 
-    # Hash only the numeric content fields — not obs_time or fetched_at.
     return {
         "metar": sorted([
             {
-                "station": m["station"],
-                "ceiling_ft": m["ceiling_ft"],
+                "station":       m["station"],
+                "ceiling_ft":    m["ceiling_ft"],
                 "visibility_sm": m["visibility_sm"],
-                "wind_kt": m["wind_kt"],
-                "precip": m["precip_code"],
+                "wind_kt":       m["wind_kt"],
+                "precip":        m["precip_code"],
             }
             for m in metars
         ], key=lambda x: x["station"]),
@@ -80,42 +63,129 @@ def build_inputs() -> dict:
     }
 
 
-def build_user_message(inputs: dict) -> str:
-    metar_lines = [
-        f"  {m['station']}: ceiling={m['ceiling_ft']}ft "
-        f"vis={m['visibility_sm']}SM wind={m['wind_kt']}kt "
-        f"precip={m['precip'] or 'nil'}"
-        for m in inputs["metar"]
-    ] or ["  No METAR data"]
-
-    nas_lines = [
-        f"  {p['type']} at {p['facility']}"
-        for p in inputs["nas_programs"]
-    ] or ["  None active"]
-
-    # Compute worst-case summary for primary stations.
+def _compute_cps(inputs: dict) -> dict:
+    """
+    Deterministic Part 135.609 HEMS go/no-go rule engine.
+    Returns dict with score, label, factors, narrative.
+    """
     primaries = {m["station"]: m for m in inputs["metar"]
-                 if m["station"] in ("KDCA", "KIAD", "KBWI")}
-    summary = []
-    if primaries:
-        ceilings = [m["ceiling_ft"] for m in primaries.values()
-                    if m["ceiling_ft"] is not None]
-        viss = [m["visibility_sm"] for m in primaries.values()
-                if m["visibility_sm"] is not None]
-        winds = [m["wind_kt"] for m in primaries.values()
-                 if m["wind_kt"] is not None]
-        if ceilings:
-            summary.append(f"Lowest ceiling: {min(ceilings)} ft")
-        if viss:
-            summary.append(f"Lowest visibility: {min(viss)} SM")
-        if winds:
-            summary.append(f"Max wind: {max(winds)} kt")
+                 if m["station"] in PRIMARY_STATIONS}
+    nas = inputs["nas_programs"]
 
-    return (
-        "METAR observations:\n" + "\n".join(metar_lines) + "\n\n"
-        "NAS delay programs:\n" + "\n".join(nas_lines) + "\n\n"
-        "Primary station summary: " + ("; ".join(summary) or "No data")
-    )
+    factors = {
+        "ceiling":    "ok",
+        "visibility": "ok",
+        "wind":       "ok",
+        "precip":     "ok",
+        "airspace":   "ok",
+        "gdp":        "ok",
+    }
+
+    worst = "ok"
+    limiting: list[str] = []
+
+    def degrade(factor: str, level: str, msg: str) -> None:
+        nonlocal worst
+        prev = factors[factor]
+        # Never downgrade severity
+        if level == "violated" or (level == "marginal" and prev == "ok"):
+            factors[factor] = level
+        if level == "violated":
+            if worst != "violated":
+                worst = "violated"
+            if msg not in limiting:
+                limiting.append(msg)
+        elif level == "marginal":
+            if worst == "ok":
+                worst = "marginal"
+            if msg not in limiting:
+                limiting.append(msg)
+
+    for sta in PRIMARY_STATIONS:
+        m = primaries.get(sta)
+        if not m:
+            continue
+
+        # Ceiling check
+        c = m.get("ceiling_ft")
+        if c is not None:
+            if c < CPS_MINIMUMS["ceiling_ft"]:
+                degrade("ceiling", "violated",
+                        f"{sta} ceiling {c}ft (min {CPS_MINIMUMS['ceiling_ft']}ft)")
+            elif c < 1500:
+                degrade("ceiling", "marginal",
+                        f"{sta} ceiling {c}ft marginal (1000–1500ft range)")
+
+        # Visibility check
+        v = m.get("visibility_sm")
+        if v is not None:
+            if v < CPS_MINIMUMS["visibility_sm"]:
+                degrade("visibility", "violated",
+                        f"{sta} vis {v}SM (min {CPS_MINIMUMS['visibility_sm']}SM)")
+            elif v < 5.0:
+                degrade("visibility", "marginal",
+                        f"{sta} vis {v}SM marginal (3–5SM range)")
+
+        # Wind check
+        w = m.get("wind_kt")
+        if w is not None:
+            if w > CPS_MINIMUMS["wind_kt"]:
+                degrade("wind", "violated",
+                        f"{sta} wind {w}kt (max {CPS_MINIMUMS['wind_kt']}kt)")
+            elif w >= 25:
+                degrade("wind", "marginal",
+                        f"{sta} wind {w}kt marginal (25–30kt range)")
+
+        # Precipitation check
+        p = str(m.get("precip") or "").upper()
+        precip_tokens = set(p.split())
+        if precip_tokens & PRECIP_VIOLATED:
+            codes = " ".join(sorted(precip_tokens & PRECIP_VIOLATED))
+            degrade("precip", "violated", f"{sta} {codes}")
+        elif precip_tokens & PRECIP_MARGINAL:
+            codes = " ".join(sorted(precip_tokens & PRECIP_MARGINAL))
+            degrade("precip", "marginal", f"{sta} {codes}")
+
+    # NAS ground programs
+    gsps = [p for p in nas
+            if "GSP" in p.get("type", "").upper()
+            or "GROUND_STOP" in p.get("type", "").upper()]
+    gdps = [p for p in nas
+            if "GDP" in p.get("type", "").upper()
+            and p not in gsps]
+
+    if gsps:
+        facilities = ", ".join(p["facility"] for p in gsps[:3])
+        degrade("gdp", "violated", f"Ground Stop at {facilities}")
+    elif gdps:
+        facilities = ", ".join(p["facility"] for p in gdps[:3])
+        degrade("gdp", "marginal", f"GDP at {facilities}")
+
+    # Score
+    if worst == "violated":
+        score, label = "RED", "NO-GO"
+    elif worst == "marginal":
+        score, label = "YELLOW", "MARGINAL"
+    else:
+        score, label = "GREEN", "GO"
+
+    # Narrative
+    if limiting:
+        narrative = limiting[0]
+        if len(limiting) > 1:
+            extra = len(limiting) - 1
+            narrative += f" (+{extra} other factor{'s' if extra > 1 else ''})"
+    elif not primaries:
+        narrative = "No primary station METAR data — CPS based on NAS programs only"
+    else:
+        narrative = "All factors within Part 135.609 HEMS minimums"
+
+    return {
+        "score":     score,
+        "label":     label,
+        "factors":   factors,
+        "narrative": narrative,
+    }
 
 
 def main(force: bool = False) -> None:
@@ -123,53 +193,35 @@ def main(force: bool = False) -> None:
     gate_result = hash_gate(SKILL_NAME, inputs, force=force)
 
     if gate_result == "skipped":
-        log.debug("%s: inputs unchanged — skipping API call", SKILL_NAME)
+        log.debug("%s: inputs unchanged — skipping recompute", SKILL_NAME)
         sys.exit(0)
 
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key())
-    input_tokens = output_tokens = 0
     status = "error"
-
     try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=400,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_message(inputs)}],
-        )
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
-        status = "ok"
-
-        raw = response.content[0].text.strip()
-        # Strip any accidental markdown fences.
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        data = json.loads(raw)
+        data = _compute_cps(inputs)
 
         db.insert_cps(
             score=data["score"],
             label=data["label"],
-            factors=data.get("factors", {}),
-            narrative=data.get("narrative", ""),
+            factors=data["factors"],
+            narrative=data["narrative"],
         )
-        log.info("%s: %s/%s — %d+%d tokens",
-                 SKILL_NAME, data["score"], data["label"],
-                 input_tokens, output_tokens)
+        status = "ok"
+        log.info("%s: %s/%s — %s", SKILL_NAME, data["score"], data["label"], data["narrative"])
 
-    except json.JSONDecodeError as e:
-        log.error("%s: JSON parse error: %s", SKILL_NAME, e)
+    except Exception as e:
+        log.error("%s: compute error: %s", SKILL_NAME, e)
         status = "error"
+        raise
     finally:
-        log_usage(SKILL_NAME, MODEL, input_tokens, output_tokens, status, gate_result)
+        # SR-1: log with 0 tokens (deterministic — no API usage)
+        log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=f"{SKILL_NAME} skill")
     parser.add_argument("--force", action="store_true",
-                        help="Bypass hash gate; invoke API regardless of input state")
+                        help="Bypass hash gate; recompute regardless of input state")
     args = parser.parse_args()
     main(force=args.force)
