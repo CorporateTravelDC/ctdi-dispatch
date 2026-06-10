@@ -73,6 +73,19 @@ def _is_tailscale(ip: str) -> bool:
     except ValueError:
         return False
 
+
+def _is_trusted(request: Request) -> bool:
+    """
+    Trust two origins:
+    1. 127.0.0.1 -- came via cloudflared tunnel; CF Access is the boundary.
+    2. 100.64.0.0/10 -- direct Tailscale connection.
+    """
+    direct = request.client.host if request.client else ""
+    if direct in ("127.0.0.1", "::1"):
+        return True
+    return _is_tailscale(_client_ip(request))
+        return False
+
 def _nm_to_deg(nm: float) -> float:
     """Approximate degrees latitude/longitude per nautical mile."""
     return nm / 60.0
@@ -107,8 +120,8 @@ def _airframes_headers() -> dict:
 async def tailscale_gate(request: Request, call_next):
     if request.url.path in ("/healthz",):
         return await call_next(request)
-    if not _is_tailscale(_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Tailscale access only")
+    if not _is_trusted(request):
+        raise HTTPException(status_code=403, detail="Tailscale or tunnel access only")
     return await call_next(request)
 
 # ── Health -------------------------------------------------------------------
