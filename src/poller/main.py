@@ -736,6 +736,8 @@ async def main() -> None:
     db.init_db_v5()
     db.init_db_v6()
     db.init_db_v7()
+    db.init_db_v8()
+    db.init_db_v9()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())
