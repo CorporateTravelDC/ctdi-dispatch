@@ -1,7 +1,7 @@
 """
 weekly-summary — SR-1 compliant. SR-2 exempt (time-bounded weekly window).
 
-Model: ollama/mistral (OSINT-tier)
+Model: deterministic (structured DB summary; no inference needed)
 Schedule: Sunday 18:00 ET (corporatetraveldc-weekly-summary.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes the past week; inputs always new.
