@@ -2,11 +2,11 @@ tunnel: 28bde9a2-0bb2-4cca-a207-9b759c4739f1
 credentials-file: /etc/cloudflared/28bde9a2-0bb2-4cca-a207-9b759c4739f1.json
 
 ingress:
-  # dispatch â CF Access gated (Tailscale + auth required)
+  # dispatch — CF Access gated (Tailscale + auth required)
   - hostname: dispatch.csexecutiveservices.com
     service: http://127.0.0.1:8000
 
-  # ops â PWA frontend, open over tunnel
+  # ops — PWA frontend, open over tunnel
   - hostname: ops.csexecutiveservices.com
     service: http://127.0.0.1:8000
 
@@ -14,11 +14,19 @@ ingress:
   - hostname: dispatch-runner.csexecutiveservices.com
     service: http://127.0.0.1:8001
 
-  # adsb â UltraFeeder tar1090
+  # openwebui — Open WebUI (Ollama chat frontend) — CF Access gated
+  - hostname: openwebui.csexecutiveservices.com
+    service: http://127.0.0.1:3000
+
+  # ollama — raw Ollama API — CF Access gated
+  - hostname: ollama.csexecutiveservices.com
+    service: http://127.0.0.1:11434
+
+  # adsb — UltraFeeder tar1090
   - hostname: adsb.csexecutiveservices.com
     service: http://127.0.0.1:8080
 
-  # acars â acarshub
+  # acars — acarshub
   - hostname: acars.csexecutiveservices.com
     service: http://127.0.0.1:9081
 
@@ -26,11 +34,11 @@ ingress:
   - hostname: ntfy.csexecutiveservices.com
     service: http://127.0.0.1:2586
 
-  # pihole â CF Access gated (Tailscale + auth required)
+  # pihole — CF Access gated (Tailscale + auth required)
   - hostname: pihole.csexecutiveservices.com
     service: http://127.0.0.1:8091
 
-  # apex and www â no content yet
+  # apex and www — no content yet
   - hostname: csexecutiveservices.com
     service: http_status:503
   - hostname: www.csexecutiveservices.com
