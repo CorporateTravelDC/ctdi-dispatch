@@ -135,7 +135,7 @@ INSTALL_DIR="\$HOME/corporatetraveldc-dispatch"
 if [ -d "\$INSTALL_DIR/.git" ]; then
     git -C "\$INSTALL_DIR" pull
 else
-    git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git "\$INSTALL_DIR"
+    git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc.git "\$INSTALL_DIR"
 fi
 
 cd "\$INSTALL_DIR"
