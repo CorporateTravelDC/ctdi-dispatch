@@ -57,15 +57,30 @@ STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
 # ── Dispatch AI chat --------------------------------------------------------
-# Resolution order: local data → Ollama (local LLM, always local, no external deps).
+# Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
 # Two context-switched models:
-#   CHAT  model: llama3.2:3b  — dispatch drawer conversations
-#   OSINT model: mistral       — EP/marketing narrative generation (in osint_monitor)
+#   CHAT  model: csexec-chat  — dispatch drawer conversations
+#   OSINT model: csexec-osint — EP/marketing narrative generation (in osint_monitor)
 # Operator may override per-request via message prefix "/model <name> <query>".
-OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://127.0.0.1:11434
+OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://127.0.0.1:11434
+OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
+OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
 OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "llama3.2:3b") # dispatch drawer default
 OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "mistral")      # OSINT narrative default
-OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
+OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
+
+# Chat endpoint + auth headers: prefer Open WebUI's Ollama proxy; fall back to Ollama direct.
+def _chat_endpoint() -> str:
+    if OPENWEBUI_URL:
+        return f"{OPENWEBUI_URL.rstrip('/')}/ollama/api/chat"
+    if OLLAMA_BASE_URL:
+        return f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat"
+    return ""
+
+def _chat_headers() -> dict:
+    if OPENWEBUI_URL and OPENWEBUI_API_KEY:
+        return {"Authorization": f"Bearer {OPENWEBUI_API_KEY}"}
+    return {}
 
 # Default center: KDCA
 DEFAULT_LAT  = 38.8816
@@ -666,8 +681,9 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
     Yields {"type":"model_info","model":"..."} as first event so the frontend
     can display which model serviced the request.
     """
-    # ── Ollama (local LLM, only backend) ─────────────────────────────────────
-    if OLLAMA_BASE_URL:
+    # ── Open WebUI proxy → Ollama (local LLM, no external deps) ─────────────
+    endpoint = _chat_endpoint()
+    if endpoint:
         resolved_model = model or OLLAMA_CHAT_MODEL
         try:
             payload = {
@@ -679,8 +695,9 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
             async with httpx.AsyncClient(timeout=120) as c:
                 async with c.stream(
                     "POST",
-                    f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                    endpoint,
                     json=payload,
+                    headers=_chat_headers(),
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -698,9 +715,9 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
                             pass
             return
         except Exception as e:
-            log.warning("Ollama unavailable (%s) — no LLM fallback", e)
+            log.warning("LLM backend unavailable (%s) — no LLM fallback", e)
 
-    # ── No LLM configured or Ollama unreachable ───────────────────────────────
+    # ── No LLM configured or backend unreachable ──────────────────────────────
     yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
 
 
@@ -722,7 +739,7 @@ async def ask_dispatch(req: AskRequest):
 
     SSE events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
     """
-    has_llm = bool(OLLAMA_BASE_URL)
+    has_llm = bool(OPENWEBUI_URL or OLLAMA_BASE_URL)
 
     # ── Operator model override: "/model <name> <rest-of-message>" ────────────
     # Stripping before history insertion so the model directive doesn't

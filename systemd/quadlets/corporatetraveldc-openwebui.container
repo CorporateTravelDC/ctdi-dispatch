@@ -1,0 +1,37 @@
+# corporatetraveldc-openwebui.container
+# Open WebUI — full chat frontend for Ollama models.
+# Serves browser UI on port 3000 (local + Tailscale).
+# CF tunnel: openwebui.csexecutiveservices.com → port 3000
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-openwebui
+
+[Unit]
+Description=Corporate Travel DC -- Open WebUI (dispatch drawer + mobile LLM frontend)
+After=network-online.target
+After=podman-user-wait-network-online.service
+
+[Container]
+Image=ghcr.io/open-webui/open-webui:main
+ContainerName=corporatetraveldc-openwebui
+PublishPort=127.0.0.1:3000:8080
+PublishPort=100.94.80.100:3000:8080
+Volume=/var/lib/corporatetraveldc/open-webui:/app/backend/data:z
+
+# host.containers.internal resolves to the host gateway in pasta networking.
+# Ollama must listen on 0.0.0.0 (set in ollama.service.d/override.conf).
+# WEBUI_AUTH=False: no login gate — Tailscale + CF Access is the perimeter.
+Environment=OLLAMA_BASE_URL=http://host.containers.internal:11434
+Environment=PORT=8080
+Environment=WEBUI_AUTH=False
+Environment=WEBUI_NAME=Dispatch AI
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
