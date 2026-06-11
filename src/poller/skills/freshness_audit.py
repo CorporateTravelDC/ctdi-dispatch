@@ -1,7 +1,7 @@
 """
 freshness-audit — SR-1 compliant. SR-2 exempt (time-bounded).
 
-Model: ollama/llama3.2:3b (chat-tier)
+Model: deterministic (feed health metrics; no inference needed)
 Schedule: 06:00 ET daily (corporatetraveldc-freshness-audit.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes a time window; always new inputs.
