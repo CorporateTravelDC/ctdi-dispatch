@@ -7,6 +7,10 @@ __pycache__/
 dist/
 build/
 
+# Frontend build output and dependencies — generated during container build
+src/runner/frontend/node_modules/
+src/runner/static/
+
 # Ollama Modelfiles — operator-specific system prompts; use Modelfile.*.template for public reference
 Modelfile.chat
 Modelfile.osint
