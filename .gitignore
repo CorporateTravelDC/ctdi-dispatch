@@ -16,6 +16,7 @@ Modelfile.chat
 Modelfile.osint
 
 # Credentials and keys — never commit
+dispatch-secrets.env
 .ssh/
 .pki/
 .proton-bridge-credentials
