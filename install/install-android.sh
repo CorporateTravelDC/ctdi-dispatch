@@ -7,7 +7,7 @@
 #                 Services run as bare Python processes managed by Termux:Boot.
 #
 # Usage (inside Termux):
-#   curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch/main/install/install-android.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch-poc/main/install/install-android.sh | bash
 #   -- or --
 #   bash install/install-android.sh [--skip-ollama] [--models "llama3.2:3b mistral"]
 
@@ -30,7 +30,7 @@ fi
 SKIP_OLLAMA=false
 OLLAMA_MODELS="llama3.2:3b mistral"
 INSTALL_DIR="$HOME/corporatetraveldc-dispatch"
-REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git"
+REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc.git"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
