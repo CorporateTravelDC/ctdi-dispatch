@@ -3,6 +3,7 @@
 Real-time executive travel intelligence platform for the Washington, DC area. Monitors commercial flights (via FAA SWIM), Amtrak trains, weather, and airspace restrictions — and delivers push alerts the moment something changes. Runs as four rootless Podman containers managed by systemd Quadlets.
 
 📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS.
+📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral architecture. Read before contributing.
 
 ---
 
