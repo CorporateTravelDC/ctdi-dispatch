@@ -1,0 +1,97 @@
+#!/bin/bash
+# scripts/pre-push — credential scanner + public mirror guard
+# Install: cp scripts/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+#
+# Two responsibilities:
+#   1. Credential pattern scanner: rejects staged content matching known secret patterns.
+#   2. Public mirror guard: blocks direct `git push public` and redirects to
+#      scripts/push-public.sh, which auto-injects the dispatch-secrets.env gitignore.
+
+set -euo pipefail
+
+remote="${1:-}"
+
+# ── Public mirror guard ────────────────────────────────────────────────────────
+# Direct pushes to public risk exposing dispatch-secrets.env.
+# push-public.sh uses git plumbing to inject the gitignore entry automatically.
+if [[ "$remote" == "public" ]]; then
+    echo ""
+    echo "[pre-push] Direct push to public mirror intercepted."
+    echo "           Use the wrapper instead — it auto-injects the dispatch-secrets.env"
+    echo "           gitignore without touching private/main:"
+    echo ""
+    echo "               bash scripts/push-public.sh"
+    echo ""
+    exit 1
+fi
+
+# ── Credential pattern scanner ─────────────────────────────────────────────────
+# Rejects any staged content matching known secret patterns.
+#
+# Patterns checked:
+#   sk_adjs_         acarsdrama Jumpseat tokens
+#   sk-ant-api       Anthropic API keys
+#   github_pat_      GitHub fine-grained PATs
+#   ghp_             GitHub classic PATs
+#   ghs_             GitHub app tokens
+#   Bearer [A-Za-z0-9]{20,}   bare Bearer tokens in source
+#   [A-Z_]{4,}=(\S{24,})     env var = long value (catches raw creds in env files)
+#   [0-9a-f]{64}     raw 64-char hex (API keys, hashes used as secrets)
+
+FAIL=0
+PATTERNS=(
+    "sk_adjs_"
+    "sk-ant-api"
+    "github_pat_"
+    "ghp_[A-Za-z0-9]"
+    "ghs_[A-Za-z0-9]"
+    "Bearer [A-Za-z0-9_\-\.]{20,}"
+)
+
+# Get staged diff (new/modified content only, no deletions)
+STAGED=$(git diff --cached --diff-filter=ACM --unified=0 2>/dev/null) || true
+[ -z "$STAGED" ] && exit 0
+
+for pattern in "${PATTERNS[@]}"; do
+    matches=$(echo "$STAGED" | grep -E "^\+" | grep -v "^\+\+\+" | \
+              grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
+              grep -v "example" | grep -v "placeholder" || true)
+    if [ -n "$matches" ]; then
+        echo ""
+        echo "[FAIL] pre-push: credential pattern detected -- commit rejected"
+        echo "       Pattern: ${pattern}"
+        echo "       Matches:"
+        echo "$matches" | head -5 | sed 's/^/         /'
+        echo ""
+        echo "       If this is a false positive, either:"
+        echo "         1. Move the value to ~/.secrets/ and reference via env var name"
+        echo "         2. Use a placeholder value (CHANGE_ME / YOUR_TOKEN_HERE)"
+        echo ""
+        FAIL=1
+    fi
+done
+
+# Check for long bare values in env-style lines (VAR=realvalue)
+# Excludes comment lines, empty values, and known-safe structural values
+env_matches=$(echo "$STAGED" | grep -E "^\+" | grep -v "^\+\+\+" | \
+    grep -v "^\+\s*#" | \
+    grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" | \
+    grep -v "CHANGE_ME" | grep -v "YOUR_" | grep -v "example" | \
+    grep -v "localhost" | grep -v "127\.0\.0" | \
+    grep -v "http" || true)
+if [ -n "$env_matches" ]; then
+    echo ""
+    echo "[FAIL] pre-push: possible raw credential in env assignment -- commit rejected"
+    echo "       Matches:"
+    echo "$env_matches" | head -5 | sed 's/^/         /'
+    echo ""
+    echo "       Store values in ~/.secrets/ and run populate-secrets.sh instead."
+    echo ""
+    FAIL=1
+fi
+
+if [ "$FAIL" -eq 1 ]; then
+    exit 1
+fi
+
+exit 0
