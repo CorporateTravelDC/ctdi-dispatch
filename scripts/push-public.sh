@@ -41,7 +41,8 @@ new_commit=$(git commit-tree "${new_tree}" -p "${sha}" \
     -m "chore(public): gitignore dispatch-secrets.env [auto-injected by push-public.sh]")
 
 # Push via send-pack — bypasses pre-push hooks, no recursion.
-git send-pack --thin "$remote_url" "${new_commit}:refs/heads/${branch}"
+# Force-push required: injection commit always creates a divergent tip on public mirror.
+git send-pack --thin "$remote_url" "+${new_commit}:refs/heads/${branch}"
 
 echo "[push-public] ✓ public/${branch}: ${sha:0:8} → ${new_commit:0:8}"
 echo "[push-public]   dispatch-secrets.env gitignored on public mirror; private/${branch} unchanged"
