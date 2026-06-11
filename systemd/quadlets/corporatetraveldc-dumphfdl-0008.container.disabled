@@ -27,7 +27,7 @@ After=podman-user-wait-network-online.service
 Image=ghcr.io/sdr-enthusiasts/docker-dumphfdl:latest
 # Uncomment once /dev/rtl_sdr_hfdl0008 confirmed present:
 # AddDevice=/dev/rtl_sdr_hfdl0008:/dev/rtl_sdr_hfdl0008
-Volume=/dev/bus/usb:/dev/bus/usb:ro
+Volume=/dev/bus/usb:/dev/bus/usb:rw
 Environment=FEED_ID=corporatetraveldc-kdca-hfdl0008
 Environment=RTL_SERIAL=HFDL0008
 Environment=TZ=America/New_York
@@ -37,7 +37,7 @@ Environment=SERVER=hfdlgateway.net
 Environment=SERVER_PORT=5556
 # 8 MHz band -- NAT/Oceanic primary (Shanwick 8825/8834, Gander 8885)
 Environment=FREQUENCIES=8825;8834;8885
-AutoUpdate=local
+AutoUpdate=registry
 Network=acars-net
 Label=io.containers.autoupdate=registry
 
