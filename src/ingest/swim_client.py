@@ -110,6 +110,9 @@ class _NmsFeedSession:
             "solace.messaging.service.vpn-name": self.cfg.vpn,
             "solace.messaging.authentication.scheme.basic.username": self.cfg.username,
             "solace.messaging.authentication.scheme.basic.password": self.cfg.password,
+            "solace.messaging.tls.trust-store-path": os.getenv(
+                "SOLACE_TRUST_STORE", "/etc/ssl/certs/"
+            ),
         }
         service = (
             MessagingService.builder()
