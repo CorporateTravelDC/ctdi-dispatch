@@ -18,14 +18,21 @@ After=podman-user-wait-network-online.service
 
 [Container]
 Image=ghcr.io/jvde-github/ais-catcher:latest
+# Uncomment AddDevice once udev rule for AIS0162 is activated:
 # AddDevice=/dev/rtl_sdr_ais0162:/dev/rtl_sdr_ais0162
-Volume=/dev/bus/usb:/dev/bus/usb:ro
-Environment=RTLSDR_SERIAL=AIS0162
+# RTL-SDR requires rw USB access (device node opens in write mode)
+Volume=/dev/bus/usb:/dev/bus/usb:rw
 Environment=TZ=America/New_York
+# Core decode args: select device by serial, serve NMEA/JSON on :8110, verbose every 60s
+# Feed CLI args (add when hardware is active):
+#   -u data.aishub.net 2237       -- AISHub feed (AIS_AISHUB_ID from secrets)
+#   -o marinetraffic:5321         -- MarineTraffic (AIS_MARINETRAFFIC_KEY from secrets)
+#   -o vesselfi:5321              -- VesselFinder (AIS_VESSELFI_KEY from secrets)
+Exec=-d AIS0162 -N 8110 -v 60 -q
 PublishPort=127.0.0.1:8110:8110
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-AutoUpdate=local
+AutoUpdate=registry
 Label=io.containers.autoupdate=registry
 
 [Service]
