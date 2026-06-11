@@ -29,6 +29,7 @@ import pathlib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
+import httpx
 import requests
 
 from common import config, db, ntfy_push as _ntfy
@@ -42,6 +43,7 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "mistral")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+OLLAMA_TIMEOUT    = 120  # ops-brief synthesis is longer than typical narrative calls
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -258,6 +260,62 @@ def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     _ntfy.send_dual(full_text, concise_text, title=title)
 
 
+def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
+    """
+    Send prompt_content to Ollama and return (full_text, concise_text).
+    Returns None on any failure — caller falls back to deterministic brief.
+    """
+    if not OLLAMA_BASE_URL:
+        return None
+
+    system = (
+        "You are the dispatch intelligence officer for a corporate executive chauffeur "
+        "operation based in the Washington DC metro area. "
+        "Generate a concise operational briefing from the raw data below. "
+        "Focus on what directly affects executive ground transport: airport delays, "
+        "TFRs that indicate VIP movements, adverse weather, Amtrak disruptions on the NEC. "
+        "Be factual. Use aviation/dispatch shorthand where appropriate. "
+        "End with a one-sentence BOTTOM LINE suitable for an ntfy push notification."
+    )
+
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model":  OLLAMA_MODEL,
+                "system": system,
+                "prompt": prompt_content,
+                "stream": False,
+                "options": {"num_predict": 600, "temperature": 0.2},
+            },
+            timeout=OLLAMA_TIMEOUT,
+        )
+        resp.raise_for_status()
+        narrative = resp.json().get("response", "").strip()
+        if not narrative:
+            return None
+
+        # Extract BOTTOM LINE as concise push (last sentence or last line after "BOTTOM LINE:")
+        concise = narrative
+        for marker in ("BOTTOM LINE:", "Bottom line:", "BOTTOM LINE —"):
+            if marker in narrative:
+                concise = narrative.split(marker, 1)[1].strip().splitlines()[0].strip()
+                break
+        else:
+            # Fall back to last non-empty sentence
+            sentences = [s.strip() for s in narrative.replace("\n", " ").split(".") if s.strip()]
+            if sentences:
+                concise = sentences[-1] + "."
+
+        now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
+        full_text = f"OPS BRIEF {now_label} (Ollama/{OLLAMA_MODEL})\n\n{narrative}"
+        return full_text, concise[:200]
+
+    except Exception as exc:
+        log.warning("ops-brief: Ollama call failed (%s) — falling back to deterministic", exc)
+        return None
+
+
 def build_brief_content() -> tuple[str, str]:
     """
     Returns (prompt_content, raw_appendix).
@@ -297,11 +355,10 @@ def build_brief_content() -> tuple[str, str]:
 
 def _build_fallback_brief(content: str) -> tuple[str, str]:
     """
-    Build a plain-data brief from raw content when Claude API is unavailable
-    (zero balance, invalid key, rate limit, or other API-level failure).
-    Returns (full_text, concise_text) — same contract as the AI path.
+    Build a plain-data brief from raw content when Ollama is unavailable
+    (not configured, unreachable, or returned empty response).
+    Returns (full_text, concise_text) — same contract as the Ollama path.
     Flagged clearly so operator knows no narrative was generated.
-    This is the standing fallback for all ops_brief API failures.
     """
     now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
     lines = content.splitlines()
@@ -324,8 +381,8 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     dc_ne  = [l for l in metar_lines if any(x in l for x in ("KDCA","KIAD","KBWI","KJFK","KEWR","KLGA","KBOS","KPHL"))]
     xcon   = [l for l in metar_lines if any(x in l for x in ("KLAX","KSFO","KSEA","KORD","KDFW","KATL","KDEN"))]
 
-    full  = f"[DATA BRIEF — API FALLBACK] {now_label}\n"
-    full += "Claude API unavailable (credit balance or key issue). Raw data push — no narrative.\n\n"
+    full  = f"[DATA BRIEF — DETERMINISTIC FALLBACK] {now_label}\n"
+    full += "Ollama unavailable or not configured. Raw data push — no narrative.\n\n"
     full += "NAS PROGRAMS:\n" + ("\n".join(nas_lines[:12]) if nas_lines else "None active") + "\n\n"
     full += "DC/NORTHEAST METARs:\n" + ("\n".join(dc_ne) if dc_ne else "Unavailable") + "\n\n"
     full += "TRANSCON METARs:\n"  + ("\n".join(xcon)  if xcon  else "Unavailable") + "\n\n"
@@ -346,10 +403,16 @@ def main(force: bool = False) -> None:
     try:
         content, raw_appendix = build_brief_content()
 
-        # Deterministic brief — no API dependency.
-        full_text, concise = _build_fallback_brief(content)
-        status = "ok"
-        log.info("%s: brief generated (deterministic)", SKILL_NAME)
+        # Try Ollama first; fall back to deterministic if unavailable / not configured.
+        ollama_result = _call_ollama(content)
+        if ollama_result:
+            full_text, concise = ollama_result
+            status = "ok"
+            log.info("%s: brief generated (Ollama/%s)", SKILL_NAME, OLLAMA_MODEL)
+        else:
+            full_text, concise = _build_fallback_brief(content)
+            status = "ok"
+            log.info("%s: brief generated (deterministic)", SKILL_NAME)
 
         # Append raw METAR + NAS appendix
         full_text = full_text.rstrip() + raw_appendix
