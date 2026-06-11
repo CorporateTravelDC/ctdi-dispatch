@@ -43,7 +43,7 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "mistral")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-OLLAMA_TIMEOUT    = 120  # ops-brief synthesis is longer than typical narrative calls
+OLLAMA_TIMEOUT    = 600  # Pi 5 CPU: mistral 7B ~10 tok/s prefill; 3200-token prompt + 180 gen ≈ 545s
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -275,7 +275,7 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
             "system": system,
             "prompt": prompt,
             "stream": False,
-            "options": {"num_predict": 600, "temperature": 0.2},
+            "options": {"num_predict": 180, "temperature": 0.2},
         },
         timeout=OLLAMA_TIMEOUT,
     )
