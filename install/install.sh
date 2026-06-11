@@ -3,7 +3,7 @@
 # Supports: Linux x86_64, Linux aarch64 (ARM64), macOS x86_64 (Intel), macOS arm64 (Apple Silicon)
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch/main/install/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch-poc/main/install/install.sh | bash
 #   -- or --
 #   bash install/install.sh [--skip-ollama] [--skip-containers] [--dev]
 #
@@ -20,7 +20,7 @@ SKIP_OLLAMA=false
 SKIP_CONTAINERS=false
 DEV_MODE=false
 OLLAMA_MODELS="llama3.2:3b mistral"
-REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git"
+REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc.git"
 INSTALL_DIR="/opt/corporatetraveldc"
 SERVICE_USER="corporatetraveldc"
 PYTHON_MIN="3.11"
@@ -273,7 +273,7 @@ if [[ "$OS" == "Linux" && "$DEV_MODE" == "false" ]]; then
     fi
     if [[ ! -f /etc/corporatetraveldc/dispatch.env ]]; then
         echo "    Note: dispatch.env should be created by your firstboot script or manually."
-        echo "    See dispatch.env.example in the repo root."
+        echo "    See config/dispatch.env.example in the repo."
     fi
 else
     # Dev mode / macOS — local config
