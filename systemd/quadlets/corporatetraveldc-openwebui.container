@@ -21,7 +21,6 @@ Volume=/var/lib/corporatetraveldc/open-webui:/app/backend/data:z
 # WEBUI_AUTH=False: no login gate — Tailscale + CF Access is the perimeter.
 Environment=OLLAMA_BASE_URL=http://host.containers.internal:11434
 Environment=PORT=8080
-Environment=WEBUI_AUTH=False
 Environment=WEBUI_NAME=Dispatch AI
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
