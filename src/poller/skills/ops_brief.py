@@ -129,6 +129,19 @@ def _metar_section() -> str:
             for m in primary
         )
     lines = [l.strip() for l in raw.splitlines() if l.strip().startswith(("METAR", "SPECI"))]
+    # Supplement missing primary DC airports from local DB
+    # (aviationweather.gov occasionally drops KDCA/KIAD from the response)
+    present = {l.split()[1] for l in lines if len(l.split()) > 1}
+    missing_dc = [s for s in ("KDCA", "KIAD", "KBWI") if s not in present]
+    if missing_dc:
+        metars = db.get_metar_snapshot()
+        for m in metars:
+            if m["station"] in missing_dc:
+                wx = (f"METAR {m['station']} (local-db): "
+                      f"{m['ceiling_ft']}ft/{m['visibility_sm']}SM/{m['wind_kt']}kt"
+                      + (f" ({m['precip_code']})" if m.get("precip_code") else ""))
+                lines.insert(0, wx)
+                log.debug("ops-brief: supplemented %s from local DB (missing from aviationweather.gov)", m["station"])
     return "\n".join(lines) if lines else "No METAR data returned."
 
 
