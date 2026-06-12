@@ -41,7 +41,7 @@ OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_MODEL")
                     or os.getenv("OLLAMA_MODEL")
                     or "mistral")
-OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "45"))
+OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "900"))  # stopgap
 MODEL            = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 FETCH_TIMEOUT    = 20           # seconds per RSS fetch
 MAX_ITEMS_SCOPE  = 20           # cap per scope per run to limit CPU

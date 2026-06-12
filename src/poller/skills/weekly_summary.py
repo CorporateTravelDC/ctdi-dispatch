@@ -27,7 +27,7 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or "csexec-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Weekly content ~600-800 tokens; mistral-nemo Pi 5 CPU ~200s — 600s gives headroom
-OLLAMA_TIMEOUT    = 600
+OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are producing a weekly operational summary for an executive chauffeur
 operation in the Washington DC metropolitan area.

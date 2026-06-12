@@ -18,7 +18,7 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or "csexec-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
-OLLAMA_TIMEOUT    = 180
+OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are a dispatch assistant for an executive chauffeur operation in the Washington DC
 metropolitan area. You have operational knowledge of DC-area airspace, VIP movement patterns,
