@@ -11,4 +11,4 @@ Exec=python3 poller/skills/ops_brief.py
 
 [Service]
 Type=oneshot
-TimeoutStartSec=180
+TimeoutStartSec=700
