@@ -1,19 +1,20 @@
 #!/bin/bash
-# scripts/pre-push — credential scanner + public mirror guard
-# Install: cp scripts/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# .git/hooks/pre-push — credential scanner + public mirror auto-sync
+# Source of truth: scripts/pre-push (keep in sync)
 #
-# Two responsibilities:
-#   1. Credential pattern scanner: rejects staged content matching known secret patterns.
-#   2. Public mirror guard: blocks direct `git push public` and redirects to
-#      scripts/push-public.sh, which auto-injects the dispatch-secrets.env gitignore.
+# Responsibilities:
+#   1. Block direct `git push public` — use scripts/push-public.sh instead.
+#   2. Credential pattern scanner — rejects commits containing known secret patterns.
+#   3. Auto-sync public mirror — after a clean push to origin/main, automatically
+#      runs scripts/push-public.sh so the public mirror never falls behind.
 
 set -euo pipefail
 
 remote="${1:-}"
+repo_root="$(git rev-parse --show-toplevel)"
 
-# ── Public mirror guard ────────────────────────────────────────────────────────
+# ── 1. Public mirror guard ──────────────────────────────────────────────────────
 # Direct pushes to public risk exposing dispatch-secrets.env.
-# push-public.sh uses git plumbing to inject the gitignore entry automatically.
 if [[ "$remote" == "public" ]]; then
     echo ""
     echo "[pre-push] Direct push to public mirror intercepted."
@@ -25,73 +26,93 @@ if [[ "$remote" == "public" ]]; then
     exit 1
 fi
 
-# ── Credential pattern scanner ─────────────────────────────────────────────────
-# Rejects any staged content matching known secret patterns.
-#
-# Patterns checked:
-#   sk_adjs_         acarsdrama Jumpseat tokens
-#   sk-ant-api       Anthropic API keys
-#   github_pat_      GitHub fine-grained PATs
-#   ghp_             GitHub classic PATs
-#   ghs_             GitHub app tokens
-#   Bearer [A-Za-z0-9]{20,}   bare Bearer tokens in source
-#   [A-Z_]{4,}=(\S{24,})     env var = long value (catches raw creds in env files)
-#   [0-9a-f]{64}     raw 64-char hex (API keys, hashes used as secrets)
+# ── 2. Credential pattern scanner ──────────────────────────────────────────────
+# Read refs being pushed from stdin; also scan commits for credential patterns.
+# stdin format: <local ref> SP <local sha1> SP <remote ref> SP <remote sha1> LF
 
+PUSHING_MAIN=false
 FAIL=0
-PATTERNS=(
-    "sk_adjs_"
-    "sk-ant-api"
-    "github_pat_"
-    "ghp_[A-Za-z0-9]"
-    "ghs_[A-Za-z0-9]"
-    "Bearer [A-Za-z0-9_\-\.]{20,}"
-)
+SCAN_RANGE=""
 
-# Get staged diff (new/modified content only, no deletions)
-STAGED=$(git diff --cached --diff-filter=ACM --unified=0 2>/dev/null) || true
-[ -z "$STAGED" ] && exit 0
+while read local_ref local_sha remote_ref remote_sha; do
+    # Track whether main is being pushed to origin
+    if [[ "$remote" == "origin" && "$remote_ref" == "refs/heads/main" ]]; then
+        PUSHING_MAIN=true
+    fi
 
-for pattern in "${PATTERNS[@]}"; do
-    matches=$(echo "$STAGED" | grep -E "^\+" | grep -v "^\+\+\+" | \
-              grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
-              grep -v "example" | grep -v "placeholder" || true)
-    if [ -n "$matches" ]; then
-        echo ""
-        echo "[FAIL] pre-push: credential pattern detected -- commit rejected"
-        echo "       Pattern: ${pattern}"
-        echo "       Matches:"
-        echo "$matches" | head -5 | sed 's/^/         /'
-        echo ""
-        echo "       If this is a false positive, either:"
-        echo "         1. Move the value to ~/.secrets/ and reference via env var name"
-        echo "         2. Use a placeholder value (CHANGE_ME / YOUR_TOKEN_HERE)"
-        echo ""
-        FAIL=1
+    # Build commit range to scan (skip null sha = branch deletion)
+    if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
+        SCAN_RANGE="${local_sha}"
+    else
+        SCAN_RANGE="${remote_sha}..${local_sha}"
+    fi
+
+    # Scan new commits being pushed for credential patterns
+    PATTERNS=(
+        "sk_adjs_"
+        "sk-ant-api"
+        "github_pat_"
+        "ghp_[A-Za-z0-9]"
+        "ghs_[A-Za-z0-9]"
+        "Bearer [A-Za-z0-9_\-\.]{20,}"
+    )
+
+    if [[ -n "$SCAN_RANGE" ]]; then
+        DIFF=$(git diff "${SCAN_RANGE}" --unified=0 2>/dev/null || true)
+
+        for pattern in "${PATTERNS[@]}"; do
+            matches=$(echo "$DIFF" | grep -E "^\+" | grep -v "^\+\+\+" | \
+                      grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
+                      grep -v "example" | grep -v "placeholder" || true)
+            if [[ -n "$matches" ]]; then
+                echo ""
+                echo "[FAIL] pre-push: credential pattern detected — push rejected"
+                echo "       Pattern: ${pattern}"
+                echo "       Matches:"
+                echo "$matches" | head -5 | sed 's/^/         /'
+                echo ""
+                echo "       If this is a false positive:"
+                echo "         1. Move the value to ~/.secrets/ and reference via env var name"
+                echo "         2. Use a placeholder (CHANGE_ME / YOUR_TOKEN_HERE)"
+                echo ""
+                FAIL=1
+            fi
+        done
+
+        # Env-var long-value scan
+        env_matches=$(echo "$DIFF" | grep -E "^\+" | grep -v "^\+\+\+" | \
+            grep -v "^\+\s*#" | \
+            grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" | \
+            grep -v "CHANGE_ME" | grep -v "YOUR_" | grep -v "example" | \
+            grep -v "localhost" | grep -v "127\.0\.0" | \
+            grep -v "http" || true)
+        if [[ -n "$env_matches" ]]; then
+            echo ""
+            echo "[FAIL] pre-push: possible raw credential in env assignment — push rejected"
+            echo "       Matches:"
+            echo "$env_matches" | head -5 | sed 's/^/         /'
+            echo ""
+            echo "       Store values in ~/.secrets/ and run populate-secrets.sh instead."
+            echo ""
+            FAIL=1
+        fi
     fi
 done
 
-# Check for long bare values in env-style lines (VAR=realvalue)
-# Excludes comment lines, empty values, and known-safe structural values
-env_matches=$(echo "$STAGED" | grep -E "^\+" | grep -v "^\+\+\+" | \
-    grep -v "^\+\s*#" | \
-    grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" | \
-    grep -v "CHANGE_ME" | grep -v "YOUR_" | grep -v "example" | \
-    grep -v "localhost" | grep -v "127\.0\.0" | \
-    grep -v "http" || true)
-if [ -n "$env_matches" ]; then
-    echo ""
-    echo "[FAIL] pre-push: possible raw credential in env assignment -- commit rejected"
-    echo "       Matches:"
-    echo "$env_matches" | head -5 | sed 's/^/         /'
-    echo ""
-    echo "       Store values in ~/.secrets/ and run populate-secrets.sh instead."
-    echo ""
-    FAIL=1
+if [[ "$FAIL" -eq 1 ]]; then
+    exit 1
 fi
 
-if [ "$FAIL" -eq 1 ]; then
-    exit 1
+# ── 3. Auto-sync public mirror ──────────────────────────────────────────────────
+# After a clean push to origin/main, automatically mirror to the public repo.
+# push-public.sh uses git send-pack (bypasses hooks — no recursion).
+if [[ "$PUSHING_MAIN" == "true" ]]; then
+    echo "[pre-push] Auto-syncing public mirror..."
+    if bash "${repo_root}/scripts/push-public.sh" main; then
+        echo "[pre-push] ✓ Public mirror synced."
+    else
+        echo "[pre-push] ⚠ Public mirror sync failed (non-blocking — origin push will continue)."
+    fi
 fi
 
 exit 0
