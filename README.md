@@ -1,9 +1,15 @@
-# corporatetraveldc-dispatch
+# Corporate Travel Dispatch Intelligence (CTDI)
 
-Real-time executive travel intelligence platform for the Washington, DC area. Monitors commercial flights (via FAA SWIM), Amtrak trains, weather, and airspace restrictions — and delivers push alerts the moment something changes. Runs as four rootless Podman containers managed by systemd Quadlets.
+Multi-region real-time travel intelligence platform. Monitors commercial aviation (via FAA SWIM or equivalent regional feeds), rail, weather, and airspace restrictions — delivering push alerts the moment something operationally relevant changes. Runs as four rootless Podman containers managed by systemd Quadlets on any Linux system.
+
+> **Origin note:** CTDI was originally built for Washington, DC metro operations (executive chauffeur + CERT/ARES/Skywarn). The system is designed for global deployment from day one — the DC configuration is the reference implementation, not a constraint. See **[docs/REGIONALIZATION.md](docs/REGIONALIZATION.md)** for a full guide to deploying elsewhere.
+
+> **Repository note:** The system user, container prefix, and filesystem paths use `corporatetraveldc` — the original deployment name. These are preserved for backward compatibility on the reference Pi deployment. New deployments can substitute any username; only the env config and Quadlet paths need to reflect it.
 
 📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS.
 📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral architecture. Read before contributing.
+🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC: airports, weather offices, European and Asia-Pacific feed equivalents.
+📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — API signup portals, email templates, and policy links for every integrated feed — US, European, and Asia-Pacific.
 
 ---
 
@@ -24,11 +30,11 @@ Real-time executive travel intelligence platform for the Washington, DC area. Mo
 
 ## Architecture
 
-Four containers share a single SQLite database (WAL mode) under the `corporatetraveldc` user:
+Four containers share a single SQLite database (WAL mode) under the deployment user:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    corporatetraveldc                        │
+│                  deployment user (corporatetraveldc)        │
 │                                                             │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌─────────┐  │
 │  │   web     │  │  poller   │  │  pusher   │  │ ingest  │  │
@@ -74,17 +80,68 @@ The ingest container stamps heartbeats into `feed_state` every 30 seconds. Befor
 
 ---
 
+## Deploying outside DC
+
+**The feed credentials themselves don't change when you move regions — only the flags for what you're monitoring do.** You're pointing the same credential infrastructure at different geographic filters.
+
+Three files contain all DC-specific geography. Swap these and the system works anywhere:
+
+### 1. Airport hub list — `src/poller/skills/ops_brief.py`
+
+```python
+# Line ~48 — replace with your local primary + regional hub airports
+HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
+```
+
+For example, a Chicago-based deployment might be:
+```python
+HUB_AIRPORTS = "KORD,KMDW,KMKE,KDTW,KSTL,KDEN,KLAX,KJFK,KBOS,KSFO"
+```
+
+For European deployments, use ICAO 4-letter codes (same format — AviationWeather.gov covers them):
+```python
+HUB_AIRPORTS = "EGLL,EGKK,EHAM,LFPG,EDDF,LEMD,LIRF,EBBR,LPPT,LSZH"
+```
+
+The `_metar_section()` function already handles ICAO format correctly. The "transcontinental hubs" label in briefings is cosmetic — rename it in the Ollama system prompt (`SYSTEM_PROMPT` in ops_brief.py) to match your context: "EUROPEAN HUBS", "INTL CONNECTIONS", whatever reads naturally for your operation.
+
+### 2. NWS alert area — `src/poller/skills/ops_brief.py`
+
+```python
+# Line ~51-53 — replace state/territory codes for your region
+NWS_ALERTS_URL = (
+    "https://api.weather.gov/alerts/active"
+    "?area=VA,MD,DC,NY,NJ,CT,MA,PA,DE,RI&status=actual&severity=Extreme,Severe,Moderate"
+)
+```
+
+This uses NWS FIPS state codes. Replace with your states/territories. Outside the US, the NWS feed won't apply — see [docs/REGIONALIZATION.md](docs/REGIONALIZATION.md) for international weather API equivalents.
+
+### 3. NWS weather field office filter — `dispatch.env`
+
+```bash
+# DC reference deployment: LWX (Sterling VA), AKQ (Wakefield VA), CTP (State College PA)
+# Replace with your local WFO codes — find yours at https://www.weather.gov/srh/nwsoffices
+NWWS_WFO_FILTER=LWX,AKQ,CTP
+```
+
+The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter keeps only the ones you care about. Without it, every WFO's output lands in your ingest queue.
+
+> **Note for operators outside the US:** The NWS API (`api.weather.gov`) and NWWS-OI feed cover US territory only. For international deployments, replace these with regional equivalents — see [docs/REGIONALIZATION.md](docs/REGIONALIZATION.md) for EUROCONTROL, JMA (Japan), BoM (Australia), and other regional weather APIs that integrate into the same poller slots.
+
+---
+
 ## API
 
 **Base URLs:**
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| Browser / PWA | `https://dispatch.csexecutiveservices.com` | CF Access gated — browser auth required; POST mutations redirected to `/admin/login` for unauthenticated clients |
-| Programmatic / admin | `https://ops.csexecutiveservices.com` | No CF Access gate — Bearer token is the only auth; use this for API scripts, Claude, and machine-to-machine calls |
+| Browser / PWA | `https://dispatch.csexecutiveservices.com` | CF Access gated — browser auth required |
+| Programmatic / admin | `https://ops.csexecutiveservices.com` | No CF Access gate — Bearer token only; use for API scripts and machine calls |
 | Tailscale direct | `http://100.94.80.100:8000` | Always available on tailnet; preferred fallback |
 
-> **Note:** `dispatch.csexecutiveservices.com` has Cloudflare Access enabled and will redirect unauthenticated POST requests to `/admin/login` (302), even if a valid Bearer token is present. Use `ops.csexecutiveservices.com` for all programmatic admin calls — it points to the same backend; the Bearer token provides the actual authorization.
+> **Note:** `dispatch.csexecutiveservices.com` has Cloudflare Access enabled. Use `ops.csexecutiveservices.com` for all programmatic admin calls — Bearer token provides the actual authorization.
 
 ### Tier 0 — Anonymous
 
@@ -176,15 +233,15 @@ OOOI phase state machine: `pre_departure → out → off → on → in`. Phases 
 
 ## CPS — Critical Predictability State
 
-The CPS score is a Part 135.609-informed go/no-go assessment for HEMS operations over the DC area. Six factors are evaluated and combined:
+The CPS score is a Part 135.609-informed go/no-go assessment for HEMS operations. Six factors are evaluated and combined:
 
 | Factor | Source |
 |---|---|
-| Ceiling | METAR — DCA, IAD, BWI |
+| Ceiling | METAR — primary airports |
 | Visibility | METAR |
 | Wind | METAR |
 | Precipitation | METAR precip_code |
-| Airspace | Active TFRs, P-56A/B, DC FRZ/SFRA status |
+| Airspace | Active TFRs, static restricted areas |
 | GDP | Active NAS ground delay programs |
 
 Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/skills/cps_recompute.py` every 60 minutes and on demand via `POST /admin/force-recompute-cps`.
@@ -195,10 +252,6 @@ Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/sk
 
 > Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)** — feature matrix, per-platform notes, and package compatibility table.
 
-The server stack (Python services + Ollama) runs on any of the platforms below. The web UI is accessible from any modern browser, including iPhone and iPad via Cloudflare Tunnel or Tailscale.
-
-### Platform support matrix
-
 | Platform | Architecture | Server stack | Containers | Local Ollama | Install script |
 |---|---|---|---|---|---|
 | **Linux x86_64** | AMD64 | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
@@ -206,31 +259,20 @@ The server stack (Python services + Ollama) runs on any of the platforms below. 
 | **macOS Apple Silicon** | arm64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
 | **macOS Intel** | x86_64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
 | **Windows x64** | AMD64 | ✅ via WSL2 | Docker Desktop / Podman Desktop | ✅ native | `install/install-windows.ps1` |
-| **Android ARM64** (tablet/kiosk) | aarch64 | ✅ bare Python | ❌ (Termux) | ✅ (Termux) | `install/install-android.sh` |
-| **iOS / iPadOS** (iPhone, iPad) | arm64 | ❌ (web client only) | ❌ | ❌ | — browse to deployment URL |
+| **Android ARM64** | aarch64 | ✅ bare Python | ❌ (Termux) | ✅ (Termux) | `install/install-android.sh` |
+| **iOS / iPadOS** | arm64 | ❌ (web client only) | ❌ | ❌ | — browse to deployment URL |
 
 ### Notes by platform
 
-**Linux (x86_64 / ARM64)** — primary deployment target. Full Podman rootless container stack with systemd Quadlets. Fedora preferred; Debian/Ubuntu/Arch also supported by the installer. The `solace-pubsubplus` SWIM ingest library has prebuilt wheels for x86_64; ARM64 requires a source build.
+**Linux (x86_64 / ARM64)** — primary deployment target. Full Podman rootless container stack with systemd Quadlets. Fedora preferred. The `solace-pubsubplus` SWIM ingest library has prebuilt wheels for x86_64; ARM64 requires a source build.
 
-**macOS (Apple Silicon / Intel)** — full Python stack runs natively; Podman Machine or Docker Desktop provides the container layer. `solace-pubsubplus` (FAA SWIM NMS) is Linux-only — SWIM push feeds require running in a Linux VM or forwarding from a Pi. REST poll fallback covers all feeds automatically.
+**macOS (Apple Silicon / Intel)** — full Python stack runs natively; Podman Machine or Docker Desktop provides the container layer. `solace-pubsubplus` (FAA SWIM NMS) is Linux-only — SWIM push feeds require running in a Linux VM or forwarding from a Pi.
 
-**Windows x64** — the installer sets up WSL2 (Ubuntu or Fedora) and runs the Linux stack inside it. Ollama installs natively on Windows and is accessible from WSL2 at the host IP. Full container support via Docker Desktop or Podman Desktop.
+**Windows x64** — the installer sets up WSL2 and runs the Linux stack inside it. Ollama installs natively on Windows and is accessible from WSL2 at the host IP.
 
-**Android ARM64 (tablet / kiosk)** — runs via Termux (install from F-Droid). All REST feeds and Ollama work; SWIM push ingest (`solace-pubsubplus`) is not supported. Use `Termux:Boot` for auto-start on reboot. Recommended models for constrained memory: `llama3.2:3b` (2.0 GB) or `phi3.5` (2.2 GB). For a tablet kiosk, point the browser at your Pi's Cloudflare Tunnel URL instead of running the server locally.
+**Android ARM64 (tablet / kiosk)** — runs via Termux (install from F-Droid). All REST feeds and Ollama work; SWIM push ingest is not supported. Recommended models for constrained memory: `llama3.2:3b` (2.0 GB) or `phi3.5` (2.2 GB).
 
-**iOS / iPadOS (iPhone, iPad)** — no server-side install supported. Browse to `https://dispatch.csexecutiveservices.com` from Safari (or your Cloudflare Tunnel URL). Add to Home Screen for a PWA-like experience. The SSE event stream (`/api/v1/events`) works in Safari for live updates.
-
-### Python package compatibility
-
-| Package | Linux x86_64 | Linux ARM64 | macOS | Windows (WSL2) | Android (Termux) |
-|---|---|---|---|---|---|
-| `fastapi` / `uvicorn` / `pydantic` | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel |
-| `requests` / `httpx` / `slixmpp` | ✅ pure | ✅ pure | ✅ pure | ✅ pure | ✅ pure |
-| `lxml` | ✅ wheel | ✅ wheel | ✅ wheel | ✅ wheel | ⚠ source build |
-| `solace-pubsubplus` (SWIM ingest) | ✅ wheel | ⚠ source build | ❌ Linux-only | ✅ in WSL2 | ❌ not supported |
-
-Packages marked ⚠ require build tools (`gcc`, `libxml2-dev`) but complete successfully with the installer.
+**iOS / iPadOS (iPhone, iPad)** — no server-side install. Browse to your Cloudflare Tunnel URL. Add to Home Screen for a PWA experience.
 
 ---
 
@@ -238,34 +280,23 @@ Packages marked ⚠ require build tools (`gcc`, `libxml2-dev`) but complete succ
 
 ### Prerequisites
 
-- Raspberry Pi 5 running Raspberry Pi OS (Fedora target; currently RPi OS)
-- Rootless Podman
-- systemd user session enabled for `corporatetraveldc`
+- Linux host running Fedora (preferred), Debian, or Ubuntu
+- Rootless Podman with systemd user session enabled
+- Ollama installed on the host (all inference runs locally — no cloud LLM key required)
 
 ### First-time setup
 
-**Quick install (Linux / macOS):**
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CorporateTravelDC/corporatetraveldc-dispatch/main/install/install.sh | bash
-# Windows: run install\install-windows.ps1 as Administrator in PowerShell
-# Android: run install/install-android.sh inside Termux
-```
-
-**Manual install:**
-
-```bash
-# Clone the repo
 git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git /opt/corporatetraveldc
 cd /opt/corporatetraveldc
 
 # Copy and populate secrets
 cp dispatch-secrets.env.example /etc/corporatetraveldc/dispatch-secrets.env
 chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
-# Edit dispatch-secrets.env — add FAA_NOTAM_API_KEY, NTFY_TOKEN, and any data source credentials
+# Edit dispatch-secrets.env — add FAA_NOTAM_API_KEY, NTFY_TOKEN, and any feed credentials
 # No LLM API key required — all inference runs locally via Ollama
 
-# Build all four images
+# Build all container images
 bash build-images.sh
 
 # Install Quadlets
@@ -283,7 +314,7 @@ curl http://127.0.0.1:8000/healthz
 
 # Create admin token
 PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py create \
-  --user corey --tier admin --label admin-iphone
+  --user operator --tier admin --label admin-phone
 ```
 
 ### After any code change
@@ -327,7 +358,7 @@ python -m pytest tests/ -x --tb=short
 
 Every automated skill must follow two rules:
 
-**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block — always, including on error. Usage is logged to `/var/lib/corporatetraveldc/api-usage.csv`. The `model` field reflects the resolved Ollama model (or `"deterministic"` for skills that don't call an LLM).
+**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block — always, including on error. Usage is logged to `/var/lib/corporatetraveldc/api-usage.csv`.
 
 **SR-2** (`src/common/sr2_gate.py`): call `hash_gate()` before any expensive computation or LLM call. Hash only content-bearing fields (never timestamps). If gate returns `"skipped"`, call `sys.exit(0)` immediately. Support `--force` flag to bypass.
 
@@ -339,61 +370,50 @@ Every automated skill must follow two rules:
 
 ## Local LLM — Ollama
 
-**This platform is designed to run entirely on local hardware.** No external LLM API key is required — all inference runs on-device via [Ollama](https://ollama.com). The only credentials in `dispatch-secrets.env` are for data sources (FAA, Amtrak, ntfy), not for AI providers.
-
-### Design
+**This platform is designed to run entirely on local hardware.** No external LLM API key is required. All inference runs on-device via [Ollama](https://ollama.com).
 
 ```
 dispatch containers
         │
         │  OLLAMA_BASE_URL=http://host.containers.internal:11434
         ▼
-  Ollama daemon (host)  ◄──  llama3.2:3b (chat)  +  mistral (OSINT)
+  Ollama daemon (host)  ◄──  llama3.2:3b (chat)  +  mistral-nemo (OSINT)
         │
         └─ GPU / CPU inference — no external API calls, no data leaves the machine
 ```
 
-Two model slots are loaded simultaneously (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=24h`). The `ollama-warmup.service` systemd oneshot fires a 1-token probe for each model on every boot so they are in RAM before the first real request.
+Two model slots are loaded simultaneously (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=24h`).
 
 ### Supported models
 
 | Model | Tag | Disk | Min RAM | Best for | Config var |
 |---|---|---|---|---|---|
 | **Llama 3.2 3B** | `llama3.2:3b` | 2.0 GB | 4 GB | Chat — fast, default | `OLLAMA_CHAT_MODEL` |
-| **Mistral 7B** | `mistral` | 4.1 GB | 8 GB | OSINT instruction-following, default | `OLLAMA_OSINT_MODEL` |
-| **Phi 3.5 Mini** | `phi3.5` | 2.2 GB | 4 GB | Ultralight chat — Pi 5 8 GB, tablet/kiosk | `OLLAMA_CHAT_MODEL` |
-| **Llama 3.1 8B** | `llama3.1:8b` | 4.7 GB | 8 GB | Chat upgrade — x86_64 or high-RAM ARM64 | `OLLAMA_CHAT_MODEL` |
-| **Gemma 2 9B** | `gemma2:9b` | 5.5 GB | 10 GB | Reasoning / deep analysis — x86_64 preferred | `OLLAMA_OSINT_MODEL` |
-| **Qwen 2.5 7B** | `qwen2.5:7b` | 4.7 GB | 8 GB | Multilingual OSINT — x86_64 preferred | `OLLAMA_OSINT_MODEL` |
+| **Mistral-Nemo 12B** | `mistral-nemo` | 7.1 GB | 12 GB | OSINT instruction-following | `OLLAMA_OSINT_MODEL` |
+| **Phi 3.5 Mini** | `phi3.5` | 2.2 GB | 4 GB | Ultralight chat — 8 GB Pi | `OLLAMA_CHAT_MODEL` |
+| **Llama 3.1 8B** | `llama3.1:8b` | 4.7 GB | 8 GB | Chat upgrade — x86_64 | `OLLAMA_CHAT_MODEL` |
+| **Gemma 2 9B** | `gemma2:9b` | 5.5 GB | 10 GB | Reasoning / deep analysis | `OLLAMA_OSINT_MODEL` |
+| **Qwen 2.5 7B** | `qwen2.5:7b` | 4.7 GB | 8 GB | Multilingual OSINT | `OLLAMA_OSINT_MODEL` |
 
-Default deployment (Pi 5 16 GB) uses `llama3.2:3b` + `mistral`. Swap to lighter models (`phi3.5` for both) on an 8 GB Pi or Android tablet.
+### LLM configuration
 
-### LLM configuration — which files
-
-No code changes are required to swap models. Everything is driven by env vars:
-
-```
-/etc/corporatetraveldc/dispatch.env          ← model names; edit freely, non-secret
-/etc/corporatetraveldc/dispatch-secrets.env  ← data source credentials only (not LLM keys)
-/opt/corporatetraveldc/Modelfile.chat        ← operator system prompt for chat model (.gitignored)
-/opt/corporatetraveldc/Modelfile.osint       ← operator system prompt for OSINT model (.gitignored)
-```
-
-**To switch models** — edit `dispatch.env`:
+No code changes are required to swap models — everything is driven by env vars:
 
 ```bash
-# Lightweight setup (8 GB RAM, tablet/kiosk)
+# /etc/corporatetraveldc/dispatch.env
+OLLAMA_CHAT_MODEL=llama3.2:3b
+OLLAMA_OSINT_MODEL=mistral-nemo
+
+# Lightweight (8 GB RAM / Pi 5 8 GB)
 OLLAMA_CHAT_MODEL=phi3.5
 OLLAMA_OSINT_MODEL=phi3.5
 
-# Upgrade path (16+ GB RAM, x86_64)
+# Upgrade path (16+ GB / x86_64)
 OLLAMA_CHAT_MODEL=llama3.1:8b
 OLLAMA_OSINT_MODEL=qwen2.5:7b
 ```
 
-Then rebuild and restart: `bash build-images.sh && systemctl --user restart corporatetraveldc-{web,poller}`
-
-**Custom operator context** — each deployment can bake in its own system prompt via Modelfiles (`.gitignored`; copy from `.template` files in the repo root):
+**Custom operator context** — bake in your own system prompt via Modelfiles:
 
 ```bash
 cp Modelfile.chat.template Modelfile.chat    # fill in operator context
@@ -403,50 +423,11 @@ bash build-models.sh                         # creates csexec-chat + csexec-osin
 
 Then set `OLLAMA_CHAT_MODEL=csexec-chat` and `OLLAMA_OSINT_MODEL=csexec-osint` in `dispatch.env`.
 
-### Cloud LLM alternatives (optional)
-
-The platform is fully self-contained without cloud APIs. If you want to wire in a cloud provider as an optional fallback, add its key to `dispatch-secrets.env` and update the relevant skill's `OLLAMA_BASE_URL` / model env var to point at the provider's OpenAI-compatible endpoint. No official cloud provider is integrated by default.
-
-### Context-switched routing
-
-- **Chat queries** (Dispatch Drawer `/api/ask`) → `OLLAMA_CHAT_MODEL` — low latency, warm in RAM
-- **OSINT narratives** (`osint_monitor` skill) → `OLLAMA_OSINT_MODEL` — instruction-following for EP/marketing output
-
-### Operator model override
-
-In the Dispatch Drawer, click the model badge in the header to select a model for the session, or type `/model <name>` in chat. To revert: click badge → Reset, or type `/model reset`. The server echoes the resolved model in an SSE `model_info` event and the `X-Dispatch-Model` response header; the drawer labels each assistant reply with the model that serviced it.
-
-Alternatively, supply `"model": "<name>"` in the `POST /api/ask` JSON body for a single-request override.
-
-### Network security
-
-Ollama binds to `0.0.0.0:11434` but is firewalled to Tailscale (`tailscale0`) and loopback. Rules are persisted in `/etc/iptables/rules.v4` and restored at boot by `iptables-restore.service`. Containers reach the host via `host.containers.internal:11434`.
-
-### Install / re-pull models
-
-```bash
-# Check what's present
-ollama list
-
-# Pull (run as corporatetraveldc)
-ollama pull llama3.2:3b
-ollama pull mistral
-
-# Or pull any supported model from the table above
-ollama pull phi3.5       # lightweight, 4 GB RAM
-ollama pull llama3.1:8b  # chat upgrade
-ollama pull gemma2:9b    # reasoning
-ollama pull qwen2.5:7b   # multilingual OSINT
-
-# Verify both warm models are loaded in RAM
-curl http://127.0.0.1:11434/api/ps
-```
-
 ---
 
 ## FAA SWIM / NMS credentials
 
-When FAA NMS credentials are provisioned, add them to `/etc/corporatetraveldc/dispatch-secrets.env` following the template in `dispatch-secrets.env.example`. Six feeds activate automatically:
+When FAA NMS credentials are provisioned, add them to `/etc/corporatetraveldc/dispatch-secrets.env`. Six feeds activate automatically:
 
 | Feed | Env vars | Description |
 |---|---|---|
@@ -454,10 +435,12 @@ When FAA NMS credentials are provisioned, add them to `/etc/corporatetraveldc/di
 | STDDS | `SWIM_NMS_USER_STDDS` / `SWIM_NMS_PASS_STDDS` / `SWIM_NMS_QUEUE_STDDS` | Surface + terminal tracks, TFRs |
 | TFMS | `SWIM_NMS_USER_TFMS` / `SWIM_NMS_PASS_TFMS` / `SWIM_NMS_QUEUE_TFMS` | NAS programs (GDP, GS, AFP, AAR) |
 | AIM | `SWIM_NMS_USER_AIM` / `SWIM_NMS_PASS_AIM` / `SWIM_NMS_QUEUE_AIM` | Digital NOTAMs |
-| TBFM | `SWIM_NMS_USER_TBFM` / `SWIM_NMS_PASS_TBFM` / `SWIM_NMS_QUEUE_TBFM` | Arrival sequencing / meter fix ETAs |
-| ITWS | `SWIM_NMS_USER_ITWS` / `SWIM_NMS_PASS_ITWS` / `SWIM_NMS_QUEUE_ITWS` | Terminal weather (precip, wind shear, microburst) |
+| TBFM | `SWIM_NMS_USER_TBFM` / `SWIM_NMS_PASS_TBFM` / `SWIM_NMS_QUEUE_TBFM` | Arrival sequencing |
+| ITWS | `SWIM_NMS_USER_ITWS` / `SWIM_NMS_PASS_ITWS` / `SWIM_NMS_QUEUE_ITWS` | Terminal weather |
 
-No code changes required after credential entry. Rebuild and restart the ingest container:
+To request FAA SWIM credentials, see [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) — includes the email template and portal link.
+
+No code changes required after credential entry. Rebuild and restart:
 
 ```bash
 bash build-images.sh
@@ -471,10 +454,10 @@ systemctl --user restart corporatetraveldc-ingest
 | Path | Purpose |
 |---|---|
 | `/opt/corporatetraveldc/src/` | All Python source |
-| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL, ~432 KB) |
+| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL) |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret platform config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Credentials (mode 0600) |
-| `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 skill usage log (model + token counts) |
+| `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 skill usage log |
 | `/var/lib/corporatetraveldc/skill-state/` | SR-2 hash gate state |
 | `/run/corporatetraveldc/triggers/` | Admin trigger files |
 | `/opt/corporatetraveldc/watchlists/` | Permanent watchlist YAML files |
@@ -483,7 +466,7 @@ systemctl --user restart corporatetraveldc-ingest
 
 ## CUI handling
 
-**CRITICAL**: This repository never contains, and must never be modified to contain, actual SHARES, HEARS, HEART, or any FOUO/CUI radio frequencies — in code, configs, exports, or documents, even password-protected. The infrastructure ships with empty placeholder files. The operator populates credentialed data from authorized sources on the Pi. The audit log is append-only, 90-day retention, and never leaves the Pi.
+**CRITICAL**: This repository never contains, and must never be modified to contain, actual SHARES, HEARS, HEART, or any FOUO/CUI radio frequencies — in code, configs, exports, or documents, even password-protected. The infrastructure ships with empty placeholder files. The operator populates credentialed data from authorized sources on the deployment host. The audit log is append-only, 90-day retention, and never leaves the host.
 
 ---
 
