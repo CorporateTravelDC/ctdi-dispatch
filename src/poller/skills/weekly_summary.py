@@ -142,6 +142,9 @@ def main(force: bool = False) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(summary)
 
+        # Archive to DB so BriefView can show weekly tab with history
+        db.archive_brief(summary, brief_type="weekly", source="skill")
+
         title = f"Weekly Ops Summary{' [FALLBACK]' if status == 'fallback' else ''}"
         # Use same topics as ops_brief so subscribers don't need a separate topic
         _ntfy.send_dual(summary, summary[:280], title=title)
