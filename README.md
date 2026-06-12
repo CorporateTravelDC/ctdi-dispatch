@@ -6,6 +6,8 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 
 > **Repository note:** The system user, container prefix, and filesystem paths use `corporatetraveldc` — the original deployment name. These are preserved for backward compatibility on the reference Pi deployment. New deployments can substitute any username; only the env config and Quadlet paths need to reflect it.
 
+> **Repository rename (2026-06):** This repository was renamed from `CorporateTravelDC/corporatetraveldc-dispatch` to `CorporateTravelDC/ctdi-dispatch` when the project was rebranded as Corporate Travel Dispatch Intelligence. GitHub automatically redirects all previous URLs — any link or `git remote` pointing at `github.com/CorporateTravelDC/corporatetraveldc-dispatch` will resolve correctly. If you arrived here via a redirect and want to confirm you're in the right place: the project description, commit history, and this note are the canonical confirmation. No content was moved to a new repository.
+
 📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS.
 📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral architecture. Read before contributing.
 🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC: airports, weather offices, European and Asia-Pacific feed equivalents.
