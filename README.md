@@ -11,12 +11,14 @@ Real-time executive travel intelligence platform for the Washington, DC area. Mo
 
 | Component | State |
 |---|---|
-| Web API | `https://dispatch.csexecutiveservices.com` |
+| Web API (browser / PWA) | `https://dispatch.csexecutiveservices.com` *(CF Access gated)* |
+| Web API (programmatic / admin) | `https://ops.csexecutiveservices.com` *(no CF Access gate)* |
+| Tailscale direct | `http://100.94.80.100:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
 | FAA SWIM NMS push feeds | Pending FAA credential provisioning |
-| Local LLM (Ollama) | llama3.2:3b (chat) + mistral (OSINT) — both warm |
-| Dispatch Drawer | Streaming chat with per-request model selector |
+| Local LLM (Ollama) | mistral-nemo 12B — csexec-chat + csexec-osint Modelfile wrappers |
+| Dispatch Drawer | Streaming chat via csexec-chat (mistral-nemo) |
 
 ---
 
@@ -74,7 +76,15 @@ The ingest container stamps heartbeats into `feed_state` every 30 seconds. Befor
 
 ## API
 
-Base URL: `https://dispatch.csexecutiveservices.com` (Cloudflare Tunnel) or `http://100.94.80.100:8000` (Tailscale direct).
+**Base URLs:**
+
+| Endpoint | URL | Notes |
+|---|---|---|
+| Browser / PWA | `https://dispatch.csexecutiveservices.com` | CF Access gated — browser auth required; POST mutations redirected to `/admin/login` for unauthenticated clients |
+| Programmatic / admin | `https://ops.csexecutiveservices.com` | No CF Access gate — Bearer token is the only auth; use this for API scripts, Claude, and machine-to-machine calls |
+| Tailscale direct | `http://100.94.80.100:8000` | Always available on tailnet; preferred fallback |
+
+> **Note:** `dispatch.csexecutiveservices.com` has Cloudflare Access enabled and will redirect unauthenticated POST requests to `/admin/login` (302), even if a valid Bearer token is present. Use `ops.csexecutiveservices.com` for all programmatic admin calls — it points to the same backend; the Bearer token provides the actual authorization.
 
 ### Tier 0 — Anonymous
 
