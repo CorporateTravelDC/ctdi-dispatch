@@ -1644,13 +1644,20 @@ def archive_brief(content: str, brief_type: str = "ops",
         )
 
 
-def get_brief_history(limit: int = 7) -> list[dict]:
-    """Return the last `limit` briefs, newest first."""
+def get_brief_history(limit: int = 7, brief_type: str | None = None) -> list[dict]:
+    """Return the last `limit` briefs, newest first. Optional brief_type filter ('ops'|'weekly')."""
     with conn() as c:
-        rows = c.execute(
-            "SELECT id, generated_at, brief_type, source FROM brief_archive ORDER BY generated_at DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
+        if brief_type:
+            rows = c.execute(
+                "SELECT id, generated_at, brief_type, source FROM brief_archive "
+                "WHERE brief_type=? ORDER BY generated_at DESC LIMIT ?",
+                (brief_type, limit)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT id, generated_at, brief_type, source FROM brief_archive ORDER BY generated_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
