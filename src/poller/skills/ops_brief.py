@@ -260,9 +260,6 @@ def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     _ntfy.send_dual(full_text, concise_text, title=title)
 
 
-OLLAMA_FALLBACK_MODEL = "llama3.2:3b"  # always available; used if primary model not yet built
-
-
 def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
     """
     Single Ollama /api/generate call. Returns response text or None on any error.
@@ -285,10 +282,9 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     """
-    Send prompt_content to Ollama and return (full_text, concise_text).
-    Tries OLLAMA_MODEL first; if that model isn't loaded yet, retries with
-    OLLAMA_FALLBACK_MODEL (llama3.2:3b — always present after base install).
-    Returns None only if Ollama is unreachable or both models fail.
+    Send prompt_content to Ollama (csexec-osint/mistral) and return (full_text, concise_text).
+    No llama fallback — all inference is via OLLAMA_MODEL (csexec-osint).
+    Returns None only if Ollama is unreachable or the model call fails.
     """
     if not OLLAMA_BASE_URL:
         return None
@@ -308,19 +304,6 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
 
     try:
         narrative = _ollama_generate(OLLAMA_MODEL, system, prompt_content)
-    except httpx.HTTPStatusError as exc:
-        # 404 = model not found (not yet pulled/built); retry with fallback
-        if exc.response.status_code == 404 and OLLAMA_MODEL != OLLAMA_FALLBACK_MODEL:
-            log.info("ops-brief: %s not ready — retrying with %s", OLLAMA_MODEL, OLLAMA_FALLBACK_MODEL)
-            model_used = OLLAMA_FALLBACK_MODEL
-            try:
-                narrative = _ollama_generate(OLLAMA_FALLBACK_MODEL, system, prompt_content)
-            except Exception as fb_exc:
-                log.warning("ops-brief: fallback Ollama call failed (%s) — going deterministic", fb_exc)
-                return None
-        else:
-            log.warning("ops-brief: Ollama call failed (%s) — going deterministic", exc)
-            return None
     except Exception as exc:
         log.warning("ops-brief: Ollama call failed (%s) — going deterministic", exc)
         return None

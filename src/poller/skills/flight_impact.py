@@ -1,7 +1,7 @@
 """
 flight-impact — SR-1 + SR-2 compliant.
 
-Model: ollama/llama3.2:3b (chat-tier)
+Model: ollama/mistral (csexec-osint — all inference unified)
 Schedule: every 15 minutes normally; drops to 5 minutes when a 'flight' watchlist
           session is active (SKILL_SCHEDULE active_interval/active_check).
 SR-1: log_usage() in finally block
@@ -29,9 +29,10 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME = "flight-impact"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_CHAT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+                     or os.getenv("OLLAMA_CHAT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "llama3.2:3b")
+                     or "csexec-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 DC_AIRPORTS = ["KDCA", "KIAD", "KBWI"]
