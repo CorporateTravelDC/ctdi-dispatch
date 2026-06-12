@@ -58,15 +58,13 @@ SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
 # ── Dispatch AI chat --------------------------------------------------------
 # Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
-# Two context-switched models:
-#   CHAT  model: csexec-chat  — dispatch drawer conversations
-#   OSINT model: csexec-osint — EP/marketing narrative generation (in osint_monitor)
-# Operator may override per-request via message prefix "/model <name> <query>".
-OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://127.0.0.1:11434
+# Both csexec-chat and csexec-osint are Modelfile wrappers on mistral-nemo:latest.
+# llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
+OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://host.containers.internal:11434
 OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
-OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "llama3.2:3b") # dispatch drawer default
-OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "mistral")      # OSINT narrative default
+OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "csexec-chat:latest")  # dispatch drawer (mistral-nemo)
+OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "csexec-osint:latest") # OSINT narrative (mistral-nemo)
 OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
 
 # Chat endpoint + auth headers: prefer Open WebUI's Ollama proxy; fall back to Ollama direct.
