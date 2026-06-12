@@ -1,0 +1,38 @@
+#!/bin/bash
+# .git/hooks/post-rewrite — auto-push after clean rebase on main
+#
+# Fires after: git rebase (command = "rebase")
+#              git commit --amend (command = "amend") — skipped
+#
+# Behavior: if the rebase completed cleanly on main with no uncommitted
+# changes, automatically pushes to origin/main. The pre-push hook then
+# auto-syncs the public mirror as part of that push.
+
+set -euo pipefail
+
+command="${1:-}"
+
+# Only act on rebase, not amend
+[[ "$command" != "rebase" ]] && exit 0
+
+current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+# Only auto-push on main
+[[ "$current_branch" != "main" ]] && exit 0
+
+# Abort if there are uncommitted changes (rebase left conflicts or edits)
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "[post-rewrite] Uncommitted changes detected — skipping auto-push."
+    echo "               Resolve all changes, then: git push origin main"
+    exit 0
+fi
+
+echo "[post-rewrite] Rebase on main complete and working tree is clean."
+echo "[post-rewrite] Auto-pushing to origin/main (public mirror will follow via pre-push hook)..."
+
+if git push origin main; then
+    echo "[post-rewrite] ✓ origin/main updated."
+else
+    echo "[post-rewrite] ✗ Push to origin failed. Run manually: git push origin main"
+    exit 0
+fi
