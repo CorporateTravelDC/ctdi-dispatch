@@ -255,10 +255,24 @@ async def get_brief() -> PlainTextResponse:
 
 
 @app.get("/api/v1/brief/history")
-async def get_brief_history(limit: int = 7) -> JSONResponse:
-    """Return metadata for the last `limit` briefs (default 7). Tier 0."""
-    entries = db.get_brief_history(min(max(limit, 1), 30))
+async def get_brief_history(limit: int = 7, type: Optional[str] = None) -> JSONResponse:
+    """Return metadata for the last `limit` briefs. Optional ?type=ops|weekly filter. Tier 0."""
+    entries = db.get_brief_history(min(max(limit, 1), 30), brief_type=type)
     return JSONResponse(entries)
+
+
+@app.get("/api/v1/brief/weekly")
+async def get_brief_weekly() -> PlainTextResponse:
+    """Latest weekly summary — from DB archive or weekly-summary.txt fallback. Tier 0."""
+    rows = db.get_brief_history(1, brief_type="weekly")
+    if rows:
+        row = db.get_brief_by_id(rows[0]["id"])
+        if row:
+            return PlainTextResponse(row["content"])
+    weekly_path = pathlib.Path(config.state_dir()) / "weekly-summary.txt"
+    if weekly_path.exists():
+        return PlainTextResponse(weekly_path.read_text())
+    return PlainTextResponse("No weekly summary available yet.")
 
 
 @app.get("/api/v1/brief/{brief_id}")
