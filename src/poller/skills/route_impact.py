@@ -18,7 +18,7 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or "csexec-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Route prompt is ~300-400 tokens; mistral-nemo Pi 5 CPU ~120s sufficient
-OLLAMA_TIMEOUT    = 180
+OLLAMA_TIMEOUT    = 900  # stopgap
 
 _route_dedup = PushDedup("route")
 
