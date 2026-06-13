@@ -59,6 +59,12 @@ TAILSCALE_CIDR     = ipaddress.ip_network("100.64.0.0/10")
 STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 
+# ── Runner service token (cert tier) ----------------------------------------
+# Used by the runner to call Tier-1-gated dispatch endpoints on behalf of the
+# frontend (e.g. /api/v1/tfr-enriched).  The token is injected server-side so
+# the browser never sees it.  Set in dispatch-secrets.env.
+RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
+
 # ── Dispatch AI chat --------------------------------------------------------
 # Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
 # Both csexec-chat and csexec-osint are Modelfile wrappers on mistral-nemo:latest.
@@ -868,15 +874,35 @@ async def chat_history_clear():
 
 
 # ── Dispatch API transparent proxy -----------------------------------------
+# Paths (relative to /api/dispatch/) that require Tier 1 (cert) auth.
+# The runner holds a cert-tier service token and injects it for these.
+# Add new Tier-1 endpoints here as they are promoted.
+_TIER1_PATHS: frozenset[str] = frozenset({
+    "api/v1/tfr-enriched",
+    "api/v1/radio",
+    "api/v1/cui/status",
+})
 
 @app.api_route("/api/dispatch/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_dispatch(path: str, request: Request):
-    """Transparent proxy to dispatch web API on port 8000."""
+    """Transparent proxy to dispatch web API on port 8000.
+
+    Auth injection: for Tier-1-gated endpoints (e.g. api/v1/tfr-enriched) the
+    runner injects its own service token when the browser hasn't supplied one.
+    This lets the frontend call enriched endpoints without holding a token itself.
+    The service token (RUNNER_ENRICHED_TOKEN, tier=cert) is stored server-side in
+    dispatch-secrets.env and never exposed to the browser.
+    """
     url = f"{DISPATCH_BASE}/{path}"
     headers = {}
+
+    # Client-supplied token takes priority (admin console, debug flows).
     auth = request.headers.get("Authorization")
     if auth:
         headers["Authorization"] = auth
+    elif RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS:
+        # Server-side token injection for known Tier-1 endpoints.
+        headers["Authorization"] = f"Bearer {RUNNER_ENRICHED_TOKEN}"
     try:
         async with httpx.AsyncClient() as c:
             if request.method == "GET":
