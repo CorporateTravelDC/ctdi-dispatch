@@ -189,7 +189,7 @@ export default function App() {
           <span className="app-footer-copy">© {new Date().getFullYear()} CS Executive Services, LLC</span>
           <span className="app-footer-sep">·</span>
           <a
-            href="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc"
+            href="https://github.com/CorporateTravelDC/ctdi-dispatch"
             target="_blank"
             rel="noopener noreferrer"
             className="app-footer-link"
