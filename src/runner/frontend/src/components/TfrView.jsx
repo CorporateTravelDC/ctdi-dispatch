@@ -31,7 +31,7 @@ function fmtUtc(s) {
   } catch (_) { return s }
 }
 
-// Search: TFR ID, type label, type short, date string
+// Search: TFR ID, type label, type short, date string, enriched narrative
 function tfrMatches(tfr, q) {
   if (!q) return true
   const lq = q.toLowerCase()
@@ -42,6 +42,7 @@ function tfrMatches(tfr, q) {
     t.short,
     fmtUtc(tfr.effective_start),
     fmtUtc(tfr.effective_end),
+    tfr.enriched_text,   // available when runner proxies tfr-enriched
   ].some(v => v && String(v).toLowerCase().includes(lq))
 }
 
@@ -65,9 +66,11 @@ function TfrRow({ tfr, isVip }) {
     <div className={`sig-msg tfr-row${isVip ? ' tfr-row-vip' : ''}`}>
       <span className={`tfr-short-chip tfr-chip-${t.color}`}>{t.short}</span>
       <span className={`sig-msg-call${isVip ? ' tfr-id-vip' : ''}`}>{tfr.tfr_id}</span>
-      {start
-        ? <span className="sig-msg-text">{start}{end ? ` → ${end}` : ' → indef.'}</span>
-        : <span className="sig-msg-text tfr-dates-degraded">dates unavailable (FAA feed)</span>
+      {tfr.enriched_text
+        ? <span className="sig-msg-text tfr-enriched">{tfr.enriched_text}</span>
+        : start
+          ? <span className="sig-msg-text">{start}{end ? ` → ${end}` : ' → indef.'}</span>
+          : <span className="sig-msg-text tfr-dates-degraded">dates unavailable (FAA feed)</span>
       }
       {isVip && <span className="tfr-vip-mini">VIP</span>}
     </div>
@@ -297,7 +300,9 @@ export default function TfrView() {
 
   const loadTfrs = useCallback(async () => {
     try {
-      const r = await fetch('/api/dispatch/api/v1/tfr')
+      // Runner injects RUNNER_ENRICHED_TOKEN server-side; browser sends no token.
+      // Falls back to /tfr (Tier 0) if enriched endpoint is unavailable.
+      const r = await fetch('/api/dispatch/api/v1/tfr-enriched')
       if (!r.ok) throw new Error(r.status)
       const d = await r.json()
       const list = Array.isArray(d) ? d : (d.tfrs || [])
@@ -305,7 +310,18 @@ export default function TfrView() {
       const nullDates = list.filter(t => !t.effective_start && !t.effective_end).length
       setFeedErr(list.length > 0 && nullDates / list.length > 0.1)
       setUpdatedAt(fmtNow())
-    } catch { setTfrs([]) }
+    } catch {
+      // Fallback: basic endpoint (no enriched_text)
+      try {
+        const r2 = await fetch('/api/dispatch/api/v1/tfr')
+        const d2 = await r2.json()
+        const list = Array.isArray(d2) ? d2 : (d2.tfrs || [])
+        setTfrs(list)
+        const nullDates = list.filter(t => !t.effective_start && !t.effective_end).length
+        setFeedErr(list.length > 0 && nullDates / list.length > 0.1)
+        setUpdatedAt(fmtNow())
+      } catch { setTfrs([]) }
+    }
   }, [])
 
   const loadNotams = useCallback(async () => {
