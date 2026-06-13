@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 
 const CATEGORIES = [
-  { id: 'corporate_intel', label: 'Corporate Intel',     icon: '🏢' },
-  { id: 'marketing_intel', label: 'Marketing Intel',     icon: '📊' },
-  { id: 'travel_trends',   label: 'Client Travel Trends',icon: '✈' },
-  { id: 'dc_area',         label: 'DC Area',             icon: '🏛' },
-  { id: 'aviation',        label: 'Aviation',            icon: '📡' },
+  { id: 'corporate_intel', label: 'Corporate Intel'     },
+  { id: 'marketing_intel', label: 'Marketing Intel'     },
+  { id: 'travel_trends',   label: 'Client Travel Trends'},
+  { id: 'dc_area',         label: 'DC Area'             },
+  { id: 'aviation',        label: 'Aviation'            },
 ]
 
 function relTime(dateStr) {
@@ -124,8 +124,7 @@ export default function IntelView() {
             className={`intel-cat-tab${category === c.id ? ' active' : ''}`}
             onClick={() => setCategory(c.id)}
           >
-            <span className="intel-cat-icon">{c.icon}</span>
-            <span className="intel-cat-label">{c.label}</span>
+            {c.label}
           </button>
         ))}
       </div>
