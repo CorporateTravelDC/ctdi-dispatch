@@ -482,59 +482,62 @@ body::before {
 .tfr-meta { display: flex; gap: 1.5rem; font-family: var(--font-data); font-size: 0.68rem; color: var(--muted); flex-wrap: wrap; }
 .tfr-meta-degraded { color: var(--orange); opacity: 0.7; font-style: italic; }
 
-/* ── TFR view redesign extras ─────────────────────────────────────────────── */
-.tfr-view-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem; }
-.tfr-view-header h2 { flex: 1; margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+/* ── TFR view (sig-panel layout) ──────────────────────────────────────────── */
+/* Panels sit inside .sig-grid — reuse all sig-panel / sig-feed / sig-msg styles */
+.tfr-grid { grid-template-columns: 1fr 2fr 1fr; }
+@media (max-width: 900px) { .tfr-grid { grid-template-columns: 1fr; } }
 
-/* VIP section — always rendered, red-tinted when active */
-.tfr-vip-section { border: 1px solid rgba(255,48,64,0.22); border-radius: var(--radius-lg); padding: 1rem 1.25rem; background: rgba(255,48,64,0.04); }
-.tfr-count-alert { color: var(--nogo) !important; }
+/* VIP panel — red tint when active */
+.tfr-vip-panel { border-color: rgba(255,48,64,0.18); }
+.tfr-vip-panel.tfr-vip-active { border-color: rgba(255,48,64,0.5); background: rgba(255,48,64,0.04); }
+.tfr-vip-label { color: var(--nogo) !important; }
+.tfr-count-hot { color: var(--nogo) !important; }
 
-.tfr-vip-clear { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; }
-.tfr-vip-clear-icon { font-size: 1.1rem; color: var(--go); flex-shrink: 0; }
-.tfr-vip-clear-label { font-family: var(--font-ui); font-size: 0.82rem; font-weight: 600; color: var(--go); }
-.tfr-vip-clear-sub { font-family: var(--font-ui); font-size: 0.7rem; color: var(--muted); margin-top: 0.1rem; }
+/* "Airspace clear" empty state */
+.tfr-clear-state { color: var(--go) !important; }
+.tfr-clear-check { font-size: 1rem; margin-right: 0.3rem; }
 
-.tfr-vip-alert-banner {
-  background: rgba(255,48,64,0.12); border: 1px solid rgba(255,48,64,0.45);
-  border-radius: var(--radius); padding: 0.5rem 0.75rem; margin-bottom: 0.75rem;
-  font-family: var(--font-ui); font-size: 0.78rem; font-weight: 700; color: var(--nogo);
-  letter-spacing: 0.04em;
+/* Per-row type chip (short label) */
+.tfr-short-chip {
+  font-family: var(--font-ui); font-size: 0.56rem; font-weight: 700;
+  padding: 0.08rem 0.32rem; border-radius: 3px; letter-spacing: 0.1em; flex-shrink: 0;
+}
+.tfr-chip-orange   { color: var(--orange);   background: rgba(255,107,53,0.12); }
+.tfr-chip-airspace { color: var(--airspace); background: rgba(74,158,255,0.10); }
+.tfr-chip-cyan     { color: var(--cyan);     background: var(--cyan-dim); }
+.tfr-chip-nogo     { color: var(--nogo);     background: rgba(255,48,64,0.10); }
+.tfr-chip-muted    { color: var(--text-2);   background: transparent; opacity: 0.7; }
+
+/* VIP row highlight */
+.tfr-row-vip { background: rgba(255,48,64,0.05); }
+.tfr-row-vip .sig-msg-call { color: var(--nogo); }
+.tfr-id-vip { color: var(--nogo) !important; }
+.tfr-vip-mini {
+  font-family: var(--font-ui); font-size: 0.55rem; font-weight: 700; letter-spacing: 0.1em;
+  color: white; background: var(--nogo); padding: 0.07rem 0.3rem; border-radius: 2px;
+  margin-left: auto; flex-shrink: 0;
 }
 
-/* Type chips on cards */
-.tfr-type-chip {
-  font-family: var(--font-ui); font-size: 0.58rem; font-weight: 700;
-  padding: 0.1rem 0.4rem; border-radius: 3px; letter-spacing: 0.1em;
-  border: 1px solid transparent;
-}
-.tfr-type-orange  { color: var(--orange); border-color: rgba(255,107,53,0.4); background: rgba(255,107,53,0.08); }
-.tfr-type-airspace { color: var(--airspace); border-color: rgba(74,158,255,0.4); background: rgba(74,158,255,0.08); }
-.tfr-type-cyan    { color: var(--cyan); border-color: rgba(0,212,255,0.3); background: var(--cyan-dim); }
-.tfr-type-nogo    { color: var(--nogo); border-color: rgba(255,48,64,0.4); background: rgba(255,48,64,0.08); }
-.tfr-type-muted   { color: var(--text-2); border-color: var(--border); background: transparent; }
+/* Degraded date text */
+.tfr-dates-degraded { color: var(--orange); opacity: 0.6; font-style: italic; }
 
-/* Type filter chips row */
-.tfr-filter-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+/* Last-updated timestamp in VIP panel header */
+.tfr-updated { font-family: var(--font-data); font-size: 0.6rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+/* Type filter chips (shared with general panel) */
+.tfr-filter-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--glass-border); }
 .tfr-filter-chip {
   background: none; border: 1px solid var(--border); color: var(--muted);
-  font-family: var(--font-ui); font-size: 0.66rem; font-weight: 700;
-  padding: 0.22rem 0.6rem; border-radius: var(--radius); cursor: pointer;
+  font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700;
+  padding: 0.18rem 0.5rem; border-radius: var(--radius); cursor: pointer;
   letter-spacing: 0.06em; transition: color var(--transition), border-color var(--transition), background var(--transition);
-  display: flex; align-items: center; gap: 0.35rem;
+  display: flex; align-items: center; gap: 0.3rem;
 }
 .tfr-filter-chip.on  { color: var(--text); border-color: var(--cyan); background: var(--cyan-dim); }
-.tfr-filter-chip.off { opacity: 0.45; }
-.tfr-filter-chip:hover { color: var(--text-2); border-color: var(--cyan); opacity: 1; }
+.tfr-filter-chip.off { opacity: 0.4; }
+.tfr-filter-chip:hover { opacity: 1; border-color: var(--cyan); }
 .tfr-filter-all { color: var(--text-2); border-color: var(--border-2); }
-.tfr-filter-count { font-size: 0.6rem; color: var(--muted); font-weight: 400; }
-.tfr-filter-summary { font-family: var(--font-ui); font-size: 0.68rem; margin-bottom: 0.5rem; }
-
-.tfr-feed-warn {
-  background: rgba(255,107,53,0.08); border: 1px solid rgba(255,107,53,0.35);
-  border-radius: var(--radius); padding: 0.4rem 0.7rem; margin-bottom: 0.75rem;
-  font-family: var(--font-ui); font-size: 0.7rem; color: var(--orange); opacity: 0.85;
-}
+.tfr-filter-count { font-size: 0.58rem; color: var(--muted); font-weight: 400; }
 
 /* ── Brief view ───────────────────────────────────────────────────────────── */
 .brief-header-row { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }

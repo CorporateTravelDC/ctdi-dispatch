@@ -1,334 +1,353 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 
-// ── TFR type inference from NOTAM ID prefix ───────────────────────────────
-// /api/v1/tfr returns {tfr_id, is_vip, effective_start, effective_end} only.
-// No classification field available without tier1 auth, so we derive from prefix.
-const TFR_TYPE_MAP = {
-  '6': { label: 'Events / Security', key: 'events',   color: 'orange' },
-  '5': { label: 'Military',          key: 'military',  color: 'airspace' },
-  '4': { label: 'International',     key: 'intl',      color: 'cyan' },
-  '9': { label: 'Fire / Disaster',   key: 'disaster',  color: 'nogo' },
-  '1': { label: 'Airport / FDC',     key: 'fdc',       color: 'muted' },
-  '2': { label: 'Enroute',           key: 'enroute',   color: 'muted' },
-  '0': { label: 'Other',             key: 'other',     color: 'muted' },
+// ── TFR type inference from NOTAM ID prefix ────────────────────────────────
+// Basic /api/v1/tfr has no classification field; derive from NOTAM series prefix.
+// NOTAM series: 0=misc, 1=airport/FDC, 2=enroute, 4=intl, 5=military,
+//               6=events/security, 9=fire/disaster
+const TFR_TYPES = {
+  '6': { label: 'Events / Security', short: 'EVT',  color: 'orange'   },
+  '5': { label: 'Military',          short: 'MIL',  color: 'airspace' },
+  '4': { label: 'International',     short: 'INTL', color: 'cyan'     },
+  '9': { label: 'Fire / Disaster',   short: 'FIRE', color: 'nogo'     },
+  '1': { label: 'Airport / FDC',     short: 'FDC',  color: 'muted'    },
+  '2': { label: 'Enroute',           short: 'ENR',  color: 'muted'    },
 }
+const DEFAULT_TYPE = { label: 'Other', short: 'OTH', color: 'muted' }
 
 function tfrType(tfr_id) {
-  if (!tfr_id) return TFR_TYPE_MAP['0']
-  const prefix = String(tfr_id).split('/')[0]
-  return TFR_TYPE_MAP[prefix] ?? TFR_TYPE_MAP['0']
+  const prefix = tfr_id ? String(tfr_id).split('/')[0] : null
+  return TFR_TYPES[prefix] ?? DEFAULT_TYPE
 }
 
-function fmtTime(s) {
+function fmtUtc(s) {
   if (!s) return null
   try {
-    return new Date(s).toLocaleString('en-US', {
-      month: 'short', day: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-      timeZone: 'UTC', hour12: false,
-    }) + 'Z'
+    const d = new Date(s)
+    const mo = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
+    const dy = String(d.getUTCDate()).padStart(2, '0')
+    const hh = String(d.getUTCHours()).padStart(2, '0')
+    const mm = String(d.getUTCMinutes()).padStart(2, '0')
+    return `${mo} ${dy} ${hh}${mm}Z`
   } catch (_) { return s }
 }
 
-function tfrMatchesSearch(tfr, q) {
+// Search: TFR ID, type label, type short, date string
+function tfrMatches(tfr, q) {
   if (!q) return true
   const lq = q.toLowerCase()
-  return [tfr.tfr_id, tfrType(tfr.tfr_id).label].some(
-    v => v && String(v).toLowerCase().includes(lq)
-  )
+  const t  = tfrType(tfr.tfr_id)
+  return [
+    tfr.tfr_id,
+    t.label,
+    t.short,
+    fmtUtc(tfr.effective_start),
+    fmtUtc(tfr.effective_end),
+  ].some(v => v && String(v).toLowerCase().includes(lq))
 }
 
-function notamMatchesSearch(n, q) {
-  if (!q) return true
-  const lq = q.toLowerCase()
-  return [n.notam_id, n.icao, n.location, n.text, n.classification, n.type].some(
-    v => v && String(v).toLowerCase().includes(lq)
-  )
+// ── Type filter keys for General panel ────────────────────────────────────
+const FILTER_KEYS = ['events', 'military', 'intl', 'disaster', 'fdc', 'enroute', 'other']
+const TYPE_BY_KEY = Object.fromEntries(
+  [...Object.entries(TFR_TYPES), ['0', DEFAULT_TYPE]].map(([, t]) => [t.short.toLowerCase(), t])
+)
+// derive key from type object
+function typeKey(t) {
+  return t.short.toLowerCase()
 }
 
-// ── TFR card ─────────────────────────────────────────────────────────────
-function TfrCard({ tfr, showVipBadge }) {
-  const t      = tfrType(tfr.tfr_id)
-  const start  = fmtTime(tfr.effective_start)
-  const end    = fmtTime(tfr.effective_end)
-  const noDate = !start && !end
+// ── TFR row (compact, sig-msg style) ─────────────────────────────────────
+function TfrRow({ tfr, isVip }) {
+  const t     = tfrType(tfr.tfr_id)
+  const start = fmtUtc(tfr.effective_start)
+  const end   = fmtUtc(tfr.effective_end)
 
   return (
-    <div className={`tfr-card${tfr.is_vip ? ' vip' : ''}`}>
-      <div className="tfr-card-header">
-        <span className="tfr-id">{tfr.tfr_id}</span>
-        {showVipBadge && tfr.is_vip && <span className="vip-badge">VIP / POTUS</span>}
-        <span className={`tfr-type-chip tfr-type-${t.color}`}>{t.label}</span>
+    <div className={`sig-msg tfr-row${isVip ? ' tfr-row-vip' : ''}`}>
+      <span className={`tfr-short-chip tfr-chip-${t.color}`}>{t.short}</span>
+      <span className={`sig-msg-call${isVip ? ' tfr-id-vip' : ''}`}>{tfr.tfr_id}</span>
+      {start
+        ? <span className="sig-msg-text">{start}{end ? ` → ${end}` : ' → indef.'}</span>
+        : <span className="sig-msg-text tfr-dates-degraded">dates unavailable (FAA feed)</span>
+      }
+      {isVip && <span className="tfr-vip-mini">VIP</span>}
+    </div>
+  )
+}
+
+// ── VIP panel ─────────────────────────────────────────────────────────────
+function VipPanel({ tfrs, loading, updatedAt }) {
+  const [search, setSearch] = useState('')
+  const vip      = useMemo(() => tfrs?.filter(t => t.is_vip) ?? [], [tfrs])
+  const filtered = useMemo(() => vip.filter(t => tfrMatches(t, search)), [vip, search])
+
+  return (
+    <div className={`sig-panel tfr-vip-panel${vip.length > 0 ? ' tfr-vip-active' : ''}`}>
+      <div className="sig-panel-header">
+        <span className="sig-label tfr-vip-label">VIP / POTUS</span>
+        {vip.length > 0
+          ? <span className="sig-count tfr-count-hot">{vip.length} active</span>
+          : <span className="sig-count">clear</span>
+        }
+        <input
+          className="sig-search"
+          type="search"
+          placeholder="search TFR ID…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          aria-label="Search VIP TFRs"
+        />
+        {updatedAt && <span className="tfr-updated">↻ {updatedAt}</span>}
       </div>
-      <div className="tfr-meta">
-        {start && <span>Start: {start}</span>}
-        {end   && <span>End: {end}</span>}
-        {noDate && <span className="tfr-meta-degraded">Dates unavailable — FAA feed degraded</span>}
+
+      <div className="sig-feed">
+        {loading ? (
+          <div className="sig-empty">Loading…</div>
+        ) : vip.length === 0 ? (
+          <div className="sig-empty tfr-clear-state">
+            <span className="tfr-clear-check">✓</span> Airspace clear — no VIP restrictions
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="sig-empty">No VIP TFRs matching &ldquo;{search}&rdquo;</div>
+        ) : (
+          filtered.map(tfr => <TfrRow key={tfr.tfr_id} tfr={tfr} isVip />)
+        )}
       </div>
     </div>
   )
 }
 
-// ── VIP / POTUS section ──────────────────────────────────────────────────
-function VipSection({ tfrs, loading }) {
-  const vip = useMemo(() => tfrs?.filter(t => t.is_vip) ?? [], [tfrs])
-
-  return (
-    <section className="airspace-section tfr-vip-section" aria-label="VIP and POTUS TFRs">
-      <div className="airspace-section-header">
-        <h3>
-          VIP / POTUS Restrictions
-          {!loading && <span className={`airspace-count${vip.length > 0 ? ' tfr-count-alert' : ''}`}>
-            {' '}{vip.length} active
-          </span>}
-        </h3>
-      </div>
-
-      {loading ? (
-        <p className="muted">Loading…</p>
-      ) : vip.length === 0 ? (
-        <div className="tfr-vip-clear">
-          <span className="tfr-vip-clear-icon">✓</span>
-          <div>
-            <div className="tfr-vip-clear-label">Airspace clear</div>
-            <div className="tfr-vip-clear-sub">No VIP / POTUS restrictions active</div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="tfr-vip-alert-banner">
-            ⚠ {vip.length} VIP / POTUS restriction{vip.length !== 1 ? 's' : ''} active
-          </div>
-          {vip.map(tfr => <TfrCard key={tfr.tfr_id} tfr={tfr} showVipBadge={false} />)}
-        </>
-      )}
-    </section>
-  )
+// ── General TFRs panel ────────────────────────────────────────────────────
+const ALL_FILTER_LABELS = {
+  evt:  'Events / Security',
+  mil:  'Military',
+  intl: 'International',
+  fire: 'Fire / Disaster',
+  fdc:  'Airport / FDC',
+  enr:  'Enroute',
+  oth:  'Other',
 }
 
-// ── General TFRs section ─────────────────────────────────────────────────
-const TYPE_FILTERS = [
-  { key: 'events',   label: 'Events / Security' },
-  { key: 'military', label: 'Military' },
-  { key: 'intl',     label: 'International' },
-  { key: 'disaster', label: 'Fire / Disaster' },
-  { key: 'fdc',      label: 'Airport / FDC' },
-  { key: 'enroute',  label: 'Enroute' },
-  { key: 'other',    label: 'Other' },
-]
-
-function GeneralSection({ tfrs, loading, feedDegraded }) {
-  const [search,      setSearch]      = useState('')
-  const [activeTypes, setActiveTypes] = useState(new Set(TYPE_FILTERS.map(f => f.key)))
+function GeneralPanel({ tfrs, loading, feedDegraded }) {
+  const [search,  setSearch]  = useState('')
+  const [typeOn,  setTypeOn]  = useState(new Set(Object.keys(ALL_FILTER_LABELS)))
 
   const nonVip = useMemo(() => tfrs?.filter(t => !t.is_vip) ?? [], [tfrs])
 
-  // Count per type for filter chip badges
-  const typeCounts = useMemo(() => {
-    const counts = {}
+  // counts per type short-key
+  const counts = useMemo(() => {
+    const c = {}
     nonVip.forEach(t => {
-      const key = tfrType(t.tfr_id).key
-      counts[key] = (counts[key] || 0) + 1
+      const key = tfrType(t.tfr_id).short.toLowerCase()
+      c[key] = (c[key] || 0) + 1
     })
-    return counts
+    return c
   }, [nonVip])
 
-  // Which type keys are actually present in data?
-  const presentKeys = useMemo(() => new Set(Object.keys(typeCounts)), [typeCounts])
+  const presentKeys = useMemo(() => new Set(Object.keys(counts)), [counts])
 
   const filtered = useMemo(() => {
     return nonVip.filter(t => {
-      const key = tfrType(t.tfr_id).key
-      return activeTypes.has(key) && tfrMatchesSearch(t, search)
+      const key = tfrType(t.tfr_id).short.toLowerCase()
+      return typeOn.has(key) && tfrMatches(t, search)
     })
-  }, [nonVip, activeTypes, search])
+  }, [nonVip, typeOn, search])
 
-  const toggleType = (key) => {
-    setActiveTypes(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else               next.add(key)
-      return next
-    })
-  }
+  const toggleType = key => setTypeOn(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
 
-  const allOn  = activeTypes.size === TYPE_FILTERS.length
-  const toggleAll = () => {
-    setActiveTypes(allOn
-      ? new Set()
-      : new Set(TYPE_FILTERS.map(f => f.key))
-    )
-  }
+  const allOn = typeOn.size === Object.keys(ALL_FILTER_LABELS).length
+  const toggleAll = () => setTypeOn(allOn ? new Set() : new Set(Object.keys(ALL_FILTER_LABELS)))
 
   return (
-    <section className="airspace-section" aria-label="General TFRs">
-      <div className="airspace-section-header">
-        <h3>
-          General Restrictions
-          {!loading && <span className="airspace-count">{nonVip.length} active</span>}
-        </h3>
+    <div className="sig-panel">
+      <div className="sig-panel-header">
+        <span className="sig-label" style={{ color: 'var(--text-2)' }}>GENERAL</span>
+        <span className="sig-count">{nonVip.length} active</span>
         <input
           className="sig-search"
           type="search"
-          placeholder="search TFRs…"
+          placeholder="TFR ID, type…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           aria-label="Search general TFRs"
         />
       </div>
 
-      {/* Type filter chips — only show types that have data */}
+      {/* Type filter chips — only present types shown */}
       {!loading && nonVip.length > 0 && (
         <div className="tfr-filter-chips">
-          {TYPE_FILTERS.filter(f => presentKeys.has(f.key)).map(f => (
-            <button
-              key={f.key}
-              className={`tfr-filter-chip${activeTypes.has(f.key) ? ' on' : ' off'}`}
-              onClick={() => toggleType(f.key)}
-              title={`${typeCounts[f.key] ?? 0} TFRs`}
-            >
-              {f.label}
-              <span className="tfr-filter-count">{typeCounts[f.key] ?? 0}</span>
-            </button>
-          ))}
+          {Object.entries(ALL_FILTER_LABELS)
+            .filter(([k]) => presentKeys.has(k))
+            .map(([k, label]) => (
+              <button
+                key={k}
+                className={`tfr-filter-chip${typeOn.has(k) ? ' on' : ' off'}`}
+                onClick={() => toggleType(k)}
+              >
+                {label}
+                <span className="tfr-filter-count">{counts[k] || 0}</span>
+              </button>
+            ))}
           <button className="tfr-filter-chip tfr-filter-all" onClick={toggleAll}>
             {allOn ? 'NONE' : 'ALL'}
           </button>
         </div>
       )}
 
-      {feedDegraded && nonVip.length > 0 && (
-        <div className="tfr-feed-warn">
-          ⚠ FAA TFR XML feed degraded — effective dates unavailable for most TFRs (upstream issue)
+      {feedDegraded && (
+        <div className="sig-hw-notice">
+          ⚠ FAA TFR XML feed degraded — effective dates unavailable (upstream issue)
         </div>
       )}
 
-      {loading ? (
-        <p className="muted">Loading…</p>
-      ) : nonVip.length === 0 ? (
-        <p className="muted">No general TFRs active</p>
-      ) : filtered.length === 0 ? (
-        <p className="muted">No TFRs match current filters</p>
-      ) : (
-        <>
-          <p className="tfr-filter-summary muted">{filtered.length} of {nonVip.length} shown</p>
-          {filtered.map(tfr => <TfrCard key={tfr.tfr_id} tfr={tfr} showVipBadge={false} />)}
-        </>
+      <div className="sig-feed">
+        {loading ? (
+          <div className="sig-empty">Loading…</div>
+        ) : nonVip.length === 0 ? (
+          <div className="sig-empty">No general TFRs active</div>
+        ) : filtered.length === 0 ? (
+          <div className="sig-empty">No TFRs match current filters</div>
+        ) : (
+          filtered.map(tfr => <TfrRow key={tfr.tfr_id} tfr={tfr} isVip={false} />)
+        )}
+      </div>
+
+      {!loading && filtered.length > 0 && filtered.length !== nonVip.length && (
+        <div className="sig-hw-notice" style={{ marginTop: '0.25rem', borderTopColor: 'transparent' }}>
+          Showing {filtered.length} of {nonVip.length} — adjust filters or search to see more
+        </div>
       )}
-    </section>
+    </div>
   )
 }
 
-// ── NOTAMs section ────────────────────────────────────────────────────────
-function NotamSection({ notams, loading }) {
-  const [search, setSearch] = useState('')
+// ── NOTAMs panel ──────────────────────────────────────────────────────────
+function notamMatches(n, q) {
+  if (!q) return true
+  const lq = q.toLowerCase()
+  return [n.notam_id, n.icao, n.location, n.text, n.classification, n.type]
+    .some(v => v && String(v).toLowerCase().includes(lq))
+}
 
+function NotamPanel({ notams, loading }) {
+  const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
-    if (!notams) return []
-    return search ? notams.filter(n => notamMatchesSearch(n, search)) : notams
+    const all = notams || []
+    return search ? all.filter(n => notamMatches(n, search)) : all
   }, [notams, search])
 
   return (
-    <section className="airspace-section" aria-label="Active NOTAMs">
-      <div className="airspace-section-header">
-        <h3>
-          NOTAMs
-          {!loading && <span className="airspace-count">{notams?.length ?? 0} active</span>}
-        </h3>
+    <div className="sig-panel">
+      <div className="sig-panel-header">
+        <span className="sig-label" style={{ color: 'var(--muted)' }}>NOTAM</span>
+        <span className="sig-count">{notams?.length ?? 0} active</span>
         <input
           className="sig-search"
           type="search"
-          placeholder="search NOTAMs…"
+          placeholder="NOTAM ID, ICAO, location…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           aria-label="Search NOTAMs"
         />
       </div>
-
-      {loading ? (
-        <p className="muted">Loading NOTAMs…</p>
-      ) : !notams?.length ? (
-        <p className="muted">
-          No active NOTAMs — FAA NOTAM API key required (<code>~/.secrets/faa-notam.key</code>)
-        </p>
-      ) : !filtered.length ? (
-        <p className="muted">No NOTAMs matching &ldquo;{search}&rdquo;</p>
-      ) : (
-        filtered.map((n, i) => (
-          <div key={n.notam_id || i} className="tfr-card">
-            <div className="tfr-card-header">
-              <span className="tfr-id">{n.notam_id || '—'}</span>
-              {n.icao           && <span className="notam-icao">{n.icao}</span>}
-              {n.classification && <span className="notam-class">{n.classification}</span>}
-            </div>
-            <p className="tfr-narrative">{n.text || n.raw_text || JSON.stringify(n)}</p>
-            <div className="tfr-meta">
-              {n.effective_start && <span>From: {fmtTime(n.effective_start)}</span>}
-              {n.effective_end   && <span>To: {fmtTime(n.effective_end)}</span>}
-              {n.location        && <span>Loc: {n.location}</span>}
-            </div>
+      <div className="sig-feed">
+        {loading ? (
+          <div className="sig-empty">Loading…</div>
+        ) : !notams?.length ? (
+          <div className="sig-pending">
+            FAA NOTAM API key required — set <code>FAA_NOTAM_API_KEY</code> in dispatch-secrets.env
           </div>
-        ))
-      )}
-    </section>
+        ) : !filtered.length ? (
+          <div className="sig-empty">No NOTAMs matching &ldquo;{search}&rdquo;</div>
+        ) : (
+          filtered.map((n, i) => (
+            <div key={n.notam_id || i} className="sig-msg">
+              <span className="sig-msg-call" style={{ color: 'var(--text-2)' }}>
+                {n.notam_id || '—'}
+              </span>
+              {n.icao && <span className="sig-msg-flight">{n.icao}</span>}
+              <span className="sig-msg-text">
+                {n.text || n.raw_text || (n.classification && `[${n.classification}]`) || '—'}
+              </span>
+              {n.location && <span className="sig-msg-loc">{n.location}</span>}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   )
 }
 
 // ── Root view ─────────────────────────────────────────────────────────────
+const POLL_MS = 30_000
+
 export default function TfrView() {
   const [tfrs,    setTfrs]    = useState(null)
   const [notams,  setNotams]  = useState(null)
   const [feedErr, setFeedErr] = useState(false)
+  const [updatedAt, setUpdatedAt] = useState(null)
 
-  useEffect(() => {
-    fetch('/api/dispatch/api/v1/tfr')
-      .then(r => { if (!r.ok) throw new Error(r.status); return r.json() })
-      .then(d => {
-        const list = Array.isArray(d) ? d : (d.tfrs || [])
-        setTfrs(list)
-        // Detect FAA feed degradation: if >10% of TFRs have no dates, flag it
-        const nullDates = list.filter(t => !t.effective_start && !t.effective_end).length
-        if (list.length > 0 && nullDates / list.length > 0.1) setFeedErr(true)
-      })
-      .catch(() => setTfrs([]))
-
-    fetch('/api/dispatch/api/v1/notams')
-      .then(r => r.json())
-      .then(d => setNotams(Array.isArray(d) ? d : (d.notams || [])))
-      .catch(() => setNotams([]))
-  }, [])
-
-  const refresh = () => {
-    setTfrs(null); setNotams(null); setFeedErr(false)
-    fetch('/api/dispatch/api/v1/tfr')
-      .then(r => r.json())
-      .then(d => {
-        const list = Array.isArray(d) ? d : (d.tfrs || [])
-        setTfrs(list)
-        const nullDates = list.filter(t => !t.effective_start && !t.effective_end).length
-        if (list.length > 0 && nullDates / list.length > 0.1) setFeedErr(true)
-      })
-      .catch(() => setTfrs([]))
-
-    fetch('/api/dispatch/api/v1/notams')
-      .then(r => r.json())
-      .then(d => setNotams(Array.isArray(d) ? d : (d.notams || [])))
-      .catch(() => setNotams([]))
+  const fmtNow = () => {
+    const d = new Date()
+    return `${String(d.getUTCHours()).padStart(2,'0')}${String(d.getUTCMinutes()).padStart(2,'0')}Z`
   }
 
+  const loadTfrs = useCallback(async () => {
+    try {
+      const r = await fetch('/api/dispatch/api/v1/tfr')
+      if (!r.ok) throw new Error(r.status)
+      const d = await r.json()
+      const list = Array.isArray(d) ? d : (d.tfrs || [])
+      setTfrs(list)
+      const nullDates = list.filter(t => !t.effective_start && !t.effective_end).length
+      setFeedErr(list.length > 0 && nullDates / list.length > 0.1)
+      setUpdatedAt(fmtNow())
+    } catch { setTfrs([]) }
+  }, [])
+
+  const loadNotams = useCallback(async () => {
+    try {
+      const r = await fetch('/api/dispatch/api/v1/notams')
+      const d = await r.json()
+      setNotams(Array.isArray(d) ? d : (d.notams || []))
+    } catch { setNotams([]) }
+  }, [])
+
+  useEffect(() => {
+    loadTfrs()
+    loadNotams()
+    const id = setInterval(loadTfrs, POLL_MS)
+    return () => clearInterval(id)
+  }, [loadTfrs, loadNotams])
+
   return (
-    <div className="panel-view">
-      <div className="tfr-view-header">
-        <h2>Airspace Restrictions</h2>
-        <button className="intel-refresh-btn" onClick={refresh}
-                disabled={tfrs === null} title="Refresh">
+    <div className="panel-view signals-view">
+      <div className="signals-header-row">
+        <h2>Airspace Restrictions — TFRs &amp; NOTAMs</h2>
+        <button
+          className="intel-refresh-btn"
+          onClick={() => { loadTfrs(); loadNotams() }}
+          disabled={tfrs === null}
+          title="Refresh now"
+        >
           {tfrs === null ? '⟳' : '↻'}
         </button>
+        <span className="sig-panel-count" style={{ marginLeft: 'auto' }}>
+          Polls every {POLL_MS / 1000}s
+        </span>
       </div>
+      <p className="sig-subtitle">
+        FAA TFR feed · Search by TFR ID or type · Airport / ARTCC data requires enriched endpoint
+      </p>
 
-      <VipSection     tfrs={tfrs}   loading={tfrs === null} />
-      <GeneralSection tfrs={tfrs}   loading={tfrs === null} feedDegraded={feedErr} />
-      <NotamSection   notams={notams} loading={notams === null} />
+      <div className="sig-grid tfr-grid">
+        <VipPanel     tfrs={tfrs}   loading={tfrs === null}   updatedAt={updatedAt} />
+        <GeneralPanel tfrs={tfrs}   loading={tfrs === null}   feedDegraded={feedErr} />
+        <NotamPanel   notams={notams} loading={notams === null} />
+      </div>
     </div>
   )
 }
