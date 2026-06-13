@@ -9,6 +9,9 @@ import SignalsView from './components/SignalsView.jsx'
 import DispatchDrawer from './components/DispatchDrawer.jsx'
 import CpsIndicator from './components/CpsIndicator.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
+import OverviewView from './components/OverviewView.jsx'
+import NtfyFeedView from './components/NtfyFeedView.jsx'
+import IntelView from './components/IntelView.jsx'
 import { useLayerConfig } from './hooks/useLayerConfig.js'
 
 /** Global layer config context — allows any child to read/update panel visibility */
@@ -96,6 +99,9 @@ export default function App() {
           <div className="topbar-nav" role="menubar">
             <NavLink to="/" end
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">OPS</NavLink>
+            <NavLink to="/map"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">MAP</NavLink>
             <NavLink to="/status"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
@@ -109,6 +115,12 @@ export default function App() {
             <NavLink to="/brief"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">BRIEF</NavLink>
+            <NavLink to="/feed"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">FEED</NavLink>
+            <NavLink to="/intel"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">INTEL</NavLink>
             <button
               className={`nav-link disp-topbar-btn${dispOpen ? ' active' : ''}`}
               onClick={() => setDispOpen(o => !o)}
@@ -158,16 +170,41 @@ export default function App() {
 
         <main className="content" id="main-content" tabIndex="-1">
           <Routes>
-            <Route path="/" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
+            <Route path="/" element={<OverviewView liveState={liveState} />} />
+            <Route path="/map" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
             <Route path="/status" element={<StatusView liveState={liveState} />} />
             <Route path="/tfr" element={<TfrView />} />
             <Route path="/signals" element={<SignalsView />} />
             <Route path="/brief" element={<BriefView />} />
+            <Route path="/feed" element={<NtfyFeedView />} />
+            <Route path="/intel" element={<IntelView />} />
             <Route path="/admin" element={<AdminView />} />
           </Routes>
         </main>
 
         <DispatchDrawer liveState={liveState} open={dispOpen} setOpen={setDispOpen} />
+
+        {/* Footer ticker */}
+        <footer className="app-footer" role="contentinfo">
+          <span className="app-footer-copy">© {new Date().getFullYear()} CS Executive Services, LLC</span>
+          <span className="app-footer-sep">·</span>
+          <a
+            href="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="app-footer-link"
+            title="Source on GitHub (public mirror)"
+          >
+            GitHub ↗
+          </a>
+          <span className="app-footer-sep">·</span>
+          <a
+            href="https://dispatch.csexecutiveservices.com"
+            className="app-footer-link"
+          >
+            dispatch.csexecutiveservices.com
+          </a>
+        </footer>
       </div>
     </LayerConfigContext.Provider>
   )
