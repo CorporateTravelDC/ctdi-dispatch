@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 import httpx
@@ -32,6 +33,8 @@ log = logging.getLogger(__name__)
 
 # ── Configuration -----------------------------------------------------------
 DISPATCH_BASE      = os.getenv("DISPATCH_BASE_URL",        "http://127.0.0.1:8000")
+NTFY_URL           = os.getenv("NTFY_URL",                  "http://host.containers.internal:2586")
+NTFY_TOKEN         = os.getenv("NTFY_TOKEN",                "")
 ULTRAFEEDER_URL    = os.getenv("ULTRAFEEDER_URL",           "http://127.0.0.1:8080/data/aircraft.json")
 ACARSHUB_URL       = os.getenv("ACARSHUB_URL",             "http://127.0.0.1:9081")
 AIS_CATCHER_URL    = os.getenv("AIS_CATCHER_URL",          "http://127.0.0.1:8110")
@@ -1011,6 +1014,181 @@ async def sse_stream(request: Request):
                              headers={"Cache-Control": "no-cache",
                                       "Connection": "keep-alive",
                                       "X-Accel-Buffering": "no"})
+
+# ── ntfy feed proxy ─────────────────────────────────────────────────────────
+# Streams ntfy SSE through the runner so the frontend avoids CORS/auth issues.
+# Known topics: tfr-alert, hot-alerts, flight-alerts, cps, ops-health,
+#               train-alerts, wx-alerts, osint-alerts, dispatch,
+#               dispatch-debriefs, ops-brief
+
+@app.get("/api/ntfy/stream")
+async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight-alerts,tfr-alert,cps,ops-health,train-alerts"):
+    """Proxy ntfy SSE feed to the frontend.
+
+    ?topics=comma,separated,topic,names
+    Streams ntfy JSON events as SSE data lines.
+    """
+    topic_str = topics.replace(" ", "")
+    ntfy_sse_url = f"{NTFY_URL.rstrip('/')}/{topic_str}/sse"
+
+    headers = {}
+    if NTFY_TOKEN:
+        headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
+
+    async def generator():
+        # Send a heartbeat immediately so the client knows the stream is alive
+        yield "data: {\"type\":\"heartbeat\"}\n\n"
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", ntfy_sse_url, headers=headers) as r:
+                    if r.status_code != 200:
+                        yield f"data: {{\"type\":\"error\",\"detail\":\"ntfy returned {r.status_code}\"}}\n\n"
+                        return
+                    async for line in r.aiter_lines():
+                        if await request.is_disconnected():
+                            break
+                        if line.startswith("data:"):
+                            yield f"{line}\n\n"
+                        elif line == "":
+                            pass  # blank separator — skip
+        except Exception as e:
+            yield f"data: {{\"type\":\"error\",\"detail\":\"{str(e)[:120]}\"}}\n\n"
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
+
+
+# ── RSS intel proxy ──────────────────────────────────────────────────────────
+# Fetches and parses RSS/Atom feeds server-side to avoid CORS.
+# Returns normalised JSON items.
+
+_RSS_CATALOG: dict[str, list[dict]] = {
+    "corporate_intel": [
+        {"name": "Business Travel News",    "url": "https://www.businesstravelnews.com/rss/news"},
+        {"name": "Skift",                   "url": "https://skift.com/feed/"},
+        {"name": "Road Warrior Voices",     "url": "https://roadwarriorvoices.com/feed/"},
+    ],
+    "marketing_intel": [
+        {"name": "Luxury Travel Advisor",   "url": "https://www.luxurytraveladvisor.com/rss/home"},
+        {"name": "Travel Weekly",           "url": "https://www.travelweekly.com/rss"},
+        {"name": "Hotel Management",        "url": "https://www.hotelmanagement.net/rss/news"},
+    ],
+    "travel_trends": [
+        {"name": "The Points Guy",          "url": "https://thepointsguy.com/feed/"},
+        {"name": "Condé Nast Traveler",     "url": "https://www.cntraveler.com/feed/rss"},
+        {"name": "Executive Traveller",     "url": "https://www.executivetraveller.com/feed"},
+    ],
+    "dc_area": [
+        {"name": "WTOP Traffic & Transit",  "url": "https://wtop.com/category/traffic/feed/"},
+        {"name": "DCist",                   "url": "https://dcist.com/feeds/rss/"},
+        {"name": "Greater Greater Wash.",   "url": "https://ggwash.org/feed"},
+    ],
+    "aviation": [
+        {"name": "Simple Flying",           "url": "https://simpleflying.com/feed/"},
+        {"name": "Aviation Week",           "url": "https://aviationweek.com/rss"},
+        {"name": "AOPA News",               "url": "https://www.aopa.org/news-and-media/all-news/rss"},
+    ],
+}
+
+_NS = {
+    "atom":    "http://www.w3.org/2005/Atom",
+    "media":   "http://search.yahoo.com/mrss/",
+    "content": "http://purl.org/rss/1.0/modules/content/",
+}
+
+
+def _parse_rss(xml_bytes: bytes, source_name: str) -> list[dict]:
+    """Parse RSS/Atom XML into a list of normalised item dicts."""
+    items: list[dict] = []
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return items
+
+    # Atom feed
+    ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+    if "atom" in ns or root.tag.endswith("}feed"):
+        for entry in root.findall("{http://www.w3.org/2005/Atom}entry"):
+            title  = entry.findtext("{http://www.w3.org/2005/Atom}title", "").strip()
+            link_el = entry.find("{http://www.w3.org/2005/Atom}link")
+            link   = (link_el.get("href") or "") if link_el is not None else ""
+            summ   = entry.findtext("{http://www.w3.org/2005/Atom}summary", "").strip()
+            pub    = (entry.findtext("{http://www.w3.org/2005/Atom}published") or
+                      entry.findtext("{http://www.w3.org/2005/Atom}updated") or "")
+            items.append({"title": title, "link": link, "summary": summ[:280],
+                          "published": pub, "source": source_name})
+        return items
+
+    # RSS 2.0
+    for item in root.findall(".//item"):
+        title   = (item.findtext("title") or "").strip()
+        link    = (item.findtext("link") or "").strip()
+        desc    = (item.findtext("description") or "").strip()
+        # strip HTML tags from description
+        desc    = re.sub(r"<[^>]+>", "", desc)[:280]
+        pub     = (item.findtext("pubDate") or item.findtext("dc:date") or "").strip()
+        items.append({"title": title, "link": link, "summary": desc,
+                      "published": pub, "source": source_name})
+
+    return items
+
+
+# Simple in-memory RSS cache: (category, url) → (timestamp, items)
+_rss_cache: dict[str, tuple[float, list[dict]]] = {}
+_RSS_TTL = 900  # 15 minutes
+
+
+@app.get("/api/rss")
+async def rss_feed(category: str = "corporate_intel"):
+    """Fetch and return normalised RSS items for a category.
+
+    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation
+    """
+    if category not in _RSS_CATALOG:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown category. Valid: {list(_RSS_CATALOG)}")
+
+    feeds = _RSS_CATALOG[category]
+    now   = time.time()
+    all_items: list[dict] = []
+
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        for feed in feeds:
+            cache_key = f"{category}:{feed['url']}"
+            cached    = _rss_cache.get(cache_key)
+            if cached and (now - cached[0]) < _RSS_TTL:
+                all_items.extend(cached[1])
+                continue
+            try:
+                r = await client.get(feed["url"],
+                                     headers={"User-Agent": "corporatetraveldc-dispatch/1.0"})
+                if r.status_code == 200:
+                    parsed = _parse_rss(r.content, feed["name"])
+                    _rss_cache[cache_key] = (now, parsed)
+                    all_items.extend(parsed)
+                else:
+                    log.warning("rss: %s returned %d", feed["url"], r.status_code)
+            except Exception as e:
+                log.warning("rss: fetch %s failed: %s", feed["url"], e)
+
+    # Sort by published desc (best-effort — strings may not sort perfectly)
+    all_items.sort(key=lambda x: x.get("published", ""), reverse=True)
+    return {"category": category, "count": len(all_items), "items": all_items[:60]}
+
+
+# ── RSS catalog listing ──────────────────────────────────────────────────────
+@app.get("/api/rss/categories")
+async def rss_categories():
+    """Return available RSS categories and their feed sources."""
+    return {
+        cat: [{"name": f["name"], "url": f["url"]} for f in feeds]
+        for cat, feeds in _RSS_CATALOG.items()
+    }
+
 
 # ── Static SPA (must be last) -----------------------------------------------
 # index.html: never cache (ensures browser always fetches fresh shell)
