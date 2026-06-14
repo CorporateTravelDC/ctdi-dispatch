@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS hot_alerts (
     computed_at     REAL DEFAULT (unixepoch()),
     route_narrative TEXT,
     active_tfrs     TEXT,           -- JSON array of TFR IDs
-    vip_flags       TEXT            -- JSON array of VIP callsigns matched
+    vip_flags       TEXT,           -- JSON array of VIP callsigns matched
+    source          TEXT DEFAULT 'route'  -- 'route' | 'flight' | 'train'
 );
 
 -- Audit log (append-only, Tier 2 actions)
@@ -333,18 +334,29 @@ def get_latest_cps() -> dict | None:
 # ── Hot alerts helpers ────────────────────────────────────────────────────────
 
 def insert_route_narrative(narrative: str, active_tfrs: list[str],
-                           vip_flags: list[str]) -> None:
+                           vip_flags: list[str],
+                           source: str = "route") -> None:
+    """
+    Write a narrative row to hot_alerts.
+
+    source values:
+      'route'   — ground-route impact (read by ops_brief ROUTE NARRATIVE section)
+      'flight'  — flight-impact skill output (ops_brief ignores these)
+      'train'   — train-impact skill output  (ops_brief ignores these)
+    """
     with conn() as c:
         c.execute("""
-            INSERT INTO hot_alerts (route_narrative, active_tfrs, vip_flags)
-            VALUES (?, ?, ?)
-        """, (narrative, json.dumps(active_tfrs), json.dumps(vip_flags)))
+            INSERT INTO hot_alerts (route_narrative, active_tfrs, vip_flags, source)
+            VALUES (?, ?, ?, ?)
+        """, (narrative, json.dumps(active_tfrs), json.dumps(vip_flags), source))
 
 
-def get_latest_route_narrative() -> dict | None:
+def get_latest_route_narrative(source: str = "route") -> dict | None:
+    """Return the most recent hot_alerts row matching source (default 'route')."""
     with conn() as c:
         row = c.execute(
-            "SELECT * FROM hot_alerts ORDER BY computed_at DESC LIMIT 1"
+            "SELECT * FROM hot_alerts WHERE source = ? ORDER BY computed_at DESC LIMIT 1",
+            (source,),
         ).fetchone()
         return dict(row) if row else None
 
