@@ -2,6 +2,7 @@
 daily-brief — SR-1 compliant. SR-2 exempt (time-bounded input; always new).
 
 Model: ollama/mistral (OSINT-tier)
+MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: 05:00 ET daily (corporatetraveldc-daily-brief.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — this skill summarizes a time window; inputs are always new.

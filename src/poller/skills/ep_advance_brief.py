@@ -2,6 +2,7 @@
 ep-advance — Executive Protection advance brief for DC UHNWI principals.
 
 Model: ollama/csexec-osint (mistral-nemo)
+MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: 07:00 ET daily (corporatetraveldc-ep-advance.timer)
 SR-1: log_usage() in finally block
 SR-2: Exempt — time-bounded input; inputs always new.
