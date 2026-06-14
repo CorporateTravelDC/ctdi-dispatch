@@ -38,11 +38,12 @@ def send_ntfy(topic: str, message: str, priority: int = 3,
     return ntfy_push.send(topic, message, title=title, priority=priority)
 
 
-def send_test_alert(message: str) -> bool:
-    """Admin-triggered test alert. Priority 3 (default) — generates popup on phone.
-    Intentionally below VIP priority (5) and high-priority alerts (4)."""
-    return send_ntfy("ops-health", f"[TEST] {message}", priority=3,
-                     title="corporatetraveldc test")
+def send_test_alert(message: str, topic: str = "ops-health",
+                    title: str | None = None, priority: int = 3) -> bool:
+    """Admin-triggered test alert.
+    topic/title/priority come from the request body; defaults preserve legacy behavior."""
+    return send_ntfy(topic, message, priority=priority,
+                     title=title or "corporatetraveldc test")
 
 
 # Dedup instances -- one per logical alert channel
