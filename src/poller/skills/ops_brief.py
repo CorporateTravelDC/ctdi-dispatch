@@ -1,22 +1,26 @@
 """
-ops-brief — unified 6-hour operational briefing (merged from daily-brief).
+ops-brief — unified operational briefing, now running hourly.
 
 Model: ollama/mistral (OSINT-tier)
-Schedule: 00:00, 06:00, 12:00, 18:00 ET (corporatetraveldc-ops-brief.timer)
+Schedule: every hour :00 ET (corporatetraveldc-ops-brief.timer)
+  — standard brief every hour
+  — 6-hour trend analysis appended at 00:00, 06:00, 12:00, 18:00 ET
 SR-1: log_usage() in finally block
 SR-2: Exempt — time-bounded input, inputs always new.
 
-Supersedes daily-brief (05:00 ET). Covers everything daily-brief did plus:
-- Northeast corridor airports (JFK/EWR/LGA/BOS/PHL)
+Covers:
+- DC-area airports (DCA/IAD/BWI)
+- Northeast corridor (JFK/EWR/LGA/BOS/PHL)
 - Transcontinental hubs (LAX/SFO/SEA/ORD/DFW/ATL/DEN)
 - FAA NAS XML (direct pull, not just DB cache)
 - NWS alerts for DC + Northeast
 - Amtrak NEC status
+- 6h trend analysis (CPS history + brief archive delta) at 6h intervals
 
 Writes to both ops-brief.txt and daily-brief.txt so /api/v1/brief keeps working.
 
 Pushes to:
-  dispatch-debriefs  — full narrative (priority 3)
+  dispatch-debriefs  — full narrative (priority 3) — click → /brief?tab=ops
   dispatch           — concise bottom line (priority 3)
 Both fire simultaneously.
 """
@@ -26,6 +30,8 @@ import argparse
 import json
 import logging
 import pathlib
+import sqlite3
+import time as _time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -59,6 +65,35 @@ NEC_ROUTES = [
     "Vermonter", "Keystone", "Empire",
 ]
 
+# Amtrak station code → full name.
+# These are RAIL station codes, NOT airport ICAO codes.
+# Mapping prevents the LLM from conflating e.g. "WAS" (Union Station) with DCA.
+AMTRAK_STATIONS: dict[str, str] = {
+    "WAS": "Washington Union Station",
+    "NYP": "New York Penn Station",
+    "BOS": "Boston South Station",
+    "PHL": "Philadelphia 30th St",
+    "BAL": "Baltimore Penn Station",
+    "NWK": "Newark Penn Station",
+    "STM": "Stamford",
+    "NHV": "New Haven",
+    "PVD": "Providence",
+    "RTE": "Route 128",
+    "BBY": "Bridgeport",
+    "NLC": "New London",
+    "MYS": "Mystic",
+    "WIL": "Wilmington",
+    "ABE": "Aberdeen",
+    "HAV": "Havre de Grace",
+    "NPN": "Newport News",
+    "RVR": "Providence",
+    "BWI": "BWI Rail Station",
+    "NCR": "New Carrollton",
+    "ALX": "Alexandria",
+    "RMT": "Richmond Staples Mill",
+    "NFK": "Norfolk",
+}
+
 SYSTEM_PROMPT = """You are producing a 6-hour operational briefing for CS Executive Services,
 an executive chauffeur operation based in Arlington, VA (Washington DC metro).
 The operator is also a credentialed CERT/ARES/Skywarn volunteer (NoVA).
@@ -91,6 +126,10 @@ If none, one line stating that.
 
 AMTRAK NEC: Status of Northeast Corridor trains — Acela and NE Regional.
 Note any delays over 15 minutes. If feed unavailable, say so.
+CRITICAL: Amtrak station names (Washington Union Station, New York Penn Station,
+Boston South Station, etc.) are RAIL stations, NOT airports. NEVER list train
+delays under airport sections. Airport delays come ONLY from FAA NAS PROGRAMS.
+Train delays come ONLY from AMTRAK NEC. These are strictly separate modes.
 
 ROUTE IMPACT: Any ground transportation impacts — road closures, POTUS movement
 advisories, major events affecting DC metro routes. Omit if nothing notable.
@@ -231,9 +270,12 @@ def _amtrak_section() -> str:
         if not nec:
             return "No Amtrak NEC trains in feed (feed may be returning non-Amtrak data only)."
         nec.sort(key=lambda x: abs(x[0]), reverse=True)
+        def _stn(code: str) -> str:
+            return AMTRAK_STATIONS.get(code, code)
+
         return "\n".join(
-            f"{t.get('trainNum','?')} {t.get('routeName','?')} "
-            f"{t.get('origCode','?')}->{t.get('destCode','?')} "
+            f"Train {t.get('trainNum','?')} ({t.get('routeName','?')}) "
+            f"{_stn(t.get('origCode','?'))} → {_stn(t.get('destCode','?'))} "
             f"{'+'if d>0 else ''}{d}min {t.get('trainState','?')} at {t.get('eventName','?')}"
             for d, t in nec[:12]
         )
@@ -268,6 +310,120 @@ def _route_section() -> str:
     return route["route_narrative"][:400]
 
 
+def _cps_history_6h() -> list[dict]:
+    """Return CPS score entries from the last 6 hours, oldest first."""
+    cutoff = _time.time() - 6 * 3600
+    try:
+        with db.conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(
+                "SELECT score, label, narrative, computed_at FROM cps_scores "
+                "WHERE computed_at >= ? ORDER BY computed_at ASC",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("ops-brief: cps_history query failed: %s", e)
+        return []
+
+
+def _brief_history_6h() -> list[dict]:
+    """Return ops brief archive entries from the last 6 hours, oldest first."""
+    cutoff = _time.time() - 6 * 3600
+    try:
+        with db.conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(
+                "SELECT id, generated_at, brief_type, content FROM brief_archive "
+                "WHERE generated_at >= ? AND brief_type='ops' ORDER BY generated_at ASC",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("ops-brief: brief_history query failed: %s", e)
+        return []
+
+
+def _trend_analysis_prompt() -> str:
+    """
+    Build a trend context block from the last 6h of CPS scores and brief archives.
+    Used at 6h boundaries (00, 06, 12, 18 ET) to drive a trend narrative section.
+    """
+    cps_hist = _cps_history_6h()
+    brief_hist = _brief_history_6h()
+
+    lines = ["=== 6-HOUR TREND DATA ==="]
+
+    # CPS trend
+    if cps_hist:
+        lines.append(f"\nCPS history (last 6h, {len(cps_hist)} readings):")
+        for entry in cps_hist:
+            ts = datetime.fromtimestamp(entry["computed_at"], tz=timezone.utc).strftime("%H:%MZ")
+            lines.append(
+                f"  {ts}: {entry.get('score','?')}/{entry.get('label','?')} — "
+                f"{(entry.get('narrative') or '')[:100]}"
+            )
+        # Summarize direction
+        if len(cps_hist) >= 2:
+            first_label = cps_hist[0].get("label", "?")
+            last_label  = cps_hist[-1].get("label", "?")
+            if first_label != last_label:
+                lines.append(f"  TREND DIRECTION: {first_label} → {last_label}")
+            else:
+                lines.append(f"  TREND DIRECTION: STABLE ({last_label})")
+    else:
+        lines.append("\nCPS history: No data in last 6h.")
+
+    # Brief archive snapshot comparison
+    if len(brief_hist) >= 2:
+        lines.append(f"\nBrief archive (last 6h, {len(brief_hist)} briefs):")
+        for b in brief_hist:
+            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
+            # Extract first 150 chars of content for trend context
+            snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
+            lines.append(f"  {ts}: {snippet}…")
+    elif len(brief_hist) == 1:
+        lines.append(f"\nBrief archive: 1 prior brief in 6h window.")
+    else:
+        lines.append("\nBrief archive: No prior briefs in 6h window (first run of interval).")
+
+    return "\n".join(lines)
+
+
+TREND_SYSTEM_PROMPT = (
+    "You are the dispatch intelligence officer for CS Executive Services. "
+    "You have just received a 6-hour data trend package showing CPS scores and brief snapshots. "
+    "In 3-5 dense sentences, identify: "
+    "(1) whether conditions have improved, degraded, or stayed stable over the past 6 hours; "
+    "(2) the single most significant change, if any; "
+    "(3) the outlook for the next 6 hours based on trajectory. "
+    "Aviation/dispatch shorthand is expected. No filler. Label your output: TREND ANALYSIS:"
+)
+
+
+def _generate_trend_narrative(trend_prompt: str) -> str:
+    """Generate a trend analysis narrative via Ollama. Returns empty string on failure."""
+    if not OLLAMA_BASE_URL:
+        return ""
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model":  OLLAMA_MODEL,
+                "system": TREND_SYSTEM_PROMPT,
+                "prompt": trend_prompt,
+                "stream": False,
+                "options": {"num_predict": 200, "temperature": 0.15},
+            },
+            timeout=OLLAMA_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+    except Exception as exc:
+        log.warning("ops-brief: trend Ollama call failed — %s", exc)
+        return ""
+
+
 def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     """Delegates to common.ntfy_push.send_dual — click URLs set per-topic."""
     _ntfy.send_dual(full_text, concise_text, title=title)
@@ -285,7 +441,7 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
             "system": system,
             "prompt": prompt,
             "stream": False,
-            "options": {"num_predict": 180, "temperature": 0.2},
+            "options": {"num_predict": 500, "temperature": 0.2},
         },
         timeout=OLLAMA_TIMEOUT,
     )
@@ -422,8 +578,21 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     return full, concise
 
 
-def main(force: bool = False) -> None:
+def main(force: bool = False, run_trend: bool = False) -> None:
+    """
+    run_trend: force a 6h trend analysis section regardless of current hour.
+               Auto-true when the current ET hour is 0, 6, 12, or 18.
+    """
     status = "error"
+
+    # Determine whether to append a 6h trend analysis.
+    # At 6h boundaries (00, 06, 12, 18 ET) or when --trend flag passed.
+    now_et_hour = datetime.now(timezone.utc).hour - 4  # rough ET offset (no DST correction)
+    # DST: ET is UTC-5 (Nov–Mar) or UTC-4 (Mar–Nov). Use a pragmatic check.
+    import time as _t
+    _lt = _t.localtime()
+    now_local_hour = _lt.tm_hour
+    is_6h_boundary = (now_local_hour % 6 == 0) or run_trend
 
     try:
         content, raw_appendix = build_brief_content()
@@ -442,8 +611,21 @@ def main(force: bool = False) -> None:
         # Append raw METAR + NAS appendix
         full_text = full_text.rstrip() + raw_appendix
 
+        # At 6h boundaries: generate and append trend analysis
+        if is_6h_boundary:
+            log.info("%s: 6h boundary — generating trend analysis", SKILL_NAME)
+            trend_prompt = _trend_analysis_prompt()
+            trend_narrative = _generate_trend_narrative(trend_prompt)
+            if trend_narrative:
+                full_text += f"\n\n--- 6-HOUR TREND ANALYSIS ---\n{trend_narrative}"
+            else:
+                # Deterministic fallback: just append the raw trend data
+                full_text += f"\n\n--- 6-HOUR TREND DATA (no narrative — Ollama unavailable) ---\n{trend_prompt}"
+            log.info("%s: trend section appended", SKILL_NAME)
+
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
-        title     = f"OPS BRIEF {now_label}"
+        brief_label = "OPS BRIEF+TREND" if is_6h_boundary else "OPS BRIEF"
+        title     = f"{brief_label} {now_label}"
 
         state = pathlib.Path(config.state_dir())
         state.mkdir(parents=True, exist_ok=True)
@@ -466,5 +648,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=f"{SKILL_NAME} skill")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--trend", action="store_true",
+                        help="Force a 6h trend analysis section regardless of current hour")
     args = parser.parse_args()
-    main(force=args.force)
+    main(force=args.force, run_trend=args.trend)
