@@ -110,7 +110,7 @@ def main(force: bool = False) -> None:
         # Deterministic narrative — no API dependency.
         narrative = build_user_message(inputs)
         flight_ids = [f["flight_id"] for f in inputs["flights"]]
-        db.insert_route_narrative(narrative, flight_ids, [])
+        db.insert_route_narrative(narrative, flight_ids, [], source="flight")
         status = "ok"
         log.info("%s: OK — %d flights", SKILL_NAME, len(flight_ids))
 

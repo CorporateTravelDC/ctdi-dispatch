@@ -23,7 +23,7 @@ Route structure:
   GET  /admin/triggers                 Admin
   POST /admin/refresh-feed/{feed}      Admin
   POST /admin/force-recompute-cps      Admin
-  POST /admin/push-test-alert          Admin
+  POST /admin/push-alert               Admin  (push-test-alert is a legacy alias)
   GET  /admin/vip                      Admin
   POST /admin/vip                      Admin
   DELETE /admin/vip/{entry}            Admin
@@ -812,6 +812,9 @@ async def force_recompute_cps(
 
 class TestAlertRequest(BaseModel):
     message: str
+    topic: str = "ops-health"   # ntfy topic; default preserves legacy behavior
+    title: Optional[str] = None
+    priority: int = 3
 
 
 @app.post("/admin/force-opsplan-snapshot")
@@ -850,12 +853,15 @@ async def force_osint_scrape(
     return JSONResponse({"trigger_id": trigger_id, "status": "accepted"}, status_code=202)
 
 
-@app.post("/admin/push-test-alert")
-async def push_test_alert(
+@app.post("/admin/push-alert")
+@app.post("/admin/push-test-alert")  # legacy alias
+async def push_alert(
     body: TestAlertRequest,
     tier: Tier = Depends(require_admin),
 ) -> JSONResponse:
-    """NOT idempotent — each POST sends a separate ntfy push."""
+    """Send an ntfy push to any topic. NOT idempotent — each POST sends a separate push.
+    Body: { message, topic (default: ops-health), title, priority (1-5, default: 3) }
+    """
     if len(body.message) > 200:
         raise HTTPException(status_code=400, detail="Message max 200 chars")
 
@@ -863,9 +869,11 @@ async def push_test_alert(
     trigger_dir = pathlib.Path(config.trigger_dir())
     trigger_dir.mkdir(parents=True, exist_ok=True)
     payload = {"id": trigger_id, "type": "push_test_alert",
-               "payload": {"message": body.message}}
+               "payload": {"message": body.message, "topic": body.topic,
+                           "title": body.title, "priority": body.priority}}
     (trigger_dir / f"{trigger_id}.json").write_text(json.dumps(payload))
-    db.insert_trigger(trigger_id, "push_test_alert", {"message": body.message})
+    db.insert_trigger(trigger_id, "push_test_alert",
+                      {"message": body.message, "topic": body.topic})
 
     return JSONResponse(
         {"trigger_id": trigger_id, "status": "accepted"},
