@@ -32,20 +32,28 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 
 ## Architecture
 
-Four containers share a single SQLite database (WAL mode) under the deployment user:
+Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the PWA frontend and its own JSON state:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  deployment user (corporatetraveldc)        │
-│                                                             │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌─────────┐  │
-│  │   web     │  │  poller   │  │  pusher   │  │ ingest  │  │
-│  │ FastAPI   │  │ Scheduler │  │  ntfy     │  │  SWIM   │  │
-│  │ REST API  │  │ + Skills  │  │  sender   │  │  NWWS   │  │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └────┬────┘  │
-│        └──────────────┴──────────────┴──────────────┘       │
-│                    SQLite (WAL) shared DB                    │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                    deployment user (corporatetraveldc)             │
+│                                                                    │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌─────────┐         │
+│  │   web     │  │  poller   │  │  pusher   │  │ ingest  │         │
+│  │ FastAPI   │  │ Scheduler │  │  ntfy     │  │  SWIM   │         │
+│  │ REST API  │  │ + Skills  │  │  sender   │  │  NWWS   │         │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └────┬────┘         │
+│        └──────────────┴──────────────┴──────────────┘             │
+│                      SQLite (WAL) shared DB                        │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────┐               │
+│  │  runner  (port 8001)                            │               │
+│  │  FastAPI + React/Vite PWA                       │               │
+│  │  Intel Feed · ADS-B Map · Status · Brief · Chat │               │
+│  │  proxies dispatch web API at :8000              │               │
+│  │  owns user_rss_feeds.json (separate from DB)    │               │
+│  └─────────────────────────────────────────────────┘               │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Containers
@@ -56,6 +64,7 @@ Four containers share a single SQLite database (WAL mode) under the deployment u
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
 | `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest (pending NMS credentials) |
+| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | PWA frontend (React/Vite) + runner API (port 8001) |
 
 ### Data feeds
 
@@ -187,6 +196,43 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | POST | `/admin/force-opsplan-snapshot` | Force ops plan snapshot |
 | POST | `/admin/push-test-alert` | Send test ntfy alert |
 | GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
+
+### Runner API (port 8001 / `dispatch-runner.csexecutiveservices.com`)
+
+The runner exposes its own API alongside the static PWA build. All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware).
+
+**ADS-B**
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/adsb/local` | Proxy → UltraFeeder aircraft.json (local antenna) |
+| GET | `/api/adsb/live` | Proxy → airplanes.live v2, 250nm radius from KDCA |
+
+**Intel Feed — RSS/Atom**
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/rss` | Merged feed: catalog + user-defined feeds for `?category=` |
+| GET | `/api/rss/categories` | Available categories and their catalog sources |
+| GET | `/api/rss/custom` | Fetch and proxy an arbitrary feed URL server-side (CORS bypass) |
+| GET | `/api/rss/user-feeds` | List all user-defined feeds |
+| POST | `/api/rss/user-feeds` | Add a user-defined feed (validates by fetching before saving) |
+| DELETE | `/api/rss/user-feeds/{id}` | Remove a user-defined feed by UUID |
+
+`?category=` accepts: `corporate_intel`, `marketing_intel`, `travel_trends`, `dc_area`, `aviation`, `__custom__`.
+`?limit=N` (default 200, max 500) controls max items returned. Each individual feed is capped at 100 items before merging. Dates are normalized to ISO 8601 on parse so sort order is always correct regardless of source date format.
+
+RSS items with `<enclosure type="audio/*">` or `<enclosure type="video/*">` tags are returned with an `audio_url` field. The frontend renders these as podcast episodes with an inline HTML5 player.
+
+User-defined feeds are persisted to `/var/lib/corporatetraveldc/user_rss_feeds.json` (volume-mounted; survives container rebuilds). Each entry has: `id` (UUID), `name`, `url`, `category`.
+
+**Dispatch proxy**
+
+| Method | Path | Description |
+|---|---|---|
+| GET/POST | `/api/dispatch/{path}` | Transparent proxy → dispatch web API at :8000 |
+| GET | `/api/stream` | SSE stream: CPS + TFR count + feed health (30s interval) |
+| GET | `/healthz` | Runner service health |
 
 ### Auth model
 
@@ -323,9 +369,10 @@ PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py create \
 
 ```bash
 cd /opt/corporatetraveldc
-bash build-images.sh
+bash build-images.sh          # rebuilds all images; pass a target name to rebuild one
 systemctl --user daemon-reload
-systemctl --user restart corporatetraveldc-web corporatetraveldc-poller corporatetraveldc-pusher
+systemctl --user restart corporatetraveldc-web corporatetraveldc-poller \
+                              corporatetraveldc-pusher corporatetraveldc-runner
 ```
 
 ---
@@ -463,6 +510,7 @@ systemctl --user restart corporatetraveldc-ingest
 | `/var/lib/corporatetraveldc/skill-state/` | SR-2 hash gate state |
 | `/run/corporatetraveldc/triggers/` | Admin trigger files |
 | `/opt/corporatetraveldc/watchlists/` | Permanent watchlist YAML files |
+| `/var/lib/corporatetraveldc/user_rss_feeds.json` | Runner: user-defined Intel Feed subscriptions |
 
 ---
 
