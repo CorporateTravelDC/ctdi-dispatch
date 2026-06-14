@@ -1,7 +1,8 @@
 """
 ops-brief — unified operational briefing, now running hourly.
 
-Model: ollama/mistral (OSINT-tier)
+Model: ollama/mistral (csexec-osint:latest, mistral-nemo 12B; Local LLM)
+MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :00 ET (corporatetraveldc-ops-brief.timer)
   — standard brief every hour
   — 6-hour trend analysis appended at 00:00, 06:00, 12:00, 18:00 ET
