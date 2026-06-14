@@ -1094,29 +1094,29 @@ async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight
 
 _RSS_CATALOG: dict[str, list[dict]] = {
     "corporate_intel": [
-        {"name": "Business Travel News",    "url": "https://www.businesstravelnews.com/rss/news"},
         {"name": "Skift",                   "url": "https://skift.com/feed/"},
-        {"name": "Road Warrior Voices",     "url": "https://roadwarriorvoices.com/feed/"},
+        {"name": "Federal News Network",    "url": "https://federalnewsnetwork.com/feed/"},
+        {"name": "The Air Current",         "url": "https://theaircurrent.com/feed/"},
     ],
     "marketing_intel": [
-        {"name": "Luxury Travel Advisor",   "url": "https://www.luxurytraveladvisor.com/rss/home"},
-        {"name": "Travel Weekly",           "url": "https://www.travelweekly.com/rss"},
-        {"name": "Hotel Management",        "url": "https://www.hotelmanagement.net/rss/news"},
+        {"name": "Robb Report Travel",      "url": "https://robbreport.com/category/travel/feed/"},
+        {"name": "Forbes Travel Guide",     "url": "https://stories.forbestravelguide.com/feed/"},
+        {"name": "Lodging Magazine",        "url": "https://lodgingmagazine.com/feed/"},
     ],
     "travel_trends": [
         {"name": "The Points Guy",          "url": "https://thepointsguy.com/feed/"},
         {"name": "Condé Nast Traveler",     "url": "https://www.cntraveler.com/feed/rss"},
-        {"name": "Executive Traveller",     "url": "https://www.executivetraveller.com/feed"},
+        {"name": "One Mile at a Time",      "url": "https://onemileatatime.com/feed/"},
     ],
     "dc_area": [
         {"name": "WTOP Traffic & Transit",  "url": "https://wtop.com/category/traffic/feed/"},
-        {"name": "DCist",                   "url": "https://dcist.com/feeds/rss/"},
-        {"name": "Greater Greater Wash.",   "url": "https://ggwash.org/feed"},
+        {"name": "Washingtonian",           "url": "https://www.washingtonian.com/feed/"},
+        {"name": "ARLnow",                  "url": "https://www.arlnow.com/feed/"},
     ],
     "aviation": [
-        {"name": "Simple Flying",           "url": "https://simpleflying.com/feed/"},
-        {"name": "Aviation Week",           "url": "https://aviationweek.com/rss"},
+        {"name": "AviationSource",          "url": "https://aviationsourcenews.com/feed/"},
         {"name": "AOPA News",               "url": "https://www.aopa.org/news-and-media/all-news/rss"},
+        {"name": "Cranky Flier",            "url": "https://crankyflier.com/feed/"},
     ],
 }
 
@@ -1127,8 +1127,32 @@ _NS = {
 }
 
 
-def _parse_rss(xml_bytes: bytes, source_name: str) -> list[dict]:
-    """Parse RSS/Atom XML into a list of normalised item dicts."""
+def _normalize_pubdate(raw: str) -> str:
+    """Normalize RSS pubDate (RFC 2822) or Atom date to ISO 8601 for reliable sort.
+
+    RFC 2822 ("Fri, 12 Jun 2026 20:38:34 +0000") sorts alphabetically by day-name
+    which is wrong. Convert to ISO 8601 so string reverse-sort gives newest-first.
+    ISO/Atom dates ("2026-06-12T...") are returned unchanged — they already sort fine.
+    """
+    if not raw:
+        return ""
+    # Already ISO 8601 (Atom feeds) — starts with digit year
+    if raw[:4].isdigit():
+        return raw
+    # RFC 2822 — parse via email.utils
+    try:
+        from email.utils import parsedate_to_datetime as _p2dt
+        return _p2dt(raw).isoformat()
+    except Exception:
+        return raw  # leave malformed dates as-is; they'll sort last
+
+
+def _parse_rss(xml_bytes: bytes, source_name: str, per_feed_limit: int = 100) -> list[dict]:
+    """Parse RSS/Atom XML into a list of normalised item dicts.
+
+    Returns up to per_feed_limit items, sorted newest-first. This prevents a
+    single podcast archive from drowning out news feeds in merged responses.
+    """
     items: list[dict] = []
     try:
         root = ET.fromstring(xml_bytes)
@@ -1146,64 +1170,114 @@ def _parse_rss(xml_bytes: bytes, source_name: str) -> list[dict]:
             pub    = (entry.findtext("{http://www.w3.org/2005/Atom}published") or
                       entry.findtext("{http://www.w3.org/2005/Atom}updated") or "")
             items.append({"title": title, "link": link, "summary": summ[:280],
-                          "published": pub, "source": source_name})
-        return items
+                          "published": _normalize_pubdate(pub), "source": source_name})
+        items.sort(key=lambda x: x.get("published", ""), reverse=True)
+        return items[:per_feed_limit]
 
     # RSS 2.0
     for item in root.findall(".//item"):
         title   = (item.findtext("title") or "").strip()
         link    = (item.findtext("link") or "").strip()
         desc    = (item.findtext("description") or "").strip()
-        # strip HTML tags from description
         desc    = re.sub(r"<[^>]+>", "", desc)[:280]
         pub     = (item.findtext("pubDate") or item.findtext("dc:date") or "").strip()
-        items.append({"title": title, "link": link, "summary": desc,
-                      "published": pub, "source": source_name})
+        # Podcast enclosure — capture audio/video URL if present
+        enc_el  = item.find("enclosure")
+        audio_url = ""
+        if enc_el is not None:
+            enc_type = enc_el.get("type", "")
+            if enc_type.startswith(("audio/", "video/")):
+                audio_url = enc_el.get("url", "")
+        entry = {"title": title, "link": link, "summary": desc,
+                 "published": _normalize_pubdate(pub), "source": source_name}
+        if audio_url:
+            entry["audio_url"] = audio_url
+        items.append(entry)
 
-    return items
+    items.sort(key=lambda x: x.get("published", ""), reverse=True)
+    return items[:per_feed_limit]
 
 
-# Simple in-memory RSS cache: (category, url) → (timestamp, items)
+# Simple in-memory RSS cache: cache_key → (timestamp, items)
 _rss_cache: dict[str, tuple[float, list[dict]]] = {}
 _RSS_TTL = 900  # 15 minutes
 
+# ── User-defined feed registry (backend-persisted) ───────────────────────────
+import json as _json
+import uuid as _uuid
+
+_USER_FEEDS_PATH = "/var/lib/corporatetraveldc/user_rss_feeds.json"
+_user_feeds_lock = __import__("asyncio").Lock()
+
+
+def _load_user_feeds() -> list[dict]:
+    try:
+        with open(_USER_FEEDS_PATH) as f:
+            data = _json.load(f)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        log.warning("user_rss_feeds: load failed: %s", e)
+        return []
+
+
+def _save_user_feeds(feeds: list[dict]) -> None:
+    try:
+        with open(_USER_FEEDS_PATH, "w") as f:
+            _json.dump(feeds, f, indent=2)
+    except Exception as e:
+        log.error("user_rss_feeds: save failed: %s", e)
+
+
+async def _fetch_one_rss(client: "httpx.AsyncClient", feed: dict, cache_prefix: str) -> list[dict]:
+    """Fetch and cache a single RSS feed dict {name, url}. Returns normalised items."""
+    cache_key = f"{cache_prefix}:{feed['url']}"
+    now = time.time()
+    cached = _rss_cache.get(cache_key)
+    if cached and (now - cached[0]) < _RSS_TTL:
+        return cached[1]
+    try:
+        r = await client.get(feed["url"],
+                             headers={"User-Agent": "corporatetraveldc-dispatch/1.0"})
+        if r.status_code == 200:
+            parsed = _parse_rss(r.content, feed["name"])
+            _rss_cache[cache_key] = (now, parsed)
+            return parsed
+        else:
+            log.warning("rss: %s returned %d", feed["url"], r.status_code)
+    except Exception as e:
+        log.warning("rss: fetch %s failed: %s", feed["url"], e)
+    return []
+
 
 @app.get("/api/rss")
-async def rss_feed(category: str = "corporate_intel"):
+async def rss_feed(category: str = "corporate_intel", limit: int = 200):
     """Fetch and return normalised RSS items for a category.
 
-    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation
+    Merges catalog feeds + any user-defined feeds assigned to this category.
+    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation|__custom__
+    ?limit=N  — max items to return (default 200, max 500). Each feed is capped at
+               100 items before merging to prevent podcast archives from swamping news.
     """
-    if category not in _RSS_CATALOG:
+    valid_cats = list(_RSS_CATALOG) + ["__custom__"]
+    if category not in valid_cats:
         raise HTTPException(status_code=400,
                             detail=f"Unknown category. Valid: {list(_RSS_CATALOG)}")
+    limit = min(max(limit, 1), 500)
 
-    feeds = _RSS_CATALOG[category]
-    now   = time.time()
+    catalog_feeds = _RSS_CATALOG.get(category, [])
+    user_feeds    = [f for f in _load_user_feeds() if f.get("category") == category]
+    all_feeds     = catalog_feeds + user_feeds
+
     all_items: list[dict] = []
-
     async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-        for feed in feeds:
-            cache_key = f"{category}:{feed['url']}"
-            cached    = _rss_cache.get(cache_key)
-            if cached and (now - cached[0]) < _RSS_TTL:
-                all_items.extend(cached[1])
-                continue
-            try:
-                r = await client.get(feed["url"],
-                                     headers={"User-Agent": "corporatetraveldc-dispatch/1.0"})
-                if r.status_code == 200:
-                    parsed = _parse_rss(r.content, feed["name"])
-                    _rss_cache[cache_key] = (now, parsed)
-                    all_items.extend(parsed)
-                else:
-                    log.warning("rss: %s returned %d", feed["url"], r.status_code)
-            except Exception as e:
-                log.warning("rss: fetch %s failed: %s", feed["url"], e)
+        for feed in all_feeds:
+            items = await _fetch_one_rss(client, feed, category)
+            all_items.extend(items)
 
-    # Sort by published desc (best-effort — strings may not sort perfectly)
     all_items.sort(key=lambda x: x.get("published", ""), reverse=True)
-    return {"category": category, "count": len(all_items), "items": all_items[:60]}
+    return {"category": category, "count": len(all_items), "items": all_items[:limit]}
 
 
 # ── RSS catalog listing ──────────────────────────────────────────────────────
@@ -1214,6 +1288,100 @@ async def rss_categories():
         cat: [{"name": f["name"], "url": f["url"]} for f in feeds]
         for cat, feeds in _RSS_CATALOG.items()
     }
+
+
+# ── Custom RSS proxy (validate + preview a feed URL) ─────────────────────────
+@app.get("/api/rss/custom")
+async def rss_custom(url: str, name: str = "Custom"):
+    """Fetch and proxy an arbitrary RSS/Atom feed URL server-side (avoids CORS).
+
+    Used for preview/validation before saving. Returns same shape as /api/rss.
+    """
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            items = await _fetch_one_rss(client, {"name": name, "url": url}, "custom")
+        if not items:
+            raise HTTPException(status_code=422,
+                                detail="URL returned 200 but no RSS/Atom items could be parsed. "
+                                       "Check that it is a valid RSS or Atom feed.")
+        return {"count": len(items), "items": items}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.warning("rss/custom: fetch %s failed: %s", url, e)
+        raise HTTPException(status_code=502, detail=f"Could not fetch feed: {e}")
+
+
+# ── User-defined feed CRUD ────────────────────────────────────────────────────
+_VALID_CATEGORIES = list(_RSS_CATALOG) + ["__custom__"]
+
+
+@app.get("/api/rss/user-feeds")
+async def user_feeds_list():
+    """Return all user-defined RSS/Atom feeds."""
+    return {"feeds": _load_user_feeds()}
+
+
+@app.post("/api/rss/user-feeds")
+async def user_feeds_add(body: dict):
+    """Add a user-defined feed. Validates the URL fetches a parseable feed first.
+
+    Body: {name: str, url: str, category: str}
+    category must be one of the catalog categories or "__custom__".
+    """
+    name     = (body.get("name") or "").strip()
+    url      = (body.get("url")  or "").strip()
+    category = (body.get("category") or "__custom__").strip()
+
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    if category not in _VALID_CATEGORIES:
+        raise HTTPException(status_code=400,
+                            detail=f"Invalid category. Valid: {_VALID_CATEGORIES}")
+
+    # Validate the feed fetches successfully before persisting
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            items = await _fetch_one_rss(client, {"name": name or "Feed", "url": url}, "validate")
+        if not items:
+            raise HTTPException(status_code=422,
+                                detail="URL returned 200 but no RSS/Atom items could be parsed.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch feed: {e}")
+
+    async with _user_feeds_lock:
+        feeds = _load_user_feeds()
+        # Reject exact URL duplicate
+        if any(f["url"] == url for f in feeds):
+            raise HTTPException(status_code=409, detail="A feed with that URL is already saved.")
+        entry = {
+            "id":       str(_uuid.uuid4()),
+            "name":     name or url,
+            "url":      url,
+            "category": category,
+        }
+        feeds.append(entry)
+        _save_user_feeds(feeds)
+
+    log.info("user_rss_feeds: added %s → %s (%s)", name, url, category)
+    return {"feed": entry, "item_count": len(items)}
+
+
+@app.delete("/api/rss/user-feeds/{feed_id}")
+async def user_feeds_delete(feed_id: str):
+    """Remove a user-defined feed by its id."""
+    async with _user_feeds_lock:
+        feeds = _load_user_feeds()
+        before = len(feeds)
+        feeds  = [f for f in feeds if f.get("id") != feed_id]
+        if len(feeds) == before:
+            raise HTTPException(status_code=404, detail="Feed not found.")
+        _save_user_feeds(feeds)
+    return {"deleted": feed_id}
 
 
 # ── Static SPA (must be last) -----------------------------------------------

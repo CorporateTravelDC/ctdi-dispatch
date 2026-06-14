@@ -2,8 +2,8 @@ import { Routes, Route, NavLink } from 'react-router-dom'
 import { useState, useEffect, useCallback, createContext, useContext } from 'react'
 import MapView from './components/MapView.jsx'
 import TrainMapView from './components/TrainMapView.jsx'
+import AisMapView from './components/AisMapView.jsx'
 import StatusView from './components/StatusView.jsx'
-import TfrView from './components/TfrView.jsx'
 import BriefView from './components/BriefView.jsx'
 import AdminView from './components/AdminView.jsx'
 import SignalsView from './components/SignalsView.jsx'
@@ -74,16 +74,17 @@ export default function App() {
     })
   }, [])
 
-  // adsbMode: globe (default) → local → live → globe
-  const ADSB_MODES  = ['globe', 'local', 'live']
-  const ADSB_LABELS = { globe: 'GLOBE', local: 'LOCAL', live: 'LIVE' }
-  const [adsbMode, setAdsbMode] = useState(
-    () => localStorage.getItem('adsbMode') || 'globe'
-  )
+  // adsbMode: globe (default) ↔ local — 'live' removed
+  const ADSB_MODES  = ['globe', 'local']
+  const ADSB_LABELS = { globe: 'GLOBE', local: 'LOCAL' }
+  const [adsbMode, setAdsbMode] = useState(() => {
+    const stored = localStorage.getItem('adsbMode')
+    // migrate any legacy 'live' value to 'globe'
+    return stored === 'live' || !stored ? 'globe' : stored
+  })
   const toggleAdsb = useCallback(() => {
     setAdsbMode(prev => {
-      const idx  = ADSB_MODES.indexOf(prev)
-      const next = ADSB_MODES[(idx + 1) % ADSB_MODES.length]
+      const next = prev === 'globe' ? 'local' : 'globe'
       localStorage.setItem('adsbMode', next)
       return next
     })
@@ -106,22 +107,22 @@ export default function App() {
               role="menuitem">OPS</NavLink>
             <NavLink to="/map"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">MAP</NavLink>
+              role="menuitem">ADSB</NavLink>
             <NavLink to="/trains"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">TRAINS</NavLink>
+              role="menuitem">EOTD</NavLink>
+            <NavLink to="/ais"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">AIS</NavLink>
             <NavLink to="/status"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">STATUS</NavLink>
-            <NavLink to="/tfr"
-              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">TFR</NavLink>
+              role="menuitem">CPS</NavLink>
             <NavLink to="/signals"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">SIGNALS</NavLink>
             <NavLink to="/brief"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">BRIEF</NavLink>
+              role="menuitem">BRIEFS</NavLink>
             <NavLink to="/feed"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">FEED</NavLink>
@@ -146,9 +147,8 @@ export default function App() {
               onClick={toggleAdsb}
               aria-label={`ADS-B mode: ${ADSB_LABELS[adsbMode]} — click to cycle`}
               title={
-                adsbMode === 'globe'  ? 'globe.airplanes.live + local feeder overlay' :
-                adsbMode === 'local'  ? 'UltraFeeder (local antenna only)' :
-                                        'airplanes.live API (full area)'
+                adsbMode === 'globe' ? 'globe.airplanes.live + local feeder overlay' :
+                                       'UltraFeeder (local antenna only)'
               }
             >
               ADS-B:{ADSB_LABELS[adsbMode]}
@@ -182,8 +182,9 @@ export default function App() {
             <Route path="/" element={<OverviewView liveState={liveState} />} />
             <Route path="/map" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
             <Route path="/trains" element={<TrainMapView />} />
+            <Route path="/ais" element={<AisMapView />} />
             <Route path="/status" element={<StatusView liveState={liveState} />} />
-            <Route path="/tfr" element={<TfrView />} />
+            <Route path="/tfr" element={<SignalsView />} />
             <Route path="/signals" element={<SignalsView />} />
             <Route path="/brief" element={<BriefView />} />
             <Route path="/feed" element={<NtfyFeedView />} />
