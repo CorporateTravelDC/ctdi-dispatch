@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 
 const CATALOG_CATEGORIES = [
   { id: 'corporate_intel', label: 'Corporate Intel'     },
@@ -8,10 +8,7 @@ const CATALOG_CATEGORIES = [
   { id: 'aviation',        label: 'Aviation'            },
 ]
 
-const ALL_CATEGORIES = [
-  ...CATALOG_CATEGORIES,
-  { id: '__custom__', label: 'Custom' },
-]
+const CUSTOM_TAB = { id: '__custom__', label: 'My Feeds' }
 
 function relTime(dateStr) {
   if (!dateStr) return ''
@@ -94,22 +91,35 @@ function RssSkeleton() {
 }
 
 // ── Add-feed form ─────────────────────────────────────────────────────────────
-function AddFeedForm({ onAdd, onCancel }) {
-  const [name,     setName]     = useState('')
-  const [url,      setUrl]      = useState('')
-  const [category, setCategory] = useState('__custom__')
-  const [busy,     setBusy]     = useState(false)
-  const [err,      setErr]      = useState(null)
+function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
+  const [name,          setName]          = useState('')
+  const [url,           setUrl]           = useState('')
+  const [categoryInput, setCategoryInput] = useState('')
+  const [busy,          setBusy]          = useState(false)
+  const [err,           setErr]           = useState(null)
   const urlRef = useRef(null)
 
   useEffect(() => { urlRef.current?.focus() }, [])
 
+  // Resolve typed label to a category value.
+  // Matches built-in catalog by label or id, falls back to raw input,
+  // and treats empty as uncategorized (__custom__).
+  const resolveCategory = (input) => {
+    const trimmed = input.trim()
+    if (!trimmed) return '__custom__'
+    const catalog = CATALOG_CATEGORIES.find(
+      c => c.id === trimmed || c.label.toLowerCase() === trimmed.toLowerCase()
+    )
+    return catalog ? catalog.id : trimmed
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
-    const trimUrl = url.trim()
+    const trimUrl  = url.trim()
     if (!trimUrl) return
     setBusy(true)
     setErr(null)
+    const category = resolveCategory(categoryInput)
     try {
       const r = await fetch('/api/rss/user-feeds', {
         method: 'POST',
@@ -148,17 +158,24 @@ function AddFeedForm({ onAdd, onCancel }) {
           onChange={e => setName(e.target.value)}
           disabled={busy}
         />
-        <select
+        {/* Freeform category — type a new name or pick an existing one */}
+        <input
           className="custom-feed-input custom-feed-cat-select"
-          value={category}
-          onChange={e => setCategory(e.target.value)}
+          type="text"
+          list="intel-category-options"
+          placeholder="Category (optional)"
+          value={categoryInput}
+          onChange={e => setCategoryInput(e.target.value)}
           disabled={busy}
-        >
+        />
+        <datalist id="intel-category-options">
           {CATALOG_CATEGORIES.map(c => (
-            <option key={c.id} value={c.id}>{c.label}</option>
+            <option key={c.id} value={c.label} />
           ))}
-          <option value="__custom__">Custom only</option>
-        </select>
+          {(existingUserCategories || []).map(cat => (
+            <option key={cat} value={cat} />
+          ))}
+        </datalist>
       </div>
       {err && <p className="custom-feed-err">{err}</p>}
       <div className="custom-feed-add-actions">
@@ -173,9 +190,21 @@ function AddFeedForm({ onAdd, onCancel }) {
   )
 }
 
-// ── My Feeds manager (shown in Custom tab) ────────────────────────────────────
+// ── My Feeds manager (shown in My Feeds tab) ──────────────────────────────────
 function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
   const [showAdd, setShowAdd] = useState(false)
+
+  // Unique user-defined category names (not catalog, not __custom__)
+  const existingUserCategories = useMemo(() => {
+    const seen = new Set()
+    userFeeds.forEach(f => {
+      const cat = f.category || '__custom__'
+      if (cat === '__custom__') return
+      if (CATALOG_CATEGORIES.find(c => c.id === cat)) return
+      seen.add(cat)
+    })
+    return [...seen].sort()
+  }, [userFeeds])
 
   const handleAdd = (feed) => {
     onFeedAdded(feed)
@@ -197,8 +226,12 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
     grouped[cat].push(f)
   })
 
-  const catLabel = (id) =>
-    ALL_CATEGORIES.find(c => c.id === id)?.label || id
+  const catLabel = (id) => {
+    const catalog = CATALOG_CATEGORIES.find(c => c.id === id)
+    if (catalog) return catalog.label
+    if (id === '__custom__') return 'Uncategorized'
+    return id  // user-defined label is the id
+  }
 
   return (
     <div className="custom-feeds-mgr">
@@ -234,7 +267,11 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
       ))}
 
       {showAdd
-        ? <AddFeedForm onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
+        ? <AddFeedForm
+            onAdd={handleAdd}
+            onCancel={() => setShowAdd(false)}
+            existingUserCategories={existingUserCategories}
+          />
         : (
           <button className="custom-feed-add-btn" onClick={() => setShowAdd(true)}>
             + Add feed
@@ -252,10 +289,10 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
   const [page,    setPage]    = useState(0)
   const PAGE_SIZE = 15
 
-  const customFeeds = userFeeds.filter(f => f.category === '__custom__')
+  const uncategorizedFeeds = userFeeds.filter(f => (f.category || '__custom__') === '__custom__')
 
   const fetchCustom = useCallback(async () => {
-    if (!customFeeds.length) { setItems([]); return }
+    if (!uncategorizedFeeds.length) { setItems([]); return }
     setLoading(true)
     const r = await fetch('/api/rss?category=__custom__').catch(() => null)
     if (r?.ok) {
@@ -263,7 +300,7 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
       setItems(data.items || [])
     }
     setLoading(false)
-  }, [customFeeds.length])  // eslint-disable-line
+  }, [uncategorizedFeeds.length])  // eslint-disable-line
 
   useEffect(() => {
     setPage(0)
@@ -280,7 +317,7 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
         onFeedAdded={(feed) => { onFeedAdded(feed); fetchCustom() }}
       />
 
-      {customFeeds.length > 0 && (
+      {uncategorizedFeeds.length > 0 && (
         <div className="rss-feed">
           {loading && <RssSkeleton />}
           {!loading && items.length === 0 && (
@@ -323,6 +360,21 @@ export default function IntelView() {
   const handleFeedAdded   = (feed) => setUserFeeds(prev => [...prev, feed])
   const handleFeedRemoved = (id)   => setUserFeeds(prev => prev.filter(f => f.id !== id))
 
+  // Build dynamic tabs: catalog + user-defined categories + My Feeds hub
+  const allCategories = useMemo(() => {
+    const seen = new Set(CATALOG_CATEGORIES.map(c => c.id))
+    seen.add('__custom__')
+    const userDefined = []
+    userFeeds.forEach(f => {
+      const cat = f.category || '__custom__'
+      if (!seen.has(cat)) {
+        seen.add(cat)
+        userDefined.push({ id: cat, label: cat })
+      }
+    })
+    return [...CATALOG_CATEGORIES, ...userDefined, CUSTOM_TAB]
+  }, [userFeeds])
+
   const loadFeed = useCallback((cat) => {
     if (cat === '__custom__') return
     setLoading(true)
@@ -357,7 +409,7 @@ export default function IntelView() {
       </div>
 
       <div className="intel-cat-tabs">
-        {ALL_CATEGORIES.map(c => (
+        {allCategories.map(c => (
           <button
             key={c.id}
             className={`intel-cat-tab${category === c.id ? ' active' : ''}${c.id === '__custom__' ? ' custom-tab' : ''}`}

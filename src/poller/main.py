@@ -206,9 +206,13 @@ class TriggerReactor:
                                       trigger_id, force=True)
             elif trigger_type == "push_test_alert":
                 from pusher import main as pusher_main
+                _msg      = payload.get("message", "Test alert from admin")
+                _topic    = payload.get("topic", "ops-health")
+                _title    = payload.get("title")
+                _priority = int(payload.get("priority", 3))
                 await asyncio.get_event_loop().run_in_executor(
                     None, lambda: pusher_main.send_test_alert(
-                        payload.get("message", "Test alert from admin"))
+                        _msg, topic=_topic, title=_title, priority=_priority)
                 )
                 db.resolve_trigger(trigger_id, "success")
             else:
