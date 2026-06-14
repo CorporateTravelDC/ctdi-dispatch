@@ -1061,7 +1061,9 @@ async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight
     Streams ntfy JSON events as SSE data lines.
     """
     topic_str = topics.replace(" ", "")
-    ntfy_sse_url = f"{NTFY_URL.rstrip('/')}/{topic_str}/sse"
+    # ?since=1h: replay the last hour of messages on connect so the feed
+    # populates immediately rather than waiting for the next live event.
+    ntfy_sse_url = f"{NTFY_URL.rstrip('/')}/{topic_str}/sse?since=1h"
 
     headers = {}
     if NTFY_TOKEN:
