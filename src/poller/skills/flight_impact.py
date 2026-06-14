@@ -2,6 +2,7 @@
 flight-impact — SR-1 + SR-2 compliant.
 
 Model: ollama/mistral (csexec-osint — all inference unified)
+MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every 15 minutes normally; drops to 5 minutes when a 'flight' watchlist
           session is active (SKILL_SCHEDULE active_interval/active_check).
 SR-1: log_usage() in finally block
