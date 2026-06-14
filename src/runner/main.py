@@ -65,7 +65,10 @@ SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
 # the browser never sees it.  Set in dispatch-secrets.env.
 RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
 
-# ── Dispatch AI chat --------------------------------------------------------
+# ── Dispatch AI chat (Local/Cloud LLM) -------------------------------------
+# These local inference endpoints are also exposed as portable MCP tools.
+# MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
+# Use with Claude Code, Cline, Cursor, Zed, Windsurf, or Open WebUI via mcpo.
 # Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
 # Both csexec-chat and csexec-osint are Modelfile wrappers on mistral-nemo:latest.
 # llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
@@ -433,7 +436,10 @@ async def ais_vessels(
 
     return {"source": "none", "vessels": [], "count": 0}
 
-# ── Dispatch AI chat --------------------------------------------------------
+# ── Dispatch AI chat (Local/Cloud LLM) -------------------------------------
+# These local inference endpoints are also exposed as portable MCP tools.
+# MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
+# Use with Claude Code, Cline, Cursor, Zed, Windsurf, or Open WebUI via mcpo.
 
 class AskRequest(BaseModel):
     message: str
