@@ -12,8 +12,28 @@ const KDCA = [38.8521, -77.0377]
 const RANGE_RINGS_NM = [50, 100, 150, 250]
 const NM_TO_M = 1852
 
-// globe.airplanes.live — centred on KDCA, zoom 8
-const GLOBE_URL = `https://globe.airplanes.live/?centerlat=${KDCA[0]}&centerlon=${KDCA[1]}&zoom=8&hideSidebar&hideButtons`
+// Base globe URL — centred on KDCA, zoom 8
+const GLOBE_BASE = `https://globe.airplanes.live/?centerlat=${KDCA[0]}&centerlon=${KDCA[1]}&zoom=8&hideSidebar&hideButtons`
+
+// Detect search type from user input
+function detectSearchType(raw) {
+  const q = raw.trim().toUpperCase()
+  if (!q) return null
+  if (/^[0-9A-F]{6}$/.test(q))      return { type: 'icao',   param: 'icao',   value: q.toLowerCase(), label: 'HEX'      }
+  // FAA N-number and common foreign registrations (alpha prefix)
+  if (/^[A-Z]-?[0-9]/.test(q) || /^N[0-9]/.test(q)) return { type: 'reg', param: 'reg', value: q, label: 'REG' }
+  // ICAO callsign: 3-letter prefix + digits/letters
+  if (/^[A-Z]{2,3}[0-9]/.test(q))  return { type: 'flight', param: 'flight', value: q, label: 'CALLSIGN' }
+  // Fall back: try as callsign
+  return { type: 'flight', param: 'flight', value: q, label: 'CALLSIGN' }
+}
+
+function buildGlobeUrl(searchResult) {
+  if (!searchResult) return GLOBE_BASE
+  // No centerlat/centerlon/zoom — let globe.airplanes.live center on the aircraft.
+  // No hideSidebar/hideButtons so the selected aircraft info panel is visible.
+  return `https://globe.airplanes.live/?${searchResult.param}=${encodeURIComponent(searchResult.value)}`
+}
 
 function localFeedIcon(heading) {
   const h = heading || 0
@@ -51,6 +71,26 @@ function GlobeMap({ liveState }) {
   const [localCount,  setLocalCount]  = useState(0)
   const [iframeError, setIframeError] = useState(false)
 
+  // Search state
+  const [searchInput, setSearchInput] = useState('')
+  const [searchResult, setSearchResult] = useState(null)
+  const [iframeSrc, setIframeSrc]     = useState(GLOBE_BASE)
+
+  const handleSearch = useCallback((e) => {
+    e.preventDefault()
+    const q = searchInput.trim()
+    if (!q) { setSearchResult(null); setIframeSrc(GLOBE_BASE); return }
+    const result = detectSearchType(q)
+    setSearchResult(result)
+    setIframeSrc(buildGlobeUrl(result))
+  }, [searchInput])
+
+  const handleClear = useCallback(() => {
+    setSearchInput('')
+    setSearchResult(null)
+    setIframeSrc(GLOBE_BASE)
+  }, [])
+
   // Init overlay Leaflet (transparent, pointer-events managed per-marker)
   useEffect(() => {
     if (leafletRef.current) return
@@ -71,7 +111,6 @@ function GlobeMap({ liveState }) {
     leafletRef.current = map
   }, [])
 
-  // Sync overlay zoom/center if we ever need it — for now static
   const refreshLocal = useCallback(async () => {
     if (!localLayerRef.current) return
     try {
@@ -111,25 +150,58 @@ function GlobeMap({ liveState }) {
 
   return (
     <div className="globe-map-wrap">
-      {iframeError ? (
-        <div className="globe-fallback">
-          <p>globe.airplanes.live blocked cross-origin embedding.</p>
-          <a href="https://globe.airplanes.live/" target="_blank" rel="noopener noreferrer"
-             className="globe-fallback-link">Open globe.airplanes.live ↗</a>
-        </div>
-      ) : (
-        <iframe
-          src={GLOBE_URL}
-          className="globe-iframe"
-          title="globe.airplanes.live"
-          referrerPolicy="no-referrer"
-          onError={() => setIframeError(true)}
-          allow="fullscreen"
+      {/* ── Search bar overlay ─────────────────────────────────── */}
+      <form className="globe-search-bar" onSubmit={handleSearch} role="search">
+        <input
+          className="globe-search-input"
+          type="search"
+          placeholder="Callsign, tail / reg, hex ID…"
+          value={searchInput}
+          onChange={e => setSearchInput(e.target.value)}
+          aria-label="Search aircraft by callsign, registration, or ICAO hex"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="characters"
+          spellCheck={false}
         />
-      )}
+        <button type="submit" className="globe-search-btn" aria-label="Search">
+          ⌕
+        </button>
+        {searchResult && (
+          <>
+            <span className="globe-search-type-badge">
+              {searchResult.label}: {searchResult.value}
+            </span>
+            <button type="button" className="globe-search-clear" onClick={handleClear} aria-label="Clear search">
+              ✕
+            </button>
+          </>
+        )}
+      </form>
 
-      {/* Transparent Leaflet overlay — local feeder aircraft only */}
-      <div ref={overlayRef} className="globe-local-overlay" />
+      {/* iframe + local overlay share a relative container so the overlay aligns correctly */}
+      <div className="globe-iframe-wrap">
+        {iframeError ? (
+          <div className="globe-fallback">
+            <p>globe.airplanes.live blocked cross-origin embedding.</p>
+            <a href="https://globe.airplanes.live/" target="_blank" rel="noopener noreferrer"
+               className="globe-fallback-link">Open globe.airplanes.live ↗</a>
+          </div>
+        ) : (
+          <iframe
+            key={iframeSrc}
+            src={iframeSrc}
+            className="globe-iframe"
+            title="globe.airplanes.live"
+            referrerPolicy="no-referrer"
+            onError={() => setIframeError(true)}
+            allow="fullscreen"
+          />
+        )}
+
+        {/* Transparent Leaflet overlay — local feeder aircraft only */}
+        <div ref={overlayRef} className="globe-local-overlay" />
+      </div>
 
       <div className="map-overlay-stats globe-stats">
         <span className="stat source-badge local-feed-stat">
@@ -260,8 +332,11 @@ function LocalMap({ adsbMode, liveState }) {
 
 // ── Root: pick globe vs local ─────────────────────────────────────────────
 export default function MapView({ adsbMode, liveState }) {
-  if (adsbMode === 'globe') {
-    return <GlobeMap liveState={liveState} />
-  }
-  return <LocalMap adsbMode={adsbMode} liveState={liveState} />
+  return (
+    <div className="train-map-view">
+      {adsbMode === 'globe'
+        ? <GlobeMap liveState={liveState} />
+        : <LocalMap adsbMode={adsbMode} liveState={liveState} />}
+    </div>
+  )
 }

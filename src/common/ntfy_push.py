@@ -28,8 +28,13 @@ TOPIC_CLICK: dict[str, str] = {
     "wx-alerts":         f"{RUNNER_BASE}/feed",
     "osint-alerts":      f"{RUNNER_BASE}/feed",
     "dispatch":          f"{RUNNER_BASE}/",
-    "dispatch-debriefs": f"{RUNNER_BASE}/brief",
-    "ops-brief":         f"{RUNNER_BASE}/brief",
+    "dispatch-debriefs":    f"{RUNNER_BASE}/brief?tab=ops",
+    "ops-brief":            f"{RUNNER_BASE}/brief?tab=ops",
+    "ep-advance-debriefs":  f"{RUNNER_BASE}/brief?tab=ep-advance",   # legacy — keep for existing subs
+    # EP-specific topics (lowercase per operator directive)
+    "ep":               f"{RUNNER_BASE}/brief?tab=ep-advance",   # generic EP alerts (concise)
+    "ep-advance":       f"{RUNNER_BASE}/brief?tab=ep-advance",   # advance intel brief (full narrative)
+    "ep-briefs":        f"{RUNNER_BASE}/brief?tab=ep-advance",   # on-demand EP snapshots (OOOI-style)
 }
 
 _DEFAULT_CLICK = RUNNER_BASE
