@@ -139,9 +139,17 @@ def get_watched_registrations() -> set:
             f"{DISPATCH_BASE_URL}/api/v1/watchlist", timeout=10
         )
         if resp.status_code == 200:
-            for s in resp.json().get("sessions", []):
+            data = resp.json()
+            # API schema v2: entries[].entry_type + entries[].identifier
+            for entry in data.get("entries", []):
+                if entry.get("entry_type") == "flight":
+                    ident = entry.get("identifier", "")
+                    if ident:
+                        watched.add(normalize_reg(ident))
+            # Transient OOOI session schema: sessions[].registration
+            for s in data.get("sessions", []):
                 if s.get("session_type") == "flight":
-                    reg = s.get("registration", "")
+                    reg = s.get("registration", "") or s.get("subject", "")
                     if reg:
                         watched.add(normalize_reg(reg))
             log.info("Watchlist: %d reg(s) → %s", len(watched), watched or "{none}")
