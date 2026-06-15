@@ -101,82 +101,90 @@ class _NmsFeedSession:
         # Import here so the module loads cleanly when solace-pubsubplus is absent
         # (container start with pending credentials skips this code path entirely).
         from solace.messaging.messaging_service import MessagingService
-        from solace.messaging.config.retry_strategy import RetryStrategy
         from solace.messaging.resources.queue import Queue
-        from solace.messaging.receiver.message_receiver import MessageHandler
+        from solace.messaging.config.transport_security_strategy import TLS
+        from solace.messaging.errors.pubsubplus_client_error import PubSubPlusClientError
 
+        # Explicit timeouts prevent indefinite SDK hang on broker unreachable.
+        # TLS without validation: FAA ems1/ems2 certs may not be in container
+        # trust store; disable for now (same as swim_test.py approach).
         props = {
             "solace.messaging.transport.host": self.cfg.host,
             "solace.messaging.service.vpn-name": self.cfg.vpn,
             "solace.messaging.authentication.scheme.basic.username": self.cfg.username,
             "solace.messaging.authentication.scheme.basic.password": self.cfg.password,
-            "solace.messaging.tls.trust-store-path": os.getenv(
-                "SOLACE_TRUST_STORE", "/etc/ssl/certs/"
-            ),
+            "SOLCLIENT_SESSION_PROP_CONNECT_TIMEOUT_MS": "15000",
+            "SOLCLIENT_SESSION_PROP_CONNECT_RETRIES": "0",
+            "SOLCLIENT_SESSION_PROP_RECONNECT_RETRIES": "0",
         }
+        tls = TLS.create().without_certificate_validation()
         service = (
             MessagingService.builder()
             .from_properties(props)
-            .with_reconnection_retry_strategy(
-                RetryStrategy.parametrized_retry(20, 3)
-            )
+            .with_transport_security_strategy(tls)
             .build()
         )
-        service.connect()
+        try:
+            service.connect()
+        except PubSubPlusClientError as e:
+            raise RuntimeError(f"connect failed: {e}") from e
 
-        queue = Queue.durable_exclusive_queue(self.cfg.queue_name)
+        queue = Queue.durable_non_exclusive_queue(self.cfg.queue_name)
         try:
             receiver = (
                 service.create_persistent_message_receiver_builder()
+                .with_message_auto_acknowledgement()
                 .build(queue)
             )
             receiver.start()
         except Exception as e:
             service.disconnect()
             raise RuntimeError(
-                f"queue bind failed for {self.cfg.queue_name!r} "
-                f"(queue may not be provisioned yet): {e}"
+                f"queue bind failed for {self.cfg.queue_name!r}: {e}"
             ) from e
+
+        log.info("swim_client %s: connected (VPN=%s queue=%s)",
+                 self.feed_name, self.cfg.vpn, self.cfg.queue_name)
+        _db_pool.submit(_stamp_healthy, self.feed_name)
 
         feed_name = self.feed_name
         handler_fn = self._handler
         stop_ev = self._stop
 
-        class _MsgHandler(MessageHandler):
-            def on_message(self, message) -> None:  # type: ignore[override]
-                try:
-                    payload = message.get_payload_as_bytes() or b""
-                    handler_fn(payload)
-                    message.ack()
-                except Exception as ex:
-                    log.error("swim_client %s handler error: %s", feed_name, ex)
-
-        receiver.receive_callback(_MsgHandler())
-        log.info("swim_client %s: connected (VPN=%s queue=%s)",
-                 feed_name, self.cfg.vpn, self.cfg.queue_name)
-
-        _db_pool.submit(_stamp_healthy, feed_name)
-
-        # Heartbeat loop while the service reports connected.
+        # Polling receive loop — receive_message() is the correct API for this
+        # SDK version; receive_callback() does not exist on _PersistentMessageReceiver.
         last_hb = time.monotonic()
-        while not stop_ev.is_set():
-            if not service.is_connected:
-                log.warning("swim_client %s: service disconnected", feed_name)
-                break
-            if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL:
-                _db_pool.submit(_stamp_healthy, feed_name)
-                last_hb = time.monotonic()
-            stop_ev.wait(5)
+        try:
+            while not stop_ev.is_set():
+                if not service.is_connected:
+                    log.warning("swim_client %s: service disconnected", feed_name)
+                    break
 
-        try:
-            receiver.terminate()
-        except Exception:
-            pass
-        try:
-            service.disconnect()
-        except Exception:
-            pass
-        _db_pool.submit(_stamp_down, feed_name, "swim_nms: disconnected")
+                try:
+                    msg = receiver.receive_message(timeout=5000)
+                    if msg is not None:
+                        try:
+                            payload = msg.get_payload_as_bytes() or b""
+                            handler_fn(payload)
+                        except Exception as ex:
+                            log.error("swim_client %s handler error: %s", feed_name, ex)
+                except Exception as poll_err:
+                    log.warning("swim_client %s: receive error: %s", feed_name, poll_err)
+                    break
+
+                if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL:
+                    _db_pool.submit(_stamp_healthy, feed_name)
+                    last_hb = time.monotonic()
+        finally:
+            try:
+                receiver.terminate()
+            except Exception:
+                pass
+            try:
+                service.disconnect()
+            except Exception:
+                pass
+            _db_pool.submit(_stamp_down, feed_name, "swim_nms: disconnected")
 
 
 # ── Message dispatch ──────────────────────────────────────────────────────────
