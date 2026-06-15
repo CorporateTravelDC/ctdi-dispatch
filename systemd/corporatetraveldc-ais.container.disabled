@@ -1,0 +1,53 @@
+[Unit]
+Description=AIS Decoder — AIS-catcher (FUTURE: dedicated AIS dongle, 161–162 MHz)
+# DISABLED — enable when dedicated AIS dongle is available
+# NOTE: AIS tracks vessels by MMSI, not aircraft registrations.
+#       The acars-watcher does NOT handle AIS — a separate ais-watcher container
+#       is needed for MMSI-based watchlist matching and ntfy push.
+#       This container feeds the community aggregator only (MarineTraffic, AISHub).
+# To enable:
+#   1. Assign serial "ais0AIS" to the new dongle via rtl_eeprom
+#   2. Add udev rule: SUBSYSTEM=="usb", ATTRS{serial}=="ais0AIS", SYMLINK+="ais0AIS"
+#   3. cp corporatetraveldc-ais.container.disabled corporatetraveldc-ais.container
+#   4. systemctl --user daemon-reload && systemctl --user enable --now corporatetraveldc-ais
+#   5. Separately deploy corporatetraveldc-ais-watcher (future container)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-ais-catcher:latest
+ContainerName=corporatetraveldc-ais
+
+AddDevice=/dev/bus/usb
+# Preferred after udev rule is in place:
+# AddDevice=/dev/ais0AIS
+
+Environment=DEVICE_SERIAL=ais0AIS
+# AIS channels A and B (standard)
+Environment=AIS_FREQS=161975000;162025000
+Environment=GAIN=33
+
+# --- Community aggregator feeds ---
+# MarineTraffic
+Environment=FEED_MARINETRAFFIC=true
+Environment=MARINETRAFFIC_HOST=5.9.207.224
+Environment=MARINETRAFFIC_PORT=5321
+
+# AISHub
+Environment=FEED_AISHUB=true
+Environment=AISHUB_HOST=data.aishub.net
+Environment=AISHUB_PORT=2000
+
+# Station info
+Environment=STATION_LAT=38.8816
+Environment=STATION_LON=-77.0910
+Environment=STATION=WA1EM-AIS
+
+Network=corporatetraveldc.network
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

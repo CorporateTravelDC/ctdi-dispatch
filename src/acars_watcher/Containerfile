@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-acars-watcher"
+LABEL org.opencontainers.image.description="ACARS message watcher — airframes.io aggregate feed"
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests==2.32.3
+
+COPY acars_watcher.py .
+
+# Drop privileges
+RUN useradd -r -s /sbin/nologin watcher
+USER watcher
+
+CMD ["python", "-u", "acars_watcher.py"]

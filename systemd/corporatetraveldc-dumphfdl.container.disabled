@@ -1,0 +1,41 @@
+[Unit]
+Description=HFDL Decoder — dumphfdl (FUTURE: dedicated HF dongle, 2–22 MHz)
+# DISABLED — enable when dedicated HF dongle is available
+# NOTE: HF reception requires a long-wire or HF-capable antenna, NOT the VHF stub.
+#       Quarter-wave for 8 MHz ≈ 9 meters. Discone or end-fed HF wire recommended.
+# To enable:
+#   1. Assign serial "hfdl0HF" to the new dongle via rtl_eeprom
+#   2. Add udev rule: SUBSYSTEM=="usb", ATTRS{serial}=="hfdl0HF", SYMLINK+="hfdl0HF"
+#   3. cp corporatetraveldc-dumphfdl.container.disabled corporatetraveldc-dumphfdl.container
+#   4. systemctl --user daemon-reload && systemctl --user enable --now corporatetraveldc-dumphfdl
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-dumphfdl:latest
+ContainerName=corporatetraveldc-dumphfdl
+
+AddDevice=/dev/bus/usb
+# Preferred after udev rule is in place:
+# AddDevice=/dev/hfdl0HF
+
+Environment=DEVICE_SERIAL=hfdl0HF
+# Common US/North Atlantic HFDL ground station frequencies (kHz)
+# Full list: https://www.airframes.io/about/hfdl
+Environment=HFDL_FREQ=2941;4654;6532;8912;10027;11348;13272;17919;21934
+Environment=GAIN=40
+Environment=FEED_AIRFRAMES=true
+Environment=STATION=WA1EM-HFDL
+
+# Forward decoded JSON to acars-watcher via UDP (HFDL carries ACARS-type messages)
+Environment=OUTPUT_UDP=corporatetraveldc-acars-watcher:5005
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Network=corporatetraveldc.network
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
