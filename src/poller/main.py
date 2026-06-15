@@ -467,22 +467,38 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     from datetime import datetime, timezone
     from shared.watchlist import watchlist_event_hit
 
-    # Route to hex endpoint for 6-char hex identifiers, callsign endpoint otherwise.
-    if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()):
-        url = f"https://api.airplanes.live/v2/hex/{ident.lower()}"
-    else:
-        url = f"https://api.airplanes.live/v2/callsign/{ident.upper().replace(' ', '')}"
-    try:
-        resp = _req.get(url, timeout=10)
-        if resp.status_code == 404:
-            return False
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        log.debug("airplanes.live %s: %s", ident, e)
-        return False
+    def _al_fetch(url: str) -> list:
+        """Fetch airplanes.live endpoint, return ac list or empty."""
+        try:
+            resp = _req.get(url, timeout=10)
+            if resp.status_code == 404:
+                return []
+            resp.raise_for_status()
+            return resp.json().get("ac") or []
+        except Exception as e:
+            log.debug("airplanes.live %s: %s", url, e)
+            return []
 
-    ac_list = data.get("ac") or []
+    # Resolve ICAO hex: explicit hex identifier > hex in notes > callsign > reg fallback.
+    # Military serials (82-8000, 98-0002 etc.) and civil regs (N757AF) are stored under
+    # identifier but their known hex is annotated in notes as "Hex: xxxxxx". Use that
+    # first — it bypasses callsign cache staleness and works for dark/restricted flights.
+    notes_hex: str | None = None
+    m = _re.search(r'\bHex:\s*([0-9a-fA-F]{6})\b', entry.get("notes") or "")
+    if m:
+        notes_hex = m.group(1).lower()
+
+    if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()):
+        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{ident.lower()}")
+    elif notes_hex:
+        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{notes_hex}")
+    else:
+        # Try callsign first; fall back to reg endpoint (catches N-numbers, tails)
+        ident_clean = ident.upper().replace(" ", "")
+        ac_list = _al_fetch(f"https://api.airplanes.live/v2/callsign/{ident_clean}")
+        if not ac_list:
+            ac_list = _al_fetch(f"https://api.airplanes.live/v2/reg/{ident_clean}")
+
     if not ac_list:
         return False
 
@@ -669,7 +685,7 @@ def _evaluate_flight_status_fdps(entry: dict, ident: str, data: dict) -> None:
 
 def _check_train_amtraker(entry: dict, ident: str, base_url: str,
                           watchlist_event_hit) -> None:
-    """Query amtraker API for current train status and fire delay alerts."""
+    """Query amtraker API for current train status and fire delay/state alerts."""
     import requests as _req
     from datetime import datetime, timezone
     url = f"{base_url}/trains/{ident}"
@@ -687,7 +703,11 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
         return
     train = trains[0] if isinstance(trains, list) else trains
 
-    # Calculate delay from scheduled vs predicted arrival.
+    state = (train.get("trainState") or train.get("status") or "").lower()
+    last_event = entry.get("last_event_summary") or ""
+
+    # Derive current delay from amtraker velocity/status fields if available.
+    # Amtraker v3 returns velocityMph, trainTimely, and per-station ETA objects.
     sched_str = entry.get("scheduled_arrival")
     pred_str = (train.get("estimatedArrival")
                 or train.get("predicted_arrival")
@@ -702,22 +722,43 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
         except ValueError:
             pass
 
-    state = (train.get("trainState") or train.get("status") or "").lower()
-    last_event = entry.get("last_event_summary") or ""
+    # Classify state: arrived / delayed / en-route / unknown.
+    # "en-route" fires once when train first appears (previous last_event was empty
+    # or a non-running state), so the operator knows the service is active.
+    is_arrived  = "arrived" in state or "station" in state
+    is_enroute  = any(k in state for k in ("active", "enroute", "en route", "en-route",
+                                            "moving", "departed"))
+    was_running = any(k in (last_event or "").lower()
+                      for k in ("departed", "en route", "on time", "late", "arrived"))
 
     if delay_min is not None:
         if delay_min >= 30:
-            priority, label = 5, f"LATE {delay_min}min"
+            summary, priority = f"#{ident} LATE {delay_min}min", 5
         elif delay_min >= 15:
-            priority, label = 4, f"late {delay_min}min"
-        elif delay_min <= 0 and "arrived" in state:
-            priority, label = 2, "arrived on time"
+            summary, priority = f"#{ident} late {delay_min}min", 4
+        elif is_arrived and delay_min <= 0:
+            summary, priority = f"#{ident} arrived on time", 2
+        elif is_arrived:
+            summary, priority = f"#{ident} arrived +{delay_min}min", 3
+        elif is_enroute and not was_running:
+            route = entry.get("route_name") or ""
+            origin = entry.get("origin") or ""
+            dest   = entry.get("destination") or ""
+            leg    = f" {origin}→{dest}" if origin or dest else ""
+            summary  = f"#{ident} {route}{leg} en route (on time)" if route else f"#{ident}{leg} en route"
+            priority = 2
         else:
             return
-        summary = f"#{ident} {label}"
-    elif "arrived" in state:
-        priority, label = 2, "arrived"
-        summary = f"#{ident} arrived"
+    elif is_arrived:
+        summary, priority = f"#{ident} arrived", 2
+    elif is_enroute and not was_running:
+        # No schedule data — fire once when train goes live so operator knows it's running
+        route = entry.get("route_name") or ""
+        origin = entry.get("origin") or ""
+        dest   = entry.get("destination") or ""
+        leg    = f" {origin}→{dest}" if origin or dest else ""
+        summary  = f"#{ident} {route}{leg} en route" if route else f"#{ident}{leg} en route"
+        priority = 2
     else:
         return
 
