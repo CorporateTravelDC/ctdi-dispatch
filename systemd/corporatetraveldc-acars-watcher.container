@@ -12,7 +12,7 @@ AutoUpdate=local
 PublishPort=5005:5005/udp
 
 # Shared pod network so acarsdec and dumpvdl2 containers can reach this by name
-Network=corporatetraveldc.network
+Network=acars-net
 
 # Shared environment (non-secret)
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
@@ -25,6 +25,7 @@ Environment=NTFY_TOPIC=flight-alerts
 Environment=POLL_INTERVAL=60
 Environment=WATCHLIST_REFRESH_INTERVAL=300
 Environment=ACARS_UDP_PORT=5005
+Environment=ACARS_STATIC_REGS=N829AW
 Environment=LOG_LEVEL=INFO
 # AIRFRAMES_API_KEY — set in dispatch-secrets.env when obtained from api@airframes.io
 
