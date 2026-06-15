@@ -112,7 +112,7 @@ class NmsFeedConfig:
 
 def _nms_feed(vpn_key: str) -> NmsFeedConfig:
     """Build a NmsFeedConfig from env vars for the given feed key (e.g. 'FDPS')."""
-    host = os.getenv("SWIM_NMS_HOST", "tcps://ems2.swim.faa.gov:55443")
+    host = os.getenv(f"SWIM_NMS_HOST_{vpn_key}") or os.getenv("SWIM_NMS_HOST", "tcps://ems1.swim.faa.gov:55443")
     vpn = os.getenv(f"SWIM_NMS_VPN_{vpn_key}", vpn_key)
     username = os.getenv(f"SWIM_NMS_USER_{vpn_key}", "")
     password = os.getenv(f"SWIM_NMS_PASS_{vpn_key}", "")
