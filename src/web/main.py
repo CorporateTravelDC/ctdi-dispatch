@@ -343,11 +343,19 @@ async def get_amtrak() -> JSONResponse:
     """Latest Amtrak DC-area status — Tier 0."""
     status = db.get_latest_amtrak_status()
     if not status:
-        return JSONResponse({"available": False, "summary": "No data yet"})
+        return JSONResponse({"available": False, "summary": "No data yet", "trains": []})
+    trains: list = []
+    raw = status.get("trains_json")
+    if raw:
+        try:
+            trains = json.loads(raw)
+        except Exception:
+            trains = []
     return JSONResponse({
         "available": True,
         "summary": status["delay_summary"],
         "fetched_at": status["fetched_at"],
+        "trains": trains,
     })
 
 
