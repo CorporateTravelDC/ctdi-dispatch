@@ -260,12 +260,30 @@ class WatchlistSweep:
     FLIGHT_SWEEP_INTERVAL = 120   # check active flight entries via AeroAPI / FDPS
     TRAIN_SWEEP_INTERVAL = 300    # check active train entries via amtraker
     LOCAL_AC_SWEEP_INTERVAL = 60  # cross-ref local_aircraft against watchlist
+    FAA_REGISTRY_INTERVAL = 7 * 86400  # weekly — FAA publishes Sunday night
 
     def __init__(self) -> None:
         self._last_expiry = 0.0
         self._last_flight = 0.0
         self._last_train = 0.0
         self._last_local_ac = 0.0
+        # Delay first FAA registry pull by 60s so startup I/O settles, then
+        # check whether an import has already happened this week.
+        self._last_faa_registry = self._faa_registry_last_import_epoch()
+
+    @staticmethod
+    def _faa_registry_last_import_epoch() -> float:
+        """Return epoch of last FAA registry import, or 0 if never imported."""
+        try:
+            from common.db import faa_registry_meta_get, init_db_v11
+            init_db_v11()
+            ts = faa_registry_meta_get("last_full_import")
+            if ts:
+                from datetime import datetime, timezone
+                return datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            pass
+        return 0.0
 
     async def run_all(self) -> None:
         now = time.time()
@@ -282,6 +300,10 @@ class WatchlistSweep:
             self._last_local_ac = now
             await asyncio.get_event_loop().run_in_executor(
                 None, self._do_local_aircraft_sweep)
+        if now - self._last_faa_registry >= self.FAA_REGISTRY_INTERVAL:
+            self._last_faa_registry = now
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._do_faa_registry_import)
 
     @staticmethod
     def _do_expiry_sweep() -> None:
@@ -772,6 +794,34 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
     )
 
 
+# ── FAA registry import ────────────────────────────────────────────────────────
+
+
+class _FAARegistrySweep:
+    """Weekly FAA N-number registry + LADD download, run inside WatchlistSweep."""
+
+    @staticmethod
+    def run() -> None:
+        try:
+            from poller.fetchers.faa_registry import fetch_faa_registry
+            stats = fetch_faa_registry()
+            if stats.get("ok"):
+                log.info(
+                    "FAA registry import OK — %d records, %d LADD, %.1fs",
+                    stats.get("registry_upserted", 0),
+                    stats.get("ladd_count", 0),
+                    stats.get("elapsed_sec", 0),
+                )
+            else:
+                log.error("FAA registry import failed: %s", stats.get("error"))
+        except Exception as exc:
+            log.error("FAA registry sweep exception: %s", exc)
+
+
+# Patch _do_faa_registry_import onto WatchlistSweep
+WatchlistSweep._do_faa_registry_import = staticmethod(_FAARegistrySweep.run)  # type: ignore[attr-defined]
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -788,6 +838,7 @@ async def main() -> None:
     db.init_db_v8()
     db.init_db_v9()
     db.init_db_v10()
+    db.init_db_v11()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())
