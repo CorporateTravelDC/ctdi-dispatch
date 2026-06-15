@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
+from datetime import datetime, timezone
 
 from common import db
 from ingest import failover
@@ -22,13 +25,234 @@ from ingest.config import NwwsConfig
 
 log = logging.getLogger("ingest.nwws")
 
+# ---------------------------------------------------------------------------
+# VTEC phenomenon + significance → (event_type, severity, certainty)
+# Covers the product set LWX, AKQ, CTP, PHI push for DC metro.
+# ---------------------------------------------------------------------------
+_VTEC_MAP: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("TO", "W"): ("Tornado Warning",               "Extreme",  "Observed"),
+    ("TO", "A"): ("Tornado Watch",                 "Extreme",  "Possible"),
+    ("SV", "W"): ("Severe Thunderstorm Warning",   "Severe",   "Observed"),
+    ("SV", "A"): ("Severe Thunderstorm Watch",     "Severe",   "Possible"),
+    ("FF", "W"): ("Flash Flood Warning",           "Severe",   "Likely"),
+    ("FF", "A"): ("Flash Flood Watch",             "Moderate", "Possible"),
+    ("FF", "Y"): ("Flash Flood Advisory",          "Minor",    "Likely"),
+    ("FL", "W"): ("Flood Warning",                "Severe",   "Likely"),
+    ("FL", "Y"): ("Flood Advisory",               "Moderate", "Likely"),
+    ("FL", "A"): ("Flood Watch",                  "Moderate", "Possible"),
+    ("WS", "W"): ("Winter Storm Warning",          "Severe",   "Likely"),
+    ("WS", "A"): ("Winter Storm Watch",            "Moderate", "Possible"),
+    ("WW", "Y"): ("Winter Weather Advisory",       "Minor",    "Likely"),
+    ("IS", "W"): ("Ice Storm Warning",             "Extreme",  "Likely"),
+    ("BZ", "W"): ("Blizzard Warning",              "Extreme",  "Likely"),
+    ("BZ", "A"): ("Blizzard Watch",               "Extreme",  "Possible"),
+    ("LE", "W"): ("Lake Effect Snow Warning",      "Severe",   "Likely"),
+    ("LE", "Y"): ("Lake Effect Snow Advisory",     "Minor",    "Likely"),
+    ("LE", "A"): ("Lake Effect Snow Watch",        "Moderate", "Possible"),
+    ("WC", "W"): ("Wind Chill Warning",            "Severe",   "Likely"),
+    ("WC", "Y"): ("Wind Chill Advisory",           "Minor",    "Likely"),
+    ("WC", "A"): ("Wind Chill Watch",              "Moderate", "Possible"),
+    ("HW", "W"): ("High Wind Warning",             "Severe",   "Likely"),
+    ("HW", "A"): ("High Wind Watch",               "Moderate", "Possible"),
+    ("WI", "Y"): ("Wind Advisory",                "Minor",    "Likely"),
+    ("EH", "W"): ("Excessive Heat Warning",        "Extreme",  "Likely"),
+    ("EH", "A"): ("Excessive Heat Watch",          "Extreme",  "Possible"),
+    ("HT", "Y"): ("Heat Advisory",                "Minor",    "Likely"),
+    ("EC", "W"): ("Extreme Cold Warning",          "Extreme",  "Likely"),
+    ("FZ", "W"): ("Freeze Warning",               "Moderate", "Likely"),
+    ("FZ", "A"): ("Freeze Watch",                 "Moderate", "Possible"),
+    ("FR", "Y"): ("Frost Advisory",               "Minor",    "Likely"),
+    ("HZ", "W"): ("Hard Freeze Warning",          "Severe",   "Likely"),
+    ("HZ", "A"): ("Hard Freeze Watch",            "Severe",   "Possible"),
+    ("FG", "Y"): ("Dense Fog Advisory",           "Minor",    "Likely"),
+    ("SM", "Y"): ("Dense Smoke Advisory",         "Minor",    "Likely"),
+    ("CF", "W"): ("Coastal Flood Warning",        "Severe",   "Likely"),
+    ("CF", "Y"): ("Coastal Flood Advisory",       "Minor",    "Likely"),
+    ("CF", "A"): ("Coastal Flood Watch",          "Moderate", "Possible"),
+    ("LS", "W"): ("Lakeshore Flood Warning",      "Severe",   "Likely"),
+    ("LS", "Y"): ("Lakeshore Flood Advisory",     "Minor",    "Likely"),
+    ("LS", "A"): ("Lakeshore Flood Watch",        "Moderate", "Possible"),
+    ("SU", "W"): ("High Surf Warning",            "Severe",   "Likely"),
+    ("SU", "Y"): ("High Surf Advisory",           "Minor",    "Likely"),
+    ("RP", "S"): ("Rip Current Statement",        "Moderate", "Possible"),
+    ("SC", "Y"): ("Small Craft Advisory",         "Minor",    "Likely"),
+    ("SE", "W"): ("Hazardous Seas Warning",       "Severe",   "Likely"),
+    ("SE", "A"): ("Hazardous Seas Watch",         "Moderate", "Possible"),
+    ("SW", "W"): ("Storm Warning",                "Severe",   "Likely"),
+    ("MH", "W"): ("Marine Weather Statement",     "Moderate", "Likely"),
+    ("AF", "Y"): ("Ashfall Advisory",             "Minor",    "Likely"),
+    ("AF", "W"): ("Ashfall Warning",              "Severe",   "Likely"),
+    ("AQ", "Y"): ("Air Quality Alert",            "Minor",    "Likely"),
+    ("DU", "W"): ("Blowing Dust Warning",         "Severe",   "Likely"),
+    ("DU", "Y"): ("Blowing Dust Advisory",        "Minor",    "Likely"),
+    ("DS", "W"): ("Dust Storm Warning",           "Severe",   "Likely"),
+    ("LO", "Y"): ("Low Water Advisory",           "Minor",    "Likely"),
+    ("UP", "W"): ("Ice Accretion Warning",        "Severe",   "Likely"),
+    ("UP", "Y"): ("Freezing Spray Advisory",      "Minor",    "Likely"),
+}
+
+# Non-VTEC text products worth storing; None = explicitly skip
+_TEXT_PRODUCTS: dict[str, tuple[str, str, str] | None] = {
+    "SPS": ("Special Weather Statement", "Minor",    "Possible"),
+    "SMW": ("Special Marine Warning",    "Severe",   "Likely"),
+    "MWS": ("Marine Weather Statement",  "Moderate", "Likely"),
+    # skip noisy products
+    "RWR": None,  # Regional Weather Roundup
+    "RTP": None,  # Regional Temp/Precip summary
+    "HWO": None,  # Hazardous Weather Outlook (narrative, no VTEC)
+    "PNS": None,  # Public Information Statement
+    "ESF": None,  # Hydrological outlook
+    "HYD": None,  # Hydrological statement
+    "ADM": None,  # Administrative message
+}
+
+# VTEC regex: /O.NEW.KLWX.TO.W.0001.260615T0200Z-260615T0300Z/
+_VTEC_RE = re.compile(
+    r"/[A-Z]\."
+    r"(?P<action>[A-Z]{3})\."
+    r"K[A-Z]{3}\."
+    r"(?P<phenom>[A-Z]{2})\."
+    r"(?P<sig>[A-YWOX])\."
+    r"\d{4}\."
+    r"(?P<t_start>\d{6}T\d{4}Z)-"
+    r"(?P<t_end>\d{6}T\d{4}Z)/"
+)
+
+_HEADLINE_RE = re.compile(r"\.\.\.(.*?)\.\.\.", re.DOTALL)
+
+
+def _vtec_time(s: str) -> float:
+    """Parse VTEC time string 'YYMMDDTHHMM Z' → unix timestamp."""
+    try:
+        return datetime.strptime(s, "%y%m%dT%H%MZ").replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return time.time() + 3600
+
+
+def _extract_headline(body: str) -> str:
+    m = _HEADLINE_RE.search(body)
+    if m:
+        return " ".join(m.group(1).split())[:300]
+    # Fall back to first substantive line after preamble
+    for line in body.splitlines():
+        line = line.strip()
+        if len(line) > 20 and not line.startswith("/") and not line[:3].isupper():
+            return line[:300]
+    return ""
+
+
+def _extract_areas(body: str) -> str:
+    """Extract affected area description from product text."""
+    # NWS products list counties/zones in plain English after the UGC block
+    areas: list[str] = []
+    capture = False
+    for line in body.splitlines():
+        s = line.strip()
+        if re.match(r"^[A-Z]{2}[CZ]\d{3}", s):
+            capture = True
+            continue
+        if capture:
+            if not s:
+                break
+            if s.startswith("/"):
+                continue  # VTEC line, skip
+            areas.append(s)
+    return (" ".join(areas))[:500] if areas else ""
+
 
 def parse_product(awips_id: str, source_wfo: str, body: str) -> list[dict]:
-    """TODO(operator): map an NWWS-OI product to db.upsert_nws_alert kwargs:
-        {alert_id, event_type, area_desc, severity, certainty,
-         effective, expires, headline, description}
-    Parse VTEC/CAP out of `body`. Return [] for products you don't track."""
-    raise NotImplementedError("parse_product: map NWWS-OI product text to upsert_nws_alert fields")
+    """
+    Parse an NWWS-OI raw NWS product into zero or more upsert_nws_alert kwargs.
+
+    Handles:
+    - VTEC-bearing products (warnings, watches, advisories) for all phenomena
+      in the DC-metro product set (LWX, AKQ, CTP, PHI)
+    - Non-VTEC text products: SPS, SMW
+    - Skips: RWR, RTP, HWO, PNS, ESF, and any unknown product code
+
+    Returns empty list for products that should not be stored.
+    """
+    now = time.time()
+    results: list[dict] = []
+
+    # --- VTEC products ---
+    vtec_matches = list(_VTEC_RE.finditer(body))
+    for m in vtec_matches:
+        action  = m.group("action")
+        phenom  = m.group("phenom")
+        sig     = m.group("sig")
+        t_start = m.group("t_start")
+        t_end   = m.group("t_end")
+
+        # Skip cancellations, expirations, and routine continuations
+        if action in ("CAN", "EXP", "ROU"):
+            continue
+
+        key = (phenom, sig)
+        if key not in _VTEC_MAP:
+            log.debug("Unknown VTEC phenomenon %s.%s from %s — skipping", phenom, sig, source_wfo)
+            continue
+
+        event_type, severity, certainty = _VTEC_MAP[key]
+
+        effective = _vtec_time(t_start) if t_start != "000000T0000Z" else now
+        expires   = _vtec_time(t_end)   if t_end   != "000000T0000Z" else now + 3600
+
+        if expires < now:
+            log.debug("VTEC %s.%s from %s already expired — skipping", phenom, sig, source_wfo)
+            continue
+
+        headline  = _extract_headline(body)
+        area_desc = _extract_areas(body) or source_wfo
+
+        # Stable alert_id: same event through EXT/UPD actions keeps same ID
+        alert_id = f"nwws:{source_wfo}:{phenom}.{sig}:{t_end}"
+
+        results.append({
+            "alert_id":    alert_id,
+            "event_type":  event_type,
+            "area_desc":   area_desc,
+            "severity":    severity,
+            "certainty":   certainty,
+            "effective":   effective,
+            "expires":     expires,
+            "headline":    headline or event_type,
+            "description": body[:2000],
+        })
+        log.info("NWWS VTEC: %s (%s.%s) from %s expires %s",
+                 event_type, phenom, sig, source_wfo,
+                 datetime.fromtimestamp(expires, tz=timezone.utc).strftime("%Y-%m-%dT%H:%MZ"))
+
+    if vtec_matches:
+        return results
+
+    # --- Non-VTEC text products ---
+    product_code = awips_id[:3].upper() if awips_id else ""
+    entry = _TEXT_PRODUCTS.get(product_code)
+    if entry is None:
+        return []  # Either explicitly skipped or unknown
+    event_type, severity, certainty = entry
+
+    headline = _extract_headline(body)
+    if not headline:
+        return []  # No useful content
+
+    # Text products expire in ~1 hour; no reliable VTEC expiry to parse
+    alert_id = f"nwws:{source_wfo}:{product_code}:{int(now)}"
+    results.append({
+        "alert_id":    alert_id,
+        "event_type":  event_type,
+        "area_desc":   source_wfo,
+        "severity":    severity,
+        "certainty":   certainty,
+        "effective":   now,
+        "expires":     now + 3600,
+        "headline":    headline,
+        "description": body[:2000],
+    })
+    log.info("NWWS text: %s (%s) from %s", event_type, product_code, source_wfo)
+
+    return results
 
 
 async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
@@ -63,10 +287,8 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
             try:
                 for kw in parse_product(awips, wfo, body):
                     db.upsert_nws_alert(**kw)
-            except NotImplementedError as e:
-                log.warning("NWWS parser seam: %s", e)
             except Exception as e:
-                log.error("NWWS product handler error: %s", e)
+                log.error("NWWS product handler error (%s %s): %s", awips, wfo, e)
 
     backoff = 5
     while not stop.is_set():
