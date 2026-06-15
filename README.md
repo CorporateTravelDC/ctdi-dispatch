@@ -24,7 +24,7 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 | Tailscale direct | `http://100.94.80.100:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
-| FAA SWIM NMS push feeds | Pending FAA credential provisioning |
+| FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
 | Local LLM (Ollama) | mistral-nemo 12B — csexec-chat + csexec-osint Modelfile wrappers |
 | Dispatch Drawer | Streaming chat via csexec-chat (mistral-nemo) |
 
@@ -63,7 +63,7 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | `corporatetraveldc-web` | `localhost/corporatetraveldc-web:latest` | FastAPI REST API, tiered auth |
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
-| `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest (pending NMS credentials) |
+| `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest — all 6 NMS feeds + NWWS-OI live |
 | `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | PWA frontend (React/Vite) + runner API (port 8001) |
 
 ### Data feeds
@@ -77,13 +77,14 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | TFR | tfr.faa.gov XML | 5 min | ⚠️ FAA upstream issue |
 | NAS programs | FAA NAS/OIS | 5 min | ⚠️ Empty upstream response |
 | NOTAMs | FAA NOTAM API | 5 min | ⚠️ Needs `FAA_NOTAM_API_KEY` |
-| Amtrak | Push ingest / poller fallback | Push / 5 min | ⚠️ Ingest not yet running |
-| FDPS (flight plan + track) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
-| STDDS (surface + terminal) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
-| TFMS (GDP/GS/AFP/AAR) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
-| AIM (digital NOTAMs) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
-| TBFM (arrival sequencing) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
-| ITWS (terminal weather) | FAA SWIM NMS | Push | ⏳ Pending NMS credentials |
+| Amtrak | Push ingest / poller fallback | Push / 5 min | ✅ Active |
+| FDPS (flight plan + track) | FAA SWIM NMS | Push | ✅ Live — push:fdps heartbeat active |
+| STDDS (surface + terminal tracks + TFRs) | FAA SWIM NMS | Push | ✅ Live — push:stdds heartbeat active |
+| TFMS (GDP/GS/AFP/AAR) | FAA SWIM NMS | Push | ✅ Live — push:tfms heartbeat active |
+| AIM/FNS (digital NOTAMs) | FAA SWIM NMS | Push | ✅ Live — push:fns heartbeat active |
+| TBFM (arrival sequencing) | FAA SWIM NMS | Push | ✅ Live — push:tbfm heartbeat active |
+| ITWS (terminal weather) | FAA SWIM NMS | Push | ✅ Live — push:itws heartbeat active |
+| NWWS-OI (NWS push) | NWWS-OI XMPP MUC | Push | ✅ Live — push:nws heartbeat active |
 
 ### Push/pull failover
 
