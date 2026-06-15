@@ -1858,3 +1858,164 @@ def osint_prune_items(max_age_days: int = 30) -> int:
     with conn() as c:
         cur = c.execute("DELETE FROM osint_items WHERE ingested_at < ?", (cutoff,))
     return cur.rowcount
+
+
+# ── FAA Aircraft Registry (V11) ────────────────────────────────────────────────
+
+SCHEMA_V11 = """
+CREATE TABLE IF NOT EXISTS faa_aircraft_registry (
+    n_number        TEXT    PRIMARY KEY,
+    mode_s_hex      TEXT,
+    serial_number   TEXT,
+    mfr_mdl_code    TEXT,
+    year_mfr        TEXT,
+    registrant_name TEXT,
+    city            TEXT,
+    state           TEXT,
+    status_code     TEXT,
+    type_aircraft   TEXT,
+    type_engine     TEXT,
+    expiration_date TEXT,
+    last_action_date TEXT,
+    cert_issue_date TEXT,
+    updated_at      REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_faa_reg_hex
+    ON faa_aircraft_registry(mode_s_hex);
+CREATE INDEX IF NOT EXISTS idx_faa_reg_status
+    ON faa_aircraft_registry(status_code);
+
+CREATE TABLE IF NOT EXISTS faa_ladd_aircraft (
+    n_number        TEXT    PRIMARY KEY,
+    updated_at      REAL    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS faa_registry_meta (
+    key             TEXT    PRIMARY KEY,
+    value           TEXT    NOT NULL
+);
+"""
+
+
+def init_db_v11() -> None:
+    """Apply v11 schema — FAA aircraft registry + LADD list."""
+    with conn() as c:
+        c.executescript(SCHEMA_V11)
+
+
+def faa_upsert_aircraft(records: list[dict]) -> int:
+    """Bulk upsert FAA registry records. Returns count upserted."""
+    import time as _time
+    now = _time.time()
+    sql = """
+        INSERT INTO faa_aircraft_registry
+            (n_number, mode_s_hex, serial_number, mfr_mdl_code, year_mfr,
+             registrant_name, city, state, status_code, type_aircraft,
+             type_engine, expiration_date, last_action_date, cert_issue_date,
+             updated_at)
+        VALUES
+            (:n_number, :mode_s_hex, :serial_number, :mfr_mdl_code, :year_mfr,
+             :registrant_name, :city, :state, :status_code, :type_aircraft,
+             :type_engine, :expiration_date, :last_action_date, :cert_issue_date,
+             :updated_at)
+        ON CONFLICT(n_number) DO UPDATE SET
+            mode_s_hex       = excluded.mode_s_hex,
+            serial_number    = excluded.serial_number,
+            mfr_mdl_code     = excluded.mfr_mdl_code,
+            year_mfr         = excluded.year_mfr,
+            registrant_name  = excluded.registrant_name,
+            city             = excluded.city,
+            state            = excluded.state,
+            status_code      = excluded.status_code,
+            type_aircraft    = excluded.type_aircraft,
+            type_engine      = excluded.type_engine,
+            expiration_date  = excluded.expiration_date,
+            last_action_date = excluded.last_action_date,
+            cert_issue_date  = excluded.cert_issue_date,
+            updated_at       = excluded.updated_at
+    """
+    for r in records:
+        r["updated_at"] = now
+    with conn() as c:
+        c.executemany(sql, records)
+    return len(records)
+
+
+def faa_upsert_ladd(n_numbers: list[str]) -> int:
+    """Replace LADD list entirely. Returns final count."""
+    import time as _time
+    now = _time.time()
+    with conn() as c:
+        c.execute("DELETE FROM faa_ladd_aircraft")
+        c.executemany(
+            "INSERT OR REPLACE INTO faa_ladd_aircraft (n_number, updated_at) VALUES (?, ?)",
+            [(n.strip().upper(), now) for n in n_numbers if n.strip()],
+        )
+    return len(n_numbers)
+
+
+def faa_lookup_by_n_number(n_number: str) -> dict | None:
+    """Look up a single aircraft by N-number (with or without leading N)."""
+    key = n_number.upper().lstrip("N") if n_number.upper().startswith("N") else n_number.upper()
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM faa_aircraft_registry WHERE n_number=?", (key,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["ladd"] = faa_is_ladd(key)
+    return d
+
+
+def faa_lookup_by_hex(hex_code: str) -> dict | None:
+    """Look up a single aircraft by ICAO mode-S hex."""
+    key = hex_code.lower()
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM faa_aircraft_registry WHERE LOWER(mode_s_hex)=?", (key,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["ladd"] = faa_is_ladd(d["n_number"])
+    return d
+
+
+def faa_is_ladd(n_number: str) -> bool:
+    """Return True if N-number is on the LADD privacy list."""
+    key = n_number.upper().lstrip("N") if n_number.upper().startswith("N") else n_number.upper()
+    with conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM faa_ladd_aircraft WHERE n_number=?", (key,)
+        ).fetchone()
+    return row is not None
+
+
+def faa_registry_meta_set(key: str, value: str) -> None:
+    with conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO faa_registry_meta (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+
+def faa_registry_meta_get(key: str) -> str | None:
+    with conn() as c:
+        row = c.execute(
+            "SELECT value FROM faa_registry_meta WHERE key=?", (key,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def faa_registry_count() -> dict:
+    with conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM faa_aircraft_registry").fetchone()[0]
+        valid = c.execute(
+            "SELECT COUNT(*) FROM faa_aircraft_registry WHERE status_code='V'"
+        ).fetchone()[0]
+        ladd  = c.execute("SELECT COUNT(*) FROM faa_ladd_aircraft").fetchone()[0]
+        last_updated = faa_registry_meta_get("last_full_import")
+    return {"total": total, "valid": valid, "ladd": ladd, "last_updated": last_updated}
