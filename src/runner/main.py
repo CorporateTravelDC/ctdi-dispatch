@@ -698,6 +698,25 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
     endpoint = _chat_endpoint()
     if endpoint:
         resolved_model = model or OLLAMA_CHAT_MODEL
+
+        # ── Pre-flight: check if Ollama is saturated (single-slot, Pi 5) ──────
+        # /api/ps returns currently loaded/running models. If a model shows
+        # size_vram > 0 it means inference is active and the slot is occupied.
+        # We probe the direct Ollama URL regardless of OPENWEBUI_URL routing.
+        ollama_direct = OLLAMA_BASE_URL.rstrip("/") if OLLAMA_BASE_URL else "http://host.containers.internal:11434"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3, read=5, write=3, pool=3)) as probe:
+                ps = await probe.get(f"{ollama_direct}/api/ps")
+                if ps.status_code == 200:
+                    ps_data = ps.json()
+                    models_running = ps_data.get("models", [])
+                    if models_running and any(m.get("size_vram", 0) > 0 for m in models_running):
+                        log.info("Ollama slot occupied — yielding model_busy, falling back to local data")
+                        yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
+                        return
+        except Exception as probe_err:
+            log.debug("Ollama /api/ps probe failed (%s) — proceeding", probe_err)
+
         try:
             payload = {
                 "model":    resolved_model,
@@ -705,7 +724,10 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
                 "messages": [{"role": "system", "content": system}] + messages,
             }
             yield f"data: {json.dumps({'type': 'model_info', 'model': resolved_model})}\n\n"
-            async with httpx.AsyncClient(timeout=120) as c:
+            # read timeout of 40s: long enough for the first token on a free Pi 5
+            # 12B model (typically 10-30s), short enough to fail fast when queued.
+            llm_timeout = httpx.Timeout(connect=10, read=40, write=10, pool=10)
+            async with httpx.AsyncClient(timeout=llm_timeout) as c:
                 async with c.stream(
                     "POST",
                     endpoint,
