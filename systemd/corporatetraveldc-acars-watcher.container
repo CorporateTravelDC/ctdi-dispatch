@@ -1,0 +1,36 @@
+[Unit]
+Description=ACARS Message Watcher — dual-source (local UDP + airframes.io REST)
+After=network-online.target corporatetraveldc-web.service
+Wants=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-acars-watcher:latest
+ContainerName=corporatetraveldc-acars-watcher
+AutoUpdate=local
+
+# Expose UDP port for local decoder input (acarsdec / dumpvdl2 → watcher)
+PublishPort=5005:5005/udp
+
+# Shared pod network so acarsdec and dumpvdl2 containers can reach this by name
+Network=corporatetraveldc.network
+
+# Shared environment (non-secret)
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# Secrets (DISPATCH_ADMIN_TOKEN, AIRFRAMES_API_KEY when available)
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+# Watcher-specific config — override in dispatch.env if needed
+Environment=DISPATCH_BASE_URL=http://100.94.80.100:8000
+Environment=NTFY_TOPIC=flight-alerts
+Environment=POLL_INTERVAL=60
+Environment=WATCHLIST_REFRESH_INTERVAL=300
+Environment=ACARS_UDP_PORT=5005
+Environment=LOG_LEVEL=INFO
+# AIRFRAMES_API_KEY — set in dispatch-secrets.env when obtained from api@airframes.io
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
