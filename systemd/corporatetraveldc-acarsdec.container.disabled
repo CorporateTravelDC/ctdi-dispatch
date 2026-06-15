@@ -1,0 +1,37 @@
+[Unit]
+Description=ACARS Decoder — acarsdec (FUTURE: dedicated ACARS dongle, ~130 MHz)
+# DISABLED — enable when dedicated ACARS dongle is available
+# To enable:
+#   1. Assign serial "acars0130" to the new dongle via rtl_eeprom
+#   2. Add udev rule: SUBSYSTEM=="usb", ATTRS{serial}=="acars0130", SYMLINK+="acars0130"
+#   3. cp corporatetraveldc-acarsdec.container.disabled corporatetraveldc-acarsdec.container
+#   4. systemctl --user daemon-reload && systemctl --user enable --now corporatetraveldc-acarsdec
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-acarsdec:latest
+ContainerName=corporatetraveldc-acarsdec
+
+AddDevice=/dev/bus/usb
+# Preferred after udev rule is in place:
+# AddDevice=/dev/acars0130
+
+Environment=DEVICE_SERIAL=acars0130
+Environment=FREQUENCIES=129.1250;130.0250;130.4250;131.5500
+Environment=GAIN=40
+Environment=FEED_AIRFRAMES=true
+Environment=STATION=WA1EM-ACARS
+
+# Forward decoded JSON to acars-watcher via UDP
+Environment=OUTPUT_UDP=corporatetraveldc-acars-watcher:5005
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Network=corporatetraveldc.network
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

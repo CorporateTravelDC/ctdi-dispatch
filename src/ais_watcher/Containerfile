@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-ais-watcher"
+LABEL org.opencontainers.image.description="AIS vessel watcher — local AIS-catcher UDP feed"
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests==2.32.3
+
+COPY ais_watcher.py .
+
+RUN useradd -r -s /sbin/nologin watcher
+USER watcher
+
+CMD ["python", "-u", "ais_watcher.py"]
