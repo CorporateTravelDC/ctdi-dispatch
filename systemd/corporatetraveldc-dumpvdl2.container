@@ -1,0 +1,45 @@
+[Unit]
+Description=VDL Mode 2 Decoder — dumpvdl2 (dongle: vdl20130, ~136 MHz)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+# SDR-Enthusiasts dumpvdl2 image with airframes.io feeder support
+Image=ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest
+ContainerName=corporatetraveldc-dumpvdl2
+
+# --- RTL-SDR device passthrough ---
+# Dongle identified by serial "vdl20130" (reserialize from "adsb1090" via rtl_eeprom)
+AddDevice=/dev/bus/usb
+# Uncomment after udev rule is set:
+# AddDevice=/dev/vdl20130
+
+# --- RTL-SDR serial ---
+Environment=DEVICE_SERIAL=vdl20130
+
+# --- VDL Mode 2 frequencies (Hz) ---
+# Primary US/North Atlantic VDL2 channels
+Environment=VDL2_FREQ=136650000;136800000;136875000;136900000
+Environment=GAIN=40
+
+# --- airframes.io feeder output ---
+Environment=FEED_AIRFRAMES=true
+Environment=STATION=WA1EM-VDL2
+
+# --- Local watcher output ---
+# Forward decoded JSON to acars-watcher container via UDP
+# dumpvdl2 JSON UDP output: --output decoded:json:udp:address=<host>,port=<port>
+Environment=OUTPUT_UDP=corporatetraveldc-acars-watcher:5005
+
+# Secrets (AIRFRAMES_API_KEY if/when obtained)
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+# Same pod network as acars-watcher
+Network=corporatetraveldc.network
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

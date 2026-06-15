@@ -1,0 +1,46 @@
+[Unit]
+Description=AIS Vessel Watcher — local AIS-catcher UDP feed (FUTURE: dedicated AIS dongle)
+# DISABLED — enable when AIS dongle hardware is available and corporatetraveldc-ais is running.
+#
+# To enable:
+#   1. Ensure corporatetraveldc-ais.container is active (AIS-catcher running and feeding UDP)
+#   2. Build the image:
+#        cd /opt/corporatetraveldc/src/ais_watcher
+#        podman build -t localhost/corporatetraveldc-ais-watcher:latest .
+#   3. Rename this file:
+#        cp corporatetraveldc-ais-watcher.container.disabled corporatetraveldc-ais-watcher.container
+#   4. Reload and start:
+#        systemctl --user daemon-reload
+#        systemctl --user enable --now corporatetraveldc-ais-watcher
+#
+# Add MMSIs to watch via AIS_STATIC_MMSI in dispatch.env:
+#   AIS_STATIC_MMSI=123456789,987654321
+After=network-online.target corporatetraveldc-web.service
+Wants=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-ais-watcher:latest
+ContainerName=corporatetraveldc-ais-watcher
+AutoUpdate=local
+
+# UDP port for AIS-catcher JSON stream
+PublishPort=5006:5006/udp
+
+Network=corporatetraveldc.network
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+Environment=DISPATCH_BASE_URL=http://100.94.80.100:8000
+Environment=NTFY_TOPIC=flight-alerts
+Environment=AIS_UDP_PORT=5006
+Environment=WATCHLIST_REFRESH_INTERVAL=300
+Environment=LOG_LEVEL=INFO
+# AIS_STATIC_MMSI=123456789,987654321  — set in dispatch.env when needed
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
