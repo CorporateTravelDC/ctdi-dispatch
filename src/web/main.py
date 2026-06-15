@@ -78,6 +78,7 @@ async def startup() -> None:
     db.init_db_v8()
     db.init_db_v9()
     db.init_db_v10()
+    db.init_db_v11()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -684,6 +685,73 @@ async def get_cui_status(
         "note": "CUI data is operator-populated on the Pi. "
                 "This endpoint confirms Tier 2 auth is working.",
     })
+
+
+# ── FAA Aircraft Registry — Tier 0 ────────────────────────────────────────────
+
+@app.get("/api/v1/aircraft/{identifier}")
+async def get_aircraft(identifier: str) -> JSONResponse:
+    """Look up an aircraft by N-number or ICAO hex from the local FAA registry cache.
+
+    - N-number:  N12345, 12345 (leading N optional)
+    - ICAO hex:  a1b2c3  (6 hex chars, case-insensitive)
+
+    Returns registrant name, city/state, aircraft type, hex, LADD flag, and
+    registration status.  Returns 404 if not found or if the registry has not
+    been imported yet.
+    """
+    try:
+        db.init_db_v11()
+    except Exception:
+        pass
+
+    ident = identifier.strip()
+    record: dict | None = None
+
+    import re as _re
+    if _re.fullmatch(r"[0-9a-fA-F]{6}", ident):
+        # Looks like a hex code
+        record = db.faa_lookup_by_hex(ident)
+    else:
+        record = db.faa_lookup_by_n_number(ident)
+
+    if not record:
+        # Check if registry is populated at all
+        counts = db.faa_registry_count()
+        if counts["total"] == 0:
+            return JSONResponse(
+                {"error": "FAA registry not yet imported — first import runs Monday 02:00 ET"},
+                status_code=503,
+            )
+        return JSONResponse({"error": f"Aircraft '{ident}' not found in FAA registry"}, status_code=404)
+
+    return JSONResponse({
+        "n_number":        record.get("n_number"),
+        "mode_s_hex":      record.get("mode_s_hex"),
+        "registrant_name": record.get("registrant_name"),
+        "city":            record.get("city"),
+        "state":           record.get("state"),
+        "year_mfr":        record.get("year_mfr"),
+        "mfr_mdl_code":    record.get("mfr_mdl_code"),
+        "serial_number":   record.get("serial_number"),
+        "status_code":     record.get("status_code"),
+        "type_aircraft":   record.get("type_aircraft"),
+        "type_engine":     record.get("type_engine"),
+        "expiration_date": record.get("expiration_date"),
+        "last_action_date":record.get("last_action_date"),
+        "ladd":            record.get("ladd", False),
+    })
+
+
+@app.get("/api/v1/aircraft-registry/status")
+async def get_faa_registry_status() -> JSONResponse:
+    """Return FAA registry import status and record counts."""
+    try:
+        db.init_db_v11()
+        counts = db.faa_registry_count()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse(counts)
 
 
 # ── Admin — all endpoints require Admin tier ───────────────────────────────────
