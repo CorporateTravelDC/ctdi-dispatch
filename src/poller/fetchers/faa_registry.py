@@ -39,6 +39,9 @@ import requests
 log = logging.getLogger(__name__)
 
 _FAA_REGISTRY_URL = "https://registry.faa.gov/database/ReleasableAircraft.zip"
+# NOTE: As of June 2026, LADD_Aircraft.zip redirects to an FAA office page (HTTP 302
+# → afb700) — the FAA appears to have discontinued this download endpoint.
+# The fetcher handles this gracefully (non-fatal warning). Re-check periodically.
 _FAA_LADD_URL     = "https://registry.faa.gov/database/LADD_Aircraft.zip"
 
 # MASTER.txt column indices (0-based)
@@ -60,10 +63,22 @@ _COL_MODE_S_HEX      = 33      # last meaningful column
 _BATCH_SIZE = 5_000             # rows per DB commit
 
 
-def _download_zip(url: str, timeout: int = 120) -> zipfile.ZipFile:
+_FAA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.faa.gov/licenses_certificates/aircraft_certification/aircraft_registry/releasable_aircraft_download",
+    "DNT": "1",
+}
+
+
+def _download_zip(url: str, timeout: int = 300) -> zipfile.ZipFile:
     """Stream-download a ZIP from the FAA and return an in-memory ZipFile."""
     log.info("FAA registry: downloading %s", url)
-    resp = requests.get(url, timeout=timeout, stream=True)
+    resp = requests.get(url, headers=_FAA_HEADERS, timeout=timeout, stream=True)
     resp.raise_for_status()
     buf = io.BytesIO()
     for chunk in resp.iter_content(65536):
