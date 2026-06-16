@@ -17,6 +17,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
+
+_FDPS_PROX_DEDUP = PushDedup("fdps_prox", dedup_secs=600)
 
 log = logging.getLogger("ingest.parsers.fdps")
 
@@ -347,6 +350,34 @@ def _fire_marine_one_ntfy(callsign: str | None, lat: float | None,
 
 # ── Watchlist integration ─────────────────────────────────────────────────────
 
+def _fire_fdps_nas_alert(callsign: str, hex_id: str, parsed: dict,
+                          dist_nm: float | None) -> None:
+    """Fire nas-alerts ntfy for a non-Marine-One watchlist or proximity event."""
+    try:
+        from shared.watchlist import _fire_ntfy_dual
+        cs = callsign or "UNKNOWN"
+        reg = parsed.get("aircraft_type") or ""
+        alt_baro = parsed.get("altitude_ft") or 0
+        gs = parsed.get("ground_speed") or 0
+        track = ""  # FDPS parsed dict doesn't carry heading; omit gracefully
+        hex_label = f"[{hex_id}]" if hex_id else ""
+        title = f"FDPS Track — {cs} {hex_label}".strip()
+        if dist_nm is not None:
+            detail = (
+                f"{cs} {reg}: {int(alt_baro)}ft {gs}kts"
+                f" | dist {dist_nm:.1f}nm DCA"
+            )
+            dispatch = f"{cs} {hex_label} {int(alt_baro)}ft {gs}kts {dist_nm:.1f}nm DCA".strip()
+        else:
+            origin = parsed.get("origin") or "?"
+            dest = parsed.get("destination") or "?"
+            detail = f"{cs} {reg}: {origin}→{dest} | {int(alt_baro)}ft {gs}kts"
+            dispatch = f"{cs} {hex_label} {origin}→{dest}".strip()
+        _fire_ntfy_dual("nas-alerts", title, detail, dispatch, priority=3)
+    except Exception as e:
+        log.error("fdps: nas-alerts fire failed for %s: %s", callsign, e)
+
+
 def check_fdps_watchlist(parsed: dict) -> None:
     """
     Check a parsed FDPS event against active flight watchlist entries.
@@ -380,6 +411,8 @@ def check_fdps_watchlist(parsed: dict) -> None:
                 watchlist_event_hit(entry["id"], summary,
                                     {**parsed, "watchlist_trigger": "fdps_fh"},
                                     priority=3)
+                _fire_fdps_nas_alert(callsign, entry.get("hex_id") or "", parsed,
+                                     dist_nm=None)
 
             elif source == "TH":
                 _maybe_alert_on_approach(entry, parsed)
@@ -389,6 +422,8 @@ def check_fdps_watchlist(parsed: dict) -> None:
                 watchlist_event_hit(entry["id"], summary,
                                     {**parsed, "watchlist_trigger": "fdps_cl"},
                                     priority=4)
+                _fire_fdps_nas_alert(callsign, entry.get("hex_id") or "", parsed,
+                                     dist_nm=None)
         except Exception as e:
             log.error("fdps watchlist event for %s: %s", ident, e)
 
@@ -420,6 +455,11 @@ def _maybe_alert_on_approach(entry: dict, parsed: dict) -> None:
              "dist_nm": round(dist, 1)},
             priority=3,
         )
+        hex_id = entry.get("hex_id") or ""
+        dedup_key = content_hash(f"fdps:prox:{hex_id or callsign}")
+        if _FDPS_PROX_DEDUP.should_push("fdps", dedup_key):
+            _fire_fdps_nas_alert(callsign, hex_id, parsed, dist_nm=round(dist, 1))
+            _FDPS_PROX_DEDUP.record("fdps", dedup_key)
     except Exception as e:
         log.error("approach alert for %s: %s", dest, e)
 
