@@ -52,8 +52,8 @@ _PERMANENT_AIRPORTS: frozenset[str] = frozenset({
 })
 
 _ICAO_RE = re.compile(r"\b(K[A-Z]{3})\b")
-_NOTAM_DEDUP = PushDedup("notam")
 _DEDUP_TTL = 86400   # 24 hours — one push per NOTAM per day
+_NOTAM_DEDUP = PushDedup("notam", dedup_secs=_DEDUP_TTL)
 
 
 def _txt(elem: ET.Element | None, path: str) -> str | None:
@@ -117,7 +117,7 @@ def _fire_notam_alert(notam: dict) -> None:
     """Push ntfy alert for a NOTAM that matches the watch set."""
     notam_id = notam["notam_id"]
     dedup_key = content_hash(notam_id)
-    if not _NOTAM_DEDUP.should_push("aim", dedup_key, ttl=_DEDUP_TTL):
+    if not _NOTAM_DEDUP.should_push("aim", dedup_key):
         return
 
     facility = notam.get("facility", "")
