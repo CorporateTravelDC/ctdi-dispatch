@@ -55,6 +55,7 @@ while read local_ref local_sha remote_ref remote_sha; do
         "ghp_[A-Za-z0-9]"
         "ghs_[A-Za-z0-9]"
         "Bearer [A-Za-z0-9_\-\.]{20,}"
+        "taile[0-9a-f]{8}"
     )
 
     if [[ -n "$SCAN_RANGE" ]]; then
