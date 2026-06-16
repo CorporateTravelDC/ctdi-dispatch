@@ -140,6 +140,13 @@ def _fire_notam_alert(notam: dict) -> None:
         _NOTAM_DEDUP.record("aim", dedup_key)
         log.info("aim: notam alert fired: %s facility=%s priority=%d", notam_id, facility, priority)
 
+    # Dual-push to nas-alerts (same content, independent of dispatch-alerts success)
+    try:
+        from shared.watchlist import _fire_ntfy_dual
+        _fire_ntfy_dual("nas-alerts", title, body, f"NOTAM {notam_id} [{facility}]", priority=3)
+    except Exception as e:
+        log.error("aim: nas-alerts dual push failed for %s: %s", notam_id, e)
+
 
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:
     """
