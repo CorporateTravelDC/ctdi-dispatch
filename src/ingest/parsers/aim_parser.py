@@ -1,56 +1,68 @@
 """
-ingest.parsers.aim_parser — FAA AIM (Aeronautical Information Management) NMS parser.
+ingest.parsers.aim_parser — FAA FNS AIM NOTAM parser (AIXM 5.1 BasicMessage).
 
-AIM on NMS delivers Digital NOTAMs (DONUTS format or ICAO NOTAM XML).
-This replaces the legacy AIM_FNS/JMS topic subscription.
+FNS delivers AIXM 5.1 AIXMBasicMessage XML over Solace AMQP. Structure:
 
-The poller's REST notam.py fetcher defers to push:fns when this feed is healthy,
-making the REST fetcher a pure fallback. The heartbeat key used by this feed
-is "fns" (not "aim") for REST-fallback compatibility.
+  message:AIXMBasicMessage
+    message:hasMember
+      event:Event
+        event:timeSlice > event:EventTimeSlice
+          event:textNOTAM > event:NOTAM   ← NOTAM payload
+          event:extension > fnse:EventExtension  ← ICAO loc + classification
+    message:hasMember
+      aixm:AirportHeliport   ← airport reference, ignored
 
-DONUTS format reference: FAA JO 7930.2, Appendix C (Digital NOTAM)
-ICAO NOTAM format reference: ICAO Annex 15
+Alert routing:
+  Permanent watch set : DC_STATIONS (KDCA, KIAD, KBWI, KFDK, KHEF, KJYO, KGAI)
+  Transient watch set : K[A-Z]{3} codes in today's runsheet trip locations,
+                        minus permanent set (non-DC origin/dest airports)
+  FDC NOTAMs          : always alert regardless of facility
+  Dedup               : 24h window keyed on notam_id (PushDedup "notam")
+
+NOTAM ID: "{location}/{year}/{number}" e.g. "PSG/2026/081"
+Effective timestamps: YYYYMMDDHHmm compact (12-digit UTC) e.g. "202606152335"
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-import xml.etree.ElementTree as ET
+import time
 from datetime import datetime, timezone
 
+import xml.etree.ElementTree as ET
+
 from common import db
+from common.ntfy_push import send as ntfy_send
+from common.push_dedup import PushDedup, content_hash
 
 log = logging.getLogger("ingest.parsers.aim")
 
-_AIM_NS = {
-    "aim":  "http://www.faa.aero/aim/1.0",
-    "notam":"http://www.faa.aero/notam/1.0",
-    "aixm": "http://www.aixm.aero/schema/5.1",
-    "gml":  "http://www.opengis.net/gml/3.2",
+_NS = {
+    "message": "http://www.aixm.aero/schema/5.1/message",
+    "event":   "http://www.aixm.aero/schema/5.1/event",
+    "aixm":    "http://www.aixm.aero/schema/5.1",
+    "fnse":    "http://www.aixm.aero/schema/5.1/extensions/FAA/FNSE",
+    "gml":     "http://www.opengis.net/gml/3.2",
 }
 
-# NOTAM type classification keywords
-_NOTAM_TYPE_MAP = {
-    "N": "NOTAM-D",
-    "C": "CANCEL",
-    "R": "REPLACE",
-}
+# Permanent watch set — mirrors DC_STATIONS in metar.py
+_PERMANENT_AIRPORTS: frozenset[str] = frozenset({
+    "KDCA", "KIAD", "KBWI", "KFDK", "KHEF", "KJYO", "KGAI",
+})
+
+_ICAO_RE = re.compile(r"\b(K[A-Z]{3})\b")
+_NOTAM_DEDUP = PushDedup("notam")
+_DEDUP_TTL = 86400   # 24 hours — one push per NOTAM per day
 
 
-def _txt(elem: ET.Element | None, *tags: str) -> str | None:
-    cur = elem
-    for tag in tags:
-        if cur is None:
-            return None
-        found = cur.find(tag)
-        if found is None:
-            for uri in _AIM_NS.values():
-                found = cur.find(f"{{{uri}}}{tag}")
-                if found is not None:
-                    break
-        cur = found
-    return (cur.text or "").strip() or None if cur is not None else None
+def _txt(elem: ET.Element | None, path: str) -> str | None:
+    if elem is None:
+        return None
+    found = elem.find(path, _NS)
+    if found is None:
+        return None
+    return (found.text or "").strip() or None
 
 
 def _parse_timestamp(ts: str | None) -> float | None:
@@ -58,10 +70,11 @@ def _parse_timestamp(ts: str | None) -> float | None:
         return None
     ts = ts.strip()
     for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%dT%H:%M:%S",
-        "%Y%m%d%H%M",       # NOTAM compact: 2606281400
-        "%y%m%d%H%M",       # NOTAM compact (2-digit year): 260628
+        "%Y%m%d%H%M",   # 12-digit YYYYMMDDHHmm e.g. "202606152335"
+        "%y%m%d%H%M",   # 10-digit YYMMDDHHmm
     ):
         try:
             dt = datetime.strptime(ts, fmt)
@@ -77,25 +90,61 @@ def _parse_timestamp(ts: str | None) -> float | None:
     return None
 
 
-def _classify_notam(notam_id: str, text: str) -> str:
-    """Determine NOTAM classification from ID prefix or text."""
-    if not notam_id:
-        return "NOTAM-D"
-    prefix = notam_id.split("/")[0].upper() if "/" in notam_id else notam_id[:1].upper()
-    if prefix == "A":
-        return "NOTAM-D"
-    if prefix.startswith("FDC"):
-        return "FDC"
-    # Check text for FDC indicator
-    if text and "FDC" in text.upper():
-        return "FDC"
-    return "NOTAM-D"
+def _get_transient_airports() -> frozenset[str]:
+    """
+    Extract non-permanent K[A-Z]{3} codes from today's runsheet trip locations.
+    Only airport-leg trips will contain ICAO codes in their location strings.
+    """
+    try:
+        sheet = db.get_runsheet()
+        if not sheet:
+            return frozenset()
+        raw = sheet.get("scheduled_trips") or "[]"
+        trips = json.loads(raw) if isinstance(raw, str) else raw
+        found: set[str] = set()
+        for trip in trips:
+            for field in ("pickup_location", "dropoff_location"):
+                text = trip.get(field, "") or ""
+                for m in _ICAO_RE.finditer(text.upper()):
+                    found.add(m.group(1))
+        return frozenset(found - _PERMANENT_AIRPORTS)
+    except Exception as e:
+        log.debug("aim: transient airport lookup failed: %s", e)
+        return frozenset()
+
+
+def _fire_notam_alert(notam: dict) -> None:
+    """Push ntfy alert for a NOTAM that matches the watch set."""
+    notam_id = notam["notam_id"]
+    dedup_key = content_hash(notam_id)
+    if not _NOTAM_DEDUP.should_push("aim", dedup_key, ttl=_DEDUP_TTL):
+        return
+
+    facility = notam.get("facility", "")
+    classification = notam.get("classification", "NOTAM-D")
+    text_body = notam.get("text_body", "")
+    priority = 4 if classification == "FDC" else 3
+    label = "FDC NOTAM" if classification == "FDC" else "NOTAM"
+
+    title = f"{label} [{facility}] — {notam_id}"
+    body = text_body[:400] if text_body else notam_id
+
+    ok = ntfy_send(
+        topic="dispatch-alerts",
+        message=body,
+        title=title,
+        priority=priority,
+        tags="warning,airplane",
+    )
+    if ok:
+        _NOTAM_DEDUP.record("aim", dedup_key)
+        log.info("aim: notam alert fired: %s facility=%s priority=%d", notam_id, facility, priority)
 
 
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:
     """
-    Parse an AIM NMS XML message. Returns list of NOTAM dicts.
-    Each dict contains the fields required by db.upsert_notam().
+    Parse an FNS AIM AIXM 5.1 message. Returns list of NOTAM dicts
+    ready for write_aim_notams().
     """
     if not xml_bytes:
         return []
@@ -105,85 +154,81 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
         log.warning("aim: XML parse error: %s", e)
         return []
 
-    raw_xml = xml_bytes.decode("utf-8", errors="replace")
     notams: list[dict] = []
 
-    # Scan for NOTAM elements — try several possible root structures
-    _NOTAM_TAGS = {"NOTAM", "notam", "digitalNotam", "notamMessage", "Notam"}
+    for member in root.findall("message:hasMember", _NS):
+        event = member.find("event:Event", _NS)
+        if event is None:
+            continue
 
-    candidates: list[ET.Element] = []
-    for elem in root.iter():
-        local = elem.tag.split("}")[-1]
-        if local in _NOTAM_TAGS:
-            candidates.append(elem)
+        for ts_elem in event.findall(".//event:EventTimeSlice", _NS):
+            notam_elem = ts_elem.find("event:textNOTAM/event:NOTAM", _NS)
+            if notam_elem is None:
+                continue
 
-    if not candidates:
-        candidates = [root]
+            number      = _txt(notam_elem, "event:number") or ""
+            year        = _txt(notam_elem, "event:year") or ""
+            location    = _txt(notam_elem, "event:location") or ""
+            notam_type  = _txt(notam_elem, "event:type") or "N"
+            issued      = _txt(notam_elem, "event:issued")
+            text_body   = _txt(notam_elem, "event:text") or ""
+            simple_text = _txt(notam_elem, ".//event:simpleText") or ""
+            eff_start   = _txt(notam_elem, "event:effectiveStart")
+            eff_end     = _txt(notam_elem, "event:effectiveEnd")
+            fir         = _txt(notam_elem, "event:affectedFIR") or ""
 
-    for elem in candidates:
-        notam = _parse_single_notam(elem, raw_xml)
-        if notam:
-            notams.append(notam)
+            ext = ts_elem.find("event:extension/fnse:EventExtension", _NS)
+            icao_loc  = _txt(ext, "fnse:icaoLocation") if ext is not None else None
+            fns_class = _txt(ext, "fnse:classification") if ext is not None else "DOM"
+
+            notam_id = f"{location}/{year}/{number}" if (location and year and number) else None
+            if not notam_id:
+                gml_id = event.get("{http://www.opengis.net/gml/3.2}id", "")
+                notam_id = gml_id or None
+            if not notam_id:
+                log.debug("aim: skipping NOTAM with no ID")
+                continue
+
+            full_text = simple_text or text_body
+            classification = "FDC" if (fns_class or "").upper() == "FDC" else "NOTAM-D"
+
+            notams.append({
+                "notam_id":        notam_id,
+                "facility":        icao_loc or location or "",
+                "classification":  classification,
+                "effective_start": _parse_timestamp(eff_start),
+                "effective_end":   _parse_timestamp(eff_end),
+                "text_body":       full_text,
+                "raw_json": json.dumps({
+                    "notam_id":    notam_id,
+                    "number":      number,
+                    "year":        year,
+                    "type":        notam_type,
+                    "location":    location,
+                    "icao":        icao_loc,
+                    "fir":         fir,
+                    "text":        text_body,
+                    "simple_text": simple_text,
+                    "issued":      issued,
+                    "source":      "swim_aim",
+                }),
+            })
 
     if not notams:
-        log.debug("aim: no NOTAMs parsed from message (tag=%s)", root.tag)
+        log.debug("aim: no NOTAMs parsed (root=%s)", root.tag)
 
     return notams
 
 
-def _parse_single_notam(elem: ET.Element, raw_xml: str) -> dict | None:
-    notam_id = (
-        _txt(elem, "NOTAM-ID") or
-        _txt(elem, "notamId") or
-        _txt(elem, "id") or
-        _txt(elem, "series")
-    )
-    if not notam_id:
-        return None
-
-    facility = (
-        _txt(elem, "ICAO-LOCATION") or
-        _txt(elem, "icaoLocation") or
-        _txt(elem, "location") or
-        _txt(elem, "airport")
-    )
-
-    text_body = (
-        _txt(elem, "TEXT") or
-        _txt(elem, "text") or
-        _txt(elem, "notamText") or
-        _txt(elem, "fullNotam") or
-        raw_xml[:500]  # last resort: prefix of raw message
-    )
-
-    classification = _classify_notam(notam_id, text_body or "")
-
-    effective_start = _parse_timestamp(
-        _txt(elem, "EFFECTIVE-FROM") or _txt(elem, "effectiveStart") or _txt(elem, "startTime")
-    )
-    effective_end = _parse_timestamp(
-        _txt(elem, "EFFECTIVE-TO") or _txt(elem, "effectiveEnd") or _txt(elem, "endTime")
-    )
-
-    return {
-        "notam_id": notam_id,
-        "facility": facility or "",
-        "classification": classification,
-        "effective_start": effective_start,
-        "effective_end": effective_end,
-        "text_body": text_body or "",
-        "raw_json": json.dumps({
-            "notam_id": notam_id,
-            "facility": facility,
-            "classification": classification,
-            "text_body": text_body,
-            "source": "swim_aim",
-        }),
-    }
-
-
 def write_aim_notams(notams: list[dict]) -> int:
-    """Upsert parsed NOTAMs into the notams table. Returns count written."""
+    """Upsert parsed NOTAMs into the notams table and fire alerts where applicable."""
+    if not notams:
+        return 0
+
+    # Build watch set once per batch (transient query is cheap but not free)
+    transient = _get_transient_airports()
+    watch_set = _PERMANENT_AIRPORTS | transient
+
     written = 0
     for n in notams:
         try:
@@ -197,6 +242,12 @@ def write_aim_notams(notams: list[dict]) -> int:
                 text_body=n["text_body"],
             )
             written += 1
+
+            # Alert if facility is in watch set or this is an FDC NOTAM
+            if n["facility"] in watch_set or n["classification"] == "FDC":
+                _fire_notam_alert(n)
+
         except Exception as e:
             log.error("aim: db write error for %s: %s", n.get("notam_id"), e)
+
     return written
