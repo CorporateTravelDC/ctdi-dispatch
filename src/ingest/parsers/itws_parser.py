@@ -76,6 +76,18 @@ def _parse_time(ts: str | None) -> str | None:
         return ts
 
 
+def _sanitize_xml(xml_bytes: bytes) -> bytes:
+    """Strip illegal XML 1.0 characters that ITWS occasionally emits."""
+    import re
+    text = xml_bytes.decode("utf-8", errors="replace")
+    # Remove characters outside the legal XML 1.0 character set
+    text = re.sub(
+        r"[^\x09\x0A\x0D\x20-퟿-�\U00010000-\U0010FFFF]",
+        "", text,
+    )
+    return text.encode("utf-8")
+
+
 def parse_itws_message(xml_bytes: bytes) -> list[dict]:
     """
     Parse an ITWS NMS XML message.
@@ -86,7 +98,7 @@ def parse_itws_message(xml_bytes: bytes) -> list[dict]:
     if not xml_bytes:
         return []
     try:
-        root = ET.fromstring(xml_bytes)
+        root = ET.fromstring(_sanitize_xml(xml_bytes))
     except ET.ParseError as e:
         log.warning("itws: XML parse error: %s", e)
         return []
