@@ -24,8 +24,12 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
+from shared.watchlist import _fire_ntfy_dual
 
 log = logging.getLogger("ingest.parsers.tbfm")
+
+_TBFM_ALERT_DEDUP = PushDedup("tbfm_alerts", dedup_secs=300)
 
 _TBFM_NS = {
     "tbfm": "http://tfms.faa.gov/tbfm/v1",
@@ -163,6 +167,40 @@ def _parse_single_sequence(elem: ET.Element) -> dict | None:
     }
 
 
+def check_tbfm_alerts(sequences: list[dict]) -> None:
+    """Fire nas-alerts ntfy for DC-area meter fix sequencing updates."""
+    # Group sequences by meter fix
+    by_fix: dict[str, list[dict]] = {}
+    for s in sequences:
+        fix = s.get("meter_fix", "").upper()
+        by_fix.setdefault(fix, []).append(s)
+
+    for fix, fix_seqs in by_fix.items():
+        if fix not in DC_METER_FIXES:
+            continue
+        seq_count = len(fix_seqs)
+        dedup_key = content_hash(f"tbfm:{fix}:{seq_count}")
+        if not _TBFM_ALERT_DEDUP.should_push("tbfm", dedup_key):
+            continue
+
+        # Build ETA info from first sequence entry with an ETA
+        eta_info = ""
+        for s in fix_seqs:
+            if s.get("eta"):
+                eta_info = f" | lead ETA {s['eta']}"
+                break
+
+        title = f"TBFM Metering — {fix}"
+        detail = f"{fix}: {seq_count} aircraft in sequence{eta_info}"
+        dispatch = f"{fix}: {seq_count} in sequence"
+        try:
+            _fire_ntfy_dual("nas-alerts", title, detail, dispatch, priority=2)
+            _TBFM_ALERT_DEDUP.record("tbfm", dedup_key)
+            log.info("tbfm: nas-alert fired for fix %s (%d in seq)", fix, seq_count)
+        except Exception as e:
+            log.error("tbfm: nas-alert fire failed for %s: %s", fix, e)
+
+
 def write_tbfm_sequences(sequences: list[dict]) -> int:
     """Upsert TBFM sequences into tbfm_sequences table. Returns count written."""
     written = 0
@@ -182,4 +220,6 @@ def write_tbfm_sequences(sequences: list[dict]) -> int:
         except Exception as e:
             log.error("tbfm: db write error for %s@%s: %s",
                       s.get("flight_id"), s.get("meter_fix"), e)
+    if sequences:
+        check_tbfm_alerts(sequences)
     return written
