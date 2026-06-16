@@ -96,7 +96,7 @@ async def healthz() -> JSONResponse:
         "nws": 2700, "notam": 900, "runsheet": 900, "atcscc_opsplan": 7200,
     }
     # REST feeds that are covered by a push source — skip staleness check when push is healthy.
-    push_covers = {"nws": "push:nws"}
+    push_covers = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
     feed_by_name = {f["feed_name"]: f for f in feeds}
 
     for f in feeds:
@@ -174,7 +174,7 @@ async def get_feeds() -> JSONResponse:
         "push:amtrak": 300,
     }
     # REST feeds covered by a push source — stale REST is expected when push is live.
-    push_covers: dict[str, str] = {"nws": "push:nws"}
+    push_covers: dict[str, str] = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
     feed_by_name = {f["feed_name"]: f for f in feeds}
 
     result = []

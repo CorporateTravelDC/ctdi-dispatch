@@ -234,7 +234,7 @@ def _handle_aim_message(payload: bytes) -> None:
     notams = parse_aim_message(payload)
     if notams:
         n = write_aim_notams(notams)
-        log.debug("aim: wrote %d NOTAM(s)", n)
+        log.info("aim: wrote %d NOTAM(s)", n)
 
 
 def _handle_tbfm_message(payload: bytes) -> None:
