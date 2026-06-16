@@ -23,8 +23,13 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
+from shared.watchlist import _fire_ntfy_dual
 
 log = logging.getLogger("ingest.parsers.tfms")
+
+_DC_FACILITIES = frozenset({"ZDC", "PCT", "KDCA", "KIAD", "KBWI", "DCA", "IAD", "BWI"})
+_TFMS_ALERT_DEDUP = PushDedup("tfms_alerts", dedup_secs=1800)
 
 # TFMS XML namespace prefixes
 _TFMS_NS = {
@@ -121,6 +126,29 @@ def _parse_single_program(elem: ET.Element, raw_xml: str) -> dict | None:
     return payload
 
 
+def check_tfms_alerts(programs: list[dict]) -> None:
+    """Fire nas-alerts ntfy for any TFMS program affecting DC-area facilities."""
+    for program in programs:
+        facility = program.get("facility") or ""
+        if facility.upper() not in _DC_FACILITIES:
+            continue
+        dedup_key = content_hash(f"{program['type']}:{facility}")
+        if not _TFMS_ALERT_DEDUP.should_push("tfms", dedup_key):
+            continue
+        title = f"TFMS {program['type']} — {facility}"
+        detail = (
+            f"{program['type']} {facility}: avg delay "
+            f"+{program.get('avg_delay_minutes', '?')}min | {program.get('reason', '')}"
+        )
+        dispatch = f"{facility} {program['type']} +{program.get('avg_delay_minutes', '?')}min"
+        try:
+            _fire_ntfy_dual("nas-alerts", title, detail, dispatch, priority=3)
+            _TFMS_ALERT_DEDUP.record("tfms", dedup_key)
+            log.info("tfms: nas-alert fired for %s %s", program['type'], facility)
+        except Exception as e:
+            log.error("tfms: nas-alert fire failed for %s: %s", facility, e)
+
+
 def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
     """
     Parse a TFMS NMS XML message. Returns a list of program dicts.
@@ -159,6 +187,8 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
 
     if not programs:
         log.debug("tfms: no programs parsed from message (tag=%s)", root.tag)
+    else:
+        check_tfms_alerts(programs)
 
     return programs
 
