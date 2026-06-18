@@ -24,7 +24,7 @@ import requests
 
 from common import config, db
 from common import ntfy_push
-from common.acars import check_wow_event as _acars_wow
+from common.acars import check_oooi_event as _acars_oooi, get_latest_phase as _acars_phase
 from common.push_dedup import PushDedup, content_hash
 from poller.fetchers.metar import parse_wind_dir
 
@@ -209,14 +209,17 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
 
 def _check_flight_landing(callsign: str) -> str | None:
     """
-    Returns "landed" if aircraft was airborne and is now confirmed on ground.
-    Guards against three common false-positive sources:
-      1. Single bad transponder reading (alt_baro=0 or "ground" at cruise altitude)
-      2. Temporary ADS-B feed dropout (aircraft gone <10 min at any altitude)
-      3. Feed dropout when last known altitude was high (never presume landed)
-    Requires MIN_LOW_READINGS consecutive below-threshold readings to fire.
+    Returns "landed" if the aircraft is confirmed on the ground.
+
+    Source priority:
+      1. ACARS/VDL2 — avionics are authoritative; checked first for every call.
+         - ACARS OFF  → aircraft is airborne; update state regardless of ADS-B.
+         - ACARS ON/IN → aircraft is on ground; fire immediately regardless of
+                         how many ADS-B readings we have seen.
+      2. ADS-B — corroborating source; requires MIN_LOW_READINGS consecutive
+                 readings at or below MIN_LANDING_ALT_FT before firing.
+                 Not used if ACARS has already resolved the state.
     """
-    import time
     cs = callsign.strip().upper()
     state = _flight_state.setdefault(cs, {
         "last_seen": 0.0,
@@ -229,6 +232,36 @@ def _check_flight_landing(callsign: str) -> str | None:
     if state["notified"]:
         return None
 
+    # ── 1. ACARS is authoritative ────────────────────────────────────────────
+    acars = _acars_phase(cs, not_before_epoch=state["last_seen"])
+    if acars:
+        phase, msg = acars
+        label = msg.get("label", "?")
+        msg_time = msg.get("msg_time")
+
+        if phase in ("on", "in"):
+            # Avionics confirm wheels on ground — no ADS-B corroboration needed.
+            log.info(
+                "%s: ACARS %s confirms on-ground — label=%s msg_time=%s",
+                cs, phase.upper(), label, msg_time,
+            )
+            state["airborne"] = False
+            state["notified"] = True
+            return "landed"
+
+        if phase == "off":
+            # Avionics confirm wheels up — set airborne regardless of ADS-B.
+            if not state["airborne"]:
+                log.info("%s: ACARS OFF confirms airborne — label=%s", cs, label)
+            state["airborne"] = True
+            if msg_time:
+                state["last_seen"] = max(state["last_seen"], float(msg_time))
+            state["low_count"] = 0
+            # Fall through so ADS-B can still update last_alt_ft this cycle.
+
+        # phase == "out" (pushback) — no state change needed here.
+
+    # ── 2. ADS-B corroboration ───────────────────────────────────────────────
     aircraft = _fetch_aircraft_callsign(cs)
 
     if aircraft:
@@ -253,29 +286,13 @@ def _check_flight_landing(callsign: str) -> str | None:
         if not state["airborne"]:
             return None
 
-        # ACARS/VDL2 WOW confirmation — authoritative bypass of ADS-B guardrail.
-        # A Weight-on-Wheels ON event from the aircraft's own avionics is definitive;
-        # no need for consecutive ADS-B readings when we have this.
-        wow = _acars_wow(cs, not_before_epoch=state["last_seen"])
-        if wow:
-            log.info(
-                "%s: ACARS WOW event confirms landing — label=%s msg_time=%s text=%.60r",
-                cs, wow.get("label"), wow.get("msg_time"),
-                (wow.get("msg_text") or "")
-            )
-            state["notified"] = True
-            return "landed"
-
-        # Not truly airborne — evaluate whether this is a real landing or noise
         current_alt = int(alt_baro) if isinstance(alt_baro, (int, float)) else 0
         last_alt = state["last_alt_ft"]
 
         if last_alt is not None and last_alt > HIGH_ALT_GATE_FT and not on_ground:
-            # Last known altitude was high cruise — single non-airborne reading is
-            # almost certainly a bad transponder message, not a real descent.
             log.debug(
-                "%s: non-airborne reading (alt=%s) but last alt was %dft — noise, not landing",
-                cs, alt_baro, last_alt
+                "%s: non-airborne reading (alt=%s) but last alt was %dft — noise",
+                cs, alt_baro, last_alt,
             )
             state["low_count"] += 1
         elif on_ground or alt_baro == "ground" or current_alt <= MIN_LANDING_ALT_FT:
@@ -288,39 +305,27 @@ def _check_flight_landing(callsign: str) -> str | None:
                       cs, state["low_count"], MIN_LOW_READINGS)
             return None
 
-        log.info("%s landing confirmed — alt=%s last_alt=%s readings=%d",
+        log.info("%s ADS-B landing confirmed — alt=%s last_alt=%s readings=%d",
                  cs, alt_baro, last_alt, state["low_count"])
         state["notified"] = True
         return "landed"
 
     else:
-        # Aircraft absent from all feeds
+        # Aircraft absent from all ADS-B feeds
         if not state["airborne"]:
             return None
         elapsed = time.time() - state["last_seen"]
         last_alt = state["last_alt_ft"]
 
-        # If last known altitude was high, a dropout is coverage loss, not a landing.
         if last_alt is not None and last_alt > HIGH_ALT_GATE_FT:
-            # High-altitude dropout — check ACARS before giving up.
-            # If the aircraft sent a WOW event after we last saw it airborne,
-            # it landed even though ADS-B never caught the descent.
-            wow = _acars_wow(cs, not_before_epoch=state["last_seen"])
-            if wow:
-                log.info(
-                    "%s: absent from feed but ACARS WOW confirms landing — label=%s",
-                    cs, wow.get("label")
-                )
-                state["notified"] = True
-                return "landed"
             log.debug(
-                "%s: absent from feed %ds but last alt was %dft — coverage gap, not landed",
-                cs, int(elapsed), last_alt
+                "%s: absent from feed %ds but last alt was %dft — coverage gap",
+                cs, int(elapsed), last_alt,
             )
             return None
 
         if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
-            log.info("%s absent from feed %ds after airborne — presumed landed (last alt=%s)",
+            log.info("%s absent from feed %ds — presumed landed (last alt=%s)",
                      cs, int(elapsed), last_alt)
             state["notified"] = True
             return "landed"
