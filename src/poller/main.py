@@ -462,6 +462,10 @@ def _check_flight_aeroapi(entry: dict, ident: str, api_key: str) -> None:
 # Phases: pre_departure → out → off → on → in
 # Stored in watchlist_entries.last_event_summary for persistence across restarts.
 
+# Last reliable altitude per identifier — guards against single "ground" readings
+# at cruise altitude triggering false ON/IN phase transitions.
+_last_known_alt: dict[str, int] = {}
+
 _OOOI_PHASES = ("pre_departure", "out", "off", "on", "in")
 
 def _phase_from_summary(summary: str) -> str:
@@ -534,7 +538,21 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     squawk   = ac.get("squawk") or ""
     dest_icao = ac.get("dst") or ""          # destination from FMS if available
 
-    # Determine current phase from ADS-B data
+    # Determine current phase from ADS-B data.
+    # Guard: if the feed reports alt="ground" or alt<100 but we last saw this
+    # aircraft above 10,000ft, treat the reading as a bad transponder message
+    # and preserve the last known altitude so we don't trigger a false ON/IN event.
+    last_known = _last_known_alt.get(ident)
+    if (alt == "ground" or (isinstance(alt, (int, float)) and alt < 100)) \
+            and last_known is not None and last_known > 10_000:
+        log.warning(
+            "%s: API returned alt=%r but last known was %dft — ignoring likely bad reading",
+            ident, alt, last_known
+        )
+        alt = last_known
+    elif isinstance(alt, (int, float)) and alt > 500:
+        _last_known_alt[ident] = int(alt)
+
     on_ground = (alt == "ground") or (isinstance(alt, (int, float)) and alt < 100 and gs < 80)
     airborne  = not on_ground and isinstance(alt, (int, float)) and alt >= 100
 
