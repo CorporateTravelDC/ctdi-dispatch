@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from common import config, db
+from common.acars import check_wow_event as _acars_wow
 from ingest import failover
 from shared.watchlist import WatchlistFileWatcher, sweep_expired_transient
 
@@ -539,17 +540,26 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     dest_icao = ac.get("dst") or ""          # destination from FMS if available
 
     # Determine current phase from ADS-B data.
-    # Guard: if the feed reports alt="ground" or alt<100 but we last saw this
-    # aircraft above 10,000ft, treat the reading as a bad transponder message
-    # and preserve the last known altitude so we don't trigger a false ON/IN event.
+    # Guard: if the feed reports alt="ground" or alt<500ft but we last saw this
+    # aircraft above 10,000ft, the reading is likely a bad transponder message.
+    # Before discarding it, check ACARS for a WOW confirmation — if avionics
+    # confirm wheels-on-ground the landing is real and we let it through.
     last_known = _last_known_alt.get(ident)
-    if (alt == "ground" or (isinstance(alt, (int, float)) and alt < 100)) \
+    if (alt == "ground" or (isinstance(alt, (int, float)) and alt < 500)) \
             and last_known is not None and last_known > 10_000:
-        log.warning(
-            "%s: API returned alt=%r but last known was %dft — ignoring likely bad reading",
-            ident, alt, last_known
-        )
-        alt = last_known
+        wow = _acars_wow(ident)
+        if wow:
+            log.info(
+                "%s: ACARS WOW confirms landing despite altitude guard — label=%s",
+                ident, wow.get("label")
+            )
+            # Leave alt as-is so on_ground fires correctly below
+        else:
+            log.warning(
+                "%s: API returned alt=%r but last known was %dft — ignoring likely bad reading",
+                ident, alt, last_known
+            )
+            alt = last_known
     elif isinstance(alt, (int, float)) and alt > 500:
         _last_known_alt[ident] = int(alt)
 
