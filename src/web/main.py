@@ -371,12 +371,56 @@ async def get_amtrak() -> JSONResponse:
     })
 
 
+@app.get("/api/v1/train-config")
+async def get_train_config() -> JSONResponse:
+    """Operator rail config — primary station, regional filter, map center — Tier 0."""
+    # Coordinates for common Amtrak stations (used to center the map).
+    _COORDS: dict = {
+        "WAS": [38.897, -77.006], "NYP": [40.750, -73.993],
+        "PHL": [39.955, -75.182], "BOS": [42.366, -71.062],
+        "BAL": [39.285, -76.622], "NHV": [41.297, -72.927],
+        "SPG": [42.103, -72.590], "NLC": [41.310, -72.924],
+        "CHI": [41.879, -87.640], "MKE": [43.001, -87.907],
+        "MIN": [44.977, -93.264], "MSP": [44.977, -93.264],
+        "SEA": [47.579, -122.331], "PDX": [45.528, -122.678],
+        "EMY": [37.834, -122.293], "SFO": [37.776, -122.416],
+        "LAX": [34.055, -118.235], "SAN": [32.715, -117.156],
+        "DEN": [39.751, -104.999], "SLC": [40.776, -111.887],
+        "ABQ": [35.060, -106.649], "NOL": [29.950, -90.072],
+        "HOU": [29.753, -95.365], "SAC": [38.584, -121.494],
+        "ATL": [33.748, -84.391], "MIA": [25.779, -80.187],
+        "ORL": [28.479, -81.379], "CLT": [35.228, -80.843],
+        "RVR": [33.980, -117.377], "BWI": [39.167, -76.668],
+        "ALB": [42.734, -73.752], "PVD": [41.823, -71.413],
+        "BUF": [42.877, -78.879], "SAV": [32.083, -81.093],
+    }
+    _DEFAULT_ROUTES   = [
+        "Acela", "Northeast Regional", "Palmetto", "Carolinian",
+        "Vermonter", "Keystone", "Empire Service", "Empire State",
+        "Silver Star", "Silver Meteor",
+    ]
+    _DEFAULT_STATIONS = ["WAS", "BWI", "NCR", "ALX", "BAL", "ABE", "WIL", "NPN"]
+    _DEFAULT_CORE     = ["Acela", "Northeast Regional"]
+
+    raw_st = config.get("AMTRAK_REGIONAL_STATIONS", "").strip()
+    stations = [s.strip().upper() for s in raw_st.split(",") if s.strip()] if raw_st else _DEFAULT_STATIONS
+
+    raw_rt = config.get("AMTRAK_REGIONAL_ROUTES", "").strip()
+    routes = [r.strip() for r in raw_rt.split(",") if r.strip()] if raw_rt else _DEFAULT_ROUTES
+
+    raw_cr = config.get("AMTRAK_CORE_ROUTES", "").strip()
+    core = [r.strip() for r in raw_cr.split(",") if r.strip()] if raw_cr else _DEFAULT_CORE
+
+    primary = config.get("AMTRAK_PRIMARY_STATION", "WAS").strip().upper() or "WAS"
+    center  = _COORDS.get(primary, _COORDS["WAS"])
+
     return JSONResponse({
-        "available": True,
-        "plan_date": plan["plan_date"],
-        "trip_count": plan["trip_count"],
-        "trips": _json.loads(plan["raw_json"]).get("trips", []),
-        "loaded_at": plan["loaded_at"],
+        "primary_station": primary,
+        "stations":        stations,
+        "routes":          routes,
+        "core_routes":     core,
+        "center":          center,
+        "zoom":            7,
     })
 
 

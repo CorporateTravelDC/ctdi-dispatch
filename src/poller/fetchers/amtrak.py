@@ -6,10 +6,21 @@ directly since that container is not deployed. Falls back gracefully if the
 feed is unreachable.
 
 Config (dispatch.env):
-  AMTRAK_FEED_URL  — base URL for amtraker v3, defaults to
-                     https://api.amtraker.com/v3/trains
-  AMTRAK_LOCAL_URL — set to non-empty to use a local container instead
-                     (legacy path; leave unset to use amtraker.com)
+  AMTRAK_FEED_URL           — base URL for amtraker v3, defaults to
+                               https://api.amtraker.com/v3/trains
+  AMTRAK_LOCAL_URL          — set to non-empty to use a local container instead
+                               (legacy path; leave unset to use amtraker.com)
+  AMTRAK_PRIMARY_STATION    — IATA/Amtrak station code for the operator's hub
+                               (default: WAS). Used for map centering.
+  AMTRAK_REGIONAL_STATIONS  — comma-separated Amtrak station codes to gate
+                               long-distance trains on (default: WAS area set).
+                               Example: CHI,MKE,GBD,NPV for Chicago metro.
+  AMTRAK_REGIONAL_ROUTES    — comma-separated route names always included
+                               regardless of station filter (default: NEC list).
+                               Example: Empire Builder,California Zephyr
+  AMTRAK_CORE_ROUTES        — comma-separated route names shown in the top
+                               "always-on" panel section (default: Acela,
+                               Northeast Regional). Set to your key services.
 
 Polled every 5 minutes by the poller scheduler.
 """
@@ -28,19 +39,42 @@ log = logging.getLogger(__name__)
 
 FETCH_TIMEOUT = 12
 
-# NEC/mid-Atlantic routes that touch the DC metro area.
-# Use full route names to avoid substring false-matches (e.g. "Empire Builder").
-NEC_ROUTES = [
+# ── Default regional config (DC / NEC) ───────────────────────────────────────
+# These are the fallback values used when no AMTRAK_* env vars are set.
+# Operators deploying the public version should override via dispatch.env.
+
+_DEFAULT_ROUTES = [
     "Acela", "Northeast Regional", "Palmetto", "Carolinian",
     "Vermonter", "Keystone", "Empire Service", "Empire State",
     "Silver Star", "Silver Meteor",
 ]
+_DEFAULT_STATIONS     = frozenset({"WAS", "BWI", "NCR", "ALX", "BAL", "ABE", "WIL", "NPN"})
+_DEFAULT_CORE_ROUTES  = ["Acela", "Northeast Regional"]
+_DEFAULT_PRIMARY      = "WAS"
 
-# DC-area stations — trains passing through any of these are included
-DC_STATIONS = {"WAS", "BWI", "NCR", "ALX", "BAL", "ABE", "WIL", "NPN"}
+# Kept for backwards-compat — use the helper functions below in new code.
+NEC_ROUTES      = _DEFAULT_ROUTES
+DC_STATIONS     = _DEFAULT_STATIONS
+DC_STATION_CODE = _DEFAULT_PRIMARY
 
-# DC Union Station is the primary hub
-DC_STATION_CODE = "WAS"
+
+def regional_routes() -> list[str]:
+    raw = config.get("AMTRAK_REGIONAL_ROUTES", "").strip()
+    return [r.strip() for r in raw.split(",") if r.strip()] if raw else _DEFAULT_ROUTES
+
+
+def regional_stations() -> frozenset:
+    raw = config.get("AMTRAK_REGIONAL_STATIONS", "").strip()
+    return frozenset(s.strip().upper() for s in raw.split(",") if s.strip()) if raw else _DEFAULT_STATIONS
+
+
+def core_routes() -> list[str]:
+    raw = config.get("AMTRAK_CORE_ROUTES", "").strip()
+    return [r.strip() for r in raw.split(",") if r.strip()] if raw else _DEFAULT_CORE_ROUTES
+
+
+def primary_station() -> str:
+    return config.get("AMTRAK_PRIMARY_STATION", _DEFAULT_PRIMARY).strip().upper() or _DEFAULT_PRIMARY
 
 
 def _use_local() -> bool:
@@ -80,10 +114,12 @@ def _delay_minutes(train: dict) -> int:
 def _normalize(raw_trains: dict) -> list:
     """
     Convert amtraker v3 dict-of-trains to a normalised list compatible with
-    _summarize(). Filters to NEC routes or DC-area station stops.
+    _summarize(). Filters to configured regional routes or station stops.
     Deduplicates by trainID, keeping the entry with the highest absolute delay.
     """
     seen: dict[str, dict] = {}  # trainID → best entry
+    _routes   = regional_routes()
+    _stations = regional_stations()
 
     for _num, v in raw_trains.items():
         entries = v if isinstance(v, list) else [v]
@@ -93,10 +129,10 @@ def _normalize(raw_trains: dict) -> list:
             dest  = t.get("destCode", "")
             station_codes = {s.get("code", "") for s in t.get("stations", [])}
 
-            is_nec = any(r.lower() in route.lower() for r in NEC_ROUTES)
-            touches_dc = bool(station_codes & DC_STATIONS) or orig in DC_STATIONS or dest in DC_STATIONS
+            is_regional = any(r.lower() in route.lower() for r in _routes)
+            touches_hub = bool(station_codes & _stations) or orig in _stations or dest in _stations
 
-            if not (is_nec or touches_dc):
+            if not (is_regional or touches_hub):
                 continue
 
             delay = _delay_minutes(t)
