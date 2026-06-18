@@ -171,6 +171,8 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | GET | `/api/v1/brief` | Latest daily brief text |
 | GET | `/api/v1/route` | Latest ground route impact narrative |
 | GET | `/api/v1/events` | Live SSE event stream (PWA-ready) |
+| GET | `/api/v1/train-config` | Operator rail config — primary station, regional filter, map center |
+| GET | `/api/v1/demo/readiness` | Demo archive seed status — days collected, ready flag, DB size |
 
 ### Tier 1 — Tailscale / CERT bearer token
 
@@ -294,6 +296,79 @@ The CPS score is a Part 135.609-informed go/no-go assessment for HEMS operations
 | GDP | Active NAS ground delay programs |
 
 Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/skills/cps_recompute.py` every 60 minutes and on demand via `POST /admin/force-recompute-cps`.
+
+---
+
+## Demo Mode & Travel Pattern Intelligence
+
+CTDI includes a built-in **archive recorder** that captures rolling snapshots of every live intelligence feed into a local SQLite database (`demo.db`). After a seed period of at least two weeks, this archive becomes two distinct assets:
+
+### 1. Client demo site
+
+The archive lets you run a fully live-looking demo without connecting to a real deployment. A demo site replays historical snapshots through the same REST API surface as the live system — the client sees a real dispatch dashboard with real historical data (NOTAMs, weather, train status, TFRs, ops plans) without any credentials or live feeds being required.
+
+**Seed readiness check:**
+
+```bash
+curl https://ops.csexecutiveservices.com/api/v1/demo/readiness
+# → {"seed_days": 21, "seed_target": 14, "ready": true, "total_snapshots": 18240,
+#    "oldest": "2026-06-16", "newest": "2026-07-07", "db_size_mb": 485.2}
+```
+
+The demo site gates itself on `ready: true`. Before that threshold, it serves a holding page. Once seeded, it auto-activates and rolls forward — the archive always holds the most recent 8 weeks.
+
+**Storage:** All payloads are zlib-compressed on write (~90% reduction for NOTAM JSON). An 8-week archive of all feeds fits in ~500 MB on a Raspberry Pi.
+
+---
+
+### 2. Traffic pattern intelligence for corporate travel planning
+
+The same archive is a **longitudinal dataset** of real airspace, rail, and weather activity — updated every five minutes, 24/7, without any manual curation. Over multiple quarters it reveals patterns that are invisible in real-time views:
+
+**Quarterly planning signals:**
+
+| Data type | What the archive reveals |
+|---|---|
+| NOTAMs | Airport construction windows, runway closures, seasonal airspace changes — by corridor and month |
+| TFRs | Frequency and duration of VIP / security TFRs at key airports — useful for client advisories |
+| NAS programs | GDP / ground stop frequency by airport and season — historically predicts Q4 hub congestion |
+| METAR | Ceiling / visibility / wind patterns — builds a local weather climatology for risk scoring |
+| Amtrak | NEC corridor on-time performance trends — informs car-vs-rail upsell recommendations |
+| Ops plan | ATCSCC initiative patterns — captures systemic NAS stress periods by route |
+
+**Example use cases:**
+
+- *"Based on the last two quarters of NOTAM and NAS program data, DCA Friday afternoons carry 30–45 min average ground delay exposure in Q4 — recommend IAD or BWI for westbound bank corridor departures after 14:00."*
+- *"Amtrak NEC on-time performance degraded 18% in the 60-day window — conversion opportunity for ground transport partnerships on BOS–WAS corridor."*
+- *"The archive shows three recurring TFR activations at DCA in the past six weeks consistent with POTUS departure windows — sufficient pattern for a standing advisory to clients traveling Friday mornings."*
+
+---
+
+### 3. Sales and marketing data for travel concierge partnerships
+
+The archive provides objective, time-stamped evidence of the operational complexity CTDI monitors and manages — directly useful in partnership conversations:
+
+- **Volume metrics**: total NOTAMs active per day by corridor, number of NAS ground programs per quarter, TFR frequency at key airports
+- **Service-level evidence**: gap between a NOTAM or TFR activation and the first push alert to the client device — demonstrable response time
+- **Route performance data**: rail vs. air delay comparison by corridor and month — grounding upsell recommendations in historical data rather than anecdote
+- **Incident archives**: specific dates and durations of major disruptions with the client advisory that was issued — a concrete deliverable for RFP responses and partnership renewals
+
+None of this requires any additional data collection beyond what the recorder already does. The intelligence is a byproduct of running the live dispatch platform.
+
+---
+
+### Archive configuration
+
+```bash
+# /etc/corporatetraveldc/dispatch.env
+
+# Demo archive settings — all optional, defaults shown
+DEMO_RECORDER_INTERVAL=300       # poll interval in seconds (default: 5 min)
+DEMO_RECORDER_RETENTION=56       # rolling window in days (default: 8 weeks)
+DEMO_RECORDER_SEED_TARGET=14     # seed days before demo site activates (default: 2 weeks)
+```
+
+The recorder runs as a standalone systemd user service (`demo-recorder.service`) outside the container stack — no rebuild required for config changes.
 
 ---
 
