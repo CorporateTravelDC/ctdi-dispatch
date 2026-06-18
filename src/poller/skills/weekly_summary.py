@@ -16,6 +16,7 @@ import time
 import httpx
 
 from common import config, db, ntfy_push as _ntfy
+from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
@@ -96,28 +97,16 @@ def build_weekly_content() -> str:
 
 
 def _call_ollama(content: str) -> str | None:
-    """Call Ollama (csexec-osint/mistral-nemo) for weekly narrative.
-    Returns narrative text or None on any error (caller falls back to deterministic).
+    """Call LLM (Ollama-first, Anthropic fallback) for weekly narrative.
+    Returns narrative text or None (caller falls back to deterministic).
     """
-    if not OLLAMA_BASE_URL:
-        return None
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": SYSTEM_PROMPT,
-                "prompt": content,
-                "stream": False,
-                "options": {"num_predict": 400, "temperature": 0.3},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip() or None
-    except Exception as exc:
-        log.warning("%s: Ollama call failed (%s) — falling back to deterministic", SKILL_NAME, exc)
-        return None
+    return llm_generate(
+        system=SYSTEM_PROMPT,
+        prompt=content,
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=400,
+        temperature=0.3,
+    )
 
 
 def main(force: bool = False) -> None:
