@@ -142,7 +142,22 @@ def push_cps_update() -> None:
 AIRPLANES_LIVE_URL = "https://api.airplanes.live/v2/callsign/{callsign}"
 FLIGHT_MONITOR_INTERVAL = 60  # seconds between checks per flight
 
-# State: callsign -> {"last_seen": timestamp, "airborne": bool, "notified": bool}
+# How long a flight must be absent from ALL feeds before declaring "presumed landed".
+# 2 minutes was too short — high-altitude aircraft drop off ADS-B coverage routinely.
+GONE_FROM_FEED_TIMEOUT_SEC = 600   # 10 minutes
+
+# If last known altitude was above this, never fire from a feed dropout alone.
+# N757AF at FL400 disappearing for 10 min is coverage loss, not a landing.
+HIGH_ALT_GATE_FT = 10_000
+
+# Must be below this altitude for a reading to count toward landing confirmation.
+MIN_LANDING_ALT_FT = 2_500
+
+# Number of consecutive below-threshold readings required before firing "landed".
+# Guards against single bad transponder messages (alt_baro=0 / "ground" at cruise).
+MIN_LOW_READINGS = 3
+
+# State: callsign -> {last_seen, airborne, notified, last_alt_ft, low_count}
 _flight_state: dict = {}
 
 
@@ -189,12 +204,22 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
 
 def _check_flight_landing(callsign: str) -> str | None:
     """
-    Returns "landed" if aircraft was airborne and is now on ground or gone
-    from feed; returns None otherwise.
+    Returns "landed" if aircraft was airborne and is now confirmed on ground.
+    Guards against three common false-positive sources:
+      1. Single bad transponder reading (alt_baro=0 or "ground" at cruise altitude)
+      2. Temporary ADS-B feed dropout (aircraft gone <10 min at any altitude)
+      3. Feed dropout when last known altitude was high (never presume landed)
+    Requires MIN_LOW_READINGS consecutive below-threshold readings to fire.
     """
     import time
     cs = callsign.strip().upper()
-    state = _flight_state.setdefault(cs, {"last_seen": 0.0, "airborne": False, "notified": False})
+    state = _flight_state.setdefault(cs, {
+        "last_seen": 0.0,
+        "airborne": False,
+        "notified": False,
+        "last_alt_ft": None,
+        "low_count": 0,
+    })
 
     if state["notified"]:
         return None
@@ -211,19 +236,63 @@ def _check_flight_landing(callsign: str) -> str | None:
             and isinstance(alt_baro, (int, float))
             and alt_baro > 500
         )
+
         if truly_airborne:
             state["airborne"] = True
             state["last_seen"] = time.time()
+            state["last_alt_ft"] = int(alt_baro)
+            state["low_count"] = 0
             log.debug("%s airborne alt=%s", cs, alt_baro)
             return None
-        elif state["airborne"]:
-            log.info("%s on ground — landing detected", cs)
-            state["notified"] = True
-            return "landed"
+
+        if not state["airborne"]:
+            return None
+
+        # Not truly airborne — evaluate whether this is a real landing or noise
+        current_alt = int(alt_baro) if isinstance(alt_baro, (int, float)) else 0
+        last_alt = state["last_alt_ft"]
+
+        if last_alt is not None and last_alt > HIGH_ALT_GATE_FT and not on_ground:
+            # Last known altitude was high cruise — single non-airborne reading is
+            # almost certainly a bad transponder message, not a real descent.
+            log.debug(
+                "%s: non-airborne reading (alt=%s) but last alt was %dft — noise, not landing",
+                cs, alt_baro, last_alt
+            )
+            state["low_count"] += 1
+        elif on_ground or alt_baro == "ground" or current_alt <= MIN_LANDING_ALT_FT:
+            state["low_count"] += 1
+        else:
+            state["low_count"] = 0
+
+        if state["low_count"] < MIN_LOW_READINGS:
+            log.debug("%s: low/ground reading %d/%d — waiting for confirmation",
+                      cs, state["low_count"], MIN_LOW_READINGS)
+            return None
+
+        log.info("%s landing confirmed — alt=%s last_alt=%s readings=%d",
+                 cs, alt_baro, last_alt, state["low_count"])
+        state["notified"] = True
+        return "landed"
+
     else:
-        # Not in feed — if was airborne and gone > 2 min, presume landed
-        if state["airborne"] and (time.time() - state["last_seen"]) > 120:
-            log.info("%s gone from feed after airborne — presumed landed", cs)
+        # Aircraft absent from all feeds
+        if not state["airborne"]:
+            return None
+        elapsed = time.time() - state["last_seen"]
+        last_alt = state["last_alt_ft"]
+
+        # If last known altitude was high, a dropout is coverage loss, not a landing.
+        if last_alt is not None and last_alt > HIGH_ALT_GATE_FT:
+            log.debug(
+                "%s: absent from feed %ds but last alt was %dft — coverage gap, not landed",
+                cs, int(elapsed), last_alt
+            )
+            return None
+
+        if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
+            log.info("%s absent from feed %ds after airborne — presumed landed (last alt=%s)",
+                     cs, int(elapsed), last_alt)
             state["notified"] = True
             return "landed"
 
