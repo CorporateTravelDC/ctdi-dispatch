@@ -40,6 +40,7 @@ import httpx
 import requests
 
 from common import config, db, ntfy_push as _ntfy
+from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
@@ -403,26 +404,14 @@ TREND_SYSTEM_PROMPT = (
 
 
 def _generate_trend_narrative(trend_prompt: str) -> str:
-    """Generate a trend analysis narrative via Ollama. Returns empty string on failure."""
-    if not OLLAMA_BASE_URL:
-        return ""
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": TREND_SYSTEM_PROMPT,
-                "prompt": trend_prompt,
-                "stream": False,
-                "options": {"num_predict": 200, "temperature": 0.15},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception as exc:
-        log.warning("ops-brief: trend Ollama call failed — %s", exc)
-        return ""
+    """Generate trend analysis via LLM (Ollama-first, Anthropic fallback). Returns empty string on failure."""
+    return llm_generate(
+        system=TREND_SYSTEM_PROMPT,
+        prompt=trend_prompt,
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=200,
+        temperature=0.15,
+    ) or ""
 
 
 def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
@@ -452,13 +441,9 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     """
-    Send prompt_content to Ollama (csexec-osint/mistral) and return (full_text, concise_text).
-    No llama fallback — all inference is via OLLAMA_MODEL (csexec-osint).
-    Returns None only if Ollama is unreachable or the model call fails.
+    Generate ops brief via LLM (Ollama-first, Anthropic fallback).
+    Returns (full_text, concise_text) or None if both backends fail.
     """
-    if not OLLAMA_BASE_URL:
-        return None
-
     system = (
         "You are the dispatch intelligence officer for a corporate executive chauffeur "
         "operation based in the Washington DC metro area. "
@@ -470,13 +455,13 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     )
 
     model_used = OLLAMA_MODEL
-    narrative = None
-
-    try:
-        narrative = _ollama_generate(OLLAMA_MODEL, system, prompt_content)
-    except Exception as exc:
-        log.warning("ops-brief: Ollama call failed (%s) — going deterministic", exc)
-        return None
+    narrative = llm_generate(
+        system=system,
+        prompt=prompt_content,
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=500,
+        temperature=0.2,
+    )
 
     if not narrative:
         return None

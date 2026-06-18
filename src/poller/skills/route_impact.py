@@ -6,6 +6,7 @@ import os
 import argparse, logging, sys, time
 import httpx
 from common import db, ntfy_push as _ntfy
+from common.llm import generate as llm_generate
 from common.push_dedup import PushDedup, content_hash
 from common.sr1_log import log_usage
 from common.sr2_gate import hash_gate
@@ -73,28 +74,16 @@ def _vip_user_message(inputs: dict) -> str:
 
 
 def _call_ollama_vip(inputs: dict) -> str | None:
-    """Call Ollama for VIP route impact narrative only. Focused prompt, Pi CPU feasible.
-    Returns narrative text or None on any error (caller falls back to deterministic).
+    """Call LLM (Ollama-first, Anthropic fallback) for VIP route impact narrative.
+    Returns narrative text or None (caller falls back to deterministic).
     """
-    if not OLLAMA_BASE_URL:
-        return None
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": SYSTEM_PROMPT,
-                "prompt": _vip_user_message(inputs),
-                "stream": False,
-                "options": {"num_predict": 200, "temperature": 0.2},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip() or None
-    except Exception as exc:
-        log.warning("%s: Ollama call failed (%s) — falling back to deterministic", SKILL_NAME, exc)
-        return None
+    return llm_generate(
+        system=SYSTEM_PROMPT,
+        prompt=_vip_user_message(inputs),
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=200,
+        temperature=0.2,
+    )
 
 
 def _deterministic_summary(inputs: dict) -> str:

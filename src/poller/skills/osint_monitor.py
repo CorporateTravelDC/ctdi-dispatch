@@ -28,6 +28,7 @@ from urllib.parse import urldefrag, urlparse
 import httpx
 
 from common import config, db
+from common.llm import generate as llm_generate
 from common.ntfy_push import send as ntfy_send
 from common.sr1_log import log_usage
 
@@ -314,30 +315,17 @@ def _build_narrative_prompt(item: dict, scope_label: str, matched_terms: list[st
 def _generate_narrative(item: dict, scope_label: str, matched_terms: list[str],
                          scope_type: str = "keyword") -> str | None:
     """
-    Call Ollama to produce a 2-sentence narrative for a HIGH+ item.
+    Call LLM (Ollama-first, Anthropic fallback) for a 2-sentence narrative on a HIGH+ item.
     Returns None on any failure — caller falls back to deterministic narrative.
     """
-    if not OLLAMA_BASE_URL:
-        return None
-
     prompt = _build_narrative_prompt(item, scope_label, matched_terms, scope_type)
-
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": 100, "temperature": 0.3},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip() or None
-    except Exception as exc:
-        log.debug("osint: Ollama narrative failed: %s", exc)
-        return None
+    return llm_generate(
+        system="",
+        prompt=prompt,
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=100,
+        temperature=0.3,
+    )
 
 
 def _deterministic_narrative(item: dict, scope_label: str, matched_terms: list[str],
