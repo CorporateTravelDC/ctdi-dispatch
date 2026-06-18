@@ -14,3 +14,6 @@ requests>=2.32.0
 slixmpp>=1.8
 httpx>=0.27
 lxml>=5.0
+
+# LLM inference (Ollama-first, Anthropic fallback)
+anthropic>=0.109
