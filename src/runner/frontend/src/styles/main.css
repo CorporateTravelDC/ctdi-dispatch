@@ -436,6 +436,58 @@ body::before {
 [data-theme="dark"]  .map-tiles { filter: brightness(0.32) saturate(0.45) hue-rotate(195deg); }
 [data-theme="light"] .map-tiles { filter: brightness(0.9) saturate(0.7); }
 
+/* Train page body — side panel + map */
+.train-page-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.train-map-section { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* Train side panel */
+.train-side-panel {
+  width: 240px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
+  border-right: 1px solid var(--border); background: var(--panel);
+  display: flex; flex-direction: column; gap: 0;
+}
+.train-panel-section { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.train-panel-section:last-child { border-bottom: none; }
+.train-panel-head {
+  font-family: var(--font-ui); font-size: 0.58rem; font-weight: 700;
+  letter-spacing: 0.1em; color: var(--muted);
+  padding: 0.3rem 0.65rem 0.25rem;
+}
+.train-panel-empty {
+  font-family: var(--font-data); font-size: 0.68rem;
+  color: var(--muted); padding: 0.25rem 0.65rem;
+}
+
+/* Train row */
+.train-row {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.65rem; cursor: default;
+  transition: background 0.1s;
+}
+.train-row:hover { background: var(--hover); }
+.train-row-num {
+  font-family: var(--font-data); font-size: 0.72rem; font-weight: 700;
+  min-width: 2.2rem; flex-shrink: 0;
+}
+.train-row-info {
+  display: flex; flex-direction: column; flex: 1; min-width: 0;
+  gap: 0.05rem;
+}
+.train-row-name {
+  font-family: var(--font-data); font-size: 0.68rem;
+  color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.train-row-route, .train-row-event {
+  font-family: var(--font-data); font-size: 0.6rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.train-row-badge {
+  font-family: var(--font-ui); font-size: 0.58rem; font-weight: 700;
+  letter-spacing: 0.05em; flex-shrink: 0;
+  border: 1px solid; border-radius: var(--radius);
+  padding: 0.1rem 0.3rem;
+}
+
 /* Map overlay stats */
 .map-overlay-stats {
   position: absolute; bottom: 1rem; left: 1rem; z-index: 1000;
