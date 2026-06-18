@@ -10,19 +10,22 @@ function briefExcerpt(text, maxLen = 220) {
   return first.length > maxLen ? first.slice(0, maxLen) + '…' : first
 }
 
-function MetricCard({ label, value, status, sub }) {
+function MetricCard({ label, value, status, sub, href }) {
   const cls = status === 'go' ? 'ov-card go'
             : status === 'marginal' ? 'ov-card marginal'
             : status === 'nogo' ? 'ov-card nogo'
             : status === 'warn' ? 'ov-card warn'
             : 'ov-card'
-  return (
+  const inner = (
     <div className={cls}>
-      <div className="ov-card-label">{label}</div>
+      <div className="ov-card-label">{label}{href && <span className="ov-card-arrow">→</span>}</div>
       <div className="ov-card-value">{value ?? '—'}</div>
       {sub && <div className="ov-card-sub">{sub}</div>}
     </div>
   )
+  return href
+    ? <a href={href} className="ov-card-link" title={`View ${label}`}>{inner}</a>
+    : inner
 }
 
 function AlertBadge({ alerts }) {
@@ -38,7 +41,7 @@ function AlertBadge({ alerts }) {
         </div>
       ))}
       {alerts.length > 4 && (
-        <div className="ov-alert-more">+{alerts.length - 4} more — see Status</div>
+        <a href="/signals#meteorology" className="ov-alert-more">+{alerts.length - 4} more — view all →</a>
       )}
     </div>
   )
@@ -128,24 +131,28 @@ export default function OverviewView({ liveState }) {
           value={cps ? `${cps.score} — ${cps.label}` : 'Loading…'}
           status={cpsStatus}
           sub={cps?.narrative?.slice(0, 80)}
+          href="/brief"
         />
         <MetricCard
           label="Environmental Alerts"
           value={alerts === null ? '…' : alerts.length || 'None'}
           status={alerts?.length > 2 ? 'warn' : alerts?.length > 0 ? 'marginal' : 'go'}
-          sub={alerts?.length > 0 ? (alerts[0]?.properties?.event || '') : 'Area clear'}
+          sub={alerts?.length > 0 ? (alerts[0]?.properties?.event || alerts[0]?.event_type || '') : 'Area clear'}
+          href="/signals#meteorology"
         />
         <MetricCard
           label="Airspace Restrictions"
           value={activeTfrs.length || 'None'}
           status={vipTfrs.length > 0 ? 'nogo' : activeTfrs.length > 0 ? 'marginal' : 'go'}
           sub={vipTfrs.length > 0 ? `${vipTfrs.length} VIP/POTUS TFR active` : activeTfrs.length > 0 ? 'See TFR page' : 'No restrictions'}
+          href="/signals"
         />
         <MetricCard
           label="Rail — Union Station"
           value={trains.length === 0 ? 'N/A' : amtrakStatus}
           status={delayedTrains.length > 0 ? 'warn' : trains.length > 0 ? 'go' : null}
           sub={amtrakSub || 'No data'}
+          href="/trains"
         />
       </div>
 
@@ -153,12 +160,14 @@ export default function OverviewView({ liveState }) {
       <div className="ov-row">
         <div className="ov-row-label">Feed Health</div>
         <FeedSummary feeds={feeds} />
+        <a href="/feeds" className="ov-section-link" style={{ marginLeft: 'auto' }}>View feeds →</a>
       </div>
 
       {/* NWS alerts */}
       <section className="ov-section">
         <div className="ov-section-header">
           <span className="ov-section-title">Active NWS Alerts — DC Metro</span>
+          <a href="/signals#meteorology" className="ov-section-link">View all →</a>
         </div>
         {alerts === null
           ? <div className="muted ov-loading">Loading alerts…</div>
