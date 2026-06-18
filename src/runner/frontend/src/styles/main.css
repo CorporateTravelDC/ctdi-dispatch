@@ -359,6 +359,34 @@ body::before {
 }
 .globe-fallback-link:hover { background: var(--cyan-dim); }
 
+/* AIS no-data overlay (shown when no feed is configured) */
+.ais-no-data-overlay {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 500; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.25rem 1.5rem;
+  display: flex; flex-direction: column; align-items: center; gap: 0.6rem;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  max-width: 320px; text-align: center;
+}
+.ais-no-data-title {
+  font-family: var(--font-ui); font-size: 0.75rem; font-weight: 700;
+  letter-spacing: 0.05em; color: var(--text);
+}
+.ais-no-data-sub {
+  font-family: var(--font-data); font-size: 0.65rem; color: var(--muted);
+  line-height: 1.4;
+}
+.ais-no-data-links {
+  display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center;
+  margin-top: 0.25rem;
+}
+.ais-tracker-link {
+  color: var(--cyan); text-decoration: none; font-family: var(--font-ui);
+  font-size: 0.65rem; border: 1px solid var(--cyan);
+  padding: 0.2rem 0.55rem; border-radius: var(--radius);
+}
+.ais-tracker-link:hover { background: var(--cyan-dim); }
+
 /* Globe search bar — docked above the iframe so airplanes.live top bar stays visible */
 .globe-search-bar {
   position: relative; z-index: 10; display: flex; align-items: center; gap: 0.35rem;
