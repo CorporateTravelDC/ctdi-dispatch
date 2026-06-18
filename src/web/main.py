@@ -10,6 +10,7 @@ Route structure:
   GET  /api/v1/weather                 Tier 0 — METAR snapshot
   GET  /api/v1/brief                   Tier 0 — latest daily brief text
   GET  /api/v1/route                   Tier 0 — latest route narrative
+  GET  /api/v1/demo/readiness          Tier 0 — demo archive seed status
 
   GET  /api/v1/radio                   Tier 1 (CERT/Tailscale)
 
@@ -30,7 +31,9 @@ Route structure:
 """
 
 import json
+import os
 import pathlib
+import sqlite3
 import time
 import uuid
 from typing import Optional
@@ -422,6 +425,42 @@ async def get_train_config() -> JSONResponse:
         "center":          center,
         "zoom":            7,
     })
+
+
+@app.get("/api/v1/demo/readiness")
+async def get_demo_readiness() -> JSONResponse:
+    """Demo archive seed status — Tier 0.
+
+    Returns how many calendar days of data the recorder has collected and
+    whether the 14-day seed target has been reached. Used by the demo site
+    to gate itself before going live.
+    """
+    DEMO_DB     = "/var/lib/corporatetraveldc/demo.db"
+    SEED_TARGET = 14
+    try:
+        db_conn = sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
+        days    = db_conn.execute(
+            "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots"
+        ).fetchone()[0]
+        total   = db_conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        oldest  = (db_conn.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0] or "")[:10]
+        newest  = (db_conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()[0] or "")[:10]
+        db_conn.close()
+        size_mb = round(os.path.getsize(DEMO_DB) / 1e6, 1) if os.path.exists(DEMO_DB) else 0.0
+        return JSONResponse({
+            "seed_days":       days,
+            "seed_target":     SEED_TARGET,
+            "ready":           days >= SEED_TARGET,
+            "total_snapshots": total,
+            "oldest":          oldest or None,
+            "newest":          newest or None,
+            "db_size_mb":      size_mb,
+        })
+    except Exception as exc:
+        return JSONResponse(
+            {"seed_days": 0, "ready": False, "error": str(exc)},
+            status_code=503,
+        )
 
 
 # ── Runsheet + Watchlist (Tier 1) ─────────────────────────────────────────────
