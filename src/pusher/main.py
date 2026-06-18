@@ -138,9 +138,17 @@ def push_cps_update() -> None:
 #      Fast, local, zero rate-limit. Used when UltraFeeder container is up.
 #   2. airplanes.live API         — https://api.airplanes.live/v2/callsign/
 #      Free, no key, same JSON schema as adsb.lol. Used as fallback.
+#   3. ACARS/VDL2 WOW confirmation — acarshub messages DB (authoritative bypass)
+#      Weight-on-Wheels ON event from aircraft avionics overrides ADS-B guardrail.
 # ---------------------------------------------------------------------------
 AIRPLANES_LIVE_URL = "https://api.airplanes.live/v2/callsign/{callsign}"
 FLIGHT_MONITOR_INTERVAL = 60  # seconds between checks per flight
+
+# Path to acarshub messages SQLite DB — mounted read-only via /var/lib volume.
+ACARSHUB_DB_PATH = config.get(
+    "ACARSHUB_DB_PATH",
+    "/var/lib/corporatetraveldc/acarshub/messages.db"
+)
 
 # How long a flight must be absent from ALL feeds before declaring "presumed landed".
 # 2 minutes was too short — high-altitude aircraft drop off ADS-B coverage routinely.
@@ -202,6 +210,48 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
         return []
 
 
+def _check_acars_wow(identifier: str, not_before_epoch: float = 0.0) -> dict | None:
+    """
+    Check acarshub messages DB for a recent Weight-on-Wheels (ON/landed) ACARS event.
+
+    Matches three reliable landing confirmation patterns observed in DC-area traffic:
+      - label H1 + 'ON ON' in text  — Boeing WOW status block (WN/UA/DL/AS/AA)
+      - label H1 + '/ON '  in text  — explicit OOOI ON field
+      - label 31 + '/ON '  in text  — JetBlue/B6 OOOI format
+
+    Returns the most recent matching message dict, or None if absent/unavailable.
+    Only returns messages with msg_time >= not_before_epoch (use state["last_seen"]
+    to avoid matching a landing from a previous flight).
+    """
+    import sqlite3 as _sq
+    norm = identifier.upper().replace("-", "").strip()
+    cutoff = max(int(not_before_epoch), int(time.time()) - 7200)  # 2h hard cap
+    try:
+        con = _sq.connect(f"file:{ACARSHUB_DB_PATH}?mode=ro", uri=True, timeout=3)
+        con.row_factory = _sq.Row
+        row = con.execute("""
+            SELECT tail, flight, label, msg_text, msg_time
+            FROM messages
+            WHERE (
+                UPPER(REPLACE(tail,    '-', '')) = ?
+                OR UPPER(REPLACE(flight, '-', '')) = ?
+            )
+            AND msg_time >= ?
+            AND (
+                (label = 'H1' AND upper(msg_text) LIKE '%ON ON%')
+                OR (label = 'H1' AND upper(msg_text) LIKE '%/ON %')
+                OR (label = '31' AND upper(msg_text) LIKE '%/ON %')
+            )
+            ORDER BY msg_time DESC
+            LIMIT 1
+        """, (norm, norm, cutoff)).fetchone()
+        con.close()
+        return dict(row) if row else None
+    except Exception as exc:
+        log.debug("acars wow query failed for %s: %s", identifier, exc)
+        return None
+
+
 def _check_flight_landing(callsign: str) -> str | None:
     """
     Returns "landed" if aircraft was airborne and is now confirmed on ground.
@@ -248,6 +298,19 @@ def _check_flight_landing(callsign: str) -> str | None:
         if not state["airborne"]:
             return None
 
+        # ACARS/VDL2 WOW confirmation — authoritative bypass of ADS-B guardrail.
+        # A Weight-on-Wheels ON event from the aircraft's own avionics is definitive;
+        # no need for consecutive ADS-B readings when we have this.
+        wow = _check_acars_wow(cs, not_before_epoch=state["last_seen"])
+        if wow:
+            log.info(
+                "%s: ACARS WOW event confirms landing — label=%s msg_time=%s text=%.60r",
+                cs, wow.get("label"), wow.get("msg_time"),
+                (wow.get("msg_text") or "")
+            )
+            state["notified"] = True
+            return "landed"
+
         # Not truly airborne — evaluate whether this is a real landing or noise
         current_alt = int(alt_baro) if isinstance(alt_baro, (int, float)) else 0
         last_alt = state["last_alt_ft"]
@@ -284,6 +347,17 @@ def _check_flight_landing(callsign: str) -> str | None:
 
         # If last known altitude was high, a dropout is coverage loss, not a landing.
         if last_alt is not None and last_alt > HIGH_ALT_GATE_FT:
+            # High-altitude dropout — check ACARS before giving up.
+            # If the aircraft sent a WOW event after we last saw it airborne,
+            # it landed even though ADS-B never caught the descent.
+            wow = _check_acars_wow(cs, not_before_epoch=state["last_seen"])
+            if wow:
+                log.info(
+                    "%s: absent from feed but ACARS WOW confirms landing — label=%s",
+                    cs, wow.get("label")
+                )
+                state["notified"] = True
+                return "landed"
             log.debug(
                 "%s: absent from feed %ds but last alt was %dft — coverage gap, not landed",
                 cs, int(elapsed), last_alt
