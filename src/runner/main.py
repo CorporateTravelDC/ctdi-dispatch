@@ -1440,6 +1440,18 @@ class StaticCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(StaticCacheMiddleware)
 
+# SPA catch-all: serve index.html for any path that isn't an API route or
+# static asset.  This enables direct-linking and page-refresh on client-side
+# routes (/ais, /signals, /trains, etc.) — Starlette's StaticFiles html=True
+# only handles directory indexes, not arbitrary SPA paths.
+_SPA_INDEX = _os.path.join(STATIC_DIR, "index.html")
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def _serve_spa(full_path: str):
+    if _os.path.isfile(_SPA_INDEX):
+        return FileResponse(_SPA_INDEX, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    raise HTTPException(status_code=404, detail="Frontend not built")
+
 if _os.path.isdir(STATIC_DIR):
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 else:
