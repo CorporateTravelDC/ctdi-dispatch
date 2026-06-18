@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 
 /** Format a brief excerpt — first meaningful line, up to maxLen chars */
 function briefExcerpt(text, maxLen = 220) {
@@ -24,7 +25,7 @@ function MetricCard({ label, value, status, sub, href }) {
     </div>
   )
   return href
-    ? <a href={href} className="ov-card-link" title={`View ${label}`}>{inner}</a>
+    ? <Link to={href} className="ov-card-link" title={`View ${label}`}>{inner}</Link>
     : inner
 }
 
@@ -41,7 +42,7 @@ function AlertBadge({ alerts }) {
         </div>
       ))}
       {alerts.length > 4 && (
-        <a href="/signals#meteorology" className="ov-alert-more">+{alerts.length - 4} more — view all →</a>
+        <Link to="/signals#meteorology" className="ov-alert-more">+{alerts.length - 4} more — view all →</Link>
       )}
     </div>
   )
@@ -160,14 +161,14 @@ export default function OverviewView({ liveState }) {
       <div className="ov-row">
         <div className="ov-row-label">Feed Health</div>
         <FeedSummary feeds={feeds} />
-        <a href="/feeds" className="ov-section-link" style={{ marginLeft: 'auto' }}>View feeds →</a>
+        <Link to="/status" className="ov-section-link" style={{ marginLeft: 'auto' }}>View feeds →</Link>
       </div>
 
       {/* NWS alerts */}
       <section className="ov-section">
         <div className="ov-section-header">
           <span className="ov-section-title">Active NWS Alerts — DC Metro</span>
-          <a href="/signals#meteorology" className="ov-section-link">View all →</a>
+          <Link to="/signals#meteorology" className="ov-section-link">View all →</Link>
         </div>
         {alerts === null
           ? <div className="muted ov-loading">Loading alerts…</div>
@@ -178,7 +179,7 @@ export default function OverviewView({ liveState }) {
       <section className="ov-section">
         <div className="ov-section-header">
           <span className="ov-section-title">Current Ops Brief</span>
-          <a href="/brief" className="ov-section-link">Full brief →</a>
+          <Link to="/brief" className="ov-section-link">Full brief →</Link>
         </div>
         {loading
           ? <div className="muted ov-loading">Loading…</div>
