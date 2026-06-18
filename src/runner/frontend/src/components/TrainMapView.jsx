@@ -12,6 +12,23 @@ const ORM_LINK    = 'https://www.openrailwaymap.org/'
 const KDCA        = [38.8521, -77.0377]
 const DEFAULT_ZOOM = 6
 const TRAIN_POLL  = 30_000
+const PANEL_POLL  = 60_000
+
+// ── NEC / DC filtering ────────────────────────────────────────────
+// Mirror of amtrak.py NEC_ROUTES and DC_STATIONS — keeps map display
+// consistent with what the dispatch backend tracks.
+const DC_STATIONS    = new Set(['WAS', 'BWI', 'NCR', 'ALX', 'BAL', 'ABE', 'WIL', 'NPN'])
+const NEC_NAMES      = ['acela', 'northeast regional', 'palmetto', 'carolinian',
+                        'vermonter', 'keystone', 'empire service', 'empire state',
+                        'silver star', 'silver meteor']
+const CORE_NEC_NAMES = ['acela', 'northeast regional']
+
+function isNECOrDC(train) {
+  const route = (train.routeName || '').toLowerCase()
+  if (NEC_NAMES.some(n => route.includes(n))) return true
+  const stns = Array.isArray(train.stations) ? train.stations : []
+  return stns.some(s => DC_STATIONS.has(s.code || s.stationCode || ''))
+}
 
 // ── Train icon factory ────────────────────────────────────────────
 function trainIcon(isVip, isWatched) {
@@ -48,20 +65,17 @@ async function geocode(query) {
 async function fetchWatchedTrains() {
   const watched = new Set()
   try {
-    // Session watchlist — Tier 0
     const r = await fetch('/api/dispatch/api/v1/watchlist')
     if (r.ok) {
       const d = await r.json()
       const entries = Array.isArray(d) ? d : (d.entries || d.watchlist || [])
       entries.forEach(e => {
         const val = (typeof e === 'string' ? e : e.entry || e.value || '').toUpperCase().trim()
-        // Train numbers: pure digits or Amtrak train number patterns
         if (/^\d{1,4}$/.test(val)) watched.add(val)
       })
     }
   } catch {}
   try {
-    // VIP list — try without token (will 401 if not Tailscale, safe to ignore)
     const r = await fetch('/api/dispatch/admin/vip')
     if (r.ok) {
       const d = await r.json()
@@ -75,8 +89,10 @@ async function fetchWatchedTrains() {
   return watched
 }
 
-// ── Fetch Amtrak positions ────────────────────────────────────────
-// api.amtraker.com returns { "trainNum": [{lat, lon, speed, heading, eventCode, trainNum, ...}] }
+// ── Fetch Amtrak positions (NEC / DC-area only) ───────────────────
+// Filters to routes and stations the dispatch backend tracks —
+// suppresses long-distance trains (Empire Builder, etc.) that have
+// no DC relevance.
 async function fetchTrainPositions() {
   try {
     const r = await fetch('https://api.amtraker.com/v3/trains', {
@@ -86,32 +102,121 @@ async function fetchTrainPositions() {
     const data = await r.json()
     const trains = []
     Object.values(data).forEach(arr => {
-      if (Array.isArray(arr)) arr.forEach(t => { if (t.lat && t.lon) trains.push(t) })
+      if (Array.isArray(arr)) arr.forEach(t => {
+        if (t.lat && t.lon && isNECOrDC(t)) trains.push(t)
+      })
     })
     return trains
   } catch { return [] }
 }
 
-// ── Heading arrow svg ─────────────────────────────────────────────
-function headingDeg(h) {
-  const map = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 }
-  return map[h] ?? 0
+// ── Fetch dispatch train list (panel data) ────────────────────────
+// Dispatch backend already filters to NEC/DC; trains include those
+// without live GPS so Acela/NE Regional always appear in the panel.
+async function fetchDispatchTrains() {
+  try {
+    const r = await fetch('/api/dispatch/api/v1/amtrak')
+    if (!r.ok) return []
+    const d = await r.json()
+    return Array.isArray(d.trains) ? d.trains : []
+  } catch { return [] }
+}
+
+// ── Train panel helpers ───────────────────────────────────────────
+function isCoreNEC(t) {
+  const name = (t.train_name || '').toLowerCase()
+  return CORE_NEC_NAMES.some(n => name.includes(n))
+}
+
+function delayColor(delay, state) {
+  const s = (state || '').toLowerCase()
+  if (s === 'completed')    return 'var(--muted)'
+  if (s === 'predeparture') return 'var(--cyan)'
+  if (delay > 30)  return 'var(--nogo)'
+  if (delay > 10)  return 'var(--orange)'
+  if (delay > 0)   return 'var(--marginal)'
+  return 'var(--go)'
+}
+
+function delayLabel(delay, state) {
+  const s = (state || '').toLowerCase()
+  if (s === 'completed')    return 'DONE'
+  if (s === 'predeparture') return 'PRE'
+  if (delay > 0) return `+${delay}m`
+  return 'OT'
+}
+
+function TrainRow({ t }) {
+  const delay = t.delay_minutes || 0
+  const color = delayColor(delay, t.train_state)
+  const label = delayLabel(delay, t.train_state)
+  const num   = t.train_number || '?'
+  const name  = (t.train_name || `Train ${num}`).replace(/\s+\d+$/, '')
+  const route = (t.orig_code && t.dest_code) ? `${t.orig_code}→${t.dest_code}` : ''
+  const event = t.event_name || (t._raw && t._raw.eventCode) || ''
+
+  return (
+    <div className="train-row">
+      <span className="train-row-num" style={{ color }}>{num}</span>
+      <div className="train-row-info">
+        <span className="train-row-name">{name}</span>
+        {route && <span className="train-row-route">{route}</span>}
+        {event && <span className="train-row-event">{event}</span>}
+      </div>
+      <span className="train-row-badge" style={{ color, borderColor: color }}>{label}</span>
+    </div>
+  )
+}
+
+function TrainPanel({ trains, loading }) {
+  const core   = trains.filter(isCoreNEC)
+  const others = trains.filter(t => !isCoreNEC(t))
+
+  return (
+    <div className="train-side-panel">
+      <div className="train-panel-section">
+        <div className="train-panel-head">ACELA · NE REGIONAL</div>
+        {loading ? (
+          <div className="train-panel-empty">Loading…</div>
+        ) : core.length ? (
+          core.map(t => <TrainRow key={t.train_number} t={t} />)
+        ) : (
+          <div className="train-panel-empty">No scheduled service</div>
+        )}
+      </div>
+
+      {others.length > 0 && (
+        <div className="train-panel-section">
+          <div className="train-panel-head">DC CORRIDOR</div>
+          {others.map(t => <TrainRow key={t.train_number} t={t} />)}
+        </div>
+      )}
+
+      {!loading && trains.length === 0 && (
+        <div className="train-panel-empty" style={{ marginTop: '1rem' }}>
+          No DC-area trains reported
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function TrainMapView() {
-  const mapRef       = useRef(null)
-  const leafletRef   = useRef(null)
-  const trainLayerRef = useRef(null)
+  const mapRef           = useRef(null)
+  const leafletRef       = useRef(null)
+  const trainLayerRef    = useRef(null)
   const searchMarkersRef = useRef(null)
 
-  const [trainCount, setTrainCount]   = useState(0)
-  const [vipCount,   setVipCount]     = useState(0)
-  const [loadErr,    setLoadErr]      = useState(false)
+  const [trainCount,     setTrainCount]     = useState(0)
+  const [vipCount,       setVipCount]       = useState(0)
+  const [loadErr,        setLoadErr]        = useState(false)
+  const [dispatchTrains, setDispatchTrains] = useState([])
+  const [panelLoading,   setPanelLoading]   = useState(true)
 
   // Search state
-  const [searchInput,  setSearchInput]  = useState('')
-  const [searchState,  setSearchState]  = useState('idle')
-  const [matchCount,   setMatchCount]   = useState(0)
+  const [searchInput, setSearchInput] = useState('')
+  const [searchState, setSearchState] = useState('idle')
+  const [matchCount,  setMatchCount]  = useState(0)
 
   // ── Init map ────────────────────────────────────────────────────
   useEffect(() => {
@@ -129,7 +234,7 @@ export default function TrainMapView() {
     leafletRef.current = map
   }, [])
 
-  // ── Refresh train overlay ───────────────────────────────────────
+  // ── Refresh train overlay (map) ─────────────────────────────────
   const refreshTrains = useCallback(async () => {
     if (!trainLayerRef.current) return
     try {
@@ -138,19 +243,17 @@ export default function TrainMapView() {
 
       let count = 0, vips = 0
       trains.forEach(t => {
-        const num  = String(t.trainNum || t.objectID || '').trim()
+        const num       = String(t.trainNum || t.objectID || '').trim()
         const isWatched = watched.has(num)
-        const isVip     = t.priority === 1 || (t.trainNum && watched.has(num) && false) // extend logic here
-        // Mark as VIP if in watchlist at highest priority — for now watchlist match = isWatched
-        const icon = trainIcon(false, isWatched)
+        const icon      = trainIcon(false, isWatched)
 
-        const spd  = t.speed  != null ? `${t.speed} mph` : '—'
-        const hdg  = t.heading || '—'
-        const sta  = t.eventCode || '—'
-        const nm   = t.routeName || t.trainNum || '?'
+        const spd     = t.speed  != null ? `${t.speed} mph` : '—'
+        const hdg     = t.heading || '—'
+        const sta     = t.eventCode || '—'
+        const nm      = t.routeName || t.trainNum || '?'
         const delayed = t.late ? ` (${t.late > 0 ? '+' : ''}${t.late}m)` : ''
 
-        const marker = L.marker([t.lat, t.lon], { icon, zIndexOffset: isWatched ? 1000 : 0 })
+        L.marker([t.lat, t.lon], { icon, zIndexOffset: isWatched ? 1000 : 0 })
           .bindTooltip(
             `<b style="color:${isWatched ? '#ffd700' : '#00d4ff'}">${num} — ${nm}</b>` +
             `<br/>Speed: ${spd} · Hdg: ${hdg}` +
@@ -161,7 +264,6 @@ export default function TrainMapView() {
           .addTo(trainLayerRef.current)
 
         if (isWatched) {
-          // Pulsing ring for watchlisted trains
           L.circleMarker([t.lat, t.lon], {
             radius: 14, color: '#ffd700', weight: 1.5,
             fill: false, opacity: 0.5,
@@ -182,6 +284,18 @@ export default function TrainMapView() {
     const id = setInterval(refreshTrains, TRAIN_POLL)
     return () => clearInterval(id)
   }, [refreshTrains])
+
+  // ── Panel polling (dispatch API) ────────────────────────────────
+  useEffect(() => {
+    const poll = async () => {
+      const trains = await fetchDispatchTrains()
+      setDispatchTrains(trains)
+      setPanelLoading(false)
+    }
+    poll()
+    const id = setInterval(poll, PANEL_POLL)
+    return () => clearInterval(id)
+  }, [])
 
   // ── Station / city search ───────────────────────────────────────
   const handleSearch = useCallback(async (e) => {
@@ -253,53 +367,60 @@ export default function TrainMapView() {
            className="train-map-external" title="Open OpenRailwayMap">↗</a>
       </div>
 
-      {/* ── Search bar ─────────────────────────────────────────── */}
-      <form className="train-search-bar" onSubmit={handleSearch} role="search">
-        <input
-          className="train-search-input"
-          type="search"
-          placeholder="Station or city… (comma-separate for multiple)"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          aria-label="Search for a rail station or city"
-          autoComplete="off" spellCheck={false}
-          disabled={searchState === 'loading'}
-        />
-        <button type="submit" className="globe-search-btn"
-          disabled={searchState === 'loading'} aria-label="Search">
-          {searchState === 'loading' ? '⟳' : '⌕'}
-        </button>
-        {statusLabel && (
-          <span className={`globe-search-type-badge${searchState === 'notfound' ? ' search-badge-notfound' : ''}`}>
-            {statusLabel}
-          </span>
-        )}
-        {(searchState === 'found' || searchState === 'notfound') && (
-          <button type="button" className="globe-search-clear" onClick={handleClear} aria-label="Clear search">✕</button>
-        )}
-      </form>
+      <div className="train-page-body">
+        {/* ── Schedule panel (always shows Acela / NE Regional) ─── */}
+        <TrainPanel trains={dispatchTrains} loading={panelLoading} />
 
-      <div className="map-container">
-        <div ref={mapRef} className="leaflet-map" />
-        <div className="map-overlay-stats">
-          <span className="stat source-badge" style={{ color: '#00d4ff' }}>
-            {trainCount} trains
-          </span>
-          {vipCount > 0 && (
-            <span className="stat source-badge" style={{ color: '#ffd700' }}>
-              ★ {vipCount} watchlisted
-            </span>
-          )}
-          {loadErr && <span className="stat" style={{ color: 'var(--nogo)', fontSize: '0.6rem' }}>Amtrak feed error</span>}
-          <span className="stat" style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
-            OSM · ORM rail · Amtrak positions
-          </span>
-          <button
-            className="intel-refresh-btn"
-            onClick={refreshTrains}
-            title="Refresh train positions"
-            style={{ marginLeft: '0.5rem' }}
-          >↻</button>
+        {/* ── Map + search ───────────────────────────────────────── */}
+        <div className="train-map-section">
+          <form className="train-search-bar" onSubmit={handleSearch} role="search">
+            <input
+              className="train-search-input"
+              type="search"
+              placeholder="Station or city… (comma-separate for multiple)"
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              aria-label="Search for a rail station or city"
+              autoComplete="off" spellCheck={false}
+              disabled={searchState === 'loading'}
+            />
+            <button type="submit" className="globe-search-btn"
+              disabled={searchState === 'loading'} aria-label="Search">
+              {searchState === 'loading' ? '⟳' : '⌕'}
+            </button>
+            {statusLabel && (
+              <span className={`globe-search-type-badge${searchState === 'notfound' ? ' search-badge-notfound' : ''}`}>
+                {statusLabel}
+              </span>
+            )}
+            {(searchState === 'found' || searchState === 'notfound') && (
+              <button type="button" className="globe-search-clear" onClick={handleClear} aria-label="Clear search">✕</button>
+            )}
+          </form>
+
+          <div className="map-container">
+            <div ref={mapRef} className="leaflet-map" />
+            <div className="map-overlay-stats">
+              <span className="stat source-badge" style={{ color: '#00d4ff' }}>
+                {trainCount} NEC/DC trains
+              </span>
+              {vipCount > 0 && (
+                <span className="stat source-badge" style={{ color: '#ffd700' }}>
+                  ★ {vipCount} watchlisted
+                </span>
+              )}
+              {loadErr && <span className="stat" style={{ color: 'var(--nogo)', fontSize: '0.6rem' }}>Amtrak feed error</span>}
+              <span className="stat" style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
+                OSM · ORM rail · Amtrak positions
+              </span>
+              <button
+                className="intel-refresh-btn"
+                onClick={refreshTrains}
+                title="Refresh train positions"
+                style={{ marginLeft: '0.5rem' }}
+              >↻</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
