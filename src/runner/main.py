@@ -1441,13 +1441,22 @@ class StaticCacheMiddleware(BaseHTTPMiddleware):
 app.add_middleware(StaticCacheMiddleware)
 
 # SPA catch-all: serve index.html for any path that isn't an API route or
-# static asset.  This enables direct-linking and page-refresh on client-side
-# routes (/ais, /signals, /trains, etc.) — Starlette's StaticFiles html=True
-# only handles directory indexes, not arbitrary SPA paths.
-_SPA_INDEX = _os.path.join(STATIC_DIR, "index.html")
+# an actual static file.  This enables direct-linking and page-refresh on
+# client-side routes (/ais, /signals, /trains, etc.) — Starlette's
+# StaticFiles html=True only handles directory indexes, not arbitrary SPA paths.
+#
+# Static assets (/assets/*, sw.js, manifest.webmanifest, etc.) are served
+# directly from disk so the browser receives the real JS/CSS, not the shell.
+_SPA_INDEX  = _os.path.join(STATIC_DIR, "index.html")
+_STATIC_ROOT = _os.path.realpath(STATIC_DIR)
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def _serve_spa(full_path: str):
+    # Check if the path maps to a real file inside the static dir (safe against traversal).
+    candidate = _os.path.realpath(_os.path.join(STATIC_DIR, full_path))
+    if candidate.startswith(_STATIC_ROOT + _os.sep) and _os.path.isfile(candidate):
+        return FileResponse(candidate)
+    # Everything else is a SPA client-side route — return the app shell.
     if _os.path.isfile(_SPA_INDEX):
         return FileResponse(_SPA_INDEX, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     raise HTTPException(status_code=404, detail="Frontend not built")
