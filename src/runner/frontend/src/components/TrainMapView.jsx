@@ -8,31 +8,24 @@ const OSM_ATTR  = '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> 
 const ORM_URL   = 'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png'
 const ORM_ATTR  = '&copy; <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a> CC-BY-SA'
 
-const ORM_LINK    = 'https://www.openrailwaymap.org/'
-const KDCA        = [38.8521, -77.0377]
-const DEFAULT_ZOOM = 6
-const TRAIN_POLL  = 30_000
-const PANEL_POLL  = 60_000
+const ORM_LINK      = 'https://www.openrailwaymap.org/'
+const DC_DEFAULT    = [38.8521, -77.0377]    // KDCA — used until config loads
+const US_CENTER     = [39.5, -98.35]          // continental US center
+const US_ZOOM       = 4
+const DEFAULT_ZOOM  = 7
+const TRAIN_POLL    = 30_000
+const PANEL_POLL    = 60_000
 
-// ── NEC / DC filtering ────────────────────────────────────────────
-// Mirror of amtrak.py NEC_ROUTES and DC_STATIONS — keeps map display
-// consistent with what the dispatch backend tracks.
-const DC_STATIONS    = new Set(['WAS', 'BWI', 'NCR', 'ALX', 'BAL', 'ABE', 'WIL', 'NPN'])
-const NEC_NAMES      = ['acela', 'northeast regional', 'palmetto', 'carolinian',
-                        'vermonter', 'keystone', 'empire service', 'empire state',
-                        'silver star', 'silver meteor']
-const CORE_NEC_NAMES = ['acela', 'northeast regional']
-
-function isNECOrDC(train) {
-  const route = (train.routeName || '').toLowerCase()
-  if (NEC_NAMES.some(n => route.includes(n))) return true
-  const stns = Array.isArray(train.stations) ? train.stations : []
-  return stns.some(s => DC_STATIONS.has(s.code || s.stationCode || ''))
-}
+// ── Hardcoded DC fallback (used before /train-config responds) ────
+const _FB_STATIONS    = new Set(['WAS', 'BWI', 'NCR', 'ALX', 'BAL', 'ABE', 'WIL', 'NPN'])
+const _FB_ROUTES      = ['acela', 'northeast regional', 'palmetto', 'carolinian',
+                          'vermonter', 'keystone', 'empire service', 'empire state',
+                          'silver star', 'silver meteor']
+const _FB_CORE_ROUTES = ['acela', 'northeast regional']
 
 // ── Train icon factory ────────────────────────────────────────────
-function trainIcon(isVip, isWatched) {
-  const color = isVip ? '#ff3131' : isWatched ? '#ffd700' : '#00d4ff'
+function trainIcon(isWatched) {
+  const color = isWatched ? '#ffd700' : '#00d4ff'
   return L.divIcon({
     className: '',
     html: `<div style="
@@ -89,11 +82,9 @@ async function fetchWatchedTrains() {
   return watched
 }
 
-// ── Fetch Amtrak positions (NEC / DC-area only) ───────────────────
-// Filters to routes and stations the dispatch backend tracks —
-// suppresses long-distance trains (Empire Builder, etc.) that have
-// no DC relevance.
-async function fetchTrainPositions() {
+// ── Fetch Amtrak positions ────────────────────────────────────────
+// filterFn: null for national mode (all trains), or isRelevant(t) for regional.
+async function fetchTrainPositions(filterFn) {
   try {
     const r = await fetch('https://api.amtraker.com/v3/trains', {
       headers: { Accept: 'application/json' },
@@ -103,16 +94,23 @@ async function fetchTrainPositions() {
     const trains = []
     Object.values(data).forEach(arr => {
       if (Array.isArray(arr)) arr.forEach(t => {
-        if (t.lat && t.lon && isNECOrDC(t)) trains.push(t)
+        if (t.lat && t.lon && (!filterFn || filterFn(t))) trains.push(t)
       })
     })
     return trains
   } catch { return [] }
 }
 
+// ── Fetch operator train config from dispatch ─────────────────────
+async function fetchTrainConfig() {
+  try {
+    const r = await fetch('/api/dispatch/api/v1/train-config')
+    if (!r.ok) return null
+    return await r.json()
+  } catch { return null }
+}
+
 // ── Fetch dispatch train list (panel data) ────────────────────────
-// Dispatch backend already filters to NEC/DC; trains include those
-// without live GPS so Acela/NE Regional always appear in the panel.
 async function fetchDispatchTrains() {
   try {
     const r = await fetch('/api/dispatch/api/v1/amtrak')
@@ -123,11 +121,6 @@ async function fetchDispatchTrains() {
 }
 
 // ── Train panel helpers ───────────────────────────────────────────
-function isCoreNEC(t) {
-  const name = (t.train_name || '').toLowerCase()
-  return CORE_NEC_NAMES.some(n => name.includes(n))
-}
-
 function delayColor(delay, state) {
   const s = (state || '').toLowerCase()
   if (s === 'completed')    return 'var(--muted)'
@@ -168,14 +161,19 @@ function TrainRow({ t }) {
   )
 }
 
-function TrainPanel({ trains, loading }) {
-  const core   = trains.filter(isCoreNEC)
-  const others = trains.filter(t => !isCoreNEC(t))
+function TrainPanel({ trains, coreRoutes, loading }) {
+  const isCore = t => coreRoutes.some(n => (t.train_name || '').toLowerCase().includes(n.toLowerCase()))
+  const core   = trains.filter(isCore)
+  const others = trains.filter(t => !isCore(t))
+
+  const coreLabel = coreRoutes.length <= 2
+    ? coreRoutes.map(r => r.toUpperCase()).join(' · ')
+    : 'CORE ROUTES'
 
   return (
     <div className="train-side-panel">
       <div className="train-panel-section">
-        <div className="train-panel-head">ACELA · NE REGIONAL</div>
+        <div className="train-panel-head">{coreLabel}</div>
         {loading ? (
           <div className="train-panel-empty">Loading…</div>
         ) : core.length ? (
@@ -187,14 +185,14 @@ function TrainPanel({ trains, loading }) {
 
       {others.length > 0 && (
         <div className="train-panel-section">
-          <div className="train-panel-head">DC CORRIDOR</div>
+          <div className="train-panel-head">REGIONAL CORRIDOR</div>
           {others.map(t => <TrainRow key={t.train_number} t={t} />)}
         </div>
       )}
 
       {!loading && trains.length === 0 && (
         <div className="train-panel-empty" style={{ marginTop: '1rem' }}>
-          No DC-area trains reported
+          No regional trains reported
         </div>
       )}
     </div>
@@ -212,21 +210,58 @@ export default function TrainMapView() {
   const [loadErr,        setLoadErr]        = useState(false)
   const [dispatchTrains, setDispatchTrains] = useState([])
   const [panelLoading,   setPanelLoading]   = useState(true)
+  const [viewMode,       setViewMode]       = useState('regional')  // 'regional' | 'national'
+
+  // Operator config (loaded once, then cached)
+  const [trainConfig, setTrainConfig] = useState({
+    stations:    _FB_STATIONS,
+    routes:      _FB_ROUTES,
+    core_routes: _FB_CORE_ROUTES,
+    center:      DC_DEFAULT,
+    zoom:        DEFAULT_ZOOM,
+  })
 
   // Search state
   const [searchInput, setSearchInput] = useState('')
   const [searchState, setSearchState] = useState('idle')
   const [matchCount,  setMatchCount]  = useState(0)
 
+  // ── Load operator config ─────────────────────────────────────────
+  useEffect(() => {
+    fetchTrainConfig().then(cfg => {
+      if (!cfg) return
+      const stations  = new Set((cfg.stations  || []).map(s => s.toUpperCase()))
+      const routes    = (cfg.routes      || []).map(r => r.toLowerCase())
+      const coreRts   = cfg.core_routes  || _FB_CORE_ROUTES
+      const center    = cfg.center       || DC_DEFAULT
+      const zoom      = cfg.zoom         || DEFAULT_ZOOM
+      setTrainConfig({ stations, routes, core_routes: coreRts, center, zoom })
+      // Fly to operator's hub on first load
+      if (leafletRef.current) {
+        leafletRef.current.flyTo(center, zoom, { duration: 1.2 })
+      }
+    })
+  }, [])
+
+  // ── Build filter function from current config ────────────────────
+  const makeFilter = useCallback((cfg) => {
+    return (train) => {
+      const route = (train.routeName || '').toLowerCase()
+      if (cfg.routes.some(n => route.includes(n))) return true
+      const stns = Array.isArray(train.stations) ? train.stations : []
+      return stns.some(s => cfg.stations.has(s.code || s.stationCode || ''))
+    }
+  }, [])
+
   // ── Init map ────────────────────────────────────────────────────
   useEffect(() => {
     if (leafletRef.current) return
-    const map = L.map(mapRef.current, { center: KDCA, zoom: DEFAULT_ZOOM, zoomControl: true })
+    const map = L.map(mapRef.current, { center: DC_DEFAULT, zoom: DEFAULT_ZOOM, zoomControl: true })
 
     L.tileLayer(OSM_URL, { attribution: OSM_ATTR, className: 'map-tiles' }).addTo(map)
     L.tileLayer(ORM_URL, { attribution: ORM_ATTR, maxZoom: 19, subdomains: 'abc', opacity: 0.8 }).addTo(map)
 
-    L.circleMarker(KDCA, { radius: 4, color: '#ffd700', fill: true, fillOpacity: 1 })
+    L.circleMarker(DC_DEFAULT, { radius: 4, color: '#ffd700', fill: true, fillOpacity: 1 })
       .addTo(map).bindTooltip('KDCA / DC', { permanent: true, className: 'airport-label' })
 
     trainLayerRef.current    = L.layerGroup().addTo(map)
@@ -234,18 +269,32 @@ export default function TrainMapView() {
     leafletRef.current = map
   }, [])
 
+  // ── Handle REGIONAL/NATIONAL toggle ─────────────────────────────
+  useEffect(() => {
+    if (!leafletRef.current) return
+    if (viewMode === 'national') {
+      leafletRef.current.flyTo(US_CENTER, US_ZOOM, { duration: 1.0 })
+    } else {
+      leafletRef.current.flyTo(trainConfig.center, trainConfig.zoom, { duration: 1.0 })
+    }
+  }, [viewMode, trainConfig])
+
   // ── Refresh train overlay (map) ─────────────────────────────────
   const refreshTrains = useCallback(async () => {
     if (!trainLayerRef.current) return
+    const filterFn = viewMode === 'national' ? null : makeFilter(trainConfig)
     try {
-      const [trains, watched] = await Promise.all([fetchTrainPositions(), fetchWatchedTrains()])
+      const [trains, watched] = await Promise.all([
+        fetchTrainPositions(filterFn),
+        fetchWatchedTrains(),
+      ])
       trainLayerRef.current.clearLayers()
 
       let count = 0, vips = 0
       trains.forEach(t => {
         const num       = String(t.trainNum || t.objectID || '').trim()
         const isWatched = watched.has(num)
-        const icon      = trainIcon(false, isWatched)
+        const icon      = trainIcon(isWatched)
 
         const spd     = t.speed  != null ? `${t.speed} mph` : '—'
         const hdg     = t.heading || '—'
@@ -277,7 +326,7 @@ export default function TrainMapView() {
       setVipCount(vips)
       setLoadErr(false)
     } catch { setLoadErr(true) }
-  }, [])
+  }, [viewMode, trainConfig, makeFilter])
 
   useEffect(() => {
     refreshTrains()
@@ -285,7 +334,7 @@ export default function TrainMapView() {
     return () => clearInterval(id)
   }, [refreshTrains])
 
-  // ── Panel polling (dispatch API) ────────────────────────────────
+  // ── Panel polling (dispatch API, always regional) ───────────────
   useEffect(() => {
     const poll = async () => {
       const trains = await fetchDispatchTrains()
@@ -303,7 +352,11 @@ export default function TrainMapView() {
     const raw = searchInput.trim()
     if (!raw) {
       searchMarkersRef.current?.clearLayers()
-      leafletRef.current?.flyTo(KDCA, DEFAULT_ZOOM, { duration: 1.0 })
+      leafletRef.current?.flyTo(
+        viewMode === 'national' ? US_CENTER : trainConfig.center,
+        viewMode === 'national' ? US_ZOOM   : trainConfig.zoom,
+        { duration: 1.0 }
+      )
       setSearchState('idle')
       setMatchCount(0)
       return
@@ -342,13 +395,17 @@ export default function TrainMapView() {
         { duration: 1.2, maxZoom: 13 }
       )
     }
-  }, [searchInput])
+  }, [searchInput, viewMode, trainConfig])
 
   const handleClear = useCallback(() => {
     setSearchInput(''); setSearchState('idle'); setMatchCount(0)
     searchMarkersRef.current?.clearLayers()
-    leafletRef.current?.flyTo(KDCA, DEFAULT_ZOOM, { duration: 1.0 })
-  }, [])
+    leafletRef.current?.flyTo(
+      viewMode === 'national' ? US_CENTER : trainConfig.center,
+      viewMode === 'national' ? US_ZOOM   : trainConfig.zoom,
+      { duration: 1.0 }
+    )
+  }, [viewMode, trainConfig])
 
   const statusLabel =
     searchState === 'loading'  ? '⟳ Geocoding…'
@@ -356,11 +413,28 @@ export default function TrainMapView() {
     : searchState === 'found'    ? `✓ ${matchCount} location${matchCount !== 1 ? 's' : ''}`
     : null
 
+  const countLabel = viewMode === 'national'
+    ? `${trainCount} trains nationwide`
+    : `${trainCount} regional trains`
+
   return (
     <div className="train-map-view">
       <div className="train-map-subnav">
         <span className="train-map-title">EOTD</span>
-        <span className="stat source-badge" style={{ color: 'var(--cyan)' }}>
+
+        {/* ── REGIONAL / NATIONAL toggle ─────────────────────── */}
+        <div className="train-view-toggle">
+          <button
+            className={`train-mode-btn${viewMode === 'regional' ? ' active' : ''}`}
+            onClick={() => setViewMode('regional')}
+          >REGIONAL</button>
+          <button
+            className={`train-mode-btn${viewMode === 'national' ? ' active' : ''}`}
+            onClick={() => setViewMode('national')}
+          >NATIONAL</button>
+        </div>
+
+        <span className="stat source-badge" style={{ color: 'var(--cyan)', marginLeft: 'auto' }}>
           OpenRailwayMap + Amtrak live positions
         </span>
         <a href={ORM_LINK} target="_blank" rel="noopener noreferrer"
@@ -368,10 +442,14 @@ export default function TrainMapView() {
       </div>
 
       <div className="train-page-body">
-        {/* ── Schedule panel (always shows Acela / NE Regional) ─── */}
-        <TrainPanel trains={dispatchTrains} loading={panelLoading} />
+        {/* ── Schedule panel (always regional/configured) ────── */}
+        <TrainPanel
+          trains={dispatchTrains}
+          coreRoutes={trainConfig.core_routes}
+          loading={panelLoading}
+        />
 
-        {/* ── Map + search ───────────────────────────────────────── */}
+        {/* ── Map + search ─────────────────────────────────── */}
         <div className="train-map-section">
           <form className="train-search-bar" onSubmit={handleSearch} role="search">
             <input
@@ -402,7 +480,7 @@ export default function TrainMapView() {
             <div ref={mapRef} className="leaflet-map" />
             <div className="map-overlay-stats">
               <span className="stat source-badge" style={{ color: '#00d4ff' }}>
-                {trainCount} NEC/DC trains
+                {countLabel}
               </span>
               {vipCount > 0 && (
                 <span className="stat source-badge" style={{ color: '#ffd700' }}>
