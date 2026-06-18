@@ -117,7 +117,7 @@ def _fire_notam_alert(notam: dict) -> None:
     """Push ntfy alert for a NOTAM that matches the watch set."""
     notam_id = notam["notam_id"]
     dedup_key = content_hash(notam_id)
-    if not _NOTAM_DEDUP.should_push("aim", dedup_key):
+    if not _NOTAM_DEDUP.should_push(notam_id, dedup_key):
         return
 
     facility = notam.get("facility", "")
@@ -137,7 +137,7 @@ def _fire_notam_alert(notam: dict) -> None:
         tags="warning,airplane",
     )
     if ok:
-        _NOTAM_DEDUP.record("aim", dedup_key)
+        _NOTAM_DEDUP.record(notam_id, dedup_key)
         log.info("aim: notam alert fired: %s facility=%s priority=%d", notam_id, facility, priority)
 
     # Dual-push to nas-alerts (same content, independent of dispatch-alerts success)
