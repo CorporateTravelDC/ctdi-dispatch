@@ -55,6 +55,8 @@ AIRFRAMES_TOKEN    = os.getenv("AIRFRAMES_TOKEN",            "")
 
 MARINETRAFFIC_BASE = os.getenv("MARINETRAFFIC_BASE_URL",    "https://services.marinetraffic.com/api")
 MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",     "")
+AIS_AISHUB_ID      = os.getenv("AIS_AISHUB_ID",             "")
+AIS_AISHUB_BASE    = "http://data.aishub.net/ws.php"
 TAILSCALE_CIDR     = ipaddress.ip_network("100.64.0.0/10")
 STATIC_DIR         = os.getenv("STATIC_DIR",                "/app/static")
 SSE_INTERVAL_SEC   = int(os.getenv("SSE_INTERVAL_SEC",      "30"))
@@ -390,6 +392,57 @@ async def hfdl_messages(
     hw = "hardware_pending" if not ACARSDRAMA_TOKEN and not AIRFRAMES_TOKEN else "unavailable"
     return {"source": "none", "messages": [], "count": 0, "detail": hw}
 
+# ── AIS helpers -------------------------------------------------------------
+
+def _bbox(lat: float, lon: float, dist_nm: int) -> dict:
+    """Approximate bounding box for a radius in nautical miles (~1 nm ≈ 1/60 deg lat)."""
+    dlat = dist_nm / 60.0
+    dlon = dlat / max(math.cos(math.radians(lat)), 0.01)
+    return {
+        "MINLAT": round(lat - dlat, 4), "MAXLAT": round(lat + dlat, 4),
+        "MINLON": round(lon - dlon, 4), "MAXLON": round(lon + dlon, 4),
+    }
+
+def _norm_vessel(v: dict, source: str) -> dict:
+    """Normalise vessel dict from any source to a common schema."""
+    if source == "local":
+        return {
+            "mmsi":       str(v.get("mmsi", "")),
+            "name":       v.get("name", "").strip(),
+            "lat":        v.get("lat") or v.get("latitude"),
+            "lon":        v.get("lon") or v.get("longitude"),
+            "sog":        v.get("speed") or v.get("sog"),
+            "cog":        v.get("course") or v.get("cog"),
+            "hdg":        v.get("heading"),
+            "nav_status": v.get("navstat") or v.get("status"),
+            "ship_type":  v.get("shiptype") or v.get("ship_type"),
+        }
+    if source == "marinetraffic.com":
+        return {
+            "mmsi":       str(v.get("MMSI", "")),
+            "name":       v.get("SHIPNAME", "").strip(),
+            "lat":        v.get("LAT"),
+            "lon":        v.get("LON"),
+            "sog":        v.get("SPEED"),
+            "cog":        v.get("COURSE"),
+            "hdg":        v.get("HEADING"),
+            "nav_status": v.get("NAVSTAT"),
+            "ship_type":  v.get("SHIPTYPE"),
+        }
+    if source == "aishub.net":
+        return {
+            "mmsi":       str(v.get("MMSI", "")),
+            "name":       v.get("NAME", "").strip(),
+            "lat":        v.get("LATITUDE"),
+            "lon":        v.get("LONGITUDE"),
+            "sog":        v.get("SOG"),
+            "cog":        v.get("COG"),
+            "hdg":        v.get("HEADING"),
+            "nav_status": v.get("NAVSTAT"),
+            "ship_type":  v.get("TYPE"),
+        }
+    return v
+
 # ── AIS endpoint ------------------------------------------------------------
 
 @app.get("/api/ais/vessels")
@@ -399,42 +452,63 @@ async def ais_vessels(
     dist: int   = Query(DEFAULT_DIST),
 ):
     """
-    AIS vessel positions. Local AIS-catcher first; falls back to MarineTraffic API.
-    AIS-catcher exposes vessel JSON at /vessels.json when running.
+    AIS vessel positions.
+    Fallback chain: local AIS-catcher → MarineTraffic API → AISHub → none.
+    Returns normalised vessel objects regardless of source.
     """
-    # 1 -- Local AIS-catcher
+    # 1 -- Local AIS-catcher (hardware)
     try:
         async with httpx.AsyncClient() as c:
             r = await c.get(f"{AIS_CATCHER_URL}/vessels.json", timeout=5)
             r.raise_for_status()
             data = r.json()
-            vessels = data.get("vessels") or data if isinstance(data, list) else []
+            raw = data.get("vessels") or (data if isinstance(data, list) else [])
+            vessels = [_norm_vessel(v, "local") for v in raw if isinstance(v, dict)]
             return {"source": "local", "vessels": vessels, "count": len(vessels)}
-    except Exception as local_err:
-        log.debug("AIS local unavailable: %s -- trying MarineTraffic", local_err)
+    except Exception as e:
+        log.debug("AIS local unavailable: %s", e)
 
-    # 2 -- MarineTraffic API fallback
-    if not MARINETRAFFIC_KEY:
-        return {"source": "none", "vessels": [], "count": 0,
-                "detail": "hardware_pending"}
-    try:
-        bbox = _bbox(lat, lon, dist)
-        url = (f"{MARINETRAFFIC_BASE}/getVessels/v:8/{MARINETRAFFIC_KEY}"
-               f"/MINLAT:{bbox['MINLAT']}/MAXLAT:{bbox['MAXLAT']}"
-               f"/MINLON:{bbox['MINLON']}/MAXLON:{bbox['MAXLON']}"
-               f"/protocol:json")
-        async with httpx.AsyncClient() as c:
-            r = await c.get(url, timeout=12,
-                            headers={"User-Agent": "corporatetraveldc/1.0"})
-            r.raise_for_status()
-            data = r.json()
-            vessels = data.get("DATA") or data if isinstance(data, list) else []
-            return {"source": "marinetraffic.com", "vessels": vessels,
-                    "count": len(vessels)}
-    except Exception as ext_err:
-        log.warning("AIS MarineTraffic unavailable: %s", ext_err)
+    # 2 -- MarineTraffic API (paid key)
+    if MARINETRAFFIC_KEY:
+        try:
+            bbox = _bbox(lat, lon, dist)
+            url = (f"{MARINETRAFFIC_BASE}/getVessels/v:8/{MARINETRAFFIC_KEY}"
+                   f"/MINLAT:{bbox['MINLAT']}/MAXLAT:{bbox['MAXLAT']}"
+                   f"/MINLON:{bbox['MINLON']}/MAXLON:{bbox['MAXLON']}"
+                   f"/protocol:json")
+            async with httpx.AsyncClient() as c:
+                r = await c.get(url, timeout=12, headers={"User-Agent": "corporatetraveldc/1.0"})
+                r.raise_for_status()
+                data = r.json()
+                raw = data.get("DATA") or (data if isinstance(data, list) else [])
+                vessels = [_norm_vessel(v, "marinetraffic.com") for v in raw if isinstance(v, dict)]
+                return {"source": "marinetraffic.com", "vessels": vessels, "count": len(vessels)}
+        except Exception as e:
+            log.warning("AIS MarineTraffic unavailable: %s", e)
 
-    return {"source": "none", "vessels": [], "count": 0}
+    # 3 -- AISHub (free data-sharing cooperative, requires registration)
+    if AIS_AISHUB_ID:
+        try:
+            bbox = _bbox(lat, lon, min(dist, 120))  # AISHub free tier: smaller window
+            params = {
+                "username": AIS_AISHUB_ID, "format": "1",
+                "output": "json", "compress": "0",
+                "latmin": bbox["MINLAT"], "latmax": bbox["MAXLAT"],
+                "lonmin": bbox["MINLON"], "lonmax": bbox["MAXLON"],
+            }
+            async with httpx.AsyncClient() as c:
+                r = await c.get(AIS_AISHUB_BASE, params=params, timeout=12,
+                                headers={"User-Agent": "corporatetraveldc/1.0"})
+                r.raise_for_status()
+                data = r.json()
+                # AISHub response: [{metadata}, vessel1, vessel2, ...]
+                raw = [v for v in data if isinstance(v, dict) and "MMSI" in v]
+                vessels = [_norm_vessel(v, "aishub.net") for v in raw]
+                return {"source": "aishub.net", "vessels": vessels, "count": len(vessels)}
+        except Exception as e:
+            log.warning("AIS AISHub unavailable: %s", e)
+
+    return {"source": "none", "vessels": [], "count": 0, "detail": "no_source_configured"}
 
 # ── Dispatch AI chat (Local/Cloud LLM) -------------------------------------
 # These local inference endpoints are also exposed as portable MCP tools.
