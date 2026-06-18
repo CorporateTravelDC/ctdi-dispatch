@@ -762,6 +762,7 @@ body::before {
 }
 .sig-label { font-family: var(--font-ui); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; }
 .sig-count { font-family: var(--font-data); font-size: 0.62rem; color: var(--muted); margin-left: auto; }
+.sig-count-hot { color: var(--orange); font-weight: 700; }
 .sig-feed  { overflow-y: auto; padding: 0.5rem 0.75rem; flex: 1; }
 
 .sig-msg {
@@ -794,6 +795,10 @@ body::before {
 
 /* Weather panel */
 .wx-panel .sig-msg-call { min-width: 4rem; }
+.wx-alert-msg .sig-msg-call { min-width: 12rem; font-weight: 700; }
+.wx-alert-msg .sig-msg-flight { font-size: 0.58rem; letter-spacing: 0.08em; padding: 0.1rem 0.3rem;
+  background: var(--bg-3); border-radius: 2px; flex-shrink: 0; }
+.wx-alert-msg .sig-msg-time { margin-left: auto; flex-shrink: 0; }
 .sig-source { font-family: var(--font-data); font-size: 0.58rem; }
 .sig-source.local    { color: var(--cyan); }
 .sig-source.external { color: var(--go); }
@@ -1142,7 +1147,15 @@ body::before {
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; color: var(--text);
 }
 .ov-alert-area  { font-size: 0.6rem; color: var(--muted); }
-.ov-alert-more  { font-family: var(--font-ui); font-size: 0.62rem; color: var(--muted); align-self: center; }
+.ov-alert-more  { font-family: var(--font-ui); font-size: 0.62rem; color: var(--muted); align-self: center;
+  text-decoration: none; }
+.ov-alert-more:hover { color: var(--cyan); }
+
+/* Clickable MetricCard wrapper */
+.ov-card-link { text-decoration: none; display: block; }
+.ov-card-link:hover .ov-card { border-color: var(--cyan); box-shadow: 0 0 14px rgba(0,212,255,0.18); }
+.ov-card-arrow { float: right; opacity: 0.35; font-size: 0.7rem; transition: opacity var(--transition); }
+.ov-card-link:hover .ov-card-arrow { opacity: 1; color: var(--cyan); }
 
 /* ── ntfy Feed view ──────────────────────────────────────────────────────── */
 .ntfy-view { display: flex; flex-direction: column; height: 100%; gap: 0; }

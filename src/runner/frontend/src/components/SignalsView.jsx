@@ -363,6 +363,90 @@ function fmtMetar(m) {
   return parts.join(' · ') || '—'
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  METEOROLOGY — NWS Alerts + METAR
+// ═══════════════════════════════════════════════════════════════════
+
+const SEV_COLORS = {
+  extreme:  '#ff2929',
+  severe:   '#ff6b35',
+  moderate: '#ffd700',
+  minor:    '#87ceeb',
+  unknown:  'var(--muted)',
+}
+
+function fmtAlertTime(s) {
+  if (!s) return ''
+  try {
+    const d = new Date(s)
+    return `${String(d.getUTCMonth()+1).padStart(2,'0')}/${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}${String(d.getUTCMinutes()).padStart(2,'0')}Z`
+  } catch(_) { return s }
+}
+
+function alertMatches(a, q) {
+  if (!q) return true
+  const lq = q.toLowerCase()
+  return [a.event_type, a.area_desc, a.severity, a.headline, a.alert_id]
+    .some(v => v && String(v).toLowerCase().includes(lq))
+}
+
+function NwsAlertsPanel() {
+  const [data, setData]     = useState(null)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/dispatch/api/v1/alerts')
+        if (!r.ok) return
+        setData(await r.json())
+      } catch (_) {}
+    }
+    poll()
+    const id = setInterval(poll, 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  const alerts   = data?.alerts ?? (Array.isArray(data) ? data : [])
+  const filtered = useMemo(() => {
+    if (!search) return alerts
+    return alerts.filter(a => alertMatches(a, search))
+  }, [alerts, search])
+
+  return (
+    <div className="sig-panel wx-panel">
+      <div className="sig-panel-header">
+        <span className="sig-label" style={{ color: '#ff8c00' }}>NWS ALERTS</span>
+        <span className={`sig-count${alerts.length > 0 ? ' sig-count-hot' : ''}`}>
+          {alerts.length > 0 ? `${alerts.length} active` : 'clear'}
+        </span>
+        <input className="sig-search" type="search" placeholder="search alerts…"
+          value={search} onChange={e => setSearch(e.target.value)} aria-label="Search NWS alerts" />
+      </div>
+      <div className="sig-feed">
+        {data === null ? (
+          <div className="sig-empty">Loading NWS alerts…</div>
+        ) : !filtered.length ? (
+          <div className="sig-empty">
+            {search ? `No alerts matching "${search}"` : '✓ No active NWS hazardous weather alerts'}
+          </div>
+        ) : filtered.map((a, i) => {
+          const sev   = (a.severity || 'unknown').toLowerCase()
+          const color = SEV_COLORS[sev] ?? SEV_COLORS.unknown
+          return (
+            <div key={a.alert_id || i} className="sig-msg wx-alert-msg">
+              <span className="sig-msg-call" style={{ color }}>{a.event_type || 'Alert'}</span>
+              <span className="sig-msg-flight" style={{ color: 'var(--text-2)' }}>{sev.toUpperCase()}</span>
+              <span className="sig-msg-text">{a.headline || a.area_desc || '—'}</span>
+              {a.expires && <span className="sig-msg-time">exp {fmtAlertTime(a.expires)}</span>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function WeatherPanel() {
   const [data, setData]   = useState(null)
   const [search, setSearch] = useState('')
@@ -470,11 +554,10 @@ export default function SignalsView() {
     return () => clearInterval(id)
   }, [loadTfrs, loadNotams])
 
-  // ── Visible panel count ────────────────────────────────────────
+  // ── Visible panel counts ───────────────────────────────────────
   const sigCount = [
     ...SIGNAL_TYPES.map(st => layers[st.key] !== false),
-    layers.ais   !== false,
-    layers.metar !== false,
+    layers.ais !== false,
   ].filter(Boolean).length
 
   return (
@@ -511,7 +594,7 @@ export default function SignalsView() {
       </div>
       <p className="sig-subtitle">
         VDL2 / ACARS / HFDL via local decoders or airframes.io —
-        AIS via local AIS-catcher or MarineTraffic — METAR from AviationWeather.gov
+        AIS via local AIS-catcher or MarineTraffic
       </p>
 
       <div className="sig-grid" role="region" aria-labelledby="signals-heading" aria-live="polite" aria-atomic="false">
@@ -520,8 +603,7 @@ export default function SignalsView() {
             ? <MessageFeed key={st.key} sigType={st} color={st.color} />
             : null
         )}
-        {layers.ais   !== false && <AisPanel />}
-        {layers.metar !== false && <WeatherPanel />}
+        {layers.ais !== false && <AisPanel />}
 
         {sigCount === 0 && (
           <div className="sig-all-hidden" role="status">
@@ -529,6 +611,23 @@ export default function SignalsView() {
           </div>
         )}
       </div>
+
+      {/* ── METEOROLOGY section ──────────────────────────────── */}
+      <div className="signals-header-row" style={{ marginTop: '2rem' }} id="meteorology">
+        <h2 id="meteorology-heading">Meteorology</h2>
+        <span className="sig-panel-count">
+          NWS Alerts · METAR · polls every 60s
+        </span>
+      </div>
+      <p className="sig-subtitle">
+        NWS hazardous weather alerts — METAR observations from AviationWeather.gov
+      </p>
+
+      <div className="sig-grid" role="region" aria-labelledby="meteorology-heading">
+        <NwsAlertsPanel />
+        {layers.metar !== false && <WeatherPanel />}
+      </div>
+
     </div>
   )
 }
