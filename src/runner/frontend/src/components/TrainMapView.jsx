@@ -121,10 +121,21 @@ async function fetchDispatchTrains() {
 }
 
 // ── Train panel helpers ───────────────────────────────────────────
+// Field name normaliser — handles both the local amtrak-tracker container
+// format (train_num / route / origin / destination / status) and the
+// amtraker.com _normalize() format (train_number / train_name / train_state /
+// orig_code / dest_code).
+function tNum(t)   { return t.train_number ?? t.train_num ?? null }
+function tName(t)  { return t.train_name   || t.route      || null }
+function tState(t) { return t.train_state  || t.status     || '' }
+function tOrig(t)  { return t.orig_code    || t.origin     || '' }
+function tDest(t)  { return t.dest_code    || t.destination || '' }
+function tEvent(t) { return t.event_name   || (t._raw && t._raw.eventCode) || '' }
+
 function delayColor(delay, state) {
   const s = (state || '').toLowerCase()
-  if (s === 'completed')    return 'var(--muted)'
-  if (s === 'predeparture') return 'var(--cyan)'
+  if (s === 'completed' || s === 'arrived') return 'var(--muted)'
+  if (s === 'predeparture' || s === 'scheduled') return 'var(--cyan)'
   if (delay > 30)  return 'var(--nogo)'
   if (delay > 10)  return 'var(--orange)'
   if (delay > 0)   return 'var(--marginal)'
@@ -133,20 +144,24 @@ function delayColor(delay, state) {
 
 function delayLabel(delay, state) {
   const s = (state || '').toLowerCase()
-  if (s === 'completed')    return 'DONE'
-  if (s === 'predeparture') return 'PRE'
+  if (s === 'completed' || s === 'arrived')         return 'ARR'
+  if (s === 'predeparture' || s === 'scheduled')    return 'SCH'
   if (delay > 0) return `+${delay}m`
   return 'OT'
 }
 
 function TrainRow({ t }) {
-  const delay = t.delay_minutes || 0
-  const color = delayColor(delay, t.train_state)
-  const label = delayLabel(delay, t.train_state)
-  const num   = t.train_number || '?'
-  const name  = (t.train_name || `Train ${num}`).replace(/\s+\d+$/, '')
-  const route = (t.orig_code && t.dest_code) ? `${t.orig_code}→${t.dest_code}` : ''
-  const event = t.event_name || (t._raw && t._raw.eventCode) || ''
+  const delay  = t.delay_minutes || 0
+  const state  = tState(t)
+  const color  = delayColor(delay, state)
+  const label  = delayLabel(delay, state)
+  const num    = tNum(t) ?? '?'
+  const rawName = tName(t) || `Train ${num}`
+  const name   = rawName.replace(/\s+\d+$/, '').trim()
+  const orig   = tOrig(t)
+  const dest   = tDest(t)
+  const route  = (orig && dest) ? `${orig}→${dest}` : ''
+  const event  = tEvent(t)
 
   return (
     <div className="train-row">
@@ -162,7 +177,10 @@ function TrainRow({ t }) {
 }
 
 function TrainPanel({ trains, coreRoutes, loading }) {
-  const isCore = t => coreRoutes.some(n => (t.train_name || '').toLowerCase().includes(n.toLowerCase()))
+  const isCore = t => {
+    const name = (tName(t) || '').toLowerCase()
+    return coreRoutes.some(n => name.includes(n.toLowerCase()))
+  }
   const core   = trains.filter(isCore)
   const others = trains.filter(t => !isCore(t))
 
