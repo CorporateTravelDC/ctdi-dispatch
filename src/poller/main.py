@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from common import config, db
-from common.acars import check_wow_event as _acars_wow
+from common.acars import get_latest_phase as _acars_phase
 from ingest import failover
 from shared.watchlist import WatchlistFileWatcher, sweep_expired_transient
 
@@ -539,56 +539,50 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     squawk   = ac.get("squawk") or ""
     dest_icao = ac.get("dst") or ""          # destination from FMS if available
 
-    # Determine current phase from ADS-B data.
-    # Guard: if the feed reports alt="ground" or alt<500ft but we last saw this
-    # aircraft above 10,000ft, the reading is likely a bad transponder message.
-    # Before discarding it, check ACARS for a WOW confirmation — if avionics
-    # confirm wheels-on-ground the landing is real and we let it through.
-    last_known = _last_known_alt.get(ident)
-    if (alt == "ground" or (isinstance(alt, (int, float)) and alt < 500)) \
-            and last_known is not None and last_known > 10_000:
-        wow = _acars_wow(ident)
-        if wow:
-            log.info(
-                "%s: ACARS WOW confirms landing despite altitude guard — label=%s",
-                ident, wow.get("label")
-            )
-            # Leave alt as-is so on_ground fires correctly below
-        else:
-            log.warning(
-                "%s: API returned alt=%r but last known was %dft — ignoring likely bad reading",
-                ident, alt, last_known
-            )
-            alt = last_known
-    elif isinstance(alt, (int, float)) and alt > 500:
+    # ── 1. ACARS is authoritative — always checked first ────────────────────
+    # Update altitude tracker from valid ADS-B readings for fallback continuity.
+    if isinstance(alt, (int, float)) and alt > 500:
         _last_known_alt[ident] = int(alt)
-
-    on_ground = (alt == "ground") or (isinstance(alt, (int, float)) and alt < 100 and gs < 80)
-    airborne  = not on_ground and isinstance(alt, (int, float)) and alt >= 100
 
     last_phase = _phase_from_summary(entry.get("last_event_summary") or "")
 
-    # Phase detection — designed to be sticky (never revert to earlier phase)
-    if airborne and gs > 50:
-        # Airborne and moving — wheels up
-        current_phase = "off"
-    elif on_ground and last_phase in ("off", "on"):
-        # Post-landing ground state
-        current_phase = "in" if gs <= 8 else "on"
-    elif on_ground and last_phase == "out":
-        # Still in departure sequence — hold "out" even when stopped (runway hold)
-        current_phase = "out"
-    elif on_ground and gs > 2 and last_phase not in ("off", "on"):
-        # Moving on ground in departure direction — gs>2 catches slow pushback
-        current_phase = "out"
-    elif on_ground and last_phase in ("in",):
-        current_phase = "in"
-    elif on_ground:
-        current_phase = "pre_departure"
+    acars = _acars_phase(ident)
+    if acars:
+        current_phase, acars_msg = acars
+        log.info(
+            "%s: ACARS %s authoritative — label=%s msg_time=%s",
+            ident, current_phase.upper(), acars_msg.get("label"), acars_msg.get("msg_time"),
+        )
     else:
-        # Liminal state (takeoff roll <100ft, high gs) — preserve last phase
-        # rather than reverting; if last was "out" keep "out" so OFF can fire next
-        current_phase = last_phase if last_phase == "out" else "pre_departure"
+        # ── 2. ADS-B phase derivation (ACARS unavailable) ────────────────────
+        # Altitude guard: if ADS-B reports sudden low alt but last known was high
+        # cruise, it is almost certainly a bad transponder reading — discard it.
+        last_known = _last_known_alt.get(ident)
+        if (alt == "ground" or (isinstance(alt, (int, float)) and alt < 500)) \
+                and last_known is not None and last_known > 10_000:
+            log.warning(
+                "%s: API returned alt=%r but last known was %dft — ignoring likely bad reading",
+                ident, alt, last_known,
+            )
+            alt = last_known
+
+        on_ground = (alt == "ground") or (isinstance(alt, (int, float)) and alt < 100 and gs < 80)
+        airborne  = not on_ground and isinstance(alt, (int, float)) and alt >= 100
+
+        if airborne and gs > 50:
+            current_phase = "off"
+        elif on_ground and last_phase in ("off", "on"):
+            current_phase = "in" if gs <= 8 else "on"
+        elif on_ground and last_phase == "out":
+            current_phase = "out"
+        elif on_ground and gs > 2 and last_phase not in ("off", "on"):
+            current_phase = "out"
+        elif on_ground and last_phase in ("in",):
+            current_phase = "in"
+        elif on_ground:
+            current_phase = "pre_departure"
+        else:
+            current_phase = last_phase if last_phase == "out" else "pre_departure"
 
     # Detect diversion: FMS dest differs from watchlist destination
     expected_dest = (entry.get("destination") or "").upper().replace("K", "", 1)
@@ -602,16 +596,21 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
                              "tracking_url": tracking},
                             priority=5)
 
-    # Fire OOOI event if phase changed
+    # Fire OOOI event if phase changed.
+    # Includes mid-leg entries where earlier phases were not observed.
     tracking_url = f"https://globe.airplanes.live/?icao={hex_id}" if hex_id else ""
 
     event_map = {
         ("pre_departure", "out"): (f"{ident} OUT — gate departure / pushback", 4),
         ("out",           "off"): (f"{ident} OFF — wheels up", 5),
-        ("pre_departure", "off"): (f"{ident} OFF — wheels up (airborne)", 5),
+        ("pre_departure", "off"): (f"{ident} OFF — airborne", 5),
         ("off",           "on"):  (f"{ident} ON — wheels down / landed", 5),
-        ("on",            "in"):  (f"{ident} IN — at gate (arrived)", 4),
-        ("off",           "in"):  (f"{ident} IN — at gate (arrived)", 4),
+        ("out",           "on"):  (f"{ident} ON — wheels down / landed", 5),
+        ("pre_departure", "on"):  (f"{ident} ON — landed (departure not tracked)", 5),
+        ("on",            "in"):  (f"{ident} IN — at gate", 4),
+        ("off",           "in"):  (f"{ident} IN — at gate", 4),
+        ("out",           "in"):  (f"{ident} IN — at gate", 4),
+        ("pre_departure", "in"):  (f"{ident} IN — at gate (arrival not tracked)", 4),
     }
 
     event_key = (last_phase, current_phase)
