@@ -276,13 +276,24 @@ async def get_brief_weekly() -> PlainTextResponse:
     return PlainTextResponse("No weekly summary available yet.")
 
 
-@app.get("/api/v1/brief/{brief_id}")
-async def get_brief_by_id(brief_id: int) -> PlainTextResponse:
-    """Return the full content of an archived brief by ID. Tier 0."""
-    row = db.get_brief_by_id(brief_id)
-    if not row:
-        return PlainTextResponse("Brief not found.", status_code=404)
-    return PlainTextResponse(row["content"])
+@app.get("/api/v1/brief/{brief_ref}")
+async def get_brief_by_ref(brief_ref: str) -> PlainTextResponse:
+    """Return brief by integer ID or the most recent brief of a type slug. Tier 0."""
+    # Integer → fetch specific archived entry
+    try:
+        row = db.get_brief_by_id(int(brief_ref))
+        if not row:
+            return PlainTextResponse("Brief not found.", status_code=404)
+        return PlainTextResponse(row["content"])
+    except ValueError:
+        pass
+    # Type slug (e.g. "ep-advance", "ops", custom) → most recent of that type
+    rows = db.get_brief_history(1, brief_type=brief_ref)
+    if rows:
+        row = db.get_brief_by_id(rows[0]["id"])
+        if row:
+            return PlainTextResponse(row["content"])
+    return PlainTextResponse(f"No {brief_ref} brief available yet.", status_code=404)
 
 
 @app.get("/api/v1/route")
