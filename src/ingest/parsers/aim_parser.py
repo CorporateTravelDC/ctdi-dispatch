@@ -18,6 +18,8 @@ Alert routing:
                         minus permanent set (non-DC origin/dest airports)
   FDC NOTAMs          : always alert regardless of facility
   Dedup               : 24h window keyed on notam_id (PushDedup "notam")
+  VIP NOTAMs          : FDC NOTAMs containing POTUS/AF1/Marine One keywords →
+                        hot-alerts priority=5; all others → nas-alerts priority=3
 
 NOTAM ID: "{location}/{year}/{number}" e.g. "PSG/2026/081"
 Effective timestamps: YYYYMMDDHHmm compact (12-digit UTC) e.g. "202606152335"
@@ -54,6 +56,13 @@ _PERMANENT_AIRPORTS: frozenset[str] = frozenset({
 _ICAO_RE = re.compile(r"\b(K[A-Z]{3})\b")
 _DEDUP_TTL = 86400   # 24 hours — one push per NOTAM per day
 _NOTAM_DEDUP = PushDedup("notam", dedup_secs=_DEDUP_TTL)
+
+_VIP_KEYWORDS = frozenset({"POTUS", "PRESIDENT", "AIR FORCE ONE", "MARINE ONE", "AIR FORCE 1", "AF1"})
+
+
+def _is_vip_notam(notam_text: str) -> bool:
+    upper = (notam_text or "").upper()
+    return any(kw in upper for kw in _VIP_KEYWORDS)
 
 
 def _txt(elem: ET.Element | None, path: str) -> str | None:
@@ -114,7 +123,13 @@ def _get_transient_airports() -> frozenset[str]:
 
 
 def _fire_notam_alert(notam: dict) -> None:
-    """Push ntfy alert for a NOTAM that matches the watch set."""
+    """Push ntfy alert for a NOTAM that matches the watch set.
+
+    Routing:
+      VIP NOTAMs (POTUS/AF1/Marine One keywords) → hot-alerts, priority=5
+      All other NOTAMs                           → nas-alerts, priority=3
+    dispatch-alerts is not used for NOTAMs.
+    """
     notam_id = notam["notam_id"]
     dedup_key = content_hash(notam_id)
     if not _NOTAM_DEDUP.should_push(notam_id, dedup_key):
@@ -123,14 +138,20 @@ def _fire_notam_alert(notam: dict) -> None:
     facility = notam.get("facility", "")
     classification = notam.get("classification", "NOTAM-D")
     text_body = notam.get("text_body", "")
-    priority = 4 if classification == "FDC" else 3
     label = "FDC NOTAM" if classification == "FDC" else "NOTAM"
 
     title = f"{label} [{facility}] — {notam_id}"
     body = text_body[:400] if text_body else notam_id
 
+    if _is_vip_notam(text_body):
+        topic = "hot-alerts"
+        priority = 5
+    else:
+        topic = "nas-alerts"
+        priority = 3
+
     ok = ntfy_send(
-        topic="dispatch-alerts",
+        topic=topic,
         message=body,
         title=title,
         priority=priority,
@@ -138,14 +159,8 @@ def _fire_notam_alert(notam: dict) -> None:
     )
     if ok:
         _NOTAM_DEDUP.record(notam_id, dedup_key)
-        log.info("aim: notam alert fired: %s facility=%s priority=%d", notam_id, facility, priority)
-
-    # Dual-push to nas-alerts (same content, independent of dispatch-alerts success)
-    try:
-        from shared.watchlist import _fire_ntfy_dual
-        _fire_ntfy_dual("nas-alerts", title, body, f"NOTAM {notam_id} [{facility}]", priority=3)
-    except Exception as e:
-        log.error("aim: nas-alerts dual push failed for %s: %s", notam_id, e)
+        log.info("aim: notam alert fired: %s facility=%s topic=%s priority=%d",
+                 notam_id, facility, topic, priority)
 
 
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:
