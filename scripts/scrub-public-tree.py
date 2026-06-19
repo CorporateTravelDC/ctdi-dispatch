@@ -10,7 +10,7 @@ import subprocess, sys
 
 # Public-safe substitutions: real_value -> placeholder
 SUBSTITUTIONS = {
-    b"taile57c8d": b"tailxxxxxxx",
+    b"tailxxxxxxx": b"tailxxxxxxx",
 }
 
 def git_out(*args, stdin=None):
