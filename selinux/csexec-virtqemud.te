@@ -1,0 +1,9 @@
+module csexec-virtqemud 1.0;
+
+require {
+    type virtqemud_t;
+    type user_home_t;
+    class file { write setattr getattr open read };
+}
+
+allow virtqemud_t user_home_t:file { write setattr getattr open read };
