@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-# ── Defaults ─────────────────────────────────────────────────────────────────
+# -- Defaults -----------------------------------------------------------------
 SKIP_OLLAMA=false
 SKIP_CONTAINERS=false
 DEV_MODE=false
@@ -24,8 +24,9 @@ REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc.gi
 INSTALL_DIR="/opt/corporatetraveldc"
 SERVICE_USER="corporatetraveldc"
 PYTHON_MIN="3.11"
+SELINUX_WAS_ENFORCING=false
 
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# -- Argument parsing ----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-ollama)     SKIP_OLLAMA=true ;;
@@ -37,9 +38,9 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# ── Detect OS and architecture ────────────────────────────────────────────────
-OS="$(uname -s)"   # Linux | Darwin
-ARCH="$(uname -m)" # x86_64 | aarch64 | arm64
+# -- Detect OS and architecture -----------------------------------------------
+OS="$(uname -s)"
+ARCH="$(uname -m)"
 
 case "$OS" in
     Linux)
@@ -64,30 +65,46 @@ esac
 
 echo "==> Platform: $PLATFORM"
 
-# ── Detect Linux package manager ─────────────────────────────────────────────
+# -- Detect Linux package manager ---------------------------------------------
 PKG_MANAGER=""
 if [[ "$OS" == "Linux" ]]; then
-    if   command -v dnf  &>/dev/null; then PKG_MANAGER="dnf"
+    if   command -v dnf     &>/dev/null; then PKG_MANAGER="dnf"
     elif command -v apt-get &>/dev/null; then PKG_MANAGER="apt"
-    elif command -v pacman &>/dev/null; then PKG_MANAGER="pacman"
-    elif command -v zypper &>/dev/null; then PKG_MANAGER="zypper"
+    elif command -v pacman  &>/dev/null; then PKG_MANAGER="pacman"
+    elif command -v zypper  &>/dev/null; then PKG_MANAGER="zypper"
     else
         echo "Warning: no supported package manager found. Install Python 3.11+ and git manually." >&2
     fi
 fi
 
-# ── Helper: require_cmd ───────────────────────────────────────────────────────
+# -- SELinux: set permissive for install --------------------------------------
+if [[ "$OS" == "Linux" ]] && command -v getenforce &>/dev/null; then
+    SELINUX_STATUS="$(getenforce 2>/dev/null || echo Disabled)"
+    if [[ "$SELINUX_STATUS" == "Enforcing" ]]; then
+        echo ""
+        echo "==> SELinux is Enforcing -- setting Permissive for install..."
+        sudo setenforce 0
+        SELINUX_WAS_ENFORCING=true
+        echo "    [OK] SELinux set to Permissive"
+    else
+        echo "==> SELinux: ${SELINUX_STATUS} -- no change needed"
+    fi
+fi
+
+# -- Helper: require_cmd ------------------------------------------------------
 require_cmd() {
     command -v "$1" &>/dev/null || { echo "Required: $1 not found. Install it and retry." >&2; exit 1; }
 }
 
-# ── 1. System dependencies ────────────────────────────────────────────────────
+# -- 1. System dependencies ---------------------------------------------------
 echo ""
 echo "==> Installing system dependencies..."
 
 case "$PKG_MANAGER" in
     dnf)
-        sudo dnf install -y python3 python3-pip python3-venv git curl libxml2-devel libxslt-devel gcc
+        sudo dnf install -y python3 python3-pip python3-venv git curl \
+            libxml2-devel libxslt-devel gcc \
+            policycoreutils-python-utils checkpolicy
         ;;
     apt)
         sudo apt-get update -qq
@@ -110,7 +127,7 @@ if [[ "$OS" == "Darwin" ]]; then
     brew install python@3.11 git curl libxml2
 fi
 
-# ── 2. Python version check ───────────────────────────────────────────────────
+# -- 2. Python version check --------------------------------------------------
 echo ""
 echo "==> Checking Python version..."
 PYTHON_BIN=""
@@ -131,7 +148,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
-# ── 3. Container runtime ──────────────────────────────────────────────────────
+# -- 3. Container runtime -----------------------------------------------------
 if [[ "$SKIP_CONTAINERS" == "false" ]]; then
     echo ""
     echo "==> Setting up container runtime..."
@@ -139,14 +156,13 @@ if [[ "$SKIP_CONTAINERS" == "false" ]]; then
     if [[ "$OS" == "Linux" ]]; then
         if ! command -v podman &>/dev/null; then
             case "$PKG_MANAGER" in
-                dnf)  sudo dnf install -y podman ;;
-                apt)  sudo apt-get install -y podman ;;
+                dnf)    sudo dnf install -y podman ;;
+                apt)    sudo apt-get install -y podman ;;
                 pacman) sudo pacman -Sy --noconfirm podman ;;
                 zypper) sudo zypper install -y podman ;;
             esac
         fi
         echo "    Podman: $(podman --version)"
-        # Enable rootless subuid/subgid for service user
         if id "$SERVICE_USER" &>/dev/null 2>&1; then
             sudo usermod --add-subuids 100000-165535 "$SERVICE_USER" 2>/dev/null || true
             sudo usermod --add-subgids 100000-165535 "$SERVICE_USER" 2>/dev/null || true
@@ -164,7 +180,7 @@ if [[ "$SKIP_CONTAINERS" == "false" ]]; then
     fi
 fi
 
-# ── 4. Ollama ─────────────────────────────────────────────────────────────────
+# -- 4. Ollama ----------------------------------------------------------------
 if [[ "$SKIP_OLLAMA" == "false" ]]; then
     echo ""
     echo "==> Installing Ollama..."
@@ -182,7 +198,6 @@ if [[ "$SKIP_OLLAMA" == "false" ]]; then
         echo "    Ollama already installed: $(ollama --version 2>/dev/null || echo 'version unknown')"
     fi
 
-    # Start Ollama service
     if [[ "$OS" == "Linux" ]]; then
         if systemctl is-enabled ollama &>/dev/null 2>&1 || systemctl is-active ollama &>/dev/null 2>&1; then
             sudo systemctl enable --now ollama
@@ -191,7 +206,6 @@ if [[ "$SKIP_OLLAMA" == "false" ]]; then
             echo "    Start it with: sudo systemctl enable --now ollama"
         fi
     elif [[ "$OS" == "Darwin" ]]; then
-        # macOS: Ollama.app auto-starts, or use 'ollama serve' in a terminal
         echo "    macOS: Open Ollama.app or run 'ollama serve' in a separate terminal."
     fi
 
@@ -209,11 +223,12 @@ if [[ "$SKIP_OLLAMA" == "false" ]]; then
     done
 fi
 
-# ── 5. Clone / update repo ────────────────────────────────────────────────────
+# -- 5. Clone / update repo ---------------------------------------------------
 echo ""
 echo "==> Setting up repository at $INSTALL_DIR..."
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     echo "    Repo exists — pulling latest..."
+    git config --global --add safe.directory "$INSTALL_DIR"
     git -C "$INSTALL_DIR" pull
 else
     if [[ "$DEV_MODE" == "true" ]]; then
@@ -225,7 +240,7 @@ else
     fi
 fi
 
-# ── 6. Python venv + requirements ────────────────────────────────────────────
+# -- 6. Python venv + requirements --------------------------------------------
 echo ""
 echo "==> Creating Python virtual environment..."
 cd "$INSTALL_DIR"
@@ -260,48 +275,60 @@ case "$PLATFORM" in
         ;;
 esac
 
-# ── 7. Config files ────────────────────────────────────────────────────────────
+# -- 7. Config files ----------------------------------------------------------
 echo ""
 echo "==> Setting up configuration..."
 
 if [[ "$OS" == "Linux" && "$DEV_MODE" == "false" ]]; then
-    sudo mkdir -p /etc/corporatetraveldc /var/lib/corporatetraveldc
+    sudo mkdir -p /etc/corporatetraveldc /var/lib/corporatetraveldc /etc/ntfy /var/lib/ntfy
     if [[ ! -f /etc/corporatetraveldc/dispatch-secrets.env ]]; then
         sudo cp "$INSTALL_DIR/dispatch-secrets.env.example" /etc/corporatetraveldc/dispatch-secrets.env
-        sudo chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
-        echo "    Created /etc/corporatetraveldc/dispatch-secrets.env — edit to add credentials."
+        sudo chmod 0640 /etc/corporatetraveldc/dispatch-secrets.env
+        sudo chown root:corporatetraveldc /etc/corporatetraveldc/dispatch-secrets.env 2>/dev/null || true
+        echo "    Created /etc/corporatetraveldc/dispatch-secrets.env -- edit to add credentials."
     fi
     if [[ ! -f /etc/corporatetraveldc/dispatch.env ]]; then
-        echo "    Note: dispatch.env should be created by your firstboot script or manually."
-        echo "    See config/dispatch.env.example in the repo."
+        sudo cp "$INSTALL_DIR/config/dispatch.env" /etc/corporatetraveldc/dispatch.env 2>/dev/null \
+            || sudo cp "$INSTALL_DIR/config/dispatch.env.example" /etc/corporatetraveldc/dispatch.env
+        sudo chmod 0640 /etc/corporatetraveldc/dispatch.env
+        sudo chown root:corporatetraveldc /etc/corporatetraveldc/dispatch.env 2>/dev/null || true
+        echo "    Created /etc/corporatetraveldc/dispatch.env"
+    fi
+    if [[ ! -f /etc/ntfy/server.yml ]] && [[ -f "$INSTALL_DIR/config/ntfy/server.yml" ]]; then
+        sudo cp "$INSTALL_DIR/config/ntfy/server.yml" /etc/ntfy/server.yml
+        sudo chmod 0640 /etc/ntfy/server.yml
+        echo "    Created /etc/ntfy/server.yml"
+    fi
+    # Install tmpfiles.d rule for /run/corporatetraveldc
+    if [[ -f "$INSTALL_DIR/systemd/tmpfiles.d/corporatetraveldc.conf" ]]; then
+        sudo cp "$INSTALL_DIR/systemd/tmpfiles.d/corporatetraveldc.conf" \
+            /etc/tmpfiles.d/corporatetraveldc.conf
+        echo "    Installed /etc/tmpfiles.d/corporatetraveldc.conf"
     fi
 else
-    # Dev mode / macOS — local config
     if [[ ! -f "$INSTALL_DIR/.env.local" ]]; then
         cp "$INSTALL_DIR/dispatch-secrets.env.example" "$INSTALL_DIR/.env.local"
-        echo "    Created .env.local — edit to add credentials. Never commit this file."
+        echo "    Created .env.local -- edit to add credentials. Never commit this file."
     fi
 fi
 
-# ── 8. Modelfiles ─────────────────────────────────────────────────────────────
+# -- 8. Modelfiles ------------------------------------------------------------
 if [[ "$SKIP_OLLAMA" == "false" ]]; then
     echo ""
     echo "==> Checking for custom Modelfiles..."
     if [[ ! -f "$INSTALL_DIR/Modelfile.chat" ]]; then
-        echo "    Modelfile.chat not found (it's .gitignored — operator-specific)."
+        echo "    Modelfile.chat not found (it's .gitignored -- operator-specific)."
         echo "    Copy and customize the template:"
         echo "      cp $INSTALL_DIR/Modelfile.chat.template $INSTALL_DIR/Modelfile.chat"
-        echo "      # Edit Modelfile.chat with your operator context"
         echo "      ollama create csexec-chat -f $INSTALL_DIR/Modelfile.chat"
     else
         echo "    Building csexec-chat from Modelfile.chat..."
         ollama create csexec-chat -f "$INSTALL_DIR/Modelfile.chat" || true
     fi
     if [[ ! -f "$INSTALL_DIR/Modelfile.osint" ]]; then
-        echo "    Modelfile.osint not found (it's .gitignored — operator-specific)."
+        echo "    Modelfile.osint not found (it's .gitignored -- operator-specific)."
         echo "    Copy and customize the template:"
         echo "      cp $INSTALL_DIR/Modelfile.osint.template $INSTALL_DIR/Modelfile.osint"
-        echo "      # Edit Modelfile.osint with your operator context"
         echo "      ollama create csexec-osint -f $INSTALL_DIR/Modelfile.osint"
     else
         echo "    Building csexec-osint from Modelfile.osint..."
@@ -309,32 +336,61 @@ if [[ "$SKIP_OLLAMA" == "false" ]]; then
     fi
 fi
 
-# ── 9. Build containers (Linux only) ─────────────────────────────────────────
+# -- 9. Build containers (Linux only) ----------------------------------------
 if [[ "$OS" == "Linux" && "$SKIP_CONTAINERS" == "false" ]]; then
     echo ""
     echo "==> Building container images..."
     bash "$INSTALL_DIR/build-images.sh"
 fi
 
-# ── 10. Summary ───────────────────────────────────────────────────────────────
+# -- 10. SELinux policy (Linux only) -----------------------------------------
+if [[ "$OS" == "Linux" ]] && command -v semodule &>/dev/null; then
+    echo ""
+    echo "==> Applying SELinux policy..."
+    SELINUX_SCRIPT="$INSTALL_DIR/selinux/apply-selinux-policy.sh"
+    if [[ -f "$SELINUX_SCRIPT" ]]; then
+        sudo bash "$SELINUX_SCRIPT"
+        echo "    [OK] SELinux policy applied"
+
+        # Restore enforcing if it was enforcing before install
+        if [[ "$SELINUX_WAS_ENFORCING" == "true" ]]; then
+            echo "    Restoring SELinux Enforcing..."
+            sudo setenforce 1
+            echo "    [OK] SELinux restored to Enforcing"
+
+            # Full filesystem relabel on next boot
+            echo "    Scheduling full filesystem relabel on next boot..."
+            sudo touch /.autorelabel
+            echo "    [OK] /.autorelabel created -- relabel will run on next boot"
+            echo "    [WARN] Reboot required to complete SELinux relabeling."
+        fi
+    else
+        echo "    [SKIP] selinux/apply-selinux-policy.sh not found -- skipping"
+    fi
+fi
+
+# -- 11. Summary --------------------------------------------------------------
 echo ""
-echo "══════════════════════════════════════════════════════"
+echo "======================================================"
 echo "  corporatetraveldc-dispatch install complete"
-echo "══════════════════════════════════════════════════════"
+echo "======================================================"
 echo ""
 echo "  Platform:    $PLATFORM"
 echo "  Repo:        $INSTALL_DIR"
 echo "  Python:      $PYTHON_BIN ($(${PYTHON_BIN} --version 2>&1 | awk '{print $2}'))"
 echo "  Ollama:      $(command -v ollama &>/dev/null && ollama list 2>/dev/null | grep -c ':' || echo '0') model(s) installed"
+echo "  SELinux:     $(getenforce 2>/dev/null || echo N/A)"
 echo ""
 echo "  Next steps:"
-echo "  1. Edit /etc/corporatetraveldc/dispatch-secrets.env — add credentials"
-echo "  2. If on Linux: install Quadlets and enable systemd user services"
+echo "  1. Edit /etc/corporatetraveldc/dispatch-secrets.env -- add credentials"
+echo "  2. Install Quadlets and enable systemd user services:"
 echo "       cp $INSTALL_DIR/.config/containers/systemd/*.container ~/.config/containers/systemd/"
 echo "       systemctl --user daemon-reload"
 echo "       systemctl --user start corporatetraveldc-web"
 echo "  3. Verify: curl http://127.0.0.1:8000/healthz"
 echo "  4. Customize Modelfile.chat and Modelfile.osint from templates"
+if [[ -f "/.autorelabel" ]]; then
 echo ""
-echo "  No LLM API key required — all inference is local via Ollama."
+echo "  [WARN] Reboot required -- SELinux filesystem relabel pending."
+fi
 echo ""
