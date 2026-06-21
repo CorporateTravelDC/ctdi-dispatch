@@ -1,0 +1,26 @@
+module csexec-tailscaled 1.0;
+
+require {
+    type sshd_t;
+    type var_lib_t;
+    type tpm_device_t;
+    type iptables_exec_t;
+    type http_port_t;
+    type NetworkManager_t;
+    class file { read write create getattr open setattr rename unlink execute };
+    class dir  { read write search getattr add_name remove_name };
+    class chr_file { getattr open read };
+    class capability { net_raw };
+    class netlink_netfilter_socket { create write read bind };
+    class tcp_socket { name_connect };
+    class dbus { send_msg };
+}
+
+allow sshd_t var_lib_t:file { read write create getattr open setattr rename unlink };
+allow sshd_t var_lib_t:dir  { read write search getattr add_name remove_name };
+allow sshd_t tpm_device_t:chr_file { getattr open read };
+allow sshd_t iptables_exec_t:file { read getattr open execute };
+allow sshd_t sshd_t:netlink_netfilter_socket { create write read bind };
+allow sshd_t self:capability net_raw;
+allow sshd_t http_port_t:tcp_socket name_connect;
+allow sshd_t NetworkManager_t:dbus send_msg;
