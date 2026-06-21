@@ -12,7 +12,6 @@ Wants=corporatetraveldc-poller.service
 [Container]
 Image=localhost/corporatetraveldc-web:latest
 PublishPort=127.0.0.1:8000:8000
-PublishPort=100.94.80.100:8000:8000
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
