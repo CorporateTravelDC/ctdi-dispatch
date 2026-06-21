@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
 # selinux/apply-selinux-policy.sh
-# CS Executive Services -- SELinux policy remediation script
+# CS Executive Services -- SELinux policy remediation + directory bootstrap
 #
-# Covers:
-#   1. virtqemud .raw image file context (relabel to virt_image_t)
-#   2. tailscaled SELinux policy (upstream if available; custom fallback)
-#   3. systemd-logind cap_userns sys_ptrace
-#   4. /var/lib/corporatetraveldc container_file_t labeling
-#   5. /run/corporatetraveldc runtime directory
+# Run as root before starting any corporatetraveldc services.
+# Idempotent -- safe to re-run after package updates or Pi migration.
 #
 # Usage:
 #   sudo ./selinux/apply-selinux-policy.sh [--raw-image-dir <path>] [--dry-run]
@@ -71,16 +67,79 @@ build_and_load_module() {
     echo "[OK]  ${name}"
 }
 
+label_container_path() {
+    local path="$1"
+    local owner="${2:-corporatetraveldc:corporatetraveldc}"
+    local mode="${3:-0755}"
+    echo "[INFO] Labeling: ${path}"
+    run mkdir -p "${path}"
+    run chown "${owner}" "${path}"
+    run chmod "${mode}" "${path}"
+    run semanage fcontext -a -t container_file_t "${path}(/.*)?" 2>/dev/null \
+        || run semanage fcontext -m -t container_file_t "${path}(/.*)?
+"
+    run restorecon -Rv "${path}"
+    echo "[OK]  ${path}"
+}
+
 require_root
 check_deps
 
 echo "=== CS Executive Services -- SELinux Policy Apply ==="
+echo "[INFO] Dry run: ${DRY_RUN}"
+echo ""
 
-# -- Step 1: Relabel .raw image files --
-echo "--- Step 1: virt_image_t relabel ---"
+# ---------------------------------------------------------------------------
+# Step 1 -- Runtime directory (/run/corporatetraveldc)
+# Recreated on each boot via tmpfiles.d; also ensure it exists now.
+# ---------------------------------------------------------------------------
+echo "--- Step 1: /run/corporatetraveldc ---"
+run mkdir -p /run/corporatetraveldc
+run chown corporatetraveldc:corporatetraveldc /run/corporatetraveldc
+run chmod 755 /run/corporatetraveldc
+echo "[OK]  /run/corporatetraveldc"
+
+# ---------------------------------------------------------------------------
+# Step 2 -- Data directory (/var/lib/corporatetraveldc)
+# ---------------------------------------------------------------------------
+echo "--- Step 2: /var/lib/corporatetraveldc ---"
+label_container_path "/var/lib/corporatetraveldc"
+label_container_path "/var/lib/corporatetraveldc/acarshub"
+
+# ---------------------------------------------------------------------------
+# Step 3 -- Config directory (/etc/corporatetraveldc)
+# Read-only mounts -- owned root:corporatetraveldc, mode 640 on files.
+# ---------------------------------------------------------------------------
+echo "--- Step 3: /etc/corporatetraveldc ---"
+run mkdir -p /etc/corporatetraveldc
+run chown root:corporatetraveldc /etc/corporatetraveldc
+run chmod 750 /etc/corporatetraveldc
+run semanage fcontext -a -t container_file_t "/etc/corporatetraveldc(/.*)?" 2>/dev/null \
+    || run semanage fcontext -m -t container_file_t "/etc/corporatetraveldc(/.*)?
+"
+run restorecon -Rv /etc/corporatetraveldc
+echo "[OK]  /etc/corporatetraveldc"
+
+# ---------------------------------------------------------------------------
+# Step 4 -- ntfy directories
+# ---------------------------------------------------------------------------
+echo "--- Step 4: ntfy directories ---"
+label_container_path "/var/lib/ntfy"
+# /etc/ntfy is read-only config -- label but keep root ownership
+run mkdir -p /etc/ntfy
+run semanage fcontext -a -t container_file_t "/etc/ntfy(/.*)?" 2>/dev/null \
+    || run semanage fcontext -m -t container_file_t "/etc/ntfy(/.*)?
+"
+run restorecon -Rv /etc/ntfy
+echo "[OK]  /etc/ntfy"
+
+# ---------------------------------------------------------------------------
+# Step 5 -- Relabel .raw image files to virt_image_t
+# ---------------------------------------------------------------------------
+echo "--- Step 5: virt_image_t relabel for .raw files ---"
 mapfile -t raw_files < <(find "${RAW_IMAGE_DIR}" -maxdepth 3 -name "*.raw" -type f 2>/dev/null)
 if [[ ${#raw_files[@]} -eq 0 ]]; then
-    echo "[SKIP] No .raw files found"
+    echo "[SKIP] No .raw files found under ${RAW_IMAGE_DIR}"
 else
     for f in "${raw_files[@]}"; do
         echo "[INFO] Relabeling: ${f}"
@@ -90,22 +149,10 @@ else
         || run semanage fcontext -m -t virt_image_t "${RAW_IMAGE_DIR}/[^/]*\.raw"
 fi
 
-# -- Step 2: /var/lib/corporatetraveldc --
-echo "--- Step 2: container_file_t on var/lib ---"
-run mkdir -p /var/lib/corporatetraveldc
-run chown -R corporatetraveldc:corporatetraveldc /var/lib/corporatetraveldc
-run semanage fcontext -a -t container_file_t "/var/lib/corporatetraveldc(/.*)?" 2>/dev/null \
-    || run semanage fcontext -m -t container_file_t "/var/lib/corporatetraveldc(/.*)?"
-run restorecon -Rv /var/lib/corporatetraveldc
-
-# -- Step 3: /run/corporatetraveldc --
-echo "--- Step 3: /run/corporatetraveldc ---"
-run mkdir -p /run/corporatetraveldc
-run chown corporatetraveldc:corporatetraveldc /run/corporatetraveldc
-run chmod 755 /run/corporatetraveldc
-
-# -- Step 4: tailscaled --
-echo "--- Step 4: tailscaled policy ---"
+# ---------------------------------------------------------------------------
+# Step 6 -- tailscaled policy
+# ---------------------------------------------------------------------------
+echo "--- Step 6: tailscaled policy ---"
 if seinfo -t 2>/dev/null | grep -q "tailscaled_t"; then
     echo "[OK]  upstream tailscaled_t present"
     if semodule -l 2>/dev/null | grep -q "^csexec-tailscaled$"; then
@@ -120,17 +167,30 @@ else
     fi
 fi
 
-# -- Step 5: TE modules --
-echo "--- Step 5: TE modules ---"
+# ---------------------------------------------------------------------------
+# Step 7 -- TE modules
+# ---------------------------------------------------------------------------
+echo "--- Step 7: TE modules ---"
 build_and_load_module "csexec-virtqemud"
 build_and_load_module "csexec-logind-userns"
 
-# -- Step 6: Verify --
-echo "--- Step 6: Verify ---"
+# ---------------------------------------------------------------------------
+# Step 8 -- Verify
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Step 8: Verify ---"
 for mod in csexec-virtqemud csexec-logind-userns; do
     semodule -l 2>/dev/null | grep -q "^${mod}$" \
-        && echo "[OK]  ${mod}" \
-        || echo "[FAIL] ${mod}" >&2
+        && echo "[OK]  module: ${mod}" \
+        || echo "[FAIL] module: ${mod}" >&2
 done
 
-echo "[OK]  Apply complete -- restart tailscaled if needed"
+for path in /var/lib/corporatetraveldc /var/lib/ntfy /etc/corporatetraveldc /etc/ntfy /run/corporatetraveldc; do
+    [[ -d "${path}" ]] \
+        && echo "[OK]  exists: ${path}" \
+        || echo "[FAIL] missing: ${path}" >&2
+done
+
+echo ""
+echo "[OK]  Apply complete."
+echo "[INFO] Restart tailscaled if it was previously blocked: sudo systemctl restart tailscaled"
