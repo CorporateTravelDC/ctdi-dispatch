@@ -1,0 +1,8 @@
+module csexec-logind-userns 1.0;
+
+require {
+    type systemd_logind_t;
+    class cap_userns { sys_ptrace };
+}
+
+allow systemd_logind_t self:cap_userns sys_ptrace;
