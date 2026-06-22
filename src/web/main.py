@@ -82,6 +82,7 @@ async def startup() -> None:
     db.init_db_v9()
     db.init_db_v10()
     db.init_db_v11()
+    db.init_db_v12()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -332,7 +333,72 @@ async def get_alerts() -> JSONResponse:
         }
         for a in alerts
     ]
+
     return JSONResponse({"alerts": result, "count": len(result)})
+
+
+@app.get("/api/v1/wx/discussion")
+async def get_wx_discussion(
+    product: Optional[str] = Query(
+        default=None,
+        description="AWIPS ID: FXUS02 (short-range default), FXUS06 (medium), "
+                    "FXUS07 (extended), FXUS05 (QPF). Omit for all products."
+    )
+) -> JSONResponse:
+    """Latest WPC national forecast discussion(s) -- Tier 0."""
+    if product:
+        awips_id = product.upper()
+        row = db.get_latest_wpc_discussion(awips_id)
+        if not row:
+            return JSONResponse({
+                "awips_id": awips_id, "product_label": None,
+                "issued_at": None, "fetched_at": None,
+                "body": None, "body_excerpt": None, "available": False,
+            })
+        return JSONResponse({
+            "awips_id":      row["awips_id"],
+            "product_label": row["product_label"],
+            "issued_at":     row["issued_at"],
+            "fetched_at":    row["fetched_at"],
+            "body":          row["body"],
+            "body_excerpt":  (row["body"] or "")[:300],
+            "available":     True,
+        })
+    else:
+        rows = db.get_latest_wpc_discussions()
+        if not rows:
+            return JSONResponse({"discussions": [], "available": False})
+        return JSONResponse({
+            "discussions": [
+                {
+                    "awips_id":      r["awips_id"],
+                    "product_label": r["product_label"],
+                    "issued_at":     r["issued_at"],
+                    "fetched_at":    r["fetched_at"],
+                    "body_excerpt":  (r["body"] or "")[:300],
+                }
+                for r in rows
+            ],
+            "available": True,
+        })
+
+
+@app.get("/api/v1/wx/discussion/{awips_id}")
+async def get_wx_discussion_by_id(awips_id: str) -> JSONResponse:
+    """Path-form convenience: /api/v1/wx/discussion/FXUS02 -- Tier 0."""
+    row = db.get_latest_wpc_discussion(awips_id.upper())
+    if not row:
+        raise HTTPException(status_code=404,
+                            detail=f"No discussion found for {awips_id.upper()}")
+    return JSONResponse({
+        "awips_id":      row["awips_id"],
+        "product_label": row["product_label"],
+        "issued_at":     row["issued_at"],
+        "fetched_at":    row["fetched_at"],
+        "body":          row["body"],
+        "body_excerpt":  (row["body"] or "")[:300],
+        "available":     True,
+    })
 
 
 @app.get("/api/v1/notams")
