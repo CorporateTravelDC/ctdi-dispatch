@@ -106,6 +106,34 @@ _TEXT_PRODUCTS: dict[str, tuple[str, str, str] | None] = {
     "ADM": None,  # Administrative message
 }
 
+
+
+# WPC national discussion products -- handled via KWNO branch in _on_msg()
+_WPC_PRODUCTS: dict[str, str] = {
+    "FXUS02": "Short Range Forecast Discussion",
+    "FXUS06": "Medium Range Forecast Discussion",
+    "FXUS07": "Extended Forecast Discussion",
+    "FXUS05": "Short Range QPF Discussion",
+}
+
+_WPC_TIME_RE = re.compile(
+    r"(\d{3,4})\s+(AM|PM)\s+([A-Z]{2,4})\s+\w+\s+(\w+)\s+(\d{1,2})\s+(\d{4})",
+    re.MULTILINE,
+)
+
+_WPC_MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5,  "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+_TZ_OFFSETS: dict[str, int] = {
+    "EST": -5, "EDT": -4,
+    "CST": -6, "CDT": -5,
+    "MST": -7, "MDT": -6,
+    "PST": -8, "PDT": -7,
+    "UTC":  0, "Z":    0,
+}
+
 # VTEC regex: /O.NEW.KLWX.TO.W.0001.260615T0200Z-260615T0300Z/
 _VTEC_RE = re.compile(
     r"/[A-Z]\."
@@ -255,6 +283,50 @@ def parse_product(awips_id: str, source_wfo: str, body: str) -> list[dict]:
     return results
 
 
+
+def _parse_wpc_issuance(body: str) -> float:
+    """Parse WPC product header issuance time to unix epoch. Falls back to now."""
+    m = _WPC_TIME_RE.search(body[:500])
+    if not m:
+        return time.time()
+    try:
+        hhmm_raw, ampm, tz_str, mon_str, day_str, year_str = m.groups()
+        hhmm = hhmm_raw.zfill(4)
+        hour = int(hhmm[:2])
+        minute = int(hhmm[2:])
+        if ampm == "PM" and hour != 12:
+            hour += 12
+        elif ampm == "AM" and hour == 12:
+            hour = 0
+        month = _WPC_MONTH_MAP.get(mon_str.upper(), 0)
+        day   = int(day_str)
+        year  = int(year_str)
+        if month == 0:
+            return time.time()
+        import calendar
+        utc_offset = _TZ_OFFSETS.get(tz_str.upper(), -4)
+        local_epoch = calendar.timegm((year, month, day, hour, minute, 0, 0, 0, 0))
+        return float(local_epoch - utc_offset * 3600)
+    except Exception:
+        return time.time()
+
+
+def parse_wpc_product(awips_id: str, body: str) -> dict | None:
+    """
+    Parse a WPC national discussion product into upsert_wpc_discussion kwargs.
+    Returns None for unknown AWIPS IDs.
+    """
+    label = _WPC_PRODUCTS.get(awips_id.upper())
+    if not label or not body:
+        return None
+    return {
+        "awips_id":      awips_id.upper(),
+        "product_label": label,
+        "issued_at":     _parse_wpc_issuance(body),
+        "body":          body[:8000],
+    }
+
+
 async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
     """Stay joined to the NWWS-OI MUC until stop is set, heartbeating health."""
     import slixmpp  # lazy import
@@ -280,10 +352,24 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
             if x is None:
                 return
             awips = x.get("awipsid", "") or x.get("ttaaii", "")
-            wfo = x.get("cccc", "")
+            wfo   = x.get("cccc", "")
+            body  = (x.text or "").strip()
+
+            # WPC national products (source KWNO) -- bypass local WFO filter
+            if wfo == "KWNO":
+                kw = parse_wpc_product(awips, body)
+                if kw:
+                    try:
+                        db.upsert_wpc_discussion(**kw)
+                        log.info("NWWS WPC: %s (%s) issued %.0f",
+                                 kw["awips_id"], kw["product_label"], kw["issued_at"])
+                    except Exception as e:
+                        log.error("NWWS WPC handler error (%s): %s", awips, e)
+                return
+
+            # Local WFO products
             if cfg.wfo_filter and wfo not in cfg.wfo_filter:
                 return
-            body = (x.text or "").strip()
             try:
                 for kw in parse_product(awips, wfo, body):
                     db.upsert_nws_alert(**kw)
