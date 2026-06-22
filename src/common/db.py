@@ -2019,3 +2019,82 @@ def faa_registry_count() -> dict:
         ladd  = c.execute("SELECT COUNT(*) FROM faa_ladd_aircraft").fetchone()[0]
         last_updated = faa_registry_meta_get("last_full_import")
     return {"total": total, "valid": valid, "ladd": ladd, "last_updated": last_updated}
+
+
+# -- Schema V12 -- WPC national forecast discussions --------------------------
+
+SCHEMA_V12 = """
+CREATE TABLE IF NOT EXISTS wpc_discussions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    awips_id        TEXT NOT NULL,
+    product_label   TEXT NOT NULL,
+    issued_at       REAL NOT NULL,
+    fetched_at      REAL DEFAULT (unixepoch()),
+    body            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wpc_discussions_awips
+    ON wpc_discussions(awips_id, issued_at DESC);
+"""
+
+
+def init_db_v12() -> None:
+    """Apply v12 schema -- WPC national forecast discussions."""
+    with conn() as c:
+        c.executescript(SCHEMA_V12)
+
+
+def upsert_wpc_discussion(awips_id: str, product_label: str,
+                           issued_at: float, body: str) -> None:
+    with conn() as c:
+        c.execute("""
+            INSERT INTO wpc_discussions (awips_id, product_label, issued_at, body)
+            VALUES (?, ?, ?, ?)
+        """, (awips_id, product_label, issued_at, body))
+
+
+def get_latest_wpc_discussion(awips_id: str = "FXUS02") -> dict | None:
+    with conn() as c:
+        row = c.execute("""
+            SELECT * FROM wpc_discussions
+            WHERE awips_id = ?
+            ORDER BY issued_at DESC LIMIT 1
+        """, (awips_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_latest_wpc_discussions() -> list[dict]:
+    with conn() as c:
+        rows = c.execute("""
+            SELECT w.*
+            FROM wpc_discussions w
+            INNER JOIN (
+                SELECT awips_id, MAX(issued_at) AS max_issued
+                FROM wpc_discussions
+                GROUP BY awips_id
+            ) latest ON w.awips_id = latest.awips_id
+                     AND w.issued_at = latest.max_issued
+            ORDER BY w.awips_id
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def prune_wpc_discussions(keep_per_product: int = 10) -> int:
+    with conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT awips_id FROM wpc_discussions"
+        ).fetchall()
+        deleted = 0
+        for row in rows:
+            awips = row[0]
+            cur = c.execute("""
+                DELETE FROM wpc_discussions
+                WHERE awips_id = ?
+                  AND id NOT IN (
+                      SELECT id FROM wpc_discussions
+                      WHERE awips_id = ?
+                      ORDER BY issued_at DESC
+                      LIMIT ?
+                  )
+            """, (awips, awips, keep_per_product))
+            deleted += cur.rowcount
+        return deleted
