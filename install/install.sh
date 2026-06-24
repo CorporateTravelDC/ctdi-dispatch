@@ -369,7 +369,26 @@ if [[ "$OS" == "Linux" ]] && command -v semodule &>/dev/null; then
     fi
 fi
 
-# -- 11. Summary --------------------------------------------------------------
+# -- 11. Ollama + OpenWebUI ---------------------------------------------------
+echo ""
+echo "-- Step 11: Ollama + OpenWebUI --"
+
+OLLAMA_SCRIPT="$INSTALL_DIR/install/ollama/install-ollama.sh"
+OPENWEBUI_SCRIPT="$INSTALL_DIR/install/openwebui/install-openwebui.sh"
+
+if [[ -f "$OLLAMA_SCRIPT" ]]; then
+    bash "$OLLAMA_SCRIPT"
+else
+    echo "    [SKIP] install/ollama/install-ollama.sh not found"
+fi
+
+if [[ -f "$OPENWEBUI_SCRIPT" ]]; then
+    bash "$OPENWEBUI_SCRIPT"
+else
+    echo "    [SKIP] install/openwebui/install-openwebui.sh not found"
+fi
+
+# -- 12. Summary --------------------------------------------------------------
 echo ""
 echo "======================================================"
 echo "  corporatetraveldc-dispatch install complete"
