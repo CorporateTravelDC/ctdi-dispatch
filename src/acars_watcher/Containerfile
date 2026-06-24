@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="corporatetraveldc-acars-watcher"
-LABEL org.opencontainers.image.description="ACARS message watcher — airframes.io aggregate feed"
+LABEL org.opencontainers.image.description="ACARS/VDL watcher — triple source: local UDP, airframes.io, ACARS Drama Jumpseat"
+LABEL org.opencontainers.image.version="3.0"
 
 WORKDIR /app
 
@@ -12,5 +13,20 @@ COPY acars_watcher.py .
 # Drop privileges
 RUN useradd -r -s /sbin/nologin watcher
 USER watcher
+
+# Required:
+#   DISPATCH_BASE_URL      http://100.94.80.100:8000
+#   DISPATCH_ADMIN_TOKEN   ctdc_...
+#   JUMPSEAT_API_KEY       sk_adjs_...   (or mount ~/.secrets/jumpseat.key)
+#
+# Optional:
+#   AIRFRAMES_API_KEY      (airframes.io auth -- idles without it)
+#   ACARS_STATIC_REGS      comma-separated tail list
+#   POLL_INTERVAL          airframes poll seconds (default 60)
+#   JUMPSEAT_POLL_INTERVAL jumpseat poll seconds (default 90)
+#   WATCHLIST_REFRESH_INTERVAL  default 300
+#   NTFY_TOPIC             default flight-alerts
+#   ACARS_UDP_PORT         default 5005
+#   LOG_LEVEL              default INFO
 
 CMD ["python", "-u", "acars_watcher.py"]
