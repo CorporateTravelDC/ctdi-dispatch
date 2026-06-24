@@ -79,8 +79,6 @@ set_env "AIRFRAMES_TOKEN" "$(read_secret airframes)"
 # -- MarineTraffic API key (AIS fallback)
 set_env "MARINETRAFFIC_API_KEY" "$(read_secret marinetraffic)"
 
-# -- FAA NOTAM API
-set_env "FAA_NOTAM_API_KEY" "$(read_secret faa-notam)"
 
 # -- ntfy auth token
 set_env "NTFY_TOKEN" "$(read_secret ntfy)"
