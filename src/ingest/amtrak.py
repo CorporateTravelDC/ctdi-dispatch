@@ -44,62 +44,90 @@ def _delay_minutes(train: dict, station_code: str) -> int:
         return 0
 
 
-def parse_feed(raw: bytes, station: str) -> tuple[list[dict], str]:
+def parse_feed(raw: bytes, cfg: "AmtrakConfig") -> tuple[list[dict], str]:
     """
-    Parse amtraker v3 JSON response, filter to trains serving `station`,
-    and return (trains, delay_summary).
+    Parse amtraker v3 JSON response. Returns (trains, delay_summary).
+
+    Filtering logic:
+      1. Watchlist stations  -- any train serving these triggers a per-train alert
+      2. Regional stations   -- trains touching any of these are included in the
+                                ops brief / delay summary (broader net)
+      3. Primary station     -- map centering, used as fallback for both above
 
     amtraker v3 shape: {train_key: [train_obj, ...], ...}
-    Each train_obj has: trainNum, routeName, stations[], lat, lon, trainID, trainTimely
-    Each station entry has: code, schArr, schDep, arr, dep, status
     """
     raw_data = json.loads(raw)
+    primary = cfg.filter_station.upper()
+    regional = frozenset(s.upper() for s in cfg.regional_stations)
+    watchlist = frozenset(s.upper() for s in cfg.watchlist_stations)
+    all_watched = regional | watchlist | {primary}
+
     trains: list[dict] = []
 
     for train_key, v in raw_data.items():
         entries = v if isinstance(v, list) else [v]
         for t in entries:
-            station_codes = [s.get("code") for s in t.get("stations", [])]
-            if station not in station_codes:
+            station_codes = {s.get("code", "") for s in t.get("stations", [])}
+            if not (station_codes & all_watched):
                 continue
 
-            stn = next(
-                (s for s in t.get("stations", []) if s.get("code") == station),
-                {},
-            )
-            delay = _delay_minutes(t, station)
+            # Find best matching station for arrival/departure times
+            # Priority: watchlist > regional > primary
+            ref_station = None
+            for priority_set in (watchlist, regional, {primary}):
+                match = next(
+                    (s for s in t.get("stations", [])
+                     if s.get("code") in priority_set),
+                    None
+                )
+                if match:
+                    ref_station = match
+                    break
+            stn = ref_station or {}
+
+            delay = _delay_minutes(t, stn.get("code", primary))
             all_stns = t.get("stations", [])
+            serving_watched = sorted(station_codes & all_watched)
 
             trains.append({
-                "train_num":     str(t.get("trainNum", train_key)),
-                "route":         t.get("routeName", ""),
-                "origin":        all_stns[0].get("code", "") if all_stns else "",
-                "destination":   all_stns[-1].get("code", "") if all_stns else "",
-                "status":        stn.get("status") or t.get("trainTimely") or "",
-                "delay_minutes": delay,
-                "scheduled_arr": stn.get("schArr"),
-                "estimated_arr": stn.get("arr"),
-                "scheduled_dep": stn.get("schDep"),
-                "estimated_dep": stn.get("dep"),
-                "lat":           t.get("lat"),
-                "lon":           t.get("lon"),
-                "train_id":      t.get("trainID", ""),
+                "train_num":        str(t.get("trainNum", train_key)),
+                "route":            t.get("routeName", ""),
+                "origin":           all_stns[0].get("code", "") if all_stns else "",
+                "destination":      all_stns[-1].get("code", "") if all_stns else "",
+                "status":           stn.get("status") or t.get("trainTimely") or "",
+                "delay_minutes":    delay,
+                "scheduled_arr":    stn.get("schArr"),
+                "estimated_arr":    stn.get("arr"),
+                "scheduled_dep":    stn.get("schDep"),
+                "estimated_dep":    stn.get("dep"),
+                "lat":              t.get("lat"),
+                "lon":              t.get("lon"),
+                "train_id":         t.get("trainID", ""),
+                "serving_watched":  serving_watched,
+                "is_watchlist":     bool(station_codes & watchlist),
+                "is_regional":      bool(station_codes & regional),
             })
 
     # Build summary
     if not trains:
-        summary = f"No trains serving {station}."
+        summary = f"No trains serving watched stations ({primary})."
     else:
         delayed = [t for t in trains if t.get("delay_minutes", 0) >= 15]
+        watchlist_delayed = [t for t in delayed if t.get("is_watchlist")]
         if not delayed:
-            summary = f"All {len(trains)} {station} trains on time or minor delay."
+            summary = f"All {len(trains)} watched trains on time or minor delay."
         else:
             worst = sorted(delayed, key=lambda x: -x["delay_minutes"])
             lines = [
                 f"#{t['train_num']} {t['route']}: +{t['delay_minutes']}min"
+                + (" [WATCH]" if t.get("is_watchlist") else "")
                 for t in worst[:5]
             ]
-            summary = f"{len(delayed)}/{len(trains)} trains delayed. " + "; ".join(lines)
+            summary = (
+                f"{len(delayed)}/{len(trains)} trains delayed"
+                + (f" ({len(watchlist_delayed)} watchlist)" if watchlist_delayed else "")
+                + ". " + "; ".join(lines)
+            )
             if len(delayed) > 5:
                 summary += f" (+{len(delayed)-5} more)"
 
@@ -119,7 +147,7 @@ async def run(cfg: AmtrakConfig, stop: asyncio.Event, heartbeat: int) -> None:
             try:
                 resp = await http.get(cfg.feed_url)
                 resp.raise_for_status()
-                trains, summary = parse_feed(resp.content, cfg.filter_station)
+                trains, summary = parse_feed(resp.content, cfg)
                 db.insert_amtrak_status(json.dumps(trains), summary)
                 failover.mark_push_healthy("amtrak")
                 log.info("Amtrak: %d train(s) at %s — %s",

@@ -240,3 +240,23 @@ def run() -> dict:
         log.error("Amtrak fetch FAILED: %s", msg)
         db.upsert_feed(feed_name, fetched_at, error=msg)
         return {"error": msg}
+
+
+def watchlist_stations() -> frozenset:
+    """
+    Stations explicitly on the operator's watch list.
+    These are checked individually for each inbound/outbound train
+    regardless of route filtering -- e.g. a long-distance train that
+    doesn't match any regional route but serves a station the operator
+    cares about (pickup/dropoff point for a client).
+
+    AMTRAK_WATCHLIST_STATIONS takes precedence over AMTRAK_REGIONAL_STATIONS
+    for per-train alerting. AMTRAK_REGIONAL_STATIONS is for broad filtering;
+    AMTRAK_WATCHLIST_STATIONS is for specific alert triggers.
+
+    If unset, falls back to primary_station() only.
+    """
+    raw = config.get("AMTRAK_WATCHLIST_STATIONS", "").strip()
+    if raw:
+        return frozenset(s.strip().upper() for s in raw.split(",") if s.strip())
+    return frozenset({primary_station()})

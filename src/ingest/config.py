@@ -79,7 +79,16 @@ class NwwsConfig:
 class AmtrakConfig:
     enabled: bool = field(default_factory=lambda: _b("AMTRAK_ENABLED", True))
     feed_url: str = field(default_factory=lambda: os.getenv("AMTRAK_FEED_URL", "https://api.amtraker.com/v3/trains"))
+    # Primary station -- map centering, single-station filter for ingest parser
     filter_station: str = field(default_factory=lambda: os.getenv("AMTRAK_PRIMARY_STATION") or os.getenv("AMTRAK_FILTER_STATION", "WAS"))
+    # Regional stations -- broad route filter (trains touching any of these)
+    regional_stations: list = field(default_factory=lambda: [
+        s.strip().upper() for s in os.getenv("AMTRAK_REGIONAL_STATIONS", "").split(",") if s.strip()
+    ] or ["WAS", "BAL", "WIL", "PHL", "TRE", "NYP", "NHV", "NLC", "BOS"])
+    # Watchlist stations -- specific alert triggers, per-train checks
+    watchlist_stations: list = field(default_factory=lambda: [
+        s.strip().upper() for s in os.getenv("AMTRAK_WATCHLIST_STATIONS", "").split(",") if s.strip()
+    ] or [os.getenv("AMTRAK_PRIMARY_STATION", "WAS")])
     poll_interval: int = field(default_factory=lambda: _i("AMTRAK_POLL_INTERVAL_SECS", 300))
 
 
