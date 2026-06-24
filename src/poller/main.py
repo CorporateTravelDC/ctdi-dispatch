@@ -38,6 +38,8 @@ FETCH_SCHEDULE: list[dict] = [
     {"name": "notam",         "module": "poller.fetchers.notam",         "interval": 300,  "push_feed": "fns"},
     {"name": "runsheet",      "module": "poller.fetchers.runsheet",      "interval": 300},
     {"name": "atcscc_opsplan","module": "poller.fetchers.atcscc_opsplan","interval": 3600},
+    {"name": "dca_fids",         "module": "poller.fetchers.dca_fids",         "interval": 60},
+    {"name": "iad_fids",         "module": "poller.fetchers.iad_fids",         "interval": 60},
 ]
 
 # Skills invoked as subprocesses (own SR-1/SR-2 state, own log entries).
