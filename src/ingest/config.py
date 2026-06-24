@@ -78,8 +78,8 @@ class NwwsConfig:
 @dataclass(frozen=True)
 class AmtrakConfig:
     enabled: bool = field(default_factory=lambda: _b("AMTRAK_ENABLED", True))
-    feed_url: str = field(default_factory=lambda: os.getenv("AMTRAK_FEED_URL", ""))
-    filter_station: str = field(default_factory=lambda: os.getenv("AMTRAK_FILTER_STATION", "WAS"))
+    feed_url: str = field(default_factory=lambda: os.getenv("AMTRAK_FEED_URL", "https://api.amtraker.com/v3/trains"))
+    filter_station: str = field(default_factory=lambda: os.getenv("AMTRAK_PRIMARY_STATION") or os.getenv("AMTRAK_FILTER_STATION", "WAS"))
     poll_interval: int = field(default_factory=lambda: _i("AMTRAK_POLL_INTERVAL_SECS", 300))
 
 
