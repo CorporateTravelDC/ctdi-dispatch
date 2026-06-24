@@ -47,6 +47,7 @@ from sse_starlette.sse import EventSourceResponse
 from auth.auth import Tier, require_admin, require_tier, resolve_tier
 from common import config, db
 from web.routes.watchlist import router as watchlist_router
+from web.routes.fids import router as fids_router
 from web.sse import live_events
 
 app = FastAPI(
@@ -66,6 +67,7 @@ app.add_middleware(
 )
 
 app.include_router(watchlist_router)
+app.include_router(fids_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,7 @@ async def healthz() -> JSONResponse:
     thresholds = {
         "metar": 900, "tfr": 900, "nas": 900,
         "nws": 2700, "notam": 900, "runsheet": 900, "atcscc_opsplan": 7200,
+        "dca_fids": 180, "iad_fids": 180,
     }
     # REST feeds that are covered by a push source — skip staleness check when push is healthy.
     push_covers = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
@@ -173,9 +176,11 @@ async def get_feeds() -> JSONResponse:
         "metar": 900, "tfr": 900, "nas": 900,
         "nws": 2700, "notam": 900, "runsheet": 900,
         "atcscc_opsplan": 7200,
+        "dca_fids": 180, "iad_fids": 180,
         "push:nws": 300, "push:fdps": 300, "push:stdds": 300,
         "push:fns": 300, "push:itws": 300,
         "push:amtrak": 300,
+        "dca_fids": 180, "iad_fids": 180,
     }
     # REST feeds covered by a push source — stale REST is expected when push is live.
     push_covers: dict[str, str] = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
