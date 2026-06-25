@@ -78,3 +78,9 @@ Modelfile.osint
 Documents/
 *claudecodeprompt*.md
 *claude-code-prompt*.md
+
+# Runtime secrets — never commit
+secrets.env
+**/secrets.env
+dispatch-secrets.env
+**/dispatch-secrets.env
