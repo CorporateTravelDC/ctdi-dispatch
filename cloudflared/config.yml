@@ -34,6 +34,12 @@ ingress:
   - hostname: ntfy.csexecutiveservices.com
     service: http://127.0.0.1:2586
 
+  # cockpit — system management UI — CF Access gated (Tailscale + auth required)
+  - hostname: cockpit.csexecutiveservices.com
+    service: http://127.0.0.1:80
+    originRequest:
+      httpHostHeader: cockpit.csexecutiveservices.com
+
   # pihole — CF Access gated (Tailscale + auth required)
   - hostname: pihole.csexecutiveservices.com
     service: http://127.0.0.1:8091

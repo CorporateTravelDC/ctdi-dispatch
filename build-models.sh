@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # build-models.sh — Build csexec custom Ollama models from Modelfiles
-# Run after 'ollama pull llama3.2:3b' and 'ollama pull mistral' are complete.
+# Run after 'ollama pull qwen3.5:9b' is complete.
+# Both custom models are based on qwen3.5:9b.
 # Run as corporatetraveldc (not root).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Building csexec-chat (llama3.2:3b + operator context) ==="
+echo "=== Building csexec-chat (qwen3.5:9b + operator context) ==="
 ollama create csexec-chat -f "${REPO_DIR}/Modelfile.chat"
 
 echo ""
-echo "=== Building csexec-osint (mistral + EP/marketing dual-use context) ==="
+echo "=== Building csexec-osint (qwen3.5:9b + EP/marketing dual-use context) ==="
 ollama create csexec-osint -f "${REPO_DIR}/Modelfile.osint"
 
 echo ""
 echo "=== Verifying models ==="
-ollama list | grep -E "csexec|llama|mistral"
+ollama list | grep -E "csexec|qwen"
 
 echo ""
 echo "=== Warm-loading both models (1-token probe) ==="
