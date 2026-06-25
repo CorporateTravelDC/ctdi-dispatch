@@ -11,9 +11,7 @@ build/
 src/runner/frontend/node_modules/
 src/runner/static/
 
-# Ollama Modelfiles — operator-specific system prompts; use Modelfile.*.template for public reference
-Modelfile.chat
-Modelfile.osint
+# Ollama Modelfiles — committed to private repo; public repo uses Modelfile.*.template only
 
 # Credentials and keys — never commit
 .ssh/
