@@ -1,9 +1,9 @@
 # Modelfile.osint — csexec-osint (PRIVATE — gitignored, do not commit)
 # Dual-use OSINT analyst: EP advance intel + brand/competitive intel
 # Build: ollama create csexec-osint -f /opt/corporatetraveldc/ctdi-dispatch-internal/Modelfile.osint
-# Base: qwen3.5:9b
+# Base: llama3.2:3b
 
-FROM qwen3.5:9b
+FROM llama3.2:3b
 
 PARAMETER temperature 0.3
 PARAMETER num_predict 150
