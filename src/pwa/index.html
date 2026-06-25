@@ -19,22 +19,29 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:       #0d1117;
-      --surface:  #161b22;
-      --border:   #30363d;
-      --text:     #e6edf3;
-      --muted:    #8b949e;
-      --accent:   #58a6ff;
-      --go:       #3fb950;
-      --caution:  #d29922;
-      --nogo:     #f85149;
-      --tfr:      #ff6b6b;
-      --sfra:     #ff9f43;
-      --frz:      #ee5a24;
+      --bg:         #0d1117;
+      --surface:    #161b22;
+      --border:     #30363d;
+      --text:       #e6edf3;
+      --muted:      #8b949e;
+      --accent:     #58a6ff;
+      --go:         #3fb950;
+      --caution:    #d29922;
+      --nogo:       #f85149;
+      --tfr:        #ff6b6b;
+      --sfra:       #ff9f43;
+      --frz:        #ee5a24;
       --prohibited: #a29bfe;
+      --train-watch:#ff9f43;
+      --train-delay:#f85149;
+      --train-ok:   #3fb950;
     }
 
-    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); font-size: 14px;
+    }
 
     /* ── Skip link (SR / keyboard) ───────────────────── */
     .skip-link {
@@ -45,7 +52,7 @@
     .skip-link:focus { top: 4px; }
 
     /* ── Layout ──────────────────────────────────────── */
-    body { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr; height: 100dvh; }
+    body { display: grid; grid-template-rows: auto 1fr auto; height: 100dvh; }
 
     header {
       background: var(--surface); border-bottom: 1px solid var(--border);
@@ -56,21 +63,19 @@
     .cps-badge {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 10px; border-radius: 999px; font-weight: 700;
-      font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase;
-      border: 1px solid;
+      font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; border: 1px solid;
     }
-    .cps-go     { background: #1a3a23; color: var(--go);      border-color: var(--go); }
-    .cps-caution{ background: #3a2a10; color: var(--caution); border-color: var(--caution); }
-    .cps-nogo   { background: #3a1010; color: var(--nogo);    border-color: var(--nogo); }
-    .cps-unknown{ background: var(--surface); color: var(--muted); border-color: var(--border); }
+    .cps-go      { background: #1a3a23; color: var(--go);      border-color: var(--go); }
+    .cps-caution { background: #3a2a10; color: var(--caution); border-color: var(--caution); }
+    .cps-nogo    { background: #3a1010; color: var(--nogo);    border-color: var(--nogo); }
+    .cps-unknown { background: var(--surface); color: var(--muted); border-color: var(--border); }
 
-    .header-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+    .header-title { font-size: 13px; font-weight: 600; flex: 1; }
     .header-time  { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
     /* ── Main area ───────────────────────────────────── */
     main {
       grid-row: 2; display: grid; overflow: hidden;
-      /* Mobile: stacked; Desktop: side panel */
       grid-template-rows: 1fr auto;
       grid-template-columns: 1fr;
     }
@@ -88,49 +93,73 @@
     #map-container { position: relative; }
     #map { height: 100%; width: 100%; background: #1a1d21; }
 
-    /* Leaflet dark tile filter */
     .leaflet-tile { filter: brightness(0.65) saturate(0.8) hue-rotate(180deg) invert(1); }
     .leaflet-container { background: #1a1d21; }
-
-    /* Leaflet control overrides */
     .leaflet-control-zoom a { background: var(--surface); color: var(--text); border-color: var(--border); }
     .leaflet-control-zoom a:hover { background: var(--border); }
     .leaflet-bar { border-color: var(--border); }
 
+    /* Train DivIcon */
+    .train-icon {
+      display: flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 4px; border: 2px solid;
+      font-size: 9px; font-weight: 800; font-family: monospace;
+      line-height: 1;
+    }
+    .train-icon.watch  { background: #3a2a10; color: var(--train-watch); border-color: var(--train-watch); }
+    .train-icon.delay  { background: #3a1010; color: var(--train-delay); border-color: var(--train-delay); }
+    .train-icon.ok     { background: #1a3a23; color: var(--train-ok);    border-color: var(--train-ok); }
+
     /* ── Info panel ──────────────────────────────────── */
     #info-panel {
       background: var(--surface); border-top: 1px solid var(--border);
-      overflow-y: auto; max-height: 40vh;
+      overflow-y: auto; max-height: 42vh;
     }
     @media (min-width: 768px) {
       #info-panel { border-top: none; border-left: 1px solid var(--border); max-height: none; }
     }
 
-    .panel-section { padding: 12px; border-bottom: 1px solid var(--border); }
+    .panel-section { padding: 10px 12px; border-bottom: 1px solid var(--border); }
     .panel-section:last-child { border-bottom: none; }
 
     .section-label {
       font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
-      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
     }
 
-    .feed-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; }
+    .feed-row  { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; font-size: 11px; }
     .feed-name { color: var(--text); }
     .feed-age  { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-    .metar-row { font-size: 12px; margin-bottom: 4px; }
-    .metar-station { font-weight: 700; color: var(--accent); width: 40px; display: inline-block; }
-    .metar-val { color: var(--text); }
+    .metar-row     { font-size: 12px; margin-bottom: 3px; display: flex; gap: 6px; }
+    .metar-station { font-weight: 700; color: var(--accent); min-width: 40px; }
+    .metar-val     { color: var(--text); }
 
-    .alert-item { font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); color: var(--caution); }
+    .alert-item  { font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border); color: var(--caution); }
     .alert-item:last-child { border-bottom: none; }
+
+    .train-row { font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border); display: flex; gap: 6px; align-items: baseline; }
+    .train-row:last-child { border-bottom: none; }
+    .train-num  { font-weight: 700; color: var(--accent); min-width: 28px; font-family: monospace; }
+    .train-delay-badge { font-size: 10px; font-weight: 700; }
+    .delay-hi   { color: var(--train-delay); }
+    .delay-mid  { color: var(--train-watch); }
+    .delay-ok   { color: var(--train-ok); }
+    .train-route { color: var(--muted); font-size: 10px; }
+    .train-watch-star { color: var(--train-watch); margin-left: 2px; }
+
+    .fids-row { display: flex; gap: 8px; font-size: 12px; margin-bottom: 3px; }
+    .fids-apt { font-weight: 700; color: var(--accent); min-width: 36px; }
+    .fids-cnt { color: var(--text); }
+    .fids-muted { color: var(--muted); }
 
     .no-data { font-size: 12px; color: var(--muted); font-style: italic; }
 
     /* ── Status bar ──────────────────────────────────── */
     footer {
       grid-row: 3; background: var(--bg); border-top: 1px solid var(--border);
-      padding: 4px 12px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted);
+      padding: 4px 12px; display: flex; align-items: center; gap: 8px;
+      font-size: 11px; color: var(--muted);
     }
     #status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--go); flex-shrink: 0; }
     #status-dot.err { background: var(--nogo); }
@@ -139,31 +168,33 @@
     .layer-legend {
       position: absolute; bottom: 24px; left: 8px; z-index: 500;
       background: rgba(22,27,34,0.92); border: 1px solid var(--border);
-      border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.8;
+      border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.9;
       backdrop-filter: blur(4px);
     }
-    .legend-row { display: flex; align-items: center; gap: 6px; }
-    .legend-swatch { width: 20px; height: 3px; border-radius: 2px; }
-    .legend-swatch.dashed { background: repeating-linear-gradient(90deg, var(--sfra) 0 6px, transparent 6px 10px); }
+    .legend-row    { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+    .legend-swatch.dashed {
+      background: repeating-linear-gradient(90deg, var(--sfra) 0 6px, transparent 6px 10px);
+    }
+    .legend-box {
+      width: 11px; height: 11px; border-radius: 2px; border: 2px solid;
+      display: inline-block; flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
-  <!-- Skip link for screen readers / keyboard users -->
   <a href="#info-panel" class="skip-link">Skip map to data summary</a>
 
-  <!-- ── SR Overview (hidden visually, read first by screen readers) ── -->
-  <!--
-    Azimuth pattern: textual dashboard overview before interactive elements.
-    Screen readers encounter this before the map canvas.
-  -->
-  <div role="region" aria-label="Dashboard overview" class="sr-only"
+  <!-- Azimuth SR overview — read first by screen readers -->
+  <div role="region" aria-label="Dashboard overview"
        style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">
-    <p id="sr-overview">Loading dispatch status. CPS state, active TFRs, and weather summary will appear here.</p>
+    <p id="sr-overview">Loading dispatch status.</p>
   </div>
 
   <!-- ── Header ── -->
   <header role="banner">
-    <span id="cps-badge" class="cps-badge cps-unknown" role="status" aria-live="polite" aria-label="CPS status">
+    <span id="cps-badge" class="cps-badge cps-unknown"
+          role="status" aria-live="polite" aria-label="CPS status">
       <span aria-hidden="true">●</span>
       <span id="cps-label">—</span>
     </span>
@@ -177,16 +208,23 @@
     <div id="map-container" role="img" aria-label="DC-area airspace and operational map">
       <div id="map"></div>
 
-      <!-- Layer legend -->
       <div class="layer-legend" aria-hidden="true">
         <div class="legend-row"><span class="legend-swatch dashed"></span> SFRA 30 NM</div>
         <div class="legend-row"><span class="legend-swatch" style="background:var(--frz)"></span> FRZ 15 NM</div>
         <div class="legend-row"><span class="legend-swatch" style="background:var(--prohibited)"></span> P-56 A/B</div>
         <div class="legend-row"><span class="legend-swatch" style="background:var(--tfr)"></span> Active TFR</div>
+        <div class="legend-row">
+          <span class="legend-box" style="background:#3a2a10;border-color:var(--train-watch)"></span>
+          Train (watchlist)
+        </div>
+        <div class="legend-row">
+          <span class="legend-box" style="background:#3a1010;border-color:var(--train-delay)"></span>
+          Train (delayed)
+        </div>
       </div>
     </div>
 
-    <!-- Info panel — Azimuth: structured DOM, aria-live change descriptions -->
+    <!-- Info panel -->
     <aside id="info-panel" aria-label="Operational data summary">
 
       <!-- Weather -->
@@ -197,7 +235,7 @@
         </div>
       </section>
 
-      <!-- Active alerts -->
+      <!-- Alerts -->
       <section class="panel-section" aria-labelledby="alerts-heading">
         <div class="section-label" id="alerts-heading">NWS Alerts</div>
         <div id="alerts-content" aria-live="polite" aria-atomic="false">
@@ -205,10 +243,27 @@
         </div>
       </section>
 
-      <!-- Active TFRs -->
+      <!-- TFRs -->
       <section class="panel-section" aria-labelledby="tfr-heading">
         <div class="section-label" id="tfr-heading">Active TFRs</div>
         <div id="tfr-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+      <!-- Trains -->
+      <section class="panel-section" aria-labelledby="trains-heading">
+        <div class="section-label" id="trains-heading">Amtrak / NEC</div>
+        <div id="trains-summary" style="font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
+        <div id="trains-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+      <!-- FIDS -->
+      <section class="panel-section" aria-labelledby="fids-heading">
+        <div class="section-label" id="fids-heading">Airport FIDS</div>
+        <div id="fids-content" aria-live="polite" aria-atomic="false">
           <span class="no-data">Loading…</span>
         </div>
       </section>
@@ -224,7 +279,7 @@
     </aside>
   </main>
 
-  <!-- ── Footer status ── -->
+  <!-- ── Footer ── -->
   <footer role="contentinfo">
     <span id="status-dot" aria-hidden="true"></span>
     <span id="status-text" aria-live="polite">Initializing…</span>
@@ -234,27 +289,23 @@
   'use strict';
 
   // ── Config ──────────────────────────────────────────────────────────────────
-  const API   = '';          // same-origin
-  const POLL  = 30_000;      // 30s refresh
-  const DCA   = [38.8521, -77.0377];
-  const ZOOM  = 9;
+  const API  = '';        // same-origin
+  const POLL = 30_000;    // 30s refresh
+  const DCA  = [38.8521, -77.0377];
+  const ZOOM = 9;
 
   // ── Map init ─────────────────────────────────────────────────────────────────
-  const map = L.map('map', {
-    center: DCA, zoom: ZOOM,
-    zoomControl: true,
-    attributionControl: true,
-  });
+  const map = L.map('map', { center: DCA, zoom: ZOOM });
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://osm.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
   }).addTo(map);
 
-  // Layer groups
   const airspaceLayer = L.layerGroup().addTo(map);
   const tfrLayer      = L.layerGroup().addTo(map);
   const wxLayer       = L.layerGroup().addTo(map);
+  const trainLayer    = L.layerGroup().addTo(map);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
@@ -267,25 +318,31 @@
   function fmtAge(isoStr) {
     if (!isoStr) return '—';
     const secs = Math.floor((Date.now() - new Date(isoStr)) / 1000);
-    if (secs < 90) return `${secs}s ago`;
+    if (secs < 90)   return `${secs}s ago`;
     if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
     return `${Math.floor(secs/3600)}h ago`;
+  }
+
+  function fmtDelay(min) {
+    if (!min || min <= 0) return null;
+    if (min >= 60) return `+${Math.floor(min/60)}h${min%60 ? (min%60)+'m' : ''}`;
+    return `+${min}m`;
   }
 
   function updateClock() {
     const t = new Date();
     $('header-time').textContent =
       t.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false })
-      + ' ' + t.toLocaleString('en-US', { timeZoneName:'short' }).split(', ')[1].split(' ').pop();
+      + ' ' + (t.toLocaleString('en-US', { timeZoneName:'short' }).split(' ').pop());
     $('header-time').setAttribute('datetime', t.toISOString());
   }
 
-  // ── Static airspace ──────────────────────────────────────────────────────────
+  // ── Airspace (static, loaded once) ───────────────────────────────────────────
   const AIRSPACE_STYLE = {
-    DC_SFRA:      { color:'#ff9f43', weight:1.5, fillOpacity:0.05, dashArray:'8 4' },
-    DC_FRZ:       { color:'#ee5a24', weight:2,   fillOpacity:0.08, dashArray: null },
-    'P-56A':      { color:'#a29bfe', weight:2.5, fillOpacity:0.20, dashArray: null },
-    'P-56B':      { color:'#a29bfe', weight:2.5, fillOpacity:0.20, dashArray: null },
+    DC_SFRA:  { color:'#ff9f43', weight:1.5, fillOpacity:0.05, dashArray:'8 4' },
+    DC_FRZ:   { color:'#ee5a24', weight:2,   fillOpacity:0.08 },
+    'P-56A':  { color:'#a29bfe', weight:2.5, fillOpacity:0.20 },
+    'P-56B':  { color:'#a29bfe', weight:2.5, fillOpacity:0.20 },
   };
 
   async function loadAirspace() {
@@ -294,26 +351,15 @@
       airspaceLayer.clearLayers();
       for (const f of fc.features) {
         const style = AIRSPACE_STYLE[f.id] || { color:'#888', weight:1, fillOpacity:0.05 };
-        const poly = L.geoJSON(f, {
+        L.geoJSON(f, {
           style,
           onEachFeature(feat, layer) {
             const p = feat.properties;
-            layer.bindTooltip(
-              `<strong>${p.name}</strong><br>${p.description}`,
-              { sticky: true, className: 'airspace-tooltip' }
-            );
-            // Accessibility: aria-label on the SVG path
-            layer.on('add', () => {
-              const el = layer.getElement?.();
-              if (el) el.setAttribute('aria-label', `${p.name}: ${p.description}`);
-            });
+            layer.bindTooltip(`<strong>${p.name}</strong><br>${p.description}`, { sticky:true });
           },
-        });
-        airspaceLayer.addLayer(poly);
+        }).addTo(airspaceLayer);
       }
-    } catch(e) {
-      console.warn('airspace load failed:', e);
-    }
+    } catch(e) { console.warn('airspace:', e); }
   }
 
   // ── TFRs ─────────────────────────────────────────────────────────────────────
@@ -322,75 +368,70 @@
       const data = await fetch(`${API}/api/v1/tfr`).then(r => r.json());
       tfrLayer.clearLayers();
       const tfrs = Array.isArray(data) ? data : (data.tfrs || []);
-      let html = '';
 
       for (const tfr of tfrs) {
-        // Try to draw polygon if geometry present
         if (tfr.geometry) {
           try {
             L.geoJSON(tfr.geometry, {
               style: { color:'#ff6b6b', weight:2, fillOpacity:0.15, dashArray:'4 4' },
-            }).bindTooltip(tfr.notam_id || tfr.id || 'TFR', { sticky:true })
-              .addTo(tfrLayer);
+            }).bindTooltip(tfr.notam_id || 'TFR', { sticky:true }).addTo(tfrLayer);
           } catch(_) {}
         }
-        const id    = tfr.notam_id || tfr.id || '—';
-        const type  = tfr.type || '';
-        const vip   = /POTUS|VIP|MOVEMENT|AF1|Marine One/i.test(type) ? ' ⚠' : '';
-        html += `<div class="alert-item">${id}${vip} — ${type || 'Unknown type'}</div>`;
       }
 
       $('tfr-content').innerHTML = tfrs.length
-        ? html
+        ? tfrs.map(t => {
+            const id  = t.notam_id || t.id || '—';
+            const typ = t.type || '';
+            const vip = /POTUS|VIP|MOVEMENT|AF1|Marine One/i.test(typ) ? ' ⚠' : '';
+            return `<div class="alert-item">${id}${vip} — ${typ || 'Unknown'}</div>`;
+          }).join('')
         : '<span class="no-data">No active TFRs</span>';
     } catch(e) {
       $('tfr-content').innerHTML = '<span class="no-data">TFR feed unavailable</span>';
     }
   }
 
-  // ── Weather (METAR) ──────────────────────────────────────────────────────────
+  // ── Weather ──────────────────────────────────────────────────────────────────
   const WX_STATIONS = ['KDCA','KIAD','KBWI'];
 
   async function loadWeather() {
     try {
-      const data = await fetch(`${API}/api/v1/weather`).then(r => r.json());
+      const data    = await fetch(`${API}/api/v1/weather`).then(r => r.json());
       const reports = Array.isArray(data) ? data : (data.reports || data.metars || []);
       let html = '';
 
       for (const r of reports) {
         const id = r.station_id || r.icao || '';
-        if (!WX_STATIONS.includes(id) && !id.startsWith('K')) continue;
-        const ceil = r.ceiling_ft != null ? `${r.ceiling_ft.toLocaleString()}ft` : '—';
-        const vis  = r.visibility_sm != null ? `${r.visibility_sm}SM` : '—';
-        const wnd  = r.wind_speed_kt != null ? `${r.wind_speed_kt}kt` : '—';
+        if (!WX_STATIONS.includes(id)) continue;
+        const ceil = r.ceiling_ft    != null ? `${r.ceiling_ft.toLocaleString()}ft`  : '—';
+        const vis  = r.visibility_sm != null ? `${r.visibility_sm}SM`                : '—';
+        const wnd  = r.wind_speed_kt != null ? `${r.wind_speed_kt}kt`               : '—';
+        const flg  = (r.ceiling_ft != null && r.ceiling_ft < 1000) ? '⚠ ' : '';
         html += `<div class="metar-row">
           <span class="metar-station">${id}</span>
-          <span class="metar-val">${ceil} / ${vis} / ${wnd}</span>
+          <span class="metar-val">${flg}${ceil} / ${vis} / ${wnd}</span>
         </div>`;
-
-        // Weather station marker
         if (r.latitude && r.longitude) {
           const ok = r.ceiling_ft == null || r.ceiling_ft > 1000;
           L.circleMarker([r.latitude, r.longitude], {
-            radius: 5, color: ok ? '#3fb950' : '#f85149', weight: 2, fillOpacity: 0.8,
-          }).bindTooltip(`${id}: ceil ${ceil}, vis ${vis}, wind ${wnd}`)
-            .addTo(wxLayer);
+            radius:5, color: ok ? '#3fb950' : '#f85149', weight:2, fillOpacity:0.8,
+          }).bindTooltip(`${id}: ${ceil} / ${vis} / ${wnd}`).addTo(wxLayer);
         }
       }
-
       $('wx-content').innerHTML = html || '<span class="no-data">No METAR data</span>';
     } catch(e) {
-      $('wx-content').innerHTML = '<span class="no-data">Weather feed unavailable</span>';
+      $('wx-content').innerHTML = '<span class="no-data">Weather unavailable</span>';
     }
   }
 
   // ── NWS Alerts ───────────────────────────────────────────────────────────────
   async function loadAlerts() {
     try {
-      const data  = await fetch(`${API}/api/v1/alerts`).then(r => r.json());
+      const data   = await fetch(`${API}/api/v1/alerts`).then(r => r.json());
       const alerts = Array.isArray(data) ? data : (data.alerts || []);
       $('alerts-content').innerHTML = alerts.length
-        ? alerts.map(a => `<div class="alert-item">${a.event || a.headline || JSON.stringify(a)}</div>`).join('')
+        ? alerts.map(a => `<div class="alert-item">${a.event || a.headline || '—'}</div>`).join('')
         : '<span class="no-data">No active alerts</span>';
     } catch(e) {
       $('alerts-content').innerHTML = '<span class="no-data">Alert feed unavailable</span>';
@@ -403,18 +444,103 @@
       const data  = await fetch(`${API}/api/v1/cps`).then(r => r.json());
       const state = (data.state || data.cps_state || 'UNKNOWN').toUpperCase();
       const badge = $('cps-badge');
-      const label = $('cps-label');
-      label.textContent = state;
-      badge.className = 'cps-badge ' + {
-        'GO': 'cps-go', 'CAUTION': 'cps-caution', 'NO-GO': 'cps-nogo',
-      }[state] || 'cps-unknown';
-      badge.setAttribute('aria-label', `CPS status: ${state}`);
-
-      // Update SR overview
-      $('sr-overview').textContent =
-        `Dispatch status: CPS is ${state}. See weather, TFR, and alert sections for details.`;
+      $('cps-label').textContent = state;
+      badge.className = 'cps-badge ' + ({'GO':'cps-go','CAUTION':'cps-caution','NO-GO':'cps-nogo'}[state] || 'cps-unknown');
+      badge.setAttribute('aria-label', `CPS: ${state}`);
+      $('sr-overview').textContent = `Dispatch status: CPS ${state}. Check weather, TFR, and alert sections for detail.`;
     } catch(e) {
       $('cps-label').textContent = '—';
+    }
+  }
+
+  // ── Amtrak trains ────────────────────────────────────────────────────────────
+  async function loadTrains() {
+    try {
+      const data   = await fetch(`${API}/api/v1/amtrak`).then(r => r.json());
+      const trains = data.trains || [];
+      trainLayer.clearLayers();
+
+      // Build panel: watchlist first, then by delay desc, limit to 10
+      const sorted = [...trains].sort((a, b) => {
+        if (a.is_watchlist && !b.is_watchlist) return -1;
+        if (!a.is_watchlist && b.is_watchlist)  return 1;
+        return (b.delay_minutes || 0) - (a.delay_minutes || 0);
+      });
+
+      const showing = sorted.slice(0, 10);
+      let html = '';
+
+      for (const t of showing) {
+        const delay = fmtDelay(t.delay_minutes);
+        const cls   = t.is_watchlist ? 'delay-hi' : (t.delay_minutes >= 30 ? 'delay-mid' : 'delay-ok');
+        const star  = t.is_watchlist ? '<span class="train-watch-star" aria-label="watchlist">★</span>' : '';
+        html += `<div class="train-row">
+          <span class="train-num">#${t.train_num}</span>
+          ${delay ? `<span class="train-delay-badge ${cls}">${delay}</span>` : ''}
+          <span class="train-route">${t.route} ${t.origin}→${t.destination}</span>
+          ${star}
+        </div>`;
+
+        // Map marker — only if we have a valid position
+        if (t.lat && t.lon && Math.abs(t.lat) > 0.1) {
+          const iconCls = t.is_watchlist ? 'watch' : (t.delay_minutes >= 30 ? 'delay' : 'ok');
+          const icon = L.divIcon({
+            html: `<div class="train-icon ${iconCls}">${t.train_num}</div>`,
+            className: '',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+          });
+          const delayStr = delay ? ` (${delay})` : ' (on time)';
+          L.marker([t.lat, t.lon], { icon })
+           .bindTooltip(`#${t.train_num} ${t.route}${delayStr}<br>${t.status || ''}`, { sticky:true })
+           .addTo(trainLayer);
+        }
+      }
+
+      const total   = trains.length;
+      const delayed = trains.filter(t => (t.delay_minutes || 0) > 0).length;
+      const watched = trains.filter(t => t.is_watchlist).length;
+      $('trains-summary').textContent =
+        `${total} trains · ${delayed} delayed · ${watched} watchlist`;
+      $('trains-content').innerHTML = html || '<span class="no-data">No train data</span>';
+
+      if (data.summary) {
+        $('trains-summary').title = data.summary;
+      }
+    } catch(e) {
+      $('trains-content').innerHTML = '<span class="no-data">Amtrak feed unavailable</span>';
+    }
+  }
+
+  // ── FIDS ─────────────────────────────────────────────────────────────────────
+  const FIDS_AIRPORTS = ['DCA', 'IAD'];
+
+  async function loadFIDS() {
+    try {
+      const results = await Promise.allSettled(
+        FIDS_AIRPORTS.map(apt => fetch(`${API}/api/v1/fids/${apt}`).then(r => r.json()))
+      );
+      let html = '';
+      for (let i = 0; i < FIDS_AIRPORTS.length; i++) {
+        const apt = FIDS_AIRPORTS[i];
+        const res = results[i];
+        if (res.status === 'fulfilled') {
+          const d = res.value;
+          const arr = d.arrivals_count   ?? '—';
+          const dep = d.departures_count ?? '—';
+          const age = d.ts ? fmtAge(d.ts) : '—';
+          html += `<div class="fids-row">
+            <span class="fids-apt">${apt}</span>
+            <span class="fids-cnt">${arr} arr / ${dep} dep</span>
+            <span class="fids-muted">${age}</span>
+          </div>`;
+        } else {
+          html += `<div class="fids-row"><span class="fids-apt">${apt}</span><span class="no-data">unavailable</span></div>`;
+        }
+      }
+      $('fids-content').innerHTML = html || '<span class="no-data">No FIDS data</span>';
+    } catch(e) {
+      $('fids-content').innerHTML = '<span class="no-data">FIDS unavailable</span>';
     }
   }
 
@@ -423,14 +549,13 @@
     try {
       const data  = await fetch(`${API}/api/v1/feeds`).then(r => r.json());
       const feeds = data.feeds || data || {};
-      const rows  = Object.entries(feeds).slice(0, 8)
-        .map(([name, f]) => {
-          const age = fmtAge(f.last_success || f.last_updated);
-          return `<div class="feed-row">
-            <span class="feed-name">${name}</span>
-            <span class="feed-age">${age}</span>
-          </div>`;
-        }).join('');
+      const rows  = Object.entries(feeds).slice(0, 10).map(([name, f]) => {
+        const age = fmtAge(f.last_success || f.last_updated);
+        return `<div class="feed-row">
+          <span class="feed-name">${name}</span>
+          <span class="feed-age">${age}</span>
+        </div>`;
+      }).join('');
       $('feeds-content').innerHTML = rows || '<span class="no-data">No feed data</span>';
     } catch(e) {
       $('feeds-content').innerHTML = '<span class="no-data">Feed status unavailable</span>';
@@ -447,20 +572,21 @@
         loadWeather(),
         loadAlerts(),
         loadTFRs(),
+        loadTrains(),
+        loadFIDS(),
         loadFeeds(),
       ]);
-      setStatus(`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`);
+      setStatus(`Updated ${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`);
     } catch(e) {
       setStatus('Refresh error — retrying', false);
     }
   }
 
-  // ── Boot ──────────────────────────────────────────────────────────────────────
+  // ── Boot ─────────────────────────────────────────────────────────────────────
   (async function boot() {
     updateClock();
     setInterval(updateClock, 1000);
-
-    await loadAirspace();  // static — load once
+    await loadAirspace();   // static — once
     await refresh();
     setInterval(refresh, POLL);
   })();
