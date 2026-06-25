@@ -46,14 +46,17 @@ log "  3. Enter your ProtonMail password"
 log "  4. Complete 2FA if enabled"
 log "  5. Note the BRIDGE SMTP PASSWORD shown at the end"
 log "     (this is NOT your ProtonMail password — save it for msmtp config)"
-log "  6. Type 'exit' when you see 'Bridge is ready'"
+log "  5. Note the BRIDGE SMTP PASSWORD shown after login"
+log "     (this is NOT your ProtonMail password — save it for msmtp)"
+log "  6. Type 'exit' at the bridge> prompt when done"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log ""
 read -r -p "Press Enter to start the interactive session…"
 
+# 'init' arg: initializes GPG + pass keystore, then opens the bridge CLI
 podman run --rm -it \
   -v protonbridge-data:/root \
-  "${IMAGE}"
+  "${IMAGE}" init
 
 log ""
 log "Interactive session complete."
