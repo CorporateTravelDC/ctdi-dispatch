@@ -1,0 +1,22 @@
+[Unit]
+Description=Refresh Unbound DNSSEC anchor after network is up
+After=network-online.target
+Wants=network-online.target
+# Requires=unbound.service intentionally ABSENT.
+# The original had Requires= which caused a restart loop: calling
+# "systemctl restart unbound" from ExecStart caused systemd to stop
+# this service too (via the Requires binding), then re-trigger it endlessly.
+#
+# This service is a boot-time safety net only — it runs once after
+# network-online.target is reached on boot. Ongoing network-up events
+# (wired/wireless connect, reconnect) are handled by the NM dispatcher:
+# /etc/NetworkManager/dispatcher.d/99-unbound-anchor
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/unbound-anchor-update
+# Wrapper exits 0 in all normal cases (handles both anchor-current and anchor-updated)
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
