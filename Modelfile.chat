@@ -1,9 +1,9 @@
 # Modelfile.chat — csexec-chat (PRIVATE — gitignored, do not commit)
 # Real-time dispatch assistant for CS Executive Services, LLC
 # Build: ollama create csexec-chat -f /opt/corporatetraveldc/ctdi-dispatch-internal/Modelfile.chat
-# Base: qwen3.5:9b
+# Base: llama3.2:3b
 
-FROM qwen3.5:9b
+FROM llama3.2:3b
 
 PARAMETER temperature 0.4
 PARAMETER num_predict 512
