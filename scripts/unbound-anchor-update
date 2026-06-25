@@ -1,0 +1,32 @@
+#!/bin/bash
+# /usr/local/sbin/unbound-anchor-update
+#
+# Wrapper around unbound-anchor that conditionally reloads Unbound.
+# Used by:
+#   - unbound-anchor.service (daily timer)
+#   - unbound-anchor-refresh.service (boot safety net)
+#   - NetworkManager dispatcher (network-up events)
+#
+# unbound-anchor exit codes:
+#   0 = anchor is current, no change needed
+#   1 = anchor was updated
+#
+# Unbound is only signaled to reload when the anchor actually changed.
+# This means the anchor file is only written when stale, and Unbound
+# is only disturbed when there's something new to pick up.
+
+ANCHOR_FILE="/var/lib/unbound/root.key"
+
+/usr/sbin/unbound-anchor -a "$ANCHOR_FILE"
+RC=$?
+
+if [ "$RC" -eq 1 ]; then
+    # Anchor was updated — reload Unbound to pick up the new trust anchor.
+    # unbound-control reload avoids a full restart (no query interruption).
+    # Falls back to systemctl restart only if control socket fails.
+    /usr/sbin/unbound-control reload 2>/dev/null \
+        || systemctl restart unbound
+fi
+
+# Both exit codes (0 = current, 1 = updated) are success from our perspective
+exit 0
