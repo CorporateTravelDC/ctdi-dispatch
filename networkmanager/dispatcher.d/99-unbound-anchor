@@ -1,0 +1,25 @@
+#!/bin/bash
+# /etc/NetworkManager/dispatcher.d/99-unbound-anchor
+#
+# Refresh the Unbound DNSSEC trust anchor on any network-up event.
+# Uses the shared wrapper (/usr/local/sbin/unbound-anchor-update) which
+# only reloads Unbound if the anchor actually changed.
+#
+# Triggers:
+#   - Any NM interface comes up: wired, wireless, or Tailscale (tailscale0)
+#   - Does NOT run on: down, pre-up, vpn-up, pre-down, or any other action
+
+IFACE="$1"
+ACTION="$2"
+
+# Only act on interface-up events
+[ "$ACTION" = "up" ] || exit 0
+
+# Brief pause — let the link stabilize and routing settle before
+# attempting to reach IANA's anchor update servers
+sleep 5
+
+# Run the shared wrapper (checks anchor, reloads Unbound only if changed)
+/usr/local/sbin/unbound-anchor-update
+
+exit 0
