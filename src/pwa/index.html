@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>CS Executive Services — Dispatch Ops</title>
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+  <style>
+    /* ── Reset & base ────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #e6edf3;
+      --muted:    #8b949e;
+      --accent:   #58a6ff;
+      --go:       #3fb950;
+      --caution:  #d29922;
+      --nogo:     #f85149;
+      --tfr:      #ff6b6b;
+      --sfra:     #ff9f43;
+      --frz:      #ee5a24;
+      --prohibited: #a29bfe;
+    }
+
+    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+
+    /* ── Skip link (SR / keyboard) ───────────────────── */
+    .skip-link {
+      position: absolute; top: -999px; left: 4px; z-index: 9999;
+      background: var(--accent); color: #000; padding: 8px 12px; border-radius: 4px;
+      font-weight: 600; text-decoration: none;
+    }
+    .skip-link:focus { top: 4px; }
+
+    /* ── Layout ──────────────────────────────────────── */
+    body { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr; height: 100dvh; }
+
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 8px 12px; display: flex; align-items: center; gap: 12px;
+      grid-row: 1; z-index: 1000;
+    }
+
+    .cps-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px; font-weight: 700;
+      font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase;
+      border: 1px solid;
+    }
+    .cps-go     { background: #1a3a23; color: var(--go);      border-color: var(--go); }
+    .cps-caution{ background: #3a2a10; color: var(--caution); border-color: var(--caution); }
+    .cps-nogo   { background: #3a1010; color: var(--nogo);    border-color: var(--nogo); }
+    .cps-unknown{ background: var(--surface); color: var(--muted); border-color: var(--border); }
+
+    .header-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+    .header-time  { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* ── Main area ───────────────────────────────────── */
+    main {
+      grid-row: 2; display: grid; overflow: hidden;
+      /* Mobile: stacked; Desktop: side panel */
+      grid-template-rows: 1fr auto;
+      grid-template-columns: 1fr;
+    }
+
+    @media (min-width: 768px) {
+      main {
+        grid-template-rows: 1fr;
+        grid-template-columns: 1fr 320px;
+      }
+      #map-container { grid-column: 1; grid-row: 1; }
+      #info-panel    { grid-column: 2; grid-row: 1; overflow-y: auto; }
+    }
+
+    /* ── Map ─────────────────────────────────────────── */
+    #map-container { position: relative; }
+    #map { height: 100%; width: 100%; background: #1a1d21; }
+
+    /* Leaflet dark tile filter */
+    .leaflet-tile { filter: brightness(0.65) saturate(0.8) hue-rotate(180deg) invert(1); }
+    .leaflet-container { background: #1a1d21; }
+
+    /* Leaflet control overrides */
+    .leaflet-control-zoom a { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .leaflet-control-zoom a:hover { background: var(--border); }
+    .leaflet-bar { border-color: var(--border); }
+
+    /* ── Info panel ──────────────────────────────────── */
+    #info-panel {
+      background: var(--surface); border-top: 1px solid var(--border);
+      overflow-y: auto; max-height: 40vh;
+    }
+    @media (min-width: 768px) {
+      #info-panel { border-top: none; border-left: 1px solid var(--border); max-height: none; }
+    }
+
+    .panel-section { padding: 12px; border-bottom: 1px solid var(--border); }
+    .panel-section:last-child { border-bottom: none; }
+
+    .section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+    }
+
+    .feed-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; }
+    .feed-name { color: var(--text); }
+    .feed-age  { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    .metar-row { font-size: 12px; margin-bottom: 4px; }
+    .metar-station { font-weight: 700; color: var(--accent); width: 40px; display: inline-block; }
+    .metar-val { color: var(--text); }
+
+    .alert-item { font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); color: var(--caution); }
+    .alert-item:last-child { border-bottom: none; }
+
+    .no-data { font-size: 12px; color: var(--muted); font-style: italic; }
+
+    /* ── Status bar ──────────────────────────────────── */
+    footer {
+      grid-row: 3; background: var(--bg); border-top: 1px solid var(--border);
+      padding: 4px 12px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted);
+    }
+    #status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--go); flex-shrink: 0; }
+    #status-dot.err { background: var(--nogo); }
+
+    /* ── Layer legend ────────────────────────────────── */
+    .layer-legend {
+      position: absolute; bottom: 24px; left: 8px; z-index: 500;
+      background: rgba(22,27,34,0.92); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.8;
+      backdrop-filter: blur(4px);
+    }
+    .legend-row { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 20px; height: 3px; border-radius: 2px; }
+    .legend-swatch.dashed { background: repeating-linear-gradient(90deg, var(--sfra) 0 6px, transparent 6px 10px); }
+  </style>
+</head>
+<body>
+  <!-- Skip link for screen readers / keyboard users -->
+  <a href="#info-panel" class="skip-link">Skip map to data summary</a>
+
+  <!-- ── SR Overview (hidden visually, read first by screen readers) ── -->
+  <!--
+    Azimuth pattern: textual dashboard overview before interactive elements.
+    Screen readers encounter this before the map canvas.
+  -->
+  <div role="region" aria-label="Dashboard overview" class="sr-only"
+       style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">
+    <p id="sr-overview">Loading dispatch status. CPS state, active TFRs, and weather summary will appear here.</p>
+  </div>
+
+  <!-- ── Header ── -->
+  <header role="banner">
+    <span id="cps-badge" class="cps-badge cps-unknown" role="status" aria-live="polite" aria-label="CPS status">
+      <span aria-hidden="true">●</span>
+      <span id="cps-label">—</span>
+    </span>
+    <span class="header-title">CSEX Dispatch Ops</span>
+    <time id="header-time" class="header-time" aria-label="Current time"></time>
+  </header>
+
+  <!-- ── Main ── -->
+  <main>
+    <!-- Map -->
+    <div id="map-container" role="img" aria-label="DC-area airspace and operational map">
+      <div id="map"></div>
+
+      <!-- Layer legend -->
+      <div class="layer-legend" aria-hidden="true">
+        <div class="legend-row"><span class="legend-swatch dashed"></span> SFRA 30 NM</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--frz)"></span> FRZ 15 NM</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--prohibited)"></span> P-56 A/B</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--tfr)"></span> Active TFR</div>
+      </div>
+    </div>
+
+    <!-- Info panel — Azimuth: structured DOM, aria-live change descriptions -->
+    <aside id="info-panel" aria-label="Operational data summary">
+
+      <!-- Weather -->
+      <section class="panel-section" aria-labelledby="wx-heading">
+        <div class="section-label" id="wx-heading">Weather (METAR)</div>
+        <div id="wx-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+      <!-- Active alerts -->
+      <section class="panel-section" aria-labelledby="alerts-heading">
+        <div class="section-label" id="alerts-heading">NWS Alerts</div>
+        <div id="alerts-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+      <!-- Active TFRs -->
+      <section class="panel-section" aria-labelledby="tfr-heading">
+        <div class="section-label" id="tfr-heading">Active TFRs</div>
+        <div id="tfr-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+      <!-- Feed freshness -->
+      <section class="panel-section" aria-labelledby="feeds-heading">
+        <div class="section-label" id="feeds-heading">Feed Freshness</div>
+        <div id="feeds-content" aria-live="polite" aria-atomic="false">
+          <span class="no-data">Loading…</span>
+        </div>
+      </section>
+
+    </aside>
+  </main>
+
+  <!-- ── Footer status ── -->
+  <footer role="contentinfo">
+    <span id="status-dot" aria-hidden="true"></span>
+    <span id="status-text" aria-live="polite">Initializing…</span>
+  </footer>
+
+  <script>
+  'use strict';
+
+  // ── Config ──────────────────────────────────────────────────────────────────
+  const API   = '';          // same-origin
+  const POLL  = 30_000;      // 30s refresh
+  const DCA   = [38.8521, -77.0377];
+  const ZOOM  = 9;
+
+  // ── Map init ─────────────────────────────────────────────────────────────────
+  const map = L.map('map', {
+    center: DCA, zoom: ZOOM,
+    zoomControl: true,
+    attributionControl: true,
+  });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://osm.org/copyright">OpenStreetMap</a>',
+    maxZoom: 18,
+  }).addTo(map);
+
+  // Layer groups
+  const airspaceLayer = L.layerGroup().addTo(map);
+  const tfrLayer      = L.layerGroup().addTo(map);
+  const wxLayer       = L.layerGroup().addTo(map);
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+
+  function setStatus(msg, ok = true) {
+    $('status-text').textContent = msg;
+    $('status-dot').className = ok ? '' : 'err';
+  }
+
+  function fmtAge(isoStr) {
+    if (!isoStr) return '—';
+    const secs = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+    if (secs < 90) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    return `${Math.floor(secs/3600)}h ago`;
+  }
+
+  function updateClock() {
+    const t = new Date();
+    $('header-time').textContent =
+      t.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false })
+      + ' ' + t.toLocaleString('en-US', { timeZoneName:'short' }).split(', ')[1].split(' ').pop();
+    $('header-time').setAttribute('datetime', t.toISOString());
+  }
+
+  // ── Static airspace ──────────────────────────────────────────────────────────
+  const AIRSPACE_STYLE = {
+    DC_SFRA:      { color:'#ff9f43', weight:1.5, fillOpacity:0.05, dashArray:'8 4' },
+    DC_FRZ:       { color:'#ee5a24', weight:2,   fillOpacity:0.08, dashArray: null },
+    'P-56A':      { color:'#a29bfe', weight:2.5, fillOpacity:0.20, dashArray: null },
+    'P-56B':      { color:'#a29bfe', weight:2.5, fillOpacity:0.20, dashArray: null },
+  };
+
+  async function loadAirspace() {
+    try {
+      const fc = await fetch(`${API}/api/v1/airspace`).then(r => r.json());
+      airspaceLayer.clearLayers();
+      for (const f of fc.features) {
+        const style = AIRSPACE_STYLE[f.id] || { color:'#888', weight:1, fillOpacity:0.05 };
+        const poly = L.geoJSON(f, {
+          style,
+          onEachFeature(feat, layer) {
+            const p = feat.properties;
+            layer.bindTooltip(
+              `<strong>${p.name}</strong><br>${p.description}`,
+              { sticky: true, className: 'airspace-tooltip' }
+            );
+            // Accessibility: aria-label on the SVG path
+            layer.on('add', () => {
+              const el = layer.getElement?.();
+              if (el) el.setAttribute('aria-label', `${p.name}: ${p.description}`);
+            });
+          },
+        });
+        airspaceLayer.addLayer(poly);
+      }
+    } catch(e) {
+      console.warn('airspace load failed:', e);
+    }
+  }
+
+  // ── TFRs ─────────────────────────────────────────────────────────────────────
+  async function loadTFRs() {
+    try {
+      const data = await fetch(`${API}/api/v1/tfr`).then(r => r.json());
+      tfrLayer.clearLayers();
+      const tfrs = Array.isArray(data) ? data : (data.tfrs || []);
+      let html = '';
+
+      for (const tfr of tfrs) {
+        // Try to draw polygon if geometry present
+        if (tfr.geometry) {
+          try {
+            L.geoJSON(tfr.geometry, {
+              style: { color:'#ff6b6b', weight:2, fillOpacity:0.15, dashArray:'4 4' },
+            }).bindTooltip(tfr.notam_id || tfr.id || 'TFR', { sticky:true })
+              .addTo(tfrLayer);
+          } catch(_) {}
+        }
+        const id    = tfr.notam_id || tfr.id || '—';
+        const type  = tfr.type || '';
+        const vip   = /POTUS|VIP|MOVEMENT|AF1|Marine One/i.test(type) ? ' ⚠' : '';
+        html += `<div class="alert-item">${id}${vip} — ${type || 'Unknown type'}</div>`;
+      }
+
+      $('tfr-content').innerHTML = tfrs.length
+        ? html
+        : '<span class="no-data">No active TFRs</span>';
+    } catch(e) {
+      $('tfr-content').innerHTML = '<span class="no-data">TFR feed unavailable</span>';
+    }
+  }
+
+  // ── Weather (METAR) ──────────────────────────────────────────────────────────
+  const WX_STATIONS = ['KDCA','KIAD','KBWI'];
+
+  async function loadWeather() {
+    try {
+      const data = await fetch(`${API}/api/v1/weather`).then(r => r.json());
+      const reports = Array.isArray(data) ? data : (data.reports || data.metars || []);
+      let html = '';
+
+      for (const r of reports) {
+        const id = r.station_id || r.icao || '';
+        if (!WX_STATIONS.includes(id) && !id.startsWith('K')) continue;
+        const ceil = r.ceiling_ft != null ? `${r.ceiling_ft.toLocaleString()}ft` : '—';
+        const vis  = r.visibility_sm != null ? `${r.visibility_sm}SM` : '—';
+        const wnd  = r.wind_speed_kt != null ? `${r.wind_speed_kt}kt` : '—';
+        html += `<div class="metar-row">
+          <span class="metar-station">${id}</span>
+          <span class="metar-val">${ceil} / ${vis} / ${wnd}</span>
+        </div>`;
+
+        // Weather station marker
+        if (r.latitude && r.longitude) {
+          const ok = r.ceiling_ft == null || r.ceiling_ft > 1000;
+          L.circleMarker([r.latitude, r.longitude], {
+            radius: 5, color: ok ? '#3fb950' : '#f85149', weight: 2, fillOpacity: 0.8,
+          }).bindTooltip(`${id}: ceil ${ceil}, vis ${vis}, wind ${wnd}`)
+            .addTo(wxLayer);
+        }
+      }
+
+      $('wx-content').innerHTML = html || '<span class="no-data">No METAR data</span>';
+    } catch(e) {
+      $('wx-content').innerHTML = '<span class="no-data">Weather feed unavailable</span>';
+    }
+  }
+
+  // ── NWS Alerts ───────────────────────────────────────────────────────────────
+  async function loadAlerts() {
+    try {
+      const data  = await fetch(`${API}/api/v1/alerts`).then(r => r.json());
+      const alerts = Array.isArray(data) ? data : (data.alerts || []);
+      $('alerts-content').innerHTML = alerts.length
+        ? alerts.map(a => `<div class="alert-item">${a.event || a.headline || JSON.stringify(a)}</div>`).join('')
+        : '<span class="no-data">No active alerts</span>';
+    } catch(e) {
+      $('alerts-content').innerHTML = '<span class="no-data">Alert feed unavailable</span>';
+    }
+  }
+
+  // ── CPS ──────────────────────────────────────────────────────────────────────
+  async function loadCPS() {
+    try {
+      const data  = await fetch(`${API}/api/v1/cps`).then(r => r.json());
+      const state = (data.state || data.cps_state || 'UNKNOWN').toUpperCase();
+      const badge = $('cps-badge');
+      const label = $('cps-label');
+      label.textContent = state;
+      badge.className = 'cps-badge ' + {
+        'GO': 'cps-go', 'CAUTION': 'cps-caution', 'NO-GO': 'cps-nogo',
+      }[state] || 'cps-unknown';
+      badge.setAttribute('aria-label', `CPS status: ${state}`);
+
+      // Update SR overview
+      $('sr-overview').textContent =
+        `Dispatch status: CPS is ${state}. See weather, TFR, and alert sections for details.`;
+    } catch(e) {
+      $('cps-label').textContent = '—';
+    }
+  }
+
+  // ── Feed freshness ───────────────────────────────────────────────────────────
+  async function loadFeeds() {
+    try {
+      const data  = await fetch(`${API}/api/v1/feeds`).then(r => r.json());
+      const feeds = data.feeds || data || {};
+      const rows  = Object.entries(feeds).slice(0, 8)
+        .map(([name, f]) => {
+          const age = fmtAge(f.last_success || f.last_updated);
+          return `<div class="feed-row">
+            <span class="feed-name">${name}</span>
+            <span class="feed-age">${age}</span>
+          </div>`;
+        }).join('');
+      $('feeds-content').innerHTML = rows || '<span class="no-data">No feed data</span>';
+    } catch(e) {
+      $('feeds-content').innerHTML = '<span class="no-data">Feed status unavailable</span>';
+    }
+  }
+
+  // ── Full refresh ─────────────────────────────────────────────────────────────
+  async function refresh() {
+    setStatus('Refreshing…');
+    try {
+      wxLayer.clearLayers();
+      await Promise.allSettled([
+        loadCPS(),
+        loadWeather(),
+        loadAlerts(),
+        loadTFRs(),
+        loadFeeds(),
+      ]);
+      setStatus(`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`);
+    } catch(e) {
+      setStatus('Refresh error — retrying', false);
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────────
+  (async function boot() {
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    await loadAirspace();  // static — load once
+    await refresh();
+    setInterval(refresh, POLL);
+  })();
+  </script>
+</body>
+</html>
