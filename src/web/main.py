@@ -10,6 +10,8 @@ Route structure:
   GET  /api/v1/weather                 Tier 0 — METAR snapshot
   GET  /api/v1/brief                   Tier 0 — latest daily brief text
   GET  /api/v1/route                   Tier 0 — latest route narrative
+  GET  /api/v1/airspace                Tier 0 — static DC airspace GeoJSON (SFRA/FRZ/P-56)
+  GET  /api/v1/airspace/{id}           Tier 0 — single airspace feature by ID
   GET  /api/v1/demo/readiness          Tier 0 — demo archive seed status
 
   GET  /api/v1/radio                   Tier 1 (CERT/Tailscale)
@@ -48,6 +50,7 @@ from auth.auth import Tier, require_admin, require_tier, resolve_tier
 from common import config, db
 from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
+from web.routes.airspace import router as airspace_router
 from web.sse import live_events
 
 app = FastAPI(
@@ -68,6 +71,7 @@ app.add_middleware(
 
 app.include_router(watchlist_router)
 app.include_router(fids_router)
+app.include_router(airspace_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
