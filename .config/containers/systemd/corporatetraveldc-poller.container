@@ -16,7 +16,7 @@ Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
 
 # Permanent watchlist files — poller's WatchlistFileWatcher hot-reloads these
-Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
+Volume=/opt/corporatetraveldc/ctdi-dispatch-internal/watchlists:/opt/corporatetraveldc/watchlists:ro,z
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
