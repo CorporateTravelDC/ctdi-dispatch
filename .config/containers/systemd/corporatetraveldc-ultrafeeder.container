@@ -5,8 +5,9 @@ After=network-online.target
 [Container]
 Image=ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest
 ContainerName=corporatetraveldc-ultrafeeder
-AddDevice=/dev/rtl_sdr_adsb:/dev/rtl_sdr_adsb
-Volume=/dev/bus/usb:/dev/bus/usb:ro
+AddDevice=/dev/bus/usb:/dev/bus/usb
+UserNS=host
+SecurityLabelDisable=true
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
@@ -23,10 +24,12 @@ Environment=TAR1090_DEFAULTCENTERLAT=38.87485
 Environment=TAR1090_DEFAULTCENTERLON=-77.14410
 Environment=TAR1090_DEFAULTRANGE=80
 Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
-Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=807b07ce-059d-457f-ba8b-d75725679565;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;mlat,collector.opensky-network.org,30003
+# Outbound feeds disabled — local decode only (network blocks 30005/10001)
+# Re-enable ULTRAFEEDER_CONFIG when on unrestricted network
+# Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=807b07ce-059d-457f-ba8b-d75725679565;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;adsb,feed.airplanes.live,30005,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,mlat.airplanes.live,31090
+Environment=READSB_MLAT=false
 PublishPort=8080:80
 PublishPort=30005:30005
-PublishPort=127.0.0.1:30003:30003
 Environment=UUID=784fdeaa-57f1-42bc-936a-cf562775e8bd
 Environment=OPENSKY_USERNAME=corporatetraveldc
 AutoUpdate=registry
