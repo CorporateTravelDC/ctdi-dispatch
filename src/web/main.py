@@ -498,6 +498,56 @@ async def get_train_config() -> JSONResponse:
     })
 
 
+@app.get("/api/v1/data-usage")
+async def get_data_usage(days: int = 30) -> JSONResponse:
+    """Network data usage from vnstat CSV log — Tier 0.
+
+    Returns per-interface daily totals plus a summary for the requested window.
+    ?days=N  — number of days to include (default 30, max 90).
+    """
+    import csv as _csv
+    usage_path = pathlib.Path(config.state_dir()) / "data-usage.csv"
+    if not usage_path.exists():
+        return JSONResponse({"available": False, "message": "No data-usage log yet."})
+
+    days = min(max(int(days), 1), 90)
+    from datetime import date as _date, timedelta as _td
+    cutoff = (_date.today() - _td(days=days - 1)).isoformat()
+
+    rows: list[dict] = []
+    totals: dict[str, dict] = {}
+    try:
+        with usage_path.open() as f:
+            for row in _csv.DictReader(f):
+                if row["date"] < cutoff:
+                    continue
+                rows.append(row)
+                iface = row["interface"]
+                if iface not in totals:
+                    totals[iface] = {"rx_gb": 0.0, "tx_gb": 0.0, "total_gb": 0.0}
+                totals[iface]["rx_gb"]    += float(row.get("rx_gb", 0))
+                totals[iface]["tx_gb"]    += float(row.get("tx_gb", 0))
+                totals[iface]["total_gb"] += float(row.get("total_gb", 0))
+    except Exception as exc:
+        return JSONResponse({"available": False, "message": str(exc)})
+
+    # Round totals
+    for iface in totals:
+        for k in totals[iface]:
+            totals[iface][k] = round(totals[iface][k], 4)
+
+    grand_total = round(sum(t["total_gb"] for t in totals.values()), 4)
+
+    return JSONResponse({
+        "available":    True,
+        "window_days":  days,
+        "grand_total_gb": grand_total,
+        "by_interface": totals,
+        "daily":        rows,
+        "log_path":     str(usage_path),
+    })
+
+
 @app.get("/api/v1/demo/readiness")
 async def get_demo_readiness() -> JSONResponse:
     """Demo archive seed status — Tier 0.
