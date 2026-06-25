@@ -76,6 +76,17 @@ class NwwsConfig:
 
 
 @dataclass(frozen=True)
+class NotamConfig:
+    # Facility filter for push alerts. Comma-separated ICAO codes.
+    # DC permanent set (KDCA,KIAD,KBWI,KFDK,KHEF,KJYO,KGAI) always alert regardless.
+    # FDC NOTAMs only push if the facility is in this list (or permanent set).
+    # VIP NOTAMs (POTUS/AF1/Marine One) always push to hot-alerts regardless.
+    # Empty = DC permanent set only (no extra facilities).
+    # Example: NOTAM_FACILITY_FILTER=ZDC,KADW,KBWI for transcon/military additions.
+    facility_filter: list[str] = field(default_factory=lambda: _list("NOTAM_FACILITY_FILTER"))
+
+
+@dataclass(frozen=True)
 class AmtrakConfig:
     enabled: bool = field(default_factory=lambda: _b("AMTRAK_ENABLED", True))
     feed_url: str = field(default_factory=lambda: os.getenv("AMTRAK_FEED_URL", "https://api.amtraker.com/v3/trains"))
