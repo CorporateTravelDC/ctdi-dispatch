@@ -5,9 +5,17 @@ Polling interval : INTERVAL seconds (default 300 = 5 min)
 Compression      : zlib level 6 — ~95% savings on NOTAM JSON
 Deduplication    : skip write when payload hash unchanged (DB-persisted,
                    survives recorder restarts)
-Retention        : RETENTION days rolling window (default 56 = 8 weeks)
+Retention        : RETENTION days rolling window (default 364 = 52 weeks)
 Seed target      : SEED_TARGET days before demo site reports "ready"
                    (default 14 = 2 weeks)
+
+Retention tiers (for marketing / QBR snapshots):
+  2w  =  14 days  — minimum seed / always-ready buffer
+  8w  =  56 days  — bi-monthly
+  12w =  84 days  — quarterly (3 months)
+  24w = 168 days  — semi-annual (6 months)
+  36w = 252 days  — 9 months
+  52w = 364 days  — annual (12 months)
 
 On first run after upgrade the migrate_legacy() function compresses all
 existing uncompressed rows in-place and vacuums the DB. This is a one-time
@@ -31,8 +39,19 @@ log = logging.getLogger('demo.recorder')
 DB          = '/var/lib/corporatetraveldc/demo.db'
 API         = 'http://127.0.0.1:8000/api/v1'
 INTERVAL    = int(os.environ.get('DEMO_RECORDER_INTERVAL',    '300'))
-RETENTION   = int(os.environ.get('DEMO_RECORDER_RETENTION',   '56'))
+RETENTION   = int(os.environ.get('DEMO_RECORDER_RETENTION',   '364'))
 SEED_TARGET = int(os.environ.get('DEMO_RECORDER_SEED_TARGET', '14'))
+
+# Retention tiers used by seed_status() / demo readiness endpoint.
+# Keys are human labels; values are days.
+RETENTION_TIERS: dict[str, int] = {
+    "2w":  14,   # seed target — always-ready buffer
+    "8w":  56,   # bi-monthly
+    "12w": 84,   # quarterly (3 months)
+    "24w": 168,  # semi-annual (6 months)
+    "36w": 252,  # 9 months
+    "52w": 364,  # annual (12 months)
+}
 
 ENDPOINTS = [
     'tfr', 'weather', 'alerts', 'cps', 'notams',
@@ -177,12 +196,27 @@ def prune(conn: sqlite3.Connection) -> None:
 
 def seed_status(conn: sqlite3.Connection) -> dict:
     """Return seed readiness dict (also used by /api/v1/demo/readiness)."""
-    days  = conn.execute(
+    days   = conn.execute(
         "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots"
     ).fetchone()[0]
-    total = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+    total  = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
     oldest = (conn.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0] or '')[:10]
     newest = (conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()[0] or '')[:10]
+
+    # Per-tier readiness: how many calendar days of data do we have vs. each target?
+    tiers: dict[str, dict] = {}
+    for label, target_days in RETENTION_TIERS.items():
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=target_days)).isoformat()
+        avail = conn.execute(
+            "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots WHERE captured_at >= ?",
+            (cutoff,)
+        ).fetchone()[0]
+        tiers[label] = {
+            "days_required":  target_days,
+            "days_available": avail,
+            "ready":          avail >= target_days,
+        }
+
     return {
         "seed_days":        days,
         "seed_target":      SEED_TARGET,
@@ -191,6 +225,8 @@ def seed_status(conn: sqlite3.Connection) -> dict:
         "oldest":           oldest or None,
         "newest":           newest or None,
         "db_size_mb":       round(os.path.getsize(DB) / 1e6, 1),
+        "retention_days":   RETENTION,
+        "tiers":            tiers,
     }
 
 
