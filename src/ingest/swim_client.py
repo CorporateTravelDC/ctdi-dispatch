@@ -284,7 +284,23 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
         "fns": "AIM", "tbfm": "TBFM", "itws": "ITWS",
     }
 
+    # SWIM_NMS_SKIP_FEEDS: comma-sep feed names to skip even if credentialed.
+    # Disables high-bandwidth feeds (FDPS, STDDS) without removing credentials.
+    _skip_raw = os.getenv("SWIM_NMS_SKIP_FEEDS", "")
+    _skip_feeds = {f.strip().lower() for f in _skip_raw.split(",") if f.strip()}
+
     for feed_name, (feed_cfg, handler) in _FEED_HANDLERS.items():
+        if feed_name.lower() in _skip_feeds:
+            log.info("swim_client %s: skipped via SWIM_NMS_SKIP_FEEDS", feed_name)
+            try:
+                from common import db as _db
+                import time as _time
+                _db.upsert_feed_skip(f"push:{feed_name}", _time.time(),
+                                     "disabled: SWIM_NMS_SKIP_FEEDS")
+            except Exception:
+                pass
+            continue
+
         if not feed_cfg.username:
             env_key = _ENV_KEY.get(feed_name, feed_name.upper())
             log.warning(
