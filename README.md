@@ -19,8 +19,8 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 
 | Component | State |
 |---|---|
-| Web API (browser / PWA) | `https://dispatch.csexecutiveservices.com` *(CF Access gated)* |
-| Web API (programmatic / admin) | `https://ops.csexecutiveservices.com` *(no CF Access gate)* |
+| PWA (operational dashboard) | `https://ops.csexecutiveservices.com` *(static HTML — no CF Access gate required)* |
+| Web API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` *(CF Access gated)* |
 | Tailscale direct | `http://100.94.80.100:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
@@ -149,11 +149,11 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| Browser / PWA | `https://dispatch.csexecutiveservices.com` | CF Access gated — browser auth required |
-| Programmatic / admin | `https://ops.csexecutiveservices.com` | No CF Access gate — Bearer token only; use for API scripts and machine calls |
+| PWA dashboard | `https://ops.csexecutiveservices.com` | Static HTML — no CF Access gate; add to Home Screen for PWA install |
+| API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` | CF Access gated; use for browser-based API calls and admin work |
 | Tailscale direct | `http://100.94.80.100:8000` | Always available on tailnet; preferred fallback |
 
-> **Note:** `dispatch.csexecutiveservices.com` has Cloudflare Access enabled. Use `ops.csexecutiveservices.com` for all programmatic admin calls — Bearer token provides the actual authorization.
+> **Note:** `ops.csexecutiveservices.com` serves the static PWA (`index.html` + `manifest.json`) via nginx. `dispatch.csexecutiveservices.com` is the CF Access-gated API gateway — the PWA calls it as `const API = ''` (same-origin). Bearer token provides the actual API authorization.
 
 ### Tier 0 — Anonymous
 
@@ -172,7 +172,8 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | GET | `/api/v1/route` | Latest ground route impact narrative |
 | GET | `/api/v1/events` | Live SSE event stream (PWA-ready) |
 | GET | `/api/v1/train-config` | Operator rail config — primary station, regional filter, map center |
-| GET | `/api/v1/demo/readiness` | Demo archive seed status — days collected, ready flag, DB size |
+| GET | `/api/v1/demo/readiness` | Demo archive seed status — days collected, tier readiness, DB size |
+| GET | `/api/v1/adsb` | Global ADS-B snapshot — airplanes.live proxy, 250 NM radius from KDCA, 30s cache |
 
 ### Tier 1 — Tailscale / CERT bearer token
 
@@ -310,14 +311,25 @@ The archive lets you run a fully live-looking demo without connecting to a real 
 **Seed readiness check:**
 
 ```bash
-curl https://ops.csexecutiveservices.com/api/v1/demo/readiness
-# → {"seed_days": 21, "seed_target": 14, "ready": true, "total_snapshots": 18240,
-#    "oldest": "2026-06-16", "newest": "2026-07-07", "db_size_mb": 485.2}
+curl https://dispatch.csexecutiveservices.com/api/v1/demo/readiness
+# → {
+#     "seed_days": 21, "seed_target": 14, "ready": true,
+#     "total_snapshots": 18240, "oldest": "2026-06-16", "newest": "2026-07-07",
+#     "db_size_mb": 48.5, "retention_days": 364,
+#     "tiers": {
+#       "2w":  {"days_required": 14,  "days_available": 21,  "ready": true},
+#       "8w":  {"days_required": 56,  "days_available": 21,  "ready": false},
+#       "12w": {"days_required": 84,  "days_available": 21,  "ready": false},
+#       "24w": {"days_required": 168, "days_available": 21,  "ready": false},
+#       "36w": {"days_required": 252, "days_available": 21,  "ready": false},
+#       "52w": {"days_required": 364, "days_available": 21,  "ready": false}
+#     }
+#   }
 ```
 
-The demo site gates itself on `ready: true`. Before that threshold, it serves a holding page. Once seeded, it auto-activates and rolls forward — the archive always holds the most recent 8 weeks.
+The demo site gates itself on `ready: true` (2-week seed). Once seeded, it auto-activates and rolls forward. Each retention tier (`2w` → `52w`) reports separately, enabling quarterly / semi-annual / annual snapshot readiness for QBR and marketing use.
 
-**Storage:** All payloads are zlib-compressed on write (~90% reduction for NOTAM JSON). An 8-week archive of all feeds fits in ~500 MB on a Raspberry Pi.
+**Storage:** All payloads are zlib-compressed on write (~95% reduction for NOTAM JSON). A full 52-week archive of all feeds fits under 500 MB on a Raspberry Pi.
 
 ---
 
@@ -364,9 +376,20 @@ None of this requires any additional data collection beyond what the recorder al
 
 # Demo archive settings — all optional, defaults shown
 DEMO_RECORDER_INTERVAL=300       # poll interval in seconds (default: 5 min)
-DEMO_RECORDER_RETENTION=56       # rolling window in days (default: 8 weeks)
+DEMO_RECORDER_RETENTION=364      # rolling window in days (default: 52 weeks / 1 year)
 DEMO_RECORDER_SEED_TARGET=14     # seed days before demo site activates (default: 2 weeks)
 ```
+
+Retention tiers tracked automatically for QBR and marketing snapshot readiness:
+
+| Tier | Days | Cadence |
+|---|---|---|
+| `2w`  |  14 | Always-ready seed buffer |
+| `8w`  |  56 | Bi-monthly snapshot |
+| `12w` |  84 | Quarterly (3 months) |
+| `24w` | 168 | Semi-annual (6 months) |
+| `36w` | 252 | 9-month snapshot |
+| `52w` | 364 | Annual (12 months) |
 
 The recorder runs as a standalone systemd user service (`demo-recorder.service`) outside the container stack — no rebuild required for config changes.
 
@@ -397,6 +420,53 @@ The recorder runs as a standalone systemd user service (`demo-recorder.service`)
 **Android ARM64 (tablet / kiosk)** — runs via Termux (install from F-Droid). All REST feeds and Ollama work; SWIM push ingest is not supported. Recommended models for constrained memory: `llama3.2:3b` (2.0 GB) or `phi3.5` (2.2 GB).
 
 **iOS / iPadOS (iPhone, iPad)** — no server-side install. Browse to your Cloudflare Tunnel URL. Add to Home Screen for a PWA experience.
+
+---
+
+## PWA — Operational Dashboard
+
+The static PWA is served from `https://ops.csexecutiveservices.com` (nginx → `/var/www/corporatetraveldc-pwa/`). It calls the dispatch API same-origin and requires no authentication for Tier 0 data.
+
+**Install as a home screen app:**
+- **iOS/iPadOS:** Safari → Share → Add to Home Screen
+- **Android:** Chrome → ⋮ → Add to Home Screen
+- **Desktop Chrome/Edge:** address bar install button appears automatically
+
+**Interface:**
+
+The dashboard is a single-page map + data panel layout. On mobile it stacks vertically (map top, panel bottom); on tablet/desktop it splits into map (left) and data sidebar (right).
+
+| Panel section | Data source | Update cadence |
+|---|---|---|
+| CPS badge (header) | `/api/v1/cps` | 30s |
+| Weather (METAR) | `/api/v1/weather` | 30s |
+| NWS Alerts | `/api/v1/alerts` | 30s |
+| Active TFRs | `/api/v1/tfr` | 30s |
+| Aircraft | `/api/v1/adsb` (airplanes.live proxy) | 30s |
+| Amtrak / NEC | `/api/v1/amtrak` | 30s |
+| Airport FIDS | `/api/v1/fids/{apt}` | 30s |
+| Feed freshness | `/api/v1/feeds` | 30s |
+
+**Map layers:**
+
+| Layer | Color | Description |
+|---|---|---|
+| SFRA 30 NM | Orange dashed ring | DC Special Flight Rules Area |
+| FRZ 15 NM | Red ring | Flight Restricted Zone |
+| P-56 A/B | Purple fill | Prohibited areas over the Mall/VP residence |
+| Active TFRs | Red dashed fill | FAA TFR polygons with NOTAM ID tooltips |
+| Aircraft | Amber diamond | Global ADS-B traffic (airplanes.live, 250 NM radius) |
+| Aircraft (watchlist) | Cyan pulsing ring | Watchlisted callsigns highlighted in the aircraft layer |
+| Trains | Colored square | NEC trains; cyan = watchlist, red = delayed, green = on time |
+| Weather stations | Circle | KDCA / KIAD / KBWI METAR points; red = ceiling < 1000 ft |
+
+**ADA / accessibility:** WCAG AA compliant. Skip-nav link, `aria-live` on all data regions, `role="status"` on CPS badge, focus-visible rings on all interactive elements, `aria-label` on all map markers, high-contrast color palette (4.5:1+ for all text, 3:1+ for UI components).
+
+**Screenshots:** *(placeholder — update when Chrome extension is available on remote)*
+
+> `docs/screenshots/pwa-dashboard.png` — full dashboard, desktop layout
+> `docs/screenshots/pwa-mobile.png` — mobile layout (stacked map + panel)
+> `docs/screenshots/pwa-aircraft.png` — global ADS-B layer with watchlist callout
 
 ---
 
