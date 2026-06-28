@@ -556,12 +556,22 @@ async def get_data_usage(days: int = 30) -> JSONResponse:
 async def get_demo_readiness() -> JSONResponse:
     """Demo archive seed status — Tier 0.
 
-    Returns how many calendar days of data the recorder has collected and
-    whether the 14-day seed target has been reached. Used by the demo site
-    to gate itself before going live.
+    Returns how many calendar days of data the recorder has collected,
+    whether the 14-day seed target has been reached, and per-tier readiness
+    for 2w / 8w / 12w / 24w / 36w / 52w marketing snapshot windows.
     """
     DEMO_DB     = "/var/lib/corporatetraveldc/demo.db"
     SEED_TARGET = 14
+    # Retention tiers: label → days required
+    TIERS = {
+        "2w":  14,   # seed / always-ready buffer
+        "8w":  56,   # bi-monthly
+        "12w": 84,   # quarterly (3 months)
+        "24w": 168,  # semi-annual (6 months)
+        "36w": 252,  # 9 months
+        "52w": 364,  # annual (12 months)
+    }
+    from datetime import datetime, timezone, timedelta
     try:
         db_conn = sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
         days    = db_conn.execute(
@@ -570,6 +580,20 @@ async def get_demo_readiness() -> JSONResponse:
         total   = db_conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
         oldest  = (db_conn.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0] or "")[:10]
         newest  = (db_conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()[0] or "")[:10]
+        # Per-tier: how many calendar-day slots have data in that window?
+        tiers: dict = {}
+        now_utc = datetime.now(timezone.utc)
+        for label, target_days in TIERS.items():
+            cutoff = (now_utc - timedelta(days=target_days)).isoformat()
+            avail  = db_conn.execute(
+                "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots WHERE captured_at >= ?",
+                (cutoff,)
+            ).fetchone()[0]
+            tiers[label] = {
+                "days_required":  target_days,
+                "days_available": avail,
+                "ready":          avail >= target_days,
+            }
         db_conn.close()
         size_mb = round(os.path.getsize(DEMO_DB) / 1e6, 1) if os.path.exists(DEMO_DB) else 0.0
         return JSONResponse({
@@ -580,6 +604,8 @@ async def get_demo_readiness() -> JSONResponse:
             "oldest":          oldest or None,
             "newest":          newest or None,
             "db_size_mb":      size_mb,
+            "retention_days":  364,
+            "tiers":           tiers,
         })
     except Exception as exc:
         return JSONResponse(
