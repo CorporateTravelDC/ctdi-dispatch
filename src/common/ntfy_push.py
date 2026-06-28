@@ -79,14 +79,34 @@ def send(
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    try:
-        resp = requests.post(url, data=message.encode("utf-8"), headers=headers, timeout=10)
-        resp.raise_for_status()
-        log.info("ntfy OK: topic=%s priority=%d click=%s", topic, priority, dest)
-        return True
-    except Exception as exc:
-        log.error("ntfy FAILED: topic=%s error=%s", topic, exc)
-        return False
+    def _attempt(base_url: str) -> bool:
+        attempt_url = f"{base_url}/{topic}"
+        try:
+            resp = requests.post(attempt_url, data=message.encode("utf-8"), headers=headers, timeout=10)
+            resp.raise_for_status()
+            log.info("ntfy OK: url=%s topic=%s priority=%d", attempt_url, topic, priority)
+            return True
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            log.warning("ntfy unreachable: url=%s error=%s", attempt_url, exc)
+            return None  # signal: try fallback
+        except Exception as exc:
+            log.error("ntfy FAILED: url=%s topic=%s error=%s", attempt_url, topic, exc)
+            return False
+
+    result = _attempt(base)
+    if result is None:
+        # Primary unreachable — try fallback URL if configured
+        fallback = config.ntfy_fallback_url()
+        if fallback:
+            log.warning("ntfy falling back to %s for topic=%s", fallback, topic)
+            result = _attempt(fallback)
+            if result is None:
+                log.error("ntfy fallback also unreachable: topic=%s", topic)
+                return False
+        else:
+            log.error("ntfy primary unreachable and no fallback configured: topic=%s", topic)
+            return False
+    return bool(result)
 
 
 def send_dual(
