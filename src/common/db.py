@@ -1076,6 +1076,41 @@ def upsert_terminal_track(track_id: str, facility: str, callsign: str | None,
 
 # ── SWIM alert helpers ────────────────────────────────────────────────────────
 
+
+def purge_old_flight_events(max_age_seconds: int = 3600) -> int:
+    """
+    Delete flight_events rows older than max_age_seconds that are NOT
+    on the active watchlist (watchlist_entries or active watchlist_sessions).
+    Watched flights are retained until removed from the watchlist.
+    Returns the number of rows deleted.
+    """
+    import time as _time
+    cutoff = _time.time() - max_age_seconds
+    with conn() as c:
+        watched: set[str] = {
+            row[0] for row in c.execute(
+                "SELECT identifier FROM watchlist_entries WHERE entry_type='flight'"
+            ).fetchall()
+        }
+        watched |= {
+            row[0] for row in c.execute(
+                "SELECT subject FROM watchlist_sessions WHERE status='active'"
+            ).fetchall()
+        }
+        if watched:
+            placeholders = ",".join("?" * len(watched))
+            result = c.execute(
+                f"DELETE FROM flight_events WHERE updated_at < ? "
+                f"AND flight_id NOT IN ({placeholders})",
+                [cutoff] + list(watched),
+            )
+        else:
+            result = c.execute(
+                "DELETE FROM flight_events WHERE updated_at < ?",
+                (cutoff,),
+            )
+        return result.rowcount
+
 def upsert_swim_alert(alert_type: str, payload: dict, expires_at: str) -> None:
     with conn() as c:
         c.execute("""

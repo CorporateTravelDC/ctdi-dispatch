@@ -52,6 +52,7 @@ SKILL_SCHEDULE: list[dict] = [
     {"name": "flight-impact",   "script": "poller/skills/flight_impact.py",
      "interval": 900, "active_interval": 300, "active_check": "flight"},
     {"name": "osint-monitor",   "script": "poller/skills/osint_monitor.py",  "interval": 900},
+    {"name": "flight-cleanup",  "script": "poller/skills/flight_events_cleanup.py", "interval": 3600},
 ]
 
 # Daily/weekly skills are handled by systemd timers, not this scheduler.
