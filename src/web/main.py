@@ -13,6 +13,7 @@ Route structure:
   GET  /api/v1/airspace                Tier 0 — static DC airspace GeoJSON (SFRA/FRZ/P-56)
   GET  /api/v1/airspace/{id}           Tier 0 — single airspace feature by ID
   GET  /api/v1/demo/readiness          Tier 0 — demo archive seed status
+  GET  /api/v1/adsb                    Tier 0 — global ADS-B (airplanes.live proxy, 250 NM radius)
 
   GET  /api/v1/radio                   Tier 1 (CERT/Tailscale)
 
@@ -930,6 +931,81 @@ async def get_cui_status(
         "note": "CUI data is operator-populated on the Pi. "
                 "This endpoint confirms Tier 2 auth is working.",
     })
+
+
+# ── Global ADS-B proxy — Tier 0 ──────────────────────────────────────────────
+
+# Simple in-process cache — refresh every 30 seconds max.
+_ADSB_CACHE: dict = {}
+_ADSB_CACHE_TS: float = 0.0
+_ADSB_TTL: int = 30  # seconds
+
+@app.get("/api/v1/adsb")
+def get_adsb_live() -> JSONResponse:
+    """Proxy global ADS-B snapshot from airplanes.live — 250 NM radius from KDCA.
+
+    No local antenna identifier is attached.  Aircraft without a position are
+    filtered out.  Result is cached for 30 seconds to absorb burst requests.
+
+    Response shape:
+      {source, count, cached_at, aircraft: [{hex, flight, lat, lon,
+        alt_baro, gs, track, squawk, type}]}
+    """
+    global _ADSB_CACHE, _ADSB_CACHE_TS
+    now = time.time()
+    if _ADSB_CACHE and (now - _ADSB_CACHE_TS) < _ADSB_TTL:
+        return JSONResponse(_ADSB_CACHE)
+
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://api.airplanes.live/v2/point/38.8521/-77.0377/250",
+            timeout=10,
+            headers={"Accept": "application/json", "User-Agent": "corporatetraveldc-dispatch/1.0"},
+        )
+        r.raise_for_status()
+        raw = r.json()
+    except Exception as exc:
+        # Return stale cache if available
+        if _ADSB_CACHE:
+            stale = dict(_ADSB_CACHE)
+            stale["stale"] = True
+            return JSONResponse(stale)
+        return JSONResponse(
+            {"source": "airplanes.live", "count": 0, "aircraft": [],
+             "error": str(exc)},
+            status_code=503,
+        )
+
+    aircraft = []
+    for ac in raw.get("ac", []):
+        lat = ac.get("lat")
+        lon = ac.get("lon")
+        if lat is None or lon is None:
+            continue
+        aircraft.append({
+            "hex":      ac.get("hex", ""),
+            "flight":   (ac.get("flight") or "").strip(),
+            "lat":      lat,
+            "lon":      lon,
+            "alt_baro": ac.get("alt_baro"),
+            "gs":       ac.get("gs"),
+            "track":    ac.get("track"),
+            "squawk":   ac.get("squawk"),
+            "type":     ac.get("t", ""),
+            "r":        ac.get("r", ""),  # N-number / registration
+            "desc":     ac.get("desc", ""),
+        })
+
+    result = {
+        "source":    "airplanes.live",
+        "count":     len(aircraft),
+        "cached_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "aircraft":  aircraft,
+    }
+    _ADSB_CACHE    = result
+    _ADSB_CACHE_TS = now
+    return JSONResponse(result)
 
 
 # ── FAA Aircraft Registry — Tier 0 ────────────────────────────────────────────
