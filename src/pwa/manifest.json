@@ -1,0 +1,42 @@
+{
+  "name": "CS Executive Services — Dispatch Ops",
+  "short_name": "CSEX Dispatch",
+  "description": "CS Executive Services dispatch operations dashboard — CPS, TFR, weather, Amtrak, airspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0d1117",
+  "background_color": "#0d1117",
+  "scope": "/",
+  "lang": "en-US",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='24' fill='%230d1117'/%3E%3Ctext x='96' y='130' font-size='110' text-anchor='middle' fill='%2358a6ff' font-family='monospace'%3E✈%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='64' fill='%230d1117'/%3E%3Ctext x='256' y='350' font-size='300' text-anchor='middle' fill='%2358a6ff' font-family='monospace'%3E✈%3C/text%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "CPS Status",
+      "short_name": "CPS",
+      "url": "/?panel=cps",
+      "description": "Critical Predictability State go/no-go score"
+    },
+    {
+      "name": "TFR Map",
+      "short_name": "TFRs",
+      "url": "/?panel=tfr",
+      "description": "Active TFRs and DC airspace"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "prefer_related_applications": false
+}
