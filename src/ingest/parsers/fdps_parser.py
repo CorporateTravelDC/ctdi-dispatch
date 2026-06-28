@@ -42,6 +42,29 @@ MARINE_ONE_SQUAWKS = frozenset({"7700", "5000", "5001"})
 DC_LAT, DC_LON = 38.8522, -77.0376
 MARINE_ONE_RADIUS_NM = 50.0
 
+# ── Geographic filter — store only DC-area traffic ────────────────────────────
+# Reduces DB size; does NOT reduce FAA wire bandwidth.
+# Keep events if: within FDPS_GEO_RADIUS_NM of DCA, OR origin/dest in
+# DC_AREA_AIRPORTS, OR flagged as POTUS/Marine One callsign.
+FDPS_GEO_RADIUS_NM = 250.0
+DC_AREA_AIRPORTS: frozenset[str] = frozenset({
+    # Primary DC triad
+    "KDCA", "KIAD", "KBWI",
+    # GA / reliever / military
+    "KADW",  # Andrews / Joint Base Andrews
+    "KCGS",  # College Park
+    "KDMH",  # Baltimore-Mtns Regional
+    "KHEF",  # Manassas
+    "KJYO",  # Leesburg Executive
+    "KGAI",  # Montgomery County Airpark
+    "KVKX",  # Potomac Airfield
+    "KEZF",  # Shannon (Fredericksburg)
+    # Controlled-airspace adjacent
+    "KNYG",  # Quantico MCAF
+    "KNHK",  # Patuxent River NAS
+})
+
+
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in nautical miles."""
@@ -259,8 +282,31 @@ def parse_fdps_message(xml_bytes: bytes) -> dict | None:
 
 # ── DB writer ─────────────────────────────────────────────────────────────────
 
+def _in_dc_area(parsed: dict) -> bool:
+    """Return True if this flight event is relevant to DC-area operations."""
+    # Callsign match always passes (Marine One, POTUS, etc.)
+    cs = (parsed.get("callsign") or "").upper()
+    if cs in MARINE_ONE_CALLSIGNS:
+        return True
+    # Origin or destination is a DC-area airport
+    origin = (parsed.get("origin") or "").upper()
+    dest   = (parsed.get("destination") or "").upper()
+    if origin in DC_AREA_AIRPORTS or dest in DC_AREA_AIRPORTS:
+        return True
+    # Current position within 250 NM of DCA
+    lat = parsed.get("latitude")
+    lon = parsed.get("longitude")
+    if lat is not None and lon is not None:
+        return distance_to_dca_nm(float(lat), float(lon)) <= FDPS_GEO_RADIUS_NM
+    # No position available — keep if either airport matched above; else discard
+    return False
+
+
 def write_flight_event(parsed: dict) -> None:
-    """Upsert a parsed FDPS message into flight_events."""
+    """Upsert a parsed FDPS message into flight_events (DC-area only)."""
+    if not _in_dc_area(parsed):
+        return  # outside DC area and not POTUS/Marine One — skip
+
     callsign = parsed.get("callsign") or ""
     airline = callsign[:3] if len(callsign) >= 3 else None
     flight_num = callsign[3:] if len(callsign) > 3 else callsign
