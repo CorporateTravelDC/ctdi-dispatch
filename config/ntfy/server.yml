@@ -1,6 +1,21 @@
-base-url: http://localhost:2586
+# /etc/ntfy/server.yml — deployed server config (template)
+# Copy to /etc/ntfy/server.yml on the Pi; fill credentials in dispatch-secrets.env
+base-url: https://ntfy.CHANGE_ME.com
 listen-http: :2586
 cache-file: /var/lib/ntfy/cache.db
 auth-file: /var/lib/ntfy/auth.db
 auth-default-access: deny-all
-behind-proxy: false
+behind-proxy: true
+keepalive-interval: 55s
+
+# SMTP outbound email notifications
+# Password injected via NTFY_SMTP_SENDER_PASS in dispatch-secrets.env (never inline here)
+# See docs/regulated-operator-setup.md for ProtonMail Bridge or transactional SMTP setup
+smtp-sender-addr: host.containers.internal:1025   # ProtonMail Bridge default; change for other relays
+smtp-sender-user: CHANGE_ME@pm.me
+smtp-sender-from: ntfy@pm.me
+
+# Phone call notifications via Twilio
+# Credentials injected via NTFY_TWILIO_* env vars in dispatch-secrets.env
+# See docs/regulated-operator-setup.md for Twilio setup
+# No fields needed here — ntfy reads NTFY_TWILIO_* env vars automatically
