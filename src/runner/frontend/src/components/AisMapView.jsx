@@ -17,8 +17,6 @@ const VESSEL_POLL      = 60_000
 const MARINETRAFFIC_URL = 'https://www.marinetraffic.com/en/ais/embed/zoom:8/centery:38.9/centerx:-76.8/maptype:0/shownames:false/mmsi:0/shipid:0/fleet:/fleet_id:/vtypes:/showmenu:/remember:false'
 const TRACKER_LINKS = [
   { label: 'MarineTraffic ↗', url: MARINETRAFFIC_URL },
-  { label: 'VesselFinder ↗',  url: 'https://www.vesselfinder.com/?lat=38.9&lng=-76.8&zoom=8' },
-  { label: 'AIS Marine ↗',    url: 'https://www.aismarine.com/ais-map/' },
 ]
 
 function vesselColor(nav_status) {
