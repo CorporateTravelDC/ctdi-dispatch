@@ -21,7 +21,7 @@ Environment=DEVICE_SERIAL=acars0130
 Environment=FREQUENCIES=129.1250;130.0250;130.4250;131.5500
 Environment=GAIN=40
 Environment=FEED_AIRFRAMES=true
-Environment=STATION=WA1EM-ACARS
+Environment=STATION=N0CALL-ACARS
 
 # Forward decoded JSON to acars-watcher via UDP
 Environment=OUTPUT_UDP=corporatetraveldc-acars-watcher:5005
