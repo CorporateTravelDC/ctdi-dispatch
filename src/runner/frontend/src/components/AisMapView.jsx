@@ -19,8 +19,8 @@ const VESSEL_POLL    = 60_000   // 1 min
 
 // Tracker iframes — tried in order; blocked ones fall through to local map
 const TRACKER_IFRAMES = [
-  { label: 'VesselFinder',  url: 'https://www.vesselfinder.com/?lat=38.9&lng=-76.8&zoom=8' },
   { label: 'MarineTraffic', url: 'https://www.marinetraffic.com/en/ais/home/centerx:-76.8/centery:38.9/zoom:8' },
+  { label: 'VesselFinder',  url: 'https://www.vesselfinder.com/?lat=38.9&lng=-76.8&zoom=8' },
 ]
 const TRACKER_LINKS = [
   { label: 'MarineTraffic ↗', url: 'https://www.marinetraffic.com/en/ais/home/centerx:-76.8/centery:38.9/zoom:8' },
@@ -111,7 +111,7 @@ export default function AisMapView() {
   const [trackedCount,  setTrackedCount]  = useState(0)
   const [dataSource,    setDataSource]    = useState('none')
   const [loadErr,       setLoadErr]       = useState(false)
-  const [mode,          setMode]          = useState('local')   // 'local' | 'iframe'
+  const [mode,          setMode]          = useState('iframe')  // 'iframe' | 'local'
   const [vesselItems,   setVesselItems]   = useState([])        // for compass summary
 
   const { entries: watchEntries, hexSet } = useWatchlist()
