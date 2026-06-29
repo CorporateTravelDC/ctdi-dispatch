@@ -38,7 +38,7 @@ scrubbed_tree=$(python3 "${repo_root}/scripts/scrub-public-tree.py" "${work_tree
 new_commit=$(git commit-tree "${scrubbed_tree}" -p "${sha}" \
     -m "chore(public): sanitize for public mirror [auto by push-public.sh]")
 
-git send-pack --thin "$remote_url" "+${new_commit}:refs/heads/${branch}"
+git push --force "$remote_url" "${new_commit}:refs/heads/${branch}"
 
 echo "[push-public] ✓ public/${branch}: ${sha:0:8} → ${new_commit:0:8}"
 echo "[push-public]   dispatch-secrets.env gitignored on public mirror; private/${branch} unchanged"
