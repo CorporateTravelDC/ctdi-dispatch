@@ -41,7 +41,7 @@ Environment=AISHUB_PORT=2000
 # Station info
 Environment=STATION_LAT=38.8816
 Environment=STATION_LON=-77.0910
-Environment=STATION=WA1EM-AIS
+Environment=STATION=N0CALL-AIS
 
 Network=corporatetraveldc.network
 

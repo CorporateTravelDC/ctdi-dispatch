@@ -68,5 +68,5 @@ is never lost again. This is a dedicated session task, not a quick fix.
 - README.md: 59976f9
 - PI5-BOOT-CONFIG.md: 24c325b
 - Token valid 90 days from 2026-06-05
-- Base URL: https://dispatch.csexecutiveservices.com
+- Base URL: https://dispatch.example.com
 - Repo: https://github.com/CorporateTravelDC/corporatetraveldc-dispatch

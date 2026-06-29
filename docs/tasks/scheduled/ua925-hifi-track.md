@@ -39,7 +39,7 @@ GET https://api.airplanes.live/v2/callsign/<TARGET_CALLSIGN>
 Extract: lat, lon, alt_baro, alt_geom, gs, track, true_heading, rssi, seen, type (adsb_icao/adsc/mlat), squawk, hex, r.
 
 STEP 2 — Always fire position alert regardless of signal type or altitude:
-POST http://100.94.80.100:8000/admin/push-test-alert
+POST http://100.x.x.x:8000/admin/push-test-alert
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
 Content-Type: application/json
 Body: {"message": "<TARGET_LABEL> HIFI: [lat]N [lon]W [alt_baro]ft [gs]kts hdg[track] type:[type] seen:[seen]s"}

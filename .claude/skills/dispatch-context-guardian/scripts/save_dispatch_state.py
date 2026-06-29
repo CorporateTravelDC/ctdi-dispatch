@@ -16,7 +16,7 @@ except ImportError:
     print("ERROR: urllib not available", file=sys.stderr)
     sys.exit(1)
 
-DISPATCH_BASE = "https://ops.csexecutiveservices.com"
+DISPATCH_BASE = "https://ops.example.com"
 STATE_FILE = os.path.expanduser("~/.config/Claude/dispatch_state_snapshot.json")
 
 ENDPOINTS = {

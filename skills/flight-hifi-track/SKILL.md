@@ -118,7 +118,7 @@ If empty (overwater): use FR24 via Chrome MCP for satellite position. Label sour
 After confirming hex, immediately POST to add the flight to the transient watchlist:
 
 ```
-POST http://100.94.80.100:8000/api/v1/watchlist
+POST http://100.x.x.x:8000/api/v1/watchlist
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_1
 Content-Type: application/json
 
@@ -143,7 +143,7 @@ If watchlist POST returns a 409 (already exists) or duplicate — skip silently,
 
 First, check MWAA FIDS (if spine is up and dest is DCA or IAD):
 ```
-GET http://100.94.80.100:8000/api/v1/fids/<DCA|IAD>/<IATA><FLIGHT_NUM>
+GET http://100.x.x.x:8000/api/v1/fids/<DCA|IAD>/<IATA><FLIGHT_NUM>
 ```
 If FIDS returns `baggage` field → use confirmed carousel. Label push `[FIDS]`.
 
@@ -160,7 +160,7 @@ If estimated arrival time (ETA) is available from the watchlist or feed, use `ET
 **Push to `flight-alerts` with priority 4 (HIGH):**
 
 ```
-POST http://100.94.80.100:8000/admin/push-alert
+POST http://100.x.x.x:8000/admin/push-alert
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
 Content-Type: application/json
 
@@ -183,7 +183,7 @@ If the flight is en route (phase = CRUISE or CLIMB), do NOT fire this push — i
 ## Step 5: Fire flight-alerts push (short form)
 
 ```
-POST http://100.94.80.100:8000/admin/push-alert
+POST http://100.x.x.x:8000/admin/push-alert
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
 Content-Type: application/json
 
@@ -209,7 +209,7 @@ Flight phase from baro_rate and altitude:
 ## Step 6: Fire dispatch-debriefs push (full table)
 
 ```
-POST http://100.94.80.100:8000/admin/push-alert
+POST http://100.x.x.x:8000/admin/push-alert
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
 Content-Type: application/json
 

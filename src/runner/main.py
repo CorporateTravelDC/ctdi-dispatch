@@ -146,7 +146,7 @@ def _is_trusted(request: Request) -> bool:
 async def tailscale_gate(request: Request, call_next):
     # Admin routes require a trusted source (Tailscale / localhost).
     # All other routes (UI, API data, chat) are open — CF tunnel + CF Access
-    # handles edge auth for dispatch-runner.csexecutiveservices.com.
+    # handles edge auth for dispatch-runner.example.com.
     if request.url.path.startswith("/admin"):
         if not _is_trusted(request):
             return JSONResponse(status_code=403, content={"detail": "access denied"})
@@ -880,17 +880,17 @@ async def ask_dispatch(req: AskRequest):
         system_prompt = (
             "You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: "
             "automotive detailing, brand strategy, executive chauffeur transportation, and IT security. "
-            "Operator: Corey Sheldon (WA1EM Extra, ARES NoVA District 10, Skywarn L0344).\n\n"
+            "Operator: Corey Sheldon (N0CALL Extra, ARES NoVA District XX, Skywarn LXXXX).\n\n"
             "All live operational data below comes from a local dispatch spine running on-premises. "
             "It is the authoritative source. Do not speculate beyond it.\n\n"
             f"CURRENT DISPATCH STATE ({now}):\n"
             f"{ctx_str if ctx_str else 'No data available from dispatch spine.'}\n\n"
             "OPERATOR CONTEXT:\n"
-            "- Location: Arlington County, VA / KDCA (15 min)\n"
+            "- Location: [operator county], [state] / KDCA (15 min)\n"
             "- Airspace: DC FRZ/SFRA, P-56A/B, concentric rings 50/100/150/250nm\n"
             "- Ground ops: Corporate Car Worldwide + Uber Black\n"
-            "- Emergency: ARES NoVA, CERT Fairfax+Loudoun, Skywarn LWX (L0344), GMRS WRCR715\n"
-            "- Dispatch spine: Pi 5, Tailscale (csexecutiveservices.ts.net)\n\n"
+            "- Emergency: ARES NoVA, CERT County+County, Skywarn LWX (LXXXX), GMRS WRXXXXX\n"
+            "- Dispatch spine: Pi 5, Tailscale (example.ts.net)\n\n"
             "Respond in plain text. No markdown. Brief and tactical unless elaboration requested. "
             "For HEMS go/no-go, always cite CPS score and narrative."
         )
