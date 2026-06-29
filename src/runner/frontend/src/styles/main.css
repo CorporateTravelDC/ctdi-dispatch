@@ -1924,3 +1924,119 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .ls-btn, .ls-icon { transition: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Step 3 — Tracked aircraft cyan overlay + airline logo tooltips
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Tracked aircraft glow pulse */
+.aircraft-marker.tracked svg {
+  filter: drop-shadow(0 0 4px #00d4ff) drop-shadow(0 0 8px rgba(0,212,255,0.5));
+  animation: tracked-pulse 2s ease-in-out infinite;
+}
+@keyframes tracked-pulse {
+  0%, 100% { filter: drop-shadow(0 0 4px #00d4ff) drop-shadow(0 0 8px rgba(0,212,255,0.4)); }
+  50%       { filter: drop-shadow(0 0 8px #00d4ff) drop-shadow(0 0 16px rgba(0,212,255,0.8)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aircraft-marker.tracked svg { animation: none; }
+}
+
+/* Tracked tooltip — airline logo + badge */
+.ac-tooltip-tracked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  min-width: 140px;
+}
+.ac-logo {
+  width: 36px;
+  height: 24px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: rgba(0,0,0,0.3);
+}
+.ac-logo-fallback {
+  opacity: 0.7;
+  width: 24px;
+  height: 24px;
+}
+.ac-tooltip-tracked-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ac-tracked-badge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #00d4ff;
+  text-transform: uppercase;
+}
+.ac-tracked-callsign {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+.ac-tracked-details {
+  font-size: 0.65rem;
+  color: var(--muted, #8a9bb0);
+}
+
+/* Leaflet tooltip wrapper override for tracked */
+.leaflet-tooltip.tracked-tooltip {
+  background: rgba(0, 18, 28, 0.92);
+  border: 1px solid #00d4ff;
+  border-radius: 4px;
+  color: #e0f7ff;
+  padding: 0;
+  box-shadow: 0 0 10px rgba(0,212,255,0.3);
+}
+.leaflet-tooltip.tracked-tooltip::before {
+  border-top-color: #00d4ff;
+}
+
+/* Tracked count badge in map stats bar */
+.tracked-stat {
+  color: #00d4ff !important;
+  font-weight: 700;
+}
+
+/* ── Watchlist badge — globe view ───────────────────────────────────────── */
+.globe-watchlist-badge {
+  position: absolute;
+  top: 56px;      /* below search bar */
+  right: 10px;
+  z-index: 450;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(0, 18, 28, 0.88);
+  border: 1px solid #00d4ff;
+  border-radius: 6px;
+  box-shadow: 0 0 12px rgba(0,212,255,0.25);
+  max-width: 240px;
+  pointer-events: none;
+}
+.gwb-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #00d4ff;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+.gwb-chip {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #e0f7ff;
+  background: rgba(0,212,255,0.12);
+  border: 1px solid rgba(0,212,255,0.4);
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
