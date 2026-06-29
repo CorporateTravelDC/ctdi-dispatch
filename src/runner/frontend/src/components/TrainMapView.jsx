@@ -1,6 +1,10 @@
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import AriaCompassRegion from './AriaCompassRegion.jsx'
+import AccessibleTable   from './AccessibleTable.jsx'
+import { useCompassSummary } from '../hooks/useCompassSummary.js'
+import { useWatchlist }      from '../hooks/useWatchlist.js'
 
 // ── Tile sources ──────────────────────────────────────────────────
 const OSM_URL   = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
@@ -23,18 +27,29 @@ const _FB_ROUTES      = ['acela', 'northeast regional', 'palmetto', 'carolinian'
                           'silver star', 'silver meteor']
 const _FB_CORE_ROUTES = ['acela', 'northeast regional']
 
-// ── Train icon factory ────────────────────────────────────────────
-function trainIcon(isWatched) {
-  const color = isWatched ? '#ffd700' : '#00d4ff'
+// ── Train icon — heading-aware SVG arrow (top-down locomotive silhouette) ───
+function trainIcon(isWatched, heading) {
+  const color  = isWatched ? '#ffd700' : '#00d4ff'
+  const stroke = isWatched ? '#3a2a00' : '#002a3a'
+  const glow   = isWatched
+    ? 'filter:drop-shadow(0 0 5px #ffd700) drop-shadow(0 0 2px #ff9900);'
+    : 'filter:drop-shadow(0 0 3px #00d4ff);'
+  const deg    = heading != null && !isNaN(heading) ? heading : 0
+  const sz     = isWatched ? 18 : 14
+  const half   = sz / 2
   return L.divIcon({
     className: '',
-    html: `<div style="
-      width:10px;height:10px;border-radius:50%;
-      background:${color};border:2px solid #000;
-      box-shadow:0 0 6px ${color};
-    "></div>`,
-    iconSize: [10, 10],
-    iconAnchor: [5, 5],
+    html: `<div style="transform:rotate(${deg}deg);width:${sz}px;height:${sz}px;${glow}">
+      <svg viewBox="0 0 12 18" width="${sz}" height="${sz}">
+        <polygon points="6,0 12,14 6,18 0,14"
+          fill="${color}" stroke="${stroke}" stroke-width="1.2" opacity="0.95"/>
+        ${isWatched
+          ? '<polygon points="6,0 12,14 6,18 0,14" fill="none" stroke="#fff" stroke-width="0.5" opacity="0.55"/>'
+          : ''}
+      </svg>
+    </div>`,
+    iconSize: [sz, sz],
+    iconAnchor: [half, half],
   })
 }
 
@@ -250,6 +265,17 @@ export default function TrainMapView() {
   const [mapDisplayMode, setMapDisplayMode] = useState('iframe')
   const [iframeError,    setIframeError]    = useState(false)
 
+  // Watchlist + train position items for compass summary
+  const { entries: watchEntries } = useWatchlist()
+  const watchlistSet = useMemo(() => {
+    const s = new Set()
+    watchEntries.forEach(e => {
+      if (e.identifier) s.add(e.identifier.trim())
+    })
+    return s
+  }, [watchEntries])
+  const [trainItems, setTrainItems] = useState([])
+
   // ── Load operator config ─────────────────────────────────────────
   useEffect(() => {
     fetchTrainConfig().then(cfg => {
@@ -331,17 +357,18 @@ export default function TrainMapView() {
     if (!trainLayerRef.current) return
     const filterFn = viewMode === 'national' ? null : makeFilter(trainConfig)
     try {
-      const [trains, watched] = await Promise.all([
+      const [trains] = await Promise.all([
         fetchTrainPositions(filterFn),
-        fetchWatchedTrains(),
       ])
       trainLayerRef.current.clearLayers()
 
       let count = 0, vips = 0
+      const trainItemsArr = []
       trains.forEach(t => {
         const num       = String(t.trainNum || t.objectID || '').trim()
-        const isWatched = watched.has(num)
-        const icon      = trainIcon(isWatched)
+        const isWatched = watchlistSet.has(num)
+        const hdgNum    = typeof t.heading === 'number' ? t.heading : null
+        const icon      = trainIcon(isWatched, hdgNum)
 
         const spd     = t.speed  != null ? `${t.speed} mph` : '—'
         const hdg     = t.heading || '—'
@@ -349,31 +376,38 @@ export default function TrainMapView() {
         const nm      = t.routeName || t.trainNum || '?'
         const delayed = t.late ? ` (${t.late > 0 ? '+' : ''}${t.late}m)` : ''
 
-        L.marker([t.lat, t.lon], { icon, zIndexOffset: isWatched ? 1000 : 0 })
-          .bindTooltip(
-            `<b style="color:${isWatched ? '#ffd700' : '#00d4ff'}">${num} — ${nm}</b>` +
-            `<br/>Speed: ${spd} · Hdg: ${hdg}` +
-            `<br/>Status: ${sta}${delayed}` +
-            (isWatched ? '<br/><b style="color:#ffd700">★ WATCHLISTED</b>' : ''),
-            { className: 'ac-tooltip', sticky: true }
-          )
+        const tip = isWatched
+          ? `<div class="ac-tooltip-tracked">
+               <div class="ac-tooltip-tracked-info">
+                 <span class="ac-tracked-badge">★ WATCHED</span>
+                 <b class="ac-tracked-callsign">${num} — ${nm}</b>
+                 <span class="ac-tracked-details">Speed: ${spd} · Hdg: ${hdg} · ${sta}${delayed}</span>
+               </div>
+             </div>`
+          : `<b style="color:#00d4ff">${num} — ${nm}</b><br/>Speed: ${spd} · Hdg: ${hdg}<br/>Status: ${sta}${delayed}`
+
+        L.marker([t.lat, t.lon], {
+          icon, interactive: true, zIndexOffset: isWatched ? 2000 : 0,
+        })
+          .bindTooltip(tip, {
+            className: isWatched ? 'ac-tooltip tracked-tooltip' : 'ac-tooltip',
+            permanent: isWatched,
+            direction: 'top',
+            sticky: !isWatched,
+          })
           .addTo(trainLayerRef.current)
 
-        if (isWatched) {
-          L.circleMarker([t.lat, t.lon], {
-            radius: 14, color: '#ffd700', weight: 1.5,
-            fill: false, opacity: 0.5,
-          }).addTo(trainLayerRef.current)
-          vips++
-        }
+        if (isWatched) vips++
+        trainItemsArr.push({ lat: t.lat, lon: t.lon, label: `${num} ${nm}`, tracked: isWatched })
         count++
       })
 
       setTrainCount(count)
       setVipCount(vips)
+      setTrainItems(trainItemsArr)
       setLoadErr(false)
     } catch { setLoadErr(true) }
-  }, [viewMode, trainConfig, makeFilter])
+  }, [viewMode, trainConfig, makeFilter, watchlistSet])
 
   useEffect(() => {
     refreshTrains()
@@ -464,6 +498,11 @@ export default function TrainMapView() {
     ? `${trainCount} trains nationwide`
     : `${trainCount} regional trains`
 
+  const compassSummary = useCompassSummary(trainItems, [])
+  const trainTableRows = trainItems.map(t => ({
+    train: t.label, lat: t.lat?.toFixed(4), lon: t.lon?.toFixed(4), watched: t.tracked ? '★' : '',
+  }))
+
   return (
     <div className="train-map-view">
       <div className="train-map-subnav">
@@ -535,6 +574,22 @@ export default function TrainMapView() {
           )}
 
           <div className="globe-iframe-wrap">
+            <AriaCompassRegion
+              summary={compassSummary}
+              entityType="trains"
+              count={trainCount}
+              extra="NEC corridor · Amtrak regional and national service."
+            />
+            <AccessibleTable
+              id="train-position-table"
+              caption={`Amtrak train positions — ${trainCount} active`}
+              columns={[
+                { key: 'train', label: 'Train' }, { key: 'lat', label: 'Latitude' },
+                { key: 'lon', label: 'Longitude' }, { key: 'watched', label: '★' },
+              ]}
+              rows={trainTableRows}
+              emptyMsg="No active trains in range."
+            />
             {/* Aggregate train tracker iframe */}
             {mapDisplayMode === 'iframe' && !iframeError && (
               <iframe
