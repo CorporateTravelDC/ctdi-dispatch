@@ -2040,3 +2040,128 @@ body::before {
   padding: 1px 5px;
   white-space: nowrap;
 }
+
+/* ═══════════════════════════════════════════════
+   Step 4 — AIS / Marine view
+   ═══════════════════════════════════════════════ */
+
+/* Mode toggle (MAP / LIVE) */
+.ais-mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 5px;
+  padding: 2px;
+}
+.ais-mode-btn {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted, #8a9bb0);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ais-mode-btn.active {
+  background: rgba(74,158,255,0.2);
+  color: #4a9eff;
+  border: 1px solid rgba(74,158,255,0.4);
+}
+.ais-mode-btn:hover:not(.active) {
+  background: rgba(255,255,255,0.05);
+  color: var(--fg, #e2e8f0);
+}
+
+/* Tracker iframe embed */
+.ais-iframe-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.ais-tracker-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #0a1628;
+}
+.ais-iframe-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 8px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: #4a9eff;
+  background: rgba(0,18,40,0.82);
+  border: 1px solid rgba(74,158,255,0.35);
+  border-radius: 4px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+
+/* No-data overlay */
+.ais-no-data-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 500;
+  background: rgba(8, 18, 36, 0.93);
+  border: 1px solid rgba(74,158,255,0.35);
+  border-radius: 8px;
+  padding: 20px 24px;
+  max-width: 340px;
+  text-align: center;
+  pointer-events: auto;
+}
+.ais-no-data-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #4a9eff;
+  margin-bottom: 8px;
+}
+.ais-no-data-sub {
+  font-size: 0.72rem;
+  color: var(--muted, #8a9bb0);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.ais-no-data-sub code {
+  font-family: monospace;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: #e2e8f0;
+  font-size: 0.68rem;
+}
+.ais-no-data-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.ais-tracker-link {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #4a9eff;
+  text-decoration: none;
+  border: 1px solid rgba(74,158,255,0.4);
+  border-radius: 4px;
+  padding: 4px 10px;
+  transition: background 0.15s;
+}
+.ais-tracker-link:hover {
+  background: rgba(74,158,255,0.12);
+}
+
+/* Vessel tracked glow pulse */
+.vessel-tracked svg {
+  filter: drop-shadow(0 0 4px #00d4ff);
+  animation: tracked-pulse 2.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vessel-tracked svg { animation: none; }
+}
