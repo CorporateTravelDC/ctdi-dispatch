@@ -516,7 +516,7 @@ def push_wx_change() -> bool:
         + "\n".join(wx_lines)
     )
     priority = 5 if hot else 3
-    topic = "hot-alerts" if hot else "cps"
+    topic = "hot-alerts" if hot else "wx-alerts"
     title = "Wind Alert -- CPS Threshold" if hot else "WX Change"
 
     success = send_ntfy(topic, message, priority=priority, title=title)

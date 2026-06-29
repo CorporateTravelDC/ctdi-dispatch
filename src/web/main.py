@@ -13,7 +13,7 @@ Route structure:
   GET  /api/v1/airspace                Tier 0 — static DC airspace GeoJSON (SFRA/FRZ/P-56)
   GET  /api/v1/airspace/{id}           Tier 0 — single airspace feature by ID
   GET  /api/v1/demo/readiness          Tier 0 — demo archive seed status
-  GET  /api/v1/adsb                    Tier 0 — global ADS-B (airplanes.live proxy, 250 NM radius)
+  GET  /api/v1/adsb                    Tier 0 — global ADS-B (airplanes.live proxy; ?lat=&lon=&radius= params)
 
   GET  /api/v1/radio                   Tier 1 (CERT/Tailscale)
 
@@ -52,6 +52,7 @@ from common import config, db
 from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
 from web.routes.airspace import router as airspace_router
+from web.routes.data_usage import router as data_usage_router
 from web.sse import live_events
 
 app = FastAPI(
@@ -73,6 +74,7 @@ app.add_middleware(
 app.include_router(watchlist_router)
 app.include_router(fids_router)
 app.include_router(airspace_router)
+app.include_router(data_usage_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -936,75 +938,94 @@ async def get_cui_status(
 # ── Global ADS-B proxy — Tier 0 ──────────────────────────────────────────────
 
 # Simple in-process cache — refresh every 30 seconds max.
-_ADSB_CACHE: dict = {}
-_ADSB_CACHE_TS: float = 0.0
-_ADSB_TTL: int = 30  # seconds
+# ADSB cache: keyed by rounded (lat, lon, radius) so map-pan queries are cached independently
+_ADSB_CACHE: dict = {}   # key -> (result_dict, timestamp)
+_ADSB_TTL: int = 30      # seconds
 
 @app.get("/api/v1/adsb")
-def get_adsb_live() -> JSONResponse:
-    """Proxy global ADS-B snapshot from airplanes.live — 250 NM radius from KDCA.
+def get_adsb_live(
+    lat: float = 38.8521,
+    lon: float = -77.0377,
+    radius: int = 250,
+) -> JSONResponse:
+    """Proxy ADS-B snapshot from airplanes.live around a configurable map center.
 
-    No local antenna identifier is attached.  Aircraft without a position are
-    filtered out.  Result is cached for 30 seconds to absorb burst requests.
+    Query params:
+      lat    — center latitude  (default 38.8521 / KDCA)
+      lon    — center longitude (default -77.0377 / KDCA)
+      radius — search radius in NM, 1-250 (max enforced; API hard-limits at 250)
+
+    Cache key is rounded to ~0.1-degree precision (~6 NM) to share results across
+    minor pan events.  TTL is 30 seconds, matching the PWA poll interval.
 
     Response shape:
-      {source, count, cached_at, aircraft: [{hex, flight, lat, lon,
-        alt_baro, gs, track, squawk, type}]}
+      {source, count, cached_at, center:{lat,lon,radius_nm}, aircraft:[...]}
     """
-    global _ADSB_CACHE, _ADSB_CACHE_TS
+    global _ADSB_CACHE
+    radius = max(1, min(int(radius), 250))
+    # Round to ~6 NM grid for cache sharing
+    key = f"{round(lat, 1)},{round(lon, 1)},{radius}"
     now = time.time()
-    if _ADSB_CACHE and (now - _ADSB_CACHE_TS) < _ADSB_TTL:
-        return JSONResponse(_ADSB_CACHE)
+    if key in _ADSB_CACHE:
+        cached_result, cached_ts = _ADSB_CACHE[key]
+        if (now - cached_ts) < _ADSB_TTL:
+            return JSONResponse(cached_result)
 
     try:
         import requests as _req
         r = _req.get(
-            "https://api.airplanes.live/v2/point/38.8521/-77.0377/250",
+            f"https://api.airplanes.live/v2/point/{lat:.4f}/{lon:.4f}/{radius}",
             timeout=10,
             headers={"Accept": "application/json", "User-Agent": "corporatetraveldc-dispatch/1.0"},
         )
         r.raise_for_status()
         raw = r.json()
     except Exception as exc:
-        # Return stale cache if available
-        if _ADSB_CACHE:
-            stale = dict(_ADSB_CACHE)
+        if key in _ADSB_CACHE:
+            stale = dict(_ADSB_CACHE[key][0])
             stale["stale"] = True
             return JSONResponse(stale)
         return JSONResponse(
             {"source": "airplanes.live", "count": 0, "aircraft": [],
+             "center": {"lat": lat, "lon": lon, "radius_nm": radius},
              "error": str(exc)},
             status_code=503,
         )
 
     aircraft = []
     for ac in raw.get("ac", []):
-        lat = ac.get("lat")
-        lon = ac.get("lon")
-        if lat is None or lon is None:
+        ac_lat = ac.get("lat")
+        ac_lon = ac.get("lon")
+        if ac_lat is None or ac_lon is None:
             continue
         aircraft.append({
             "hex":      ac.get("hex", ""),
             "flight":   (ac.get("flight") or "").strip(),
-            "lat":      lat,
-            "lon":      lon,
+            "lat":      ac_lat,
+            "lon":      ac_lon,
             "alt_baro": ac.get("alt_baro"),
             "gs":       ac.get("gs"),
             "track":    ac.get("track"),
             "squawk":   ac.get("squawk"),
             "type":     ac.get("t", ""),
-            "r":        ac.get("r", ""),  # N-number / registration
+            "r":        ac.get("r", ""),
             "desc":     ac.get("desc", ""),
+            "category": ac.get("category", ""),
         })
 
     result = {
         "source":    "airplanes.live",
         "count":     len(aircraft),
         "cached_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "center":    {"lat": lat, "lon": lon, "radius_nm": radius},
         "aircraft":  aircraft,
     }
-    _ADSB_CACHE    = result
-    _ADSB_CACHE_TS = now
+    _ADSB_CACHE[key] = (result, now)
+    # Prune: keep at most 30 cache keys
+    if len(_ADSB_CACHE) > 30:
+        oldest_keys = sorted(_ADSB_CACHE, key=lambda k: _ADSB_CACHE[k][1])
+        for k in oldest_keys[:10]:
+            del _ADSB_CACHE[k]
     return JSONResponse(result)
 
 
