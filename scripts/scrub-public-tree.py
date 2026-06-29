@@ -11,6 +11,7 @@ import subprocess, sys
 # Files to drop entirely from the public tree (relative to repo root)
 DROP_FILES = {
     "dispatch-secrets.env",
+    "secrets.env",           # acars-watcher/secrets.env — never public
 }
 
 # Public-safe substitutions: real_value -> placeholder
@@ -57,6 +58,14 @@ SUBSTITUTIONS = {
     b"dispatch.csexecutiveservices.com": b"dispatch.example.com",
     b"ops.csexecutiveservices.com":      b"ops.example.com",
 
+    # Jumpseat tokens (both the exposed one and any future sk_adjs_ pattern)
+    b"sk_adjs_27C-PdbN3ut0U-T6JNgyRdPCZaQupbCQH6dvFEUjf7Q": b"sk_adjs_REDACTED",
+    b"sk_adjs_Bk-ct0MqeMCt7PAwiGOAItFFLTxLr-A_fxgOTCPETK0": b"sk_adjs_REDACTED",
+
+    # Dispatch admin tokens (ctdc_cowork_ prefix)
+    b"ctdc_cowork_5NC2G5DLI8CONLZCFWO5TLM5CEABD7OQ": b"ctdc_cowork_REDACTED",
+    b"ctdc_cowork_8AXAVWO6YNOVKTSC34WC36B65G83F09U":  b"ctdc_cowork_REDACTED",
+
     # New ntfy token from current session
     b"tk_v82g71ytad8wtmrfwnvzlxkm5iu3b": b"tk_REDACTED",
 
@@ -75,6 +84,10 @@ def scrub_blob(sha):
     new = content
     for old, repl in SUBSTITUTIONS.items():
         new = new.replace(old, repl)
+    # Regex sweep for token prefixes not caught by literal dict
+    import re as _re
+    new = _re.sub(rb"sk_adjs_[A-Za-z0-9_\-]{10,}", b"sk_adjs_REDACTED", new)
+    new = _re.sub(rb"ctdc_cowork_[A-Z0-9]{20,}", b"ctdc_cowork_REDACTED", new)
     if new == content:
         return sha
     r = subprocess.run(
