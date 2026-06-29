@@ -16,7 +16,7 @@ const RANGE_RINGS_NM = [50, 100, 150, 250]
 const NM_TO_M = 1852
 
 // Base globe URL — centred on KDCA, zoom 8
-const GLOBE_BASE = `https://globe.airplanes.live/?centerlat=${KDCA[0]}&centerlon=${KDCA[1]}&zoom=8&hideSidebar&hideButtons`
+const GLOBE_BASE = `https://globe.airplanes.live/?centerlat=${KDCA[0]}&centerlon=${KDCA[1]}&zoom=8&hideSidebar`
 
 // Detect search type from user input
 function detectSearchType(raw) {
