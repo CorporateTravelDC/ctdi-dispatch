@@ -10,14 +10,37 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 
 export const DEFAULT_CONFIG = {
   layers: {
-    vdl2:  true,
-    acars: true,
-    hfdl:  true,
-    ais:   true,
-    metar: true,
+    // Signal panels
+    vdl2:     true,
+    acars:    true,
+    hfdl:     true,
+    ais:      true,
+    metar:    true,
+    // Map overlays (gated per-view; Steps 3-5 will wire toggles)
+    tfr:      true,
+    airspace: true,
+    rings:    true,
+    localFeed: true,
+    tracked:  true,
+    trains:   false,
+    marine:   false,
+    weather:  false,
   },
-  // signal panel order (future use)
-  // mapOverlays: { tfr: true, aircraft: true, airspace: true },
+  // Per-feed panel collapse state
+  panels: {
+    flights: true,
+    trains:  true,
+    marine:  true,
+    weather: true,
+    tfr:     true,
+    signals: true,
+    amtrak:  true,
+    cps:     true,
+    notam:   false,
+    adsb:    true,
+  },
+  // Accessible table preference — user can toggle to surface tabular data
+  showTables: false,
 }
 
 const STORAGE_KEY = 'ctdc_layer_config'
@@ -32,7 +55,9 @@ function loadConfig() {
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
-      layers: { ...DEFAULT_CONFIG.layers, ...(parsed.layers || {}) },
+      layers:  { ...DEFAULT_CONFIG.layers,  ...(parsed.layers  || {}) },
+      panels:  { ...DEFAULT_CONFIG.panels,  ...(parsed.panels  || {}) },
+      showTables: parsed.showTables ?? DEFAULT_CONFIG.showTables,
     }
   } catch {
     return DEFAULT_CONFIG
@@ -83,7 +108,9 @@ export function useLayerConfig() {
       const merged = {
         ...DEFAULT_CONFIG,
         ...remote,
-        layers: { ...DEFAULT_CONFIG.layers, ...(remote.layers || {}) },
+        layers:  { ...DEFAULT_CONFIG.layers,  ...(remote.layers  || {}) },
+        panels:  { ...DEFAULT_CONFIG.panels,  ...(remote.panels  || {}) },
+        showTables: remote.showTables ?? DEFAULT_CONFIG.showTables,
       }
       setConfig(merged)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
@@ -123,7 +150,25 @@ export function useLayerConfig() {
     })
   }, [])
 
-  return { config, updateConfig, toggleLayer, setAllLayers }
+  const togglePanel = (key) => {
+    setConfig(prev => {
+      const next = { ...prev, panels: { ...prev.panels, [key]: !prev.panels[key] } }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      syncToBackend(next)
+      return next
+    })
+  }
+
+  const toggleTableView = () => {
+    setConfig(prev => {
+      const next = { ...prev, showTables: !prev.showTables }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      syncToBackend(next)
+      return next
+    })
+  }
+
+  return { config, updateConfig, toggleLayer, setAllLayers, togglePanel, toggleTableView }
 }
 
 /** Returns true if the user has a stored admin token (sync mode active) */

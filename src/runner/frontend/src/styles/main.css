@@ -1531,3 +1531,232 @@ body::before {
   accent-color: var(--cyan); border-radius: var(--radius);
   background: transparent;
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACCESSIBILITY — Tableau Azimuth method + WCAG 2.1 AA
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Screen-reader-only utility (WCAG 1.3.1, 1.4.3) ─────────────────────── */
+.sr-only {
+  position: absolute !important;
+  width:    1px !important;
+  height:   1px !important;
+  padding:  0   !important;
+  margin:  -1px !important;
+  overflow: hidden   !important;
+  clip:     rect(0,0,0,0) !important;
+  white-space: nowrap    !important;
+  border:   0   !important;
+}
+
+/* Make sr-only focusable when it receives focus (e.g. skip links) */
+.sr-only:focus,
+.sr-only:focus-within {
+  position: static   !important;
+  width:    auto     !important;
+  height:   auto     !important;
+  padding:  inherit  !important;
+  margin:   inherit  !important;
+  overflow: visible  !important;
+  clip:     auto     !important;
+  white-space: normal !important;
+}
+
+/* ── AriaCompassRegion — Azimuth-method ARIA status bar ─────────────────── */
+.aria-compass-region {
+  display:      flex;
+  align-items:  center;
+  gap:          0.5rem;
+  padding:      0.25rem 1rem;
+  background:   rgba(0, 212, 255, 0.07);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.18);
+  font-family:  var(--font-data);
+  font-size:    0.65rem;
+  letter-spacing: 0.03em;
+  color:        var(--cyan);
+  min-height:   1.75rem;
+  overflow:     hidden;
+  text-overflow: ellipsis;
+  white-space:  nowrap;
+  /* Keyboard-focus visible even if visually subtle */
+  outline-offset: -2px;
+}
+.aria-compass-region:focus-visible {
+  outline: 2px solid var(--cyan);
+}
+.aria-compass-label {
+  opacity: 0.55;
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.aria-compass-summary {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aria-compass-extra {
+  opacity: 0.6;
+  flex-shrink: 0;
+  font-size: 0.6rem;
+}
+
+/* High-contrast override — ensure contrast ≥4.5:1 */
+@media (prefers-contrast: more) {
+  .aria-compass-region {
+    background:   #001a22;
+    border-color: #00d4ff;
+    color:        #00d4ff;
+  }
+}
+
+/* ── AccessibleTable — Azimuth tabular fallback ─────────────────────────── */
+.accessible-table-wrap.table-visible {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.accessible-table {
+  width:            100%;
+  border-collapse:  collapse;
+  font-family:      var(--font-data);
+  font-size:        0.7rem;
+  color:            var(--text);
+}
+.table-caption {
+  caption-side: top;
+  text-align:   left;
+  padding:      0.25rem 0.5rem;
+  font-size:    0.65rem;
+  font-weight:  600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color:        var(--muted);
+}
+.accessible-table thead th {
+  background:     rgba(0,140,220,0.12);
+  color:          var(--cyan);
+  padding:        0.3rem 0.5rem;
+  text-align:     left;
+  border-bottom:  1px solid rgba(0,140,220,0.2);
+  font-size:      0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.accessible-table tbody td {
+  padding:        0.25rem 0.5rem;
+  border-bottom:  1px solid rgba(0,140,220,0.06);
+  vertical-align: middle;
+}
+.accessible-table tbody tr:last-child td { border-bottom: none; }
+.accessible-table tbody tr:hover td     { background: rgba(0,212,255,0.04); }
+.table-empty,
+.table-truncated {
+  color:      var(--muted);
+  font-style: italic;
+  text-align: center;
+  padding:    0.75rem;
+}
+/* Responsive: stack on narrow viewports */
+@media (max-width: 480px) {
+  .accessible-table thead { display: none; }
+  .accessible-table tbody td::before {
+    content:      attr(data-label);
+    display:      block;
+    font-size:    0.6rem;
+    font-weight:  600;
+    color:        var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.1rem;
+  }
+  .accessible-table tbody td { display: block; padding: 0.2rem 0.5rem; }
+  .accessible-table tbody tr {
+    display:       block;
+    border-bottom: 1px solid rgba(0,140,220,0.12);
+    padding:       0.3rem 0;
+  }
+}
+
+/* ── FeedPanel — collapsible ARIA-wired panel ─────────────────────────────── */
+.feed-panel {
+  background:   var(--surface);
+  border:       1px solid rgba(0,140,220,0.14);
+  border-radius: 6px;
+  overflow:     hidden;
+  transition:   border-color 0.15s;
+}
+.feed-panel:focus-within {
+  border-color: rgba(0,212,255,0.35);
+}
+.fp-header {
+  margin:  0;
+  padding: 0;
+}
+.fp-toggle {
+  display:        flex;
+  align-items:    center;
+  gap:            0.4rem;
+  width:          100%;
+  background:     transparent;
+  border:         none;
+  cursor:         pointer;
+  padding:        0.55rem 0.75rem;
+  color:          var(--text);
+  font-family:    var(--font-ui);
+  font-size:      0.73rem;
+  font-weight:    600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align:     left;
+  transition:     background 0.12s;
+}
+.fp-toggle:hover   { background: rgba(0,212,255,0.06); }
+.fp-toggle:focus-visible {
+  outline:        2px solid var(--cyan);
+  outline-offset: -2px;
+}
+.fp-chevron {
+  font-size:   0.65rem;
+  color:       var(--muted);
+  flex-shrink: 0;
+  width:       0.85rem;
+  text-align:  center;
+}
+.fp-title { flex: 1; }
+.fp-badge {
+  font-family:   var(--font-data);
+  font-size:     0.65rem;
+  font-weight:   700;
+  padding:       0.1rem 0.35rem;
+  border-radius: 3px;
+  flex-shrink:   0;
+}
+.fp-badge-go     { background: rgba(0,255,136,0.15);  color: var(--go);      }
+.fp-badge-nogo   { background: rgba(255,48,64,0.15);  color: var(--nogo);    }
+.fp-badge-warn   { background: rgba(255,200,0,0.15);  color: var(--warn, #ffc800); }
+.fp-badge-cyan   { background: rgba(0,212,255,0.15);  color: var(--cyan);    }
+.fp-badge-muted  { background: rgba(120,140,160,0.15); color: var(--muted);  }
+
+.fp-body   { border-top: 1px solid rgba(0,140,220,0.1); }
+.fp-content { padding: 0.6rem 0.75rem; }
+.fp-table-slot { border-top: 1px solid rgba(0,140,220,0.08); }
+
+/* Animation: collapse/expand */
+.fp-closed .fp-body { display: none; }
+
+/* High-contrast mode */
+@media (prefers-contrast: more) {
+  .feed-panel         { border-color: #00d4ff; }
+  .fp-toggle          { color: #fff; }
+  .fp-badge-go        { background: #004422; color: #00ff88; }
+  .fp-badge-nogo      { background: #440011; color: #ff3040; }
+}
+
+/* Reduced-motion: no transitions */
+@media (prefers-reduced-motion: reduce) {
+  .feed-panel,
+  .fp-toggle,
+  .aria-compass-region { transition: none; }
+}
