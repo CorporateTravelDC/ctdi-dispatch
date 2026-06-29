@@ -14,7 +14,8 @@ const OSM_NAUTICAL_ATTR = '&copy; <a href="https://www.openseamap.org">OpenSeaMa
 const DEFAULT_CENTER   = [38.9, -76.8]
 const DEFAULT_ZOOM     = 8
 const VESSEL_POLL      = 60_000
-const MARINETRAFFIC_URL = 'https://www.marinetraffic.com/en/ais/embed/zoom:8/centery:38.9/centerx:-76.8/maptype:0/shownames:false/mmsi:0/shipid:0/fleet:/fleet_id:/vtypes:/showmenu:/remember:false'
+const MT_EMBED_BASE = 'https://www.marinetraffic.com/en/ais/embed/zoom:8/centery:38.9/centerx:-76.8/maptype:0/shownames:false/mmsi:0/shipid:0/fleet:/fleet_id:/vtypes:/showmenu:/remember:false'
+const MARINETRAFFIC_URL = MT_EMBED_BASE  // updated at runtime with widget_id if key present
 const TRACKER_LINKS = [
   { label: 'MarineTraffic ↗', url: MARINETRAFFIC_URL },
 ]
@@ -65,6 +66,7 @@ export default function AisMapView() {
   // 'local' : full OSM + OpenSeaMap Leaflet
   const [mode,         setMode]        = useState('iframe')
   const [iframeError,  setIframeError] = useState(false)
+  const [mtEmbedUrl,   setMtEmbedUrl]   = useState(MT_EMBED_BASE)
   const [vesselCount,  setVesselCount] = useState(0)
   const [trackedCount, setTrackedCount]= useState(0)
   const [dataSource,   setDataSource]  = useState('none')
@@ -79,6 +81,18 @@ export default function AisMapView() {
     if (m) mmsiSet.add(m[1])
     if (e.identifier && /^\d{9}$/.test(e.identifier)) mmsiSet.add(e.identifier)
   })
+
+  // Fetch MarineTraffic widget key from runner config endpoint
+  useEffect(() => {
+    fetch('/api/v1/frontend-config')
+      .then(r => r.ok ? r.json() : {})
+      .then(cfg => {
+        if (cfg.mt_widget_key) {
+          setMtEmbedUrl(MT_EMBED_BASE + '?widget_id=' + encodeURIComponent(cfg.mt_widget_key))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Init Leaflet — single instance, tile layers toggled by mode
   useEffect(() => {
@@ -231,7 +245,7 @@ export default function AisMapView() {
         {/* MarineTraffic iframe background — behind transparent Leaflet */}
         {mode === 'iframe' && !iframeError && (
           <iframe
-            src={MARINETRAFFIC_URL}
+            src={mtEmbedUrl}
             className="globe-iframe"
             title="MarineTraffic live AIS"
             referrerPolicy="no-referrer"
