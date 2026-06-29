@@ -24,6 +24,7 @@ import requests
 
 from common import config, db
 from common import ntfy_push
+from common import pushover
 from common.acars import check_oooi_event as _acars_oooi, get_latest_phase as _acars_phase
 from common.push_dedup import PushDedup, content_hash
 from poller.fetchers.metar import parse_wind_dir
@@ -45,6 +46,18 @@ def send_test_alert(message: str, topic: str = "ops-health",
     topic/title/priority come from the request body; defaults preserve legacy behavior."""
     return send_ntfy(topic, message, priority=priority,
                      title=title or "corporatetraveldc test")
+
+
+
+def hot_push(topic: str, message: str, title: str) -> bool:
+    """Co-fire ntfy priority 5 + Pushover Emergency for any max-priority event.
+
+    Both sends are attempted regardless of the other's outcome.
+    Returns True if at least one delivery succeeded.
+    """
+    ntfy_ok = send_ntfy(topic, message, priority=5, title=title)
+    po_ok   = pushover.send_emergency(title=title, message=message)
+    return ntfy_ok or po_ok
 
 
 # Dedup instances -- one per logical alert channel
@@ -89,18 +102,9 @@ def push_vip_tfrs() -> int:
         if not _tfr_dedup.should_push(key, h, hot=True):  # VIP = always hot
             continue
 
-        success = send_ntfy(
-            topic="tfr-alert",
-            message=message,
-            priority=5,
-            title=f"VIP TFR: {t['tfr_id']}",
-        )
-        send_ntfy(
-            topic="hot-alerts",
-            message=message,
-            priority=5,
-            title=f"VIP TFR: {t['tfr_id']}",
-        )
+        # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
+        success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
+        hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
         if success:
             db.mark_tfr_notified(t["tfr_id"])
             _tfr_dedup.record(key, h)
@@ -551,7 +555,11 @@ def push_wx_change() -> bool:
     topic = "hot-alerts" if hot else "wx-alerts"
     title = "Wind Alert -- CPS Threshold" if hot else "WX Change"
 
-    success = send_ntfy(topic, message, priority=priority, title=title)
+    # Hot wx path: co-fire Pushover Emergency on priority-5 (CPS NO-GO) alerts.
+    if hot:
+        success = hot_push(topic, message, title=title)
+    else:
+        success = send_ntfy(topic, message, priority=priority, title=title)
     if success:
         for station, m in primaries.items():
             _wx_dedup.set_raw(station, {
