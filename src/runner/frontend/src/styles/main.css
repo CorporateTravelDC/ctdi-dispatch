@@ -98,7 +98,7 @@ body::before {
   inset: 0;
   background-image: radial-gradient(var(--bg-grid) 1px, transparent 1px);
   background-size: 28px 28px;
-  pointer-events: none;
+  pointer-events: all;
   z-index: 0;
 }
 
@@ -343,7 +343,7 @@ body::before {
 }
 .globe-local-overlay {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  z-index: 2; pointer-events: none; background: transparent;
+  z-index: 2; pointer-events: all; background: transparent;
 }
 /* Allow individual markers to be interactive over the iframe */
 .globe-local-overlay .leaflet-marker-pane { pointer-events: all; }
@@ -2007,20 +2007,21 @@ body::before {
 /* ── Watchlist badge — globe view ───────────────────────────────────────── */
 .globe-watchlist-badge {
   position: absolute;
-  top: 56px;      /* below search bar */
-  right: 10px;
+  top: 10px;
+  left: 62px;
   z-index: 450;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
   padding: 4px 8px;
-  background: rgba(0, 18, 28, 0.88);
+  background: rgba(0, 18, 28, 0.60);
   border: 1px solid #00d4ff;
   border-radius: 6px;
-  box-shadow: 0 0 12px rgba(0,212,255,0.25);
+  cursor: grab;
+  box-shadow: 0 0 12px rgba(0,212,255,0.18);
   max-width: 240px;
-  pointer-events: none;
+  pointer-events: all;
 }
 .gwb-label {
   font-size: 0.6rem;
@@ -2040,6 +2041,92 @@ body::before {
   padding: 1px 5px;
   white-space: nowrap;
 }
+
+.gwb-collapse-btn {
+  background: none; border: none; color: rgba(0,212,255,0.5); cursor: pointer;
+  font-size: 0.65rem; padding: 0 2px; margin-left: 4px; line-height: 1;
+  flex-shrink: 0; align-self: center;
+}
+.gwb-collapse-btn:hover { color: #00d4ff; }
+
+.gwb-collapsed-pill {
+  position: absolute;
+  top: 10px;
+  left: 62px;
+  z-index: 450;
+  background: rgba(0, 18, 28, 0.60);
+  border: 1px solid #00d4ff;
+  border-radius: 12px;
+  color: #00d4ff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  cursor: pointer;
+  pointer-events: all;
+  box-shadow: 0 0 8px rgba(0,212,255,0.2);
+  transition: background 0.15s;
+}
+.gwb-collapsed-pill:hover { background: rgba(0,212,255,0.15); }
+
+/* ═══════════════════════════════════════════════
+   Train panel resize + collapse
+   ═══════════════════════════════════════════════ */
+
+.train-side-panel-wrap {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  position: relative;
+  overflow: visible;
+  transition: width 0.1s;
+}
+.train-side-panel-wrap .train-side-panel {
+  width: 100%;
+  min-width: 0;
+}
+.train-panel-collapsed .train-side-panel {
+  display: none;
+}
+.train-panel-collapser {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 14px;
+  height: 44px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem;
+  color: var(--muted);
+  padding: 0;
+}
+.train-panel-collapser:hover { color: var(--cyan); background: var(--hover); }
+
+.train-panel-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  background: transparent;
+  cursor: col-resize;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 5;
+}
+.train-panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -2px; right: -2px;
+}
+.train-panel-resize-handle:hover,
+.train-panel-resize-handle:active {
+  background: rgba(0,212,255,0.25);
+}
+
 
 /* ═══════════════════════════════════════════════
    Step 4 — AIS / Marine view
@@ -2099,7 +2186,7 @@ body::before {
   border: 1px solid rgba(74,158,255,0.35);
   border-radius: 4px;
   padding: 2px 7px;
-  pointer-events: none;
+  pointer-events: all;
 }
 
 /* No-data overlay */
@@ -2173,7 +2260,7 @@ body::before {
 }
 /* Transparent overlay mode — sits on top of iframe, no base tiles visible */
 .ais-overlay-mode {
-  pointer-events: none;
+  pointer-events: all;
 }
 .ais-overlay-mode .leaflet-container {
   background: transparent !important;
