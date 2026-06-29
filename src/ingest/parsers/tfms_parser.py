@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from common import db
 from common.push_dedup import PushDedup, content_hash
 from shared.watchlist import _fire_ntfy_dual
+from ingest.parsers.geo_filter import is_core_airport
 
 log = logging.getLogger("ingest.parsers.tfms")
 
@@ -194,9 +195,24 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
 
 
 def write_tfms_programs(programs: list[dict]) -> int:
-    """Upsert parsed TFMS programs into nas_programs. Returns count written."""
+    """Upsert parsed TFMS programs into nas_programs. Returns count written.
+
+    Geo filter: only store programs affecting CORE_AIRPORTS or DC
+    ARTCC/TRACON facilities (ZDC, PCT).  National FCA/AFP programs that
+    reference no specific facility still pass (facility is empty/None).
+    """
+    # ARTCC/TRACON identifiers that are not airport codes but are always relevant.
+    _DC_ARTCC = frozenset({"ZDC", "PCT"})
+
     written = 0
     for p in programs:
+        facility = (p.get("facility") or "").upper()
+        # Pass if: no facility specified (national scope), DC ARTCC/TRACON,
+        # or airport is in the 30-airport core set.
+        if facility and facility not in _DC_ARTCC and not is_core_airport(facility):
+            log.debug("tfms: geo-filtered program %s (facility=%s not in core)",
+                      p.get("program_id"), facility)
+            continue
         try:
             db.upsert_nas_program(
                 program_id=p["program_id"],

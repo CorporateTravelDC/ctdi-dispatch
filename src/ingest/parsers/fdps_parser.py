@@ -10,7 +10,6 @@ within 50nm of DCA.
 from __future__ import annotations
 
 import logging
-import math
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
@@ -18,6 +17,12 @@ from typing import Any
 
 from common import db
 from common.push_dedup import PushDedup, content_hash
+from ingest.parsers.geo_filter import (
+    passes_geo_filter,
+    is_core_airport,
+    _haversine_nm,
+    distance_to_dca_nm,
+)
 
 _FDPS_PROX_DEDUP = PushDedup("fdps_prox", dedup_secs=600)
 
@@ -42,43 +47,18 @@ MARINE_ONE_SQUAWKS = frozenset({"7700", "5000", "5001"})
 DC_LAT, DC_LON = 38.8522, -77.0376
 MARINE_ONE_RADIUS_NM = 50.0
 
-# ── Geographic filter — store only DC-area traffic ────────────────────────────
+# ── Geographic filter — store only relevant traffic ───────────────────────────
 # Reduces DB size; does NOT reduce FAA wire bandwidth.
-# Keep events if: within FDPS_GEO_RADIUS_NM of DCA, OR origin/dest in
-# DC_AREA_AIRPORTS, OR flagged as POTUS/Marine One callsign.
-FDPS_GEO_RADIUS_NM = 250.0
-DC_AREA_AIRPORTS: frozenset[str] = frozenset({
-    # Primary DC triad
-    "KDCA", "KIAD", "KBWI",
-    # GA / reliever / military
-    "KADW",  # Andrews / Joint Base Andrews
-    "KCGS",  # College Park
-    "KDMH",  # Baltimore-Mtns Regional
-    "KHEF",  # Manassas
-    "KJYO",  # Leesburg Executive
-    "KGAI",  # Montgomery County Airpark
-    "KVKX",  # Potomac Airfield
-    "KEZF",  # Shannon (Fredericksburg)
-    # Controlled-airspace adjacent
-    "KNYG",  # Quantico MCAF
-    "KNHK",  # Patuxent River NAS
-})
+# Keep events if: within 250 NM of DCA, OR origin/dest in CORE_AIRPORTS (30
+# major US airports), OR flagged as POTUS/Marine One callsign.
+# Filter logic lives in ingest.parsers.geo_filter (passes_geo_filter).
+#
+# DC-area GA/reliever/military airports are within the 250 NM radius and will
+# pass the in_range() check even though they aren't in CORE_AIRPORTS.
 
 
 
-def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in nautical miles."""
-    R_NM = 3440.065
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
-         * math.sin(dlon / 2) ** 2)
-    return R_NM * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
-def distance_to_dca_nm(lat: float, lon: float) -> float:
-    return _haversine_nm(lat, lon, DC_LAT, DC_LON)
+# _haversine_nm and distance_to_dca_nm are imported from geo_filter above.
 
 
 def is_marine_one(callsign: str | None, squawk: str | None) -> bool:
@@ -283,23 +263,27 @@ def parse_fdps_message(xml_bytes: bytes) -> dict | None:
 # ── DB writer ─────────────────────────────────────────────────────────────────
 
 def _in_dc_area(parsed: dict) -> bool:
-    """Return True if this flight event is relevant to DC-area operations."""
-    # Callsign match always passes (Marine One, POTUS, etc.)
+    """
+    Return True if this flight event is relevant to dispatch operations.
+
+    Pass conditions (any):
+      • Callsign is a known POTUS/Marine One callsign (always pass)
+      • Origin airport is in CORE_AIRPORTS or within 250 NM of DCA
+      • Destination airport is in CORE_AIRPORTS
+      • Current position is within 250 NM of DCA
+    """
+    # VIP/POTUS always passes regardless of position or airports.
     cs = (parsed.get("callsign") or "").upper()
     if cs in MARINE_ONE_CALLSIGNS:
         return True
-    # Origin or destination is a DC-area airport
-    origin = (parsed.get("origin") or "").upper()
-    dest   = (parsed.get("destination") or "").upper()
-    if origin in DC_AREA_AIRPORTS or dest in DC_AREA_AIRPORTS:
-        return True
-    # Current position within 250 NM of DCA
+
+    # Check position + origin together, then destination separately.
     lat = parsed.get("latitude")
     lon = parsed.get("longitude")
-    if lat is not None and lon is not None:
-        return distance_to_dca_nm(float(lat), float(lon)) <= FDPS_GEO_RADIUS_NM
-    # No position available — keep if either airport matched above; else discard
-    return False
+    return (
+        passes_geo_filter(lat=lat, lon=lon, airport=parsed.get("origin"))
+        or is_core_airport(parsed.get("destination"))
+    )
 
 
 def write_flight_event(parsed: dict) -> None:

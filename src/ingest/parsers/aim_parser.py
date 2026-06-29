@@ -38,6 +38,7 @@ from common import db
 from common.ntfy_push import send as ntfy_send
 from common.push_dedup import PushDedup, content_hash
 from ingest import config as ingest_config
+from ingest.parsers.geo_filter import is_core_airport
 
 log = logging.getLogger("ingest.parsers.aim")
 
@@ -266,11 +267,25 @@ def write_aim_notams(notams: list[dict]) -> int:
 
     written = 0
     for n in notams:
+        facility = n["facility"]
+        is_fdc   = n["classification"] == "FDC"
+        is_vip   = _is_vip_notam(n.get("text_body", ""))
+
+        # Geo filter on DB writes.
+        # Always store: VIP NOTAMs (POTUS/AF1/Marine One), FDC NOTAMs (national scope),
+        # and any NOTAM-D whose facility is in CORE_AIRPORTS or the configured watch set.
+        in_watch = facility in watch_set
+        in_core  = is_core_airport(facility)
+        if not (is_vip or is_fdc or in_watch or in_core):
+            log.debug("aim: geo-filtered NOTAM %s facility=%s (not in core or watch set)",
+                      n["notam_id"], facility)
+            continue
+
         try:
             db.upsert_notam(
                 notam_id=n["notam_id"],
                 raw_json=n["raw_json"],
-                facility=n["facility"],
+                facility=facility,
                 classification=n["classification"],
                 effective_start=n.get("effective_start"),
                 effective_end=n.get("effective_end"),
@@ -278,16 +293,11 @@ def write_aim_notams(notams: list[dict]) -> int:
             )
             written += 1
 
-            facility = n["facility"]
-            is_fdc   = n["classification"] == "FDC"
-            is_vip   = _is_vip_notam(n.get("text_body", ""))
-
-            # VIP NOTAMs always alert (POTUS/AF1/Marine One) regardless of facility.
-            # FDC and NOTAM-D: alert only if facility is in the configured watch set.
-            if is_vip or facility in watch_set:
+            # Alert routing: VIP always; others only when in watch set.
+            if is_vip or in_watch:
                 _fire_notam_alert(n)
             elif is_fdc:
-                log.debug("aim: FDC NOTAM suppressed by facility filter: %s facility=%s", n["notam_id"], facility)
+                log.debug("aim: FDC NOTAM stored but not alerted (facility=%s not in watch set)", facility)
 
         except Exception as e:
             log.error("aim: db write error for %s: %s", n.get("notam_id"), e)
