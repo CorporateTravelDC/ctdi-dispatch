@@ -12,6 +12,7 @@ import subprocess, sys
 DROP_FILES = {
     "dispatch-secrets.env",
     "secrets.env",           # acars-watcher/secrets.env — never public
+    "STATUS.md",             # contains operator email + CF tunnel UUID
 }
 
 # Public-safe substitutions: real_value -> placeholder
@@ -57,6 +58,24 @@ SUBSTITUTIONS = {
     b"csexecutiveservices.ts.net":       b"example.ts.net",
     b"dispatch.csexecutiveservices.com": b"dispatch.example.com",
     b"ops.csexecutiveservices.com":      b"ops.example.com",
+
+    # Cloudflare tunnel UUID
+    b"28bde9a2-0bb2-4cca-a207-9b759c4739f1": b"00000000-0000-0000-0000-cf0tunnel0000",
+
+    # SWIM NMS operator email / username prefix
+    b"corey.sheldon@csexecutiveservices.com": b"operator@example.com",
+    b"corey.sheldon.csexecutiveservices.com": b"swimuser.example.com",
+
+    # Amateur radio callsigns (FCC public but operator-identifying)
+    b"WA1EM-5":   b"N0CALL-5",
+    b"WA1EM":     b"N0CALL",
+    b"WRCR715":   b"WRXXXXX",
+    b"L0344":     b"LXXXX",
+
+    # ARES/CERT identifiers
+    b"District 10":           b"District XX",
+    b"Fairfax+Loudoun":       b"County+County",
+    b"Arlington County, VA":  b"[operator county], [state]",
 
     # Jumpseat tokens (both the exposed one and any future sk_adjs_ pattern)
     b"sk_adjs_27C-PdbN3ut0U-T6JNgyRdPCZaQupbCQH6dvFEUjf7Q": b"sk_adjs_REDACTED",
