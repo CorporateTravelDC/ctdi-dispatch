@@ -2165,3 +2165,39 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .vessel-tracked svg { animation: none; }
 }
+
+/* ── AIS / Train map display mode: iframe bg + transparent Leaflet overlay ── */
+.ais-leaflet-layer {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 2;
+}
+/* Transparent overlay mode — sits on top of iframe, no base tiles visible */
+.ais-overlay-mode {
+  pointer-events: none;
+}
+.ais-overlay-mode .leaflet-container {
+  background: transparent !important;
+}
+.ais-overlay-mode .leaflet-tile-pane,
+.ais-overlay-mode .leaflet-shadow-pane {
+  display: none !important;
+}
+/* Re-enable interaction for individual markers/tooltips */
+.ais-overlay-mode .leaflet-marker-pane  { pointer-events: all; }
+.ais-overlay-mode .leaflet-tooltip-pane { pointer-events: all; }
+/* Full local map mode */
+.ais-local-mode {
+  pointer-events: auto;
+}
+.ais-local-mode .leaflet-container { background: #1a2133; }
+
+/* MarineTraffic iframe fallback banner */
+.ais-iframe-fallback-banner {
+  position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
+  z-index: 5; background: var(--panel); border: 1px solid var(--orange);
+  padding: 0.3rem 0.75rem; border-radius: var(--radius);
+  font-size: 0.7rem; color: var(--orange);
+  display: flex; gap: 0.5rem; align-items: center;
+  white-space: nowrap;
+}
+
