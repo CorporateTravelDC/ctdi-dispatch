@@ -55,6 +55,7 @@ AIRFRAMES_TOKEN    = os.getenv("AIRFRAMES_TOKEN",            "")
 
 MARINETRAFFIC_BASE = os.getenv("MARINETRAFFIC_BASE_URL",    "https://services.marinetraffic.com/api")
 MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",     "")
+AIS_MT_WIDGET_KEY  = os.getenv("AIS_MARINETRAFFIC_KEY",     "")  # widget embed key (widget_id param)
 AIS_AISHUB_ID      = os.getenv("AIS_AISHUB_ID",             "")
 AIS_AISHUB_BASE    = "http://data.aishub.net/ws.php"
 TAILSCALE_CIDR     = ipaddress.ip_network("100.64.0.0/10")
@@ -1079,6 +1080,12 @@ def _chat_save_exchange(user_msg: str, assistant_msg: str) -> None:
 @app.on_event("startup")
 async def startup_event():
     await asyncio.to_thread(_chat_db_init)
+
+@app.get("/api/v1/frontend-config")
+async def frontend_config():
+    """Expose non-secret runtime config values to the React frontend."""
+    return {"mt_widget_key": AIS_MT_WIDGET_KEY}
+
 
 @app.get("/api/v1/config")
 async def get_user_config():
