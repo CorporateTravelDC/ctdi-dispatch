@@ -115,7 +115,7 @@ def send_dual(
     *,
     title: str,
     topic_full: str  = "dispatch-debriefs",
-    topic_brief: str = "dispatch",
+    topic_brief: str = "dispatch-ops",
     priority: int = 3,
 ) -> None:
     """Send the same alert to two topics — full narrative + concise one-liner."""

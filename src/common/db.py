@@ -1077,6 +1077,18 @@ def upsert_terminal_track(track_id: str, facility: str, callsign: str | None,
 # ── SWIM alert helpers ────────────────────────────────────────────────────────
 
 
+SCHEMA_USAGE = """
+CREATE TABLE IF NOT EXISTS feed_data_usage (
+    feed_name        TEXT PRIMARY KEY,
+    bytes_in         INTEGER DEFAULT 0,   -- raw bytes from source (pre-filter)
+    records_in       INTEGER DEFAULT 0,   -- messages/records received
+    records_accepted INTEGER DEFAULT 0,   -- records that passed filter and were stored
+    window_start     REAL,               -- unix epoch when window opened (reset on restart)
+    updated_at       REAL DEFAULT (unixepoch())
+);
+"""
+
+
 def purge_old_flight_events(max_age_seconds: int = 3600) -> int:
     """
     Delete flight_events rows older than max_age_seconds that are NOT
@@ -1110,6 +1122,62 @@ def purge_old_flight_events(max_age_seconds: int = 3600) -> int:
                 (cutoff,),
             )
         return result.rowcount
+
+
+def init_feed_usage(feed_name: str) -> None:
+    """Open a fresh usage window for a feed (called at ingest/poller startup)."""
+    import time as _time
+    with conn() as c:
+        c.execute("""
+            INSERT INTO feed_data_usage
+                (feed_name, bytes_in, records_in, records_accepted, window_start, updated_at)
+            VALUES (?, 0, 0, 0, ?, unixepoch())
+            ON CONFLICT(feed_name) DO UPDATE SET
+                bytes_in=0, records_in=0, records_accepted=0,
+                window_start=excluded.window_start, updated_at=unixepoch()
+        """, (feed_name, _time.time()))
+
+
+def record_feed_bytes(feed_name: str, bytes_in: int,
+                      records_in: int = 1, records_accepted: int = 0) -> None:
+    """Increment usage counters for a feed. Thread-safe via SQLite WAL."""
+    with conn() as c:
+        c.execute("""
+            INSERT INTO feed_data_usage
+                (feed_name, bytes_in, records_in, records_accepted,
+                 window_start, updated_at)
+            VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
+            ON CONFLICT(feed_name) DO UPDATE SET
+                bytes_in = bytes_in + excluded.bytes_in,
+                records_in = records_in + excluded.records_in,
+                records_accepted = records_accepted + excluded.records_accepted,
+                updated_at = unixepoch()
+        """, (feed_name, bytes_in, records_in, records_accepted))
+
+
+def get_feed_data_usage() -> list[dict]:
+    """Return per-feed data usage snapshot."""
+    with conn() as c:
+        rows = c.execute("""
+            SELECT feed_name, bytes_in, records_in, records_accepted,
+                   window_start, updated_at
+            FROM feed_data_usage
+            ORDER BY bytes_in DESC
+        """).fetchall()
+    return [
+        {
+            "feed_name": r[0],
+            "bytes_in": r[1],
+            "records_in": r[2],
+            "records_accepted": r[3],
+            "records_dropped": max(0, r[2] - r[3]),
+            "filter_pass_pct": round(100 * r[3] / r[2], 1) if r[2] else None,
+            "window_start": r[4],
+            "updated_at": r[5],
+        }
+        for r in rows
+    ]
+
 
 def upsert_swim_alert(alert_type: str, payload: dict, expires_at: str) -> None:
     with conn() as c:
@@ -2076,6 +2144,7 @@ def init_db_v12() -> None:
     """Apply v12 schema -- WPC national forecast discussions."""
     with conn() as c:
         c.executescript(SCHEMA_V12)
+        c.executescript(SCHEMA_USAGE)
 
 
 def upsert_wpc_discussion(awips_id: str, product_label: str,
