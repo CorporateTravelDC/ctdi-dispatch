@@ -57,6 +57,13 @@ _WX_SPEED_THRESHOLD_KT  = 10   # alert on >= 10kt speed change
 _WX_DIR_THRESHOLD_DEG   = 45   # alert on >= 45 degree direction shift
 _WX_HOT_PUSH_KT         = 30   # hot push (bypass dedup) at CPS NO-GO limit
 
+# Feed freshness gates for wx-alerts.
+# If the METAR (ITWS) feed is older than this or has consecutive failures,
+# suppress wx-alerts rather than pushing stale data.
+_METAR_MAX_AGE_SEC      = 1200  # 20 min -- METAR feeds every ~5 min nominally
+_METAR_MAX_FAILURES     = 3     # suppress after 3 consecutive fetch failures
+_NWS_MAX_AGE_SEC        = 1800  # 30 min -- NWS alert poll cadence is slower
+
 
 def push_vip_tfrs() -> int:
     """
@@ -424,6 +431,24 @@ def push_watchlist_retries() -> int:
     return retried
 
 
+def _feed_is_fresh(feed_name: str, max_age: float, max_failures: int = 3) -> bool:
+    """Return True if the named feed has a recent, non-failed row in feed_state."""
+    states = {s["feed_name"]: s for s in db.get_feed_states()}
+    state = states.get(feed_name)
+    if state is None:
+        log.warning("feed_gate: no feed_state row for %r -- treating as stale", feed_name)
+        return False
+    age = time.time() - (state.get("fetched_at") or 0)
+    if age > max_age:
+        log.warning("feed_gate: %s stale (%.0fs > %.0fs)", feed_name, age, max_age)
+        return False
+    failures = state.get("consecutive_failures") or 0
+    if failures >= max_failures:
+        log.warning("feed_gate: %s has %d consecutive failures", feed_name, failures)
+        return False
+    return True
+
+
 # Primary DC-area stations for wind-change monitoring
 _WX_STATIONS = ("KDCA", "KIAD", "KBWI")
 
@@ -445,6 +470,13 @@ def push_wx_change() -> bool:
 
     primaries = {m["station"]: m for m in metars if m["station"] in _WX_STATIONS}
     if not primaries:
+        return False
+
+    # Feed freshness gate: suppress wx-alerts when METAR source is stale/degraded.
+    # METAR is the ITWS proxy (ADDS terminal weather). If it has gone stale or is
+    # repeatedly failing, the wind data is unreliable -- suppress rather than push noise.
+    if not _feed_is_fresh("metar", _METAR_MAX_AGE_SEC, _METAR_MAX_FAILURES):
+        log.info("push_wx_change: metar feed not fresh -- suppressing alert")
         return False
 
     now = time.time()
