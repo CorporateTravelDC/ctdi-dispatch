@@ -1,7 +1,7 @@
 # corporatetraveldc-openwebui.container
 # Open WebUI — full chat frontend for Ollama models.
 # Serves browser UI on port 3000 (local + Tailscale).
-# CF tunnel: openwebui.csexecutiveservices.com → port 3000
+# CF tunnel: openwebui.example.com → port 3000
 # Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-openwebui
 
 [Unit]
@@ -13,7 +13,7 @@ After=podman-user-wait-network-online.service
 Image=ghcr.io/open-webui/open-webui:main
 ContainerName=corporatetraveldc-openwebui
 PublishPort=127.0.0.1:3000:8080
-PublishPort=100.94.80.100:3000:8080
+PublishPort=100.x.x.x:3000:8080
 Volume=/var/lib/corporatetraveldc/open-webui:/app/backend/data:z
 
 # host.containers.internal resolves to the host gateway in pasta networking.

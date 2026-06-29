@@ -15,7 +15,7 @@ RUN useradd -r -s /sbin/nologin watcher
 USER watcher
 
 # Required:
-#   DISPATCH_BASE_URL      http://100.94.80.100:8000
+#   DISPATCH_BASE_URL      http://100.x.x.x:8000
 #   DISPATCH_ADMIN_TOKEN   ctdc_...
 #   JUMPSEAT_API_KEY       sk_adjs_...   (or mount ~/.secrets/jumpseat.key)
 #
