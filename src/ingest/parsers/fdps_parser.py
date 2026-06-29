@@ -305,7 +305,7 @@ def _in_dc_area(parsed: dict) -> bool:
 def write_flight_event(parsed: dict) -> None:
     """Upsert a parsed FDPS message into flight_events (DC-area only)."""
     if not _in_dc_area(parsed):
-        return  # outside DC area and not POTUS/Marine One — skip
+        return False  # outside DC area and not POTUS/Marine One — skip
 
     callsign = parsed.get("callsign") or ""
     airline = callsign[:3] if len(callsign) >= 3 else None

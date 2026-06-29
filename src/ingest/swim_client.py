@@ -165,7 +165,13 @@ class _NmsFeedSession:
                     if msg is not None:
                         try:
                             payload = msg.get_payload_as_bytes() or b""
-                            handler_fn(payload)
+                            raw_bytes = len(payload)
+                            accepted = handler_fn(payload)  # True/1 = passed filter
+                            _db_pool.submit(
+                                _db.record_feed_bytes,
+                                feed_name, raw_bytes, 1,
+                                0 if accepted is False else 1,
+                            )
                         except Exception as ex:
                             log.error("swim_client %s handler error: %s", feed_name, ex)
                 except Exception as poll_err:
@@ -317,6 +323,7 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
             )
             continue
 
+        _db.init_feed_usage(feed_name)
         session = _NmsFeedSession(feed_name, feed_cfg, handler)
         session.start(thread_stop)
         feed_sessions.append((feed_name, session))
