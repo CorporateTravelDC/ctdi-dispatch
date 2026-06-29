@@ -19,9 +19,9 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 
 | Component | State |
 |---|---|
-| PWA (operational dashboard) | `https://ops.csexecutiveservices.com` *(static HTML — no CF Access gate required)* |
-| Web API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` *(CF Access gated)* |
-| Tailscale direct | `http://100.94.80.100:8000` |
+| PWA (operational dashboard) | `https://ops.example.com` *(static HTML — no CF Access gate required)* |
+| Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
+| Tailscale direct | `http://100.x.x.x:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
 | FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
@@ -149,11 +149,11 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| PWA dashboard | `https://ops.csexecutiveservices.com` | Static HTML — no CF Access gate; add to Home Screen for PWA install |
-| API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` | CF Access gated; use for browser-based API calls and admin work |
-| Tailscale direct | `http://100.94.80.100:8000` | Always available on tailnet; preferred fallback |
+| PWA dashboard | `https://ops.example.com` | Static HTML — no CF Access gate; add to Home Screen for PWA install |
+| API (browser / programmatic) | `https://dispatch.example.com` | CF Access gated; use for browser-based API calls and admin work |
+| Tailscale direct | `http://100.x.x.x:8000` | Always available on tailnet; preferred fallback |
 
-> **Note:** `ops.csexecutiveservices.com` serves the static PWA (`index.html` + `manifest.json`) via nginx. `dispatch.csexecutiveservices.com` is the CF Access-gated API gateway — the PWA calls it as `const API = ''` (same-origin). Bearer token provides the actual API authorization.
+> **Note:** `ops.example.com` serves the static PWA (`index.html` + `manifest.json`) via nginx. `dispatch.example.com` is the CF Access-gated API gateway — the PWA calls it as `const API = ''` (same-origin). Bearer token provides the actual API authorization.
 
 ### Tier 0 — Anonymous
 
@@ -201,7 +201,7 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | POST | `/admin/push-test-alert` | Send test ntfy alert |
 | GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
 
-### Runner API (port 8001 / `dispatch-runner.csexecutiveservices.com`)
+### Runner API (port 8001 / `dispatch-runner.example.com`)
 
 The runner exposes its own API alongside the static PWA build. All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware).
 
@@ -311,7 +311,7 @@ The archive lets you run a fully live-looking demo without connecting to a real 
 **Seed readiness check:**
 
 ```bash
-curl https://dispatch.csexecutiveservices.com/api/v1/demo/readiness
+curl https://dispatch.example.com/api/v1/demo/readiness
 # → {
 #     "seed_days": 21, "seed_target": 14, "ready": true,
 #     "total_snapshots": 18240, "oldest": "2026-06-16", "newest": "2026-07-07",
@@ -425,7 +425,7 @@ The recorder runs as a standalone systemd user service (`demo-recorder.service`)
 
 ## PWA — Operational Dashboard
 
-The static PWA is served from `https://ops.csexecutiveservices.com` (nginx → `/var/www/corporatetraveldc-pwa/`). It calls the dispatch API same-origin and requires no authentication for Tier 0 data.
+The static PWA is served from `https://ops.example.com` (nginx → `/var/www/corporatetraveldc-pwa/`). It calls the dispatch API same-origin and requires no authentication for Tier 0 data.
 
 **Install as a home screen app:**
 - **iOS/iPadOS:** Safari → Share → Add to Home Screen

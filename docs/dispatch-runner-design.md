@@ -10,7 +10,7 @@ dispatch operations. It runs as a fifth container alongside the four dispatch
 backend containers, proxying the dispatch web API and serving its own frontend
 and runner-specific API routes.
 
-Accessible at: https://dispatch-runner.csexecutiveservices.com (port 8001)
+Accessible at: https://dispatch-runner.example.com (port 8001)
 Auth: Tailscale identity — 100.64.0.0/10 subnet enforced in FastAPI middleware
 on every non-healthz route. Cloudflare tunnel terminates at localhost:8001.
 
@@ -285,7 +285,7 @@ Service worker: cache-first for static assets, network-first for API calls.
   Quadlet: ~/.config/containers/systemd/corporatetraveldc-runner.container
   Port: 8001 (127.0.0.1 + Tailscale IP)
   Volume: /var/lib/corporatetraveldc:/var/lib/corporatetraveldc:Z
-  Tunnel: dispatch-runner.csexecutiveservices.com → localhost:8001
+  Tunnel: dispatch-runner.example.com → localhost:8001
   DISPATCH_BASE_URL: http://127.0.0.1:8000 (dispatch web API)
 
 ---

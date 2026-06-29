@@ -78,7 +78,7 @@ def vip_watchlist_path() -> str:
 
 def tailscale_domain_suffix() -> str:
     """Tailscale magic DNS suffix — used by Tier 1 auth."""
-    return get("TAILSCALE_DOMAIN_SUFFIX", ".csexecutiveservices.ts.net")
+    return get("TAILSCALE_DOMAIN_SUFFIX", ".example.ts.net")
 
 
 def faa_notam_api_key() -> str:
