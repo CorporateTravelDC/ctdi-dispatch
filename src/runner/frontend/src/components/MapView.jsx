@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import AriaCompassRegion from './AriaCompassRegion.jsx'
 import AccessibleTable   from './AccessibleTable.jsx'
 import { useCompassSummary } from '../hooks/useCompassSummary.js'
+import LayerSidebar from './LayerSidebar.jsx'
+import { useGlobalLayerConfig } from '../App.jsx'
 
 // DC-area static airspace GeoJSON (approximate)
 const AIRSPACE = {
@@ -247,6 +249,8 @@ function GlobeMap({ liveState }) {
 
 // ── Local Leaflet map ──────────────────────────────────────────────────────
 function LocalMap({ adsbMode, liveState }) {
+  const { config } = useGlobalLayerConfig() ?? {}
+  const layers = config?.layers ?? {}
   const mapRef         = useRef(null)
   const leafletRef     = useRef(null)
   const aircraftLayerRef = useRef(null)
@@ -266,14 +270,19 @@ function LocalMap({ adsbMode, liveState }) {
       className: 'map-tiles',
     }).addTo(map)
 
+    // Store refs for layer toggling
+    map._airspaceLayers = []
     Object.values(AIRSPACE).forEach(({ radius, color, label }) => {
-      L.circle(KDCA, { radius, color, weight: 1, fill: false, dashArray: '4 6', opacity: 0.5 })
+      const c = L.circle(KDCA, { radius, color, weight: 1, fill: false, dashArray: '4 6', opacity: 0.5 })
         .addTo(map).bindTooltip(label, { permanent: false })
+      map._airspaceLayers.push(c)
     })
 
+    map._ringLayers = []
     RANGE_RINGS_NM.forEach(nm => {
-      L.circle(KDCA, { radius: nm * NM_TO_M, color: '#2a3f6f', weight: 1, fill: false, dashArray: '2 8', opacity: 0.4 })
+      const r = L.circle(KDCA, { radius: nm * NM_TO_M, color: '#2a3f6f', weight: 1, fill: false, dashArray: '2 8', opacity: 0.4 })
         .addTo(map)
+      map._ringLayers.push(r)
     })
 
     L.circleMarker(KDCA, { radius: 5, color: '#ffd700', fill: true, fillOpacity: 1 })
@@ -362,6 +371,32 @@ function LocalMap({ adsbMode, liveState }) {
     if (liveState?.tfr_count !== undefined) setTfrCount(liveState.tfr_count)
   }, [liveState])
 
+  // Sync layer visibility to config
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    // airspace boundaries
+    map._airspaceLayers?.forEach(c =>
+      layers.airspace !== false ? map.addLayer(c) : map.removeLayer(c)
+    )
+    // range rings
+    map._ringLayers?.forEach(r =>
+      layers.rings !== false ? map.addLayer(r) : map.removeLayer(r)
+    )
+    // aircraft layer visibility
+    if (aircraftLayerRef.current) {
+      layers.localFeed !== false
+        ? map.addLayer(aircraftLayerRef.current)
+        : map.removeLayer(aircraftLayerRef.current)
+    }
+    // TFR layer visibility
+    if (tfrLayerRef.current) {
+      layers.tfr !== false
+        ? map.addLayer(tfrLayerRef.current)
+        : map.removeLayer(tfrLayerRef.current)
+    }
+  }, [layers.airspace, layers.rings, layers.localFeed, layers.tfr])
+
   const compassSummary = useCompassSummary(acItems, tfrExtra)
 
   // Accessible table columns for screen-reader fallback
@@ -373,7 +408,9 @@ function LocalMap({ adsbMode, liveState }) {
   }))
 
   return (
-    <div className="map-container">
+    <div className="map-with-sidebar">
+      <LayerSidebar />
+      <div className="map-container">
       <AriaCompassRegion
         summary={compassSummary}
         entityType="aircraft"
@@ -401,6 +438,7 @@ function LocalMap({ adsbMode, liveState }) {
           {adsbMode === 'local' ? 'LOCAL' : 'LIVE (airplanes.live)'}
         </span>
       </div>
+    </div>
     </div>
   )
 }
