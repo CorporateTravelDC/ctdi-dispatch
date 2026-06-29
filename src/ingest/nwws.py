@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from common import db
 from ingest import failover
 from ingest.config import NwwsConfig
+from ingest.parsers.geo_filter import is_core_wfo
 
 log = logging.getLogger("ingest.nwws")
 
@@ -367,8 +368,15 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
                         log.error("NWWS WPC handler error (%s): %s", awips, e)
                 return
 
-            # Local WFO products
-            if cfg.wfo_filter and wfo not in cfg.wfo_filter:
+            # Local WFO products.
+            # If cfg.wfo_filter is configured, use it exclusively.
+            # Otherwise fall back to the shared CORE_WFOS gate (is_core_wfo
+            # accepts both 3-letter LWX and 4-letter ICAO-style KLWX codes).
+            if cfg.wfo_filter:
+                if wfo not in cfg.wfo_filter:
+                    return
+            elif not is_core_wfo(wfo):
+                log.debug("NWWS: dropping product from non-core WFO %s (%s)", wfo, awips)
                 return
             try:
                 for kw in parse_product(awips, wfo, body):
