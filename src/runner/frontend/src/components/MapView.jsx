@@ -1,6 +1,9 @@
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import AriaCompassRegion from './AriaCompassRegion.jsx'
+import AccessibleTable   from './AccessibleTable.jsx'
+import { useCompassSummary } from '../hooks/useCompassSummary.js'
 
 // DC-area static airspace GeoJSON (approximate)
 const AIRSPACE = {
@@ -70,6 +73,7 @@ function GlobeMap({ liveState }) {
   const localLayerRef = useRef(null)
   const [localCount,  setLocalCount]  = useState(0)
   const [iframeError, setIframeError] = useState(false)
+  const [localItems,  setLocalItems]  = useState([])  // for Azimuth compass summary
 
   // Search state
   const [searchInput, setSearchInput] = useState('')
@@ -139,6 +143,12 @@ function GlobeMap({ liveState }) {
         count++
       })
       setLocalCount(count)
+      // Collect for Azimuth compass summary
+      setLocalItems(
+        aircraft
+          .filter(ac => ac.lat && ac.lon)
+          .map(ac => ({ lat: ac.lat, lon: ac.lon, label: (ac.flight || '').trim() || ac.hex || '?', tracked: false }))
+      )
     } catch (_) {}
   }, [])
 
@@ -148,8 +158,28 @@ function GlobeMap({ liveState }) {
     return () => clearInterval(id)
   }, [refreshLocal])
 
+  const compassSummary = useCompassSummary(localItems, [])
+  const localTableRows = localItems.map(ac => ({ callsign: ac.label, lat: ac.lat?.toFixed(4), lon: ac.lon?.toFixed(4) }))
+
   return (
     <div className="globe-map-wrap">
+      <AriaCompassRegion
+        summary={compassSummary}
+        entityType="local feeder aircraft"
+        count={localCount}
+        extra="Global traffic via globe.airplanes.live."
+      />
+      <AccessibleTable
+        id="globe-local-table"
+        caption={`Local feeder aircraft — ${localCount} visible`}
+        columns={[
+          { key: 'callsign', label: 'Callsign' },
+          { key: 'lat',      label: 'Latitude'  },
+          { key: 'lon',      label: 'Longitude' },
+        ]}
+        rows={localTableRows}
+        emptyMsg="No local feeder aircraft visible."
+      />
       {/* ── Search bar overlay ─────────────────────────────────── */}
       <form className="globe-search-bar" onSubmit={handleSearch} role="search">
         <input
@@ -224,6 +254,8 @@ function LocalMap({ adsbMode, liveState }) {
   const [acCount,  setAcCount]  = useState(0)
   const [tfrCount, setTfrCount] = useState(0)
   const [error,    setError]    = useState(null)
+  const [acItems,  setAcItems]  = useState([])   // for Azimuth compass summary
+  const [tfrExtra, setTfrExtra] = useState([])   // TFR descriptions for summary
 
   useEffect(() => {
     if (leafletRef.current) return
@@ -274,6 +306,16 @@ function LocalMap({ adsbMode, liveState }) {
         count++
       })
       setAcCount(count)
+      // Collect positions for Azimuth compass summary
+      const compassItems = aircraft
+        .filter(ac => ac.lat && ac.lon)
+        .map(ac => ({
+          lat:     ac.lat,
+          lon:     ac.lon,
+          label:   (ac.flight || '').trim() || ac.hex || '?',
+          tracked: false,  // watchlist support wired in Step 3
+        }))
+      setAcItems(compassItems)
       setError(null)
     } catch (e) { setError(`ADS-B: ${e.message}`) }
   }, [adsbMode])
@@ -296,6 +338,11 @@ function LocalMap({ adsbMode, liveState }) {
           .bindTooltip(`${tfr.is_vip ? 'VIP TFR: ' : 'TFR: '}${tfr.tfr_id}`, { className: 'tfr-tooltip' })
       })
       setTfrCount(tfrs.length)
+      // Collect TFR descriptions for Azimuth summary
+      const extras = tfrs
+        .filter(t => t.is_vip)
+        .map(t => `VIP TFR: ${t.tfr_id}`)
+      setTfrExtra(extras)
     } catch (_) {}
   }, [])
 
@@ -315,8 +362,36 @@ function LocalMap({ adsbMode, liveState }) {
     if (liveState?.tfr_count !== undefined) setTfrCount(liveState.tfr_count)
   }, [liveState])
 
+  const compassSummary = useCompassSummary(acItems, tfrExtra)
+
+  // Accessible table columns for screen-reader fallback
+  const acTableRows = acItems.map(ac => ({
+    callsign: ac.label,
+    lat:      ac.lat?.toFixed(4),
+    lon:      ac.lon?.toFixed(4),
+    tracked:  ac.tracked ? 'Yes' : 'No',
+  }))
+
   return (
     <div className="map-container">
+      <AriaCompassRegion
+        summary={compassSummary}
+        entityType="aircraft"
+        count={acCount}
+        extra={tfrCount > 0 ? `${tfrCount} active TFR${tfrCount !== 1 ? 's' : ''}.` : ''}
+      />
+      <AccessibleTable
+        id="local-ac-table"
+        caption={`Aircraft within range — ${acCount} visible`}
+        columns={[
+          { key: 'callsign', label: 'Callsign' },
+          { key: 'lat',      label: 'Latitude'  },
+          { key: 'lon',      label: 'Longitude' },
+          { key: 'tracked',  label: 'Tracked'   },
+        ]}
+        rows={acTableRows}
+        emptyMsg="No aircraft currently visible."
+      />
       <div ref={mapRef} className="leaflet-map" />
       <div className="map-overlay-stats">
         <span className="stat">{acCount} AC</span>
