@@ -244,6 +244,12 @@ export default function TrainMapView() {
   const [searchState, setSearchState] = useState('idle')
   const [matchCount,  setMatchCount]  = useState(0)
 
+  // Map display mode: 'iframe' = asm.transitdocs.com bg + transparent overlay | 'local' = full OSM+ORM
+  const osmLayerRef      = useRef(null)
+  const ormLayerRef      = useRef(null)
+  const [mapDisplayMode, setMapDisplayMode] = useState('iframe')
+  const [iframeError,    setIframeError]    = useState(false)
+
   // ── Load operator config ─────────────────────────────────────────
   useEffect(() => {
     fetchTrainConfig().then(cfg => {
@@ -276,8 +282,12 @@ export default function TrainMapView() {
     if (leafletRef.current) return
     const map = L.map(mapRef.current, { center: DC_DEFAULT, zoom: DEFAULT_ZOOM, zoomControl: true })
 
-    L.tileLayer(OSM_URL, { attribution: OSM_ATTR, className: 'map-tiles' }).addTo(map)
-    L.tileLayer(ORM_URL, { attribution: ORM_ATTR, maxZoom: 19, subdomains: 'abc', opacity: 0.8 }).addTo(map)
+    osmLayerRef.current = L.tileLayer(OSM_URL, { attribution: OSM_ATTR, className: 'map-tiles' })
+    ormLayerRef.current = L.tileLayer(ORM_URL, { attribution: ORM_ATTR, maxZoom: 19, subdomains: 'abc', opacity: 0.8 })
+    // Start without tiles (iframe mode is default); interaction starts disabled
+    map.dragging.disable()
+    map.scrollWheelZoom.disable()
+    map.touchZoom.disable()
 
     L.circleMarker(DC_DEFAULT, { radius: 4, color: '#ffd700', fill: true, fillOpacity: 1 })
       .addTo(map).bindTooltip('KDCA / DC', { permanent: true, className: 'airport-label' })
@@ -286,6 +296,25 @@ export default function TrainMapView() {
     searchMarkersRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
   }, [])
+
+  // ── Toggle tile layers and interaction based on mapDisplayMode ──────────────────
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    if (mapDisplayMode === 'local') {
+      if (osmLayerRef.current && !map.hasLayer(osmLayerRef.current)) map.addLayer(osmLayerRef.current)
+      if (ormLayerRef.current && !map.hasLayer(ormLayerRef.current)) map.addLayer(ormLayerRef.current)
+      map.dragging.enable()
+      map.scrollWheelZoom.enable()
+      map.touchZoom.enable()
+    } else {
+      if (osmLayerRef.current && map.hasLayer(osmLayerRef.current))  map.removeLayer(osmLayerRef.current)
+      if (ormLayerRef.current && map.hasLayer(ormLayerRef.current))  map.removeLayer(ormLayerRef.current)
+      map.dragging.disable()
+      map.scrollWheelZoom.disable()
+      map.touchZoom.disable()
+    }
+  }, [mapDisplayMode])
 
   // ── Handle REGIONAL/NATIONAL toggle ─────────────────────────────
   useEffect(() => {
@@ -452,8 +481,17 @@ export default function TrainMapView() {
           >NATIONAL</button>
         </div>
 
+        <div className="ais-mode-toggle" role="group" aria-label="Map display mode">
+          <button className={`ais-mode-btn${mapDisplayMode === 'iframe' ? ' active' : ''}`}
+            onClick={() => setMapDisplayMode('iframe')}
+            disabled={iframeError} title={iframeError ? 'Amtrak tracker blocked embed' : 'Amtrak System Map + local overlay'}>
+            🌐 LIVE</button>
+          <button className={`ais-mode-btn${mapDisplayMode === 'local' ? ' active' : ''}`}
+            onClick={() => setMapDisplayMode('local')} title="Full OSM + OpenRailwayMap">
+            🗺 MAP</button>
+        </div>
         <span className="stat source-badge" style={{ color: 'var(--cyan)', marginLeft: 'auto' }}>
-          OpenRailwayMap + Amtrak live positions
+          {mapDisplayMode === 'iframe' ? 'asm.transitdocs.com + Amtrak overlay' : 'OpenRailwayMap + Amtrak live'}
         </span>
         <a href={ORM_LINK} target="_blank" rel="noopener noreferrer"
            className="train-map-external" title="Open OpenRailwayMap">↗</a>
@@ -469,6 +507,7 @@ export default function TrainMapView() {
 
         {/* ── Map + search ─────────────────────────────────── */}
         <div className="train-map-section">
+          {mapDisplayMode === 'local' && (
           <form className="train-search-bar" onSubmit={handleSearch} role="search">
             <input
               className="train-search-input"
@@ -493,10 +532,26 @@ export default function TrainMapView() {
               <button type="button" className="globe-search-clear" onClick={handleClear} aria-label="Clear search">✕</button>
             )}
           </form>
+          )}
 
-          <div className="map-container">
-            <div ref={mapRef} className="leaflet-map" />
-            <div className="map-overlay-stats">
+          <div className="globe-iframe-wrap">
+            {/* Aggregate train tracker iframe */}
+            {mapDisplayMode === 'iframe' && !iframeError && (
+              <iframe
+                src="https://asm.transitdocs.com/map"
+                className="globe-iframe"
+                title="Amtrak System Map (asm.transitdocs.com)"
+                referrerPolicy="no-referrer"
+                onError={() => { setIframeError(true); setMapDisplayMode('local') }}
+                allow="fullscreen"
+              />
+            )}
+            {/* Leaflet: transparent in iframe mode, tiled in local mode */}
+            <div
+              ref={mapRef}
+              className={`ais-leaflet-layer${mapDisplayMode === 'iframe' ? ' ais-overlay-mode' : ' ais-local-mode'}`}
+            />
+            <div className="map-overlay-stats globe-stats">
               <span className="stat source-badge" style={{ color: '#00d4ff' }}>
                 {countLabel}
               </span>
