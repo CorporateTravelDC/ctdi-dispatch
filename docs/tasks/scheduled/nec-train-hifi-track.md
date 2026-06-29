@@ -17,7 +17,7 @@ service names are marketing labels and are not unique per departure. This mirror
 practice of using ICAO hex over callsign for cache/filter bypass.
 
 STEP 1 — Fetch Amtrak data:
-GET http://100.94.80.100:8000/api/v1/amtrak
+GET http://100.x.x.x:8000/api/v1/amtrak
 
 Extract the full response. Look for these watched trains in the data:
 Acela: 2155, 2159, 2163, 2167, 2171, 2173, 2121
@@ -32,7 +32,7 @@ STEP 2 — Build summary:
 - Note any on-time trains
 
 STEP 3 — Always fire ntfy alert:
-POST http://100.94.80.100:8000/admin/push-test-alert
+POST http://100.x.x.x:8000/admin/push-test-alert
 Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
 Content-Type: application/json
 Body: {"message": "NEC HIFI: [N] trains tracked, [D] delayed. Worst: [train#] +[min]min. [on-time count] on time."}

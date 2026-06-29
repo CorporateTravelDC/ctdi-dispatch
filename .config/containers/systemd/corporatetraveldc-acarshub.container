@@ -1,7 +1,7 @@
 # corporatetraveldc-acarshub.container
 # ACARS web UI. Subscribes to acarsrouter ZMQ ACARS output (port 45550).
 # Overlays ADS-B targets from UltraFeeder tar1090.
-# Serves browser UI on port 9081 (→ acars.csexecutiveservices.com via nginx).
+# Serves browser UI on port 9081 (→ acars.example.com via nginx).
 [Unit]
 Description=Corporate Travel DC — acarshub ACARS web UI
 After=network-online.target

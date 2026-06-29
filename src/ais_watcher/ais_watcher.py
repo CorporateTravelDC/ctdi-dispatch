@@ -25,7 +25,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-DISPATCH_BASE_URL    = os.environ.get("DISPATCH_BASE_URL",    "http://100.94.80.100:8000")
+DISPATCH_BASE_URL    = os.environ.get("DISPATCH_BASE_URL",    "http://100.x.x.x:8000")
 DISPATCH_ADMIN_TOKEN = os.environ.get("DISPATCH_ADMIN_TOKEN", "")
 NTFY_TOPIC           = os.environ.get("NTFY_TOPIC",           "flight-alerts")
 # Comma-separated MMSI numbers to always watch (9-digit strings)

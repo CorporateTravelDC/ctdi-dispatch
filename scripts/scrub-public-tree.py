@@ -18,75 +18,75 @@ DROP_FILES = {
 # Public-safe substitutions: real_value -> placeholder
 SUBSTITUTIONS = {
     # SWIM credentials
-    b"coreywsheldon@pm.me":      b"swimuser@example.com",
-    b"KSLwVuvKQv2dxEUWhhqCGQ":  b"SWIM_PASSWORD_REDACTED",
+    b"operator@example.com":      b"swimuser@example.com",
+    b"SWIM_PASSWORD_REDACTED":  b"SWIM_PASSWORD_REDACTED",
 
     # SWIM queue UUIDs
-    b"0a85a945-d6ee-478d-83a9-3a4691cc5c20": b"00000000-0000-0000-0000-000000000000",
-    b"978bdb94-2630-4b83-a1bc-ece1bdec73d6": b"00000000-0000-0000-0000-000000000001",
-    b"65aa6c7b-5f78-48ac-8af9-a0e4387f366e": b"00000000-0000-0000-0000-000000000002",
-    b"0f3c9f94-6b52-4eea-ba63-fca285db2fe2": b"00000000-0000-0000-0000-000000000003",
-    b"3b7da560-bd3e-45df-83b5-ef9673ee7608": b"00000000-0000-0000-0000-000000000004",
-    b"7f221de9-79f3-4ca9-b44b-f57e7ba06707": b"00000000-0000-0000-0000-000000000005",
+    b"00000000-0000-0000-0000-000000000000": b"00000000-0000-0000-0000-000000000000",
+    b"00000000-0000-0000-0000-000000000001": b"00000000-0000-0000-0000-000000000001",
+    b"00000000-0000-0000-0000-000000000002": b"00000000-0000-0000-0000-000000000002",
+    b"00000000-0000-0000-0000-000000000003": b"00000000-0000-0000-0000-000000000003",
+    b"00000000-0000-0000-0000-000000000004": b"00000000-0000-0000-0000-000000000004",
+    b"00000000-0000-0000-0000-000000000005": b"00000000-0000-0000-0000-000000000005",
 
     # SWIM queue prefixes
-    b"coreywsheldon.pm.me.FDPS":    b"swimuser.FDPS",
-    b"coreywsheldon.pm.me.STDDS":   b"swimuser.STDDS",
-    b"coreywsheldon.pm.me.TFMS":    b"swimuser.TFMS",
-    b"coreywsheldon.pm.me.AIM_FNS": b"swimuser.AIM_FNS",
-    b"coreywsheldon.pm.me.TBFM":    b"swimuser.TBFM",
-    b"coreywsheldon.pm.me.ITWS":    b"swimuser.ITWS",
+    b"swimuser.FDPS":    b"swimuser.FDPS",
+    b"swimuser.STDDS":   b"swimuser.STDDS",
+    b"swimuser.TFMS":    b"swimuser.TFMS",
+    b"swimuser.AIM_FNS": b"swimuser.AIM_FNS",
+    b"swimuser.TBFM":    b"swimuser.TBFM",
+    b"swimuser.ITWS":    b"swimuser.ITWS",
 
     # NWWS
-    b"corey.sheldon@nwws-oi.weather.gov": b"nwwsuser@nwws-oi.weather.gov",
+    b"nwwsuser@nwws-oi.weather.gov": b"nwwsuser@nwws-oi.weather.gov",
 
     # ntfy token pattern (tk_ prefix)
-    b"tk_02rd10x8sa31x3sk4vl0ckpekzie2": b"tk_REDACTED",
+    b"tk_REDACTED": b"tk_REDACTED",
 
     # Tailscale hostnames
-    b"taile57c8d": b"tailxxxxxxx",
+    b"tailxxxxxxx": b"tailxxxxxxx",
 
     # Personal email
-    b"csexecservices@gmail.com": b"operator@example.com",
-    b"coreywsheldon@pm.me":      b"operator@example.com",
-    b"corey.sheldon@pm.me":      b"operator@example.com",
+    b"operator@example.com": b"operator@example.com",
+    b"operator@example.com":      b"operator@example.com",
+    b"operator@example.com":      b"operator@example.com",
     # Tailscale IP (Pi)
-    b"100.94.80.100":                   b"100.x.x.x",
+    b"100.x.x.x":                   b"100.x.x.x",
 
     # Domain references
-    b"csexecutiveservices.com":          b"example.com",
-    b"csexecutiveservices.ts.net":       b"example.ts.net",
-    b"dispatch.csexecutiveservices.com": b"dispatch.example.com",
-    b"ops.csexecutiveservices.com":      b"ops.example.com",
+    b"example.com":          b"example.com",
+    b"example.ts.net":       b"example.ts.net",
+    b"dispatch.example.com": b"dispatch.example.com",
+    b"ops.example.com":      b"ops.example.com",
 
     # Cloudflare tunnel UUID
-    b"28bde9a2-0bb2-4cca-a207-9b759c4739f1": b"00000000-0000-0000-0000-cf0tunnel0000",
+    b"00000000-0000-0000-0000-cf0tunnel0000": b"00000000-0000-0000-0000-cf0tunnel0000",
 
     # SWIM NMS operator email / username prefix
-    b"corey.sheldon@csexecutiveservices.com": b"operator@example.com",
-    b"corey.sheldon.csexecutiveservices.com": b"swimuser.example.com",
+    b"corey.sheldon@example.com": b"operator@example.com",
+    b"corey.sheldon.example.com": b"swimuser.example.com",
 
     # Amateur radio callsigns (FCC public but operator-identifying)
-    b"WA1EM-5":   b"N0CALL-5",
-    b"WA1EM":     b"N0CALL",
-    b"WRCR715":   b"WRXXXXX",
-    b"L0344":     b"LXXXX",
+    b"N0CALL-5":   b"N0CALL-5",
+    b"N0CALL":     b"N0CALL",
+    b"WRXXXXX":   b"WRXXXXX",
+    b"LXXXX":     b"LXXXX",
 
     # ARES/CERT identifiers
-    b"District 10":           b"District XX",
-    b"Fairfax+Loudoun":       b"County+County",
-    b"Arlington County, VA":  b"[operator county], [state]",
+    b"District XX":           b"District XX",
+    b"County+County":       b"County+County",
+    b"[operator county], [state]":  b"[operator county], [state]",
 
     # Jumpseat tokens (both the exposed one and any future sk_adjs_ pattern)
-    b"sk_adjs_27C-PdbN3ut0U-T6JNgyRdPCZaQupbCQH6dvFEUjf7Q": b"sk_adjs_REDACTED",
-    b"sk_adjs_Bk-ct0MqeMCt7PAwiGOAItFFLTxLr-A_fxgOTCPETK0": b"sk_adjs_REDACTED",
+    b"sk_adjs_REDACTED": b"sk_adjs_REDACTED",
+    b"sk_adjs_REDACTED": b"sk_adjs_REDACTED",
 
     # Dispatch admin tokens (ctdc_cowork_ prefix)
-    b"ctdc_cowork_5NC2G5DLI8CONLZCFWO5TLM5CEABD7OQ": b"ctdc_cowork_REDACTED",
-    b"ctdc_cowork_8AXAVWO6YNOVKTSC34WC36B65G83F09U":  b"ctdc_cowork_REDACTED",
+    b"ctdc_cowork_REDACTED": b"ctdc_cowork_REDACTED",
+    b"ctdc_cowork_REDACTED":  b"ctdc_cowork_REDACTED",
 
     # New ntfy token from current session
-    b"tk_v82g71ytad8wtmrfwnvzlxkm5iu3b": b"tk_REDACTED",
+    b"tk_REDACTED": b"tk_REDACTED",
 
 }
 

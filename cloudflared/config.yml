@@ -1,53 +1,53 @@
-tunnel: 28bde9a2-0bb2-4cca-a207-9b759c4739f1
-credentials-file: /etc/cloudflared/28bde9a2-0bb2-4cca-a207-9b759c4739f1.json
+tunnel: 00000000-0000-0000-0000-cf0tunnel0000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-cf0tunnel0000.json
 
 ingress:
   # dispatch — CF Access gated (Tailscale + auth required)
-  - hostname: dispatch.csexecutiveservices.com
+  - hostname: dispatch.example.com
     service: http://127.0.0.1:8000
 
   # ops — PWA frontend, open over tunnel
-  - hostname: ops.csexecutiveservices.com
+  - hostname: ops.example.com
     service: http://127.0.0.1:8000
 
   # dispatch-runner
-  - hostname: dispatch-runner.csexecutiveservices.com
+  - hostname: dispatch-runner.example.com
     service: http://127.0.0.1:8001
 
   # openwebui — Open WebUI (Ollama chat frontend) — CF Access gated
-  - hostname: openwebui.csexecutiveservices.com
+  - hostname: openwebui.example.com
     service: http://127.0.0.1:3000
 
   # ollama — raw Ollama API — CF Access gated
-  - hostname: ollama.csexecutiveservices.com
+  - hostname: ollama.example.com
     service: http://127.0.0.1:11434
 
   # adsb — UltraFeeder tar1090
-  - hostname: adsb.csexecutiveservices.com
+  - hostname: adsb.example.com
     service: http://127.0.0.1:8080
 
   # acars — acarshub
-  - hostname: acars.csexecutiveservices.com
+  - hostname: acars.example.com
     service: http://127.0.0.1:9081
 
   # ntfy
-  - hostname: ntfy.csexecutiveservices.com
+  - hostname: ntfy.example.com
     service: http://127.0.0.1:2586
 
   # cockpit — system management UI — CF Access gated (Tailscale + auth required)
-  - hostname: cockpit.csexecutiveservices.com
+  - hostname: cockpit.example.com
     service: http://127.0.0.1:80
     originRequest:
-      httpHostHeader: cockpit.csexecutiveservices.com
+      httpHostHeader: cockpit.example.com
 
   # pihole — CF Access gated (Tailscale + auth required)
-  - hostname: pihole.csexecutiveservices.com
+  - hostname: pihole.example.com
     service: http://127.0.0.1:8091
 
   # apex and www — no content yet
-  - hostname: csexecutiveservices.com
+  - hostname: example.com
     service: http_status:503
-  - hostname: www.csexecutiveservices.com
+  - hostname: www.example.com
     service: http_status:503
 
   # catch-all
