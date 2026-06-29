@@ -1760,3 +1760,167 @@ body::before {
   .fp-toggle,
   .aria-compass-region { transition: none; }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STEP 2 — Panel grid, LayerSidebar, FeedPanel detail styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Map + sidebar wrapper ───────────────────────────────────────────────── */
+.map-with-sidebar {
+  display:  flex;
+  flex:     1;
+  overflow: hidden;
+  position: relative;
+  height:   100%;
+}
+
+/* ── LayerSidebar ─────────────────────────────────────────────────────────── */
+.layer-sidebar {
+  display:        flex;
+  flex-direction: column;
+  gap:            2px;
+  padding:        0.35rem 0.25rem;
+  background:     rgba(4, 8, 18, 0.82);
+  border-right:   1px solid rgba(0,140,220,0.15);
+  backdrop-filter: blur(6px);
+  z-index:        500;
+  overflow-y:     auto;
+  flex-shrink:    0;
+  width:          52px;
+}
+.ls-btn {
+  display:        flex;
+  flex-direction: column;
+  align-items:    center;
+  justify-content: center;
+  gap:            1px;
+  padding:        0.3rem 0.15rem;
+  border:         1px solid transparent;
+  border-radius:  5px;
+  cursor:         pointer;
+  background:     transparent;
+  transition:     background 0.12s, border-color 0.12s, opacity 0.12s;
+  min-height:     44px; /* WCAG 2.5.5 touch target */
+}
+.ls-btn:focus-visible {
+  outline:        2px solid var(--cyan);
+  outline-offset: 1px;
+}
+.ls-btn.ls-on {
+  background:     rgba(0, 212, 255, 0.12);
+  border-color:   rgba(0, 212, 255, 0.35);
+}
+.ls-btn.ls-off {
+  opacity: 0.38;
+}
+.ls-btn:hover { opacity: 1; background: rgba(0,212,255,0.08); }
+.ls-icon {
+  font-size:  1rem;
+  line-height: 1;
+  color:      var(--cyan);
+}
+.ls-btn.ls-off .ls-icon { color: var(--muted); }
+.ls-label {
+  font-family:    var(--font-ui);
+  font-size:      0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color:          var(--muted);
+  text-align:     center;
+  line-height:    1.1;
+}
+.ls-btn.ls-on .ls-label { color: var(--cyan); }
+
+/* ── Overview panel grid ─────────────────────────────────────────────────── */
+.ov-panel-grid {
+  display:               grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap:                   0.65rem;
+  margin-bottom:         0.25rem;
+}
+@media (max-width: 900px) { .ov-panel-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 500px) { .ov-panel-grid { grid-template-columns: 1fr; } }
+
+.ov-panel { min-height: 80px; }
+.ov-section-panel { margin: 0; }
+
+/* ── FeedPanel stat/content rows ─────────────────────────────────────────── */
+.fp-stat-row {
+  display:     flex;
+  align-items: baseline;
+  gap:         0.5rem;
+  flex-wrap:   wrap;
+}
+.fp-stat-value {
+  font-family:  var(--font-data);
+  font-size:    1.15rem;
+  font-weight:  700;
+  line-height:  1;
+}
+.fp-stat-value.cyan   { color: var(--cyan); }
+.fp-stat-value.go     { color: var(--go);   }
+.fp-stat-value.warn   { color: var(--orange, #ff6b35); }
+.fp-stat-value.nogo   { color: var(--nogo); }
+.fp-stat-value.muted  { color: var(--muted); font-size: 0.7rem; }
+.fp-stat-label {
+  font-family:  var(--font-ui);
+  font-size:    0.65rem;
+  color:        var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 1;
+}
+.fp-panel-link {
+  font-family:    var(--font-ui);
+  font-size:      0.65rem;
+  color:          var(--cyan);
+  text-decoration: none;
+  opacity:        0.75;
+  flex-shrink:    0;
+  margin-left:    auto;
+}
+.fp-panel-link:hover { opacity: 1; text-decoration: underline; }
+
+/* Delayed train chips */
+.fp-delayed-list { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.35rem; }
+.fp-delay-chip {
+  font-family:  var(--font-data);
+  font-size:    0.65rem;
+  padding:      0.1rem 0.35rem;
+  border-radius: 3px;
+  background:   rgba(255,107,53,0.15);
+  color:        var(--orange, #ff6b35);
+}
+
+/* VIP TFR chips */
+.fp-vip-list  { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.35rem; }
+.fp-vip-chip {
+  font-family:  var(--font-data);
+  font-size:    0.65rem;
+  padding:      0.1rem 0.4rem;
+  border-radius: 3px;
+  background:   rgba(255,48,64,0.18);
+  color:        var(--nogo);
+  font-weight:  700;
+  border:       1px solid rgba(255,48,64,0.35);
+}
+
+/* Weather panel */
+.fp-weather-body { display: flex; flex-direction: column; gap: 0.25rem; }
+.fp-metar-row    { display: flex; align-items: baseline; gap: 0.5rem; }
+.fp-metar-station { font-family: var(--font-data); font-size: 0.8rem; font-weight: 700; color: var(--text); }
+.fp-metar-val    { font-family: var(--font-data); font-size: 0.75rem; color: var(--cyan); }
+.fp-metar-detail { font-family: var(--font-data); font-size: 0.65rem; color: var(--muted); }
+
+/* Signals panel */
+.fp-signals-body { display: flex; flex-direction: column; gap: 0.3rem; }
+.fp-sig-row      { display: flex; align-items: baseline; gap: 0.4rem; }
+.fp-sig-label    { font-family: var(--font-data); font-size: 0.7rem; color: var(--muted); width: 3rem; }
+.fp-sig-count    { font-family: var(--font-data); font-size: 0.95rem; font-weight: 700; color: var(--cyan); }
+.fp-sig-unit     { font-family: var(--font-ui); font-size: 0.6rem; color: var(--muted); }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ls-btn, .ls-icon { transition: none; }
+}
