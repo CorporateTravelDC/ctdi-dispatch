@@ -48,6 +48,18 @@ SUBSTITUTIONS = {
     b"csexecservices@gmail.com": b"operator@example.com",
     b"coreywsheldon@pm.me":      b"operator@example.com",
     b"corey.sheldon@pm.me":      b"operator@example.com",
+    # Tailscale IP (Pi)
+    b"100.94.80.100":                   b"100.x.x.x",
+
+    # Domain references
+    b"csexecutiveservices.com":          b"example.com",
+    b"csexecutiveservices.ts.net":       b"example.ts.net",
+    b"dispatch.csexecutiveservices.com": b"dispatch.example.com",
+    b"ops.csexecutiveservices.com":      b"ops.example.com",
+
+    # New ntfy token from current session
+    b"tk_v82g71ytad8wtmrfwnvzlxkm5iu3b": b"tk_REDACTED",
+
 }
 
 
