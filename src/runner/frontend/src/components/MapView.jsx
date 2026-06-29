@@ -103,15 +103,111 @@ function trackedTooltipHtml(callsign, alt, spd, hdg) {
 
 function WatchlistBadge({ entries }) {
   const flights = entries.filter(e => e.entry_type === 'flight')
+  const [collapsed, setCollapsed] = useState(() =>
+    localStorage.getItem('gwb_collapsed') === '1'
+  )
+  const [pos, setPos] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('gwb_pos')) || { x: null, y: null } }
+    catch { return { x: null, y: null } }
+  })
+  const dragging  = useRef(false)
+  const origin    = useRef(null)
+  const startPos  = useRef(null)
+  const badgeRef  = useRef(null)
+
+  const onMouseDown = useCallback((e) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    dragging.current = true
+    const rect = badgeRef.current.getBoundingClientRect()
+    origin.current   = { x: e.clientX, y: e.clientY }
+    startPos.current = { x: pos.x ?? rect.left, y: pos.y ?? rect.top }
+    const onMove = (ev) => {
+      if (!dragging.current) return
+      setPos({ x: startPos.current.x + (ev.clientX - origin.current.x),
+               y: startPos.current.y + (ev.clientY - origin.current.y) })
+    }
+    const onUp = () => {
+      dragging.current = false
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setPos(p => { try { localStorage.setItem('gwb_pos', JSON.stringify(p)) } catch {} return p })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [pos])
+
+  const onTouchStart = useCallback((e) => {
+    const t = e.touches[0]
+    dragging.current = true
+    const rect = badgeRef.current.getBoundingClientRect()
+    origin.current   = { x: t.clientX, y: t.clientY }
+    startPos.current = { x: pos.x ?? rect.left, y: pos.y ?? rect.top }
+    const onTMove = (ev) => {
+      if (!dragging.current) return
+      const tt = ev.touches[0]
+      setPos({ x: startPos.current.x + (tt.clientX - origin.current.x),
+               y: startPos.current.y + (tt.clientY - origin.current.y) })
+    }
+    const onTEnd = () => {
+      dragging.current = false
+      window.removeEventListener('touchmove', onTMove)
+      window.removeEventListener('touchend', onTEnd)
+      setPos(p => { try { localStorage.setItem('gwb_pos', JSON.stringify(p)) } catch {} return p })
+    }
+    window.addEventListener('touchmove', onTMove, { passive: true })
+    window.addEventListener('touchend', onTEnd)
+  }, [pos])
+
+  const toggle = useCallback(() => {
+    setCollapsed(c => {
+      const next = !c
+      try { localStorage.setItem('gwb_collapsed', next ? '1' : '0') } catch {}
+      return next
+    })
+  }, [])
+
   if (!flights.length) return null
+
+  const posStyle = pos.x !== null
+    ? { position: 'fixed', left: pos.x, top: pos.y, right: 'unset' }
+    : {}
+
+  /* ── Collapsed pill ───────────────────────────────────────────── */
+  if (collapsed) {
+    return (
+      <button
+        className="gwb-collapsed-pill"
+        style={posStyle}
+        onClick={toggle}
+        title="Show watchlist"
+        aria-label={`Watchlist: ${flights.length} aircraft`}
+      >
+        ★ {flights.length}
+      </button>
+    )
+  }
+
+  /* ── Full badge ───────────────────────────────────────────────── */
   return (
-    <div className="globe-watchlist-badge" role="complementary" aria-label="Active watchlist">
+    <div
+      ref={badgeRef}
+      className="globe-watchlist-badge"
+      role="complementary"
+      aria-label="Active watchlist"
+      style={posStyle}
+      onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
+      title="Drag to reposition"
+    >
       <span className="gwb-label">★ WATCHING</span>
       {flights.map(e => (
         <span key={e.id} className="gwb-chip" title={e.last_event_summary || e.identifier}>
           {e.identifier}
         </span>
       ))}
+      <button className="gwb-collapse-btn" onClick={(e) => { e.stopPropagation(); toggle() }}
+        title="Collapse" aria-label="Collapse watchlist">✕</button>
     </div>
   )
 }

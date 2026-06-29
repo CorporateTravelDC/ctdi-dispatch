@@ -11,6 +11,9 @@ ContainerName=ntfy
 PublishPort=2586:2586
 Volume=/etc/ntfy:/etc/ntfy:ro,z
 Volume=/var/lib/ntfy-backup:/var/lib/ntfy:z
+
+# SMTP + Twilio credentials (from dispatch-secrets.env)
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=serve
 
 [Service]

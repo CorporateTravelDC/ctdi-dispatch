@@ -243,6 +243,15 @@ export default function TrainMapView() {
   const [loadErr,        setLoadErr]        = useState(false)
   const [dispatchTrains, setDispatchTrains] = useState([])
   const [panelLoading,   setPanelLoading]   = useState(true)
+  // ── Resizable panel ───────────────────────────────────────────────────────
+  const [panelWidth,     setPanelWidth]     = useState(() => {
+    const saved = parseInt(localStorage.getItem('train_panel_w'), 10)
+    return (!isNaN(saved) && saved >= 48 && saved <= 400) ? saved : 240
+  })
+  const [panelCollapsed, setPanelCollapsed] = useState(() =>
+    localStorage.getItem('train_panel_collapsed') === '1'
+  )
+  const resizeDrag = useRef(false)
   const [viewMode,       setViewMode]       = useState('regional')  // 'regional' | 'national'
 
   // Operator config (loaded once, then cached)
@@ -537,12 +546,75 @@ export default function TrainMapView() {
       </div>
 
       <div className="train-page-body">
-        {/* ── Schedule panel (always regional/configured) ────── */}
-        <TrainPanel
-          trains={dispatchTrains}
-          coreRoutes={trainConfig.core_routes}
-          loading={panelLoading}
-        />
+        {/* ── Schedule panel (resizable) ───────────────────── */}
+        <div
+          className={`train-side-panel-wrap${panelCollapsed ? ' train-panel-collapsed' : ''}`}
+          style={{ width: panelCollapsed ? 28 : panelWidth }}
+        >
+          {!panelCollapsed && (
+            <TrainPanel
+              trains={dispatchTrains}
+              coreRoutes={trainConfig.core_routes}
+              loading={panelLoading}
+            />
+          )}
+          {/* collapse toggle */}
+          <button
+            className="train-panel-collapser"
+            onClick={() => setPanelCollapsed(c => {
+              const next = !c
+              localStorage.setItem('train_panel_collapsed', next ? '1' : '0')
+              return next
+            })}
+            title={panelCollapsed ? 'Expand panel' : 'Collapse panel'}
+            aria-label={panelCollapsed ? 'Expand train panel' : 'Collapse train panel'}
+          >{panelCollapsed ? '›' : '‹'}</button>
+        </div>
+
+        {/* ── Drag handle ──────────────────────────────────── */}
+        {!panelCollapsed && (
+          <div
+            className="train-panel-resize-handle"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              resizeDrag.current = true
+              const startX = e.clientX
+              const startW = panelWidth
+              const onMove = (ev) => {
+                if (!resizeDrag.current) return
+                const nw = Math.min(400, Math.max(100, startW + (ev.clientX - startX)))
+                setPanelWidth(nw)
+              }
+              const onUp = () => {
+                resizeDrag.current = false
+                setPanelWidth(w => { localStorage.setItem('train_panel_w', w); return w })
+                window.removeEventListener('mousemove', onMove)
+                window.removeEventListener('mouseup', onUp)
+              }
+              window.addEventListener('mousemove', onMove)
+              window.addEventListener('mouseup', onUp)
+            }}
+            onTouchStart={(e) => {
+              resizeDrag.current = true
+              const startX = e.touches[0].clientX
+              const startW = panelWidth
+              const onTMove = (ev) => {
+                if (!resizeDrag.current) return
+                const nw = Math.min(400, Math.max(100, startW + (ev.touches[0].clientX - startX)))
+                setPanelWidth(nw)
+              }
+              const onTEnd = () => {
+                resizeDrag.current = false
+                setPanelWidth(w => { localStorage.setItem('train_panel_w', w); return w })
+                window.removeEventListener('touchmove', onTMove)
+                window.removeEventListener('touchend', onTEnd)
+              }
+              window.addEventListener('touchmove', onTMove, { passive: true })
+              window.addEventListener('touchend', onTEnd)
+            }}
+            aria-hidden="true"
+          />
+        )}
 
         {/* ── Map + search ─────────────────────────────────── */}
         <div className="train-map-section">
