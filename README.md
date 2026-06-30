@@ -666,6 +666,88 @@ systemctl --user restart corporatetraveldc-ingest
 
 ---
 
+## Reservation System Integration
+
+CTDI can automatically add flights and trains to the watchlist the moment a reservation is created in your livery or booking software — no manual entry required.
+
+### How it works
+
+Most reservation platforms (LimoAnywhere, Livery Coach, GroundWidgets, and others) support outbound webhooks triggered on new or updated bookings. A lightweight webhook receiver parses the reservation payload, extracts the flight number or train number, and calls CTDI's watchlist API. From that point CTDI tracks the trip automatically: OOOI phase state, delays, diversions, and ntfy push alerts.
+
+### Watchlist API endpoint
+
+```
+POST /api/v1/watchlist
+Authorization: Bearer <tier1-token>
+Content-Type: application/json
+
+{
+  "type": "flight",
+  "identifier": "UAL2341",
+  "label": "Smith pickup — ORD",
+  "auto_remove_at": "2026-07-01T22:00:00Z"
+}
+```
+
+For Amtrak trips, use `"type": "train"` and the train number as `identifier` (e.g. `"79"`).
+
+`auto_remove_at` sets an automatic expiry so the watchlist stays clean. Set it to a few hours after scheduled arrival. Permanent entries can also be managed via YAML files in `/opt/corporatetraveldc/watchlists/` — picked up live by `WatchlistFileWatcher` without a restart.
+
+### Sample webhook receiver (Python)
+
+A minimal FastAPI receiver that bridges a generic JSON webhook to CTDI:
+
+```python
+from fastapi import FastAPI, Request
+import httpx, os
+
+app = FastAPI()
+CTDI_URL = os.environ["CTDI_URL"]          # e.g. http://100.x.x.x:8000
+CTDI_TOKEN = os.environ["CTDI_TOKEN"]      # tier1 bearer token
+
+@app.post("/webhook/reservation")
+async def reservation_hook(req: Request):
+    data = await req.json()
+
+    # Adapt field names to your platform's payload schema
+    flight   = data.get("flight_number") or data.get("flightNumber")
+    train    = data.get("train_number")  or data.get("trainNumber")
+    label    = data.get("client_name", "reservation")
+    expires  = data.get("dropoff_time") or data.get("arrivalTime")
+
+    entry_type = "flight" if flight else "train"
+    identifier = flight or train
+    if not identifier:
+        return {"status": "skipped", "reason": "no flight or train in payload"}
+
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{CTDI_URL}/api/v1/watchlist",
+            headers={"Authorization": f"Bearer {CTDI_TOKEN}"},
+            json={"type": entry_type, "identifier": identifier,
+                  "label": label, "auto_remove_at": expires},
+            timeout=10,
+        )
+    return {"status": "ok", "watchlist": r.json()}
+```
+
+Run it alongside CTDI on the same Pi or on any reachable host. Add a Quadlet or systemd unit to keep it running.
+
+### Platform-specific notes
+
+| Platform | Webhook support | Notes |
+|---|---|---|
+| **LimoAnywhere** | ✅ Outbound webhooks | Configure under Settings → Integrations → Webhooks; fires on reservation create/update |
+| **Livery Coach** | ✅ Outbound webhooks | Available in Coach Pro tier; sends JSON payload on booking events |
+| **GroundWidgets** | ✅ Webhook / API callback | Supported on Business and Enterprise plans |
+| **Limo Anywhere (legacy)** | ⚠️ Polling fallback | No native webhook; poll the LimoAnywhere API on a cron schedule instead |
+| **Custom / in-house** | ✅ Direct API call | Call `POST /api/v1/watchlist` directly from your booking confirmation flow |
+
+For platforms without native webhook support, a cron-based poller that checks for new reservations every 5 minutes and syncs to the watchlist achieves the same result with slightly higher latency.
+
+
+---
+
 ## License
 
 Proprietary. CS Executive Services, LLC. All rights reserved.
