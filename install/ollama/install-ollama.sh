@@ -9,12 +9,12 @@
 # ARCHITECTURE:
 #   Ollama API: machine-facing only
 #     Local:        http://127.0.0.1:11434
-#     Tailscale:    http://100.94.80.100:11434
+#     Tailscale:    http://100.x.x.x:11434
 #     CF tunnel:    RESERVED/403 -- never publicly routed
 #
 #   OpenWebUI: human-facing browser UI
-#     Tailscale:    http://100.94.80.100:3000
-#     CF tunnel:    https://openwebui.csexecutiveservices.com
+#     Tailscale:    http://100.x.x.x:3000
+#     CF tunnel:    https://openwebui.example.com
 #
 #   Claude Code / dispatch automated tasks use Ollama directly
 #   via loopback. OpenWebUI is for human chat sessions only.

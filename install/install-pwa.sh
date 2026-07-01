@@ -4,7 +4,7 @@
 # What this does:
 #   1. Creates /var/www/corporatetraveldc-pwa/
 #   2. Copies index.html from src/pwa/
-#   3. Installs the nginx vhost for ops.csexecutiveservices.com
+#   3. Installs the nginx vhost for ops.example.com
 #   4. Splits ops off the shared dispatch/ops server block if still combined
 #   5. Reloads nginx
 #
@@ -46,7 +46,7 @@ fi
 # ── 3. Remove ops from shared dispatch server block (if still combined) ─────────
 if grep -q "ops\.csexecutiveservices\.com" "${DISPATCH_CONF}" 2>/dev/null; then
     log "Splitting ops off from dispatch server block…"
-    # Remove 'ops.csexecutiveservices.com' from the server_name line
+    # Remove 'ops.example.com' from the server_name line
     sed -i 's/ ops\.csexecutiveservices\.com//' "${DISPATCH_CONF}"
     log "  Updated ${DISPATCH_CONF}"
 fi
@@ -63,5 +63,5 @@ nginx -t || die "nginx config test failed — check ${NGINX_CONF}"
 log "Reloading nginx…"
 systemctl reload nginx
 log ""
-log "Done. PWA is live at https://ops.csexecutiveservices.com"
-log "API proxy: https://ops.csexecutiveservices.com/api/v1/*"
+log "Done. PWA is live at https://ops.example.com"
+log "API proxy: https://ops.example.com/api/v1/*"
