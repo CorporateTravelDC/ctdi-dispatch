@@ -92,7 +92,7 @@ The ingest container stamps heartbeats into `feed_state` every 30 seconds. Befor
 
 ---
 
----<br>
+<br>
 <h3>Operational Topology</h3>
 <ul>
   <li><b>Core Network Interface:</b> System workloads are managed via rootless Podman container layers operating inside your private security grid.</li>
