@@ -9,11 +9,20 @@
 # open-source sourcing pipeline. The runtime scope_type field routes which personality
 # activates. See src/poller/skills/osint_monitor.py for scope type definitions.
 
-FROM mistral
+FROM gemma3:4b
 
-PARAMETER temperature 0.3
-PARAMETER num_predict 150
+PARAMETER temperature 0.4
+PARAMETER num_predict 512
 PARAMETER num_ctx 4096
+
+# Force Ollama to use 2 physical, half of the cores of the Pi 5
+PARAMETER num_thread 2
+
+# Reduce memory footprint so it runs smoothly alongside an average 4GB system load
+
+# Model Behavior & Temperature
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
 
 SYSTEM """
 You are an intelligence analyst embedded in the dispatch system for <YOUR_FIRM_NAME> —
