@@ -1,13 +1,22 @@
 # Modelfile.chat — csexec-chat (PRIVATE — gitignored, do not commit)
 # Real-time dispatch assistant for CS Executive Services, LLC
 # Build: ollama create csexec-chat -f /opt/corporatetraveldc/ctdi-dispatch-internal/Modelfile.chat
-# Base: llama3.2:3b
 
-FROM llama3.2:3b
+FROM gemma3:4b
 
 PARAMETER temperature 0.4
 PARAMETER num_predict 512
 PARAMETER num_ctx 4096
+
+# Force Ollama to use 2 physical, half of the cores of the Pi 5
+PARAMETER num_thread 2
+
+# Reduce memory footprint so it runs smoothly alongside an average 4GB system load
+
+# Model Behavior & Temperature
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+
 
 SYSTEM """
 You are the dispatch assistant for CS Executive Services, LLC — a boutique executive
