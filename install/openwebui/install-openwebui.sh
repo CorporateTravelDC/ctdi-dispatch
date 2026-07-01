@@ -40,5 +40,5 @@ if command -v firewall-cmd &>/dev/null; then
 fi
 
 echo ""
-echo "-- OpenWebUI: http://100.94.80.100:3000"
-echo "-- CF tunnel: https://openwebui.csexecutiveservices.com (when CF deployed)"
+echo "-- OpenWebUI: http://100.x.x.x:3000"
+echo "-- CF tunnel: https://openwebui.example.com (when CF deployed)"

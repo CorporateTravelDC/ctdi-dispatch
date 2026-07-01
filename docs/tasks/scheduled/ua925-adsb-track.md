@@ -42,7 +42,7 @@ STEP 2 — Determine signal type:
 
 STEP 3 — Decision:
 IF type is "adsb_icao" AND seen < 30 AND rssi is present (ground receiver confirmed):
-  POST http://100.94.80.100:8000/admin/push-test-alert
+  POST http://100.x.x.x:8000/admin/push-test-alert
   Authorization: Bearer REDACTED_DISPATCH_TOKEN_2
   Content-Type: application/json
   Body: {"message": "<TARGET_LABEL> ADS-B acquired (ground): [lat]N [lon]W [alt_baro]ft [gs]kts RSSI:[rssi]dBm"}

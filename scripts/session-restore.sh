@@ -278,5 +278,5 @@ podman network ls | grep acars || warn "acars-net not found"
 
 echo ""
 echo "--- dispatch-runner tunnel ---"
-echo "https://dispatch-runner.csexecutiveservices.com/healthz"
+echo "https://dispatch-runner.example.com/healthz"
 echo "(confirm accessible from Tailscale browser)"
