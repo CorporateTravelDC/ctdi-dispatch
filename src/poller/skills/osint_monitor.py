@@ -113,7 +113,7 @@ def _fetch_feed(url: str) -> list[dict]:
     """
     try:
         headers = {
-            "User-Agent": "corporatetraveldc-dispatch/1.0 (+https://csexecutiveservices.com)",
+            "User-Agent": "corporatetraveldc-dispatch/1.0 (+https://example.com)",
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml",
         }
         resp = httpx.get(url, headers=headers, timeout=FETCH_TIMEOUT, follow_redirects=True)

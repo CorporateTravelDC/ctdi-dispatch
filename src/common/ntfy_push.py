@@ -15,7 +15,7 @@ from common import config
 
 log = logging.getLogger(__name__)
 
-RUNNER_BASE = "https://ops.csexecutiveservices.com"
+RUNNER_BASE = "https://ops.example.com"
 
 # Per-topic deep-link targets — mobile tap opens the right view
 TOPIC_CLICK: dict[str, str] = {

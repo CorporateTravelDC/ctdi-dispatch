@@ -7,12 +7,12 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Building csexec-chat (qwen3.5:9b + operator context) ==="
-ollama create csexec-chat -f "${REPO_DIR}/Modelfile.chat"
+echo "=== Building corporatetraveldc-pi5-chat (qwen3.5:9b + operator context) ==="
+ollama create corporatetraveldc-pi5-chat -f "${REPO_DIR}/Modelfile.chat"
 
 echo ""
-echo "=== Building csexec-osint (qwen3.5:9b + EP/marketing dual-use context) ==="
-ollama create csexec-osint -f "${REPO_DIR}/Modelfile.osint"
+echo "=== Building corporatetraveldc-pi5-osint (qwen3.5:9b + EP/marketing dual-use context) ==="
+ollama create corporatetraveldc-pi5-osint -f "${REPO_DIR}/Modelfile.osint"
 
 echo ""
 echo "=== Verifying models ==="
