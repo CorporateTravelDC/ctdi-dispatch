@@ -5,11 +5,19 @@
 # This template ships in the public repo. Modelfile.chat (the real file with
 # operator-specific context) is .gitignored and stays in the private repo only.
 
-FROM qwen3.5:9b
+FROM gemma3:4b
 
-PARAMETER temperature 0.4
-PARAMETER num_predict 512
+# 2. Hardware-Specific Parameters
+# Force Ollama to use 2 physical, half of the cores of the Pi 5
+PARAMETER num_thread 2
+
+# Reduce memory footprint so it runs smoothly alongside an average 4GB system load
 PARAMETER num_ctx 4096
+
+# 3. Model Behavior & Temperature
+# Balanced temperature for accurate tool-calling and reasoning
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
 
 SYSTEM """
 You are the dispatch assistant for <YOUR_FIRM_NAME> — a <FIRM_DESCRIPTION> operated
