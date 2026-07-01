@@ -92,9 +92,24 @@ The ingest container stamps heartbeats into `feed_state` every 30 seconds. Befor
 
 ---
 
-Operational TopologyCore Network Interface: System workloads are managed via rootless Podman container layers operating inside your private security grid.Data Transit Protocol: Outbound alerting payloads communicate exclusively via standard local network loopback or localized LAN HTTP POST sequences.Local Inference Pipeline: Upstream tasks interact directly via local sockets with the host-bound Ollama execution engine.Key Security SafeguardsAbsolute Data Sovereignty: 0% of PNR, itinerary data, or employee travel records escape to public cloud networks. All AI inference is computed locally on-device using host-bound engines.Native Compliance Hook Egress: Outbound alert logs are wrapped in strict, immutable JSON payloads and routed directly to your internal network's archival proxy endpoints.Resource Hardening: System execution caps (num_thread) are baked natively into the custom LLM wrappers, ensuring that network routers, proxies, and infrastructure always maintain dedicated CPU headroom.For a deep-dive review of system telemetry mapping, SEC Rule 17a-4/FINRA Rule 4511 alignment, and SELinux Type Enforcement variables, see the Enterprise Security & Compliance Technical Datasheet.
+---<br>
+<h3>Operational Topology</h3>
+<ul>
+  <li><b>Core Network Interface:</b> System workloads are managed via rootless Podman container layers operating inside your private security grid.</li>
+  <li><b>Data Transit Protocol:</b> Outbound alerting payloads communicate exclusively via standard local network loopback or localized LAN HTTP POST sequences.</li>
+  <li><b>Local Inference Pipeline:</b> Upstream tasks interact directly via local sockets with the host-bound Ollama execution engine.</li>
+</ul>
 
----
+<h3>Key Security Safeguards</h3>
+<ul>
+  <li><b>Absolute Data Sovereignty:</b> 0% of PNR, itinerary data, or employee travel records escape to public cloud networks. All AI inference is computed locally on-device using host-bound engines.</li>
+  <li><b>Native Compliance Hook Egress:</b> Outbound alert logs are wrapped in strict, immutable JSON payloads and routed directly to your internal network's archival proxy endpoints.</li>
+  <li><b>Resource Hardening:</b> System execution caps (num_thread) are baked natively into the custom LLM wrappers, ensuring that network routers, proxies, and infrastructure always maintain dedicated CPU headroom.</li>
+</ul>
+
+<p>For a deep-dive review of system telemetry mapping, SEC Rule 17a-4/FINRA Rule 4511 alignment, and SELinux Type Enforcement variables, see the <a href="docs/COMPLIANCE_SECURITY.md">Enterprise Security & Compliance Technical Datasheet</a>.</p>
+<br>
+
 ## Deploying outside DC
 
 **The feed credentials themselves don't change when you move regions — only the flags for what you're monitoring do.** You're pointing the same credential infrastructure at different geographic filters.
