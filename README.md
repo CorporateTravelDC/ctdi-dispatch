@@ -92,14 +92,9 @@ The ingest container stamps heartbeats into `feed_state` every 30 seconds. Befor
 
 ---
 
-## 🔒 Enterprise Architecture & Compliance
+Operational TopologyCore Network Interface: System workloads are managed via rootless Podman container layers operating inside your private security grid.Data Transit Protocol: Outbound alerting payloads communicate exclusively via standard local network loopback or localized LAN HTTP POST sequences.Local Inference Pipeline: Upstream tasks interact directly via local sockets with the host-bound Ollama execution engine.Key Security SafeguardsAbsolute Data Sovereignty: 0% of PNR, itinerary data, or employee travel records escape to public cloud networks. All AI inference is computed locally on-device using host-bound engines.Native Compliance Hook Egress: Outbound alert logs are wrapped in strict, immutable JSON payloads and routed directly to your internal network's archival proxy endpoints.Resource Hardening: System execution caps (num_thread) are baked natively into the custom LLM wrappers, ensuring that network routers, proxies, and infrastructure always maintain dedicated CPU headroom.For a deep-dive review of system telemetry mapping, SEC Rule 17a-4/FINRA Rule 4511 alignment, and SELinux Type Enforcement variables, see the Enterprise Security & Compliance Technical Datasheet.
 
-This platform is engineered explicitly for **100% self-hosted, on-premises deployment** within regulated enterprise perimeters (Financial Services, Corporate Law, and Governed Logistics). 
-
-
-┌────────────────────────────────────────────────────────┐│             FIRM'S PRIVATE SECURITY BOUNDARY           ││                                                        ││  ┌─────────────────┐            ┌───────────────────┐  ││  │  CTDI DISPATCH  │ (Local LAN)│ Institutional     │  ││  │ (Podman Stack)  ├───────────>│ Compliance Proxy  │  ││  │  └────────┬────────┘  HTTP POST └─────────┬─────────┘  ││           │                               │            ││     (Local Socket)                        ▼            ││           ▼                     ┌───────────────────┐  ││  ┌─────────────────┐            │ Smarsh /          │  ││  │ Host Ollama Edge│            │ Global Relay      │  ││  │  └─────────────────┘            └───────────────────┘  ││  └────────────────────────────────────────────────────────┘Key Security SafeguardsAbsolute Data Sovereignty: 0% of PNR, itinerary data, or employee travel records escape to public cloud networks. All AI inference is computed locally on-device using host-bound engines.Native Compliance Hook Egress: Outbound alert logs are wrapped in strict, immutable JSON payloads and routed directly to your internal network's archival proxy endpoints.Resource Hardening: System execution caps (num_thread) are baked natively into the custom LLM wrappers, ensuring that network routers, proxies, and infrastructure always maintain dedicated CPU headroom.For a deep-dive review of system telemetry mapping, SEC Rule 17a-4/FINRA Rule 4511 alignment, and SELinux Type Enforcement variables, see the Enterprise Security & Compliance Technical Datasheet.
-
-
+---
 ## Deploying outside DC
 
 **The feed credentials themselves don't change when you move regions — only the flags for what you're monitoring do.** You're pointing the same credential infrastructure at different geographic filters.
