@@ -26,7 +26,7 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 | All containers | Running |
 | FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
 | Local LLM (Ollama) | mistral-nemo 12B — csexec-chat + csexec-osint Modelfile wrappers |
-| Dispatch Drawer | Streaming chat via csexec-chat (mistral-nemo) |
+| Dispatch Drawer | Streaming chat via csexec-chat (gemma3) |
 
 ---
 
@@ -91,6 +91,12 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 The ingest container stamps heartbeats into `feed_state` every 30 seconds. Before each REST poll, the poller checks whether the heartbeat for that feed is fresher than 90 seconds. If so, it skips the REST fetch — ingest owns that feed. When ingest disconnects, the heartbeat ages out and REST polling resumes automatically. No manual intervention required.
 
 ---
+
+## 🔒 Enterprise Architecture & Compliance
+
+This platform is engineered explicitly for **100% self-hosted, on-premises deployment** within regulated enterprise perimeters (Financial Services, Corporate Law, and Governed Logistics). 
+
+
 
 ## Deploying outside DC
 
