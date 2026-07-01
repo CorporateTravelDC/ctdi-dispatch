@@ -13,6 +13,14 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC: airports, weather offices, European and Asia-Pacific feed equivalents.
 📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — API signup portals, email templates, and policy links for every integrated feed — US, European, and Asia-Pacific.
 
+
+All Public releases are GPG signed with the following key(s):
+
+ABD3976FCC006E0F3FE559177286B3118BA4EFB2 - Corporate Travel DC 'Corey Sheldon' (Default GPG Code Signing Key for CorporateTravelDC Repositories) <developer@csexecutiveservices.com>
+
+All Active keys will have their Pubkey included in the repo listed by FULL Fingerprint. 
+
+
 ---
 
 ## Status
