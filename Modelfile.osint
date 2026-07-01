@@ -1,13 +1,21 @@
 # Modelfile.osint — csexec-osint (PRIVATE — gitignored, do not commit)
 # Dual-use OSINT analyst: EP advance intel + brand/competitive intel
 # Build: ollama create csexec-osint -f /opt/corporatetraveldc/ctdi-dispatch-internal/Modelfile.osint
-# Base: llama3.2:3b
 
-FROM llama3.2:3b
+FROM gemma3:4b
 
-PARAMETER temperature 0.3
-PARAMETER num_predict 150
+PARAMETER temperature 0.4
+PARAMETER num_predict 512
 PARAMETER num_ctx 4096
+
+# Force Ollama to use 2 physical, half of the cores of the Pi 5
+PARAMETER num_thread 2
+
+# Reduce memory footprint so it runs smoothly alongside an average 4GB system load
+
+# Model Behavior & Temperature
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
 
 SYSTEM """
 You are an intelligence analyst embedded in the dispatch system for CS Executive Services,
