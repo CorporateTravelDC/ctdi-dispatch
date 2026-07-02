@@ -240,6 +240,20 @@ def set_tfr_enrichment(tfr_id: str, text: str) -> None:
         """, (text, tfr_id))
 
 
+def expire_tfrs(active_ids: list[str]) -> None:
+    """Delete TFRs no longer present in the current FAA feed.
+    The getTfrList endpoint is authoritative — any ID absent from the current
+    response has been cancelled or expired upstream."""
+    if not active_ids:
+        return  # Safety: never wipe the table on an empty feed response
+    placeholders = ",".join("?" * len(active_ids))
+    with conn() as c:
+        c.execute(
+            f"DELETE FROM tfrs WHERE tfr_id NOT IN ({placeholders})",
+            active_ids,
+        )
+
+
 # ── METAR helpers ─────────────────────────────────────────────────────────────
 
 def upsert_metar(station: str, raw_metar: str, ceiling_ft: int | None,
@@ -612,6 +626,25 @@ def upsert_nws_alert(alert_id: str, event_type: str, area_desc: str,
                 fetched_at=unixepoch()
         """, (alert_id, event_type, area_desc, severity, certainty,
               effective, expires, headline, description))
+
+
+def cleanup_expired_notams() -> int:
+    """Delete NOTAMs whose effective_end has passed (1-hour grace period).
+    Also prunes NULL-end NOTAMs inserted more than 45 days ago (stale PERM entries).
+    Returns the number of rows removed."""
+    now = time.time()
+    cutoff = now - 3600           # 1-hour grace window
+    stale  = now - (45 * 86400)  # 45-day stale window for NULL-end entries
+    with conn() as c:
+        r1 = c.execute(
+            "DELETE FROM notams WHERE effective_end IS NOT NULL AND effective_end < ?",
+            (cutoff,),
+        )
+        r2 = c.execute(
+            "DELETE FROM notams WHERE effective_end IS NULL AND inserted_at < ?",
+            (stale,),
+        )
+        return (r1.rowcount or 0) + (r2.rowcount or 0)
 
 
 def expire_nws_alerts(active_ids: list[str]) -> None:

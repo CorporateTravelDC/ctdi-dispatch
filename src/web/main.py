@@ -1354,3 +1354,27 @@ async def delete_vip(
     current = [e for e in current if e != entry]
     _write_vip_list(current)
     return JSONResponse({"vip": sorted(set(current)), "removed": entry})
+
+
+# ---------------------------------------------------------------------------
+# Watchdog status endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/watchdog/status")
+async def watchdog_status(
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Return last ctdi-watchdog run result.
+
+    Reads /var/lib/corporatetraveldc/watchdog-last-run.json written by
+    /opt/corporatetraveldc/bin/ctdi-watchdog.sh after each 5-minute run.
+    """
+    status_path = pathlib.Path("/var/lib/corporatetraveldc/watchdog-last-run.json")
+    if not status_path.exists():
+        return JSONResponse({"available": False, "reason": "no run recorded yet"})
+    try:
+        data = json.loads(status_path.read_text())
+        data["age_seconds"] = int(time.time()) - data.get("unix", 0)
+        return JSONResponse(data)
+    except Exception as exc:
+        return JSONResponse({"available": False, "error": str(exc)})
