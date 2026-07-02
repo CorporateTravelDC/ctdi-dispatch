@@ -119,6 +119,12 @@ def run() -> dict:
             if rec.vip:
                 new_vip_ids.append(rec.tfr_id)
 
+        # Sweep TFRs that are no longer in the FAA feed.
+        # The getTfrList endpoint returns the full current active list, so any
+        # ID we have in the DB that is absent from this response is expired.
+        active_ids = [r.tfr_id for r in records]
+        db.expire_tfrs(active_ids)
+
         db.upsert_feed(feed_name, fetched_at, error=None,
                        payload_hash=payload_hash)
         log.info("TFR fetch OK — %d TFRs, %d VIP", len(records), len(new_vip_ids))

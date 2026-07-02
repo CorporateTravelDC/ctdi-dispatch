@@ -139,6 +139,12 @@ def run() -> dict:
                        payload_hash=payload_hash)
         log.info("NOTAM fetch OK — %d NOTAMs across %d locations",
                  len(all_notams), len(DC_LOCATIONS))
+
+        # Prune expired and stale NOTAM rows so the active count stays accurate.
+        cleaned = db.cleanup_expired_notams()
+        if cleaned:
+            log.info("NOTAM cleanup: removed %d expired/stale rows", cleaned)
+
         return {"count": len(all_notams), "locations": DC_LOCATIONS}
 
     except Exception as e:
