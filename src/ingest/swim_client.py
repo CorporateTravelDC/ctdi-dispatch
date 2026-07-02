@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ingest import failover
 from ingest.config import NmsConfig, NmsFeedConfig
+from common import db as _db
 
 log = logging.getLogger("ingest.swim_client")
 
@@ -299,9 +300,7 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
         if feed_name.lower() in _skip_feeds:
             log.info("swim_client %s: skipped via SWIM_NMS_SKIP_FEEDS", feed_name)
             try:
-                from common import db as _db
-                import time as _time
-                _db.upsert_feed_skip(f"push:{feed_name}", _time.time(),
+                        _db.upsert_feed_skip(f"push:{feed_name}", time.time(),
                                      "disabled: SWIM_NMS_SKIP_FEEDS")
             except Exception:
                 pass
@@ -314,11 +313,9 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
                 "set SWIM_NMS_USER_%s in dispatch-secrets.env to enable",
                 feed_name, env_key,
             )
-            from common import db as _db
-            import time as _time
             _db.upsert_feed_skip(
                 f"push:{feed_name}",
-                _time.time(),
+                time.time(),
                 "pending_credentials: NMS credentials not yet provisioned",
             )
             continue
