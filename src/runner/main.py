@@ -1157,7 +1157,7 @@ async def sse_stream(request: Request):
 #               dispatch-debriefs, ops-brief
 
 @app.get("/api/ntfy/stream")
-async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight-alerts,tfr-alert,cps,ops-health,train-alerts"):
+async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight-alerts,tfr-alert,cps,ops-health,train-alerts,ops-brief"):
     """Proxy ntfy SSE feed to the frontend.
 
     ?topics=comma,separated,topic,names
