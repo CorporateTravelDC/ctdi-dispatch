@@ -19,7 +19,7 @@ set -euo pipefail
 SKIP_OLLAMA=false
 SKIP_CONTAINERS=false
 DEV_MODE=false
-OLLAMA_MODELS="llama3.2:3b mistral"
+OLLAMA_MODELS="gemma3:4b"
 REPO_URL="https://github.com/CorporateTravelDC/corporatetraveldc-dispatch-poc.git"
 INSTALL_DIR="/opt/corporatetraveldc"
 SERVICE_USER="corporatetraveldc"
@@ -102,7 +102,7 @@ echo "==> Installing system dependencies..."
 
 case "$PKG_MANAGER" in
     dnf)
-        sudo dnf install -y python3 python3-pip python3-venv git curl \
+        sudo dnf install -y python3 python3-pip python3-virtualenv git curl \
             libxml2-devel libxslt-devel gcc \
             policycoreutils-python-utils checkpolicy
         ;;
