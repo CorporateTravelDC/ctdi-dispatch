@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger('demo.recorder')
 
 DB          = '/var/lib/corporatetraveldc/demo.db'
-API         = 'http://127.0.0.1:8000/api/v1'
+API         = os.environ.get('DEMO_RECORDER_API_BASE', 'http://100.94.80.100:8000/api/v1')
 INTERVAL    = int(os.environ.get('DEMO_RECORDER_INTERVAL',    '300'))
 RETENTION   = int(os.environ.get('DEMO_RECORDER_RETENTION',   '364'))
 SEED_TARGET = int(os.environ.get('DEMO_RECORDER_SEED_TARGET', '14'))

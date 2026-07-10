@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ep-advance every hour at :30 (offset from ops-brief at :00 so Ollama jobs never stack; script adds 12h trend at 00:30/12:30 ET)
+Requires=corporatetraveldc-ep-advance.service
+
+[Timer]
+OnCalendar=*-*-* *:30:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

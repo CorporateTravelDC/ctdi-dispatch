@@ -7,7 +7,7 @@
 import { useGlobalLayerConfig } from '../App.jsx'
 
 const LAYERS = [
-  { key: 'localFeed', icon: '✈', label: 'Local Feed',  title: 'Local ADS-B feeder aircraft (green)' },
+  { key: 'localFeed', icon: '✈', label: 'Traffic',     title: 'ADS-B traffic (airplanes.live aggregator feed)' },
   { key: 'tracked',   icon: '◎', label: 'Tracked',     title: 'Tracked/watchlisted flights (cyan)' },
   { key: 'tfr',       icon: '⊘', label: 'TFR Rings',   title: 'TFR restriction circles' },
   { key: 'airspace',  icon: '⬡', label: 'Airspace',    title: 'FRZ / SFRA boundaries' },

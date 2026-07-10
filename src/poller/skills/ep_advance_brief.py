@@ -1,9 +1,12 @@
 """
 ep-advance — Executive Protection advance brief for DC UHNWI principals.
 
-Model: ollama/csexec-osint (mistral-nemo)
+Model: ollama/corporatetraveldc-pi5-osint (mistral-nemo)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
-Schedule: 07:00 ET daily (corporatetraveldc-ep-advance.timer)
+Schedule: every hour :30 ET (corporatetraveldc-ep-advance.timer) — offset from
+  ops-brief's :00 so Ollama jobs never stack back-to-back
+  — standard EP-advance brief every hour
+  — 12-hour trend analysis (retrospective + predictive) prepended at 00:30, 12:30 ET
 SR-1: log_usage() in finally block
 SR-2: Exempt — time-bounded input; inputs always new.
 
@@ -25,7 +28,8 @@ import argparse
 import json
 import logging
 import pathlib
-import time
+import sqlite3
+import time as _time
 from datetime import datetime, timezone
 
 import httpx
@@ -739,7 +743,7 @@ def _osint_section() -> str:
     Falls back gracefully if no OSINT data available.
     """
     try:
-        cutoff_24h = time.time() - 86400
+        cutoff_24h = _time.time() - 86400
         items = db.osint_get_feed(scope_id=None, min_score=4, limit=20)
         if not items:
             return "No active OSINT feed items in last 24h."
@@ -979,10 +983,133 @@ def _fallback_brief(tfr: str, weather: str, nws: str, route: str, osint: str) ->
     return full, concise
 
 
+# ── 12-hour trend analysis (retrospective + predictive) ────────────────────────
+# Mirrors ops-brief's 6h trend pattern, scaled to a 12h window and EP framing.
+# Fires at 00:00 and 12:00 ET.
+
+def _cps_history_12h() -> list[dict]:
+    """Return CPS score entries from the last 12 hours, oldest first."""
+    cutoff = _time.time() - 12 * 3600
+    try:
+        with db.conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(
+                "SELECT score, label, narrative, computed_at FROM cps_scores "
+                "WHERE computed_at >= ? ORDER BY computed_at ASC",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("ep-advance: cps_history query failed: %s", e)
+        return []
+
+
+def _ep_brief_history_12h() -> list[dict]:
+    """Return ep-advance brief archive entries from the last 12 hours, oldest first."""
+    cutoff = _time.time() - 12 * 3600
+    try:
+        with db.conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(
+                "SELECT id, generated_at, brief_type, content FROM brief_archive "
+                "WHERE generated_at >= ? AND brief_type='ep-advance' ORDER BY generated_at ASC",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("ep-advance: brief_history query failed: %s", e)
+        return []
+
+
+def _trend_analysis_prompt_12h() -> str:
+    """Build a 12h trend context block from CPS history + ep-advance brief archive."""
+    cps_hist   = _cps_history_12h()
+    brief_hist = _ep_brief_history_12h()
+
+    lines = ["=== 12-HOUR TREND DATA ==="]
+
+    if cps_hist:
+        lines.append(f"\nCPS history (last 12h, {len(cps_hist)} readings):")
+        for entry in cps_hist:
+            ts = datetime.fromtimestamp(entry["computed_at"], tz=timezone.utc).strftime("%H:%MZ")
+            lines.append(
+                f"  {ts}: {entry.get('score','?')}/{entry.get('label','?')} — "
+                f"{(entry.get('narrative') or '')[:100]}"
+            )
+        if len(cps_hist) >= 2:
+            first_label = cps_hist[0].get("label", "?")
+            last_label  = cps_hist[-1].get("label", "?")
+            if first_label != last_label:
+                lines.append(f"  TREND DIRECTION: {first_label} → {last_label}")
+            else:
+                lines.append(f"  TREND DIRECTION: STABLE ({last_label})")
+    else:
+        lines.append("\nCPS history: No data in last 12h.")
+
+    if len(brief_hist) >= 2:
+        lines.append(f"\nEP-advance brief archive (last 12h, {len(brief_hist)} briefs):")
+        for b in brief_hist:
+            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
+            snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
+            lines.append(f"  {ts}: {snippet}…")
+    elif len(brief_hist) == 1:
+        lines.append("\nEP-advance brief archive: 1 prior brief in 12h window.")
+    else:
+        lines.append("\nEP-advance brief archive: No prior briefs in 12h window (first run of interval).")
+
+    return "\n".join(lines)
+
+
+TREND_SYSTEM_PROMPT_EP = (
+    "You are the EP intelligence officer for CS Executive Services. "
+    "You have just received a 12-hour data trend package showing CPS scores and "
+    "prior EP-advance brief snapshots for a DC-metro UHNWI protective operation. "
+    "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
+    "RETROSPECTIVE (LAST 12H): whether the threat/operational environment improved, "
+    "degraded, or stayed stable over the past 12 hours, and the single most significant "
+    "change, if any (new TFR, protest activity, venue/route change, weather).\n\n"
+    "PREDICTIVE (NEXT 12H): the outlook for the next 12 hours based on current "
+    "trajectory — scheduled movements, known venue activity, weather, and any "
+    "TFR/security posture changes already on the board.\n\n"
+    "Aviation/dispatch shorthand is expected. No filler. Use exactly those two labels, nothing else."
+)
+
+
+def _generate_trend_narrative_ep(trend_prompt: str) -> str:
+    """Generate the 12h trend narrative via Ollama. Returns empty string on failure."""
+    if not OLLAMA_BASE_URL:
+        return ""
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model":  OLLAMA_MODEL,
+                "system": TREND_SYSTEM_PROMPT_EP,
+                "prompt": trend_prompt,
+                "stream": False,
+                "options": {"num_predict": 260, "temperature": 0.15},
+            },
+            timeout=OLLAMA_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+    except Exception as exc:
+        log.warning("ep-advance: trend narrative failed — %s", exc)
+        return ""
+
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 
-def main(force: bool = False) -> None:
+def main(force: bool = False, run_trend: bool = False) -> None:
+    """
+    run_trend: force a 12h trend analysis section regardless of current hour.
+               Auto-true when the current ET hour is 0 or 12.
+    """
     status = "error"
+
+    _lt = _time.localtime()
+    is_12h_boundary = (_lt.tm_hour % 12 == 0) or run_trend
+
     try:
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -1020,7 +1147,27 @@ def main(force: bool = False) -> None:
             log.info("ep-advance: brief generated (deterministic fallback)")
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
-        title     = f"EP-ADVANCE {now_label}"
+        brief_label = "EP-ADVANCE+TREND" if is_12h_boundary else "EP-ADVANCE"
+        title     = f"{brief_label} {now_label}"
+
+        # At 12h boundaries (00:00 / 12:00 ET): lead with retrospective + predictive
+        # trend, THEN the traditional advance brief underneath.
+        if is_12h_boundary:
+            log.info("ep-advance: 12h boundary — generating trend analysis")
+            trend_prompt = _trend_analysis_prompt_12h()
+            trend_narrative = _generate_trend_narrative_ep(trend_prompt)
+            if not trend_narrative:
+                trend_narrative = (
+                    "RETROSPECTIVE (LAST 12H): narrative unavailable (Ollama offline) — raw data below.\n\n"
+                    "PREDICTIVE (NEXT 12H): narrative unavailable (Ollama offline).\n\n"
+                    f"{trend_prompt}"
+                )
+            full_text = (
+                f"{title}\n\n"
+                f"=== 12-HOUR TREND ===\n{trend_narrative}\n\n"
+                f"=== TRADITIONAL BRIEF ===\n{full_text}"
+            )
+            log.info("ep-advance: trend section prepended")
 
         # Write to state dir
         state = pathlib.Path(config.state_dir())
@@ -1043,7 +1190,9 @@ def main(force: bool = False) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser(description="EP-Advance daily brief skill")
+    parser = argparse.ArgumentParser(description="EP-Advance brief skill")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--trend", action="store_true",
+                        help="Force a 12h trend analysis section regardless of current hour")
     args = parser.parse_args()
-    main(force=args.force)
+    main(force=args.force, run_trend=args.trend)

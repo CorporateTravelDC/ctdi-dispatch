@@ -146,6 +146,8 @@ def _parse_single_sequence(elem: ET.Element) -> dict | None:
         _txt(elem, "tracon") or
         "ZDC"  # default to Washington ARTCC for DC-area data
     )
+    if facility.upper() != "ZDC":
+        return None
 
     eta_raw = (
         _txt(elem, "eta") or

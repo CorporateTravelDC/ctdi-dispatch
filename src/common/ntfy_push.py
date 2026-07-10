@@ -15,29 +15,35 @@ from common import config
 
 log = logging.getLogger(__name__)
 
-RUNNER_BASE = "https://ops.example.com"
+RUNNER_BASE = "https://ops.csexecutiveservices.com"
+# ops.csexecutiveservices.com now serves the full runner app (the same
+# screen-reader-capable React SPA that used to live at dispatch-runner) — that
+# domain is retired as a live public endpoint (reserved for a future demo-archiver
+# stub serving time-delayed data; see demo/recorder.py). All tap-through links
+# below point to ops's real routed views, not anchor fragments, since ops no
+# longer serves the old single-page anchor-based PWA.
 
-# Per-topic deep-link targets — mobile tap opens the right view
+# Per-topic deep-link targets — mobile tap opens the right routed view.
 TOPIC_CLICK: dict[str, str] = {
-    "tfr-alert":         f"{RUNNER_BASE}/tfr",
-    "hot-alerts":        f"{RUNNER_BASE}/tfr",
-    "flight-alerts":     f"{RUNNER_BASE}/feed",
-    "cps":               f"{RUNNER_BASE}/feed",
-    "ops-health":        f"{RUNNER_BASE}/feed",
-    "train-alerts":      f"{RUNNER_BASE}/feed",
-    "wx-alerts":         f"{RUNNER_BASE}/feed",
-    "osint-alerts":      f"{RUNNER_BASE}/feed",
-    "dispatch":          f"{RUNNER_BASE}/",
+    "tfr-alert":            f"{RUNNER_BASE}/tfr",
+    "hot-alerts":           f"{RUNNER_BASE}/tfr",              # VIP/POTUS movement — same signals view
+    "flight-alerts":        f"{RUNNER_BASE}/map",              # ADS-B view
+    "cps":                  f"{RUNNER_BASE}/",                 # CpsIndicator is in the global header on every view
+    "ops-health":           f"{RUNNER_BASE}/status",           # feed health / freshness
+    "train-alerts":         f"{RUNNER_BASE}/trains",           # EOTD view
+    "wx-alerts":            f"{RUNNER_BASE}/signals#meteorology",
+    "osint-alerts":         f"{RUNNER_BASE}/intel",            # IntelView (custom/RSS feed monitor)
+    "dispatch":             f"{RUNNER_BASE}/feed",             # live ntfy feed view
     "dispatch-debriefs":    f"{RUNNER_BASE}/brief?tab=ops",
     "ops-brief":            f"{RUNNER_BASE}/brief?tab=ops",
-    "ep-advance-debriefs":  f"{RUNNER_BASE}/brief?tab=ep-advance",   # legacy — keep for existing subs
+    "ep-advance-debriefs":  f"{RUNNER_BASE}/brief?tab=ep-advance",  # legacy — keep for existing subs
     # EP-specific topics (lowercase per operator directive)
     "ep":               f"{RUNNER_BASE}/brief?tab=ep-advance",   # generic EP alerts (concise)
     "ep-advance":       f"{RUNNER_BASE}/brief?tab=ep-advance",   # advance intel brief (full narrative)
     "ep-briefs":        f"{RUNNER_BASE}/brief?tab=ep-advance",   # on-demand EP snapshots (OOOI-style)
 }
 
-_DEFAULT_CLICK = RUNNER_BASE
+_DEFAULT_CLICK = f"{RUNNER_BASE}/"
 
 
 def send(

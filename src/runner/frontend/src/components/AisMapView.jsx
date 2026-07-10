@@ -208,16 +208,6 @@ export default function AisMapView() {
       <div className="train-map-subnav">
         <span className="train-map-title">AIS</span>
 
-        <div className="ais-mode-toggle" role="group" aria-label="AIS display mode">
-          <button className={`ais-mode-btn${mode === 'iframe' ? ' active' : ''}`}
-            onClick={() => setMode('iframe')} aria-pressed={mode === 'iframe'}
-            disabled={iframeError} title={iframeError ? 'MarineTraffic blocked cross-origin embed' : ''}>
-            🌐 LIVE</button>
-          <button className={`ais-mode-btn${mode === 'local' ? ' active' : ''}`}
-            onClick={() => setMode('local')} aria-pressed={mode === 'local'}>
-            ⚓ MAP</button>
-        </div>
-
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
           {TRACKER_LINKS.map(t => (
             <a key={t.label} href={t.url} target="_blank" rel="noopener noreferrer"
@@ -265,35 +255,17 @@ export default function AisMapView() {
           </div>
         )}
 
-        {/* Leaflet: transparent overlay in iframe mode, full tiled in local mode */}
+        {/* Leaflet: transparent vessel/watchlist overlay on top of the embed
+            (or on top of the plain nautical fallback tiles if the embed failed) */}
         <div
           ref={mapRef}
           className={`ais-leaflet-layer${mode === 'iframe' ? ' ais-overlay-mode' : ' ais-local-mode'}`}
         />
 
-        {/* No local AIS feed notice (local mode only) */}
-        {mode === 'local' && !src && vesselCount === 0 && !loadErr && (
-          <div className="ais-no-data-overlay">
-            <div className="ais-no-data-title">No live AIS feed</div>
-            <div className="ais-no-data-sub">
-              Deploy AIS-catcher on the Pi (port 8110), then set
-              <code> AIS_CATCHER_URL=http://127.0.0.1:8110</code> in dispatch.env.
-            </div>
-            <div className="ais-no-data-links">
-              {TRACKER_LINKS.map(t => (
-                <a key={t.label} href={t.url} target="_blank" rel="noopener noreferrer"
-                   className="ais-tracker-link">{t.label}</a>
-              ))}
-            </div>
-          </div>
-        )}
-
         <div className="map-overlay-stats globe-stats">
           {vesselCount > 0
             ? <span className="stat source-badge" style={{ color: '#4a9eff' }}>{vesselCount} vessels</span>
-            : mode === 'iframe'
-              ? <span className="stat source-badge" style={{ color: 'var(--muted)' }}>no local AIS</span>
-              : <span className="stat source-badge" style={{ color: 'var(--muted)' }}>No live AIS</span>
+            : <span className="stat source-badge" style={{ color: 'var(--muted)' }}>No live AIS</span>
           }
           {trackedCount > 0 && <span className="stat tracked-stat">★ {trackedCount} TRACKED</span>}
           {src && <span className="stat" style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>{src}</span>}

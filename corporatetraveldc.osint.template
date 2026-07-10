@@ -1,8 +1,8 @@
-# Modelfile.osint.template — OSINT narrative model (dual-use: EP + marketing/brand intel)
-# Copy to Modelfile.osint and fill in YOUR operator context before building.
-# Build: ollama create csexec-osint -f /opt/corporatetraveldc/Modelfile.osint
+# corporatetraveldc.osint.template — OSINT narrative model (dual-use: EP + marketing/brand intel)
+# Copy to corporatetraveldc.osint and fill in YOUR operator context before building.
+# Build: ollama create corporatetraveldc-pi5-osint -f /opt/corporatetraveldc/corporatetraveldc.osint
 #
-# This template ships in the public repo. Modelfile.osint (the real file with
+# This template ships in the public repo. corporatetraveldc.osint (the real file with
 # operator-specific context) is .gitignored and stays in the private repo only.
 #
 # Design intent: one model handles two distinct OSINT use cases that share the same

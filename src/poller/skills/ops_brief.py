@@ -1,7 +1,7 @@
 """
 ops-brief — unified operational briefing, now running hourly.
 
-Model: ollama/mistral (csexec-osint:latest, mistral-nemo 12B; Local LLM)
+Model: ollama/mistral (corporatetraveldc-pi5-osint:latest, mistral-nemo 12B; Local LLM)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :00 ET (corporatetraveldc-ops-brief.timer)
   — standard brief every hour
@@ -395,11 +395,12 @@ def _trend_analysis_prompt() -> str:
 TREND_SYSTEM_PROMPT = (
     "You are the dispatch intelligence officer for CS Executive Services. "
     "You have just received a 6-hour data trend package showing CPS scores and brief snapshots. "
-    "In 3-5 dense sentences, identify: "
-    "(1) whether conditions have improved, degraded, or stayed stable over the past 6 hours; "
-    "(2) the single most significant change, if any; "
-    "(3) the outlook for the next 6 hours based on trajectory. "
-    "Aviation/dispatch shorthand is expected. No filler. Label your output: TREND ANALYSIS:"
+    "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
+    "RETROSPECTIVE (LAST 6H): whether conditions improved, degraded, or stayed stable over "
+    "the past 6 hours, and the single most significant change, if any.\n\n"
+    "PREDICTIVE (NEXT 6H): the outlook for the next 6 hours based on current trajectory, "
+    "active NAS programs, weather systems in motion, and any known TFR/schedule changes.\n\n"
+    "Aviation/dispatch shorthand is expected. No filler. Use exactly those two labels, nothing else."
 )
 
 
@@ -594,24 +595,32 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             status = "ok"
             log.info("%s: brief generated (deterministic)", SKILL_NAME)
 
-        # Append raw METAR + NAS appendix
+        # Append raw METAR + NAS appendix to the traditional brief body
         full_text = full_text.rstrip() + raw_appendix
-
-        # At 6h boundaries: generate and append trend analysis
-        if is_6h_boundary:
-            log.info("%s: 6h boundary — generating trend analysis", SKILL_NAME)
-            trend_prompt = _trend_analysis_prompt()
-            trend_narrative = _generate_trend_narrative(trend_prompt)
-            if trend_narrative:
-                full_text += f"\n\n--- 6-HOUR TREND ANALYSIS ---\n{trend_narrative}"
-            else:
-                # Deterministic fallback: just append the raw trend data
-                full_text += f"\n\n--- 6-HOUR TREND DATA (no narrative — Ollama unavailable) ---\n{trend_prompt}"
-            log.info("%s: trend section appended", SKILL_NAME)
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "OPS BRIEF+TREND" if is_6h_boundary else "OPS BRIEF"
         title     = f"{brief_label} {now_label}"
+
+        # At 6h boundaries (00/06/12/18 ET): lead the brief with a retrospective +
+        # predictive trend package, THEN the traditional brief body underneath.
+        if is_6h_boundary:
+            log.info("%s: 6h boundary — generating trend analysis", SKILL_NAME)
+            trend_prompt = _trend_analysis_prompt()
+            trend_narrative = _generate_trend_narrative(trend_prompt)
+            if not trend_narrative:
+                # Deterministic fallback: raw trend data stands in for the narrative
+                trend_narrative = (
+                    "RETROSPECTIVE (LAST 6H): narrative unavailable (Ollama offline) — raw data below.\n\n"
+                    "PREDICTIVE (NEXT 6H): narrative unavailable (Ollama offline).\n\n"
+                    f"{trend_prompt}"
+                )
+            full_text = (
+                f"{title}\n\n"
+                f"=== 6-HOUR TREND ===\n{trend_narrative}\n\n"
+                f"=== TRADITIONAL BRIEF ===\n{full_text}"
+            )
+            log.info("%s: trend section prepended", SKILL_NAME)
 
         state = pathlib.Path(config.state_dir())
         state.mkdir(parents=True, exist_ok=True)

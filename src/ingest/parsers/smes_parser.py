@@ -238,6 +238,8 @@ def _parse_tais_event(el: ET.Element) -> dict | None:
                 or _text(el, "facilityIdentifier")
                 or TAIS_FACILITY)
     facility = facility.upper().strip()
+    if facility != TAIS_FACILITY:
+        return None
 
     track_id = (_attr(el, "trackNumber")
                 or _text(el, "trackNumber")

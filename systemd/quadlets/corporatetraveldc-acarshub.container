@@ -12,7 +12,7 @@ Wants=corporatetraveldc-acarsrouter.service
 [Container]
 Image=ghcr.io/sdr-enthusiasts/docker-acarshub:latest
 ContainerName=corporatetraveldc-acarshub
-Network=acars-net
+Network=acars-net.network
 
 # Persist ACARS message database across restarts
 Volume=/var/lib/corporatetraveldc/acarshub:/run/acars:z

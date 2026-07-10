@@ -7,6 +7,7 @@ auth-file: /var/lib/ntfy/auth.db
 auth-default-access: deny-all
 behind-proxy: true
 keepalive-interval: 55s
+message-size-limit: "65536"   # default is 4096 -- full brief narratives (ops-brief, ep-advance) exceed that and get silently rejected as unsupported attachments without this
 
 # SMTP outbound email notifications
 # Password injected via NTFY_SMTP_SENDER_PASS in dispatch-secrets.env (never inline here)
