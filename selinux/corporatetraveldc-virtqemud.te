@@ -1,4 +1,4 @@
-module csexec-virtqemud 1.0;
+module corporatetraveldc-virtqemud 1.0;
 
 require {
     type virtqemud_t;

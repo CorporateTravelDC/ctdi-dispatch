@@ -47,6 +47,11 @@ SUBSTITUTIONS = {
 
     # Tailscale hostnames
     b"tailxxxxxxx": b"tailxxxxxxx",
+    # Real tailnet domain suffix (this Pi's) -- was never actually caught by
+    # anything above; the entry immediately above only matches the
+    # placeholder against itself. Added 2026-07-10 alongside the real
+    # Tailscale HTTPS cert work.
+    b"tail09da2e.ts.net": b"tailxxxxxxx.ts.net",
 
     # Personal email
     b"operator@example.com": b"operator@example.com",
@@ -63,6 +68,10 @@ SUBSTITUTIONS = {
 
     # Cloudflare tunnel UUID
     b"00000000-0000-0000-0000-cf0tunnel0000": b"00000000-0000-0000-0000-cf0tunnel0000",
+    # Real tunnel UUID (this Pi's) -- the entry above only matches the
+    # placeholder against itself, same gap as the tailnet domain above.
+    # Catches both the bare UUID and its use in the credentials-file path.
+    b"28bde9a2-0bb2-4cca-a207-9b759c4739f1": b"00000000-0000-0000-0000-cf0tunnel0000",
 
     # SWIM NMS operator email / username prefix
     b"corey.sheldon@example.com": b"operator@example.com",

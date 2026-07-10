@@ -4,7 +4,10 @@
 #
 # NOTE: pusher calls ntfy. NTFY_URL in dispatch.env must be reachable from
 # inside this container. Use http://host.containers.internal:2586 if ntfy
-# is on the same host.
+# is on the same host. Network=pasta:--map-gw is required for that alias to
+# resolve at all -- this host's default rootless pasta networking runs with
+# --no-map-gw, which breaks it otherwise. See openwebui.container for the
+# same pattern.
 
 [Unit]
 Description=Corporate Travel DC â ntfy alert pusher
@@ -15,6 +18,7 @@ Wants=corporatetraveldc-poller.service
 
 [Container]
 Image=localhost/corporatetraveldc-pusher:latest
+Network=pasta:--map-gw
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
