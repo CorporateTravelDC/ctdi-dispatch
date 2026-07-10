@@ -107,14 +107,14 @@ fi
 
 # ── dispatch-secrets.env (template) ──────────────────────────────────────────
 DSEC=/etc/corporatetraveldc/dispatch-secrets.env
-DSEC_EXAMPLE="${REPO_DIR}/dispatch-secrets.env.example"
+DSEC_EXAMPLE="${REPO_DIR}/dispatch-secrets.env.template"
 if [[ -f "${DSEC}" ]]; then
     warn "${DSEC} exists — skipping"
 elif [[ -f "${DSEC_EXAMPLE}" ]]; then
     install -m 0600 -o root -g root "${DSEC_EXAMPLE}" "${DSEC}"
     ok "Created ${DSEC} (mode 0600) — fill in before starting the stack"
 else
-    warn "dispatch-secrets.env.example not found — ${DSEC} not created"
+    warn "dispatch-secrets.env.template not found — ${DSEC} not created"
 fi
 
 # ── ntfy server.yml ───────────────────────────────────────────────────────────

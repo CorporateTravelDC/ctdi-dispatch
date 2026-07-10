@@ -9,12 +9,12 @@
 # ARCHITECTURE:
 #   Ollama API: machine-facing only
 #     Local:        http://127.0.0.1:11434
-#     Tailscale:    http://100.x.x.x:11434
+#     Tailscale:    http://100.94.80.100:11434
 #     CF tunnel:    RESERVED/403 -- never publicly routed
 #
 #   OpenWebUI: human-facing browser UI
-#     Tailscale:    http://100.x.x.x:3000
-#     CF tunnel:    https://openwebui.example.com
+#     Tailscale:    http://100.94.80.100:3000
+#     CF tunnel:    https://openwebui.csexecutiveservices.com
 #
 #   Claude Code / dispatch automated tasks use Ollama directly
 #   via loopback. OpenWebUI is for human chat sessions only.
@@ -38,11 +38,25 @@ else
     echo "[OK]  Ollama installed"
 fi
 
-echo "[INFO] Configuring loopback-only binding..."
+echo "[INFO] Configuring binding..."
+# Bound to this host's Tailscale IP, not 127.0.0.1: pasta's --map-gw (used
+# by containers to reach host-bound services via host.containers.internal)
+# cannot deliver to a strictly loopback-bound socket -- the kernel refuses
+# externally-arriving traffic addressed to 127.0.0.0/8 regardless of any
+# NAT/routing pasta does, as an anti-spoofing measure. This is not a Podman
+# quirk; no pasta flag changes it. Confirmed live 2026-07-10: nginx and
+# ntfy (both 0.0.0.0-bound) were reachable via host.containers.internal with
+# --map-gw; Ollama on 127.0.0.1 was not, even with the same flag.
+#
+# Binding the Tailscale IP specifically (not 0.0.0.0) keeps Ollama off the
+# public-WiFi-facing interface entirely -- not just firewall-blocked, never
+# listening there. nginx (host-local) and openwebui (container, via the
+# literal Tailscale IP -- see install/openwebui/openwebui.container) both
+# reach it this way; neither needs Network=pasta:--map-gw for this.
 sudo mkdir -p /etc/systemd/system/ollama.service.d
 sudo tee /etc/systemd/system/ollama.service.d/10-binding.conf > /dev/null << 'EOF'
 [Service]
-Environment="OLLAMA_HOST=127.0.0.1:11434"
+Environment="OLLAMA_HOST=100.94.80.100:11434"
 EOF
 sudo systemctl daemon-reload
 

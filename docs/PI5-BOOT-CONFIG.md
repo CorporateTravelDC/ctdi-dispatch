@@ -75,7 +75,7 @@ sudo -E rpi-eeprom-config --edit
    ```bash
    cd /opt/corporatetraveldc
    git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git .
-   cp dispatch-secrets.env.example /etc/corporatetraveldc/dispatch-secrets.env
+   cp dispatch-secrets.env.template /etc/corporatetraveldc/dispatch-secrets.env
    chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
    # Populate secrets, then:
    bash build-images.sh

@@ -27,9 +27,9 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 
 | Component | State |
 |---|---|
-| Ops dashboard (runner app) | `https://ops.example.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
-| Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
-| Tailscale direct | `http://100.x.x.x:8000` |
+| Ops dashboard (runner app) | `https://ops.csexecutiveservices.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
+| Web API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` *(CF Access gated)* |
+| Tailscale direct | `http://100.94.80.100:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
 | FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
@@ -40,7 +40,7 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 
 ## Architecture
 
-Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the ops.example.com frontend and its own JSON state:
+Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the ops.csexecutiveservices.com frontend and its own JSON state:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -55,7 +55,7 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 │                      SQLite (WAL) shared DB                        │
 │                                                                    │
 │  ┌─────────────────────────────────────────────────┐               │
-│  │  runner (port 8001) → served at ops.example.com  │               │
+│  │  runner (port 8001) → served at ops.csexecutiveservices.com  │               │
 │  │  FastAPI + React/Vite SPA, screen-reader ready   │               │
 │  │  Intel Feed · ADS-B Map · Status · Brief · Chat  │               │
 │  │  proxies dispatch web API at :8000               │               │
@@ -72,7 +72,7 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
 | `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest — all 6 NMS feeds + NWWS-OI live |
-| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.example.com` |
+| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.csexecutiveservices.com` |
 
 ### Data feeds
 
@@ -173,11 +173,11 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| Ops dashboard (runner app) | `https://ops.example.com` | React SPA, screen-reader accessible; no CF Access gate |
-| API (browser / programmatic) | `https://dispatch.example.com` | CF Access gated; use for browser-based API calls and admin work |
-| Tailscale direct | `http://100.x.x.x:8000` | Always available on tailnet; preferred fallback |
+| Ops dashboard (runner app) | `https://ops.csexecutiveservices.com` | React SPA, screen-reader accessible; no CF Access gate |
+| API (browser / programmatic) | `https://dispatch.csexecutiveservices.com` | CF Access gated; use for browser-based API calls and admin work |
+| Tailscale direct | `http://100.94.80.100:8000` | Always available on tailnet; preferred fallback |
 
-> **Note:** `ops.example.com` proxies to the runner app (port 8001) via nginx — it is the live operational dashboard (map, TFR/signals, EOTD trains, briefs, admin, feed). `dispatch.example.com` is the CF Access-gated API gateway the runner calls internally. Bearer token provides the actual API authorization. `dispatch-runner.example.com` is retired as a live public endpoint — reserved for a future demo-archiver stub serving time-delayed data (see *Demo Mode & Travel Pattern Intelligence* below).
+> **Note:** `ops.csexecutiveservices.com` proxies to the runner app (port 8001) via nginx — it is the live operational dashboard (map, TFR/signals, EOTD trains, briefs, admin, feed). `dispatch.csexecutiveservices.com` is the CF Access-gated API gateway the runner calls internally. Bearer token provides the actual API authorization. `dispatch-runner.csexecutiveservices.com` is retired as a live public endpoint — reserved for a future demo-archiver stub serving time-delayed data (see *Demo Mode & Travel Pattern Intelligence* below).
 
 ### Tier 0 — Anonymous
 
@@ -225,9 +225,9 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | POST | `/admin/push-test-alert` | Send test ntfy alert |
 | GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
 
-### Runner API (port 8001 — served publicly at `ops.example.com`)
+### Runner API (port 8001 — served publicly at `ops.csexecutiveservices.com`)
 
-The runner exposes its own API alongside its React/Vite SPA build (the same screen-reader-accessible app now served at `ops.example.com`). All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware). `dispatch-runner.example.com` no longer routes here in production — it is retired as a live endpoint and reserved for a future demo-archiver stub (time-delayed data replay; see *Demo Mode & Travel Pattern Intelligence*).
+The runner exposes its own API alongside its React/Vite SPA build (the same screen-reader-accessible app now served at `ops.csexecutiveservices.com`). All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware). `dispatch-runner.csexecutiveservices.com` no longer routes here in production — it is retired as a live endpoint and reserved for a future demo-archiver stub (time-delayed data replay; see *Demo Mode & Travel Pattern Intelligence*).
 
 **ADS-B**
 
@@ -268,7 +268,7 @@ Tokens are created with `csex-token`. Format: `ctdc_<user>_<32-char-random>`. On
 
 ```
 Tier 0 → anonymous (all /api/v1/* data endpoints)
-Tier 1 → Tailscale-User-Login header | 100.x.x.x source IP | cert bearer token
+Tier 1 → Tailscale-User-Login header | 100.94.80.100 source IP | cert bearer token
 Tier 2 → bearer token tier=shares (audit-logged; CUI-adjacent)
 Admin  → bearer token tier=admin (all /admin/* endpoints)
 ```
@@ -332,12 +332,12 @@ CTDI includes a built-in **archive recorder** that captures rolling snapshots of
 
 The archive lets you run a fully live-looking demo without connecting to a real deployment. A demo site replays historical snapshots through the same REST API surface as the live system — the client sees a real dispatch dashboard with real historical data (NOTAMs, weather, train status, TFRs, ops plans) without any credentials or live feeds being required.
 
-**Planned endpoint:** `dispatch-runner.example.com` is the expected home for this demo site once built. It is currently retired from live production traffic — all real operational traffic now lives at `ops.example.com` — and is reserved specifically for this future time-delayed-data demo/stub use.
+**Planned endpoint:** `dispatch-runner.csexecutiveservices.com` is the expected home for this demo site once built. It is currently retired from live production traffic — all real operational traffic now lives at `ops.csexecutiveservices.com` — and is reserved specifically for this future time-delayed-data demo/stub use.
 
 **Seed readiness check:**
 
 ```bash
-curl https://dispatch.example.com/api/v1/demo/readiness
+curl https://dispatch.csexecutiveservices.com/api/v1/demo/readiness
 # → {
 #     "seed_days": 21, "seed_target": 14, "ready": true,
 #     "total_snapshots": 18240, "oldest": "2026-06-16", "newest": "2026-07-07",
@@ -451,7 +451,7 @@ The recorder runs as a standalone systemd user service (`demo-recorder.service`)
 
 ## Ops Dashboard — Runner App
 
-`https://ops.example.com` now serves the full runner application — the same screen-reader-accessible React/Vite SPA previously reachable only at `dispatch-runner.example.com`. The old single-page static-HTML PWA (`src/pwa/`) has been permanently removed from this codebase; nothing under `ops.example.com` is static HTML anymore. The runner calls the dispatch API same-origin via its `/api/dispatch/*` proxy and requires no authentication for Tier 0 data.
+`https://ops.csexecutiveservices.com` now serves the full runner application — the same screen-reader-accessible React/Vite SPA previously reachable only at `dispatch-runner.csexecutiveservices.com`. The old single-page static-HTML PWA (`src/pwa/`) has been permanently removed from this codebase; nothing under `ops.csexecutiveservices.com` is static HTML anymore. The runner calls the dispatch API same-origin via its `/api/dispatch/*` proxy and requires no authentication for Tier 0 data.
 
 **Add to home screen:** the app declares `apple-mobile-web-app-capable` meta tags, so iOS/iPadOS Safari → Share → Add to Home Screen still works. It does not yet ship a `manifest.json` + service worker, so it is not currently full-install-eligible in Chrome/Edge (no install-button prompt) — that's a known gap, not a regression from the retired static PWA.
 
@@ -491,7 +491,7 @@ git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git /o
 cd /opt/corporatetraveldc
 
 # Copy and populate secrets
-cp dispatch-secrets.env.example /etc/corporatetraveldc/dispatch-secrets.env
+cp dispatch-secrets.env.template /etc/corporatetraveldc/dispatch-secrets.env
 chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
 # Edit dispatch-secrets.env — add FAA_NOTAM_API_KEY, NTFY_TOKEN, and any feed credentials
 # No LLM API key required — all inference runs locally via Ollama
@@ -708,7 +708,7 @@ from fastapi import FastAPI, Request
 import httpx, os
 
 app = FastAPI()
-CTDI_URL = os.environ["CTDI_URL"]          # e.g. http://100.x.x.x:8000
+CTDI_URL = os.environ["CTDI_URL"]          # e.g. http://100.94.80.100:8000
 CTDI_TOKEN = os.environ["CTDI_TOKEN"]      # tier1 bearer token
 
 @app.post("/webhook/reservation")

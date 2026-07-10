@@ -4,7 +4,11 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/cloudflared tunnel --config /home/corporatetraveldc/.cloudflared/config.yml run
+# --protocol http2: this host's uplink is a public WiFi hotspot (xfinitywifi),
+# not a private/wired network. Its NAT times out idle UDP faster than QUIC's
+# keepalive interval, causing constant stream drops/reconnects (305 in 11h
+# on 2026-07-10). HTTP/2 is TCP-based and far more tolerant of that.
+ExecStart=/usr/bin/cloudflared tunnel --protocol http2 --config /home/corporatetraveldc/.cloudflared/config.yml run
 Restart=always
 RestartSec=15
 TimeoutStartSec=30

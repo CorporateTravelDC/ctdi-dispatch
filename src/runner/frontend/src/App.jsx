@@ -213,10 +213,10 @@ export default function App() {
           </a>
           <span className="app-footer-sep">·</span>
           <a
-            href="https://dispatch.example.com"
+            href="https://dispatch.csexecutiveservices.com"
             className="app-footer-link"
           >
-            dispatch.example.com
+            dispatch.csexecutiveservices.com
           </a>
         </footer>
       </div>

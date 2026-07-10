@@ -1,4 +1,4 @@
-module csexec-tailscaled 1.0;
+module corporatetraveldc-tailscaled 1.0;
 
 require {
     type sshd_t;
