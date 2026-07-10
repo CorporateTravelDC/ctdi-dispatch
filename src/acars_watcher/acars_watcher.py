@@ -82,7 +82,11 @@ DISPATCH_SESSION.headers.update({
 # ---------------------------------------------------------------------------
 
 def _resolve_jumpseat_token() -> Optional[str]:
-    env = os.environ.get("JUMPSEAT_API_KEY", "").strip()
+    # ACARSDRAMA_JUMPSEAT_TOKEN is canonical -- namespaced to the site it's for,
+    # so it won't collide with an unrelated "jumpseat"-named key down the road.
+    # JUMPSEAT_API_KEY kept as a fallback alias for anything still set that way.
+    env = (os.environ.get("ACARSDRAMA_JUMPSEAT_TOKEN", "").strip()
+           or os.environ.get("JUMPSEAT_API_KEY", "").strip())
     if env:
         return env
     secret = pathlib.Path.home() / ".secrets" / "jumpseat.key"

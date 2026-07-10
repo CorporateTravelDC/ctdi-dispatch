@@ -4,8 +4,9 @@ import { useSearchParams } from 'react-router-dom'
 // ── Built-in brief type configs ───────────────────────────────────────────────
 // Any undiscovered type gets the default config (ops-style schedule/workflow).
 const BUILTIN = {
-  ops:    { label: 'OPS BRIEF',   emptyMsg: 'No brief yet. Generates hourly; 6-hour trend analysis at 00:00, 06:00, 12:00, 18:00 ET.' },
-  weekly: { label: 'WEEKLY',      emptyMsg: 'No weekly summary yet. Runs Sunday 18:00 ET.' },
+  ops:        { label: 'OPS BRIEF',  emptyMsg: 'No brief yet. Generates hourly; 6-hour trend analysis at 00:00, 06:00, 12:00, 18:00 ET.' },
+  weekly:     { label: 'WEEKLY',     emptyMsg: 'No weekly summary yet. Runs Sunday 18:00 ET.' },
+  'ep-advance': { label: 'EP ADVANCE', emptyMsg: 'No EP advance brief yet. Generates daily at 07:00 ET (4-week rolling DC-metro/50mi threat, route, and venue intelligence).' },
 }
 
 function typeLabel(t) {
@@ -141,6 +142,19 @@ export default function BriefView() {
   const [addingType,   setAddingType]   = useState(false)
   const [newTypeInput, setNewTypeInput] = useState('')
   const [newTypeErr,   setNewTypeErr]   = useState('')
+
+  // Re-sync tab whenever the URL's ?tab= changes, not just on first mount.
+  // useState(urlTab) above only captures the param once -- if this view is
+  // already mounted (PWA/home-screen app reused instead of a fresh page load)
+  // and a new ntfy click-through changes ?tab=, React Router does NOT remount
+  // this component for a same-route search-param change, so the old useState
+  // value would otherwise never update and the click-through silently lands
+  // on whatever tab was already open instead of the intended one.
+  useEffect(() => {
+    const t = searchParams.get('tab')
+    if (t && t !== tab) setTab(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   // Auto-discover brief types from history
   useEffect(() => {

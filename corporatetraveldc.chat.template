@@ -1,8 +1,8 @@
-# Modelfile.chat.template — Dispatch Drawer assistant (CHAT tier)
-# Copy to Modelfile.chat and fill in YOUR operator context before building.
-# Build: ollama create csexec-chat -f /opt/corporatetraveldc/Modelfile.chat
+# corporatetraveldc.chat.template — Dispatch Drawer assistant (CHAT tier)
+# Copy to corporatetraveldc.chat and fill in YOUR operator context before building.
+# Build: ollama create corporatetraveldc-pi5-chat -f /opt/corporatetraveldc/corporatetraveldc.chat
 #
-# This template ships in the public repo. Modelfile.chat (the real file with
+# This template ships in the public repo. corporatetraveldc.chat (the real file with
 # operator-specific context) is .gitignored and stays in the private repo only.
 
 FROM gemma3:4b

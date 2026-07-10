@@ -16,7 +16,7 @@ SKILL_NAME = "tfr-enrichment"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "csexec-osint:latest")
+                     or "corporatetraveldc-pi5-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
 OLLAMA_TIMEOUT    = 900  # stopgap

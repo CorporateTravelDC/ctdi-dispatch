@@ -13,6 +13,8 @@ DROP_FILES = {
     "dispatch-secrets.env",
     "secrets.env",           # acars-watcher/secrets.env — never public
     "STATUS.md",             # contains operator email + CF tunnel UUID
+    "corporatetraveldc.chat",  # real Modelfile -- operator name/callsign/county, public gets .template only
+    "corporatetraveldc.osint", # real Modelfile -- same
 }
 
 # Public-safe substitutions: real_value -> placeholder
@@ -66,6 +68,10 @@ SUBSTITUTIONS = {
     b"corey.sheldon@example.com": b"operator@example.com",
     b"corey.sheldon.example.com": b"swimuser.example.com",
 
+    # Operator real name / chauffeur contractor relationship
+    b"Corey Sheldon": b"the operator",
+    b"Corporate Car Worldwide": b"[chauffeur partner]",
+
     # Amateur radio callsigns (FCC public but operator-identifying)
     b"N0CALL-5":   b"N0CALL-5",
     b"N0CALL":     b"N0CALL",
@@ -107,6 +113,14 @@ def scrub_blob(sha):
     import re as _re
     new = _re.sub(rb"sk_adjs_[A-Za-z0-9_\-]{10,}", b"sk_adjs_REDACTED", new)
     new = _re.sub(rb"ctdc_cowork_[A-Z0-9]{20,}", b"ctdc_cowork_REDACTED", new)
+    # General domain sweep -- catches every subdomain of the real business
+    # domain (acars./adsb./dispatch./ntfy./ollama./openwebui./pihole./ops./etc,
+    # present and future), not just the handful hardcoded in SUBSTITUTIONS above.
+    # Preserves the subdomain label, only swaps the root.
+    new = _re.sub(rb"([A-Za-z0-9-]+\.)?csexecutiveservices\.com", lambda m: (m.group(1) or b"") + b"example.com", new)
+    # Real Tailscale IP for this Pi -- swap for the same placeholder used
+    # elsewhere in the tree.
+    new = new.replace(b"100.94.80.100", b"100.x.x.x")
     if new == content:
         return sha
     r = subprocess.run(

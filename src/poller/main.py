@@ -43,15 +43,26 @@ FETCH_SCHEDULE: list[dict] = [
 ]
 
 # Skills invoked as subprocesses (own SR-1/SR-2 state, own log entries).
+# Ollama-backed skills get a 950s subprocess timeout -- comfortably past the
+# skill's own internal 900s Ollama call timeout, so a call that's merely queued
+# behind a thermally-paused Ollama (see ollama_governor) gets waited out instead
+# of the subprocess being killed and losing the run. Non-LLM skills keep 120s.
+_OLLAMA_SKILL_TIMEOUT = 950
+
 SKILL_SCHEDULE: list[dict] = [
-    {"name": "tfr-enrichment",  "script": "poller/skills/tfr_enrichment.py",  "interval": 300},
-    {"name": "route-impact",    "script": "poller/skills/route_impact.py",     "interval": 300},
+    {"name": "tfr-enrichment",  "script": "poller/skills/tfr_enrichment.py",  "interval": 300,
+     "timeout": _OLLAMA_SKILL_TIMEOUT},
+    {"name": "route-impact",    "script": "poller/skills/route_impact.py",     "interval": 300,
+     "timeout": _OLLAMA_SKILL_TIMEOUT},
     {"name": "cps-recompute",   "script": "poller/skills/cps_recompute.py",    "interval": 3600},
     {"name": "train-impact",    "script": "poller/skills/train_impact.py",
-     "interval": 900, "active_interval": 300, "active_check": "train"},
+     "interval": 900, "active_interval": 300, "active_check": "train",
+     "timeout": _OLLAMA_SKILL_TIMEOUT},
     {"name": "flight-impact",   "script": "poller/skills/flight_impact.py",
-     "interval": 900, "active_interval": 300, "active_check": "flight"},
-    {"name": "osint-monitor",   "script": "poller/skills/osint_monitor.py",  "interval": 900},
+     "interval": 900, "active_interval": 300, "active_check": "flight",
+     "timeout": _OLLAMA_SKILL_TIMEOUT},
+    {"name": "osint-monitor",   "script": "poller/skills/osint_monitor.py",  "interval": 900,
+     "timeout": _OLLAMA_SKILL_TIMEOUT},
     {"name": "flight-cleanup",  "script": "poller/skills/flight_events_cleanup.py", "interval": 3600},
 ]
 
@@ -121,17 +132,27 @@ class SkillLoop:
 
     Optional active_interval + active_check: when a watchlist session of type
     active_check ('train' | 'flight') is live, the loop uses active_interval.
+
+    Runs as a background asyncio task rather than an inline await: an
+    Ollama-backed skill that's queued behind a thermally-paused/slow Ollama
+    call (see ollama_governor.py) can take up to `timeout` seconds without
+    blocking fetchers, other skills, or watchlist sweeps from running on
+    schedule in the meantime. An in-flight guard skips re-triggering a skill
+    whose previous run hasn't finished yet.
     """
 
     def __init__(self, name: str, script: str, interval: int,
                  active_interval: int | None = None,
-                 active_check: str | None = None):
+                 active_check: str | None = None,
+                 timeout: int = 120):
         self.name = name
         self.script = script
         self.interval = interval
         self.active_interval = active_interval
         self.active_check = active_check
+        self.timeout = timeout
         self._last_run = 0.0
+        self._task: asyncio.Task | None = None
 
     def _effective_interval(self) -> int:
         if self.active_interval and self.active_check:
@@ -147,25 +168,38 @@ class SkillLoop:
         now = time.time()
         if now - self._last_run < self._effective_interval():
             return
+        if self._task is not None and not self._task.done():
+            log.debug("Skill %s: previous run still in flight (queued behind "
+                      "Ollama?) -- skipping this tick", self.name)
+            return
         self._last_run = now
         script_path = src_dir / self.script
         if not script_path.exists():
             log.warning("Skill script not found: %s", script_path)
             return
+        self._task = asyncio.create_task(self._run(script_path))
+
+    async def _run(self, script_path: Path) -> None:
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, str(script_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
             if proc.returncode != 0 and proc.returncode is not None:
                 log.error("Skill %s exited %d: %s",
                           self.name, proc.returncode, stderr.decode()[:200])
             else:
                 log.info("Skill %s: ok (rc=%s)", self.name, proc.returncode)
         except asyncio.TimeoutError:
-            log.error("Skill %s timed out after 120s", self.name)
+            log.error("Skill %s timed out after %ds", self.name, self.timeout)
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
         except Exception as e:
             log.error("Skill %s error: %s", self.name, e)
 
@@ -245,13 +279,16 @@ class TriggerReactor:
         args = [sys.executable, str(script_path)]
         if force:
             args.append("--force")
+        # Ollama-backed skills (currently just osint-monitor's manual trigger)
+        # get the same queued-not-killed timeout as the scheduled loop.
+        skill_timeout = 950 if "osint_monitor" in script else 120
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.communicate(), timeout=120)
+            await asyncio.wait_for(proc.communicate(), timeout=skill_timeout)
             db.resolve_trigger(trigger_id, "success" if proc.returncode == 0 else "failed")
         except Exception as e:
             db.resolve_trigger(trigger_id, "failed", str(e))

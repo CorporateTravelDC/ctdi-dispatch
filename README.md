@@ -27,20 +27,20 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 
 | Component | State |
 |---|---|
-| PWA (operational dashboard) | `https://ops.example.com` *(static HTML — no CF Access gate required)* |
+| Ops dashboard (runner app) | `https://ops.example.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
 | Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
 | Tailscale direct | `http://100.x.x.x:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
 | FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
-| Local LLM (Ollama) | mistral-nemo 12B — csexec-chat + csexec-osint Modelfile wrappers |
-| Dispatch Drawer | Streaming chat via csexec-chat (gemma3) |
+| Local LLM (Ollama) | mistral-nemo 12B — corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint Modelfile wrappers |
+| Dispatch Drawer | Streaming chat via corporatetraveldc-pi5-chat (gemma3) |
 
 ---
 
 ## Architecture
 
-Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the PWA frontend and its own JSON state:
+Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the ops.example.com frontend and its own JSON state:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -55,11 +55,11 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 │                      SQLite (WAL) shared DB                        │
 │                                                                    │
 │  ┌─────────────────────────────────────────────────┐               │
-│  │  runner  (port 8001)                            │               │
-│  │  FastAPI + React/Vite PWA                       │               │
-│  │  Intel Feed · ADS-B Map · Status · Brief · Chat │               │
-│  │  proxies dispatch web API at :8000              │               │
-│  │  owns user_rss_feeds.json (separate from DB)    │               │
+│  │  runner (port 8001) → served at ops.example.com  │               │
+│  │  FastAPI + React/Vite SPA, screen-reader ready   │               │
+│  │  Intel Feed · ADS-B Map · Status · Brief · Chat  │               │
+│  │  proxies dispatch web API at :8000               │               │
+│  │  owns user_rss_feeds.json (separate from DB)     │               │
 │  └─────────────────────────────────────────────────┘               │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -72,7 +72,7 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
 | `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest — all 6 NMS feeds + NWWS-OI live |
-| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | PWA frontend (React/Vite) + runner API (port 8001) |
+| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.example.com` |
 
 ### Data feeds
 
@@ -173,11 +173,11 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| PWA dashboard | `https://ops.example.com` | Static HTML — no CF Access gate; add to Home Screen for PWA install |
+| Ops dashboard (runner app) | `https://ops.example.com` | React SPA, screen-reader accessible; no CF Access gate |
 | API (browser / programmatic) | `https://dispatch.example.com` | CF Access gated; use for browser-based API calls and admin work |
 | Tailscale direct | `http://100.x.x.x:8000` | Always available on tailnet; preferred fallback |
 
-> **Note:** `ops.example.com` serves the static PWA (`index.html` + `manifest.json`) via nginx. `dispatch.example.com` is the CF Access-gated API gateway — the PWA calls it as `const API = ''` (same-origin). Bearer token provides the actual API authorization.
+> **Note:** `ops.example.com` proxies to the runner app (port 8001) via nginx — it is the live operational dashboard (map, TFR/signals, EOTD trains, briefs, admin, feed). `dispatch.example.com` is the CF Access-gated API gateway the runner calls internally. Bearer token provides the actual API authorization. `dispatch-runner.example.com` is retired as a live public endpoint — reserved for a future demo-archiver stub serving time-delayed data (see *Demo Mode & Travel Pattern Intelligence* below).
 
 ### Tier 0 — Anonymous
 
@@ -225,9 +225,9 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | POST | `/admin/push-test-alert` | Send test ntfy alert |
 | GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
 
-### Runner API (port 8001 / `dispatch-runner.example.com`)
+### Runner API (port 8001 — served publicly at `ops.example.com`)
 
-The runner exposes its own API alongside the static PWA build. All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware).
+The runner exposes its own API alongside its React/Vite SPA build (the same screen-reader-accessible app now served at `ops.example.com`). All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware). `dispatch-runner.example.com` no longer routes here in production — it is retired as a live endpoint and reserved for a future demo-archiver stub (time-delayed data replay; see *Demo Mode & Travel Pattern Intelligence*).
 
 **ADS-B**
 
@@ -331,6 +331,8 @@ CTDI includes a built-in **archive recorder** that captures rolling snapshots of
 ### 1. Client demo site
 
 The archive lets you run a fully live-looking demo without connecting to a real deployment. A demo site replays historical snapshots through the same REST API surface as the live system — the client sees a real dispatch dashboard with real historical data (NOTAMs, weather, train status, TFRs, ops plans) without any credentials or live feeds being required.
+
+**Planned endpoint:** `dispatch-runner.example.com` is the expected home for this demo site once built. It is currently retired from live production traffic — all real operational traffic now lives at `ops.example.com` — and is reserved specifically for this future time-delayed-data demo/stub use.
 
 **Seed readiness check:**
 
@@ -447,50 +449,30 @@ The recorder runs as a standalone systemd user service (`demo-recorder.service`)
 
 ---
 
-## PWA — Operational Dashboard
+## Ops Dashboard — Runner App
 
-The static PWA is served from `https://ops.example.com` (nginx → `/var/www/corporatetraveldc-pwa/`). It calls the dispatch API same-origin and requires no authentication for Tier 0 data.
+`https://ops.example.com` now serves the full runner application — the same screen-reader-accessible React/Vite SPA previously reachable only at `dispatch-runner.example.com`. The old single-page static-HTML PWA (`src/pwa/`) has been permanently removed from this codebase; nothing under `ops.example.com` is static HTML anymore. The runner calls the dispatch API same-origin via its `/api/dispatch/*` proxy and requires no authentication for Tier 0 data.
 
-**Install as a home screen app:**
-- **iOS/iPadOS:** Safari → Share → Add to Home Screen
-- **Android:** Chrome → ⋮ → Add to Home Screen
-- **Desktop Chrome/Edge:** address bar install button appears automatically
+**Add to home screen:** the app declares `apple-mobile-web-app-capable` meta tags, so iOS/iPadOS Safari → Share → Add to Home Screen still works. It does not yet ship a `manifest.json` + service worker, so it is not currently full-install-eligible in Chrome/Edge (no install-button prompt) — that's a known gap, not a regression from the retired static PWA.
 
-**Interface:**
+**Routed views:**
 
-The dashboard is a single-page map + data panel layout. On mobile it stacks vertically (map top, panel bottom); on tablet/desktop it splits into map (left) and data sidebar (right).
-
-| Panel section | Data source | Update cadence |
+| Route | View | Description |
 |---|---|---|
-| CPS badge (header) | `/api/v1/cps` | 30s |
-| Weather (METAR) | `/api/v1/weather` | 30s |
-| NWS Alerts | `/api/v1/alerts` | 30s |
-| Active TFRs | `/api/v1/tfr` | 30s |
-| Aircraft | `/api/v1/adsb` (airplanes.live proxy) | 30s |
-| Amtrak / NEC | `/api/v1/amtrak` | 30s |
-| Airport FIDS | `/api/v1/fids/{apt}` | 30s |
-| Feed freshness | `/api/v1/feeds` | 30s |
+| `/` | Overview | Landing dashboard — CPS, weather, TFR, feed-health summary cards |
+| `/map` | Map | Global ADS-B traffic (airplanes.live proxy / local UltraFeeder) |
+| `/trains` | EOTD | NEC train tracking with watchlist highlighting |
+| `/ais` | AIS Map | Maritime traffic overlay |
+| `/status` | Status | Feed freshness / error state for all data sources |
+| `/tfr`, `/signals` | Signals | Active TFRs, NWS alerts, meteorology (`#meteorology`) |
+| `/brief` | Brief | Ops brief, weekly summary, and custom/EP brief tabs (`?tab=`) |
+| `/feed` | Feed | Live ntfy notification stream |
+| `/intel` | Intel | Curated + user-defined RSS/Atom intelligence feeds |
+| `/admin` | Admin | Tailscale-gated administrative controls |
 
-**Map layers:**
+The CPS badge is shown in the global header on every view, not a dedicated route.
 
-| Layer | Color | Description |
-|---|---|---|
-| SFRA 30 NM | Orange dashed ring | DC Special Flight Rules Area |
-| FRZ 15 NM | Red ring | Flight Restricted Zone |
-| P-56 A/B | Purple fill | Prohibited areas over the Mall/VP residence |
-| Active TFRs | Red dashed fill | FAA TFR polygons with NOTAM ID tooltips |
-| Aircraft | Amber diamond | Global ADS-B traffic (airplanes.live, 250 NM radius) |
-| Aircraft (watchlist) | Cyan pulsing ring | Watchlisted callsigns highlighted in the aircraft layer |
-| Trains | Colored square | NEC trains; cyan = watchlist, red = delayed, green = on time |
-| Weather stations | Circle | KDCA / KIAD / KBWI METAR points; red = ceiling < 1000 ft |
-
-**ADA / accessibility:** WCAG AA compliant. Skip-nav link, `aria-live` on all data regions, `role="status"` on CPS badge, focus-visible rings on all interactive elements, `aria-label` on all map markers, high-contrast color palette (4.5:1+ for all text, 3:1+ for UI components).
-
-**Screenshots:** *(placeholder — update when Chrome extension is available on remote)*
-
-> `docs/screenshots/pwa-dashboard.png` — full dashboard, desktop layout
-> `docs/screenshots/pwa-mobile.png` — mobile layout (stacked map + panel)
-> `docs/screenshots/pwa-aircraft.png` — global ADS-B layer with watchlist callout
+**Accessibility:** the runner app uses `aria-live` regions, `role="status"`, and `aria-label` attributes across its live-data components. A full WCAG AA audit pass (contrast ratios, focus-visible rings, skip-nav) has not been re-run since the migration off the old static PWA — treat as a follow-up, not a confirmed guarantee, until re-verified against this app specifically.
 
 ---
 
@@ -637,10 +619,10 @@ OLLAMA_OSINT_MODEL=qwen2.5:7b
 ```bash
 cp Modelfile.chat.template Modelfile.chat    # fill in operator context
 cp Modelfile.osint.template Modelfile.osint  # fill in operator context
-bash build-models.sh                         # creates csexec-chat + csexec-osint
+bash build-models.sh                         # creates corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint
 ```
 
-Then set `OLLAMA_CHAT_MODEL=csexec-chat` and `OLLAMA_OSINT_MODEL=csexec-osint` in `dispatch.env`.
+Then set `OLLAMA_CHAT_MODEL=corporatetraveldc-pi5-chat` and `OLLAMA_OSINT_MODEL=corporatetraveldc-pi5-osint` in `dispatch.env`.
 
 ---
 

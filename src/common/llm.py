@@ -12,7 +12,7 @@ Usage:
     text = generate(
         system="You are a concise aviation dispatcher.",
         prompt="Summarise this TFR: ...",
-        ollama_model="csexec-osint:latest",
+        ollama_model="corporatetraveldc-pi5-osint:latest",
         max_tokens=200,
         temperature=0.2,
     )

@@ -1,7 +1,7 @@
 """
 weekly-summary — SR-1 compliant. SR-2 exempt (time-bounded weekly window).
 
-Model: csexec-osint:latest (mistral-nemo 12B via Ollama); deterministic fallback.
+Model: corporatetraveldc-pi5-osint:latest (mistral-nemo 12B via Ollama); deterministic fallback.
 Schedule: Sunday 18:00 ET (corporatetraveldc-weekly-summary.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes the past week; inputs always new.
@@ -25,7 +25,7 @@ SKILL_NAME = "weekly-summary"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "csexec-osint:latest")
+                     or "corporatetraveldc-pi5-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Weekly content ~600-800 tokens; mistral-nemo Pi 5 CPU ~200s — 600s gives headroom
 OLLAMA_TIMEOUT    = 900  # stopgap
