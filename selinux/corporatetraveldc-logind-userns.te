@@ -1,4 +1,4 @@
-module csexec-logind-userns 1.0;
+module corporatetraveldc-logind-userns 1.0;
 
 require {
     type systemd_logind_t;

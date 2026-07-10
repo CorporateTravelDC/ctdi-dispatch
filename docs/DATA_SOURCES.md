@@ -476,7 +476,7 @@ ACARSDRAMA_JUMPSEAT_TOKEN=
 
 When integrating a new feed:
 
-1. Add the credential stub(s) to `dispatch-secrets.env.example` with a comment block that includes the signup URL and a brief description.
+1. Add the credential stub(s) to `dispatch-secrets.env.template` with a comment block that includes the signup URL and a brief description.
 
 2. Add an entry to this file (`docs/DATA_SOURCES.md`) following the same template:
    - Last-verified date

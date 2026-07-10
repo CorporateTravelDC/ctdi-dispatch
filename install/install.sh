@@ -282,7 +282,7 @@ echo "==> Setting up configuration..."
 if [[ "$OS" == "Linux" && "$DEV_MODE" == "false" ]]; then
     sudo mkdir -p /etc/corporatetraveldc /var/lib/corporatetraveldc /etc/ntfy /var/lib/ntfy
     if [[ ! -f /etc/corporatetraveldc/dispatch-secrets.env ]]; then
-        sudo cp "$INSTALL_DIR/dispatch-secrets.env.example" /etc/corporatetraveldc/dispatch-secrets.env
+        sudo cp "$INSTALL_DIR/dispatch-secrets.env.template" /etc/corporatetraveldc/dispatch-secrets.env
         sudo chmod 0640 /etc/corporatetraveldc/dispatch-secrets.env
         sudo chown root:corporatetraveldc /etc/corporatetraveldc/dispatch-secrets.env 2>/dev/null || true
         echo "    Created /etc/corporatetraveldc/dispatch-secrets.env -- edit to add credentials."
@@ -307,7 +307,7 @@ if [[ "$OS" == "Linux" && "$DEV_MODE" == "false" ]]; then
     fi
 else
     if [[ ! -f "$INSTALL_DIR/.env.local" ]]; then
-        cp "$INSTALL_DIR/dispatch-secrets.env.example" "$INSTALL_DIR/.env.local"
+        cp "$INSTALL_DIR/dispatch-secrets.env.template" "$INSTALL_DIR/.env.local"
         echo "    Created .env.local -- edit to add credentials. Never commit this file."
     fi
 fi

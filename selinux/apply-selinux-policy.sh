@@ -155,37 +155,86 @@ fi
 echo "--- Step 6: tailscaled policy ---"
 if seinfo -t 2>/dev/null | grep -q "tailscaled_t"; then
     echo "[OK]  upstream tailscaled_t present"
-    if semodule -l 2>/dev/null | grep -q "^csexec-tailscaled$"; then
-        run semodule -r csexec-tailscaled
+    if semodule -l 2>/dev/null | grep -q "^corporatetraveldc-tailscaled$"; then
+        run semodule -r corporatetraveldc-tailscaled
     fi
 else
     if dnf info tailscale-selinux &>/dev/null; then
         run dnf install -y tailscale-selinux
         run restorecon -v "$(command -v tailscaled 2>/dev/null || echo /usr/sbin/tailscaled)"
     else
-        build_and_load_module "csexec-tailscaled"
+        build_and_load_module "corporatetraveldc-tailscaled"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7 -- TE modules
+# Step 7 -- SDR USB passthrough (dumpvdl2, ultrafeeder/readsb)
+# Both bind-mount /dev/bus/usb and AddDevice= their RTL-SDR dongle directly
+# into container_t. Without an explicit allow, enforcing denies
+# { open ioctl read write } on the usb_device_t chr_file and both decoders
+# spin in a tight reopen/retry loop -- on 2026-07-09 that produced 6,700+ AVC
+# denials in 17 minutes and made the box appear to lock up. This is the
+# missing piece; without it, re-enabling enforcing WILL reproduce the
+# incident. Scoped to just usb_device_t chr_file (not the broader
+# container_use_devices boolean) since only these two containers need it.
 # ---------------------------------------------------------------------------
-echo "--- Step 7: TE modules ---"
-build_and_load_module "csexec-virtqemud"
-build_and_load_module "csexec-logind-userns"
+echo "--- Step 7: SDR USB passthrough ---"
+build_and_load_module "corporatetraveldc-sdr-usb"
 
 # ---------------------------------------------------------------------------
-# Step 8 -- Verify
+# Step 8 -- nginx backend port labels
+# See selinux/label-nginx-backend-ports.sh for the full port inventory and
+# the procedure for adding a port when a new vhost is added.
+# ---------------------------------------------------------------------------
+echo "--- Step 8: nginx backend port labels ---"
+run bash "${SCRIPT_DIR}/label-nginx-backend-ports.sh" $([[ "$DRY_RUN" == true ]] && echo --dry-run)
+
+# ---------------------------------------------------------------------------
+# Step 9 -- nginx outbound connect (name_connect)
+# Labeling a port http_port_t (Step 8) only governs name_bind under stock
+# policy -- httpd_t's name_connect to http_port_t is boolean-gated
+# (httpd_can_network_connect), and that boolean's scope is "port_type", not
+# just http_port_t. This module grants the same permission unconditionally
+# but scoped to http_port_t only. Must run after Step 8.
+# ---------------------------------------------------------------------------
+echo "--- Step 9: nginx outbound connect ---"
+build_and_load_module "corporatetraveldc-nginx-proxy"
+
+# ---------------------------------------------------------------------------
+# Step 10 -- nginx SSL cert directory (cert_t)
+# /etc/nginx/ssl holds the Tailscale HTTPS cert for
+# tailscale-dispatch-runner.conf (see scripts/renew-tailscale-cert.sh).
+# Files land there via `mv` from a /tmp staging dir -- same-filesystem mv
+# doesn't relabel, so without this rule httpd_t is denied reading a cert
+# still carrying user_tmp_t. cert_t is the standard reference-policy type
+# for TLS certs (matches /etc/pki/tls/certs), not a custom type.
+# ---------------------------------------------------------------------------
+echo "--- Step 10: nginx SSL cert directory ---"
+run mkdir -p /etc/nginx/ssl
+run semanage fcontext -a -t cert_t "/etc/nginx/ssl(/.*)?" 2>/dev/null \
+    || run semanage fcontext -m -t cert_t "/etc/nginx/ssl(/.*)?"
+run restorecon -Rv /etc/nginx/ssl
+
+# ---------------------------------------------------------------------------
+# Step 11 -- TE modules
+# ---------------------------------------------------------------------------
+echo "--- Step 11: TE modules ---"
+build_and_load_module "corporatetraveldc-virtqemud"
+build_and_load_module "corporatetraveldc-logind-userns"
+build_and_load_module "corporatetraveldc-fail2ban-lockdown"
+
+# ---------------------------------------------------------------------------
+# Step 12 -- Verify
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Step 8: Verify ---"
-for mod in csexec-virtqemud csexec-logind-userns; do
+echo "--- Step 12: Verify ---"
+for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown; do
     semodule -l 2>/dev/null | grep -q "^${mod}$" \
         && echo "[OK]  module: ${mod}" \
         || echo "[FAIL] module: ${mod}" >&2
 done
 
-for path in /var/lib/corporatetraveldc /var/lib/ntfy /etc/corporatetraveldc /etc/ntfy /run/corporatetraveldc; do
+for path in /var/lib/corporatetraveldc /var/lib/ntfy /etc/corporatetraveldc /etc/ntfy /run/corporatetraveldc /etc/nginx/ssl; do
     [[ -d "${path}" ]] \
         && echo "[OK]  exists: ${path}" \
         || echo "[FAIL] missing: ${path}" >&2
@@ -194,3 +243,6 @@ done
 echo ""
 echo "[OK]  Apply complete."
 echo "[INFO] Restart tailscaled if it was previously blocked: sudo systemctl restart tailscaled"
+echo "[INFO] Also run pihole-unbound-selinux-internal/selinux/apply-selinux-policy.sh"
+echo "       before re-enabling enforcing -- it fixes the nginx/pihole port-80"
+echo "       and pihole-webserver/8091 denials on the same host."

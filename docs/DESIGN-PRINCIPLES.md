@@ -69,5 +69,5 @@ Before opening a PR that adds a new capability, verify:
 - [ ] Any inference uses `OLLAMA_BASE_URL`; cloud provider is gated behind an explicit operator config
 - [ ] No new entry in `requirements.txt` that pulls a cloud LLM SDK without the above gate
 - [ ] If a new external data feed: documented in README, poller has a graceful fallback, credentials are optional
-- [ ] If a new secret: added to `dispatch-secrets.env.example` in the appropriate section (data credentials vs. optional cloud LLM)
+- [ ] If a new secret: added to `dispatch-secrets.env.template` in the appropriate section (data credentials vs. optional cloud LLM)
 - [ ] CUI rules satisfied (see `SECURITY.md`)

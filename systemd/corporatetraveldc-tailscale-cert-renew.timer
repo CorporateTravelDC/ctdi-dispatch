@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily check for Tailscale HTTPS cert renewal (04:00 ET)
+Requires=corporatetraveldc-tailscale-cert-renew.service
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

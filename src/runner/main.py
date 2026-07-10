@@ -146,7 +146,7 @@ def _is_trusted(request: Request) -> bool:
 async def tailscale_gate(request: Request, call_next):
     # Admin routes require a trusted source (Tailscale / localhost).
     # All other routes (UI, API data, chat) are open — CF tunnel + CF Access
-    # handles edge auth for dispatch-runner.example.com.
+    # handles edge auth for dispatch-runner.csexecutiveservices.com.
     if request.url.path.startswith("/admin"):
         if not _is_trusted(request):
             return JSONResponse(status_code=403, content={"detail": "access denied"})
