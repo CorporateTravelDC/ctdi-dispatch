@@ -1,0 +1,22 @@
+module corporatetraveldc-sdr-usb 1.0;
+
+# dumpvdl2 and corporatetraveldc-ultrafeeder (readsb) bind-mount /dev/bus/usb
+# and AddDevice= their RTL-SDR dongle straight into container_t. Under
+# enforcing, container_t has no allow for usb_device_t chr_file, so both
+# decoders are denied { open ioctl read write } and spin in a tight
+# reopen/retry loop. Observed 2026-07-09: 6,752 AVC denials from these two
+# containers alone in a 17-minute enforcing boot, flooding audit/journald and
+# making the host appear to lock up.
+#
+# Scoped to usb_device_t chr_file only -- not the broader
+# container_use_devices boolean -- since no other container on this host
+# needs raw device access (verified against every live .container quadlet).
+
+require {
+	type container_t;
+	type usb_device_t;
+	class chr_file { open ioctl read write };
+}
+
+#============= container_t ==============
+allow container_t usb_device_t:chr_file { open ioctl read write };

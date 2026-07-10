@@ -150,7 +150,7 @@ fi
 echo ""
 echo "==> Setting up configuration..."
 if [[ ! -f "$INSTALL_DIR/.env.local" ]]; then
-    cp "$INSTALL_DIR/dispatch-secrets.env.example" "$INSTALL_DIR/.env.local"
+    cp "$INSTALL_DIR/dispatch-secrets.env.template" "$INSTALL_DIR/.env.local"
     echo "    Created .env.local — edit to add credentials. Never commit this file."
 fi
 
@@ -213,7 +213,7 @@ echo "    ✗ FAA SWIM NMS push ingest (solace-pubsubplus, Linux-native C librar
 echo "    ✗ systemd Quadlets (use Termux:Boot instead)"
 echo ""
 echo "  iOS / iPadOS note: Run the stack on any supported platform above,"
-echo "  then browse to https://dispatch.example.com (or local IP)"
+echo "  then browse to https://dispatch.csexecutiveservices.com (or local IP)"
 echo "  from Safari on iPhone/iPad. No server-side install supported on iOS."
 echo ""
 echo "  Manual start:"

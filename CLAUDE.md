@@ -87,7 +87,7 @@ All four share the same SQLite database via WAL mode.
 Defined in `src/auth/auth.py`. Four tiers enforced as FastAPI dependencies:
 
 - **T0** — anonymous, no token required
-- **T1** — Tailscale (via `Tailscale-User-Login` header or `100.x.x.x` source IP) or `cert` bearer token
+- **T1** — Tailscale (via `Tailscale-User-Login` header or `100.94.80.100` source IP) or `cert` bearer token
 - **T2 (SHARES)** — bearer token with `tier=shares`; access audit-logged
 - **Admin** — bearer token with `tier=admin`; required for all `/admin/*` endpoints
 
