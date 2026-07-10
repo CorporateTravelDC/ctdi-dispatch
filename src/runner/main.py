@@ -73,13 +73,13 @@ RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
 # MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 # Use with Claude Code, Cline, Cursor, Zed, Windsurf, or Open WebUI via mcpo.
 # Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
-# Both csexec-chat and csexec-osint are Modelfile wrappers on mistral-nemo:latest.
+# Both corporatetraveldc-pi5-chat and corporatetraveldc-pi5-osint are Modelfile wrappers on mistral-nemo:latest.
 # llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://host.containers.internal:11434
 OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
-OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "csexec-chat:latest")  # dispatch drawer (mistral-nemo)
-OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "csexec-osint:latest") # OSINT narrative (mistral-nemo)
+OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "corporatetraveldc-pi5-chat:latest")  # dispatch drawer (mistral-nemo)
+OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "corporatetraveldc-pi5-osint:latest") # OSINT narrative (mistral-nemo)
 OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
 
 # Chat endpoint + auth headers: prefer Open WebUI's Ollama proxy; fall back to Ollama direct.

@@ -8,15 +8,19 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'CS Executive Services Dispatch',
-        short_name: 'Dispatch',
-        theme_color: '#0a0e1a',
-        background_color: '#0a0e1a',
+        name: 'Corporate Travel Dispatch Intelligence',
+        short_name: 'Dispatch Intel',
+        description: 'Real-time TFR, weather, airspace, and ground-route dispatch intelligence.',
+        theme_color: '#040812',
+        background_color: '#040812',
         display: 'standalone',
-        orientation: 'landscape-primary',
+        orientation: 'any',
+        start_url: '/',
+        scope: '/',
         icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {

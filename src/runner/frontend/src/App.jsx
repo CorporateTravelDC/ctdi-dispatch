@@ -74,17 +74,20 @@ export default function App() {
     })
   }, [])
 
-  // adsbMode: globe (default) ↔ local — 'live' removed
-  const ADSB_MODES  = ['globe', 'local']
-  const ADSB_LABELS = { globe: 'GLOBE', local: 'LOCAL' }
+  // adsbMode: globe (aggregator embed, default) <-> tactical (airspace/TFR map).
+  // Both source aircraft from the airplanes.live aggregator now -- local-feeder
+  // display already has its own dedicated view at adsb.csexecutiveservices.com,
+  // so there's no "local" mode here to duplicate it.
+  const ADSB_MODES  = ['globe', 'tactical']
+  const ADSB_LABELS = { globe: 'GLOBE', tactical: 'TACTICAL' }
   const [adsbMode, setAdsbMode] = useState(() => {
     const stored = localStorage.getItem('adsbMode')
-    // migrate any legacy 'live' value to 'globe'
-    return stored === 'live' || !stored ? 'globe' : stored
+    // migrate any legacy 'live'/'local' value to 'globe'
+    return (stored === 'live' || stored === 'local' || !stored) ? 'globe' : stored
   })
   const toggleAdsb = useCallback(() => {
     setAdsbMode(prev => {
-      const next = prev === 'globe' ? 'local' : 'globe'
+      const next = prev === 'globe' ? 'tactical' : 'globe'
       localStorage.setItem('adsbMode', next)
       return next
     })
@@ -97,8 +100,8 @@ export default function App() {
 
       <div className="app">
         <nav className="topbar" role="navigation" aria-label="Primary navigation">
-          <span className="topbar-brand" aria-label="CS Executive Services Dispatch">
-            CSEX DISPATCH
+          <span className="topbar-brand" aria-label="Corporate Travel Dispatch Intelligence">
+            CORPORATE TRAVEL DISPATCH INTELLIGENCE
           </span>
 
           <div className="topbar-nav" role="menubar">
@@ -147,8 +150,8 @@ export default function App() {
               onClick={toggleAdsb}
               aria-label={`ADS-B mode: ${ADSB_LABELS[adsbMode]} — click to cycle`}
               title={
-                adsbMode === 'globe' ? 'globe.airplanes.live + local feeder overlay' :
-                                       'UltraFeeder (local antenna only)'
+                adsbMode === 'globe' ? 'globe.airplanes.live embed + watchlist highlighting' :
+                                       'Tactical map — airspace, TFRs, and traffic (airplanes.live)'
               }
             >
               ADS-B:{ADSB_LABELS[adsbMode]}

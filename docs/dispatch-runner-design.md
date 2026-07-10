@@ -214,7 +214,7 @@ process-scoped (restarts clear it). No persistent RSS cache on disk.
 
 ### Chat — Dispatch Drawer
 
-- Streaming chat via csexec-chat (mistral-nemo Modelfile wrapper)
+- Streaming chat via corporatetraveldc-pi5-chat (mistral-nemo Modelfile wrapper)
 - Backed by /api/dispatch/api/v1/chat endpoint
 
 ---

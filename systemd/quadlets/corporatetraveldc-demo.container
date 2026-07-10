@@ -1,0 +1,21 @@
+# corporatetraveldc-demo.container
+# Install to ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-demo
+[Unit]
+Description=Corporate Travel DC — demo archive recorder (2-week minimum seed buffer)
+After=network-online.target corporatetraveldc-web.service
+Wants=corporatetraveldc-web.service
+
+[Container]
+Image=localhost/corporatetraveldc-demo:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+AutoUpdate=local
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
