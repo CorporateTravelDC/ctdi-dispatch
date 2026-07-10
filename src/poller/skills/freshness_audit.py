@@ -25,7 +25,7 @@ OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_CHAT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "csexec-osint:latest")
+                     or "corporatetraveldc-pi5-osint:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 # Stale thresholds in seconds — per SKILL.md feed freshness reference.

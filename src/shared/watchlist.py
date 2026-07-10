@@ -24,6 +24,7 @@ from typing import Literal
 import requests
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
 
 log = logging.getLogger("shared.watchlist")
 
@@ -38,25 +39,23 @@ EntryType = Literal["flight", "train"]
 _ntfy_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy")
 
 # Dedup window: don't re-fire the same event_type for the same entry within this many seconds.
+# Persisted (not in-memory) — survives container restarts and is shared between
+# the ingest container and the poller, which both call watchlist_event_hit() for
+# the same entities via different paths (push-primary vs. REST fallback). An
+# in-memory-only cache would let both fire independently during handoff windows
+# or after either process restarts.
 _DEDUP_WINDOW_SECS = 300  # 5 minutes
-_dedup_lock = threading.Lock()
-_dedup_cache: dict[str, float] = {}  # key = f"{entry_id}:{event_type}" → last fired epoch
-
-
-def _dedup_key(entry_id: str, event_type: str) -> str:
-    return f"{entry_id}:{event_type}"
+_watchlist_dedup = PushDedup("watchlist-event", dedup_secs=_DEDUP_WINDOW_SECS)
 
 
 def _check_dedup(entry_id: str, event_type: str) -> bool:
     """Return True if we should suppress (already fired within dedup window)."""
-    key = _dedup_key(entry_id, event_type)
-    now = time.time()
-    with _dedup_lock:
-        last = _dedup_cache.get(key, 0.0)
-        if now - last < _DEDUP_WINDOW_SECS:
-            return True
-        _dedup_cache[key] = now
+    key = f"{entry_id}:{event_type}"
+    ck = content_hash(event_type)  # constant per event_type -- pure time-window gate
+    if _watchlist_dedup.should_push(key, ck):
+        _watchlist_dedup.record(key, ck)
         return False
+    return True
 
 
 def get_active_entries(entry_type: EntryType | None = None) -> list[dict]:

@@ -125,6 +125,29 @@ checkmodule -M -m -o ctdi_governor.mod ctdi_governor.te
 semodule_package -o ctdi_governor.pp -m ctdi_governor.mod
 semodule -i ctdi_governor.pp
 
+# --- STEP 3.5: PIN OLLAMA TO 2 CORES + AUTO-UNLOAD IDLE MODELS ---
+echo "[+] Writing ollama.service resource-limit drop-in..."
+mkdir -p /etc/systemd/system/ollama.service.d
+cat << 'EOF' > /etc/systemd/system/ollama.service.d/20-resource-limits.conf
+[Service]
+# Pin Ollama (and its llama-server children) to 2 of the Pi 5's 4 cores --
+# leaves cores 2-3 free for the dispatch containers (web/poller/pusher/ingest)
+# and caps how much heat a single inference run can generate. This backstops
+# the Modelfiles' own "PARAMETER num_thread 2" -- that only requests a thread
+# count from llama.cpp, it does not restrict which cores the OS schedules
+# those threads onto. AllowedCPUs is the actual enforcement.
+AllowedCPUs=0,1
+
+# Unload an idle model from memory after 10 minutes of no requests, so the
+# Pi cools back toward baseline (60s-mid-60s C) between brief/OSINT runs
+# instead of staying loaded (and hot) indefinitely.
+Environment="OLLAMA_KEEP_ALIVE=10m"
+EOF
+
+echo "[+] Reloading and restarting ollama.service with resource limits..."
+systemctl daemon-reload
+systemctl restart ollama.service
+
 # --- STEP 4: APPLY CONTEXTS AND LAUNCH ---
 echo "[+] Applying correct target context file labeling via restorecon..."
 restorecon -v /usr/local/bin/ollama_governor.py

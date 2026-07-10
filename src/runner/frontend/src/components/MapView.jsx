@@ -261,15 +261,20 @@ function GlobeMap({ liveState }) {
     leafletRef.current = map
   }, [])
 
+  // Only the operator's watchlist is drawn here — full traffic is already
+  // visible in the embedded globe.airplanes.live iframe below, and local-feed
+  // traffic has its own dedicated view at adsb.csexecutiveservices.com. Duplicating
+  // either as a second marker layer on top of the aggregator embed is redundant.
   const refreshLocal = useCallback(async () => {
     if (!localLayerRef.current) return
     try {
-      const r = await fetch('/api/adsb/local')
+      const r = await fetch('/api/adsb/live')
       if (!r.ok) return
       const data = await r.json()
       const aircraft = data.aircraft || data.ac || []
       localLayerRef.current.clearLayers()
       let count = 0
+      const tracked = []
       aircraft.forEach(ac => {
         if (!ac.lat || !ac.lon) return
         const alt = ac.alt_baro ?? ac.altitude ?? 0
@@ -278,31 +283,22 @@ function GlobeMap({ liveState }) {
         const hdg = ac.track || ac.heading || 0
         const spd = ac.gs ?? ac.speed ?? '?'
         const isTracked = callsignSet.has(callsign.toUpperCase()) || hexSet.has((ac.hex || '').toLowerCase())
+        if (!isTracked) return
         const marker = L.marker([ac.lat, ac.lon], {
-          icon: isTracked ? trackedIcon(hdg) : localFeedIcon(hdg),
+          icon: trackedIcon(hdg),
           interactive: true,
-          zIndexOffset: isTracked ? 1000 : 0,
+          zIndexOffset: 1000,
         })
-        const tip = isTracked
-          ? trackedTooltipHtml(callsign, alt, spd, hdg)
-          : `<b class="local-feed-tip">LOCAL</b> ${callsign}<br/>Alt: ${alt}ft · ${spd}kt · ${Math.round(hdg)}°`
-        marker.bindTooltip(tip, {
-          className: isTracked ? 'ac-tooltip tracked-tooltip' : 'ac-tooltip local-tooltip',
-          permanent: isTracked,
+        marker.bindTooltip(trackedTooltipHtml(callsign, alt, spd, hdg), {
+          className: 'ac-tooltip tracked-tooltip',
+          permanent: true,
         })
         marker.addTo(localLayerRef.current)
         count++
+        tracked.push({ lat: ac.lat, lon: ac.lon, label: callsign, tracked: true })
       })
       setLocalCount(count)
-      setLocalItems(
-        aircraft
-          .filter(ac => ac.lat && ac.lon)
-          .map(ac => {
-            const callsign = (ac.flight || '').trim() || ac.hex || '?'
-            const isTracked = callsignSet.has(callsign.toUpperCase()) || hexSet.has((ac.hex || '').toLowerCase())
-            return { lat: ac.lat, lon: ac.lon, label: callsign, tracked: isTracked }
-          })
-      )
+      setLocalItems(tracked)
     } catch (_) {}
   }, [callsignSet, hexSet])
 
@@ -319,13 +315,13 @@ function GlobeMap({ liveState }) {
     <div className="globe-map-wrap">
       <AriaCompassRegion
         summary={compassSummary}
-        entityType="local feeder aircraft"
+        entityType="watchlist aircraft"
         count={localCount}
-        extra="Global traffic via globe.airplanes.live."
+        extra="Full traffic is shown live in the globe.airplanes.live embed below."
       />
       <AccessibleTable
         id="globe-local-table"
-        caption={`Local feeder aircraft — ${localCount} visible`}
+        caption={`Watchlist aircraft — ${localCount} visible`}
         columns={[
           { key: 'callsign', label: 'Callsign' },
           { key: 'lat',      label: 'Latitude'  },
@@ -333,7 +329,7 @@ function GlobeMap({ liveState }) {
           { key: 'tracked',  label: 'Tracked'   },
         ]}
         rows={localTableRows}
-        emptyMsg="No local feeder aircraft visible."
+        emptyMsg="No watchlisted aircraft currently airborne."
       />
       {/* ── Search bar overlay ─────────────────────────────────── */}
       <form className="globe-search-bar" onSubmit={handleSearch} role="search">
@@ -385,9 +381,9 @@ function GlobeMap({ liveState }) {
       </div>
 
       <div className="map-overlay-stats globe-stats">
-        <span className="stat source-badge local-feed-stat">◉ {localCount} LOCAL</span>
+        <span className="stat source-badge local-feed-stat">★ {localCount} TRACKED</span>
         <span className="stat" style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
-          green = local feeder · cyan = tracked · globe = airplanes.live
+          cyan = watchlist · globe = airplanes.live
         </span>
       </div>
     </div>
@@ -395,7 +391,7 @@ function GlobeMap({ liveState }) {
 }
 
 // ── Local Leaflet map ──────────────────────────────────────────────────────
-function LocalMap({ adsbMode, liveState }) {
+function TacticalMap({ liveState }) {
   const { config } = useGlobalLayerConfig() ?? {}
   const layers = config?.layers ?? {}
   const mapRef           = useRef(null)
@@ -446,8 +442,9 @@ function LocalMap({ adsbMode, liveState }) {
   const refreshAircraft = useCallback(async () => {
     if (!aircraftLayerRef.current) return
     try {
-      const url = adsbMode === 'local' ? '/api/adsb/local' : '/api/adsb/live'
-      const r = await fetch(url)
+      // Always the aggregator feed — local-feeder display lives at
+      // adsb.csexecutiveservices.com; no need to duplicate it here.
+      const r = await fetch('/api/adsb/live')
       if (!r.ok) throw new Error(r.statusText)
       const data = await r.json()
       const aircraft = data.aircraft || data.ac || []
@@ -493,7 +490,7 @@ function LocalMap({ adsbMode, liveState }) {
       setAcItems(compassItems)
       setError(null)
     } catch (e) { setError(`ADS-B: ${e.message}`) }
-  }, [adsbMode, callsignSet, hexSet])
+  }, [callsignSet, hexSet])
 
   const refreshTfrs = useCallback(async () => {
     if (!tfrLayerRef.current) return
@@ -603,22 +600,20 @@ function LocalMap({ adsbMode, liveState }) {
           )}
           <span className="stat">{tfrCount} TFR{tfrCount !== 1 ? 's' : ''}</span>
           {error && <span className="stat error">{error}</span>}
-          <span className={`stat source-badge ${adsbMode}`}>
-            {adsbMode === 'local' ? 'LOCAL' : 'LIVE (airplanes.live)'}
-          </span>
+          <span className="stat source-badge">LIVE (airplanes.live)</span>
         </div>
       </div>
     </div>
   )
 }
 
-// ── Root: pick globe vs local ─────────────────────────────────────────────
+// ── Root: pick globe (aggregator embed) vs tactical (airspace/TFR map) ────
 export default function MapView({ adsbMode, liveState }) {
   return (
     <div className="train-map-view">
-      {adsbMode === 'globe'
-        ? <GlobeMap liveState={liveState} />
-        : <LocalMap adsbMode={adsbMode} liveState={liveState} />}
+      {adsbMode === 'tactical'
+        ? <TacticalMap liveState={liveState} />
+        : <GlobeMap liveState={liveState} />}
     </div>
   )
 }

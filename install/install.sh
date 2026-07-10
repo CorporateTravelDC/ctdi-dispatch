@@ -320,19 +320,19 @@ if [[ "$SKIP_OLLAMA" == "false" ]]; then
         echo "    Modelfile.chat not found (it's .gitignored -- operator-specific)."
         echo "    Copy and customize the template:"
         echo "      cp $INSTALL_DIR/Modelfile.chat.template $INSTALL_DIR/Modelfile.chat"
-        echo "      ollama create csexec-chat -f $INSTALL_DIR/Modelfile.chat"
+        echo "      ollama create corporatetraveldc-pi5-chat -f $INSTALL_DIR/Modelfile.chat"
     else
-        echo "    Building csexec-chat from Modelfile.chat..."
-        ollama create csexec-chat -f "$INSTALL_DIR/Modelfile.chat" || true
+        echo "    Building corporatetraveldc-pi5-chat from Modelfile.chat..."
+        ollama create corporatetraveldc-pi5-chat -f "$INSTALL_DIR/Modelfile.chat" || true
     fi
     if [[ ! -f "$INSTALL_DIR/Modelfile.osint" ]]; then
         echo "    Modelfile.osint not found (it's .gitignored -- operator-specific)."
         echo "    Copy and customize the template:"
         echo "      cp $INSTALL_DIR/Modelfile.osint.template $INSTALL_DIR/Modelfile.osint"
-        echo "      ollama create csexec-osint -f $INSTALL_DIR/Modelfile.osint"
+        echo "      ollama create corporatetraveldc-pi5-osint -f $INSTALL_DIR/Modelfile.osint"
     else
-        echo "    Building csexec-osint from Modelfile.osint..."
-        ollama create csexec-osint -f "$INSTALL_DIR/Modelfile.osint" || true
+        echo "    Building corporatetraveldc-pi5-osint from Modelfile.osint..."
+        ollama create corporatetraveldc-pi5-osint -f "$INSTALL_DIR/Modelfile.osint" || true
     fi
 fi
 

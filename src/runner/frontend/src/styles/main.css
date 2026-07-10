@@ -144,9 +144,10 @@ body::before {
 
 .topbar-brand {
   font-family: var(--font-ui);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
   color: var(--cyan);
   user-select: none;
   white-space: nowrap;
@@ -857,7 +858,7 @@ body::before {
   color: var(--muted); flex-shrink: 0; font-size: 0.58rem; align-self: center;
   border: 1px solid var(--border); border-radius: 2px; padding: 0 0.2rem;
 }
-.sig-msg-text { color: var(--text-2); opacity: 0.9; word-break: break-word; flex: 1; }
+.sig-msg-text { color: var(--text-2); opacity: 0.9; word-break: break-word; flex: 1 1 100%; min-width: 12rem; }
 .sig-msg-loc  { color: var(--muted); font-size: 0.58rem; flex-basis: 100%; margin-top: 0.1rem; }
 .sig-empty, .sig-pending { color: var(--muted); font-family: var(--font-ui); font-size: 0.75rem; padding: 0.5rem 0; }
 .sig-pending { color: var(--orange); }
@@ -1064,7 +1065,7 @@ body::before {
   .topbar-brand {
     padding: 0 0.85rem;
     height: 40px; display: flex; align-items: center;
-    flex: 1; font-size: 0.66rem;
+    flex: 1; font-size: 0.46rem; letter-spacing: 0.02em;
   }
   .topbar-right {
     margin-left: 0; padding: 0 0.5rem;

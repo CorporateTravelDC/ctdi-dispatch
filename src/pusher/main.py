@@ -176,6 +176,24 @@ MIN_LOW_READINGS = 3
 # State: callsign -> {last_seen, airborne, notified, last_alt_ft, low_count}
 _flight_state: dict = {}
 
+# Persisted "already notified this landing" gate, independent of _flight_state.
+# _flight_state["notified"] alone is NOT restart-safe: if this container restarts
+# while a landed aircraft is still a live watchlist entry, _flight_state resets to
+# empty and _check_flight_landing() will happily re-confirm "landed" a few poll
+# cycles later (on-ground/low-alt readings persist at the gate), re-firing the
+# same notification. This gate survives restarts via the shared state volume.
+#
+# Window depends on confirmation source: ACARS is authoritative (avionics report
+# wheels-on-ground directly), so a 1h re-arm is safe. ADS-B/absence-based
+# confirmation is corroborative/inferred, so it gets a longer 2h window to guard
+# against a restart re-chasing stale ground/low-alt readings before they age out.
+_landing_dedup_acars = PushDedup("flight-landing-acars", dedup_secs=3600)   # 1h
+_landing_dedup_adsb  = PushDedup("flight-landing-adsb", dedup_secs=7200)    # 2h
+
+
+def _landing_dedup_for(result: str) -> PushDedup:
+    return _landing_dedup_acars if result == "landed_acars" else _landing_dedup_adsb
+
 
 def _ultrafeeder_url() -> str:
     """Return local UltraFeeder base URL, or empty string if not configured."""
@@ -258,7 +276,7 @@ def _check_flight_landing(callsign: str) -> str | None:
             )
             state["airborne"] = False
             state["notified"] = True
-            return "landed"
+            return "landed_acars"
 
         if phase == "off":
             # Avionics confirm wheels up — set airborne regardless of ADS-B.
@@ -319,7 +337,7 @@ def _check_flight_landing(callsign: str) -> str | None:
         log.info("%s ADS-B landing confirmed — alt=%s last_alt=%s readings=%d",
                  cs, alt_baro, last_alt, state["low_count"])
         state["notified"] = True
-        return "landed"
+        return "landed_adsb"
 
     else:
         # Aircraft absent from all ADS-B feeds
@@ -339,7 +357,7 @@ def _check_flight_landing(callsign: str) -> str | None:
             log.info("%s absent from feed %ds — presumed landed (last alt=%s)",
                      cs, int(elapsed), last_alt)
             state["notified"] = True
-            return "landed"
+            return "landed_adsb"
 
     return None
 
@@ -360,7 +378,7 @@ def push_flight_watchlist_landings() -> int:
         if not callsign:
             continue
         result = _check_flight_landing(callsign)
-        if result == "landed":
+        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed.\nWatchlist monitoring complete."
             success = send_ntfy(
                 topic="flight-alerts",
@@ -369,6 +387,7 @@ def push_flight_watchlist_landings() -> int:
                 title=f"{callsign} — Landed",
             )
             if success:
+                _landing_dedup_for(result).record(callsign, content_hash("landed"))
                 try:
                     db.terminate_watchlist_session(
                         session["id"],
@@ -386,7 +405,7 @@ def push_flight_watchlist_landings() -> int:
         if not callsign:
             continue
         result = _check_flight_landing(callsign)
-        if result == "landed":
+        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed."
             success = send_ntfy(
                 topic="flight-alerts",
@@ -395,6 +414,7 @@ def push_flight_watchlist_landings() -> int:
                 title=f"{callsign} — Landed",
             )
             if success:
+                _landing_dedup_for(result).record(callsign, content_hash("landed"))
                 pushed += 1
 
     return pushed
