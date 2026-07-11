@@ -42,6 +42,10 @@ function historyUrl(type) {
 }
 
 // ── Shared localStorage for operator-defined types ────────────────────────────
+// Briefs regenerate hourly (or every 30min for EP) -- 60s polling catches
+// a fresh one quickly without hammering the API.
+const BRIEF_POLL_MS = 60_000
+
 const LS_KEY = 'ctdc_brief_custom_types'
 function loadCustomTypes() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || [] } catch { return [] }
@@ -59,21 +63,35 @@ function BriefTab({ type }) {
   const [archText,    setArchText]    = useState(null)
   const [archLoading, setArchLoading] = useState(false)
 
-  useEffect(() => {
-    setLoading(true)
-    setBrief(null)
-    setHistory([])
-    setSelected(null)
-    setArchText(null)
+  // Fetch current brief + history. On the initial load (or when type
+  // changes) this resets all view state and shows the loading spinner. On
+  // subsequent poll ticks it refreshes brief/history in the background only
+  // -- it does NOT touch selected/archText state, so a background refresh
+  // never yanks the operator out of an archived brief they're reading, and
+  // it never re-flashes the loading spinner.
+  const loadCurrent = useCallback((isInitial) => {
+    if (isInitial) {
+      setLoading(true)
+      setBrief(null)
+      setHistory([])
+      setSelected(null)
+      setArchText(null)
+    }
     Promise.all([
       fetch(briefUrl(type)).then(r => r.ok ? r.text() : null).catch(() => null),
       fetch(historyUrl(type)).then(r => r.ok ? r.json() : []).catch(() => []),
     ]).then(([text, hist]) => {
       setBrief(text?.trim() ? text : null)
       setHistory(Array.isArray(hist) ? hist : [])
-      setLoading(false)
-    }).catch(() => setLoading(false))
+      if (isInitial) setLoading(false)
+    }).catch(() => { if (isInitial) setLoading(false) })
   }, [type])
+
+  useEffect(() => {
+    loadCurrent(true)
+    const id = setInterval(() => loadCurrent(false), BRIEF_POLL_MS)
+    return () => clearInterval(id)
+  }, [loadCurrent])
 
   useEffect(() => {
     if (selected === null) { setArchText(null); return }
