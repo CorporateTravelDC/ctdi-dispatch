@@ -71,6 +71,54 @@ curl -s http://127.0.0.1:8000/api/v1/feeds
 sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db "SELECT * FROM cps_scores ORDER BY computed_at DESC LIMIT 3;"
 ```
 
+### Container resource limits
+
+Every `.container` file carries the same four resource-control lines -- copy
+them into any new container's quadlet file (this is the "going forward"
+convention, not just what's on the box today):
+
+```
+[Container]
+Memory=1536m
+PodmanArgs=--memory-swap=1536m
+
+[Service]
+CPUWeight=100
+CPUQuota=300%
+```
+
+- `Memory=1536m` -- hard RAM ceiling (1.5GiB). `PodmanArgs=--memory-swap=1536m`
+  sets swap-equals-memory, i.e. zero additional swap: without it a leaking
+  container will swap-thrash on the host's zram device instead of getting a
+  clean OOM-kill, which burns CPU and never actually frees anything. Verify
+  with `memory.max` / `memory.swap.max` under the container's payload cgroup
+  (`/proc/<pid>/cgroup`, find the `libpod-payload-*` path under
+  `/sys/fs/cgroup/...`).
+- `CPUWeight=100` -- proportional CPU share (cgroup v2 `cpu.weight`), the
+  systemd default. Only matters when something else is actually contending
+  for CPU right now; on an idle box a container can still burst across all
+  4 cores for free. Host `ollama.service` runs at `CPUWeight=500` (see
+  `scripts/ollama_governor.sh`), so under real contention Ollama wins
+  roughly 5x the contested time -- clearly preferred without hard-starving
+  the dispatch stack.
+- `CPUQuota=300%` -- hard ceiling regardless of contention: no single
+  container (or Ollama) may ever claim more than 3 of the Pi's 4 cores,
+  even when the box is otherwise idle.
+- These are `[Service]` directives on the systemd unit quadlet generates,
+  not `[Container]` -- they land on the parent `<service>.service` cgroup,
+  not the podman-managed payload sub-cgroup nested under it. cgroup v2
+  enforces hierarchically, so the payload cgroup showing `cpu.max: max`
+  locally is expected; check the parent (`dirname` of the payload path) to
+  see the real value.
+- After editing any `.container` file: `systemctl --user daemon-reload`
+  then `systemctl --user restart <name>.service` -- edits don't take effect
+  on a running container until it's recreated.
+
+`container-mem-watch.sh` (user timer, every 2min) watches for sustained
+high memory pressure and real OOM-kills across all live containers and
+alerts to ntfy `ops-health` -- observation only, never restarts anything.
+Check current state any time with `container-mem-watch.sh --status`.
+
 ## Architecture overview
 
 ### Four containers

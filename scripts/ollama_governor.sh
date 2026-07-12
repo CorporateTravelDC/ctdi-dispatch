@@ -125,18 +125,28 @@ checkmodule -M -m -o ctdi_governor.mod ctdi_governor.te
 semodule_package -o ctdi_governor.pp -m ctdi_governor.mod
 semodule -i ctdi_governor.pp
 
-# --- STEP 3.5: PIN OLLAMA TO 2 CORES + AUTO-UNLOAD IDLE MODELS ---
+# --- STEP 3.5: PREFER OLLAMA UNDER CONTENTION + AUTO-UNLOAD IDLE MODELS ---
 echo "[+] Writing ollama.service resource-limit drop-in..."
 mkdir -p /etc/systemd/system/ollama.service.d
 cat << 'EOF' > /etc/systemd/system/ollama.service.d/20-resource-limits.conf
 [Service]
-# Pin Ollama (and its llama-server children) to 2 of the Pi 5's 4 cores --
-# leaves cores 2-3 free for the dispatch containers (web/poller/pusher/ingest)
-# and caps how much heat a single inference run can generate. This backstops
-# the Modelfiles' own "PARAMETER num_thread 2" -- that only requests a thread
-# count from llama.cpp, it does not restrict which cores the OS schedules
-# those threads onto. AllowedCPUs is the actual enforcement.
-AllowedCPUs=0,1
+# CPUWeight (cgroup v2 cpu.weight) instead of a static AllowedCPUs pin --
+# weight only matters when something else is actually contending for CPU
+# right now; the kernel scheduler re-evaluates every tick, live, with no
+# polling daemon needed. Idle box: Ollama (and its llama-server children)
+# can burst across all 4 cores for free. Under real contention with the
+# dispatch containers (each at CPUWeight=100, see their .container files):
+# 500 vs 100 means Ollama gets ~5x the contested CPU time -- clearly
+# favored, without hard-starving the stack. This backstops the Modelfiles'
+# own "PARAMETER num_thread 2" -- that only requests a thread count from
+# llama.cpp, it does not by itself control OS-level scheduling priority.
+CPUWeight=500
+
+# Hard ceiling regardless of contention state -- no single inference run
+# may ever claim more than 3 of the Pi's 4 cores, even if the box is
+# otherwise completely idle. Same ceiling applied to every dispatch
+# container (see CLAUDE.md "Container resource limits").
+CPUQuota=300%
 
 # Unload an idle model from memory after 10 minutes of no requests, so the
 # Pi cools back toward baseline (60s-mid-60s C) between brief/OSINT runs

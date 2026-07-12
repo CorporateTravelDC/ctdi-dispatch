@@ -15,6 +15,13 @@ DROP_FILES = {
     "STATUS.md",             # contains operator email + CF tunnel UUID
     "corporatetraveldc.chat",  # real Modelfile -- operator name/callsign/county, public gets .template only
     "corporatetraveldc.osint", # real Modelfile -- same
+    # Real orchestration scripts -- never transit to public at all, so public
+    # exposure never depends on this file's own SUBSTITUTIONS table catching
+    # every real value it embeds as a dict key. External operators get
+    # scripts/push-public.example.sh + scripts/scrub-public-tree.example.py
+    # instead -- placeholder-only from the start, tracked and pushed normally.
+    "push-public.sh",
+    "scrub-public-tree.py",
 }
 
 # Public-safe substitutions: real_value -> placeholder

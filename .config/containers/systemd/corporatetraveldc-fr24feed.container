@@ -5,6 +5,10 @@ After=corporatetraveldc-ultrafeeder.service
 Wants=corporatetraveldc-ultrafeeder.service
 
 [Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-flightradar24:latest
 ContainerName=corporatetraveldc-fr24feed
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
@@ -17,6 +21,15 @@ PublishPort=8754:8754
 AutoUpdate=registry
 
 [Service]
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
 Restart=always
 RestartSec=30
 TimeoutStartSec=60
