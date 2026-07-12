@@ -34,7 +34,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-DISPATCH_BASE_URL     = os.environ.get("DISPATCH_BASE_URL",       "http://100.94.80.100:8000")
+DISPATCH_BASE_URL     = os.environ.get("DISPATCH_BASE_URL",       "http://100.x.x.x:8000")
 DISPATCH_ADMIN_TOKEN  = os.environ.get("DISPATCH_ADMIN_TOKEN",    "")
 
 AIRFRAMES_API_BASE    = os.environ.get("AIRFRAMES_API_BASE",      "https://api.airframes.io/v1")

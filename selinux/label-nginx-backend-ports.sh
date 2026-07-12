@@ -14,7 +14,7 @@
 # complete, self-explaining audit trail of what nginx is allowed to reach.
 #
 # Root cause this fixes: on 2026-07-09 SELinux enforcing denied nginx
-# { name_connect } to port 8001 (the ops.csexecutiveservices.com backend),
+# { name_connect } to port 8001 (the ops.example.com backend),
 # discovered live after the original SDR-USB/pihole-port-80 incident was
 # already fixed -- confirming every proxy_pass target needs its own label,
 # not just the ones that happened to be live during the incident.
@@ -56,14 +56,14 @@ command -v semanage &>/dev/null || {
 
 # port:vhost file (nginx/conf.d/ unless noted):purpose
 PORTS=(
-    "2586:ntfy.csexecutiveservices.com.conf:ntfy push server"
-    "3000:openwebui.csexecutiveservices.com.conf:Open WebUI"
-    "8000:dispatch.csexecutiveservices.com.conf:dispatch REST API + SSE events"
+    "2586:ntfy.example.com.conf:ntfy push server"
+    "3000:openwebui.example.com.conf:Open WebUI"
+    "8000:dispatch.example.com.conf:dispatch REST API + SSE events"
     "8001:config/nginx-corporatetraveldc-ops.conf + tailscale-dispatch-runner.conf:dispatch-runner app"
-    "8080:adsb.csexecutiveservices.com.conf:adsb-ultrafeeder web UI"
-    "8091:pihole.csexecutiveservices.com.conf:Pi-hole webserver"
-    "9081:acars.csexecutiveservices.com.conf:acarshub web UI"
-    "11434:ollama.csexecutiveservices.com.conf:Ollama daemon"
+    "8080:adsb.example.com.conf:adsb-ultrafeeder web UI"
+    "8091:pihole.example.com.conf:Pi-hole webserver"
+    "9081:acars.example.com.conf:acarshub web UI"
+    "11434:ollama.example.com.conf:Ollama daemon"
 )
 
 echo "=== label-nginx-backend-ports.sh ==="

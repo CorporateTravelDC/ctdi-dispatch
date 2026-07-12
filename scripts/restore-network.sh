@@ -103,8 +103,8 @@ fi
 
 say "Restoring Ollama's bind..."
 if [[ -f "${OLLAMA_BINDING_CONF}" ]] && grep -q '^Environment="OLLAMA_HOST=127\.0\.0\.1:11434"' "${OLLAMA_BINDING_CONF}"; then
-    say "  ollama: OLLAMA_HOST -> 100.94.80.100:11434"
-    run sed -i 's/^Environment="OLLAMA_HOST=127\.0\.0\.1:11434"/Environment="OLLAMA_HOST=100.94.80.100:11434"/' "${OLLAMA_BINDING_CONF}"
+    say "  ollama: OLLAMA_HOST -> 100.x.x.x:11434"
+    run sed -i 's/^Environment="OLLAMA_HOST=127\.0\.0\.1:11434"/Environment="OLLAMA_HOST=100.x.x.x:11434"/' "${OLLAMA_BINDING_CONF}"
     run systemctl daemon-reload
     run systemctl restart ollama.service
 else

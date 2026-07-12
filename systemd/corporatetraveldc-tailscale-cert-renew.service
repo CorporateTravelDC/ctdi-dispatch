@@ -1,5 +1,5 @@
 [Unit]
-Description=Renew Tailscale HTTPS cert for corporatetraveldc-dispatch.tail09da2e.ts.net
+Description=Renew Tailscale HTTPS cert for corporatetraveldc-dispatch.tailxxxxxxx.ts.net
 After=tailscaled.service network-online.target
 Wants=network-online.target
 

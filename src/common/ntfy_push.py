@@ -15,8 +15,8 @@ from common import config
 
 log = logging.getLogger(__name__)
 
-RUNNER_BASE = "https://ops.csexecutiveservices.com"
-# ops.csexecutiveservices.com now serves the full runner app (the same
+RUNNER_BASE = "https://ops.example.com"
+# ops.example.com now serves the full runner app (the same
 # screen-reader-capable React SPA that used to live at dispatch-runner) — that
 # domain is retired as a live public endpoint (reserved for a future demo-archiver
 # stub serving time-delayed data; see demo/recorder.py). All tap-through links
