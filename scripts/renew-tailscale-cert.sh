@@ -1,7 +1,7 @@
 #!/bin/bash
 # /opt/corporatetraveldc/scripts/renew-tailscale-cert.sh
 # Provision/renew the Tailscale HTTPS cert for
-# corporatetraveldc-dispatch.tail09da2e.ts.net, used by
+# corporatetraveldc-dispatch.tailxxxxxxx.ts.net, used by
 # nginx/conf.d/tailscale-dispatch-runner.conf. Idempotent -- safe to run
 # daily via corporatetraveldc-tailscale-cert-renew.timer; `tailscale cert
 # --min-validity` only actually reissues when the current cert is within
@@ -24,7 +24,7 @@
 set -uo pipefail
 
 CTDC_USER="corporatetraveldc"
-DOMAIN="corporatetraveldc-dispatch.tail09da2e.ts.net"
+DOMAIN="corporatetraveldc-dispatch.tailxxxxxxx.ts.net"
 SSL_DIR="/etc/nginx/ssl"
 CERT_FILE="${SSL_DIR}/tailscale-dispatch.crt"
 KEY_FILE="${SSL_DIR}/tailscale-dispatch.key"

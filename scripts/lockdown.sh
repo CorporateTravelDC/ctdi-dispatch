@@ -14,7 +14,7 @@
 # openwebui's quadlet: openwebui reaches Ollama by its literal Tailscale IP
 # (not host.containers.internal -- pasta's --map-gw can't reach a strictly
 # loopback-bound service, see install/ollama/install-ollama.sh), so cutting
-# it off at the source also drops the public ollama.csexecutiveservices.com
+# it off at the source also drops the public ollama.example.com
 # endpoint at the same time -- a reasonable thing to shed under suspected
 # attack, not just openwebui's chat feature.
 #

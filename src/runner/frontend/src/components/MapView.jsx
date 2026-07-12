@@ -263,7 +263,7 @@ function GlobeMap({ liveState }) {
 
   // Only the operator's watchlist is drawn here — full traffic is already
   // visible in the embedded globe.airplanes.live iframe below, and local-feed
-  // traffic has its own dedicated view at adsb.csexecutiveservices.com. Duplicating
+  // traffic has its own dedicated view at adsb.example.com. Duplicating
   // either as a second marker layer on top of the aggregator embed is redundant.
   const refreshLocal = useCallback(async () => {
     if (!localLayerRef.current) return
@@ -443,7 +443,7 @@ function TacticalMap({ liveState }) {
     if (!aircraftLayerRef.current) return
     try {
       // Always the aggregator feed — local-feeder display lives at
-      // adsb.csexecutiveservices.com; no need to duplicate it here.
+      // adsb.example.com; no need to duplicate it here.
       const r = await fetch('/api/adsb/live')
       if (!r.ok) throw new Error(r.statusText)
       const data = await r.json()
