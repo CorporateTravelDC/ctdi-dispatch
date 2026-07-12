@@ -35,7 +35,7 @@ echo "[push-public] Scrubbing sensitive identifiers..."
 scrubbed_tree=$(python3 "${repo_root}/scripts/scrub-public-tree.py" "${work_tree}")
 
 # ── Step 3: create the patched commit and push ─────────────────────────────────
-new_commit=$(git commit-tree "${scrubbed_tree}" -p "${sha}" \
+new_commit=$(git commit-tree -S "${scrubbed_tree}" -p "${sha}" \
     -m "chore(public): sanitize for public mirror [auto by push-public.sh]")
 
 git push --force "$remote_url" "${new_commit}:refs/heads/${branch}"

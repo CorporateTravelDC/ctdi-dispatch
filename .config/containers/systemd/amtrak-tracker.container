@@ -15,6 +15,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-amtrak-tracker:latest
 
 # Shared DB — tracker writes amtrak_status and stamps push:amtrak heartbeat
@@ -32,6 +36,15 @@ Environment=HISTORY_HOURS=24
 AutoUpdate=local
 
 [Service]
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
 Restart=always
 RestartSec=30
 TimeoutStartSec=60
