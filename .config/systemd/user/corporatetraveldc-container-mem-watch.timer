@@ -1,0 +1,11 @@
+[Unit]
+Description=Run container-mem-watch every 2 minutes
+Requires=corporatetraveldc-container-mem-watch.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
