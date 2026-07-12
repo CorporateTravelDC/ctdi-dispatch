@@ -76,7 +76,7 @@ export default function App() {
 
   // adsbMode: globe (aggregator embed, default) <-> tactical (airspace/TFR map).
   // Both source aircraft from the airplanes.live aggregator now -- local-feeder
-  // display already has its own dedicated view at adsb.csexecutiveservices.com,
+  // display already has its own dedicated view at adsb.example.com,
   // so there's no "local" mode here to duplicate it.
   const ADSB_MODES  = ['globe', 'tactical']
   const ADSB_LABELS = { globe: 'GLOBE', tactical: 'TACTICAL' }
@@ -213,10 +213,10 @@ export default function App() {
           </a>
           <span className="app-footer-sep">·</span>
           <a
-            href="https://dispatch.csexecutiveservices.com"
+            href="https://dispatch.example.com"
             className="app-footer-link"
           >
-            dispatch.csexecutiveservices.com
+            dispatch.example.com
           </a>
         </footer>
       </div>

@@ -3,16 +3,16 @@
 # OpenWebUI -- browser-based Ollama chat UI
 #
 # Access:
-#   Tailscale: http://100.94.80.100:3000
-#   CF tunnel: https://openwebui.csexecutiveservices.com
+#   Tailscale: http://100.x.x.x:3000
+#   CF tunnel: https://openwebui.example.com
 #
-# Ollama backend: http://100.94.80.100:11434 -- this host's own Tailscale
+# Ollama backend: http://100.x.x.x:11434 -- this host's own Tailscale
 # IP, not host.containers.internal. Ollama binds that IP specifically, not
 # 127.0.0.1 (see install/ollama/install-ollama.sh) -- pasta's --map-gw
 # cannot reach a strictly loopback-bound service at all (kernel-level
 # anti-spoofing, not a Podman limitation), so the host.containers.internal
 # alias was never going to work here regardless of --map-gw. No
-# Network=pasta:--map-gw needed on this container: 100.94.80.100 is a real
+# Network=pasta:--map-gw needed on this container: 100.x.x.x is a real
 # routable address reachable via normal pasta outbound NAT, the same way
 # corporatetraveldc-runner.container reaches its own dependencies.
 
@@ -31,7 +31,7 @@ ContainerName=openwebui
 AutoUpdate=registry
 PublishPort=3000:8080
 Volume=/var/lib/openwebui:/app/backend/data:Z
-Environment=OLLAMA_BASE_URL=http://100.94.80.100:11434
+Environment=OLLAMA_BASE_URL=http://100.x.x.x:11434
 NoNewPrivileges=true
 
 [Service]

@@ -20,11 +20,11 @@ ollama list | grep -E "corporatetraveldc|gemma"
 
 echo ""
 echo "=== Warm-loading both models (1-token probe) ==="
-curl -s http://100.94.80.100:11434/api/generate \
+curl -s http://100.x.x.x:11434/api/generate \
   -d '{"model":"corporatetraveldc-pi5-chat","prompt":"ping","stream":false,"options":{"num_predict":1}}' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('corporatetraveldc-pi5-chat:', 'OK' if d.get('response') is not None else 'FAIL')"
 
-curl -s http://100.94.80.100:11434/api/generate \
+curl -s http://100.x.x.x:11434/api/generate \
   -d '{"model":"corporatetraveldc-pi5-osint","prompt":"ping","stream":false,"options":{"num_predict":1}}' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('corporatetraveldc-pi5-osint:', 'OK' if d.get('response') is not None else 'FAIL')"
 
