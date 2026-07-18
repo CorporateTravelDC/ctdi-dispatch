@@ -295,7 +295,7 @@ def _build_narrative_prompt(item: dict, scope_label: str, matched_terms: list[st
         )
     elif scope_type in _MARKETING_SCOPE_TYPES:
         instruction = (
-            "Write a 2-sentence brand and market intelligence summary for CS Executive "
+            "Write a 2-sentence brand and market intelligence summary for [operator LLC abbreviation]utive "
             "Services, a boutique DC-area executive services firm (automotive detailing, "
             "brand strategy, executive chauffeur transportation, IT security). "
             "First sentence: what happened and why it matters to the market. "

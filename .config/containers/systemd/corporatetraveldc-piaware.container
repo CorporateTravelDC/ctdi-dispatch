@@ -15,10 +15,8 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-Environment=FEEDER_ID=807b07ce-059d-457f-ba8b-d75725679565
-Environment=LAT=38.87485
-Environment=LONG=-77.14410
-Environment=ALT_M=85
+# FEEDER_ID / LAT / LONG / ALT_M come from dispatch-secrets.env
+# (EnvironmentFile= above) -- never hardcoded here, see CLAUDE.md.
 AutoUpdate=registry
 
 [Service]

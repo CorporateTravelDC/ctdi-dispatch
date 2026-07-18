@@ -1,5 +1,5 @@
 # LM Studio — Dispatch AI Prompts for Raspberry Pi 5
-## CS Executive Services / corporatetraveldc-dispatch
+## [operator LLC] / corporatetraveldc-dispatch
 
 Generated from live source read of `src/poller/skills/` — 2026-06-05.
 Drop-in replacement for Anthropic API calls. Each section maps 1:1 to a skill.
@@ -141,7 +141,7 @@ Maximum 250 words. Direct and operational. No preamble. Plain text only.
 
 ```
 SYSTEM PROMPT:
-You are producing a 6-hour operational briefing for CS Executive Services, an
+You are producing a 6-hour operational briefing for [operator LLC], an
 executive chauffeur operation based in Arlington, VA (Washington DC metro area).
 The operator is also a credentialed CERT/ARES/Skywarn volunteer in Northern Virginia.
 

@@ -75,18 +75,93 @@ _FAA_HEADERS = {
 }
 
 
+# Resume/retry tuning for _download_zip(). registry.faa.gov has repeatedly
+# dropped the connection mid-transfer on the ~73MB registry file
+# (requests.exceptions.ChunkedEncodingError wrapping IncompleteRead).
+# Confirmed 2026-07-13: happened on both a scheduled run and a manual
+# retry, and again repeatedly during hardening testing — connections
+# reliably survive only ~7MB before dropping, so a fixed attempt count
+# (originally 6 retries) ran out before the 73MB file completed. Bounded
+# by wall-clock elapsed time instead, with short backoff, since failures
+# are frequent (every 10-20s) rather than needing long cool-off periods.
+_MAX_ELAPSED_SEC = 2400          # give up resuming after 40 min total (observed real-world throughput ~40-50KB/s effective, see 2026-07-13 testing)
+_INITIAL_BACKOFF_SEC = 3
+_MAX_BACKOFF_SEC = 30
+
+
 def _download_zip(url: str, timeout: int = 300) -> zipfile.ZipFile:
-    """Stream-download a ZIP from the FAA and return an in-memory ZipFile."""
-    log.info("FAA registry: downloading %s", url)
-    resp = requests.get(url, headers=_FAA_HEADERS, timeout=timeout, stream=True)
-    resp.raise_for_status()
+    """Stream-download a ZIP from the FAA, resuming on connection drops.
+
+    Uses a Range header to resume from the last byte received rather than
+    restarting from scratch, with exponential backoff between attempts.
+    Falls back to a full restart if the server doesn't honor the Range
+    request (no 206 response).
+    """
     buf = io.BytesIO()
-    for chunk in resp.iter_content(65536):
-        buf.write(chunk)
-    buf.seek(0)
-    size_mb = buf.tell() / 1_048_576
-    log.info("FAA registry: downloaded %.1f MB from %s", size_mb, url)
-    return zipfile.ZipFile(buf)
+    attempt = 0
+    backoff = _INITIAL_BACKOFF_SEC
+    start_time = time.time()
+
+    while True:
+        attempt += 1
+        elapsed = time.time() - start_time
+        headers = dict(_FAA_HEADERS)
+        resume_from = buf.tell()
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+            log.info(
+                "FAA registry: resuming %s at byte %d (attempt %d, %ds elapsed)",
+                url, resume_from, attempt, int(elapsed),
+            )
+        else:
+            log.info(
+                "FAA registry: downloading %s (attempt %d)",
+                url, attempt,
+            )
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            resp.raise_for_status()
+
+            if resume_from and resp.status_code != 206:
+                log.warning(
+                    "FAA registry: server did not honor Range resume "
+                    "(got HTTP %d, expected 206) — restarting from scratch",
+                    resp.status_code,
+                )
+                buf = io.BytesIO()
+
+            for chunk in resp.iter_content(65536):
+                buf.write(chunk)
+
+            size_mb = buf.tell() / 1_048_576
+            log.info(
+                "FAA registry: downloaded %.1f MB from %s (%d attempt%s)",
+                size_mb, url, attempt, "" if attempt == 1 else "s",
+            )
+            buf.seek(0)
+            return zipfile.ZipFile(buf)
+
+        except (
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as e:
+            elapsed = time.time() - start_time
+            if elapsed > _MAX_ELAPSED_SEC:
+                log.error(
+                    "FAA registry: giving up on %s after %d attempts / %ds "
+                    "(%.1f MB downloaded): %s",
+                    url, attempt, int(elapsed), buf.tell() / 1_048_576, e,
+                )
+                raise
+            log.warning(
+                "FAA registry: download interrupted at %.1f MB "
+                "(attempt %d, %ds elapsed): %s — retrying in %ds",
+                buf.tell() / 1_048_576, attempt, int(elapsed), e, backoff,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF_SEC)
 
 
 def _parse_master(zf: zipfile.ZipFile) -> Generator[list[dict], None, None]:

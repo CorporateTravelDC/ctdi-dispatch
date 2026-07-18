@@ -238,6 +238,21 @@ Civil Aviation Administration of China AIS services are primarily accessible to 
 
 ---
 
+## Aircraft registry equivalents by region
+
+Separate from the live flight-plan/NOTAM feeds above, aircraft *ownership/registration* lookups (N-number <-> Mode S hex <-> registrant) are country-specific -- there's no single global registry.
+
+| Region | Service | Access |
+|---|---|---|
+| US | FAA Aircraft Registry (N-Number) | Free bulk download, daily refresh -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| UK | CAA G-INFO | Paid product (email/Excel delivery), monthly or quarterly -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| Global fallback | OpenSky Network Aircraft Database | Free bulk CSV, 127 countries, irregular updates -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| Europe (other) | No single EU-wide registry -- each country's CAA maintains its own (DGAC in France, LBA in Germany, ENAC in Italy, etc.) | Integrate per-country following the FAA/UK CAA pattern if needed |
+
+The local registry lookup endpoint (`GET /api/v1/aircraft/<N-NUMBER-or-HEX>`) currently only serves US N-number data. A non-US deployment that needs fast local hex/registration lookups would need to either import a regional registry (UK CAA G-INFO, etc.) into the same table structure, or fall back to airplanes.live/OpenSky for registration cross-checks -- see the `flight-hifi-track` skill's fallback chain for the pattern.
+
+---
+
 ## Ops brief naming conventions
 
 The ops brief sections that use DC-specific names (`DC METRO`, `NORTHEAST`, `TRANSCON HUBS`) are labels in the Ollama system prompt inside `ops_brief.py`. They're cosmetic — rename them to match your operating context:

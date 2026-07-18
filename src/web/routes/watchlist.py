@@ -1,11 +1,16 @@
 """
 web.routes.watchlist — Permanent + transient watchlist REST API.
 
-GET  /api/v1/watchlist              List all active entries (Tier 0)
-GET  /api/v1/watchlist/history      Recent events (Tier 0)
+GET  /api/v1/watchlist              List all active entries (Tier 1: Tailscale/token)
+GET  /api/v1/watchlist/history      Recent events (Tier 1: Tailscale/token)
 POST /api/v1/watchlist/flights      Add transient flight entry (Admin)
 POST /api/v1/watchlist/trains       Add transient train entry (Admin)
 DELETE /api/v1/watchlist/{id}       Remove an entry (Admin)
+
+VIP watchlist contents (who/what is being tracked) are not Tier 0: this
+hostname has no Cloudflare Access gate, so Tier 0 here means the raw
+public internet. Reads require at least Tier 1 (on Tailscale, or a
+cert/shares/admin bearer token); writes remain Admin-only as before.
 """
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from auth.auth import Tier, require_admin
+from auth.auth import Tier, require_admin, require_tier
 from common import db
 from shared.watchlist import _fire_ntfy_dual, PERMANENT_WATCHLIST_DIR
 
@@ -40,8 +45,10 @@ def _make_id(entry_type: str, identifier: str) -> str:
 # ── GET /api/v1/watchlist ─────────────────────────────────────────────────────
 
 @router.get("")
-async def list_watchlist_entries() -> JSONResponse:
-    """List all active watchlist entries (permanent + transient). Tier 0."""
+async def list_watchlist_entries(
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> JSONResponse:
+    """List all active watchlist entries (permanent + transient). Tier 1+."""
     entries = db.get_watchlist_entries()
     return JSONResponse({"entries": entries, "count": len(entries)})
 
@@ -49,8 +56,11 @@ async def list_watchlist_entries() -> JSONResponse:
 # ── GET /api/v1/watchlist/history ─────────────────────────────────────────────
 
 @router.get("/history")
-async def watchlist_history(limit: int = 50) -> JSONResponse:
-    """Recent watchlist events. Tier 0."""
+async def watchlist_history(
+    limit: int = 50,
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> JSONResponse:
+    """Recent watchlist events. Tier 1+."""
     limit = min(limit, 200)
     rows = db.get_watchlist_history(limit=limit)
     return JSONResponse({"history": rows, "count": len(rows)})

@@ -196,22 +196,24 @@ class _NmsFeedSession:
 
 # ── Message dispatch ──────────────────────────────────────────────────────────
 
-def _handle_fdps_message(payload: bytes) -> None:
+def _handle_fdps_message(payload: bytes) -> bool:
     from ingest.parsers.fdps_parser import (
         parse_fdps_message, write_flight_event,
         check_marine_one, check_fdps_watchlist,
     )
     parsed = parse_fdps_message(payload)
     if parsed is None:
-        return
+        return False
     source = parsed.get("source", "")
+    accepted = False
     if source in ("FH", "TH", "CL", "HP", "OH"):
-        write_flight_event(parsed)
+        accepted = write_flight_event(parsed)
     check_marine_one(parsed)
     check_fdps_watchlist(parsed)
+    return accepted
 
 
-def _handle_stdds_message(payload: bytes) -> None:
+def _handle_stdds_message(payload: bytes) -> bool:
     from ingest.parsers.smes_parser import (
         parse_smes_message, write_surface_tracks,
         parse_tais_message, write_terminal_tracks,
@@ -220,47 +222,58 @@ def _handle_stdds_message(payload: bytes) -> None:
     if smes_tracks:
         n = write_surface_tracks(smes_tracks)
         log.debug("stdds: wrote %d surface track(s)", n)
-        return
+        return n > 0
 
     tais_tracks = parse_tais_message(payload)
     if tais_tracks:
         n = write_terminal_tracks(tais_tracks)
         log.debug("stdds: wrote %d terminal track(s)", n)
+        return n > 0
+
+    return False
 
 
-def _handle_tfms_message(payload: bytes) -> None:
+def _handle_tfms_message(payload: bytes) -> bool:
     from ingest.parsers.tfms_parser import parse_tfms_message, write_tfms_programs
     programs = parse_tfms_message(payload)
     if programs:
         n = write_tfms_programs(programs)
         log.debug("tfms: wrote %d NAS program(s)", n)
+        return n > 0
+    return False
 
 
-def _handle_aim_message(payload: bytes) -> None:
+def _handle_aim_message(payload: bytes) -> bool:
     from ingest.parsers.aim_parser import parse_aim_message, write_aim_notams
     notams = parse_aim_message(payload)
     if notams:
         n = write_aim_notams(notams)
         log.info("aim: wrote %d NOTAM(s)", n)
+        return n > 0
+    return False
 
 
-def _handle_tbfm_message(payload: bytes) -> None:
+def _handle_tbfm_message(payload: bytes) -> bool:
     from ingest.parsers.tbfm_parser import parse_tbfm_message, write_tbfm_sequences
     sequences = parse_tbfm_message(payload)
     if sequences:
         n = write_tbfm_sequences(sequences)
         log.debug("tbfm: wrote %d sequence(s)", n)
+        return n > 0
+    return False
 
 
-def _handle_itws_message(payload: bytes) -> None:
+def _handle_itws_message(payload: bytes) -> bool:
     from ingest.parsers.itws_parser import (
         parse_itws_message, write_itws_alerts, check_itws_alerts,
     )
     alerts = parse_itws_message(payload)
     if alerts:
-        write_itws_alerts(alerts)
+        n = write_itws_alerts(alerts)
         check_itws_alerts(alerts)
         log.debug("itws: processed %d alert(s)", len(alerts))
+        return n > 0
+    return False
 
 
 # ── Supervisor (async entry point) ────────────────────────────────────────────

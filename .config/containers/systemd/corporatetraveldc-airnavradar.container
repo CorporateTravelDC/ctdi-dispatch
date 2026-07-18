@@ -15,10 +15,8 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-Environment=SHARING_KEY=e3b00e8697f7d4f28a53bb6ab32824c0
-Environment=LAT=38.87485
-Environment=LONG=-77.14410
-Environment=ALT=279
+# SHARING_KEY / LAT / LONG / ALT come from dispatch-secrets.env
+# (EnvironmentFile= above) -- never hardcoded here, see CLAUDE.md.
 AutoUpdate=registry
 
 [Service]

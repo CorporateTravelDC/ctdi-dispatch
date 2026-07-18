@@ -200,7 +200,7 @@ export default function App() {
 
         {/* Footer ticker */}
         <footer className="app-footer" role="contentinfo">
-          <span className="app-footer-copy">© {new Date().getFullYear()} CS Executive Services, LLC</span>
+          <span className="app-footer-copy">© {new Date().getFullYear()} [operator LLC], LLC</span>
           <span className="app-footer-sep">·</span>
           <a
             href="https://github.com/CorporateTravelDC/ctdi-dispatch"

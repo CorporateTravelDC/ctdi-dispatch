@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # selinux/apply-selinux-policy.sh
-# CS Executive Services -- SELinux policy remediation + directory bootstrap
+# [operator LLC] -- SELinux policy remediation + directory bootstrap
 #
 # Run as root before starting any corporatetraveldc services.
 # Idempotent -- safe to re-run after package updates or Pi migration.
@@ -85,7 +85,7 @@ label_container_path() {
 require_root
 check_deps
 
-echo "=== CS Executive Services -- SELinux Policy Apply ==="
+echo "=== [operator LLC] -- SELinux Policy Apply ==="
 echo "[INFO] Dry run: ${DRY_RUN}"
 echo ""
 

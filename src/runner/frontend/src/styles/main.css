@@ -862,6 +862,12 @@ body::before {
 .sig-msg-loc  { color: var(--muted); font-size: 0.58rem; flex-basis: 100%; margin-top: 0.1rem; }
 .sig-empty, .sig-pending { color: var(--muted); font-family: var(--font-ui); font-size: 0.75rem; padding: 0.5rem 0; }
 .sig-pending { color: var(--orange); }
+
+/* NOTAM panel -- click-to-expand rows, parity with wx-alert-msg styling */
+.notam-msg { cursor: pointer; }
+.notam-msg:hover { background: rgba(0, 140, 220, 0.06); }
+.notam-msg:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
+.notam-perm { color: var(--marginal); font-style: italic; }
 .sig-hw-notice {
   font-family: var(--font-ui); font-size: 0.62rem; color: var(--marginal);
   padding: 0.2rem 0.5rem; border-left: 2px solid var(--marginal); margin: 0.15rem 0;

@@ -92,6 +92,7 @@ async def startup() -> None:
     db.init_db_v10()
     db.init_db_v11()
     db.init_db_v12()
+    db.init_db_v13()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -826,7 +827,7 @@ async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
         "keyword", "person", "org", "topic", "geo",
         # Executive-protection context — get DC-area geo boost + EP narrative framing
         "ep_threat", "ep_principal", "ep_venue", "executive_protection",
-        # Marketing / brand-intelligence context — CS ExecSvcs brand narrative framing
+        # Marketing / brand-intelligence context — [operator LLC abbreviation]Svcs brand narrative framing
         "brand_monitor", "market_intel", "competitor", "marketing",
     }
     if body.scope_type not in allowed_types:

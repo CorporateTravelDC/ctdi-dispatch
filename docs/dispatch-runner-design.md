@@ -5,7 +5,7 @@
 
 ## Overview
 
-dispatch-runner is the internal operational PWA for CS Executive Services
+dispatch-runner is the internal operational PWA for [operator LLC]
 dispatch operations. It runs as a fifth container alongside the four dispatch
 backend containers, proxying the dispatch web API and serving its own frontend
 and runner-specific API routes.
@@ -256,7 +256,7 @@ Token set once in the Admin view, sent by frontend on admin requests.
 
 ## PWA Manifest
 
-  name: "CS Executive Services Dispatch"
+  name: "[operator LLC] Dispatch"
   short_name: "Dispatch"
   theme_color: "#0a0e1a"
   background_color: "#0a0e1a"

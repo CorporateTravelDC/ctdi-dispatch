@@ -15,7 +15,8 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-Environment=FR24KEY=fec943a17ae7a17d
+# FR24KEY comes from dispatch-secrets.env (EnvironmentFile= above) --
+# never hardcoded here, see CLAUDE.md.
 Environment=MLAT=yes
 PublishPort=8754:8754
 AutoUpdate=registry

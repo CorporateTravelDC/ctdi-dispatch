@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 FETCH_TIMEOUT = 10
 HEADERS = {
-    "User-Agent": "corporatetraveldc/1.0 (dispatch@corporatetraveldc.com)",
+    "User-Agent": "corporatetraveldc/1.0 (dispatch@example.com)",
     "Accept": "application/geo+json",
 }
 

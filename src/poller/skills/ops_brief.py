@@ -31,10 +31,12 @@ import argparse
 import json
 import logging
 import pathlib
+import re
 import sqlite3
+import subprocess
 import time as _time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 import requests
@@ -61,6 +63,14 @@ NWS_ALERTS_URL = (
     "?area=VA,MD,DC,NY,NJ,CT,MA,PA,DE,RI&status=actual&severity=Extreme,Severe,Moderate"
 )
 AMTRAKER_URL = "https://api.amtraker.com/v3/trains"
+
+# ATCSCC daily "Operations Plan" advisory — FAA's own forward-looking
+# forecast (planned/possible/probable GDPs, ground stops, airspace
+# constraints), distinct from currently-active NAS programs. Not a
+# documented/versioned API — legacy fly.faa.gov advisories database,
+# still live underneath the nasstatus.faa.gov SPA. Parsed defensively.
+ATCSCC_ADV_LIST_URL   = "https://www.fly.faa.gov/adv/adv_list"
+ATCSCC_ADV_DETAIL_URL = "https://www.fly.faa.gov/adv/adv_otherdis"
 
 NEC_ROUTES = [
     "Acela", "Northeast Regional", "Palmetto", "Carolinian",
@@ -96,7 +106,7 @@ AMTRAK_STATIONS: dict[str, str] = {
     "NFK": "Norfolk",
 }
 
-SYSTEM_PROMPT = """You are producing a 6-hour operational briefing for CS Executive Services,
+SYSTEM_PROMPT = """You are producing a 6-hour operational briefing for [operator LLC],
 an executive chauffeur operation based in Arlington, VA (Washington DC metro).
 The operator is also a credentialed CERT/ARES/Skywarn volunteer (NoVA).
 
@@ -119,6 +129,13 @@ or ground stop is active (expand those). Flag marine layer, convection, wind eve
 
 NAS PROGRAMS: All active ground stops, GDPs, and departure delay programs nationwide.
 Include avg/max delay times and trend. If none, state that explicitly.
+
+ATCSCC FORECAST: Planned/possible/probable ground stops, GDPs, and airspace
+constraints from today's ATCSCC Operations Plan advisory — FAA's own forward-
+looking outlook for later today/overnight, distinct from the currently-active
+NAS PROGRAMS above. State timing (e.g. "after 1800Z") and probability language
+(possible/probable/expected) exactly as FAA states it. Flag any VIP MOVEMENT(S)
+noted in the advisory. If unavailable, state that explicitly.
 
 TFRs: VIP/POTUS TFRs active or expected. Include TFR ID if known. Note any
 impacts to DC-area airspace. If none active, state that.
@@ -221,6 +238,214 @@ def _nas_section() -> str:
     except ET.ParseError as e:
         log.warning("NAS XML parse error: %s", e)
         return f"NAS XML parse error: {e}"
+
+
+
+def _find_todays_opsplan_advisory() -> tuple[str, str] | None:
+    """
+    Locate today's (UTC) ATCSCC OPERATIONS PLAN advisory in the legacy
+    fly.faa.gov advisories database. Returns (adv_date_MMDDYYYY, advn) or
+    None if not found / fetch failed. The list page is newest-first, so the
+    first DCC/OPERATIONS PLAN row is the latest (handles same-day reissues).
+    """
+    today = datetime.now(timezone.utc)
+    params = {
+        "whichAdvisories": "ATCSCC",
+        "advisoryCategory": "All",
+        "date": today.strftime("%Y-%m-%d"),
+        "airflow": "true", "ctop": "true", "gStop": "true",
+        "gDelay": "true", "route": "true", "other": "true",
+    }
+    try:
+        r = requests.get(ATCSCC_ADV_LIST_URL, params=params, timeout=12)
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.warning("ATCSCC adv list fetch failed: %s", e)
+        return None
+
+    for row in re.split(r"<tr[^>]*>", html, flags=re.IGNORECASE):
+        if "OPERATIONS PLAN" not in row.upper():
+            continue
+        link = re.search(r"adv_otherdis\?adv_date=(\d{8})&advn=(\d+)", row)
+        if not link:
+            continue
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.IGNORECASE | re.DOTALL)
+        cell_text = [re.sub(r"<[^<]+?>", "", c).strip() for c in cells]
+        # Column 2 (index 1) is CONTROL ELEMENT — the daily ops plan is issued by DCC.
+        if len(cell_text) >= 2 and cell_text[1].upper() == "DCC":
+            return link.group(1), link.group(2)
+    return None
+
+
+def _fetch_opsplan_text(adv_date: str, advn: str) -> str | None:
+    """Fetch and lightly clean the raw <PRE> advisory text for a given advisory."""
+    try:
+        r = requests.get(
+            ATCSCC_ADV_DETAIL_URL,
+            params={"adv_date": adv_date, "advn": advn},
+            timeout=12,
+        )
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.warning("ATCSCC adv detail fetch failed: %s", e)
+        return None
+    m = re.search(r"<PRE>(.*?)</PRE>", html, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    raw = m.group(1)
+    for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
+        raw = raw.replace(a, b)
+    return raw.strip()
+
+
+_OPSPLAN_HEADER_RE = re.compile(r"^([A-Z][A-Z0-9 /()_\-]{2,60}:)\s*$", re.MULTILINE)
+
+
+def _split_opsplan_sections(raw: str) -> dict[str, str]:
+    """Split the raw ATCSCC advisory text into {SECTION NAME: body} on ALL-CAPS
+    header lines (e.g. 'TERMINAL PLANNED:'). Free text before the first header
+    (the human-written forecast paragraph) is stored under '_intro'."""
+    headers = list(_OPSPLAN_HEADER_RE.finditer(raw))
+    if not headers:
+        return {"_intro": raw.strip()}
+    sections: dict[str, str] = {}
+    intro = raw[: headers[0].start()].strip()
+    if intro:
+        sections["_intro"] = intro
+    for i, h in enumerate(headers):
+        key = h.group(1).rstrip(":").strip()
+        start = h.end()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(raw)
+        sections[key] = raw[start:end].strip()
+    return sections
+
+
+def _fetch_atcscc_opsplan_sections() -> tuple[str, dict] | None:
+    """Fetch + split today's ATCSCC OPERATIONS PLAN advisory ONCE. Returns
+    (advn, sections) or None. Shared by the forecast formatter and the
+    webinar-defer check so a single ops-brief run only hits the legacy
+    fly.faa.gov advisories database twice total (list + detail), not four
+    times."""
+    found = _find_todays_opsplan_advisory()
+    if not found:
+        return None
+    adv_date, advn = found
+    raw = _fetch_opsplan_text(adv_date, advn)
+    if not raw:
+        return None
+    return advn, _split_opsplan_sections(raw)
+
+
+_WEBINAR_RE = re.compile(r"NEXT PLANNING WEBINAR:\s*(\d{3,4})Z?", re.IGNORECASE)
+
+
+def _next_webinar_utc(sections: dict, now: "datetime | None" = None) -> "datetime | None":
+    """Parse 'NEXT PLANNING WEBINAR: HHMMZ' out of the advisory (it lands as
+    trailing text in whichever section happens to be last -- currently VIP
+    MOVEMENT(S) -- since it has inline content and isn't its own header).
+    Resolves to the next UTC occurrence: today if still ahead, else assumed
+    to mean tomorrow (advisories are same-calendar-day documents)."""
+    now = now or datetime.now(timezone.utc)
+    text = " ".join(sections.values())
+    m = _WEBINAR_RE.search(text)
+    if not m:
+        return None
+    hhmm = m.group(1).zfill(4)
+    try:
+        hour, minute = int(hhmm[:2]), int(hhmm[2:])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+    except ValueError:
+        return None
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate < now - timedelta(hours=1):
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _defer_for_webinar(webinar_dt: datetime) -> None:
+    """Push a defer notice and schedule a one-shot rerun ~10 minutes after
+    the ATCSCC planning webinar, via a transient systemd-run --user timer
+    (requires linger enabled for the user -- confirmed present on this box)."""
+    rerun_at = webinar_dt + timedelta(minutes=10)
+    now = datetime.now(timezone.utc)
+    delay_seconds = max(60, int((rerun_at - now).total_seconds()))
+
+    msg = (
+        f"Ops brief deferred: ATCSCC planning webinar at {webinar_dt.strftime('%H:%MZ')} "
+        f"is within 30 min. Waiting for the post-webinar Operations Plan update -- "
+        f"rerunning at {rerun_at.strftime('%H:%MZ')}."
+    )
+    log.info("%s", msg)
+    try:
+        _ntfy.send_dual(msg, msg, title="OPS BRIEF DEFERRED")
+    except Exception as e:
+        log.warning("defer notice push failed: %s", e)
+
+    try:
+        unit_name = f"corporatetraveldc-ops-brief-webinar-rerun-{int(now.timestamp())}"
+        subprocess.run(
+            [
+                "systemd-run", "--user",
+                f"--unit={unit_name}",
+                f"--on-active={delay_seconds}",
+                "--description=Deferred ops-brief rerun (post-webinar)",
+                "systemctl", "--user", "start",
+                "corporatetraveldc-ops-brief-deferred.service",
+            ],
+            check=True, timeout=15, capture_output=True, text=True,
+        )
+        log.info("ops-brief: deferred rerun scheduled in %ds via %s", delay_seconds, unit_name)
+    except Exception as e:
+        log.error("ops-brief: failed to schedule deferred rerun: %s", e)
+
+
+def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> str:
+    """
+    ATCSCC's own daily Operations Plan advisory — the FAA's forward-looking
+    forecast of planned/possible/probable ground stops, GDPs, and airspace
+    constraints for later today/overnight. Complements _nas_section(), which
+    only reflects programs that are CURRENTLY active.
+    pass prefetched=(advn, sections) from _fetch_atcscc_opsplan_sections()
+    to avoid a redundant fetch when the caller already pulled it (e.g. the
+    webinar-defer check in main()).
+    """
+    try:
+        data = prefetched if prefetched is not None else _fetch_atcscc_opsplan_sections()
+        if not data:
+            return "ATCSCC Operations Plan advisory not yet posted or unavailable for today."
+        advn, sections = data
+
+        def _clean(body: str, max_lines: int = 14) -> str:
+            lines = [
+                l.strip() for l in body.splitlines()
+                if l.strip() and not set(l.strip()) <= {"_"}
+            ]
+            return "\n".join(lines[:max_lines]) if lines else "None."
+
+        intro            = _clean(sections.get("_intro", ""), max_lines=10)
+        terminal_planned = _clean(sections.get("TERMINAL PLANNED", ""))
+        enroute_planned  = _clean(sections.get("EN ROUTE PLANNED", ""))
+        vip_raw = sections.get("VIP MOVEMENT(S)", "")
+        # VIP MOVEMENT(S) is the last labeled section in the advisory, so its
+        # body runs to end-of-text and picks up the trailing signature block
+        # (planning webinar time, sequence code, sender tag) -- trim those off.
+        vip_raw = vip_raw.split("NEXT PLANNING WEBINAR")[0]
+        vip              = _clean(vip_raw, max_lines=4)
+
+        parts = [f"ATCSCC ADVZY {advn} DCC OPERATIONS PLAN (advisory text, forward-looking):"]
+        if intro:
+            parts.append(f"SUMMARY: {intro}")
+        parts.append(f"TERMINAL PLANNED (later today/overnight):\n{terminal_planned}")
+        parts.append(f"EN ROUTE PLANNED (later today/overnight):\n{enroute_planned}")
+        if vip and vip != "None.":
+            parts.append(f"VIP MOVEMENT(S) NOTED IN OPS PLAN:\n{vip}")
+        return "\n\n".join(parts)
+    except Exception as e:
+        log.warning("ATCSCC forecast section failed: %s", e)
+        return f"ATCSCC Operations Plan forecast unavailable ({e})."
 
 
 def _nws_alerts_section() -> str:
@@ -331,7 +556,9 @@ def _cps_history_6h() -> list[dict]:
 
 def _brief_history_6h() -> list[dict]:
     """Return ops brief archive entries from the last 6 hours, oldest first."""
-    cutoff = _time.time() - 6 * 3600
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ISO-8601 string -- matches
+    # brief_archive.generated_at's stored TEXT format so the WHERE
+    # clause actually compares correctly (was float vs TEXT before).
     try:
         with db.conn() as c:
             c.row_factory = sqlite3.Row
@@ -380,7 +607,7 @@ def _trend_analysis_prompt() -> str:
     if len(brief_hist) >= 2:
         lines.append(f"\nBrief archive (last 6h, {len(brief_hist)} briefs):")
         for b in brief_hist:
-            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
+            ts = datetime.fromisoformat(b["generated_at"].replace("Z", "+00:00")).strftime("%H:%MZ")
             # Extract first 150 chars of content for trend context
             snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
             lines.append(f"  {ts}: {snippet}…")
@@ -393,7 +620,7 @@ def _trend_analysis_prompt() -> str:
 
 
 TREND_SYSTEM_PROMPT = (
-    "You are the dispatch intelligence officer for CS Executive Services. "
+    "You are the dispatch intelligence officer for [operator LLC]. "
     "You have just received a 6-hour data trend package showing CPS scores and brief snapshots. "
     "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
     "RETROSPECTIVE (LAST 6H): whether conditions improved, degraded, or stayed stable over "
@@ -484,7 +711,7 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     return full_text, concise[:200]
 
 
-def build_brief_content() -> tuple[str, str]:
+def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> tuple[str, str]:
     """
     Returns (prompt_content, raw_appendix).
     prompt_content — fed to Claude for narrative generation.
@@ -497,6 +724,7 @@ def build_brief_content() -> tuple[str, str]:
     # Raw sections stored separately so they can be appended to final brief
     raw_metar = _metar_section()
     raw_nas   = _nas_section()
+    raw_atcscc = _atcscc_forecast_section(prefetched_atcscc)
 
     parts = [
         f"=== OPS BRIEF DATA PULL {now_utc} ===",
@@ -504,6 +732,7 @@ def build_brief_content() -> tuple[str, str]:
         f"TFRs:\n{_tfr_section()}",
         f"METARs (hub airports):\n{raw_metar}",
         f"FAA NAS PROGRAMS:\n{raw_nas}",
+        f"ATCSCC OPERATIONS PLAN FORECAST:\n{raw_atcscc}",
         f"NWS ALERTS (DC/Northeast):\n{_nws_alerts_section()}",
         f"AMTRAK NEC:\n{_amtrak_section()}",
     ]
@@ -516,7 +745,8 @@ def build_brief_content() -> tuple[str, str]:
     raw_appendix = (
         f"\n\n--- RAW DATA ({now_utc}) ---\n"
         f"METARs:\n{raw_metar}\n\n"
-        f"NAS STATUS:\n{raw_nas}"
+        f"NAS STATUS:\n{raw_nas}\n\n"
+        f"ATCSCC OPS PLAN FORECAST:\n{raw_atcscc}"
     )
     return prompt_content, raw_appendix
 
@@ -530,17 +760,19 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     """
     now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
     lines = content.splitlines()
-    nas_lines, metar_lines, nws_lines, tfr_lines, amtrak_lines = [], [], [], [], []
+    nas_lines, metar_lines, nws_lines, tfr_lines, amtrak_lines, atcscc_lines = [], [], [], [], [], []
     current = None
     for line in lines:
         u = line.upper()
         if "FAA NAS PROGRAMS" in u:       current = "nas"
+        elif "ATCSCC OPERATIONS PLAN FORECAST" in u: current = "atcscc"
         elif "METARS" in u:               current = "metar"
         elif "NWS ALERTS" in u:           current = "nws"
         elif "TFRS:" in u:                current = "tfr"
         elif "AMTRAK" in u:               current = "amtrak"
         elif line.startswith("==="):      current = None
         elif current == "nas"    and line.strip(): nas_lines.append(line.strip())
+        elif current == "atcscc" and line.strip(): atcscc_lines.append(line.strip())
         elif current == "metar"  and line.strip().startswith(("METAR","SPECI")): metar_lines.append(line.strip())
         elif current == "nws"    and line.strip(): nws_lines.append(line.strip())
         elif current == "tfr"    and line.strip(): tfr_lines.append(line.strip())
@@ -552,6 +784,7 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     full  = f"[DATA BRIEF — DETERMINISTIC FALLBACK] {now_label}\n"
     full += "Ollama unavailable or not configured. Raw data push — no narrative.\n\n"
     full += "NAS PROGRAMS:\n" + ("\n".join(nas_lines[:12]) if nas_lines else "None active") + "\n\n"
+    full += "ATCSCC FORECAST (PLANNED):\n" + ("\n".join(atcscc_lines[:20]) if atcscc_lines else "Unavailable") + "\n\n"
     full += "DC/NORTHEAST METARs:\n" + ("\n".join(dc_ne) if dc_ne else "Unavailable") + "\n\n"
     full += "TRANSCON METARs:\n"  + ("\n".join(xcon)  if xcon  else "Unavailable") + "\n\n"
     full += "TFRs:\n"  + ("\n".join(tfr_lines[:3])    if tfr_lines    else "No VIP TFRs") + "\n\n"
@@ -565,7 +798,7 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     return full, concise
 
 
-def main(force: bool = False, run_trend: bool = False) -> None:
+def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = False) -> None:
     """
     run_trend: force a 6h trend analysis section regardless of current hour.
                Auto-true when the current ET hour is 0, 6, 12, or 18.
@@ -582,7 +815,26 @@ def main(force: bool = False, run_trend: bool = False) -> None:
     is_6h_boundary = (now_local_hour % 6 == 0) or run_trend
 
     try:
-        content, raw_appendix = build_brief_content()
+        # Webinar-aware defer: if the ATCSCC planning webinar is under 30 min
+        # out, skip this cycle's brief, push a defer notice, and schedule a
+        # one-shot rerun 10 min after the webinar so we pick up the updated
+        # Operations Plan instead of stale pre-webinar data. Skipped on the
+        # deferred rerun itself so this can never chain indefinitely.
+        atcscc_prefetch = None
+        if not deferred_rerun:
+            atcscc_prefetch = _fetch_atcscc_opsplan_sections()
+            if atcscc_prefetch:
+                _, _sections = atcscc_prefetch
+                webinar_dt = _next_webinar_utc(_sections)
+                if webinar_dt:
+                    mins_until = (webinar_dt - datetime.now(timezone.utc)).total_seconds() / 60
+                    if 0 <= mins_until < 30:
+                        _defer_for_webinar(webinar_dt)
+                        status = "deferred"
+                        log_usage(SKILL_NAME, MODEL, 0, 0, status, "new")
+                        return
+
+        content, raw_appendix = build_brief_content(prefetched_atcscc=atcscc_prefetch)
 
         # Try Ollama first; fall back to deterministic if unavailable / not configured.
         ollama_result = _call_ollama(content)
@@ -645,5 +897,7 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--trend", action="store_true",
                         help="Force a 6h trend analysis section regardless of current hour")
+    parser.add_argument("--deferred-rerun", action="store_true",
+                        help="This run IS a webinar-deferred rerun -- skip the defer check itself")
     args = parser.parse_args()
-    main(force=args.force, run_trend=args.trend)
+    main(force=args.force, run_trend=args.trend, deferred_rerun=args.deferred_rerun)

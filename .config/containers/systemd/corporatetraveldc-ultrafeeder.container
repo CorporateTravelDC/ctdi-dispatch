@@ -17,24 +17,23 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Environment=READSB_DEVICE_TYPE=rtlsdr
 Environment=READSB_RTLSDR_DEVICE=ADSB1090
-Environment=READSB_LAT=38.87485
-Environment=READSB_LON=-77.14410
-Environment=READSB_ALT=85m
+# READSB_LAT / READSB_LON / READSB_ALT / TAR1090_DEFAULTCENTERLAT/LON / UUID
+# come from dispatch-secrets.env (EnvironmentFile= above) -- never
+# hardcoded here, see CLAUDE.md.
 Environment=READSB_MODEAC=true
 Environment=READSB_MLAT=true
 Environment=READSB_NET_ENABLE=true
 Environment=READSB_NET_ONLY=false
-Environment=TAR1090_DEFAULTCENTERLAT=38.87485
-Environment=TAR1090_DEFAULTCENTERLON=-77.14410
 Environment=TAR1090_DEFAULTRANGE=80
 Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
 # Outbound feeds disabled — local decode only (network blocks 30005/10001)
-# Re-enable ULTRAFEEDER_CONFIG when on unrestricted network
-# Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=807b07ce-059d-457f-ba8b-d75725679565;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;adsb,feed.airplanes.live,30005,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,mlat.airplanes.live,31090
+# Re-enable ULTRAFEEDER_CONFIG when on unrestricted network. Uses ${UUID}
+# from dispatch-secrets.env rather than a literal -- fill in via env
+# expansion if re-enabled, don't paste the UUID back in literally.
+# Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=${UUID};adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;adsb,feed.airplanes.live,30005,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,mlat.airplanes.live,31090
 Environment=READSB_MLAT=false
 PublishPort=8080:80
 PublishPort=30005:30005
-Environment=UUID=784fdeaa-57f1-42bc-936a-cf562775e8bd
 Environment=OPENSKY_USERNAME=corporatetraveldc
 AutoUpdate=registry
 

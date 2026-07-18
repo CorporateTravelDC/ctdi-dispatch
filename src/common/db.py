@@ -579,15 +579,16 @@ def upsert_notam(notam_id: str, raw_json: str, facility: str,
         c.execute("""
             INSERT INTO notams
                 (notam_id, raw_json, facility, classification,
-                 effective_start, effective_end, text_body)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 effective_start, effective_end, text_body, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
             ON CONFLICT(notam_id) DO UPDATE SET
                 raw_json=excluded.raw_json,
                 facility=excluded.facility,
                 classification=excluded.classification,
                 effective_start=excluded.effective_start,
                 effective_end=excluded.effective_end,
-                text_body=excluded.text_body
+                text_body=excluded.text_body,
+                last_seen_at=unixepoch()
         """, (notam_id, raw_json, facility, classification,
               effective_start, effective_end, text_body))
 
@@ -630,18 +631,23 @@ def upsert_nws_alert(alert_id: str, event_type: str, area_desc: str,
 
 def cleanup_expired_notams() -> int:
     """Delete NOTAMs whose effective_end has passed (1-hour grace period).
-    Also prunes NULL-end NOTAMs inserted more than 45 days ago (stale PERM entries).
+    Also prunes NULL-end NOTAMs not re-seen on the wire in 30 days (stale
+    permanent-duration entries). last_seen_at refreshes on every upsert, so a
+    NOTAM still being rebroadcast never ages out -- only ones that have
+    actually dropped off the feed do. Falls back to inserted_at for rows
+    written before the last_seen_at column existed.
     Returns the number of rows removed."""
     now = time.time()
     cutoff = now - 3600           # 1-hour grace window
-    stale  = now - (45 * 86400)  # 45-day stale window for NULL-end entries
+    stale  = now - (30 * 86400)  # 30-day stale window for NULL-end entries
     with conn() as c:
         r1 = c.execute(
             "DELETE FROM notams WHERE effective_end IS NOT NULL AND effective_end < ?",
             (cutoff,),
         )
         r2 = c.execute(
-            "DELETE FROM notams WHERE effective_end IS NULL AND inserted_at < ?",
+            "DELETE FROM notams WHERE effective_end IS NULL "
+            "AND COALESCE(last_seen_at, inserted_at) < ?",
             (stale,),
         )
         return (r1.rowcount or 0) + (r2.rowcount or 0)
@@ -2178,6 +2184,25 @@ def init_db_v12() -> None:
     with conn() as c:
         c.executescript(SCHEMA_V12)
         c.executescript(SCHEMA_USAGE)
+
+
+SCHEMA_V13 = """
+ALTER TABLE notams ADD COLUMN last_seen_at REAL DEFAULT NULL;
+"""
+
+
+def init_db_v13() -> None:
+    """Apply v13 schema -- notams.last_seen_at, refreshed on every upsert so
+    NULL-effective_end staleness can be judged by 'last seen on the wire'
+    rather than 'first ever inserted'."""
+    with conn() as c:
+        for stmt in SCHEMA_V13.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass  # column already exists on subsequent startups
 
 
 def upsert_wpc_discussion(awips_id: str, product_label: str,

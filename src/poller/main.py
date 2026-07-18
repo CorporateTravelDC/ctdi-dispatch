@@ -301,7 +301,11 @@ class WatchlistSweep:
     FLIGHT_SWEEP_INTERVAL = 120   # check active flight entries via AeroAPI / FDPS
     TRAIN_SWEEP_INTERVAL = 300    # check active train entries via amtraker
     LOCAL_AC_SWEEP_INTERVAL = 60  # cross-ref local_aircraft against watchlist
-    FAA_REGISTRY_INTERVAL = 7 * 86400  # weekly — FAA publishes Sunday night
+    FAA_REGISTRY_INTERVAL = 1 * 86400  # daily — FAA actually refreshes
+    # ReleasableAircraft.zip daily at 23:30 CT; the registry itself only
+    # changes that once/day regardless, so this mostly buys faster recovery
+    # if an import fails rather than more frequent real data. (Was weekly;
+    # changed 2026-07-13 per operator request.)
 
     def __init__(self) -> None:
         self._last_expiry = 0.0
@@ -906,6 +910,7 @@ async def main() -> None:
     db.init_db_v9()
     db.init_db_v10()
     db.init_db_v11()
+    db.init_db_v13()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

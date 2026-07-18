@@ -81,6 +81,80 @@ FAA_NOTAM_API_KEY=
 
 ---
 
+### FAA Aircraft Registry (N-Number Database)
+
+**Last verified:** 2026-07
+
+**What it provides:** The full US civil aircraft registration database — every N-number, Mode S hex code, registrant name/address, aircraft type, engine type, status code, and certification dates. Refreshed by the FAA daily (the underlying file only changes once/day regardless of poll frequency, but polling daily buys faster recovery from a failed import rather than fresher data).
+
+**Source:** `https://registry.faa.gov/database/ReleasableAircraft.zip` — a ~73MB ZIP containing `MASTER.txt` (fixed-column CSV, no header, ~314K rows).
+
+**API type:** Static bulk file download. No API, no pagination, no auth.
+
+**Access:** No credentials required. Public download, no registration.
+
+**Reliability note (2026-07):** `registry.faa.gov` has shown frequent mid-transfer connection drops on this file — not a fixed timeout, just generally poor/variable throughput. The fetcher (`src/poller/fetchers/faa_registry.py`) resumes via HTTP Range headers on failure rather than restarting from byte 0, with exponential backoff and a 40-minute wall-clock ceiling. Verified end-to-end: a full import completed in ~28 minutes across 8 resumed attempts on a genuinely bad connection day.
+
+**No email required.**
+
+**Local lookup endpoint (once imported):**
+```
+GET /api/v1/aircraft/<N-NUMBER-or-HEX>
+```
+Only covers US-registered (N-number) aircraft — foreign-registered aircraft (UK G-, Canada C-, etc.) will 404 here regardless of import freshness. See UK CAA G-INFO under European Sources and [Global Aircraft Registry Sources](#global-aircraft-registry-sources) below for non-US registries.
+
+**Credentials location:** None needed.
+
+---
+
+### FAA LADD (Limiting Aircraft Data Displayed)
+
+**Last verified:** 2026-07
+
+**What it provides:** A boolean flag per N-number indicating the registrant has opted out of display on services that redistribute FAA-source data (historically the ASDI feed). **Important:** LADD does not remove the aircraft from the registry, and does not stop it from broadcasting ADS-B — independent receiver networks (airplanes.live, this platform's own UltraFeeder) are not FAA-source-derived and are not bound by LADD restrictions. The only value LADD adds here is a discretion/context signal ("this owner requested privacy elsewhere"), not a tracking capability.
+
+**Old access path — dead:** The anonymous `https://registry.faa.gov/database/LADD_Aircraft.zip` download that used to work is confirmed dead as of 2026-07 (returns a non-zip response).
+
+**Current official path:** FAA's NAS Aeronautical Data Exchange (ADX) portal — the "IndustryLADD" list, published monthly (first Thursday).
+
+**Signup portal:** [https://adx.faa.gov](https://adx.faa.gov)
+
+**Access process:** Requires a Login.gov account associated with an ADX/MyAccess profile. Eligibility for a small commercial operator (vs. FAA/DoD/contractor accounts) is **unconfirmed** — worth a direct inquiry to the program office before investing time in the Login.gov registration flow.
+
+**Email template (inquiry to the LADD program office before registering):**
+```
+To: LADD@faa.gov
+Subject: IndustryLADD Access Eligibility -- [Your Organization Name]
+
+FAA LADD Program Office,
+
+I operate [describe your operation -- e.g., a small executive ground
+transportation dispatch platform] and would like to confirm eligibility
+for IndustryLADD list access via the NAS Aeronautical Data Exchange (ADX)
+portal before registering for a Login.gov / MyAccess account.
+
+Organization: [Your organization name and type]
+Use case: Cross-referencing the LADD flag as a discretion/context signal
+          alongside our existing FAA aircraft registry lookups -- not for
+          redistribution or public display.
+Technical contact: [Your name, email, phone]
+
+Could you confirm whether a private commercial operator of my type
+qualifies for IndustryLADD access via ADX, and if so, the registration
+steps beyond creating a Login.gov account?
+
+Thank you,
+[Your name]
+[Organization]
+[Contact information]
+```
+
+**Alternative (unofficial, unvetted):** [laddlist.com](https://laddlist.com) is a third-party site that publishes both the Industry and Source LADD lists via a lookup tool. As of 2026-07 it has no discoverable public API for programmatic per-aircraft or bulk queries (client-rendered Next.js app -- `/api/search`, `/api/aircraft/<tail>` and similar guesses all 404). Would need the actual request shape captured from browser devtools before integrating. Not currently wired in -- flagged here as a known option, not a recommendation, given it's an unofficial source for FAA program data.
+
+**Credentials location:** TBD pending eligibility confirmation -- likely Login.gov/OAuth-style rather than a simple username/password. Do not assume a `USER`/`PASS` env var pair matches the real mechanism until the registration flow is actually walked through.
+
+---
+
 ### AviationWeather.gov ADDS (Aviation Digital Data Service)
 
 **Last verified:** 2025-12
@@ -233,6 +307,60 @@ EUROCONTROL_NM_B2B_USER=
 EUROCONTROL_NM_B2B_PASS=
 EUROCONTROL_NM_B2B_CERT_PATH=
 ```
+
+---
+
+### UK CAA G-INFO (UK Register of Civil Aircraft)
+
+**Last verified:** 2026-07
+
+**What it provides:** The UK equivalent of the FAA N-number registry -- registration marks, registered owner details, aircraft type/manufacturer/serial number, engine details, airworthiness certificate info, and technical details for every UK-registered aircraft (18,000-21,000+ aircraft; ~35% of records change annually).
+
+**API type:** None -- this is a purchased data product, not an API. Delivered as an MS Excel file by email.
+
+**Portal:** [https://www.caa.co.uk/aircraft-register/g-info/](https://www.caa.co.uk/aircraft-register/g-info/)
+
+**Order form:** [SRG1860](https://www.caa.co.uk/SRG1860) (PDF)
+
+**Pricing (as of 2026-07):**
+
+| Product | Price (inc. VAT) |
+|---|---|
+| Single issue, MS Excel file | GBP 450.00 |
+| Quarterly subscription (4 issues/yr) with email updates | GBP 745.00 |
+| Monthly subscription (12 issues/yr) with email updates | GBP 1,745.00 |
+| Corporate licence, unlimited users | GBP 1,855.00 |
+
+**Access process:** Complete order form SRG1860 and submit with payment. No organizational eligibility review -- this is a straightforward commercial purchase. The database is licensed for single-PC use unless a corporate licence is purchased.
+
+**Email template (order / inquiry):**
+```
+To: aircraft.reg@caa.co.uk
+Subject: G-INFO Database Order Inquiry -- [Your Organization Name]
+
+Aircraft Registration Section,
+
+I would like to order the G-INFO database (UK Register of Civil Aircraft)
+and have a question before submitting form SRG1860.
+
+Organization: [Your organization name]
+Product of interest: [e.g., monthly subscription with email updates]
+Use case: [describe -- e.g., cross-referencing UK-registered aircraft
+          against ADS-B tracking data for operational awareness]
+
+Could you confirm the current turnaround time for [monthly/quarterly]
+subscription delivery, and whether the Excel format is suitable for
+programmatic parsing (column layout, date of most recent format change)?
+
+Thank you,
+[Your name]
+[Organization]
+[Contact information]
+```
+
+**Contact:** Aircraft Registration Section, aircraft.reg@caa.co.uk, +44 (0)330 022 1917 (weekdays 09:00-16:30 UK time).
+
+**Credentials location:** None -- this is a manually-delivered email product, not an API. If automated periodic ingestion is added later (parsing the emailed Excel file), it would follow a similar push-primary pattern to how Amtrak/NWWS-OI are wired, not a `dispatch-secrets.env` credential -- no env var needed for the current manual-purchase workflow.
 
 ---
 
@@ -469,6 +597,30 @@ FLIGHTAWARE_API_KEY=
 ```bash
 ACARSDRAMA_JUMPSEAT_TOKEN=
 ```
+
+---
+
+## Global Aircraft Registry Sources
+
+Aircraft *ownership/registration* data (N-number, registrant, hex mapping) is a different category from *live position tracking* (the AIS/Radar Aggregators section above) -- every country maintains its own civil aircraft register, and there's no single global authority. This section covers cross-national aggregators and the pattern for adding a country-specific registry.
+
+### OpenSky Network Aircraft Database
+
+**Last verified:** 2026-07
+
+**What it provides:** A crowdsourced aggregation of national aircraft registry metadata (icao24/hex, registration, manufacturer, model, typecode, serial number, operator) spanning 127 countries. Useful as a best-effort fallback for hex/registration lookups outside the US and UK, where a dedicated national registry integration doesn't exist yet.
+
+**Access:** [https://opensky-network.org/datasets/metadata/](https://opensky-network.org/datasets/metadata/) -- free CSV download, no credentials, no registration.
+
+**Reliability note:** Updates are irregular and were on hold as of the last check (2026-07) -- treat this as a supplementary/best-effort source, not authoritative. Cross-check against the FAA registry or UK CAA G-INFO where those apply; only fall back to OpenSky for aircraft outside US/UK coverage.
+
+**No email required.**
+
+**Credentials location:** None needed.
+
+### Adding a new national registry
+
+Follow the FAA/UK CAA pattern above: what it provides, API type (bulk file vs. purchased product vs. live API), access process, email template if a human request is needed, and credentials location (or "none" if it's a public download or manual product). Add the entry under the appropriate regional section (US/European/Asia-Pacific Sources) rather than here -- this section is for cross-national aggregators only (currently just OpenSky).
 
 ---
 

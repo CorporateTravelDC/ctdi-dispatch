@@ -878,7 +878,7 @@ async def ask_dispatch(req: AskRequest):
         now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         system_prompt = (
-            "You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: "
+            "You are the dispatch AI assistant for [operator LLC], LLC — a boutique executive services firm: "
             "automotive detailing, brand strategy, executive chauffeur transportation, and IT security. "
             "Operator: the operator (N0CALL Extra, ARES NoVA District XX, Skywarn LXXXX).\n\n"
             "All live operational data below comes from a local dispatch spine running on-premises. "
@@ -985,6 +985,13 @@ _TIER1_PATHS: frozenset[str] = frozenset({
     "api/v1/radio",
     "api/v1/cui/status",
 })
+# NOTE: watchlist (VIP flight/person tracking) deliberately excluded --
+# this proxy injects its service token for ANY caller, regardless of who's
+# viewing ops.example.com (a public, non-CF-Access-gated
+# hostname). That's an acceptable tradeoff for low-sensitivity data
+# (weather/radio/regulatory status) but not for VIP tracking data. The
+# watchlist widget must gate on the *browser's own* auth, not have this
+# proxy transparently unlock it for anonymous visitors.
 
 @app.api_route("/api/dispatch/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_dispatch(path: str, request: Request):

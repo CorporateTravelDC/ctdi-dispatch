@@ -30,7 +30,7 @@ import logging
 import pathlib
 import sqlite3
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 import requests
@@ -855,7 +855,7 @@ def _extended_venues_summary() -> str:
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are the advance intelligence officer for CS Executive Services, preparing a daily
+You are the advance intelligence officer for [operator LLC], preparing a daily
 EP-Advance brief for a multi-national UHNWI executive with a personal security detail
 on a 4-week Washington DC engagement (full metro including 50-mile radius).
 
@@ -1006,7 +1006,9 @@ def _cps_history_12h() -> list[dict]:
 
 def _ep_brief_history_12h() -> list[dict]:
     """Return ep-advance brief archive entries from the last 12 hours, oldest first."""
-    cutoff = _time.time() - 12 * 3600
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ISO-8601 string -- matches
+    # brief_archive.generated_at's stored TEXT format so the WHERE
+    # clause actually compares correctly (was float vs TEXT before).
     try:
         with db.conn() as c:
             c.row_factory = sqlite3.Row
@@ -1049,7 +1051,7 @@ def _trend_analysis_prompt_12h() -> str:
     if len(brief_hist) >= 2:
         lines.append(f"\nEP-advance brief archive (last 12h, {len(brief_hist)} briefs):")
         for b in brief_hist:
-            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
+            ts = datetime.fromisoformat(b["generated_at"].replace("Z", "+00:00")).strftime("%H:%MZ")
             snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
             lines.append(f"  {ts}: {snippet}…")
     elif len(brief_hist) == 1:
@@ -1061,7 +1063,7 @@ def _trend_analysis_prompt_12h() -> str:
 
 
 TREND_SYSTEM_PROMPT_EP = (
-    "You are the EP intelligence officer for CS Executive Services. "
+    "You are the EP intelligence officer for [operator LLC]. "
     "You have just received a 12-hour data trend package showing CPS scores and "
     "prior EP-advance brief snapshots for a DC-metro UHNWI protective operation. "
     "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"

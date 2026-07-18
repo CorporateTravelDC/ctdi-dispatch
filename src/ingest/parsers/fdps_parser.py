@@ -286,8 +286,9 @@ def _in_dc_area(parsed: dict) -> bool:
     )
 
 
-def write_flight_event(parsed: dict) -> None:
-    """Upsert a parsed FDPS message into flight_events (DC-area only)."""
+def write_flight_event(parsed: dict) -> bool:
+    """Upsert a parsed FDPS message into flight_events (DC-area only).
+    Returns True if written, False if filtered out (outside DC area)."""
     if not _in_dc_area(parsed):
         return False  # outside DC area and not POTUS/Marine One — skip
 
@@ -311,6 +312,7 @@ def write_flight_event(parsed: dict) -> None:
         ground_speed_kt=parsed.get("ground_speed"),
         raw_json=parsed.get("raw_xml", ""),
     )
+    return True
 
 
 # ── Marine One detection ──────────────────────────────────────────────────────

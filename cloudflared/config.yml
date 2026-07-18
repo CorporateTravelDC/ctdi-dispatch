@@ -1,5 +1,5 @@
-tunnel: 00000000-0000-0000-0000-cf0tunnel0000
-credentials-file: /home/corporatetraveldc/.cloudflared/00000000-0000-0000-0000-cf0tunnel0000.json
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /home/corporatetraveldc/.cloudflared/00000000-0000-0000-0000-000000000000.json
 
 # Every hostname below routes to host nginx on :80 -- nginx does the actual
 # per-vhost backend dispatch (see nginx/conf.d/*.conf), not cloudflared.

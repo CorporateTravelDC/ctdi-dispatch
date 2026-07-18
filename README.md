@@ -33,7 +33,7 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 | Tailscale direct | `http://100.x.x.x:8000` |
 | CPS | YELLOW / MARGINAL |
 | All containers | Running |
-| FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
+| FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected ([operator LLC abbreviation] subscription, 2026-06) |
 | Local LLM (Ollama) | mistral-nemo 12B — corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint Modelfile wrappers |
 | Dispatch Drawer | Streaming chat via corporatetraveldc-pi5-chat (gemma3) |
 
@@ -757,4 +757,4 @@ For platforms without native webhook support, a cron-based poller that checks fo
 
 ## License
 
-Proprietary. CS Executive Services, LLC. All rights reserved.
+Proprietary. [operator LLC], LLC. All rights reserved.
