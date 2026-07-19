@@ -6,7 +6,7 @@ Signal proxy fallback chain:
   VDL2 / ACARS / HFDL: local acarshub (:9081)
                         -> api.jumpseat.acarsdrama.com/v1 (acarsdrama Jumpseat)
                         -> api.airframes.io (airframes.io, secondary fallback)
-  AIS:                  local AIS-catcher (:8110) -> MarineTraffic API
+  AIS:                  local AIS-catcher (:8110) -> Kpler Maritime 2.0 GraphQL
   All external fallbacks: 250nm radius centered on KDCA (38.8816, -77.0910)
 """
 import asyncio
@@ -53,8 +53,8 @@ ACARSDRAMA_TOKEN   = (os.getenv("ACARSDRAMA_JUMPSEAT_TOKEN") or
 AIRFRAMES_BASE     = os.getenv("AIRFRAMES_BASE_URL",        "https://api.airframes.io")
 AIRFRAMES_TOKEN    = os.getenv("AIRFRAMES_TOKEN",            "")
 
-MARINETRAFFIC_BASE = os.getenv("MARINETRAFFIC_BASE_URL",    "https://services.marinetraffic.com/api")
-MARINETRAFFIC_KEY  = os.getenv("MARINETRAFFIC_API_KEY",     "")
+KPLER_GRAPHQL_URL    = "https://api.sml.kpler.com/graphql"
+KPLER_MARITIME_TOKEN = os.getenv("KPLER_MARITIME_API_TOKEN", "")  # Maritime 2.0 GraphQL Bearer token
 AIS_MT_WIDGET_KEY  = os.getenv("AIS_MARINETRAFFIC_KEY",     "")  # widget embed key (widget_id param)
 AIS_AISHUB_ID      = os.getenv("AIS_AISHUB_ID",             "")
 AIS_AISHUB_BASE    = "http://data.aishub.net/ws.php"
@@ -418,18 +418,6 @@ def _norm_vessel(v: dict, source: str) -> dict:
             "nav_status": v.get("navstat") or v.get("status"),
             "ship_type":  v.get("shiptype") or v.get("ship_type"),
         }
-    if source == "marinetraffic.com":
-        return {
-            "mmsi":       str(v.get("MMSI", "")),
-            "name":       v.get("SHIPNAME", "").strip(),
-            "lat":        v.get("LAT"),
-            "lon":        v.get("LON"),
-            "sog":        v.get("SPEED"),
-            "cog":        v.get("COURSE"),
-            "hdg":        v.get("HEADING"),
-            "nav_status": v.get("NAVSTAT"),
-            "ship_type":  v.get("SHIPTYPE"),
-        }
     if source == "aishub.net":
         return {
             "mmsi":       str(v.get("MMSI", "")),
@@ -443,6 +431,81 @@ def _norm_vessel(v: dict, source: str) -> dict:
             "ship_type":  v.get("TYPE"),
         }
     return v
+
+def _norm_vessel_kpler(node: dict) -> dict:
+    """
+    Normalise a Kpler Maritime 2.0 GraphQL vessel node (nested staticData /
+    lastPositionUpdate objects) to the same flat schema used by the local
+    and AISHub sources.
+    """
+    static = node.get("staticData") or {}
+    pos    = node.get("lastPositionUpdate") or {}
+    return {
+        "mmsi":       str(static.get("mmsi", "")),
+        "name":       (static.get("name") or "").strip(),
+        "lat":        pos.get("latitude"),
+        "lon":        pos.get("longitude"),
+        "sog":        pos.get("speed"),
+        "cog":        pos.get("course"),
+        "hdg":        pos.get("heading"),
+        "nav_status": pos.get("navigationalStatus"),
+        "ship_type":  static.get("shipType"),
+    }
+
+
+async def _fetch_kpler_vessels(lat: float, lon: float, dist: int) -> dict:
+    """
+    Kpler Maritime 2.0 GraphQL API -- successor to the MarineTraffic REST
+    Vessels API (services.marinetraffic.com/api/getVessels/v:8/...), which
+    Kpler fully discontinued platform-wide in 2025 after acquiring Spire
+    Maritime/MarineTraffic. The old endpoint 404s unconditionally now --
+    this is not a per-key permission issue, the whole legacy API family is
+    gone. See docs/DATA_SOURCES.md for the migration story and how to
+    request a Maritime 2.0 token (a distinct credential from the
+    MarineTraffic embed widget key -- AIS_MARINETRAFFIC_KEY above -- which
+    is a separate, still-functioning product).
+
+    Raises on any HTTP or GraphQL-level error; caller is responsible for
+    catching and falling through to the next tier, same as every other
+    source in this fallback chain.
+    """
+    bbox = _bbox(lat, lon, dist)
+    polygon = (
+        f"[[{bbox['MINLON']}, {bbox['MINLAT']}], "
+        f"[{bbox['MAXLON']}, {bbox['MINLAT']}], "
+        f"[{bbox['MAXLON']}, {bbox['MAXLAT']}], "
+        f"[{bbox['MINLON']}, {bbox['MAXLAT']}], "
+        f"[{bbox['MINLON']}, {bbox['MINLAT']}]]"
+    )
+    query = (
+        "query VesselsInArea {"
+        "  vessels(areaOfInterest: {polygon: {type: \"Polygon\", coordinates: ["
+        + polygon +
+        "]}}, first: 200) {"
+        "    nodes {"
+        "      staticData { name mmsi shipType }"
+        "      lastPositionUpdate { latitude longitude heading speed course navigationalStatus }"
+        "    }"
+        "  }"
+        "}"
+    )
+    async with httpx.AsyncClient() as c:
+        r = await c.post(
+            KPLER_GRAPHQL_URL,
+            headers={
+                "Authorization": f"Bearer {KPLER_MARITIME_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={"query": query},
+            timeout=12,
+        )
+        r.raise_for_status()
+        payload = r.json()
+        if payload.get("errors"):
+            raise RuntimeError(payload["errors"][0].get("message", "Kpler GraphQL error"))
+        nodes = ((payload.get("data") or {}).get("vessels") or {}).get("nodes") or []
+        vessels = [_norm_vessel_kpler(n) for n in nodes]
+        return {"source": "marinetraffic.com", "vessels": vessels, "count": len(vessels)}
 
 # ── AIS endpoint ------------------------------------------------------------
 
@@ -469,23 +532,13 @@ async def ais_vessels(
     except Exception as e:
         log.debug("AIS local unavailable: %s", e)
 
-    # 2 -- MarineTraffic API (paid key)
-    if MARINETRAFFIC_KEY:
+    # 2 -- Kpler Maritime 2.0 GraphQL API (successor to the discontinued
+    #      MarineTraffic REST Vessels API -- see _fetch_kpler_vessels above)
+    if KPLER_MARITIME_TOKEN:
         try:
-            bbox = _bbox(lat, lon, dist)
-            url = (f"{MARINETRAFFIC_BASE}/getVessels/v:8/{MARINETRAFFIC_KEY}"
-                   f"/MINLAT:{bbox['MINLAT']}/MAXLAT:{bbox['MAXLAT']}"
-                   f"/MINLON:{bbox['MINLON']}/MAXLON:{bbox['MAXLON']}"
-                   f"/protocol:json")
-            async with httpx.AsyncClient() as c:
-                r = await c.get(url, timeout=12, headers={"User-Agent": "corporatetraveldc/1.0"})
-                r.raise_for_status()
-                data = r.json()
-                raw = data.get("DATA") or (data if isinstance(data, list) else [])
-                vessels = [_norm_vessel(v, "marinetraffic.com") for v in raw if isinstance(v, dict)]
-                return {"source": "marinetraffic.com", "vessels": vessels, "count": len(vessels)}
+            return await _fetch_kpler_vessels(lat, lon, dist)
         except Exception as e:
-            log.warning("AIS MarineTraffic unavailable: %s", e)
+            log.warning("AIS Kpler Maritime 2.0 unavailable: %s", e)
 
     # 3 -- AISHub (free data-sharing cooperative, requires registration)
     if AIS_AISHUB_ID:

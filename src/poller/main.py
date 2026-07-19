@@ -40,6 +40,8 @@ FETCH_SCHEDULE: list[dict] = [
     {"name": "atcscc_opsplan","module": "poller.fetchers.atcscc_opsplan","interval": 3600},
     {"name": "dca_fids",         "module": "poller.fetchers.dca_fids",         "interval": 300},
     {"name": "iad_fids",         "module": "poller.fetchers.iad_fids",         "interval": 300},
+    {"name": "eurocontrol",    "module": "poller.fetchers.eurocontrol",    "interval": 900},
+    {"name": "jasdat",         "module": "poller.fetchers.jasdat",         "interval": 900},
 ]
 
 # Skills invoked as subprocesses (own SR-1/SR-2 state, own log entries).
@@ -911,6 +913,8 @@ async def main() -> None:
     db.init_db_v10()
     db.init_db_v11()
     db.init_db_v13()
+    db.init_db_v14()
+    db.init_db_v15()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

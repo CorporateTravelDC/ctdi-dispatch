@@ -265,6 +265,8 @@ NWWS_PASSWORD=
 
 **What it provides:** The European equivalent of FAA SWIM + ATCSCC combined. Flight plans, ATC flow management measures (CTOT, regulations, MCIs, GDP/GS equivalents), OPMET (METARs, TAFs, SIGMETs), NOTAMs, airspace status. Uses SOAP/XML web services.
 
+**Fetcher:** `src/poller/fetchers/eurocontrol.py` — credential-gated on the three vars below, same skip/retry pattern as every other fetcher in this codebase. Marks the feed `awaiting_credentials` until they are set; activates automatically the moment they are.
+
 **Portal:** [https://www.eurocontrol.int/service/network-manager-business-business-b2b-web-services](https://www.eurocontrol.int/service/network-manager-business-business-b2b-web-services)
 
 **Access request form:** [https://www.eurocontrol.int/contact/nm-b2b-access-request](https://www.eurocontrol.int/contact/nm-b2b-access-request)
@@ -423,6 +425,8 @@ JMA_API_KEY=
 **Last verified:** 2025-12
 
 **What it provides:** The Japanese equivalent of FAA AIM SWIM. NOTAMs, AIS data, SIGMET/AIRMET, airspace information for Japanese airspace. Operated by JCAB (Japan Civil Aviation Bureau), Ministry of Land, Infrastructure, Transport and Tourism.
+
+**Fetcher:** `src/poller/fetchers/jasdat.py` — credential-gated on the two vars below, same skip/retry pattern as every other fetcher in this codebase. Marks the feed `awaiting_credentials` until they are set; activates automatically the moment they are.
 
 **Portal:** [https://www.jasdat.go.jp/en/](https://www.jasdat.go.jp/en/)
 
@@ -621,6 +625,32 @@ Aircraft *ownership/registration* data (N-number, registrant, hex mapping) is a 
 ### Adding a new national registry
 
 Follow the FAA/UK CAA pattern above: what it provides, API type (bulk file vs. purchased product vs. live API), access process, email template if a human request is needed, and credentials location (or "none" if it's a public download or manual product). Add the entry under the appropriate regional section (US/European/Asia-Pacific Sources) rather than here -- this section is for cross-national aggregators only (currently just OpenSky).
+
+---
+
+### Kpler Maritime 2.0 (vessel/AIS tracking)
+
+**Last verified:** 2026-07
+
+**What it provides:** Real-time vessel positions and characteristics for the AIS map view's tier-2 fallback (`runner/main.py`, `/api/ais/vessels`). Fallback chain: local AIS-catcher hardware (tier 1) -> Kpler Maritime 2.0 GraphQL (tier 2) -> AISHub free cooperative (tier 3).
+
+**Migration note:** MarineTraffic's classic REST Vessels API (`services.marinetraffic.com/api/getVessels/v:8/...`) is discontinued platform-wide -- Kpler acquired Spire Maritime (which had already absorbed MarineTraffic) and moved all users to the GraphQL API below as of 2025. The old endpoint 404s unconditionally now regardless of key validity; this is not a per-account permission issue. See `runner/main.py::_fetch_kpler_vessels` for the current implementation.
+
+**Portal:** [https://developers.kpler.com/](https://developers.kpler.com/)
+
+**API base URL:** `https://api.sml.kpler.com/graphql` (Bearer token auth, GraphQL POST)
+
+**Access process:** Vessel-data API access is a sales-gated enterprise product (`Contact Kpler` / `Request a trial`), not a self-serve developer signup. A MarineTraffic embed/widget key (`AIS_MARINETRAFFIC_KEY`) is a separate, unrelated product from a MarineTraffic donated-receiver "station operator" account, which typically comes with a properly-scoped Maritime 2.0 API token.
+
+**Credentials location in dispatch-secrets.env:**
+```bash
+KPLER_MARITIME_API_TOKEN=
+```
+
+**Separate, still-functioning credential (do not confuse with the above):**
+```bash
+AIS_MARINETRAFFIC_KEY=   # MarineTraffic embed widget ID, not a data API token
+```
 
 ---
 

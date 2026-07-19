@@ -53,6 +53,7 @@ from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
 from web.routes.airspace import router as airspace_router
 from web.routes.data_usage import router as data_usage_router
+from web.routes.webhooks import router as webhooks_router
 from web.sse import live_events
 
 app = FastAPI(
@@ -75,6 +76,7 @@ app.include_router(watchlist_router)
 app.include_router(fids_router)
 app.include_router(airspace_router)
 app.include_router(data_usage_router)
+app.include_router(webhooks_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +95,8 @@ async def startup() -> None:
     db.init_db_v11()
     db.init_db_v12()
     db.init_db_v13()
+    db.init_db_v14()
+    db.init_db_v15()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────

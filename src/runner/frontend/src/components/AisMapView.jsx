@@ -82,17 +82,13 @@ export default function AisMapView() {
     if (e.identifier && /^\d{9}$/.test(e.identifier)) mmsiSet.add(e.identifier)
   })
 
-  // Fetch MarineTraffic widget key from runner config endpoint
-  useEffect(() => {
-    fetch('/api/v1/frontend-config')
-      .then(r => r.ok ? r.json() : {})
-      .then(cfg => {
-        if (cfg.mt_widget_key) {
-          setMtEmbedUrl(MT_EMBED_BASE + '?widget_id=' + encodeURIComponent(cfg.mt_widget_key))
-        }
-      })
-      .catch(() => {})
-  }, [])
+  // NOTE: mt_widget_key currently holds a MarineTraffic developer API key,
+  // not a real embed widget ID (those are generated from MarineTraffic's own
+  // embed configurator page and are a different credential entirely). Appending
+  // an invalid widget_id had no visible effect -- MarineTraffic silently falls
+  // back to the generic public embed -- but there's no reason to keep sending
+  // a value we know is wrong. Serving the plain base URL is the confirmed-working
+  // stopgap until a real widget ID exists. See docs/DATA_SOURCES.md.
 
   // Init Leaflet — single instance, tile layers toggled by mode
   useEffect(() => {
@@ -207,6 +203,16 @@ export default function AisMapView() {
     <div className="train-map-view">
       <div className="train-map-subnav">
         <span className="train-map-title">AIS</span>
+
+        <div className="ais-mode-toggle" role="group" aria-label="Map display mode">
+          <button className={`ais-mode-btn${mode === 'iframe' ? ' active' : ''}`}
+            onClick={() => setMode('iframe')}
+            disabled={iframeError} title={iframeError ? 'MarineTraffic blocked embed' : 'MarineTraffic embed + live vessel overlay'}>
+            🌐 LIVE</button>
+          <button className={`ais-mode-btn${mode === 'local' ? ' active' : ''}`}
+            onClick={() => setMode('local')} title="Full OSM + OpenSeaMap, native vessel plotting">
+            🗺 MAP</button>
+        </div>
 
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
           {TRACKER_LINKS.map(t => (

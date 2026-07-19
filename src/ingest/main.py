@@ -58,6 +58,8 @@ async def main() -> None:
     db.init_db_v6()
     db.init_db_v7()
     db.init_db_v13()
+    db.init_db_v14()
+    db.init_db_v15()
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()

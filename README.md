@@ -94,6 +94,8 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | TBFM (arrival sequencing) | FAA SWIM NMS | Push | ✅ Live — push:tbfm heartbeat active |
 | ITWS (terminal weather) | FAA SWIM NMS | Push | ✅ Live — push:itws heartbeat active |
 | NWWS-OI (NWS push) | NWWS-OI XMPP MUC | Push | ✅ Live — push:nws heartbeat active |
+| EUROCONTROL NM B2B (flow measures, OPMET, NOTAMs) | EUROCONTROL | 15 min | ⚠️ Needs EUROCONTROL_NM_B2B_USER/PASS/CERT_PATH — code ships ready, see docs/DATA_SOURCES.md for the access-request template |
+| JASDAT (Japan NOTAMs, AIS, SIGMET/AIRMET) | JCAB/MLIT | 15 min | ⚠️ Needs JASDAT_USER/PASS — code ships ready, see docs/DATA_SOURCES.md for the access-request template |
 
 ### Push/pull failover
 
@@ -225,6 +227,18 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 | POST | `/admin/force-opsplan-snapshot` | Force ops plan snapshot |
 | POST | `/admin/push-test-alert` | Send test ntfy alert |
 | GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
+
+### Inbound webhooks -- shared-secret header (X-Webhook-Secret)
+
+Credential-gated: each returns 503 until its corresponding *_WEBHOOK_SECRET is set in
+dispatch-secrets.env. Ships ready, activates on credential, same pattern as
+the NOTAM feed. See src/web/routes/webhooks.py.
+
+| Method | Path | Source | Notes |
+|---|---|---|---|
+| POST | `/webhooks/limoanywhere/reservations` | LimoAnywhere Customer API | reservation.created/updated/cancelled |
+| POST | `/webhooks/ringcentral/events` | RingCentral Subscription API | call/SMS/voicemail events; handles the one-time Validation-Token handshake |
+| POST | `/webhooks/3cx/events` | 3CX Call Control API | call events |
 
 ### Runner API (port 8001 — served publicly at `ops.example.com`)
 

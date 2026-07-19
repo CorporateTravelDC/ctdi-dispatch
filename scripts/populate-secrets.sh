@@ -76,8 +76,10 @@ set_env "ACARSDRAMA_JUMPSEAT_TOKEN" "$(read_secret jumpseat token)"
 # -- airframes.io (secondary external fallback for VDL2/ACARS/HFDL)
 set_env "AIRFRAMES_TOKEN" "$(read_secret airframes)"
 
-# -- MarineTraffic API key (AIS fallback)
-set_env "MARINETRAFFIC_API_KEY" "$(read_secret marinetraffic)"
+# -- Kpler Maritime 2.0 GraphQL token (AIS fallback -- successor to the
+#    discontinued MarineTraffic REST Vessels API)
+# ~/.secrets/kpler.key  ->  KPLER_MARITIME_API_TOKEN
+set_env "KPLER_MARITIME_API_TOKEN" "$(read_secret kpler key)"
 
 
 # -- ntfy auth token

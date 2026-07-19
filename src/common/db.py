@@ -2260,3 +2260,89 @@ def prune_wpc_discussions(keep_per_product: int = 10) -> int:
             """, (awips, awips, keep_per_product))
             deleted += cur.rowcount
         return deleted
+
+
+SCHEMA_V14 = """
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source          TEXT    NOT NULL,   -- 'limoanywhere' | 'ringcentral' | '3cx'
+    event_type      TEXT    NOT NULL,
+    external_ref    TEXT,               -- source's own event/reservation/call id
+    payload         TEXT    NOT NULL,   -- raw JSON as received
+    received_at     REAL    NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_source
+    ON webhook_events(source, received_at);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_ref
+    ON webhook_events(external_ref);
+"""
+
+
+def init_db_v14() -> None:
+    """Apply v14 schema — inbound external webhook events (LimoAnywhere/RingCentral/3CX)."""
+    with conn() as c:
+        c.executescript(SCHEMA_V14)
+
+
+def insert_webhook_event(source: str, event_type: str, external_ref: str, payload: str) -> int:
+    """Store a raw inbound webhook delivery. Returns the new row id."""
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO webhook_events (source, event_type, external_ref, payload)
+                   VALUES (?, ?, ?, ?)""",
+            (source, event_type, external_ref, payload),
+        )
+        return cur.lastrowid
+
+
+def get_webhook_events(source: str | None = None, limit: int = 50) -> list[dict]:
+    """Return recent webhook events, optionally filtered by source."""
+    with conn() as c:
+        if source:
+            rows = c.execute(
+                """SELECT * FROM webhook_events WHERE source = ?
+                       ORDER BY received_at DESC LIMIT ?""",
+                (source, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM webhook_events ORDER BY received_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+SCHEMA_V15 = """
+CREATE TABLE IF NOT EXISTS international_aviation_feed (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source          TEXT    NOT NULL,   -- 'eurocontrol' | 'jasdat'
+    record_type     TEXT    NOT NULL,   -- 'notam' | 'sigmet' | 'flow_measure' | etc.
+    external_ref    TEXT,
+    raw_json        TEXT    NOT NULL,
+    fetched_at      REAL    NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_intl_aviation_source
+    ON international_aviation_feed(source, fetched_at);
+"""
+
+
+def init_db_v15() -> None:
+    """Apply v15 schema -- international aviation feeds (EUROCONTROL/JASDAT)."""
+    with conn() as c:
+        c.executescript(SCHEMA_V15)
+
+
+def upsert_international_aviation_records(source: str, records: list[dict]) -> int:
+    """Bulk-insert normalized international aviation records. Returns count inserted."""
+    with conn() as c:
+        n = 0
+        for r in records:
+            c.execute(
+                """INSERT INTO international_aviation_feed
+                       (source, record_type, external_ref, raw_json)
+                       VALUES (?, ?, ?, ?)""",
+                (source, r.get("record_type", "unknown"),
+                 str(r.get("external_ref", "")), json.dumps(r)),
+            )
+            n += 1
+        return n
