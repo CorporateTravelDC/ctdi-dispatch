@@ -95,6 +95,123 @@ OLLAMA_MAX_RETRIES      = int(os.getenv("OLLAMA_MAX_RETRIES", "1"))
 OLLAMA_RETRY_WAIT_CAP_S = float(os.getenv("OLLAMA_RETRY_WAIT_CAP_S", "1200.0"))
 
 
+# ── Pre-flight thermal cool-launch gate (added 2026-07-27) ────────────────────
+# Operator observation: the CPU only ever spikes into governor-trip range
+# (75C+, see ollama_governor.py) DURING an active inference -- confirmed via
+# thermal-ingest-guard's own logged samples, which show the box idling
+# anywhere from the low 60s to low 70s C between inferences, then spiking to
+# 79-83C during a generate() call before settling back down.
+#
+# wait_then_budget()/ollama_post_with_retry() above handle a pause that's
+# ALREADY happened (governor SIGSTOPped mid-flight or beforehand). This is a
+# different, earlier intervention: if the box is already running warm right
+# before we're about to ADD inference heat on top of it, wait (bounded) for
+# it to settle into a cooler starting band first, so the inference's own
+# heat is less likely to cross the governor's trip point at all. Starting an
+# inference from ~60C instead of ~72C buys meaningfully more thermal
+# headroom before hitting 75C, for the exact same generation workload.
+#
+# Deliberately PASSIVE -- this does not itself stop/restart ingest
+# containers. thermal-ingest-guard.py already does that reactively at
+# 74C/79C, running as its own host-level systemd --user timer; duplicating
+# that control from here would mean two independent systems mutating the
+# same ingest container state from different processes (this runs inside
+# the poller CONTAINER, which has no access to the host's systemctl --user
+# session or scripts/ tree -- confirmed: only /sys/class/thermal is exposed
+# into the container, not the host's systemd bus). If the box is genuinely
+# hot enough to need active shedding, the existing guard is already handling
+# that on its own 2-minute cadence; this wait just lets a report skill
+# benefit from that cooldown-in-progress before firing instead of firing
+# the instant Ollama merely isn't paused.
+#
+# Bounded and best-effort like every other wait in this module: if the
+# target temp is never reached within the max wait, proceed anyway with
+# whatever temp we've got. A scheduled brief must still eventually run --
+# this is about improving the odds of a clean run, not blocking one.
+#
+# NOT applied to priority="hot" calls -- same rule as the pause-aware
+# waits above. Also skipped when OLLAMA_BASE_URL is unset, since there's
+# nothing local to protect if the call is going straight to Anthropic.
+THERMAL_ZONE                  = "/sys/class/thermal/thermal_zone0/temp"
+OLLAMA_PREFLIGHT_COOL_ENABLED  = os.getenv("OLLAMA_PREFLIGHT_COOL_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+OLLAMA_PREFLIGHT_COOL_TARGET_C = float(os.getenv("OLLAMA_PREFLIGHT_COOL_TARGET_C", "62.0"))
+OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S = float(os.getenv("OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S", "240.0"))
+OLLAMA_PREFLIGHT_COOL_POLL_S  = float(os.getenv("OLLAMA_PREFLIGHT_COOL_POLL_S", "15.0"))
+
+
+def _read_cpu_temp_c() -> float | None:
+    """Read the Pi's CPU temperature the same way ollama_governor.py and
+    scripts/thermal-ingest-guard.py do. Returns None (never raises) if the
+    sysfs path isn't readable -- e.g. a non-Pi dev environment -- so callers
+    can treat "unknown" as "skip the gate" rather than crash a report run
+    over a missing thermal zone."""
+    try:
+        with open(THERMAL_ZONE) as f:
+            return float(f.read().strip()) / 1000.0
+    except (OSError, ValueError):
+        return None
+
+
+def wait_for_cool_launch(
+    target_c: float = OLLAMA_PREFLIGHT_COOL_TARGET_C,
+    max_wait_s: float = OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S,
+    poll_s: float = OLLAMA_PREFLIGHT_COOL_POLL_S,
+) -> tuple[bool, float | None]:
+    """Poll CPU temp until it's at/below target_c or max_wait_s elapses.
+    Returns (reached_target, last_known_temp_c). last_known_temp_c is None
+    only if the thermal zone was never readable at all (gate effectively a
+    no-op in that environment).
+    """
+    temp = _read_cpu_temp_c()
+    if temp is None:
+        return True, None  # nothing to gate on -- proceed
+    if temp <= target_c:
+        return True, temp
+
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, temp
+        time.sleep(min(poll_s, remaining))
+        temp = _read_cpu_temp_c()
+        if temp is None:
+            return True, None
+        if temp <= target_c:
+            return True, temp
+
+
+def preflight_cool_launch_if_needed(priority: str) -> None:
+    """Called at the top of generate() for non-"hot" priority calls, before
+    any Ollama readiness/generation work. Logs and blocks (bounded) if the
+    box is running warm; no-ops immediately otherwise."""
+    if priority == "hot" or not OLLAMA_PREFLIGHT_COOL_ENABLED or not OLLAMA_BASE_URL:
+        return
+    temp = _read_cpu_temp_c()
+    if temp is None or temp <= OLLAMA_PREFLIGHT_COOL_TARGET_C:
+        return
+    log.info(
+        "llm: pre-flight cool-launch gate -- %.1fC is above target %.1fC, "
+        "waiting up to %.0fs before firing inference",
+        temp, OLLAMA_PREFLIGHT_COOL_TARGET_C, OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S,
+    )
+    reached, final_temp = wait_for_cool_launch(
+        OLLAMA_PREFLIGHT_COOL_TARGET_C,
+        OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S,
+        OLLAMA_PREFLIGHT_COOL_POLL_S,
+    )
+    if final_temp is None:
+        return
+    if reached:
+        log.info("llm: pre-flight cool-launch -- reached %.1fC, proceeding", final_temp)
+    else:
+        log.warning(
+            "llm: pre-flight cool-launch -- still %.1fC after %.0fs wait, "
+            "proceeding anyway (never blocks a run indefinitely)",
+            final_temp, OLLAMA_PREFLIGHT_COOL_MAX_WAIT_S,
+        )
+
+
 def _ollama_ready(timeout_s: float = OLLAMA_READY_TIMEOUT_S) -> bool:
     """Cheap health check against Ollama's own API. Never raises -- any
     exception (connection refused, read timeout, DNS failure, whatever)
@@ -283,7 +400,16 @@ def generate(
     no earlier signal than "Ollama call timed out." Neither layer touches
     ollama_governor.py itself, which stays fully operator-only — see
     docs/SUDO_JUSTIFICATION_PROPOSAL.md.
+
+    Added 2026-07-27: a pre-flight cool-launch gate runs before any of the
+    above -- see preflight_cool_launch_if_needed()/wait_for_cool_launch().
+    Bounded wait for the box to be at/below a target CPU temp before firing
+    at all, so this inference's own heat is less likely to cross the
+    governor's trip point on top of whatever the box was already running.
+    Passive (does not itself touch ingest containers); "hot" priority skips
+    it entirely, same as the pause-aware waits.
     """
+    preflight_cool_launch_if_needed(priority)
     effective_timeout = OLLAMA_TIMEOUT if timeout is None else timeout
     if OLLAMA_BASE_URL:
         generate_timeout = wait_then_budget(effective_timeout) if priority != "hot" else effective_timeout
