@@ -79,7 +79,11 @@ SKILL_SCHEDULE: list[dict] = [
      "timeout": _OLLAMA_SKILL_TIMEOUT},
     {"name": "osint-monitor",   "script": "poller/skills/osint_monitor.py",  "interval": 900,
      "timeout": _OLLAMA_SKILL_TIMEOUT},
-    {"name": "flight-cleanup",  "script": "poller/skills/flight_events_cleanup.py", "interval": 3600},
+    # 2026-07-27: was hourly against a 1h-window delete policy that never
+    # actually ran (missing __main__ entry point -- see the skill's module
+    # docstring). Redesigned as a 30-day retention + Nextcloud archival job;
+    # daily is plenty for a 30-day-out window.
+    {"name": "flight-cleanup",  "script": "poller/skills/flight_events_cleanup.py", "interval": 86400},
 ]
 
 # Daily/weekly skills are handled by systemd timers, not this scheduler.
@@ -408,13 +412,31 @@ class WatchlistSweep:
     @staticmethod
     def _do_flight_sweep() -> None:
         """
-        Check active flight watchlist entries for OOOI events and delays.
-        Data source priority:
+        Check active flight watchlist entries for OOOI events, delays, and
+        confirmed-flight-plan / airport-system changes.
+
+        OOOI-phase (OUT/OFF/ON/IN) source priority -- a fallback chain,
+        since these are all position-derived signals competing for the
+        same phase determination:
           1. FlightAware AeroAPI  (if FLIGHTAWARE_AEROAPI_KEY set)
           2. airplanes.live       (free, no key needed — primary live source)
-          3. FDPS flight_events   (SWIM cache — when NMS provisioned)
-        Triggers: OUT, OFF, ON, IN, delay >15min, delay >30min, diversion.
-        Standing directive: all watchlist flights use this trigger set.
+          3. Schedule inference   (ADS-B dark fallback)
+
+        FDPS (FAA filed flight plan: destination/cancellation/status) and
+        FIDS (DCA/IAD gate/baggage/status, MWAA feed) are NOT part of that
+        fallback chain -- they're independent plan/airport-system signals,
+        so both are checked every tick for every entry regardless of
+        whether the OOOI-phase chain above got an ADS-B hit. 2026-07-27:
+        FDPS's checker had a matching bug that meant it never actually
+        fired (see _check_flight_fdps_cache docstring); FIDS was never
+        wired into this sweep at all (see _check_flight_fids docstring).
+        Both fixed/added same day.
+
+        Triggers: OUT, OFF, ON, IN, delay >15min, delay >30min, diversion,
+        FDPS status/destination/cancellation, FIDS gate/baggage/status.
+        Standing directive: all watchlist flights use this trigger set --
+        transient and permanent entries alike (get_active_entries below
+        already returns both, no tier filter).
         """
         import os as _os
         try:
@@ -430,13 +452,15 @@ class WatchlistSweep:
                     if api_key:
                         _check_flight_aeroapi(entry, ident, api_key)
                     else:
-                        # airplanes.live first; fall back to FDPS cache
+                        # airplanes.live is the OOOI-phase source; schedule
+                        # inference is its ADS-B-dark fallback only.
                         hit = _check_flight_airplanes_live(entry, ident)
                         if not hit:
-                            _check_flight_fdps_cache(entry, ident)
-                        if not hit:
-                            # ADS-B dark — check schedule-based arrival inference
                             _check_flight_schedule_inference(entry, ident)
+
+                    # Independent of OOOI-phase hit/miss above.
+                    _check_flight_fdps_cache(entry, ident)
+                    _check_flight_fids(entry, ident)
                 except Exception as e:
                     log.debug("flight sweep %s: %s", ident, e)
 
@@ -988,35 +1012,187 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                 log.debug("schedule infer dep %s: %s", ident, e)
 
 def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
-    """Fall back to recent FDPS data in flight_events table (used when NMS provisioned)."""
+    """Check FAA FDPS (SWIM/SFDPS FIXM feed, see ingest/parsers/fdps_parser.py)
+    for a confirmed flight plan matching this callsign. Fires on a
+    destination change (diversion signal) or a cancellation; otherwise
+    fires a lower-priority status note only when the status actually
+    changed since last tick.
+
+    2026-07-27: replaced a matching predicate that compared the ICAO
+    callsign (e.g. 'UAL2185') against flight_events.flight_id (a GUFI/UUID
+    -- never equal to a callsign) or flight_num alone (e.g. '2185', missing
+    the airline prefix -- also never equal to 'UAL2185'). Neither branch
+    could ever match, so this function has fired zero real events since it
+    was written despite flight_events holding 200k+ real rows -- this is
+    the actual reason FDPS looked "disconnected" from OOOI alerts. Now uses
+    db.get_flight_plan_by_callsign, which splits the callsign correctly and
+    is backed by an index (SCHEMA_V22) instead of a per-tick 600s-window
+    full-table Python scan.
+
+    2026-07-27 (same day, follow-up fix): this function originally compared
+    its own status string against the SHARED entry["last_event_summary"]
+    field -- but that field is overwritten by every other check type
+    (OOOI, FIDS, proximity, schedule inference) too, so an intervening fire
+    from any of those made this function see a false "changed" status and
+    re-fire an unchanged FDPS status. Now reads/writes its own dedicated
+    last_fdps_status column (SCHEMA_V23), same pattern as oooi_phase.
+    Destination changes are now also persisted onto the entry itself
+    (db.update_watchlist_destination) so the diversion event converges
+    instead of re-firing every tick forever.
+
+    Called every tick regardless of ADS-B hit status (unlike the OOOI-phase
+    chain above) -- flight-plan-level changes like a cancellation or
+    destination change are meaningful even while the aircraft is still
+    tracking normally on ADS-B.
+    """
+    from shared.watchlist import watchlist_event_hit
+    from datetime import datetime, timezone
     try:
-        rows = db.get_active_flight_events(max_age_seconds=600)
-        match = next(
-            (r for r in rows
-             if (r.get("flight_id") or "").upper() == ident.upper()
-             or (r.get("flight_num") or "").upper() == ident.upper()),
-            None,
-        )
-        if match:
-            _evaluate_flight_status_fdps(entry, ident, match)
+        plan = db.get_flight_plan_by_callsign(ident)
+        if not plan:
+            return
+        status = (plan.get("status") or "").lower()
+        dest = plan.get("destination")
+        last_status = (entry.get("last_fdps_status") or "").lower()
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if status == "cancelled" and last_status != "cancelled":
+            watchlist_event_hit(
+                entry["id"], f"{ident} FDPS: flight plan CANCELLED",
+                {"watchlist_trigger": "fdps_cancelled", "identifier": ident},
+                priority=4,
+            )
+            db.update_watchlist_fdps_status(entry["id"], status, now_iso)
+            return
+
+        prior_dest = entry.get("destination")
+        if dest and prior_dest and dest.upper() != prior_dest.upper():
+            watchlist_event_hit(
+                entry["id"],
+                f"{ident} FDPS: destination changed {prior_dest}→{dest}",
+                {"watchlist_trigger": "fdps_destination_change",
+                 "identifier": ident, "prior_destination": prior_dest,
+                 "new_destination": dest},
+                priority=4,
+            )
+            db.update_watchlist_destination(entry["id"], dest.upper())
+            db.update_watchlist_fdps_status(entry["id"], status, now_iso)
+            return
+
+        if status and status != last_status:
+            watchlist_event_hit(
+                entry["id"], f"{ident} FDPS: {status}",
+                {"watchlist_trigger": "fdps_status", "status": status,
+                 "identifier": ident},
+                priority=3,
+            )
+            db.update_watchlist_fdps_status(entry["id"], status, now_iso)
     except Exception as e:
         log.debug("fdps cache %s: %s", ident, e)
 
 
-def _evaluate_flight_status_fdps(entry: dict, ident: str, data: dict) -> None:
-    """Evaluate FDPS-sourced flight event for status changes (NMS path)."""
+# ICAO callsign prefix -> IATA carrier code, for FIDS lookups below (MWAA's
+# feed is IATA-keyed). Not exhaustive -- covers carriers actually seen at
+# DCA/IAD plus common internationals already known to flight-hifi-track.
+# A carrier missing from this map just means _check_flight_fids no-ops for
+# it (same as a genuine FIDS miss), not an error.
+_ICAO_TO_IATA_CARRIER = {
+    "AAL": "AA", "UAL": "UA", "DAL": "DL", "SWA": "WN", "JBU": "B6",
+    "ASA": "AS", "NKS": "NK", "FFT": "F9", "RPA": "YX", "ENY": "MQ",
+    "ASH": "YX", "SKW": "OO", "EDV": "9E", "BAW": "BA", "KLM": "KL",
+    "AFR": "AF", "DLH": "LH", "ACA": "AC", "VIR": "VS", "QTR": "QR",
+    "UAE": "EK", "ETD": "EY",
+}
+
+
+def _check_flight_fids(entry: dict, ident: str) -> None:
+    """Check DCA/IAD FIDS (MWAA feed, poller.fetchers.dca_fids/iad_fids,
+    common/airport_fids.py) for gate/baggage/status on a watchlisted flight,
+    firing when any of those change since last tick.
+
+    2026-07-27: net-new wiring, not a reconnect -- FIDS was added
+    2026-07-14 (commit 74db2c2) purely as an on-demand
+    GET /api/v1/fids/{airport}/{flight} lookup (what hub-arrivals-lookup and
+    flight-hifi-track's baggage-claim step call). It was never hooked into
+    the continuous OOOI watchlist sweep at all; there was nothing to
+    disconnect. FIDS only covers DCA and IAD (MWAA-operated), so this is a
+    genuine no-op for any entry not routed through one of those two.
+    """
+    import re
+    dest = (entry.get("destination") or "").upper()
+    origin = (entry.get("origin") or "").upper()
+    if dest in ("KDCA", "DCA"):
+        airport = "DCA"
+    elif dest in ("KIAD", "IAD"):
+        airport = "IAD"
+    elif origin in ("KDCA", "DCA"):
+        airport = "DCA"
+    elif origin in ("KIAD", "IAD"):
+        airport = "IAD"
+    else:
+        return
+
+    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
+    if not m:
+        return
+    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
+    if not iata_carrier:
+        return
+    flight_num = m.group(2)
+
+    try:
+        from common.airport_fids import lookup_arrival
+        result = lookup_arrival(airport, iata_carrier, flight_num)
+    except Exception as e:
+        log.debug("fids check %s: %s", ident, e)
+        return
+    if not result:
+        return
+
+    summary = (f"{ident} FIDS {airport}: gate {result.get('gate') or '?'} "
+               f"baggage {result.get('baggage') or '?'} "
+               f"{result.get('status') or ''}").strip()
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 2026-07-27 follow-up fix #1: this used to compare against the SHARED
+    # entry["last_event_summary"] field, which every other check type
+    # (FDPS, OOOI, proximity, schedule inference) also overwrites -- an
+    # intervening fire from any of those made this see a false "changed"
+    # FIDS summary and re-fire an unchanged one. Confirmed root cause of
+    # three duplicate "...Landed" pushes for UAL2670 on 2026-07-27, ~5min
+    # apart, each sitting between unrelated fdps_status fires. Now compares
+    # against its own dedicated last_fids_status column (SCHEMA_V23), same
+    # pattern as oooi_phase / last_fdps_status.
+    last_status = entry.get("last_fids_status") or ""
+    if summary.lower() == last_status.lower():
+        return
+
+    # 2026-07-27 follow-up fix #2: MWAA's own FIDS display reported "Landed"
+    # for UAL2670 at 17:27z, well before the aircraft was actually at the
+    # gate (ADS-B-confirmed oooi_in didn't fire until 17:42z) -- a real
+    # quirk in the airport display system, not a bug in our polling. FIDS
+    # is not authoritative for "landed"; ADS-B-driven OOOI is. Suppress a
+    # landed-type FIDS claim until OOOI's own phase independently agrees the
+    # aircraft is in ("in") -- still cache the status (so it doesn't
+    # re-evaluate as "changed" every tick and doesn't emit a duplicate once
+    # OOOI does catch up), just don't push it standalone.
+    status_lower = (result.get("status") or "").lower()
+    if "land" in status_lower and entry.get("oooi_phase") != "in":
+        db.update_watchlist_fids_status(entry["id"], summary, now_iso)
+        log.debug("fids %s: suppressing premature landed claim (oooi_phase=%s)",
+                  ident, entry.get("oooi_phase"))
+        return
+
     from shared.watchlist import watchlist_event_hit
-    status = (data.get("status") or "").lower()
-    if not status:
-        return
-    last = entry.get("last_event_summary") or ""
-    if status == last.lower():
-        return
-    summary = f"{ident} FDPS: {status}"
-    watchlist_event_hit(entry["id"], summary,
-                        {"watchlist_trigger": "fdps_status", "status": status,
-                         "identifier": ident},
-                        priority=3)
+    watchlist_event_hit(
+        entry["id"], summary,
+        {"watchlist_trigger": "fids_update", "identifier": ident,
+         "airport": airport, "gate": result.get("gate"),
+         "baggage": result.get("baggage"), "status": result.get("status")},
+        priority=3,
+    )
+    db.update_watchlist_fids_status(entry["id"], summary, now_iso)
 
 
 def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
@@ -1243,6 +1419,9 @@ async def main() -> None:
     db.init_db_v19()
     db.init_db_v20()
     db.init_db_v21()
+    db.init_db_v22()
+    db.init_db_v23()
+    db.init_db_v24()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

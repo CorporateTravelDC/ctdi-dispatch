@@ -1,16 +1,20 @@
 # Alert Reference — ntfy topics, triggers, and dedup logic
 
-_Compiled 2026-07-20. This is a full sweep of every ntfy push in the
-corporatetraveldc codebase: what fires it, what topic it goes to, at what
-priority, and what stops it from spamming. Written after a session that
-fixed FDPS/ITWS/TFMS parsers, added GDP/GS/APTC/GADV/sector coalescing,
-and found + fixed an intermittent ntfy 403 that was silently dropping
-alerts — see "Push reliability" at the end._
+_Compiled 2026-07-20, extended 2026-07-27. This is a full sweep of every
+ntfy push in the corporatetraveldc codebase: what fires it, what topic it
+goes to, at what priority, and what stops it from spamming. Originally
+written after a session that fixed FDPS/ITWS/TFMS parsers, added GDP/GS/
+APTC/GADV/sector coalescing, and found + fixed an intermittent ntfy 403
+that was silently dropping alerts — see "Push reliability" at the end.
+Extended 2026-07-27 to cover the approval-gate topic and every standalone
+ops script that pushes ntfy directly rather than through the two shared
+Python helpers below — that surface had grown since the original sweep
+and had never been swept the same way._
 
 ## How to read this
 
-Every alert path in this codebase funnels through one of two shared
-helpers, never a raw `requests.post` in the calling code:
+Alert paths in this codebase come from three places. Two are shared
+Python helpers, never a raw `requests.post` in the calling code:
 
 - **`shared/watchlist.py` → `_fire_ntfy_dual(domain_topic, title, detail_body, dispatch_body, priority)`**
   Fires two pushes at once: the full-detail body to `domain_topic`, and a
@@ -20,10 +24,26 @@ helpers, never a raw `requests.post` in the calling code:
   Single-topic send, or a full+concise pair to two explicit topics (default
   `dispatch-debriefs` + `dispatch-ops`). Used by the poller-side skills
   (ops-brief, ep-advance, daily-brief, weekly-summary, freshness-audit,
-  AIM/NOTAM alerts, route-impact, TFR enrichment, OSINT monitor).
+  AIM/NOTAM alerts, route-impact, TFR enrichment, OSINT monitor). This is
+  the only one of the three paths with a configured (if currently unused)
+  fallback URL and a 401/403 ambiguous-status guard — see "Push
+  reliability" below.
 
-Both now retry on failure (3 attempts, 0.5s/1s backoff) as of 2026-07-20 —
-see the reliability note at the bottom.
+The third is **not** a shared helper at all: a dozen-plus standalone ops
+scripts (`scripts/*.sh`) and `scripts/thermal-ingest-guard.py` each define
+their own small `ntfy_send()`/`ntfy_alert()` function and hit ntfy with a
+raw `curl` or `urllib` call. These don't share any code with each other or
+with the two helpers above — no shared retry logic, no shared fallback,
+each one independently reads `NTFY_BASE_URL`/`NTFY_TOKEN` (or, in one
+case, an entirely different token file — see below) and rolls its own
+`curl -H "Title: ..." -H "Priority: ..."` call. See "Standalone
+bash/script alerts" below for the full list — this path was not covered
+in the original 2026-07-20 sweep.
+
+Both Python helpers retry on failure (3 attempts, 0.5s/1s backoff) as of
+2026-07-20 — see the reliability note at the bottom. The standalone
+scripts do not retry at all; most wrap the curl call in `|| true` or `||
+log "warn" ...`, so a failed push there is silently dropped, not retried.
 
 ## Topic index
 
@@ -41,13 +61,16 @@ see the reliability note at the bottom.
 | `dispatch` | every `_fire_ntfy_dual` call (paired with domain topic) | matches paired topic | Concise everything-feed — one line per event across all domains |
 | `dispatch-debriefs` / `dispatch-ops` | `common.ntfy_push.send_dual` default topics | 3 | Generic full/concise pair when a skill doesn't specify its own topics |
 | `ops-brief` | poller/skills/ops_brief.py, daily_brief.py | 3 | Hourly + daily operational brief |
-| `ops-health` | freshness_audit.py, container-mem-watch.sh, scheduled-ingest-restart.sh | 2–4 | Feed staleness, container memory pressure, preventive restarts |
+| `ops-health` | freshness_audit.py, container-mem-watch.sh, scheduled-ingest-restart.sh, thermal-ingest-guard.py, restore-network.sh, threat-resolve.sh, renew-tailscale-cert.sh, restart-stack.sh, nextcloud-health-check.sh, watchdog.sh (suppressed/completed restarts) | 2–5 | Feed staleness, container memory pressure, preventive restarts, thermal tier shed/resume, network lockdown lift, cert renewal, stack restart status, Nextcloud health. By far the busiest topic — see "Standalone bash/script alerts" below for the non-Python firers, which the original 2026-07-20 sweep didn't cover. |
+| `hot-alerts` | fdps_parser (Marine One only, via tfr-alert not this), tfr_enrichment, route_impact, watchdog.sh (full stack restart), lockdown.sh (lockdown engaged), threat-initiate.sh (manual threat response) | 4–5 | VIP-only / severe-ops escalation feed. Originally documented as VIP-only (fdps/tfr/route); as of 2026-07-27 also carries non-VIP severe-ops events (stack restart, network lockdown) — same "wake someone up now" intent, different domain. Worth deciding later whether ops-severity events belong on a separate topic from VIP-movement events, since they're currently sharing one feed for two different kinds of urgency. |
 | `ep` / `ep-advance` | ep_advance_brief.py | 3 / 4 | Executive-protection concise / full narrative |
 | `ep-briefs` | (reserved, on-demand EP snapshots) | — | — |
 | `cps` | pusher (from cps_recompute.py's written score) | — | Critical Predictability State change |
 | `osint-alerts` | osint_monitor.py | scope-dependent (`PUSH_PRIORITY` by score_label) | Keyword/RSS/marketing intel hits above `push_threshold` |
 | `reservations` | web/routes/webhooks.py (LimoAnywhere) | 3 | Reservation created/updated/cancelled |
 | `calls` | web/routes/webhooks.py (RingCentral, 3CX) | 3 | Call events from phone system integrations |
+| `approval-gate` | scripts/sudo-approval-gate.sh | 4 | **Added 2026-07-27.** Allow/Deny push for the two approval-gated sudo grants (`ollama.service` start/stop/restart, `dnf remove`/`autoremove`) — see `docs/SUDO_JUSTIFICATION_PROPOSAL.md`. Uses ntfy's `actions` field for inline Allow/Deny buttons that hit `/admin/approval-requests/{id}/resolve` directly from the notification, no need to open the app. No response within the request's TTL (600s default) is treated as a denial. |
+| `dispatch-alerts` | scripts/check-pat-expiry.sh | 4–5 | **Inconsistent, flagged 2026-07-27** — this is the only alert path in the codebase that (a) uses this topic name instead of `ops-health`/`dispatch`, and (b) reads its ntfy token from `~/.secrets/ntfy.token` instead of `NTFY_TOKEN` in `dispatch-secrets.env` like every other script. Functionally fine (fires correctly for GitHub PAT expiry warnings within 5 days), but worth normalizing to `ops-health` + the standard token source next time this script is touched, purely for consistency — not urgent. |
 
 ## Ingest-side parsers (push-primary, `shared/watchlist.py` path)
 
@@ -181,6 +204,87 @@ but never alerted.
   every call event → `calls` (full) + `dispatch` (concise), priority 3.
   Same no-dedup reasoning.
 
+## Standalone bash/script alerts (raw curl/urllib, not through either Python helper)
+
+**Added 2026-07-27** — this whole surface predates today but was never
+swept the same way the ingest/poller/web paths were on 2026-07-20. Every
+entry below defines its own tiny `ntfy_send()`, reads
+`NTFY_BASE_URL`/`NTFY_OPS_TOPIC`/`NTFY_HOT_TOPIC` (defaulting to
+`http://127.0.0.1:2586`, `ops-health`, `hot-alerts`) independently, and
+does **not** retry on failure — most swallow the curl error with `|| true`
+or a log line only. None of these use `common/ntfy_push.py`'s
+retry/fallback/ambiguous-403 logic, so a dropped push here is genuinely
+dropped, not silently retried.
+
+- **`scripts/watchdog.sh`** (the ctdi-watchdog timer, every 5 min):
+  checks all long-running services and timers; fires `ops-health` at
+  priority 2–3 when a restart is suppressed by cooldown or completes, and
+  `hot-alerts` at priority 4 when it initiates a full stack restart (the
+  most severe automated action this script can take). This is the same
+  watchdog `dispatch_watchdog_status_tool`/`stack_watchdog_status_tool`
+  read their last-run record from.
+- **`scripts/lockdown.sh`**: fires `hot-alerts` (no explicit priority set,
+  so ntfy's server default of 3 applies) when host-reach opt-ins for
+  Ollama/pusher/acarshub are reverted — either fail2ban-triggered or
+  manual. Worth an explicit priority here given it shares the `hot-alerts`
+  topic with VIP-movement pushes.
+- **`scripts/restore-network.sh`**: fires `ops-health` (default priority)
+  when lockdown is lifted and host-reach opt-ins are restored.
+- **`scripts/threat-initiate.sh`** / **`scripts/threat-resolve.sh`**:
+  operator-invoked manual threat response (wraps lockdown.sh/
+  restore-network.sh with an explicit "MANUAL" framing and optional
+  banned-IP reference). Initiate → `hot-alerts`; resolve → `ops-health`.
+  Both default priority (no explicit value set).
+- **`scripts/renew-tailscale-cert.sh`**: fires `ops-health` on cert renewal
+  success, renewal failure, or an nginx-config-test failure after a
+  successful renewal (nginx deliberately NOT reloaded in that last case,
+  still serving the old cert). All default priority.
+- **`scripts/restart-stack.sh`**: fires `ops-health` after a manual full
+  restart, message differs by whether `/healthz` is responding yet
+  (`Stack Restart Complete` vs. `Stack Restart -- API Pending`). Default
+  priority.
+- **`scripts/container-mem-watch.sh`**: fires `ops-health` priority 3 when
+  any container has been over its memory-pressure threshold (80% of cap)
+  continuously for 10+ minutes, or a kernel-confirmed OOM event is found.
+  Had a token bug (fixed 2026-07-19, predating this doc's original sweep)
+  where the Authorization header was simply never sent — see "Push
+  reliability" below.
+- **`scripts/scheduled-ingest-restart.sh`**: fires `ops-health` on
+  preventive ingest-container restart success/failure. Same 2026-07-19
+  token-source bug as container-mem-watch.sh, already fixed.
+- **`scripts/nextcloud-health-check.sh`**: fires `ops-health` priority 4
+  when any of its checks fail (occ status, local/outbound HTTP, cron
+  freshness).
+- **`scripts/check-pat-expiry.sh`**: fires the non-standard
+  `dispatch-alerts` topic (see topic index above) at priority 4, escalating
+  to 5 inside the final warning day, when a GitHub PAT is within
+  `WARN_DAYS` (5) of expiring.
+- **`scripts/sudo-approval-gate.sh`**: fires `approval-gate` priority 4 —
+  see the topic index entry above for the Allow/Deny action-button detail.
+  This is the only standalone-script push that uses ntfy's JSON API
+  (`actions` field) rather than the plain-text `-d "$msg"` convention
+  every other script here uses, because it needs the inline buttons.
+- **`scripts/thermal-ingest-guard.py`** (Python, but hand-rolled — not
+  `common/ntfy_push.py`): its own `ntfy_alert(cfg, message, title,
+  priority=4)` posts straight to `/ops-health` via `urllib.request`, no
+  `requests` dependency, no retry, no fallback. Fires priority 5 on a tier-2
+  shed (heaviest ingest load stopped), priority 4 on tier-1, priority 3 on
+  restore. This is the same topic thermal alerts have always used, just
+  never previously listed in the topic index's "fired by" column.
+
+**A genuine current gap, not something to leave undocumented:**
+`.config/containers/systemd/ntfy.container` sets
+`OnFailure=ntfy-container-alert.service` — but that unit does not exist
+anywhere on this host (checked `systemctl list-unit-files`, the repo, and
+both systemd unit search paths; nothing). If the ntfy container itself
+crashes, nothing currently fires — there is no alerting path for "the
+alerting service died." Every mechanism above depends on ntfy being up;
+none of them cover ntfy being down. Worth either writing that unit
+(probably a tiny script that hits Pushover/SMS/some out-of-band channel,
+since ntfy itself obviously can't alert on its own death) or removing the
+dangling `OnFailure=` reference so it stops looking like a real safety net
+that isn't there.
+
 ## Sector/corridor coalescing (new, 2026-07-20)
 
 `shared/sector_coalesce.py` sits between TFMS's RSTR/GDP/GS/APTC/GADV
@@ -247,3 +351,30 @@ previously have silently vanished.
   because it's the same failure mode (silent 403) with a different, fully
   root-caused cause — worth keeping distinct from the still-open one above
   in any future investigation.
+
+**`NTFY_FALLBACK_URL` — built, wired, never configured (checked 2026-07-27):**
+`common/ntfy_push.py`'s `send()` is the only one of the three alert paths
+(see "How to read this") with a fallback mechanism: if the primary ntfy
+URL (`NTFY_URL`, currently `http://host.containers.internal:2586` —
+resolves to the self-hosted ntfy container, reachable from containers on
+this host or from the operator's phone over Tailscale) is unreachable
+(connection error or timeout, not an HTTP error status), `send()` retries
+the identical request against `config.ntfy_fallback_url()`
+(`NTFY_FALLBACK_URL` in `dispatch.env`). The docstring calls this "native
+fallback on :2587" — i.e., a second ntfy listener that wouldn't require
+being on the tailnet to reach, for a topology where an operator doesn't
+want every alert path fully gated behind VPN lockdown. As of this check:
+`NTFY_FALLBACK_URL` is unset in both `dispatch.env` and
+`dispatch-secrets.env`, and nothing in the ntfy Quadlet (either copy)
+actually publishes a `:2587` port — only `2586:2586`. So this is real,
+tested-shaped code with nowhere to land: if the primary ntfy endpoint ever
+becomes unreachable, `common/ntfy_push.py` callers correctly attempt the
+fallback and get nothing, same as if the mechanism didn't exist. Also
+worth noting: even if `NTFY_FALLBACK_URL` were configured, it would only
+help the `common/ntfy_push.py` path — the `shared/watchlist.py` dual-fire
+helper and every standalone bash script/thermal-ingest-guard.py above have
+no fallback of their own and would still go dark if the primary ntfy
+endpoint became unreachable. Whether this is worth building out (a real
+`:2587` listener, or a different non-Tailscale reachability path
+entirely) versus leaving as documented-but-dormant is an operator call,
+not something this doc is resolving.

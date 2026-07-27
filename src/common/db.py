@@ -1128,38 +1128,99 @@ CREATE TABLE IF NOT EXISTS feed_data_usage (
 """
 
 
-def purge_old_flight_events(max_age_seconds: int = 3600) -> int:
+def get_protected_flight_ids() -> set[str]:
+    """flight_events.flight_id (GUFI) values that must be retained regardless
+    of age because they belong to a flight currently on the active watchlist.
+
+    2026-07-27: the original purge_old_flight_events compared flight_id (a
+    GUFI/UUID) directly against watchlist identifiers (ICAO callsigns like
+    "UAL2670") in a NOT IN clause -- the same class of mismatch as the
+    original _check_flight_fdps_cache bug fixed earlier the same day. A GUFI
+    is never equal to a callsign, so that exclusion was always a silent
+    no-op. This version matches correctly by splitting each watched
+    identifier into airline+flight_num (same split as
+    get_flight_plan_by_callsign) and looking up the matching flight_events
+    rows by those columns instead.
     """
-    Delete flight_events rows older than max_age_seconds that are NOT
-    on the active watchlist (watchlist_entries or active watchlist_sessions).
-    Watched flights are retained until removed from the watchlist.
-    Returns the number of rows deleted.
-    """
-    import time as _time
-    cutoff = _time.time() - max_age_seconds
+    import re
     with conn() as c:
-        watched: set[str] = {
+        idents: set[str] = {
             row[0] for row in c.execute(
                 "SELECT identifier FROM watchlist_entries WHERE entry_type='flight'"
             ).fetchall()
         }
-        watched |= {
+        idents |= {
             row[0] for row in c.execute(
                 "SELECT subject FROM watchlist_sessions WHERE status='active'"
             ).fetchall()
         }
-        if watched:
-            placeholders = ",".join("?" * len(watched))
-            result = c.execute(
-                f"DELETE FROM flight_events WHERE updated_at < ? "
-                f"AND flight_id NOT IN ({placeholders})",
-                [cutoff] + list(watched),
-            )
+        protected: set[str] = set()
+        for ident in idents:
+            m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", (ident or "").strip())
+            if not m:
+                continue
+            airline, flight_num = m.group(1).upper(), m.group(2)
+            rows = c.execute(
+                "SELECT flight_id FROM flight_events WHERE airline=? AND flight_num=?",
+                (airline, flight_num),
+            ).fetchall()
+            protected |= {r[0] for r in rows}
+        return protected
+
+
+def export_old_flight_events(cutoff_days: int = 30, limit: int = 1000) -> list[dict]:
+    """Return up to `limit` flight_events rows older than cutoff_days that
+    are NOT protected by an active watchlist entry (see
+    get_protected_flight_ids), oldest first. Read-only -- does not delete
+    anything. Pair with delete_flight_events_by_id() using this exact same
+    row set, only after the export has been successfully archived
+    elsewhere (see poller/skills/flight_events_cleanup.py).
+
+    2026-07-27: bounded by `limit` after a live test with cutoff_days=0
+    (deliberately matching the whole table) OOM-killed the poller
+    container -- SELECT * over 220k+ rows of raw_json, fully materialized
+    into Python dicts, blew past the container's 448m memory cap. The
+    caller (flight_events_cleanup.run()) loops in batches of `limit`
+    instead of pulling everything in one shot; a batch smaller than
+    `limit` means there's nothing left to archive. The exclusion is done
+    in SQL now (flight_id NOT IN protected-GUFIs) rather than as a
+    Python-side post-filter, so LIMIT and the protected-set exclusion
+    don't fight each other -- a short batch is always genuinely the end.
+    """
+    cutoff = time.time() - cutoff_days * 86400
+    protected = get_protected_flight_ids()
+    with conn() as c:
+        if protected:
+            placeholders = ",".join("?" * len(protected))
+            rows = c.execute(
+                f"SELECT * FROM flight_events WHERE updated_at < ? "
+                f"AND flight_id NOT IN ({placeholders}) "
+                f"ORDER BY updated_at ASC LIMIT ?",
+                [cutoff] + list(protected) + [limit],
+            ).fetchall()
         else:
-            result = c.execute(
-                "DELETE FROM flight_events WHERE updated_at < ?",
-                (cutoff,),
-            )
+            rows = c.execute(
+                "SELECT * FROM flight_events WHERE updated_at < ? "
+                "ORDER BY updated_at ASC LIMIT ?",
+                (cutoff, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_flight_events_by_id(flight_ids: list[str]) -> int:
+    """Delete specific flight_events rows by flight_id (GUFI). Deletes
+    exactly the row set passed in -- callers should pass the same list
+    returned by export_old_flight_events(), not a freshly re-run query, so
+    there's no gap between "what we archived" and "what we deleted".
+    Returns the number of rows actually deleted."""
+    if not flight_ids:
+        return 0
+    with conn() as c:
+        placeholders = ",".join("?" * len(flight_ids))
+        result = c.execute(
+            f"DELETE FROM flight_events WHERE flight_id IN ({placeholders})",
+            flight_ids,
+        )
         return result.rowcount
 
 
@@ -2905,3 +2966,167 @@ def count_recent_approvals(command_pattern: str, since_epoch: float) -> int:
             (command_pattern, since_epoch),
         ).fetchone()
         return row["n"] if row else 0
+
+
+# ── FDPS confirmed flight-plan lookup ─────────────────────────────────────────
+# 2026-07-27: flight_events (populated by ingest/parsers/fdps_parser.py, see
+# its module docstring for the FIXM 3.0/4.2 parser history) had no index on
+# (airline, flight_num) -- a callsign-based lookup against 219k+ rows under
+# concurrent ingest write load took >30s and timed out. This index makes the
+# equality lookup instant; the ORDER BY updated_at DESC only has to sort the
+# small per-callsign result set (a callsign is reused across different real
+# flights over time, so more than one flight_id/GUFI can match -- most recent
+# wins).
+
+SCHEMA_V22 = """
+CREATE INDEX IF NOT EXISTS idx_flight_events_callsign
+    ON flight_events(airline, flight_num);
+"""
+
+
+def init_db_v22() -> None:
+    """Apply v22 schema -- index for FDPS callsign lookups. See SCHEMA_V22
+    comment above."""
+    with conn() as c:
+        for stmt in SCHEMA_V22.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
+
+
+def get_flight_plan_by_callsign(callsign: str) -> dict | None:
+    """Confirmed flight-plan details from FAA FDPS (SWIM/SFDPS FIXM feed),
+    keyed by ICAO callsign (e.g. 'UAL2185' -> airline='UAL', flight_num='2185').
+
+    Returns the most-recently-updated flight_events row matching that
+    callsign split, or None if FDPS has never carried a flight plan for it
+    (feed coverage gap, callsign not yet filed, or genuinely no match).
+    Prefers a non-cancelled row when both a stale cancelled entry and a
+    fresher active/proposed one exist for the same reused callsign.
+    """
+    import re
+    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", callsign.strip())
+    if not m:
+        return None
+    airline, flight_num = m.group(1).upper(), m.group(2)
+
+    with conn() as c:
+        row = c.execute("""
+            SELECT * FROM flight_events
+            WHERE airline = ? AND flight_num = ?
+            ORDER BY (status != 'cancelled') DESC, updated_at DESC
+            LIMIT 1
+        """, (airline, flight_num)).fetchone()
+        return dict(row) if row else None
+
+
+# ── v23: dedicated FDPS/FIDS state tracking (fixes 2026-07-27 alert-spam bug) ─
+#
+# last_event_summary is a single shared field written by EVERY watchlist
+# check type (OOOI phase transitions, fdps_status/fdps_cancelled/
+# fdps_destination_change, fids_update, proximity, schedule inference) via
+# update_watchlist_last_event(). _check_flight_fdps_cache and
+# _check_flight_fids (both added earlier the same day as this fix) each
+# compared their OWN new summary against that ONE shared field to decide
+# whether to fire -- so a fire from a DIFFERENT check type in between ticks
+# overwrote the field and made the NEXT check see a false "changed" positive,
+# even though its own actual signal hadn't moved. This is confirmed as the
+# proximate cause of three duplicate "UAL2670 FIDS DCA: gate B14 baggage 5
+# Landed" pushes on 2026-07-27, each ~5 minutes apart, interleaved with
+# unrelated fdps_status fires that kept clobbering last_event_summary.
+#
+# The OOOI-phase chain already solved this exact problem via its own
+# dedicated oooi_phase/oooi_phase_updated_at columns (see init_db_v16() and
+# update_watchlist_oooi_phase() -- same lesson, just not yet applied to FDPS
+# or FIDS when they were wired in). This migration gives each of those two
+# checks the same treatment: last_fdps_status/last_fdps_updated_at and
+# last_fids_status/last_fids_updated_at, both independent of
+# last_event_summary and of each other.
+SCHEMA_V23 = """
+ALTER TABLE watchlist_entries ADD COLUMN last_fdps_status TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN last_fdps_updated_at TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN last_fids_status TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN last_fids_updated_at TEXT;
+"""
+
+
+def init_db_v23() -> None:
+    """Apply v23 schema -- dedicated FDPS/FIDS state columns. See SCHEMA_V23
+    comment above. ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite, so
+    each statement is tried independently and a 'duplicate column' error
+    (already applied) is swallowed -- safe to call on every startup."""
+    with conn() as c:
+        for stmt in SCHEMA_V23.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+def update_watchlist_fdps_status(entry_id: str, status: str, updated_at: str) -> None:
+    """Persist _check_flight_fdps_cache's own state for entry_id. Deliberately
+    separate from update_watchlist_last_event()'s last_event_summary column
+    and from update_watchlist_fids_status() -- see SCHEMA_V23 comment for why
+    sharing a field across check types caused repeated re-firing."""
+    with conn() as c:
+        c.execute("""
+            UPDATE watchlist_entries
+            SET last_fdps_status=?, last_fdps_updated_at=?
+            WHERE id=?
+        """, (status, updated_at, entry_id))
+
+
+def update_watchlist_fids_status(entry_id: str, status: str, updated_at: str) -> None:
+    """Persist _check_flight_fids's own state for entry_id. Deliberately
+    separate from update_watchlist_last_event()'s last_event_summary column
+    and from update_watchlist_fdps_status() -- see SCHEMA_V23 comment for why
+    sharing a field across check types caused repeated re-firing."""
+    with conn() as c:
+        c.execute("""
+            UPDATE watchlist_entries
+            SET last_fids_status=?, last_fids_updated_at=?
+            WHERE id=?
+        """, (status, updated_at, entry_id))
+
+
+# ── v24: index for the 30-day flight_events retention scan ─────────────────
+#
+# export_old_flight_events() filters on updated_at with no supporting
+# index -- confirmed via direct testing that a bare `WHERE updated_at < ?`
+# scan against this table times out past 15s+ under concurrent write load
+# at 220k+ rows (same class of problem SCHEMA_V22 solved for the
+# airline+flight_num lookup). Without this, the new daily archival skill
+# would hit the same kind of slow-DDL/slow-scan issue that caused the
+# SCHEMA_V22 rollout's brief web outage, every single day instead of once.
+SCHEMA_V24 = """
+CREATE INDEX IF NOT EXISTS idx_flight_events_updated_at
+    ON flight_events(updated_at);
+"""
+
+
+def init_db_v24() -> None:
+    """Apply v24 schema -- index for the flight_events retention scan. See
+    SCHEMA_V24 comment above."""
+    with conn() as c:
+        for stmt in SCHEMA_V24.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
+
+
+def update_watchlist_destination(entry_id: str, destination: str) -> None:
+    """Persist a confirmed destination change (e.g. an FDPS-detected
+    diversion) onto the watchlist entry itself. Without this,
+    _check_flight_fdps_cache's destination-change comparison
+    (plan.destination vs entry.destination) would never converge -- the
+    entry's stored destination never moved, so the same "changed" event
+    would re-fire on every tick forever after a genuine diversion."""
+    with conn() as c:
+        c.execute(
+            "UPDATE watchlist_entries SET destination=? WHERE id=?",
+            (destination, entry_id),
+        )

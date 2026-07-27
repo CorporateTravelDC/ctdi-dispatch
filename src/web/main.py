@@ -106,6 +106,9 @@ async def startup() -> None:
     db.init_db_v19()
     db.init_db_v20()
     db.init_db_v21()
+    db.init_db_v22()
+    db.init_db_v23()
+    db.init_db_v24()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -469,6 +472,38 @@ async def get_amtrak() -> JSONResponse:
         "summary": status["delay_summary"],
         "fetched_at": status["fetched_at"],
         "trains": trains,
+    })
+
+
+@app.get("/api/v1/flightplan/{callsign}")
+async def get_flight_plan(callsign: str) -> JSONResponse:
+    """Confirmed flight-plan details from FAA FDPS (SWIM/SFDPS FIXM feed) —
+    Tier 0. Filed origin/destination/aircraft type/status, straight from the
+    FAA's own flight plan message for this callsign -- not inferred from
+    ADS-B position or scraped from an airport FIDS page. Coverage is whatever
+    the live FDPS feed has carried; a miss here doesn't mean the flight
+    doesn't exist, just that FDPS hasn't (yet) had a matching flight plan
+    message for it.
+    """
+    plan = db.get_flight_plan_by_callsign(callsign)
+    if not plan:
+        return JSONResponse({
+            "callsign": callsign.strip().upper(),
+            "confirmed": False,
+            "source": "fdps",
+            "reason": "No FDPS flight plan on file for this callsign",
+        })
+    return JSONResponse({
+        "callsign": callsign.strip().upper(),
+        "confirmed": True,
+        "source": "fdps",
+        "origin": plan.get("origin"),
+        "destination": plan.get("destination"),
+        "aircraft_type": plan.get("aircraft_type"),
+        "status": plan.get("status"),
+        "departure_time": plan.get("departure_time"),
+        "arrival_time": plan.get("arrival_time"),
+        "updated_at": plan.get("updated_at"),
     })
 
 

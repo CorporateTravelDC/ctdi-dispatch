@@ -141,13 +141,24 @@ async def add_flight_watchlist(
 
     entry_id = _make_id("flight", ident)
     now = _now_iso()
+
+    # 2026-07-27: cross-check FDPS (FAA FIXM flight-plan feed, see
+    # /api/v1/flightplan/{callsign}) for this callsign. If the caller didn't
+    # supply origin/destination, backfill from FDPS's filed flight plan
+    # rather than leaving the entry with no route at all -- this is the
+    # FAA's own filed plan, not a guess. Never overwrites an origin/
+    # destination the caller actually supplied.
+    fdps_plan = db.get_flight_plan_by_callsign(ident)
+    fdps_origin = (fdps_plan or {}).get("origin")
+    fdps_dest = (fdps_plan or {}).get("destination")
+
     entry = {
         "id": entry_id,
         "entry_type": "flight",
         "tier": "transient",
         "identifier": ident,
-        "origin": (body.origin or "").upper() or None,
-        "destination": (body.destination or "").upper() or None,
+        "origin": (body.origin or "").upper() or fdps_origin or None,
+        "destination": (body.destination or "").upper() or fdps_dest or None,
         "route_name": None,
         "scheduled_departure": body.scheduled_departure,
         "scheduled_arrival": body.scheduled_arrival,
@@ -174,15 +185,33 @@ async def add_flight_watchlist(
         except ValueError:
             expire_str = f" — auto-expire {body.auto_remove_at}"
 
+    # 2026-07-27: hex_id/registration have been real columns (and real
+    # request fields, see FlightWatchlistRequest above) since the
+    # 2026-07-22 fix, but this notification never surfaced them -- the
+    # "Watching <ident>" push looked identical whether or not the caller
+    # supplied a hex, so there was no quick glance confirmation of which
+    # physical airframe got matched. Found 2026-07-27 when the operator
+    # noticed the watchlist-add push for UAL2670 had no hex in it.
+    id_tag = f" [{entry['hex_id']}]" if entry["hex_id"] else ""
+    reg_tag = f" {entry['registration']}" if entry["registration"] else ""
+
     _fire_ntfy_dual(
         domain_topic="flight-alerts",
-        title=f"Watching {ident} {route}",
-        detail_body=f"Flight {ident} {route} added to watchlist{expire_str}",
-        dispatch_body=f"Watchlist: {ident} added (transient)",
+        title=f"Watching {ident}{id_tag} {route}",
+        detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}",
+        dispatch_body=f"Watchlist: {ident}{id_tag} added (transient)",
         priority=2,
     )
 
-    return JSONResponse(entry, status_code=201)
+    response = dict(entry)
+    if fdps_plan:
+        response["fdps_confirmed"] = {
+            "aircraft_type": fdps_plan.get("aircraft_type"),
+            "status": fdps_plan.get("status"),
+            "origin_used": fdps_origin is not None and not body.origin,
+            "destination_used": fdps_dest is not None and not body.destination,
+        }
+    return JSONResponse(response, status_code=201)
 
 
 # ── POST /api/v1/watchlist/trains ─────────────────────────────────────────────
