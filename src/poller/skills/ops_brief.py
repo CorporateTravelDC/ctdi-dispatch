@@ -33,15 +33,16 @@ import logging
 import pathlib
 import re
 import sqlite3
-import subprocess
 import time as _time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 import httpx
+from common.ollama_lock import ollama_slot, OllamaBusyError
 import requests
 
 from common import config, db, ntfy_push as _ntfy
+from common.aam_watch import get_aam_watch_section
 from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
 
@@ -366,40 +367,43 @@ def _next_webinar_utc(sections: dict, now: "datetime | None" = None) -> "datetim
 
 
 def _defer_for_webinar(webinar_dt: datetime) -> None:
-    """Push a defer notice and schedule a one-shot rerun ~10 minutes after
-    the ATCSCC planning webinar, via a transient systemd-run --user timer
-    (requires linger enabled for the user -- confirmed present on this box)."""
-    rerun_at = webinar_dt + timedelta(minutes=10)
+    """Push a defer notice and skip generation this cycle.
+
+    --- FIXED 2026-07-20 ---
+    This used to try to schedule a one-shot systemd-run --user timer to
+    rerun ~10 minutes after the webinar. That never actually worked: this
+    code runs inside the corporatetraveldc-poller container (a plain Python
+    image, no systemd tooling at all), so subprocess.run(["systemd-run",
+    ...]) always failed with FileNotFoundError ([Errno 2] No such file or
+    directory: 'systemd-run'). Confirmed today via journalctl -- every
+    defer this session (11:00 and 13:00 ET) hit that error and silently
+    dropped the whole hour's brief instead of rerunning. The referenced
+    target unit (corporatetraveldc-ops-brief-deferred.service) doesn't
+    even exist on the host either, so this was never fully wired up.
+
+    Real fix: don't try to self-reschedule at all. ops-brief already runs
+    hourly via corporatetraveldc-ops-brief.timer. Webinars only trigger a
+    defer when they land within 30 min of a scheduled run, and observed
+    spacing between webinars is ~2 hours -- so the NEXT regular hourly run
+    (30-60 min later) is always well past the post-webinar update window
+    on its own. No special rerun is needed; just skip this cycle cleanly
+    and let the existing timer catch it next hour. Simpler and it can't
+    silently eat a cycle the way the broken subprocess call did.
+    """
     now = datetime.now(timezone.utc)
-    delay_seconds = max(60, int((rerun_at - now).total_seconds()))
+    next_hourly_utc = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
 
     msg = (
         f"Ops brief deferred: ATCSCC planning webinar at {webinar_dt.strftime('%H:%MZ')} "
-        f"is within 30 min. Waiting for the post-webinar Operations Plan update -- "
-        f"rerunning at {rerun_at.strftime('%H:%MZ')}."
+        f"is within 30 min. Skipping this cycle so we don't publish on stale "
+        f"pre-webinar data -- next hourly run at {next_hourly_utc.strftime('%H:%MZ')} "
+        f"will pick up the post-webinar Operations Plan update."
     )
     log.info("%s", msg)
     try:
         _ntfy.send_dual(msg, msg, title="OPS BRIEF DEFERRED")
     except Exception as e:
         log.warning("defer notice push failed: %s", e)
-
-    try:
-        unit_name = f"corporatetraveldc-ops-brief-webinar-rerun-{int(now.timestamp())}"
-        subprocess.run(
-            [
-                "systemd-run", "--user",
-                f"--unit={unit_name}",
-                f"--on-active={delay_seconds}",
-                "--description=Deferred ops-brief rerun (post-webinar)",
-                "systemctl", "--user", "start",
-                "corporatetraveldc-ops-brief-deferred.service",
-            ],
-            check=True, timeout=15, capture_output=True, text=True,
-        )
-        log.info("ops-brief: deferred rerun scheduled in %ds via %s", delay_seconds, unit_name)
-    except Exception as e:
-        log.error("ops-brief: failed to schedule deferred rerun: %s", e)
 
 
 def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> str:
@@ -652,17 +656,21 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
     Single Ollama /api/generate call. Returns response text or None on any error.
     Raises httpx.HTTPStatusError so callers can inspect status codes.
     """
-    resp = httpx.post(
-        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-        json={
-            "model":  model,
-            "system": system,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"num_predict": 500, "temperature": 0.2},
-        },
-        timeout=OLLAMA_TIMEOUT,
-    )
+    # priority="report" (2026-07-26): see common/ollama_lock.py. Raises
+    # OllamaBusyError up to the caller (same as any other httpx failure this
+    # function already lets propagate) if a hot alert is pending.
+    with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model":  model,
+                "system": system,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": 500, "temperature": 0.2},
+            },
+            timeout=OLLAMA_TIMEOUT,
+        )
     resp.raise_for_status()
     return resp.json().get("response", "").strip() or None
 
@@ -849,6 +857,14 @@ def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = Fa
 
         # Append raw METAR + NAS appendix to the traditional brief body
         full_text = full_text.rstrip() + raw_appendix
+
+        # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
+        # eVTOL/Part 108) watch section if a fresh one exists -- the scrape
+        # + synthesis runs weekly (aam_weekly_watch.py), this just reads
+        # the cached result, no extra Ollama call on every hourly run.
+        aam_section = get_aam_watch_section("ops")
+        if aam_section:
+            full_text = full_text.rstrip() + "\n\n=== " + aam_section
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "OPS BRIEF+TREND" if is_6h_boundary else "OPS BRIEF"

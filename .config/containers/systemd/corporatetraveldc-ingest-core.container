@@ -1,0 +1,42 @@
+# corporatetraveldc-ingest-core.container
+# Install to ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-ingest-core
+#
+# Part of the 2026-07-26 ingest split: one process/container per SWIM feed
+# (plus one "core" container for NWWS-OI/Amtrak/local_airspace) instead of
+# all of it as threads inside a single corporatetraveldc-ingest container.
+# Same image as before (localhost/corporatetraveldc-ingest:latest) -- the
+# split is entirely env-var driven (SWIM_NMS_ENABLED, SWIM_NMS_SKIP_FEEDS,
+# NWWS_ENABLED, AMTRAK_ENABLED, LOCAL_AIRSPACE_ENABLED), no code duplication.
+# See scripts/ingest-feed-ctl.sh for stop/start/restart-with-stagger control
+# across all seven at once, and docs/DATA_SOURCES.md for the rationale
+# (CPU/memory contention across 6 concurrent Solace sessions was implicated
+# in the SWIM keep-alive churn and poller fetch-cadence drift found the
+# same night).
+[Unit]
+Description=Corporate Travel DC ingest -- core (NWWS-OI + Amtrak + local airspace, zero SWIM feeds)
+After=network-online.target
+After=ntfy.service
+Wants=ntfy.service
+
+[Container]
+Memory=256m
+PodmanArgs=--memory-swap=256m
+Image=localhost/corporatetraveldc-ingest:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=SWIM_NMS_ENABLED=false
+Environment=LOCAL_AIRSPACE_ENABLED=true
+AutoUpdate=local
+
+[Service]
+CPUWeight=100
+CPUQuota=80%
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

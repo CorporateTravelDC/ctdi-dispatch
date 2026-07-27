@@ -20,3 +20,15 @@ smtp-sender-from: ntfy@pm.me
 # Credentials injected via NTFY_TWILIO_* env vars in dispatch-secrets.env
 # See docs/regulated-operator-setup.md for Twilio setup
 # No fields needed here — ntfy reads NTFY_TWILIO_* env vars automatically
+
+# Rate limiting -- self-hosted single-operator instance, not multi-tenant
+# public. Defaults are tuned for anti-abuse on a public instance and were
+# 429-ing our own internal container traffic during heavy debugging bursts
+# today (2026-07-20) -- ops-brief, ep-advance, and several parser test
+# alerts all sharing what ntfy sees as very few distinct visitor identities
+# (behind-proxy: true above with no actual reverse proxy in the internal
+# container->host path collapses visitor attribution). Raised generously
+# since every caller here is our own dispatch platform, not an untrusted
+# public visitor.
+visitor-request-limit-burst: 5000
+visitor-request-limit-replenish: 1s

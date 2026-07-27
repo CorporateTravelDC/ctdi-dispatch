@@ -54,6 +54,8 @@ from web.routes.fids import router as fids_router
 from web.routes.airspace import router as airspace_router
 from web.routes.data_usage import router as data_usage_router
 from web.routes.webhooks import router as webhooks_router
+from web.routes.sectors import router as sectors_router
+from web.routes.remember import router as remember_router
 from web.sse import live_events
 
 app = FastAPI(
@@ -77,6 +79,8 @@ app.include_router(fids_router)
 app.include_router(airspace_router)
 app.include_router(data_usage_router)
 app.include_router(webhooks_router)
+app.include_router(sectors_router)
+app.include_router(remember_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -97,6 +101,10 @@ async def startup() -> None:
     db.init_db_v13()
     db.init_db_v14()
     db.init_db_v15()
+    db.init_db_v16()
+    db.init_db_v18()
+    db.init_db_v19()
+    db.init_db_v20()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -195,7 +203,13 @@ async def get_feeds() -> JSONResponse:
         "dca_fids": 180, "iad_fids": 180,
     }
     # REST feeds covered by a push source — stale REST is expected when push is live.
-    push_covers: dict[str, str] = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
+    # "tfr": "push:stdds" and "nas": "push:tfms" removed 2026-07-23 -- same bogus
+    # 2026-06-07 POC mapping fixed in poller/main.py's FETCH_SCHEDULE (STDDS/TFMS
+    # are unrelated-to-partially-overlapping feeds, not real push sources for
+    # tfr/nas). This dict was making /api/v1/feeds report push_covered=true for
+    # both, hiding 2+ days of real staleness on the admin/overview dashboards
+    # while the underlying REST polls were also being silently skipped.
+    push_covers: dict[str, str] = {"nws": "push:nws", "notam": "push:fns"}
     feed_by_name = {f["feed_name"]: f for f in feeds}
 
     result = []
@@ -508,6 +522,74 @@ async def get_train_config() -> JSONResponse:
         "center":          center,
         "zoom":            7,
     })
+
+
+@app.get("/api/v1/wx-config")
+async def get_wx_config() -> JSONResponse:
+    """
+    Operator meteorology config -- Tier 0.
+
+    Returns the NWS (default) radar source, centered on the operator's local
+    forecast office, plus an optional operator-defined alternate source for
+    non-US deployments (a different national met office, or any embeddable
+    radar/satellite image or iframe URL). WX_OPERATOR_* unset -> the
+    frontend hides the toggle and shows NWS only.
+
+    Config (dispatch.env):
+      WX_NWS_RADAR_SITE   -- 4-letter NWS radar site ID (default KLWX --
+                              Sterling, VA WFO, covers the DC metro area)
+      WX_NWS_WFO          -- 3-letter NWS Weather Forecast Office ID, for
+                              the "local forecast office" label (default LWX)
+      WX_OPERATOR_NAME    -- display name for the alternate source (e.g.
+                              "Met Office", "Environment Canada")
+      WX_OPERATOR_MAP_URL -- embeddable image or iframe URL for the
+                              alternate source's local radar/satellite view
+      WX_OPERATOR_IS_IFRAME -- "true" if WX_OPERATOR_MAP_URL should be
+                              embedded as an <iframe> rather than an <img>
+                              (some met offices only offer an interactive
+                              map page, not a static/animated image)
+    """
+    nws_site = config.get("WX_NWS_RADAR_SITE", "KLWX").strip().upper() or "KLWX"
+    nws_wfo  = config.get("WX_NWS_WFO", "LWX").strip().upper() or "LWX"
+    # Display label for the default radar source -- "NEXRAD" (the actual
+    # radar network/product name for the /ridge/standard/ base-reflectivity
+    # loop) rather than "NWS" (the parent agency), per operator request
+    # 2026-07-21. The underlying default site/office (Sterling/LWX) is
+    # unaffected -- this only renames the toggle button / panel label.
+    nws_label = config.get("WX_NWS_LABEL", "NEXRAD").strip() or "NEXRAD"
+
+    operator_name = config.get("WX_OPERATOR_NAME", "").strip()
+    operator_url  = config.get("WX_OPERATOR_MAP_URL", "").strip()
+    operator_iframe = config.get("WX_OPERATOR_IS_IFRAME", "").strip().lower() == "true"
+
+    operator = None
+    if operator_name and operator_url:
+        operator = {
+            "name":       operator_name,
+            "map_url":    operator_url,
+            "is_iframe":  operator_iframe,
+        }
+
+    return JSONResponse({
+        "nws": {
+            "name":     nws_label,
+            "wfo":      nws_wfo,
+            "radar_site": nws_site,
+            "radar_url":  f"https://radar.weather.gov/ridge/standard/{nws_site}_loop.gif",
+            "station_page": f"https://radar.weather.gov/station/{nws_site.lower()}/standard",
+        },
+        "operator": operator,
+    })
+
+
+@app.get("/api/v1/bandwidth-priority")
+async def get_bandwidth_priority_route() -> JSONResponse:
+    """
+    Current bandwidth-priority override state — Tier 0 (no auth), so any
+    container on the box (ingest, a future NEXRAD puller) can poll it
+    without needing an admin token. See /admin/bandwidth-priority to set it.
+    """
+    return JSONResponse(db.get_bandwidth_priority())
 
 
 @app.get("/api/v1/data-usage")
@@ -1038,13 +1120,27 @@ def get_adsb_live(
 
 @app.get("/api/v1/aircraft/{identifier}")
 async def get_aircraft(identifier: str) -> JSONResponse:
-    """Look up an aircraft by N-number or ICAO hex from the local FAA registry cache.
+    """Look up an aircraft by N-number/tail or ICAO hex, cross-referencing
+    the local FAA registry cache AND OpenSky's registry (added 2026-07-23,
+    operator directive: flight numbers resolve to a tail number, then that
+    tail is cross-referenced against BOTH registries to derive an
+    authoritative hex — don't trust a single source's self-reported hex
+    alone). FAA is US-N-number-only and checked first when the identifier
+    looks like one; OpenSky covers foreign registrations FAA never will and
+    is checked either as the primary source (non-N-number tails) or as a
+    cross-check against FAA's hex (N-number tails present in both).
 
     - N-number:  N12345, 12345 (leading N optional)
     - ICAO hex:  a1b2c3  (6 hex chars, case-insensitive)
+    - Foreign tail: G-EUYA, D-AIBL, etc. — FAA will never have these,
+      OpenSky is the only source.
 
-    Returns registrant name, city/state, aircraft type, hex, LADD flag, and
-    registration status.  Returns 404 if not found or if the registry has not
+    Returns a `source` field ("faa", "opensky", or "faa+opensky") and, when
+    both registries have the tail, a `hex_mismatch` flag — true means FAA's
+    and OpenSky's recorded hex for this tail disagree, which is itself a
+    signal worth surfacing (stale registry data on one side, or a
+    re-registration in progress) rather than silently picking one.
+    Returns 404 if not found in either registry, or if neither registry has
     been imported yet.
     """
     try:
@@ -1053,40 +1149,88 @@ async def get_aircraft(identifier: str) -> JSONResponse:
         pass
 
     ident = identifier.strip()
-    record: dict | None = None
+    faa_record: dict | None = None
+    osky_record: dict | None = None
 
     import re as _re
-    if _re.fullmatch(r"[0-9a-fA-F]{6}", ident):
-        # Looks like a hex code
-        record = db.faa_lookup_by_hex(ident)
-    else:
-        record = db.faa_lookup_by_n_number(ident)
+    is_hex = bool(_re.fullmatch(r"[0-9a-fA-F]{6}", ident))
 
-    if not record:
-        # Check if registry is populated at all
-        counts = db.faa_registry_count()
-        if counts["total"] == 0:
+    if is_hex:
+        faa_record = db.faa_lookup_by_hex(ident)
+        osky_record = db.opensky_lookup_by_hex(ident)
+    else:
+        faa_record = db.faa_lookup_by_n_number(ident)
+        osky_record = db.opensky_lookup_by_registration(ident)
+
+    if not faa_record and not osky_record:
+        faa_counts = db.faa_registry_count()
+        opensky_total = db.opensky_registry_count()
+        if faa_counts["total"] == 0 and opensky_total == 0:
             return JSONResponse(
-                {"error": "FAA registry not yet imported — first import runs Monday 02:00 ET"},
+                {"error": "Neither FAA nor OpenSky registry has been imported yet"},
                 status_code=503,
             )
-        return JSONResponse({"error": f"Aircraft '{ident}' not found in FAA registry"}, status_code=404)
+        return JSONResponse(
+            {"error": f"Aircraft '{ident}' not found in FAA or OpenSky registry"},
+            status_code=404,
+        )
+
+    faa_hex = (faa_record.get("mode_s_hex") or "").lower() if faa_record else None
+    osky_hex = (osky_record.get("icao24") or "").lower() if osky_record else None
+
+    if faa_record and osky_record:
+        source = "faa+opensky"
+        hex_mismatch = bool(faa_hex and osky_hex and faa_hex != osky_hex)
+        # FAA is authoritative for US N-numbers when both agree or FAA alone
+        # has a value; OpenSky fills in only if FAA's hex is somehow blank.
+        authoritative_hex = faa_hex or osky_hex
+    elif faa_record:
+        source = "faa"
+        hex_mismatch = False
+        authoritative_hex = faa_hex
+    else:
+        source = "opensky"
+        hex_mismatch = False
+        authoritative_hex = osky_hex
 
     return JSONResponse({
-        "n_number":        record.get("n_number"),
-        "mode_s_hex":      record.get("mode_s_hex"),
-        "registrant_name": record.get("registrant_name"),
-        "city":            record.get("city"),
-        "state":           record.get("state"),
-        "year_mfr":        record.get("year_mfr"),
-        "mfr_mdl_code":    record.get("mfr_mdl_code"),
-        "serial_number":   record.get("serial_number"),
-        "status_code":     record.get("status_code"),
-        "type_aircraft":   record.get("type_aircraft"),
-        "type_engine":     record.get("type_engine"),
-        "expiration_date": record.get("expiration_date"),
-        "last_action_date":record.get("last_action_date"),
-        "ladd":            record.get("ladd", False),
+        "identifier":      ident,
+        "source":          source,
+        "hex_id":          authoritative_hex,
+        "hex_mismatch":    hex_mismatch,
+        "faa": ({
+            "n_number":        faa_record.get("n_number"),
+            "mode_s_hex":      faa_record.get("mode_s_hex"),
+            "registrant_name": faa_record.get("registrant_name"),
+            "city":            faa_record.get("city"),
+            "state":           faa_record.get("state"),
+            "year_mfr":        faa_record.get("year_mfr"),
+            "mfr_mdl_code":    faa_record.get("mfr_mdl_code"),
+            "serial_number":   faa_record.get("serial_number"),
+            "status_code":     faa_record.get("status_code"),
+            "type_aircraft":   faa_record.get("type_aircraft"),
+            "type_engine":     faa_record.get("type_engine"),
+            "expiration_date": faa_record.get("expiration_date"),
+            "last_action_date":faa_record.get("last_action_date"),
+            "ladd":            faa_record.get("ladd", False),
+        } if faa_record else None),
+        "opensky": ({
+            "icao24":            osky_record.get("icao24"),
+            "registration":      osky_record.get("registration"),
+            "manufacturer_name": osky_record.get("manufacturer_name"),
+            "model":             osky_record.get("model"),
+            "typecode":          osky_record.get("typecode"),
+            "operator":          osky_record.get("operator"),
+            "owner":             osky_record.get("owner"),
+            "registered":        osky_record.get("registered"),
+            "built":             osky_record.get("built"),
+        } if osky_record else None),
+        # Back-compat top-level fields for existing callers that read the
+        # pre-2026-07-23 flat FAA-only shape directly.
+        "n_number":        faa_record.get("n_number") if faa_record else None,
+        "mode_s_hex":      authoritative_hex,
+        "registrant_name": faa_record.get("registrant_name") if faa_record else osky_record.get("owner"),
+        "ladd":            faa_record.get("ladd", False) if faa_record else False,
     })
 
 
@@ -1359,6 +1503,49 @@ async def delete_vip(
     current = [e for e in current if e != entry]
     _write_vip_list(current)
     return JSONResponse({"vip": sorted(set(current)), "removed": entry})
+
+
+# ---------------------------------------------------------------------------
+# Bandwidth priority override (SWIM vs. NEXRAD) — operator toggle
+# ---------------------------------------------------------------------------
+# 2026-07-21. Corey wants a bidirectional manual override for when bandwidth
+# is tight: declare 'swim' (SWIM/NMS ingest stays full-rate) or 'nexrad' (a
+# future NEXRAD Level II puller gets priority, SWIM's fdps feed backs off)
+# or 'auto' (no override). See SCHEMA_V20 in common/db.py for the full
+# rationale, including the honest caveat that the 'swim' direction has
+# nothing on the other side to defer yet since no Level II puller exists.
+
+class BandwidthPriorityRequest(BaseModel):
+    priority: str            # 'auto' | 'swim' | 'nexrad' | 'weather'
+    reason: str = ""
+    ttl_seconds: float | None = None
+
+
+@app.post("/admin/bandwidth-priority")
+async def set_bandwidth_priority_route(
+    body: BandwidthPriorityRequest,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    if body.priority not in ("auto", "swim", "nexrad", "weather"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"priority must be 'auto', 'swim', 'nexrad', or 'weather' — got {body.priority!r}",
+        )
+    state = db.set_bandwidth_priority(
+        priority=body.priority, set_by="admin", reason=body.reason,
+        ttl_seconds=body.ttl_seconds,
+    )
+    db.insert_trigger(str(uuid.uuid4()), "bandwidth_priority_set",
+                       {"priority": body.priority, "reason": body.reason})
+    return JSONResponse(state)
+
+
+@app.delete("/admin/bandwidth-priority")
+async def clear_bandwidth_priority_route(
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    state = db.set_bandwidth_priority(priority="auto", set_by="admin", reason="cleared")
+    return JSONResponse(state)
 
 
 # ---------------------------------------------------------------------------

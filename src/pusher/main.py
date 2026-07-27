@@ -605,6 +605,11 @@ async def main() -> None:
         loop.add_signal_handler(sig, shutdown.set)
 
     db.init_db_v8()
+    db.init_db_v9()
+    db.init_db_v16()
+    db.init_db_v18()
+    db.init_db_v19()
+    db.init_db_v20()
     log.info("corporatetraveldc pusher started")
 
     while not shutdown.is_set():

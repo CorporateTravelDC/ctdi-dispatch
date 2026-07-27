@@ -107,6 +107,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 # ── Helpers ------------------------------------------------------------------
 
 def _client_ip(request: Request) -> str:
+    # Cloudflare sets CF-Connecting-IP authoritatively at its edge -- it is
+    # not client-spoofable and is present on every request that actually
+    # traversed the Cloudflare tunnel (the public ops.example.com
+    # hostname). Prefer it over X-Forwarded-For, which for tunnel traffic
+    # reduces to cloudflared's own loopback hop into nginx and is not a
+    # reliable signal of the real origin.
+    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf_ip:
+        return cf_ip
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         return xff.split(",")[0].strip()
@@ -129,6 +138,29 @@ _TRUSTED_NETS = [
 
 
 def _is_trusted(request: Request) -> bool:
+    # BUG FIX 2026-07-21: when a request arrives via the Cloudflare tunnel
+    # (ops.example.com), CF-Connecting-IP is the ONLY signal we
+    # trust for real origin. Previously this function also checked
+    # request.client.host and a naively-parsed X-Forwarded-For, both of
+    # which -- for tunnel traffic -- resolve to cloudflared's own loopback
+    # hop into nginx (127.0.0.1), which is in _TRUSTED_NETS. Whenever
+    # Cloudflare's edge didn't additionally forward a usable X-Forwarded-For
+    # chain, that loopback hop got treated as a trusted LAN origin, which is
+    # exactly why the public Ops hostname intermittently showed admin/search
+    # as available when it should not have been. If CF-Connecting-IP is
+    # present, we decide trust from that value alone and never fall
+    # through to the loopback-derived candidates.
+    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf_ip:
+        try:
+            addr = ipaddress.ip_address(cf_ip)
+            trusted = any(addr in net for net in _TRUSTED_NETS)
+        except ValueError:
+            trusted = False
+        if not trusted:
+            log.warning("runner: untrusted (cloudflare) cf_ip=%s path=%s", cf_ip, request.url.path)
+        return trusted
+
     direct = request.client.host if request.client else ""
     xff = _client_ip(request)
     for candidate in filter(None, [direct, xff]):
@@ -142,15 +174,57 @@ def _is_trusted(request: Request) -> bool:
     return False
 
 
+# UPDATED 2026-07-21 per operator direction: Ops (the public Cloudflare
+# hostname) gets ZERO admin capability, full stop -- not "admin data is
+# hidden," but "admin actions are unreachable regardless of what token is
+# presented." Previously this middleware only checked the bare /admin
+# prefix, which nothing on this service actually serves directly -- every
+# real admin action reaches this container via the generic
+# /api/dispatch/{path} proxy in proxy_dispatch() below, as
+# /api/dispatch/admin/... . That meant a caller with a valid admin token
+# could perform real admin actions straight through the public hostname,
+# which is exactly what the operator wants closed off. Two things are now
+# blocked pre-emptively, before the request ever reaches the proxy or a
+# downstream token check, unless the request itself is tailnet/LAN-
+# originating (_is_trusted):
+#   1. Any request (GET or otherwise) to /api/dispatch/admin/*
+#   2. Any non-GET (mutating) request to /api/dispatch/api/v1/*
+# A trusted-origin request still needs its own valid token for the
+# downstream dispatch-web service to actually accept it -- this
+# middleware only enforces the network-origin half of "tailnet AND
+# token," per operator direction ("100.x.x.x:8001 will have all
+# access, assuming a valid token").
+_ADMIN_PROXY_PREFIX = "/api/dispatch/admin"
+_API_V1_PROXY_PREFIX = "/api/dispatch/api/v1"
+
+
 @app.middleware("http")
 async def tailscale_gate(request: Request, call_next):
-    # Admin routes require a trusted source (Tailscale / localhost).
-    # All other routes (UI, API data, chat) are open — CF tunnel + CF Access
-    # handles edge auth for dispatch-runner.example.com.
-    if request.url.path.startswith("/admin"):
-        if not _is_trusted(request):
-            return JSONResponse(status_code=403, content={"detail": "access denied"})
+    path = request.url.path
+    is_admin_proxy_path = path.startswith(_ADMIN_PROXY_PREFIX) or path.startswith("/admin")
+    is_v1_mutation = (
+        path.startswith(_API_V1_PROXY_PREFIX)
+        and request.method != "GET"
+    )
+    if (is_admin_proxy_path or is_v1_mutation) and not _is_trusted(request):
+        # 404, not 403 -- per operator direction the point isn't "you're
+        # denied," it's "this surface doesn't exist to you." A 403 would
+        # confirm an admin path is there to probe against; a 404 doesn't.
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     return await call_next(request)
+
+
+@app.get("/api/whoami")
+async def whoami(request: Request):
+    """
+    Tells the frontend whether THIS request arrived over a trusted
+    (Tailscale/LAN) origin, so it can decide whether to render the ADMIN
+    nav tab and the Settings token field at all. Added 2026-07-21 so Ops
+    (public hostname) never even shows admin UI exists, rather than
+    showing it disabled/broken -- matches the tailscale_gate enforcement
+    above, using the same _is_trusted check for consistency.
+    """
+    return {"tailnet": _is_trusted(request)}
 
 # ── Health -------------------------------------------------------------------
 
@@ -517,7 +591,17 @@ async def ais_vessels(
 ):
     """
     AIS vessel positions.
-    Fallback chain: local AIS-catcher → MarineTraffic API → AISHub → none.
+    Fallback chain: local AIS-catcher -> AISHub -> none.
+
+    UPDATED 2026-07-21 per operator direction: dropped the Kpler Maritime
+    2.0 tier entirely ("mt is being a douchebag" -- MarineTraffic/Kpler
+    access is a sales-gated enterprise product and the operator has no
+    working credential for it, only an embed-widget key that was never
+    going to work here; see docs/DATA_SOURCES.md). AISHub is free,
+    reciprocal, and already working once AIS_AISHUB_ID is registered, so
+    it's the only real fallback tier now. _fetch_kpler_vessels is left
+    defined but unused below rather than deleted, in case Kpler access is
+    ever actually obtained later -- not wired into this fallback chain.
     Returns normalised vessel objects regardless of source.
     """
     # 1 -- Local AIS-catcher (hardware)
@@ -532,15 +616,7 @@ async def ais_vessels(
     except Exception as e:
         log.debug("AIS local unavailable: %s", e)
 
-    # 2 -- Kpler Maritime 2.0 GraphQL API (successor to the discontinued
-    #      MarineTraffic REST Vessels API -- see _fetch_kpler_vessels above)
-    if KPLER_MARITIME_TOKEN:
-        try:
-            return await _fetch_kpler_vessels(lat, lon, dist)
-        except Exception as e:
-            log.warning("AIS Kpler Maritime 2.0 unavailable: %s", e)
-
-    # 3 -- AISHub (free data-sharing cooperative, requires registration)
+    # 2 -- AISHub (free data-sharing cooperative, requires registration)
     if AIS_AISHUB_ID:
         try:
             bbox = _bbox(lat, lon, min(dist, 120))  # AISHub free tier: smaller window
@@ -1037,14 +1113,30 @@ _TIER1_PATHS: frozenset[str] = frozenset({
     "api/v1/tfr-enriched",
     "api/v1/radio",
     "api/v1/cui/status",
+    # Added 2026-07-21: dispatch-web gates GET /api/v1/watchlist itself at
+    # tier1 (CERT/Tailscale) regardless of what this runner's own
+    # tailscale_gate middleware allows through. Per operator direction Ops
+    # (public hostname) should see the REAL watchlist read-only -- the
+    # runner's own middleware already blocks any WRITE to this path from a
+    # non-trusted origin, so injecting the service token here only widens
+    # the READ, matching the same pattern already used for tfr-enriched/
+    # radio/cui-status above. This is what actually makes "Ops sees
+    # everything, view-only" true; without it every GET from the public
+    # hostname 403s at dispatch-web before the runner's own logic matters.
+    "api/v1/watchlist",
+    "api/v1/watchlist/history",
 })
-# NOTE: watchlist (VIP flight/person tracking) deliberately excluded --
-# this proxy injects its service token for ANY caller, regardless of who's
-# viewing ops.example.com (a public, non-CF-Access-gated
-# hostname). That's an acceptable tradeoff for low-sensitivity data
-# (weather/radio/regulatory status) but not for VIP tracking data. The
-# watchlist widget must gate on the *browser's own* auth, not have this
-# proxy transparently unlock it for anonymous visitors.
+# NOTE: watchlist (VIP flight/person tracking) deliberately excluded from
+# _TIER1_PATHS -- this proxy will not inject its own service token for it.
+# See _WATCHLIST_PATHS / _is_tailnet_request() below for the actual gate.
+
+# UPDATED 2026-07-21 per operator direction: dropped the paired-auth
+# placeholder gate entirely. Ops (public hostname) now sees the REAL
+# watchlist on every GET -- it's a view-only dashboard, not a "hide the
+# data" concern anymore. What's actually gated is MUTATION (add/remove),
+# enforced by tailscale_gate's is_v1_mutation check above, which blocks
+# any non-GET /api/v1/* request that doesn't arrive from a trusted
+# (Tailscale/LAN) origin, before it ever reaches this proxy.
 
 @app.api_route("/api/dispatch/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_dispatch(path: str, request: Request):
@@ -1055,12 +1147,16 @@ async def proxy_dispatch(path: str, request: Request):
     This lets the frontend call enriched endpoints without holding a token itself.
     The service token (RUNNER_ENRICHED_TOKEN, tier=cert) is stored server-side in
     dispatch-secrets.env and never exposed to the browser.
+
+    Admin paths and non-GET api/v1/* mutations are rejected before they
+    even reach this function -- see tailscale_gate middleware above.
     """
+    auth = request.headers.get("Authorization")
+
     url = f"{DISPATCH_BASE}/{path}"
     headers = {}
 
     # Client-supplied token takes priority (admin console, debug flows).
-    auth = request.headers.get("Authorization")
     if auth:
         headers["Authorization"] = auth
     elif RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS:
@@ -1082,7 +1178,7 @@ async def proxy_dispatch(path: str, request: Request):
         ct = r.headers.get("content-type", "")
         if "text/plain" in ct:
             return PlainTextResponse(r.text, status_code=r.status_code)
-        return r.json()
+        return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Dispatch unavailable: {e}")
 
@@ -1288,6 +1384,21 @@ _RSS_CATALOG: dict[str, list[dict]] = {
         {"name": "AviationSource",          "url": "https://aviationsourcenews.com/feed/"},
         {"name": "AOPA News",               "url": "https://www.aopa.org/news-and-media/all-news/rss"},
         {"name": "Cranky Flier",            "url": "https://crankyflier.com/feed/"},
+    ],
+    # Added 2026-07-23 per operator request (vertiport/eVTOL/Part 108
+    # research chat). Only URLs independently verified to return real
+    # RSS/Atom XML from this Pi are included here -- Electric VTOL News
+    # (evtol.news) and AIN FutureFlight both publish <link rel="alternate"
+    # rss+xml> tags that 404/serve HTML instead of feed content when
+    # fetched externally (bot-gated or broken), and Federal Register's
+    # search.rss endpoint 500s regardless of params/UA from this network.
+    # Don't add those three without re-verifying from a different network
+    # first -- see hex_only_sweep_authority-adjacent lesson on unverified
+    # feeds/parsers (feedback_swim_parser_verification memory).
+    "advanced_air_mobility": [
+        {"name": "Urban Air Mobility News",  "url": "https://urbanairmobilitynews.com/feed/"},
+        {"name": "UASWeekly",                "url": "https://uasweekly.com/feed/"},
+        {"name": "FAA News",                 "url": "https://www.faa.gov/rss.xml"},
     ],
 }
 

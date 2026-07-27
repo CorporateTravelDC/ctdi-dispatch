@@ -10,9 +10,37 @@ This document covers every integrated data source, how to request access, and em
 
 ### FAA SWIM / NMS (System Wide Information Management — Network Management Server)
 
-**Last verified:** 2025-12
+**Last verified:** 2026-07-26
 
-**What it provides:** Push-primary flight plan data, real-time tracks, TFRs, NAS flow programs (GDP, GS, AFP, AAR), digital NOTAMs, terminal weather, and arrival sequencing. The highest-fidelity aviation data feed available in the US.
+**What it provides:** Push-primary flight plan data (FDPS), real-time surface/terminal tracks (STDDS), NAS flow programs (GDP, GS, AFP, AAR -- TFMS), digital NOTAMs (AIM/AIM_FNS), terminal weather alerts (ITWS), and arrival sequencing (TBFM). Six separate Solace PubSub+ VPN sessions, one per feed, each with its own durable exclusive queue -- see src/ingest/swim_client.py. The highest-fidelity aviation data feed available in the US.
+
+**Correction (2026-07-26):** TFRs are NOT delivered via SWIM in this system, despite FAA's SWIM program including them in principle. This platform's TFR data comes from the completely separate tfr.faa.gov/tfrapi/getTfrList JSON REST endpoint (src/poller/fetchers/tfr.py), polled every 5 minutes independently of the SWIM ingest container. Do not assume a SWIM outage affects TFR data, or that fixing SWIM fixes TFR staleness -- they share no code path.
+
+**Known operational note (2026-07-26):** all six SWIM sessions were found hitting SOLCLIENT_SUBCODE_KEEP_ALIVE_FAILURE in simultaneous bursts every 1-3 minutes, traced to this Pi's WiFi/gateway congestion combined with the Solace SDK's default ~9s keep-alive tolerance (3000ms x 3). Widened to 5000ms x 8 (~40s) in swim_client.py -- reduced but did not eliminate the churn; some congestion events exceed even 40s. See swim_client.py's inline comment at the SOLCLIENT_SESSION_PROP_KEEP_ALIVE_INT_MS property for detail. A priority/backpressure scheme to reduce ingest's own contention footprint during high-load periods is tracked separately (see ingest/backpressure work, 2026-07-26).
+
+**Container topology (2026-07-26):** ingest is no longer a single container running all sources as threads. It is now split into seven independent Podman Quadlet units sharing the same `localhost/corporatetraveldc-ingest:latest` image, differentiated purely by environment variables -- no code duplication:
+
+| Unit | Runs | Memory cap | CPU cap |
+|---|---|---|---|
+| `corporatetraveldc-ingest-core` | NWWS-OI, Amtrak, local airspace monitor -- zero SWIM | 256m | 80% |
+| `corporatetraveldc-ingest-fdps` | SWIM FDPS only | 448m | 150% |
+| `corporatetraveldc-ingest-stdds` | SWIM STDDS only | 384m | 120% |
+| `corporatetraveldc-ingest-tfms` | SWIM TFMS only | 320m | 90% |
+| `corporatetraveldc-ingest-tbfm` | SWIM TBFM only | 320m | 80% |
+| `corporatetraveldc-ingest-itws` | SWIM ITWS only | 256m | 60% |
+| `corporatetraveldc-ingest-notam` | SWIM AIM_FNS (NOTAM) only | 256m | 60% |
+
+Resource caps are weighted by real observed volume the night this was built: FDPS (continuous nationwide flight events) and STDDS (surface/terminal tracks) are the heaviest; TFMS/TBFM moderate; ITWS/NOTAM lightest (NOTAM in particular reports "wrote 0" most cycles). The per-feed split is driven entirely by `SWIM_NMS_ENABLED`, `SWIM_NMS_SKIP_FEEDS` (pre-existing mechanism in swim_client.py), `NWWS_ENABLED`, `AMTRAK_ENABLED`, and a new `LOCAL_AIRSPACE_ENABLED` flag (src/ingest/main.py) that ensures only the core container runs the local airspace monitor thread.
+
+**Why split it:** this lets any single feed be stopped, started, or restarted independently -- without dropping the other five SWIM sessions, NWWS-OI, Amtrak, or local airspace along with it. Previously all six SWIM sessions plus NWWS-OI/Amtrak/local-airspace lived in one process, so any restart (manual or OOM-triggered) dropped everything at once. Total measured footprint across all seven at steady state is roughly 300-350MB combined, versus roughly 126MB for the old single process under equivalent load -- a real but moderate increase, confirmed empirically (not guessed) before this split was built: a clean-room `podman run --rm` test showed the Solace PubSub+ client library itself costs ~30-38MB per process regardless of which single feed it's handling, since that's the dominant fixed cost, not the feed-specific parser code.
+
+**Control:** `scripts/ingest-feed-ctl.sh status|stop|start|restart` operates on any single unit, `core`, or a comma-separated list, or `all`. `start`/`restart` support `--stagger=Ns` (default 15s) and `--order=lightest-first|heaviest-first` (default lightest-first) to control how the six SWIM feeds come up relative to each other; `core` always comes first regardless of order, since NWWS-OI/Amtrak/local airspace have no SWIM contention profile and nothing should wait on them. `stop` always fires every target at once (no reason to delay freeing resources).
+
+**Relationship to the existing bandwidth-priority soft-pause (nexrad/weather modes, see /admin/bandwidth-priority):** that mechanism is unchanged and independent of this split -- it keeps a feed's Solace session connected but stops draining its queue, a soft, reversible-in-seconds lever that auto-triggers off severe/extreme NWS alerts. `ingest-feed-ctl.sh` is a separate, stronger lever: a real process stop that frees the container's actual CPU/memory, for situations (planned maintenance, a leaking/misbehaving single feed, genuine Tailscale/WiFi saturation) where soft pausing isn't enough. The two are not yet integrated -- the weather auto-trigger still only does the soft pause, not a hard stop. Whether/how to wire the two together is an open design question, not yet decided.
+
+**Preventive OOM-leak restart watchdog (scripts/scheduled-ingest-restart.sh):** previously scoped to the single monolithic ingest service; updated the same day to check and restart each of the seven containers independently (own cooldown per-container), so one container's threshold-triggered restart never touches the other six.
+
+**Backlog fast-forward triage (2026-07-26):** every SWIM feed session now checks each message's Solace `sender_timestamp` on reconnect. If the oldest queued message is already older than `SWIM_BACKLOG_STALE_SECONDS` (default 7200s / 2h) -- meaning a real backlog built up during whatever outage just ended, soft-paused or hard-stopped -- the feed keeps processing anything under that threshold or within the most recent `SWIM_BACKLOG_RECENT_FRACTION` (default 0.10) of the backlog's total time span, and silently drops everything else without ever handing it to the per-feed parser (not written to the DB, not pushed, not counted as filter-accepted -- still counted as received bytes for the existing feed-data-usage counters). For a 2-day outage that means the newest ~4.8h of backlog still gets processed; the rest is discarded. For anything shorter than the 2h floor (e.g. the observed 10-15 minute Ollama-governor-scale pauses), this never engages at all -- the whole backlog processes normally, identical to pre-2026-07-26 behavior. Live-verified 2026-07-26 across all 7 containers post-rollout: no handler errors, no spurious triage triggers (nothing was actually behind), normal write volume unaffected. Not yet exercised against a real multi-hour+ backlog -- next genuine outage will be the first live test of the drop path itself.
 
 **API type:** Solace PubSub+ message queue (AMQP/JMS). The `solace-pubsubplus` Python library handles the connection.
 
@@ -673,3 +701,21 @@ When integrating a new feed:
 4. Commit all three files in the same commit as the code integration.
 
 The goal is that any operator who deploys this system can open `docs/DATA_SOURCES.md` and find exactly what they need to sign up for every feed — without hunting through code for credentials or searching documentation externally.
+
+## Thermal ingest guard (2026-07-26)
+
+`scripts/thermal-ingest-guard.py` -- automatic, tunable fallback that stops
+the heaviest SWIM ingest containers when the box runs hot, and restores
+them once temps hold cool for a dwell period. Independent of
+`ollama_governor.py` (never touches Ollama's own thermal pause/resume).
+Runs every 2 minutes via `corporatetraveldc-thermal-ingest-guard.timer`
+(systemd --user, no root needed). All thresholds and feed groupings are
+tunable in `dispatch.env` (`THERMAL_GUARD_*` -- see that file for the
+full rationale and defaults). Two tiers: tier 1 sheds the two heaviest
+feeds (tfms, stdds) at 74C; tier 2 adds the remaining three (fdps, tbfm,
+itws) at 79C if tier 1 alone isn't enough. Fires an ntfy alert
+(`ops-health` topic) on every shed and restore.
+
+State: `/var/lib/corporatetraveldc/thermal_ingest_guard_state.json`.
+Check current tier/temp: `cat` that file, or watch
+`journalctl --user -u corporatetraveldc-thermal-ingest-guard.service`.

@@ -407,6 +407,10 @@ body::before {
   flex-shrink: 0;
 }
 .globe-search-btn:hover { color: var(--text); }
+.globe-search-disabled { opacity: 0.55; }
+.globe-search-disabled .globe-search-input { cursor: not-allowed; }
+.globe-search-disabled .globe-search-btn { cursor: not-allowed; color: var(--muted); }
+.globe-search-disabled .globe-search-btn:hover { color: var(--muted); }
 .globe-search-type-badge {
   font-family: var(--font-data); font-size: 0.6rem; letter-spacing: 0.06em;
   color: var(--cyan); border: 1px solid var(--cyan); border-radius: var(--radius);
@@ -515,6 +519,33 @@ body::before {
   letter-spacing: 0.05em; flex-shrink: 0;
   border: 1px solid; border-radius: var(--radius);
   padding: 0.1rem 0.3rem;
+}
+
+/* Current-station status line (added 2026-07-21 -- replaces the map/globe
+   view for Amtrak rows: shows where the train currently is instead of a
+   position on a map). Distinct from the muted .train-row-event fallback so
+   it reads as live status, not metadata. */
+.train-row-station {
+  font-family: var(--font-data); font-size: 0.62rem; color: var(--cyan);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Split-screen train page body (added 2026-07-21, replaces the old
+   side-panel + map layout): left column Amtrak, right column MARC/VRE,
+   both plain text -- no map. */
+.train-split-body {
+  display: flex; flex: 1; min-height: 0; overflow: hidden;
+}
+.train-split-col {
+  flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden;
+  border-right: 1px solid var(--border); background: var(--panel);
+  display: flex; flex-direction: column; gap: 0;
+}
+.train-split-col-last { border-right: none; }
+@media (max-width: 720px) {
+  .train-split-body { flex-direction: column; overflow-y: auto; }
+  .train-split-col { border-right: none; border-bottom: 1px solid var(--border); }
+  .train-split-col-last { border-bottom: none; }
 }
 
 /* Map overlay stats */
@@ -805,6 +836,8 @@ body::before {
 }
 .admin-btn:hover { color: var(--text-2); border-color: var(--cyan); background: var(--cyan-dim); }
 .admin-btn.warn:hover { border-color: var(--nogo); color: var(--nogo); }
+.admin-btn.active { color: var(--go); border-color: var(--go); background: var(--cyan-dim); }
+.admin-btn.warn.active { color: var(--nogo); border-color: var(--nogo); background: rgba(255,0,0,0.08); }
 .admin-btn-sm { padding: 0.15rem 0.5rem; font-size: 0.6rem; }
 .admin-toggle-row { display: flex; align-items: center; justify-content: space-between; cursor: pointer; margin-bottom: 0.5rem; }
 .admin-toggle-chevron { font-size: 0.75rem; color: var(--muted); margin-left: 0.35rem; }
@@ -1900,6 +1933,62 @@ body::before {
   color:        var(--orange, #ff6b35);
 }
 
+/* Train roster tile — National/Regional/Amtrak/VRE/MARC grouping with
+   No-Service badges. Added 2026-07-21 per operator direction. */
+.fp-roster-tabs { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.fp-roster-section { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.35rem; }
+.fp-roster-section-title {
+  font-family: var(--font-data);
+  font-size:   0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:       var(--text-dim, #8a94a6);
+  margin-bottom: 0.25rem;
+}
+.fp-roster-group { margin-bottom: 0.3rem; }
+.fp-roster-group-head {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-family: var(--font-data);
+  font-size: 0.68rem;
+  color: var(--text-dim, #8a94a6);
+}
+.fp-roster-group-title { font-weight: 600; color: inherit; }
+.fp-roster-group-count {
+  background: rgba(255,255,255,0.08); border-radius: 8px;
+  padding: 0 0.35rem; font-size: 0.62rem;
+}
+.fp-roster-noservice-count { color: var(--orange, #ff6b35); font-size: 0.6rem; }
+.fp-roster-chip-row { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.2rem; }
+.fp-roster-chip {
+  position: relative;
+  font-family: var(--font-data);
+  font-size: 0.62rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(0,212,255,0.12);
+  color: var(--cyan, #00d4ff);
+  display: inline-flex; align-items: center; gap: 0.25rem;
+}
+.fp-roster-chip.no-service {
+  background: rgba(138,148,166,0.12);
+  color: var(--text-dim, #8a94a6);
+  text-decoration: line-through;
+}
+.fp-roster-chip.delayed { background: rgba(255,107,53,0.15); color: var(--orange, #ff6b35); }
+.fp-roster-chip-badge {
+  font-size: 0.55rem;
+  padding: 0 0.25rem;
+  border-radius: 2px;
+  background: rgba(138,148,166,0.25);
+  color: inherit;
+  text-decoration: none;
+}
+.fp-roster-chip-badge.warn { background: rgba(255,107,53,0.25); }
+.fp-roster-chip-more {
+  font-family: var(--font-data); font-size: 0.6rem; color: var(--text-dim, #8a94a6);
+  align-self: center;
+}
+
 /* VIP TFR chips */
 .fp-vip-list  { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.35rem; }
 .fp-vip-chip {
@@ -2295,3 +2384,48 @@ body::before {
   white-space: nowrap;
 }
 
+
+/* Weather tab — radar image/iframe, now living inside .wx-radar-stage
+   (which supplies the border/background/centering), so these just need to
+   fill the stage while preserving aspect ratio. */
+.wx-radar-image {
+  max-width: 100%; max-height: 100%; width: auto; height: auto;
+  display: block; object-fit: contain;
+}
+.wx-radar-frame {
+  width: 100%; height: 100%; border: none; display: block;
+}
+.wx-radar-caption {
+  font-family: var(--font-ui); font-size: 0.62rem; color: var(--muted);
+  padding: 0.35rem 0.1rem 0.1rem; text-align: right;
+}
+.wx-radar-caption a { color: var(--cyan); text-decoration: none; }
+.wx-radar-caption a:hover { text-decoration: underline; }
+
+/* WX tab — full-bleed radar hero (mirrors .globe-map-wrap/.map-container's
+   width:100%/flex:1 treatment) + fixed-width side panel for METAR/alerts,
+   replacing the earlier 50/50 split-column layout. 2026-07-21. */
+.wx-body {
+  display: flex; flex: 1; min-height: 0; overflow: hidden;
+}
+.wx-radar-main {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 0.5rem 0.65rem;
+}
+.wx-radar-head {
+  font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.1em; color: var(--muted);
+  padding: 0.15rem 0 0.4rem;
+}
+.wx-radar-stage {
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #0d1420; border-radius: var(--radius); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.wx-side-panel {
+  width: 260px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
+  border-left: 1px solid var(--border); background: var(--panel);
+  display: flex; flex-direction: column; gap: 0;
+}

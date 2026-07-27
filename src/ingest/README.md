@@ -4,13 +4,25 @@ The ingest container connects to FAA SWIM data feeds and pushes events
 into the shared SQLite database. The poller's REST fallback activates
 automatically whenever ingest is not stamping heartbeats.
 
-## NMS/Solace credentials (pending FAA provisioning)
+## NMS/Solace credentials -- LIVE as of 2026-07-20
 
-The NMS feeds (FDPS, STDDS) require credentials issued by the FAA SWIM
-program office. Until they arrive the container starts cleanly, logs
-`pending_credentials`, and the poller continues polling REST.
+Credentials arrived and are configured; this section's "pending" framing is
+stale and kept only for the setup steps below (still accurate if ever
+reprovisioning from scratch). All six SWIM feeds (fdps, stdds, tfms, tbfm,
+itws, and fns/aim for NOTAMs) are actively connected and receiving live
+traffic. **Real per-parser status, 2026-07-20** (see each parser's own
+module docstring for full schema details):
 
-**To enable live SWIM once credentials arrive:**
+| Feed  | Parser            | Status                                                                 |
+|-------|-------------------|-------------------------------------------------------------------------|
+| TBFM  | tbfm_parser.py    | FIXED, live -- tbfm_sequences populating, real metering ntfy alerts     |
+| STDDS/TAIS | smes_parser.py (TAIS path) | FIXED, live -- terminal_tracks populating          |
+| STDDS/SMES | smes_parser.py (SMES path) | FIXED, live -- surface_tracks populating (real `asdexMsg` schema, confirmed against FAA's FIXM-Mediated STDDS Data Overview doc + a live captured sample) |
+| TFMS  | tfms_parser.py    | PARTIALLY fixed -- RSTR (restriction) msgType fully live in nas_programs (real ground stops/MIT restrictions). TMI_FLIGHT_LIST/trackInformation/flightPlanInformation/APTC/GADV msgTypes are confirmed-schema but stubbed, pending design decisions (OOOI-coupling for per-flight data, CPS integration for APTC, new table for GADV) |
+| ITWS  | itws_parser.py    | Parse-error bug fixed (stray unescaped `<` in text content); 13+ product types confirmed and taxonomized (simple alert-style vs. raster-heavy), dispatcher/handlers not yet built |
+| FDPS  | fdps_parser.py    | NOT fixed -- confirmed the live feed is FIXM 3.0, not the FIXM 4.2 the parser was written against (a genuinely different message model, confirmed against the official SFDPS Data Consumer Reference Manual). Version-detection scaffold in place (`_detect_fixm_version`), old 4.2 logic preserved as `_parse_fdps_message_fixm42_legacy`, FIXM 3.0 field mapping is a stub (`_parse_fdps_message_fixm30`) pending a dedicated rewrite session |
+
+**To enable live SWIM from a fresh setup (credentials lost/reprovisioning):**
 
 1. Add credentials to `/etc/corporatetraveldc/dispatch-secrets.env`:
    ```
@@ -59,15 +71,25 @@ program office. Until they arrive the container starts cleanly, logs
 
 ## Message types parsed
 
-| Source | Feed  | What it carries                            |
-|--------|-------|--------------------------------------------|
-| `FH`   | FDPS  | Full flight plan (origin, dest, type)      |
-| `TH`   | FDPS  | Track position (lat, lon, alt, speed)      |
-| `CL`   | FDPS  | Cancellation                               |
-| `HP/OH`| FDPS  | Handoff events                             |
-| `HZ`   | FDPS  | Heartbeat position (altitude skipped)      |
-| SMES   | STDDS | ASDE-X surface tracks at DCA/IAD/BWI       |
-| TAIS   | STDDS | Terminal radar tracks (PCT TRACON)         |
+`FH`/`TH`/`CL`/`HP`/`OH`/`HZ` below are the FIXM 4.2 legacy source-type
+model fdps_parser.py was originally written against -- kept for reference
+in `_parse_fdps_message_fixm42_legacy`, but NOT what's actually live (see
+table above: live feed is FIXM 3.0, a different message model entirely,
+still stubbed as of 2026-07-20).
+
+| Source | Feed  | What it carries                            | Live? |
+|--------|-------|---------------------------------------------|-------|
+| `FH`   | FDPS  | Full flight plan (origin, dest, type)        | No -- legacy 4.2 model |
+| `TH`   | FDPS  | Track position (lat, lon, alt, speed)        | No -- legacy 4.2 model |
+| `CL`   | FDPS  | Cancellation                                 | No -- legacy 4.2 model |
+| `HP/OH`| FDPS  | Handoff events                               | No -- legacy 4.2 model |
+| `HZ`   | FDPS  | Heartbeat position (altitude skipped)        | No -- legacy 4.2 model |
+| `asdexMsg` (positionReport/mlatReport/adsbReport) | STDDS/SMES | ASDE-X surface tracks at DCA/IAD/BWI | **Yes**, live 2026-07-20 |
+| `TATrackAndFlightPlan` | STDDS/TAIS | Terminal radar tracks (PCT TRACON, though captures so far have mostly shown other TRACONs) | **Yes**, live 2026-07-20 |
+| `RSTR` (restrictionMessage) | TFMS | GDP/GS/MIT restrictions (program_id, facility, airports, category, mit value, reason) | **Yes**, live 2026-07-20 |
+| `TMI_FLIGHT_LIST`/`FlightModify`/`trackInformation`/`flightPlanInformation` | TFMS | Per-flight TMI/reroute/track/flight-plan data | No -- stubbed, OOOI-coupling planned |
+| `APTC`/`GADV` | TFMS | Airport config/rates; ATCSCC general advisories | No -- stubbed, design pending |
+| various (Microburst/Wind Shear/Tornado ATIS, Terminal Weather Text, Precipitation raster, etc.) | ITWS | Terminal weather products, 13+ distinct types | No -- taxonomized, not parsed |
 
 ---
 

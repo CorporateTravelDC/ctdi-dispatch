@@ -31,7 +31,7 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 | Ops dashboard (runner app) | `https://ops.example.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
 | Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
 | Tailscale direct | `http://100.x.x.x:8000` |
-| CPS | YELLOW / MARGINAL |
+| CPS | GREEN / GO *(live snapshot as of 2026-07-25 -- check `/api/v1/cps` for current)* |
 | All containers | Running |
 | FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected ([operator LLC abbreviation] subscription, 2026-06) |
 | Local LLM (Ollama) | mistral-nemo 12B — corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint Modelfile wrappers |
@@ -72,8 +72,10 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | `corporatetraveldc-web` | `localhost/corporatetraveldc-web:latest` | FastAPI REST API, tiered auth |
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
-| `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest — all 6 NMS feeds + NWWS-OI live |
+| `corporatetraveldc-ingest-{core,fdps,stdds,tfms,tbfm,itws,notam}` | `localhost/corporatetraveldc-ingest:latest` (same image, 7 Quadlets) | SWIM/NWWS/Amtrak push ingest, split 2026-07-26 into 7 independent containers — one per SWIM feed plus one "core" for NWWS-OI/Amtrak/local airspace, so any single feed can be stopped/started/restarted without dropping the rest. See docs/DATA_SOURCES.md and scripts/ingest-feed-ctl.sh. |
 | `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.example.com` |
+| `corporatetraveldc-runner-demo` | `localhost/corporatetraveldc-runner:latest` | Second instance of the runner, in demo-playback mode (port 8005) — reads `demo.db` instead of live feeds; internal-only, not yet publicly exposed (see *Demo Mode* below) |
+| `corporatetraveldc-acarshub` | `localhost/corporatetraveldc-acars-watcher:latest` | acarshub web UI — local ACARS/VDL2 decode viewer for this station's own RTL-SDR |
 
 ### Data feeds
 
@@ -83,12 +85,12 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | NWS alerts | api.weather.gov | 5 min | ✅ Active |
 | ATCSCC ops plan | ATCSCC | 1 hr | ✅ Active |
 | Runsheet | Local file | 5 min | ✅ Active |
-| TFR | tfr.faa.gov XML | 5 min | ⚠️ FAA upstream issue |
-| NAS programs | FAA NAS/OIS | 5 min | ⚠️ Empty upstream response |
+| TFR | tfr.faa.gov/tfrapi/getTfrList (JSON) | 5 min | ✅ Active |
+| NAS programs | nasstatus.faa.gov/api/airport-status-information | 5 min | ✅ Active |
 | NOTAMs | FAA NOTAM API | 5 min | ⚠️ Needs `FAA_NOTAM_API_KEY` |
 | Amtrak | Push ingest / poller fallback | Push / 5 min | ✅ Active |
 | FDPS (flight plan + track) | FAA SWIM NMS | Push | ✅ Live — push:fdps heartbeat active |
-| STDDS (surface + terminal tracks + TFRs) | FAA SWIM NMS | Push | ✅ Live — push:stdds heartbeat active |
+| STDDS (surface + terminal tracks) | FAA SWIM NMS | Push | ✅ Live — push:stdds heartbeat active. Does **not** carry TFR data despite an earlier doc claim to the contrary -- TFRs have their own independent REST poll of tfr.faa.gov, see Data feeds table above |
 | TFMS (GDP/GS/AFP/AAR) | FAA SWIM NMS | Push | ✅ Live — push:tfms heartbeat active |
 | AIM/FNS (digital NOTAMs) | FAA SWIM NMS | Push | ✅ Live — push:fns heartbeat active |
 | TBFM (arrival sequencing) | FAA SWIM NMS | Push | ✅ Live — push:tbfm heartbeat active |
@@ -347,7 +349,7 @@ CTDI includes a built-in **archive recorder** that captures rolling snapshots of
 
 The archive lets you run a fully live-looking demo without connecting to a real deployment. A demo site replays historical snapshots through the same REST API surface as the live system — the client sees a real dispatch dashboard with real historical data (NOTAMs, weather, train status, TFRs, ops plans) without any credentials or live feeds being required.
 
-**Planned endpoint:** `dispatch-runner.example.com` is the expected home for this demo site once built. It is currently retired from live production traffic — all real operational traffic now lives at `ops.example.com` — and is reserved specifically for this future time-delayed-data demo/stub use.
+**Status: backend built and running, not yet public.** The demo-playback runner is live right now as `corporatetraveldc-runner-demo.service` (port 8005, internal-only) — a second instance of the runner app reading `demo.db` instead of live feeds. `dispatch-runner.example.com` is the intended public hostname for it, but is deliberately left unwired — going public is a business go/no-go decision for the operator, not a technical blocker. All real operational traffic lives at `ops.example.com`.
 
 **Seed readiness check:**
 
@@ -660,7 +662,10 @@ No code changes required after credential entry. Rebuild and restart:
 
 ```bash
 bash build-images.sh
-systemctl --user restart corporatetraveldc-ingest
+# Ingest is now 7 independent containers sharing this one image (split
+# 2026-07-26) -- restart all of them via the control script, staggered so
+# they don't all reconnect to Solace at once:
+scripts/ingest-feed-ctl.sh restart all --order=lightest-first --stagger=15
 ```
 
 ---

@@ -176,10 +176,23 @@ def extract_reg_from_msg(msg: dict) -> str:
 
 def build_ntfy_payload(reg: str, msg: dict, source: str) -> dict:
     tail   = extract_reg_from_msg(msg) or reg
-    flight = (msg.get("flight")
-              or msg.get("flightNumber")
-              or (msg.get("acars") or {}).get("flight")
-              or "")
+    flight_raw = (msg.get("flight")
+                  or msg.get("flightNumber")
+                  or (msg.get("acars") or {}).get("flight")
+                  or "")
+    # airframes.io occasionally attaches a flight-state ENRICHMENT OBJECT
+    # (dict, e.g. {'id':..., 'flight':'AA2141', 'flightIcao':'AAL2141', ...})
+    # to the "flight" field instead of a plain flight-number string. Without
+    # this guard, an f-string on that dict dumps its raw repr() straight into
+    # the ntfy title -- confirmed live 2026-07-26 on N829AW/AA2141. Pull a
+    # sane flight number back out of it, don't just stringify the object.
+    if isinstance(flight_raw, dict):
+        flight = (flight_raw.get("flight")
+                  or flight_raw.get("flightIata")
+                  or flight_raw.get("flightIcao")
+                  or "")
+    else:
+        flight = str(flight_raw) if flight_raw else ""
     label  = (msg.get("label")
               or (msg.get("acars") or {}).get("label")
               or msg.get("type")

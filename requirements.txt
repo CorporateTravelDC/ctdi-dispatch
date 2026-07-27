@@ -10,7 +10,9 @@ sse-starlette>=1.6.5
 requests>=2.32.0
 
 # Push ingest (NWWS-OI/XMPP, Amtrak HTTP, XML parsing)
-# python-qpid-proton is ingest-only; installed in Containerfile.ingest
+# NMS/Solace (solace-pubsubplus) is ingest-only; installed via src/ingest/requirements.txt.
+# Legacy AMQP (python-qpid-proton) removed 2026-07-19 -- was never actually
+# installed here despite the old comment; NMS/Solace replaced it entirely.
 slixmpp>=1.8
 httpx>=0.27
 lxml>=5.0

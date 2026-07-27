@@ -31,9 +31,23 @@ log = logging.getLogger(__name__)
 # Each fetcher is also independently triggerable via trigger files.
 
 FETCH_SCHEDULE: list[dict] = [
-    {"name": "tfr",           "module": "poller.fetchers.tfr",           "interval": 300,  "push_feed": "stdds"},
+    # push_feed removed 2026-07-23: was "stdds" (STDDS/TAIS surface surveillance --
+    # unrelated to TFRs, a leftover from the 2026-06-07 POC commit that was never
+    # corrected once real per-feed push sources existed). This silently suppressed
+    # every real TFR REST poll for 2+ days since STDDS push has been reliably
+    # healthy -- zero Marine One / POTUS TFR alerts could fire in that window.
+    # No genuine push:tfr source exists; TFR has no push-primary path, restore
+    # independent REST polling of tfr.faa.gov/tfrapi/getTfrList.
+    {"name": "tfr",           "module": "poller.fetchers.tfr",           "interval": 300},
     {"name": "metar",         "module": "poller.fetchers.metar",         "interval": 300},
-    {"name": "nas",           "module": "poller.fetchers.nas",           "interval": 300,  "push_feed": "tfms"},
+    # push_feed removed 2026-07-23: was "tfms" (Traffic Flow Management -- carries
+    # GDP/GS/TMI data, a real but partial overlap with NAS status, not a full
+    # substitute -- nasstatus.faa.gov also carries airport closures TFMS doesn't).
+    # Also a 2026-06-07 POC leftover, never corrected. Silently suppressed every
+    # real NAS-status REST poll for 2.8+ days since TFMS push has been reliably
+    # healthy. No push:nas source exists. Restore independent REST polling of
+    # nasstatus.faa.gov/api/airport-status-information.
+    {"name": "nas",           "module": "poller.fetchers.nas",           "interval": 300},
     {"name": "nws",           "module": "poller.fetchers.nws",           "interval": 300,  "push_feed": "nws"},
     {"name": "notam",         "module": "poller.fetchers.notam",         "interval": 300,  "push_feed": "fns"},
     {"name": "runsheet",      "module": "poller.fetchers.runsheet",      "interval": 300},
@@ -302,21 +316,44 @@ class WatchlistSweep:
     EXPIRY_INTERVAL = 60          # sweep expired transient entries
     FLIGHT_SWEEP_INTERVAL = 120   # check active flight entries via AeroAPI / FDPS
     TRAIN_SWEEP_INTERVAL = 300    # check active train entries via amtraker
+    VESSEL_SWEEP_INTERVAL = 300   # check active vessel entries via AISHub/Kpler
     LOCAL_AC_SWEEP_INTERVAL = 60  # cross-ref local_aircraft against watchlist
     FAA_REGISTRY_INTERVAL = 1 * 86400  # daily — FAA actually refreshes
     # ReleasableAircraft.zip daily at 23:30 CT; the registry itself only
     # changes that once/day regardless, so this mostly buys faster recovery
     # if an import fails rather than more frequent real data. (Was weekly;
     # changed 2026-07-13 per operator request.)
+    OPENSKY_FRESHNESS_INTERVAL = 30 * 86400  # monthly HEAD-only freshness probe
+    # Added 2026-07-21. OpenSky's bulk aircraft metadata CSV is a frozen
+    # snapshot (confirmed stale since Nov 2024, "on hold" per their own
+    # site) -- this only does a HEAD request unless the source has actually
+    # changed, see poller/fetchers/opensky_registry.py module docstring.
+    # NOT a full-download interval like FAA_REGISTRY_INTERVAL above.
 
     def __init__(self) -> None:
         self._last_expiry = 0.0
         self._last_flight = 0.0
         self._last_train = 0.0
+        self._last_vessel = 0.0
         self._last_local_ac = 0.0
         # Delay first FAA registry pull by 60s so startup I/O settles, then
         # check whether an import has already happened this week.
         self._last_faa_registry = self._faa_registry_last_import_epoch()
+        self._last_opensky_freshness = self._opensky_last_import_epoch()
+
+    @staticmethod
+    def _opensky_last_import_epoch() -> float:
+        """Return epoch of last OpenSky freshness check/import, or 0 if never run."""
+        try:
+            from common.db import opensky_registry_meta_get, init_db_v17
+            init_db_v17()
+            ts = opensky_registry_meta_get("last_full_import")
+            if ts:
+                from datetime import datetime, timezone
+                return datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            pass
+        return 0.0
 
     @staticmethod
     def _faa_registry_last_import_epoch() -> float:
@@ -343,6 +380,9 @@ class WatchlistSweep:
         if now - self._last_train >= self.TRAIN_SWEEP_INTERVAL:
             self._last_train = now
             await asyncio.get_event_loop().run_in_executor(None, self._do_train_sweep)
+        if now - self._last_vessel >= self.VESSEL_SWEEP_INTERVAL:
+            self._last_vessel = now
+            await asyncio.get_event_loop().run_in_executor(None, self._do_vessel_sweep)
         if now - self._last_local_ac >= self.LOCAL_AC_SWEEP_INTERVAL:
             self._last_local_ac = now
             await asyncio.get_event_loop().run_in_executor(
@@ -351,6 +391,10 @@ class WatchlistSweep:
             self._last_faa_registry = now
             await asyncio.get_event_loop().run_in_executor(
                 None, self._do_faa_registry_import)
+        if now - self._last_opensky_freshness >= self.OPENSKY_FRESHNESS_INTERVAL:
+            self._last_opensky_freshness = now
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._do_opensky_freshness_check)
 
     @staticmethod
     def _do_expiry_sweep() -> None:
@@ -395,8 +439,53 @@ class WatchlistSweep:
                             _check_flight_schedule_inference(entry, ident)
                 except Exception as e:
                     log.debug("flight sweep %s: %s", ident, e)
+
+            # Landed/dead auto-sweep, right after status-check freshens
+            # oooi_phase for this tick's entries. See sweep_landed_flights()
+            # docstring for the operator directive behind this (2026-07-21).
+            from shared.watchlist import sweep_landed_flights
+            swept = sweep_landed_flights()
+            if swept:
+                log.info("watchlist: landed/dead-swept %d flight entries", swept)
         except Exception as e:
             log.error("flight sweep error: %s", e)
+
+    @staticmethod
+    def _do_vessel_sweep() -> None:
+        """
+        Check active vessel watchlist entries (MMSI) via AISHub / Kpler
+        Maritime 2.0, mirroring _do_flight_sweep / _do_train_sweep. Stub
+        added 2026-07-21 alongside the vessel entry_type itself -- see
+        shared/watchlist.py's _FILE_MAP comment and web/routes/watchlist.py's
+        add_vessel_watchlist.
+
+        Source: AISHub only (free data-sharing cooperative, AIS_AISHUB_ID --
+        empty until the local receiver is up and registered). Kpler Maritime
+        2.0 was evaluated and dropped 2026-07-21 per operator direction --
+        MarineTraffic/Kpler access is a sales-gated enterprise product with
+        no working credential in hand, not worth chasing when AISHub already
+        works. This method runs every tick and no-ops cleanly (does nothing)
+        until AIS_AISHUB_ID is set.
+        """
+        import os as _os
+        try:
+            from shared.watchlist import get_active_entries, watchlist_event_hit
+            entries = get_active_entries(entry_type="vessel")
+            if not entries:
+                return
+
+            aishub_id = _os.environ.get("AIS_AISHUB_ID", "")
+            if not aishub_id:
+                return  # no source configured yet -- see docstring
+
+            for entry in entries:
+                mmsi = entry["identifier"]
+                try:
+                    _check_vessel_aishub(entry, mmsi, aishub_id)
+                except Exception as e:
+                    log.debug("vessel sweep %s: %s", mmsi, e)
+        except Exception as e:
+            log.error("vessel sweep error: %s", e)
 
     @staticmethod
     def _do_local_aircraft_sweep() -> None:
@@ -486,6 +575,15 @@ class WatchlistSweep:
                                           watchlist_event_hit)
                 except Exception as e:
                     log.debug("train sweep %s: %s", ident, e)
+
+            # Landed/dead auto-sweep, right after status-check freshens
+            # last_event_summary for this tick's entries. See
+            # sweep_landed_trains() docstring for the operator directive
+            # behind this (2026-07-21).
+            from shared.watchlist import sweep_landed_trains
+            swept = sweep_landed_trains()
+            if swept:
+                log.info("watchlist: landed/dead-swept %d train entries", swept)
         except Exception as e:
             log.error("train sweep error: %s", e)
 
@@ -552,23 +650,55 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
             log.debug("airplanes.live %s: %s", url, e)
             return []
 
-    # Resolve ICAO hex: explicit hex identifier > hex in notes > callsign > reg fallback.
+    # Resolve ICAO hex: explicit hex identifier > callsign > known hex
+    # (structured hex_id column, then legacy notes text) > reg fallback.
     # Military serials (82-8000, 98-0002 etc.) and civil regs (N757AF) are stored under
-    # identifier but their known hex is annotated in notes as "Hex: xxxxxx". Use that
-    # first — it bypasses callsign cache staleness and works for dark/restricted flights.
+    # identifier -- their known hex used to live only as free text ("Hex: xxxxxx")
+    # in notes; schema v18 (2026-07-21) added a real hex_id column, backfilled from
+    # that same notes text.
+    #
+    # IMPORTANT: callsign must stay the PRIMARY resolution path for anything
+    # that isn't already a bare hex identifier. Querying airplanes.live BY a
+    # known/expected hex, instead of by callsign, would make the identity-
+    # mismatch check below tautological -- you'd only ever get back the
+    # aircraft you already told the API to find, so "observed hex != expected
+    # hex" could never fire. resolved_via_hex tracks when a hex-keyed lookup
+    # was actually used (bare-hex identifier, or callsign not broadcasting)
+    # so that no-op comparison gets skipped instead of silently "always
+    # passing".
+    expected_hex = (entry.get("hex_id") or "").lower().strip() or None
     notes_hex: str | None = None
-    m = _re.search(r'\bHex:\s*([0-9a-fA-F]{6})\b', entry.get("notes") or "")
+    m = _re.search(r'\bHex:\s*([0-9a-fA-F]{6})\b', entry.get("notes") or "", _re.IGNORECASE)
     if m:
         notes_hex = m.group(1).lower()
 
+    # Operator directive 2026-07-23: once a flight/tail has been resolved
+    # to a hex, that hex is the ONLY thing treated as authoritative for
+    # all further sweeps -- identifier/reservation becomes notification
+    # text only, never a resolution key again. So: an entry with a
+    # confirmed hex_id is queried by hex directly, exclusively, from here
+    # on -- never re-resolved via callsign. An entry with no hex_id yet is
+    # still in bootstrap mode and must use callsign to discover one (see
+    # callsign_live_confirmed below, which locks it in on first hit).
+    resolved_via_hex = False
+    callsign_live_confirmed = False
+
     if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()):
         ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{ident.lower()}")
-    elif notes_hex:
-        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{notes_hex}")
+        resolved_via_hex = True
+    elif expected_hex:
+        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{expected_hex}")
+        resolved_via_hex = True
     else:
-        # Try callsign first; fall back to reg endpoint (catches N-numbers, tails)
+        # Bootstrap phase only -- no confirmed hex exists yet, callsign is
+        # the only way to discover one.
         ident_clean = ident.upper().replace(" ", "")
         ac_list = _al_fetch(f"https://api.airplanes.live/v2/callsign/{ident_clean}")
+        if ac_list:
+            callsign_live_confirmed = True
+        if not ac_list and notes_hex:
+            ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{notes_hex}")
+            resolved_via_hex = True
         if not ac_list:
             ac_list = _al_fetch(f"https://api.airplanes.live/v2/reg/{ident_clean}")
 
@@ -578,6 +708,23 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     ac = ac_list[0]
     hex_id   = (ac.get("hex") or "").lower().strip()
     reg      = ac.get("r") or ""
+
+    # Auto hex-lock: first genuine live contact under the callsign (as
+    # opposed to a reg-fallback guess, which may not even be this specific
+    # leg's aircraft) permanently anchors this entry to that hex for every
+    # future sweep. This is what makes the directive self-enforcing --
+    # entries created without a confirmed hex_id (the common, correct case
+    # per flight-hifi-track Step 3 when the operating tail is still
+    # unconfirmed) graduate to hex-locked automatically the moment we
+    # actually see the aircraft, rather than staying callsign-bootstrapped
+    # forever.
+    if callsign_live_confirmed and hex_id and not expected_hex:
+        try:
+            db.set_watchlist_identity(entry["id"], hex_id=hex_id, registration=reg or None)
+            log.info("%s: hex-locked to %s (%s) on first live contact",
+                     ident, hex_id, reg or "no reg")
+        except Exception as e:
+            log.warning("%s: hex-lock failed: %s", ident, e)
     alt      = ac.get("alt_baro")   # int ft, or "ground"
     gs       = float(ac.get("gs") or 0)
     lat      = ac.get("lat")
@@ -590,14 +737,33 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     if isinstance(alt, (int, float)) and alt > 500:
         _last_known_alt[ident] = int(alt)
 
-    last_phase = _phase_from_summary(entry.get("last_event_summary") or "")
+    # OOOI phase state lives in its own dedicated DB field (oooi_phase,
+    # added 2026-07-21), decoupled from last_event_summary. Every other
+    # alert type for this entry (TMI assignment, flight-plan amendment,
+    # approach-proximity ping, FDPS filed/cancelled) also overwrites
+    # last_event_summary -- deriving phase by parsing that shared text field
+    # meant any of those unrelated alerts would clobber phase-tracking state
+    # in between OOOI checks, so the parser fell back to "pre_departure" and
+    # the next airborne check looked like a brand-new transition. Confirmed
+    # live: one DAL2962 takeoff fired "OFF -- airborne" 14 separate times
+    # over 90 minutes before this fix.
+    last_phase = entry.get("oooi_phase") or "pre_departure"
 
-    acars = _acars_phase(ident)
+    # Prefer the entry's own confirmed registration (operator-set or
+    # backfilled by a prior ADS-B hit) over this tick's live-observed reg --
+    # the entry-level value only gets set when someone was confident (see
+    # web/routes/watchlist.py), so it's less likely to be a same-day tail
+    # swap in progress. Falls back to the just-observed ADS-B registration
+    # so Jumpseat (registration-keyed) still has something to search on for
+    # entries that have never had a registration confirmed yet.
+    acars_reg = entry.get("registration") or reg
+    acars = _acars_phase(ident, registration=acars_reg)
     if acars:
         current_phase, acars_msg = acars
         log.info(
-            "%s: ACARS %s authoritative — label=%s msg_time=%s",
-            ident, current_phase.upper(), acars_msg.get("label"), acars_msg.get("msg_time"),
+            "%s: %s %s authoritative — label=%s msg_time=%s",
+            ident, acars_msg.get("_source", "ACARS"), current_phase.upper(),
+            acars_msg.get("label"), acars_msg.get("msg_time"),
         )
     else:
         # ── 2. ADS-B phase derivation (ACARS unavailable) ────────────────────
@@ -642,6 +808,42 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
                              "tracking_url": tracking},
                             priority=5)
 
+    # Detect identity mismatch: the live ADS-B hex we just resolved for
+    # this callsign/identifier differs from the entry's own stored expected
+    # hex_id -- 2026-07-21, schema v18. This is the actual enforcement of
+    # "follows the metal, not the schedule": a flight number can get
+    # reassigned to a different physical airframe day to day, and every
+    # match in this pipeline used to trust the callsign/identifier string
+    # alone. Only fires when the entry HAS a known expected hex (an entry
+    # with no hex_id set yet has nothing to compare against, so it's
+    # silently skipped rather than false-alarming on every poll).
+    expected_reg = (entry.get("registration") or "").upper().strip() or None
+    if expected_hex and hex_id and hex_id != expected_hex and not resolved_via_hex:
+        mismatch_summary = (
+            f"{ident} IDENTITY MISMATCH — tracking hex {hex_id} "
+            f"(expected {expected_hex}, reg {reg or '?'})"
+        )
+        tracking = f"https://globe.airplanes.live/?icao={hex_id}" if hex_id else ""
+        watchlist_event_hit(entry["id"], mismatch_summary,
+                            {"watchlist_trigger": "identity_mismatch",
+                             "identifier": ident, "expected_hex": expected_hex,
+                             "observed_hex": hex_id, "expected_registration": expected_reg,
+                             "observed_registration": reg, "tracking_url": tracking},
+                            priority=5)
+    elif not expected_hex and expected_reg and reg and reg.upper() != expected_reg:
+        # Secondary signal for entries that only have a stored registration
+        # (no hex_id backfilled yet) -- weaker check since tail numbers can
+        # legitimately be reused across owners over years, but still worth
+        # a flag rather than silent trust.
+        mismatch_summary = (
+            f"{ident} REGISTRATION MISMATCH — tracking {reg} (expected {expected_reg})"
+        )
+        watchlist_event_hit(entry["id"], mismatch_summary,
+                            {"watchlist_trigger": "identity_mismatch_reg",
+                             "identifier": ident, "expected_registration": expected_reg,
+                             "observed_registration": reg, "observed_hex": hex_id},
+                            priority=4)
+
     # Fire OOOI event if phase changed.
     # Includes mid-leg entries where earlier phases were not observed.
     tracking_url = f"https://globe.airplanes.live/?icao={hex_id}" if hex_id else ""
@@ -673,6 +875,15 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
                              "phase": current_phase,
                              "tracking_url": tracking_url},
                             priority=priority)
+        # Persist the new phase to its own field immediately -- this is what
+        # stops the next check from re-deriving a stale phase and re-firing
+        # this same transition. Independent of watchlist_event_hit's own
+        # 5-min dedup (which only rate-limits identical event_types; it does
+        # not fix mis-detected "new" transitions).
+        db.update_watchlist_oooi_phase(
+            entry["id"], current_phase,
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
         log.info("flight OOOI: %s %s→%s", ident, last_phase, current_phase)
 
     return True
@@ -691,7 +902,9 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
     from shared.watchlist import watchlist_event_hit
     from datetime import datetime, timezone, timedelta
 
-    last_phase = _phase_from_summary(entry.get("last_event_summary") or "")
+    # See _check_flight_airplanes_live for why this reads the dedicated
+    # oooi_phase field instead of parsing last_event_summary.
+    last_phase = entry.get("oooi_phase") or "pre_departure"
     now = datetime.now(timezone.utc)
 
     # Post-arrival inference: ADS-B dark after confirmed departure.
@@ -717,6 +930,28 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             except Exception:
                 pass
         if fire:
+            # Operator directive 2026-07-23: don't accept a pure time-based
+            # "landed" guess without a live ACARS cross-check first -- this
+            # phase write is what sweep_landed_flights() reads to decide
+            # whether to auto-delete the entry. ADS-B dark alone doesn't
+            # distinguish "landed, taxied in, out of local SDR/aggregator
+            # VHF range" from "still airborne, diverted, or otherwise not
+            # actually down." If ACARS has data and it disagrees with IN,
+            # suppress the inference and let real tracking catch up
+            # instead. If ACARS has nothing either, the schedule guess is
+            # still the best signal available -- proceed as before.
+            acars_check = None
+            try:
+                acars_check = _acars_phase(ident, registration=entry.get("registration"))
+            except Exception as e:
+                log.debug("schedule infer ACARS check %s: %s", ident, e)
+            if acars_check and acars_check[0] != "in":
+                log.info(
+                    "%s: schedule-inferred IN suppressed -- ACARS shows phase=%s instead",
+                    ident, acars_check[0],
+                )
+                return
+
             summary = f"{ident} IN — at gate (schedule inferred, ADS-B dark)"
             watchlist_event_hit(
                 entry["id"], summary,
@@ -724,6 +959,9 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                  "identifier": ident,
                  "note": reason},
                 priority=4,
+            )
+            db.update_watchlist_oooi_phase(
+                entry["id"], "in", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
             log.info("flight schedule infer: %s IN (%s)", ident, reason)
 
@@ -741,6 +979,9 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                          "identifier": ident, "scheduled_departure": sched_dep,
                          "note": "No ADS-B contact — departure inferred from schedule"},
                         priority=4,
+                    )
+                    db.update_watchlist_oooi_phase(
+                        entry["id"], "off", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     )
                     log.info("flight schedule infer: %s OFF (past dep+90m)", ident)
             except Exception as e:
@@ -776,6 +1017,59 @@ def _evaluate_flight_status_fdps(entry: dict, ident: str, data: dict) -> None:
                         {"watchlist_trigger": "fdps_status", "status": status,
                          "identifier": ident},
                         priority=3)
+
+
+def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
+    """
+    Query AISHub for a specific watchlisted MMSI and fire a position/status
+    event if it's found. AISHub's public API is bbox-based (no direct
+    single-MMSI lookup in the free tier) -- reuses the exact same DC-area
+    bbox query already proven out in runner/main.py's /api/ais/vessels
+    AISHub tier, then filters client-side for our MMSI. Good enough for a
+    stub since vessels worth watchlisting here are expected to be in local
+    (Chesapeake/DC-area) waters; a vessel outside that window simply won't
+    resolve yet -- not an error, just out of range for the free-tier query.
+    """
+    import requests as _req
+    from datetime import datetime, timezone
+
+    AIS_AISHUB_BASE = "http://data.aishub.net/ws.php"
+    DEFAULT_LAT, DEFAULT_LON, DIST_NM = 38.8816, -77.0910, 120
+    # ~1 deg latitude = 60nm; longitude scaled by cos(latitude) for the DC area.
+    dlat = DIST_NM / 60.0
+    dlon = DIST_NM / (60.0 * 0.78)
+    params = {
+        "username": aishub_id, "format": "1", "output": "json", "compress": "0",
+        "latmin": DEFAULT_LAT - dlat, "latmax": DEFAULT_LAT + dlat,
+        "lonmin": DEFAULT_LON - dlon, "lonmax": DEFAULT_LON + dlon,
+    }
+    try:
+        resp = _req.get(AIS_AISHUB_BASE, params=params, timeout=12,
+                        headers={"User-Agent": "corporatetraveldc/1.0"})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.debug("aishub %s: %s", mmsi, e)
+        return
+
+    raw = [v for v in data if isinstance(v, dict) and "MMSI" in v]
+    match = next((v for v in raw if str(v.get("MMSI")) == str(mmsi)), None)
+    if not match:
+        return  # not currently in range -- normal, not an error
+
+    lat, lon = match.get("LATITUDE"), match.get("LONGITUDE")
+    sog = match.get("SOG")
+    name = (match.get("NAME") or "").strip()
+    last_event = entry.get("last_event_summary") or ""
+    summary = f"MMSI {mmsi} {name} -- {lat}N {lon}W {sog}kt".strip()
+    if summary == last_event:
+        return
+    watchlist_event_hit(
+        entry["id"], summary,
+        {"watchlist_trigger": "vessel_position", "identifier": mmsi,
+         "lat": lat, "lon": lon, "sog": sog, "source": "aishub.net"},
+        priority=2,
+    )
 
 
 def _check_train_amtraker(entry: dict, ident: str, base_url: str,
@@ -895,6 +1189,35 @@ class _FAARegistrySweep:
 WatchlistSweep._do_faa_registry_import = staticmethod(_FAARegistrySweep.run)  # type: ignore[attr-defined]
 
 
+# ── OpenSky registry freshness check ───────────────────────────────────────────
+
+
+class _OpenSkyRegistrySweep:
+    """Monthly HEAD-only freshness probe for the OpenSky aircraft metadata
+    CSV, run inside WatchlistSweep. Only downloads the full 94MB+ file if
+    the source has actually changed -- see fetcher module docstring."""
+
+    @staticmethod
+    def run() -> None:
+        try:
+            from poller.fetchers.opensky_registry import check_opensky_freshness
+            stats = check_opensky_freshness()
+            if not stats.get("ok"):
+                log.error("OpenSky registry freshness check failed: %s", stats.get("error"))
+            elif stats.get("changed"):
+                log.info(
+                    "OpenSky registry: source changed, re-imported — %d records, %.1fs",
+                    stats.get("registry_upserted", 0), stats.get("elapsed_sec", 0),
+                )
+            else:
+                log.info("OpenSky registry: source unchanged, no re-import needed")
+        except Exception as exc:
+            log.error("OpenSky registry freshness sweep exception: %s", exc)
+
+
+WatchlistSweep._do_opensky_freshness_check = staticmethod(_OpenSkyRegistrySweep.run)  # type: ignore[attr-defined]
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -915,6 +1238,10 @@ async def main() -> None:
     db.init_db_v13()
     db.init_db_v14()
     db.init_db_v15()
+    db.init_db_v16()
+    db.init_db_v18()
+    db.init_db_v19()
+    db.init_db_v20()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

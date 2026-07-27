@@ -241,6 +241,10 @@ def fetch_faa_registry() -> dict:
     db.init_db_v11()    # idempotent — ensures tables exist
 
     started = time.time()
+    # Captured before any upsert -- see faa_registry_sweep_removed() docstring.
+    # Every row touched by this run gets updated_at >= run_cutoff; anything
+    # still older after the run genuinely dropped out of the source file.
+    run_cutoff = started
     total_upserted = 0
 
     # ── N-number registry ──────────────────────────────────────────────────
@@ -264,6 +268,18 @@ def fetch_faa_registry() -> dict:
     except Exception as e:
         log.warning("FAA LADD import failed (non-fatal): %s", e)
 
+    # ── Sweep removed/deregistered aircraft ─────────────────────────────────
+    # Added 2026-07-21. Only sweeps if the registry import itself succeeded
+    # (guarded above by the try/except return) -- a failed/partial download
+    # must never be allowed to look like mass deregistration.
+    removed_count = 0
+    try:
+        removed_count = db.faa_registry_sweep_removed(run_cutoff)
+        if removed_count:
+            log.info("FAA registry: swept %d removed/deregistered records", removed_count)
+    except Exception as e:
+        log.warning("FAA registry sweep failed (non-fatal): %s", e)
+
     elapsed = time.time() - started
     import datetime
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -273,6 +289,7 @@ def fetch_faa_registry() -> dict:
         "ok": True,
         "registry_upserted": total_upserted,
         "ladd_count": ladd_count,
+        "removed_count": removed_count,
         "elapsed_sec": round(elapsed, 1),
         "timestamp": timestamp,
     }

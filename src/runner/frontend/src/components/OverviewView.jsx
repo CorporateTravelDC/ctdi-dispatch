@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import FeedPanel from './FeedPanel.jsx'
 import AccessibleTable from './AccessibleTable.jsx'
 import { useGlobalLayerConfig } from '../App.jsx'
+import { useWatchlist } from '../hooks/useWatchlist.js'
 
 /** Format a brief excerpt — first meaningful line, up to maxLen chars */
 function briefExcerpt(text, maxLen = 220) {
@@ -89,21 +90,82 @@ function FlightsPanel({ liveState }) {
   )
 }
 
+const _DOW_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/**
+ * Rebuilt 2026-07-21 per operator direction: the roster is now split into
+ * National (Amtrak intercity bellwethers) and Regional (Amtrak + VRE + MARC
+ * subsections), each entry carrying a `days_active` day-of-week pattern so
+ * a No-Service badge can be shown for any train not running today. This
+ * pulls the PERMANENT train roster from the watchlist (entry_type/tier
+ * fields added alongside the vessel-entry-type work) rather than only the
+ * live Amtrak delay feed — the live feed only covers trains currently near
+ * WAS, not the full static roster, and has no notion of national/regional/
+ * subsection grouping or day-of-week service patterns.
+ */
+function TrainRosterGroup({ title, entries, todayAbbr, liveByNum }) {
+  if (!entries.length) return null
+  const noServiceCount = entries.filter(e => !(e.days_active || []).includes(todayAbbr)).length
+  return (
+    <div className="fp-roster-group">
+      <div className="fp-roster-group-head">
+        <span className="fp-roster-group-title">{title}</span>
+        <span className="fp-roster-group-count">{entries.length}</span>
+        {noServiceCount > 0 && (
+          <span className="fp-roster-noservice-count">{noServiceCount} no-service today</span>
+        )}
+      </div>
+      <div className="fp-roster-chip-row">
+        {entries.slice(0, 24).map(e => {
+          const runsToday = (e.days_active || []).includes(todayAbbr)
+          const live = liveByNum[e.identifier]
+          const delayed = live && (live.delay_minutes ?? 0) > 5
+          return (
+            <span
+              key={e.id || e.identifier}
+              className={`fp-roster-chip ${runsToday ? '' : 'no-service'} ${delayed ? 'delayed' : ''}`}
+              title={runsToday
+                ? (delayed ? `+${live.delay_minutes}m delay` : (e.route_name || ''))
+                : `No Service today (${(e.days_active || []).join('/')} only)`}
+            >
+              {e.identifier}
+              {!runsToday && <span className="fp-roster-chip-badge">No Service</span>}
+              {runsToday && delayed && <span className="fp-roster-chip-badge warn">+{live.delay_minutes}m</span>}
+            </span>
+          )
+        })}
+        {entries.length > 24 && <span className="fp-roster-chip-more">+{entries.length - 24} more</span>}
+      </div>
+    </div>
+  )
+}
+
 function TrainsPanel({ amtrak }) {
   const trains = amtrak?.trains ?? (Array.isArray(amtrak) ? amtrak : [])
   const delayed = trains.filter(t => (t.delay_minutes ?? 0) > 5)
-  const tblRows = trains.slice(0, 10).map(t => ({
-    num:   t.train_number || t.id || '—',
-    route: t.route_name  || '—',
-    delay: t.delay_minutes > 0 ? `+${t.delay_minutes}m` : 'On time',
-  }))
+  const { entries: watchEntries } = useWatchlist()
+
+  const todayAbbr = _DOW_ABBR[new Date().getDay()]
+
+  const liveByNum = {}
+  trains.forEach(t => {
+    const num = t.train_number || t.id
+    if (num) liveByNum[num] = t
+  })
+
+  const permanentTrains = watchEntries.filter(e => e.entry_type === 'train' && e.tier === 'permanent')
+  const national = permanentTrains.filter(e => e.show_national)
+  const regionalAmtrak = permanentTrains.filter(e => e.show_regional && e.subsection === 'amtrak')
+  const regionalVre    = permanentTrains.filter(e => e.show_regional && e.subsection === 'vre')
+  const regionalMarc   = permanentTrains.filter(e => e.show_regional && e.subsection === 'marc')
+
   return (
     <>
       <div className="fp-stat-row">
         <span className={`fp-stat-value ${delayed.length > 0 ? 'warn' : 'go'}`}>
           {trains.length === 0 ? '—' : delayed.length > 0 ? `${delayed.length} delayed` : 'On time'}
         </span>
-        <span className="fp-stat-label">{trains.length} trains tracked</span>
+        <span className="fp-stat-label">{trains.length} live · {permanentTrains.length} on roster</span>
         <Link to="/trains" className="fp-panel-link">EOTD view →</Link>
       </div>
       {delayed.length > 0 && (
@@ -115,6 +177,22 @@ function TrainsPanel({ amtrak }) {
           ))}
         </div>
       )}
+
+      {permanentTrains.length > 0 && (
+        <div className="fp-roster-tabs">
+          <div className="fp-roster-section">
+            <div className="fp-roster-section-title">National</div>
+            <TrainRosterGroup title="Amtrak" entries={national} todayAbbr={todayAbbr} liveByNum={liveByNum} />
+          </div>
+          <div className="fp-roster-section">
+            <div className="fp-roster-section-title">Regional</div>
+            <TrainRosterGroup title="Amtrak"    entries={regionalAmtrak} todayAbbr={todayAbbr} liveByNum={liveByNum} />
+            <TrainRosterGroup title="VRE"       entries={regionalVre}    todayAbbr={todayAbbr} liveByNum={liveByNum} />
+            <TrainRosterGroup title="MARC"      entries={regionalMarc}   todayAbbr={todayAbbr} liveByNum={liveByNum} />
+          </div>
+        </div>
+      )}
+
       <AccessibleTable
         caption="NEC trains at Washington Union Station"
         columns={[
@@ -122,7 +200,11 @@ function TrainsPanel({ amtrak }) {
           { key: 'route', label: 'Route'   },
           { key: 'delay', label: 'Status'  },
         ]}
-        rows={tblRows}
+        rows={trains.slice(0, 10).map(t => ({
+          num:   t.train_number || t.id || '—',
+          route: t.route_name  || '—',
+          delay: t.delay_minutes > 0 ? `+${t.delay_minutes}m` : 'On time',
+        }))}
         emptyMsg="No train data available."
       />
     </>

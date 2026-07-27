@@ -7,13 +7,38 @@ All notification pushes go through here so that:
   - Token strip (some configs store "token:label" in secrets.env)
 """
 import logging
+import time
 from typing import Optional
 
 import requests
 
 from common import config
+from common.push_dedup import PushDedup, content_hash
 
 log = logging.getLogger(__name__)
+
+# Retry added 2026-07-20 -- confirmed via shared/watchlist.py's identical
+# push path that ntfy intermittently returns 403 Forbidden under
+# concurrent load with nothing in ntfy's own server logs to explain it
+# (messages_published counter climbs steadily and healthily through the
+# same windows) -- points to a transient client/network-path hiccup
+# rather than a deterministic auth/config problem. This module shares the
+# same server, network path, and concurrent-access pattern, so the same
+# mitigation applies here: retry generic (non-connection/timeout) failures
+# a bounded number of times before giving up, rather than a single
+# silent-drop attempt. Connection/timeout errors already had a distinct
+# fallback-URL path below; this only affects the "the request reached the
+# server and got a bad status" branch.
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_SECS = 0.5  # doubles each retry: 0.5s, 1s
+
+# Idempotency guard added 2026-07-21 -- same fix and same shared state file
+# as shared/watchlist.py's identical guard (see that module's docstring for
+# the full false-negative-403 root cause). Narrowly targets 401/403 only;
+# genuine failure signals (timeouts, connection errors, other statuses)
+# still retry-and-resend exactly as before.
+_AMBIGUOUS_STATUS_TTL_SECS = 90
+_ambiguous_dedup = PushDedup("ntfy-ambiguous-status", dedup_secs=_AMBIGUOUS_STATUS_TTL_SECS)
 
 RUNNER_BASE = "https://ops.example.com"
 # ops.example.com now serves the full runner app (the same
@@ -87,17 +112,65 @@ def send(
 
     def _attempt(base_url: str) -> bool:
         attempt_url = f"{base_url}/{topic}"
-        try:
-            resp = requests.post(attempt_url, data=message.encode("utf-8"), headers=headers, timeout=10)
-            resp.raise_for_status()
-            log.info("ntfy OK: url=%s topic=%s priority=%d", attempt_url, topic, priority)
-            return True
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-            log.warning("ntfy unreachable: url=%s error=%s", attempt_url, exc)
-            return None  # signal: try fallback
-        except Exception as exc:
-            log.error("ntfy FAILED: url=%s topic=%s error=%s", attempt_url, topic, exc)
-            return False
+        idem_key = content_hash(f"{topic}|{title}|{message}|{priority}")
+        backoff = _RETRY_BACKOFF_SECS
+        last_exc: Exception | None = None
+        last_body: str | None = None
+        for attempt in range(1, _RETRY_ATTEMPTS + 1):
+            try:
+                resp = requests.post(attempt_url, data=message.encode("utf-8"), headers=headers, timeout=10)
+                resp.raise_for_status()
+                if attempt > 1:
+                    log.info("ntfy OK on retry %d/%d: url=%s topic=%s priority=%d",
+                             attempt, _RETRY_ATTEMPTS, attempt_url, topic, priority)
+                else:
+                    log.info("ntfy OK: url=%s topic=%s priority=%d", attempt_url, topic, priority)
+                return True
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                log.warning("ntfy unreachable: url=%s error=%s", attempt_url, exc)
+                return None  # signal: try fallback -- not worth retrying the same unreachable host
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status in (401, 403):
+                    # Documented false-negative pattern -- don't resend, mark
+                    # as probable-delivery and stop instead of risking a
+                    # confirmed duplicate for a message that likely already went out.
+                    if _ambiguous_dedup.should_push(idem_key, idem_key):
+                        _ambiguous_dedup.record(idem_key, idem_key)
+                        log.warning(
+                            "ntfy %s: url=%s topic=%s -- known false-negative pattern, "
+                            "treating as delivered, NOT resending: %s",
+                            status, attempt_url, topic, exc,
+                        )
+                    else:
+                        log.warning(
+                            "ntfy %s: url=%s topic=%s -- already marked probable-delivery "
+                            "within %ds window, suppressing resend",
+                            status, attempt_url, topic, _AMBIGUOUS_STATUS_TTL_SECS,
+                        )
+                    return True
+                last_exc = exc
+                last_body = getattr(getattr(exc, "response", None), "text", None)
+                if attempt < _RETRY_ATTEMPTS:
+                    log.warning(
+                        "ntfy attempt %d/%d failed: url=%s topic=%s error=%s -- retrying in %.1fs",
+                        attempt, _RETRY_ATTEMPTS, attempt_url, topic, exc, backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+            except Exception as exc:
+                last_exc = exc
+                last_body = getattr(getattr(exc, "response", None), "text", None)
+                if attempt < _RETRY_ATTEMPTS:
+                    log.warning(
+                        "ntfy attempt %d/%d failed: url=%s topic=%s error=%s -- retrying in %.1fs",
+                        attempt, _RETRY_ATTEMPTS, attempt_url, topic, exc, backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+        log.error("ntfy FAILED after %d attempts: url=%s topic=%s error=%s body=%s",
+                  _RETRY_ATTEMPTS, attempt_url, topic, last_exc, last_body)
+        return False
 
     result = _attempt(base)
     if result is None:

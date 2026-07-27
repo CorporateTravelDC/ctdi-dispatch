@@ -7,6 +7,7 @@ import { useCompassSummary } from '../hooks/useCompassSummary.js'
 import LayerSidebar from './LayerSidebar.jsx'
 import { useGlobalLayerConfig } from '../App.jsx'
 import { useWatchlist, airlineLogoUrl, FALLBACK_PLANE_SVG } from '../hooks/useWatchlist.js'
+import { useTailnet } from '../hooks/useTailnet.js'
 
 // DC-area static airspace GeoJSON (approximate)
 const AIRSPACE = {
@@ -226,15 +227,18 @@ function GlobeMap({ liveState }) {
   const [iframeSrc, setIframeSrc]     = useState(GLOBE_BASE)
 
   const { entries: watchEntries, callsignSet, hexSet } = useWatchlist()
+  const tailnet = useTailnet()
+  const searchEnabled = tailnet === true
 
   const handleSearch = useCallback((e) => {
     e.preventDefault()
+    if (!searchEnabled) return
     const q = searchInput.trim()
     if (!q) { setSearchResult(null); setIframeSrc(GLOBE_BASE); return }
     const result = detectSearchType(q)
     setSearchResult(result)
     setIframeSrc(buildGlobeUrl(result))
-  }, [searchInput])
+  }, [searchInput, searchEnabled])
 
   const handleClear = useCallback(() => {
     setSearchInput('')
@@ -332,11 +336,16 @@ function GlobeMap({ liveState }) {
         emptyMsg="No watchlisted aircraft currently airborne."
       />
       {/* ── Search bar overlay ─────────────────────────────────── */}
-      <form className="globe-search-bar" onSubmit={handleSearch} role="search">
+      <form
+        className={searchEnabled ? "globe-search-bar" : "globe-search-bar globe-search-disabled"}
+        onSubmit={handleSearch}
+        role="search"
+        aria-disabled={!searchEnabled}
+      >
         <input
           className="globe-search-input"
           type="search"
-          placeholder="Callsign, tail / reg, hex ID…"
+          placeholder={searchEnabled ? "Callsign, tail / reg, hex ID…" : "Search unavailable on public view"}
           value={searchInput}
           onChange={e => setSearchInput(e.target.value)}
           aria-label="Search aircraft by callsign, registration, or ICAO hex"
@@ -344,8 +353,10 @@ function GlobeMap({ liveState }) {
           autoCorrect="off"
           autoCapitalize="characters"
           spellCheck={false}
+          disabled={!searchEnabled}
+          readOnly={!searchEnabled}
         />
-        <button type="submit" className="globe-search-btn" aria-label="Search">⌕</button>
+        <button type="submit" className="globe-search-btn" aria-label="Search" disabled={!searchEnabled}>⌕</button>
         {searchResult && (
           <>
             <span className="globe-search-type-badge">

@@ -1,0 +1,7 @@
+[Unit]
+Description=Corporate Travel DC -- thermal/CPU-load fallback guard for SWIM ingest containers
+After=corporatetraveldc-poller.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/thermal-ingest-guard.py

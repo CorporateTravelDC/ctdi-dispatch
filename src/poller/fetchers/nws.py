@@ -36,6 +36,21 @@ FORECAST_ZONES = {
 # Severity levels we care about — Minor omitted intentionally
 ALERT_SEVERITY_FILTER = {"Extreme", "Severe", "Moderate"}
 
+# Severities that trip the ingest backpressure valve (see
+# ingest/swim_client.py's _bandwidth_priority_says_pause, added
+# 2026-07-26). Deliberately narrower than ALERT_SEVERITY_FILTER --
+# "Moderate" alone (e.g. a routine Wind Advisory) isn't worth pausing
+# STDDS/TBFM/ITWS/NOTAM ingest over; Severe/Extreme is the bar for
+# genuinely disruptive weather where FDPS/TFMS throughput matters more
+# than the other four feeds.
+WEATHER_PRIORITY_SEVERITIES = {"Extreme", "Severe"}
+
+# TTL on the auto-set override -- self-heals if this fetcher stops
+# running (poller crash/restart) instead of leaving ingest permanently
+# throttled. 3x this fetcher's own 300s interval gives two missed
+# cycles of slack before the override lapses on its own.
+WEATHER_PRIORITY_TTL_SECONDS = 900
+
 
 def _parse_iso(ts: str | None) -> float | None:
     if not ts:
@@ -69,6 +84,57 @@ def fetch_alerts() -> list[dict]:
             "description": (props.get("description") or "")[:2000],
         })
     return alerts
+
+
+def _maybe_set_weather_priority(alerts: list[dict]) -> None:
+    """Auto-trigger the ingest backpressure valve (bandwidth_priority=weather)
+    when a Severe/Extreme NWS alert is active for the DC region, and clear it
+    back to auto when it isn't -- without ever overriding an operator's own
+    manual setting.
+
+    Never touches state that wasn't set by this same auto-trigger: reads the
+    current state first and only acts when set_by is None, "auto", or
+    "auto-weather" (i.e. nothing, or a prior run of this same function). A
+    manually-set priority=nexrad (or a manual priority=weather) is left
+    alone either way -- an operator's explicit call always wins.
+    """
+    try:
+        current = db.get_bandwidth_priority()
+    except Exception as e:
+        log.debug("nws: weather-priority check skipped, DB read failed: %s", e)
+        return
+
+    set_by = current.get("set_by")
+    if set_by not in (None, "auto", "auto-weather"):
+        return  # operator has this set manually -- never override
+
+    severe = [a for a in alerts if a.get("severity") in WEATHER_PRIORITY_SEVERITIES]
+
+    if severe:
+        # Refresh (or set) every run so the TTL keeps sliding forward while
+        # the event is ongoing; top() by severity then soonest-expires so
+        # the reason string reflects the most urgent active alert.
+        top = sorted(
+            severe,
+            key=lambda a: (a.get("severity") != "Extreme", a.get("expires") or 0),
+        )[0]
+        try:
+            db.set_bandwidth_priority(
+                priority="weather", set_by="auto-weather",
+                reason=f"{top.get('severity')} {top.get('event_type')}: {top.get('area_desc')}"[:200],
+                ttl_seconds=WEATHER_PRIORITY_TTL_SECONDS,
+            )
+            log.info("nws: weather-priority ENGAGED (%s alert(s), top=%s)",
+                     len(severe), top.get("event_type"))
+        except Exception as e:
+            log.warning("nws: failed to set weather priority: %s", e)
+    elif current.get("priority") == "weather" and set_by in ("auto", "auto-weather"):
+        try:
+            db.set_bandwidth_priority(priority="auto", set_by="auto-weather",
+                                      reason="no active Severe/Extreme alert")
+            log.info("nws: weather-priority CLEARED -- no active Severe/Extreme alert")
+        except Exception as e:
+            log.warning("nws: failed to clear weather priority: %s", e)
 
 
 def fetch_zone_forecast(zone: str, url: str) -> dict | None:
@@ -105,6 +171,7 @@ def run() -> dict:
             active_ids.append(a["alert_id"])
 
         db.expire_nws_alerts(active_ids)
+        _maybe_set_weather_priority(alerts)
 
         # ── Zone forecasts ────────────────────────────────────────────────────
         for zone, url in FORECAST_ZONES.items():

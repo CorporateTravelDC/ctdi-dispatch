@@ -176,6 +176,11 @@ export function hasSyncToken() {
   return !!localStorage.getItem(TOKEN_KEY)
 }
 
+/** Returns the stored admin token, or null if none is set. */
+export function getSyncToken() {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
 /** Store or clear admin token for backend sync */
 export function setSyncToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token)

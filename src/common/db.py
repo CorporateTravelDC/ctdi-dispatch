@@ -1241,17 +1241,30 @@ def get_active_swim_alerts() -> list[dict]:
 # ── Watchlist entry helpers ───────────────────────────────────────────────────
 
 def upsert_watchlist_entry(entry: dict) -> None:
+    # days_active arrives as a python list (or None) from callers -- encode
+    # to JSON text since SQLite has no native array column type. Decoded
+    # back to a list in get_watchlist_entries() below.
+    days_active = entry.get("days_active")
+    days_active_json = json.dumps(days_active) if days_active is not None else None
+
+    show_national = entry.get("show_national")
+    show_regional = entry.get("show_regional")
+
     with conn() as c:
         c.execute("""
             INSERT INTO watchlist_entries
                 (id, entry_type, tier, identifier, origin, destination,
                  route_name, scheduled_departure, scheduled_arrival,
                  auto_remove_at, added_at, added_by, notes,
-                 last_event_at, last_event_summary)
+                 last_event_at, last_event_summary, hex_id, registration,
+                 subsection, show_national, show_regional, days_active,
+                 sister_flight)
             VALUES (:id, :entry_type, :tier, :identifier, :origin,
                     :destination, :route_name, :scheduled_departure,
                     :scheduled_arrival, :auto_remove_at, :added_at,
-                    :added_by, :notes, :last_event_at, :last_event_summary)
+                    :added_by, :notes, :last_event_at, :last_event_summary,
+                    :hex_id, :registration, :subsection, :show_national,
+                    :show_regional, :days_active, :sister_flight)
             ON CONFLICT(id) DO UPDATE SET
                 identifier=excluded.identifier,
                 origin=excluded.origin,
@@ -1260,7 +1273,14 @@ def upsert_watchlist_entry(entry: dict) -> None:
                 scheduled_departure=excluded.scheduled_departure,
                 scheduled_arrival=excluded.scheduled_arrival,
                 auto_remove_at=excluded.auto_remove_at,
-                notes=excluded.notes
+                notes=excluded.notes,
+                hex_id=COALESCE(excluded.hex_id, watchlist_entries.hex_id),
+                registration=COALESCE(excluded.registration, watchlist_entries.registration),
+                subsection=excluded.subsection,
+                show_national=excluded.show_national,
+                show_regional=excluded.show_regional,
+                days_active=excluded.days_active,
+                sister_flight=excluded.sister_flight
         """, {
             "id": entry["id"],
             "entry_type": entry["entry_type"],
@@ -1277,7 +1297,33 @@ def upsert_watchlist_entry(entry: dict) -> None:
             "notes": entry.get("notes"),
             "last_event_at": entry.get("last_event_at"),
             "last_event_summary": entry.get("last_event_summary"),
+            "hex_id": (entry.get("hex_id") or "").lower().strip() or None,
+            "registration": entry.get("registration"),
+            "subsection": entry.get("subsection"),
+            "show_national": None if show_national is None else int(bool(show_national)),
+            "show_regional": None if show_regional is None else int(bool(show_regional)),
+            "days_active": days_active_json,
+            "sister_flight": entry.get("sister_flight"),
         })
+
+
+def set_watchlist_identity(entry_id: str, hex_id: str | None = None,
+                           registration: str | None = None) -> None:
+    """Directly set/backfill hex_id and/or registration on an existing
+    entry without touching any other field. Used by the one-time notes-hex
+    backfill and by any future admin "confirm identity" action."""
+    sets, params = [], {}
+    if hex_id is not None:
+        sets.append("hex_id=:hex_id")
+        params["hex_id"] = hex_id.lower().strip() or None
+    if registration is not None:
+        sets.append("registration=:registration")
+        params["registration"] = registration.upper().strip() or None
+    if not sets:
+        return
+    params["id"] = entry_id
+    with conn() as c:
+        c.execute(f"UPDATE watchlist_entries SET {', '.join(sets)} WHERE id=:id", params)
 
 
 def get_watchlist_entries(entry_type: str | None = None,
@@ -1298,7 +1344,22 @@ def get_watchlist_entries(entry_type: str | None = None,
             params.append(tier)
         base += " ORDER BY added_at DESC"
         rows = c.execute(base, params).fetchall()
-        return [dict(r) for r in rows]
+        entries = [dict(r) for r in rows]
+        for e in entries:
+            # days_active is stored as JSON text (see upsert_watchlist_entry) --
+            # decode back to a list for consumers (frontend roster panel,
+            # day-pattern flight logic).
+            raw_days = e.get("days_active")
+            if raw_days:
+                try:
+                    e["days_active"] = json.loads(raw_days)
+                except (TypeError, ValueError):
+                    e["days_active"] = None
+            if "show_national" in e and e["show_national"] is not None:
+                e["show_national"] = bool(e["show_national"])
+            if "show_regional" in e and e["show_regional"] is not None:
+                e["show_regional"] = bool(e["show_regional"])
+        return entries
 
 
 def delete_watchlist_entry(entry_id: str) -> dict | None:
@@ -1607,6 +1668,7 @@ def init_db_v8() -> None:
                     c.execute(stmt)
                 except Exception:
                     pass  # column already exists on subsequent startups
+
 
 
 def upsert_local_aircraft(icao_hex: str, callsign: str | None,
@@ -2096,6 +2158,21 @@ def faa_upsert_ladd(n_numbers: list[str]) -> int:
     return len(n_numbers)
 
 
+def faa_registry_sweep_removed(cutoff_epoch: float) -> int:
+    """Delete rows not touched since cutoff_epoch -- i.e. aircraft that no
+    longer appear in the source file (deregistered/removed). cutoff_epoch
+    should be captured BEFORE the import run starts, so every row upserted
+    during the run has updated_at >= cutoff_epoch and survives; anything
+    older is from a prior run and genuinely missing from this one.
+    Added 2026-07-21 -- the upsert-only import never pruned stale records
+    before this."""
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM faa_aircraft_registry WHERE updated_at < ?", (cutoff_epoch,)
+        )
+        return cur.rowcount
+
+
 def faa_lookup_by_n_number(n_number: str) -> dict | None:
     """Look up a single aircraft by N-number (with or without leading N)."""
     key = n_number.upper().lstrip("N") if n_number.upper().startswith("N") else n_number.upper()
@@ -2330,6 +2407,369 @@ def init_db_v15() -> None:
     """Apply v15 schema -- international aviation feeds (EUROCONTROL/JASDAT)."""
     with conn() as c:
         c.executescript(SCHEMA_V15)
+
+
+# ── Schema V16 — dedicated OOOI phase field on watchlist_entries ──────────────
+
+SCHEMA_V16 = """
+ALTER TABLE watchlist_entries ADD COLUMN oooi_phase TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN oooi_phase_updated_at TEXT;
+"""
+
+
+def init_db_v16() -> None:
+    """Apply v16 schema — adds a dedicated oooi_phase field to watchlist_entries.
+
+    Fixes a live bug (found 2026-07-21): OOOI phase was previously re-derived
+    by parsing the free-text last_event_summary field, which every other
+    alert type for the same entry (TMI assignment, flight-plan amendment,
+    approach-proximity ping, FDPS filed/cancelled) also overwrites. Any of
+    those unrelated alerts firing in between OOOI checks clobbered the
+    parser's input, causing it to fall back to "pre_departure" and re-fire
+    the same OOOI transition repeatedly (confirmed live: one takeoff fired
+    "OFF — airborne" 14 times over 90 minutes). This field is written only
+    by the OOOI phase-detection code paths in poller/main.py.
+    """
+    with conn() as c:
+        for stmt in SCHEMA_V16.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass  # column already exists on subsequent startups
+
+
+# ── OpenSky Aircraft Metadata Registry (V17) ────────────────────────────────
+# International supplementary registry -- see poller/fetchers/opensky_registry.py.
+# OpenSky's bulk aircraftDatabase.csv is a frozen snapshot (confirmed
+# 2026-07-21: Last-Modified Nov 2024, site itself says updates are "on hold"),
+# so this is a one-time/occasional import, not a recurring full pull like FAA's
+# daily one -- see fetcher module docstring for the freshness-check approach.
+
+SCHEMA_V17 = """
+CREATE TABLE IF NOT EXISTS opensky_aircraft_registry (
+    icao24          TEXT    PRIMARY KEY,
+    registration    TEXT,
+    manufacturer_icao TEXT,
+    manufacturer_name TEXT,
+    model           TEXT,
+    typecode        TEXT,
+    serial_number   TEXT,
+    icao_aircraft_type TEXT,
+    operator        TEXT,
+    operator_icao   TEXT,
+    operator_iata   TEXT,
+    owner           TEXT,
+    registered      TEXT,
+    reg_until       TEXT,
+    status          TEXT,
+    built           TEXT,
+    updated_at      REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opensky_reg_registration
+    ON opensky_aircraft_registry(registration);
+
+CREATE TABLE IF NOT EXISTS opensky_registry_meta (
+    key             TEXT    PRIMARY KEY,
+    value           TEXT    NOT NULL
+);
+"""
+
+
+def init_db_v17() -> None:
+    """Apply v17 schema — OpenSky aircraft metadata registry (supplementary,
+    international coverage the FAA registry doesn't have)."""
+    with conn() as c:
+        c.executescript(SCHEMA_V17)
+
+
+# ── Schema V18 — hex/registration identity fields on watchlist_entries ───────
+# 2026-07-21. Closes a real gap: check_fdps_watchlist() and the TFMS matcher
+# both match a live event to a watchlist entry on callsign string alone.
+# entry.get("hex_id") was already being read in fdps_parser.py's
+# _fire_fdps_nas_alert() call site -- it just always returned None, because
+# no such column existed. The only place a hex ever lived was hand-typed
+# into the free-text notes field ("Hex: af83e8"), regex-scraped at poll time
+# by poller/main.py's _check_flight_airplanes_live(). Real structured
+# columns let that same function do an actual identity cross-check instead
+# of just resolving a lookup key: compare the ADS-B-reported hex/registration
+# against the entry's *expected* hex/registration and flag a mismatch --
+# the literal "follows the metal, not the schedule" claim, now enforced
+# rather than just descriptive of the underlying registry data existing.
+
+SCHEMA_V18 = """
+ALTER TABLE watchlist_entries ADD COLUMN hex_id TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN registration TEXT;
+"""
+
+
+def init_db_v18() -> None:
+    """Apply v18 schema — adds hex_id/registration identity columns to
+    watchlist_entries. See SCHEMA_V18 comment above for why."""
+    with conn() as c:
+        for stmt in SCHEMA_V18.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass  # column already exists on subsequent startups
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_watchlist_entries_hex
+                ON watchlist_entries(hex_id)
+        """)
+
+
+# ── Schema V19 — train subsection/day-pattern + flight sister-flight fields ──
+# 2026-07-21. Closes a real gap found while rebuilding the train page: the
+# permanent_trains.json/permanent_flights.json files already carry
+# subsection ("amtrak"/"vre"/"marc"), show_national, show_regional,
+# days_active, and (for flights) sister_flight -- added earlier in this same
+# session's train-roster rebuild -- but shared.watchlist.WatchlistFileWatcher
+# never read them into the DB, and no columns existed to hold them anyway.
+# Every permanent train entry has silently had subsection=NULL since that
+# rebuild, which is why the VRE/MARC panel filters (subsection='vre'/'marc')
+# always matched zero rows despite the roster file itself being correct.
+# days_active is stored as a JSON-encoded array (SQLite has no native array
+# type) and decoded back to a list in get_watchlist_entries() below.
+
+SCHEMA_V19 = """
+ALTER TABLE watchlist_entries ADD COLUMN subsection TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN show_national INTEGER;
+ALTER TABLE watchlist_entries ADD COLUMN show_regional INTEGER;
+ALTER TABLE watchlist_entries ADD COLUMN days_active TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN sister_flight TEXT;
+"""
+
+
+def init_db_v19() -> None:
+    """Apply v19 schema — adds subsection/show_national/show_regional/
+    days_active/sister_flight columns to watchlist_entries. See SCHEMA_V19
+    comment above for why."""
+    with conn() as c:
+        for stmt in SCHEMA_V19.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass  # column already exists on subsequent startups
+
+
+# ── Schema V20 — bandwidth priority override (SWIM vs NEXRAD) ───────────────
+# 2026-07-21. Corey asked for a bidirectional operator toggle: when bandwidth
+# is tight, let a human (or, later, an automated contention detector) declare
+# which side matters more right now -- 'swim' (SWIM/NMS ingest stays at full
+# rate, anything else should back off) or 'nexrad' (a NEXRAD Level II puller
+# gets priority, SWIM's heaviest feed -- fdps, the unscoped nationwide flight
+# feed, see ingest_swim_firehose_bandwidth memory -- pauses until this flips
+# back). 'auto' is the default/no-override state.
+#
+# IMPORTANT — half of this is currently a no-op: there is no NEXRAD Level II
+# puller built yet (only an ingest.swim_client fallback exists so far). The
+# 'nexrad' priority direction is real today (ingest/swim_client.py checks it
+# and pauses fdps). The 'swim' priority direction has nothing on the other
+# side to defer YET -- it's a documented contract for whenever a Level II
+# puller is built, not functional today. Don't represent it as already doing
+# something on the NEXRAD side until that puller exists and checks this flag.
+#
+# Singleton row (id=1, enforced via CHECK) rather than a new one per change --
+# callers only ever care about "what's the current state", not history.
+# expires_at is optional; NULL means "stays until explicitly changed back."
+
+SCHEMA_V20 = """
+CREATE TABLE IF NOT EXISTS bandwidth_priority_state (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    priority    TEXT NOT NULL DEFAULT 'auto',
+    reason      TEXT,
+    set_by      TEXT,
+    set_at      REAL,
+    expires_at  REAL
+);
+"""
+
+
+def init_db_v20() -> None:
+    """Apply v20 schema — creates bandwidth_priority_state (singleton row).
+    See SCHEMA_V20 comment above for why."""
+    with conn() as c:
+        for stmt in SCHEMA_V20.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
+        c.execute("""
+            INSERT OR IGNORE INTO bandwidth_priority_state (id, priority, set_at)
+            VALUES (1, 'auto', :now)
+        """, {"now": time.time()})
+
+
+def get_bandwidth_priority() -> dict:
+    """Current bandwidth-priority override state.
+
+    Returns dict: priority ('auto'|'swim'|'nexrad'|'weather'), reason, set_by,
+    set_at, expires_at, and active (bool -- True only when priority != 'auto'
+    AND not expired). Expiry is computed on read, not written back -- a stale
+    row just reports active=False and priority normalized to 'auto' until
+    someone explicitly calls set_bandwidth_priority() again.
+
+    'weather' added 2026-07-26: an ingest-side backpressure valve, distinct
+    from 'nexrad' (which only pauses fdps for an unrelated future NEXRAD
+    puller). 'weather' pauses the SWIM feeds that are lowest-value during an
+    active severe/extreme weather event (STDDS surface tracks, TBFM arrival
+    sequencing, ITWS raw terminal weather codes, AIM/NOTAM) so FDPS (flight
+    events) and TFMS (NAS ground programs -- GDP/GS, exactly what matters
+    during weather-driven ground stops) keep their full share of this Pi's
+    CPU/bandwidth instead of competing with six equally-weighted sessions.
+    See ingest/swim_client.py's _bandwidth_priority_says_pause().
+    """
+    with conn() as c:
+        row = c.execute("SELECT * FROM bandwidth_priority_state WHERE id = 1").fetchone()
+    if row is None:
+        return {"priority": "auto", "reason": None, "set_by": None,
+                 "set_at": None, "expires_at": None, "active": False}
+    d = dict(row)
+    now = time.time()
+    expired = d["expires_at"] is not None and now >= d["expires_at"]
+    d["active"] = d["priority"] != "auto" and not expired
+    if expired:
+        d["priority"] = "auto"
+    return d
+
+
+def set_bandwidth_priority(priority: str, set_by: str = "", reason: str = "",
+                           ttl_seconds: float | None = None) -> dict:
+    """Set the bandwidth-priority override. priority must be 'auto', 'swim',
+    'nexrad', or 'weather'. ttl_seconds is optional -- omit for "stays until
+    explicitly changed back."."""
+    if priority not in ("auto", "swim", "nexrad", "weather"):
+        raise ValueError(f"invalid priority: {priority!r} (must be auto/swim/nexrad/weather)")
+    now = time.time()
+    expires_at = (now + ttl_seconds) if ttl_seconds else None
+    with conn() as c:
+        c.execute("""
+            INSERT INTO bandwidth_priority_state (id, priority, reason, set_by, set_at, expires_at)
+            VALUES (1, :priority, :reason, :set_by, :set_at, :expires_at)
+            ON CONFLICT(id) DO UPDATE SET
+                priority=excluded.priority, reason=excluded.reason,
+                set_by=excluded.set_by, set_at=excluded.set_at, expires_at=excluded.expires_at
+        """, {"priority": priority, "reason": reason or None, "set_by": set_by or None,
+              "set_at": now, "expires_at": expires_at})
+    return get_bandwidth_priority()
+
+
+def opensky_upsert_aircraft(records: list[dict]) -> int:
+    """Bulk upsert OpenSky registry records. Returns count upserted."""
+    import time as _time
+    now = _time.time()
+    sql = """
+        INSERT INTO opensky_aircraft_registry
+            (icao24, registration, manufacturer_icao, manufacturer_name, model,
+             typecode, serial_number, icao_aircraft_type, operator, operator_icao,
+             operator_iata, owner, registered, reg_until, status, built, updated_at)
+        VALUES
+            (:icao24, :registration, :manufacturer_icao, :manufacturer_name, :model,
+             :typecode, :serial_number, :icao_aircraft_type, :operator, :operator_icao,
+             :operator_iata, :owner, :registered, :reg_until, :status, :built, :updated_at)
+        ON CONFLICT(icao24) DO UPDATE SET
+            registration       = excluded.registration,
+            manufacturer_icao  = excluded.manufacturer_icao,
+            manufacturer_name  = excluded.manufacturer_name,
+            model              = excluded.model,
+            typecode           = excluded.typecode,
+            serial_number      = excluded.serial_number,
+            icao_aircraft_type = excluded.icao_aircraft_type,
+            operator           = excluded.operator,
+            operator_icao      = excluded.operator_icao,
+            operator_iata      = excluded.operator_iata,
+            owner              = excluded.owner,
+            registered         = excluded.registered,
+            reg_until          = excluded.reg_until,
+            status             = excluded.status,
+            built              = excluded.built,
+            updated_at         = excluded.updated_at
+    """
+    for r in records:
+        r["updated_at"] = now
+    with conn() as c:
+        c.executemany(sql, records)
+    return len(records)
+
+
+def opensky_lookup_by_hex(icao24: str) -> dict | None:
+    """Look up a single aircraft by ICAO24 hex (supplementary to FAA lookup)."""
+    key = icao24.lower()
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM opensky_aircraft_registry WHERE LOWER(icao24)=?", (key,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def opensky_lookup_by_registration(registration: str) -> dict | None:
+    """
+    Look up a single aircraft by registration/tail number. Added 2026-07-23
+    to support the tail-number -> hex resolution directive: FAA covers US
+    N-numbers only, OpenSky's registry (idx_opensky_reg_registration) covers
+    foreign registrations too -- this is the fallback/cross-check for
+    non-US tails FAA will never have, and a second independent source for
+    US tails FAA does have.
+    """
+    key = registration.upper().strip().replace("-", "")
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM opensky_aircraft_registry "
+            "WHERE UPPER(REPLACE(registration, '-', ''))=?", (key,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def opensky_registry_meta_set(key: str, value: str) -> None:
+    with conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO opensky_registry_meta (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+
+def opensky_registry_meta_get(key: str) -> str | None:
+    with conn() as c:
+        row = c.execute(
+            "SELECT value FROM opensky_registry_meta WHERE key=?", (key,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def opensky_registry_count() -> int:
+    with conn() as c:
+        return c.execute("SELECT COUNT(*) FROM opensky_aircraft_registry").fetchone()[0]
+
+
+def opensky_registry_sweep_removed(cutoff_epoch: float) -> int:
+    """Delete OpenSky rows not touched since cutoff_epoch -- same mark-and-sweep
+    pattern as faa_registry_sweep_removed(), same reasoning."""
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM opensky_aircraft_registry WHERE updated_at < ?", (cutoff_epoch,)
+        )
+        return cur.rowcount
+
+
+def update_watchlist_oooi_phase(entry_id: str, phase: str, updated_at: str) -> None:
+    """Persist the OOOI phase tracker's own state for entry_id.
+
+    Deliberately separate from update_watchlist_last_event()'s
+    last_event_summary column — see init_db_v16() docstring for why sharing
+    that field with every other alert type caused repeated re-firing.
+    """
+    with conn() as c:
+        c.execute("""
+            UPDATE watchlist_entries
+            SET oooi_phase=?, oooi_phase_updated_at=?
+            WHERE id=?
+        """, (phase, updated_at, entry_id))
 
 
 def upsert_international_aviation_records(source: str, records: list[dict]) -> int:

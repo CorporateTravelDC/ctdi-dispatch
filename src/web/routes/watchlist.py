@@ -42,6 +42,40 @@ def _make_id(entry_type: str, identifier: str) -> str:
     return f"wl-{entry_type}-{ident_slug}-{date_str}"
 
 
+def _default_auto_remove_at(scheduled_arrival: Optional[str],
+                             buffer_hours: float,
+                             fallback_hours: float = 24.0) -> str:
+    """
+    Compute a transient watchlist entry's expiry when the caller doesn't
+    supply one. Without this, entries created via the normal add flow
+    (which historically never set auto_remove_at) get auto_remove_at=NULL
+    and the sweep's `WHERE auto_remove_at IS NOT NULL` clause can never
+    match them -- functionally permanent despite being tagged transient.
+    This was the root cause of UA1453/DL2962 never sweeping (2026-07-21).
+
+    If a scheduled_arrival is known, expire buffer_hours after it (covers
+    delays/diversions without leaving a dead entry indefinitely). If not
+    known yet (e.g. added pre-departure), fall back to added-time +
+    fallback_hours so a bad/missing arrival estimate can't make the entry
+    immortal either.
+    """
+    from datetime import timedelta
+
+    base = None
+    if scheduled_arrival:
+        try:
+            base = datetime.fromisoformat(scheduled_arrival.replace("Z", "+00:00"))
+        except ValueError:
+            base = None
+
+    if base is not None:
+        expiry = base + timedelta(hours=buffer_hours)
+    else:
+        expiry = datetime.now(timezone.utc) + timedelta(hours=fallback_hours)
+
+    return expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # ── GET /api/v1/watchlist ─────────────────────────────────────────────────────
 
 @router.get("")
@@ -77,6 +111,22 @@ class FlightWatchlistRequest(BaseModel):
     auto_remove_at: Optional[str] = None
     notes: Optional[str] = None
     added_by: str = "api"
+    # 2026-07-22: hex_id/registration were already columns on
+    # watchlist_entries (schema v18) and already read by
+    # poller._check_flight_airplanes_live's identity-mismatch check --
+    # but this endpoint never exposed a way to *set* them on add, so
+    # every transient entry ever created here had expected_hex=None.
+    # Combined with `identifier` never being normalized to an ICAO
+    # callsign (airplanes.live's callsign endpoint wants "AAL2773", not
+    # the IATA-style "AA2773" callers were passing), this meant
+    # transient flight entries could silently never resolve on
+    # airplanes.live at all -- they'd fall through to the weaker
+    # schedule-inference fallback while permanent entries (manually
+    # pre-formatted with correct ICAO identifiers in
+    # permanent_flights.json) resolved fine. Found 2026-07-22 when the
+    # operator noticed transient flight-alerts were mostly missing.
+    hex_id: Optional[str] = None
+    registration: Optional[str] = None
 
 
 @router.post("/flights", status_code=201)
@@ -101,10 +151,13 @@ async def add_flight_watchlist(
         "route_name": None,
         "scheduled_departure": body.scheduled_departure,
         "scheduled_arrival": body.scheduled_arrival,
-        "auto_remove_at": body.auto_remove_at,
+        "auto_remove_at": body.auto_remove_at or _default_auto_remove_at(
+            body.scheduled_arrival, buffer_hours=6.0),
         "added_at": now,
         "added_by": body.added_by,
         "notes": body.notes,
+        "hex_id": (body.hex_id or "").strip() or None,
+        "registration": (body.registration or "").strip() or None,
         "last_event_at": None,
         "last_event_summary": None,
     }
@@ -168,7 +221,8 @@ async def add_train_watchlist(
         "route_name": body.route_name,
         "scheduled_departure": body.scheduled_departure,
         "scheduled_arrival": body.scheduled_arrival,
-        "auto_remove_at": body.auto_remove_at,
+        "auto_remove_at": body.auto_remove_at or _default_auto_remove_at(
+            body.scheduled_arrival, buffer_hours=3.0),
         "added_at": now,
         "added_by": body.added_by,
         "notes": body.notes,
@@ -201,6 +255,76 @@ async def add_train_watchlist(
     return JSONResponse(entry, status_code=201)
 
 
+# ── POST /api/v1/watchlist/vessels ────────────────────────────────────────────
+# Stub, added 2026-07-21 per operator directive -- yachts/cruise ships,
+# identified by MMSI (Maritime Mobile Service Identity, the AIS equivalent
+# of a flight's hex). Mirrors the flight/train transient-add shape. Live
+# AIS status checking (arrival/dead-sweep parity with flights/trains) is
+# NOT wired yet -- this only covers add/store/list/permanent-sync. The
+# standalone ais_watcher.py already exists and pulls MMSI matches off the
+# local AIS-catcher feed but has never been connected to this watchlist API
+# (its own docstring says so); that connection is a follow-up, not part of
+# this stub.
+
+class VesselWatchlistRequest(BaseModel):
+    identifier: str  # MMSI, 9 digits
+    origin: Optional[str] = None       # home port / departure port
+    destination: Optional[str] = None  # destination port
+    scheduled_arrival: Optional[str] = None
+    auto_remove_at: Optional[str] = None
+    notes: Optional[str] = None
+    added_by: str = "api"
+
+
+@router.post("/vessels", status_code=201)
+async def add_vessel_watchlist(
+    body: VesselWatchlistRequest,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Add a transient vessel (yacht/cruise ship) watchlist entry by MMSI. Admin required."""
+    ident = body.identifier.strip()
+    if not ident:
+        raise HTTPException(400, "identifier (MMSI) is required")
+    if not ident.isdigit() or len(ident) != 9:
+        raise HTTPException(400, "identifier must be a 9-digit MMSI")
+
+    entry_id = _make_id("vessel", ident)
+    now = _now_iso()
+    entry = {
+        "id": entry_id,
+        "entry_type": "vessel",
+        "tier": "transient",
+        "identifier": ident,
+        "origin": body.origin,
+        "destination": body.destination,
+        "route_name": None,
+        "scheduled_departure": None,
+        "scheduled_arrival": body.scheduled_arrival,
+        "auto_remove_at": body.auto_remove_at or _default_auto_remove_at(
+            body.scheduled_arrival, buffer_hours=6.0),
+        "added_at": now,
+        "added_by": body.added_by,
+        "notes": body.notes,
+        "last_event_at": None,
+        "last_event_summary": None,
+    }
+    db.upsert_watchlist_entry(entry)
+
+    origin = body.origin or ""
+    dest = body.destination or ""
+    route = f"{origin}→{dest}" if origin or dest else ""
+
+    _fire_ntfy_dual(
+        domain_topic="vessel-alerts",
+        title=f"Watching vessel MMSI {ident} {route}",
+        detail_body=f"Vessel MMSI {ident} {route} added to watchlist",
+        dispatch_body=f"Watchlist: vessel {ident} added (transient)",
+        priority=2,
+    )
+
+    return JSONResponse(entry, status_code=201)
+
+
 # ── DELETE /api/v1/watchlist/{id} ─────────────────────────────────────────────
 
 @router.delete("/{entry_id}", status_code=204)
@@ -226,8 +350,10 @@ async def remove_watchlist_entry(
 
     ident = entry["identifier"]
     etype = entry["entry_type"]
+    _REMOVE_TOPIC = {"flight": "flight-alerts", "train": "train-alerts",
+                     "vessel": "vessel-alerts"}
     _fire_ntfy_dual(
-        domain_topic="flight-alerts" if etype == "flight" else "train-alerts",
+        domain_topic=_REMOVE_TOPIC.get(etype, "dispatch"),
         title=f"Watchlist: {ident} removed",
         detail_body=f"{etype.title()} {ident} removed from watchlist",
         dispatch_body=f"Watchlist: {ident} removed",
@@ -246,6 +372,8 @@ class FlightBatchItem(BaseModel):
     auto_remove_at: Optional[str] = None
     notes: Optional[str] = None
     added_by: str = "api"
+    hex_id: Optional[str] = None  # see FlightWatchlistRequest, 2026-07-22
+    registration: Optional[str] = None
 
 
 class FlightBatchRequest(BaseModel):
@@ -279,10 +407,13 @@ async def add_flight_watchlist_batch(
             "route_name": None,
             "scheduled_departure": item.scheduled_departure,
             "scheduled_arrival": item.scheduled_arrival,
-            "auto_remove_at": item.auto_remove_at,
+            "auto_remove_at": item.auto_remove_at or _default_auto_remove_at(
+                item.scheduled_arrival, buffer_hours=6.0),
             "added_at": now,
             "added_by": item.added_by,
             "notes": item.notes,
+            "hex_id": (item.hex_id or "").strip() or None,
+            "registration": (item.registration or "").strip() or None,
             "last_event_at": None,
             "last_event_summary": None,
         }
@@ -353,7 +484,8 @@ async def add_train_watchlist_batch(
             "route_name": item.route_name,
             "scheduled_departure": item.scheduled_departure,
             "scheduled_arrival": item.scheduled_arrival,
-            "auto_remove_at": item.auto_remove_at,
+            "auto_remove_at": item.auto_remove_at or _default_auto_remove_at(
+                item.scheduled_arrival, buffer_hours=3.0),
             "added_at": now,
             "added_by": item.added_by,
             "notes": item.notes,
@@ -404,9 +536,20 @@ class PermanentTrainItem(BaseModel):
     added_by: str = "operator"
 
 
+class PermanentVesselItem(BaseModel):
+    id: str
+    identifier: str  # MMSI, 9 digits
+    route_name: Optional[str] = None
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    notes: Optional[str] = None
+    added_by: str = "operator"
+
+
 class PermanentBatchRequest(BaseModel):
     flights: List[PermanentFlightItem] = []
     trains: List[PermanentTrainItem] = []
+    vessels: List[PermanentVesselItem] = []
 
 
 def _merge_permanent_file(filename: str,
@@ -459,31 +602,36 @@ async def add_permanent_watchlist_batch(
     """
     flight_dicts = [f.model_dump() for f in body.flights]
     train_dicts = [t.model_dump() for t in body.trains]
+    vessel_dicts = [v.model_dump() for v in body.vessels]
 
-    f_added = f_skipped = t_added = t_skipped = 0
+    f_added = f_skipped = t_added = t_skipped = v_added = v_skipped = 0
     if flight_dicts:
         f_added, f_skipped = _merge_permanent_file("permanent_flights.json",
                                                     flight_dicts)
     if train_dicts:
         t_added, t_skipped = _merge_permanent_file("permanent_trains.json",
                                                     train_dicts)
+    if vessel_dicts:
+        v_added, v_skipped = _merge_permanent_file("permanent_vessels.json",
+                                                    vessel_dicts)
 
-    total_added = f_added + t_added
+    total_added = f_added + t_added + v_added
     if total_added:
         _fire_ntfy_dual(
             domain_topic="dispatch",
             title=f"Permanent watchlist: {total_added} entr{'y' if total_added == 1 else 'ies'} added",
             detail_body=(f"Permanent watchlist updated: {f_added} flight(s), "
-                         f"{t_added} train(s) added. "
-                         f"{f_skipped + t_skipped} skipped (duplicates)."),
+                         f"{t_added} train(s), {v_added} vessel(s) added. "
+                         f"{f_skipped + t_skipped + v_skipped} skipped (duplicates)."),
             dispatch_body=(f"Permanent watchlist: +{f_added} flights, "
-                           f"+{t_added} trains"),
+                           f"+{t_added} trains, +{v_added} vessels"),
             priority=2,
         )
 
     return JSONResponse({
         "flights": {"added": f_added, "skipped": f_skipped},
         "trains": {"added": t_added, "skipped": t_skipped},
+        "vessels": {"added": v_added, "skipped": v_skipped},
         "total_added": total_added,
     }, status_code=201)
 

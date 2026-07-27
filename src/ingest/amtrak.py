@@ -95,6 +95,15 @@ def parse_feed(raw: bytes, cfg: "AmtrakConfig") -> tuple[list[dict], str]:
                 "origin":           all_stns[0].get("code", "") if all_stns else "",
                 "destination":      all_stns[-1].get("code", "") if all_stns else "",
                 "status":           stn.get("status") or t.get("trainTimely") or "",
+                # station_code/station_name -- added 2026-07-21 per operator
+                # direction to replace the train map/globe view with plain
+                # text: this is the SAME reference station (watchlist >
+                # regional > primary priority) already used above for delay
+                # math, just finally surfaced. "status" above is that
+                # station's live status (e.g. "Enroute"/"Station"/"Departed")
+                # -- station_name is where it's currently relative to.
+                "station_code":     stn.get("code", ""),
+                "station_name":     stn.get("name", ""),
                 "delay_minutes":    delay,
                 "scheduled_arr":    stn.get("schArr"),
                 "estimated_arr":    stn.get("arr"),

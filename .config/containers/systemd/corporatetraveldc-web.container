@@ -14,6 +14,15 @@ Memory=1536m
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-web:latest
+# 2026-07-23: web now hosts POST /api/v1/remember (second-brain manual
+# capture), which needs WebDAV reach to Nextcloud -- loopback-bound
+# (127.0.0.1:8090), not reachable via host.containers.internal under
+# any pasta flag (kernel anti-spoofing on 127.0.0.0/8, see
+# docs/COMPLIANCE_SECURITY.md). Reuse the existing 0.0.0.0:80 nginx
+# vhost for cloud.example.com instead -- same per-
+# container opt-in already used by the second-brain poller Quadlets.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 PublishPort=127.0.0.1:8000:8000
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z

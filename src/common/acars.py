@@ -1,8 +1,28 @@
 """
-common.acars — ACARS/VDL2 authoritative flight state.
+common.acars — ACARS/VDL2/HFDL authoritative flight state.
 
-ACARS messages originate directly from aircraft avionics — they are the
-most reliable source of flight phase truth available.  ADS-B is secondary.
+ACARS/VDL2/HFDL messages originate directly from aircraft avionics — they
+are the most reliable source of flight phase truth available.  ADS-B is
+secondary.
+
+Source priority (2026-07-23 -- operator directive: default to the
+aggregators, which are already credentialed, rather than local-SDR-only):
+  1. ACARS Drama Jumpseat (api.jumpseat.acarsdrama.com) -- queried live,
+     by registration. Near-global coverage, not limited to this station's
+     own VHF/SDR range.
+  2. airframes.io REST -- queried live, global stream filtered client-side
+     by flight/tail. Secondary aggregator, used when Jumpseat has nothing
+     (no token, rate-limited, or no hit for this registration).
+  3. Local acarshub (this station's own acarsdec/dumpvdl2 decode,
+     messages.db) -- fallback when neither aggregator has anything. This
+     was previously the ONLY source get_latest_phase() checked; kept as
+     the last resort, not removed, since it's zero-latency and has no
+     third-party dependency once a flight is actually in range.
+
+This is deliberately separate from the "in local range" ADS-B-proximity
+notification in ingest/local_airspace.py and poller.main's local_aircraft
+sweep -- those stay exactly as they are, driven by UltraFeeder position
+data, not ACARS. Nothing here changes that path.
 
 Consumers:
   pusher  — all four OOOI phases drive _flight_state directly
@@ -11,8 +31,12 @@ Consumers:
 
 import logging
 import os
+import pathlib
 import sqlite3
 import time
+from datetime import datetime, timezone
+
+import requests
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +44,193 @@ ACARSHUB_DB_PATH = os.environ.get(
     "ACARSHUB_DB_PATH",
     "/var/lib/corporatetraveldc/acarshub/messages.db",
 )
+
+# ── Aggregator config (mirrors acars_watcher.py's env vars/token resolution
+# so both consumers of the same credentials stay in sync) ───────────────────
+JUMPSEAT_API_BASE  = os.environ.get("JUMPSEAT_API_BASE",  "https://api.jumpseat.acarsdrama.com/v1")
+AIRFRAMES_API_BASE = os.environ.get("AIRFRAMES_API_BASE", "https://api.airframes.io/v1")
+_AGGREGATOR_TIMEOUT = 8  # seconds -- this runs inline in the per-entry poller sweep loop
+
+
+def _resolve_jumpseat_token() -> str | None:
+    env = (os.environ.get("ACARSDRAMA_JUMPSEAT_TOKEN", "").strip()
+           or os.environ.get("JUMPSEAT_API_KEY", "").strip())
+    if env:
+        return env
+    secret = pathlib.Path.home() / ".secrets" / "jumpseat.key"
+    if secret.exists():
+        return secret.read_text().strip()
+    return None
+
+
+def _resolve_airframes_token() -> str | None:
+    env = os.environ.get("AIRFRAMES_TOKEN", "").strip()
+    if env:
+        return env
+    secret = pathlib.Path.home() / ".secrets" / "airframes.token"
+    if secret.exists():
+        return secret.read_text().strip()
+    return None
+
+
+_JUMPSEAT_TOKEN = _resolve_jumpseat_token()
+_AIRFRAMES_TOKEN = _resolve_airframes_token()
+
+
+def _extract_reg(msg: dict) -> str:
+    for key in ("tail", "registration", "reg", "aircraft_reg"):
+        v = msg.get(key, "")
+        if v:
+            return str(v).strip().upper().replace("-", "")
+    acars = msg.get("acars") or {}
+    if isinstance(acars, dict):
+        v = acars.get("reg", "") or acars.get("tail", "")
+        if v:
+            return str(v).strip().upper().replace("-", "")
+    return ""
+
+
+def _extract_flight(msg: dict) -> str:
+    v = (msg.get("flight") or msg.get("flightNumber")
+         or (msg.get("acars") or {}).get("flight") or "")
+    return str(v).strip().upper().replace(" ", "").replace("-", "")
+
+
+def _extract_label(msg: dict) -> str:
+    return str(msg.get("label") or (msg.get("acars") or {}).get("label")
+               or msg.get("type") or "").strip()
+
+
+def _extract_text(msg: dict) -> str:
+    return str(msg.get("cleanedText") or msg.get("text")
+               or (msg.get("acars") or {}).get("msg_text")
+               or msg.get("message") or "").strip()
+
+
+def _extract_epoch(msg: dict) -> float:
+    """Best-effort timestamp -> epoch seconds. Aggregator timestamps are
+    ISO 8601; fall back to "now" (sorts last, never crashes the sweep)."""
+    raw = msg.get("timestamp") or msg.get("msg_time") or msg.get("time")
+    if raw is None:
+        return time.time()
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        s = str(raw).replace("Z", "+00:00")
+        return datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        return time.time()
+
+
+def _phase_hit(label: str, text: str, patterns: list[tuple[str, str]]) -> bool:
+    """Reimplements the SQL `label=? AND upper(msg_text) LIKE ?` check for
+    an in-memory aggregator message. Every pattern in _PHASE_PATTERNS is a
+    plain '%substring%' wildcard (no other SQL wildcards used), so this is
+    just a label-equality + substring-containment check."""
+    label_u = (label or "").upper().strip()
+    text_u = (text or "").upper()
+    for want_label, like in patterns:
+        if label_u != want_label:
+            continue
+        needle = like.strip("%")
+        if needle in text_u:
+            return True
+    return False
+
+
+def _best_phase_from_messages(messages: list[dict], cutoff_epoch: float) -> tuple[str, dict] | None:
+    """Given a list of raw aggregator message dicts (already filtered to the
+    aircraft/flight of interest), find the single most recent one matching
+    any OOOI phase pattern. Mirrors get_latest_phase()'s local-DB UNION+
+    ORDER BY msg_time DESC LIMIT 1 semantics, done in Python."""
+    best: tuple[float, str, dict] | None = None
+    for msg in messages:
+        ts = _extract_epoch(msg)
+        if ts < cutoff_epoch:
+            continue
+        label = _extract_label(msg)
+        text = _extract_text(msg)
+        for phase, patterns in _PHASE_PATTERNS.items():
+            if _phase_hit(label, text, patterns):
+                if best is None or ts > best[0]:
+                    best = (ts, phase, msg)
+                break
+    if best is None:
+        return None
+    _, phase, msg = best
+    return phase, {
+        "tail": _extract_reg(msg),
+        "flight": _extract_flight(msg),
+        "label": _extract_label(msg),
+        "msg_text": _extract_text(msg),
+        "msg_time": _extract_epoch(msg),
+    }
+
+
+def _query_jumpseat_phase(registration: str, cutoff_epoch: float) -> tuple[str, dict] | None:
+    if not _JUMPSEAT_TOKEN or not registration:
+        return None
+    try:
+        resp = requests.get(
+            f"{JUMPSEAT_API_BASE}/messages/search",
+            params={"registration": registration, "limit": "20", "source": "messages"},
+            headers={"Authorization": f"Bearer {_JUMPSEAT_TOKEN}"},
+            timeout=_AGGREGATOR_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            log.debug("jumpseat phase query %s: HTTP %s", registration, resp.status_code)
+            return None
+        data = resp.json()
+        items = data.get("items", data) if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            return None
+        result = _best_phase_from_messages(items, cutoff_epoch)
+        if result:
+            phase, msg = result
+            msg["_source"] = "JUMPSEAT"
+            return phase, msg
+    except Exception as exc:
+        log.debug("jumpseat phase query %s failed: %s", registration, exc)
+    return None
+
+
+def _query_airframes_phase(identifier: str, registration: str, cutoff_epoch: float) -> tuple[str, dict] | None:
+    try:
+        headers = {}
+        if _AIRFRAMES_TOKEN:
+            headers["Authorization"] = f"Bearer {_AIRFRAMES_TOKEN}"
+        since = datetime.fromtimestamp(cutoff_epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = requests.get(
+            f"{AIRFRAMES_API_BASE}/messages",
+            params={"since": since, "limit": 500},
+            headers=headers,
+            timeout=_AGGREGATOR_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            log.debug("airframes.io phase query: HTTP %s", resp.status_code)
+            return None
+        data = resp.json()
+        msgs = data if isinstance(data, list) else data.get("messages", data.get("data", []))
+        if not isinstance(msgs, list):
+            return None
+        ident_norm = (identifier or "").upper().replace(" ", "").replace("-", "")
+        reg_norm = (registration or "").upper().replace("-", "")
+        matched = [
+            m for m in msgs
+            if isinstance(m, dict)
+            and ((reg_norm and _extract_reg(m) == reg_norm)
+                 or (ident_norm and _extract_flight(m) == ident_norm))
+        ]
+        if not matched:
+            return None
+        result = _best_phase_from_messages(matched, cutoff_epoch)
+        if result:
+            phase, msg = result
+            msg["_source"] = "AIRFRAMES"
+            return phase, msg
+    except Exception as exc:
+        log.debug("airframes.io phase query %s failed: %s", identifier, exc)
+    return None
 
 # OOOI phase patterns confirmed from DC-area ACARS/VDL2 traffic.
 # Each entry is (label, LIKE pattern).  Ordered most-reliable first.
@@ -122,16 +333,40 @@ def check_oooi_event(
 def get_latest_phase(
     identifier: str,
     not_before_epoch: float = 0.0,
+    registration: str | None = None,
 ) -> tuple[str, dict] | None:
     """
-    Return (phase, message_dict) for the most recent ACARS OOOI event across
-    all four phases, or None if no data is available.
+    Return (phase, message_dict) for the most recent ACARS/VDL2/HFDL OOOI
+    event across all four phases, or None if no data is available.
 
-    Queries all phases in a single UNION and returns the one most recent result.
-    Use this when ACARS should authoritatively set the current flight state.
+    Source priority, 2026-07-23: Jumpseat (by registration) -> airframes.io
+    (global, filtered by identifier/registration) -> local acarshub DB
+    (this station's own decode). Aggregators default first since they're
+    already credentialed and have near-global coverage; local is the
+    fallback, not the gate -- see module docstring.
+
+    `registration` is optional but strongly recommended: Jumpseat's search
+    endpoint is registration-keyed, so without it that source is skipped
+    entirely and airframes.io/local are the only sources tried.
+
+    Use this when ACARS/VDL2/HFDL should authoritatively set the current
+    flight state.
     """
     norm = identifier.upper().replace("-", "").strip()
     cutoff = max(int(not_before_epoch), int(time.time()) - 7200)
+
+    reg_norm = (registration or "").upper().replace("-", "").strip() or None
+
+    if reg_norm:
+        agg = _query_jumpseat_phase(reg_norm, cutoff)
+        if agg:
+            return agg
+
+    agg = _query_airframes_phase(norm, reg_norm, cutoff)
+    if agg:
+        return agg
+
+    # Fall back to local acarshub decode (this station's own SDR range).
 
     unions: list[str] = []
     params: list = []

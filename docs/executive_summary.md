@@ -1,10 +1,30 @@
 # Executive Summary — Executive Travel Intelligence Platform
 
+_v1.1.0 — Updated 2026-07-20_
+
 ## Overview
 
 This is a real-time monitoring platform built specifically for high-stakes executive travel in the Washington, DC area. It watches three things simultaneously — **commercial flights, Amtrak trains, and weather** — and delivers automated alerts the moment something changes, before the disruption reaches your traveler.
 
 The platform pulls data directly from the same systems that air traffic controllers and airline operations centers use. It is operational today, running on private dedicated infrastructure with no reliance on consumer flight apps or third-party aggregators.
+
+---
+
+## What's New Since v1.0.0
+
+**The platform is now fully live.** The final piece of federal provisioning — our direct real-time connection to the FAA's national data network — has been completed and confirmed in production. Every capability described in this document is now operating on live data, verified end to end against actual air traffic. What follows is what that unlocked, and what else has improved.
+
+**We now see your flight the way air traffic control sees it.** For every flight on your watchlist, the platform confirms the filed flight plan, the specific aircraft assigned, and its live position, altitude, and speed — continuously, from the moment the plan is filed. Your coordinator no longer waits for an airline app to catch up; we are watching the same picture the controllers are.
+
+**Weather monitoring now covers the moments that matter most.** Dedicated terminal weather systems at DCA, Dulles, and BWI now feed the platform directly, including wind shear and microburst detection on final approach and departure — the two phases of flight most sensitive to weather, and the ones most likely to produce a sudden go-around or hold. When conditions at the field turn, your driver knows before the arrivals board does.
+
+**Earlier warning on airport-wide disruptions — from the source.** Previously, the platform inferred major FAA delay programs from their downstream effects. It now receives the FAA's own declaration messages directly, for any airport in the country. When the FAA orders a ground stop, we see the order itself — the earliest signal that exists — which can mean the difference between a driver repositioned in advance and a principal waiting at the curb.
+
+**Deeper insight into how your flight will actually arrive.** The platform now tracks which runways DCA, Dulles, and BWI are actively using and alerts only when a change is meaningful — a shifted arrival flow, a reduced acceptance rate, a degrading weather category — not routine housekeeping. For watched flights, it confirms whether a reroute has actually been approved (not merely requested) and identifies the specific named arrival and departure corridors the flight will fly. That translates directly into more accurate curbside timing.
+
+**Regional awareness, without the noise.** Beyond individual flights, the platform now reads congestion across whole corridors — the DC area, New York, Boston, and other key regions your principals travel between — and distinguishes a genuinely building disruption from ordinary background activity. You are alerted when a situation is actually emerging; the full underlying picture remains available on request. More signal, no chatter. Official FAA command-center advisories are likewise filtered to surface only what touches the DC area.
+
+**Quietly more dependable.** As part of ongoing hardening, alert delivery now automatically retries on the rare transient hiccup, the hourly operational brief's scheduling has been tightened, and a background maintenance issue affecting data collection was traced to its root cause and resolved — cutting related interruptions by roughly three quarters, with an automatic safety net covering the remainder. None of this changes what you see; it strengthens the guarantee behind it.
 
 ---
 
@@ -68,7 +88,9 @@ Two tiers:
 
 ## Current Status
 
-The platform is live and operational. All three monitoring areas (air, rail, weather) are active. The FAA's primary real-time push connection (NMS credentials) is pending administrative provisioning by the FAA — once received, six additional data streams activate automatically with no code changes. Everything else is running now.
+**All systems are live and confirmed operational.** The FAA's real-time push connection — the platform's primary data artery, previously pending administrative provisioning — has been granted, activated, and verified in production. The six data streams that depended on it are now running on live federal data, each confirmed end to end against real air traffic: flight-plan and position monitoring, terminal weather at all three DC-area airports, national traffic-flow management, arrival sequencing, airspace restrictions, and airport advisories.
+
+The platform is monitoring, correlating, and delivering — today, in production, with no remaining provisioning dependencies. Watchlists are active, dual-format notifications are flowing, and the recent reliability hardening described above is in place. There is nothing left to switch on.
 
 ---
 

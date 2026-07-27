@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { getSyncToken } from './useLayerConfig.js'
 
 const REFRESH_MS = 60_000
 
@@ -14,7 +15,14 @@ export function useWatchlist() {
 
   async function fetchWatchlist() {
     try {
-      const res = await fetch('/api/dispatch/api/v1/watchlist')
+      // Attach the stored admin token if the operator has set one (see
+      // SettingsPanel.jsx) -- the runner's proxy requires BOTH this token
+      // AND a tailnet-originating request before it will forward to the
+      // real watchlist; anything else gets a placeholder list back, never
+      // a real 403 and never a silently-empty widget.
+      const token = getSyncToken()
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await fetch('/api/dispatch/api/v1/watchlist', { headers })
       if (!res.ok) return
       const data = await res.json()
       setEntries(data.entries ?? [])

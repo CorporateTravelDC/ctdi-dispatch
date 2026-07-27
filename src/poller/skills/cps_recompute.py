@@ -14,6 +14,7 @@ Writes result to cps_scores table; pusher fires ntfy topic "cps".
 import argparse
 import logging
 import sys
+from datetime import datetime, timezone
 
 from common import db
 from common.sr1_log import log_usage
@@ -31,6 +32,21 @@ CPS_MINIMUMS = {"ceiling_ft": 1000, "visibility_sm": 3.0, "wind_kt": 30}
 # Primary observation stations for DC-area HEMS scoring (in priority order)
 PRIMARY_STATIONS = ("KDCA", "KIAD", "KBWI")
 
+# ITWS wind-shear-relevant products -- 2026-07-21. Both Microburst and Wind
+# Shear ATIS fire at severity 5 (severe, per itws_parser.py's 1-6 scale)
+# when active; Gust Front ETI fires at severity 4 (moderate, advance
+# warning of a pending event, not yet at the runway). METAR wind_kt alone
+# is a steady-state reading -- it can miss a microburst or wind shear
+# event entirely if the ATIS report lands between METAR observation
+# cycles, which is exactly the gap this closes. Rows older than
+# ITWS_STALE_SECONDS are ignored -- itws_alerts is a continuously
+# upserted "current state" table (see db.upsert_itws_alert), so a hazard
+# that cleared should not keep degrading CPS just because the ingest
+# container hasn't pushed a fresher OFF/none-pending row yet.
+ITWS_SEVERE_PRODUCTS = frozenset({"Wind Shear ATIS Product", "Microburst ATIS Product"})
+ITWS_GUST_FRONT_PRODUCT = "Gust Front ETI Product"
+ITWS_STALE_SECONDS = 1200
+
 # Precip codes that violate or degrade minimums
 PRECIP_VIOLATED = frozenset({
     "TS", "TSRA", "TSGR", "TSPL", "TSSN", "FZRA", "FZDZ", "FZFG",
@@ -44,6 +60,11 @@ PRECIP_MARGINAL = frozenset({
 def build_inputs() -> dict:
     metars = db.get_metar_snapshot()
     nas = db.get_active_nas_programs()
+    itws_relevant = ITWS_SEVERE_PRODUCTS | {ITWS_GUST_FRONT_PRODUCT}
+    itws = [
+        a for a in db.get_active_itws_alerts()
+        if a["airport"] in PRIMARY_STATIONS and a["product_type"] in itws_relevant
+    ]
 
     return {
         "metar": sorted([
@@ -60,7 +81,29 @@ def build_inputs() -> dict:
             {"type": p["type"], "facility": p["facility"]}
             for p in nas
         ], key=lambda x: (x["type"], x["facility"])),
+        "itws": sorted([
+            {
+                "airport":      a["airport"],
+                "product_type": a["product_type"],
+                "severity":     a["severity"],
+                "detail":       a["detail"],
+                "last_seen":    a["last_seen"],
+            }
+            for a in itws
+        ], key=lambda x: (x["airport"], x["product_type"])),
     }
+
+
+def _itws_row_is_fresh(row: dict) -> bool:
+    last_seen = row.get("last_seen")
+    if not last_seen:
+        return False
+    try:
+        seen_at = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    age = (datetime.now(timezone.utc) - seen_at).total_seconds()
+    return age <= ITWS_STALE_SECONDS
 
 
 def _compute_cps(inputs: dict) -> dict:
@@ -71,6 +114,9 @@ def _compute_cps(inputs: dict) -> dict:
     primaries = {m["station"]: m for m in inputs["metar"]
                  if m["station"] in PRIMARY_STATIONS}
     nas = inputs["nas_programs"]
+    itws_by_station: dict[str, list[dict]] = {}
+    for row in inputs.get("itws", []):
+        itws_by_station.setdefault(row["airport"], []).append(row)
 
     factors = {
         "ceiling":    "ok",
@@ -135,6 +181,21 @@ def _compute_cps(inputs: dict) -> dict:
             elif w >= 25:
                 degrade("wind", "marginal",
                         f"{sta} wind {w}kt marginal (25–30kt range)")
+
+        # ITWS wind shear / microburst / gust front check -- catches
+        # short-duration events a steady-state METAR reading can miss
+        # entirely between observation cycles. See ITWS_SEVERE_PRODUCTS
+        # comment above for the severity mapping.
+        for itws_row in itws_by_station.get(sta, []):
+            if not _itws_row_is_fresh(itws_row):
+                continue
+            severity = itws_row.get("severity") or 0
+            product = itws_row["product_type"]
+            detail = itws_row.get("detail") or product
+            if product in ITWS_SEVERE_PRODUCTS and severity >= 5:
+                degrade("wind", "violated", f"{sta} {detail} (ITWS)")
+            elif product == ITWS_GUST_FRONT_PRODUCT and severity >= 4:
+                degrade("wind", "marginal", f"{sta} {detail} (ITWS)")
 
         # Precipitation check
         p = str(m.get("precip") or "").upper()

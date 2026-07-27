@@ -13,7 +13,9 @@ import SettingsPanel from './components/SettingsPanel.jsx'
 import OverviewView from './components/OverviewView.jsx'
 import NtfyFeedView from './components/NtfyFeedView.jsx'
 import IntelView from './components/IntelView.jsx'
+import WeatherView from './components/WeatherView.jsx'
 import { useLayerConfig } from './hooks/useLayerConfig.js'
+import { useTailnet } from './hooks/useTailnet.js'
 
 /** Global layer config context — allows any child to read/update panel visibility */
 export const LayerConfigContext = createContext(null)
@@ -41,6 +43,7 @@ export default function App() {
   const [dispOpen, setDispOpen]       = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const layerCtx = useLayerConfig()
+  const tailnet = useTailnet()
 
   // ── Theme management ──────────────────────────────────────────────────────
   const [themeOverride, setThemeOverride] = useState(
@@ -120,6 +123,9 @@ export default function App() {
             <NavLink to="/status"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">CPS</NavLink>
+            <NavLink to="/wx"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">WX</NavLink>
             <NavLink to="/signals"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">SIGNALS</NavLink>
@@ -139,9 +145,11 @@ export default function App() {
               aria-label="Dispatch query panel"
               role="menuitem"
             >DISP</button>
-            <NavLink to="/admin"
-              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">ADMIN</NavLink>
+            {tailnet === true && (
+              <NavLink to="/admin"
+                className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+                role="menuitem">ADMIN</NavLink>
+            )}
           </div>
 
           <div className="topbar-right">
@@ -177,7 +185,7 @@ export default function App() {
 
         {/* Settings panel — slide down from topbar */}
         {settingsOpen && (
-          <SettingsPanel onClose={() => setSettingsOpen(false)} />
+          <SettingsPanel onClose={() => setSettingsOpen(false)} tailnet={tailnet} />
         )}
 
         <main className="content" id="main-content" tabIndex="-1">
@@ -187,12 +195,13 @@ export default function App() {
             <Route path="/trains" element={<TrainMapView />} />
             <Route path="/ais" element={<AisMapView />} />
             <Route path="/status" element={<StatusView liveState={liveState} />} />
+            <Route path="/wx" element={<WeatherView />} />
             <Route path="/tfr" element={<SignalsView />} />
             <Route path="/signals" element={<SignalsView />} />
             <Route path="/brief" element={<BriefView />} />
             <Route path="/feed" element={<NtfyFeedView />} />
             <Route path="/intel" element={<IntelView />} />
-            <Route path="/admin" element={<AdminView />} />
+            <Route path="/admin" element={tailnet === true ? <AdminView /> : <OverviewView liveState={liveState} />} />
           </Routes>
         </main>
 

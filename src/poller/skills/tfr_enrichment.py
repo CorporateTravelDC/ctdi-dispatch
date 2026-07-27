@@ -114,12 +114,16 @@ def _call_ollama_vip(inputs: dict) -> str | None:
     """Call LLM (Ollama-first, Anthropic fallback) for VIP TFR narrative.
     Returns narrative text or None (caller falls back to deterministic).
     """
+    # priority="hot" (2026-07-26): this is the VIP/POTUS TFR narrative --
+    # must never wait behind a report job (ep-brief/ops-brief/weekly-summary/
+    # osint-monitor) for the shared Ollama slot. See common/ollama_lock.py.
     return llm_generate(
         system=SYSTEM_PROMPT,
         prompt=_vip_user_message(inputs),
         ollama_model=OLLAMA_MODEL,
         max_tokens=220,
         temperature=0.2,
+        priority="hot",
     )
 
 

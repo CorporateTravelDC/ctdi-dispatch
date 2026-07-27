@@ -33,9 +33,11 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 
 import httpx
+from common.ollama_lock import ollama_slot, OllamaBusyError
 import requests
 
 from common import config, db, ntfy_push as _ntfy
+from common.aam_watch import get_aam_watch_section
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
@@ -920,20 +922,27 @@ Keep total brief under 750 words. Threat posture first; bottom line last."""
 def _call_ollama(prompt: str) -> tuple[str, str] | None:
     if not OLLAMA_BASE_URL:
         return None
+    # priority="report" (2026-07-26): full advance brief, not a hot alert --
+    # backs off immediately if a hot VIP/TFR call is pending, retries next
+    # scheduled cycle. See common/ollama_lock.py.
     try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": SYSTEM_PROMPT,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": 750, "temperature": 0.15},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
+        with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
+            resp = httpx.post(
+                f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+                json={
+                    "model":  OLLAMA_MODEL,
+                    "system": SYSTEM_PROMPT,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"num_predict": 750, "temperature": 0.15},
+                },
+                timeout=OLLAMA_TIMEOUT,
+            )
         resp.raise_for_status()
         narrative = resp.json().get("response", "").strip()
+    except OllamaBusyError as exc:
+        log.info("ep-advance: Ollama slot unavailable — %s", exc)
+        return None
     except Exception as exc:
         log.warning("ep-advance: Ollama failed — %s", exc)
         return None
@@ -1081,20 +1090,24 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
     """Generate the 12h trend narrative via Ollama. Returns empty string on failure."""
     if not OLLAMA_BASE_URL:
         return ""
+    # priority="report" (2026-07-26): see common/ollama_lock.py.
     try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": TREND_SYSTEM_PROMPT_EP,
-                "prompt": trend_prompt,
-                "stream": False,
-                "options": {"num_predict": 260, "temperature": 0.15},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
+        with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
+            resp = httpx.post(
+                f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+                json={
+                    "model":  OLLAMA_MODEL,
+                    "system": TREND_SYSTEM_PROMPT_EP,
+                    "prompt": trend_prompt,
+                    "stream": False,
+                    "options": {"num_predict": 260, "temperature": 0.15},
+                },
+                timeout=OLLAMA_TIMEOUT,
+            )
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
+    except OllamaBusyError as exc:
+        log.info("ep-advance: trend narrative Ollama slot unavailable — %s", exc)
     except Exception as exc:
         log.warning("ep-advance: trend narrative failed — %s", exc)
         return ""
@@ -1170,6 +1183,14 @@ def main(force: bool = False, run_trend: bool = False) -> None:
                 f"=== TRADITIONAL BRIEF ===\n{full_text}"
             )
             log.info("ep-advance: trend section prepended")
+
+        # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
+        # eVTOL/Part 108) watch section if a fresh one exists -- last-mile
+        # EP planning angle, same cached weekly source ops-brief uses. See
+        # common.aam_watch docstring.
+        aam_section = get_aam_watch_section("ep")
+        if aam_section:
+            full_text = full_text.rstrip() + "\n\n=== " + aam_section
 
         # Write to state dir
         state = pathlib.Path(config.state_dir())

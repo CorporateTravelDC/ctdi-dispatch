@@ -1,14 +1,44 @@
 {
   "watchlist": [
     {
-      "id": "perm-flight-ual357",
-      "identifier": "UAL357",
-      "origin": "KSFO",
+      "id": "perm-flight-ual1573",
+      "identifier": "UAL1573",
+      "origin": "KLAX",
       "destination": "KIAD",
-      "route_name": "United SFO-IAD",
-      "notes": "Bellweather flight. United A320. SFO T3 dep ~21:30 PDT / IAD arr ~05:53 EDT.",
-      "added": "2026-05-29",
-      "added_by": "operator"
+      "route_name": "United LAX-IAD",
+      "notes": "Bellweather flight (replaces UAL357, swapped 2026-07-22 -- UAL357 was pulled for persistently noisy TFMS TMI churn near IAD; note the same IAD-arrival flow-constraint noise is structural to ANY IAD-bound flight and may recur here too, mitigated by the 2026-07-22 per-constraint dedup fix). United mainline. LAX dep ~19:49 EDT/16:49 PDT / IAD arr ~00:31 EDT.",
+      "added": "2026-07-22",
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
+    },
+    {
+      "id": "perm-flight-ba293",
+      "identifier": "BA293",
+      "origin": "EGLL",
+      "destination": "KIAD",
+      "route_name": "British Airways LHR-IAD",
+      "notes": "Bellwether international flight -- validates oceanic SWIM/FIDS handling and foreign-registration identity matching. UK-registered aircraft, not present in FAA registry; hex confirmed live via FIDS/ADS-B, not fixed (tail varies).",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-25-3200",
@@ -17,7 +47,17 @@
       "route_name": "VC-25B",
       "notes": "New AF1. Hex: af83e8",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-98-0002",
@@ -26,7 +66,17 @@
       "route_name": "VC-25A",
       "notes": "AF2. Hex: adfeb8",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-82-8000",
@@ -35,7 +85,17 @@
       "route_name": "VC-25A",
       "notes": "AF1 Backup. Hex: adfdf8",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-92-9000",
@@ -44,7 +104,17 @@
       "route_name": "VC-25A",
       "notes": "AF1. Hex: adfdf9",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-98-0001",
@@ -53,7 +123,17 @@
       "route_name": "VC-25A",
       "notes": "AF2/SAM — VP Vance and Rubio. Hex: adfeb7",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-05-0730",
@@ -62,7 +142,17 @@
       "route_name": "C-40C",
       "notes": "SPAR/DoS — normally Dept of State. Hex: ae17ef",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-n757af",
@@ -71,7 +161,17 @@
       "route_name": "757",
       "notes": "Trump Force 1. Hex: aa3410",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-99-0003",
@@ -80,7 +180,17 @@
       "route_name": "VC-25A",
       "notes": "AF2 Backup. Hex: adfeb9",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-hex-af3ff9",
@@ -89,7 +199,17 @@
       "route_name": "E4B/E4C",
       "notes": "Nightwatch — ADW/Offutt. Tail unknown — hex lookup pending.",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-hex-ac5801",
@@ -98,7 +218,17 @@
       "route_name": "VC-25C",
       "notes": "New AF2 Trainer. Tail unknown — hex lookup pending.",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-hex-ac544a",
@@ -107,7 +237,17 @@
       "route_name": "VC-25C",
       "notes": "AF2 New Trainer. Tail unknown — hex lookup pending.",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     },
     {
       "id": "perm-flight-hex-3c4b24",
@@ -116,7 +256,17 @@
       "route_name": "VC-25C",
       "notes": "New AF1 Trainer. Tail unknown — hex lookup pending.",
       "added": "2026-05-29",
-      "added_by": "operator"
+      "added_by": "operator",
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "sister_flight": null
     }
   ]
 }
