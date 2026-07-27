@@ -2786,3 +2786,122 @@ def upsert_international_aviation_records(source: str, records: list[dict]) -> i
             )
             n += 1
         return n
+
+
+# ── v21: sudo approval-gate ─────────────────────────────────────────────────
+#
+# Backing store for the human-in-the-loop approval gate on passwordless sudo
+# grants (ollama.service start/stop/restart, dnf remove/autoremove -- see
+# SUDO_JUSTIFICATION_PROPOSAL.md, decided 2026-07-27). Claude creates a
+# pending row + fires an ntfy push with Allow/Deny action buttons; the phone
+# tap hits POST /admin/approval-requests/{id}/resolve (Tier 0, no bearer auth
+# -- secured purely by the unguessable id, same trust model as a magic link)
+# which flips status. expires_at is enforced on READ (get_approval_request),
+# not via a background sweep -- a request nobody ever taps just reads back as
+# "expired" the next time anything checks it, which is exactly the fail-
+# closed behavior wanted: silence is never consent.
+#
+# command_pattern is separate from command: pattern is the normalized/generic
+# form used to count repeat approvals for the frequency-promotion proposal
+# (e.g. "dnf remove <docs-cleanup-set>" -> pattern "dnf-remove", but the full
+# command with the real package list is still stored and shown in the push).
+
+SCHEMA_V21 = """
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id               TEXT PRIMARY KEY,
+    command_pattern  TEXT NOT NULL,
+    command          TEXT NOT NULL,
+    reasoning        TEXT,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    created_at       REAL NOT NULL,
+    resolved_at      REAL,
+    expires_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_pattern
+    ON approval_requests(command_pattern, status, created_at);
+"""
+
+
+def init_db_v21() -> None:
+    """Apply v21 schema -- creates approval_requests. See SCHEMA_V21 comment
+    above for the fail-closed-on-expiry design."""
+    with conn() as c:
+        for stmt in SCHEMA_V21.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
+
+
+def create_approval_request(request_id: str, command_pattern: str, command: str,
+                             reasoning: str = "", ttl_seconds: float = 600.0) -> dict:
+    now = time.time()
+    expires_at = now + ttl_seconds
+    with conn() as c:
+        c.execute(
+            """INSERT INTO approval_requests
+                   (id, command_pattern, command, reasoning, status, created_at, expires_at)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
+            (request_id, command_pattern, command, reasoning, now, expires_at),
+        )
+    return {"id": request_id, "status": "pending", "expires_at": expires_at}
+
+
+def get_approval_request(request_id: str) -> dict | None:
+    """Read a request, applying expiry-on-read: a still-pending row past its
+    expires_at reads back (and is persisted) as 'expired', never as 'pending'
+    or implicitly allowed. Silence is never consent."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        if d["status"] == "pending" and time.time() >= d["expires_at"]:
+            c.execute(
+                "UPDATE approval_requests SET status='expired', resolved_at=? WHERE id=?",
+                (time.time(), request_id),
+            )
+            d["status"] = "expired"
+            d["resolved_at"] = time.time()
+        return d
+
+
+def resolve_approval_request(request_id: str, action: str) -> dict | None:
+    """action must be 'allow' or 'deny'. Only resolves a request still in
+    'pending' state -- a request already allowed/denied/expired can't be
+    flipped again (no double-tap races, no resolving a stale/expired link)."""
+    if action not in ("allow", "deny"):
+        raise ValueError(f"invalid action: {action!r} (must be allow/deny)")
+    new_status = "allowed" if action == "allow" else "denied"
+    now = time.time()
+    with conn() as c:
+        cur = c.execute(
+            """UPDATE approval_requests
+               SET status=?, resolved_at=?
+               WHERE id=? AND status='pending' AND expires_at > ?""",
+            (new_status, now, request_id, now),
+        )
+        if cur.rowcount == 0:
+            # either not found, already resolved, or expired-on-arrival
+            row = c.execute(
+                "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        row = c.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        return dict(row)
+
+
+def count_recent_approvals(command_pattern: str, since_epoch: float) -> int:
+    """Count of 'allowed' requests for this pattern since since_epoch --
+    backs the frequency-promotion proposal (>2 in a rolling 7 days -> Claude
+    proposes folding the pattern into a standing NOPASSWD grant with no gate)."""
+    with conn() as c:
+        row = c.execute(
+            """SELECT COUNT(*) AS n FROM approval_requests
+               WHERE command_pattern = ? AND status = 'allowed' AND created_at >= ?""",
+            (command_pattern, since_epoch),
+        ).fetchone()
+        return row["n"] if row else 0

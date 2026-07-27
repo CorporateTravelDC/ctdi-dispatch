@@ -105,6 +105,7 @@ async def startup() -> None:
     db.init_db_v18()
     db.init_db_v19()
     db.init_db_v20()
+    db.init_db_v21()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -1546,6 +1547,83 @@ async def clear_bandwidth_priority_route(
 ) -> JSONResponse:
     state = db.set_bandwidth_priority(priority="auto", set_by="admin", reason="cleared")
     return JSONResponse(state)
+
+
+# ---------------------------------------------------------------------------
+# Sudo approval-gate (added 2026-07-27, see SUDO_JUSTIFICATION_PROPOSAL.md)
+#
+# Claude creates a pending request (admin-token gated, called from the Pi
+# side), pushes an ntfy alert with Allow/Deny action buttons, then polls
+# status. The resolve endpoint the phone actually taps is deliberately
+# Tier 0 (no bearer auth) -- Cloudflare strips Authorization headers on the
+# way through the tunnel, so a token-gated endpoint would never work from a
+# phone that isn't on the tailnet. Security here comes from the id itself:
+# a UUID4 is 122 bits of entropy, functionally a magic link, and the DB only
+# accepts one resolution per id (already-resolved or expired requests can't
+# be re-resolved -- see resolve_approval_request()'s WHERE clause).
+# ---------------------------------------------------------------------------
+
+class ApprovalRequestCreate(BaseModel):
+    command_pattern: str
+    command: str
+    reasoning: str = ""
+    ttl_seconds: float = 600.0
+
+
+@app.post("/admin/approval-requests", status_code=201)
+async def create_approval_request_route(
+    body: ApprovalRequestCreate,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    request_id = str(uuid.uuid4())
+    result = db.create_approval_request(
+        request_id, body.command_pattern, body.command,
+        reasoning=body.reasoning, ttl_seconds=body.ttl_seconds,
+    )
+    return JSONResponse(result, status_code=201)
+
+
+@app.get("/admin/approval-requests/{request_id}")
+async def get_approval_request_route(
+    request_id: str,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    row = db.get_approval_request(request_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="approval request not found")
+    return JSONResponse(row)
+
+
+@app.get("/admin/approval-requests/{request_id}/resolve")
+async def resolve_approval_request_route(
+    request_id: str,
+    action: str = Query(..., pattern="^(allow|deny)$"),
+) -> JSONResponse:
+    """Tier 0 -- deliberately no auth dependency. See module comment above."""
+    row = db.resolve_approval_request(request_id, action)
+    if row is None:
+        raise HTTPException(status_code=404, detail="approval request not found")
+    return JSONResponse(row)
+
+
+@app.get("/admin/approval-requests")
+async def list_approval_requests_route(
+    command_pattern: Optional[str] = Query(default=None),
+    since_days: float = Query(default=7.0),
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Recent approvals for a pattern -- backs the frequency-promotion check.
+    If command_pattern is omitted, just reports the count for an empty
+    pattern (0) rather than erroring, since this is a convenience read, not
+    a mutation."""
+    since = time.time() - since_days * 86400
+    count = db.count_recent_approvals(command_pattern or "", since)
+    return JSONResponse({
+        "command_pattern": command_pattern,
+        "since_days": since_days,
+        "allowed_count": count,
+        "promotion_candidate": count > 2,
+    })
 
 
 # ---------------------------------------------------------------------------

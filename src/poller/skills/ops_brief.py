@@ -637,12 +637,23 @@ TREND_SYSTEM_PROMPT = (
 
 def _generate_trend_narrative(trend_prompt: str) -> str:
     """Generate trend analysis via LLM (Ollama-first, Anthropic fallback). Returns empty string on failure."""
+    # Explicit timeout override (2026-07-27): llm_generate()'s shared default
+    # (OLLAMA_TIMEOUT=60s in dispatch.env) was deliberately tuned from real
+    # p99/max data showing THIS call used to be reliably sub-minute -- see
+    # common/llm.py's generate() docstring. Under tonight's thermal/CPU
+    # pressure it's been missing that window on every single run (confirmed
+    # via journalctl: "Ollama unavailable, busy, or failed" -> deterministic
+    # fallback, every hour, while ep-advance's own separately-timed calls
+    # keep succeeding). Wiring this module's own already-declared
+    # OLLAMA_TIMEOUT=900 constant through explicitly, matching the pattern
+    # already used by aam_weekly_watch/dispatch_desk_memo/second_brain_*.
     return llm_generate(
         system=TREND_SYSTEM_PROMPT,
         prompt=trend_prompt,
         ollama_model=OLLAMA_MODEL,
         max_tokens=200,
         temperature=0.15,
+        timeout=OLLAMA_TIMEOUT,
     ) or ""
 
 
@@ -691,12 +702,15 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     )
 
     model_used = OLLAMA_MODEL
+    # Explicit timeout override (2026-07-27) -- see _generate_trend_narrative
+    # above for the full explanation. Same root cause, same fix.
     narrative = llm_generate(
         system=system,
         prompt=prompt_content,
         ollama_model=OLLAMA_MODEL,
         max_tokens=500,
         temperature=0.2,
+        timeout=OLLAMA_TIMEOUT,
     )
 
     if not narrative:

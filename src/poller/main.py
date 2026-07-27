@@ -1242,6 +1242,7 @@ async def main() -> None:
     db.init_db_v18()
     db.init_db_v19()
     db.init_db_v20()
+    db.init_db_v21()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

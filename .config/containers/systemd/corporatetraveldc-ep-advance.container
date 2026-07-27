@@ -26,4 +26,4 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=950
+TimeoutStartSec=1500

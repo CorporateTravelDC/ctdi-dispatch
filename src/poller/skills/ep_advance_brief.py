@@ -32,8 +32,8 @@ import sqlite3
 import time as _time
 from datetime import datetime, timezone, timedelta
 
-import httpx
-from common.ollama_lock import ollama_slot, OllamaBusyError
+from common.ollama_lock import OllamaBusyError
+from common.llm import wait_then_budget, ollama_post_with_retry
 import requests
 
 from common import config, db, ntfy_push as _ntfy
@@ -922,22 +922,33 @@ Keep total brief under 750 words. Threat posture first; bottom line last."""
 def _call_ollama(prompt: str) -> tuple[str, str] | None:
     if not OLLAMA_BASE_URL:
         return None
+    # Added 2026-07-27: bounded pause-aware readiness wait, carved out of
+    # OLLAMA_TIMEOUT rather than stacked on top -- see
+    # common/llm.py's wait_then_budget() for the full rationale (a
+    # governor thermal SIGSTOP otherwise burns the entire 1200s timeout
+    # silently before falling back). This call bypasses common.llm.generate()
+    # (its own direct httpx path, kept for ep-advance's larger prompt/token
+    # budget), so it routes its wait through the same shared helper instead
+    # of duplicating the mechanism.
+    generate_timeout = wait_then_budget(OLLAMA_TIMEOUT)
+    if generate_timeout is None:
+        log.info("ep-advance: Ollama not ready after bounded readiness wait (governor thermal pause?)")
+        return None
     # priority="report" (2026-07-26): full advance brief, not a hot alert --
     # backs off immediately if a hot VIP/TFR call is pending, retries next
     # scheduled cycle. See common/ollama_lock.py.
     try:
-        with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
-            resp = httpx.post(
-                f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-                json={
-                    "model":  OLLAMA_MODEL,
-                    "system": SYSTEM_PROMPT,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"num_predict": 750, "temperature": 0.15},
-                },
-                timeout=OLLAMA_TIMEOUT,
-            )
+        resp = ollama_post_with_retry(
+            {
+                "model":  OLLAMA_MODEL,
+                "system": SYSTEM_PROMPT,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": 750, "temperature": 0.15},
+            },
+            timeout=generate_timeout,
+            priority="report",
+        )
         resp.raise_for_status()
         narrative = resp.json().get("response", "").strip()
     except OllamaBusyError as exc:
@@ -1090,20 +1101,25 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
     """Generate the 12h trend narrative via Ollama. Returns empty string on failure."""
     if not OLLAMA_BASE_URL:
         return ""
+    # Added 2026-07-27: bounded pause-aware readiness wait -- see
+    # common/llm.py's wait_then_budget() and _call_ollama() above.
+    generate_timeout = wait_then_budget(OLLAMA_TIMEOUT)
+    if generate_timeout is None:
+        log.info("ep-advance: trend narrative Ollama not ready after bounded readiness wait (governor thermal pause?)")
+        return ""
     # priority="report" (2026-07-26): see common/ollama_lock.py.
     try:
-        with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
-            resp = httpx.post(
-                f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-                json={
-                    "model":  OLLAMA_MODEL,
-                    "system": TREND_SYSTEM_PROMPT_EP,
-                    "prompt": trend_prompt,
-                    "stream": False,
-                    "options": {"num_predict": 260, "temperature": 0.15},
-                },
-                timeout=OLLAMA_TIMEOUT,
-            )
+        resp = ollama_post_with_retry(
+            {
+                "model":  OLLAMA_MODEL,
+                "system": TREND_SYSTEM_PROMPT_EP,
+                "prompt": trend_prompt,
+                "stream": False,
+                "options": {"num_predict": 260, "temperature": 0.15},
+            },
+            timeout=generate_timeout,
+            priority="report",
+        )
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
     except OllamaBusyError as exc:

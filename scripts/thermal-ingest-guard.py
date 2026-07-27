@@ -121,6 +121,59 @@ def feed_ctl(action, target):
     )
 
 
+def _feed_is_active(feed):
+    """True if the given ingest feed's systemd --user unit is active."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", f"corporatetraveldc-ingest-{feed}.service"],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _reconcile_stale_tier(tier, tier1_feeds, tier2_feeds):
+    """Correct a stale persisted tier after a host reboot.
+
+    A reboot brings every enabled Quadlet back up regardless of what tier
+    this guard last recorded (podman/systemd don't know about our JSON
+    state file). Confirmed live 2026-07-26: after the Argon->DIY case
+    swap + reboot, all 7 ingest containers came back up normally, but
+    thermal_ingest_guard_state.json still said tier=2 from before the
+    reboot -- which then silently blocked BOTH the trip logic (tier<2/
+    tier<1 checks skip because tier was already "2") AND the resume logic
+    (temp wasn't below resume_temp yet), leaving the guard inert instead
+    of either shedding or restoring correctly. If the feeds implied by the
+    persisted tier are actually running, the tier is stale -- reset to 0
+    so this run's trip/resume logic evaluates fresh against the real
+    container state instead of trusting last-known bookkeeping blindly.
+    """
+    if tier <= 0:
+        return tier
+    check_feeds = [f.strip() for f in tier1_feeds.split(",") if f.strip()]
+    if tier >= 2:
+        check_feeds += [f.strip() for f in tier2_feeds.split(",") if f.strip()]
+    # Fixed 2026-07-27: was all(...) -- required EVERY tier-implicated feed
+    # to be running before treating the tier as stale. That silently broke
+    # in exactly the case this function exists for: an external intervention
+    # (a manual `systemctl start` bypassing feed_ctl/this guard's own state
+    # tracking -- e.g. a cooldown-restore script) brought most feeds back up
+    # while one unrelated feed (itws) stayed down for its own separate
+    # reason. all() then never matched, tier stayed stuck at 2 forever, and
+    # since the trip logic only fires on tier<N transitions, the guard could
+    # neither re-shed (tier already "2") nor resume (temp never held below
+    # resume_temp long enough) -- fully inert in both directions while temps
+    # climbed. any() is the correct invariant: if tier=N is accurate, NONE of
+    # the N-implicated feeds should be running; if even one is up, the
+    # record is stale regardless of what any other feed is doing.
+    active_feeds = [f for f in check_feeds if _feed_is_active(f)]
+    if active_feeds:
+        print(f"{LOG_PREFIX} stale tier={tier} detected ({','.join(active_feeds)} actually running) -- resetting to 0")
+        return 0
+    return tier
+
+
 def _host_ntfy_base(cfg):
     """NTFY_URL in dispatch.env is written for pasta:--map-gw CONTAINERS
     (host.containers.internal alias) -- this script runs directly on the
@@ -164,6 +217,10 @@ def main():
     temp = get_temp_c()
     state = load_state()
     tier = state.get("tier", 0)
+    tier = _reconcile_stale_tier(tier, tier1_feeds, tier2_feeds)
+    if tier != state.get("tier", 0):
+        state = {"tier": tier, "below_resume_since": None}
+        save_state(state)
     now = time.time()
 
     print(f"{LOG_PREFIX} temp={temp:.2f}C tier={tier}")

@@ -72,9 +72,22 @@ elif [[ "${ollama_state}" == *T* ]]; then
 fi
 
 # --- Is the target model currently resident? ---------------------------------
+# Fixed 2026-07-27: this check was comparing against a bare, closing-quote
+# terminated model name (\"${MODEL}\"), but Ollama's /api/ps ALWAYS returns
+# name:tag (e.g. "corporatetraveldc-pi5-osint:latest"), never a bare name.
+# That meant the closing quote never immediately followed the name and this
+# grep could NEVER match -- is_resident was permanently stuck at 0 no matter
+# what, so this script fired an uncapped /api/generate warm-up call on
+# EVERY single 2-minute cycle, forever, even while the model was already
+# pinned resident (confirmed live: /api/ps showed expires_at 2318 -- pinned
+# -- while this exact grep still reported "not resident"). Combined with no
+# num_predict cap on that call (fixed below) and ollama.service's -np 1
+# (single processing slot, no concurrency), this was the actual mechanism
+# behind llama-server being pegged at ~95-190% CPU for its entire ~10.5h
+# uptime today -- not SWIM ingest, not brief schedules.
 resident="$(curl -sf --max-time 5 "http://${OLLAMA_HOST}/api/ps" 2>/dev/null)"
 is_resident=0
-if [[ -n "${resident}" ]] && grep -q "\"${MODEL}\"" <<< "${resident}"; then
+if [[ -n "${resident}" ]] && grep -qE "\"name\":\"${MODEL}(:[A-Za-z0-9_.-]+)?\"" <<< "${resident}"; then
     is_resident=1
 fi
 
@@ -98,8 +111,17 @@ if (( is_resident == 1 )); then
 fi
 
 log "warn" "${MODEL} not resident and ollama is running -- re-pinning with keep_alive=-1"
+# Fixed 2026-07-27: no num_predict cap meant this warm-up (a bare "warm"
+# prompt, no stop condition) could run essentially unbounded. WARM_TIMEOUT
+# only bounds the CLIENT's curl wait -- it does not cancel generation
+# server-side on timeout. With the residency-check bug above making this
+# fire every single cycle regardless of actual state, and ollama.service's
+# -np 1 (one processing slot), each uncapped call queued behind whatever
+# was already stuck, building an ever-growing backlog. num_predict=4 is
+# plenty to force residency -- generating real content was never this
+# call's job.
 warm_out="$(curl -sf --max-time "${WARM_TIMEOUT}" "http://${OLLAMA_HOST}/api/generate" \
-    -d "{\"model\":\"${MODEL}\",\"prompt\":\"warm\",\"stream\":false,\"keep_alive\":-1}" 2>&1)"
+    -d "{\"model\":\"${MODEL}\",\"prompt\":\"warm\",\"stream\":false,\"keep_alive\":-1,\"options\":{\"num_predict\":4}}" 2>&1)"
 rc=$?
 if (( rc == 0 )); then
     log "info" "re-pinned ${MODEL} successfully"
