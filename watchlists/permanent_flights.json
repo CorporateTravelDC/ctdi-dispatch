@@ -1,26 +1,6 @@
 {
   "watchlist": [
     {
-      "id": "perm-flight-ual1573",
-      "identifier": "UAL1573",
-      "origin": "KLAX",
-      "destination": "KIAD",
-      "route_name": "United LAX-IAD",
-      "notes": "Bellweather flight (replaces UAL357, swapped 2026-07-22 -- UAL357 was pulled for persistently noisy TFMS TMI churn near IAD; note the same IAD-arrival flow-constraint noise is structural to ANY IAD-bound flight and may recur here too, mitigated by the 2026-07-22 per-constraint dedup fix). United mainline. LAX dep ~19:49 EDT/16:49 PDT / IAD arr ~00:31 EDT.",
-      "added": "2026-07-22",
-      "added_by": "operator",
-      "days_active": [
-        "Mon",
-        "Tue",
-        "Wed",
-        "Thu",
-        "Fri",
-        "Sat",
-        "Sun"
-      ],
-      "sister_flight": null
-    },
-    {
       "id": "perm-flight-ba293",
       "identifier": "BA293",
       "origin": "EGLL",
@@ -121,7 +101,7 @@
       "identifier": "98-0001",
       "origin": "KADW",
       "route_name": "VC-25A",
-      "notes": "AF2/SAM — VP Vance and Rubio. Hex: adfeb7",
+      "notes": "AF2/SAM \u2014 VP Vance and Rubio. Hex: adfeb7",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [
@@ -140,7 +120,7 @@
       "identifier": "05-0730",
       "origin": "KADW",
       "route_name": "C-40C",
-      "notes": "SPAR/DoS — normally Dept of State. Hex: ae17ef",
+      "notes": "SPAR/DoS \u2014 normally Dept of State. Hex: ae17ef",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [
@@ -197,7 +177,7 @@
       "identifier": "af3ff9",
       "origin": "KADW",
       "route_name": "E4B/E4C",
-      "notes": "Nightwatch — ADW/Offutt. Tail unknown — hex lookup pending.",
+      "notes": "Nightwatch \u2014 ADW/Offutt. Tail unknown \u2014 hex lookup pending.",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [
@@ -216,7 +196,7 @@
       "identifier": "ac5801",
       "origin": "KADW",
       "route_name": "VC-25C",
-      "notes": "New AF2 Trainer. Tail unknown — hex lookup pending.",
+      "notes": "New AF2 Trainer. Tail unknown \u2014 hex lookup pending.",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [
@@ -235,7 +215,7 @@
       "identifier": "ac544a",
       "origin": "KADW",
       "route_name": "VC-25C",
-      "notes": "AF2 New Trainer. Tail unknown — hex lookup pending.",
+      "notes": "AF2 New Trainer. Tail unknown \u2014 hex lookup pending.",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [
@@ -254,7 +234,7 @@
       "identifier": "3c4b24",
       "origin": "KADW",
       "route_name": "VC-25C",
-      "notes": "New AF1 Trainer. Tail unknown — hex lookup pending.",
+      "notes": "New AF1 Trainer. Tail unknown \u2014 hex lookup pending.",
       "added": "2026-05-29",
       "added_by": "operator",
       "days_active": [

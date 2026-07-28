@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -142,15 +143,80 @@ async def add_flight_watchlist(
     entry_id = _make_id("flight", ident)
     now = _now_iso()
 
+    # 2026-07-28: auto-resolve tail -> hex whenever a registration is given
+    # and no hex_id was supplied directly. Same dual-registry logic as
+    # GET /api/v1/aircraft/{identifier} (FAA authoritative for US N-numbers,
+    # OpenSky fallback/cross-check) -- operator request: "for FDPS departures
+    # with tail numbers let's always resolve it" so a provisional tail
+    # doesn't sit un-trackable on airplanes.live just because nobody
+    # remembered to look it up by hand.
+    resolved_hex_id = (body.hex_id or "").strip() or None
+    resolved_registration = (body.registration or "").strip() or None
+    if resolved_registration and not resolved_hex_id:
+        try:
+            faa_rec = db.faa_lookup_by_n_number(resolved_registration)
+            osky_rec = db.opensky_lookup_by_registration(resolved_registration)
+            faa_hex = (faa_rec.get("mode_s_hex") or "").lower() if faa_rec else None
+            osky_hex = (osky_rec.get("icao24") or "").lower() if osky_rec else None
+            resolved_hex_id = faa_hex or osky_hex or None
+        except Exception:
+            # Registry lookup is a nice-to-have at add time, never block
+            # the watchlist add itself if it errors.
+            resolved_hex_id = None
+
     # 2026-07-27: cross-check FDPS (FAA FIXM flight-plan feed, see
     # /api/v1/flightplan/{callsign}) for this callsign. If the caller didn't
     # supply origin/destination, backfill from FDPS's filed flight plan
     # rather than leaving the entry with no route at all -- this is the
     # FAA's own filed plan, not a guess. Never overwrites an origin/
     # destination the caller actually supplied.
+    #
+    # 2026-07-28: get_flight_plan_by_callsign() only matches on the airline
+    # code embedded in `ident` itself -- for a codeshare/regional-operated
+    # flight (e.g. "UAL4044" marketed by United, actually flown as "ASH4044"
+    # by Mesa/United Express) FDPS carries the record under the OPERATING
+    # carrier's code, so the direct-identifier lookup silently returns None
+    # even though FAA absolutely has a live flight plan for this flight.
+    # Fall back to a flight_num (+ origin, if known) match across all
+    # carriers when the direct lookup misses -- this is what actually
+    # caught ASH4044/ASH4056 for UAL4044/UAL4056 during manual checking.
     fdps_plan = db.get_flight_plan_by_callsign(ident)
+    if not fdps_plan:
+        fallback_origin = (body.origin or "").strip().upper() or None
+        fdps_plan = db.get_flight_plan_by_flight_num(ident, origin=fallback_origin)
     fdps_origin = (fdps_plan or {}).get("origin")
     fdps_dest = (fdps_plan or {}).get("destination")
+    # "Confirmed" means FAA's own feed shows this exact flight as actively
+    # filed/moving right now -- "proposed" (not yet filed), "cancelled",
+    # "dropped", or no record at all are all fdps_confirmed=False, just
+    # with a different reason visible in last_fdps_status.
+    fdps_confirmed = bool(fdps_plan) and fdps_plan.get("status") == "active"
+
+    # 2026-07-28 (codeshare_map Phase 1): the flight_num fallback above only
+    # fires when the direct callsign lookup missed -- which means, whenever
+    # it DOES find a plan, FDPS just confirmed this physical flight is filed
+    # under a different carrier code than the marketing identifier the
+    # caller gave us. That's a live, real-world marketing<->operating
+    # confirmation -- record it instead of discarding it, so the mapping
+    # accumulates on its own from ordinary dispatch use.
+    if fdps_plan:
+        _mkt_match = re.match(r"^([A-Za-z]+)(\d+[A-Za-z]?)$", ident.strip())
+        if _mkt_match:
+            _marketing_carrier, _marketing_num = _mkt_match.group(1).upper(), _mkt_match.group(2)
+            _operating_carrier = (fdps_plan.get("airline") or "").upper() or None
+            if _operating_carrier and _operating_carrier != _marketing_carrier:
+                try:
+                    db.upsert_codeshare_mapping(
+                        marketing_carrier=_marketing_carrier,
+                        marketing_flight_num=_marketing_num,
+                        operating_carrier=_operating_carrier,
+                        operating_flight_num=fdps_plan.get("flight_num"),
+                        origin=fdps_origin,
+                        destination=fdps_dest,
+                        source="fdps_fallback_match",
+                    )
+                except Exception:
+                    pass
 
     entry = {
         "id": entry_id,
@@ -167,12 +233,19 @@ async def add_flight_watchlist(
         "added_at": now,
         "added_by": body.added_by,
         "notes": body.notes,
-        "hex_id": (body.hex_id or "").strip() or None,
-        "registration": (body.registration or "").strip() or None,
+        "hex_id": resolved_hex_id,
+        "registration": resolved_registration,
         "last_event_at": None,
         "last_event_summary": None,
     }
     db.upsert_watchlist_entry(entry)
+
+    # Persist the FDPS read at add-time (previously response-only, see
+    # docstring on update_watchlist_fdps_confirmation for why this matters --
+    # a GET on this entry a minute later used to show no trace of what FDPS
+    # said when it was added).
+    fdps_status_value = (fdps_plan or {}).get("status")
+    db.update_watchlist_fdps_confirmation(entry_id, fdps_status_value, now)
 
     origin = entry["origin"] or ""
     dest = entry["destination"] or ""
@@ -194,18 +267,23 @@ async def add_flight_watchlist(
     # noticed the watchlist-add push for UAL2670 had no hex in it.
     id_tag = f" [{entry['hex_id']}]" if entry["hex_id"] else ""
     reg_tag = f" {entry['registration']}" if entry["registration"] else ""
+    # 2026-07-28: plain yes/no FDPS tag on the push itself, not just buried
+    # in the API response -- operator request, so it is glanceable on the
+    # phone the moment the watchlist-add push lands, same as the hex tag.
+    fdps_tag = " FDPS:Y" if fdps_confirmed else " FDPS:N"
 
     _fire_ntfy_dual(
         domain_topic="flight-alerts",
         title=f"Watching {ident}{id_tag} {route}",
-        detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}",
-        dispatch_body=f"Watchlist: {ident}{id_tag} added (transient)",
+        detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}{fdps_tag}",
+        dispatch_body=f"Watchlist: {ident}{id_tag} added (transient){fdps_tag}",
         priority=2,
     )
 
     response = dict(entry)
+    response["fdps_confirmed"] = fdps_confirmed
     if fdps_plan:
-        response["fdps_confirmed"] = {
+        response["fdps_detail"] = {
             "aircraft_type": fdps_plan.get("aircraft_type"),
             "status": fdps_plan.get("status"),
             "origin_used": fdps_origin is not None and not body.origin,

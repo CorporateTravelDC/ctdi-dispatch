@@ -18,6 +18,7 @@ COPY src/runner/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/runner/main.py .
+COPY src/shared/ ./shared/
 COPY --from=frontend-builder /static ./static
 
 ENV STATIC_DIR=/app/static

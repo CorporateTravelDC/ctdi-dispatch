@@ -682,6 +682,24 @@ def insert_amtrak_status(trains_json: str, delay_summary: str) -> None:
             INSERT INTO amtrak_status (trains_json, delay_summary)
             VALUES (?, ?)
         """, (trains_json, delay_summary))
+        # 2026-07-28 (train_events parity with flight_events): also unpack
+        # this same payload into structured rows so it becomes mineable the
+        # same way flight_events is, instead of sitting as an opaque JSON
+        # blob only ever read back whole. Best-effort -- a parse issue here
+        # must never break the primary blob insert above, which every
+        # existing caller (poller fetcher, ingest push path, amtrak_tracker)
+        # depends on unconditionally succeeding.
+        try:
+            for row in _parse_trains_json_to_rows(trains_json):
+                c.execute("""
+                    INSERT INTO train_events
+                    (train_number, train_name, route_name, direction,
+                     origin, destination, station_code, station_name,
+                     scheduled_time, estimated_time, status, delay_minutes, platform)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, row)
+        except Exception:
+            pass
 
 
 def get_latest_amtrak_status() -> dict | None:
@@ -1392,9 +1410,14 @@ def get_watchlist_entries(entry_type: str | None = None,
     """Return active watchlist entries (not yet auto_remove_at expired)."""
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with conn() as c:
+        # FIX (2026-07-28): same datetime()-normalization fix as
+        # sweep_expired_watchlist_entries() -- see that function's
+        # docstring for the full root cause (raw TEXT comparison between
+        # two different timestamp formats, space-vs-'T' separator sorting
+        # incorrectly in ASCII).
         base = """
             SELECT * FROM watchlist_entries
-            WHERE (auto_remove_at IS NULL OR auto_remove_at > ?)
+            WHERE (auto_remove_at IS NULL OR datetime(auto_remove_at) > datetime(?))
         """
         params: list = [now_iso]
         if entry_type:
@@ -1445,14 +1468,58 @@ def update_watchlist_last_event(entry_id: str, summary: str,
         """, (event_at, summary, entry_id))
 
 
+def update_watchlist_fdps_confirmation(entry_id: str, status: str | None,
+                                       updated_at: str) -> None:
+    """Persist FDPS flight-plan status onto a watchlist entry at add-time.
+
+    2026-07-28: added_at-time FDPS resolution was previously response-only
+    (see web/routes/watchlist.py add_flight_watchlist's transient
+    "fdps_confirmed" response block) -- it was never written to the
+    last_fdps_status/last_fdps_updated_at columns, so a fresh GET on the
+    same entry a minute later showed no trace of what FDPS said at add
+    time. Operator request: "for FDPS departures with tail numbers let's
+    always resolve it and then have a FDPS yes/no confirmation in the
+    watchlist when it's added" -- this makes that confirmation durable,
+    not just a one-shot response field.
+    """
+    with conn() as c:
+        c.execute("""
+            UPDATE watchlist_entries
+            SET last_fdps_status=?, last_fdps_updated_at=?
+            WHERE id=?
+        """, (status, updated_at, entry_id))
+
+
 def sweep_expired_watchlist_entries() -> list[dict]:
-    """Remove transient entries past auto_remove_at. Returns removed entries."""
+    """Remove transient entries past auto_remove_at. Returns removed entries.
+
+    FIX (2026-07-28): auto_remove_at is stored in whatever format the caller
+    supplied ("YYYY-MM-DD HH:MM:SS", space-separated, no zone) while now_iso
+    here is ISO8601 ("YYYY-MM-DDTHH:MM:SSZ"). SQLite has no native datetime
+    type, so this was a plain TEXT comparison -- and since ' ' (0x20) sorts
+    before 'T' (0x54) in ASCII, any auto_remove_at on the *same calendar
+    date* as now always compared as "less than" now_iso, REGARDLESS of the
+    actual hour. Result: every same-day transient entry expired on the very
+    next sweep tick after insertion (observed: two live client flights
+    wiped within seconds/hours of being added, nowhere near their real
+    auto_remove_at). Root-caused via direct DB inspection + operator
+    noticing a "4 hours off" pattern in the push text (a real, separate
+    UTC/local labeling issue -- see the watchlist add-flight route -- but
+    NOT what was actually deleting these rows; that was this format
+    mismatch, which fired within seconds regardless of hour).
+
+    Fix: wrap both sides in SQLite's datetime() so the comparison happens
+    on normalized values instead of raw text -- datetime() accepts both
+    "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM:SSZ" and returns the same
+    canonical form for both, so a real chronological comparison happens
+    instead of an accidental ASCII one.
+    """
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with conn() as c:
         rows = c.execute("""
             SELECT * FROM watchlist_entries
             WHERE tier='transient' AND auto_remove_at IS NOT NULL
-              AND auto_remove_at <= ?
+              AND datetime(auto_remove_at) <= datetime(?)
         """, (now_iso,)).fetchall()
         expired = [dict(r) for r in rows]
         if expired:
@@ -3020,6 +3087,50 @@ def get_flight_plan_by_callsign(callsign: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_flight_plan_by_flight_num(callsign_or_number: str,
+                                  origin: str | None = None) -> dict | None:
+    """Fallback FDPS match by bare flight number (+ optional origin),
+    ignoring the airline code entirely.
+
+    2026-07-28: get_flight_plan_by_callsign() only matches the airline code
+    embedded in the given identifier. That breaks for codeshare/regional-
+    operated flights -- a flight marketed as "UAL4044" (United) is actually
+    flown and filed with FAA as "ASH4044" (Mesa Airlines, operating as
+    United Express). The marketing carrier's code never appears in FDPS at
+    all for these, so the direct lookup always returns None even when FAA
+    has a completely live flight plan on file. Confirmed this the hard way
+    2026-07-28 checking UAL4044/UAL4056 by hand (both filed under "ASH").
+
+    Strips any leading letters from `callsign_or_number` to get the bare
+    number, then matches flight_num alone. `origin` narrows the match when
+    given (recommended -- flight numbers get reused across carriers and
+    routes on the same day, e.g. 4044 was seen as SWA/ENY/ASH on 2026-07-28
+    alone), but is optional since callers may not have it yet.
+    """
+    import re
+    m = re.match(r"^[A-Za-z]*(\d+[A-Za-z]?)$", callsign_or_number.strip())
+    if not m:
+        return None
+    flight_num = m.group(1)
+
+    with conn() as c:
+        if origin:
+            row = c.execute("""
+                SELECT * FROM flight_events
+                WHERE flight_num = ? AND origin = ?
+                ORDER BY (status != 'cancelled') DESC, updated_at DESC
+                LIMIT 1
+            """, (flight_num, origin.strip().upper())).fetchone()
+        else:
+            row = c.execute("""
+                SELECT * FROM flight_events
+                WHERE flight_num = ?
+                ORDER BY (status != 'cancelled') DESC, updated_at DESC
+                LIMIT 1
+            """, (flight_num,)).fetchone()
+        return dict(row) if row else None
+
+
 # ── v23: dedicated FDPS/FIDS state tracking (fixes 2026-07-27 alert-spam bug) ─
 #
 # last_event_summary is a single shared field written by EVERY watchlist
@@ -3116,6 +3227,531 @@ def init_db_v24() -> None:
             stmt = stmt.strip()
             if stmt:
                 c.execute(stmt)
+
+
+SCHEMA_V25 = """
+-- 2026-07-28: codeshare_map -- marketing<->operating carrier/flight-number
+-- pairings. Operator request: infer airline flight-numbering blocks and
+-- route-locks the same way we already infer aircraft identity (FAA +
+-- OpenSky), starting from real confirmed pairs rather than a hand-authored
+-- table someone has to keep current by hand. Seeded opportunistically by
+-- add_flight_watchlist's FDPS flight_num-fallback match (see
+-- web/routes/watchlist.py) -- every time that fallback fires, it has just
+-- proven a marketing identifier and an FAA-filed operating identifier are
+-- the same physical flight, live, in production. NULL marketing_flight_num
+-- is a valid, meaningful state (carrier-level-only signal, e.g. a future
+-- AeroAPI codeshares_iata capture) -- lookup/upsert logic must use IS,
+-- not =, when matching on it.
+CREATE TABLE IF NOT EXISTS codeshare_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    marketing_carrier TEXT NOT NULL,
+    marketing_flight_num TEXT,
+    operating_carrier TEXT,
+    operating_flight_num TEXT,
+    origin TEXT,
+    destination TEXT,
+    confidence INTEGER DEFAULT 1,
+    source TEXT,
+    first_seen_at TEXT,
+    last_confirmed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_codeshare_marketing
+    ON codeshare_map(marketing_carrier, marketing_flight_num);
+CREATE INDEX IF NOT EXISTS idx_codeshare_operating
+    ON codeshare_map(operating_carrier, operating_flight_num);
+"""
+
+
+def init_db_v25() -> None:
+    """Apply v25 schema -- codeshare_map. See SCHEMA_V25 comment above."""
+    with conn() as c:
+        for stmt in SCHEMA_V25.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
+
+
+def upsert_codeshare_mapping(marketing_carrier: str, marketing_flight_num: str | None,
+                              operating_carrier: str | None, operating_flight_num: str | None,
+                              origin: str | None, destination: str | None,
+                              source: str) -> None:
+    """Record or reinforce a marketing<->operating pairing. Matches on
+    IS (not =) throughout since marketing_flight_num/operating_carrier are
+    legitimately NULL for coarse, carrier-level-only signals -- SQLite\'s
+    UNIQUE index treats every NULL as distinct, so a plain INSERT ... ON
+    CONFLICT would silently accumulate duplicate rows for those; this
+    explicit SELECT-then-INSERT/UPDATE avoids that."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    marketing_carrier = (marketing_carrier or "").upper() or None
+    operating_carrier = (operating_carrier or "").upper() or None
+    with conn() as c:
+        existing = c.execute("""
+            SELECT id FROM codeshare_map
+            WHERE marketing_carrier IS ? AND marketing_flight_num IS ?
+              AND operating_carrier IS ?
+        """, (marketing_carrier, marketing_flight_num, operating_carrier)).fetchone()
+        if existing:
+            c.execute("""
+                UPDATE codeshare_map
+                SET confidence = confidence + 1,
+                    last_confirmed_at = ?,
+                    origin = COALESCE(?, origin),
+                    destination = COALESCE(?, destination),
+                    operating_flight_num = COALESCE(?, operating_flight_num)
+                WHERE id = ?
+            """, (now, origin, destination, operating_flight_num, existing["id"]))
+        else:
+            c.execute("""
+                INSERT INTO codeshare_map
+                (marketing_carrier, marketing_flight_num, operating_carrier,
+                 operating_flight_num, origin, destination, confidence,
+                 source, first_seen_at, last_confirmed_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """, (marketing_carrier, marketing_flight_num, operating_carrier,
+                  operating_flight_num, origin, destination, source, now, now))
+
+
+def get_codeshare_mapping_by_marketing(marketing_carrier: str, marketing_flight_num: str,
+                                        include_zero_confidence: bool = False) -> list[dict]:
+    with conn() as c:
+        q = """
+            SELECT * FROM codeshare_map
+            WHERE marketing_carrier = ? AND marketing_flight_num = ?
+        """ + ("" if include_zero_confidence else " AND confidence > 0") + """
+            ORDER BY confidence DESC
+        """
+        rows = c.execute(q, ((marketing_carrier or "").upper(), marketing_flight_num)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_codeshare_mapping_by_operating(operating_carrier: str, operating_flight_num: str,
+                                        include_zero_confidence: bool = False) -> list[dict]:
+    with conn() as c:
+        q = """
+            SELECT * FROM codeshare_map
+            WHERE operating_carrier = ? AND operating_flight_num = ?
+        """ + ("" if include_zero_confidence else " AND confidence > 0") + """
+            ORDER BY confidence DESC
+        """
+        rows = c.execute(q, ((operating_carrier or "").upper(), operating_flight_num)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def decay_stale_codeshare_mappings(stale_after_days: int = 90, decay_amount: int = 1) -> dict:
+    """Phase 3: periodic maintenance sweep for codeshare_map. Any entry not
+    reconfirmed (see upsert_codeshare_mapping) in `stale_after_days` days
+    loses `decay_amount` confidence, floored at 0. A mapping that reaches 0
+    is not deleted -- the historical record stays -- but
+    get_codeshare_mapping_by_marketing/by_operating exclude it by default
+    (include_zero_confidence=True overrides), so a stale/likely-wrong
+    pairing stops being trusted automatically without erasing the fact it
+    was once observed. Intended to run on a schedule (12-24h, alongside
+    whatever second-brain ingestion cadence ends up calling the analyze_*
+    mining functions) -- not wired to a timer yet as of 2026-07-28, this is
+    the callable primitive."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           time.gmtime(time.time() - stale_after_days * 86400))
+    with conn() as c:
+        stale = c.execute("""
+            SELECT id, marketing_carrier, marketing_flight_num, operating_carrier,
+                   operating_flight_num, confidence, last_confirmed_at
+            FROM codeshare_map
+            WHERE datetime(last_confirmed_at) < datetime(?) AND confidence > 0
+        """, (cutoff,)).fetchall()
+
+        decayed = []
+        zeroed = []
+        for row in stale:
+            new_conf = max(0, row["confidence"] - decay_amount)
+            c.execute("UPDATE codeshare_map SET confidence = ? WHERE id = ?",
+                     (new_conf, row["id"]))
+            entry = {
+                "marketing_carrier": row["marketing_carrier"],
+                "marketing_flight_num": row["marketing_flight_num"],
+                "operating_carrier": row["operating_carrier"],
+                "operating_flight_num": row["operating_flight_num"],
+                "old_confidence": row["confidence"],
+                "new_confidence": new_conf,
+                "last_confirmed_at": row["last_confirmed_at"],
+            }
+            decayed.append(entry)
+            if new_conf == 0:
+                zeroed.append(entry)
+
+    return {
+        "stale_after_days": stale_after_days,
+        "checked": len(stale),
+        "decayed": decayed,
+        "zeroed_out": zeroed,
+        "generated_at": now,
+    }
+
+
+def analyze_flight_number_patterns(min_samples: int = 5, dominance_threshold: float = 0.85) -> dict:
+    """Phase 2 mining over flight_events (30-day live window, operating-
+    carrier data only -- flight_events is FDPS/FIXM, it has never carried a
+    marketing code, see get_flight_plan_by_flight_num\'s docstring). Produces:
+    (a) route_locks -- (airline, flight_num) pairs where one origin/dest
+        pair dominates at or above `dominance_threshold` across at least
+        `min_samples` observations;
+    (b) block_histogram -- per-airline flight-number-range (bucketed by
+        1000) observation counts, for spotting mainline-vs-regional-block
+        numbering conventions.
+    Computed on demand -- flight_events is retention-capped at 30 days live
+    (see flight_events_retention_archival_20260727), so a full scan stays
+    cheap. No cron/materialization needed yet; revisit if this gets slow.
+    """
+    from collections import defaultdict, Counter
+
+    with conn() as c:
+        rows = c.execute("""
+            SELECT airline, flight_num, origin, destination
+            FROM flight_events
+            WHERE airline IS NOT NULL AND flight_num IS NOT NULL
+        """).fetchall()
+
+    by_key = defaultdict(Counter)
+    for r in rows:
+        by_key[(r["airline"], r["flight_num"])][(r["origin"], r["destination"])] += 1
+
+    route_locks = []
+    for (airline, flight_num), counter in by_key.items():
+        total = sum(counter.values())
+        if total < min_samples:
+            continue
+        top_route, top_count = counter.most_common(1)[0]
+        dominance = top_count / total
+        if dominance >= dominance_threshold:
+            route_locks.append({
+                "airline": airline, "flight_num": flight_num,
+                "origin": top_route[0], "destination": top_route[1],
+                "dominance": round(dominance, 3), "samples": total,
+            })
+    route_locks.sort(key=lambda x: -x["samples"])
+
+    block_hist: dict = {}
+    for (airline, flight_num), counter in by_key.items():
+        digits = "".join(ch for ch in flight_num if ch.isdigit())
+        if not digits:
+            continue
+        num = int(digits)
+        bucket = f"{(num // 1000) * 1000}-{(num // 1000) * 1000 + 999}"
+        block_hist.setdefault(airline, {}).setdefault(bucket, 0)
+        block_hist[airline][bucket] += sum(counter.values())
+
+    return {
+        "route_locks": route_locks,
+        "block_histogram": block_hist,
+        "sample_window": "flight_events live retention (30d)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+SCHEMA_V26 = """
+-- 2026-07-28: train_events + vessel_events -- structured historical
+-- accumulation tables, same role for trains/vessels that flight_events
+-- plays for flights. Operator request: bring these two verticals up to
+-- parity with the flight codeshare/route-lock work (same route-lock +
+-- schedule-drift analysis, applied to Amtrak trains and DC-area AIS
+-- vessel traffic -- water taxis, cruise ships).
+CREATE TABLE IF NOT EXISTS train_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    train_number    TEXT,
+    train_name      TEXT,
+    route_name      TEXT,
+    direction       TEXT,
+    origin          TEXT,
+    destination     TEXT,
+    station_code    TEXT,
+    station_name    TEXT,
+    scheduled_time  TEXT,
+    estimated_time  TEXT,
+    status          TEXT,
+    delay_minutes   INTEGER,
+    platform        TEXT,
+    fetched_at      REAL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_train_events_number
+    ON train_events(train_number, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_train_events_number_station
+    ON train_events(train_number, station_code, fetched_at);
+
+CREATE TABLE IF NOT EXISTS vessel_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mmsi        TEXT,
+    name        TEXT,
+    lat         REAL,
+    lon         REAL,
+    sog         REAL,
+    cog         REAL,
+    hdg         REAL,
+    nav_status  TEXT,
+    ship_type   TEXT,
+    source      TEXT,
+    fetched_at  REAL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_vessel_events_mmsi
+    ON vessel_events(mmsi, fetched_at);
+"""
+
+
+def init_db_v26() -> None:
+    """Apply v26 schema -- train_events + vessel_events. See SCHEMA_V26
+    comment above.
+
+    2026-07-28 fix: order matters here. SCHEMA_V26's CREATE INDEX on
+    station_code was failing with "no such column: station_code" on any
+    deployment that had already run the original (pre-fix) v26 -- CREATE
+    TABLE IF NOT EXISTS is a no-op against an existing table, so the new
+    columns never appeared, and the CREATE INDEX statement (which DOES run
+    unconditionally) then referenced a column that didn't exist yet. Fixed
+    by running CREATE TABLE statements first, then the ALTER TABLE guard,
+    then CREATE INDEX statements last -- so the columns always exist by
+    the time anything indexes them, whether this is a fresh install or a
+    pre-fix deployment catching up."""
+    with conn() as c:
+        for stmt in SCHEMA_V26.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt and stmt.upper().startswith("CREATE TABLE"):
+                c.execute(stmt)
+        # origin/destination/station_code/station_name were added to
+        # SCHEMA_V26 after some deployments already ran the original
+        # version -- ALTER TABLE ... ADD COLUMN for anyone whose
+        # train_events predates this fix. Guarded so re-running is a no-op.
+        existing_cols = {row["name"] for row in
+                         c.execute("PRAGMA table_info(train_events)").fetchall()}
+        for col in ("origin", "destination", "station_code", "station_name"):
+            if col not in existing_cols:
+                c.execute(f"ALTER TABLE train_events ADD COLUMN {col} TEXT")
+        for stmt in SCHEMA_V26.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt and stmt.upper().startswith("CREATE INDEX"):
+                c.execute(stmt)
+
+
+def _parse_trains_json_to_rows(trains_json: str) -> list[tuple]:
+    """Parse a trains_json blob (as already stored in amtrak_status) into
+    train_events row tuples. Best-effort -- an Amtrak feed schema change
+    should degrade to fewer populated columns, never raise.
+
+    2026-07-28 fix: field names confirmed against a real stored blob, not
+    guessed from the documented /api/v1/amtrak *response* contract (which
+    turned out to describe a different, reshaped view -- the raw ingest
+    blob uses train_num/route/origin/destination/station_code/station_name
+    /scheduled_dep/estimated_dep, not train_number/route_name/direction/
+    scheduled_time). Each array entry is this train's status AT ONE
+    STATION at fetch time (a multi-stop train appears once per stop it's
+    currently near), not one flat door-to-door record -- station_code
+    identifies which stop this particular row is about."""
+    import json as _json
+    try:
+        trains = _json.loads(trains_json)
+    except Exception:
+        return []
+    if not isinstance(trains, list):
+        return []
+    rows = []
+    for t in trains:
+        if not isinstance(t, dict):
+            continue
+        rows.append((
+            t.get("train_num"),
+            None,  # train_name -- no distinct field in the raw blob
+            t.get("route"),
+            None,  # direction -- not present in the raw blob
+            t.get("origin"),
+            t.get("destination"),
+            t.get("station_code"),
+            t.get("station_name"),
+            t.get("scheduled_dep") or t.get("scheduled_arr"),
+            t.get("estimated_dep") or t.get("estimated_arr"),
+            t.get("status"),
+            t.get("delay_minutes"),
+            None,  # platform -- not present in the raw blob
+        ))
+    return rows
+
+
+def backfill_train_events_from_amtrak_status(force: bool = False) -> int:
+    """One-time migration: unpack every existing amtrak_status.trains_json
+    blob into train_events rows, so train_events starts with amtrak_status's
+    full retained history instead of an empty table. Safe to call more than
+    once -- no-ops if train_events already has rows, since amtrak_status is
+    the entire source of truth here and re-running would just duplicate it.
+    Returns the number of rows inserted (0 if skipped)."""
+    with conn() as c:
+        existing = c.execute("SELECT COUNT(*) AS n FROM train_events").fetchone()
+        if existing and existing["n"] > 0 and not force:
+            return 0
+        if force:
+            c.execute("DELETE FROM train_events")
+        blobs = c.execute(
+            "SELECT trains_json FROM amtrak_status ORDER BY fetched_at ASC"
+        ).fetchall()
+        inserted = 0
+        for b in blobs:
+            for row in _parse_trains_json_to_rows(b["trains_json"]):
+                c.execute("""
+                    INSERT INTO train_events
+                    (train_number, train_name, route_name, direction,
+                     origin, destination, station_code, station_name,
+                     scheduled_time, estimated_time, status, delay_minutes, platform)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, row)
+                inserted += 1
+        return inserted
+
+
+def insert_vessel_event(mmsi: str, name, lat, lon, sog, cog, hdg,
+                         nav_status, ship_type, source: str) -> None:
+    with conn() as c:
+        c.execute("""
+            INSERT INTO vessel_events
+            (mmsi, name, lat, lon, sog, cog, hdg, nav_status, ship_type, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (mmsi, name, lat, lon, sog, cog, hdg, nav_status, ship_type, source))
+
+
+def analyze_train_patterns(min_samples: int = 5, drift_minutes_flag: int = 10) -> dict:
+    """train_events analog of analyze_flight_number_patterns. Per
+    train_number: dominant route_name/direction (Amtrak numbers are already
+    carrier-fixed, so this mostly confirms consistency rather than
+    discovering it the way the flight side does), plus schedule-time drift
+    -- mean scheduled time-of-day across the oldest third of samples vs the
+    newest third, flagged when the shift exceeds drift_minutes_flag.
+
+    Honest caveat: train_events only goes back as far as amtrak_status's
+    retained history (backfilled once via backfill_train_events_from_
+    amtrak_status). A real multi-year drift -- the 5:45->6:10 shuttle creep
+    the operator described -- needs years of data this system has not been
+    running long enough to have. This mechanism is real and starts
+    compounding a genuine baseline from today forward; it is not a 3-year
+    lookback on day one."""
+    import re as _re
+    from collections import defaultdict
+
+    def _time_of_day_minutes(ts):
+        if not ts:
+            return None
+        m = _re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", str(ts))
+        if not m:
+            return None
+        return int(m.group(1)) * 60 + int(m.group(2))
+
+    with conn() as c:
+        rows = c.execute("""
+            SELECT train_number, route_name, origin, destination,
+                   station_code, scheduled_time, fetched_at
+            FROM train_events
+            WHERE train_number IS NOT NULL
+            ORDER BY train_number, fetched_at ASC
+        """).fetchall()
+
+    by_train = defaultdict(list)
+    by_train_station = defaultdict(list)
+    for r in rows:
+        by_train[r["train_number"]].append(r)
+        by_train_station[(r["train_number"], r["station_code"])].append(r)
+
+    route_locks = []
+    for train_number, samples in by_train.items():
+        total = len(samples)
+        if total < min_samples:
+            continue
+        route_counts: dict = {}
+        for s in samples:
+            key = (s["route_name"], s["origin"], s["destination"])
+            route_counts[key] = route_counts.get(key, 0) + 1
+        top_route, top_count = max(route_counts.items(), key=lambda kv: kv[1])
+        dominance = top_count / total
+        route_locks.append({
+            "train_number": train_number, "route_name": top_route[0],
+            "origin": top_route[1], "destination": top_route[2],
+            "dominance": round(dominance, 3), "samples": total,
+        })
+
+    drift_flags = []
+    for (train_number, station_code), samples in by_train_station.items():
+        if not station_code:
+            continue
+        tod = [_time_of_day_minutes(s["scheduled_time"]) for s in samples]
+        tod = [t for t in tod if t is not None]
+        if len(tod) < min_samples:
+            continue
+        third = max(1, len(tod) // 3)
+        old_avg = sum(tod[:third]) / third
+        new_avg = sum(tod[-third:]) / third
+        shift = new_avg - old_avg
+        if abs(shift) >= drift_minutes_flag:
+            drift_flags.append({
+                "train_number": train_number,
+                "station_code": station_code,
+                "shift_minutes": round(shift, 1),
+                "old_avg_time_of_day_min": round(old_avg, 1),
+                "new_avg_time_of_day_min": round(new_avg, 1),
+                "samples": len(tod),
+            })
+
+    return {
+        "route_locks": route_locks,
+        "schedule_drift_flags": drift_flags,
+        "sample_window": "train_events (backfilled from amtrak_status history)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def analyze_vessel_patterns(min_samples: int = 5) -> dict:
+    """vessel_events analog of analyze_flight_number_patterns. Vessels have
+    no flight-number equivalent, so "route-lock" here means: per-MMSI, does
+    one coarse position cluster (rounded to ~0.01 deg, ~1km) dominate --
+    e.g. the National Harbor<->Alexandria water taxi run should show up as
+    a small, repeated set of clusters rather than scattered positions.
+    Only populated for watchlisted vessels seen via the AISHub sweep so
+    far (see _check_vessel_aishub in poller/main.py) -- local AIS-catcher
+    hardware and the Kpler/MarineTraffic path are not wired into this
+    capture yet."""
+    from collections import defaultdict
+
+    with conn() as c:
+        rows = c.execute("""
+            SELECT mmsi, name, lat, lon FROM vessel_events
+            WHERE mmsi IS NOT NULL AND lat IS NOT NULL AND lon IS NOT NULL
+        """).fetchall()
+
+    by_mmsi = defaultdict(list)
+    for r in rows:
+        by_mmsi[r["mmsi"]].append(r)
+
+    route_locks = []
+    for mmsi, samples in by_mmsi.items():
+        total = len(samples)
+        if total < min_samples:
+            continue
+        cluster_counts: dict = {}
+        for s in samples:
+            try:
+                key = (round(float(s["lat"]), 2), round(float(s["lon"]), 2))
+            except (TypeError, ValueError):
+                continue
+            cluster_counts[key] = cluster_counts.get(key, 0) + 1
+        if not cluster_counts:
+            continue
+        top_cluster, top_count = max(cluster_counts.items(), key=lambda kv: kv[1])
+        dominance = top_count / total
+        route_locks.append({
+            "mmsi": mmsi, "name": samples[0]["name"],
+            "dominant_cluster_lat": top_cluster[0], "dominant_cluster_lon": top_cluster[1],
+            "dominance": round(dominance, 3), "samples": total,
+            "distinct_clusters": len(cluster_counts),
+        })
+    route_locks.sort(key=lambda x: -x["samples"])
+
+    return {
+        "route_locks": route_locks,
+        "sample_window": "vessel_events (accumulating from today forward, AISHub-watchlisted sweep only)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
 
 
 def update_watchlist_destination(entry_id: str, destination: str) -> None:

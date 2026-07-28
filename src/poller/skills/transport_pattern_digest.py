@@ -1,0 +1,189 @@
+"""
+transport_pattern_digest -- second-brain ingestion for the flight/train/
+vessel route-lock and codeshare-map system (2026-07-28, Phase 2.8/3 wiring).
+
+Runs codeshare_map's Phase 3 decay sweep, then all three
+analyze_*_patterns() mining functions (flights, trains, vessels), and
+writes a synthesized note into corporatetraveldc/01-Sources/transport-
+patterns/ in the second-brain vault. This is the scheduled job that Phase
+2's flight mining and Phase 3's decay sweep were explicitly designed to
+need -- see common/db.py's analyze_flight_number_patterns docstring
+("computed on demand... no cron needed yet" turned out wrong once
+flight_events volume was actually measured; this timer is that cron) and
+decay_stale_codeshare_mappings's docstring ("not wired to a timer yet").
+
+Honest scope note written into every digest: train/vessel schedule-drift
+and route-lock detection is only as deep as this platform's own retained
+history (train_events backfilled from amtrak_status on 2026-07-28;
+vessel_events accumulating from today forward, and currently empty because
+AIS_AISHUB_ID isn't configured yet). Multi-year drift detection (the
+example that motivated this whole feature -- a shuttle's scheduled
+departure creeping over years) needs years of data this system has not
+been running long enough to have; the mechanism is real and compounds a
+genuine baseline starting now.
+
+Schedule: every 12h (corporatetraveldc-transport-pattern-digest.timer).
+
+Model: same tiered pattern as second_brain_daily.py -- Ollama first (cheap,
+local), deterministic fallback if unavailable. SR-1 compliant (log_usage).
+"""
+import logging
+import sqlite3
+from datetime import datetime, timezone
+
+from common import db
+from common.llm import generate as llm_generate
+from common.sr1_log import log_usage
+from second_brain import webdav_client
+from second_brain.index_db import INDEX_DB, index_note
+from second_brain.index_db import init_db as init_vault_db
+from second_brain.scrub_gate import ScrubGateBlocked, gate
+
+log = logging.getLogger(__name__)
+
+SKILL_NAME = "transport-pattern-digest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+
+SYSTEM_PROMPT = """You are writing a technical digest entry for a
+second-brain knowledge vault used by a DC-area executive chauffeur/
+dispatch operation. You're given the output of route-lock and schedule-
+drift mining across three transport verticals (commercial flights, Amtrak
+trains, DC-area AIS vessel traffic) plus a codeshare-mapping cache health
+check. Summarize under 300 words, plain markdown, no headers deeper than
+###. Call out anything that looks like a genuine pattern (a route-locked
+flight/train number, a real schedule-time drift, a vessel cluster
+suggesting a regular water-taxi/cruise run) versus data that's simply too
+thin yet to conclude anything from -- do not oversell empty or sparse
+results as findings. Be factual, not promotional."""
+
+
+def build_digest_content() -> tuple[str, dict]:
+    decay = db.decay_stale_codeshare_mappings()
+    flights = db.analyze_flight_number_patterns(min_samples=5, dominance_threshold=0.85)
+    trains = db.analyze_train_patterns(min_samples=10, drift_minutes_flag=10)
+    vessels = db.analyze_vessel_patterns(min_samples=5)
+
+    stats = {
+        "codeshare_checked": decay["checked"],
+        "codeshare_zeroed_out": len(decay["zeroed_out"]),
+        "flight_route_locks": len(flights["route_locks"]),
+        "train_route_locks": len(trains["route_locks"]),
+        "train_drift_flags": len(trains["schedule_drift_flags"]),
+        "vessel_route_locks": len(vessels["route_locks"]),
+    }
+
+    sections = [
+        f"Codeshare map decay sweep: {decay['checked']} entries checked, "
+        f"{len(decay['zeroed_out'])} zeroed out (unconfirmed 90+ days).",
+        "",
+        f"## Flights ({len(flights['route_locks'])} route-locked flight numbers, "
+        f"{flights['sample_window']})",
+    ]
+    top_flights = sorted(flights["route_locks"], key=lambda x: -x["samples"])[:15]
+    for x in top_flights:
+        sections.append(
+            f"- {x['airline']}{x['flight_num']}: {x['origin']}->{x['destination']} "
+            f"({x['dominance']*100:.0f}% of {x['samples']} observations)"
+        )
+    if not top_flights:
+        sections.append("- No flight numbers yet meet the sample-size/dominance threshold.")
+
+    sections.append("")
+    sections.append(
+        f"## Trains ({len(trains['route_locks'])} route-locked train numbers, "
+        f"{len(trains['schedule_drift_flags'])} schedule-drift flags, {trains['sample_window']})"
+    )
+    top_trains = sorted(trains["route_locks"], key=lambda x: -x["samples"])[:10]
+    for x in top_trains:
+        sections.append(
+            f"- Train {x['train_number']} ({x['route_name']}): "
+            f"{x['origin']}->{x['destination']} ({x['dominance']*100:.0f}% of {x['samples']} observations)"
+        )
+    for x in trains["schedule_drift_flags"][:10]:
+        sections.append(
+            f"- DRIFT: train {x['train_number']} at {x['station_code']} shifted "
+            f"{x['shift_minutes']:+.1f} min (time-of-day {x['old_avg_time_of_day_min']:.0f}->"
+            f"{x['new_avg_time_of_day_min']:.0f} min, {x['samples']} samples)"
+        )
+    if not top_trains:
+        sections.append("- No train numbers yet meet the sample-size/dominance threshold.")
+
+    sections.append("")
+    sections.append(
+        f"## Vessels ({len(vessels['route_locks'])} MMSI position clusters, {vessels['sample_window']})"
+    )
+    top_vessels = sorted(vessels["route_locks"], key=lambda x: -x["samples"])[:10]
+    for x in top_vessels:
+        sections.append(
+            f"- MMSI {x['mmsi']} ({x['name'] or 'unnamed'}): dominant cluster "
+            f"{x['dominant_cluster_lat']},{x['dominant_cluster_lon']} "
+            f"({x['dominance']*100:.0f}% of {x['samples']} observations, "
+            f"{x['distinct_clusters']} distinct clusters)"
+        )
+    if not top_vessels:
+        sections.append(
+            "- No vessel data yet -- AIS_AISHUB_ID is not configured, so vessel_events "
+            "is not currently accumulating. Not an error; awaiting that credential."
+        )
+
+    return "\n".join(sections), stats
+
+
+def main() -> None:
+    status = "error"
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H%M")
+
+    try:
+        raw_content, stats = build_digest_content()
+
+        # CUI/PII scrub gate -- non-negotiable, see second_brain.scrub_gate
+        raw_content = gate(raw_content, source=SKILL_NAME)
+
+        ollama_result = llm_generate(
+            system=SYSTEM_PROMPT, prompt=raw_content,
+            ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
+            timeout=300,
+        )
+        if ollama_result:
+            ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")
+            narrative = ollama_result + "\n\n---\n\n**Raw mining output:**\n\n" + raw_content
+            status = "ok"
+            log.info("%s: narrative generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
+        else:
+            narrative = raw_content
+            status = "fallback"
+            log.info("%s: Ollama unavailable -- using raw mining output", SKILL_NAME)
+
+        frontmatter = (
+            "---\n"
+            f"generated_at: {now.isoformat()}\n"
+            "ingest_method: transport-pattern-digest-auto\n"
+            f"stats: {stats}\n"
+            "---\n\n"
+        )
+        note = frontmatter + f"# Transport Pattern Digest — {stamp}\n\n" + narrative + "\n"
+
+        rel_path = f"{webdav_client.BUSINESS_ROOT}/01-Sources/transport-patterns/{stamp}.md"
+        webdav_client.put(rel_path, note)
+        log.info("%s: wrote %s (%d bytes, status=%s)", SKILL_NAME, rel_path, len(note), status)
+
+        conn = sqlite3.connect(INDEX_DB)
+        init_vault_db(conn)
+        index_note(
+            conn, rel_path, title=f"Transport Pattern Digest — {stamp}", content=note,
+            tags="transport-patterns,codeshare,auto", ingest_method="transport-pattern-digest-auto",
+        )
+        conn.close()
+
+    except ScrubGateBlocked as e:
+        status = "blocked"
+        log.error("%s: BLOCKED by scrub gate: %s", SKILL_NAME, e)
+    finally:
+        log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
+                   0, 0, status, "n/a")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    main()

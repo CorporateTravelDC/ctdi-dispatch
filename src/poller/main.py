@@ -888,15 +888,30 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     event_key = (last_phase, current_phase)
     if event_key in event_map and current_phase != last_phase:
         summary, priority = event_map[event_key]
+        # 2026-07-28: credit the actual source that determined this phase
+        # transition instead of a bare generic string. `acars` (set above,
+        # unconditionally, before the phase-derivation branch) is truthy
+        # exactly when _acars_phase() returned an authoritative OOOI message
+        # for this flight -- that data (source system, label, msg_time) was
+        # already being computed and logged, just never surfaced in the
+        # actual push text riders see. Operator flagged this directly:
+        # alerts were reading as generic ADS-B-derived even when a real
+        # ACARS OUT/OFF/ON/IN transmission is what actually confirmed it.
+        if acars:
+            src_label = acars_msg.get("label") or acars_msg.get("_source") or "ACARS"
+            summary = f"{summary} — confirmed via ACARS ({src_label})"
+        else:
+            summary = f"{summary} — ADS-B derived"
         if tracking_url:
             summary_full = summary + "\n" + tracking_url
         else:
             summary_full = summary
-        watchlist_event_hit(entry["id"], summary,
+        watchlist_event_hit(entry["id"], summary_full,
                             {"watchlist_trigger": f"oooi_{current_phase}",
                              "identifier": ident, "hex": hex_id, "reg": reg,
                              "alt_ft": alt, "gs_kt": gs, "lat": lat, "lon": lon,
                              "phase": current_phase,
+                             "source": "acars" if acars else "adsb",
                              "tracking_url": tracking_url},
                             priority=priority)
         # Persist the new phase to its own field immediately -- this is what
@@ -1229,6 +1244,29 @@ def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
         return
 
     raw = [v for v in data if isinstance(v, dict) and "MMSI" in v]
+
+    # 2026-07-28 (vessel_events parity with flight_events): persist every
+    # vessel this bbox query returns, not just the one this watchlist entry
+    # is looking for. Without this, DC-area water-taxi/cruise traffic (the
+    # operator's National Harbor<->Alexandria example) would only ever
+    # accumulate history for MMSIs someone happened to hand-watchlist --
+    # the same gap codeshare_map was built to close on the flight side.
+    # Best-effort, one row at a time -- a persistence hiccup on one vessel
+    # must never block the watchlist-match logic below or the rest of the
+    # sweep.
+    for v in raw:
+        try:
+            db.insert_vessel_event(
+                mmsi=str(v.get("MMSI") or ""),
+                name=(v.get("NAME") or "").strip() or None,
+                lat=v.get("LATITUDE"), lon=v.get("LONGITUDE"),
+                sog=v.get("SOG"), cog=v.get("COG"), hdg=v.get("HEADING"),
+                nav_status=v.get("NAVSTAT"), ship_type=v.get("TYPE"),
+                source="aishub.net",
+            )
+        except Exception:
+            pass
+
     match = next((v for v in raw if str(v.get("MMSI")) == str(mmsi)), None)
     if not match:
         return  # not currently in range -- normal, not an error
@@ -1422,6 +1460,8 @@ async def main() -> None:
     db.init_db_v22()
     db.init_db_v23()
     db.init_db_v24()
+    db.init_db_v25()
+    db.init_db_v26()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

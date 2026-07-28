@@ -1,15 +1,20 @@
 """
 second_brain_rss -- RSS/Atom poller feeding corporatetraveldc/00-Inbox/rss/
-in the second-brain vault. Config-driven and currently a no-op: no feed
-URLs are configured yet -- see docs/SECOND_BRAIN_STATUS.md, "Original plan
-vs. what's built". This needs Corey to actually supply feed URLs before it
-does anything; the code is real and ready, the feed list is not.
+in the second-brain vault.
+
+2026-07-28: no longer a no-op. Seeded from shared.rss_catalog.all_feed_urls()
+-- the same built-in catalog (all categories, including advanced_air_mobility
+/ the FAA UTM feeds) and operator-added custom feeds (user_rss_feeds.json)
+that the PWA Intel tab shows and churns on. Operator request: churn on "the
+existing intel and anything added to the dispatch's rss pool" -- since this
+reads the shared catalog live on every run rather than a static copy, any
+feed added via the PWA or the built-in catalog going forward is picked up
+automatically, no re-seeding needed.
 
 Config:
-  SECOND_BRAIN_RSS_FEEDS in dispatch.env -- comma-separated feed URLs.
-  Empty/unset -> logs and returns, same "awaiting_credentials"-style
-  pattern already used by the eurocontrol/jasdat/notam fetchers for
-  not-yet-configured feeds.
+  SECOND_BRAIN_RSS_FEEDS in dispatch.env -- optional comma-separated EXTRA
+  feed URLs, additive on top of the shared catalog (not a replacement for
+  it). Leave unset if the shared catalog covers everything you want ingested.
 
 No new pip dependency on purpose (matching second_brain.client_entity_ingest's
 stated rationale) -- stdlib xml.etree handles basic RSS 2.0 <item> parsing
@@ -39,8 +44,14 @@ _MAX_ITEMS_PER_FEED = 10
 
 
 def _feed_urls() -> list[str]:
+    from shared.rss_catalog import all_feed_urls
+
+    urls = list(all_feed_urls())
     raw = os.getenv("SECOND_BRAIN_RSS_FEEDS", "").strip()
-    return [u.strip() for u in raw.split(",") if u.strip()]
+    for u in (u.strip() for u in raw.split(",") if u.strip()):
+        if u not in urls:
+            urls.append(u)
+    return urls
 
 
 def _parse_rss_items(xml_bytes: bytes) -> list[dict]:
