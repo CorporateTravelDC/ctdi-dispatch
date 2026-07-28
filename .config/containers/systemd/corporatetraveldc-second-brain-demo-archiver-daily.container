@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- daily rolling ingest of demo-archiver recorder data into second brain
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same WebDAV reach pattern as the other second-brain Quadlets -- see
+# docs/COMPLIANCE_SECURITY.md, "Container Network Isolation". Reads
+# demo.db directly off the shared volume (no network needed for that
+# part); the pasta opt-in here is only for the vault write.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/second_brain_demo_archiver_daily.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120

@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- transport pattern digest (codeshare/route-lock/drift mining across flights, trains, vessels + Phase 3 decay sweep, 2026-07-28)
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same Nextcloud-via-nginx-vhost reasoning as corporatetraveldc-second-brain-rss.container --
+# host.containers.internal cannot reach the loopback-only WebDAV port directly, so this reaches
+# it through the existing 0.0.0.0-bound nginx vhost for cloud.example.com instead.
+# See docs/COMPLIANCE_SECURITY.md, "Container Network Isolation".
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/transport_pattern_digest.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=600

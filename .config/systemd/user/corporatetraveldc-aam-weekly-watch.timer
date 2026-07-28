@@ -1,0 +1,10 @@
+[Unit]
+Description=Run AAM weekly watch Sunday 09:00 ET (ahead of Dispatch Desk 09:30 and second-brain weekly 18:15, so Ollama jobs don't stack)
+Requires=corporatetraveldc-aam-weekly-watch.service
+
+[Timer]
+OnCalendar=Sun *-*-* 09:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

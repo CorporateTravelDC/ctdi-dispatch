@@ -45,4 +45,14 @@ RestartSec=5
 TimeoutStartSec=30
 
 [Install]
-WantedBy=default.target
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

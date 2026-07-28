@@ -1,0 +1,11 @@
+[Unit]
+Description=Run second-brain daily digest at 23:45 ET (captures nearly the full day)
+Requires=corporatetraveldc-second-brain-daily.service
+
+[Timer]
+OnCalendar=*-*-* 23:45:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

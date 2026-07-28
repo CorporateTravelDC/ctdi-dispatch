@@ -1,24 +1,38 @@
+# ~/.config/containers/systemd/openwebui.container
+#
+# OpenWebUI -- browser-based Ollama chat UI
+#
+# Access:
+#   Tailscale: http://100.x.x.x:3000
+#   CF tunnel: https://openwebui.example.com
+#
+# Ollama backend: http://100.x.x.x:11434 -- this host's own Tailscale
+# IP, not host.containers.internal. Ollama binds that IP specifically, not
+# 127.0.0.1 (see install/ollama/install-ollama.sh) -- pasta's --map-gw
+# cannot reach a strictly loopback-bound service at all (kernel-level
+# anti-spoofing, not a Podman limitation), so the host.containers.internal
+# alias was never going to work here regardless of --map-gw. No
+# Network=pasta:--map-gw needed on this container: 100.x.x.x is a real
+# routable address reachable via normal pasta outbound NAT, the same way
+# corporatetraveldc-runner.container reaches its own dependencies.
+
 [Unit]
-Description=ntfy — primary push broker (container, port 2586)
-After=network-online.target
-StartLimitBurst=3
-StartLimitIntervalSec=120s
-OnFailure=ntfy-container-alert.service
+Description=OpenWebUI -- Ollama browser interface
+After=ollama.service network-online.target
+Wants=network-online.target
 
 [Container]
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
-Image=docker.io/binwiederhier/ntfy:v2.25.0
-ContainerName=ntfy
-PublishPort=2586:2586
-Volume=/etc/ntfy:/etc/ntfy:ro,z
-Volume=/var/lib/ntfy-backup:/var/lib/ntfy:z
-
-# SMTP + Twilio credentials (from dispatch-secrets.env)
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=serve
+Image=ghcr.io/open-webui/open-webui:main
+ContainerName=openwebui
+AutoUpdate=registry
+PublishPort=3000:8080
+Volume=/var/lib/openwebui:/app/backend/data:Z
+Environment=OLLAMA_BASE_URL=http://100.x.x.x:11434
+NoNewPrivileges=true
 
 [Service]
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
@@ -30,8 +44,9 @@ CPUWeight=100
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
 CPUQuota=300%
-Restart=on-failure
-RestartSec=30s
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
 
 [Install]
 # 2026-07-28: no longer auto-started at login. This unit and 17 others

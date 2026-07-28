@@ -1,51 +1,39 @@
-# corporatetraveldc-acarshub.container
-# ACARS web UI. Subscribes to acarsrouter ZMQ ACARS output (port 45550).
-# Overlays ADS-B targets from UltraFeeder tar1090.
-# Serves browser UI on port 9081 (→ acars.example.com via nginx).
+# corporatetraveldc-runner.container
+# Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-runner
+#
+# Default (pasta) networking, not Network=host: this container previously
+# ran with full host networking, undocumented, with these PublishPort=
+# lines already present but inert under it. Removed 2026-07-10 -- the
+# scoped PublishPort= pattern below (matching corporatetraveldc-web.container)
+# covers the same access, and DISPATCH_BASE_URL/ULTRAFEEDER_URL already
+# address the host by its literal Tailscale IP, which pasta routes
+# correctly without needing Network=pasta:--map-gw (that's only required
+# for the host.containers.internal alias, not for reaching a real
+# host-network-visible address directly).
+
 [Unit]
-Description=Corporate Travel DC — acarshub ACARS web UI
+Description=Corporate Travel DC -- dispatch-runner PWA (port 8001)
 After=network-online.target
-After=corporatetraveldc-acarsrouter.service
-After=corporatetraveldc-ultrafeeder.service
-Wants=corporatetraveldc-acarsrouter.service
+After=podman-user-wait-network-online.service
+After=corporatetraveldc-web.service
+Wants=corporatetraveldc-web.service
 
 [Container]
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
-Image=ghcr.io/sdr-enthusiasts/docker-acarshub:latest
-ContainerName=corporatetraveldc-acarshub
-Network=acars-net
-
-# Persist ACARS message database across restarts
-Volume=/var/lib/corporatetraveldc/acarshub:/run/acars:z
-
+Image=localhost/corporatetraveldc-runner:latest
+PublishPort=127.0.0.1:8001:8001
+PublishPort=100.x.x.x:8001:8001
+Environment=DISPATCH_BASE_URL=http://100.x.x.x:8000
+Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
+Environment=SSE_INTERVAL_SEC=30
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-
-# ACARS input — ZMQ from acarsrouter (no inbound port needed)
-Environment=ENABLE_ACARS=true
-Environment=ENABLE_VDLM=true
-Environment=VDLM_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45555
-Environment=ACARS_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45550
-
-# ADS-B overlay from UltraFeeder tar1090
-Environment=ENABLE_ADSB=true
-Environment=ADSB_URL=http://host.containers.internal:8080/data/aircraft.json
-Environment=ADSB_LAT=38.8816
-Environment=ADSB_LON=-77.0910
-
-# IATA override for common mismatches in US ops
-Environment=IATA_OVERRIDE=UP|UPS|United Parcel Service
-
-# Prune DB after 14 days (default 7 — bump slightly for dispatch use)
-Environment=DB_SAVE_DAYS=14
-
-# Web UI on port 9081
-PublishPort=127.0.0.1:9081:80
-
-AutoUpdate=registry
+AutoUpdate=local
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 
 [Service]
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
@@ -58,8 +46,8 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Restart=always
-RestartSec=30
-TimeoutStartSec=90
+RestartSec=5
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
 
 [Install]
 # 2026-07-28: no longer auto-started at login. This unit and 17 others

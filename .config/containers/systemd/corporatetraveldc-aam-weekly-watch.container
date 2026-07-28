@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- weekly Advanced Air Mobility (vertiport/eVTOL/Part 108) watch
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same scoped opt-in as corporatetraveldc-second-brain-weekly.container --
+# reaches Nextcloud WebDAV via the existing cloud.example.com
+# nginx vhost (0.0.0.0:80 -> 127.0.0.1:8090) through the internal alias,
+# not host networking. See docs/COMPLIANCE_SECURITY.md.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/aam_weekly_watch.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=950

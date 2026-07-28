@@ -329,35 +329,40 @@ def _check_flight_landing(callsign: str) -> str | None:
         else:
             state["low_count"] = 0
 
-        if state["low_count"] < MIN_LOW_READINGS:
+        # 2026-07-28 operator directive: local DC-metro ADS-B receiver
+        # coverage is not reliable enough to independently confirm landed --
+        # low/ground readings are logged for visibility but no longer fire
+        # "landed_adsb" on their own. ACARS (checked earlier in this
+        # function) is the only source that can return a landed result here.
+        if state["low_count"] >= MIN_LOW_READINGS:
+            log.info(
+                "%s: %d consecutive low/ground ADS-B readings (alt=%s last_alt=%s) "
+                "-- ADS-B alone no longer confirms landed, awaiting ACARS",
+                cs, state["low_count"], alt_baro, last_alt,
+            )
+        else:
             log.debug("%s: low/ground reading %d/%d — waiting for confirmation",
                       cs, state["low_count"], MIN_LOW_READINGS)
-            return None
-
-        log.info("%s ADS-B landing confirmed — alt=%s last_alt=%s readings=%d",
-                 cs, alt_baro, last_alt, state["low_count"])
-        state["notified"] = True
-        return "landed_adsb"
+        return None
 
     else:
-        # Aircraft absent from all ADS-B feeds
+        # Aircraft absent from all ADS-B feeds. Absence is not confirmation
+        # of anything -- it's exactly the "ADS-B dark" condition that was
+        # producing landed pushes 15-20 min before actual arrival, most
+        # often attributable to the local receiver's limited DC-metro sky
+        # coverage rather than the aircraft actually being down. No longer
+        # fires "landed_adsb" from a timeout; ACARS is required.
         if not state["airborne"]:
             return None
         elapsed = time.time() - state["last_seen"]
         last_alt = state["last_alt_ft"]
 
-        if last_alt is not None and last_alt > HIGH_ALT_GATE_FT:
-            log.debug(
-                "%s: absent from feed %ds but last alt was %dft — coverage gap",
+        if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
+            log.info(
+                "%s absent from feed %ds (last alt=%s) -- ADS-B-dark alone no "
+                "longer confirms landed, awaiting ACARS",
                 cs, int(elapsed), last_alt,
             )
-            return None
-
-        if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
-            log.info("%s absent from feed %ds — presumed landed (last alt=%s)",
-                     cs, int(elapsed), last_alt)
-            state["notified"] = True
-            return "landed_adsb"
 
     return None
 

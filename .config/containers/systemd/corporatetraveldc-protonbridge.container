@@ -1,0 +1,34 @@
+[Unit]
+Description=Corporate Travel DC -- ProtonMail Bridge (local SMTP/IMAP relay)
+Documentation=file:///opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/regulated-operator-setup.md
+After=network-online.target
+
+[Container]
+Memory=1536m
+PodmanArgs=--memory-swap=1536m
+Image=docker.io/schklom/protonmail-bridge:latest-arm64
+# No Exec= override -- the image's entrypoint runs the persistent relay
+# daemon by default (only the "init" arg triggers the one-shot interactive
+# login flow, which already ran manually via setup-protonbridge.sh).
+# Loopback-only: this relay is Pi-local, never reachable externally.
+PublishPort=127.0.0.1:1025:1025
+Volume=protonbridge-data:/root
+
+[Service]
+CPUWeight=100
+CPUQuota=300%
+Restart=always
+RestartSec=10
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

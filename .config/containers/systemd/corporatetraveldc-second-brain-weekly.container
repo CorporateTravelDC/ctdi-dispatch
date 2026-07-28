@@ -1,0 +1,30 @@
+[Unit]
+Description=Corporate Travel DC -- second-brain weekly compile ("compile the wiki" step)
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Nextcloud WebDAV (port 8090) is published on 127.0.0.1 only, by
+# design (nginx-fronted) -- host.containers.internal cannot reach a
+# strictly loopback-bound service under any pasta flag (see
+# docs/COMPLIANCE_SECURITY.md, "Container Network Isolation"). Rather
+# than widening Nextcloud's bind or granting this container the
+# host's full network stack, reach Nextcloud through the *existing*
+# nginx vhost for cloud.example.com, which already listens
+# on 0.0.0.0:80 and proxies to 127.0.0.1:8090 -- the same sanctioned
+# ingress real WebDAV clients use, just via the internal alias instead
+# of the public path. That is a 0.0.0.0-bound host service, so the
+# documented per-container opt-in applies: Network=pasta:--map-gw
+# restores host.containers.internal for this container only (same
+# pattern as corporatetraveldc-pusher.container reaching ntfy). No
+# change to Nextcloud's publish scope, no host networking.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/second_brain_weekly.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=950
+

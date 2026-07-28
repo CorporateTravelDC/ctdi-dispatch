@@ -73,6 +73,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
 from shared.watchlist import _fire_ntfy_dual  # reuse ntfy infra for ITWS alerts
 
 log = logging.getLogger("ingest.parsers.itws")
@@ -639,8 +640,27 @@ def write_itws_alerts(alerts: list[dict]) -> int:
     return written
 
 
+# 2026-07-28: ITWS re-broadcasts its current product state on essentially
+# every SWIM message for as long as the underlying condition holds (same
+# hazard-cell count, same storm position, etc.), not just on a state
+# change -- confirmed live: the same "N active hazard cell(s)" detail was
+# firing an identical ntfy push roughly every 2 minutes for a single
+# ongoing condition. There was no dedup here at all, unlike every other
+# push path in this codebase (landing pushes, TFR enrichment, etc.) which
+# all use PushDedup. Suppression window is intentionally shorter than the
+# 1h default used elsewhere -- aviation weather hazards can escalate on a
+# timescale where an hour of silence on a still-active severe alert is too
+# long, but 2 minutes is far too chatty. 20 minutes re-fires periodically
+# on a persisting hazard without spamming every SWIM tick, and any real
+# content change (new severity, new detail text) fires immediately
+# regardless of the window via PushDedup's content-hash comparison.
+_itws_dedup = PushDedup("itws-alerts", dedup_secs=1200)  # 20 min
+
+
 def check_itws_alerts(alerts: list[dict]) -> None:
-    """Fire ntfy for high-severity ITWS alerts (severity >= 4)."""
+    """Fire ntfy for high-severity ITWS alerts (severity >= 4), deduped per
+    (airport, product_type) slot so an unchanged, still-active condition
+    doesn't re-fire on every SWIM message re-broadcasting the same state."""
     for a in alerts:
         sev = a.get("severity") or 0
         if sev < ITWS_ALERT_SEVERITY:
@@ -648,9 +668,15 @@ def check_itws_alerts(alerts: list[dict]) -> None:
         airport = a["airport"]
         product_type = a["product_type"]
         detail = a.get("detail") or product_type
+        dedup_key = f"{airport}:{product_type}"
+        hash_key = content_hash(f"{sev}:{detail}")
+        if not _itws_dedup.should_push(dedup_key, hash_key):
+            log.debug("itws: suppressing duplicate alert %s (unchanged within window)", dedup_key)
+            continue
         title = f"ITWS {product_type} — {airport} (sev {sev})"
         dispatch = f"{airport}: {product_type} severity {sev}"
         try:
             _fire_ntfy_dual("wx-alerts", title, detail, dispatch, priority=4)
+            _itws_dedup.record(dedup_key, hash_key)
         except Exception as e:
             log.error("itws: ntfy error for %s/%s: %s", airport, product_type, e)

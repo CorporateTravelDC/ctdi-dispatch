@@ -1,24 +1,36 @@
 [Unit]
-Description=ntfy — primary push broker (container, port 2586)
-After=network-online.target
-StartLimitBurst=3
-StartLimitIntervalSec=120s
-OnFailure=ntfy-container-alert.service
+Description=ACARS Message Watcher — dual-source (local UDP + airframes.io REST)
+After=network-online.target corporatetraveldc-web.service
+Wants=network-online.target
 
 [Container]
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
-Image=docker.io/binwiederhier/ntfy:v2.25.0
-ContainerName=ntfy
-PublishPort=2586:2586
-Volume=/etc/ntfy:/etc/ntfy:ro,z
-Volume=/var/lib/ntfy-backup:/var/lib/ntfy:z
+Image=localhost/corporatetraveldc-acars-watcher:latest
+ContainerName=corporatetraveldc-acars-watcher
+AutoUpdate=local
 
-# SMTP + Twilio credentials (from dispatch-secrets.env)
+# Expose UDP port for local decoder input (acarsdec / dumpvdl2 → watcher)
+PublishPort=5005:5005/udp
+
+# Shared pod network so acarsdec and dumpvdl2 containers can reach this by name
+Network=acars-net.network
+
+# Shared environment (non-secret)
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# Secrets (DISPATCH_ADMIN_TOKEN, AIRFRAMES_API_KEY when available)
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=serve
+
+# Watcher-specific config — override in dispatch.env if needed
+Environment=DISPATCH_BASE_URL=http://100.x.x.x:8000
+Environment=NTFY_TOPIC=flight-alerts
+Environment=POLL_INTERVAL=60
+Environment=WATCHLIST_REFRESH_INTERVAL=300
+Environment=ACARS_UDP_PORT=5005
+Environment=LOG_LEVEL=INFO
+# AIRFRAMES_API_KEY — set in dispatch-secrets.env when obtained from api@airframes.io
 
 [Service]
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
@@ -30,8 +42,8 @@ CPUWeight=100
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
 CPUQuota=300%
-Restart=on-failure
-RestartSec=30s
+Restart=always
+RestartSec=30
 
 [Install]
 # 2026-07-28: no longer auto-started at login. This unit and 17 others

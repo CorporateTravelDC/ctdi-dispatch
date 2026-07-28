@@ -1,24 +1,20 @@
+# corporatetraveldc-demo.container
+# Install to ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-demo
 [Unit]
-Description=ntfy — primary push broker (container, port 2586)
-After=network-online.target
-StartLimitBurst=3
-StartLimitIntervalSec=120s
-OnFailure=ntfy-container-alert.service
+Description=Corporate Travel DC — demo archive recorder (2-week minimum seed buffer)
+After=network-online.target corporatetraveldc-web.service
+Wants=corporatetraveldc-web.service
 
 [Container]
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
-Image=docker.io/binwiederhier/ntfy:v2.25.0
-ContainerName=ntfy
-PublishPort=2586:2586
-Volume=/etc/ntfy:/etc/ntfy:ro,z
-Volume=/var/lib/ntfy-backup:/var/lib/ntfy:z
-
-# SMTP + Twilio credentials (from dispatch-secrets.env)
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=serve
+Image=localhost/corporatetraveldc-demo:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+AutoUpdate=local
 
 [Service]
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
@@ -30,8 +26,9 @@ CPUWeight=100
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
 CPUQuota=300%
-Restart=on-failure
-RestartSec=30s
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
 
 [Install]
 # 2026-07-28: no longer auto-started at login. This unit and 17 others

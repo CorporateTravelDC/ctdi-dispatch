@@ -115,9 +115,20 @@ def save_state(state):
 
 
 def feed_ctl(action, target):
+    # Timeout must cover ingest-feed-ctl.sh's own staggered restart timing
+    # (default 15s between each unit) plus real per-container start/stop
+    # time, not just a flat guess. A flat 60s undercounted a 5-feed restart
+    # (4 staggers alone = 60s) and caused the restart command to be killed
+    # mid-batch on 2026-07-28, leaving itws down after an otherwise-clean
+    # Tier 2 resume. Scale with target count instead.
+    if target in ("all", "core"):
+        n = 7 if target == "all" else 1
+    else:
+        n = len(target.split(","))
+    budget = max(60, (n - 1) * 15 + n * 25)
     subprocess.run(
         [FEED_CTL, action, target],
-        check=False, capture_output=True, text=True, timeout=60,
+        check=False, capture_output=True, text=True, timeout=budget,
     )
 
 

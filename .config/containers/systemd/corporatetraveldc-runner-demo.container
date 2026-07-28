@@ -1,0 +1,54 @@
+# corporatetraveldc-runner-demo.container
+# Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-runner-demo
+#
+# Second instance of the SAME runner image already used by
+# corporatetraveldc-runner.container (live, Tailscale-only, port 8001).
+# This instance is identical except DISPATCH_BASE_URL points at the
+# demo playback API (corporatetraveldc-demo-api, port 8004) instead of
+# the live web app (port 8000) -- zero runner code changes, since the
+# demo API mirrors the live app's /api/v1/{endpoint} path shape exactly.
+#
+# Internal-only for now (127.0.0.1 + Tailscale IP only, port 8005). No
+# nginx vhost, no Cloudflare Tunnel ingress, no public DNS -- exposing
+# this to the public dispatch-runner.example.com hostname
+# is a separate, deliberate step (new public surface, prospect-facing)
+# and should get an explicit go-ahead rather than being silently wired.
+
+[Unit]
+Description=Corporate Travel DC -- dispatch-runner PWA, demo-playback mode (port 8005)
+After=network-online.target corporatetraveldc-demo-api.service
+Wants=corporatetraveldc-demo-api.service
+
+[Container]
+Memory=1536m
+PodmanArgs=--memory-swap=1536m
+Image=localhost/corporatetraveldc-runner:latest
+PublishPort=127.0.0.1:8005:8001
+PublishPort=100.x.x.x:8005:8001
+Environment=DISPATCH_BASE_URL=http://100.x.x.x:8004
+Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
+Environment=SSE_INTERVAL_SEC=30
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+AutoUpdate=local
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+
+[Service]
+CPUWeight=100
+CPUQuota=300%
+Restart=always
+RestartSec=5
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

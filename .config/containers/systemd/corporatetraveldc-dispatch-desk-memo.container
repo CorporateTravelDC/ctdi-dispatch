@@ -1,0 +1,15 @@
+[Unit]
+Description=Corporate Travel DC -- weekly "Dispatch Desk" week-in-review memo
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/dispatch_desk_memo.py
+
+[Service]
+Type=oneshot
+TimeoutStartSec=950

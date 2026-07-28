@@ -1,0 +1,53 @@
+# ~/.config/containers/systemd/nextcloud-app.container
+#
+# Nextcloud (apache-bundled image) -- second-brain vault backend.
+# Bare WebDAV + CalDAV to start (Contacts/Notes/Deck/Talk apps can be
+# enabled later from the Nextcloud apps UI once a call is made on which
+# to turn on -- no extra containers needed for that, it's just app
+# store toggles inside this same instance).
+#
+# Published on 127.0.0.1:8090 only -- nginx (cloud.example.com.conf)
+# reverse-proxies from there, matching the dispatch-web/runner pattern.
+# First boot auto-installs using the NEXTCLOUD_ADMIN_USER/PASSWORD +
+# POSTGRES_* vars from the env files below (official image entrypoint
+# runs `occ maintenance:install` automatically when config.php doesn't
+# exist yet).
+
+[Unit]
+Description=Nextcloud -- second-brain vault (WebDAV/CalDAV)
+After=nextcloud-db.service network-online.target
+Wants=network-online.target
+Requires=nextcloud-db.service
+
+[Container]
+Image=docker.io/library/nextcloud:stable-apache
+ContainerName=nextcloud-app
+AutoUpdate=registry
+Network=nextcloud-net.network
+EnvironmentFile=%h/.config/nextcloud/nextcloud.env
+EnvironmentFile=%h/.config/nextcloud/nextcloud-secrets.env
+PublishPort=127.0.0.1:8090:80
+Volume=nextcloud-html:/var/www/html
+Memory=2048m
+PodmanArgs=--memory-swap=2048m
+NoNewPrivileges=true
+
+[Service]
+CPUWeight=150
+CPUQuota=300%
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

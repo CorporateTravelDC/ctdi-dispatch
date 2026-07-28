@@ -1,0 +1,16 @@
+[Unit]
+Description=Corporate Travel DC -- mcpo (MCP-over-OpenAPI bridge for dispatch-mcp)
+Documentation=https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
+After=network-online.target
+After=podman-user-wait-network-online.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+ExecStart=/home/corporatetraveldc/.local/bin/mcpo --port 8082 -- /home/corporatetraveldc/mcp/dispatch-mcp/dispatch-mcp-wrapper.sh
+
+[Install]
+WantedBy=default.target

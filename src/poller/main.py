@@ -929,6 +929,47 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
 
 
 
+def _fids_shows_landed(entry: dict, ident: str) -> bool:
+    """
+    True if DCA/IAD FIDS currently reports this flight as landed/arrived.
+    Reuses the same airport/carrier/flight-number resolution as
+    _check_flight_fids(). Returns False (not "unknown") for any flight not
+    routed through DCA/IAD, or on any lookup failure -- callers treat False
+    as "no FIDS corroboration available," not as a negative signal.
+    """
+    import re
+    dest = (entry.get("destination") or "").upper()
+    origin = (entry.get("origin") or "").upper()
+    if dest in ("KDCA", "DCA"):
+        airport = "DCA"
+    elif dest in ("KIAD", "IAD"):
+        airport = "IAD"
+    elif origin in ("KDCA", "DCA"):
+        airport = "DCA"
+    elif origin in ("KIAD", "IAD"):
+        airport = "IAD"
+    else:
+        return False
+
+    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
+    if not m:
+        return False
+    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
+    if not iata_carrier:
+        return False
+    flight_num = m.group(2)
+
+    try:
+        from common.airport_fids import lookup_arrival
+        result = lookup_arrival(airport, iata_carrier, flight_num)
+    except Exception:
+        return False
+    if not result:
+        return False
+    status_lower = (result.get("status") or "").lower()
+    return "land" in status_lower or "arrived" in status_lower
+
+
 def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
     """
     Fallback when ADS-B is dark (transponder off at gate).
@@ -979,19 +1020,46 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             # suppress the inference and let real tracking catch up
             # instead. If ACARS has nothing either, the schedule guess is
             # still the best signal available -- proceed as before.
+            # 2026-07-28 operator directive: the DC-metro local UltraFeeder
+            # receiver does not have reliable sky coverage for terminal-area
+            # confirmations. "ADS-B dark" (this function's own trigger
+            # condition) was firing landed guesses 15-20 minutes before
+            # actual arrival on multiple flights. ADS-B/schedule-based
+            # inference alone must NEVER independently confirm IN/landed --
+            # require positive corroboration from ACARS or FIDS first.
             acars_check = None
             try:
                 acars_check = _acars_phase(ident, registration=entry.get("registration"))
             except Exception as e:
                 log.debug("schedule infer ACARS check %s: %s", ident, e)
-            if acars_check and acars_check[0] != "in":
+
+            acars_confirms = bool(acars_check and acars_check[0] in ("on", "in"))
+            acars_contradicts = bool(acars_check and acars_check[0] not in ("on", "in"))
+
+            fids_confirms = False
+            if not acars_confirms:
+                try:
+                    fids_confirms = _fids_shows_landed(entry, ident)
+                except Exception as e:
+                    log.debug("schedule infer FIDS check %s: %s", ident, e)
+
+            if acars_contradicts:
                 log.info(
                     "%s: schedule-inferred IN suppressed -- ACARS shows phase=%s instead",
                     ident, acars_check[0],
                 )
                 return
 
-            summary = f"{ident} IN — at gate (schedule inferred, ADS-B dark)"
+            if not (acars_confirms or fids_confirms):
+                log.debug(
+                    "%s: schedule window for IN reached (%s) but neither ACARS nor "
+                    "FIDS confirms yet -- holding, ADS-B-dark alone is not sufficient",
+                    ident, reason,
+                )
+                return
+
+            confirm_src = "ACARS" if acars_confirms else "FIDS"
+            summary = f"{ident} IN — at gate ({confirm_src}-confirmed, ADS-B dark)"
             watchlist_event_hit(
                 entry["id"], summary,
                 {"watchlist_trigger": "oooi_in_inferred",
@@ -1194,10 +1262,25 @@ def _check_flight_fids(entry: dict, ident: str) -> None:
     # OOOI does catch up), just don't push it standalone.
     status_lower = (result.get("status") or "").lower()
     if "land" in status_lower and entry.get("oooi_phase") != "in":
-        db.update_watchlist_fids_status(entry["id"], summary, now_iso)
-        log.debug("fids %s: suppressing premature landed claim (oooi_phase=%s)",
-                  ident, entry.get("oooi_phase"))
-        return
+        # 2026-07-28: was gated on oooi_phase == "in" (ADS-B/OOOI agreement)
+        # -- but ADS-B is no longer a trusted independent source for landed
+        # confirmation (local DC-metro receiver coverage gaps were firing
+        # false-early "landed" pushes 15-20 min before actual arrival), so
+        # requiring it to have already agreed would make FIDS landed claims
+        # almost never fire. ACARS is the check-and-balance now instead:
+        # trust FIDS unless ACARS actively says otherwise.
+        acars_check = None
+        try:
+            acars_check = _acars_phase(ident, registration=entry.get("registration"))
+        except Exception as e:
+            log.debug("fids landed ACARS cross-check %s: %s", ident, e)
+        if acars_check and acars_check[0] not in ("on", "in"):
+            db.update_watchlist_fids_status(entry["id"], summary, now_iso)
+            log.debug("fids %s: suppressing landed claim -- ACARS shows phase=%s instead",
+                      ident, acars_check[0])
+            return
+        log.info("fids %s: landed claim accepted (FIDS-confirmed, ACARS phase=%s)",
+                  ident, acars_check[0] if acars_check else "unavailable")
 
     from shared.watchlist import watchlist_event_hit
     watchlist_event_hit(

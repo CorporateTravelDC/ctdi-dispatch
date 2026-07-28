@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- second-brain vault file-inventory scan (index_db --scan)
+
+[Container]
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same WebDAV reach pattern as the other second-brain Quadlets (daily,
+# weekly, rss) -- see docs/COMPLIANCE_SECURITY.md, "Container Network
+# Isolation". Nextcloud WebDAV is loopback-bound; reach it through the
+# existing 0.0.0.0-bound nginx vhost via the per-container pasta opt-in.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 -m second_brain.index_db --scan
+
+[Service]
+Type=oneshot
+TimeoutStartSec=300

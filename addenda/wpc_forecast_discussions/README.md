@@ -92,7 +92,7 @@ After applying, rebuild and restart:
 ```bash
 bash build-images.sh
 systemctl --user restart corporatetraveldc-web.service
-systemctl --user restart corporatetraveldc-ingest.service
+bash scripts/ingest-feed-ctl.sh restart all   # old monolith retired 2026-07-26, per-feed split
 ```
 
 The `wpc_discussions` table is created automatically on first web container
