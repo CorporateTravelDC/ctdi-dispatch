@@ -887,6 +887,48 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
 
     event_key = (last_phase, current_phase)
     if event_key in event_map and current_phase != last_phase:
+        # 2026-07-28: operator directive -- "ACARS/FDPS/FIDS/VDL IS the sole
+        # authority of any oooi alert period going forward." Supersedes the
+        # on/in-only gate added earlier the same day (after the UA6203
+        # false-landed incident) -- that gate covered arrival-side only,
+        # and the SAME flight then produced a false OUT/OFF on its
+        # departure side hours later (a CLT gate pushback-and-return
+        # misread by the alt/gs heuristic as wheels-up), confirmed against
+        # a live FlightAware screenshot plus FDPS's own re-proposed flight
+        # plan showing it never actually departed. ADS-B-derived
+        # current_phase is still computed above (needed for diversion
+        # detection, hex-lock, and position telemetry) but can no longer
+        # fire or persist ANY of the four OOOI transitions on its own --
+        # every phase now requires ACARS, FIDS, or (OFF only -- see
+        # _fdps_confirms_off's docstring for why it's scoped that narrowly)
+        # FDPS confirmation before this block writes anything. VDL2 is
+        # already folded into the ACARS check (common.acars.get_latest_phase
+        # pulls ACARS/VDL2/HFDL uniformly) -- no separate VDL path exists
+        # or is needed.
+        confirm_src = None
+        if acars:
+            confirm_src = "acars"
+        else:
+            try:
+                if _fids_confirms_phase(entry, ident, current_phase):
+                    confirm_src = "fids"
+            except Exception as e:
+                log.debug("%s: FIDS phase confirmation check failed: %s", ident, e)
+            if not confirm_src and current_phase == "off":
+                try:
+                    if _fdps_confirms_off(ident, hex_id):
+                        confirm_src = "fdps"
+                except Exception as e:
+                    log.debug("%s: FDPS phase confirmation check failed: %s", ident, e)
+
+        if not confirm_src:
+            log.debug(
+                "%s: ADS-B suggests %s->%s but no ACARS/FIDS/FDPS confirmation "
+                "yet -- holding phase at %s, not firing/persisting",
+                ident, last_phase, current_phase, last_phase,
+            )
+            return True
+
         summary, priority = event_map[event_key]
         # 2026-07-28: credit the actual source that determined this phase
         # transition instead of a bare generic string. `acars` (set above,
@@ -897,11 +939,15 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
         # actual push text riders see. Operator flagged this directly:
         # alerts were reading as generic ADS-B-derived even when a real
         # ACARS OUT/OFF/ON/IN transmission is what actually confirmed it.
-        if acars:
+        # "ADS-B derived" can no longer appear here at all -- confirm_src
+        # is guaranteed non-None by the gate above.
+        if confirm_src == "acars":
             src_label = acars_msg.get("label") or acars_msg.get("_source") or "ACARS"
             summary = f"{summary} — confirmed via ACARS ({src_label})"
+        elif confirm_src == "fids":
+            summary = f"{summary} — confirmed via FIDS"
         else:
-            summary = f"{summary} — ADS-B derived"
+            summary = f"{summary} — confirmed via FDPS"
         if tracking_url:
             summary_full = summary + "\n" + tracking_url
         else:
@@ -968,6 +1014,113 @@ def _fids_shows_landed(entry: dict, ident: str) -> bool:
         return False
     status_lower = (result.get("status") or "").lower()
     return "land" in status_lower or "arrived" in status_lower
+
+
+# 2026-07-28 operator directive: "ACARS/FDPS/FIDS/VDL IS the sole authority
+# of any oooi alert period going forward." VDL2 is already folded into
+# ACARS (common.acars.get_latest_phase pulls from ACARS/VDL2/HFDL
+# uniformly -- there is no separate VDL check to add). This generalizes
+# the landed-only FIDS check above into a full four-phase confirmer so the
+# same standard applies to OUT/OFF, not just ON/IN.
+_FIDS_STATUS_TO_PHASE = {
+    "outgate":    "out",
+    "inair":      "off",
+    "landed":     "on",
+    "ingate":     "in",
+    "in customs": "in",
+}
+
+
+def _fids_confirms_phase(entry: dict, ident: str, target_phase: str) -> bool:
+    """
+    True if DCA/IAD FIDS currently reports this flight at the given target
+    OOOI phase. Checks the arrival-side FIDS record if the flight's
+    destination is DCA/IAD (arrival records carry full-lifecycle status --
+    OutGate/InAir/Landed/InGate all appear on the SAME arrival record as
+    the flight progresses), or the departure-side record via
+    lookup_departure() if the origin is DCA/IAD. Returns False (not
+    "unknown") for any flight not routed through DCA/IAD, any status that
+    doesn't map to target_phase, or on any lookup failure -- callers treat
+    False as "no FIDS corroboration available," never as a negative signal.
+    """
+    import re
+    dest = (entry.get("destination") or "").upper()
+    origin = (entry.get("origin") or "").upper()
+    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
+    if not m:
+        return False
+    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
+    if not iata_carrier:
+        return False
+    flight_num = m.group(2)
+
+    result = None
+    try:
+        from common.airport_fids import lookup_arrival, lookup_departure
+        if dest in ("KDCA", "DCA"):
+            result = lookup_arrival("DCA", iata_carrier, flight_num)
+        elif dest in ("KIAD", "IAD"):
+            result = lookup_arrival("IAD", iata_carrier, flight_num)
+        elif origin in ("KDCA", "DCA"):
+            result = lookup_departure("DCA", iata_carrier, flight_num)
+        elif origin in ("KIAD", "IAD"):
+            result = lookup_departure("IAD", iata_carrier, flight_num)
+    except Exception as e:
+        log.debug("%s: FIDS phase confirmation lookup failed: %s", ident, e)
+        return False
+    if not result:
+        return False
+    status = (result.get("status") or "").strip().lower()
+    return _FIDS_STATUS_TO_PHASE.get(status) == target_phase
+
+
+def _fdps_confirms_off(ident: str, hex_id: str | None) -> bool:
+    """
+    True if FDPS's own flight-plan status corroborates OFF (airborne).
+    Deliberately narrow: the only FDPS status value confirmed live to map
+    cleanly to an OOOI phase is fdpsFlightStatus="ACTIVE" (an activated IFR
+    flight plan is FDPS's equivalent of airborne). No FDPS status has been
+    observed that cleanly maps to OUT, ON, or IN -- inventing those
+    mappings without a verified live sample would repeat the exact mistake
+    flagged in feedback_swim_parser_verification.md, so this only ever
+    confirms "off" and is never called for any other target phase.
+
+    Matches by hex (embedded in raw_json as aircraftAddress) rather than
+    by airline+flight_num string, because FDPS files under the OPERATING
+    carrier (e.g. ASH/Mesa for a UA-marketed regional leg), not the
+    marketing identifier riders search under -- confirmed live on
+    UA6203/ASH6203. Bounded to a 2h updated_at window so this stays an
+    indexed range scan (idx_flight_events_updated_at), never a full-table
+    LIKE scan across a quarter-million-row table.
+    """
+    if not hex_id:
+        return False
+    import re as _re
+    m = _re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
+    if not m:
+        return False
+    flight_num = m.group(2)
+    hex_upper = hex_id.upper()
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                """
+                SELECT status, raw_json FROM flight_events
+                WHERE flight_num = ? AND updated_at > ?
+                ORDER BY updated_at DESC LIMIT 20
+                """,
+                (flight_num, time.time() - 7200),
+            ).fetchall()
+    except Exception as e:
+        log.debug("%s: FDPS phase confirmation query failed: %s", ident, e)
+        return False
+    for row in rows:
+        raw = row["raw_json"] or ""
+        if hex_upper not in raw.upper():
+            continue
+        status = (row["status"] or "").strip().lower()
+        return status == "active"
+    return False
 
 
 def _check_flight_schedule_inference(entry: dict, ident: str) -> None:

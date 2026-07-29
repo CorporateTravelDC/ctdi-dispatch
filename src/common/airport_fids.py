@@ -282,3 +282,89 @@ def lookup_arrival(
         "dep_gate":      flight.get("dep_gate"),
         "dep_terminal":  flight.get("dep_terminal"),
     }
+
+
+def lookup_departure(
+    airport: str,
+    iata: str,
+    flight_number: str,
+    date_str: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Look up a departure by IATA carrier + flight number. Mirrors
+    lookup_arrival() but reads data["departures"] -- verified live
+    (2026-07-28) that this is NOT a symmetric schema with arrivals[]:
+    departure records' aircraftInfo is a LIST of one dict (arrivals[]: a
+    bare dict), and "gate"/"mod_gate" already mean the departure gate
+    directly (arrivals[] uses those for the arrival gate and a separate
+    dep_gate/dep_terminal pair for the origin side).
+
+    Args:
+        airport:       "DCA" or "IAD" -- the flight's ORIGIN, not destination
+        iata:          IATA carrier code, e.g. "UA"
+        flight_number: Numeric string, e.g. "6203"
+        date_str:      "YYYY-MM-DD" -- defaults to today
+
+    Returns normalized dict or None:
+        {
+            "airport":        "IAD",
+            "iata":           "UA",
+            "flight_number":  "6203",
+            "status":         "OutGate",
+            "gate":           "C20",
+            "terminal":       "A",
+            "scheduled":      "2026-07-28 14:53:00",
+            "estimated":      "2026-07-28 19:31:00",
+            "tail":           "N87360",
+            "arr_airport":    "IAD",
+            "arr_gate":       "1",
+            "arr_terminal":   None,
+        }
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    airport = airport.upper()
+    data = get_data(airport)
+    if data is None:
+        return None
+
+    departures = data.get("departures", [])
+    matches = [
+        f for f in departures
+        if f.get("IATA", "").upper() == iata.upper()
+        and str(f.get("flightnumber", "")) == str(flight_number)
+        and f.get("publishedTime", "").startswith(date_str)
+    ]
+    if not matches:
+        matches = [
+            f for f in departures
+            if f.get("IATA", "").upper() == iata.upper()
+            and str(f.get("flightnumber", "")) == str(flight_number)
+        ]
+    if not matches:
+        return None
+
+    flight = sorted(
+        matches,
+        key=lambda f: STATUS_PRIORITY.get(_effective_status(f) or "", 99),
+    )[0]
+
+    # aircraftInfo is a LIST on departure records -- take the first entry.
+    aircraft_list = flight.get("aircraftInfo") or [{}]
+    aircraft = aircraft_list[0] if aircraft_list else {}
+
+    return {
+        "airport":       airport,
+        "iata":          flight.get("IATA", "").upper(),
+        "flight_number": str(flight.get("flightnumber", "")),
+        "status":        _effective_status(flight),
+        "gate":          _effective_gate(flight),
+        "terminal":      flight.get("dep_terminal"),
+        "scheduled":     flight.get("publishedTime"),
+        "estimated":     _effective_time(flight),
+        "tail":          aircraft.get("tail_number"),
+        "arr_airport":   flight.get("airportcode"),
+        "arr_gate":      flight.get("arr_gate"),
+        "arr_terminal":  flight.get("arr_terminal"),
+    }
