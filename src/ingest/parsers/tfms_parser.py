@@ -443,12 +443,32 @@ def check_tfms_alerts(programs: list[dict]) -> None:
     still deduped the same way as before (content_hash on type+facility)
     so repeated identical program broadcasts don't spam even when
     escalating.
+
+    UPDATED 2026-08-02 per operator direction: no longer fires to the
+    shared "nas-alerts" bucket. Routes through
+    shared.sector_coalesce.fire_family_alert("tfms", ...), which fires the
+    escalating-only aggregate "tfms-alerts" (any facility) plus, when the
+    facility resolves to one of the 8 tracked zones, "tfms-<zone>" -- same
+    family pattern as tbfm-alerts/tbfm-<zone>, independently threshold-
+    tunable per zone via set_escalate_threshold("tfms", "<ZONE_NAME>", ...).
+    NOTE: this only moves TFMS traffic off nas-alerts -- aim_parser.py's
+    NOTAM alerts still publish to nas-alerts as of this change; that's a
+    separate rename (nas-alerts -> aim_fns-alerts) not yet done, flagged
+    to the operator pending confirmation given its much higher volume.
     """
-    from shared.sector_coalesce import maybe_fire_coalesced_alert
+    from shared.sector_coalesce import fire_family_alert, is_tracked_facility
 
     for program in programs:
         facility = program.get("facility") or ""
-        if facility.upper() not in _DC_FACILITIES:
+        # WIDENED 2026-08-03 per operator direction: this was hardcoded to
+        # _DC_FACILITIES (DC-area only) despite the docstring above already
+        # describing an "8 sectors" design matching TBFM -- TFMS never
+        # actually reached the other 7 zones because this gate silently
+        # dropped everything else before fire_family_alert was ever called.
+        # is_tracked_facility() checks against the same 8-zone map TBFM
+        # already resolves against unrestricted, so TFMS now genuinely
+        # matches TBFM's scope instead of just claiming to in a comment.
+        if not is_tracked_facility(facility):
             continue
         dedup_key = content_hash(f"{program['type']}:{facility}")
         if not _TFMS_ALERT_DEDUP.should_push("tfms", dedup_key):
@@ -460,13 +480,13 @@ def check_tfms_alerts(programs: list[dict]) -> None:
         )
         dispatch = f"{facility} {program['type']} +{program.get('avg_delay_minutes', '?')}min"
         try:
-            result = maybe_fire_coalesced_alert(
-                "nas-alerts", "tfms", facility, title, detail, dispatch, base_priority=3,
+            result = fire_family_alert(
+                "tfms", "tfms", facility, title, detail, dispatch, base_priority=3,
             )
             _TFMS_ALERT_DEDUP.record("tfms", dedup_key)
-            log.info("tfms: nas-alert coalesced for %s %s -> sector=%s escalating=%s fired=%s",
+            log.info("tfms: alert coalesced for %s %s -> sector=%s escalating=%s fired=%s zone_fired=%s",
                       program['type'], facility, result.get("sector"),
-                      result.get("escalating"), result.get("fired"))
+                      result.get("escalating"), result.get("fired"), result.get("zone_fired"))
         except Exception as e:
             log.error("tfms: nas-alert fire failed for %s: %s", facility, e)
 
@@ -1032,9 +1052,11 @@ def _handle_airport_config(fi_message: ET.Element) -> list[dict]:
                 )
                 dispatch = f"{airport_upper} config: arr {arr_rate}/hr wx {weather}"
                 try:
-                    from shared.sector_coalesce import maybe_fire_coalesced_alert
-                    maybe_fire_coalesced_alert(
-                        "nas-alerts", "tfms_aptc", airport_upper, title, detail, dispatch, base_priority=3,
+                    # tfms-alerts/tfms-<zone> family pattern, 2026-08-02 -- see
+                    # check_tfms_alerts() docstring above
+                    from shared.sector_coalesce import fire_family_alert
+                    fire_family_alert(
+                        "tfms", "tfms_aptc", airport_upper, title, detail, dispatch, base_priority=3,
                     )
                     _APTC_ALERT_DEDUP.record("tfms_aptc", dedup_key)
                     log.info("tfms: APTC config-change alert fired for %s", airport_upper)
@@ -1073,9 +1095,16 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
     if ga is None:
         return []
 
+    from shared.sector_coalesce import is_tracked_facility
+
     facilities_raw = _fcm_text(ga, "facilities") or ""
     facilities = {f.strip().upper() for f in facilities_raw.replace(",", " ").split() if f.strip()}
-    dc_hit = facilities & _DC_FACILITIES
+    # WIDENED 2026-08-03 (see check_tfms_alerts comment above) -- was
+    # `facilities & _DC_FACILITIES`, DC-only. "dc_hit" name kept for
+    # minimal diff even though it's no longer DC-exclusive; represents
+    # whichever of this advisory's named facilities fall in one of the 8
+    # tracked zones.
+    dc_hit = {f for f in facilities if is_tracked_facility(f)}
     if not dc_hit:
         return []
 
@@ -1099,9 +1128,11 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
     representative_facility = sorted(dc_hit)[0]
 
     try:
-        from shared.sector_coalesce import maybe_fire_coalesced_alert
-        maybe_fire_coalesced_alert(
-            "nas-alerts", "tfms_gadv", representative_facility, title, detail, dispatch, base_priority=3,
+        # tfms-alerts/tfms-<zone> family pattern, 2026-08-02 -- see
+        # check_tfms_alerts() docstring above
+        from shared.sector_coalesce import fire_family_alert
+        fire_family_alert(
+            "tfms", "tfms_gadv", representative_facility, title, detail, dispatch, base_priority=3,
         )
         _GADV_ALERT_DEDUP.record("tfms_gadv", dedup_key)
         log.info("tfms: GADV alert fired for advisory %s (facilities=%s)", advisory_number, dc_hit)

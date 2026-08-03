@@ -63,6 +63,7 @@ _RSS_CATALOG: dict[str, list[dict]] = {
 }
 
 USER_FEEDS_PATH = "/var/lib/corporatetraveldc/user_rss_feeds.json"
+USER_CATEGORIES_PATH = "/var/lib/corporatetraveldc/user_rss_categories.json"
 
 
 def load_user_feeds() -> list[dict]:
@@ -83,6 +84,84 @@ def save_user_feeds(feeds: list[dict]) -> None:
             json.dump(feeds, f, indent=2)
     except Exception as e:
         log.error("user_rss_feeds: save failed: %s", e)
+
+
+# ── User-defined categories + multi-operator visibility model ───────────────
+# Added 2026-08-02 per operator direction: "Add Category" parallel to Add
+# Feed, plus a department/multi-operator model -- "Anyone within a
+# department or division is able to see the same feeds if they are opted
+# in, or create a department-wide category ... Everyone could have, on an
+# admin token or username basis, their own independent feeds ... not flood
+# everybody else's feed."
+#
+# Both categories (this file) and feeds (user_rss_feeds.json above) share
+# the same three-value `scope` field:
+#   "company"    -- visible to everyone, including anonymous/no-token
+#                   callers. Default for anything with no scope set at all
+#                   (backward compat with every category/feed that existed
+#                   before this change -- nothing already saved silently
+#                   becomes hidden).
+#   "department" -- visible only to callers whose resolved identity
+#                   (auth/auth.py resolve_identity(), via web/main.py's
+#                   /api/v1/whoami-token) has a `department` matching this
+#                   entry's `department` field.
+#   "personal"   -- visible only to the caller whose token_prefix matches
+#                   this entry's `owner` field.
+# `owner` is always a token_prefix (e.g. "ctdc_corey_"), never a raw token
+# or hashed value -- token_prefix is already the codebase's existing
+# display/audit identifier (see auth/auth.py's _token_prefix()), so this
+# reuses that rather than inventing a second identity string.
+def load_user_categories() -> list[dict]:
+    try:
+        with open(USER_CATEGORIES_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        log.warning("user_rss_categories: load failed: %s", e)
+        return []
+
+
+def save_user_categories(categories: list[dict]) -> None:
+    try:
+        with open(USER_CATEGORIES_PATH, "w") as f:
+            json.dump(categories, f, indent=2)
+    except Exception as e:
+        log.error("user_rss_categories: save failed: %s", e)
+
+
+def visible_to(entry: dict, identity: dict) -> bool:
+    """Shared visibility rule for both user categories and user feeds.
+    identity is the dict shape returned by auth.auth.resolve_identity() /
+    GET /api/v1/whoami-token: {tier, user_label, department, token_prefix}.
+    Fails open to visible for an unrecognized scope value rather than
+    silently hiding an entry someone can't explain the disappearance of."""
+    scope = entry.get("scope") or "company"
+    if scope == "company":
+        return True
+    if scope == "department":
+        dept = identity.get("department")
+        return bool(dept) and dept == entry.get("department")
+    if scope == "personal":
+        prefix = identity.get("token_prefix")
+        return bool(prefix) and prefix == entry.get("owner")
+    return True
+
+
+def list_all_categories(identity: dict) -> list[dict]:
+    """Built-in catalog categories (always company-scope) + user-created
+    categories filtered by visibility for this identity. Built-ins get a
+    human label derived from their key since _RSS_CATALOG only ever had
+    keys, not display labels, before this."""
+    result = [
+        {"id": key, "label": key.replace("_", " ").title(), "scope": "company", "builtin": True}
+        for key in _RSS_CATALOG
+    ]
+    for cat in load_user_categories():
+        if visible_to(cat, identity):
+            result.append(cat)
+    return result
 
 
 def all_feed_urls() -> list[str]:

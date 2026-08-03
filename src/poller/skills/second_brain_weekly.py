@@ -26,13 +26,25 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-weekly"
-OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-weekly:latest"
 
 SYSTEM_PROMPT = """You are compiling a week's worth of daily operational logs
 into one weekly synthesis for a second-brain knowledge vault. Identify
 patterns across the days (recurring TFR types, weather trends, CPS
 trajectory, notable watchlist activity) rather than just concatenating the
-days. Under 500 words, plain markdown."""
+days.
+
+Critical rules:
+- The prompt's first line states the real week and date range being
+  compiled. Do not invent, guess, or restate a different date or week
+  anywhere in your output -- use only what the prompt gives you.
+- Do not add a title, heading, or dateline of any kind (no "#", "##", or
+  similar) -- the note this becomes already has its own week label in the
+  surrounding document. Start directly with the first sentence of prose.
+- Any number you cite (counts, delay minutes, etc.) must be quoted EXACTLY
+  as it appears in the daily notes below -- do not round, abbreviate, or
+  restate it differently.
+- Under 500 words, plain prose paragraphs only."""
 
 
 def _week_label(d: date) -> str:
@@ -67,11 +79,15 @@ def main() -> None:
             if content:
                 bodies.append(content.decode("utf-8", errors="replace"))
 
-        combined = "\n\n---\n\n".join(bodies)
+        week_range = f"{recent[0]['path'].rsplit('/', 1)[-1][:10]} through {recent[-1]['path'].rsplit('/', 1)[-1][:10]}"
+        combined = (
+            f"Week being compiled: {_week_label(today)} ({week_range})\n\n"
+            + "\n\n---\n\n".join(bodies)
+        )
         combined = gate(combined, source=SKILL_NAME)
 
         ollama_result = llm_generate(
-            system=SYSTEM_PROMPT, prompt=combined,
+            system=None, prompt=combined,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.3,
             # Explicit timeout added 2026-07-26: reads up to 7 days of daily
             # notes, prompt size grows as the vault accumulates content, not
@@ -87,7 +103,12 @@ def main() -> None:
             status = "ok"
             log.info("%s: synthesis generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
         else:
-            synthesis = "(Ollama unavailable -- raw concatenation follows)\n\n" + combined[:3000]
+            synthesis = (
+                "*This week's synthesis pass didn't complete in time (usually a "
+                "thermal-governor pause on the inference box overlapping a long "
+                "compile run) -- showing the week's daily notes directly below "
+                "instead of a synthesized rollup.*\n\n" + combined[:3000]
+            )
             status = "fallback"
             log.info("%s: Ollama unavailable -- using raw concatenation", SKILL_NAME)
 

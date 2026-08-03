@@ -345,7 +345,7 @@ def ollama_post_with_retry(
 
 
 def generate(
-    system: str,
+    system: str | None,
     prompt: str,
     ollama_model: str,
     max_tokens: int = 300,
@@ -432,7 +432,7 @@ def generate(
 
 
 def _ollama(
-    system: str,
+    system: str | None,
     prompt: str,
     model: str,
     max_tokens: int,
@@ -440,15 +440,20 @@ def _ollama(
     priority: str = "report",
     timeout: float = OLLAMA_TIMEOUT,
 ) -> str | None:
+    payload = {
+        "model":   model,
+        "prompt":  prompt,
+        "stream":  False,
+        "options": {"num_predict": max_tokens, "temperature": temperature},
+    }
+    if system:
+        # Non-empty system explicitly overrides the model's Modelfile
+        # SYSTEM for this call. Omitting the key (system None/"") lets
+        # Ollama use the dedicated model's own baked-in default instead.
+        payload["system"] = system
     try:
         resp = ollama_post_with_retry(
-            {
-                "model":   model,
-                "system":  system,
-                "prompt":  prompt,
-                "stream":  False,
-                "options": {"num_predict": max_tokens, "temperature": temperature},
-            },
+            payload,
             timeout=timeout,
             priority=priority,
         )

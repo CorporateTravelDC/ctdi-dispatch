@@ -240,6 +240,13 @@ body::before {
 .cps-pill.nogo     { color: var(--nogo);      border-color: var(--nogo);     box-shadow: var(--nogo-glow); }
 .cps-pill.unknown  { color: var(--muted);     border-color: var(--border); }
 
+/* Wake-lock indicator (2026-08-02) -- reuses the cps-pill shape. 'quiet' is
+   deliberately the same muted/no-glow treatment as .unknown above: a
+   working wake lock should not compete for attention with CPS. 'nogo'
+   (shared with CPS red) covers both lost and denied -- both mean the
+   screen could sleep unexpectedly, worth the same visual alarm. */
+.wakelock-pill.quiet { color: var(--muted); border-color: var(--border); }
+
 /* ── Content area ─────────────────────────────────────────────────────────── */
 .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
 
@@ -338,6 +345,8 @@ body::before {
   display: flex; flex-direction: column;
 }
 .globe-iframe-wrap { position: relative; flex: 1; min-height: 0; }
+.ais-demo-placeholder-wrap { display: flex; align-items: center; justify-content: center; overflow: hidden; background: #0a0e14; }
+.ais-demo-placeholder-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .globe-iframe {
   position: absolute; inset: 0; width: 100%; height: 100%;
   border: none; z-index: 1;
@@ -527,6 +536,15 @@ body::before {
    it reads as live status, not metadata. */
 .train-row-station {
   font-family: var(--font-data); font-size: 0.62rem; color: var(--cyan);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Final-destination ETA line (added 2026-07-29) -- distinct from
+   .train-row-station (live status at the reference station): this is
+   scheduled/estimated arrival at where the train is actually going, so it
+   gets the muted route/event color rather than the cyan "live" color. */
+.train-row-dest-eta {
+  font-family: var(--font-data); font-size: 0.6rem; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -1309,6 +1327,47 @@ body::before {
 .ntfy-ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: var(--cyan-dim); }
 
 /* Topic filter chips */
+.ntfy-box-banner {
+  margin: 0.5rem 0.75rem 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 212, 255, 0.06);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.ntfy-integrations-panel {
+  margin: 0.6rem 0.75rem 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.ntfy-integrations-head { display: flex; flex-direction: column; gap: 0.15rem; margin-bottom: 0.6rem; }
+.ntfy-integrations-head h3 { margin: 0; font-size: 0.85rem; }
+.ntfy-integrations-sub { font-size: 0.7rem; color: var(--muted); }
+.ntfy-integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+.ntfy-integration-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+.ntfy-integration-card-head { display: flex; flex-direction: column; gap: 0.1rem; margin-bottom: 0.4rem; }
+.ntfy-integration-name { font-weight: 600; font-size: 0.78rem; }
+.ntfy-integration-hint { font-size: 0.65rem; color: var(--muted); }
+.ntfy-integration-latest-row { display: flex; justify-content: space-between; gap: 0.5rem; }
+.ntfy-integration-title { font-size: 0.72rem; font-weight: 600; }
+.ntfy-integration-ts { font-size: 0.65rem; color: var(--muted); white-space: nowrap; }
+.ntfy-integration-message { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; line-height: 1.35; }
+.ntfy-integration-meta { font-size: 0.6rem; color: var(--muted); opacity: 0.7; margin-top: 0.3rem; }
+.ntfy-integration-empty { font-size: 0.7rem; color: var(--muted); font-style: italic; }
+
 .ntfy-topic-filters {
   display: flex; flex-wrap: wrap; gap: 0.35rem;
   padding-bottom: 0.6rem; border-bottom: 1px solid var(--glass-border);
@@ -1556,6 +1615,23 @@ body::before {
 .custom-feed-cat-select  { max-width: 10rem; flex-shrink: 0; cursor: pointer; }
 .custom-feed-err { color: var(--nogo); font-family: var(--font-ui); font-size: 0.68rem; margin: 0; }
 .custom-feed-add-actions { display: flex; gap: 0.5rem; align-items: center; }
+
+/* Scope selector (company/department/personal) + department badge on
+   feed rows -- added 2026-08-02 for the multi-operator visibility model. */
+.custom-feed-scope-select { max-width: 9rem; flex-shrink: 0; cursor: pointer; }
+.custom-feed-scope-badge {
+  flex-shrink: 0; font-family: var(--font-ui); font-size: 0.55rem;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--cyan);
+  border: 1px solid var(--cyan-dim, rgba(0,212,255,0.25)); border-radius: var(--radius);
+  padding: 0.05rem 0.35rem;
+}
+
+/* Detect-feed result note (YouTube/Rumble/native-RSS resolver) --
+   added 2026-08-03. */
+.custom-feed-resolve-note {
+  font-family: var(--font-ui); font-size: 0.68rem; color: var(--text-dim, #8a94a6);
+  margin: 0.15rem 0 0.3rem 0; line-height: 1.4;
+}
 
 /* ── Podcast player ───────────────────────────────────────────────────────── */
 .podcast-item { border-left: 2px solid var(--cyan-dim, rgba(0,212,255,0.25)); }
@@ -2402,6 +2478,55 @@ body::before {
 .wx-radar-caption a { color: var(--cyan); text-decoration: none; }
 .wx-radar-caption a:hover { text-decoration: underline; }
 
+/* WX tab -- WPC prog chart forecast-hour selector row. Reuses
+   .train-mode-btn's look (border/cyan-active) via the shared class on
+   each button; this just adds the row layout and shrinks padding/font
+   slightly since there are up to 9 buttons (NOW + 8 forecast hours). */
+.wx-prog-hours {
+  display: flex; flex-wrap: wrap; gap: 0.3rem;
+  padding: 0 0.65rem 0.4rem;
+}
+.wx-prog-hour-btn {
+  font-size: 0.6rem; padding: 0.15rem 0.45rem;
+}
+
+/* AIRMET/SIGMET hazard panel (WX tab, HAZARDS source) -- added 2026-08-03.
+   .wx-radar-stage normally centers a fixed-size <img>; the hazards panel
+   needs to fill the whole stage instead, hence the align/justify override
+   on .wx-radar-stage-hazards (set from WeatherView.jsx alongside this). */
+.wx-radar-stage-hazards {
+  align-items: stretch !important;
+  justify-content: stretch !important;
+}
+.wx-hazard-panel {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.wx-hazard-panel .wx-prog-hours {
+  padding: 0.4rem 0.5rem 0.35rem;
+  flex: 0 0 auto;
+}
+.wx-hazard-map {
+  flex: 1; min-height: 240px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.wx-hazard-legend {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-ui); font-size: 0.58rem; color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+.wx-hazard-legend-item {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+}
+.wx-hazard-swatch {
+  display: inline-block; width: 0.6rem; height: 0.6rem;
+  border-radius: 2px; flex: 0 0 auto;
+}
+
 /* WX tab — full-bleed radar hero (mirrors .globe-map-wrap/.map-container's
    width:100%/flex:1 treatment) + fixed-width side panel for METAR/alerts,
    replacing the earlier 50/50 split-column layout. 2026-07-21. */
@@ -2428,4 +2553,120 @@ body::before {
   width: 260px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
   border-left: 1px solid var(--border); background: var(--panel);
   display: flex; flex-direction: column; gap: 0;
+}
+
+
+/* ── Demo access gate (added 2026-08-01, DEMO_MODE only) ─────────────────── */
+
+.demo-gate-loading {
+  position: fixed; inset: 0; background: var(--bg);
+}
+
+.demo-gate {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+  background-image: radial-gradient(var(--bg-grid) 1px, transparent 1px);
+  background-size: 22px 22px;
+  padding: 1.5rem;
+}
+
+.demo-gate-panel {
+  width: 100%; max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2rem 1.75rem;
+  box-shadow: var(--cyan-glow);
+  text-align: center;
+}
+
+.demo-gate-brand {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 1.1rem;
+}
+
+.demo-gate-title {
+  font-family: var(--font-ui);
+  font-size: 1.15rem;
+  color: var(--cyan);
+  margin: 0 0 0.6rem;
+}
+
+.demo-gate-copy {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-2);
+  margin: 0 0 1.3rem;
+}
+
+.demo-gate-form {
+  display: flex; flex-direction: column; gap: 0.6rem;
+}
+
+.demo-gate-input {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.demo-gate-input:focus {
+  outline: none;
+  border-color: var(--border-2);
+  box-shadow: var(--cyan-glow);
+}
+
+.demo-gate-btn {
+  background: var(--cyan);
+  color: var(--bg);
+  border: none;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  padding: 0.65rem;
+  cursor: pointer;
+}
+
+.demo-gate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.demo-gate-error {
+  color: #ff5d5d;
+  font-size: 0.75rem;
+  margin: 0.8rem 0 0;
+}
+
+.demo-gate-footer {
+  margin: 1.4rem 0 0;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.demo-gate-link {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.demo-banner {
+  font-family: var(--font-ui);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--bg);
+  background: var(--cyan);
+  border-radius: 3px;
+  padding: 0.15rem 0.4rem;
+  margin-left: 0.6rem;
 }

@@ -40,13 +40,14 @@ _RETRY_BACKOFF_SECS = 0.5  # doubles each retry: 0.5s, 1s
 _AMBIGUOUS_STATUS_TTL_SECS = 90
 _ambiguous_dedup = PushDedup("ntfy-ambiguous-status", dedup_secs=_AMBIGUOUS_STATUS_TTL_SECS)
 
-RUNNER_BASE = "https://ops.example.com"
-# ops.example.com now serves the full runner app (the same
-# screen-reader-capable React SPA that used to live at dispatch-runner) — that
-# domain is retired as a live public endpoint (reserved for a future demo-archiver
-# stub serving time-delayed data; see demo/recorder.py). All tap-through links
-# below point to ops's real routed views, not anchor fragments, since ops no
-# longer serves the old single-page anchor-based PWA.
+RUNNER_BASE = config.runner_click_base()
+# 2026-08-03: defaults to the Tailscale hostname (corporatetraveldc-dispatch.
+# tailxxxxxxx.ts.net), not ops.example.com. That hostname was
+# retired 2026-08-02 (see runner/main.py's _RETIRED_HOSTNAMES) and now
+# hard-rejects every request at the app layer -- every click-through below
+# was landing on a dead link, not just an exposed one. All tap-through links
+# below point to the runner's real routed views, not anchor fragments, since
+# it no longer serves the old single-page anchor-based PWA.
 
 # Per-topic deep-link targets — mobile tap opens the right routed view.
 TOPIC_CLICK: dict[str, str] = {

@@ -5,6 +5,7 @@ import AriaCompassRegion from './AriaCompassRegion.jsx'
 import AccessibleTable   from './AccessibleTable.jsx'
 import { useCompassSummary } from '../hooks/useCompassSummary.js'
 import { useWatchlist, FALLBACK_PLANE_SVG } from '../hooks/useWatchlist.js'
+import { useDemoStatus } from '../hooks/useDemoStatus.js'
 
 const OSM_URL          = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const OSM_ATTR         = '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
@@ -74,6 +75,18 @@ export default function AisMapView() {
   const [vesselItems,  setVesselItems] = useState([])
 
   const { entries: watchEntries } = useWatchlist()
+  const [demoStatus] = useDemoStatus()
+  // Treat "not yet known" (null, still loading) the same as demo mode --
+  // withhold the live fetch/iframe until we positively know this ISN'T a
+  // demo instance, rather than defaulting open and risking one live call
+  // slipping out before the check resolves. trusted_origin mirrors
+  // App.jsx's own demoBanner logic: a Tailscale/trusted visitor to the
+  // demo-runner instance (i.e. Corey, checking the demo build itself)
+  // still gets the real live AIS picture like every other tab already
+  // gives them -- the placeholder is specifically for untrusted/public
+  // demo visitors, not for the operator poking at the demo instance.
+  const isDemo = demoStatus === null ||
+    (demoStatus.demo_mode === true && demoStatus.trusted_origin !== true)
 
   const mmsiSet = new Set()
   watchEntries.forEach(e => {
@@ -90,9 +103,20 @@ export default function AisMapView() {
   // a value we know is wrong. Serving the plain base URL is the confirmed-working
   // stopgap until a real widget ID exists. See docs/DATA_SOURCES.md.
 
-  // Init Leaflet — single instance, tile layers toggled by mode
+  // Init Leaflet — single instance, tile layers toggled by mode.
+  // isDemo guard added 2026-08-02: the ref'd <div> below only renders in
+  // the live (non-demo) branch. This effect used to run unconditionally
+  // on every mount -- including the brief instant before useDemoStatus()
+  // resolves (isDemo defaults true while loading, on EVERY instance, demo
+  // or live) -- so L.map(mapRef.current, ...) ran against a null ref,
+  // Leaflet threw "Map container not found", and with no error boundary
+  // React unmounted the entire app to a blank screen with no way back
+  // except a hard reload. Confirmed as the actual cause of the black-screen
+  // report on both Tailscale and the public demo.
   useEffect(() => {
+    if (isDemo) return
     if (leafletRef.current) return
+    if (!mapRef.current) return
     const map = L.map(mapRef.current, {
       center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, zoomControl: true,
     })
@@ -104,7 +128,7 @@ export default function AisMapView() {
     vesselLayerRef.current  = L.layerGroup().addTo(map)
     trackedLayerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
-  }, [])
+  }, [isDemo])
 
   // Toggle interaction and tile visibility when mode changes
   useEffect(() => {
@@ -126,6 +150,7 @@ export default function AisMapView() {
   }, [mode])
 
   const refreshVessels = useCallback(async () => {
+    if (isDemo) return  // never fetch live vessel positions in demo mode
     if (!vesselLayerRef.current || !trackedLayerRef.current) return
     try {
       const r = await fetch('/api/ais/vessels')
@@ -183,10 +208,11 @@ export default function AisMapView() {
   }, [mmsiSet.size])
 
   useEffect(() => {
+    if (isDemo) return  // no polling loop in demo mode either
     refreshVessels()
     const id = setInterval(refreshVessels, VESSEL_POLL)
     return () => clearInterval(id)
-  }, [refreshVessels])
+  }, [refreshVessels, isDemo])
 
   const handleIframeError = () => {
     setIframeError(true)
@@ -222,8 +248,17 @@ export default function AisMapView() {
         </span>
       </div>
 
-      {/* Map area: iframe bg + transparent Leaflet overlay (iframe mode)
-                   OR full tiled Leaflet (local mode)  */}
+      {isDemo ? (
+        <div className="globe-iframe-wrap ais-demo-placeholder-wrap">
+          <img
+            src="/ais-demo-placeholder.jpg"
+            alt="AIS / vessel tracking preview -- upcoming feature, shown for demonstration purposes only. Live vessel positions are not shown in demo mode."
+            className="ais-demo-placeholder-img"
+          />
+        </div>
+      ) : (
+      /* Map area: iframe bg + transparent Leaflet overlay (iframe mode)
+                   OR full tiled Leaflet (local mode)  */
       <div className="globe-iframe-wrap">
         <AriaCompassRegion summary={compassSummary} entityType="vessels" count={vesselCount}
           extra="Potomac · Chesapeake · Port of Baltimore." />
@@ -282,6 +317,7 @@ export default function AisMapView() {
           <button className="intel-refresh-btn" onClick={refreshVessels} title="Refresh vessels">↻</button>
         </div>
       </div>
+      )}
     </div>
   )
 }

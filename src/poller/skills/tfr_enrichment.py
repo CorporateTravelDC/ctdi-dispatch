@@ -14,9 +14,9 @@ from common.sr2_gate import hash_gate
 log = logging.getLogger(__name__)
 SKILL_NAME = "tfr-enrichment"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_TFR_ENRICHMENT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-tfr-enrichment:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
 OLLAMA_TIMEOUT    = 900  # stopgap
@@ -118,7 +118,7 @@ def _call_ollama_vip(inputs: dict) -> str | None:
     # must never wait behind a report job (ep-brief/ops-brief/weekly-summary/
     # osint-monitor) for the shared Ollama slot. See common/ollama_lock.py.
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=_vip_user_message(inputs),
         ollama_model=OLLAMA_MODEL,
         max_tokens=220,

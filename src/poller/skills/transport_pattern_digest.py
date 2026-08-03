@@ -42,7 +42,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "transport-pattern-digest"
-OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-transport-digest:latest"
 
 SYSTEM_PROMPT = """You are writing a technical digest entry for a
 second-brain knowledge vault used by a DC-area executive chauffeur/
@@ -141,7 +141,7 @@ def main() -> None:
         raw_content = gate(raw_content, source=SKILL_NAME)
 
         ollama_result = llm_generate(
-            system=SYSTEM_PROMPT, prompt=raw_content,
+            system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
             timeout=300,
         )

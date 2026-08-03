@@ -50,9 +50,11 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME = "ops-brief"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "mistral")
+                     or "corporatetraveldc-pi5-ops-brief:latest")
+OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
+                      or "corporatetraveldc-pi5-ops-brief-trend:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 OLLAMA_TIMEOUT    = 900  # stopgap: Pi 5 CPU under load; systemd TimeoutStartSec=1000
 
@@ -401,7 +403,13 @@ def _defer_for_webinar(webinar_dt: datetime) -> None:
     )
     log.info("%s", msg)
     try:
-        _ntfy.send_dual(msg, msg, title="OPS BRIEF DEFERRED")
+        # topic_brief override added 2026-08-02: dispatch-ops is now
+        # weekly-summary-only (see _send_ntfy_dual below) -- this and every
+        # other ops-brief-family push moves to "ops-brief", the topic name
+        # that was already documented everywhere but never actually used
+        # until now (see ntfy_topic_audit_20260802 memory for how that was
+        # found).
+        _ntfy.send_dual(msg, msg, title="OPS BRIEF DEFERRED", topic_brief="ops-brief")
     except Exception as e:
         log.warning("defer notice push failed: %s", e)
 
@@ -648,9 +656,9 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
     # OLLAMA_TIMEOUT=900 constant through explicitly, matching the pattern
     # already used by aam_weekly_watch/dispatch_desk_memo/second_brain_*.
     return llm_generate(
-        system=TREND_SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=trend_prompt,
-        ollama_model=OLLAMA_MODEL,
+        ollama_model=OLLAMA_TREND_MODEL,
         max_tokens=200,
         temperature=0.15,
         timeout=OLLAMA_TIMEOUT,
@@ -658,8 +666,19 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
 
 
 def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
-    """Delegates to common.ntfy_push.send_dual — click URLs set per-topic."""
-    _ntfy.send_dual(full_text, concise_text, title=title)
+    """Delegates to common.ntfy_push.send_dual — click URLs set per-topic.
+
+    topic_brief="ops-brief" added 2026-08-02: send_dual()'s default
+    ("dispatch-ops") used to be shared, undocumented, with weekly_summary.py
+    -- nobody was actually subscribed to "ops-brief" (the topic every
+    click-map entry and docstring claimed was real) because nothing ever
+    published there. Corey's direction: dispatch-ops becomes
+    weekly-summary-only; ops-brief's concise push moves to match its own
+    documented name instead. topic_full stays on the shared default
+    ("dispatch-debriefs") -- that one's fine as a general full-narrative
+    bucket, only the concise/"brief" side had the collision.
+    """
+    _ntfy.send_dual(full_text, concise_text, title=title, topic_brief="ops-brief")
 
 
 def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
@@ -691,15 +710,10 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     Generate ops brief via LLM (Ollama-first, Anthropic fallback).
     Returns (full_text, concise_text) or None if both backends fail.
     """
-    system = (
-        "You are the dispatch intelligence officer for a corporate executive chauffeur "
-        "operation based in the Washington DC metro area. "
-        "Generate a concise operational briefing from the raw data below. "
-        "Focus on what directly affects executive ground transport: airport delays, "
-        "TFRs that indicate VIP movements, adverse weather, Amtrak disruptions on the NEC. "
-        "Be factual. Use aviation/dispatch shorthand where appropriate. "
-        "End with a one-sentence BOTTOM LINE suitable for an ntfy push notification."
-    )
+    # System prompt now lives in the corporatetraveldc-pi5-ops-brief
+    # Modelfile itself (2026-08-02) -- system=None below lets Ollama use
+    # that baked-in default instead of resending it every call.
+    system = None
 
     model_used = OLLAMA_MODEL
     # Explicit timeout override (2026-07-27) -- see _generate_trend_narrative

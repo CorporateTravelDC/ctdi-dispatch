@@ -38,6 +38,7 @@ import os
 import pathlib
 import sqlite3
 import time
+import httpx
 import uuid
 from typing import Optional
 
@@ -47,7 +48,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from auth.auth import Tier, require_admin, require_tier, resolve_tier
+from auth.auth import Tier, require_admin, require_tier, resolve_tier, resolve_identity
 from common import config, db
 from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
@@ -111,9 +112,28 @@ async def startup() -> None:
     db.init_db_v24()
     db.init_db_v25()
     db.init_db_v26()
+    db.init_db_v27()
+    db.init_db_v28()
+    db.init_db_v29()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
+
+@app.get("/api/v1/whoami-token")
+async def whoami_token(identity: dict = Depends(resolve_identity)) -> JSONResponse:
+    """
+    Added 2026-08-02 for the department/multi-operator RSS feed visibility
+    model. Lets a caller (currently: the runner service, which never
+    touches the shared DB directly) resolve a Bearer token to
+    {tier, user_label, department, token_prefix} without needing its own
+    DB connection or token-hashing logic -- runner just forwards whatever
+    Authorization header it received and trusts this response. Tier 0 --
+    an invalid/missing token isn't an error here, it just resolves to
+    anonymous (tier="tier0", the rest null), same as resolve_tier()
+    everywhere else in this codebase never raises for anonymous callers.
+    """
+    return JSONResponse(identity)
+
 
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
@@ -233,13 +253,26 @@ async def get_feeds() -> JSONResponse:
                 push_age = int(now - push["fetched_at"])
                 push_covered = push_age <= 300
 
+        # When a push source is actively covering this feed, the pull-side's
+        # own error (e.g. "awaiting_credentials") is real but not actionable
+        # or alarming -- the feed IS healthy, just not via the REST path.
+        # Added 2026-08-02 after this showed notam as simultaneously
+        # push_covered=true and error="awaiting_credentials", which reads
+        # as "broken" even though 267 facilities' worth of real NOTAMs were
+        # updating live via push the whole time. `error` now reflects actual
+        # feed health (null when push-covered); the raw pull-side detail is
+        # preserved separately in `pull_error` rather than dropped.
+        pull_error = f["error"]
+        display_error = None if push_covered else pull_error
+
         result.append({
             "feed_name":              name,
             "fetched_at":             f["fetched_at"],
             "age_seconds":            age,
             "stale_threshold_seconds": threshold,
             "push_covered":           push_covered,
-            "error":                  f["error"],
+            "error":                  display_error,
+            "pull_error":             pull_error,
             "consecutive_failures":   f["consecutive_failures"],
         })
     return JSONResponse({"feeds": result})
@@ -614,10 +647,152 @@ async def get_wx_config() -> JSONResponse:
             "wfo":      nws_wfo,
             "radar_site": nws_site,
             "radar_url":  f"https://radar.weather.gov/ridge/standard/{nws_site}_loop.gif",
+            # National composite loop -- added 2026-08-03, same
+            # radar.weather.gov path family as the site loop above, just
+            # "CONUS" instead of the per-deployment site code. Verified
+            # live: 200/real image/gif, ~650KB (picked over the ~6.6MB
+            # CONUS-LARGE variant to keep the 150s poll-driven cache-bust
+            # from hammering bandwidth).
+            "radar_url_conus": "https://radar.weather.gov/ridge/standard/CONUS_loop.gif",
             "station_page": f"https://radar.weather.gov/station/{nws_site.lower()}/standard",
         },
         "operator": operator,
+        # WPC national surface prog series -- added 2026-08-03. Public NOAA
+        # imagery, no key/auth, same direct-image-link pattern as the NEXRAD
+        # loop above (radar.weather.gov). Verified live: all 9 URLs return
+        # 200/real JPEGs. Static/hardcoded here rather than config-driven
+        # since these are fixed, WPC-documented product URLs, not a
+        # per-deployment operator choice like the NWS/operator radar toggle.
+        "prog": {
+            "name": "WPC SFC PROG",
+            "current": {
+                "label": "Current Analysis",
+                "url": "https://www.wpc.ncep.noaa.gov/sfc/namussfcwbg.jpg",
+            },
+            "forecasts": [
+                {"hour": 6,  "label": "6HR",  "url": "https://www.wpc.ncep.noaa.gov/basicwx/91fndfd.jpg"},
+                {"hour": 12, "label": "12HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/92fndfd.jpg"},
+                {"hour": 18, "label": "18HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/93fndfd.jpg"},
+                {"hour": 24, "label": "24HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/94fndfd.jpg"},
+                {"hour": 30, "label": "30HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/95fndfd.jpg"},
+                {"hour": 36, "label": "36HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/96fndfd.jpg"},
+                {"hour": 48, "label": "48HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/98fndfd.jpg"},
+                {"hour": 60, "label": "60HR", "url": "https://www.wpc.ncep.noaa.gov/basicwx/99fndfd.jpg"},
+            ],
+        },
+        # 2026-08-03 (later same day): expanded from Western Atlantic-only to
+        # cover the entire US -- Corey's ask: "the Maritime equivalent for
+        # the entire U.S. ... Gulf Shore ... Eastern Pacific". Added NOAA's
+        # joint Unified Surface Analysis (one chart, whole CONUS + Gulf +
+        # both ocean approaches) plus a full Eastern Pacific SFC/WAVE
+        # NOW/24H/48H set mirroring the existing Western Atlantic set,
+        # sourced from OPC's ocean.weather.gov (same fixed-filename static
+        # image pattern as tgftp.nws.noaa.gov/fax/, just a different NOAA
+        # host). Existing WATL charts kept, only relabeled (WATL prefix)
+        # now that other regions coexist in the same toggle row.
+        "maritime": {
+            "name": "OPC MARITIME",
+            "charts": [
+                {"key": "watl-sfc-current",  "label": "WATL SFC NOW",  "url": "https://tgftp.nws.noaa.gov/fax/PYAD10.gif"},
+                {"key": "watl-sfc-24",       "label": "WATL SFC 24H",  "url": "https://tgftp.nws.noaa.gov/fax/PPAE10.gif"},
+                {"key": "watl-sfc-48",       "label": "WATL SFC 48H",  "url": "https://tgftp.nws.noaa.gov/fax/QDTM10.gif"},
+                {"key": "watl-wave-current", "label": "WATL WAVE NOW", "url": "https://tgftp.nws.noaa.gov/fax/PWAA90.gif"},
+                {"key": "watl-wave-24",      "label": "WATL WAVE 24H", "url": "https://tgftp.nws.noaa.gov/fax/PWAE10.gif"},
+                {"key": "watl-wave-48",      "label": "WATL WAVE 48H", "url": "https://tgftp.nws.noaa.gov/fax/PJAI10.gif"},
+                {"key": "unified-us",        "label": "UNIFIED (US)",  "url": "https://ocean.weather.gov/UA/entire_UA.gif"},
+                {"key": "epac-sfc-current",  "label": "EPAC SFC NOW",  "url": "https://ocean.weather.gov/shtml/P_full_00hrsfc.gif"},
+                {"key": "epac-sfc-24",       "label": "EPAC SFC 24H",  "url": "https://ocean.weather.gov/shtml/P_24hrsfc.gif"},
+                {"key": "epac-sfc-48",       "label": "EPAC SFC 48H",  "url": "https://ocean.weather.gov/shtml/P_48hrsfc.gif"},
+                {"key": "epac-wave-current", "label": "EPAC WAVE NOW", "url": "https://ocean.weather.gov/shtml/P_00hrww.gif"},
+                {"key": "epac-wave-24",      "label": "EPAC WAVE 24H", "url": "https://ocean.weather.gov/shtml/P_24hrww.gif"},
+                {"key": "epac-wave-48",      "label": "EPAC WAVE 48H", "url": "https://ocean.weather.gov/shtml/P_48hrww.gif"},
+            ],
+        },
     })
+
+
+
+# ── AIRMET/SIGMET hazard overlay -----------------------------------------
+# Added 2026-08-03. Aviation hazard polygons (icing, turbulence, IFR,
+# mountain obscuration, convective) for the MapView overlay layer.
+#
+# Source: AWC's real Data API (aviationweather.gov/api/data/airsigmet),
+# NOT the aviationweather.gov HTML/progchart pages -- those are blocked by
+# an edge WAF for automated requests (confirmed live, "the request is
+# blocked" on every attempt, both from this box and from an unrelated
+# network). The /api/data/* endpoints are the same, unblocked, documented
+# public API already used elsewhere on this platform for METAR/TAF.
+# airsigmet covers BOTH domestic AIRMET and SIGMET products in one call
+# (airSigmetType field distinguishes them) -- no need for the separate
+# gairmet/isigmet endpoints; isigmet in particular is international/
+# oceanic SIGMETs, not relevant to DC-area ops.
+#
+# Real data, live-fetched, in both live and demo mode this cycle -- same
+# "not replay-captured yet" approach as the wx-config prog/maritime charts
+# above. Server-side 5-minute cache to avoid hammering AWC on every client
+# poll (the map layer refreshes every 5 min client-side too).
+
+_airmets_cache: dict = {"fetched_at": 0.0, "data": []}
+_AIRMETS_CACHE_TTL = 300  # seconds
+
+_HAZARD_COLOR = {
+    "CONVECTIVE": "#ff3131",
+    "TURB":       "#a855f7",
+    "ICE":        "#4a9eff",
+    "IFR":        "#ffd700",
+    "MTN_OBSCN":  "#8b6f47",
+    "LLWS":       "#ff8c00",
+    "SFC_WND":    "#ff8c00",
+}
+
+
+def _normalize_airsigmet(r: dict) -> dict | None:
+    coords = r.get("coords") or []
+    latlngs = [[c["lat"], c["lon"]] for c in coords if "lat" in c and "lon" in c]
+    if len(latlngs) < 3:
+        return None
+    hazard = (r.get("hazard") or "").upper().replace(" ", "_")
+    return {
+        "id": f"{r.get('icaoId','')}-{r.get('seriesId','')}-{r.get('alphaChar','')}",
+        "type": r.get("airSigmetType") or "AIRMET",
+        "hazard": hazard,
+        "color": _HAZARD_COLOR.get(hazard, "#9ca3af"),
+        "severity": r.get("severity"),
+        "altitude_low": r.get("altitudeLow1"),
+        "altitude_high": r.get("altitudeHi1"),
+        "valid_from": r.get("validTimeFrom"),
+        "valid_to": r.get("validTimeTo"),
+        "coords": latlngs,
+        "raw_text": (r.get("rawAirSigmet") or "")[:600],
+    }
+
+
+async def _fetch_airmets() -> list:
+    import time as _time
+    now = _time.time()
+    if now - _airmets_cache["fetched_at"] < _AIRMETS_CACHE_TTL and _airmets_cache["data"]:
+        return _airmets_cache["data"]
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.get("https://aviationweather.gov/api/data/airsigmet",
+                             params={"format": "json"}, timeout=15)
+            r.raise_for_status()
+            raw = r.json()
+        normalized = [n for n in (_normalize_airsigmet(x) for x in raw) if n]
+        _airmets_cache["data"] = normalized
+        _airmets_cache["fetched_at"] = now
+        return normalized
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("airmets: AWC fetch failed: %s", e)
+        return _airmets_cache["data"]  # serve stale cache rather than empty on a transient failure
+
+
+@app.get("/api/v1/airmets")
+async def get_airmets() -> JSONResponse:
+    """Active AIRMET/SIGMET hazard polygons — Tier 0. Public FAA/AWC data."""
+    data = await _fetch_airmets()
+    return JSONResponse({"airmets": data, "count": len(data)})
 
 
 @app.get("/api/v1/bandwidth-priority")
@@ -1183,6 +1358,7 @@ async def get_aircraft(identifier: str) -> JSONResponse:
     """
     try:
         db.init_db_v11()
+        db.init_db_v27()
     except Exception:
         pass
 
@@ -1215,6 +1391,14 @@ async def get_aircraft(identifier: str) -> JSONResponse:
 
     faa_hex = (faa_record.get("mode_s_hex") or "").lower() if faa_record else None
     osky_hex = (osky_record.get("icao24") or "").lower() if osky_record else None
+
+    # FAA's own manufacturer/model decode via ACFTREF.txt (added 2026-08-02),
+    # independent of OpenSky's model/typecode fields below -- deliberate
+    # redundancy so the two sources can be cross-checked against each other.
+    acftref_record = (
+        db.faa_acftref_lookup(faa_record.get("mfr_mdl_code"))
+        if faa_record else None
+    )
 
     if faa_record and osky_record:
         source = "faa+opensky"
@@ -1251,6 +1435,8 @@ async def get_aircraft(identifier: str) -> JSONResponse:
             "expiration_date": faa_record.get("expiration_date"),
             "last_action_date":faa_record.get("last_action_date"),
             "ladd":            faa_record.get("ladd", False),
+            "manufacturer":    acftref_record.get("manufacturer") if acftref_record else None,
+            "model":           acftref_record.get("model") if acftref_record else None,
         } if faa_record else None),
         "opensky": ({
             "icao24":            osky_record.get("icao24"),

@@ -1,65 +1,90 @@
 # CTDI Dispatch: On-Premises Architecture & Compliance Datasheet
-**For Regulated Industries (Financial Services, SEC Rule 17a-4, FINRA Rule 4511)**
 
-The Corporate Travel Dispatch Intelligence (CTDI) platform is uniquely architected for zero-trust, completely isolated on-premises deployments. Unlike cloud-reliant LLM providers, CTDI runs entirely within your firm's managed perimeter, eliminating third-party data supply chain risks.
+The Corporate Travel Dispatch Intelligence (CTDI) platform is architected for zero-trust, on-premises deployment. It runs entirely within the operator's own managed environment -- no data leaves the deployment to any third-party cloud service by default, and every inference call stays local (see `DESIGN-PRINCIPLES.md`).
+
+**Framing note (2026-08-03):** this document was previously written with several sections describing features that were never built -- a "Compliance Egress Hook Engine," direct PNR/reservation-record processing, and specific SEC/FINRA integration claims that don't correspond to anything in this codebase. That content has been replaced below with an accurate description of what the platform actually does and how it's meant to be positioned. The platform does not process travel bookings, PNRs, or reservation records itself, and does not claim to. What it *does* do -- run entirely on-premises, log its own actions locally and immutably, and stay out of a client's existing travel/booking data path -- is real, and is what this document now describes.
 
 ---
 
-## 1. Data Sovereignty & Isolation Matrix
+## 1. Positioning: Compliance-Supportive Infrastructure, Not a Compliance Product
+
+CTDI is not a recordkeeping system, a PNR processor, or a regulatory filing tool. It is a situational-awareness and dispatch platform (weather, TFRs, NAS/ATCSCC ground programs, Amtrak status, ADS-B/ASDE-X ground movement, and a chauffeur/executive-transport runsheet) that an operator runs on their own hardware, in parallel with whatever travel-management, booking, or dispatch software they already use (a GDS, a limo-dispatch platform like LimoAnywhere, a PBX/call system like RingCentral or 3CX, or an internal scheduling tool). The `runsheet` table in this platform is deliberately ingest-only today for exactly this reason -- it's built to receive trip data *from* an operator's existing system, not to replace it or to become the operator's system of record (see `runsheet_ingest_only_until_limoanywhere_tiein` in project history).
+
+The compliance-relevant claim this document supports is narrow and accurate: **an operator who runs CTDI alongside their existing travel/booking platforms is not introducing a new third-party data-handling risk into their compliance posture**, because CTDI:
+
+- Never contacts a cloud LLM or third-party data-processing API by default (see `DESIGN-PRINCIPLES.md` §2) -- there is no vendor in the loop reading operational data.
+- Never receives or stores PNR, reservation, or payment data -- it has no data model for any of that (confirmed: no such table exists in this platform's schema).
+- Keeps every action it takes -- feed fetches, admin actions, alert fires -- in a local, append-only audit log that never leaves the device (§3 below).
+
+This is a statement about *what CTDI adds to* an operator's existing compliance posture (nothing that wasn't already there, no new external dependency, no new data-handling surface), not a claim that CTDI itself is a regulatory-compliance product, that it satisfies SEC Rule 17a-4 or FINRA Rule 4511 recordkeeping requirements on its own, or that it has been reviewed by any regulator. Those rules govern a firm's own books-and-records obligations for its own regulated activity; whether and how they apply is a determination the operator's own compliance counsel makes, not something this platform certifies. If an operator's existing travel/booking platform has its own recordkeeping obligations, CTDI's job is to stay out of that data path entirely -- which, by having no PNR/booking data model at all, it does by construction.
+
+---
+
+## 2. Data Sovereignty & Isolation
 
 | Data Classification | Processing Location | External Network Escape | Storage State |
 | :--- | :--- | :--- | :--- |
-| **Travel Booking / PNR** | Internal Podman Containers | None (0% outbound) | In-Memory / Local DB |
-| **LLM Inference Matrix** | Native Host Ollama Daemon | None (Air-gapped compatible) | Ephemeral / Static Weights |
-| **Audit Logs** | Systemd Journald / Text Logs | None (0% outbound) | Write-Once Local Drive |
+| **Operational feeds** (weather, TFR, NOTAM, ATCSCC ops-plan, Amtrak, ADS-B/ASDE-X, runsheet) | Internal Podman containers | None by default -- read-only pulls from government/public-interest sources only (see `DESIGN-PRINCIPLES.md` §3) | Local SQLite (WAL mode), on-device |
+| **LLM Inference** | Native host Ollama daemon | None (air-gapped compatible) | Ephemeral -- no query or response is sent to any external provider |
+| **Audit Logs** | Systemd journald + local SQLite `audit_log` table | None (0% outbound) | Append-only, local disk, 90-day retention |
 
-### Complete Cloud Air-Gapping
-By default, the platform binds its web interfaces, backend processes, and LLM orchestration layer (`Gemma3`/`Mistral-Nemo`) strictly to the host environment or internal container network interfaces. No travel data, itineraries, or employee records are leaked to public APIs, external training sets, or third-party web apps.
+By default, the platform binds its web interfaces, backend processes, and LLM orchestration layer strictly to the host environment or internal container-network interfaces. Operational data -- flight tracks, TFRs, weather, watchlist entries, runsheet trips -- is processed and stored entirely on the deployed device. Nothing here describes or requires third-party PNR data ingestion; if a future runsheet integration (LimoAnywhere/RingCentral/3CX) is built, the same isolation principles apply to whatever trip-level data that integration actually carries, and this section will be updated to reflect the real data model at that time rather than a hypothetical one.
 
 ---
 
-## 2. On-Premises Compliance Hook Infrastructure
+## 3. Audit Logging (Real, As-Built)
 
-To comply with archiving mandates regarding operational notifications (such as alerts sent to corporate messaging channels), CTDI contains a native **Compliance Egress Hook Engine** built into the core runner workflow.
+CTDI maintains a genuine append-only audit log (`audit_log` table, local SQLite, never leaves the device) recording every admin action taken through the platform's API:
 
-### Integration Mechanism
-Rather than communicating directly with external communications networks, the CTDI execution loop pushes an unalterable JSON data packet over the local network via HTTP POST to the firm's pre-configured internal recording node.
-
-### Configurable Environmental Variables
-The platform reads institutional mapping targets directly from the central, non-secret configuration file at `/etc/corporatetraveldc/dispatch.env`:
-
-```ini
-COMPLIANCE_HOOK_ENABLED=true
-COMPLIANCE_TARGET_URL=http://firm.local
-COMPLIANCE_FORMAT=JSON_STRICT
-COMPLIANCE_RETRY_LIMIT=5
+```sql
+CREATE TABLE audit_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_time      REAL DEFAULT (unixepoch()),
+    action          TEXT NOT NULL,
+    tier            TEXT NOT NULL,
+    token_prefix    TEXT,           -- first 8 chars of token only, never the full token
+    remote_addr     TEXT,
+    detail          TEXT            -- JSON, action-specific
+);
 ```
 
----
+This is the platform's actual, current audit mechanism. The data lives locally in this table first and always; it can be queried directly (`/admin/audit`, token-gated) whether or not anything below is ever turned on.
 
-## 3. Standardized Audit Record Format
+As of 2026-08-03, CTDI also ships a real, disabled-by-default outbound egress hook for operators whose own recordkeeping platform (Global Relay, Smarsh, an internal SIEM, or anything else) needs a copy of this audit trail pushed out rather than pulled. It is off unless an operator explicitly configures it:
 
-All events processed through the egress loop are automatically wrapped in a strict structural envelope designed for ingestion by institutional indexing tools (e.g., Global Relay, Smarsh, or native internal SIEM platforms):
-
-```json
-{
-  "record_id": "ctdi_1719782400",
-  "timestamp_utc": "2026-06-30T21:20:00Z",
-  "source_node": "ctdi-dispatch-pi5-primary",
-  "compliance_classification": "REGULATED_TRAVEL_INTELLIGENCE",
-  "data_payload": {
-    "event": "reservation_created",
-    "operator_id": "OP-901",
-    "itinerary_id": "PNR-77A91",
-    "risk_level": "LOW",
-    "routing": "Local Container Grid"
-  }
-}
+```
+COMPLIANCE_HOOK_ENABLED=false        # default -- module no-ops immediately if false
+COMPLIANCE_TARGET_URL=               # operator's own endpoint; unset = no-op even if enabled
+COMPLIANCE_TARGET_AUTH_HEADER=       # optional bearer/auth header for that endpoint
+COMPLIANCE_RETRY_LIMIT=5             # attempts before a row is marked failed_permanent
 ```
 
+`COMPLIANCE_TARGET_URL` and `COMPLIANCE_TARGET_AUTH_HEADER` are operator secrets (they can reveal or grant access to an internal endpoint) and belong in `dispatch-secrets.env`, never in the tracked non-secret config.
+
+Mechanically: a 5-minute systemd timer (`corporatetraveldc-compliance-egress-push.timer`) runs `common.compliance_egress.push_pending_audit_events()` inside the poller container. It checks `COMPLIANCE_HOOK_ENABLED` and `COMPLIANCE_TARGET_URL` first and returns immediately (no DB read, no network call) if either is unset. When both are set, it batches unshipped `audit_log` rows (tracked via `egress_status`/`egress_attempts`/`egress_last_error` columns on that same table -- no second table, no duplicated log) and POSTs a fixed envelope: `record_id, event_time_utc, source_node, action, tier, token_prefix, remote_addr, detail`. That is the entire payload shape -- there is no PNR, reservation, or trip-level field in it, because none of that lives in `audit_log` to begin with. Rows that fail are retried up to `COMPLIANCE_RETRY_LIMIT` times, then marked `failed_permanent` so a persistently unreachable target degrades to "stop trying" rather than retrying forever.
+
 ---
 
-## 4. Host Integration & Hardening Guidelines
+## 4. Alignment with ISO/IEC 42001 (AI Management System Standard)
+
+**Status, stated plainly: CTDI is not ISO/IEC 42001 certified.** Certification requires an accredited third-party certification body to run a two-stage audit (documentation review, then an operational-effectiveness evaluation with staff interviews and evidence collection) followed by annual surveillance audits. No such audit has been performed on this platform or on [operator LLC], LLC. Any claim to the contrary would be inaccurate and is not made anywhere in this document.
+
+What *is* true, and is the actual basis for this section: CTDI's core design principles were built around several of the same control areas ISO/IEC 42001's Annex A asks an AI management system to address, independent of and prior to this document being written. That is a genuine architectural fact, not a marketing gloss -- the table below maps specific, existing platform behavior to the relevant control area.
+
+| ISO/IEC 42001 Annex A control area | What CTDI actually does |
+| :--- | :--- |
+| A.7 -- Data for AI systems | No operator query or model input/output is sent to any external party. Ollama-only local inference is a hard default (`DESIGN-PRINCIPLES.md` §2); CUI-classified radio data is handled under an explicit, non-negotiable ruleset (never in code, configs, or exports). |
+| A.9 -- Responsible use of the AI system | Deterministic fallback is required when local inference is unavailable -- the system does not silently fail over to a cloud provider. Any cloud LLM integration must be an explicit, operator-controlled opt-in, never a default. |
+| A.10 -- Third-party / supplier relationships | Local-only inference removes the AI supply-chain risk (model-vendor data handling, training-data exposure, vendor outage dependency) that ISO/IEC 42001 is partly designed to help organizations manage. |
+| A.4 -- Resources for AI systems | Real, evidenced resource guardrails (network, memory, CPU, thermal) exist for every AI-adjacent process, each backed by dated incident data and telemetry, not a theoretical worst case (`GUARDRAILS_JUSTIFICATION.md`). |
+
+What is genuinely missing, and would need to be built before a real certification audit could be attempted: a formal, top-management-owned AI policy document (as opposed to the informal, code-enforced rules in `DESIGN-PRINCIPLES.md`), defined AI-governance roles and responsibilities (this is presently a single-operator business), a documented AI risk/impact-assessment methodology, and a management-review cadence. None of these are difficult to build on top of what already exists -- the underlying practices they'd formalize are already there -- but they are real gaps, not paperwork technicalities, and no pitch material should describe them as already closed.
+
+**Net position for a client or partner conversation:** CTDI is not certified, and does not claim to be. It was built using ISO/IEC 42001's control areas as design guardrails from early in its development, which means an operator adopting it starts substantively closer to a certifiable posture than a platform built without that framework in mind -- "compliance-adjacent from day one" in the sense that the hard technical work (data handling, vendor isolation, resource governance) is already done, not in the sense that a certificate exists. A full standalone treatment of this, including the honest gap list, lives in `ISO_42001_ALIGNMENT.md`.
+
+---
+
+## 5. Host Integration & Hardening Guidelines
 
 * **SELinux Support:** The system includes ready-to-use Type Enforcement modules (`.te`) that authorize the background systemd service layers to function within targeted enforcement contexts.
 * **Process Priority:** The platform isolates worker processes inside rootless Podman containers, keeping system resources strictly ringfenced away from host operations.
@@ -165,4 +190,3 @@ all. If it needs to reach a host-bound service, use
 `Network=pasta:--map-gw` and comment why. Reach for the bridge-mode
 host-wide setting or `Network=host` only if the per-container mechanism
 genuinely doesn't apply, and say so in a comment either way.
-

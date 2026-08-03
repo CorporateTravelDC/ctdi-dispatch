@@ -55,7 +55,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "aam-weekly-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-aam-watch:latest"
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service
@@ -229,7 +229,7 @@ def main() -> None:
         )
 
         ollama_result = llm_generate(
-            system=SYSTEM_PROMPT, prompt=prompt,
+            system=None, prompt=prompt,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=700, temperature=0.25,
             # Explicit timeout added 2026-07-26: this call legitimately runs
             # ~5-6 minutes (300-360s observed 2026-07-23 live test), but was

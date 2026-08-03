@@ -1,12 +1,18 @@
 # Executive Summary — Executive Travel Intelligence Platform
 
-_v1.1.0 — Updated 2026-07-20_
+_v1.2.0 — Updated 2026-08-02_
 
 ## Overview
 
 This is a real-time monitoring platform built specifically for high-stakes executive travel in the Washington, DC area. It watches three things simultaneously — **commercial flights, Amtrak trains, and weather** — and delivers automated alerts the moment something changes, before the disruption reaches your traveler.
 
 The platform pulls data directly from the same systems that air traffic controllers and airline operations centers use. It is operational today, running on private dedicated infrastructure with no reliance on consumer flight apps or third-party aggregators.
+
+---
+
+## What's New Since v1.1.0
+
+**You can now see the platform live, yourself.** A password-protected rolling demo of the full platform -- the same live dashboard the operations team uses -- is now reachable over the public internet, not just on-site. It replays a real, recent two-week operating window end to end (weather, flight monitoring, briefings, everything above) so it can be reviewed without needing a live event to point at. Ask your [operator LLC] contact for the current demo link and access code.
 
 ---
 

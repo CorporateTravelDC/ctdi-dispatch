@@ -89,11 +89,36 @@ def parse_feed(raw: bytes, cfg: "AmtrakConfig") -> tuple[list[dict], str]:
             all_stns = t.get("stations", [])
             serving_watched = sorted(station_codes & all_watched)
 
+            # Final-destination ETA -- added 2026-07-29 per operator request.
+            # station_code/station_name/scheduled_arr/estimated_arr above are
+            # all pinned to the REFERENCE station (watchlist>regional>primary
+            # priority), which is frequently not the train's actual final
+            # stop -- e.g. a Regional continuing past WAS to Virginia, or any
+            # train whose reference station is an intermediate watchlist/
+            # regional stop. dest_stn is the true last station in the run;
+            # surfacing its own schArr/arr gives "when does it actually get
+            # where it's going," distinct from "is it on time right now."
+            dest_stn = all_stns[-1] if all_stns else {}
+            dest_delay = 0
+            dest_sch = dest_stn.get("schArr")
+            dest_est = dest_stn.get("arr")
+            if dest_sch and dest_est and dest_sch != dest_est:
+                try:
+                    from datetime import datetime as _dt
+                    _s = _dt.fromisoformat(dest_sch.replace("Z", "+00:00"))
+                    _e = _dt.fromisoformat(dest_est.replace("Z", "+00:00"))
+                    dest_delay = max(0, int((_e - _s).total_seconds() / 60))
+                except Exception:
+                    dest_delay = 0
+
             trains.append({
                 "train_num":        str(t.get("trainNum", train_key)),
                 "route":            t.get("routeName", ""),
                 "origin":           all_stns[0].get("code", "") if all_stns else "",
                 "destination":      all_stns[-1].get("code", "") if all_stns else "",
+                "dest_scheduled_arr":  dest_sch,
+                "dest_estimated_arr":  dest_est,
+                "dest_delay_minutes":  dest_delay,
                 "status":           stn.get("status") or t.get("trainTimely") or "",
                 # station_code/station_name -- added 2026-07-21 per operator
                 # direction to replace the train map/globe view with plain

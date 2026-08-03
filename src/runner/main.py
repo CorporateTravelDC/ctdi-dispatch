@@ -10,12 +10,16 @@ Signal proxy fallback chain:
   All external fallbacks: 250nm radius centered on KDCA (38.8816, -77.0910)
 """
 import asyncio
+import base64
 import datetime
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import math
 import os
+import random
 import re
 import sqlite3
 import time
@@ -33,6 +37,16 @@ log = logging.getLogger(__name__)
 
 # ── Configuration -----------------------------------------------------------
 DISPATCH_BASE      = os.getenv("DISPATCH_BASE_URL",        "http://127.0.0.1:8000")
+
+# Demo-playback gating. Only ever true on the corporatetraveldc-runner-demo
+# Quadlet instance (port 8005) -- the live ops.example.com
+# instance never sets this, so none of the code guarded by it can affect
+# real operational traffic. DEMO_SESSION_SECRET must match the value
+# demo.profiles (src/demo/profiles.py) signs tokens with -- both read it
+# from the same dispatch-secrets.env.
+DEMO_MODE           = os.getenv("DEMO_MODE", "false").strip().lower() == "true"
+DEMO_SESSION_SECRET = os.getenv("DEMO_SESSION_SECRET", "")
+DEMO_SESSION_COOKIE = "ctdc_demo_session"
 NTFY_URL           = os.getenv("NTFY_URL",                  "http://host.containers.internal:2586")
 NTFY_TOKEN         = os.getenv("NTFY_TOKEN",                "")
 ULTRAFEEDER_URL    = os.getenv("ULTRAFEEDER_URL",           "http://127.0.0.1:8080/data/aircraft.json")
@@ -50,7 +64,12 @@ ACARSDRAMA_TOKEN   = (os.getenv("ACARSDRAMA_JUMPSEAT_TOKEN") or
 
 # airframes.io -- secondary external fallback (keep both)
 # Only used if acarsdrama is unavailable or returns no results
-AIRFRAMES_BASE     = os.getenv("AIRFRAMES_BASE_URL",        "https://api.airframes.io")
+AIRFRAMES_BASE     = os.getenv("AIRFRAMES_BASE_URL",        "https://api.airframes.io/v1")
+# Fixed 2026-08-03: airframes.io docs (docs.airframes.io/api) confirm the
+# documented, stable base is .../v1 -- the bare host DOES respond for
+# backward compat but /v1 is what should be used for new integrations.
+# Was missing here; combined with AIRFRAMES_TOKEN being unset, this meant
+# the airframes.io fallback tier for VDL2/ACARS/HFDL never actually ran.
 AIRFRAMES_TOKEN    = os.getenv("AIRFRAMES_TOKEN",            "")
 
 KPLER_GRAPHQL_URL    = "https://api.sml.kpler.com/graphql"
@@ -174,6 +193,34 @@ def _is_trusted(request: Request) -> bool:
     return False
 
 
+def _verify_demo_session(token: str | None) -> dict | None:
+    """Stateless HMAC verify of a demo session token issued by
+    demo.profiles.issue_session_token() (src/demo/profiles.py -- the
+    signing side of truth). Duplicated here rather than imported because
+    the runner and demo-api are separate containers/build contexts; this
+    is deliberately a small, stable, stdlib-only algorithm (~15 lines) so
+    the duplication risk is low. Requires DEMO_SESSION_SECRET to match on
+    both sides (both read it from dispatch-secrets.env). Returns the
+    decoded payload (id/label/window_days/speed/exp) if valid and
+    unexpired, else None -- callers never distinguish "missing", "bad
+    signature", and "expired"; all three just mean "not authenticated"."""
+    if not token or not DEMO_SESSION_SECRET:
+        return None
+    try:
+        payload_b, sig_b = token.encode().split(b".", 1)
+        expected_sig = hmac.new(DEMO_SESSION_SECRET.encode(), payload_b, hashlib.sha256).digest()
+        expected_sig_b = base64.urlsafe_b64encode(expected_sig).rstrip(b"=")
+        if not hmac.compare_digest(sig_b, expected_sig_b):
+            return None
+        pad = b"=" * (-len(payload_b) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b + pad))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
+
+
 # UPDATED 2026-07-21 per operator direction: Ops (the public Cloudflare
 # hostname) gets ZERO admin capability, full stop -- not "admin data is
 # hidden," but "admin actions are unreachable regardless of what token is
@@ -198,8 +245,38 @@ _ADMIN_PROXY_PREFIX = "/api/dispatch/admin"
 _API_V1_PROXY_PREFIX = "/api/dispatch/api/v1"
 
 
+# ops.example.com RETIRED 2026-08-02 per operator direction --
+# dispatch-runner is now fully functional with proper gating (demo-mode
+# password gate on dispatch-runner.example.com, Tailscale-only
+# HTTPS for the live instance at port 8001), so the old always-open public
+# mirror of the LIVE instance is no longer needed and is a real exposure
+# (it's how the unauthenticated /api/rss/user-feeds write routes were
+# reachable from the public internet). The clean fix is removing the
+# Cloudflare Tunnel Public Hostname route entirely, but this tunnel is
+# dashboard-managed (remotely managed) -- confirmed 2026-08-02, the local
+# ~/.cloudflared/config.yml `ingress` list is NOT the live routing source
+# for it (edited it, restarted cloudflared, "Updated to new configuration"
+# log still showed ops. plus three hostnames -- mcp/cockpit/dav -- that
+# were never even in the local file, proving the daemon pulls ingress from
+# Cloudflare's control plane, not this file). Killing the tunnel-level
+# route needs the CF Zero Trust dashboard (Networks > Tunnels > dispatch >
+# Public Hostname tab) or a scoped API token, neither available to this
+# session -- flagged to the operator as a follow-up, not blocking this fix.
+# In the meantime this is a real, complete kill at the one layer this
+# session CAN deploy: any request whose Host header is exactly
+# ops.example.com is hard-rejected before touching any route,
+# the same "surface doesn't exist" 404 philosophy as the admin-path check
+# below, so even while the DNS/tunnel route still technically exists,
+# nothing behind it is reachable through that hostname anymore.
+_RETIRED_HOSTNAMES = {"ops.example.com"}
+
+
 @app.middleware("http")
 async def tailscale_gate(request: Request, call_next):
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if host in _RETIRED_HOSTNAMES:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     path = request.url.path
     is_admin_proxy_path = path.startswith(_ADMIN_PROXY_PREFIX) or path.startswith("/admin")
     is_v1_mutation = (
@@ -225,6 +302,71 @@ async def whoami(request: Request):
     above, using the same _is_trusted check for consistency.
     """
     return {"tailnet": _is_trusted(request)}
+
+
+# ── Demo-mode login gate ------------------------------------------------------
+# Only reachable/meaningful when DEMO_MODE=true (runner-demo instance, port
+# 8005). Added 2026-08-01 so the public dispatch-runner.example.com
+# hostname actually enforces the password-gated access Corey asked for --
+# see the hard gate in proxy_dispatch() below for the enforcement half of
+# this; these two routes are just login + status.
+
+@app.post("/api/demo/login")
+async def demo_login(request: Request):
+    """Public: exchanges a password for a session. Proxies the actual
+    check to demo_api's /api/v1/demo/login (that service holds the real
+    profiles DB, this one doesn't) and, on success, sets an HttpOnly
+    cookie so the raw token never touches frontend JS -- the frontend
+    only ever sees the boolean/label/window/speed fields below, never
+    the token itself."""
+    if not DEMO_MODE:
+        raise HTTPException(404, "Not found")
+    body = await request.json()
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{DISPATCH_BASE}/api/v1/demo/login",
+                              json={"password": body.get("password", "")},
+                              timeout=10)
+    except httpx.HTTPError:
+        raise HTTPException(502, "Demo backend unreachable")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, "Invalid password")
+    data = r.json()
+    resp = JSONResponse({
+        "ok": True,
+        "label": data["label"],
+        "window_days": data["window_days"],
+        "speed": data["speed"],
+    })
+    resp.set_cookie(
+        DEMO_SESSION_COOKIE, data["session"],
+        max_age=data.get("expires_in_seconds", 8 * 3600),
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
+    return resp
+
+
+@app.get("/api/demo/status")
+async def demo_status(request: Request):
+    """Tells the frontend whether this is a demo-mode instance, whether
+    THIS request is already authenticated -- either a valid session
+    cookie, or arriving from a trusted/Tailscale origin, which per
+    operator direction never needs to log in at all -- and the active
+    profile's label/window/speed for a small "viewing: X demo" banner."""
+    if not DEMO_MODE:
+        return {"demo_mode": False, "authenticated": True}
+    if _is_trusted(request):
+        return {"demo_mode": True, "authenticated": True, "trusted_origin": True}
+    payload = _verify_demo_session(request.cookies.get(DEMO_SESSION_COOKIE))
+    if payload:
+        return {
+            "demo_mode": True, "authenticated": True, "trusted_origin": False,
+            "label": payload.get("label"),
+            "window_days": payload.get("window_days"),
+            "speed": payload.get("speed"),
+        }
+    return {"demo_mode": True, "authenticated": False}
+
 
 # ── Health -------------------------------------------------------------------
 
@@ -366,48 +508,225 @@ async def _acarsdrama_messages(protocol_filter: str, since: int,
         return [_normalize_jumpseat_msg(m) for m in items]
 
 
+# Fixed 2026-08-03: the old implementation assumed protocol-specific
+# endpoints (/vdl2, /acars, /hfdl) with lat/lon/radius params. Confirmed
+# live that path 404s -- it never existed. airframes.io's real and only
+# message-listing route is the unified /v1/messages (docs.airframes.io/api),
+# which has NO geographic filter at all; protocol is selected client-side
+# via each message's sourceType field. Verified live with a real token:
+# a last-hour pull returned sourceType values vdl / acars / hfdl /
+# aero-acars / iridium-acars -- HFDL genuinely present (17 of 100 in one
+# sample), confirming this is a real usable fallback for HFDL, not a dead
+# end. ACARS-family satellite variants (aero-acars, iridium-acars) are
+# folded into the "acars" bucket since they're the same message class over
+# a different link, matching what the ACARS tab already represents.
+_AIRFRAMES_SOURCE_TYPES = {
+    "vdl2":  ("vdl",),
+    "acars": ("acars", "aero-acars", "iridium-acars"),
+    "hfdl":  ("hfdl",),
+}
+
+
+def _normalize_airframes_msg(m: dict) -> dict:
+    """
+    Normalize an airframes.io /v1/messages record to the canonical
+    frontend schema (same shape _normalize_jumpseat_msg produces).
+
+    airframes.io field   → canonical field:
+      timestamp/createdAt  → timestamp (preserved) + time (HH:MM:SS UTC)
+      tail                  → registration / callsign
+      flightNumber          → flight
+      sourceType            → protocol (upper-cased)
+      linkDirection         → direction
+      station.ident         → location
+      airframe.icaoType     → icao_type
+      airframe.description  → aircraft_type
+      text / data           → text
+    """
+    ts_raw = m.get("timestamp") or m.get("createdAt") or ""
+    time_str = ""
+    try:
+        dt = datetime.datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        time_str = dt.strftime("%H:%M:%S")
+    except Exception:
+        time_str = ts_raw[11:19] if len(ts_raw) >= 19 else ts_raw
+
+    airframe = m.get("airframe") or {}
+    station  = m.get("station") or {}
+
+    reg    = m.get("tail") or airframe.get("tail") or ""
+    flight = m.get("flightNumber") or ""
+    if flight in ("null", "None", "N/A"):
+        flight = ""
+    callsign = reg or flight or "?"
+
+    return {
+        "id":            m.get("id"),
+        "timestamp":     ts_raw,
+        "time":          time_str,
+        "callsign":      callsign,
+        "flight":        flight,
+        "registration":  reg,
+        "protocol":      (m.get("sourceType") or "").upper(),
+        "direction":     m.get("linkDirection") or "",
+        "location":      station.get("ident") or "",
+        "icao_type":     airframe.get("icaoType") or "",
+        "aircraft_type": airframe.get("description") or "",
+        "text":          (m.get("text") or m.get("data") or "").strip(),
+        "automated":     False,
+    }
+
+
 async def _airframes_messages(endpoint: str, since: int,
                                lat: float, lon: float, dist: int) -> list:
     """
-    Fetch from airframes.io API (secondary external fallback).
+    Fetch from airframes.io's real API (secondary external fallback).
     Only called when both local acarshub and acarsdrama are unavailable.
+
+    lat/lon/dist are accepted only to keep this function's call signature
+    unchanged for its three callers (vdl2/acars/hfdl_messages) -- the real
+    airframes.io /v1/messages endpoint has no geographic filter, so these
+    are not sent and have no effect on this fallback tier. If that becomes
+    a problem (this fallback pulling non-DC-area traffic), the fix is
+    client-side filtering on message.station.latitude/longitude, not a
+    request param -- airframes.io simply doesn't expose one.
     """
     if not AIRFRAMES_TOKEN:
         return []
-    url = f"{AIRFRAMES_BASE.rstrip('/')}/{endpoint}"
-    params = {"lat": lat, "lon": lon, "radius": dist}
+    source_types = _AIRFRAMES_SOURCE_TYPES.get(endpoint, (endpoint,))
+    url = f"{AIRFRAMES_BASE.rstrip('/')}/messages"
+    params = {"limit": 100}  # exclude_errors=true triggers a live 500 on airframes.io -- confirmed 2026-08-03, omit it
     if since:
-        params["since"] = since
+        params["since"] = datetime.datetime.fromtimestamp(
+            since, tz=datetime.timezone.utc).isoformat()
+    else:
+        params["timeframe"] = "last-hour"
     async with httpx.AsyncClient() as c:
         r = await c.get(url, params=params,
-                        headers=_airframes_headers(), timeout=10)
+                        headers=_airframes_headers(), timeout=15)
         r.raise_for_status()
         data = r.json()
-        return data.get("messages") or (data if isinstance(data, list) else [])
+        items = data if isinstance(data, list) else (data.get("data") or data.get("messages") or [])
+        items = [m for m in items if (m.get("sourceType") or "") in source_types]
+        return [_normalize_airframes_msg(m) for m in items]
+
+# ── Demo-mode signal sanitization --------------------------------------------
+# VDL2/ACARS/HFDL are NOT proxied through demo_api.py's replay archive --
+# these three routes always call the real live decoder/aggregator chain
+# above, in both live and demo mode. Real registrations, callsigns, flight
+# numbers, and receiver station location have to be stripped here, at the
+# only point they ever pass through this process, before a public demo
+# visitor's browser ever sees them.
+#
+# The real->fake mapping is process-local and in-memory only (never
+# written to disk, never sent to a client, reset on every container
+# restart) -- it exists purely so the same real aircraft renders as the
+# same fake identity across multiple messages within one running demo
+# session, not as a way to "remember" real tails anywhere persistent.
+_signal_tail_map:   dict[str, str] = {}
+_signal_flight_map: dict[str, str] = {}
+_SANITIZE_SALT = os.getenv("DEMO_SANITIZE_SALT") or DEMO_SESSION_SECRET or "ctdc-demo-signal-sanitize"
+_FAKE_CARRIERS = ["DEM", "XYZ", "QDC"]  # deliberately fictional-looking, not real IATA/ICAO codes
+
+
+def _synthetic_tail(real: str) -> str:
+    key = (real or "").strip().upper()
+    if not key:
+        return real
+    if key not in _signal_tail_map:
+        h = hashlib.sha256((_SANITIZE_SALT + "TAIL" + key).encode()).hexdigest()
+        _signal_tail_map[key] = "N" + str(int(h[:5], 16) % 90000 + 10000)
+    return _signal_tail_map[key]
+
+
+def _synthetic_flight(real: str) -> str:
+    key = (real or "").strip().upper()
+    if not key:
+        return real
+    if key not in _signal_flight_map:
+        h = hashlib.sha256((_SANITIZE_SALT + "FLT" + key).encode()).hexdigest()
+        carrier = _FAKE_CARRIERS[int(h[:2], 16) % len(_FAKE_CARRIERS)]
+        num = int(h[2:6], 16) % 9000 + 100
+        _signal_flight_map[key] = f"{carrier}{num}"
+    return _signal_flight_map[key]
+
+
+def _sanitize_signal_message(m: dict) -> dict:
+    """Replace registration/callsign/flight with a per-process-consistent
+    synthetic identity, scrub the same real substrings out of free-text
+    `text` (decoded ACARS/VDL2 payloads frequently repeat the tail/flight
+    inline), and generalize the receiving station location so a public
+    demo visitor can't infer Corey's physical feeder location."""
+    m = dict(m)
+    real_reg      = (m.get("registration") or "").strip()
+    real_flight   = (m.get("flight") or "").strip()
+    real_callsign = (m.get("callsign") or "").strip()
+
+    fake_reg    = _synthetic_tail(real_reg) if real_reg else real_reg
+    fake_flight = _synthetic_flight(real_flight) if real_flight else real_flight
+
+    if real_callsign and real_callsign == real_reg:
+        fake_callsign = fake_reg
+    elif real_callsign and real_callsign == real_flight:
+        fake_callsign = fake_flight
+    elif real_callsign and real_callsign != "?":
+        fake_callsign = _synthetic_tail(real_callsign)
+    else:
+        fake_callsign = real_callsign
+
+    text = m.get("text") or ""
+    if real_reg:
+        text = re.sub(re.escape(real_reg), fake_reg, text, flags=re.IGNORECASE)
+    if real_flight:
+        text = re.sub(re.escape(real_flight), fake_flight, text, flags=re.IGNORECASE)
+
+    m["registration"] = fake_reg
+    m["flight"]        = fake_flight
+    m["callsign"]      = fake_callsign
+    m["text"]          = text
+    if m.get("location"):
+        m["location"] = "DC-METRO"
+    return m
+
+
+def _sanitize_signal_payload(payload: dict) -> dict:
+    payload = dict(payload)
+    payload["messages"] = [_sanitize_signal_message(m) for m in (payload.get("messages") or [])]
+    return payload
+
+
+def _should_sanitize_signals(request: Request) -> bool:
+    return DEMO_MODE and not _is_trusted(request)
+
 
 # ── VDL2 endpoint -----------------------------------------------------------
 
 @app.get("/api/vdl2/messages")
 async def vdl2_messages(
+    request: Request,
     since: int   = Query(0),
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
 ):
     """VDL2 messages. Local acarshub first; falls back to airframes.io."""
+    sanitize = _should_sanitize_signals(request)
     try:
         msgs = await _acarshub_messages("vdl2", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        result = {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.debug("VDL2 local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("VDLM2", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.debug("VDL2 acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("vdl2", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.warning("VDL2 all sources unavailable: %s", e)
     return {"source": "none", "messages": [], "count": 0}
@@ -416,25 +735,30 @@ async def vdl2_messages(
 
 @app.get("/api/acars/messages")
 async def acars_messages(
+    request: Request,
     since: int   = Query(0),
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
 ):
     """ACARS messages. Local acarshub first; falls back to airframes.io."""
+    sanitize = _should_sanitize_signals(request)
     try:
         msgs = await _acarshub_messages("acars", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        result = {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.debug("ACARS local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("ACARS", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.debug("ACARS acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("acars", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.warning("ACARS all sources unavailable: %s", e)
     return {"source": "none", "messages": [], "count": 0}
@@ -443,25 +767,46 @@ async def acars_messages(
 
 @app.get("/api/hfdl/messages")
 async def hfdl_messages(
+    request: Request,
     since: int   = Query(0),
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
 ):
-    """HFDL messages. Local acarshub first; falls back to airframes.io."""
+    """
+    HFDL messages. Local acarshub first, then acarsdrama, then airframes.io.
+
+    Fixed 2026-08-03: unlike VDL2/ACARS, acarsdrama's Jumpseat API is
+    confirmed (live-tested, 200-message sample) to carry ZERO HFDL traffic
+    at any tier -- it's a VHF-only aggregator, not a config/subscription
+    problem on our end. That call still returns 200 with an empty list, not
+    an error, so the old exception-only fallback logic returned "0 results,
+    source: acarsdrama.com" and stopped -- airframes.io (which DOES carry
+    real HFDL, confirmed live) was never reached. HFDL specifically now
+    falls through to airframes.io on an EMPTY acarsdrama result too, not
+    just a hard failure. VDL2/ACARS are left on exception-only fallback
+    deliberately -- acarsdrama does carry real traffic for those, so a
+    legitimately quiet window shouldn't burn an extra airframes.io call.
+    """
+    sanitize = _should_sanitize_signals(request)
     try:
         msgs = await _acarshub_messages("hfdl", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        result = {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.debug("HFDL local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("HFDL", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        if msgs:
+            result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+            return _sanitize_signal_payload(result) if sanitize else result
+        log.debug("HFDL acarsdrama returned 0 messages (Jumpseat carries no HFDL) -- trying airframes.io")
     except Exception as e:
         log.debug("HFDL acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("hfdl", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _sanitize_signal_payload(result) if sanitize else result
     except Exception as e:
         log.warning("HFDL all sources unavailable: %s", e)
     hw = "hardware_pending" if not ACARSDRAMA_TOKEN and not AIRFRAMES_TOKEN else "unavailable"
@@ -1150,7 +1495,22 @@ async def proxy_dispatch(path: str, request: Request):
 
     Admin paths and non-GET api/v1/* mutations are rejected before they
     even reach this function -- see tailscale_gate middleware above.
+
+    Demo-mode gate (added 2026-08-01): when DEMO_MODE=true and this
+    request did NOT arrive over a trusted (Tailscale/LAN) origin, a valid
+    demo session cookie is required or the request is rejected outright --
+    this is what makes the public dispatch-runner.example.com
+    hostname actually password-gated rather than falling through to
+    demo_api's own lenient default-window/speed behavior. Trusted-origin
+    requests (Corey, over Tailscale) are completely unaffected -- no
+    cookie, no login, exactly today's open behavior.
     """
+    demo_session_token: str | None = None
+    if DEMO_MODE and not _is_trusted(request):
+        demo_session_token = request.cookies.get(DEMO_SESSION_COOKIE)
+        if not _verify_demo_session(demo_session_token):
+            raise HTTPException(401, "Demo login required")
+
     auth = request.headers.get("Authorization")
 
     url = f"{DISPATCH_BASE}/{path}"
@@ -1162,10 +1522,17 @@ async def proxy_dispatch(path: str, request: Request):
     elif RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS:
         # Server-side token injection for known Tier-1 endpoints.
         headers["Authorization"] = f"Bearer {RUNNER_ENRICHED_TOKEN}"
+    params = dict(request.query_params)
+    if demo_session_token:
+        # Verified above -- overrides any window/speed the browser itself
+        # tried to pass, demo_api's own resolver prioritizes session over
+        # raw query params the same way.
+        params["session"] = demo_session_token
+
     try:
         async with httpx.AsyncClient() as c:
             if request.method == "GET":
-                r = await c.get(url, params=dict(request.query_params),
+                r = await c.get(url, params=params,
                                 headers=headers, timeout=10)
             else:
                 body = await request.body()
@@ -1306,6 +1673,117 @@ async def sse_stream(request: Request):
                                       "Connection": "keep-alive",
                                       "X-Accel-Buffering": "no"})
 
+# ── Demo-mode synthetic alert feed + webhook fan-out --------------------------
+# Added 2026-08-03. Two things this closes/adds:
+#
+# (a) /api/ntfy/stream below was a raw, unfiltered proxy straight to the
+#     real ntfy broker -- same leak class as the AIS and ACARS/VDL2/HFDL
+#     routes found earlier: any public demo visitor saw genuine live
+#     TFR/CPS/flight-watchlist/weather alerts, completely unsanitized.
+#     Fixed by swapping in a synthetic, clearly-fictional alert stream for
+#     any DEMO_MODE + untrusted-origin request, using the same N##### /
+#     DEM-XYZ-QDC synthetic-identity convention already used for
+#     ACARS/VDL2/HFDL sanitization, so nothing here is even superficially
+#     confusable with real operational content.
+#
+# (b) Corey's ask: showcase that this same alert bus can fan out via
+#     webhook into a reservation system (LimoAnywhere) and call-center
+#     platforms (3CX, RingCentral) -- all three genuinely support inbound
+#     webhooks per their own docs, so this is a real, representative
+#     integration pattern, not a fabricated one. Demo-only for now (no
+#     real account to point at yet): each synthetic alert also fires a
+#     best-effort fan-out to three in-process mock receivers, and a small
+#     ring buffer of what each received is exposed for the frontend to
+#     display -- so a visitor can watch one alert land in the feed AND on
+#     all three "external" mock endpoints in real time. Nothing here
+#     touches the real pusher/alerting stack; it only runs inside the
+#     demo-mode gate, entirely separate from live operations.
+
+_DEMO_SYNTHETIC_ALERTS = [
+    {"topic": "tfr-alert",         "title": "Sample TFR",       "message": "Example: temporary flight restriction posted near KDCA -- sample data for demonstration, not a real advisory."},
+    {"topic": "wx-alerts",         "title": "Sample WX",        "message": "Example: METAR at KIAD shifting toward MVFR, ceiling trending down -- sample data for demonstration."},
+    {"topic": "flight-alerts",     "title": "N40217 [a1b2c3]",  "message": "N40217 [a1b2c3] DEM4821 -- sample position 38.9N 77.0W FL280 CRUISE | OOOI: watching (demo data)"},
+    {"topic": "flight-alerts",     "title": "N75530 -- BAGGAGE","message": "N75530 XYZ1190: sample bags ~14:35 (approach, +20min) -- KDCA (demo data)"},
+    {"topic": "cps",               "title": "Sample CPS",       "message": "Example: Critical Predictability State GO -- ceiling/vis/wind/precip/airspace/GDP nominal (sample data)."},
+    {"topic": "hot-alerts",        "title": "Sample Hot Alert", "message": "Example: elevated ground-route impact flagged for a DC-metro corridor -- sample data for demonstration."},
+    {"topic": "train-alerts",      "title": "Sample Rail",      "message": "Example: Acela 2151 running +8min into WAS -- sample data for demonstration."},
+    {"topic": "dispatch",          "title": "Sample Health",    "message": "Example: all feeds nominal, watchdog last run clean -- sample data for demonstration."},
+    {"topic": "dispatch-debriefs", "title": "Sample Debrief",   "message": "DEM4821 N40217 a1b2c3 | 38.900N 77.000W 28000ft 410kts CRUISE | sq:2200 (demo data)"},
+    {"topic": "ops-brief",         "title": "Sample Brief",     "message": "OPS BRIEF (sample) -- conditions nominal across tracked feeds. This is illustrative demo content, not a real operational brief."},
+]
+
+_demo_webhook_log: dict[str, list[dict]] = {"limoanywhere": [], "threecx": [], "ringcentral": []}
+_DEMO_WEBHOOK_LOG_MAX = 20
+
+
+async def _demo_fanout_alert(alert: dict) -> None:
+    """Best-effort fan-out of one synthetic demo alert to the three mock
+    receivers, mirroring what a real outbound webhook delivery to
+    LimoAnywhere/3CX/RingCentral would carry. In-process only (mock
+    receivers are just this same app's own in-memory log, see below) --
+    no real network call leaves the box, matching the rest of the demo's
+    privacy boundary, while still exercising the exact same payload shape
+    a real webhook integration would use."""
+    payload = {
+        "event": "dispatch_alert",
+        "source": "[operator LLC] Dispatch",
+        "topic": alert["topic"],
+        "title": alert["title"],
+        "message": alert["message"],
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    for name in ("limoanywhere", "threecx", "ringcentral"):
+        buf = _demo_webhook_log[name]
+        buf.insert(0, payload)
+        del buf[_DEMO_WEBHOOK_LOG_MAX:]
+
+
+@app.get("/api/demo/webhook-log")
+async def demo_webhook_log(request: Request):
+    """Recent payloads each mock receiver has gotten -- backs the
+    Integrations panel on the Feed tab. Demo-mode only; 404s on the live
+    instance and for trusted/Tailscale visitors on the demo instance (no
+    reason to show marketing fixtures to the operator)."""
+    if not DEMO_MODE or _is_trusted(request):
+        raise HTTPException(404, "Not found")
+    return {
+        "limoanywhere": _demo_webhook_log["limoanywhere"],
+        "threecx":      _demo_webhook_log["threecx"],
+        "ringcentral":  _demo_webhook_log["ringcentral"],
+    }
+
+
+async def _synthetic_ntfy_stream(request: Request):
+    """Demo-mode replacement for the real ntfy proxy. Cycles through
+    _DEMO_SYNTHETIC_ALERTS on a loop with light randomized pacing (25-45s
+    between messages, shuffled order per loop) so the feed feels alive
+    without ever being a 1:1 timed reveal of the same fixed script twice
+    in a row. Each emitted alert also drives the webhook fan-out above."""
+    yield "data: {\"type\":\"heartbeat\"}\n\n"
+    rotation = list(_DEMO_SYNTHETIC_ALERTS)
+    idx = 0
+    counter = 0
+    while True:
+        if await request.is_disconnected():
+            break
+        if idx % len(rotation) == 0:
+            random.shuffle(rotation)
+        alert = rotation[idx % len(rotation)]
+        idx += 1
+        counter += 1
+        await _demo_fanout_alert(alert)
+        msg = {
+            "id": f"demo-{counter}",
+            "time": int(time.time()),
+            "event": "message",
+            "topic": alert["topic"],
+            "title": alert["title"],
+            "message": alert["message"],
+        }
+        yield f"data: {json.dumps(msg)}\n\n"
+        await asyncio.sleep(random.uniform(25, 45))
+
+
 # ── ntfy feed proxy ─────────────────────────────────────────────────────────
 # Streams ntfy SSE through the runner so the frontend avoids CORS/auth issues.
 # Known topics: tfr-alert, hot-alerts, flight-alerts, cps, ops-health,
@@ -1318,7 +1796,19 @@ async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight
 
     ?topics=comma,separated,topic,names
     Streams ntfy JSON events as SSE data lines.
+
+    DEMO_MODE + untrusted origin: real ntfy is never touched at all --
+    _synthetic_ntfy_stream() above takes over entirely. See its docstring
+    and the block above it for why (this route used to leak real live
+    alerts to public demo visitors, same bug class as AIS/ACARS/VDL2/HFDL).
     """
+    if _should_sanitize_signals(request):
+        return StreamingResponse(
+            _synthetic_ntfy_stream(request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                     "X-Accel-Buffering": "no"},
+        )
     topic_str = topics.replace(" ", "")
     # ?since=1h: replay the last hour of messages on connect so the feed
     # populates immediately rather than waiting for the next live event.
@@ -1457,8 +1947,51 @@ import uuid as _uuid
 from shared.rss_catalog import USER_FEEDS_PATH as _USER_FEEDS_PATH
 from shared.rss_catalog import load_user_feeds as _load_user_feeds
 from shared.rss_catalog import save_user_feeds as _save_user_feeds
+from shared.rss_catalog import load_user_categories as _load_user_categories
+from shared.rss_catalog import save_user_categories as _save_user_categories
+from shared.rss_catalog import list_all_categories as _list_all_categories
+from shared.rss_catalog import visible_to as _visible_to
+from shared.feed_resolve import resolve_source as _resolve_source
 
 _user_feeds_lock = __import__("asyncio").Lock()
+_user_categories_lock = __import__("asyncio").Lock()
+
+_ANON_IDENTITY = {"tier": "tier0", "user_label": None, "department": None, "token_prefix": None}
+_identity_cache: dict[str, tuple[float, dict]] = {}
+_IDENTITY_CACHE_TTL = 60
+
+
+async def _resolve_operator_identity(request: Request) -> dict:
+    """
+    Added 2026-08-02 for the department/multi-operator RSS visibility
+    model. The runner never touches the shared DB directly (see this
+    file's README note on that boundary), so identity resolution is a
+    proxied call to web/main.py's /api/v1/whoami-token rather than a local
+    token lookup -- that endpoint wraps auth.auth.resolve_identity(),
+    which itself never raises, so this never raises either; a missing,
+    invalid, or unreachable-backend token all resolve to _ANON_IDENTITY.
+    Cached per raw Authorization header value for _IDENTITY_CACHE_TTL
+    seconds so a burst of RSS calls (rss_feed() fetches N feeds per
+    category request) doesn't add a network round-trip per call.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header:
+        return _ANON_IDENTITY
+    now = time.time()
+    cached = _identity_cache.get(auth_header)
+    if cached and cached[0] > now:
+        return cached[1]
+    identity = _ANON_IDENTITY
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(f"{DISPATCH_BASE}/api/v1/whoami-token",
+                             headers={"Authorization": auth_header})
+        if r.status_code == 200:
+            identity = r.json()
+    except httpx.HTTPError as e:
+        log.warning("_resolve_operator_identity: whoami-token call failed: %s", e)
+    _identity_cache[auth_header] = (now + _IDENTITY_CACHE_TTL, identity)
+    return identity
 
 
 async def _fetch_one_rss(client: "httpx.AsyncClient", feed: dict, cache_prefix: str) -> list[dict]:
@@ -1483,22 +2016,27 @@ async def _fetch_one_rss(client: "httpx.AsyncClient", feed: dict, cache_prefix: 
 
 
 @app.get("/api/rss")
-async def rss_feed(category: str = "corporate_intel", limit: int = 200):
+async def rss_feed(request: Request, category: str = "corporate_intel", limit: int = 200):
     """Fetch and return normalised RSS items for a category.
 
-    Merges catalog feeds + any user-defined feeds assigned to this category.
-    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation|__custom__
+    Merges catalog feeds + any user-defined feeds assigned to this category
+    that are visible to the caller (company-scope always included;
+    department/personal-scope only if the caller's resolved identity
+    matches -- see shared.rss_catalog.visible_to(), added 2026-08-02).
+    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation|<user-category-id>|__custom__
     ?limit=N  — max items to return (default 200, max 500). Each feed is capped at
                100 items before merging to prevent podcast archives from swamping news.
     """
-    valid_cats = list(_RSS_CATALOG) + ["__custom__"]
+    identity = await _resolve_operator_identity(request)
+    valid_cats = {c["id"] for c in _list_all_categories(identity)} | {"__custom__"}
     if category not in valid_cats:
         raise HTTPException(status_code=400,
-                            detail=f"Unknown category. Valid: {list(_RSS_CATALOG)}")
+                            detail=f"Unknown category. Valid: {sorted(valid_cats)}")
     limit = min(max(limit, 1), 500)
 
     catalog_feeds = _RSS_CATALOG.get(category, [])
-    user_feeds    = [f for f in _load_user_feeds() if f.get("category") == category]
+    user_feeds    = [f for f in _load_user_feeds()
+                     if f.get("category") == category and _visible_to(f, identity)]
     all_feeds     = catalog_feeds + user_feeds
 
     all_items: list[dict] = []
@@ -1513,12 +2051,77 @@ async def rss_feed(category: str = "corporate_intel", limit: int = 200):
 
 # ── RSS catalog listing ──────────────────────────────────────────────────────
 @app.get("/api/rss/categories")
-async def rss_categories():
-    """Return available RSS categories and their feed sources."""
-    return {
-        cat: [{"name": f["name"], "url": f["url"]} for f in feeds]
-        for cat, feeds in _RSS_CATALOG.items()
-    }
+async def rss_categories(request: Request):
+    """Return available RSS categories.
+
+    UPDATED 2026-08-02: previously returned only the hardcoded built-in
+    catalog (name -> feed list); now also includes user-created categories
+    (Add Category) visible to the caller. Response shape changed to a list
+    of {id, label, scope, department?, owner?, builtin?} objects rather
+    than a bare {cat: [feeds...]} dict, since categories are now real
+    entities with their own identity, not just dict keys -- the frontend's
+    CATALOG_CATEGORIES hardcoded array is retired in favor of calling this.
+    Built-in catalog feed contents are still available via the existing
+    /api/rss?category=X endpoint, unchanged.
+    """
+    identity = await _resolve_operator_identity(request)
+    return {"categories": _list_all_categories(identity)}
+
+
+@app.post("/api/rss/categories")
+async def rss_categories_add(request: Request, body: dict):
+    """
+    Create a user-defined category. Added 2026-08-02 (Add Category,
+    parallel to Add Feed).
+
+    Body: {label: str, scope: "company"|"department"|"personal" (default
+    "company"), department: str (required if scope="department")}.
+    Requires a resolved identity (Bearer token) -- anonymous callers may
+    not create categories, matching the write-gating added to Add Feed in
+    this same change (closes the previously-unauthenticated write surface,
+    see the ops.example.com retirement note near tailscale_gate
+    above).
+    """
+    identity = await _resolve_operator_identity(request)
+    if identity["tier"] == "tier0":
+        raise HTTPException(status_code=401, detail="A valid token is required to create a category.")
+
+    label      = (body.get("label") or "").strip()
+    scope      = (body.get("scope") or "company").strip()
+    department = (body.get("department") or "").strip() or None
+
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required.")
+    if scope not in ("company", "department", "personal"):
+        raise HTTPException(status_code=400, detail='scope must be one of: company, department, personal')
+    if scope == "department" and not department:
+        raise HTTPException(status_code=400, detail="department is required when scope='department'.")
+    if scope == "department" and identity.get("department") and department != identity["department"]:
+        # Not a hard security boundary (there's no cross-department secret
+        # here), just guards against fat-fingering a typo'd department name
+        # nobody else's token will ever match -- the caller can still name
+        # any department their own token doesn't have, on purpose, for the
+        # "set this up ahead of a department that doesn't have tokens yet"
+        # case, but not silently.
+        log.info("rss_categories_add: caller department=%s creating category for different department=%s",
+                  identity.get("department"), department)
+
+    async with _user_categories_lock:
+        categories = _load_user_categories()
+        cat_id = f"user_{_uuid.uuid4().hex[:12]}"
+        entry = {
+            "id":         cat_id,
+            "label":      label,
+            "scope":      scope,
+            "department": department if scope == "department" else None,
+            "owner":      identity.get("token_prefix") if scope == "personal" else None,
+            "created_by": identity.get("user_label"),
+        }
+        categories.append(entry)
+        _save_user_categories(categories)
+
+    log.info("user_rss_categories: added %s (scope=%s) by %s", label, scope, identity.get("user_label"))
+    return {"category": entry}
 
 
 # ── Custom RSS proxy (validate + preview a feed URL) ─────────────────────────
@@ -1545,32 +2148,101 @@ async def rss_custom(url: str, name: str = "Custom"):
         raise HTTPException(status_code=502, detail=f"Could not fetch feed: {e}")
 
 
+@app.post("/api/rss/resolve-source")
+async def rss_resolve_source(request: Request, body: dict):
+    """Resolve an arbitrary source URL (YouTube channel, Rumble channel, or a
+    blog homepage) into an actual RSS/Atom feed URL, so Add Feed can accept
+    "paste the channel/blog link" instead of requiring a pre-built feed URL.
+
+    Added 2026-08-03 per operator request for direct YouTube/Rumble/blog
+    support. See shared/feed_resolve.py's module docstring for the three
+    resolution strategies and the known Rumble/Cloudflare limitation found
+    during live testing (RSS-Bridge's RumbleBridge is wired up correctly,
+    but Rumble's own bot protection currently blocks the scrape for every
+    account tested -- returns a note explaining this, not a silent failure).
+
+    Body: {url: str}. Requires a valid (non-anonymous) identity -- this
+    fetches arbitrary caller-supplied URLs server-side, same SSRF-adjacent
+    reasoning as gating POST /api/rss/user-feeds behind auth.
+
+    Returns: {resolved: bool, detected_type: str, feed_url: str|None, note: str}
+    """
+    identity = await _resolve_operator_identity(request)
+    if identity["tier"] == "tier0":
+        raise HTTPException(status_code=401, detail="A valid token is required to resolve a source.")
+
+    url = (body.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    result = await _resolve_source(url)
+    log.info("rss/resolve-source: %s -> resolved=%s type=%s by %s",
+             url, result.get("resolved"), result.get("detected_type"),
+             identity.get("user_label"))
+    return result
+
+
 # ── User-defined feed CRUD ────────────────────────────────────────────────────
-_VALID_CATEGORIES = list(_RSS_CATALOG) + ["__custom__"]
+# _VALID_CATEGORIES retired 2026-08-02 -- categories are dynamic now (built-in
+# catalog keys + user-created categories), resolved per-request via
+# _list_all_categories(identity) so a caller only sees valid options they can
+# actually use (their own personal categories, their department's, and every
+# company-wide one).
 
 
 @app.get("/api/rss/user-feeds")
-async def user_feeds_list():
-    """Return all user-defined RSS/Atom feeds."""
-    return {"feeds": _load_user_feeds()}
+async def user_feeds_list(request: Request):
+    """Return user-defined RSS/Atom feeds visible to the caller.
+
+    UPDATED 2026-08-02: previously returned every saved feed unconditionally
+    (single shared global list). Now filtered by shared.rss_catalog.visible_to()
+    against the caller's resolved identity -- company-scope feeds (including
+    every feed that existed before this change, since unset scope defaults to
+    company) still show for everyone; department/personal-scope feeds only
+    show to a matching department token or the owning token respectively.
+    """
+    identity = await _resolve_operator_identity(request)
+    return {"feeds": [f for f in _load_user_feeds() if _visible_to(f, identity)]}
 
 
 @app.post("/api/rss/user-feeds")
-async def user_feeds_add(body: dict):
+async def user_feeds_add(request: Request, body: dict):
     """Add a user-defined feed. Validates the URL fetches a parseable feed first.
 
-    Body: {name: str, url: str, category: str}
-    category must be one of the catalog categories or "__custom__".
+    Body: {name: str, url: str, category: str, scope: "company"|"department"|
+    "personal" (default "company"), department: str (required if scope=
+    "department")}. category must be a valid built-in or user category id
+    (resolved per-caller, see _list_all_categories) or "__custom__".
+
+    UPDATED 2026-08-02: requires a resolved identity (Bearer token) --
+    anonymous POSTs are rejected with 401. This closes the write exposure
+    that made this route reachable/writable from the public internet via
+    the now-retired ops.example.com hostname (see the
+    tailscale_gate note above) -- defense in depth even after that hostname
+    is fully decommissioned at the tunnel level. Also stamps `owner` (this
+    caller's token_prefix) so personal-scope feeds are attributable and
+    deletable only by their creator (see user_feeds_delete below).
     """
-    name     = (body.get("name") or "").strip()
-    url      = (body.get("url")  or "").strip()
-    category = (body.get("category") or "__custom__").strip()
+    identity = await _resolve_operator_identity(request)
+    if identity["tier"] == "tier0":
+        raise HTTPException(status_code=401, detail="A valid token is required to add a feed.")
+
+    name       = (body.get("name") or "").strip()
+    url        = (body.get("url")  or "").strip()
+    category   = (body.get("category") or "__custom__").strip()
+    scope      = (body.get("scope") or "company").strip()
+    department = (body.get("department") or "").strip() or None
 
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="url must start with http:// or https://")
-    if category not in _VALID_CATEGORIES:
+    valid_cats = {c["id"] for c in _list_all_categories(identity)} | {"__custom__"}
+    if category not in valid_cats:
         raise HTTPException(status_code=400,
-                            detail=f"Invalid category. Valid: {_VALID_CATEGORIES}")
+                            detail=f"Invalid category. Valid: {sorted(valid_cats)}")
+    if scope not in ("company", "department", "personal"):
+        raise HTTPException(status_code=400, detail='scope must be one of: company, department, personal')
+    if scope == "department" and not department:
+        raise HTTPException(status_code=400, detail="department is required when scope='department'.")
 
     # Validate the feed fetches successfully before persisting
     try:
@@ -1594,23 +2266,48 @@ async def user_feeds_add(body: dict):
             "name":     name or url,
             "url":      url,
             "category": category,
+            "scope":    scope,
+            "department": department if scope == "department" else None,
+            "owner":    identity.get("token_prefix") if scope == "personal" else None,
+            "created_by": identity.get("user_label"),
         }
         feeds.append(entry)
         _save_user_feeds(feeds)
 
-    log.info("user_rss_feeds: added %s → %s (%s)", name, url, category)
+    log.info("user_rss_feeds: added %s → %s (%s, scope=%s) by %s",
+              name, url, category, scope, identity.get("user_label"))
     return {"feed": entry, "item_count": len(items)}
 
 
 @app.delete("/api/rss/user-feeds/{feed_id}")
-async def user_feeds_delete(feed_id: str):
-    """Remove a user-defined feed by its id."""
+async def user_feeds_delete(feed_id: str, request: Request):
+    """Remove a user-defined feed by its id.
+
+    UPDATED 2026-08-02: requires a resolved identity (same as POST above),
+    and additionally requires ownership -- admin tier can delete anything;
+    otherwise a company-scope feed can be deleted by anyone with a valid
+    token (matches the pre-existing shared-list behavior for the common
+    case), a department-scope feed only by a matching department token,
+    and a personal-scope feed only by its owning token_prefix.
+    """
+    identity = await _resolve_operator_identity(request)
+    if identity["tier"] == "tier0":
+        raise HTTPException(status_code=401, detail="A valid token is required to delete a feed.")
+
     async with _user_feeds_lock:
         feeds = _load_user_feeds()
-        before = len(feeds)
-        feeds  = [f for f in feeds if f.get("id") != feed_id]
-        if len(feeds) == before:
+        target = next((f for f in feeds if f.get("id") == feed_id), None)
+        if target is None:
             raise HTTPException(status_code=404, detail="Feed not found.")
+
+        if identity["tier"] != "admin":
+            scope = target.get("scope") or "company"
+            if scope == "personal" and target.get("owner") != identity.get("token_prefix"):
+                raise HTTPException(status_code=403, detail="Only the owner can delete a personal feed.")
+            if scope == "department" and target.get("department") != identity.get("department"):
+                raise HTTPException(status_code=403, detail="Only a matching department token can delete this feed.")
+
+        feeds = [f for f in feeds if f.get("id") != feed_id]
         _save_user_feeds(feeds)
     return {"deleted": feed_id}
 

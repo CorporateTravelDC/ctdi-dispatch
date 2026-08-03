@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-ops-brief 2min before ops-brief (:00)
+Requires=corporatetraveldc-ollama-prewarm-ops-brief.service
+
+[Timer]
+OnCalendar=*-*-* *:58:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

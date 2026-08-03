@@ -234,6 +234,20 @@ def parse_tbfm_message(xml_bytes: bytes) -> list[dict]:
     return sequences
 
 
+# Minimum aircraft-in-sequence count for a meter fix to be considered real
+# congestion -- added 2026-08-02 per operator direction. Before this,
+# check_tbfm_alerts() fired for every fix with ANY sequence data at all,
+# down to a single aircraft, which is normal/routine metering, not
+# congestion worth a push. Operator's own framing: "at least five aircraft
+# in sequence, or legitimate congestion" -- interpreted as a single
+# threshold (five aircraft IS the bar for "legitimate congestion" here,
+# not a second independent signal) since seq_count is the only reliable
+# congestion proxy available in this feed; there's no separate hold/delay
+# field to check against. Flag to the operator if a second, ETA-spread-
+# based signal turns out to be wanted in addition to this.
+_MIN_SEQ_FOR_ALERT = 5
+
+
 def check_tbfm_alerts(sequences: list[dict]) -> None:
     """
     Fire tbfm-alerts ntfy for DC-area meter fix sequencing updates.
@@ -246,8 +260,27 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
     track in isolation -- so a sector-specific subscription shows only
     that sector's metering load/congestion trend, while tbfm-alerts still
     carries everything nationwide for the aggregate view.
+
+    UPDATED 2026-08-02 per operator direction: gated on _MIN_SEQ_FOR_ALERT
+    (5) -- a single aircraft (or a handful under the threshold) at a meter
+    fix is routine, not congestion, and was blasting a push for every
+    trivial update. Sub-threshold fixes are skipped before the dedup check
+    even runs, so they don't consume/reset that fix's dedup window either.
+
+    UPDATED 2026-08-02 (later same day) per operator direction: switched
+    from a manual dual-fire (always push to tbfm-alerts + push to the zone
+    topic if resolved) to shared.sector_coalesce.fire_family_alert(), which
+    adds real escalation gating on top of the _MIN_SEQ_FOR_ALERT floor --
+    "keep TBFM alerts... specifically for the escalating metering flight
+    plan issues" -- so tbfm-alerts and tbfm-<zone> now only fire when a
+    fix's activity is genuinely trending up vs. the last 15 minutes, not
+    on every single qualifying (5+ aircraft) update. Per-zone sensitivity
+    is independently tunable via
+    shared.sector_coalesce.set_escalate_threshold("tbfm", "<ZONE_NAME>",
+    multiplier, floor) -- note ZONE_NAME here is the _SECTOR_FACILITY_MAP
+    name (e.g. "DC_LOCAL", "NEW_YORK"), not the ntfy topic code (zdc/zny).
     """
-    from shared.sector_coalesce import sector_ntfy_topic
+    from shared.sector_coalesce import fire_family_alert
 
     by_fix: dict[str, list[dict]] = {}
     for s in sequences:
@@ -256,6 +289,8 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
 
     for fix, fix_seqs in by_fix.items():
         seq_count = len(fix_seqs)
+        if seq_count < _MIN_SEQ_FOR_ALERT:
+            continue
         dedup_key = content_hash(f"tbfm:{fix}:{seq_count}")
         # Bug fixed 2026-07-21: dedup slot key was the constant string "tbfm"
         # for every meter fix, so with ~100 fixes active nationwide on this
@@ -285,13 +320,12 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
         detail = f"{fix}: {seq_count} aircraft in sequence{eta_info}"
         dispatch = f"{fix}: {seq_count} in sequence"
         try:
-            _fire_ntfy_dual("tbfm-alerts", title, detail, dispatch, priority=2)
-            sector_topic = sector_ntfy_topic(facility)
-            if sector_topic:
-                _fire_ntfy_dual(sector_topic, title, detail, dispatch, priority=2)
+            result = fire_family_alert("tbfm", "tbfm", facility, title, detail, dispatch, base_priority=2)
             _TBFM_ALERT_DEDUP.record(dedup_slot, dedup_key)
-            log.info("tbfm: tbfm-alert fired for fix %s (%d in seq, facility=%s, sector_topic=%s)",
-                      fix, seq_count, facility, sector_topic)
+            log.info("tbfm: fire_family_alert for fix %s (%d in seq, facility=%s, sector=%s, "
+                      "escalating=%s, aggregate_fired=%s, zone_fired=%s)",
+                      fix, seq_count, facility, result.get("sector"), result.get("escalating"),
+                      result.get("fired"), result.get("zone_fired"))
         except Exception as e:
             log.error("tbfm: tbfm-alert fire failed for %s: %s", fix, e)
 

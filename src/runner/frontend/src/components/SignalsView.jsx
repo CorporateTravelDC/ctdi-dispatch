@@ -307,7 +307,11 @@ function MessageFeed({ sigType, color }) {
         <input className="sig-search" type="search" placeholder="search…"
           value={search} onChange={e => setSearch(e.target.value)} aria-label={`Search ${sigType.label} messages`} />
       </div>
-      {hwNotice && <div className="sig-hw-notice">⚠ No local {sigType.label} decoder — showing Jumpseat remote data</div>}
+      {hwNotice && (
+        <div className="sig-hw-notice">
+          ⚠ No local {sigType.label} decoder — showing {SOURCE_LABELS[data.source] || data.source} remote data
+        </div>
+      )}
       <div className="sig-feed" ref={feedRef}>
         {isPending ? (
           <div className="sig-pending">Hardware pending — {sigType.label} decoder not active</div>

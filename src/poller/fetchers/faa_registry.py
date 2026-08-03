@@ -207,6 +207,55 @@ def _parse_master(zf: zipfile.ZipFile) -> Generator[list[dict], None, None]:
             yield batch
 
 
+def _parse_acftref(zf: zipfile.ZipFile) -> Generator[list[dict], None, None]:
+    """Yield batches of dicts from ACFTREF.txt inside the SAME registry ZIP
+    MASTER.txt comes from -- no separate download. Added 2026-08-02 to
+    decode faa_aircraft_registry.mfr_mdl_code locally instead of requiring
+    an external WebFetch to registry.faa.gov per lookup (done by hand for
+    N39FE earlier the same day this was built).
+
+    Column layout confirmed against a live download (comma-delimited, one
+    header row "CODE,MFR,MODEL,...", trailing comma on every data row,
+    UTF-8 BOM on the header line -- hence utf-8-sig decoding here instead
+    of latin-1 like MASTER.txt uses):
+      0 CODE  1 MFR  2 MODEL  3 TYPE-ACFT  4 TYPE-ENG  5 AC-CAT
+      6 BUILD-CERT-IND  7 NO-ENG  8 NO-SEATS  9 AC-WEIGHT  10 SPEED
+    """
+    names = zf.namelist()
+    ref_name = next((n for n in names if n.upper() == "ACFTREF.TXT"), None)
+    if not ref_name:
+        log.warning("FAA registry: ACFTREF.TXT not found in ZIP; files: %s", names)
+        return
+
+    with zf.open(ref_name) as raw:
+        text = io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace")
+        reader = csv.reader(text)
+        batch: list[dict] = []
+        for row in reader:
+            if len(row) < 11:
+                continue
+            code = row[0].strip()
+            if not code or code.upper() == "CODE":   # header row
+                continue
+            batch.append({
+                "code":         code,
+                "manufacturer": row[1].strip() or None,
+                "model":        row[2].strip() or None,
+                "type_acft":    row[3].strip() or None,
+                "type_engine":  row[4].strip() or None,
+                "ac_category":  row[5].strip() or None,
+                "no_engines":   row[7].strip() or None,
+                "no_seats":     row[8].strip() or None,
+                "ac_weight":    row[9].strip() or None,
+                "speed":        row[10].strip() or None,
+            })
+            if len(batch) >= _BATCH_SIZE:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+
 def _parse_ladd(zf: zipfile.ZipFile) -> list[str]:
     """Return list of N-numbers from the LADD ZIP."""
     names = zf.namelist()
@@ -258,6 +307,18 @@ def fetch_faa_registry() -> dict:
         log.error("FAA registry import failed: %s", e)
         return {"ok": False, "error": str(e)}
 
+    # ── ACFTREF reference table (mfr_mdl_code -> manufacturer/model) ────────
+    # Same zip, no new download. Non-fatal if it fails -- the registry
+    # import itself already succeeded and shouldn't be blocked by this.
+    acftref_count = 0
+    try:
+        for batch in _parse_acftref(zf):
+            db.faa_acftref_upsert(batch)
+            acftref_count += len(batch)
+        log.info("FAA ACFTREF: %d reference records upserted", acftref_count)
+    except Exception as e:
+        log.warning("FAA ACFTREF import failed (non-fatal): %s", e)
+
     # ── LADD list ─────────────────────────────────────────────────────────
     ladd_count = 0
     try:
@@ -288,6 +349,7 @@ def fetch_faa_registry() -> dict:
     stats = {
         "ok": True,
         "registry_upserted": total_upserted,
+        "acftref_count": acftref_count,
         "ladd_count": ladd_count,
         "removed_count": removed_count,
         "elapsed_sec": round(elapsed, 1),

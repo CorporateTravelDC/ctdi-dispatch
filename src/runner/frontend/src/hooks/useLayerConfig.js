@@ -18,6 +18,7 @@ export const DEFAULT_CONFIG = {
     metar:    true,
     // Map overlays (gated per-view; Steps 3-5 will wire toggles)
     tfr:      true,
+    airmet:   true,
     airspace: true,
     rings:    true,
     localFeed: true,

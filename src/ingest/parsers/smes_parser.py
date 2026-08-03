@@ -15,38 +15,43 @@ from common import db
 
 log = logging.getLogger("ingest.parsers.smes")
 
-# One-shot full-message debug capture -- 2026-07-20, same technique that
-# confirmed tbfm_parser.py's real schema (see that file's docstring for the
-# result of doing this for TBFM). terminal_tracks is now confirmed-good
-# (TAIS path fixed and live, 327+ rows); surface_tracks is still 0 rows --
-# all 5 samples caught under both "smes" and "tais" labels this session were
-# byte-identical, meaning every message seen on this queue so far has been
-# TAIS-shaped, not SMES-shaped (both parse functions are called unconditionally
-# on every stdds payload -- see swim_client._handle_stdds_message -- so the
-# capture isn't selective, it just records what came in). TAIS cap dropped to
-# a small ongoing spot-check; SMES cap raised substantially to maximize the
-# chance of catching a genuinely different (real ASDE-X) message if one ever
-# arrives on this subscription. If SMES stays empty after this much larger
-# sample, the working conclusion becomes "this STDDS entitlement doesn't
-# carry ASDE-X SMES data" rather than "we haven't looked hard enough."
+# Full-message debug capture -- 2026-07-20, same technique that confirmed
+# tbfm_parser.py's real schema. Originally split "smes" vs "tais" by which
+# parse function was called, which conflated everything into two buckets
+# regardless of actual message shape.
+#
+# 2026-08-03 rework: this STDDS queue turns out to carry FAR more message
+# shapes than smes/tais -- live samples confirmed asdexMsg (real ASDE-X,
+# batched), TATrackAndFlightPlan / TAStatus (TAIS), SafetyLogicHoldBar
+# (runway safety-logic status), and DATISData (digital ATIS) all arriving
+# on one subscription. Capture is now keyed by the message's ACTUAL root
+# tag (not by which parse function happened to be called on it), with a
+# small per-tag cap, so a rare/new schema isn't crowded out by whichever
+# shape happens to be most common that hour, and future investigation of
+# "what else is on this queue" doesn't require guessing from stale
+# samples that already rotated out.
 _DEBUG_SAMPLE_DIR = "/var/lib/corporatetraveldc/smes_debug"
-_DEBUG_SAMPLE_MAX_TAIS = 3
-_DEBUG_SAMPLE_MAX_SMES = 40
-_smes_debug_count = 0
-_tais_debug_count = 0
+_DEBUG_SAMPLE_MAX_PER_TAG = 5
+_debug_tag_counts: dict[str, int] = {}
 
-# Priority facility capture -- 2026-07-20. Generic capture above is
-# unfiltered/random (confirmed: 45 samples across two restarts hit small
-# out-of-area TRACONs like TRI/GPT/PWM/CID, nothing DC-area), so a message
-# actually sourced from IAD/DCA/BWI could be comparatively rare in a random
-# sample even if it exists. IAD in particular has had known ASDE-X
-# outage/repair periods recently, which cuts both ways -- may mean fewer
-# live ASDE-X messages from IAD right now, or may mean an outage/fault
-# status message is what's on the wire instead of track data. Either way,
-# worth a dedicated, uncapped-relative-to-the-generic-budget catch: any
-# message whose <src> matches one of our actual airports of interest gets
-# captured regardless of the generic per-kind cap above, into its own
-# directory so it can't be crowded out by non-DC-area traffic.
+
+def _root_tag_of(xml_bytes: bytes) -> str | None:
+    try:
+        return ET.fromstring(xml_bytes).tag.split("}")[-1]
+    except ET.ParseError:
+        return None
+
+
+# Priority facility capture -- 2026-07-20, fixed 2026-08-03. Generic capture
+# above is unfiltered/random, so a message actually sourced from IAD/DCA/BWI
+# could be comparatively rare in a random sample even if it exists.
+#
+# Bug fixed 2026-08-03: this checked `<src>{fac}</src>`, which is the TAIS
+# tag -- SMES/asdexMsg messages carry `<airport>{fac}</airport>` instead
+# (confirmed via live samples: `<airport>KIAD</airport>`, not `<src>`), so
+# the "priority capture for our actual airports" safety net had never once
+# matched a real SMES message despite KIAD/KBWI both being confirmed live
+# on this queue. Now checks both tag forms.
 _PRIORITY_FACILITIES = ("IAD", "DCA", "BWI")
 _PRIORITY_SAMPLE_DIR = "/var/lib/corporatetraveldc/smes_debug_priority"
 _PRIORITY_SAMPLE_MAX = 25
@@ -57,8 +62,10 @@ def _maybe_capture_priority_sample(xml_bytes: bytes, kind: str) -> None:
     global _priority_debug_count
     if _priority_debug_count >= _PRIORITY_SAMPLE_MAX:
         return
-    # Cheap pre-check before touching XML parsing: <src>IAD</src> etc.
-    if not any(f"<src>{fac}</src>".encode() in xml_bytes for fac in _PRIORITY_FACILITIES):
+    if not any(
+        f"<src>{fac}</src>".encode() in xml_bytes or f"<airport>K{fac}</airport>".encode() in xml_bytes
+        for fac in _PRIORITY_FACILITIES
+    ):
         return
     try:
         os.makedirs(_PRIORITY_SAMPLE_DIR, exist_ok=True)
@@ -73,23 +80,19 @@ def _maybe_capture_priority_sample(xml_bytes: bytes, kind: str) -> None:
 
 def _capture_debug_sample(xml_bytes: bytes, kind: str) -> None:
     _maybe_capture_priority_sample(xml_bytes, kind)
-    global _smes_debug_count, _tais_debug_count
-    count = _smes_debug_count if kind == "smes" else _tais_debug_count
-    cap = _DEBUG_SAMPLE_MAX_SMES if kind == "smes" else _DEBUG_SAMPLE_MAX_TAIS
-    if count >= cap:
+    tag = _root_tag_of(xml_bytes) or "unknown"
+    count = _debug_tag_counts.get(tag, 0)
+    if count >= _DEBUG_SAMPLE_MAX_PER_TAG:
         return
     try:
         os.makedirs(_DEBUG_SAMPLE_DIR, exist_ok=True)
-        path = f"{_DEBUG_SAMPLE_DIR}/{kind}_sample_{count}.xml"
+        path = f"{_DEBUG_SAMPLE_DIR}/{tag}_{count}.xml"
         with open(path, "wb") as f:
             f.write(xml_bytes)
-        log.info("stdds: wrote %s debug sample %s (%d bytes)", kind, path, len(xml_bytes))
+        log.info("stdds: wrote %s debug sample %s (%d bytes)", tag, path, len(xml_bytes))
     except Exception as e:
-        log.warning("stdds: %s debug sample capture failed: %s", kind, e)
-    if kind == "smes":
-        _smes_debug_count += 1
-    else:
-        _tais_debug_count += 1
+        log.warning("stdds: %s debug sample capture failed: %s", tag, e)
+    _debug_tag_counts[tag] = count + 1
 
 
 # AIRPORTS we care about for surface tracks.
@@ -203,7 +206,20 @@ def parse_smes_message(xml_bytes: bytes) -> list[dict]:
     """
     Parse a SMES (Surface Movement Event Service) message -- real asdexMsg
     schema, not the old positionReport/facilityIdentifier tag guesses.
-    Returns a list of surface track dicts (usually 0 or 1).
+
+    2026-08-03 fix: a single asdexMsg BATCHES many report elements -- live
+    samples confirmed KBWI messages carrying up to 34 positionReports and
+    KORD messages carrying up to 51, all as sibling direct children of the
+    same asdexMsg root. The original implementation used _find_path_local()
+    to grab only the FIRST matching report element and returned a single
+    dict, silently discarding the rest of every batch on every message --
+    which meant most of each poll's ground traffic (up to ~97% of a
+    51-aircraft KORD batch) was thrown away before it ever reached the DB.
+    KDCA/KIAD/KBWI still accumulated thousands of surface_tracks rows over
+    time purely because *some* aircraft happened to land in the "first
+    match" slot across enough messages, masking how much was being dropped
+    per cycle. Fixed to walk every batched report element and return one
+    dict per valid record.
     """
     _capture_debug_sample(xml_bytes, "smes")
     try:
@@ -223,95 +239,296 @@ def parse_smes_message(xml_bytes: bytes) -> list[dict]:
     if airport not in SMES_AIRPORTS:
         return []
 
-    report_type = next(
-        (t for t in ("positionReport", "mlatReport", "adsbReport")
-         if any(_local_tag(c.tag) == t for c in root)),
-        None,
-    )
-    if report_type is None:
-        return []
-    report_elem = _find_path_local(root, report_type)
-
-    eram_gufi = _path_text(root, "enhancedData", "eramGufi") or _path_text(
-        report_elem, "enhancedData", "eramGufi")
-
-    if report_type == "positionReport":
-        # Flat structure -- doc-derived, not yet sample-confirmed.
-        track_id = _path_text(report_elem, "track")
-        callsign = (_path_text(report_elem, "flightId", "aircraftId")
-                    or _path_text(report_elem, "manual", "callNum"))
-        squawk = _path_text(report_elem, "flightId", "mode3ACode")
-        aircraft_type = (_path_text(report_elem, "flightInfo", "acType")
-                          or _path_text(report_elem, "manual", "acType"))
-        lat_str = _path_text(report_elem, "position", "latitude")
-        lon_str = _path_text(report_elem, "position", "longitude")
-        alt_str = _path_text(report_elem, "position", "altitude")
-        spd_str = _path_text(report_elem, "movement", "speed")
-        hdg_str = _path_text(report_elem, "movement", "heading")
-    else:
-        # mlatReport / adsbReport (SMES Cat10) -- nested under report/basicReport,
-        # confirmed against a real adsbReport sample (KPHX, 2026-07-20).
-        inner = _find_path_local(report_elem, "report")
-        basic = _find_path_local(inner, "basicReport")
-        track_id = _path_text(basic, "track")
-        callsign = None  # not present in either the doc's mapping or the real sample
-        squawk = _path_text(inner, "mode3ACode")
-        aircraft_type = None
-        pos = _find_path_local(basic, "position")
-        lat_str = _path_text(pos, "lat")
-        lon_str = _path_text(pos, "lon")
-        alt_str = _path_text(inner, "level")
-        vel = _find_path_local(basic, "velocity")
-        vx_str = _path_text(vel, "x")
-        vy_str = _path_text(vel, "y")
-        spd_str = None  # derived below from vx/vy if present, like FDPS's vx/vy fallback
-        hdg_str = None
-        if vx_str and vy_str:
-            try:
-                vx, vy = float(vx_str), float(vy_str)
-                spd_str = str((vx ** 2 + vy ** 2) ** 0.5)
-            except ValueError:
-                pass
-
-    if not track_id:
+    report_elems = [
+        c for c in root
+        if _local_tag(c.tag) in ("positionReport", "mlatReport", "adsbReport")
+    ]
+    if not report_elems:
         return []
 
-    try:
-        latitude = float(lat_str) if lat_str else None
-        longitude = float(lon_str) if lon_str else None
-    except ValueError:
-        latitude = longitude = None
-    if latitude is None or longitude is None:
-        return []
+    msg_eram_gufi = _path_text(root, "enhancedData", "eramGufi")
 
-    try:
-        altitude_ft = float(alt_str) if alt_str else None
-    except ValueError:
-        altitude_ft = None
-    try:
-        speed_kts = int(float(spd_str)) if spd_str else None
-    except ValueError:
-        speed_kts = None
-    try:
-        heading_deg = float(hdg_str) if hdg_str else None
-    except ValueError:
-        heading_deg = None
+    results: list[dict] = []
+    for report_elem in report_elems:
+        report_type = _local_tag(report_elem.tag)
+        eram_gufi = msg_eram_gufi or _path_text(report_elem, "enhancedData", "eramGufi")
 
-    return [{
-        "track_id": str(track_id),
-        "airport": airport,
-        "callsign": callsign,
-        "squawk": squawk,
-        "aircraft_type": aircraft_type,
-        "target_type": report_type,
-        "latitude": latitude,
-        "longitude": longitude,
-        "altitude_ft": altitude_ft,
-        "speed_kts": speed_kts,
-        "heading_deg": heading_deg,
-        "eram_gufi": eram_gufi,
-        "last_seen": _now_iso(),
-    }]
+        if report_type == "positionReport":
+            # Flat structure -- doc-derived, not yet sample-confirmed.
+            track_id = _path_text(report_elem, "track")
+            callsign = (_path_text(report_elem, "flightId", "aircraftId")
+                        or _path_text(report_elem, "manual", "callNum"))
+            squawk = _path_text(report_elem, "flightId", "mode3ACode")
+            aircraft_type = (_path_text(report_elem, "flightInfo", "acType")
+                              or _path_text(report_elem, "manual", "acType"))
+            lat_str = _path_text(report_elem, "position", "latitude")
+            lon_str = _path_text(report_elem, "position", "longitude")
+            alt_str = _path_text(report_elem, "position", "altitude")
+            spd_str = _path_text(report_elem, "movement", "speed")
+            hdg_str = _path_text(report_elem, "movement", "heading")
+        else:
+            # mlatReport / adsbReport (SMES Cat10) -- nested under report/basicReport,
+            # confirmed against a real adsbReport sample (KPHX, 2026-07-20).
+            inner = _find_path_local(report_elem, "report")
+            basic = _find_path_local(inner, "basicReport")
+            track_id = _path_text(basic, "track")
+            callsign = None  # not present in either the doc's mapping or the real sample
+            squawk = _path_text(inner, "mode3ACode")
+            aircraft_type = None
+            pos = _find_path_local(basic, "position")
+            lat_str = _path_text(pos, "lat")
+            lon_str = _path_text(pos, "lon")
+            alt_str = _path_text(inner, "level")
+            vel = _find_path_local(basic, "velocity")
+            vx_str = _path_text(vel, "x")
+            vy_str = _path_text(vel, "y")
+            spd_str = None  # derived below from vx/vy if present, like FDPS's vx/vy fallback
+            hdg_str = None
+            if vx_str and vy_str:
+                try:
+                    vx, vy = float(vx_str), float(vy_str)
+                    spd_str = str((vx ** 2 + vy ** 2) ** 0.5)
+                except ValueError:
+                    pass
+
+        if not track_id:
+            continue
+
+        try:
+            latitude = float(lat_str) if lat_str else None
+            longitude = float(lon_str) if lon_str else None
+        except ValueError:
+            latitude = longitude = None
+        if latitude is None or longitude is None:
+            continue
+
+        try:
+            altitude_ft = float(alt_str) if alt_str else None
+        except ValueError:
+            altitude_ft = None
+        try:
+            speed_kts = int(float(spd_str)) if spd_str else None
+        except ValueError:
+            speed_kts = None
+        try:
+            heading_deg = float(hdg_str) if hdg_str else None
+        except ValueError:
+            heading_deg = None
+
+        results.append({
+            "track_id": str(track_id),
+            "airport": airport,
+            "callsign": callsign,
+            "squawk": squawk,
+            "aircraft_type": aircraft_type,
+            "target_type": report_type,
+            "latitude": latitude,
+            "longitude": longitude,
+            "altitude_ft": altitude_ft,
+            "speed_kts": speed_kts,
+            "heading_deg": heading_deg,
+            "eram_gufi": eram_gufi,
+            "last_seen": _now_iso(),
+        })
+
+    return results
+
+
+# -- STDDS/TAIS family-wide congestion alert -----------------------------
+#
+# Added 2026-08-03 per operator direction. Context: TAIS's facility field
+# is a hardcoded constant ("PCT" -- Potomac TRACON, see TAIS_FACILITY
+# above) -- there is no per-fix, per-taxiway, or per-runway breakdown in
+# this feed's data model (no meter-fix field like TBFM, no ground/taxi
+# status flag, just track_id/lat/lon/alt/speed/squawk per aircraft). Given
+# that, and the operator's own framing ("do we want to just do an overall
+# family-wide with no sectors on that?"), this fires a SINGLE family-wide
+# "stdds-alerts" topic keyed on overall PCT track-count trend -- how many
+# aircraft PCT is working right now vs. its own last-15-minutes baseline --
+# rather than inventing a fake per-taxiway/per-fix split this feed can't
+# actually support. No "stdds-<zone>" per-sector topic is fired: PCT
+# already sits inside the "zdc" ARTCC group used by tbfm/tfms (see
+# _ARTCC_GROUPS in shared.sector_coalesce), and since PCT never varies for
+# this feed, a zone push would just be a second, redundant copy of the
+# exact same aggregate event under a different topic name every time --
+# hence fire_family_alert(..., zone_split=False).
+#
+# Uses the same escalating-burst classification as tbfm/tfms/itws/aim_fns
+# (shared.sector_coalesce.record_event: current 15-min window vs. the
+# prior 15-min window), gated by a floor so routine single-digit batches
+# never even reach the escalation check. Floor set from live samples
+# 2026-08-03: normal per-message PCT batches ran 1-20 tracks; 15 sits at
+# the high end of routine and low end of "worth a look," leaving the
+# escalating-trend gate (not this floor) as the real signal for "PCT is
+# genuinely busier than its own recent baseline right now."
+_MIN_TAIS_TRACKS_FOR_ALERT = 15
+
+
+def check_stdds_alerts(tracks: list[dict]) -> None:
+    """Fire stdds-alerts (family-wide, no zone split) when this message's
+    PCT terminal-track batch size is escalating vs. the last 15 minutes."""
+    if not tracks:
+        return
+    track_count = len(tracks)
+    if track_count < _MIN_TAIS_TRACKS_FOR_ALERT:
+        return
+
+    from shared.sector_coalesce import fire_family_alert
+
+    title = "STDDS/TAIS -- Potomac TRACON traffic"
+    detail = f"PCT: {track_count} terminal tracks in this update"
+    dispatch = f"PCT: {track_count} tracks"
+    try:
+        result = fire_family_alert(
+            "stdds", "stdds", TAIS_FACILITY, title, detail, dispatch,
+            base_priority=2, zone_split=False,
+        )
+        log.info(
+            "stdds: fire_family_alert for PCT (%d tracks, escalating=%s, "
+            "aggregate_fired=%s)",
+            track_count, result.get("escalating"), result.get("fired"),
+        )
+    except Exception as e:
+        log.error("stdds: stdds-alert fire failed: %s", e)
+
+
+# -- Per-airport SMES/ASDE-X surface-track congestion alert ---------------
+#
+# Added 2026-08-03 per operator direction: "extend that out to the per
+# sector, like everything else, so I can see where there are ADSE issues."
+# Unlike PCT/TAIS (a single constant facility, hence family-wide-only,
+# see check_stdds_alerts above), SMES surface tracks naturally group by
+# AIRPORT (KDCA/KIAD/KBWI), and those three airports are genuinely
+# distinct facilities worth telling apart -- "DCA ground is busy" and
+# "IAD ground is busy" are different, actionable facts, not the same
+# event under two names the way stdds-zdc would have been for PCT.
+#
+# The existing ARTCC-shaped zone machinery (_ARTCC_GROUPS) actually
+# collapses DCA/IAD/BWI into the SAME "zdc" group (used by tbfm/tfms),
+# which would hide them from each other -- so this uses the new
+# sector_override param on fire_family_alert() (2026-08-03) to bypass
+# that and use the airport code directly as both the escalation sector
+# and the zone topic name: stdds-dca / stdds-iad / stdds-bwi, plus the
+# same stdds-alerts family-wide aggregate every other stdds event also
+# feeds. Per-airport threshold tuning is available the same way as any
+# other zone: shared.sector_coalesce.set_escalate_threshold("stdds",
+# "DCA", multiplier, floor) (sector name is the bare airport code minus
+# the K prefix, e.g. "DCA" not "KDCA", to match sector_override usage
+# below).
+_MIN_SURFACE_TRACKS_FOR_ALERT = 15
+
+# STDDS zone routing, extended 2026-08-03 per operator direction: opened
+# STDDS alerting up to the same eight ARTCC-level sectors already tracked
+# by TBFM/TFMS (shared.sector_coalesce._ARTCC_GROUPS), using real,
+# confirmed-live major airports within each sector -- cross-checked
+# against this platform's OWN captured data (every airport below has real
+# rows in stdds_safety_status/surface_movement_events as of 2026-08-03),
+# not guessed from general knowledge. DCA/IAD/BWI keep their EXISTING
+# individual, airport-level zone topics (stdds-dca/stdds-iad/stdds-bwi)
+# rather than being pooled into one "stdds-zdc" topic like the other seven
+# zones -- this is [operator LLC]' own home-region operational
+# focus and predates this change (see
+# stdds_incursion_taxi_per_airport_zones_20260803). An operator running
+# this platform from a different home region should swap
+# _STDDS_REGIONAL_AIRPORTS for their own local airports -- nothing
+# downstream (topic naming, escalation gating, the ntfy topic-count
+# watchdog) treats DCA/IAD/BWI specially in code, only this one constant
+# does.
+_STDDS_REGIONAL_AIRPORTS = frozenset({"KDCA", "KIAD", "KBWI"})
+
+# Major-airport -> ARTCC-zone-code routing for the other 7 tracked
+# sectors. Airport choice per zone is an approximation, not a verified
+# ARTCC-boundary lookup (real ARTCC polygons are complex and this
+# platform has no boundary-geometry data to check against) -- these are
+# well-known major hub airports conventionally associated with each named
+# center. "zatl" zone key matches shared.sector_coalesce (real ARTCC code
+# there is ZTL, fixed 2026-08-03 -- the zone KEY name is unaffected).
+_STDDS_ZONE_AIRPORTS: dict[str, str] = {
+    # zny -- New York Center/TRACON
+    "KJFK": "zny", "KLGA": "zny", "KEWR": "zny",
+    # zid -- Indianapolis Center
+    "KCVG": "zid", "KSDF": "zid",
+    # zob -- Cleveland Center
+    "KCLE": "zob", "KPIT": "zob", "KDTW": "zob",
+    # zatl -- Atlanta Center/TRACON
+    "KATL": "zatl",
+    # zhu -- Houston Center
+    "KIAH": "zhu",
+    # zla -- Los Angeles Center
+    "KLAX": "zla", "KLAS": "zla",
+    # zse -- Seattle Center
+    "KSEA": "zse", "KPDX": "zse",
+}
+
+
+def _stdds_sector_for(airport: str | None) -> str | None:
+    """Return the sector_override value for an airport, or None if it's
+    outside the currently-tracked scope (data collection stays nationwide
+    regardless -- see write_surface_tracks/write_safety_status/
+    write_surface_movement_event, none of which call this; only the
+    three alerting functions below do). DCA/IAD/BWI resolve to their own
+    bare airport code for an individual zone topic (e.g. stdds-dca); the
+    14 other tracked airports resolve to their shared ARTCC-zone code
+    (e.g. stdds-zny) so all traffic for one geographic sector coalesces
+    onto one topic instead of one-topic-per-airport -- matching the
+    TBFM/TFMS convention this was asked to align with, and avoiding the
+    per-airport topic-count growth that made incursion/taxi alerting
+    nationwide-unscoped a real problem earlier this same session."""
+    if not airport:
+        return None
+    if airport in _STDDS_REGIONAL_AIRPORTS:
+        return airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
+    return _STDDS_ZONE_AIRPORTS.get(airport)
+
+
+def check_surface_alerts(tracks: list[dict]) -> None:
+    """Fire stdds-alerts (aggregate) + stdds-<zone> (per airport for
+    DCA/IAD/BWI, per ARTCC sector for the other 7 tracked zones) when this
+    message's SMES surface-track batch size for a given airport is
+    escalating vs. that airport's own last-15-minutes baseline.
+
+    FIXED 2026-08-03: this had NO scope check at all before this change --
+    unlike check_incursion_alert/check_taxi_alerts (which were caught and
+    scoped to DCA/IAD/BWI earlier this session after a live nationwide-
+    alerting incident), ASDE-X ground-congestion alerting has been
+    unscoped/nationwide since it was first built, one zone topic per
+    airport that ever crossed _MIN_SURFACE_TRACKS_FOR_ALERT. That's a
+    real, if quieter, version of the same topic-count risk. Now scoped
+    via _stdds_sector_for() like the other two, consistent with the
+    unified 8-zone design."""
+    if not tracks:
+        return
+
+    from shared.sector_coalesce import fire_family_alert
+
+    by_airport: dict[str, int] = {}
+    for t in tracks:
+        airport = t.get("airport")
+        if airport:
+            by_airport[airport] = by_airport.get(airport, 0) + 1
+
+    for airport, track_count in by_airport.items():
+        if track_count < _MIN_SURFACE_TRACKS_FOR_ALERT:
+            continue
+        sector = _stdds_sector_for(airport)
+        if sector is None:
+            continue
+        title = f"STDDS/ASDE-X -- {airport} ground traffic"
+        detail = f"{airport}: {track_count} surface tracks in this update"
+        dispatch = f"{airport}: {track_count} ground tracks"
+        try:
+            result = fire_family_alert(
+                "stdds", "stdds_surface", airport, title, detail, dispatch,
+                base_priority=2, sector_override=sector,
+            )
+            log.info(
+                "stdds: fire_family_alert for %s surface (%d tracks, escalating=%s, "
+                "aggregate_fired=%s, zone_fired=%s)",
+                airport, track_count, result.get("escalating"),
+                result.get("fired"), result.get("zone_fired"),
+            )
+        except Exception as e:
+            log.error("stdds: stdds-surface alert fire failed for %s: %s", airport, e)
 
 
 def write_surface_tracks(tracks: list[dict]) -> int:
@@ -492,3 +709,252 @@ def write_terminal_tracks(tracks: list[dict]) -> int:
         except Exception as e:
             log.error("tais: DB write error for track %s: %s", t.get("track_id"), e)
     return written
+
+
+# -- SafetyLogicHoldBar -- runway safety-logic status / incursion signal ---
+#
+# Added 2026-08-03 per operator direction: "I can see an incursion alert
+# into the system." Real schema confirmed via live samples (KCLT, KCVG):
+#
+#   <ns2:SafetyLogicHoldBar xmlns:ns2="...v4-0:smes:surfacemovementevent">
+#     <airport>KCLT</airport>
+#     <control>1</control>
+#     <status>0000000000000000000000000000000000000000000000000000800000200000</status>
+#   </ns2:SafetyLogicHoldBar>
+#
+# IMPORTANT LIMITATION, stated plainly rather than glossed over: no FAA
+# ICD/interface document is available to this project confirming what each
+# digit position in <status> means (which runway, which hold-bar light,
+# which sensor). Two samples show <control> as a constant "1" and <status>
+# as a long mostly-zero digit string with occasional non-zero digits at
+# different positions between airports -- consistent with a per-light or
+# per-position bitmask, but that is an inference, not a confirmed mapping.
+# Treat a CHANGE in this bitmask as "something in this airport's runway
+# safety-logic picture just changed, go look" -- not as a decoded "runway
+# incursion detected at taxiway X" classification. Overclaiming precision
+# here would be actively misleading for safety-adjacent data.
+def parse_safety_logic_message(xml_bytes: bytes) -> dict | None:
+    """Parse a SafetyLogicHoldBar message. Returns a dict or None (wrong
+    root tag / parse error / no airport)."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        log.warning("stdds: SafetyLogicHoldBar XML parse error: %s", e)
+        return None
+
+    if _local_tag(root.tag) != "SafetyLogicHoldBar":
+        return None
+
+    airport = _child_local_text(root, "airport")
+    if not airport:
+        return None
+    airport = airport.upper().strip()
+    if not airport.startswith("K") and len(airport) == 3:
+        airport = "K" + airport
+
+    control = _child_local_text(root, "control")
+    status_bitmask = _child_local_text(root, "status")
+    if not status_bitmask:
+        return None
+
+    return {
+        "airport": airport,
+        "control": control,
+        "status_bitmask": status_bitmask,
+        "last_seen": _now_iso(),
+    }
+
+
+def write_safety_status(record: dict) -> str | None:
+    """Upsert one SafetyLogicHoldBar record. Returns the PREVIOUS
+    status_bitmask (None if this airport is new), so the caller can detect
+    a change without a second query."""
+    try:
+        return db.upsert_safety_status(
+            airport=record["airport"],
+            control=record.get("control"),
+            status_bitmask=record["status_bitmask"],
+            last_seen=record["last_seen"],
+        )
+    except Exception as e:
+        log.error("stdds: DB write error for safety status %s: %s", record.get("airport"), e)
+        return None
+
+
+def check_incursion_alert(record: dict, previous_bitmask: str | None) -> None:
+    """Fire stdds-alerts (aggregate) + stdds-<zone> when a SafetyLogicHoldBar
+    status bitmask CHANGES. escalating_only=False -- a single status
+    change is itself worth a look; this is safety-adjacent data and
+    should not wait for a 3x-burst trend the way routine traffic volume
+    does. Scoped via _stdds_sector_for() -- extended 2026-08-03 from
+    DCA/IAD/BWI-only to all 8 tracked zones, see comment above
+    _STDDS_REGIONAL_AIRPORTS."""
+    airport = record["airport"]
+    sector = _stdds_sector_for(airport)
+    if sector is None:
+        return
+    new_bitmask = record["status_bitmask"]
+    if previous_bitmask is not None and previous_bitmask == new_bitmask:
+        return  # unchanged -- no alert
+
+    from shared.sector_coalesce import fire_family_alert
+
+    if previous_bitmask is None:
+        detail = f"{airport}: safety-logic status first seen -- raw bitmask {new_bitmask}"
+    else:
+        detail = f"{airport}: safety-logic status CHANGED -- raw bitmask {new_bitmask} (was {previous_bitmask})"
+    title = f"STDDS Safety Logic -- {airport} status change"
+    dispatch = f"{airport}: safety-logic status changed (raw, unconfirmed mapping)"
+    try:
+        result = fire_family_alert(
+            "stdds", "stdds_safety", airport, title, detail, dispatch,
+            base_priority=3, escalating_only=False, sector_override=sector,
+        )
+        log.info(
+            "stdds: fire_family_alert for %s safety-logic change (aggregate_fired=%s, zone_fired=%s)",
+            airport, result.get("fired"), result.get("zone_fired"),
+        )
+    except Exception as e:
+        log.error("stdds: stdds-safety alert fire failed for %s: %s", airport, e)
+
+
+# -- SurfaceMovementEventMessage -- discrete taxi/ground-event stream ------
+#
+# Added 2026-08-03 per operator direction: "taxi issues." Real schema
+# confirmed via live samples (KMCO, KMSP, KSEA): one aircraft per message,
+# a current <event> (e.g. "runwayin", "runwayout") plus a rolling
+# <events><eventRecord> history (e.g. "spotout" = gate pushback, "on" =
+# touchdown), a <status> of "onrunway" or "onsurface" (taxiing), plus
+# <runway>, position, and enhancedData with departure/destination airports.
+#
+# This is a genuinely different signal from raw ASDE-X track density
+# (check_surface_alerts above): it's FAA's own discrete state stream per
+# aircraft, so "how many aircraft are CURRENTLY taxiing (status=onsurface)
+# at this airport" is a real derived count, not an inference from position
+# density alone.
+def parse_surface_movement_event_message(xml_bytes: bytes) -> dict | None:
+    """Parse a SurfaceMovementEventMessage. Returns a dict or None (wrong
+    root tag / parse error / missing required fields)."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        log.warning("stdds: SurfaceMovementEventMessage XML parse error: %s", e)
+        return None
+
+    if _local_tag(root.tag) != "SurfaceMovementEventMessage":
+        return None
+
+    airport = _child_local_text(root, "airport")
+    track_id = _child_local_text(root, "track")
+    if not airport or not track_id:
+        return None
+    airport = airport.upper().strip()
+    if not airport.startswith("K") and len(airport) == 3:
+        airport = "K" + airport
+
+    callsign = _child_local_text(root, "callsign")
+    event = _child_local_text(root, "event")
+    status = _child_local_text(root, "status")
+    runway = _child_local_text(root, "runway")
+    event_time = _child_local_text(root, "time")
+
+    pos = _find_path_local(root, "position")
+    lat_str = _path_text(pos, "latitude")
+    lon_str = _path_text(pos, "longitude")
+    alt_str = _child_local_text(root, "altitude")
+
+    try:
+        latitude = float(lat_str) if lat_str else None
+        longitude = float(lon_str) if lon_str else None
+    except ValueError:
+        latitude = longitude = None
+    try:
+        altitude_ft = float(alt_str) if alt_str else None
+    except ValueError:
+        altitude_ft = None
+
+    enhanced = _find_path_local(root, "enhancedData")
+    departure_airport = _path_text(enhanced, "departureAirport") if enhanced is not None else None
+    destination_airport = _path_text(enhanced, "destinationAirport") if enhanced is not None else None
+
+    return {
+        "track_id": str(track_id),
+        "airport": airport,
+        "callsign": callsign,
+        "event": event,
+        "status": status,
+        "runway": runway,
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude_ft": altitude_ft,
+        "event_time": event_time,
+        "departure_airport": departure_airport,
+        "destination_airport": destination_airport,
+        "last_seen": _now_iso(),
+    }
+
+
+def write_surface_movement_event(record: dict) -> bool:
+    """Upsert one SurfaceMovementEventMessage record. Returns True on
+    success."""
+    try:
+        db.upsert_surface_movement_event(
+            track_id=record["track_id"],
+            airport=record["airport"],
+            callsign=record.get("callsign"),
+            event=record.get("event"),
+            status=record.get("status"),
+            runway=record.get("runway"),
+            latitude=record.get("latitude"),
+            longitude=record.get("longitude"),
+            altitude_ft=record.get("altitude_ft"),
+            event_time=record.get("event_time"),
+            departure_airport=record.get("departure_airport"),
+            destination_airport=record.get("destination_airport"),
+            last_seen=record["last_seen"],
+        )
+        return True
+    except Exception as e:
+        log.error("stdds: DB write error for surface movement event %s: %s", record.get("track_id"), e)
+        return False
+
+
+_MIN_ONSURFACE_FOR_ALERT = 10
+
+
+def check_taxi_alerts(record: dict) -> None:
+    """Fire stdds-alerts (aggregate) + stdds-<zone> when the CURRENT count
+    of aircraft in taxi phase (status='onsurface') at this airport is
+    escalating vs. its own last-15-minutes baseline. Only queries/fires on
+    the airport touched by this message, not a full nationwide sweep.
+    Scoped via _stdds_sector_for() -- extended 2026-08-03 from
+    DCA/IAD/BWI-only to all 8 tracked zones, see comment above
+    _STDDS_REGIONAL_AIRPORTS."""
+    airport = record.get("airport")
+    sector = _stdds_sector_for(airport) if airport else None
+    if sector is None:
+        return
+
+    onsurface_count = db.count_onsurface(airport)
+    if onsurface_count < _MIN_ONSURFACE_FOR_ALERT:
+        return
+
+    from shared.sector_coalesce import fire_family_alert
+
+    sector = airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
+    title = f"STDDS Taxi -- {airport} ground movement"
+    detail = f"{airport}: {onsurface_count} aircraft currently taxiing (status=onsurface)"
+    dispatch = f"{airport}: {onsurface_count} taxiing"
+    try:
+        result = fire_family_alert(
+            "stdds", "stdds_taxi", airport, title, detail, dispatch,
+            base_priority=2, sector_override=sector,
+        )
+        log.info(
+            "stdds: fire_family_alert for %s taxi (%d onsurface, escalating=%s, "
+            "aggregate_fired=%s, zone_fired=%s)",
+            airport, onsurface_count, result.get("escalating"),
+            result.get("fired"), result.get("zone_fired"),
+        )
+    except Exception as e:
+        log.error("stdds: stdds-taxi alert fire failed for %s: %s", airport, e)

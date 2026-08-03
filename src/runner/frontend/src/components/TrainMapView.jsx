@@ -37,6 +37,33 @@ function tOrig(t)  { return t.orig_code    || t.origin     || '' }
 function tDest(t)  { return t.dest_code    || t.destination || '' }
 function tEvent(t) { return t.event_name   || (t._raw && t._raw.eventCode) || '' }
 
+// Final-destination ETA -- added 2026-07-29 per operator request: the panel
+// only ever showed delay/status at the REFERENCE station (watchlist>
+// regional>primary priority, see tCurrentStationLine below), never when the
+// train actually reaches where it's actually going. dest_estimated_arr/
+// dest_scheduled_arr are populated by both the primary ingest writer and the
+// poller fallback writer as of 2026-07-29; older cached records (or a feed
+// error mid-transition) fall back to digging the last station out of the
+// raw amtraker record directly.
+function tDestEta(t) {
+  let sched = t.dest_scheduled_arr
+  let est   = t.dest_estimated_arr
+  if (!sched && !est) {
+    const stations = (t._raw && Array.isArray(t._raw.stations)) ? t._raw.stations : null
+    const last = stations && stations.length ? stations[stations.length - 1] : null
+    if (last) { sched = last.schArr; est = last.arr }
+  }
+  const iso = est || sched
+  if (!iso) return null
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return null
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const dest = tDest(t)
+    return dest ? `ETA ${dest} ${time}` : `ETA ${time}`
+  } catch { return null }
+}
+
 // Current-station line: "Departed BAL", "At WAS", "Awaiting departure at NYP".
 // Primary source: ingest.amtrak's station_code/station_name (added
 // 2026-07-21 specifically for this -- it was already resolving this
@@ -95,6 +122,7 @@ function TrainRow({ t }) {
   const route    = (orig && dest) ? `${orig}→${dest}` : ''
   const station  = tCurrentStationLine(t)
   const fallbackEvent = !station ? tEvent(t) : ''
+  const destEta  = tDestEta(t)
 
   return (
     <div className="train-row">
@@ -104,6 +132,7 @@ function TrainRow({ t }) {
         {route && <span className="train-row-route">{route}</span>}
         {station && <span className="train-row-station">{station}</span>}
         {fallbackEvent && <span className="train-row-event">{fallbackEvent}</span>}
+        {destEta && <span className="train-row-dest-eta">{destEta}</span>}
       </div>
       <span className="train-row-badge" style={{ color, borderColor: color }}>{label}</span>
     </div>

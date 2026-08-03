@@ -23,9 +23,9 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME = "weekly-summary"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_WEEKLY_SUMMARY_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-weekly-summary:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Weekly content ~600-800 tokens; mistral-nemo Pi 5 CPU ~200s — 600s gives headroom
 OLLAMA_TIMEOUT    = 900  # stopgap
@@ -101,7 +101,7 @@ def _call_ollama(content: str) -> str | None:
     Returns narrative text or None (caller falls back to deterministic).
     """
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=content,
         ollama_model=OLLAMA_MODEL,
         max_tokens=400,

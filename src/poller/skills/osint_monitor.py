@@ -39,9 +39,9 @@ SKILL_NAME  = "osint-monitor"
 OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
 # OSINT narratives use the instruction-optimised model (mistral by default).
 # Falls back to OLLAMA_MODEL → OLLAMA_CHAT_MODEL if OSINT-specific var unset.
-OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_NARRATOR_MODEL")
                     or os.getenv("OLLAMA_MODEL")
-                    or "mistral")
+                    or "corporatetraveldc-pi5-osint-monitor:latest")
 OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "900"))  # stopgap
 MODEL            = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 FETCH_TIMEOUT    = 20           # seconds per RSS fetch

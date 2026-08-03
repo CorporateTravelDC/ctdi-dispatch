@@ -1,23 +1,24 @@
 tunnel: 00000000-0000-0000-0000-000000000000
 credentials-file: /home/corporatetraveldc/.cloudflared/00000000-0000-0000-0000-000000000000.json
 
-# Every hostname below routes to host nginx on :80 -- nginx does the actual
-# per-vhost backend dispatch (see nginx/conf.d/*.conf), not cloudflared.
-# This replaced the older per-service-port ingress list (each hostname
-# pointing straight at its own backend port) once nginx started fronting
-# everything; this file had drifted from that migration until 2026-07-10.
-# dispatch-runner.example.com and cockpit.example.com are retired from the
-# tunnel entirely -- see README.md's "dispatch-runner.example.com is retired
-# as a live public endpoint" note. cockpit is host-management surface and is
-# intentionally Tailscale-only now, not tunnel-exposed.
 ingress:
   # dispatch — CF Access gated (Tailscale + auth required)
   - hostname: dispatch.example.com
     service: http://127.0.0.1:80
 
-  # ops — PWA frontend, open over tunnel
-  - hostname: ops.example.com
+  # ops.example.com RETIRED 2026-08-02 -- removed from the live
+  # tunnel config via the Cloudflare API directly (this local ingress file is
+  # not what actually serves the tunnel, it is dashboard/API-managed, but kept
+  # in sync here for correctness). App layer also hard-rejects this hostname,
+  # see runner/main.py _RETIRED_HOSTNAMES. Live dispatch access is Tailscale-
+  # only now: https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net
+
+  # dispatch-runner — public rolling demo (password-gated at the app
+  # layer, see runner main.py DEMO_MODE). Open over tunnel same as ops,
+  # since the gate happens after this hop, not before it. Added 2026-08-01.
+  - hostname: dispatch-runner.example.com
     service: http://127.0.0.1:80
+
 
   # openwebui — Open WebUI (Ollama chat frontend) — CF Access gated
   - hostname: openwebui.example.com
@@ -35,19 +36,33 @@ ingress:
   - hostname: acars.example.com
     service: http://127.0.0.1:80
 
+  # cloud -- Nextcloud second-brain vault (WebDAV/CalDAV)
+  - hostname: cloud.example.com
+    service: http://127.0.0.1:80
+
   # ntfy
   - hostname: ntfy.example.com
     service: http://127.0.0.1:80
+
 
   # pihole — CF Access gated (Tailscale + auth required)
   - hostname: pihole.example.com
     service: http://127.0.0.1:80
 
-  # apex and www — no content yet
+  # wrangler — CF Worker's primary upstream (smart-router fetches this,
+  # not the public hostnames, which the Worker itself owns via zone routes)
+  - hostname: wrangler.example.com
+    service: http://127.0.0.1:80
+
+  # apex and www — served by nginx (www.example.com.conf)
+  # Note: the CF Worker owns these two hostnames at the zone-route level,
+  # so this rule is only reached for traffic that bypasses the Worker
+  # (e.g. direct-to-tunnel debugging). Real visitors go through the Worker
+  # -> wrangler.example.com -> this same nginx vhost.
   - hostname: example.com
-    service: http_status:503
+    service: http://127.0.0.1:80
   - hostname: www.example.com
-    service: http_status:503
+    service: http://127.0.0.1:80
 
   # catch-all
   - service: http_status:404

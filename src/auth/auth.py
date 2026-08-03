@@ -77,6 +77,41 @@ def resolve_tier(
     return Tier.T0
 
 
+def resolve_identity(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> dict:
+    """
+    Added 2026-08-02 for the department/multi-operator feed visibility
+    model (Add Category, personal vs department vs company-scoped RSS
+    feeds -- see shared/rss_catalog.py). Unlike resolve_tier(), which only
+    answers "how privileged is this request," this answers "who is this,"
+    so the runner service (which never touches the shared DB directly --
+    see README's "runner is the only container that does not touch the
+    shared DB" note) can ask web/main.py's /api/v1/whoami-token endpoint
+    and get back a stable identity to scope personal/department feeds by,
+    without runner needing its own DB connection or duplicating the token
+    hashing/lookup logic here.
+
+    Returns {"tier": str, "user_label": str|None, "department": str|None,
+    "token_prefix": str|None} -- anonymous/invalid tokens resolve to
+    tier="tier0" with the rest None, never raises.
+    """
+    if credentials and credentials.credentials:
+        token_hash = _hash_token(credentials.credentials)
+        record = db.lookup_token(token_hash)
+        if record:
+            return {
+                "tier": record["tier"],
+                "user_label": record["user_label"],
+                "department": record.get("department"),
+                "token_prefix": record["token_prefix"],
+            }
+    if _is_tailscale_request(request):
+        return {"tier": "tier1", "user_label": None, "department": None, "token_prefix": None}
+    return {"tier": "tier0", "user_label": None, "department": None, "token_prefix": None}
+
+
 def require_tier(minimum: Tier):
     """Dependency factory: raises 403 if resolved tier is below minimum."""
     order = [Tier.T0, Tier.T1, Tier.T2, Tier.ADMIN]
@@ -106,10 +141,15 @@ def _token_prefix(user: str) -> str:
 
 
 def generate_token(user: str, tier: str, device_label: str | None,
-                   expires_at: float | None = None) -> str:
+                   expires_at: float | None = None, department: str | None = None) -> str:
     """
     Generate a new token, store its hash in the DB, return the plaintext.
     Plaintext is shown once and never stored.
+
+    department -- added 2026-08-02, optional. Tokens with no department set
+    are treated as personal-only for department-scoped feed visibility
+    (see shared/rss_catalog.py); set one to make this operator part of a
+    department for department-scoped categories/feeds.
     """
     valid_tiers = {"cert", "shares", "admin"}
     if tier not in valid_tiers:
@@ -129,6 +169,7 @@ def generate_token(user: str, tier: str, device_label: str | None,
         tier=tier,
         device_label=device_label,
         expires_at=expires_at,
+        department=department,
     )
     return token_plaintext
 

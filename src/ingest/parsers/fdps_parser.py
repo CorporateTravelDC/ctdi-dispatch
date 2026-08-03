@@ -871,24 +871,31 @@ def _fire_marine_one_ntfy(callsign: str | None, lat: float | None,
 def _fire_fdps_nas_alert(callsign: str, hex_id: str, parsed: dict,
                           dist_nm: float | None) -> None:
     """
-    Fire tbfm-alerts ntfy for a non-Marine-One watchlist or proximity event.
+    Fire fdps-alerts / fdps-<zone> ntfy for a non-Marine-One watchlist or
+    proximity event, via shared.sector_coalesce.fire_family_alert -- gives
+    this its own family (escalation threshold, per-topic throttle,
+    enable/sanitize), separate from tbfm.
 
-    UPDATED 2026-07-21 per operator direction: this is the "NAS proximity"
-    feed folded into TBFM/metering as its own concern, rather than living
-    in the general nas-alerts bucket -- proximity-to-DCA tracking and
-    meter-fix sequencing are both "how busy/compressed is this piece of
-    airspace right now" signals, so they share tbfm-alerts (and, when a
-    controlling facility is known and is one of the 8 tracked ARTCCs, the
-    matching per-sector topic too -- see shared.sector_coalesce).
+    CHANGED 2026-08-03 per operator direction ("everything should be
+    following the same... logic... family-wide alerts and then a
+    per-sector alert"): this used to fire directly to "tbfm-alerts" +
+    tbfm's sector_ntfy_topic (2026-07-21 decision to fold FDPS proximity
+    into the TBFM/metering concern, bypassing sector_coalesce entirely --
+    no escalation gating, no throttle). Moved onto its own "fdps-alerts"/
+    "fdps-<zone>" topics and the standard escalating-only family gate so
+    it gets the same throttle protection just built for tbfm/tfms.
+    **New topic names -- fdps-alerts / fdps-<zone> did not exist as
+    subscriptions before this change; nothing was being lost by moving
+    since the old tbfm-alerts/tbfm-<zone> pushes for this event type were
+    never actually a distinct, subscribable signal from real TBFM
+    metering events.**
     """
     try:
-        from shared.watchlist import _fire_ntfy_dual
-        from shared.sector_coalesce import sector_ntfy_topic
+        from shared.sector_coalesce import fire_family_alert
         cs = callsign or "UNKNOWN"
         reg = parsed.get("aircraft_type") or ""
         alt_baro = parsed.get("altitude_ft") or 0
         gs = parsed.get("ground_speed") or 0
-        track = ""  # FDPS parsed dict doesn't carry heading; omit gracefully
         hex_label = f"[{hex_id}]" if hex_id else ""
         title = f"FDPS Track — {cs} {hex_label}".strip()
         if dist_nm is not None:
@@ -902,13 +909,10 @@ def _fire_fdps_nas_alert(callsign: str, hex_id: str, parsed: dict,
             dest = parsed.get("destination") or "?"
             detail = f"{cs} {reg}: {origin}→{dest} | {int(alt_baro)}ft {gs}kts"
             dispatch = f"{cs} {hex_label} {origin}→{dest}".strip()
-        _fire_ntfy_dual("tbfm-alerts", title, detail, dispatch, priority=3)
         facility = parsed.get("controlling_facility")
-        sector_topic = sector_ntfy_topic(facility)
-        if sector_topic:
-            _fire_ntfy_dual(sector_topic, title, detail, dispatch, priority=3)
+        fire_family_alert("fdps", "fdps", facility, title, detail, dispatch, base_priority=3)
     except Exception as e:
-        log.error("fdps: tbfm-alert fire failed for %s: %s", callsign, e)
+        log.error("fdps: family-alert fire failed for %s: %s", callsign, e)
 
 
 def check_fdps_watchlist(parsed: dict) -> None:

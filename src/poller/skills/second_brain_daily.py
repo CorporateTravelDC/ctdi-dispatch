@@ -31,14 +31,26 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-daily"
-OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-daily:latest"
 
 SYSTEM_PROMPT = """You are writing a single day's operational log entry for a
 second-brain knowledge vault used by a DC-area executive chauffeur/dispatch
-operation. Summarize today's operational picture in under 300 words, plain
-markdown, no headers deeper than ###. Note anything a future weekly compile
-pass would want to link to (notable TFRs, weather events, CPS trend,
-watchlist activity). Be factual, not promotional."""
+operation. Summarize the day's operational picture described in the prompt
+in under 300 words, plain prose paragraphs only.
+
+Critical rules:
+- The prompt's first line states the real date being summarized. Do not
+  invent, guess, or restate a different date anywhere in your output.
+- Do not add a title, heading, or dateline of any kind (no "#", "##", or
+  similar) -- the note this becomes already has its own date in the
+  surrounding document. Start directly with the first sentence of prose.
+- Every number in the prompt (counts, delay minutes, station counts, etc.)
+  must be quoted EXACTLY as given -- same digits, same value. Do not round,
+  abbreviate, spell out, or restate a number differently than it appears
+  in the prompt.
+- Note anything a future weekly compile pass would want to link to
+  (notable TFRs, weather events, CPS trend, watchlist activity).
+- Be factual, not promotional."""
 
 
 def build_daily_content() -> tuple[str, dict]:
@@ -75,6 +87,7 @@ def build_daily_content() -> tuple[str, dict]:
     }
 
     sections = [
+        f"Date being summarized: {date.today().isoformat()}",
         f"CPS readings today: {len(cps_rows)} ({dict(cps_counts)})",
         f"TFRs seen today: {len(tfr_rows)} total, {len(vip_tfrs)} VIP/POTUS",
         f"Active NOTAMs: {len(notams)}",
@@ -107,7 +120,7 @@ def main() -> None:
         raw_content = gate(raw_content, source=SKILL_NAME)
 
         ollama_result = llm_generate(
-            system=SYSTEM_PROMPT, prompt=raw_content,
+            system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
             # Explicit timeout added 2026-07-26: smallest prompt of the
             # group, not yet independently timed, but was silently

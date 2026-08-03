@@ -410,17 +410,77 @@ def audit_count_24h() -> int:
         return row[0] if row else 0
 
 
+# ── Compliance egress (outbound audit push) ──────────────────────────────────
+# 2026-08-03: corrects docs/COMPLIANCE_SECURITY.md, which previously (and
+# inaccurately) stated no outbound audit-push mechanism existed in this
+# codebase. It does now -- see common/compliance_egress.py for the actual
+# push logic; these are just the DB-side tracking helpers. Ships disabled
+# (COMPLIANCE_HOOK_ENABLED=false by default) -- see that module's docstring.
+
+def get_unshipped_audit_events(limit: int = 50, retry_limit: int = 5) -> list[dict]:
+    """Rows not yet successfully shipped and not yet permanently failed
+    (egress_attempts < retry_limit), oldest first so a long backlog drains
+    in order rather than the newest events starving older ones."""
+    with conn() as c:
+        rows = c.execute("""
+            SELECT * FROM audit_log
+            WHERE egress_status = 'pending' AND egress_attempts < ?
+            ORDER BY event_time ASC LIMIT ?
+        """, (retry_limit, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_audit_shipped(audit_id: int) -> None:
+    with conn() as c:
+        c.execute(
+            "UPDATE audit_log SET egress_status = 'shipped' WHERE id = ?",
+            (audit_id,),
+        )
+
+
+def mark_audit_egress_failed(audit_id: int, error: str, retry_limit: int = 5) -> None:
+    """Increment the attempt counter and record the error. Once attempts
+    reaches retry_limit, marks the row failed_permanent so
+    get_unshipped_audit_events() stops returning it -- a persistently
+    unreachable target degrades to "stop trying, this record is stuck"
+    rather than retrying forever every poll cycle."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT egress_attempts FROM audit_log WHERE id = ?", (audit_id,)
+        ).fetchone()
+        attempts = (row[0] if row else 0) + 1
+        status = "failed_permanent" if attempts >= retry_limit else "pending"
+        c.execute("""
+            UPDATE audit_log
+            SET egress_attempts = ?, egress_last_error = ?, egress_status = ?
+            WHERE id = ?
+        """, (attempts, error[:500], status, audit_id))
+
+
 # ── Auth token helpers ────────────────────────────────────────────────────────
 
 def insert_token(token_hash: str, token_prefix: str, user_label: str,
                  tier: str, device_label: str | None,
-                 expires_at: float | None) -> None:
+                 expires_at: float | None, department: str | None = None) -> None:
     with conn() as c:
         c.execute("""
             INSERT INTO auth_tokens
-                (token_hash, token_prefix, user_label, tier, device_label, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (token_hash, token_prefix, user_label, tier, device_label, expires_at))
+                (token_hash, token_prefix, user_label, tier, device_label, expires_at, department)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (token_hash, token_prefix, user_label, tier, device_label, expires_at, department))
+
+
+def set_token_department(token_prefix: str, department: str | None) -> int:
+    """Set (or clear, with department=None) the department for all active
+    tokens matching this prefix. Returns count updated. Added 2026-08-02
+    for the department/multi-operator feed visibility model -- see
+    shared/rss_catalog.py."""
+    with conn() as c:
+        c.execute("""
+            UPDATE auth_tokens SET department=?
+            WHERE token_prefix LIKE ? AND revoked_at IS NULL
+        """, (department, token_prefix + "%"))
+        return c.execute("SELECT changes()").fetchone()[0]
 
 
 def lookup_token(token_hash: str) -> dict | None:
@@ -3528,6 +3588,277 @@ def init_db_v26() -> None:
             stmt = stmt.strip()
             if stmt and stmt.upper().startswith("CREATE INDEX"):
                 c.execute(stmt)
+
+
+# ── Schema V27 — FAA ACFTREF.txt reference table (mfr_mdl_code decode) ──────
+# 2026-08-02. Corey's directive: get FAA's own manufacturer/model decode
+# locally too, not just OpenSky's -- redundant on purpose, so the two
+# sources can be cross-checked against each other the same way FAA+OpenSky
+# hex is already cross-checked in get_aircraft(). Real gap this closes:
+# faa_aircraft_registry.mfr_mdl_code (e.g. "1390044") has been stored raw
+# since v11 with no local way to decode it -- every prior lookup either left
+# it opaque or required an external WebFetch to registry.faa.gov (done by
+# hand for N39FE earlier today, the exact case that prompted this).
+#
+# ACFTREF.txt ships inside the SAME ReleasableAircraft.zip MASTER.txt
+# already comes from (confirmed 2026-08-02 via `unzip -l`) -- no new
+# download, no new schedule, just parse one more file out of the zip
+# fetch_faa_registry() already opens weekly.
+#
+# Column layout (confirmed against a live download, comma-delimited, one
+# header row, trailing comma on every row):
+#   0 CODE  1 MFR  2 MODEL  3 TYPE-ACFT  4 TYPE-ENG  5 AC-CAT
+#   6 BUILD-CERT-IND  7 NO-ENG  8 NO-SEATS  9 AC-WEIGHT  10 SPEED
+#   11 TC-DATA-SHEET  12 TC-DATA-HOLDER
+# CODE matches faa_aircraft_registry.mfr_mdl_code exactly (verified:
+# code 1390044 -> "BOMBARDIER INC" / "BD-100-1A10", matching both the
+# registry.faa.gov web lookup and OpenSky's independent typecode CL30
+# for N39FE, hex a480f2).
+
+SCHEMA_V27 = """
+CREATE TABLE IF NOT EXISTS faa_aircraft_reference (
+    code            TEXT    PRIMARY KEY,
+    manufacturer    TEXT,
+    model           TEXT,
+    type_acft       TEXT,
+    type_engine     TEXT,
+    ac_category     TEXT,
+    no_engines      TEXT,
+    no_seats        TEXT,
+    ac_weight       TEXT,
+    speed           TEXT,
+    updated_at      REAL    NOT NULL
+);
+"""
+
+
+def init_db_v27() -> None:
+    """Apply v27 schema -- FAA ACFTREF.txt reference table. See SCHEMA_V27
+    comment above for why."""
+    with conn() as c:
+        c.executescript(SCHEMA_V27)
+
+
+def faa_acftref_upsert(records: list[dict]) -> int:
+    """Bulk upsert FAA ACFTREF.txt reference records. Returns count upserted."""
+    import time as _time
+    now = _time.time()
+    sql = """
+        INSERT INTO faa_aircraft_reference
+            (code, manufacturer, model, type_acft, type_engine, ac_category,
+             no_engines, no_seats, ac_weight, speed, updated_at)
+        VALUES
+            (:code, :manufacturer, :model, :type_acft, :type_engine, :ac_category,
+             :no_engines, :no_seats, :ac_weight, :speed, :updated_at)
+        ON CONFLICT(code) DO UPDATE SET
+            manufacturer = excluded.manufacturer,
+            model        = excluded.model,
+            type_acft    = excluded.type_acft,
+            type_engine  = excluded.type_engine,
+            ac_category  = excluded.ac_category,
+            no_engines   = excluded.no_engines,
+            no_seats     = excluded.no_seats,
+            ac_weight    = excluded.ac_weight,
+            speed        = excluded.speed,
+            updated_at   = excluded.updated_at
+    """
+    for r in records:
+        r["updated_at"] = now
+    with conn() as c:
+        c.executemany(sql, records)
+    return len(records)
+
+
+def faa_acftref_lookup(code: str) -> dict | None:
+    """Decode a faa_aircraft_registry.mfr_mdl_code into manufacturer/model
+    via the local ACFTREF reference table. Returns None if the code isn't
+    in the table (e.g. registry updated before a reference re-import)."""
+    if not code:
+        return None
+    with conn() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM faa_aircraft_reference WHERE code=?", (code.strip(),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+# ── Schema V28 — STDDS safety-logic hold bar + surface movement events ──────
+#
+# Added 2026-08-03. Two more STDDS message shapes discovered on the same
+# SWIM subscription that already carries SMES/TAIS (see smes_parser.py):
+#
+# SafetyLogicHoldBar -- ASDE-X runway-safety-logic status per airport.
+# Fields confirmed from real samples (KCLT, KCVG): <airport>, <control>
+# (seen as "1" in every live sample so far -- likely a reporting-enabled
+# flag, not itself the alert signal), <status> (a long digit string, ~68-70
+# chars, mostly zeros with occasional non-zero digits at scattered
+# positions). No FAA ICD/interface document is available to this project
+# confirming what each digit position means -- treat status as an opaque
+# per-airport bitmask whose CHANGE is the reliable signal, not a decoded
+# "which light/runway" classification. Do not claim more precision than
+# that in any alert text.
+#
+# SurfaceMovementEventMessage -- discrete per-aircraft ground-movement
+# events (confirmed live: "spotout" [pushback], "runwayin"/"runwayout",
+# "on" [touchdown], carried in both a current <event> field and a rolling
+# <events><eventRecord> history). status field seen as "onrunway" /
+# "onsurface" (taxiing). This is what actually lets us count "how many
+# aircraft are in the taxi phase right now" per airport, as opposed to
+# just raw ASDE-X track density.
+SCHEMA_V28 = """
+CREATE TABLE IF NOT EXISTS stdds_safety_status (
+    airport         TEXT PRIMARY KEY,
+    control         TEXT,
+    status_bitmask  TEXT NOT NULL,
+    last_seen       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS surface_movement_events (
+    track_id             TEXT NOT NULL,
+    airport              TEXT NOT NULL,
+    callsign             TEXT,
+    event                TEXT,
+    status               TEXT,
+    runway               TEXT,
+    latitude             REAL,
+    longitude            REAL,
+    altitude_ft          REAL,
+    event_time           TEXT,
+    departure_airport    TEXT,
+    destination_airport  TEXT,
+    last_seen            TEXT NOT NULL,
+    PRIMARY KEY (airport, track_id)
+);
+CREATE INDEX IF NOT EXISTS idx_surface_movement_events_status
+    ON surface_movement_events(airport, status);
+"""
+
+
+def init_db_v28() -> None:
+    """Apply v28 schema -- STDDS safety-logic status + surface movement
+    (taxi) events. See SCHEMA_V28 comment above."""
+    with conn() as c:
+        c.executescript(SCHEMA_V28)
+
+# 2026-08-03: adds outbound-egress tracking columns to the existing
+# audit_log table (no new table -- this is state ON the audit_log rows
+# themselves, not a separate log). ALTER TABLE ADD COLUMN has no IF NOT
+# EXISTS in SQLite, so each statement is tried independently and a
+# "duplicate column" error (already applied) is swallowed -- same pattern
+# as SCHEMA_V23, safe to call on every startup.
+SCHEMA_V29 = """
+ALTER TABLE audit_log ADD COLUMN egress_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE audit_log ADD COLUMN egress_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE audit_log ADD COLUMN egress_last_error TEXT;
+CREATE INDEX IF NOT EXISTS idx_audit_log_egress_status ON audit_log(egress_status);
+"""
+
+
+def init_db_v29() -> None:
+    """Apply v29 schema -- compliance-egress tracking columns on
+    audit_log. See SCHEMA_V29 comment above and common/compliance_egress.py
+    for the actual push logic this enables."""
+    with conn() as c:
+        for stmt in SCHEMA_V29.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+def upsert_safety_status(airport: str, control: str | None,
+                          status_bitmask: str, last_seen: str) -> str | None:
+    """Upsert the latest SafetyLogicHoldBar status for an airport. Returns
+    the PREVIOUS status_bitmask value (None if this airport has never been
+    seen before), so the caller can detect a change without a separate
+    SELECT."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT status_bitmask FROM stdds_safety_status WHERE airport=?",
+            (airport,)
+        ).fetchone()
+        previous = row[0] if row else None
+        c.execute("""
+            INSERT INTO stdds_safety_status (airport, control, status_bitmask, last_seen)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(airport) DO UPDATE SET
+                control=excluded.control,
+                status_bitmask=excluded.status_bitmask,
+                last_seen=excluded.last_seen
+        """, (airport, control, status_bitmask, last_seen))
+    return previous
+
+
+def get_safety_status(airport: str | None = None) -> list[dict]:
+    with conn() as c:
+        if airport:
+            rows = c.execute(
+                "SELECT * FROM stdds_safety_status WHERE airport=?", (airport,)
+            ).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM stdds_safety_status ORDER BY airport").fetchall()
+        return [dict(r) for r in rows]
+
+
+def upsert_surface_movement_event(track_id: str, airport: str, callsign: str | None,
+                                   event: str | None, status: str | None,
+                                   runway: str | None, latitude: float | None,
+                                   longitude: float | None, altitude_ft: float | None,
+                                   event_time: str | None, departure_airport: str | None,
+                                   destination_airport: str | None, last_seen: str) -> None:
+    with conn() as c:
+        c.execute("""
+            INSERT INTO surface_movement_events
+                (track_id, airport, callsign, event, status, runway,
+                 latitude, longitude, altitude_ft, event_time,
+                 departure_airport, destination_airport, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(airport, track_id) DO UPDATE SET
+                callsign=excluded.callsign,
+                event=excluded.event,
+                status=excluded.status,
+                runway=excluded.runway,
+                latitude=excluded.latitude,
+                longitude=excluded.longitude,
+                altitude_ft=excluded.altitude_ft,
+                event_time=excluded.event_time,
+                departure_airport=excluded.departure_airport,
+                destination_airport=excluded.destination_airport,
+                last_seen=excluded.last_seen
+        """, (track_id, airport, callsign, event, status, runway,
+              latitude, longitude, altitude_ft, event_time,
+              departure_airport, destination_airport, last_seen))
+
+
+def count_onsurface(airport: str) -> int:
+    """Count distinct aircraft whose LATEST known surface-movement status
+    is 'onsurface' (taxiing, not yet on/off the runway) at this airport --
+    the "how many are in the taxi phase right now" gauge."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT count(*) FROM surface_movement_events WHERE airport=? AND status='onsurface'",
+            (airport,)
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def get_surface_movement_events(airport: str | None = None) -> list[dict]:
+    with conn() as c:
+        if airport:
+            rows = c.execute(
+                "SELECT * FROM surface_movement_events WHERE airport=? ORDER BY last_seen DESC",
+                (airport,)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM surface_movement_events ORDER BY airport, last_seen DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _parse_trains_json_to_rows(trains_json: str) -> list[tuple]:

@@ -113,6 +113,18 @@ set_env "AIS_AISHUB_ID"          "$(read_secret aishub)"
 set_env "AIS_MARINETRAFFIC_KEY"  "$(read_secret marinetraffic)"
 set_env "AIS_VESSELFI_KEY"       "$(read_secret vesselfi)"
 
+# -- Inbound webhook shared secrets (src/web/routes/webhooks.py). Each
+#    receiver 503s until its secret is set -- code ships ready, nothing
+#    else to wire up once these land. Value is whatever shared secret you
+#    configure as a custom outbound header on that platform's side; it is
+#    NOT the vendor's own signing key (see webhooks.py docstring for why).
+# ~/.secrets/limoanywhere_webhook.key  ->  LIMOANYWHERE_WEBHOOK_SECRET
+set_env "LIMOANYWHERE_WEBHOOK_SECRET" "$(read_secret limoanywhere_webhook key)"
+# ~/.secrets/ringcentral_webhook.key   ->  RINGCENTRAL_WEBHOOK_SECRET
+set_env "RINGCENTRAL_WEBHOOK_SECRET"  "$(read_secret ringcentral_webhook key)"
+# ~/.secrets/threecx_webhook.key       ->  THREECX_WEBHOOK_SECRET
+set_env "THREECX_WEBHOOK_SECRET"      "$(read_secret threecx_webhook key)"
+
 echo ""
 echo "=== Done ==="
 echo "Restart containers to pick up changes:"

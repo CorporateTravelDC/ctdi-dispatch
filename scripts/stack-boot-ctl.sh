@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/stack-boot-ctl.sh
-# Staggered startup control for the 18 non-ingest long-running Quadlet
+# Staggered startup control for the 19 non-ingest long-running Quadlet
 # containers (everything except the seven SWIM ingest units, which have
 # their own staggered control surface -- see scripts/ingest-feed-ctl.sh
 # and corporatetraveldc-boot-stagger.service). Verified directly against
@@ -54,6 +54,7 @@ declare -A UNIT_NAME=(
   [dumpvdl2]="${UNIT_PREFIX}dumpvdl2"
   [nextcloud-app]="nextcloud-app"
   [openwebui]="openwebui"
+  [rss-bridge]="rss-bridge"
   [demo]="${UNIT_PREFIX}demo"
   [acars-watcher]="${UNIT_PREFIX}acars-watcher"
   [runner]="${UNIT_PREFIX}runner"
@@ -77,6 +78,7 @@ ORDER=(
   dumpvdl2
   nextcloud-app
   openwebui
+  rss-bridge
   demo
   acars-watcher
   runner

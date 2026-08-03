@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 
-const CATALOG_CATEGORIES = [
-  { id: 'corporate_intel', label: 'Corporate Intel'     },
-  { id: 'marketing_intel', label: 'Marketing Intel'     },
-  { id: 'travel_trends',   label: 'Client Travel Trends'},
-  { id: 'dc_area',         label: 'DC Area'             },
-  { id: 'aviation',        label: 'Aviation'            },
-]
-
 const CUSTOM_TAB = { id: '__custom__', label: 'My Feeds' }
+
+// Reuses the same localStorage key AdminView.jsx already established as
+// "the operator's bearer token" for this app -- added 2026-08-02 so
+// Add Feed / Add Category (now auth-gated, see runner/main.py) work for
+// real operators without inventing a second token-entry UI. If unset,
+// requests go out with no Authorization header at all, which the backend
+// correctly resolves to anonymous (tier0) -- unauthenticated writes are
+// now rejected with 401 rather than silently failing in a confusing way.
+function authHeaders() {
+  const token = localStorage.getItem('adminToken') || ''
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  return headers
+}
 
 function relTime(dateStr) {
   if (!dateStr) return ''
@@ -90,41 +96,187 @@ function RssSkeleton() {
   )
 }
 
+// Shared scope selector — used by both Add Feed and Add Category.
+// Added 2026-08-02 for the department/multi-operator visibility model
+// (see shared/rss_catalog.py's visible_to()). "company" (default) matches
+// today's pre-existing behavior — visible to everyone, including
+// anonymous callers.
+function ScopeSelector({ scope, setScope, department, setDepartment, busy }) {
+  return (
+    <div className="custom-feed-add-row">
+      <select
+        className="custom-feed-input custom-feed-scope-select"
+        value={scope}
+        onChange={e => setScope(e.target.value)}
+        disabled={busy}
+      >
+        <option value="company">Company-wide</option>
+        <option value="department">Department</option>
+        <option value="personal">Personal (just me)</option>
+      </select>
+      {scope === 'department' && (
+        <input
+          className="custom-feed-input"
+          type="text"
+          placeholder="Department name (e.g. DISPATCH)"
+          value={department}
+          onChange={e => setDepartment(e.target.value)}
+          disabled={busy}
+          required
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Add-category form ────────────────────────────────────────────────────────
+// Added 2026-08-02, parallel to Add Feed.
+function AddCategoryForm({ onAdd, onCancel }) {
+  const [label,      setLabel]      = useState('')
+  const [scope,      setScope]      = useState('company')
+  const [department, setDepartment] = useState('')
+  const [busy,        setBusy]      = useState(false)
+  const [err,         setErr]       = useState(null)
+  const labelRef = useRef(null)
+
+  useEffect(() => { labelRef.current?.focus() }, [])
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    const trimmed = label.trim()
+    if (!trimmed) return
+    if (scope === 'department' && !department.trim()) {
+      setErr('Department name is required for a department-scoped category.')
+      return
+    }
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await fetch('/api/rss/categories', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ label: trimmed, scope, department: department.trim() || undefined }),
+      })
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`)
+      onAdd(body.category)
+    } catch (e) {
+      setErr(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="custom-feed-add-form" onSubmit={handleSubmit}>
+      <div className="custom-feed-add-row">
+        <input
+          ref={labelRef}
+          className="custom-feed-input"
+          type="text"
+          placeholder="Category name (e.g. AAM, Supply Chain, Oil)"
+          value={label}
+          onChange={e => setLabel(e.target.value)}
+          required
+          disabled={busy}
+        />
+      </div>
+      <ScopeSelector scope={scope} setScope={setScope}
+                     department={department} setDepartment={setDepartment} busy={busy} />
+      {err && <p className="custom-feed-err">{err}</p>}
+      <div className="custom-feed-add-actions">
+        <button type="submit" className="ntfy-ctrl-btn" disabled={busy || !label.trim()}>
+          {busy ? 'Saving…' : 'Add category'}
+        </button>
+        <button type="button" className="rss-expand-btn" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 // ── Add-feed form ─────────────────────────────────────────────────────────────
-function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
+function AddFeedForm({ onAdd, onCancel, categories }) {
   const [name,          setName]          = useState('')
   const [url,           setUrl]           = useState('')
   const [categoryInput, setCategoryInput] = useState('')
+  const [scope,         setScope]         = useState('company')
+  const [department,    setDepartment]    = useState('')
   const [busy,          setBusy]          = useState(false)
   const [err,           setErr]           = useState(null)
+  const [resolving,     setResolving]     = useState(false)
+  const [resolveNote,   setResolveNote]   = useState(null)
   const urlRef = useRef(null)
 
   useEffect(() => { urlRef.current?.focus() }, [])
 
-  // Resolve typed label to a category value.
-  // Matches built-in catalog by label or id, falls back to raw input,
-  // and treats empty as uncategorized (__custom__).
+  // Detect feed URL from a pasted channel/blog link -- YouTube (@handle,
+  // /c/, /user/, /channel/), Rumble (/c/, /user/), or native RSS/Atom
+  // autodiscovery on any other page. See shared/feed_resolve.py for the
+  // three strategies and the known Rumble/Cloudflare limitation (the
+  // resolved URL is still filled in even when Rumble's own bot protection
+  // is currently blocking the scrape -- see the note shown below the
+  // field, which explains why in that case).
+  const handleResolve = async () => {
+    const trimmed = url.trim()
+    if (!trimmed) return
+    setResolving(true)
+    setResolveNote(null)
+    try {
+      const r = await fetch('/api/rss/resolve-source', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed }),
+      })
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`)
+      if (body.resolved && body.feed_url) {
+        setUrl(body.feed_url)
+      }
+      setResolveNote(body.note || null)
+    } catch (e) {
+      setResolveNote(`Detect failed: ${e.message}`)
+    } finally {
+      setResolving(false)
+    }
+  }
+
+  // Resolve typed label to a category id. Matches by id or label
+  // (case-insensitive) against every category the caller can currently
+  // see (built-in + visible user categories, see IntelView's categories
+  // state, fetched from GET /api/rss/categories). Falls back to
+  // "__custom__" for empty input -- no longer falls back to an arbitrary
+  // raw string, since the backend only accepts ids from that same list
+  // (Add Category is now the one way to make a brand-new category, this
+  // form only ever assigns an existing one).
   const resolveCategory = (input) => {
     const trimmed = input.trim()
     if (!trimmed) return '__custom__'
-    const catalog = CATALOG_CATEGORIES.find(
+    const match = categories.find(
       c => c.id === trimmed || c.label.toLowerCase() === trimmed.toLowerCase()
     )
-    return catalog ? catalog.id : trimmed
+    return match ? match.id : '__custom__'
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     const trimUrl  = url.trim()
     if (!trimUrl) return
+    if (scope === 'department' && !department.trim()) {
+      setErr('Department name is required for a department-scoped feed.')
+      return
+    }
     setBusy(true)
     setErr(null)
     const category = resolveCategory(categoryInput)
     try {
       const r = await fetch('/api/rss/user-feeds', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), url: trimUrl, category }),
+        headers: authHeaders(),
+        body: JSON.stringify({
+          name: name.trim(), url: trimUrl, category,
+          scope, department: department.trim() || undefined,
+        }),
       })
       const body = await r.json()
       if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`)
@@ -142,13 +294,23 @@ function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
           ref={urlRef}
           className="custom-feed-input"
           type="url"
-          placeholder="https://example.com/feed.rss  ·  or youtube.com/feeds/videos.xml?channel_id=UC…"
+          placeholder="Paste a feed URL, a YouTube channel, a Rumble channel, or a blog homepage"
           value={url}
-          onChange={e => setUrl(e.target.value)}
+          onChange={e => { setUrl(e.target.value); setResolveNote(null) }}
           required
           disabled={busy}
         />
+        <button
+          type="button"
+          className="rss-expand-btn"
+          onClick={handleResolve}
+          disabled={busy || resolving || !url.trim()}
+          title="Turn a YouTube/Rumble/blog link into an actual feed URL"
+        >
+          {resolving ? 'Detecting…' : 'Detect feed'}
+        </button>
       </div>
+      {resolveNote && <p className="custom-feed-resolve-note">{resolveNote}</p>}
       <div className="custom-feed-add-row">
         <input
           className="custom-feed-input custom-feed-name-input"
@@ -158,7 +320,8 @@ function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
           onChange={e => setName(e.target.value)}
           disabled={busy}
         />
-        {/* Freeform category — type a new name or pick an existing one */}
+        {/* Pick an existing category by name — creating a new one now
+            happens via the separate Add Category form/button. */}
         <input
           className="custom-feed-input custom-feed-cat-select"
           type="text"
@@ -169,14 +332,13 @@ function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
           disabled={busy}
         />
         <datalist id="intel-category-options">
-          {CATALOG_CATEGORIES.map(c => (
+          {categories.map(c => (
             <option key={c.id} value={c.label} />
-          ))}
-          {(existingUserCategories || []).map(cat => (
-            <option key={cat} value={cat} />
           ))}
         </datalist>
       </div>
+      <ScopeSelector scope={scope} setScope={setScope}
+                     department={department} setDepartment={setDepartment} busy={busy} />
       {err && <p className="custom-feed-err">{err}</p>}
       <div className="custom-feed-add-actions">
         <button type="submit" className="ntfy-ctrl-btn" disabled={busy || !url.trim()}>
@@ -191,31 +353,35 @@ function AddFeedForm({ onAdd, onCancel, existingUserCategories }) {
 }
 
 // ── My Feeds manager (shown in My Feeds tab) ──────────────────────────────────
-function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
-  const [showAdd, setShowAdd] = useState(false)
+function MyFeedsManager({ userFeeds, categories, onFeedRemoved, onFeedAdded, onCategoryAdded }) {
+  const [showAddFeed, setShowAddFeed] = useState(false)
+  const [showAddCat,  setShowAddCat]  = useState(false)
 
-  // Unique user-defined category names (not catalog, not __custom__)
-  const existingUserCategories = useMemo(() => {
-    const seen = new Set()
-    userFeeds.forEach(f => {
-      const cat = f.category || '__custom__'
-      if (cat === '__custom__') return
-      if (CATALOG_CATEGORIES.find(c => c.id === cat)) return
-      seen.add(cat)
-    })
-    return [...seen].sort()
-  }, [userFeeds])
-
-  const handleAdd = (feed) => {
+  const handleAddFeed = (feed) => {
     onFeedAdded(feed)
-    setShowAdd(false)
+    setShowAddFeed(false)
+  }
+
+  const handleAddCat = (cat) => {
+    onCategoryAdded(cat)
+    setShowAddCat(false)
   }
 
   const handleRemove = async (feed) => {
     try {
-      await fetch(`/api/rss/user-feeds/${feed.id}`, { method: 'DELETE' })
+      const r = await fetch(`/api/rss/user-feeds/${feed.id}`, { method: 'DELETE', headers: authHeaders() })
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(body.detail || `HTTP ${r.status}`)
+      }
       onFeedRemoved(feed.id)
-    } catch {}
+    } catch (e) {
+      // Surfaced inline rather than a toast — ownership-denied deletes
+      // (403, see runner/main.py's user_feeds_delete) are common enough
+      // now that department/personal feeds exist that silent failure
+      // would be confusing.
+      alert(`Could not remove feed: ${e.message}`)  // eslint-disable-line no-alert
+    }
   }
 
   // Group by category for display
@@ -227,10 +393,10 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
   })
 
   const catLabel = (id) => {
-    const catalog = CATALOG_CATEGORIES.find(c => c.id === id)
-    if (catalog) return catalog.label
+    const match = categories.find(c => c.id === id)
+    if (match) return match.label
     if (id === '__custom__') return 'Uncategorized'
-    return id  // user-defined label is the id
+    return id
   }
 
   return (
@@ -242,7 +408,7 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
         </span>
       </div>
 
-      {userFeeds.length === 0 && !showAdd && (
+      {userFeeds.length === 0 && !showAddFeed && (
         <p className="muted rss-empty" style={{ padding: '0.25rem 0' }}>
           No custom feeds yet. Add RSS, podcast, or YouTube channel feeds below.
         </p>
@@ -255,6 +421,11 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
             <div key={f.id} className="custom-feed-row">
               <span className="custom-feed-row-name">{f.name}</span>
               <span className="custom-feed-row-url muted">{f.url}</span>
+              {f.scope && f.scope !== 'company' && (
+                <span className="custom-feed-scope-badge" title={f.scope === 'department' ? `Department: ${f.department}` : 'Personal feed'}>
+                  {f.scope === 'department' ? f.department : 'Personal'}
+                </span>
+              )}
               <button
                 className="custom-feed-remove"
                 onClick={() => handleRemove(f)}
@@ -266,24 +437,35 @@ function MyFeedsManager({ userFeeds, onFeedRemoved, onFeedAdded }) {
         </div>
       ))}
 
-      {showAdd
-        ? <AddFeedForm
-            onAdd={handleAdd}
-            onCancel={() => setShowAdd(false)}
-            existingUserCategories={existingUserCategories}
-          />
-        : (
-          <button className="custom-feed-add-btn" onClick={() => setShowAdd(true)}>
+      {showAddFeed && (
+        <AddFeedForm
+          onAdd={handleAddFeed}
+          onCancel={() => setShowAddFeed(false)}
+          categories={categories}
+        />
+      )}
+      {showAddCat && (
+        <AddCategoryForm
+          onAdd={handleAddCat}
+          onCancel={() => setShowAddCat(false)}
+        />
+      )}
+      {!showAddFeed && !showAddCat && (
+        <div className="custom-feed-add-actions">
+          <button className="custom-feed-add-btn" onClick={() => setShowAddFeed(true)}>
             + Add feed
           </button>
-        )
-      }
+          <button className="custom-feed-add-btn" onClick={() => setShowAddCat(true)}>
+            + Add category
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Custom tab content: manager + items tagged __custom__ ─────────────────────
-function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
+function CustomTabView({ userFeeds, categories, onFeedRemoved, onFeedAdded, onCategoryAdded }) {
   const [items,   setItems]   = useState([])
   const [loading, setLoading] = useState(false)
   const [page,    setPage]    = useState(0)
@@ -294,7 +476,7 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
   const fetchCustom = useCallback(async () => {
     if (!uncategorizedFeeds.length) { setItems([]); return }
     setLoading(true)
-    const r = await fetch('/api/rss?category=__custom__').catch(() => null)
+    const r = await fetch('/api/rss?category=__custom__', { headers: authHeaders() }).catch(() => null)
     if (r?.ok) {
       const data = await r.json()
       setItems(data.items || [])
@@ -313,8 +495,10 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
     <div className="custom-feeds-view">
       <MyFeedsManager
         userFeeds={userFeeds}
+        categories={categories}
         onFeedRemoved={onFeedRemoved}
         onFeedAdded={(feed) => { onFeedAdded(feed); fetchCustom() }}
+        onCategoryAdded={onCategoryAdded}
       />
 
       {uncategorizedFeeds.length > 0 && (
@@ -339,41 +523,56 @@ function CustomTabView({ userFeeds, onFeedRemoved, onFeedAdded }) {
 
 // ── Root view ─────────────────────────────────────────────────────────────────
 export default function IntelView() {
-  const [category,  setCategory]  = useState(
+  const [category,   setCategory]   = useState(
     () => localStorage.getItem('rss_category') || 'corporate_intel'
   )
-  const [items,     setItems]     = useState([])
-  const [loading,   setLoading]   = useState(true)
-  const [error,     setError]     = useState(null)
-  const [page,      setPage]      = useState(0)
-  const [userFeeds, setUserFeeds] = useState([])
+  const [items,       setItems]       = useState([])
+  const [loading,     setLoading]     = useState(true)
+  const [error,       setError]       = useState(null)
+  const [page,        setPage]        = useState(0)
+  const [userFeeds,   setUserFeeds]   = useState([])
+  const [categories,  setCategories]  = useState([])
   const PAGE_SIZE = 15
 
-  // Load user feeds from backend on mount
+  // Load user feeds + categories from backend on mount.
+  // UPDATED 2026-08-02: categories are now fetched from the backend
+  // (GET /api/rss/categories, identity-filtered for department/personal
+  // visibility) instead of a hardcoded frontend array -- see
+  // shared/rss_catalog.py's list_all_categories(). Both calls send
+  // authHeaders() so a caller with a department/personal token sees their
+  // own categories and feeds immediately, not just company-wide ones.
   useEffect(() => {
-    fetch('/api/rss/user-feeds')
+    fetch('/api/rss/user-feeds', { headers: authHeaders() })
       .then(r => r.ok ? r.json() : { feeds: [] })
       .then(d => setUserFeeds(d.feeds || []))
       .catch(() => {})
+    fetch('/api/rss/categories', { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : { categories: [] })
+      .then(d => setCategories(d.categories || []))
+      .catch(() => {})
   }, [])
 
-  const handleFeedAdded   = (feed) => setUserFeeds(prev => [...prev, feed])
-  const handleFeedRemoved = (id)   => setUserFeeds(prev => prev.filter(f => f.id !== id))
+  const handleFeedAdded     = (feed) => setUserFeeds(prev => [...prev, feed])
+  const handleFeedRemoved   = (id)   => setUserFeeds(prev => prev.filter(f => f.id !== id))
+  const handleCategoryAdded = (cat)  => setCategories(prev => [...prev, cat])
 
-  // Build dynamic tabs: catalog + user-defined categories + My Feeds hub
+  // Build dynamic tabs: fetched categories + any orphan category strings
+  // still on a feed but not (yet) in the categories list (shouldn't
+  // normally happen now that Add Feed only assigns existing categories,
+  // but stays defensive for feeds saved before this change) + My Feeds hub.
   const allCategories = useMemo(() => {
-    const seen = new Set(CATALOG_CATEGORIES.map(c => c.id))
+    const seen = new Set(categories.map(c => c.id))
     seen.add('__custom__')
-    const userDefined = []
+    const orphan = []
     userFeeds.forEach(f => {
       const cat = f.category || '__custom__'
       if (!seen.has(cat)) {
         seen.add(cat)
-        userDefined.push({ id: cat, label: cat })
+        orphan.push({ id: cat, label: cat })
       }
     })
-    return [...CATALOG_CATEGORIES, ...userDefined, CUSTOM_TAB]
-  }, [userFeeds])
+    return [...categories, ...orphan, CUSTOM_TAB]
+  }, [categories, userFeeds])
 
   const loadFeed = useCallback((cat) => {
     if (cat === '__custom__') return
@@ -381,7 +580,7 @@ export default function IntelView() {
     setError(null)
     setItems([])
     setPage(0)
-    fetch(`/api/rss?category=${encodeURIComponent(cat)}`)
+    fetch(`/api/rss?category=${encodeURIComponent(cat)}`, { headers: authHeaders() })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(data => { setItems(data.items || []); setLoading(false) })
       .catch(e  => { setError(e.message); setLoading(false) })
@@ -423,8 +622,10 @@ export default function IntelView() {
       {isCustom ? (
         <CustomTabView
           userFeeds={userFeeds}
+          categories={categories}
           onFeedAdded={handleFeedAdded}
           onFeedRemoved={handleFeedRemoved}
+          onCategoryAdded={handleCategoryAdded}
         />
       ) : (
         <div className="rss-feed">

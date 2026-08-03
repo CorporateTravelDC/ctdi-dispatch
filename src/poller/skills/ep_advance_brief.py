@@ -45,9 +45,13 @@ log = logging.getLogger(__name__)
 SKILL_NAME      = "ep-advance"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL    = (
-    os.getenv("OLLAMA_OSINT_MODEL")
+    os.getenv("OLLAMA_EP_ADVANCE_MODEL")
     or os.getenv("OLLAMA_MODEL")
-    or "mistral"
+    or "corporatetraveldc-pi5-ep-advance:latest"
+)
+OLLAMA_TREND_MODEL_EP = (
+    os.getenv("OLLAMA_EP_ADVANCE_TREND_MODEL")
+    or "corporatetraveldc-pi5-ep-advance-trend:latest"
 )
 MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 OLLAMA_TIMEOUT = 1200   # 20 min — Pi 5 needs headroom for large prompts
@@ -941,7 +945,8 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_MODEL,
-                "system": SYSTEM_PROMPT,
+                # system omitted 2026-08-02: baked into the dedicated
+                # corporatetraveldc-pi5-ep-advance Modelfile now.
                 "prompt": prompt,
                 "stream": False,
                 "options": {"num_predict": 750, "temperature": 0.15},
@@ -1111,8 +1116,9 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
     try:
         resp = ollama_post_with_retry(
             {
-                "model":  OLLAMA_MODEL,
-                "system": TREND_SYSTEM_PROMPT_EP,
+                "model":  OLLAMA_TREND_MODEL_EP,
+                # system omitted 2026-08-02: baked into the dedicated
+                # corporatetraveldc-pi5-ep-advance-trend Modelfile now.
                 "prompt": trend_prompt,
                 "stream": False,
                 "options": {"num_predict": 260, "temperature": 0.15},

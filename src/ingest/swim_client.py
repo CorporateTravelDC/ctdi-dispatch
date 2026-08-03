@@ -553,18 +553,43 @@ def _handle_stdds_message(payload: bytes) -> bool:
     from ingest.parsers.smes_parser import (
         parse_smes_message, write_surface_tracks,
         parse_tais_message, write_terminal_tracks,
+        check_stdds_alerts, check_surface_alerts,
+        parse_safety_logic_message, write_safety_status, check_incursion_alert,
+        parse_surface_movement_event_message, write_surface_movement_event,
+        check_taxi_alerts,
     )
     smes_tracks = parse_smes_message(payload)
     if smes_tracks:
         n = write_surface_tracks(smes_tracks)
         log.info("stdds: wrote %d surface track(s)", n)
+        check_surface_alerts(smes_tracks)
         return n > 0
 
     tais_tracks = parse_tais_message(payload)
     if tais_tracks:
         n = write_terminal_tracks(tais_tracks)
         log.info("stdds: wrote %d terminal track(s)", n)
+        check_stdds_alerts(tais_tracks)
         return n > 0
+
+    safety_record = parse_safety_logic_message(payload)
+    if safety_record:
+        previous_bitmask = write_safety_status(safety_record)
+        log.info("stdds: wrote safety-logic status for %s", safety_record["airport"])
+        check_incursion_alert(safety_record, previous_bitmask)
+        return True
+
+    taxi_record = parse_surface_movement_event_message(payload)
+    if taxi_record:
+        ok = write_surface_movement_event(taxi_record)
+        if ok:
+            log.info(
+                "stdds: wrote surface movement event %s %s at %s (event=%s status=%s)",
+                taxi_record.get("callsign"), taxi_record["track_id"],
+                taxi_record["airport"], taxi_record.get("event"), taxi_record.get("status"),
+            )
+            check_taxi_alerts(taxi_record)
+        return ok
 
     return False
 

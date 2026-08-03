@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useDemoStatus } from '../hooks/useDemoStatus.js'
 
 const ALL_TOPICS = [
   { id: 'dispatch',          label: 'General',     color: 'cyan'   },
@@ -54,7 +55,97 @@ function AlertItem({ msg }) {
   )
 }
 
+const _RECEIVERS = [
+  { key: 'limoanywhere', label: 'LimoAnywhere',  hint: 'Reservation / dispatch platform' },
+  { key: 'threecx',      label: '3CX',           hint: 'Call center / PBX platform' },
+  { key: 'ringcentral',  label: 'RingCentral',    hint: 'Call center / UCaaS platform' },
+]
+
+function relTimeShort(iso) {
+  if (!iso) return ''
+  try {
+    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+    if (diff < 5) return 'just now'
+    if (diff < 60) return `${diff}s ago`
+    return `${Math.floor(diff / 60)}m ago`
+  } catch { return '' }
+}
+
+/**
+ * IntegrationsPanel -- shows each mock receiver (LimoAnywhere / 3CX /
+ * RingCentral) and the most recent webhook payload it's gotten, polling
+ * /api/demo/webhook-log every 4s. Only rendered for the chauffeur-pitch
+ * and ea-pitch demo profiles (see NtfyFeedView below) -- those are the
+ * two audiences who'd actually care that this alert bus can reach into
+ * their reservation/call-center stack, not just push to a phone.
+ * Demo-only: the endpoint itself 404s for live/trusted requests, so this
+ * component has nothing to show and nothing to poll outside that context.
+ */
+function IntegrationsPanel() {
+  const [log, setLog] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/demo/webhook-log')
+        if (!r.ok) return
+        const data = await r.json()
+        if (!cancelled) setLog(data)
+      } catch { /* transient -- keep last known state */ }
+    }
+    poll()
+    const id = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  return (
+    <div className="ntfy-integrations-panel">
+      <div className="ntfy-integrations-head">
+        <h3>Webhook integrations</h3>
+        <span className="ntfy-integrations-sub">
+          Every alert above also fans out via webhook to your reservation and call-center platforms — shown live below.
+        </span>
+      </div>
+      <div className="ntfy-integrations-grid">
+        {_RECEIVERS.map(r => {
+          const items = log?.[r.key] || []
+          const latest = items[0]
+          return (
+            <div key={r.key} className="ntfy-integration-card">
+              <div className="ntfy-integration-card-head">
+                <span className="ntfy-integration-name">{r.label}</span>
+                <span className="ntfy-integration-hint">{r.hint}</span>
+              </div>
+              {latest ? (
+                <div className="ntfy-integration-latest">
+                  <div className="ntfy-integration-latest-row">
+                    <span className="ntfy-integration-title">{latest.title}</span>
+                    <span className="ntfy-integration-ts">{relTimeShort(latest.timestamp)}</span>
+                  </div>
+                  <div className="ntfy-integration-message">{latest.message}</div>
+                  <div className="ntfy-integration-meta">POST /webhook · {latest.event}</div>
+                </div>
+              ) : (
+                <div className="ntfy-integration-empty">Waiting for the next alert…</div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function NtfyFeedView() {
+  const [demoStatus] = useDemoStatus()
+  // Only genuine public demo visitors (not Corey over Tailscale, who
+  // should just see the plain real feed like every other tab) get the
+  // marketing emphasis below, and only for the two audiences who asked
+  // for it -- ota-pitch/concierge-pitch see the ordinary feed.
+  const isPublicDemo = demoStatus !== null && demoStatus.demo_mode === true && demoStatus.trusted_origin !== true
+  const showBoxEmphasis = isPublicDemo && (demoStatus.label === 'chauffeur-pitch' || demoStatus.label === 'ea-pitch')
+
   const [enabledTopics, setEnabledTopics] = useState(
     () => {
       try {
@@ -159,6 +250,14 @@ export default function NtfyFeedView() {
           <button className="ntfy-ctrl-btn" onClick={clearMessages}>CLEAR</button>
         </div>
       </div>
+
+      {showBoxEmphasis && (
+        <div className="ntfy-box-banner">
+          Self-hosted alert bus — every message here stays on this box. No third-party push service, no cloud relay.
+        </div>
+      )}
+
+      {showBoxEmphasis && <IntegrationsPanel />}
 
       {/* Topic filter chips */}
       <div className="ntfy-topic-filters">

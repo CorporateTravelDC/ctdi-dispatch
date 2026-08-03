@@ -46,7 +46,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "dispatch-desk-memo"
-OLLAMA_MODEL = "corporatetraveldc-pi5-osint:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-dispatch-desk:latest"
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service
@@ -203,7 +203,7 @@ def main() -> None:
         prompt = "\n\n".join(blocks)
 
         ollama_result = llm_generate(
-            system=SYSTEM_PROMPT, prompt=prompt,
+            system=None, prompt=prompt,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=1100, temperature=0.4,
             # Explicit timeout added 2026-07-26: this is the largest prompt
             # of the group (90 items across 6 categories) and legitimately

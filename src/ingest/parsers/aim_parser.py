@@ -27,8 +27,15 @@ Storage/alert routing:
   VIP (POTUS/VP/AF1/AF2/Marine One) : always stored + alerted, nationwide,
                         regardless of facility.
   Dedup               : 24h window keyed on notam_id (PushDedup "notam")
-  Alert priority      : VIP → hot-alerts priority=5; everything else in the
-                        watch set → nas-alerts priority=3
+  Alert routing (refined 2026-08-03): VIP -> hot-alerts priority=5.
+                        Flight-restriction NOTAMs (TFRs, restricted/
+                        prohibited airspace) -> fdps-alerts/fdps-<zone>
+                        priority=4, fired on first occurrence (not
+                        escalation-gated -- a lone TFR is itself
+                        alert-worthy). Everything else in the watch set
+                        (IAP/ASDE-X/other NOTAM-D content) -> nas-alerts
+                        priority=3, plus aim_fns-alerts/aim_fns-<zone>
+                        (escalation-gated, see shared.sector_coalesce).
 
 NOTAM ID: "{location}/{year}/{number}" e.g. "PSG/2026/081"
 Effective timestamps: YYYYMMDDHHmm compact (12-digit UTC) e.g. "202606152335"
@@ -138,6 +145,36 @@ def _is_vip_notam(notam_text: str) -> bool:
     return any(kw in upper for kw in _VIP_KEYWORDS)
 
 
+# 2026-08-03 per operator: "make nas-alerts mostly iap and asde-x type
+# alerts and flight restrictions in fdps-{*} or hot-alerts respectively" --
+# flight-restriction NOTAMs (TFRs, restricted/prohibited airspace) are an
+# airspace/zone concern, the same shape as FDPS proximity tracking, so they
+# get diverted out of nas-alerts and into the fdps family instead. VIP
+# flight restrictions already land on hot-alerts via _is_vip_notam (POTUS/
+# AF1/Marine One TFR text always matches there first) -- this classifier
+# only needs to catch the non-VIP case. Reuses
+# _NATIONAL_SIGNIFICANT_CFR_RE since FAA TFR text conventionally cites the
+# authorizing regulation (91.137/141/143/145, 99.7) -- same proven signal
+# already used by _is_national_significant, not a new guess.
+_FLIGHT_RESTRICTION_KEYWORDS = frozenset({
+    "FLIGHT RESTRICTIONS", "FLT RESTRICTIONS", "FLIGHT RESTRICTED",
+    "TEMPORARY FLIGHT RESTRICTION", "TFR", "PROHIBITED AREA",
+    "RESTRICTED AREA", "NATIONAL DEFENSE AIRSPACE", "AIRSPACE RESTRICTED",
+})
+
+
+def _is_flight_restriction_notam(notam_text: str) -> bool:
+    """True if NOTAM text reads as a flight-restriction/TFR (airspace
+    closed or limited to specific traffic) rather than a facility/
+    procedure/equipment NOTAM (IAP unavailable, ASDE-X outage, runway/
+    taxiway closure, obstacle, etc -- the content nas-alerts is meant to
+    carry post-2026-08-03)."""
+    upper = (notam_text or "").upper()
+    if _NATIONAL_SIGNIFICANT_CFR_RE.search(upper):
+        return True
+    return any(kw in upper for kw in _FLIGHT_RESTRICTION_KEYWORDS)
+
+
 def _txt(elem: ET.Element | None, path: str) -> str | None:
     if elem is None:
         return None
@@ -209,9 +246,23 @@ def _get_transient_airports() -> frozenset[str]:
 def _fire_notam_alert(notam: dict) -> None:
     """Push ntfy alert for a NOTAM that matches the watch set.
 
-    Routing:
-      VIP NOTAMs (POTUS/AF1/Marine One keywords) → hot-alerts, priority=5
-      All other NOTAMs                           → nas-alerts, priority=3
+    Routing (refined 2026-08-03 per operator: "make nas-alerts mostly iap
+    and asde-x type alerts and flight restrictions in fdps-{*} or
+    hot-alerts respectively"):
+      VIP NOTAMs (POTUS/AF1/Marine One)       → hot-alerts, priority=5
+      Flight-restriction NOTAMs (non-VIP)     → fdps-alerts/fdps-<zone>,
+                                                 priority=4, fired on FIRST
+                                                 occurrence (escalating_only
+                                                 =False -- a lone TFR is
+                                                 itself alert-worthy, unlike
+                                                 tbfm/tfms/itws/aim_fns
+                                                 bursts which want to stay
+                                                 quiet until escalating)
+      Everything else (IAP/ASDE-X/other)      → nas-alerts, priority=3,
+                                                 plus aim_fns-alerts/
+                                                 aim_fns-<zone> (escalating-
+                                                 only, unchanged from the
+                                                 earlier 2026-08-03 rollout)
     dispatch-alerts is not used for NOTAMs.
     """
     notam_id = notam["notam_id"]
@@ -227,24 +278,71 @@ def _fire_notam_alert(notam: dict) -> None:
     title = f"{label} [{facility}] — {notam_id}"
     body = text_body[:400] if text_body else notam_id
 
-    if _is_vip_notam(text_body):
-        topic = "hot-alerts"
-        priority = 5
-    else:
-        topic = "nas-alerts"
-        priority = 3
+    is_vip = _is_vip_notam(text_body)
+    is_restriction = (not is_vip) and _is_flight_restriction_notam(text_body)
 
-    ok = ntfy_send(
-        topic=topic,
-        message=body,
-        title=title,
-        priority=priority,
-        tags="warning,airplane",
-    )
-    if ok:
+    fired = False
+    family_fired = False
+
+    if is_vip:
+        # VIP stays exclusive to hot-alerts -- same design as Marine One
+        # in fdps_parser.py, never folded into a family-alerts pattern.
+        fired = ntfy_send(
+            topic="hot-alerts",
+            message=body,
+            title=title,
+            priority=5,
+            tags="warning,airplane",
+        )
+    elif is_restriction:
+        # Airspace/zone concern -- route through the fdps family instead
+        # of nas-alerts. escalating_only=False: a standalone TFR is itself
+        # the alert, it must not wait for a burst pattern.
+        #
+        # 2026-08-03 (same day, follow-up): feed_name is "fdps_notam", NOT
+        # "fdps" -- family stays "fdps" (same fdps-alerts/fdps-<zone>
+        # topics, per the operator's original ask), but the feed_name used
+        # for escalation-counting must differ. Reason: record_event()'s
+        # window/prior counts are per-sector across ALL feeds sharing that
+        # feed_name unless isolate=True -- if this used feed_name="fdps"
+        # (same as fdps_parser.py's own proximity-tracking calls), a burst
+        # of TFR NOTAMs could make fdps_parser's real proximity alerts
+        # spuriously read "escalating" with no actual proximity trend, or
+        # vice versa. isolate=True keeps this feed_name's event count
+        # entirely independent of fdps_parser's -- no sympathetic trigger
+        # in either direction -- while both still land on the same
+        # fdps-alerts/fdps-<zone> topics for the operator.
+        try:
+            from shared.sector_coalesce import fire_family_alert
+            result = fire_family_alert(
+                "fdps", "fdps_notam", facility, title, body, body,
+                base_priority=4, escalating_only=False, isolate=True,
+            )
+            family_fired = bool(result.get("fired") or result.get("zone_fired"))
+        except Exception as e:
+            log.error("aim: fdps family-alert fire failed for %s: %s", notam_id, e)
+    else:
+        # IAP/ASDE-X/other NOTAM-D content -- the nas-alerts residual bucket.
+        fired = ntfy_send(
+            topic="nas-alerts",
+            message=body,
+            title=title,
+            priority=3,
+            tags="warning,airplane",
+        )
+        try:
+            from shared.sector_coalesce import fire_family_alert
+            result = fire_family_alert("aim_fns", "aim_fns", facility, title, body, body, base_priority=3)
+            family_fired = bool(result.get("fired") or result.get("zone_fired"))
+        except Exception as e:
+            log.error("aim: aim_fns family-alert fire failed for %s: %s", notam_id, e)
+
+    if fired or family_fired:
         _NOTAM_DEDUP.record(notam_id, dedup_key)
-        log.info("aim: notam alert fired: %s facility=%s topic=%s priority=%d",
-                 notam_id, facility, topic, priority)
+        log.info(
+            "aim: notam alert fired: %s facility=%s vip=%s restriction=%s legacy_fired=%s family_fired=%s",
+            notam_id, facility, is_vip, is_restriction, fired, family_fired,
+        )
 
 
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:

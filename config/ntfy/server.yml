@@ -32,3 +32,22 @@ smtp-sender-from: ntfy@pm.me
 # public visitor.
 visitor-request-limit-burst: 5000
 visitor-request-limit-replenish: 1s
+
+# Subscription cap -- 2026-08-03 per operator: raised from the ntfy default
+# (30) to 100 as a soft working limit. Topic count is growing fast with the
+# family-alert rollout (tbfm/tfms/fdps/itws/aim_fns aggregates+zones = ~45
+# topics alone, on top of ~15-20 legacy ones -- topics_active was already at
+# 61 the day this was raised, with stdds and FIDS-OOOI still to come). 100
+# gives real headroom over todays count without being unbounded; see the
+# ntfy-topic-count-watchdog timer for the early-warning check as we approach
+# 150 (a separate soft ceiling, not enforced by ntfy itself -- just the
+# trigger point for a heads-up alert to reconsider growth or raise this
+# again before subscriptions actually start getting rejected).
+visitor-subscription-limit: 100
+
+# Prometheus metrics -- 2026-08-03, enabled so the topic-count-watchdog can
+# read a real gauge (ntfy_topics) instead of scraping the periodic "Server
+# stats" log line. Attaches to the existing listen-http port (:2586,
+# Tailscale/localhost-only reach per the nginx vhosts proxy_pass target);
+# not separately exposed, no new port opened.
+enable-metrics: true

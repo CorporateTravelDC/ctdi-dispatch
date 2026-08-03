@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-aam-watch 3min before aam-weekly-watch (Sun 09:00)
+Requires=corporatetraveldc-ollama-prewarm-aam-weekly-watch.service
+
+[Timer]
+OnCalendar=Sun *-*-* 08:57:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

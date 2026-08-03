@@ -16,6 +16,10 @@ import IntelView from './components/IntelView.jsx'
 import WeatherView from './components/WeatherView.jsx'
 import { useLayerConfig } from './hooks/useLayerConfig.js'
 import { useTailnet } from './hooks/useTailnet.js'
+import { useDemoStatus } from './hooks/useDemoStatus.js'
+import { useWakeLock } from './hooks/useWakeLock.js'
+import WakeLockIndicator from './components/WakeLockIndicator.jsx'
+import DemoLoginGate from './components/DemoLoginGate.jsx'
 
 /** Global layer config context — allows any child to read/update panel visibility */
 export const LayerConfigContext = createContext(null)
@@ -44,6 +48,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const layerCtx = useLayerConfig()
   const tailnet = useTailnet()
+  const [demoStatus, recheckDemoStatus] = useDemoStatus()
+  const wakeLockStatus = useWakeLock()
 
   // ── Theme management ──────────────────────────────────────────────────────
   const [themeOverride, setThemeOverride] = useState(
@@ -96,6 +102,20 @@ export default function App() {
     })
   }, [])
 
+  // Demo-mode gate: nothing else renders until this resolves and, if
+  // gated, until login succeeds. demoStatus === null means the check is
+  // still in flight -- render nothing rather than flashing live content
+  // on a genuinely gated (public, unauthenticated) visit.
+  if (demoStatus === null) {
+    return <div className="demo-gate-loading" aria-hidden="true" />
+  }
+  if (demoStatus.demo_mode && !demoStatus.authenticated) {
+    return <DemoLoginGate onSuccess={() => recheckDemoStatus()} />
+  }
+  const demoBanner = (demoStatus.demo_mode && !demoStatus.trusted_origin)
+    ? `DEMO${demoStatus.label ? ': ' + demoStatus.label : ''}${demoStatus.speed ? ' · ' + demoStatus.speed + 'x' : ''}`
+    : null
+
   return (
     <LayerConfigContext.Provider value={layerCtx}>
       {/* Skip navigation — visible on keyboard focus only */}
@@ -106,6 +126,11 @@ export default function App() {
           <span className="topbar-brand" aria-label="Corporate Travel Dispatch Intelligence">
             CORPORATE TRAVEL DISPATCH INTELLIGENCE
           </span>
+          {demoBanner && (
+            <span className="demo-banner" title="This is a replayed archive, not live operational data">
+              {demoBanner}
+            </span>
+          )}
 
           <div className="topbar-nav" role="menubar">
             <NavLink to="/" end
@@ -165,6 +190,7 @@ export default function App() {
               ADS-B:{ADSB_LABELS[adsbMode]}
             </button>
             <CpsIndicator cps={liveState?.cps} />
+            <WakeLockIndicator status={wakeLockStatus} />
             <button
               className="theme-btn"
               onClick={cycleTheme}

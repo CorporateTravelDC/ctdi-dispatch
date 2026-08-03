@@ -1,0 +1,55 @@
+# ~/.config/containers/systemd/rss-bridge.container
+#
+# RSS-Bridge -- self-hosted "turn any site into RSS" (Public Domain,
+# https://github.com/RSS-Bridge/rss-bridge). Deployed 2026-08-03 per
+# operator request for direct Rumble + no-native-RSS blog support in the
+# Intel tile, alongside native YouTube RSS support (no bridge needed for
+# YouTube -- see shared/feed_resolve.py).
+#
+# Network: bound to this host's own Tailscale IP (100.x.x.x), not
+# loopback and not the public-WiFi-facing interface -- same pattern as
+# Ollama/OpenWebUI (see docs/COMPLIANCE_SECURITY.md). This means every
+# container that needs to reach it (the second-brain-rss poller for
+# ingestion, web/runner for constructing+validating bridge URLs when an
+# operator adds a feed) does so via plain outbound NAT on that address,
+# no Network=pasta:--map-gw opt-in needed on any consumer's Quadlet.
+# Deliberately NOT exposed via the Cloudflare tunnel or any public vhost
+# -- this is operator/dept feed-configuration tooling, not a public
+# service, and RSS-Bridge's own admin/config surface has no auth of its
+# own by default.
+
+[Unit]
+Description=RSS-Bridge -- self-hosted RSS generation for Rumble/no-RSS blogs
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Memory=256m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if the container leaks past Memory=.
+PodmanArgs=--memory-swap=256m
+Image=docker.io/rssbridge/rss-bridge:latest
+ContainerName=rss-bridge
+PublishPort=100.x.x.x:3001:80
+# Data dir under the corporatetraveldc user's own home, not /var/lib --
+# /var/lib is root-owned and creating a new subdirectory there needs
+# interactive sudo (see docs/COMPLIANCE_SECURITY.md's known blocker on
+# arbitrary root-owned paths). Every other Quadlet's /var/lib/* dirs were
+# pre-created by Corey's setup.sh; this one wasn't, so it gets a
+# self-contained path this user already owns outright.
+Volume=/home/corporatetraveldc/.local/share/rss-bridge/whitelist.txt:/app/whitelist.txt:z
+NoNewPrivileges=true
+AutoUpdate=registry
+
+[Service]
+CPUWeight=50
+CPUQuota=100%
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+# No WantedBy on purpose -- startup is owned by
+# corporatetraveldc-stack-boot-stagger.service via scripts/stack-boot-ctl.sh,
+# same convention as every other long-running Quadlet added since
+# 2026-07-28. Do not re-add WantedBy=default.target here.

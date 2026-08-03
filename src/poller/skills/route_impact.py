@@ -14,9 +14,9 @@ from common.sr2_gate import hash_gate
 log = logging.getLogger(__name__)
 SKILL_NAME = "route-impact"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_ROUTE_IMPACT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-route-impact:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Route prompt is ~300-400 tokens; mistral-nemo Pi 5 CPU ~120s sufficient
 OLLAMA_TIMEOUT    = 900  # stopgap
@@ -82,7 +82,7 @@ def _call_ollama_vip(inputs: dict) -> str | None:
     # weekly-summary/osint-monitor) for the shared Ollama slot. See
     # common/ollama_lock.py.
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=_vip_user_message(inputs),
         ollama_model=OLLAMA_MODEL,
         max_tokens=200,

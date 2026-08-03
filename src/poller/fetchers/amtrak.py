@@ -137,6 +137,26 @@ def _normalize(raw_trains: dict) -> list:
 
             delay = _delay_minutes(t)
             train_id = t.get("trainID") or t.get("trainNum", _num)
+
+            # Final-destination ETA -- added 2026-07-29, mirrors the same
+            # fix in ingest/amtrak.py (the primary writer) for schema parity
+            # when this fallback fetcher is the one that fires. Stations
+            # list is already on `t` (full raw amtraker record) even though
+            # this fetcher's own normalized entry doesn't otherwise expose
+            # per-station granularity beyond `_raw`.
+            _stations = t.get("stations", [])
+            _dest_stn = _stations[-1] if _stations else {}
+            dest_sch = _dest_stn.get("schArr")
+            dest_est = _dest_stn.get("arr")
+            dest_delay = 0
+            if dest_sch and dest_est and dest_sch != dest_est:
+                try:
+                    _s = datetime.fromisoformat(dest_sch.replace("Z", "+00:00"))
+                    _e = datetime.fromisoformat(dest_est.replace("Z", "+00:00"))
+                    dest_delay = max(0, int((_e - _s).total_seconds() / 60))
+                except Exception:
+                    dest_delay = 0
+
             entry = {
                 "train_number": t.get("trainNum", _num),
                 "train_name":   f"{t.get('routeName','?')} {t.get('trainNum','?')}",
@@ -144,6 +164,9 @@ def _normalize(raw_trains: dict) -> list:
                 "train_state":  t.get("trainState", ""),
                 "orig_code":    orig,
                 "dest_code":    dest,
+                "dest_scheduled_arr": dest_sch,
+                "dest_estimated_arr": dest_est,
+                "dest_delay_minutes": dest_delay,
                 "event_name":   t.get("eventName", ""),
                 "_raw":         t,
             }

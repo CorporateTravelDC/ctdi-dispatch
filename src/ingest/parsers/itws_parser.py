@@ -660,7 +660,18 @@ _itws_dedup = PushDedup("itws-alerts", dedup_secs=1200)  # 20 min
 def check_itws_alerts(alerts: list[dict]) -> None:
     """Fire ntfy for high-severity ITWS alerts (severity >= 4), deduped per
     (airport, product_type) slot so an unchanged, still-active condition
-    doesn't re-fire on every SWIM message re-broadcasting the same state."""
+    doesn't re-fire on every SWIM message re-broadcasting the same state.
+
+    2026-08-03: ADDED a second push through
+    shared.sector_coalesce.fire_family_alert("itws", ...) -- "itws-alerts"
+    (escalating-only aggregate) and "itws-<zone>" per-zone, giving ITWS the
+    same escalation-threshold + per-topic throttle protection as
+    tbfm/tfms/fdps. The existing direct "wx-alerts" push is left in place
+    unchanged (not replaced) -- wx-alerts is shared with NWS/METAR-derived
+    weather content, not ITWS-exclusive, so removing ITWS from it would be
+    a visibility regression for anyone only watching that one topic. Flag
+    to the operator if wx-alerts should drop ITWS content once the new
+    itws-alerts/itws-<zone> topics are confirmed live-subscribed."""
     for a in alerts:
         sev = a.get("severity") or 0
         if sev < ITWS_ALERT_SEVERITY:
@@ -680,3 +691,8 @@ def check_itws_alerts(alerts: list[dict]) -> None:
             _itws_dedup.record(dedup_key, hash_key)
         except Exception as e:
             log.error("itws: ntfy error for %s/%s: %s", airport, product_type, e)
+        try:
+            from shared.sector_coalesce import fire_family_alert
+            fire_family_alert("itws", "itws", airport, title, detail, dispatch, base_priority=4)
+        except Exception as e:
+            log.error("itws: family-alert fire failed for %s/%s: %s", airport, product_type, e)

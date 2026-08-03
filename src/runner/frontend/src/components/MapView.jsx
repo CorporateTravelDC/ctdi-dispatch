@@ -410,8 +410,10 @@ function TacticalMap({ liveState }) {
   const aircraftLayerRef = useRef(null)
   const trackedLayerRef  = useRef(null)
   const tfrLayerRef      = useRef(null)
-  const [acCount,  setAcCount]  = useState(0)
-  const [tfrCount, setTfrCount] = useState(0)
+  const airmetLayerRef   = useRef(null)
+  const [acCount,     setAcCount]     = useState(0)
+  const [tfrCount,    setTfrCount]    = useState(0)
+  const [airmetCount, setAirmetCount] = useState(0)
   const [error,    setError]    = useState(null)
   const [acItems,  setAcItems]  = useState([])
   const [tfrExtra, setTfrExtra] = useState([])
@@ -447,6 +449,7 @@ function TacticalMap({ liveState }) {
     aircraftLayerRef.current = L.layerGroup().addTo(map)
     trackedLayerRef.current  = L.layerGroup().addTo(map)   // tracked on top
     tfrLayerRef.current      = L.layerGroup().addTo(map)
+    airmetLayerRef.current   = L.layerGroup().addTo(map)
     leafletRef.current = map
   }, [])
 
@@ -526,6 +529,36 @@ function TacticalMap({ liveState }) {
     } catch (_) {}
   }, [])
 
+  const refreshAirmets = useCallback(async () => {
+    if (!airmetLayerRef.current) return
+    try {
+      const r = await fetch('/api/dispatch/api/v1/airmets')
+      if (!r.ok) return
+      const data = await r.json()
+      const airmets = data.airmets || []
+      airmetLayerRef.current.clearLayers()
+      airmets.forEach(a => {
+        if (!a.coords || a.coords.length < 3) return
+        const isSigmet = a.type === 'SIGMET'
+        L.polygon(a.coords, {
+          color: a.color || '#9ca3af',
+          weight: isSigmet ? 2 : 1,
+          fill: true,
+          fillOpacity: isSigmet ? 0.14 : 0.08,
+          dashArray: isSigmet ? null : '4 4',
+        })
+          .addTo(airmetLayerRef.current)
+          .bindTooltip(
+            `<b>${a.type}: ${a.hazard.replace(/_/g, ' ')}</b><br/>` +
+            `${a.altitude_low ?? 'SFC'}–${a.altitude_high ?? '?'}ft` +
+            (a.severity ? ` · sev ${a.severity}` : ''),
+            { className: 'tfr-tooltip' }
+          )
+      })
+      setAirmetCount(airmets.length)
+    } catch (_) {}
+  }, [])
+
   useEffect(() => {
     refreshAircraft()
     const id = setInterval(refreshAircraft, 10_000)
@@ -537,6 +570,12 @@ function TacticalMap({ liveState }) {
     const id = setInterval(refreshTfrs, 60_000)
     return () => clearInterval(id)
   }, [refreshTfrs])
+
+  useEffect(() => {
+    refreshAirmets()
+    const id = setInterval(refreshAirmets, 300_000)  // matches the 5-min server-side cache TTL
+    return () => clearInterval(id)
+  }, [refreshAirmets])
 
   useEffect(() => {
     if (liveState?.tfr_count !== undefined) setTfrCount(liveState.tfr_count)
@@ -568,7 +607,12 @@ function TacticalMap({ liveState }) {
         ? map.addLayer(tfrLayerRef.current)
         : map.removeLayer(tfrLayerRef.current)
     }
-  }, [layers.airspace, layers.rings, layers.localFeed, layers.tfr])
+    if (airmetLayerRef.current) {
+      layers.airmet !== false
+        ? map.addLayer(airmetLayerRef.current)
+        : map.removeLayer(airmetLayerRef.current)
+    }
+  }, [layers.airspace, layers.rings, layers.localFeed, layers.tfr, layers.airmet])
 
   const compassSummary = useCompassSummary(acItems, tfrExtra)
 
@@ -610,6 +654,7 @@ function TacticalMap({ liveState }) {
             <span className="stat tracked-stat">★ {trackedCount} TRACKED</span>
           )}
           <span className="stat">{tfrCount} TFR{tfrCount !== 1 ? 's' : ''}</span>
+          <span className="stat">{airmetCount} AIRMET/SIGMET</span>
           {error && <span className="stat error">{error}</span>}
           <span className="stat source-badge">LIVE (airplanes.live)</span>
         </div>

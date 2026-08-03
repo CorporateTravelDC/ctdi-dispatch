@@ -80,6 +80,20 @@ def tailscale_domain_suffix() -> str:
     """Tailscale magic DNS suffix — used by Tier 1 auth."""
     return get("TAILSCALE_DOMAIN_SUFFIX", ".example.ts.net")
 
+def runner_click_base() -> str:
+    """
+    Base URL for ntfy click-through links (common/ntfy_push.py TOPIC_CLICK).
+
+    2026-08-03: defaults to the Tailscale hostname, not a public domain --
+    ops.example.com was retired 2026-08-02 (see runner/main.py's
+    _RETIRED_HOSTNAMES) and now hard-rejects requests, so every click-through
+    still pointing at it was landing on a dead link, not just an insecure one.
+    Override with NTFY_CLICK_BASE only for a deliberately public-facing
+    deployment (the demo instance does not use this module at all -- it
+    never imports common.ntfy_push, see src/demo/*.py).
+    """
+    return get("NTFY_CLICK_BASE", "https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net")
+
 
 def faa_notam_api_key() -> str:
     """FAA NOTAM API key — register free at https://api.faa.gov"""
