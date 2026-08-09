@@ -16,6 +16,18 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=python3 poller/skills/ops_brief.py --deferred-rerun
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -26,4 +38,6 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=950
+# 2026-08-06: runs the same ops_brief.py, same fail-fast redesign --
+# matching the recalculated value on corporatetraveldc-ops-brief.container.
+TimeoutStartSec=600

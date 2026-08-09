@@ -24,11 +24,13 @@ REST polling automatically — no explicit coordination needed.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from ingest import failover
 from ingest.config import NmsConfig, NmsFeedConfig
@@ -68,6 +70,101 @@ _RECONNECT_BACKOFF = [15, 30, 60, 60, 60]  # successive retry delays, capped at 
 # offered to the parser, it doesn't change what the parser does with it.
 BACKLOG_STALE_SECONDS = int(os.getenv("SWIM_BACKLOG_STALE_SECONDS", "7200"))        # 2h
 BACKLOG_RECENT_FRACTION = float(os.getenv("SWIM_BACKLOG_RECENT_FRACTION", "0.10"))  # last 10%
+
+# Client-acknowledgement rollout (2026-08-05). Every feed until now built its
+# receiver with .with_message_auto_acknowledgement() -- the SDK's default,
+# which hands message disposal to the SDK's own internal delivery/ack thread.
+# Under sustained high throughput on the two busiest feeds (stdds, tfms) that
+# internal thread was freeing a native message buffer mid-process, producing
+# the `Bad msg_p pointer` / SOLCLIENT_SUBCODE_PARAM_NULL_PTR crash that killed
+# the container (~2 min lifespan, then start-limit -> dead). Crucially this is
+# NOT app-level concurrency: each feed already runs one consumer thread in its
+# own container/process, so there is nothing to serialize -- the unsafe thread
+# is inside the SDK. Client-ack makes THIS code own the message lifecycle: the
+# native buffer stays valid until we call receiver.ack(msg) after extracting
+# the payload, so the SDK's internal thread can't recycle it out from under us.
+#
+# Rolled out to ALL SWIM feeds 2026-08-05 after stdds validated it (stdds ran
+# crash-free on client-ack for 25+ min vs ~2 min to death on auto-ack, with
+# zero ack failures). Default is now "all". Override per-container with
+# SWIM_CLIENT_ACK_FEEDS (comma-list of feed names, e.g. "stdds,tfms"; or empty
+# to force that feed back to auto-ack) -- no rebuild needed. Feed names are the
+# session feed_names, not container names: the AIM/NOTAM feed is "fns".
+_ALL_SWIM_ACK_FEEDS: frozenset[str] = frozenset(
+    {"fdps", "stdds", "tfms", "fns", "tbfm", "itws"}
+)
+_client_ack_raw = os.getenv("SWIM_CLIENT_ACK_FEEDS", "all").strip().lower()
+_CLIENT_ACK_FEEDS: frozenset[str] = (
+    _ALL_SWIM_ACK_FEEDS
+    if _client_ack_raw == "all"
+    else frozenset(f.strip() for f in _client_ack_raw.split(",") if f.strip())
+)
+
+# Bad-message forensic capture, added 2026-08-05. The client-ack rollout
+# above fixes the actual `Bad msg_p pointer` / SOLCLIENT_SUBCODE_PARAM_NULL_PTR
+# crash (543 occurrences before the fix, zero since -- it was a use-after-free
+# on the SDK's own internal ack thread, not something Python could have
+# caught here even with a try/except). This hook is NOT a fix for that; it's
+# armed evidence-gathering in case a similar decode/parse anomaly class ever
+# recurs -- writes a small structured record to disk (header/timestamp/
+# error-signature/decodable-fragment) so a future FAA report has something
+# concrete to point at instead of a log line that already rotated out.
+# Deliberately no ntfy push -- this is documentation, not operator alerting.
+# Capped like every other debug-capture pattern in this ingest package so a
+# genuine burst can't fill the disk.
+_BAD_MSG_CAPTURE_DIR = "/var/lib/corporatetraveldc/swim_bad_message_captures"
+_BAD_MSG_CAPTURE_MAX = 200
+_BAD_MSG_FRAGMENT_BYTES = 2048
+_bad_msg_capture_count = 0
+
+
+def _capture_bad_message(feed_name: str, stage: str, error: Exception,
+                          msg=None, raw_bytes: bytes | None = None) -> None:
+    """Write one structured bad-message record to disk. Never raises -- a
+    capture failure must not take down the receive loop it's protecting.
+
+    stage: "receive_message" (receiver.receive_message() itself raised --
+    the closest analog to where the original SDK-thread crash symptom would
+    surface if it recurs as a catchable exception) or "handler" (payload
+    extraction or parser/handler code raised on a specific message).
+    """
+    global _bad_msg_capture_count
+    if _bad_msg_capture_count >= _BAD_MSG_CAPTURE_MAX:
+        return
+    try:
+        header: dict = {}
+        if msg is not None:
+            for attr in ("get_application_message_id", "get_destination_name",
+                         "get_sender_timestamp", "get_class_of_service"):
+                try:
+                    fn = getattr(msg, attr, None)
+                    header[attr] = fn() if fn is not None else None
+                except Exception:
+                    pass
+
+        fragment = None
+        if raw_bytes:
+            fragment = raw_bytes[:_BAD_MSG_FRAGMENT_BYTES].decode("utf-8", errors="replace")
+
+        record = {
+            "feed_name": feed_name,
+            "stage": stage,
+            "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "error_type": type(error).__name__,
+            "error_signature": str(error)[:500],
+            "header": header,
+            "fragment": fragment,
+        }
+        os.makedirs(_BAD_MSG_CAPTURE_DIR, exist_ok=True)
+        path = f"{_BAD_MSG_CAPTURE_DIR}/{feed_name}_{_bad_msg_capture_count}.json"
+        with open(path, "w") as f:
+            json.dump(record, f, indent=2)
+        _bad_msg_capture_count += 1
+        log.info("swim_client %s: wrote bad-message capture %s (stage=%s)",
+                  feed_name, path, stage)
+    except Exception as capture_err:
+        log.warning("swim_client %s: bad-message capture failed: %s",
+                    feed_name, capture_err)
 
 # _db_pool now only carries the low-frequency heartbeat/status calls
 # (_stamp_healthy/_stamp_down -- every 30s per feed, plus connect/disconnect).
@@ -341,13 +438,20 @@ class _NmsFeedSession:
         except PubSubPlusClientError as e:
             raise RuntimeError(f"connect failed: {e}") from e
 
+        # Per-feed ack mode -- see _CLIENT_ACK_FEEDS above. stdds uses client
+        # (manual) ack to work around the SDK's auto-ack use-after-free under
+        # load; every other feed keeps the original auto-ack path unchanged
+        # until stdds is validated.
+        use_client_ack = self.feed_name in _CLIENT_ACK_FEEDS
+
         queue = Queue.durable_non_exclusive_queue(self.cfg.queue_name)
         try:
-            receiver = (
-                service.create_persistent_message_receiver_builder()
-                .with_message_auto_acknowledgement()
-                .build(queue)
-            )
+            _rx_builder = service.create_persistent_message_receiver_builder()
+            if use_client_ack:
+                _rx_builder = _rx_builder.with_message_client_acknowledgement()
+            else:
+                _rx_builder = _rx_builder.with_message_auto_acknowledgement()
+            receiver = _rx_builder.build(queue)
             receiver.start()
         except Exception as e:
             service.disconnect()
@@ -355,8 +459,9 @@ class _NmsFeedSession:
                 f"queue bind failed for {self.cfg.queue_name!r}: {e}"
             ) from e
 
-        log.info("swim_client %s: connected (VPN=%s queue=%s)",
-                 self.feed_name, self.cfg.vpn, self.cfg.queue_name)
+        log.info("swim_client %s: connected (VPN=%s queue=%s ack=%s)",
+                 self.feed_name, self.cfg.vpn, self.cfg.queue_name,
+                 "client" if use_client_ack else "auto")
         _db_pool.submit(_stamp_healthy, self.feed_name)
 
         feed_name = self.feed_name
@@ -442,6 +547,7 @@ class _NmsFeedSession:
                 try:
                     msg = receiver.receive_message(timeout=5000)
                     if msg is not None:
+                        payload = b""
                         try:
                             payload = msg.get_payload_as_bytes() or b""
                             raw_bytes = len(payload)
@@ -511,8 +617,27 @@ class _NmsFeedSession:
                             )
                         except Exception as ex:
                             log.error("swim_client %s handler error: %s", feed_name, ex)
+                            _capture_bad_message(feed_name, "handler", ex,
+                                                  msg=msg, raw_bytes=payload)
+                        finally:
+                            # Client-ack feeds (stdds during rollout) must ack
+                            # every message they pulled -- once -- so the broker
+                            # doesn't redeliver it and the SDK can release the
+                            # native buffer now that we've copied out the
+                            # payload. Auto-ack feeds skip this entirely (the
+                            # SDK acks for them). An ack failure must never kill
+                            # the loop -- log and move on; a genuinely dead
+                            # session is caught by the receive_message() guard
+                            # below on the next iteration.
+                            if use_client_ack:
+                                try:
+                                    receiver.ack(msg)
+                                except Exception as ack_err:
+                                    log.warning("swim_client %s: client-ack failed: %s",
+                                                feed_name, ack_err)
                 except Exception as poll_err:
                     log.warning("swim_client %s: receive error: %s", feed_name, poll_err)
+                    _capture_bad_message(feed_name, "receive_message", poll_err)
                     break
 
                 if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL:

@@ -35,6 +35,18 @@ Environment=LOCAL_AIRSPACE_ENABLED=false
 AutoUpdate=local
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=149M
 CPUWeight=100
 CPUQuota=150%
 Restart=always

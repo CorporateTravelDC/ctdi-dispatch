@@ -70,7 +70,7 @@ export default function AdminView() {
   }
 
   // Bandwidth priority (SWIM vs NEXRAD) -- Tier 0 read, admin-gated write.
-  // 2026-07-21: bidirectional operator toggle Corey asked for. 'nexrad'
+  // 2026-07-21: bidirectional operator toggle the operator asked for. 'nexrad'
   // pauses ingest's fdps feed (see ingest/swim_client.py); 'swim' is a
   // documented contract for a future NEXRAD Level II puller that doesn't
   // exist yet -- flagged in the UI below, not hidden.

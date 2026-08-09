@@ -1,0 +1,14 @@
+[Unit]
+Description=Run gig-economy daily watch 08:00 ET (clear of AAM 07:30/aviation 07:45 and hourly ops-brief/ep-advance :00/:30 marks)
+Requires=corporatetraveldc-gig-economy-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 America/New_York
+# Persistent=false -- same reasoning as every other daily-watch timer
+# 2026-08-06 onward: a missed run because the box happened to be
+# rebooting at 08:00 is a much smaller loss than firing redundantly on
+# every reboot and racing the runner container before it's up.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

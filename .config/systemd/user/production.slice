@@ -1,0 +1,21 @@
+[Unit]
+Description=CTDI Dispatch -- production containers (dedicated slice, separate from app.slice)
+Documentation=man:systemd.slice(5)
+
+# 2026-08-06: deliberately a top-level slice (no "app-" prefix), a
+# sibling of app.slice under user@1000.service -- NOT nested under it.
+# systemd's slice naming is hierarchical by dash-segments: a slice named
+# "app-production.slice" would be a CHILD of app.slice and would inherit
+# app.slice's own memory ceiling (see app.slice.d/50-desktop-memory-ceiling.conf),
+# defeating the entire point of separating production from the desktop
+# session. "production.slice" has no such prefix, so it lands as its own
+# top-level slice alongside app.slice/session.slice/background.slice --
+# genuinely independent, not nested.
+#
+# Deliberately NO memory ceiling on this slice itself. Protection here
+# comes from each container's own Memory=/MemoryLow= pair (see every
+# .container Quadlet file) -- this slice exists purely to give production
+# its own cgroup namespace so app.slice's new ceiling can't reach it, not
+# to add a second umbrella cap on top of the per-container ones.
+
+[Slice]

@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 minutes -- check all UltraFeeder ADS-B outbound links for sustained fast flapping
+Requires=corporatetraveldc-adsb-link-watchdog.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

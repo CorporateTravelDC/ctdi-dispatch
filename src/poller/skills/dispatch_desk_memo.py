@@ -218,15 +218,26 @@ def main() -> None:
             log.info("%s: memo generated via Ollama/%s (%d items across %d categories)",
                      SKILL_NAME, OLLAMA_MODEL, total_items, len(CATEGORIES))
         else:
-            # Deterministic fallback: raw headline digest, not the
-            # narrative voice -- clearly labeled as such so it's never
-            # mistaken for a real issue.
-            memo_body = (
-                "(Ollama unavailable -- raw headline digest follows, "
-                "not the usual narrative format)\n\n" + prompt[:4000]
-            )
-            status = "fallback"
-            log.info("%s: Ollama unavailable -- using raw headline fallback", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                # Deterministic fallback: raw headline digest, not the
+                # narrative voice -- clearly labeled as such so it's never
+                # mistaken for a real issue.
+                memo_body = (
+                    "(Ollama unavailable -- raw headline digest follows, "
+                    "not the usual narrative format)\n\n" + prompt[:4000]
+                )
+                status = "fallback"
+                log.info("%s: Ollama unavailable -- using raw headline fallback", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                memo_body = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         week_label = _week_label(today)
         generated_at = datetime.now(timezone.utc).isoformat()

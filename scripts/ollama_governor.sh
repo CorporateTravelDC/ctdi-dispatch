@@ -3,6 +3,34 @@
 # CTDI Dispatch Thermal Governor Installer - Fedora 40+ (SELinux Enforcing)
 # Tailored for: Local Ollama Host + Rootless Podman Quadlet Stack
 # ==============================================================================
+#
+# 2026-08-06: two changes from the version that shipped 2026-07-something:
+#
+# 1. Synced send_signal_to_ollama() to the live 2026-07-25 hotfix -- this
+#    tracked copy had drifted from what was actually running on the box.
+#    The original `pgrep -f ollama` matches against the FULL command line,
+#    which also matches this script's own invocation ("python3
+#    /usr/local/bin/ollama_governor.py" contains the substring "ollama"),
+#    so the governor SIGSTOPped itself on every thermal trip along with
+#    the real ollama process -- and since its own main loop was now
+#    frozen, it could never detect cooldown or send SIGCONT, leaving it
+#    stuck stopped indefinitely providing zero thermal protection. Fixed
+#    live on 2026-07-25 (`pgrep -x` exact-match + explicit own-PID
+#    exclusion) but never synced back here -- re-running this installer
+#    as it stood would have silently reintroduced that bug.
+#
+# 2. MAX_TEMP/RECOVER_TEMP/CHECK_INTERVAL are now env-var configurable
+#    (OLLAMA_GOVERNOR_MAX_TEMP_C / OLLAMA_GOVERNOR_RECOVER_TEMP_C /
+#    OLLAMA_GOVERNOR_CHECK_INTERVAL_S), same os.getenv()-with-a-default
+#    pattern as common/llm.py's OLLAMA_PREFLIGHT_COOL_* gate. Defaults
+#    match today's hardcoded values exactly -- nothing changes for this
+#    box unless /etc/corporatetraveldc/ollama-governor.env is created
+#    (see config/ollama-governor.env for a documented template). This is
+#    the actual point of the change: a deployment on lesser hardware
+#    (older Pi, cost-constrained board with a lower safe thermal
+#    ceiling) can retune these by editing that env file and running
+#    `systemctl restart ollama-governor.service` -- no reinstall, no
+#    rewriting this script, no SELinux policy regen needed.
 
 set -e
 
@@ -24,14 +52,27 @@ import subprocess
 import time
 import signal
 
-MAX_TEMP = 75.0      # Freeze Ollama at 75oC to protect CTDI dispatch loop
-RECOVER_TEMP = 68.0  # Safe temperature threshold to resume
-CHECK_INTERVAL = 2.0 # Check hardware sensors every 2 seconds
+# 2026-08-06: env-var configurable, defaults match the original hardcoded
+# values -- see scripts/ollama_governor.sh header for the full rationale.
+# Sourced via EnvironmentFile= in the systemd unit below (optional file,
+# "-" prefix -- these os.getenv() defaults apply if it doesn't exist).
+MAX_TEMP = float(os.getenv("OLLAMA_GOVERNOR_MAX_TEMP_C", "75.0"))          # Freeze Ollama at/above this temp (C)
+RECOVER_TEMP = float(os.getenv("OLLAMA_GOVERNOR_RECOVER_TEMP_C", "68.0")) # Resume once at/below this temp (C)
+CHECK_INTERVAL = float(os.getenv("OLLAMA_GOVERNOR_CHECK_INTERVAL_S", "2.0"))  # Sensor poll cadence (seconds)
+
+if RECOVER_TEMP >= MAX_TEMP:
+    raise SystemExit(
+        f"[FATAL] OLLAMA_GOVERNOR_RECOVER_TEMP_C ({RECOVER_TEMP}) must be "
+        f"lower than OLLAMA_GOVERNOR_MAX_TEMP_C ({MAX_TEMP}) -- as configured "
+        f"the pause/resume state machine would never settle."
+    )
+
+OWN_PID = os.getpid()  # never signal ourselves
 
 def get_pi_temperature():
     """Reads the hwmon matrix matching Fedora kernel architecture."""
     try:
-        for i in range(10): 
+        for i in range(10):
             name_path = f"/sys/class/hwmon/hwmon{i}/name"
             if os.path.exists(name_path):
                 with open(name_path, "r") as f:
@@ -46,21 +87,43 @@ def get_pi_temperature():
         return 0.0
 
 def send_signal_to_ollama(sig):
-    """Finds the native host Ollama process and issues thread-freezing signals."""
+    """Finds the native host Ollama process and issues thread-freezing signals.
+
+    FIX (2026-07-25): the original `pgrep -f ollama` matched against the full
+    command line, which also matches THIS script's own invocation
+    ("python3 /usr/local/bin/ollama_governor.py" contains the substring
+    "ollama"). That caused the governor to SIGSTOP itself along with the real
+    ollama process on every thermal trip -- and since its own main loop was
+    now frozen, it could never detect cooldown or send SIGCONT, leaving it
+    stuck stopped indefinitely (found 2026-07-25, had been dead for an
+    unknown period providing zero thermal protection).
+
+    Fix: use `pgrep -x ollama` (exact binary-name match -- only matches a
+    process whose comm name is literally "ollama", i.e. `ollama serve`, never
+    a python script that merely mentions the word) AND explicitly exclude our
+    own PID as a second layer of defense against any future pattern change.
+    """
     try:
-        # Match 'ollama' broadly to find 'ollama serve' running natively on the host
-        pid_strings = subprocess.check_output(["pgrep", "-f", "ollama"]).decode().strip().split('\n')
+        pid_strings = subprocess.check_output(["pgrep", "-x", "ollama"]).decode().strip().split('\n')
         for pid_str in pid_strings:
             pid = pid_str.strip()
-            if pid.isdigit():
+            if pid.isdigit() and int(pid) != OWN_PID:
                 os.kill(int(pid), sig)
+    except subprocess.CalledProcessError:
+        # pgrep exits 1 when it finds no matches -- ollama not running, nothing to do
+        pass
     except Exception:
         pass
 
 def main():
     is_paused = False
-    print("[INFO] CTDI Ollama Governor initialized under Fedora SELinux policy constraints.", flush=True)
-    
+    print(
+        f"[INFO] CTDI Ollama Governor initialized under Fedora SELinux policy "
+        f"constraints. MAX_TEMP={MAX_TEMP}C RECOVER_TEMP={RECOVER_TEMP}C "
+        f"CHECK_INTERVAL={CHECK_INTERVAL}s",
+        flush=True,
+    )
+
     while True:
         current_temp = get_pi_temperature()
         if current_temp >= MAX_TEMP and not is_paused:
@@ -88,6 +151,10 @@ After=network.target
 
 [Service]
 Type=simple
+# 2026-08-06: optional env file ("-" prefix -- service starts fine with
+# the script's own defaults if this file doesn't exist). See
+# config/ollama-governor.env in the repo for a documented template.
+EnvironmentFile=-/etc/corporatetraveldc/ollama-governor.env
 ExecStart=/usr/bin/python3 /usr/local/bin/ollama_governor.py
 Restart=always
 RestartSec=5
@@ -152,6 +219,40 @@ CPUQuota=300%
 # Pi cools back toward baseline (60s-mid-60s C) between brief/OSINT runs
 # instead of staying loaded (and hot) indefinitely.
 Environment="OLLAMA_KEEP_ALIVE=10m"
+
+# Memory cap, added 2026-07-31. Baseline B = ~3.1GB, the live cgroup
+# memory.current measured while corporatetraveldc-pi5-osint (the model
+# EP-advance/ops-brief use, num_ctx=4096, the biggest job on this box) was
+# fully loaded with context allocated -- not an estimate, captured off a
+# real run. Formula is operator-specified: 125% of B as the RAM-only
+# comfort ceiling, 150% of B as the absolute combined RAM+swap ceiling.
+#
+# MemoryHigh = 125% of B (~3.9GB): soft threshold. Above this the kernel
+# actively reclaims from this cgroup (page cache first, then swap) on an
+# ongoing basis -- this is what keeps Ollama out of swap entirely under
+# normal conditions, since with the rest of the box's RAM free, reclaim
+# has cache to evict without touching swap.
+MemoryHigh=3900M
+
+# MemoryMax = 150% of B (~4.65GB): hard ceiling on the cgroup's own
+# resident memory. Deliberately set above MemoryHigh so reclaim has room
+# to work gracefully instead of hitting an immediate OOM wall.
+MemoryMax=4650M
+
+# MemorySwapMax: bounds how much of any overflow past MemoryHigh may
+# land in swap specifically, so a contested-RAM scenario can push the
+# model (or context) onto swap without ever swapping the entirety of it.
+# 750M = the gap between the 125% and 150% marks.
+MemorySwapMax=750M
+
+# MemoryLow, added 2026-08-06. Protects Ollama's real working set (100%
+# of B) from kernel reclaim as long as memory is available anywhere else
+# on the box -- previously 0/unset, meaning an unrelated cgroup (e.g. the
+# interactive desktop session) driving system-wide memory pressure could
+# reclaim/swap Ollama with zero priority protection. See
+# systemd/ollama.service.d/20-resource-limits.conf in this repo for the
+# full incident writeup this was added to close.
+MemoryLow=3100M
 EOF
 
 echo "[+] Reloading and restarting ollama.service with resource limits..."

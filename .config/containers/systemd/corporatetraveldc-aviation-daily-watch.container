@@ -1,0 +1,39 @@
+[Unit]
+Description=Corporate Travel DC -- daily general aviation industry watch
+
+[Container]
+# Same lighter tier as aam-daily-watch -- same model/call shape, 1-day
+# lookback, smaller max_tokens (500 vs AAM's 700, no status block to
+# carry). Paired Memory=/--memory-swap= (equal values, zero extra swap)
+# so a runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+Memory=768m
+PodmanArgs=--memory-swap=768m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same scoped opt-in as corporatetraveldc-aam-daily-watch.container --
+# reaches Nextcloud WebDAV via the existing cloud.example.com
+# nginx vhost (0.0.0.0:80 -> 127.0.0.1:8090) through the internal alias,
+# not host networking. See docs/COMPLIANCE_SECURITY.md.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/aviation_daily_watch.py
+
+[Service]
+# Dedicated slice, separate from app.slice (where the interactive
+# desktop session -- Brave/Claude Desktop -- lives). See
+# .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow: protects roughly a third of this container's own Memory=
+# cap from kernel reclaim as long as memory is available elsewhere on
+# the box -- prioritizes production over an unconstrained desktop
+# session under real memory pressure, not just a cap after the fact.
+# Uppercase M required -- systemd's own MemoryLow= parser silently
+# rejects lowercase 'm' with "Invalid argument, ignoring" (confirmed
+# live 2026-08-06 -- see the same-day fix across every other container).
+MemoryLow=256M
+Type=oneshot
+TimeoutStartSec=950

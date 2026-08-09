@@ -101,6 +101,51 @@ caps that assume this). An 8 GB Pi 5 is workable only with a reduced model
 selection (see README.md's LLM model table for the "8 GB Pi 5" row) and
 likely a reduced ingest-container footprint.
 
+## USB port assignment (full physical map)
+
+Complete port assignment for this Pi 5's four USB ports, for whenever
+it gets label-makered, moved, or a dongle unplugged and needs to go
+back in the right spot. The RTL-SDR pair below is confirmed **stable**
+as of a physical reseat on **2026-08-06** (a prior attempt that same
+night showed active connect/disconnect flapping and a USB protocol
+error — this configuration held cleanly with no re-enumeration once
+both dongles were fully seated). Mouse/keyboard positions per operator
+physical inspection, same date.
+
+| Physical position | Device | Identifier | Protocol / freq | Bus path | Symlink |
+|---|---|---|---|---|---|
+| **Lower USB 3.0 port** | RTL-SDR dongle | serial `ACARS0130` | VDL-M / ACARS (dumpvdl2, 136.650–136.975 MHz) | `1-1` | `/dev/rtl_sdr_acars` |
+| **Upper USB 3.0 port** | RTL-SDR dongle | serial `ADSB1090` | ADS-B (ultrafeeder/readsb, 1090 MHz) | `3-1` | `/dev/rtl_sdr_adsb` |
+| **Lower USB 2.0 port** | Mouse | Pixart Imaging `093a:2510` | — | `3-2` | — |
+| **Upper USB 2.0 port** | Keyboard | SiGma Micro `1c4f:0002` | — | `1-2` | — |
+
+The two RTL-SDR dongles are identical hardware (Realtek, vendor `0bda`
+product `2838`), distinguished only by their programmed serial (see
+`/etc/udev/rules.d/99-rtlsdr-adsb.rules` for the udev rule that keys
+off this serial to create a stable device symlink). Bus path and
+symlink are included as a direct cross-reference for `lsusb` /
+`journalctl -k` output — a fresh `journalctl -k --since "..."` after
+any reseat will show `usb 1-1: ...` or `usb 3-1: ...` lines with a
+`SerialNumber:` field matching the table above, which is the fastest
+way to confirm both are seated correctly and staying connected (no
+repeated `new ... USB device number N` / `USB disconnect` pairs for
+the same bus path, no `device descriptor read/64, error -71` — that
+error specifically indicates a marginal physical connection, not a
+software/udev problem).
+
+Note the bus grouping doesn't predict physical position: `1-1`
+(lower 3.0) and `1-2` (upper 2.0) share a controller/bus, as do `3-1`
+(upper 3.0) and `3-2` (lower 2.0) — the Pi 5 pairs one 3.0 and one 2.0
+port per xHCI controller, but that pairing doesn't line up with
+"same side" labeling, so don't assume the 2.0 port physically above/
+below a given 3.0 port shares its bus number.
+
+If the RTL-SDR dongles are ever moved to different physical ports,
+this table becomes stale for the *position* column only — the
+serial-to-protocol mapping (`ACARS0130` = VDL-M, `ADSB1090` = ADS-B)
+doesn't change, since that's a property of the dongle itself (its
+programmed EEPROM serial), not the port it's plugged into.
+
 ## Network
 
 Wired or a strong Wi-Fi link is required, not optional -- this platform's

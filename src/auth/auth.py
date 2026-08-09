@@ -2,9 +2,30 @@
 Auth layer — Tier resolution for incoming requests.
 
 Tier 0: Anonymous — no auth required.
-Tier 1: CERT/Tailscale — Tailscale forwards Tailscale-User-Login header on tailnet.
+Tier 1: CERT — bearer token with tier=cert in DB.
 Tier 2: SHARES — Bearer token with tier=shares in DB.
 Admin: Bearer token with tier=admin in DB.
+
+2026-08-05: elevation above Tier 0 requires a valid bearer token AND a
+non-public-origin request. nginx sets X-CTDI-Public: 1 on the Cloudflare-
+tunnel-fronted public vhost (dispatch.example.com); that
+marker forces Tier 0 before any token lookup runs, so a tunnel-borne
+token -- even a valid admin token -- can never elevate. Tailnet and
+on-box loopback requests never carry this marker (nginx only sets it on
+the public vhost's location blocks) and resolve the bearer token
+normally. Tailnet identity/network origin alone no longer grants any
+tier by itself -- a real bearer token is required either way; the
+network path only affects whether that token is even considered.
+
+Replaces the previous Tailscale-User-Login-header / X-Forwarded-For-
+prefix trust model (_is_tailscale_request, removed), which was
+exploitable: nginx's public vhost forwarded X-Forwarded-For via
+$proxy_add_x_forwarded_for (append, not replace), so a client-supplied
+"X-Forwarded-For: 100.x.x.x" survived as the first value in the merged
+header and satisfied the old startswith("100.") check from the open
+internet, no token required. Confirmed exploitable against the live
+container before this fix; confirmed closed after. See
+docs/COMPLIANCE_SECURITY.md §6 for the full network-vs-app-layer model.
 
 Token format: ctdc_<user>_<32-char-base32-or-hex>
 Token stored as SHA-256 hash in DB. Plaintext never stored.
@@ -19,7 +40,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from common import config, db
+from common import db
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -35,22 +56,6 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _is_tailscale_request(request: Request) -> bool:
-    """
-    Tailscale sets Tailscale-User-Login on authenticated tailnet requests.
-    nginx must forward this header; strip it on public Cloudflare Tunnel traffic.
-    """
-    ts_header = request.headers.get("Tailscale-User-Login")
-    ts_suffix = config.tailscale_domain_suffix()
-    if ts_header and ts_suffix and ts_header.endswith(ts_suffix):
-        return True
-    # Also accept X-Forwarded-For from Tailscale CGNAT range 100.64.0.0/10.
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for.startswith("100."):
-        return True
-    return False
-
-
 def resolve_tier(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
@@ -59,6 +64,9 @@ def resolve_tier(
     Resolve the tier for the current request. Used as a FastAPI dependency.
     Does not raise — always returns a Tier. Route handlers enforce minimum tier.
     """
+    if request.headers.get("X-CTDI-Public") == "1":
+        return Tier.T0
+
     if credentials and credentials.credentials:
         token_hash = _hash_token(credentials.credentials)
         record = db.lookup_token(token_hash)
@@ -70,9 +78,6 @@ def resolve_tier(
                 return Tier.T2
             if tier_str == "cert":
                 return Tier.T1
-
-    if _is_tailscale_request(request):
-        return Tier.T1
 
     return Tier.T0
 
@@ -96,7 +101,13 @@ def resolve_identity(
     Returns {"tier": str, "user_label": str|None, "department": str|None,
     "token_prefix": str|None} -- anonymous/invalid tokens resolve to
     tier="tier0" with the rest None, never raises.
+
+    2026-08-05: same X-CTDI-Public guard as resolve_tier() -- a tunnel-
+    borne request never resolves to an identity above anonymous, token
+    or not. See resolve_tier()'s docstring for the full rationale.
     """
+    if request.headers.get("X-CTDI-Public") == "1":
+        return {"tier": "tier0", "user_label": None, "department": None, "token_prefix": None}
     if credentials and credentials.credentials:
         token_hash = _hash_token(credentials.credentials)
         record = db.lookup_token(token_hash)
@@ -107,8 +118,6 @@ def resolve_identity(
                 "department": record.get("department"),
                 "token_prefix": record["token_prefix"],
             }
-    if _is_tailscale_request(request):
-        return {"tier": "tier1", "user_label": None, "department": None, "token_prefix": None}
     return {"tier": "tier0", "user_label": None, "department": None, "token_prefix": None}
 
 

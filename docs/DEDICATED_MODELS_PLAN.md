@@ -74,7 +74,7 @@ notes from the vault and asks the model to synthesize patterns across just
 those 7. It has no visibility into prior weeks at all — so "CPS trended
 worse this week" has no way to mean anything relative; there's no baseline.
 
-Proposed design (not yet built — this is the plan Corey asked for):
+Proposed design (not yet built — this is the plan the operator asked for):
 
 1. **Retrieval step, before the LLM call.** Before building the weekly
    prompt, query `second_brain.index_db` (the FTS index already built and
@@ -188,7 +188,7 @@ per skill) is already the target shape for a fine-tuned model to slot into.
 
 ## 5. Framework for a future EA back-office variant
 
-Corey's framing tonight — "use this as a framework and benchmark for a
+the operator's framing tonight — "use this as a framework and benchmark for a
 future planned executive assistant back-office variant based off of the
 overall platform itself" — maps cleanly onto what's built:
 

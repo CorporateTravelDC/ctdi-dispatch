@@ -81,7 +81,7 @@ export default function AisMapView() {
   // demo instance, rather than defaulting open and risking one live call
   // slipping out before the check resolves. trusted_origin mirrors
   // App.jsx's own demoBanner logic: a Tailscale/trusted visitor to the
-  // demo-runner instance (i.e. Corey, checking the demo build itself)
+  // demo-runner instance (i.e. the operator, checking the demo build itself)
   // still gets the real live AIS picture like every other tab already
   // gives them -- the placeholder is specifically for untrusted/public
   // demo visitors, not for the operator poking at the demo instance.

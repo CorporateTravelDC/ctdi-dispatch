@@ -1,0 +1,14 @@
+[Unit]
+Description=Run aviation daily watch 07:45 ET (15min after aam-daily-watch 07:30, clear of hourly ops-brief/ep-advance :00/:30 marks)
+Requires=corporatetraveldc-aviation-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 07:45:00 America/New_York
+# Persistent=false (2026-08-06): same reasoning as the AAM daily/weekly
+# fix from the same night -- a missed run because the box happened to
+# be rebooting at 07:45 is a much smaller loss than firing redundantly
+# on every reboot and racing the runner container before it's up.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -16,6 +16,18 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=python3 poller/skills/ops_brief.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -26,4 +38,15 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=1100
+# 2026-08-06: was 1100s, sized for the old 900s-primary-timeout +
+# same-prompt-retry design (see src/poller/skills/ops_brief.py's
+# OLLAMA_TIMEOUT comment for the full incident writeup -- that
+# combination let a single slow generate() call outlast this very
+# timeout, killing the container before the run could even reach its
+# own deterministic fallback). New worst case with the fail-fast
+# redesign (150s timeout, 0 retries, on both the main narrative and the
+# 6h-trend call): 150s + 150s (trend, boundary hours only) + ~20s
+# data-gathering/ntfy/archive overhead =~ 320s. 600s keeps just under
+# 2x margin over that calculated worst case while still being roughly
+# half the old value.
+TimeoutStartSec=600

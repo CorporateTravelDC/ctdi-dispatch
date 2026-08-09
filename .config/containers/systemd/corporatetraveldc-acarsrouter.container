@@ -25,11 +25,23 @@ Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5555
 # ACARS: acarsdrama, airframes.io (acarsdec re-enable pending)
 Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550;feed.airframes.io:5550
 Environment=AR_OVERRIDE_STATION_NAME=corporatetraveldc-kdca-vdl2
-Network=acars-net
+Network=acars-net.network
 PublishPort=9080:9080
 AutoUpdate=registry
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box

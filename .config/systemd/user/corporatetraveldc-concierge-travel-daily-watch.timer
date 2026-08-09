@@ -1,0 +1,10 @@
+[Unit]
+Description=Run concierge/luxury-travel daily watch 08:15 ET (15min after gig-economy 08:00, clear of hourly ops-brief/ep-advance :00/:30 marks)
+Requires=corporatetraveldc-concierge-travel-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:15:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

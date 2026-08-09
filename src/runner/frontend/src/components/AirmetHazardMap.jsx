@@ -3,7 +3,7 @@
 // A self-contained, CONUS-framed Leaflet view of the same FAA AIRMET/SIGMET
 // hazard polygons already drawn on the tactical map (MapView.jsx's
 // refreshAirmets/airmetLayerRef) -- deliberately duplicated here rather than
-// shared, per Corey's direction: the WX tab is meant to become an
+// shared, per the operator's direction: the WX tab is meant to become an
 // all-travel-hazards "look at everything" page (prog / maritime / hazards),
 // separate from the tactical map, which stays a live-traffic view for
 // flights (and later AIS). Read-only -- no aircraft, no TFRs, no DC-airspace

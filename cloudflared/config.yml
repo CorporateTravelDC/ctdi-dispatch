@@ -6,12 +6,27 @@ ingress:
   - hostname: dispatch.example.com
     service: http://127.0.0.1:80
 
-  # ops.example.com RETIRED 2026-08-02 -- removed from the live
-  # tunnel config via the Cloudflare API directly (this local ingress file is
-  # not what actually serves the tunnel, it is dashboard/API-managed, but kept
-  # in sync here for correctness). App layer also hard-rejects this hostname,
-  # see runner/main.py _RETIRED_HOSTNAMES. Live dispatch access is Tailscale-
+  # ops.example.com RETIRED 2026-08-02 -- app layer already
+  # hard-rejected this hostname (runner/main.py _RETIRED_HOSTNAMES) and no
+  # nginx vhost has matched it since. Live dispatch access is Tailscale-
   # only now: https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net
+  #
+  # 2026-08-05: this tunnel is dashboard/API-managed -- confirmed by
+  # restarting cloudflared and diffing this file's ingress list against
+  # the "Updated to new configuration" log line it printed on
+  # registration: the two don't match (live remote config includes
+  # mcp./cockpit./dav.example.com, none of which are in this
+  # file; this file's apex/www entries aren't in the remote list either).
+  # This local ingress: block does not actually route tunnel traffic --
+  # cloudflared only reads tunnel:/credentials-file: from it and fetches
+  # real ingress rules from Cloudflare. The ops entry here was removed for
+  # accuracy only (had no live effect either way); the record that
+  # actually matters -- the live remote push -- already had no ops entry,
+  # confirming the 2026-08-02 retirement was done correctly via the
+  # dashboard/API, same as the earlier (now-replaced) version of this
+  # comment claimed. Separately flagged: mcp./cockpit./dav. are live on
+  # the real tunnel and undocumented anywhere in this repo -- worth an
+  # audit, not addressed here.
 
   # dispatch-runner — public rolling demo (password-gated at the app
   # layer, see runner main.py DEMO_MODE). Open over tunnel same as ops,

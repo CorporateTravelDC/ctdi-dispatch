@@ -52,7 +52,7 @@ LOOP_DAYS = int(os.environ.get("DEMO_LOOP_DAYS", "14"))
 # Without this, _anchor() below picks the EARLIEST point where every
 # endpoint has data -- which, as the archive grows, permanently loops the
 # OLDEST slice of history forever (the archive's first 14 days), since the
-# anchor never moves once cached. Corey found this produced a thinner-
+# anchor never moves once cached. the operator found this produced a thinner-
 # feeling loop than the archive now supports (07-09 through 07-23 was the
 # coldest-start slice; 07-19 through 08-01 has full daily coverage on
 # every core endpoint). This override lets the loop's START be moved to a
@@ -189,7 +189,7 @@ def _resolve_playback_params(session: str | None, window: str | None,
     Priority: valid session token > explicit window/speed query params >
     the original fixed default. A window label ('2w'/'8w'/etc, matching
     demo.recorder.RETENTION_TIERS) or a raw integer day count are both
-    accepted for the query-param path, since Corey's own Tailnet browsing
+    accepted for the query-param path, since the operator's own Tailnet browsing
     is meant to bypass the password system entirely, not route through it."""
     if session:
         payload = demo_profiles.verify_session_token(session)
@@ -500,7 +500,7 @@ async def wx_config_stub() -> JSONResponse:
             ],
         },
         # 2026-08-03 (later same day): expanded from Western Atlantic-only to
-        # cover the entire US -- Corey's ask: "the Maritime equivalent for
+        # cover the entire US -- the operator's ask: "the Maritime equivalent for
         # the entire U.S. ... Gulf Shore ... Eastern Pacific". Added NOAA's
         # joint Unified Surface Analysis (one chart, whole CONUS + Gulf +
         # both ocean approaches) plus a full Eastern Pacific SFC/WAVE

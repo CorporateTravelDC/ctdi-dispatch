@@ -451,9 +451,26 @@ def main(force: bool = False) -> None:
                     if score >= LABEL_THRESHOLDS["HIGH"] and OLLAMA_BASE_URL:
                         narrative = _generate_narrative(item, scope_label, matched, scope_type)
                     if not narrative:
-                        narrative = _deterministic_narrative(
-                            item, scope_label, matched, score, score_label
-                        )
+                        # 2026-08-06: narrow safety net around the fallback
+                        # ITSELF -- same pattern applied identically across
+                        # every skill with an Ollama fallback (see
+                        # route_impact.py for the full note). Per-item here
+                        # rather than whole-run: this call site sits inside
+                        # the per-feed/per-item loop with no outer catch, so
+                        # an unguarded exception would silently abort
+                        # processing of every remaining item in this run,
+                        # not just this one.
+                        try:
+                            narrative = _deterministic_narrative(
+                                item, scope_label, matched, score, score_label
+                            )
+                        except Exception as fallback_err:
+                            log.error("osint: deterministic fallback also failed for %r — %s",
+                                      title, fallback_err)
+                            narrative = (
+                                f"[OSINT-MONITOR] Generation failed for this item -- both "
+                                f"Ollama and the deterministic fallback errored. See logs."
+                            )
 
                     is_new = db.osint_save_item(
                         scope_id=scope_id,

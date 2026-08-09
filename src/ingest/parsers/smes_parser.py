@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
+from common.push_dedup import PushDedup, content_hash
 
 log = logging.getLogger("ingest.parsers.smes")
 
@@ -366,11 +367,18 @@ _MIN_TAIS_TRACKS_FOR_ALERT = 15
 
 def check_stdds_alerts(tracks: list[dict]) -> None:
     """Fire stdds-alerts (family-wide, no zone split) when this message's
-    PCT terminal-track batch size is escalating vs. the last 15 minutes."""
+    PCT terminal-track batch size is escalating vs. the last 15 minutes.
+    PCT is always DC-local (Potomac TRACON, no nationwide variant) so no
+    priority tiering applies here -- only the dedup gate (see
+    _STDDS_PCT_DEDUP above)."""
     if not tracks:
         return
     track_count = len(tracks)
     if track_count < _MIN_TAIS_TRACKS_FOR_ALERT:
+        return
+
+    dedup_key = content_hash(str(track_count))
+    if not _STDDS_PCT_DEDUP.should_push("pct", dedup_key):
         return
 
     from shared.sector_coalesce import fire_family_alert
@@ -383,6 +391,7 @@ def check_stdds_alerts(tracks: list[dict]) -> None:
             "stdds", "stdds", TAIS_FACILITY, title, detail, dispatch,
             base_priority=2, zone_split=False,
         )
+        _STDDS_PCT_DEDUP.record("pct", dedup_key)
         log.info(
             "stdds: fire_family_alert for PCT (%d tracks, escalating=%s, "
             "aggregate_fired=%s)",
@@ -481,6 +490,58 @@ def _stdds_sector_for(airport: str | None) -> str | None:
     return _STDDS_ZONE_AIRPORTS.get(airport)
 
 
+# -- DC vs. nationwide alert tiering, added 2026-08-05 -----------------------
+#
+# Context: the client-ack fix (see swim_client.py) stopped stdds from
+# crash-looping, which means it now fires its full alert volume continuously
+# instead of only in short bursts before dying. A same-night investigation
+# found ~574 real alerts in a 55-minute window, 77% of them for the 39
+# tracked-but-non-regional airports (everything in _STDDS_ZONE_AIRPORTS)
+# rather than DCA/IAD/BWI.
+#
+# Operator direction: don't silence the nationwide data -- it's the
+# "elephant walk" of delayed flights and taxi queues upstream/downstream
+# that's genuinely useful for pattern analysis -- tier it instead, the same
+# way fdps_parser.py is already scoped: full weight for the DC-local zone,
+# lower weight (but not dropped) for everything else. The topic split
+# already exists (stdds-dca/iad/bwi vs. the 7 pooled stdds-<zone> topics,
+# see _stdds_sector_for above) -- what was missing was a PRIORITY split on
+# top of it, since every zone fired at the same base_priority regardless of
+# whether it was DC or nationwide.
+#
+# _stdds_priority() is the one-line hook: DC regional airports keep the
+# base_priority a caller passes in; every other tracked airport gets it
+# dropped by one level (floored at 1, ntfy's minimum), so nationwide traffic
+# still reaches its own zone topic and the family-wide aggregate, just with
+# a less intrusive default notification. No fidelity is lost -- this only
+# changes the `priority` field on the push, not whether it fires.
+def _stdds_priority(airport: str | None, base_priority: int) -> int:
+    if airport in _STDDS_REGIONAL_AIRPORTS:
+        return base_priority
+    return max(1, base_priority - 1)
+
+
+# Per-topic dedup, added 2026-08-05 -- same PushDedup pattern tbfm_parser.py
+# (_TBFM_ALERT_DEDUP) and tfms_parser.py (_TFMS_ALERT_DEDUP) already use to
+# collapse bursts of identical-content events before they ever reach
+# fire_family_alert(). stdds had zero throttle/dedup of its own before this
+# -- every qualifying message re-fired unconditionally (subject only to the
+# escalating-trend gate, which answers "is this a real trend" but not "have
+# I already told the operator this exact count in the last few minutes").
+# 300s mirrors tbfm's window, the closest analog (congestion/volume-based,
+# not a one-shot event like a NOTAM). Keyed per-airport (or the constant
+# "pct" for the PCT-wide aggregate) so one busy airport's dedup slot can't
+# evict another's, same per-entity-key fix tbfm_parser.py needed on
+# 2026-07-21. check_incursion_alert is deliberately NOT given a dedup slot
+# here -- its previous_bitmask comparison already only fires on a genuine
+# content change, and it's explicitly safety-adjacent (escalating_only=False
+# for the same reason); a redundant time-based suppression on top of that
+# would risk delaying a real runway safety-logic change.
+_STDDS_PCT_DEDUP = PushDedup("stdds_pct_alerts", dedup_secs=300)
+_STDDS_SURFACE_DEDUP = PushDedup("stdds_surface_alerts", dedup_secs=300)
+_STDDS_TAXI_DEDUP = PushDedup("stdds_taxi_alerts", dedup_secs=300)
+
+
 def check_surface_alerts(tracks: list[dict]) -> None:
     """Fire stdds-alerts (aggregate) + stdds-<zone> (per airport for
     DCA/IAD/BWI, per ARTCC sector for the other 7 tracked zones) when this
@@ -513,14 +574,18 @@ def check_surface_alerts(tracks: list[dict]) -> None:
         sector = _stdds_sector_for(airport)
         if sector is None:
             continue
+        dedup_key = content_hash(str(track_count))
+        if not _STDDS_SURFACE_DEDUP.should_push(airport, dedup_key):
+            continue
         title = f"STDDS/ASDE-X -- {airport} ground traffic"
         detail = f"{airport}: {track_count} surface tracks in this update"
         dispatch = f"{airport}: {track_count} ground tracks"
         try:
             result = fire_family_alert(
                 "stdds", "stdds_surface", airport, title, detail, dispatch,
-                base_priority=2, sector_override=sector,
+                base_priority=_stdds_priority(airport, 2), sector_override=sector,
             )
+            _STDDS_SURFACE_DEDUP.record(airport, dedup_key)
             log.info(
                 "stdds: fire_family_alert for %s surface (%d tracks, escalating=%s, "
                 "aggregate_fired=%s, zone_fired=%s)",
@@ -788,7 +853,14 @@ def check_incursion_alert(record: dict, previous_bitmask: str | None) -> None:
     should not wait for a 3x-burst trend the way routine traffic volume
     does. Scoped via _stdds_sector_for() -- extended 2026-08-03 from
     DCA/IAD/BWI-only to all 8 tracked zones, see comment above
-    _STDDS_REGIONAL_AIRPORTS."""
+    _STDDS_REGIONAL_AIRPORTS.
+
+    2026-08-05: base_priority is tiered via _stdds_priority() same as the
+    volume alerts below -- this only changes the ntfy priority badge for a
+    nationwide airport's change, not whether/when it fires. escalating_only
+    stays False and no dedup gate is added (see _STDDS_PCT_DEDUP comment
+    above) -- a real safety-logic change still fires immediately regardless
+    of DC vs. nationwide."""
     airport = record["airport"]
     sector = _stdds_sector_for(airport)
     if sector is None:
@@ -796,6 +868,27 @@ def check_incursion_alert(record: dict, previous_bitmask: str | None) -> None:
     new_bitmask = record["status_bitmask"]
     if previous_bitmask is not None and previous_bitmask == new_bitmask:
         return  # unchanged -- no alert
+
+    # 2026-08-03: log every real change for DCA/IAD/BWI to the append-only
+    # history table (db.STDDS_SAFETY_HISTORY_AIRPORTS) -- separate from
+    # and in addition to the alert fired below. This is what lets a later
+    # analysis pass correlate bit-position flips against
+    # surface_movement_events (same ASDE-X sensor network) to empirically
+    # reverse-engineer what each bit means, since no FAA ICD is available.
+    # Failure here must never block the alert path below -- history is a
+    # nice-to-have research log, not part of the safety-adjacent alerting
+    # this function exists for.
+    if airport in db.STDDS_SAFETY_HISTORY_AIRPORTS:
+        try:
+            db.insert_safety_status_history(
+                airport=airport,
+                control=record.get("control"),
+                previous_bitmask=previous_bitmask,
+                new_bitmask=new_bitmask,
+                changed_at=record["last_seen"],
+            )
+        except Exception as e:
+            log.error("stdds: safety-status history write failed for %s: %s", airport, e)
 
     from shared.sector_coalesce import fire_family_alert
 
@@ -808,7 +901,8 @@ def check_incursion_alert(record: dict, previous_bitmask: str | None) -> None:
     try:
         result = fire_family_alert(
             "stdds", "stdds_safety", airport, title, detail, dispatch,
-            base_priority=3, escalating_only=False, sector_override=sector,
+            base_priority=_stdds_priority(airport, 3), escalating_only=False,
+            sector_override=sector,
         )
         log.info(
             "stdds: fire_family_alert for %s safety-logic change (aggregate_fired=%s, zone_fired=%s)",
@@ -939,6 +1033,10 @@ def check_taxi_alerts(record: dict) -> None:
     if onsurface_count < _MIN_ONSURFACE_FOR_ALERT:
         return
 
+    dedup_key = content_hash(str(onsurface_count))
+    if not _STDDS_TAXI_DEDUP.should_push(airport, dedup_key):
+        return
+
     from shared.sector_coalesce import fire_family_alert
 
     sector = airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
@@ -948,8 +1046,9 @@ def check_taxi_alerts(record: dict) -> None:
     try:
         result = fire_family_alert(
             "stdds", "stdds_taxi", airport, title, detail, dispatch,
-            base_priority=2, sector_override=sector,
+            base_priority=_stdds_priority(airport, 2), sector_override=sector,
         )
+        _STDDS_TAXI_DEDUP.record(airport, dedup_key)
         log.info(
             "stdds: fire_family_alert for %s taxi (%d onsurface, escalating=%s, "
             "aggregate_fired=%s, zone_fired=%s)",

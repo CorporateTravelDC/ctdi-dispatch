@@ -45,12 +45,24 @@ export default function DemoLoginGate({ onSuccess }) {
     <div className="demo-gate">
       <div className="demo-gate-panel">
         <span className="demo-gate-brand">CORPORATE TRAVEL DISPATCH INTELLIGENCE</span>
-        <h1 className="demo-gate-title">Live Demo Access</h1>
+        <h1 className="demo-gate-title">Privileged Demo Access</h1>
         <p className="demo-gate-copy">
           This is a rolling playback of a real dispatch operations platform,
           replayed from a private archive. Enter the access password you
           were given to view it.
         </p>
+        <div className="demo-gate-disclosure" role="note">
+          <span className="demo-gate-disclosure-label">Not live data</span>
+          <p className="demo-gate-disclosure-body">
+            The clock and calendar date shown inside this demo follow
+            <strong> your own device&rsquo;s current time</strong>. The
+            operational data itself &mdash; flights, trains, weather, alerts and
+            every dispatch figure &mdash; is a <strong>historical replay at
+            least two weeks old</strong>, played on a continuous loop. Nothing
+            shown reflects current, real-world operations or any traveler&rsquo;s
+            actual movements.
+          </p>
+        </div>
         <form onSubmit={submit} className="demo-gate-form">
           <input
             type="password"

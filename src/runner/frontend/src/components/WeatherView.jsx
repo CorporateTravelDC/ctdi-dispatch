@@ -15,7 +15,7 @@ async function fetchWxConfig() {
 
 // 2026-07-21 correction: WX is strictly a full-page NEXRAD/operator radar
 // map -- no METAR, no NWS alerts panel here. Those already have a home on
-// the Signals tab (SignalsView.jsx's WeatherPanel/NwsAlertsPanel) and Corey
+// the Signals tab (SignalsView.jsx's WeatherPanel/NwsAlertsPanel) and the operator
 // wants them to stay there ONLY, not duplicated onto this page in any
 // format. Don't re-add a METAR/alerts side panel to this component.
 //
@@ -33,7 +33,7 @@ async function fetchWxConfig() {
 // view (AirmetHazardMap.jsx) instead of a static image, since AIRMET/SIGMET
 // is vector polygon data with no equivalent public chart image (confirmed:
 // AWC doesn't publish a static gairmet/sigmet graphic the way WPC does for
-// surface prog). This is the first step toward Corey's stated direction --
+// surface prog). This is the first step toward the operator's stated direction --
 // WX becomes the all-travel-hazards "look at everything" page, while the
 // tactical map (and later the AIS map) stays the live-traffic view.
 
@@ -155,7 +155,7 @@ export default function WeatherView() {
         Full-page radar -- mirrors .globe-map-wrap/.map-container's plain
         width:100%/flex:1 treatment directly, no side panel of any kind.
         Corrected 2026-07-21: an earlier pass added a METAR/alerts side
-        panel here; that was wrong -- Corey wants METAR/alerts to live ONLY
+        panel here; that was wrong -- the operator wants METAR/alerts to live ONLY
         on the Signals tab, and WX to be strictly the radar map, full page.
       */}
       {source === 'prog' && prog && (

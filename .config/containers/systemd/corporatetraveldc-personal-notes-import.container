@@ -1,0 +1,28 @@
+[Unit]
+Description=Corporate Travel DC -- personal Notes -> vault ONE-WAY import (poll; 2026-08-08)
+
+[Container]
+Memory=512m
+# Per-note copy loop, light footprint. Paired Memory=/--memory-swap= (equal,
+# zero extra swap) so a runaway gets a clean OOM-kill instead of swap-thrashing
+# the box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=512m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same sanctioned internal ingress as the RSS/second-brain skills: Nextcloud's
+# WebDAV (127.0.0.1:8090) isn't container-reachable, so reach it through the
+# host nginx vhost (0.0.0.0:80) via host.containers.internal with Host-header
+# spoofing. Network=pasta:--map-gw restores host.containers.internal for this
+# container only. WRITE side uses Host cloud. (baked into webdav_client); READ
+# side uses Host dav. (set in the skill) so it can see operator's account.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/second_brain_personal_notes_import.py
+
+[Service]
+Slice=production.slice
+MemoryLow=170M
+Type=oneshot
+TimeoutStartSec=300

@@ -2,6 +2,12 @@
 Description=Corporate Travel DC -- second-brain RSS poller (seeded from shared rss_catalog, 2026-07-28)
 
 [Container]
+Memory=512m
+# 2026-08-06: previously unguarded -- per-item RSS ingest loop, not a single large narrative generation -- lighter footprint.
+# Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
+# runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=512m
 Image=localhost/corporatetraveldc-poller:latest
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 # Nextcloud WebDAV (port 8090) is published on 127.0.0.1 only, by
@@ -25,6 +31,18 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=python3 poller/skills/second_brain_rss.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=170M
 Type=oneshot
 TimeoutStartSec=300
 

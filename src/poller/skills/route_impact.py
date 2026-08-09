@@ -131,9 +131,22 @@ def main(force: bool = False) -> None:
                 status = "ok"
                 log.info("%s: VIP route narrative via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
             else:
-                narrative = _deterministic_summary(inputs)
-                status = "fallback"
-                log.warning("%s: Ollama unavailable for VIP route — using deterministic fallback", SKILL_NAME)
+                # 2026-08-06: narrow safety net around the fallback ITSELF --
+                # if _deterministic_summary() has a bug and throws, this
+                # still pushes a minimal notice instead of the whole run
+                # dying silently with no push at all. Same pattern applied
+                # identically across every skill with an Ollama fallback.
+                try:
+                    narrative = _deterministic_summary(inputs)
+                    status = "fallback"
+                    log.warning("%s: Ollama unavailable for VIP route — using deterministic fallback", SKILL_NAME)
+                except Exception as fallback_err:
+                    log.error("%s: deterministic fallback also failed — %s", SKILL_NAME, fallback_err)
+                    narrative = (
+                        f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                        f"deterministic fallback errored. See logs."
+                    )
+                    status = "fallback_error"
         else:
             # No VIP TFRs: deterministic is the correct call, not a degraded path.
             narrative = _deterministic_summary(inputs)

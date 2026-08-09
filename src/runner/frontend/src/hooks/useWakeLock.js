@@ -17,7 +17,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
  * Distinct from that normal case: if the lock is released while the
  * document is STILL visible (OS-level power management overriding it,
  * some other app or system dialog stealing it, anything unexpected), that's
- * the actual "this could be silently going dark" signal Corey asked to
+ * the actual "this could be silently going dark" signal the operator asked to
  * surface rather than paper over. On that path we both flag 'lost' AND
  * immediately attempt a single re-acquire — self-heals when possible,
  * still visibly flags that it happened rather than staying silent about it.

@@ -3,8 +3,30 @@ common.llm — Shared LLM inference with Ollama-first / Anthropic fallback.
 
 Priority:
   1. Ollama  (OLLAMA_BASE_URL set and reachable)
-  2. Anthropic API  (ANTHROPIC_API_KEY set)
+  2. Anthropic API  (ANTHROPIC_API_KEY set, AND both gates below open)
   3. None  (caller uses its own deterministic fallback)
+
+Two independent gates control step 2, both must be open:
+  - Per-call: generate()'s allow_anthropic param (default True). A caller
+    that has no real fallback of its own passes the default; ops_brief.py
+    passes False as of 2026-08-06 (it has a deterministic template).
+    ep_advance_brief.py never goes through this function at all -- it
+    calls ollama_post_with_retry() directly, so it never had Anthropic
+    access to gate.
+  - Global: ANTHROPIC_FALLBACK_ENABLED env var (default "true" -- this
+    module ships as a template other deployments may run hybrid
+    local+cloud, so the out-of-the-box default preserves that with zero
+    config needed). 2026-08-06: THIS box's dispatch.env sets it to
+    "false" -- operator directive is no Anthropic/cloud calls at all
+    from this deployment, across every caller (route_impact,
+    tfr_enrichment, osint_monitor, weekly_summary, aam_weekly_watch,
+    dispatch_desk_memo, second_brain_daily/weekly,
+    transport_pattern_digest -- everything, not just the two briefs).
+    Deliberately a separate flag from allow_anthropic rather than
+    flipping that parameter's own default to False -- changing the
+    per-call default would silently change behavior for every other
+    deployment of this codebase; this env var only changes it for boxes
+    that explicitly set it.
 
 Usage:
     from common.llm import generate
@@ -36,6 +58,13 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Haiku is the Anthropic fallback — fast and cheap for short skill outputs.
 ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+
+# Global master gate (2026-08-06) -- see module docstring above for the
+# full two-gate design. Same boolean-parsing style already used for
+# OLLAMA_PREFLIGHT_COOL_ENABLED below. Default "true" so this module
+# behaves exactly as it always has for any deployment that doesn't set
+# this var -- this box's own dispatch.env sets it to "false".
+ANTHROPIC_FALLBACK_ENABLED = os.getenv("ANTHROPIC_FALLBACK_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # ── Pause-aware readiness wait (added 2026-07-27) ─────────────────────────────
 # ollama_governor.py SIGSTOPs the native `ollama serve` process on a thermal
@@ -212,6 +241,89 @@ def preflight_cool_launch_if_needed(priority: str) -> None:
         )
 
 
+# ── Load-aware pre-flight gate (2026-08-09) ─────────────────────────────────
+# Sibling of the thermal cool-launch gate above -- same shape, same rules
+# (skipped for priority="hot" and when OLLAMA_BASE_URL is unset). Rationale:
+# baseline load is ~5-6 on 4 cores (already oversubscribed); firing a ~5k-token
+# CPU inference into a transient spike (a concurrent skill, a model build, an
+# ingest burst) stacks contention and makes even small models blow the
+# OLLAMA_TIMEOUT budget -- observed empirically 2026-08-09: at load ~15 every
+# model, including 1.5B, timed out regardless of size. Rather than eat the
+# timeout, hold until load returns near baseline, then fire. Best-effort:
+# never blocks a run indefinitely.
+OLLAMA_PREFLIGHT_LOAD_ENABLED    = os.getenv("OLLAMA_PREFLIGHT_LOAD_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+OLLAMA_PREFLIGHT_LOAD_TARGET     = float(os.getenv("OLLAMA_PREFLIGHT_LOAD_TARGET", "7.0"))
+OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S = float(os.getenv("OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S", "180.0"))
+OLLAMA_PREFLIGHT_LOAD_POLL_S     = float(os.getenv("OLLAMA_PREFLIGHT_LOAD_POLL_S", "15.0"))
+
+
+def _read_loadavg1() -> float | None:
+    """1-minute load average, or None (never raises) if unreadable -- so a
+    non-Linux dev env treats 'unknown' as 'skip the gate' rather than crash."""
+    try:
+        with open("/proc/loadavg") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def wait_for_low_load(
+    target: float = OLLAMA_PREFLIGHT_LOAD_TARGET,
+    max_wait_s: float = OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S,
+    poll_s: float = OLLAMA_PREFLIGHT_LOAD_POLL_S,
+) -> tuple[bool, float | None]:
+    """Poll 1-min load until at/below target or max_wait_s elapses. Returns
+    (reached_target, last_known_load). last_known_load is None only if
+    /proc/loadavg was never readable (gate a no-op in that environment)."""
+    load = _read_loadavg1()
+    if load is None:
+        return True, None
+    if load <= target:
+        return True, load
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, load
+        time.sleep(min(poll_s, remaining))
+        load = _read_loadavg1()
+        if load is None:
+            return True, None
+        if load <= target:
+            return True, load
+
+
+def preflight_load_gate_if_needed(priority: str) -> None:
+    """Called in generate() right after the cool-launch gate, for non-"hot"
+    calls. Holds (bounded) if 1-min load is above target so inference doesn't
+    fire into contention and eat the timeout; no-ops immediately otherwise."""
+    if priority == "hot" or not OLLAMA_PREFLIGHT_LOAD_ENABLED or not OLLAMA_BASE_URL:
+        return
+    load = _read_loadavg1()
+    if load is None or load <= OLLAMA_PREFLIGHT_LOAD_TARGET:
+        return
+    log.info(
+        "llm: pre-flight load gate -- load %.2f is above target %.2f, waiting "
+        "up to %.0fs before firing inference",
+        load, OLLAMA_PREFLIGHT_LOAD_TARGET, OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S,
+    )
+    reached, final_load = wait_for_low_load(
+        OLLAMA_PREFLIGHT_LOAD_TARGET,
+        OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S,
+        OLLAMA_PREFLIGHT_LOAD_POLL_S,
+    )
+    if final_load is None:
+        return
+    if reached:
+        log.info("llm: pre-flight load gate -- load %.2f, proceeding", final_load)
+    else:
+        log.warning(
+            "llm: pre-flight load gate -- load still %.2f after %.0fs wait, "
+            "proceeding anyway (never blocks a run indefinitely)",
+            final_load, OLLAMA_PREFLIGHT_LOAD_MAX_WAIT_S,
+        )
+
+
 def _ollama_ready(timeout_s: float = OLLAMA_READY_TIMEOUT_S) -> bool:
     """Cheap health check against Ollama's own API. Never raises -- any
     exception (connection refused, read timeout, DNS failure, whatever)
@@ -352,10 +464,46 @@ def generate(
     temperature: float = 0.2,
     priority: str = "report",
     timeout: float | None = None,
+    allow_anthropic: bool = True,
+    max_retries: int | None = None,
+    retry_wait_cap: float | None = None,
 ) -> str | None:
     """
     Try Ollama, then Anthropic. Returns generated text or None if both fail.
     Callers should handle None with their own deterministic fallback.
+
+    allow_anthropic (2026-08-06): False skips the Anthropic step entirely --
+    Ollama failure/timeout goes straight to returning None, regardless of
+    whether ANTHROPIC_API_KEY is set. Added for ops_brief.py, which the
+    operator wants staying local-Ollama-or-deterministic only, never a
+    cloud API call. Defaults to True so every other caller of generate()
+    (route_impact, tfr_enrichment, osint_monitor, weekly_summary,
+    aam_weekly_watch, dispatch_desk_memo, second_brain_daily/weekly,
+    transport_pattern_digest) keeps today's Ollama-then-Anthropic behavior
+    unchanged -- this is an opt-in restriction per caller, not a global
+    removal of the fallback.
+
+    A caller passing allow_anthropic=True (the default) can still be
+    blocked by the separate module-level ANTHROPIC_FALLBACK_ENABLED env
+    gate (2026-08-06) -- see the module docstring. That's the actual
+    global off-switch for a whole deployment; allow_anthropic is a
+    per-call opt-out on top of it, not instead of it. This box's
+    dispatch.env sets ANTHROPIC_FALLBACK_ENABLED=false, so as of that
+    change EVERY caller of generate() on this box is Ollama-or-None --
+    ops_brief.py's own allow_anthropic=False is now redundant with the
+    global gate (harmless to leave -- belt and suspenders, and it keeps
+    working correctly if this box's env var is ever reverted without
+    the code being touched).
+
+    max_retries/retry_wait_cap (2026-08-06): pass through to
+    ollama_post_with_retry() to override OLLAMA_MAX_RETRIES/
+    OLLAMA_RETRY_WAIT_CAP_S per call. Added alongside allow_anthropic for
+    ops_brief.py's fail-fast redesign -- see that module for why 0 retries
+    is now correct there (a genuinely slow generate call was being retried
+    with the identical slow prompt, guaranteeing the outer container
+    timeout would kill the whole run before either attempt finished). None
+    (default) keeps today's shared module-level defaults for every other
+    caller.
 
     priority: "hot" for real-time VIP/TFR alert paths that must never wait
     behind a report job -- see common/ollama_lock.py. Defaults to "report"
@@ -410,22 +558,42 @@ def generate(
     it entirely, same as the pause-aware waits.
     """
     preflight_cool_launch_if_needed(priority)
+    preflight_load_gate_if_needed(priority)
+    # Both gates must be open -- see module docstring. Computed once so
+    # the two branches below log identically regardless of which path
+    # got here, and say WHICH gate is closed (useful for debugging a
+    # box like this one where the global gate is off but individual
+    # callers still pass allow_anthropic=True by default).
+    anthropic_gate_open = allow_anthropic and ANTHROPIC_FALLBACK_ENABLED
+    if allow_anthropic and not ANTHROPIC_FALLBACK_ENABLED:
+        anthropic_blocked_reason = "ANTHROPIC_FALLBACK_ENABLED=false for this deployment"
+    elif not allow_anthropic:
+        anthropic_blocked_reason = "disabled for this caller (allow_anthropic=False)"
+    else:
+        anthropic_blocked_reason = None
+
     effective_timeout = OLLAMA_TIMEOUT if timeout is None else timeout
     if OLLAMA_BASE_URL:
         generate_timeout = wait_then_budget(effective_timeout) if priority != "hot" else effective_timeout
         if generate_timeout is None:
             log.info(
                 "llm: Ollama not ready after bounded readiness wait "
-                "(governor thermal pause?) — trying Anthropic fallback"
+                "(governor thermal pause?) — %s",
+                f"Anthropic fallback {anthropic_blocked_reason}, returning None" if not anthropic_gate_open
+                else "trying Anthropic fallback",
             )
         else:
             result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
-                              priority=priority, timeout=generate_timeout)
+                              priority=priority, timeout=generate_timeout,
+                              max_retries=max_retries, retry_wait_cap=retry_wait_cap)
             if result is not None:
                 return result
+            if not anthropic_gate_open:
+                log.info("llm: Ollama unavailable, busy, or failed — Anthropic fallback %s, returning None", anthropic_blocked_reason)
+                return None
             log.info("llm: Ollama unavailable, busy, or failed — trying Anthropic fallback")
 
-    if ANTHROPIC_API_KEY:
+    if anthropic_gate_open and ANTHROPIC_API_KEY:
         return _anthropic(system, prompt, max_tokens, temperature)
 
     return None
@@ -439,6 +607,8 @@ def _ollama(
     temperature: float,
     priority: str = "report",
     timeout: float = OLLAMA_TIMEOUT,
+    max_retries: int | None = None,
+    retry_wait_cap: float | None = None,
 ) -> str | None:
     payload = {
         "model":   model,
@@ -456,6 +626,8 @@ def _ollama(
             payload,
             timeout=timeout,
             priority=priority,
+            max_retries=max_retries,
+            retry_wait_cap=retry_wait_cap,
         )
         resp.raise_for_status()
         response_text = resp.json().get("response", "").strip()
@@ -464,7 +636,14 @@ def _ollama(
         log.info("llm: Ollama slot unavailable (priority=%s): %s", priority, exc)
         return None
     except Exception as exc:
-        log.debug("llm: Ollama call failed: %s", exc)
+        # 2026-08-07: was .debug -- every skill's main() sets
+        # logging.basicConfig(level=logging.INFO), so this line was
+        # silently invisible in every production log, and the caller's
+        # own "Ollama unavailable, busy, or failed" line never says WHY.
+        # Bumped to .warning to match the sibling "still unreachable"
+        # line in ollama_post_with_retry() above -- this is a genuine
+        # failure worth surfacing, not routine/expected behavior.
+        log.warning("llm: Ollama call failed: %s", exc)
         return None
 
 

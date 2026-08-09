@@ -35,13 +35,25 @@ PublishPort=100.x.x.x:3001:80
 # /var/lib is root-owned and creating a new subdirectory there needs
 # interactive sudo (see docs/COMPLIANCE_SECURITY.md's known blocker on
 # arbitrary root-owned paths). Every other Quadlet's /var/lib/* dirs were
-# pre-created by Corey's setup.sh; this one wasn't, so it gets a
+# pre-created by the operator's setup.sh; this one wasn't, so it gets a
 # self-contained path this user already owns outright.
 Volume=/home/corporatetraveldc/.local/share/rss-bridge/whitelist.txt:/app/whitelist.txt:z
 NoNewPrivileges=true
 AutoUpdate=registry
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=85M
 CPUWeight=50
 CPUQuota=100%
 Restart=always

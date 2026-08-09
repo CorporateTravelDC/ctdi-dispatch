@@ -193,7 +193,7 @@ def main() -> None:
     # create
     p_create = sub.add_parser("create", help="Create a new auth token")
     p_create.add_argument("--user", required=True,
-                          help="User label (e.g. cowork, admin, corey)")
+                          help="User label (e.g. cowork, admin, operator)")
     p_create.add_argument("--tier", required=True,
                           choices=["cert", "shares", "admin"],
                           help="Auth tier for this token")

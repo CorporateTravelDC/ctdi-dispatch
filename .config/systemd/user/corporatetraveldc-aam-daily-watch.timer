@@ -1,0 +1,18 @@
+[Unit]
+Description=Run AAM daily watch 07:30 ET (after daily-opsplan 07:00, clear of the hourly ops-brief/ep-advance :00/:30 Ollama-slot marks by 30min either side)
+Requires=corporatetraveldc-aam-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 America/New_York
+# Persistent=false (2026-08-06): deliberately NOT persistent, unlike the
+# weekly sibling's original setting -- see that timer's own fix note.
+# Persistent=true fires a catch-up run immediately on the next boot if
+# the scheduled time was missed, which raced this box's own recent
+# reboots against the runner container before it was up, repeatedly
+# failing with connection-refused and burning an Ollama cycle for
+# nothing. A missed daily run (box happened to be rebooting at 07:30) is
+# a much smaller loss than firing redundantly on every reboot.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

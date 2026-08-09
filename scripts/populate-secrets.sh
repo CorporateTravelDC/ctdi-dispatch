@@ -96,6 +96,10 @@ set_env "FLIGHTAWARE_FEEDER_KEY" "$(read_secret flightaware token)"
 # ~/.secrets/flightaware.key  ->  FLIGHTAWARE_AEROAPI_KEY
 set_env "FLIGHTAWARE_AEROAPI_KEY" "$(read_secret flightaware key)"
 
+# -- Cowork<->Dispatch message board write key (X-Board-Key). Board-only scope,
+# rotatable. ~/.secrets/board.key  ->  BOARD_KEY  (added 2026-08-07)
+set_env "BOARD_KEY" "$(read_secret board key)"
+
 # -- AirNav RadarBox feeder sharing key
 # ~/.secrets/airnavradar.token  ->  AIRNAVRADAR_SHARING_KEY
 set_env "AIRNAVRADAR_SHARING_KEY" "$(read_secret airnavradar)"

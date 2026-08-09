@@ -24,6 +24,11 @@ Image=localhost/corporatetraveldc-web:latest
 Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 PublishPort=127.0.0.1:8000:8000
+# 2026-08-08: tailnet publish restored — the runner (DISPATCH_BASE_URL=
+# http://100.x.x.x:8000) and the PWA reach the web API here. Dropped
+# 2026-08-06; a restart re-applying the quadlet then broke runner->web
+# (CPS/briefs blank, admin-token add-feed 401 via failed whoami-token).
+PublishPort=100.x.x.x:8000:8000
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
@@ -31,6 +36,18 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 AutoUpdate=local
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box

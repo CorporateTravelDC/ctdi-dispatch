@@ -45,11 +45,13 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from auth.auth import Tier, require_admin, require_tier, resolve_tier, resolve_identity
 from common import config, db
+import secrets as _secrets
+from second_brain.scrub_gate import ScrubGateBlocked as _ScrubGateBlocked, gate as _scrub_gate
 from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
 from web.routes.airspace import router as airspace_router
@@ -115,6 +117,7 @@ async def startup() -> None:
     db.init_db_v27()
     db.init_db_v28()
     db.init_db_v29()
+    db.init_db_v30()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -133,6 +136,105 @@ async def whoami_token(identity: dict = Depends(resolve_identity)) -> JSONRespon
     everywhere else in this codebase never raises for anonymous callers.
     """
     return JSONResponse(identity)
+
+
+# ── Cowork <-> Dispatch message board (Tier-0, tunnel-reachable) ─────────────
+# Two-way coordination channel. The Cloudflare tunnel STRIPS the Authorization
+# header, so board writes authenticate with a custom X-Board-Key header (which
+# the tunnel does NOT strip), NOT the Bearer/tier system. Reads are anonymous
+# Tier-0. Every POST runs the same CUI/PII scrub gate as /api/v1/remember.
+# Coordination text only -- substantive payloads live in the vault, referenced
+# via `refs`. See db.board_* and the build contract.
+_BOARD_KEY = os.getenv("BOARD_KEY", "").strip()
+_board_post_hits: list = []   # naive in-memory rate-limit clock
+
+
+class BoardMsgIn(BaseModel):
+    from_: str = Field(alias="from")
+    to: str
+    thread: str
+    subject: str
+    body: str
+    refs: Optional[list] = None
+    in_reply_to: Optional[str] = None
+
+
+@app.get("/api/v1/board/health")
+async def board_health() -> JSONResponse:
+    """Board reachability probe -- Tier 0, no auth."""
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/api/v1/board")
+async def board_get(thread: str = "coord", since: str = "", limit: int = 50) -> JSONResponse:
+    """Read board messages (Tier-0/anonymous). since = opaque cursor from a prior
+    read (seq or ISO ts); returns only newer messages plus a fresh cursor."""
+    msgs, cursor = db.board_query(thread=thread, since=since or None, limit=limit)
+    return JSONResponse({"messages": msgs, "cursor": cursor})
+
+
+@app.get("/api/v1/board/threads")
+async def board_threads() -> JSONResponse:
+    """List board threads + last-activity ts -- Tier 0."""
+    return JSONResponse({"threads": db.board_threads()})
+
+
+@app.get("/api/v1/board/enroll")
+async def board_enroll(nonce: str = "") -> JSONResponse:
+    """One-time enrollment fetch -- Tier-0, no Authorization (the CF tunnel
+    strips it). A valid, unconsumed, unexpired nonce returns a short-lived
+    board-write TOKEN exactly once, then the nonce is dead. Reads never need a
+    key, so this only enables the caller's writes. The enroll URL is not itself
+    the secret -- consuming it once is what returns the secret.
+
+    200 -> {token, expires_at, scope}; 401 -> unknown nonce; 410 -> nonce
+    already consumed or expired (replay/leak of the URL is worthless)."""
+    if not nonce:
+        raise HTTPException(status_code=400, detail="nonce query param is required")
+    r = db.board_consume_nonce(nonce)
+    st = r["status"]
+    if st == "ok":
+        return JSONResponse({
+            "token": r["token"],
+            "expires_at": r["expires_at"],
+            "scope": r["scope"],
+            "usage": "send this value as the X-Board-Key header on POST /api/v1/board",
+        })
+    if st == "invalid":
+        raise HTTPException(status_code=401, detail="invalid enrollment nonce")
+    raise HTTPException(status_code=410, detail=f"enrollment nonce {st} (single-use, ~10min TTL)")
+
+
+@app.post("/api/v1/board", status_code=201)
+async def board_post(msg: BoardMsgIn, request: Request) -> JSONResponse:
+    """Post a board message. Authenticates via X-Board-Key (NOT Authorization --
+    the CF tunnel strips Authorization). 401 on bad/missing key; 422 if the
+    CUI/PII scrub gate blocks (do not retry same text); 201 on success."""
+    # Authorize via X-Board-Key: either the long-lived master BOARD_KEY OR a
+    # short-lived board-write token minted through /api/v1/board/enroll.
+    presented = request.headers.get("X-Board-Key", "")
+    authorized = bool(presented) and (
+        (bool(_BOARD_KEY) and _secrets.compare_digest(presented, _BOARD_KEY))
+        or db.board_token_valid(presented)
+    )
+    if not authorized:
+        raise HTTPException(status_code=401, detail="missing or invalid X-Board-Key")
+    now = time.monotonic()
+    _board_post_hits[:] = [t for t in _board_post_hits if now - t < 60]
+    if len(_board_post_hits) >= 30:
+        raise HTTPException(status_code=429, detail="board POST rate limit (30/min) exceeded")
+    _board_post_hits.append(now)
+    try:
+        _scrub_gate("\n".join([msg.subject or "", msg.body or "", " ".join(msg.refs or [])]),
+                    source="board")
+    except _ScrubGateBlocked as e:
+        raise HTTPException(status_code=422, detail=f"blocked by CUI/PII scrub gate: {e}")
+    rec = db.board_insert(
+        from_side=msg.from_, to_side=msg.to, thread=msg.thread,
+        subject=msg.subject, body=msg.body, refs=msg.refs, in_reply_to=msg.in_reply_to,
+        remote_addr=(request.client.host if request.client else None),
+    )
+    return JSONResponse({"id": rec["id"], "ts": rec["ts"]}, status_code=201)
 
 
 @app.get("/healthz")
@@ -238,6 +340,14 @@ async def get_feeds() -> JSONResponse:
     push_covers: dict[str, str] = {"nws": "push:nws", "notam": "push:fns"}
     feed_by_name = {f["feed_name"]: f for f in feeds}
 
+    # Belt-and-suspenders pull-path viability (poller/skills/pull_path_verify.py,
+    # 12h timer). Independent of push freshness -- confirms the pull FALLBACK
+    # endpoint still works even when a push source is what's carrying the data.
+    pull_status = db.get_pull_path_status()
+    # Push feeds whose fallback is a pull source of a different name -- so the
+    # push row can also show "pull: verified" for its own fallback path.
+    push_to_pull = {"push:nws": "nws", "push:fns": "notam", "push:amtrak": "amtrak"}
+
     result = []
     for f in feeds:
         name = f["feed_name"]
@@ -274,6 +384,12 @@ async def get_feeds() -> JSONResponse:
             "error":                  display_error,
             "pull_error":             pull_error,
             "consecutive_failures":   f["consecutive_failures"],
+            # Belt-and-suspenders pull-path viability (12h probe), independent
+            # of freshness. None = no probe defined for this feed.
+            "pull_verified":          ((None if pp["ok"] is None else bool(pp["ok"])) if (pp := (pull_status.get(name) or pull_status.get(push_to_pull.get(name, "")))) else None),
+            "pull_state":             (pp["state"] if pp else None),
+            "pull_checked_at":        (pp["checked_at"] if pp else None),
+            "pull_detail":            (pp["detail"] if pp else None),
         })
     return JSONResponse({"feeds": result})
 
@@ -681,7 +797,7 @@ async def get_wx_config() -> JSONResponse:
             ],
         },
         # 2026-08-03 (later same day): expanded from Western Atlantic-only to
-        # cover the entire US -- Corey's ask: "the Maritime equivalent for
+        # cover the entire US -- the operator's ask: "the Maritime equivalent for
         # the entire U.S. ... Gulf Shore ... Eastern Pacific". Added NOAA's
         # joint Unified Surface Analysis (one chart, whole CONUS + Gulf +
         # both ocean approaches) plus a full Eastern Pacific SFC/WAVE
@@ -1732,7 +1848,7 @@ async def delete_vip(
 # ---------------------------------------------------------------------------
 # Bandwidth priority override (SWIM vs. NEXRAD) — operator toggle
 # ---------------------------------------------------------------------------
-# 2026-07-21. Corey wants a bidirectional manual override for when bandwidth
+# 2026-07-21. the operator wants a bidirectional manual override for when bandwidth
 # is tight: declare 'swim' (SWIM/NMS ingest stays full-rate) or 'nexrad' (a
 # future NEXRAD Level II puller gets priority, SWIM's fdps feed backs off)
 # or 'auto' (no override). See SCHEMA_V20 in common/db.py for the full

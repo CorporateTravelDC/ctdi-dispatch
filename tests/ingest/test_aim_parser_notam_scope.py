@@ -214,7 +214,7 @@ def test_normalize_notam_number_empty():
 # which covers a huge chunk of the Midwest/Northeast, not just "near DC")
 # became a must-ingest+alert item. Confirmed live: 164 NOTAM-D rows from
 # small regional fields (Louisville KSDF, etc.) flooded nas-alerts this way.
-# Corey's actual ask was scoped to FDC ("on the FDC thing... anything within
+# the operator's actual ask was scoped to FDC ("on the FDC thing... anything within
 # ZDC/ZNY/ZID/ZTL/ZOB must ingest") -- NOTAM-D keeps the original, narrower
 # core-airport/watch-set-only gate.
 

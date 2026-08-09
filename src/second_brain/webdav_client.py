@@ -8,6 +8,19 @@ tested implementation instead of copy-pasted ones.
 Never prints the password. Uses the same app-password secrets file and
 Host-header-spoofing approach as second_brain.index_db (Nextcloud validates
 Host against trusted_domains even for loopback requests).
+
+2026-08-08: the vault/account split (Option B) was EXECUTED. The vault now
+lives under a dedicated non-admin "corporatetraveldc" Nextcloud account. The
+business folder stays nested (BUSINESS_ROOT="corporatetraveldc"), so the live
+DAV path is files/corporatetraveldc/corporatetraveldc/ -- i.e. only the account
+changed, not the folder layout. Because this module is entirely env-driven
+(NEXTCLOUD_ADMIN_USER, default "operator"), NO code change was needed: the cutover
+was a pure env flip in dispatch.env (NEXTCLOUD_ADMIN_USER=corporatetraveldc) +
+a fresh app-password for that account in dispatch-secrets.env. operator's home no
+longer contains the vault at all, so the folder-name disclosure gap is closed.
+(The earlier 2026-08-06 note about a "flattened BUSINESS_ROOT" split that was
+drafted-but-never-run is superseded: we deliberately kept the folder nested and
+only swapped the account, which is why the same code path serves both eras.)
 """
 import os
 from xml.etree import ElementTree as ET
@@ -15,7 +28,7 @@ from xml.etree import ElementTree as ET
 import requests
 
 WEBDAV_BASE = os.environ.get("NEXTCLOUD_WEBDAV_BASE", "http://127.0.0.1:8090/remote.php/dav/files")
-NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "corey")
+NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "operator")
 _SECRETS_FILE = os.environ.get(
     "NEXTCLOUD_SECRETS_FILE",
     os.path.expanduser("~/.config/nextcloud/nextcloud-secrets.env"),
@@ -60,7 +73,7 @@ def _base_url() -> str:
 
 def mkcol(rel_path: str) -> int:
     """Create a single folder. 201 = created, 405 = already exists (both fine)."""
-    url = f"{_base_url()}/{rel_path}"
+    url = f"{_base_url()}/{rel_path.strip('/')}"
     r = requests.request("MKCOL", url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=15)
     return r.status_code
 
@@ -76,7 +89,8 @@ def mkdirs(rel_path: str) -> None:
 
 def put(rel_path: str, content: str | bytes, content_type: str = "text/markdown") -> int:
     """Write a file, creating parent folders as needed."""
-    if "/" in rel_path.strip("/"):
+    rel_path = rel_path.strip("/")
+    if "/" in rel_path:
         mkdirs(rel_path.rsplit("/", 1)[0])
     if isinstance(content, str):
         content = content.encode("utf-8")
@@ -92,7 +106,7 @@ def put(rel_path: str, content: str | bytes, content_type: str = "text/markdown"
 
 def get(rel_path: str) -> bytes | None:
     """Fetch a file's content. Returns None if not found (404)."""
-    url = f"{_base_url()}/{rel_path}"
+    url = f"{_base_url()}/{rel_path.strip('/')}"
     r = requests.get(url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=30)
     if r.status_code == 404:
         return None
@@ -102,7 +116,7 @@ def get(rel_path: str) -> bytes | None:
 
 def list_files(rel_path: str = "") -> list[dict]:
     """List files (not folders) directly under rel_path (depth 1, non-recursive)."""
-    url = f"{_base_url()}/{rel_path}".rstrip("/")
+    url = f"{_base_url()}/{rel_path.strip('/')}".rstrip("/")
     body = ('<?xml version="1.0" encoding="utf-8"?>'
             '<d:propfind xmlns:d="DAV:"><d:prop><d:getcontentlength/>'
             '<d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>')

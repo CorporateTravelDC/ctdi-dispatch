@@ -2,6 +2,12 @@
 Description=Corporate Travel DC -- weekly "Dispatch Desk" week-in-review memo
 
 [Container]
+Memory=1536m
+# 2026-08-06: previously unguarded -- heaviest LLM prompt in the stack -- 90 items/6 categories, ~11min runs (see OLLAMA_TIMEOUT=800 in dispatch_desk_memo.py) -- matches the standard poller/ops-brief tier.
+# Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
+# runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Network=pasta:--map-gw
@@ -11,5 +17,17 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=python3 poller/skills/dispatch_desk_memo.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 Type=oneshot
 TimeoutStartSec=950

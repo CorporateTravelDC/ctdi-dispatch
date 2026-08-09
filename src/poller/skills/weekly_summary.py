@@ -122,9 +122,20 @@ def main(force: bool = False) -> None:
             status = "ok"
             log.info("%s: narrative generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
         else:
-            summary = raw_content
-            status = "fallback"
-            log.info("%s: Ollama unavailable — using deterministic content", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                summary = raw_content
+                status = "fallback"
+                log.info("%s: Ollama unavailable — using deterministic content", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                summary = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         import pathlib
         p = pathlib.Path(config.state_dir()) / "weekly-summary.txt"

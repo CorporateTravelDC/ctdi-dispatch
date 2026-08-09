@@ -460,7 +460,7 @@ def write_aim_notams(notams: list[dict]) -> int:
         facility = n["facility"]
         is_fdc   = n["classification"] == "FDC"
         is_vip   = _is_vip_notam(n.get("text_body", ""))
-        # DC-region-ARTCC must-ingest applies to FDC only (Corey: "on the FDC
+        # DC-region-ARTCC must-ingest applies to FDC only (the operator: "on the FDC
         # thing... anything within ZDC/ZNY/ZID/ZTL/ZOB must ingest"). ZID/ZTL/
         # ZOB/ZNY each cover a huge geographic area -- applying this to routine
         # NOTAM-D too would mean every airport-level NOTAM anywhere in the

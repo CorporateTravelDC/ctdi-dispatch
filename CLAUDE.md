@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this system is
 
-Real-time executive travel intelligence platform for the Washington DC area. Monitors commercial flights (via FAA SWIM), Amtrak trains, and weather, then fires push alerts through ntfy. Runs as four Podman containers managed by systemd Quadlets under the `corporatetraveldc` user account.
+Real-time executive travel intelligence platform for the Washington DC area. Monitors commercial flights (via FAA SWIM), Amtrak trains, and weather, then fires push alerts through ntfy. Runs as a set of Podman containers managed by systemd Quadlets under the `corporatetraveldc` user account -- core stack (web/poller/pusher/ingest, ingest itself split into 7 per-feed containers, see below) plus a growing number of standalone timer-triggered skill containers and auxiliary services (ACARS/ADS-B stack, second-brain, daily category watches, etc.). Don't hardcode a total container count here -- it drifts fast; check `systemctl --user list-units 'corporatetraveldc-*' --all` for the live picture.
 
 ## Key paths
 
@@ -35,9 +35,9 @@ PYTHONPATH=src ./venv/bin/python src/poller/fetchers/metar.py
 PYTHONPATH=src ./venv/bin/python src/poller/fetchers/tfr.py
 
 # Token management
-PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py create --user corey --tier admin --label admin-iphone
+PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py create --user operator --tier admin --label admin-iphone
 PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py list
-PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py revoke --prefix ctdc_corey_
+PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py revoke --prefix ctdc_operator_
 PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py show-cost
 
 # Run tests
@@ -72,6 +72,16 @@ sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db "SELECT * FROM cps_score
 ```
 
 ### Container resource limits
+
+> ⚠️ **SINGLE-EDGE-UNIT ASSUMPTION.** Every value in this section (Memory /
+> CPUQuota / CPUWeight), plus the Ollama `OLLAMA_TIMEOUT=240` brief timeout,
+> `OLLAMA_PREFLIGHT_COOL_TARGET_C`, the thermal governor, and `MAX_LOADED=1`, is
+> tuned for **shared-resource contention on ONE Raspberry Pi 5** (4 cores, 16 GB,
+> no GPU, one thermal envelope). If the stack is ever de-consolidated (Ollama on
+> dedicated hardware, DNS/Tailscale on a separate device, containers spread across
+> nodes), **most of these numbers become obsolete or overly conservative and must
+> be re-measured per node — do not carry them forward blindly.** Full rationale +
+> what changes on each topology shift: `docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md`.
 
 Every `.container` file carries the same four resource-control lines -- copy
 them into any new container's quadlet file (this is the "going forward"
@@ -121,14 +131,14 @@ Check current state any time with `container-mem-watch.sh --status`.
 
 ## Architecture overview
 
-### Four containers
+### Core containers
 
 - **web** (`src/web/`) — FastAPI app. Serves tiered REST API. No auth secrets in responses.
 - **poller** (`src/poller/`) — Async scheduler. Runs fetchers on intervals; invokes skills as subprocesses; watches trigger directory for admin commands.
 - **pusher** (`src/pusher/`) — ntfy alert sender. Polls DB every 30s for unnotified VIP TFRs and CPS changes.
-- **ingest** (`src/ingest/`) — FAA SWIM push feeds via NMS/Solace AMQP. Pending FAA credential provisioning. While credentials are absent, it starts cleanly and stamps `pending_credentials` — the poller falls back to REST automatically.
+- **ingest** (`src/ingest/`) — FAA SWIM push feeds via NMS/Solace AMQP. Split into 7 per-feed containers (`corporatetraveldc-ingest-core`, `-fdps`, `-stdds`, `-tfms`, `-tbfm`, `-itws`, `-notam`). SWIM_NMS_* credentials are provisioned in `dispatch-secrets.env` and all 7 are live (confirmed 2026-08-07: `feed_state` shows push:fdps/stdds/tfms/tbfm/itws/fns all fresh, zero errors). The REST `notam` fetcher specifically still needs `FAA_NOTAM_API_KEY` (separate from SWIM credentials) -- see the FAA SWIM feeds section below.
 
-All four share the same SQLite database via WAL mode.
+Plus many standalone timer-triggered skill containers (daily/weekly watches, second-brain, health checks) and auxiliary services (ACARS/ADS-B stack, Nextcloud, ntfy) beyond this core set. All share the same SQLite database via WAL mode.
 
 ### Auth tiers
 
@@ -143,7 +153,7 @@ Token format: `ctdc_<user>_<32-char-random>`. Only SHA-256 hash stored in DB; pl
 
 ### Database schema
 
-`src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … `SCHEMA_V6`) — each version is applied at startup via `init_db_v{N}()`. All new tables use `CREATE TABLE IF NOT EXISTS`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
+`src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … currently through `SCHEMA_V30`, open-ended -- check `src/common/db.py` for the actual current top version rather than trusting a number in this doc) — each version is applied at startup via `init_db_v{N}()`. All new tables use `CREATE TABLE IF NOT EXISTS`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
 
 ### Skill runtime rules (SR-1 and SR-2)
 
@@ -178,6 +188,8 @@ Flight monitoring uses `airplanes.live` free API by default, with fallback to Fl
 | `ops-brief` | Daily/weekly brief | 3 |
 | `ops-health` | Freshness audit | 2 |
 
-### FAA SWIM feeds (NMS credentials pending)
+### FAA SWIM feeds
 
-When credentials arrive, add to `/etc/corporatetraveldc/dispatch-secrets.env` (see `src/ingest/README.md`), then rebuild and restart the ingest container. No code changes needed — the feed names activate automatically.
+SWIM_NMS_* credentials (FDPS/STDDS/TFMS/AIM/TBFM/ITWS) are provisioned in `/etc/corporatetraveldc/dispatch-secrets.env` and all six SWIM push feeds are live -- confirmed 2026-08-07 via `feed_state` (push:fdps/stdds/tfms/tbfm/itws/fns all fresh, zero consecutive_failures). If a SWIM feed ever needs re-provisioning, add/update the relevant `SWIM_NMS_USER/PASS/QUEUE_<FEED>` vars, then rebuild and restart the matching per-feed ingest container (`corporatetraveldc-ingest-<feed>`) -- no code changes needed, feed names activate automatically.
+
+Separately, the REST `notam` fetcher (`src/poller/fetchers/notam.py`, distinct from the SWIM AIM/FNS NOTAM push feed) genuinely still needs `FAA_NOTAM_API_KEY`/`FAA_NOTAM_API_SECRET` -- `feed_state` shows `notam: awaiting_credentials`. This is NOT the same gap as the SWIM credentials above; live NOTAM data is already flowing via `push:fns` -> `ingest/parsers/aim_parser.py` -> the `notams` table regardless of this REST fetcher's status.

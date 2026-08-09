@@ -307,7 +307,7 @@ async def whoami(request: Request):
 # ── Demo-mode login gate ------------------------------------------------------
 # Only reachable/meaningful when DEMO_MODE=true (runner-demo instance, port
 # 8005). Added 2026-08-01 so the public dispatch-runner.example.com
-# hostname actually enforces the password-gated access Corey asked for --
+# hostname actually enforces the password-gated access the operator asked for --
 # see the hard gate in proxy_dispatch() below for the enforcement half of
 # this; these two routes are just login + status.
 
@@ -656,7 +656,7 @@ def _sanitize_signal_message(m: dict) -> dict:
     synthetic identity, scrub the same real substrings out of free-text
     `text` (decoded ACARS/VDL2 payloads frequently repeat the tail/flight
     inline), and generalize the receiving station location so a public
-    demo visitor can't infer Corey's physical feeder location."""
+    demo visitor can't infer the operator's physical feeder location."""
     m = dict(m)
     real_reg      = (m.get("registration") or "").strip()
     real_flight   = (m.get("flight") or "").strip()
@@ -1502,7 +1502,7 @@ async def proxy_dispatch(path: str, request: Request):
     this is what makes the public dispatch-runner.example.com
     hostname actually password-gated rather than falling through to
     demo_api's own lenient default-window/speed behavior. Trusted-origin
-    requests (Corey, over Tailscale) are completely unaffected -- no
+    requests (the operator, over Tailscale) are completely unaffected -- no
     cookie, no login, exactly today's open behavior.
     """
     demo_session_token: str | None = None
@@ -1686,7 +1686,7 @@ async def sse_stream(request: Request):
 #     ACARS/VDL2/HFDL sanitization, so nothing here is even superficially
 #     confusable with real operational content.
 #
-# (b) Corey's ask: showcase that this same alert bus can fan out via
+# (b) the operator's ask: showcase that this same alert bus can fan out via
 #     webhook into a reservation system (LimoAnywhere) and call-center
 #     platforms (3CX, RingCentral) -- all three genuinely support inbound
 #     webhooks per their own docs, so this is a real, representative
@@ -1950,6 +1950,7 @@ from shared.rss_catalog import save_user_feeds as _save_user_feeds
 from shared.rss_catalog import load_user_categories as _load_user_categories
 from shared.rss_catalog import save_user_categories as _save_user_categories
 from shared.rss_catalog import list_all_categories as _list_all_categories
+from shared.rss_catalog import find_existing_category as _find_existing_category
 from shared.rss_catalog import visible_to as _visible_to
 from shared.feed_resolve import resolve_source as _resolve_source
 
@@ -2043,6 +2044,13 @@ async def rss_feed(request: Request, category: str = "corporate_intel", limit: i
     async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
         for feed in all_feeds:
             items = await _fetch_one_rss(client, feed, category)
+            # 2026-08-07: provenance passthrough for entity_tracking's
+            # backlink-discovered feeds (see common/entity_tracking.py) --
+            # operator directive: auto-discovered-source content must be
+            # visibly marked, not blended in with hand-curated feeds.
+            if feed.get("discovered"):
+                for it in items:
+                    it["discovered"] = True
             all_items.extend(items)
 
     all_items.sort(key=lambda x: x.get("published", ""), reverse=True)
@@ -2108,6 +2116,16 @@ async def rss_categories_add(request: Request, body: dict):
 
     async with _user_categories_lock:
         categories = _load_user_categories()
+        # Alias-aware duplicate guard (2026-08-07): refuse if this names a
+        # category -- or the same concept (shorthand/jargon/STT-variant, e.g.
+        # "AAM"/"eVTOL"/"EV tolls" all == advanced_air_mobility) -- that already
+        # exists, built-in or user-created. Prevents the empty-duplicate bug.
+        dup = _find_existing_category(label, categories)
+        if dup:
+            raise HTTPException(status_code=409, detail=(
+                f"A category for this already exists: '{dup['label']}' "
+                f"({dup['source']} category, id={dup['id']}). Add feeds to it "
+                f"instead of creating a duplicate."))
         cat_id = f"user_{_uuid.uuid4().hex[:12]}"
         entry = {
             "id":         cat_id,

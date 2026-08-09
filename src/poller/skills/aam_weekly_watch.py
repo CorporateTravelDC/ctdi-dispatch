@@ -46,6 +46,7 @@ import httpx
 
 from common import config
 from common.llm import generate as llm_generate
+from common.rss_retrieval import retrieve, format_citations
 from common.sr1_log import log_usage
 from second_brain import webdav_client
 from second_brain.index_db import INDEX_DB, index_note
@@ -74,6 +75,23 @@ OLLAMA_MODEL = "corporatetraveldc-pi5-aam-watch:latest"
 RUNNER_BASE_URL = "http://100.x.x.x:8001"
 RSS_CATEGORY = "advanced_air_mobility"
 LOOKBACK_DAYS = 7
+
+# 2026-08-06: retrieval query for common.rss_retrieval.retrieve() -- the
+# skill's own topic anchors, so the prompt gets the most relevant items
+# out of the week's corpus rather than every headline undifferentiated.
+# Lexical/keyword retrieval, not embeddings -- see rss_retrieval.py's
+# module docstring for why. RETRIEVE_TOP_N caps how many items make it
+# into the prompt after ranking (weekly corpus can run 20-40+ items;
+# most weeks that's still small enough to include in full, but ranking
+# still matters for which ones the model is explicitly told to lead
+# with via citation order).
+RETRIEVE_QUERY = (
+    "DC-area vertiport infrastructure eVTOL Part 108 powered-lift "
+    "regulatory FAA vertiport siting ground transport chauffeur "
+    "executive protection counter-UAS security low-altitude airspace "
+    "battery BESS propulsion hydrogen"
+)
+RETRIEVE_TOP_N = 20
 
 _OPS_MARKER = "=== OPS FRAMING ==="
 _EP_MARKER = "=== EP FRAMING ==="
@@ -136,11 +154,21 @@ Plain text within each section, no markdown headers beyond the labels
 above, no filler."""
 
 
-def _fetch_week_items() -> list[dict]:
-    """Pull the advanced_air_mobility RSS category and filter to the last
-    LOOKBACK_DAYS days. Returns [] on any fetch failure -- this is a
-    weekly watch, not a critical feed; missing this week's items degrades
-    gracefully to the status block alone."""
+def _fetch_week_items(lookback_days: int = LOOKBACK_DAYS, category: str = RSS_CATEGORY) -> list[dict]:
+    """Pull the given RSS category (default advanced_air_mobility, this
+    module's own) and filter to the last lookback_days days (default
+    LOOKBACK_DAYS=7, this module's own weekly cadence). Returns [] on any
+    fetch failure -- this is a weekly watch, not a critical feed; missing
+    this week's items degrades gracefully to the status block alone.
+
+    2026-08-06: lookback_days parameterized (was a hardcoded read of the
+    module-level LOOKBACK_DAYS) so aam_daily_watch.py -- the daily
+    sibling -- can reuse this exact fetch/filter logic with its own
+    1-day window instead of duplicating it. category parameterized the
+    same day so aviation_daily_watch.py -- a different category
+    entirely -- can reuse it too. Both default to this module's own
+    original values, unchanged for every existing call site here.
+    """
     # Retry once after a short backoff: this same-host call has shown
     # transient connection-refused/timeout failures believed to be Wi-Fi
     # link congestion on this Pi (see docs/DATA_SOURCES.md), not a broken
@@ -153,7 +181,7 @@ def _fetch_week_items() -> list[dict]:
         try:
             resp = httpx.get(
                 f"{RUNNER_BASE_URL}/api/rss",
-                params={"category": RSS_CATEGORY, "limit": 100},
+                params={"category": category, "limit": 100},
                 timeout=15,
             )
             resp.raise_for_status()
@@ -168,7 +196,7 @@ def _fetch_week_items() -> list[dict]:
         log.warning("%s: RSS fetch failed after retry: %s", SKILL_NAME, last_err)
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     recent = []
     for it in items:
         pub_raw = it.get("pubDate") or it.get("published") or ""
@@ -217,15 +245,22 @@ def main() -> None:
 
     try:
         items = _fetch_week_items()
-        headline_block = "\n".join(
-            f"- {it.get('title', '').strip()} ({it.get('source', it.get('feed', 'unknown'))})"
-            for it in items
-        ) or "(no items in the last 7 days -- quiet week for this category)"
+        # 2026-08-06: retrieve the most relevant subset (lexical ranking
+        # against RETRIEVE_QUERY, see common/rss_retrieval.py) rather than
+        # dumping every fetched headline undifferentiated -- the model
+        # gets fewer, better-targeted items, each with an explicit
+        # citation (title/source/link), not just a bare title.
+        retrieved = retrieve(items, RETRIEVE_QUERY, RETRIEVE_TOP_N)
+        headline_block = format_citations(retrieved) or (
+            "(no items in the last 7 days -- quiet week for this category)"
+        )
 
         prompt = (
             f"CURRENT STATUS (as of {_TODAY_STATUS_ASOF}):\n{_TODAY_STATUS}\n\n"
-            f"THIS WEEK'S RAW HEADLINES ({len(items)} items, "
-            f"last {LOOKBACK_DAYS} days):\n{headline_block}"
+            f"THIS WEEK'S MOST RELEVANT DEVELOPMENTS ({len(retrieved)} of "
+            f"{len(items)} items retrieved, last {LOOKBACK_DAYS} days -- "
+            f"cite these directly, do not invent sources not listed here):"
+            f"\n{headline_block}"
         )
 
         ollama_result = llm_generate(
@@ -238,24 +273,47 @@ def main() -> None:
             # run was failing well before Ollama could finish, falling back
             # to raw-headline text with no visible error. 500s gives
             # headroom under the container's TimeoutStartSec=950.
-            timeout=500,
+            #
+            # allow_anthropic=False, max_retries=0 (2026-08-06): retrofit
+            # of the same fail-fast fix already applied to ops_brief.py/
+            # ep_advance_parameter.py -- caught live, this run: a mid-flight
+            # timeout at 500s triggered a retry with a FRESH 500s timeout,
+            # and 500+500=1000s exceeds this container's own
+            # TimeoutStartSec=950, meaning the retry can never actually
+            # finish on its own terms -- the outer timeout kills the whole
+            # run first, same failure shape as the ops-brief/ep-advance
+            # incident this exact pattern was built to fix there. One
+            # attempt, no retry, straight to the deterministic fallback
+            # (already correctly wired below) on any failure.
+            timeout=240, allow_anthropic=False, max_retries=2,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")
             ops_synthesis, ep_synthesis = _split_framings(gated)
             status = "ok"
-            log.info("%s: split synthesis generated via Ollama/%s (%d items)",
-                     SKILL_NAME, OLLAMA_MODEL, len(items))
+            log.info("%s: split synthesis generated via Ollama/%s (%d of %d items retrieved)",
+                     SKILL_NAME, OLLAMA_MODEL, len(retrieved), len(items))
         else:
-            fallback = (
-                "WHAT MATTERS TODAY:\n" + _TODAY_STATUS.strip() +
-                "\n\nTHIS WEEK'S DEVELOPMENTS (Ollama unavailable -- raw headlines):\n" +
-                headline_block
-            )
-            ops_synthesis = ep_synthesis = fallback
-            status = "fallback"
-            log.info("%s: Ollama unavailable -- using raw headline fallback for both flavors",
-                     SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                fallback = (
+                    "WHAT MATTERS TODAY:\n" + _TODAY_STATUS.strip() +
+                    "\n\nTHIS WEEK'S DEVELOPMENTS (Ollama unavailable -- raw headlines):\n" +
+                    headline_block
+                )
+                ops_synthesis = ep_synthesis = fallback
+                status = "fallback"
+                log.info("%s: Ollama unavailable -- using raw headline fallback for both flavors",
+                         SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                ops_synthesis = ep_synthesis = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         week_label = _week_label(today)
         generated_at = datetime.now(timezone.utc).isoformat()

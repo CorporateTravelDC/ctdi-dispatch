@@ -13,6 +13,14 @@ Sunday 18:15 ET window.
 
 Model: same tiered pattern as weekly_summary.py -- Ollama first (cheap,
 local), deterministic fallback if unavailable. SR-1 compliant (log_usage).
+
+2026-08-07: also surfaces same-day common.export_analysis digests (see
+that module's docstring for the full file-handling policy) in the daily
+rollup, same "Latest X excerpt" pattern already used for ops-brief below
+-- this is how export-analysis output satisfies the operator directive
+that it "feed into second-brain daily," alongside the weekly compile
+already picking it up automatically via the existing 04-Syntheses/daily
+scan (second_brain_weekly.py, 2026-08-06 fix).
 """
 import logging
 import sqlite3
@@ -105,6 +113,20 @@ def build_daily_content() -> tuple[str, dict]:
         if excerpt:
             sections.append("Latest ops-brief excerpt:\n" + excerpt)
 
+    # 2026-08-07: same-day export-analysis digest(s), if any -- see
+    # common.export_analysis's docstring for the full policy. Best-effort,
+    # never fatal if the vault read fails or nothing exists today.
+    try:
+        today_str = date.today().isoformat()
+        export_note = webdav_client.get(
+            f"{webdav_client.BUSINESS_ROOT}/04-Syntheses/daily/export-analysis-linkedin-{today_str}.md"
+        )
+        if export_note:
+            excerpt = export_note.decode("utf-8", errors="replace")[:400]
+            sections.append("Today's export-analysis digest:\n" + excerpt)
+    except Exception:
+        pass  # no digest today, or vault unreachable -- not fatal to the daily rollup
+
     return "\n\n".join(sections), stats
 
 
@@ -137,9 +159,20 @@ def main() -> None:
             status = "ok"
             log.info("%s: narrative generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
         else:
-            narrative = raw_content
-            status = "fallback"
-            log.info("%s: Ollama unavailable -- using deterministic content", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                narrative = raw_content
+                status = "fallback"
+                log.info("%s: Ollama unavailable -- using deterministic content", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                narrative = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         frontmatter = (
             "---\n"

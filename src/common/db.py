@@ -199,6 +199,254 @@ def get_feed_states() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# ── Pull-path connectivity verification (belt-and-suspenders) ─────────────────
+# Populated by poller/skills/pull_path_verify.py: a periodic lightweight probe
+# of each PULL-capable feed source's endpoint, INDEPENDENT of push freshness.
+# feed_state answers "is data arriving?"; this answers "if the push feed died,
+# would the pull fallback path still actually work?". Surfaced in /api/v1/feeds
+# as pull_verified so both dimensions are visible ("push: covered, pull: verified").
+
+def _ensure_pull_path_status(c) -> None:
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS pull_path_status (
+            feed_name   TEXT PRIMARY KEY,
+            checked_at  REAL,
+            ok          INTEGER,   -- 1 = pull path viable, 0 = failed
+            state       TEXT,      -- verified|auth_gated|rate_limited|degraded|failed
+            http_code   INTEGER,
+            latency_ms  INTEGER,
+            detail      TEXT
+        )"""
+    )
+
+
+def upsert_pull_path_status(feed_name: str, checked_at: float, ok: bool | None, state: str,
+                            http_code: int | None, latency_ms: int | None,
+                            detail: str | None) -> None:
+    # ok is tri-state: True (viable) / False (broken) / None (unconfigured --
+    # never a live fallback; stored NULL so it reads distinct from a failure).
+    ok_val = None if ok is None else (1 if ok else 0)
+    with conn() as c:
+        _ensure_pull_path_status(c)
+        c.execute(
+            """INSERT INTO pull_path_status
+                 (feed_name, checked_at, ok, state, http_code, latency_ms, detail)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(feed_name) DO UPDATE SET
+                 checked_at=excluded.checked_at, ok=excluded.ok, state=excluded.state,
+                 http_code=excluded.http_code, latency_ms=excluded.latency_ms,
+                 detail=excluded.detail""",
+            (feed_name, checked_at, ok_val, state, http_code, latency_ms, detail),
+        )
+
+
+def get_pull_path_status() -> dict:
+    with conn() as c:
+        _ensure_pull_path_status(c)
+        rows = c.execute("SELECT * FROM pull_path_status").fetchall()
+        return {r["feed_name"]: dict(r) for r in rows}
+
+
+# ── Cowork<->Dispatch message board (added 2026-08-07) ───────────────────────
+# Append-only, Tier-0/tunnel-reachable coordination log between the off-box
+# Cowork session and the Pi dispatch side. Writes are gated by X-Board-Key at
+# the web layer (NOT the Bearer/tier system -- the Cloudflare tunnel strips
+# Authorization). `seq` is the monotonic cursor. See web/main.py board endpoints
+# and the build contract. NEVER store CUI/credentialed/movement data here --
+# the scrub gate runs on every POST at the web layer.
+
+def _ensure_board(c) -> None:
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_messages (
+            seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          TEXT UNIQUE NOT NULL,
+            ts          TEXT NOT NULL,        -- UTC ISO
+            from_side   TEXT,
+            to_side     TEXT,
+            thread      TEXT NOT NULL,
+            subject     TEXT,
+            body        TEXT,
+            refs        TEXT,                 -- JSON array
+            in_reply_to TEXT,
+            remote_addr TEXT
+        )"""
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_board_thread_seq ON board_messages(thread, seq)")
+
+
+def _board_row_to_msg(r) -> dict:
+    try:
+        refs = json.loads(r["refs"]) if r["refs"] else []
+    except Exception:
+        refs = []
+    return {
+        "id": r["id"], "ts": r["ts"], "seq": r["seq"],
+        "from": r["from_side"], "to": r["to_side"], "thread": r["thread"],
+        "subject": r["subject"], "body": r["body"],
+        "refs": refs, "in_reply_to": r["in_reply_to"],
+    }
+
+
+def board_insert(from_side: str, to_side: str, thread: str, subject: str,
+                 body: str, refs: list | None = None, in_reply_to: str | None = None,
+                 remote_addr: str | None = None) -> dict:
+    import uuid as _uuid
+    mid = "brd-" + _uuid.uuid4().hex[:12]
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with conn() as c:
+        _ensure_board(c)
+        cur = c.execute(
+            """INSERT INTO board_messages
+                 (id, ts, from_side, to_side, thread, subject, body, refs, in_reply_to, remote_addr)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (mid, ts, from_side, to_side, thread, subject, body,
+             json.dumps(refs or []), in_reply_to, remote_addr),
+        )
+        return {"id": mid, "ts": ts, "seq": cur.lastrowid}
+
+
+def board_query(thread: str = "coord", since: str | None = None, limit: int = 50) -> tuple[list, str]:
+    """Return (messages, cursor). Messages are seq-ordered ascending, only those
+    newer than `since` (a numeric seq cursor, or an ISO ts). cursor is the max
+    seq returned (opaque string) for the caller to pass back as `since`."""
+    limit = max(1, min(int(limit or 50), 200))
+    clauses = ["thread = ?"]
+    params: list = [thread]
+    if since:
+        s = str(since).strip()
+        if s.isdigit():
+            clauses.append("seq > ?"); params.append(int(s))
+        else:
+            clauses.append("ts > ?"); params.append(s)
+    with conn() as c:
+        _ensure_board(c)
+        rows = c.execute(
+            f"SELECT * FROM board_messages WHERE {' AND '.join(clauses)} ORDER BY seq ASC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+    msgs = [_board_row_to_msg(r) for r in rows]
+    cursor = str(msgs[-1]["seq"]) if msgs else (str(since) if since else "0")
+    return msgs, cursor
+
+
+def board_threads() -> list[dict]:
+    with conn() as c:
+        _ensure_board(c)
+        rows = c.execute(
+            "SELECT thread, MAX(ts) AS last_ts, COUNT(*) AS n FROM board_messages GROUP BY thread ORDER BY last_ts DESC"
+        ).fetchall()
+        return [{"thread": r["thread"], "last_activity": r["last_ts"], "count": r["n"]} for r in rows]
+
+
+# ── Board write-auth: one-time enrollment nonce -> short-lived board-write token
+# (added 2026-08-07). A session obtains board-write access by consuming a
+# single-use nonce (handed out-of-band as an enroll URL) exactly once; that
+# mints a short-lived token scoped to board-write only. Both nonce and token are
+# stored HASHED at rest (sha256) -- a DB read never yields a usable secret. The
+# minted token is preferred over handing out the long-lived BOARD_KEY: smaller
+# blast radius, and a leak self-heals when it expires.
+_BOARD_TOKEN_TTL_S = 7 * 86400   # minted board-write tokens live 7 days
+
+
+def _board_sha(s: str) -> str:
+    import hashlib
+    return hashlib.sha256((s or "").encode()).hexdigest()
+
+
+def _ensure_board_auth(c) -> None:
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_enroll_nonces (
+            nonce_hash        TEXT PRIMARY KEY,
+            created_at        REAL,
+            expires_at        REAL,
+            consumed_at       REAL,
+            minted_token_hash TEXT,
+            label             TEXT
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_tokens (
+            token_hash  TEXT PRIMARY KEY,
+            created_at  REAL,
+            expires_at  REAL,
+            scope       TEXT,
+            label       TEXT,
+            via_nonce   TEXT
+        )"""
+    )
+
+
+def board_mint_nonce(ttl_s: int = 600, label: str | None = None) -> dict:
+    """Create a single-use enrollment nonce (default 10min TTL). Returns the
+    PLAINTEXT nonce (only stored hashed) for embedding in the enroll URL."""
+    import secrets as _s
+    nonce = "bnc_" + _s.token_urlsafe(24)
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        c.execute(
+            "INSERT INTO board_enroll_nonces (nonce_hash, created_at, expires_at, label) VALUES (?, ?, ?, ?)",
+            (_board_sha(nonce), now, now + ttl_s, label),
+        )
+    return {"nonce": nonce, "expires_at": now + ttl_s, "ttl_s": ttl_s}
+
+
+def board_consume_nonce(nonce: str) -> dict:
+    """Consume a nonce exactly once. On success mints a short-lived board-write
+    token and returns it PLAINTEXT (stored hashed). status is one of:
+    ok | invalid | consumed | expired."""
+    import secrets as _s
+    now = time.time()
+    nh = _board_sha(nonce)
+    with conn() as c:
+        _ensure_board_auth(c)
+        row = c.execute("SELECT * FROM board_enroll_nonces WHERE nonce_hash=?", (nh,)).fetchone()
+        if row is None:
+            return {"status": "invalid"}
+        if row["consumed_at"] is not None:
+            return {"status": "consumed"}
+        if now > row["expires_at"]:
+            return {"status": "expired"}
+        token = "btk_" + _s.token_urlsafe(30)
+        texp = now + _BOARD_TOKEN_TTL_S
+        c.execute(
+            "INSERT INTO board_tokens (token_hash, created_at, expires_at, scope, label, via_nonce) VALUES (?, ?, ?, ?, ?, ?)",
+            (_board_sha(token), now, texp, "board-write", row["label"], nh[:12]),
+        )
+        c.execute(
+            "UPDATE board_enroll_nonces SET consumed_at=?, minted_token_hash=? WHERE nonce_hash=?",
+            (now, _board_sha(token), nh),
+        )
+    return {"status": "ok", "token": token, "expires_at": texp, "scope": "board-write"}
+
+
+def board_token_valid(presented: str) -> bool:
+    """True if `presented` is a minted board-write token that hasn't expired.
+
+    SCOPE-BLIND BY DESIGN (2026-08-07): every minted token today is
+    scope="board-write" (see board_consume_nonce), so this deliberately does
+    NOT filter on scope -- existence + expiry is sufficient.
+
+    !! FOOTGUN GUARD: if you ever add a SECOND token scope (board-read,
+    board-admin, a different resource, etc.), you MUST make this check
+    scope-aware AT THE SAME TIME -- e.g. board_token_valid(presented,
+    required_scope) filtering on `scope` -- and update the POST /api/v1/board
+    caller to pass the scope it requires. As written, a token minted under ANY
+    scope string still passes this check, so a second scope added alone would
+    silently grant board-write to tokens that were meant to be restricted.
+    Adding a second scope without fixing this is a privilege-escalation bug.
+    """
+    if not presented:
+        return False
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        # NOTE: no `AND scope=?` here on purpose -- see the scope-blind guard in
+        # this function's docstring before adding one / adding a second scope.
+        row = c.execute("SELECT expires_at FROM board_tokens WHERE token_hash=?", (_board_sha(presented),)).fetchone()
+        return bool(row and row["expires_at"] and row["expires_at"] > now)
+
+
 # ── TFR helpers ───────────────────────────────────────────────────────────────
 
 def upsert_tfr(tfr_id: str, raw_json: str, is_vip: bool,
@@ -1724,6 +1972,26 @@ def upsert_flight_event(flight_id: str, airline: str | None,
               raw_json))
 
 
+def enrich_flight_arrival_times(updates: list[tuple[float, str]]) -> int:
+    """Bulk-set flight_events.arrival_time for existing rows, by flight_id
+    (GUFI) primary key. `updates` is a list of (arrival_time, flight_id)
+    tuples (executemany parameter order). Deliberately does NOT touch
+    updated_at -- that column is what feed_db_integrity_check.py reads as
+    "FDPS is actively writing"; bumping it here would make a silently-dead
+    FDPS feed look alive just because enrichment is still running against
+    old rows. Returns the number of rows actually updated (excludes
+    flight_ids that no longer exist, e.g. aged out of the retention
+    window between the enrichment query and this write)."""
+    if not updates:
+        return 0
+    with conn() as c:
+        cur = c.executemany(
+            "UPDATE flight_events SET arrival_time = ? WHERE flight_id = ?",
+            updates,
+        )
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
 SCHEMA_V6 = """
 CREATE TABLE IF NOT EXISTS tbfm_sequences (
     meter_fix       TEXT NOT NULL,
@@ -2746,7 +3014,7 @@ def init_db_v19() -> None:
 
 
 # ── Schema V20 — bandwidth priority override (SWIM vs NEXRAD) ───────────────
-# 2026-07-21. Corey asked for a bidirectional operator toggle: when bandwidth
+# 2026-07-21. the operator asked for a bidirectional operator toggle: when bandwidth
 # is tight, let a human (or, later, an automated contention detector) declare
 # which side matters more right now -- 'swim' (SWIM/NMS ingest stays at full
 # rate, anything else should back off) or 'nexrad' (a NEXRAD Level II puller
@@ -3591,7 +3859,7 @@ def init_db_v26() -> None:
 
 
 # ── Schema V27 — FAA ACFTREF.txt reference table (mfr_mdl_code decode) ──────
-# 2026-08-02. Corey's directive: get FAA's own manufacturer/model decode
+# 2026-08-02. the operator's directive: get FAA's own manufacturer/model decode
 # locally too, not just OpenSky's -- redundant on purpose, so the two
 # sources can be cross-checked against each other the same way FAA+OpenSky
 # hex is already cross-checked in get_aircraft(). Real gap this closes:
@@ -3769,6 +4037,81 @@ def init_db_v29() -> None:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
+
+
+# 2026-08-03: append-only history of every SafetyLogicHoldBar bitmask
+# CHANGE (not every raw message -- STDDS re-sends the current value on a
+# short cycle regardless of whether it changed, logging every one of
+# those would be pure noise for this purpose) for DCA/IAD/BWI only, per
+# operator direction for local reverse-engineering of the bit-position
+# mapping (no FAA ICD available -- see the SafetyLogicHoldBar comment
+# above parse_safety_logic_message). Deliberately scoped to the three
+# home-region airports rather than all ~37 currently observed nationwide
+# -- operator's own call: the bit encoding is presumably an ASDE-X
+# protocol-level constant, not airport-specific, so DC-only data should
+# be enough to find real correlations without the volume of a nationwide
+# log. Meant to be joined against surface_movement_events (airport +
+# event_time) as the first correlation source -- same underlying ASDE-X
+# sensor network as the safety-logic signal itself, already being logged
+# with real runway/event detail. ADS-B/ACARS enrichment is a planned
+# follow-on once there is enough history here to correlate against, not
+# built yet.
+SCHEMA_V30 = """
+CREATE TABLE IF NOT EXISTS stdds_safety_status_history (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    airport           TEXT NOT NULL,
+    control           TEXT,
+    previous_bitmask  TEXT,
+    new_bitmask       TEXT NOT NULL,
+    changed_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stdds_safety_status_history_airport_time
+    ON stdds_safety_status_history(airport, changed_at);
+"""
+
+
+def init_db_v30() -> None:
+    """Apply v30 schema -- stdds_safety_status_history (DCA/IAD/BWI bit-
+    mapping reverse-engineering log). See SCHEMA_V30 comment above."""
+    with conn() as c:
+        c.executescript(SCHEMA_V30)
+
+
+# Airports this history log covers -- kept as one constant so the ingest
+# side (smes_parser.check_incursion_alert) and any future analysis/API
+# code agree on scope without duplicating the literal set.
+STDDS_SAFETY_HISTORY_AIRPORTS = frozenset({"KDCA", "KIAD", "KBWI"})
+
+
+def insert_safety_status_history(airport: str, control: str | None,
+                                  previous_bitmask: str | None,
+                                  new_bitmask: str, changed_at: str) -> None:
+    """Append one bitmask-change row. Caller (check_incursion_alert)
+    already knows this is a real change and already scoped to
+    STDDS_SAFETY_HISTORY_AIRPORTS -- this function does not re-check
+    either, it just writes."""
+    with conn() as c:
+        c.execute("""
+            INSERT INTO stdds_safety_status_history
+                (airport, control, previous_bitmask, new_bitmask, changed_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (airport, control, previous_bitmask, new_bitmask, changed_at))
+
+
+def get_safety_status_history(airport: str | None = None,
+                               limit: int = 500) -> list[dict]:
+    with conn() as c:
+        if airport:
+            rows = c.execute(
+                "SELECT * FROM stdds_safety_status_history WHERE airport=? "
+                "ORDER BY id DESC LIMIT ?", (airport, limit)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM stdds_safety_status_history "
+                "ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def upsert_safety_status(airport: str, control: str | None,

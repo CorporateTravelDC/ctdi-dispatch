@@ -1,0 +1,10 @@
+[Unit]
+Description=Run trains/yachts daily watch 08:30 ET (after concierge-travel 08:15, clear of hourly ops-brief/ep-advance :00/:30 marks)
+Requires=corporatetraveldc-trains-yachts-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

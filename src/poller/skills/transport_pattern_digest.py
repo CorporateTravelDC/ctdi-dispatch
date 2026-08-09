@@ -144,6 +144,15 @@ def main() -> None:
             system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
             timeout=300,
+            # 2026-08-06: found live during a full-container-sweep -- this
+            # skill crashed at 12:31-12:36 ET today from the exact same bug
+            # already fixed elsewhere (aam_weekly_watch.py etc): a mid-flight
+            # Ollama pause triggered a retry with a fresh 300s timeout, and
+            # 300+300=600s hits this container's own TimeoutStartSec=600
+            # with zero headroom. allow_anthropic=False keeps this Ollama-
+            # only; max_retries=0 sends one failed attempt straight to the
+            # deterministic fallback below instead of risking the kill.
+            allow_anthropic=False, max_retries=0,
         )
         if ollama_result:
             ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")
@@ -151,9 +160,20 @@ def main() -> None:
             status = "ok"
             log.info("%s: narrative generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
         else:
-            narrative = raw_content
-            status = "fallback"
-            log.info("%s: Ollama unavailable -- using raw mining output", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                narrative = raw_content
+                status = "fallback"
+                log.info("%s: Ollama unavailable -- using raw mining output", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                narrative = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         frontmatter = (
             "---\n"

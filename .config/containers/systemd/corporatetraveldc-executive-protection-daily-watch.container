@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- daily executive-protection/security watch
+
+[Container]
+Memory=768m
+PodmanArgs=--memory-swap=768m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=python3 poller/skills/executive_protection_daily_watch.py
+
+[Service]
+Slice=production.slice
+MemoryLow=256M
+Type=oneshot
+TimeoutStartSec=950

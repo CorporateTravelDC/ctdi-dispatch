@@ -59,11 +59,12 @@ build_and_load_module() {
     run checkmodule -M -m -o "${work_dir}/${name}.mod" "${work_dir}/${name}.te"
     run semodule_package -o "${work_dir}/${name}.pp" -m "${work_dir}/${name}.mod"
 
-    if semodule -l 2>/dev/null | grep -q "^${name}$"; then
-        run semodule -u "${work_dir}/${name}.pp"
-    else
-        run semodule -i "${work_dir}/${name}.pp"
-    fi
+    # `semodule -u`/--upgrade is deprecated -- `-i`/--install now handles
+    # both fresh-install and update-in-place for an already-loaded module of
+    # the same name, so the old install-vs-upgrade branch here is no longer
+    # needed (confirmed 2026-08-09: -i cleanly updated an already-loaded
+    # module with no separate upgrade step).
+    run semodule -i "${work_dir}/${name}.pp"
     echo "[OK]  ${name}"
 }
 
@@ -222,13 +223,14 @@ echo "--- Step 11: TE modules ---"
 build_and_load_module "corporatetraveldc-virtqemud"
 build_and_load_module "corporatetraveldc-logind-userns"
 build_and_load_module "corporatetraveldc-fail2ban-lockdown"
+build_and_load_module "corporatetraveldc-fail2ban-cf-egress"
 
 # ---------------------------------------------------------------------------
 # Step 12 -- Verify
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Step 12: Verify ---"
-for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown; do
+for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown corporatetraveldc-fail2ban-cf-egress; do
     semodule -l 2>/dev/null | grep -q "^${mod}$" \
         && echo "[OK]  module: ${mod}" \
         || echo "[FAIL] module: ${mod}" >&2

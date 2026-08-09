@@ -19,3 +19,10 @@ lxml>=5.0
 
 # LLM inference (Ollama-first, Anthropic fallback)
 anthropic>=0.109
+
+# Google Trends supplementary signal (common/trends_signal.py, 2026-08-07)
+# -- no official Trends API exists; trendspy is an actively maintained
+# fork of the archived (April 2025) pytrends. Pinned failure handling is
+# in the calling module, not here -- this box treats every call as
+# best-effort/non-fatal.
+trendspy>=0.1.6

@@ -21,8 +21,7 @@ secrets safely — any token embedded in the bundle or stored in localStorage is
 readable by anyone with DevTools. Handing the browser a cert-tier token would
 effectively make all Tier-1 data public to anyone who can reach the runner URL.
 
-At the same time, the runner itself is Tailscale-gated and CF-Access-protected.
-It is a trusted internal service. It *can* hold a secret.
+At the same time, the runner itself is Tailscale-gated (public `ops.example.com` CF Access hostname retired 2026-08-02/03; Tailscale is now the only gate). It is a trusted internal service. It *can* hold a secret.
 
 ---
 

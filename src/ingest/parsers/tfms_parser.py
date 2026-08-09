@@ -587,7 +587,7 @@ def _handle_tmi_flight_list(fi_message: ET.Element) -> list[dict]:
                     _handle_flight_times below for real OOOI data)
                   > entryLat/entryLon/entryHeading, exitInd
 
-    Direction locked in 2026-07-20 (Corey): couple into the existing OOOI
+    Direction locked in 2026-07-20 (the operator): couple into the existing OOOI
     watchlist system rather than a new standalone table. Implemented as:
     match on aircraftId against the flight watchlist, and if matched, fire
     a watchlist_event_hit tagged watchlist_trigger="tfms_tmi" carrying the

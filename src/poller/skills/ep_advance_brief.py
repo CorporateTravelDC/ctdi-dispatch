@@ -54,7 +54,19 @@ OLLAMA_TREND_MODEL_EP = (
     or "corporatetraveldc-pi5-ep-advance-trend:latest"
 )
 MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-OLLAMA_TIMEOUT = 1200   # 20 min — Pi 5 needs headroom for large prompts
+# 2026-08-06: was 1200s. ep-advance never actually failed outright on
+# 2026-08-06 (unlike ops-brief) purely because its container's
+# TimeoutStartSec=1500 happened to have enough margin to survive one
+# slow generate() call -- every run that night still completed 9-15
+# minutes late instead of on schedule. Same fail-fast redesign as
+# ops-brief (see that module for the full incident writeup): tight
+# timeout, one attempt, no retry against Ollama with the same slow
+# prompt (see max_retries=0 at both ollama_post_with_retry() call sites
+# below) -- falls straight to _fallback_brief()'s deterministic
+# template, already wired into main(), instead of silently running late
+# behind a retry that was never going to help. 150s = same
+# baseline-plus-90s-margin derivation as ops_brief.py's identical fix.
+OLLAMA_TIMEOUT = 240  # 2026-08-07: 150->240, cold-launch coverage (operator directive)
 
 
 # ── Traditional EP threat site categories ─────────────────────────────────────
@@ -942,6 +954,10 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
     # backs off immediately if a hot VIP/TFR call is pending, retries next
     # scheduled cycle. See common/ollama_lock.py.
     try:
+        # max_retries=0 (2026-08-06): no retry against Ollama with the
+        # same slow prompt -- see OLLAMA_TIMEOUT comment above. One
+        # attempt at generate_timeout, then straight to the caller's
+        # deterministic fallback on any failure.
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_MODEL,
@@ -953,6 +969,7 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
             },
             timeout=generate_timeout,
             priority="report",
+            max_retries=0,
         )
         resp.raise_for_status()
         narrative = resp.json().get("response", "").strip()
@@ -1114,6 +1131,7 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
         return ""
     # priority="report" (2026-07-26): see common/ollama_lock.py.
     try:
+        # max_retries=0 (2026-08-06): see _call_ollama above.
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_TREND_MODEL_EP,
@@ -1125,6 +1143,7 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
             },
             timeout=generate_timeout,
             priority="report",
+            max_retries=0,
         )
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
@@ -1179,9 +1198,21 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             status = "ok"
             log.info("ep-advance: brief generated via Ollama/%s", OLLAMA_MODEL)
         else:
-            full_text, concise = _fallback_brief(tfr, weather, nws, route, osint)
-            status = "ok"
-            log.info("ep-advance: brief generated (deterministic fallback)")
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                full_text, concise = _fallback_brief(tfr, weather, nws, route, osint)
+                status = "ok"
+                log.info("ep-advance: brief generated (deterministic fallback)")
+            except Exception as fallback_err:
+                log.error("ep-advance: deterministic fallback also failed — %s", fallback_err)
+                full_text = (
+                    "[EP-ADVANCE] Generation failed -- both Ollama and the "
+                    "deterministic fallback errored. See logs."
+                )
+                concise = full_text
+                status = "fallback_error"
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "EP-ADVANCE+TREND" if is_12h_boundary else "EP-ADVANCE"

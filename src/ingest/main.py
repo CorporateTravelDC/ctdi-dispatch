@@ -77,6 +77,7 @@ async def main() -> None:
     db.init_db_v20()
     db.init_db_v28()
     db.init_db_v29()
+    db.init_db_v30()
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()

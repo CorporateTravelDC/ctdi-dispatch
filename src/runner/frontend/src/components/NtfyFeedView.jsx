@@ -139,7 +139,7 @@ function IntegrationsPanel() {
 
 export default function NtfyFeedView() {
   const [demoStatus] = useDemoStatus()
-  // Only genuine public demo visitors (not Corey over Tailscale, who
+  // Only genuine public demo visitors (not the operator over Tailscale, who
   // should just see the plain real feed like every other tab) get the
   // marketing emphasis below, and only for the two audiences who asked
   // for it -- ota-pitch/concierge-pitch see the ordinary feed.

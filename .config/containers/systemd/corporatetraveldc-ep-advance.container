@@ -16,6 +16,18 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Exec=python3 poller/skills/ep_advance_brief.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -26,4 +38,12 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=1500
+# 2026-08-06: was 1500s, sized for the old 1200s-primary-timeout design.
+# ep-advance never actually failed outright on 2026-08-06 (that margin
+# was enough to survive one slow call), but every run was 9-15 minutes
+# late -- see src/poller/skills/ep_advance_brief.py's OLLAMA_TIMEOUT
+# comment. New worst case with the fail-fast redesign (150s timeout, 0
+# retries, on both the main and 12h-trend call): 150s + 150s (trend,
+# boundary hours only) + ~20s overhead =~ 320s. 600s matches
+# ops-brief's recalculated value for the same reasoning.
+TimeoutStartSec=600

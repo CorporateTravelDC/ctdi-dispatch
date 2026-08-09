@@ -335,10 +335,22 @@ def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int
             "results":     website_results,
             "note": (
                 "SWIM (flight_events) had no matching rows -- served from the "
-                "MWAA website fallback. flight_events has been empty "
-                "platform-wide most of this session (suspected ingest parser/"
-                "connectivity issue -- see tbfm_parser.py and swim_client.py), "
-                "so this is the expected path for DCA/IAD until that's resolved."
+                "MWAA website fallback. Root-caused 2026-08-07 (this note was "
+                "previously wrong -- corrected here rather than left stale): "
+                "flight_events IS actively receiving fresh FDPS writes (confirmed "
+                "live, ~6,400 rows/hour) -- ingest connectivity itself is fine. "
+                "The real cause is that ingest/parsers/fdps_parser.py's "
+                "write_flight_event() hardcodes arrival_time=None on every write "
+                "(confirmed: 0 of 579k+ rows have ever had a non-null "
+                "arrival_time, going back to the earliest data on 2026-07-20) -- "
+                "FDPS position/status messages don't carry an arrival-time "
+                "estimate natively, and no enrichment step (e.g. joining "
+                "tbfm_sequences.eta by flight_id, which IS populated) was ever "
+                "built to fill it in. Since this function's SWIM query filters "
+                "on arrival_time BETWEEN now AND cutoff, it can structurally "
+                "never match a row -- this is the expected/permanent path for "
+                "DCA/IAD until arrival_time enrichment is built, not a transient "
+                "connectivity issue."
             ),
         }
 

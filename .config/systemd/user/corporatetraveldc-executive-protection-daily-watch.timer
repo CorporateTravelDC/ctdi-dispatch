@@ -1,0 +1,10 @@
+[Unit]
+Description=Run executive-protection daily watch 08:45 ET (after trains-yachts 08:30, clear of hourly ops-brief/ep-advance :00/:30 marks)
+Requires=corporatetraveldc-executive-protection-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:45:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

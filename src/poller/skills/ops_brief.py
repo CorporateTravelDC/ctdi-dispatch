@@ -56,7 +56,25 @@ OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
 OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
                       or "corporatetraveldc-pi5-ops-brief-trend:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-OLLAMA_TIMEOUT    = 900  # stopgap: Pi 5 CPU under load; systemd TimeoutStartSec=1000
+# 2026-08-06: was 900s (+ an automatic same-prompt retry on top) -- root
+# cause of the missing 8:00/3:00/4:00/5:00/6:00 ops-brief runs on
+# 2026-08-06. That combination let a single slow generate() call
+# consume more wall-clock than the container's own outer
+# TimeoutStartSec, so systemd killed the whole run before either the
+# primary attempt or the retry could finish OR fall back --
+# see docs/COMPLIANCE_SECURITY.md and the 2026-08-06 incident notes.
+# Fail-fast redesign, per operator directive: no cloud (Anthropic)
+# fallback for this skill, and no retry against Ollama with the same
+# slow prompt -- see the llm_generate() calls below (allow_anthropic=
+# False, max_retries=0). On timeout, this now goes straight to
+# _build_fallback_brief()'s deterministic template, which already
+# existed and was already wired into main() -- it just used to be
+# reachable only after also waiting out a doomed Anthropic attempt.
+# 150s = observed healthy baseline for this call (real narrative
+# generate() calls completed in well under 60s on 2026-08-06's clean
+# runs, e.g. 01:00/02:00) plus a 90s margin, same shape as the
+# 60-90s-past-baseline guidance used for ep-advance's identical fix.
+OLLAMA_TIMEOUT    = 240  # 2026-08-07: 150->240, cold-launch coverage (operator directive)
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -644,17 +662,15 @@ TREND_SYSTEM_PROMPT = (
 
 
 def _generate_trend_narrative(trend_prompt: str) -> str:
-    """Generate trend analysis via LLM (Ollama-first, Anthropic fallback). Returns empty string on failure."""
-    # Explicit timeout override (2026-07-27): llm_generate()'s shared default
-    # (OLLAMA_TIMEOUT=60s in dispatch.env) was deliberately tuned from real
-    # p99/max data showing THIS call used to be reliably sub-minute -- see
-    # common/llm.py's generate() docstring. Under tonight's thermal/CPU
-    # pressure it's been missing that window on every single run (confirmed
-    # via journalctl: "Ollama unavailable, busy, or failed" -> deterministic
-    # fallback, every hour, while ep-advance's own separately-timed calls
-    # keep succeeding). Wiring this module's own already-declared
-    # OLLAMA_TIMEOUT=900 constant through explicitly, matching the pattern
-    # already used by aam_weekly_watch/dispatch_desk_memo/second_brain_*.
+    """Generate trend analysis via local Ollama only. Returns empty string on failure.
+
+    2026-08-06: allow_anthropic=False (never call the cloud API for this
+    skill, operator directive) and max_retries=0 (a slow call gets ONE
+    attempt at the tight OLLAMA_TIMEOUT above, then straight to the
+    deterministic fallback the caller already builds on empty string --
+    no retry against Ollama with the same slow prompt, which is what let
+    a single call consume more time than the container's own timeout).
+    """
     return llm_generate(
         system=None,  # dedicated Modelfile carries this now
         prompt=trend_prompt,
@@ -662,6 +678,8 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
         max_tokens=200,
         temperature=0.15,
         timeout=OLLAMA_TIMEOUT,
+        allow_anthropic=False,
+        max_retries=0,
     ) or ""
 
 
@@ -672,7 +690,7 @@ def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     ("dispatch-ops") used to be shared, undocumented, with weekly_summary.py
     -- nobody was actually subscribed to "ops-brief" (the topic every
     click-map entry and docstring claimed was real) because nothing ever
-    published there. Corey's direction: dispatch-ops becomes
+    published there. the operator's direction: dispatch-ops becomes
     weekly-summary-only; ops-brief's concise push moves to match its own
     documented name instead. topic_full stays on the shared default
     ("dispatch-debriefs") -- that one's fine as a general full-narrative
@@ -707,8 +725,10 @@ def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     """
-    Generate ops brief via LLM (Ollama-first, Anthropic fallback).
-    Returns (full_text, concise_text) or None if both backends fail.
+    Generate ops brief via local Ollama only (2026-08-06: no Anthropic
+    fallback, operator directive -- see llm_generate() call below).
+    Returns (full_text, concise_text) or None on any Ollama failure --
+    caller (main()) already builds a deterministic template on None.
     """
     # System prompt now lives in the corporatetraveldc-pi5-ops-brief
     # Modelfile itself (2026-08-02) -- system=None below lets Ollama use
@@ -716,8 +736,9 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     system = None
 
     model_used = OLLAMA_MODEL
-    # Explicit timeout override (2026-07-27) -- see _generate_trend_narrative
-    # above for the full explanation. Same root cause, same fix.
+    # 2026-08-06: allow_anthropic=False, max_retries=0 -- see
+    # _generate_trend_narrative above for the full explanation. Same
+    # fail-fast redesign, same root cause it fixes.
     narrative = llm_generate(
         system=system,
         prompt=prompt_content,
@@ -725,6 +746,8 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
         max_tokens=500,
         temperature=0.2,
         timeout=OLLAMA_TIMEOUT,
+        allow_anthropic=False,
+        max_retries=0,
     )
 
     if not narrative:
@@ -879,9 +902,21 @@ def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = Fa
             status = "ok"
             log.info("%s: brief generated (Ollama/%s)", SKILL_NAME, OLLAMA_MODEL)
         else:
-            full_text, concise = _build_fallback_brief(content)
-            status = "ok"
-            log.info("%s: brief generated (deterministic)", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                full_text, concise = _build_fallback_brief(content)
+                status = "ok"
+                log.info("%s: brief generated (deterministic)", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: deterministic fallback also failed — %s", SKILL_NAME, fallback_err)
+                full_text = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                concise = full_text
+                status = "fallback_error"
 
         # Append raw METAR + NAS appendix to the traditional brief body
         full_text = full_text.rstrip() + raw_appendix

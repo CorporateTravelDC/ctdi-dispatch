@@ -36,7 +36,7 @@ import requests
 
 INDEX_DB     = os.environ.get("SECOND_BRAIN_INDEX_DB", "/var/lib/corporatetraveldc/second_brain_index.db")
 WEBDAV_BASE  = os.environ.get("NEXTCLOUD_WEBDAV_BASE", "http://127.0.0.1:8090/remote.php/dav/files")
-NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "corey")
+NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "operator")
 # Password is read from the same secrets file the Nextcloud Quadlet uses --
 # never hardcoded, never logged, never printed.
 _SECRETS_FILE = os.environ.get(
@@ -52,12 +52,16 @@ _DAV_NS = "{DAV:}"
 #
 # BUSINESS_ROOT holds all corporatetraveldc/[operator LLC] business
 # and second-brain content, kept as a separate top-level folder from
-# Corey's personal Nextcloud folders (Photos, Documents, InstantUpload,
+# the operator's personal Nextcloud folders (Photos, Documents, InstantUpload,
 # Templates) -- see docs/SECOND_BRAIN_STATUS.md, "Nextcloud file layout".
 # Reorganized 2026-07-22: business content used to live directly under a
 # bare top-level Docs/ folder, indistinguishable from personal use of a
 # folder with the same generic name. Category lookup now checks one level
 # deeper for anything under BUSINESS_ROOT.
+#
+# 2026-08-06: a dedicated-account/flattened-root redesign was drafted and
+# staged elsewhere in this repo's history but never actually deployed --
+# see webdav_client.py's module docstring. Reverted to match live reality.
 BUSINESS_ROOT = "corporatetraveldc"
 
 _FOLDER_CATEGORY = {
@@ -369,7 +373,7 @@ def scan_vault(conn: sqlite3.Connection) -> dict:
     separate, explicit operation if ever needed)."""
     password = _load_password()
     if not password:
-        return {"error": f"could not read NEXTCLOUD_ADMIN_PASSWORD from {_SECRETS_FILE}"}
+        return {"error": f"could not read NEXTCLOUD_APP_PASSWORD from {_SECRETS_FILE}"}
 
     auth = (NEXTCLOUD_USER, password)
     base_url = f"{WEBDAV_BASE}/{NEXTCLOUD_USER}"

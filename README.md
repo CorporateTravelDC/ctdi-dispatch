@@ -1,6 +1,6 @@
 # Corporate Travel Dispatch Intelligence (CTDI)
 
-Multi-region real-time travel intelligence platform. Monitors commercial aviation (via FAA SWIM or equivalent regional feeds), rail, weather, and airspace restrictions — delivering push alerts the moment something operationally relevant changes. Runs as four rootless Podman containers managed by systemd Quadlets on any Linux system.
+Multi-region real-time travel intelligence platform. Monitors commercial aviation (via FAA SWIM or equivalent regional feeds), rail, weather, and airspace restrictions — delivering push alerts the moment something operationally relevant changes. Runs as a set of rootless Podman containers managed by systemd Quadlets on any Linux system (core web/poller/pusher/ingest stack plus per-feed ingest containers and standalone skill/timer containers — see Architecture below for the current breakdown; don't rely on a specific total count here, it drifts as feeds/skills are added).
 
 > **Origin note:** CTDI was originally built for Washington, DC metro operations (executive chauffeur + CERT/ARES/Skywarn). The system is designed for global deployment from day one — the DC configuration is the reference implementation, not a constraint. See **[docs/REGIONALIZATION.md](docs/REGIONALIZATION.md)** for a full guide to deploying elsewhere.
 
@@ -12,6 +12,7 @@ Multi-region real-time travel intelligence platform. Monitors commercial aviatio
 📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral architecture. Read before contributing.
 🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC: airports, weather offices, European and Asia-Pacific feed equivalents.
 📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — API signup portals, email templates, and policy links for every integrated feed — US, European, and Asia-Pacific.
+⚠️ **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail, timeout, and CPU/memory/thermal limit in this stack is tuned for **one Raspberry Pi 5 under shared-resource contention**. Read before de-consolidating services (Ollama/DNS/containers onto separate hardware) or reusing these values elsewhere — most become obsolete or overly conservative once the topology changes.
 
 
 All Public releases are GPG signed with the following key(s):
@@ -28,7 +29,7 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 
 | Component | State |
 |---|---|
-| Ops dashboard (runner app) | `https://ops.example.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
+| Ops dashboard (runner app) | Tailscale-only, `http://100.x.x.x:8001` *(React SPA, screen-reader accessible)* — the public `ops.example.com` hostname was retired 2026-08-02/03 as part of the XFF-spoofing fix; no public CF-Access-gated or ungated endpoint exists for the runner anymore |
 | Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
 | Tailscale direct | `http://100.x.x.x:8000` |
 | CPS | GREEN / GO *(live snapshot as of 2026-07-25 -- check `/api/v1/cps` for current)* |
@@ -41,7 +42,7 @@ All Active keys will have their Pubkey included in the repo listed by FULL Finge
 
 ## Architecture
 
-Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the ops.example.com frontend and its own JSON state:
+web, poller, pusher, and all 7 ingest containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container role that does not touch the shared DB — it owns the Tailscale-only ops frontend (see Status above) and its own JSON state:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -73,9 +74,9 @@ Five containers share a SQLite database (WAL mode) under the deployment user. Th
 | `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
 | `corporatetraveldc-ingest-{core,fdps,stdds,tfms,tbfm,itws,notam}` | `localhost/corporatetraveldc-ingest:latest` (same image, 7 Quadlets) | SWIM/NWWS/Amtrak push ingest, split 2026-07-26 into 7 independent containers — one per SWIM feed plus one "core" for NWWS-OI/Amtrak/local airspace, so any single feed can be stopped/started/restarted without dropping the rest. See docs/DATA_SOURCES.md and scripts/ingest-feed-ctl.sh. |
-| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.example.com` |
-| `corporatetraveldc-runner-demo` | `localhost/corporatetraveldc-runner:latest` | Second instance of the runner, in demo-playback mode (port 8005) — reads `demo.db` instead of live feeds; internal-only, not yet publicly exposed (see *Demo Mode* below) |
-| `corporatetraveldc-acarshub` | `localhost/corporatetraveldc-acars-watcher:latest` | acarshub web UI — local ACARS/VDL2 decode viewer for this station's own RTL-SDR |
+| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — Tailscale-only, `http://100.x.x.x:8001` (public `ops.example.com` hostname retired 2026-08-02/03) |
+| `corporatetraveldc-runner-demo` | `localhost/corporatetraveldc-runner:latest` | Second instance of the runner, in demo-playback mode (port 8005) — reads `demo.db` instead of live feeds; internal-only, not publicly exposed (see *Demo Mode* below) |
+| `corporatetraveldc-acarshub` | `ghcr.io/sdr-enthusiasts/docker-acarshub:latest` | acarshub web UI — local ACARS/VDL2 decode viewer for this station's own RTL-SDR. (Distinct from `corporatetraveldc-acars-watcher`, a separate locally-built container.) |
 
 ### Data feeds
 
@@ -582,7 +583,7 @@ Every automated skill must follow two rules:
 
 ### Schema migrations
 
-`src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … `SCHEMA_V8`). Each version is applied at startup via `init_db_v{N}()`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
+`src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … currently through `SCHEMA_V30`, open-ended — check `src/common/db.py` for the actual current top version). Each version is applied at startup via `init_db_v{N}()`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
 
 ---
 
@@ -645,18 +646,18 @@ Then set `OLLAMA_CHAT_MODEL=corporatetraveldc-pi5-chat` and `OLLAMA_OSINT_MODEL=
 
 ## FAA SWIM / NMS credentials
 
-When FAA NMS credentials are provisioned, add them to `/etc/corporatetraveldc/dispatch-secrets.env`. Six feeds activate automatically:
+All six feeds below are provisioned and live (confirmed 2026-08-07 via `feed_state` — zero errors, fresh heartbeats on all six). Kept here as the reference for what each feed needs if credentials ever need to be rotated or re-provisioned on a new deployment:
 
 | Feed | Env vars | Description |
 |---|---|---|
 | FDPS | `SWIM_NMS_USER_FDPS` / `SWIM_NMS_PASS_FDPS` / `SWIM_NMS_QUEUE_FDPS` | Flight plan + track data |
-| STDDS | `SWIM_NMS_USER_STDDS` / `SWIM_NMS_PASS_STDDS` / `SWIM_NMS_QUEUE_STDDS` | Surface + terminal tracks, TFRs |
+| STDDS | `SWIM_NMS_USER_STDDS` / `SWIM_NMS_PASS_STDDS` / `SWIM_NMS_QUEUE_STDDS` | Surface + terminal tracks (does **not** carry TFR data — TFRs are their own independent REST poll of tfr.faa.gov, see Data feeds table above) |
 | TFMS | `SWIM_NMS_USER_TFMS` / `SWIM_NMS_PASS_TFMS` / `SWIM_NMS_QUEUE_TFMS` | NAS programs (GDP, GS, AFP, AAR) |
 | AIM | `SWIM_NMS_USER_AIM` / `SWIM_NMS_PASS_AIM` / `SWIM_NMS_QUEUE_AIM` | Digital NOTAMs |
 | TBFM | `SWIM_NMS_USER_TBFM` / `SWIM_NMS_PASS_TBFM` / `SWIM_NMS_QUEUE_TBFM` | Arrival sequencing |
 | ITWS | `SWIM_NMS_USER_ITWS` / `SWIM_NMS_PASS_ITWS` / `SWIM_NMS_QUEUE_ITWS` | Terminal weather |
 
-To request FAA SWIM credentials, see [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) — includes the email template and portal link.
+To request FAA SWIM credentials for a new deployment, see [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) — includes the email template and portal link.
 
 No code changes required after credential entry. Rebuild and restart:
 

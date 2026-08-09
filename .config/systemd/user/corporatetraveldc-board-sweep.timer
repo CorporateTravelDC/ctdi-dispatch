@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispatch-side board sweep hourly -- surface new to:dispatch coordination messages (bidirectional mirror of Cowork's research sweep)
+Requires=corporatetraveldc-board-sweep.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=false
+
+[Install]
+WantedBy=timers.target

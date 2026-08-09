@@ -115,15 +115,29 @@ Concretely:
   `httpd_can_network_connect` boolean, whose scope is every TCP port class
   in the base policy, not just the ones this repo defines. Each labeled
   port traces to exactly one vhost in `nginx/conf.d/`.
-* `selinux/corporatetraveldc-fail2ban-lockdown.te` grants `fail2ban_t`
-  exactly three things -- search on `systemd_unit_file_t` and
-  `user_home_dir_t`, and name_connect on `http_port_t` -- discovered via a
-  full enforcing sweep on 2026-07-10: fail2ban's actionban/actionunban
-  invoke `scripts/lockdown.sh`/`restore-network.sh` from `fail2ban_t`, which
-  otherwise can't reach the quadlets under `/home/corporatetraveldc`, can't
-  run `systemctl daemon-reload`/`restart`, and can't send the ntfy incident
-  notification. No broader domain transition or unconfined exec for
-  fail2ban -- just the three grants the scripts actually use.
+* `selinux/corporatetraveldc-fail2ban-lockdown.te` grants `fail2ban_t` the
+  specific search/read/write/ioctl/getattr/name_connect permissions
+  `scripts/lockdown.sh`/`restore-network.sh` actually use -- discovered
+  across three rounds (2026-07-10, then 2026-08-09) as fail2ban's
+  actionban/actionunban exercised more of the scripts' real behavior: reach
+  the quadlets under `/home/corporatetraveldc`, run `systemctl daemon-reload`/
+  `restart` (including stat-ing the `systemctl` binary itself), edit
+  `ollama.service.d/10-binding.conf` in place via `sed -i`'s temp-file+rename
+  sequence, and send the ntfy incident notification. No broader domain
+  transition or unconfined exec for fail2ban -- just the grants the scripts
+  actually exercise, added as each round of enforcing surfaced the next one.
+* `selinux/corporatetraveldc-fail2ban-cf-egress.te` grants `fail2ban_t` one
+  thing -- name_connect on `pihole_port_t` -- so `scripts/cf-honeypot-ban.sh`
+  (the honeypot's Cloudflare-edge IP Access Rule ban/unban action, see
+  `docs/HONEYPOT_FAIL2BAN.md`) can reach `api.cloudflare.com` over HTTPS.
+  Port 443 is labeled `pihole_port_t` on this box rather than the stock
+  `http_port_t` (pre-existing Pi-hole customization, not introduced here),
+  so any fail2ban action making an outbound HTTPS call needs this grant
+  regardless of destination. `audit2allow`'s first pass over the same
+  denials also proposed `self:process execmem` (for `grep -oP`'s PCRE JIT
+  compiler) -- deliberately not granted; the script was rewritten to use
+  `sed` instead, avoiding the permission rather than carrying it as a
+  standing exception.
 
 **Adding a new network-facing service:** add its `proxy_pass` target to
 `nginx/conf.d/`, add one line to the `PORTS` list in
@@ -190,3 +204,100 @@ all. If it needs to reach a host-bound service, use
 `Network=pasta:--map-gw` and comment why. Reach for the bridge-mode
 host-wide setting or `Network=host` only if the per-container mechanism
 genuinely doesn't apply, and say so in a comment either way.
+
+---
+
+## 6. Request Trust Model: Network-Layer ACL vs. Application-Layer Tier Checks
+
+Two independent, non-interchangeable enforcement layers, each covering a
+traffic path the other structurally cannot see. This section exists
+because the two were briefly conflated (2026-08-05 investigation, below)
+-- the short version is that neither is redundant with the other, and
+assuming otherwise is what left a real hole open.
+
+**Network layer -- Tailscale ACL, tag-scoped grants (`tailscale/policy.hujson`).**
+Governs one thing: which devices can even open a connection to a port
+bound on the tailnet interface (100.x.x.x) at all. Default posture is
+explicit-allow -- an untagged or improperly-tagged device gets nothing,
+enforced by Tailscale's control plane before a packet reaches this box.
+This is what actually protects the admin runner today: `runner/main.py`
+(port 8001) is reachable only via `tailscale-dispatch-runner.conf`, a
+Tailscale-cert HTTPS vhost bound to the tailnet IP. A device that isn't
+tagged `tag:corporatetraveldc-server` (owner's own devices, via
+`autogroup:self`) cannot reach that port to begin with -- there's no
+header to forge, because there's no connection to forge it over.
+
+**Application layer -- the `X-CTDI-Public` marker (`auth.py::resolve_tier`).**
+Governs a completely different question: for a request that already
+reached this app's shared backend process, did it arrive through the
+public Cloudflare Tunnel or not. This exists because `dispatch.example.com`
+(port 8000, the web API) is deliberately public -- Cloudflare Tunnel
+traffic terminates at a local nginx listener and is proxied to the exact
+same FastAPI process a tailnet request would reach. **Tailscale ACLs have
+zero visibility into this path** -- tunnel traffic never touches the
+tailnet interface, so no tag, grant, or ACL rule ever evaluates it. The
+only thing standing between an anonymous internet request and an
+elevated tier is whatever the app itself decides to trust, which is why
+this specific check has to be correct on its own, independent of how
+good the tailnet ACL is.
+
+**2026-08-05 finding: the previous app-layer check was spoofable, and the
+ACL work does not cover the gap.** `auth.py` previously trusted
+`Tailscale-User-Login` and an `X-Forwarded-For` prefix of `"100."` as
+proof of tailnet origin. The live public vhost forwarded
+`X-Forwarded-For` via nginx's `$proxy_add_x_forwarded_for`, which
+*appends* the connecting peer's address rather than replacing the
+header -- so a plain internet client sending `X-Forwarded-For:
+100.64.0.1` reached the app as `"100.64.0.1, 127.0.0.1"`, which still
+satisfied a naive `.startswith("100.")` check. Verified exploitable
+against the live `dispatch.example.com` endpoint (which
+gates 7 Tier-1 API routes) with no token at all. The tailnet rebuild and
+ACL/tag hardening done the same night do not touch this: that traffic
+never reached the tailnet in the first place, so no amount of ACL
+correctness closes an application-layer header-trust bug on a path the
+ACL never sees.
+
+**Fix**: nginx now sets `X-CTDI-Public: 1` via a literal
+`proxy_set_header` on every location block in `dispatch.example.com.conf`
+that proxies to port 8000. `resolve_tier()` forces Tier 0 whenever that
+marker is present, before any token lookup runs -- so even a *valid*
+bearer token presented through the tunnel cannot elevate. This is safe
+specifically because `proxy_set_header` **replaces** the header for the
+proxied request regardless of what the client sent (unlike
+`$proxy_add_x_forwarded_for`'s append semantics above) -- empirically
+verified in an isolated test harness: a client sending `X-CTDI-Public: 0`
+still reached a test backend as `"1"`. The corollary risk this creates --
+a location block that forgets the directive silently lets the client's
+own value straight through -- was verified the same way and is why every
+location block proxying to a public-facing port must carry it
+explicitly; nginx location blocks that define any `proxy_set_header` of
+their own do not inherit server-level ones.
+
+Verified against the live (rebuilt) `corporatetraveldc-web` container
+after the fix: a spoofed `X-Forwarded-For: 100.x.x.x` with no token is
+rejected (403); a request carrying `X-CTDI-Public: 1` **and a real,
+valid cert-tier bearer token** is still rejected (403) -- the marker
+overrides a genuinely valid credential, which is the actual property
+this fix needed to have; a request with no marker and a valid token
+still succeeds (200), confirming genuine tailnet/direct access is
+unaffected.
+
+**`runner/main.py`'s CF-Connecting-IP check (`_is_trusted`) -- documented
+past work, effectively superseded by the ACL for its one remaining live
+path.** This function predates the marker approach (2026-07-21 bugfix
+for the same class of problem: `ops.example.com`, then a
+public vhost in front of the runner, was intermittently trusting a
+Cloudflare-tunnel loopback hop as if it were a LAN origin). `ops.example.com`
+was retired as a public endpoint 2026-08-02/03 -- confirmed no matching
+nginx vhost exists for it today, so its CF-Connecting-IP branch is
+currently unreachable in practice. The runner's only remaining live
+front door is the tailnet-only vhost above, where reachability is
+already gated by tag-scoped ACL grants before the request arrives --
+making this specific check close to true network/app-layer redundancy
+for the path that's actually live. Left as-is (not rewritten to the
+marker model) since it isn't exploitable today and the stale
+`ops.example.com` Cloudflare ingress rule that used to front
+it has been removed outright (not just left dead) -- see
+`cloudflared/config.yml`. If the runner is ever re-exposed publicly, it
+needs the same `X-CTDI-Public` treatment `auth.py` now has, not a revival
+of IP-header trust.

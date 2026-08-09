@@ -2604,6 +2604,33 @@ body::before {
   margin: 0 0 1.3rem;
 }
 
+.demo-gate-disclosure {
+  background: var(--orange-dim);
+  border: 1px solid var(--orange);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 0.65rem 0.8rem;
+  margin: 0 0 1.3rem;
+}
+
+.demo-gate-disclosure-label {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--orange);
+  margin: 0 0 0.35rem;
+}
+
+.demo-gate-disclosure-body {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 0;
+}
+
 .demo-gate-form {
   display: flex; flex-direction: column; gap: 0.6rem;
 }
