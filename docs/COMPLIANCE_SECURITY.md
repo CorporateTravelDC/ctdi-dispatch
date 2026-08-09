@@ -205,6 +205,44 @@ all. If it needs to reach a host-bound service, use
 host-wide setting or `Network=host` only if the per-container mechanism
 genuinely doesn't apply, and say so in a comment either way.
 
+### External API Action Safety Pattern: Verify Success, Verify Identity
+
+Standing rule for any script that calls an external API to enforce a
+consequential, state-mutating action (bans, deletes, anything a monitoring
+or security control fires automatically and unattended) -- established
+2026-08-09 fixing `scripts/cf-honeypot-ban.sh` twice in one day, each round
+catching a failure mode the previous round's fix didn't cover:
+
+1. **Check the response body, not just the HTTP status code.** Some APIs
+   (Cloudflare's included) return `200 OK` with `{"success": false, ...}`
+   for validation failures -- an HTTP-status-only check treats that as
+   success. Every call must check both: 2xx status AND the body's own
+   success/status field.
+2. **A lookup-then-mutate flow must verify the looked-up object's identity
+   before acting on it, every time** -- never assume a filtered query
+   actually filtered. Concretely: `cf-honeypot-ban.sh`'s unban path does
+   `GET .../rules?configuration.value=<ip>` then `DELETE` on the first
+   result; if that GET's filter silently fails to apply (see #3) and
+   returns the full unfiltered list instead, blindly deleting
+   `.result[0]` deletes an unrelated rule -- a different IP's legitimate
+   ban lifted by accident, not the one being unbanned. Confirm
+   `result[0]`'s own identity field matches the intended target before the
+   mutating call, or abort loudly.
+3. **`curl -X GET --data-urlencode ...` without `-G` sends the params as a
+   request body, not a URL query string** -- many APIs (Cloudflare
+   included) silently ignore a GET request's body and just return
+   everything unfiltered. This is exactly the bug that made #2 a real risk
+   rather than a theoretical one. Always pass `-G` when using
+   `--data`/`--data-urlencode` with `-X GET`.
+4. **Plain `curl -s` alone is not sufficient error detection** (see the
+   `docs/HONEYPOT_FAIL2BAN.md` postmortem) -- it only signals non-zero on
+   connection-level failure, never on an HTTP error response. Combine with
+   #1's body check, always.
+
+None of these are Cloudflare-specific despite the pattern being discovered
+there -- apply all four to any future external-API action a jail, timer, or
+watchdog fires unattended.
+
 ---
 
 ## 6. Request Trust Model: Network-Layer ACL vs. Application-Layer Tier Checks
