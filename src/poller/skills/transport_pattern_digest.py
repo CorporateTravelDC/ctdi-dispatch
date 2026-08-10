@@ -22,6 +22,16 @@ departure creeping over years) needs years of data this system has not
 been running long enough to have; the mechanism is real and compounds a
 genuine baseline starting now.
 
+2026-08-09: cruise ships specifically (as opposed to DC-area water-taxi/
+harbor traffic) are stubbed via analyze_vessel_patterns()'s new
+vessel_class tag (AIS type 60-69 = "passenger", the closest available
+signal -- see _vessel_class_for_ship_type in common/db.py) rather than a
+separate mining function. No new mechanism needed once real cruise-relevant
+AIS coverage exists; today's blocker is twofold: (1) AIS_AISHUB_ID isn't
+registered yet, and (2) even once it is, AISHub's cooperative-receiver
+network is coastal/harbor-range, so open-ocean cruise itineraries would
+need a satellite-AIS source, not built.
+
 Schedule: every 12h (corporatetraveldc-transport-pattern-digest.timer).
 
 Model: same tiered pattern as second_brain_daily.py -- Ollama first (cheap,
@@ -114,9 +124,11 @@ def build_digest_content() -> tuple[str, dict]:
     )
     top_vessels = sorted(vessels["route_locks"], key=lambda x: -x["samples"])[:10]
     for x in top_vessels:
+        prefix_tag = f", {x['name_prefix']}" if x["name_prefix"] else ""
+        weight_tag = f", {x['weight_class']}" if x.get("weight_class") else ""
         sections.append(
-            f"- MMSI {x['mmsi']} ({x['name'] or 'unnamed'}): dominant cluster "
-            f"{x['dominant_cluster_lat']},{x['dominant_cluster_lon']} "
+            f"- MMSI {x['mmsi']} ({x['name'] or 'unnamed'}, {x['vessel_class']}{prefix_tag}{weight_tag}): "
+            f"dominant cluster {x['dominant_cluster_lat']},{x['dominant_cluster_lon']} "
             f"({x['dominance']*100:.0f}% of {x['samples']} observations, "
             f"{x['distinct_clusters']} distinct clusters)"
         )
@@ -125,6 +137,39 @@ def build_digest_content() -> tuple[str, dict]:
             "- No vessel data yet -- AIS_AISHUB_ID is not configured, so vessel_events "
             "is not currently accumulating. Not an error; awaiting that credential."
         )
+    else:
+        sections.append(
+            f"- {vessels['passenger_cruise_class_count']} of the above are AIS-type "
+            f"60-69 (\"passenger\", the closest available signal for cruise/charter "
+            f"traffic -- AIS has no dedicated cruise code)."
+        )
+        prefix_counts = vessels.get("name_prefix_counts", {})
+        prefix_summary = ", ".join(
+            f"{p}={n}" for p, n in prefix_counts.items() if n
+        )
+        sections.append(
+            "- By vessel-name prefix (independently queryable, MV/MY/SV/SY/PV/PY): "
+            + (prefix_summary if prefix_summary else "none of the tracked MMSIs carry a recognized prefix yet.")
+        )
+    sections.append(
+        "- Cruise-ship-specific tracking (multi-day port-call/itinerary drift, distinct "
+        "from the DC-area water-taxi clusters above) is stubbed via this same vessel_class "
+        "tag rather than a separate mechanism: same analyze_vessel_patterns() mining, "
+        "filtered to passenger/cruise-class MMSIs, once real ocean-going AIS coverage "
+        "exists (AISHub's free feed is coastal/cooperative-receiver-dependent, so DC-area "
+        "AIS receivers won't see open-ocean cruise itineraries -- a dedicated satellite-AIS "
+        "source would be the eventual upgrade path, not built yet)."
+    )
+    sections.append(
+        "- Cargo/tanker weight class (Panamax/Neopanamax/Suezmax/Aframax/VLCC/ULCC for "
+        "tankers; Handysize/Handymax/Panamax/Capesize/VLOC for bulk carriers) is stubbed "
+        "via vessel_events.loa_m/beam_m (SCHEMA_V31) but reads 'insufficient_data' on "
+        "every row today -- nothing ingests those dimension fields yet, pending live "
+        "AISHub field verification once AIS_AISHUB_ID is registered. Container ship vs. "
+        "bulk/general cargo isn't derivable from AIS ship_type at all (both report as "
+        "'cargo', 70-79) -- that split needs an IMO-number cross-reference against a "
+        "vessel-type registry, a separate future data source, not an AIS/AISHub gap."
+    )
 
     return "\n".join(sections), stats
 

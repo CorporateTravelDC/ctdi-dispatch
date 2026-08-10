@@ -395,6 +395,119 @@ def get_latest_phase(
     return None
 
 
+def get_recent_message_texts(
+    identifier: str,
+    registration: str | None = None,
+    limit: int = 5,
+    lookback_minutes: float = 180.0,
+) -> list[dict]:
+    """Return up to `limit` recent raw ACARS/VDL2/HFDL messages for this
+    flight/tail, most recent first -- NOT filtered to OOOI phase patterns
+    like get_latest_phase(). Built 2026-08-10 as a "what does ACARS say
+    right now" sub-check for diversion and OOOI watchlist alerts (the
+    operator's own request: attach whatever reason-relevant ACARS/VDL
+    traffic exists to a diversion alert rather than a bare destination-
+    changed notice with no context).
+
+    Deliberately returns raw message text for a human to read rather than
+    trying to classify a "reason" from keywords -- an unverified keyword
+    match (e.g. treating any message containing "FUEL" as a fuel-related
+    diversion cause) would repeat exactly the kind of overconfident,
+    plausible-but-wrong signal this platform has caught and discarded
+    elsewhere tonight (flight_events.status='cancelled', etc.). Same
+    three-source priority as get_latest_phase(): Jumpseat (by
+    registration) -> airframes.io (global, filtered) -> local acarshub
+    decode -- reusing the same aggregator config/helpers so this doesn't
+    introduce a fourth, differently-credentialed ACARS read path.
+
+    Returns [] (not None) when nothing is found -- callers should treat
+    that as "no ACARS traffic in this window", state it plainly in the
+    alert, not as an error."""
+    norm = identifier.upper().replace("-", "").strip()
+    reg_norm = (registration or "").upper().replace("-", "").strip() or None
+    cutoff = time.time() - lookback_minutes * 60
+
+    def _to_result(msgs: list[dict], source: str) -> list[dict]:
+        out = []
+        for m in msgs:
+            ts = _extract_epoch(m)
+            if ts < cutoff:
+                continue
+            text = _extract_text(m)
+            if not text:
+                continue
+            out.append({
+                "source": source, "time": ts,
+                "label": _extract_label(m), "text": text,
+            })
+        out.sort(key=lambda x: -x["time"])
+        return out[:limit]
+
+    if reg_norm and _JUMPSEAT_TOKEN:
+        try:
+            resp = requests.get(
+                f"{JUMPSEAT_API_BASE}/messages/search",
+                params={"registration": reg_norm, "limit": "20", "source": "messages"},
+                headers={"Authorization": f"Bearer {_JUMPSEAT_TOKEN}"},
+                timeout=_AGGREGATOR_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("items", data) if isinstance(data, dict) else data
+                if isinstance(items, list):
+                    result = _to_result(items, "JUMPSEAT")
+                    if result:
+                        return result
+        except Exception as exc:
+            log.debug("jumpseat recent-messages query %s failed: %s", reg_norm, exc)
+
+    try:
+        headers = {}
+        if _AIRFRAMES_TOKEN:
+            headers["Authorization"] = f"Bearer {_AIRFRAMES_TOKEN}"
+        since = datetime.fromtimestamp(cutoff, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = requests.get(
+            f"{AIRFRAMES_API_BASE}/messages",
+            params={"since": since, "limit": 500},
+            headers=headers,
+            timeout=_AGGREGATOR_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            msgs = data if isinstance(data, list) else data.get("messages", data.get("data", []))
+            if isinstance(msgs, list):
+                matched = [
+                    m for m in msgs
+                    if isinstance(m, dict)
+                    and ((reg_norm and _extract_reg(m) == reg_norm)
+                         or (norm and _extract_flight(m) == norm))
+                ]
+                result = _to_result(matched, "AIRFRAMES")
+                if result:
+                    return result
+    except Exception as exc:
+        log.debug("airframes.io recent-messages query %s failed: %s", identifier, exc)
+
+    try:
+        con = _open_db()
+        # msg_text aliased to "text" -- _extract_text() (shared with the
+        # aggregator paths above) checks msg.get("text"), not a bare
+        # msg.get("msg_text"); without this alias every local-DB row would
+        # silently extract as empty text. Caught in testing before this
+        # ever ran against a real diversion.
+        rows = con.execute("""
+            SELECT tail, flight, label, msg_text AS text, msg_time FROM messages
+            WHERE (UPPER(REPLACE(tail,'-',''))=? OR UPPER(REPLACE(flight,'-',''))=?)
+              AND msg_time>=?
+            ORDER BY msg_time DESC LIMIT ?
+        """, (norm, norm, cutoff, limit)).fetchall()
+        con.close()
+        return _to_result([dict(r) for r in rows], "LOCAL")
+    except Exception as exc:
+        log.debug("acars get_recent_message_texts local fallback failed for %s: %s", identifier, exc)
+    return []
+
+
 # Backward-compat alias.
 def check_wow_event(
     identifier: str, not_before_epoch: float = 0.0

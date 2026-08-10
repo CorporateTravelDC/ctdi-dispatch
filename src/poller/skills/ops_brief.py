@@ -43,6 +43,7 @@ import requests
 
 from common import config, db, ntfy_push as _ntfy
 from common.aam_watch import get_aam_watch_section
+from common.disruption_weather_watch import get_disruption_weather_capsule
 from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
 
@@ -928,6 +929,16 @@ def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = Fa
         aam_section = get_aam_watch_section("ops")
         if aam_section:
             full_text = full_text.rstrip() + "\n\n=== " + aam_section
+
+        # 2026-08-10 catch-up session: short truncated capsule of the daily
+        # disruption/weather digest (poller/skills/disruption_weather_digest.py,
+        # daily 04:35 ET) -- the "leadership standup"-style short version
+        # requested for the daily brief, distinct from that skill's full
+        # note in the second-brain vault. Same cached-read, no-extra-
+        # Ollama-call pattern as the AAM section above.
+        disruption_capsule = get_disruption_weather_capsule()
+        if disruption_capsule:
+            full_text = full_text.rstrip() + "\n\n=== DISRUPTION/WEATHER (30d) ===\n" + disruption_capsule
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "OPS BRIEF+TREND" if is_6h_boundary else "OPS BRIEF"

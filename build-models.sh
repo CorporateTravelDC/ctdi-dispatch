@@ -25,6 +25,17 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Signed-manifest integrity self-check (docs/COMPLIANCE_SECURITY.md "Signed
+# Manifest Integrity") -- collective, whole-tree: this script builds models
+# from Modelfiles it does its own per-Modelfile check on (GUARD 0 below),
+# but that doesn't cover build-models.sh's own integrity, or anything else
+# it might read. Run once, up front, before touching anything.
+if ! "${REPO_DIR}/scripts/verify-manifest.sh"; then
+    echo "XX INTEGRITY CHECK FAILED -- refusing to run build-models.sh" >&2
+    exit 5
+fi
+
 OLLAMA_HOST="${OLLAMA_HOST:-100.x.x.x:11434}"; export OLLAMA_HOST
 OLLAMA_URL="http://${OLLAMA_HOST}"
 
@@ -43,6 +54,7 @@ declare -A MODELS=(
   [corporatetraveldc-pi5-aam-watch]="aam-watch"
   [corporatetraveldc-pi5-dispatch-desk]="dispatch-desk"
   [corporatetraveldc-pi5-transport-digest]="transport-digest"
+  [corporatetraveldc-pi5-disruption-weather-digest]="disruption-weather-digest"
   [corporatetraveldc-pi5-secondbrain-daily]="secondbrain-daily"
   [corporatetraveldc-pi5-secondbrain-weekly]="secondbrain-weekly"
 )
@@ -110,10 +122,23 @@ except Exception: print("")')"
   return 0
 }
 
+assert_modelfile_integrity() {  # GUARD 0 -- applies to every model, not just brief-class
+  local suffix="$1" name="$2"
+  local relpath="corporatetraveldc.${suffix}"
+  if ! "${REPO_DIR}/scripts/verify-manifest.sh" "${relpath}"; then
+    echo "  XX BLOCKED: ${name}'s Modelfile (${relpath}) failed the signed-manifest"
+    echo "     integrity check -- refusing to build a model from a Modelfile that"
+    echo "     doesn't match its signed hash. Run scripts/sign-manifest.sh after"
+    echo "     reviewing/approving the change, or investigate why it doesn't match."
+    exit 5
+  fi
+}
+
 build_one() {
   local name="$1" suffix="$2"
   local modelfile="${REPO_DIR}/corporatetraveldc.${suffix}"
   [ -f "$modelfile" ] || { echo "XX missing Modelfile: ${modelfile}"; exit 2; }
+  assert_modelfile_integrity "$suffix" "$name"
   if is_brief_model "$name"; then
     echo "=== BRIEF model ${name} (guarded build) ==="
     assert_brief_base_ok "$modelfile" "$name"

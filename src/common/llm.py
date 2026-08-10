@@ -42,13 +42,103 @@ Usage:
         text = deterministic_fallback(...)
 """
 
+import inspect
 import logging
 import os
+import pathlib
+import subprocess
 import time
 
 import httpx
 
 from common.ollama_lock import ollama_slot, OllamaBusyError
+
+# Signed-manifest integrity gate (docs/COMPLIANCE_SECURITY.md "Signed
+# Manifest Integrity") -- see _verify_before_inference() below, called at
+# the top of ollama_post_with_retry() (the one function every LLM call path
+# converges on, including ep_advance_brief.py's direct call that bypasses
+# generate() entirely -- see that function's own docstring).
+class IntegrityCheckFailed(RuntimeError):
+    """Raised when a calling skill's source file or a model's Modelfile
+    doesn't match its signed hash. Deliberately NOT swallowed into
+    generate()'s normal None-return/deterministic-fallback contract --
+    a failed integrity check is a security event, not an ordinary
+    Ollama-unavailable condition, and should be as loud as a crash, not as
+    quiet as a timeout."""
+
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_VERIFY_SCRIPT = _REPO_ROOT / "scripts" / "verify-manifest.sh"
+_verified_this_process: set[str] = set()
+
+
+def _verify_integrity(relpath: str) -> None:
+    """Verify one file against the signed manifest, once per process
+    (cached in _verified_this_process -- each skill run is a fresh
+    short-lived process anyway, so this is effectively once per run, not a
+    per-call cost). Raises IntegrityCheckFailed on any failure: missing
+    verify script, bad signature, hash mismatch, or the path simply not
+    being in the manifest at all."""
+    if relpath in _verified_this_process:
+        return
+    if not _VERIFY_SCRIPT.exists():
+        raise IntegrityCheckFailed(
+            f"llm: {_VERIFY_SCRIPT} not found -- cannot verify {relpath}, refusing to proceed"
+        )
+    result = subprocess.run(
+        [str(_VERIFY_SCRIPT), relpath],
+        capture_output=True, text=True, cwd=str(_REPO_ROOT),
+    )
+    if result.returncode != 0:
+        raise IntegrityCheckFailed(
+            f"llm: integrity check failed for {relpath}: {result.stderr.strip() or result.stdout.strip()}"
+        )
+    _verified_this_process.add(relpath)
+
+
+def _modelfile_relpath_for(ollama_model: str | None) -> str | None:
+    """Derive corporatetraveldc.<suffix> from a corporatetraveldc-pi5-<suffix>
+    model name, matching build-models.sh's own naming convention. Returns
+    None for anything that doesn't match (a bare upstream model like
+    "gemma3:4b" pulled directly -- not one of ours, nothing to check)."""
+    if not ollama_model:
+        return None
+    name = ollama_model.split(":", 1)[0]
+    prefix = "corporatetraveldc-pi5-"
+    if not name.startswith(prefix):
+        return None
+    suffix = name[len(prefix):]
+    return f"corporatetraveldc.{suffix}"
+
+
+def _verify_before_inference(ollama_model: str | None) -> None:
+    """Called at the top of ollama_post_with_retry(). Verifies (1) the
+    skill file that ultimately triggered this call -- the first stack
+    frame outside this module, so it correctly identifies the real caller
+    whether it came via generate()/_ollama() (all inside this file) or a
+    skill calling ollama_post_with_retry() directly -- and (2) the
+    Modelfile for a dedicated corporatetraveldc-pi5-* model, if the name
+    matches that convention."""
+    this_file = str(pathlib.Path(__file__).resolve())
+    caller_file = None
+    for frame_info in inspect.stack():
+        candidate = str(pathlib.Path(frame_info.filename).resolve())
+        if candidate != this_file:
+            caller_file = candidate
+            break
+    if caller_file:
+        try:
+            caller_relpath = str(pathlib.Path(caller_file).relative_to(_REPO_ROOT))
+            _verify_integrity(caller_relpath)
+        except ValueError:
+            # Caller isn't under the repo root at all (e.g. an interactive
+            # REPL/test outside the checked-out tree) -- nothing to verify
+            # against, and nothing to block either.
+            pass
+
+    modelfile_relpath = _modelfile_relpath_for(ollama_model)
+    if modelfile_relpath:
+        _verify_integrity(modelfile_relpath)
 
 log = logging.getLogger(__name__)
 
@@ -419,7 +509,16 @@ def ollama_post_with_retry(
     priority="hot" never retries here -- raises immediately on the first
     transport failure, exactly like the pre-2026-07-27 behavior. A hot
     VIP/TFR alert path must never wait out a possible 20-minute pause.
+
+    Added 2026-08-09: verifies the calling skill's source file (and, for a
+    dedicated corporatetraveldc-pi5-* model, its Modelfile) against the
+    signed manifest before ever reaching Ollama -- see
+    _verify_before_inference() and docs/COMPLIANCE_SECURITY.md's "Signed
+    Manifest Integrity". Raises IntegrityCheckFailed (not returned as a
+    normal failure) if either doesn't match.
     """
+    _verify_before_inference(payload.get("model"))
+
     retries = OLLAMA_MAX_RETRIES if max_retries is None else max_retries
     wait_cap = OLLAMA_RETRY_WAIT_CAP_S if retry_wait_cap is None else retry_wait_cap
 

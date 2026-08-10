@@ -21,7 +21,7 @@ Wants=corporatetraveldc-demo.service
 Memory=512m
 PodmanArgs=--memory-swap=512m
 Image=localhost/corporatetraveldc-demo:latest
-Exec=uvicorn demo.demo_api:app --host 0.0.0.0 --port 8004
+Exec=scripts/verified-exec.sh uvicorn demo.demo_api:app --host 0.0.0.0 --port 8004
 PublishPort=127.0.0.1:8004:8004
 PublishPort=100.x.x.x:8004:8004
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z

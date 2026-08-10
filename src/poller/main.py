@@ -646,6 +646,29 @@ def _phase_from_summary(summary: str) -> str:
     return "pre_departure"
 
 
+def _acars_reason_context(ident: str, registration: str | None) -> str:
+    """2026-08-10: shared sub-check for diversion/OOOI alerts, per operator
+    request -- attach whatever recent ACARS/VDL traffic exists for this
+    flight so a diversion or phase-change alert carries actual context
+    instead of a bare notice. Uses common.acars.get_recent_message_texts
+    (raw messages, not a keyword-guessed "reason" -- see that function's
+    docstring for why guessing a cause from message text isn't done).
+
+    Always returns a non-empty string -- an explicit "no ACARS traffic
+    found" is meaningfully different from silence in an alert body (the
+    reader needs to know this WAS checked, not just that nothing appeared)."""
+    try:
+        from common.acars import get_recent_message_texts
+        msgs = get_recent_message_texts(ident, registration=registration, limit=3)
+    except Exception as e:
+        log.debug("%s: ACARS reason sub-check failed: %s", ident, e)
+        return "ACARS: sub-check failed, see logs"
+    if not msgs:
+        return "ACARS: no recent messages found (last 3h)"
+    lines = [f"ACARS ({m['source']}, {m.get('label') or '?'}): {m['text'][:200]}" for m in msgs]
+    return "\n".join(lines)
+
+
 def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     """
     Query airplanes.live free API for live ADS-B position.
@@ -820,17 +843,48 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
         else:
             current_phase = last_phase if last_phase == "out" else "pre_departure"
 
-    # Detect diversion: FMS dest differs from watchlist destination
+    # Detect diversion: FMS dest differs from watchlist destination.
+    #
+    # 2026-08-10: hardened with an FDPS cross-check, same "requires
+    # confirmation before firing hard" discipline the OOOI block below
+    # already applies (2026-07-28 operator directive, after the UA6203
+    # false-positive) -- a single ADS-B FMS `dst` field read is real
+    # telemetry but can be stale or mid-reroute-clearance rather than a
+    # genuine diversion. When FDPS's own filed flight plan for this
+    # callsign agrees on the new destination, this fires as CONFIRMED
+    # (priority 5); when FDPS hasn't caught up yet or has no data, it
+    # still fires -- silence would be worse than a single-source flag --
+    # but labeled SUSPECTED (priority 4) so the reader knows this is
+    # ADS-B-only evidence, not corroborated. Either way, a recent-ACARS-
+    # traffic sub-check (_acars_reason_context) is attached so the alert
+    # carries actual context instead of a bare destination-changed line.
+    # (Previously computed a `detail` string with a tracking-URL line that
+    # was never actually used in the watchlist_event_hit call below --
+    # fixed as part of this same edit.)
     expected_dest = (entry.get("destination") or "").upper().replace("K", "", 1)
     if dest_icao and expected_dest and dest_icao.upper() not in (expected_dest, "K" + expected_dest):
-        divert_summary = f"{ident} DIVERTED to {dest_icao} (expected {entry.get('destination','')})"
+        fdps_plan = None
+        try:
+            fdps_plan = db.get_flight_plan_by_callsign(ident)
+        except Exception as e:
+            log.debug("%s: FDPS cross-check for diversion failed: %s", ident, e)
+        fdps_dest = (fdps_plan or {}).get("destination") or ""
+        confirmed = bool(fdps_dest) and fdps_dest.upper().lstrip("K") == dest_icao.upper().lstrip("K")
+        label = "DIVERSION CONFIRMED (FDPS agrees)" if confirmed else "SUSPECTED DIVERSION (ADS-B only, FDPS not yet confirming)"
+        divert_summary = f"{ident} {label} -- now tracking to {dest_icao} (expected {entry.get('destination','')})"
         tracking = f"https://globe.airplanes.live/?icao={hex_id}" if hex_id else ""
-        detail = (divert_summary + "\nTrack: " + tracking) if tracking else divert_summary
-        watchlist_event_hit(entry["id"], divert_summary,
+        acars_ctx = _acars_reason_context(ident, entry.get("registration") or reg)
+        detail_lines = [divert_summary]
+        if tracking:
+            detail_lines.append(f"Track: {tracking}")
+        detail_lines.append(acars_ctx)
+        detail = "\n".join(detail_lines)
+        watchlist_event_hit(entry["id"], detail,
                             {"watchlist_trigger": "diversion", "identifier": ident,
                              "hex": hex_id, "diverted_to": dest_icao,
-                             "tracking_url": tracking},
-                            priority=5)
+                             "tracking_url": tracking, "confirmed": confirmed,
+                             "acars_context": acars_ctx},
+                            priority=5 if confirmed else 4)
 
     # Detect identity mismatch: the live ADS-B hex we just resolved for
     # this callsign/identifier differs from the entry's own stored expected
@@ -952,11 +1006,20 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
             summary_full = summary + "\n" + tracking_url
         else:
             summary_full = summary
+        # 2026-08-10: same ACARS-context sub-check as the diversion alerts,
+        # per operator request to cover "any diversion alert, diversion
+        # change, or OOOI watchlist alert." Mildly redundant with
+        # acars_msg above when confirm_src=="acars" (that's the single
+        # message that confirmed THIS transition) -- kept anyway since
+        # get_recent_message_texts can surface additional recent traffic
+        # beyond just the one confirming message.
+        acars_ctx = _acars_reason_context(ident, entry.get("registration") or reg)
+        summary_full = summary_full + "\n" + acars_ctx
         watchlist_event_hit(entry["id"], summary_full,
                             {"watchlist_trigger": f"oooi_{current_phase}",
                              "identifier": ident, "hex": hex_id, "reg": reg,
                              "alt_ft": alt, "gs_kt": gs, "lat": lat, "lon": lon,
-                             "phase": current_phase,
+                             "phase": current_phase, "acars_context": acars_ctx,
                              "source": "acars" if acars else "adsb",
                              "tracking_url": tracking_url},
                             priority=priority)
@@ -1212,12 +1275,13 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                 return
 
             confirm_src = "ACARS" if acars_confirms else "FIDS"
-            summary = f"{ident} IN — at gate ({confirm_src}-confirmed, ADS-B dark)"
+            acars_ctx = _acars_reason_context(ident, entry.get("registration"))
+            summary = f"{ident} IN — at gate ({confirm_src}-confirmed, ADS-B dark)\n{acars_ctx}"
             watchlist_event_hit(
                 entry["id"], summary,
                 {"watchlist_trigger": "oooi_in_inferred",
                  "identifier": ident,
-                 "note": reason},
+                 "note": reason, "acars_context": acars_ctx},
                 priority=4,
             )
             db.update_watchlist_oooi_phase(
@@ -1232,12 +1296,14 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             try:
                 dep_dt = datetime.fromisoformat(sched_dep.replace("Z", "+00:00"))
                 if now > dep_dt + timedelta(minutes=90):
-                    summary = f"{ident} OFF — departed (schedule inferred, ADS-B not seen)"
+                    acars_ctx = _acars_reason_context(ident, entry.get("registration"))
+                    summary = f"{ident} OFF — departed (schedule inferred, ADS-B not seen)\n{acars_ctx}"
                     watchlist_event_hit(
                         entry["id"], summary,
                         {"watchlist_trigger": "oooi_off_inferred",
                          "identifier": ident, "scheduled_departure": sched_dep,
-                         "note": "No ADS-B contact — departure inferred from schedule"},
+                         "note": "No ADS-B contact — departure inferred from schedule",
+                         "acars_context": acars_ctx},
                         priority=4,
                     )
                     db.update_watchlist_oooi_phase(
@@ -1250,9 +1316,10 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
 def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
     """Check FAA FDPS (SWIM/SFDPS FIXM feed, see ingest/parsers/fdps_parser.py)
     for a confirmed flight plan matching this callsign. Fires on a
-    destination change (diversion signal) or a cancellation; otherwise
-    fires a lower-priority status note only when the status actually
-    changed since last tick.
+    cancellation, a tail/airframe reassignment (2026-08-10, see the
+    dedicated block below), or a destination change (diversion signal);
+    otherwise fires a lower-priority status note only when the status
+    actually changed since last tick.
 
     2026-07-27: replaced a matching predicate that compared the ICAO
     callsign (e.g. 'UAL2185') against flight_events.flight_id (a GUFI/UUID
@@ -1301,14 +1368,52 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
             db.update_watchlist_fdps_status(entry["id"], status, now_iso)
             return
 
-        prior_dest = entry.get("destination")
-        if dest and prior_dest and dest.upper() != prior_dest.upper():
+        # 2026-08-10: tail/airframe reassignment detection -- FDPS's
+        # aircraftDescription carries a real aircraftAddress (hex) +
+        # registration for a filed flight plan (see
+        # _extract_aircraft_hex_registration in common/db.py). A watchlist
+        # entry added against one airframe can have a DIFFERENT one
+        # assigned by the time of a later refile/replan for the same
+        # callsign (equipment swap) -- worth its own explicit alert,
+        # distinct from a destination change or generic status note, since
+        # every subsequent ADS-B/ACARS poll needs the NEW hex to keep
+        # tracking the right physical aircraft. Only compared when FDPS
+        # actually has both a hex and a prior hex to compare -- a flight
+        # plan with no aircraft assigned yet (hex is None) is not a "tail
+        # change", just an equipment assignment still pending.
+        new_hex = plan.get("hex")
+        new_reg = plan.get("registration")
+        prior_hex = entry.get("hex_id")
+        if new_hex and prior_hex and new_hex.upper() != prior_hex.upper():
             watchlist_event_hit(
                 entry["id"],
-                f"{ident} FDPS: destination changed {prior_dest}→{dest}",
+                f"{ident} FDPS: TAIL CHANGE {prior_hex}/{entry.get('registration') or '?'} "
+                f"→ {new_hex}/{new_reg or '?'}",
+                {"watchlist_trigger": "fdps_tail_change", "identifier": ident,
+                 "prior_hex": prior_hex, "new_hex": new_hex,
+                 "prior_registration": entry.get("registration"),
+                 "new_registration": new_reg},
+                priority=4,
+            )
+            db.update_watchlist_hex_registration(entry["id"], new_hex, new_reg)
+            db.update_watchlist_fdps_status(entry["id"], status, now_iso)
+            return
+
+        prior_dest = entry.get("destination")
+        if dest and prior_dest and dest.upper() != prior_dest.upper():
+            # 2026-08-10: an FDPS-confirmed flight-plan destination change
+            # is itself a CONFIRMED diversion (this is the authoritative
+            # source, not an ADS-B inference -- see the "diversion"
+            # trigger in _check_flight_airplanes_live for the ADS-B-only/
+            # unconfirmed counterpart). Same ACARS-context sub-check
+            # attached per operator request.
+            acars_ctx = _acars_reason_context(ident, plan.get("registration") or entry.get("registration"))
+            summary = (f"{ident} FDPS: destination changed {prior_dest}→{dest}\n" + acars_ctx)
+            watchlist_event_hit(
+                entry["id"], summary,
                 {"watchlist_trigger": "fdps_destination_change",
                  "identifier": ident, "prior_destination": prior_dest,
-                 "new_destination": dest},
+                 "new_destination": dest, "acars_context": acars_ctx},
                 priority=4,
             )
             db.update_watchlist_destination(entry["id"], dest.upper())
@@ -1702,6 +1807,7 @@ async def main() -> None:
     db.init_db_v28()
     db.init_db_v29()
     db.init_db_v30()
+    db.init_db_v31()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

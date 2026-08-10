@@ -229,7 +229,24 @@ except Exception:
 # not an outage.
 was_armed = state.get("armed", False)
 armed = was_armed or latest_total > 0
+
+# 2026-08-10: peak_total tracked SEPARATELY from latest_total, found
+# investigating a real VDLM alert whose own message read "after previously
+# accumulating 0 total" -- self-contradictory (armed=True is only supposed
+# to mean it once had real traffic). Root cause: acarsrouter's own
+# "Total messages processed" counter resets to 0 on container/process
+# restart, but this script's `armed` flag is a separate, persisted state
+# that survives that restart -- so a channel that had 30000+ messages
+# before a restart, then genuinely goes silent (a real outage, as VDLM's
+# was), reports latest_total=0 and the message reads as if it never had
+# any traffic at all. peak_total is the max ever observed across restarts,
+# so the alert can say what the channel actually achieved historically,
+# and separately flag when a restart happened (current total dropped from
+# a nonzero peak) as a distinct, useful data point rather than erasing it.
+peak_total = max(state.get("peak_total", 0), latest_total)
+restart_detected = peak_total > 0 and latest_total < peak_total
 state["armed"] = armed
+state["peak_total"] = peak_total
 state["last_run_ts"] = now_ts
 state["last_total"] = latest_total
 
@@ -238,11 +255,19 @@ if armed and trailing is not None and all(delta == 0 for _, delta in trailing):
     last_alert = state.get("last_alert_ts") or 0
     if now_ts - last_alert >= cooldown:
         minutes = streak_min * 5
+        restart_note = (
+            f" (NOTE: acarsrouter's own counter shows {latest_total}, below "
+            f"the {peak_total} peak previously seen -- acarsrouter itself "
+            f"likely restarted; this does NOT mean the outage is benign, "
+            f"just that 'total' resets on restart -- check the decoder "
+            f"container/SDR hardware directly)"
+            if restart_detected else ""
+        )
         message = (
             f"{channel} feed has gone quiet: 0 new messages for the last "
-            f"{minutes} min ({streak_min} consecutive 5-min periods), "
-            f"after previously accumulating {latest_total} total -- "
-            f"decoder or upstream source may have dropped"
+            f"{minutes} min ({streak_min} consecutive 5-min periods) -- "
+            f"peak total ever seen: {peak_total}, current: {latest_total}."
+            f"{restart_note} Decoder or upstream source may have dropped"
         )
         state["last_alert_ts"] = now_ts
 

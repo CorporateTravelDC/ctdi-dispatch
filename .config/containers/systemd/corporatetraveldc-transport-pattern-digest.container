@@ -18,7 +18,7 @@ Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=python3 poller/skills/transport_pattern_digest.py
+Exec=scripts/verified-exec.sh python3 src/poller/skills/transport_pattern_digest.py
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the

@@ -61,6 +61,65 @@ web_search("[ICAO_CALLSIGN] flight status [YYYY-MM-DD]")
 
 ---
 
+## Step 1f: FDPS local-DB rotation + cancellation-history check (query BEFORE giving up on a dark callsign)
+
+**Added 2026-08-09** after a real UA456 (KORD→KDCA) query: ADS-B and ACARS were both dark, and it turned out
+to be genuine -- the aircraft was still on the ground pre-departure, mid-rotation, with the KORD→KDCA leg not
+yet re-filed. The local FDPS/SFDPS `flight_events` table (SQLite, `/var/lib/corporatetraveldc/corporatetraveldc.db`,
+schema in `src/common/db.py`) resolved this cleanly where ADS-B/ACARS/web_search all came up empty or noisy --
+run this BEFORE falling back to web_search (Step 1e) whenever ADS-B is dark for a flight number that recurs daily.
+
+**Query 1 -- same-callsign history across ALL routes (detects multi-leg rotations):**
+```sql
+SELECT flight_id, origin, destination, status, raw_json,
+       datetime(updated_at,'unixepoch','localtime')
+FROM flight_events
+WHERE airline='<ICAO_AIRLINE>' AND flight_num='<NUM>'
+ORDER BY updated_at DESC LIMIT 10;
+```
+Airlines commonly reuse ONE flight number for multiple legs of the same aircraft's rotation in a single day
+(e.g. UA456 flew KDEN→KAUS→KORD→KDCA as three/four same-number legs on 2026-08-09). If the most recent rows
+show the aircraft completing a DIFFERENT leg (not yet the one you were asked about) that just landed at the
+ORIGIN of the leg you care about, that's strong evidence of "still on the ground, hasn't re-filed yet" rather
+than a dead trail -- report it as such, don't just say "not found."
+
+**Query 2 -- has the SPECIFIC route you're tracking been filed yet today:**
+```sql
+SELECT flight_id, status, datetime(updated_at,'unixepoch','localtime')
+FROM flight_events
+WHERE airline='<ICAO_AIRLINE>' AND flight_num='<NUM>'
+  AND origin='<ORIGIN_ICAO>' AND destination='<DEST_ICAO>'
+  AND date(updated_at,'unixepoch','localtime')=date('now','localtime');
+```
+Empty result + Query 1 showing the aircraft recently landed at your route's origin = genuinely not yet filed
+(not a data gap). Note this explicitly in the debrief rather than treating it the same as "no data available."
+
+**Query 3 -- recurrence + cancellation-rate check (same route, trailing days):**
+```sql
+SELECT status, COUNT(*) FROM flight_events
+WHERE airline='<ICAO_AIRLINE>' AND flight_num='<NUM>'
+  AND origin='<ORIGIN_ICAO>' AND destination='<DEST_ICAO>'
+  AND updated_at > unixepoch('now','-30 days')
+GROUP BY status;
+```
+If this route/flight-number recurs daily with a high cancelled/dropped fraction, say so in the debrief -- it's
+directly relevant context ("this flight has been cancelled on N of the last M days") and feeds the
+transport-pattern-recognition angle (see `poller/skills/transport_pattern_digest.py` /
+docs on the second-brain's transport-patterns research area) -- log a durable note there when a genuinely
+notable pattern turns up, don't let it evaporate after just this one chat response.
+
+**DB access notes:**
+- The live DB sees heavy write contention from concurrent SWIM ingest containers -- use a short `.timeout`
+  (`sqlite3 -cmd ".timeout 3000"`) and tolerate occasional lock failures by retrying, rather than blocking
+  indefinitely. For a longer analysis session (many queries), copy the file first (`cp` to a scratch path
+  with real disk space -- this DB is large, tens of GB; the harness's own `/tmp` scratchpad is too small)
+  and query the stable copy instead of hammering the live file repeatedly.
+- `raw_json` is the raw FIXM/NAS XML message -- `departurePoint`/`arrivalPoint` under `<departure>`/`<arrival>`
+  give the actual leg's airports (more reliable for multi-leg detection than the summary columns alone, which
+  only show the CURRENT leg's origin/destination, not the history of prior legs under the same flight number).
+
+---
+
 ## Step 2: ACARS lookup (runs after hex confirmed; parallel with Step 2a)
 
 Once `<CONFIRMED_HEX>` is known, query airframes.io for recent ACARS messages:

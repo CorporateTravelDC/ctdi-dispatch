@@ -21,6 +21,13 @@
 # attacker-controlled is ever re-embedded into a shell command.
 set -uo pipefail
 
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh"; then
+    echo "cf-honeypot-notes: INTEGRITY CHECK FAILED -- refusing to run" >&2
+    exit 1
+fi
+
 ip="${1:?usage: cf-honeypot-notes.sh <ip>}"
 LOG="/var/log/nginx/honeypot.log"
 

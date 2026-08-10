@@ -13,6 +13,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Signed-manifest integrity self-check (docs/COMPLIANCE_SECURITY.md "Signed
+# Manifest Integrity") -- this script runs as root and builds/loads SELinux
+# policy modules; worth the same "verify before doing anything" treatment as
+# the automated fail2ban/skill entrypoints, even though it's operator-run.
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh"; then
+    echo "[FAIL] Integrity check failed -- refusing to run apply-selinux-policy.sh" >&2
+    exit 5
+fi
+
 DRY_RUN=false
 RAW_IMAGE_DIR="${HOME}"
 

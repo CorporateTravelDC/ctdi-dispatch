@@ -13,7 +13,7 @@ Image=localhost/corporatetraveldc-poller:latest
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=python3 poller/skills/ops_brief.py
+Exec=scripts/verified-exec.sh python3 src/poller/skills/ops_brief.py
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the

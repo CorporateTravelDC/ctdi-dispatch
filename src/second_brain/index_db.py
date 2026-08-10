@@ -34,14 +34,29 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+def _require_nextcloud_user() -> str:
+    """No silent "operator" fallback -- see second_brain.webdav_client's identical
+    helper for the 2026-08-09 incident this avoids (a vault write silently
+    landing in the retired operator account with no error anywhere)."""
+    user = os.environ.get("NEXTCLOUD_ADMIN_USER")
+    if not user:
+        raise RuntimeError(
+            "NEXTCLOUD_ADMIN_USER is not set. Source "
+            "/etc/corporatetraveldc/dispatch.env, or export "
+            "NEXTCLOUD_ADMIN_USER=corporatetraveldc explicitly, before importing "
+            "second_brain.index_db."
+        )
+    return user
+
+
 INDEX_DB     = os.environ.get("SECOND_BRAIN_INDEX_DB", "/var/lib/corporatetraveldc/second_brain_index.db")
 WEBDAV_BASE  = os.environ.get("NEXTCLOUD_WEBDAV_BASE", "http://127.0.0.1:8090/remote.php/dav/files")
-NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "operator")
+NEXTCLOUD_USER = _require_nextcloud_user()
 # Password is read from the same secrets file the Nextcloud Quadlet uses --
 # never hardcoded, never logged, never printed.
 _SECRETS_FILE = os.environ.get(
     "NEXTCLOUD_SECRETS_FILE",
-    os.path.expanduser("~/.config/nextcloud/nextcloud-secrets.env"),
+    "/etc/corporatetraveldc/dispatch-secrets.env",
 )
 
 _DAV_NS = "{DAV:}"

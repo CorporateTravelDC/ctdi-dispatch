@@ -14,24 +14,56 @@ lives under a dedicated non-admin "corporatetraveldc" Nextcloud account. The
 business folder stays nested (BUSINESS_ROOT="corporatetraveldc"), so the live
 DAV path is files/corporatetraveldc/corporatetraveldc/ -- i.e. only the account
 changed, not the folder layout. Because this module is entirely env-driven
-(NEXTCLOUD_ADMIN_USER, default "operator"), NO code change was needed: the cutover
-was a pure env flip in dispatch.env (NEXTCLOUD_ADMIN_USER=corporatetraveldc) +
-a fresh app-password for that account in dispatch-secrets.env. operator's home no
-longer contains the vault at all, so the folder-name disclosure gap is closed.
+(NEXTCLOUD_ADMIN_USER), NO code change was needed: the cutover was a pure env
+flip in dispatch.env (NEXTCLOUD_ADMIN_USER=corporatetraveldc) + a fresh
+app-password for that account in dispatch-secrets.env.
 (The earlier 2026-08-06 note about a "flattened BUSINESS_ROOT" split that was
 drafted-but-never-run is superseded: we deliberately kept the folder nested and
 only swapped the account, which is why the same code path serves both eras.)
+
+2026-08-09: NEXTCLOUD_ADMIN_USER's silent "operator" default was removed (see
+_require_nextcloud_user() below) after it caused a real incident: an ad hoc
+interactive run of second_brain.remember without dispatch.env sourced wrote a
+genuine vault note to operator's (retired) account instead of corporatetraveldc's,
+with no error anywhere -- the write succeeded, the read-back succeeded, it just
+silently went to the wrong account. Recovered by hand (copied the file into
+the correct account's data dir, removed the stray copy, occ files:scan on
+both). Now raises immediately at import if the env var isn't set, rather than
+guessing which account you meant.
 """
 import os
 from xml.etree import ElementTree as ET
 
 import requests
 
+def _require_nextcloud_user() -> str:
+    """No silent fallback (2026-08-09 postmortem): a `NEXTCLOUD_ADMIN_USER`-less
+    interactive/ad hoc invocation of this module used to default to "operator" --
+    the account, RETIRED 2026-08-08 by the vault/account split -- and silently
+    wrote a real vault note there instead of the current corporatetraveldc
+    account. The write itself succeeded (no error anywhere), so nothing caught
+    it; the note only turned up missing when someone went looking for it in
+    the UI. Fail loudly at import time instead: production containers already
+    get this from dispatch.env's EnvironmentFile, so this only ever fires for
+    the ad hoc case that needs it."""
+    user = os.environ.get("NEXTCLOUD_ADMIN_USER")
+    if not user:
+        raise RuntimeError(
+            "NEXTCLOUD_ADMIN_USER is not set. This used to silently default to "
+            "the retired 'operator' account (see this function's docstring for why "
+            "that's exactly the failure mode being avoided) -- source "
+            "/etc/corporatetraveldc/dispatch.env, or export "
+            "NEXTCLOUD_ADMIN_USER=corporatetraveldc explicitly, before importing "
+            "second_brain.webdav_client."
+        )
+    return user
+
+
 WEBDAV_BASE = os.environ.get("NEXTCLOUD_WEBDAV_BASE", "http://127.0.0.1:8090/remote.php/dav/files")
-NEXTCLOUD_USER = os.environ.get("NEXTCLOUD_ADMIN_USER", "operator")
+NEXTCLOUD_USER = _require_nextcloud_user()
 _SECRETS_FILE = os.environ.get(
     "NEXTCLOUD_SECRETS_FILE",
-    os.path.expanduser("~/.config/nextcloud/nextcloud-secrets.env"),
+    "/etc/corporatetraveldc/dispatch-secrets.env",
 )
 HOST_HEADER = "cloud.example.com"
 BUSINESS_ROOT = "corporatetraveldc"

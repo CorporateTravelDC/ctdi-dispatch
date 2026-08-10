@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 minutes -- check UltraFeeder/ADS-B local receive heartbeat for sustained silence
+Requires=corporatetraveldc-adsb-feed-silence-watchdog.service
+
+[Timer]
+OnCalendar=*:1/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

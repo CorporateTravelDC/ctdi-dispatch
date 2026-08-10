@@ -3389,6 +3389,32 @@ def init_db_v22() -> None:
                 c.execute(stmt)
 
 
+def _extract_aircraft_hex_registration(raw_xml: str | None) -> tuple[str | None, str | None]:
+    """flight_events.raw_json actually holds the raw FDPS FIXM XML text
+    (not JSON, despite the column name) -- see ingest/parsers/fdps_parser.py
+    for the full namespace-aware parse this mirrors a narrow slice of.
+    The <aircraftDescription> element carries aircraftAddress (ICAO 24-bit
+    hex) and registration (tail number) as plain XML attributes, e.g.:
+        <aircraftDescription ... aircraftAddress="AB2C8E" ... registration="N819UA" ...>
+
+    A small targeted regex is used here rather than importing
+    fdps_parser.py's namespace-aware ElementTree helpers (those are
+    module-private and this only needs two flat attributes, not a full
+    tree walk) or a fresh XML parse in common/db.py (keeps this module's
+    dependency footprint as-is). Returns (None, None) if either attribute
+    is absent -- normal for a flight plan that hasn't had an aircraft
+    assigned yet, not an error."""
+    if not raw_xml:
+        return None, None
+    import re
+    hex_m = re.search(r'aircraftAddress="([0-9A-Fa-f]{6})"', raw_xml)
+    reg_m = re.search(r'\bregistration="([^"]+)"', raw_xml)
+    return (
+        hex_m.group(1).upper() if hex_m else None,
+        reg_m.group(1) if reg_m else None,
+    )
+
+
 def get_flight_plan_by_callsign(callsign: str) -> dict | None:
     """Confirmed flight-plan details from FAA FDPS (SWIM/SFDPS FIXM feed),
     keyed by ICAO callsign (e.g. 'UAL2185' -> airline='UAL', flight_num='2185').
@@ -3398,7 +3424,15 @@ def get_flight_plan_by_callsign(callsign: str) -> dict | None:
     (feed coverage gap, callsign not yet filed, or genuinely no match).
     Prefers a non-cancelled row when both a stale cancelled entry and a
     fresher active/proposed one exist for the same reused callsign.
-    """
+
+    2026-08-10: the returned dict now also carries "hex" and
+    "registration" keys, parsed from raw_json via
+    _extract_aircraft_hex_registration() -- added so callers (see
+    _check_flight_fdps_cache in poller/main.py) can detect a tail/airframe
+    reassignment on an already-watchlisted flight, not just a destination
+    or cancellation change. Both are None if the flight plan doesn't
+    carry an aircraft assignment yet (e.g. still "proposed" upstream of
+    equipment assignment) -- a normal state, not a parse failure."""
     import re
     m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", callsign.strip())
     if not m:
@@ -3412,7 +3446,11 @@ def get_flight_plan_by_callsign(callsign: str) -> dict | None:
             ORDER BY (status != 'cancelled') DESC, updated_at DESC
             LIMIT 1
         """, (airline, flight_num)).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        plan = dict(row)
+        plan["hex"], plan["registration"] = _extract_aircraft_hex_registration(plan.get("raw_json"))
+        return plan
 
 
 def get_flight_plan_by_flight_num(callsign_or_number: str,
@@ -4083,6 +4121,55 @@ def init_db_v30() -> None:
 STDDS_SAFETY_HISTORY_AIRPORTS = frozenset({"KDCA", "KIAD", "KBWI"})
 
 
+# 2026-08-09: additive columns for vessel physical dimensions, added ahead
+# of the ingestion path that would populate them (nothing currently writes
+# these -- see init_db_v31 docstring). Nullable REAL, safe on every
+# existing row. ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite, so
+# each statement is tried independently and a "duplicate column" error
+# (already applied) is swallowed -- same pattern as SCHEMA_V23/V29.
+SCHEMA_V31 = """
+ALTER TABLE vessel_events ADD COLUMN loa_m     REAL;
+ALTER TABLE vessel_events ADD COLUMN beam_m    REAL;
+ALTER TABLE vessel_events ADD COLUMN draught_m REAL;
+"""
+
+
+def init_db_v31() -> None:
+    """Apply v31 schema -- vessel_events.loa_m/beam_m/draught_m. See
+    SCHEMA_V31 comment above.
+
+    Honest scope note (2026-08-09, per operator request to break tanker/
+    bulk-carrier traffic down by weight class -- Panamax, Neopanamax,
+    Suezmax, Aframax, VLCC/ULCC, Handysize/Handymax/Capesize/VLOC, etc.):
+    those classes are conventionally defined by vessel length/beam/draught
+    (constrained by which canals/straits a hull can transit), NOT by the
+    AIS ship_type code, which only has coarse 10-wide buckets (70-79
+    "cargo", 80-89 "tanker") with no size information at all. AIS Static
+    and Voyage Data messages (Type 5) DO carry dimension-to-bow/stern/
+    port/starboard fields that let length-overall and beam be derived --
+    but nothing in this codebase captures them yet: _norm_vessel() in
+    runner/main.py (all three sources -- local, aishub.net, Kpler) reads
+    only position/nav fields today, and AISHub's exact field names for
+    those dimensions (commonly A/B/C/D/DRAUGHT in AIS parlance, but not
+    confirmed against a real AISHub payload in this codebase) need
+    verifying against a live response once AIS_AISHUB_ID is actually
+    registered, rather than guessed and shipped unverified. This migration
+    only adds the columns so _tanker_weight_class()/_bulk_carrier_
+    weight_class() below have somewhere to read from the moment that
+    ingestion wiring lands -- both currently return "insufficient_data"
+    for every row, honestly, since loa_m is never populated yet."""
+    with conn() as c:
+        for stmt in SCHEMA_V31.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
 def insert_safety_status_history(airport: str, control: str | None,
                                   previous_bitmask: str | None,
                                   new_bitmask: str, changed_at: str) -> None:
@@ -4375,6 +4462,162 @@ def analyze_train_patterns(min_samples: int = 5, drift_minutes_flag: int = 10) -
     }
 
 
+def _vessel_class_for_ship_type(ship_type: str | None) -> str:
+    """Classify an AIS ship-type code (ITU-R M.1371 numeric code, stored
+    as-is from AISHub's shiptype/TYPE/shipType fields -- see runner/main.py)
+    into the buckets ITU-R M.1371 actually distinguishes. Expanded
+    2026-08-09 per operator request to cover the full multi-domain set
+    (motor vessels, motor/sailing/pleasure yachts and vessels, passenger/
+    cruise, patrol, cargo, tanker) rather than only passenger/cargo/tanker.
+
+    36 ("Sailing") and 37 ("Pleasure Craft") are dedicated AIS codes --
+    independent confirmation for the SV/SY and MY/PY name-prefix signal
+    below, not a guess. 55 ("Law Enforcement") is the closest AIS code to
+    "patrol vessel" (PV); there is no dedicated AIS code for "motor
+    vessel" specifically since that describes propulsion, not vessel
+    class -- MV is only derivable from the name prefix.
+
+    60-69 ("Passenger") remains the closest available signal for cruise
+    ships specifically -- AIS has no dedicated cruise code, so a cruise
+    ship and a harbor water-taxi both report somewhere in 60-69.
+
+    70-79 ("Cargo") and 80-89 ("Tanker") are as granular as AIS ship_type
+    gets: container ship vs. bulk/general cargo, and crude vs. product vs.
+    chemical tanker, are NOT distinguishable from this code alone -- that
+    would need an IMO-number cross-reference against a vessel-type
+    registry (e.g. IHS Markit/Lloyd's or a free IMO dataset), a separate
+    future data source, not something AIS itself carries. Weight-class
+    breakdown for cargo/tanker (Panamax, Neopanamax, Suezmax, Aframax,
+    VLCC/ULCC, Handysize/Handymax/Capesize/VLOC) is handled separately by
+    _tanker_weight_class()/_bulk_carrier_weight_class() below, gated on
+    loa_m (see SCHEMA_V31) -- not by this function, since size and cargo
+    type are independent axes."""
+    try:
+        code = int(ship_type)
+    except (TypeError, ValueError):
+        return "unknown"
+    if code == 36:
+        return "sailing"
+    if code == 37:
+        return "pleasure_craft"
+    if code == 50:
+        return "pilot_vessel"
+    if code == 51:
+        return "search_and_rescue"
+    if code == 55:
+        return "law_enforcement/patrol"
+    if 60 <= code <= 69:
+        return "passenger/cruise-class"
+    if 70 <= code <= 79:
+        return "cargo"
+    if 80 <= code <= 89:
+        return "tanker"
+    return "other"
+
+
+# Tanker weight classes, by length-overall (LOA, meters) -- the
+# conventional definition (constrained by which canals/straits a hull can
+# transit) uses deadweight tonnage (DWT), which AIS does not carry at all;
+# LOA is the closest proxy derivable from AIS dimension fields (once
+# ingested -- see SCHEMA_V31/init_db_v31), so these bands are approximate
+# and meant to be replaced with real DWT thresholds if a vessel-registry
+# lookup is ever added. Bands drawn from standard tanker-class LOA ranges:
+# Panamax ~228m, Aframax ~245m, Suezmax ~275m, VLCC ~330m, ULCC ~350m+.
+_TANKER_WEIGHT_CLASSES = (
+    (228, "Panamax"),
+    (245, "Aframax"),
+    (275, "Suezmax"),
+    (330, "VLCC"),
+    (float("inf"), "ULCC"),
+)
+
+# Bulk-carrier weight classes, by LOA -- same DWT-vs-LOA caveat as tankers
+# above. Bands: Handysize ~190m, Handymax/Supramax ~200m, Panamax ~225m,
+# Capesize ~300m, VLOC (Very Large Ore Carrier) 300m+.
+_BULK_CARRIER_WEIGHT_CLASSES = (
+    (190, "Handysize"),
+    (200, "Handymax/Supramax"),
+    (225, "Panamax"),
+    (300, "Capesize"),
+    (float("inf"), "VLOC"),
+)
+
+# Neopanamax (New Panamax, post-2016 expanded locks): ~366m LOA / 49m beam
+# ceiling, spans the top of several of the classes above -- checked first
+# since it's a beam-gated class the LOA-only bands can't express alone.
+_NEOPANAMAX_MAX_LOA_M = 366.0
+_NEOPANAMAX_MAX_BEAM_M = 49.0
+
+
+def _weight_class_from_loa(loa_m: float | None, beam_m: float | None,
+                            bands: tuple) -> str:
+    """Shared lookup for _tanker_weight_class/_bulk_carrier_weight_class.
+    Returns "insufficient_data" when loa_m is missing -- honest today for
+    every row, since nothing populates loa_m yet (see SCHEMA_V31).
+
+    Neopanamax is beam-gated (~49m ceiling), not just length-gated, so it
+    can't be expressed as one more LOA-only band in the tuple below without
+    also silently reclassifying real VLCC/Capesize/VLOC/ULCC hulls that
+    happen to share a similar length but are actually too beamy for the
+    expanded locks. It's checked as a special case instead, and only when
+    beam_m is actually known -- without it, a wide hull can't be told apart
+    from a Neopanamax one on length alone, so this deliberately falls
+    through to the plain LOA bands rather than guessing."""
+    if loa_m is None:
+        return "insufficient_data"
+    second_largest_max = bands[-2][0]
+    if (beam_m is not None and loa_m > second_largest_max
+            and loa_m <= _NEOPANAMAX_MAX_LOA_M and beam_m <= _NEOPANAMAX_MAX_BEAM_M):
+        return "Neopanamax"
+    for max_loa, label in bands:
+        if loa_m <= max_loa:
+            return label
+    return bands[-1][1]
+
+
+def _tanker_weight_class(loa_m: float | None, beam_m: float | None = None) -> str:
+    """See _TANKER_WEIGHT_CLASSES/_weight_class_from_loa docstrings.
+    Not yet wired to real data -- see init_db_v31()."""
+    return _weight_class_from_loa(loa_m, beam_m, _TANKER_WEIGHT_CLASSES)
+
+
+def _bulk_carrier_weight_class(loa_m: float | None, beam_m: float | None = None) -> str:
+    """See _BULK_CARRIER_WEIGHT_CLASSES/_weight_class_from_loa docstrings.
+    Not yet wired to real data -- see init_db_v31()."""
+    return _weight_class_from_loa(loa_m, beam_m, _BULK_CARRIER_WEIGHT_CLASSES)
+
+
+# Standard maritime vessel-name prefixes -- independent signal from the AIS
+# ship_type code, and often more reliable in practice since ship_type is
+# self-reported and frequently left at a generic/default value, while the
+# name prefix is baked into the vessel's registered name itself. Ordered
+# longest-first so a two-letter prefix is checked before any shorter
+# collision (none currently, kept for safety if more are added later).
+_VESSEL_NAME_PREFIXES = ("MV", "MY", "SV", "SY", "PV", "PY")
+
+
+def _vessel_name_prefix(name: str | None) -> str | None:
+    """Extract a standard vessel-name prefix if the vessel's AIS-reported
+    name starts with one, space- or period-separated (e.g. "MV FREEDOM OF
+    THE SEAS", "M/V FREEDOM..."). Added 2026-08-09 per operator request --
+    each of MV (motor vessel), MY (motor yacht), SV (sailing vessel), SY
+    (sailing yacht), PV (patrol vessel), PY (pleasure yacht) needs to be
+    independently queryable in analyze_vessel_patterns()'s output, not
+    folded into a single class. Cruise ships most commonly carry MV (large
+    passenger/cargo motor vessels) or occasionally MY: this prefix and the
+    ship_type-derived vessel_class are deliberately kept as two separate
+    fields since either alone can miss what the other catches (ship_type
+    is self-reported and often stale/generic; not every vessel's name
+    carries a prefix at all)."""
+    if not name:
+        return None
+    cleaned = name.strip().upper().replace("/", "").replace(".", "")
+    first_token = cleaned.split(" ", 1)[0] if cleaned else ""
+    if first_token in _VESSEL_NAME_PREFIXES:
+        return first_token
+    return None
+
+
 def analyze_vessel_patterns(min_samples: int = 5) -> dict:
     """vessel_events analog of analyze_flight_number_patterns. Vessels have
     no flight-number equivalent, so "route-lock" here means: per-MMSI, does
@@ -4389,7 +4632,7 @@ def analyze_vessel_patterns(min_samples: int = 5) -> dict:
 
     with conn() as c:
         rows = c.execute("""
-            SELECT mmsi, name, lat, lon FROM vessel_events
+            SELECT mmsi, name, lat, lon, ship_type, loa_m, beam_m FROM vessel_events
             WHERE mmsi IS NOT NULL AND lat IS NOT NULL AND lon IS NOT NULL
         """).fetchall()
 
@@ -4413,17 +4656,225 @@ def analyze_vessel_patterns(min_samples: int = 5) -> dict:
             continue
         top_cluster, top_count = max(cluster_counts.items(), key=lambda kv: kv[1])
         dominance = top_count / total
+        vclass = _vessel_class_for_ship_type(samples[0]["ship_type"])
+        loa_m = samples[0]["loa_m"]
+        beam_m = samples[0]["beam_m"]
+        # Weight class is only meaningful for the two bulk-cargo-carrying
+        # classes -- a passenger/sailing/pleasure/patrol vessel doesn't
+        # have a Panamax/Capesize equivalent, so this stays None for those
+        # rather than reporting a misleading "insufficient_data" on
+        # classes it was never meant to apply to.
+        if vclass == "tanker":
+            weight_class = _tanker_weight_class(loa_m, beam_m)
+        elif vclass == "cargo":
+            weight_class = _bulk_carrier_weight_class(loa_m, beam_m)
+        else:
+            weight_class = None
         route_locks.append({
             "mmsi": mmsi, "name": samples[0]["name"],
+            "vessel_class": vclass,
+            "name_prefix": _vessel_name_prefix(samples[0]["name"]),
+            "weight_class": weight_class,
             "dominant_cluster_lat": top_cluster[0], "dominant_cluster_lon": top_cluster[1],
             "dominance": round(dominance, 3), "samples": total,
             "distinct_clusters": len(cluster_counts),
         })
     route_locks.sort(key=lambda x: -x["samples"])
 
+    name_prefix_counts = {p: 0 for p in _VESSEL_NAME_PREFIXES}
+    for x in route_locks:
+        if x["name_prefix"]:
+            name_prefix_counts[x["name_prefix"]] += 1
+
     return {
         "route_locks": route_locks,
+        "passenger_cruise_class_count": sum(
+            1 for x in route_locks if x["vessel_class"] == "passenger/cruise-class"
+        ),
+        # Independently queryable per-prefix counts (MV/MY/SV/SY/PV/PY) --
+        # see _vessel_name_prefix docstring for why this is kept separate
+        # from vessel_class/passenger_cruise_class_count rather than merged.
+        "name_prefix_counts": name_prefix_counts,
         "sample_window": "vessel_events (accumulating from today forward, AISHub-watchlisted sweep only)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def analyze_disruption_weather_split(days: int = 30, facilities: list[str] | None = None) -> dict:
+    """Generalizes the 2026-08-09 ad hoc nas_programs weather-vs-facility
+    analysis (see that session's vault note,
+    01-Sources/transport-patterns/2026-08-09-30day-facility-weather-
+    analysis.md) into reusable code for the new recurring disruption-
+    weather digest.
+
+    nas_programs is the only transport-modality source in this platform
+    with a genuinely reliable, FAA-sourced, per-event REASON string (e.g.
+    "WX:Thunderstorms", "VOL:Compacted Demand", "RWY:Construction").
+    Deliberately NOT based on flight_events.status='cancelled' -- that
+    field was confirmed contaminated by FDPS flight-PLAN-cancellation
+    noise (refiled/amended plans, not real operational cancellations),
+    see the same vault note for the full root-cause trace.
+
+    facilities: defaults to the DC-area + major connecting-hub list used
+    in the 2026-08-09 session; pass an explicit list to scope elsewhere.
+    """
+    if facilities is None:
+        facilities = ["DCA", "IAD", "BWI", "ORD", "ATL", "EWR", "LGA", "JFK",
+                      "MCO", "DFW", "MIA", "FLL", "DEN", "BOS", "MDW", "SFO",
+                      "CLT", "PHL", "IAH", "LAS", "LAX", "MSP"]
+
+    placeholders = ",".join("?" for _ in facilities)
+    with conn() as c:
+        rows = c.execute(f"""
+            SELECT facility, json_extract(raw_json,'$.reason') as reason
+            FROM nas_programs
+            WHERE fetched_at >= strftime('%s','now',?)
+              AND facility IN ({placeholders})
+        """, (f"-{days} days", *facilities)).fetchall()
+
+    from collections import defaultdict
+    stats: dict = defaultdict(lambda: {"total": 0, "weather": 0})
+    for r in rows:
+        reason = r["reason"] or ""
+        stats[r["facility"]]["total"] += 1
+        if reason.startswith("WX:"):
+            stats[r["facility"]]["weather"] += 1
+
+    facility_breakdown = []
+    for facility, s in stats.items():
+        total = s["total"]
+        weather = s["weather"]
+        facility_breakdown.append({
+            "facility": facility, "total_programs": total,
+            "weather_driven": weather, "facility_or_other": total - weather,
+            "pct_weather": round(100.0 * weather / total, 1) if total else None,
+        })
+    facility_breakdown.sort(key=lambda x: -x["total_programs"])
+
+    return {
+        "facility_breakdown": facility_breakdown,
+        "lookback_days": days,
+        "sample_window": f"nas_programs (real {days}-day FAA/SWIM TFMS history)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def analyze_train_disruption_summary(days: int = 30, delay_threshold_minutes: int = 15,
+                                      nec_facilities: list[str] | None = None) -> dict:
+    """Train-side counterpart to analyze_disruption_weather_split(). Real
+    delay-rate/severity metrics come straight from train_events.delay_minutes
+    (genuinely reported by Amtrak's own amtraker v3 feed).
+
+    A true per-delay weather-vs-non-weather split -- the way
+    nas_programs.reason gives flights -- is NOT possible from data this
+    platform ingests: confirmed 2026-08-09 that no "cause"/"reason"/
+    "delayReason" field exists anywhere in ingest/amtrak.py,
+    poller/fetchers/amtrak.py, or train_events' own schema, and
+    nws_alerts holds no retained history (current-snapshot-only, actively
+    expiring inactive alerts -- see feed_db_integrity_check.py's
+    docstring). Fabricating a per-train weather attribution from data
+    that doesn't carry one would repeat the exact "cancelled means
+    cancelled" mistake already caught and discarded for flight_events
+    tonight.
+
+    What this DOES provide instead, explicitly labeled as a REGIONAL
+    PROXY rather than a per-train attribution: how many distinct days in
+    the lookback window had a confirmed WX:-tagged nas_programs entry at
+    a Northeast-Corridor-relevant airport (real FAA-sourced ground truth,
+    just for aviation, not rail) -- context for whether the window was
+    regionally weather-heavy, not a claim about any specific train
+    delay's actual cause."""
+    if nec_facilities is None:
+        nec_facilities = ["DCA", "BWI", "PHL", "EWR", "JFK", "LGA", "BOS"]
+
+    with conn() as c:
+        train_rows = c.execute("""
+            SELECT train_number, route_name, delay_minutes
+            FROM train_events
+            WHERE fetched_at >= strftime('%s','now',?)
+              AND delay_minutes IS NOT NULL
+        """, (f"-{days} days",)).fetchall()
+
+    from collections import defaultdict
+    by_train: dict = defaultdict(list)
+    for r in train_rows:
+        by_train[(r["train_number"], r["route_name"])].append(r["delay_minutes"])
+
+    delay_summary = []
+    for (train_number, route_name), delays in by_train.items():
+        total = len(delays)
+        if total < 3:
+            continue
+        avg_delay = sum(delays) / total
+        pct_over_threshold = 100.0 * sum(1 for d in delays if d >= delay_threshold_minutes) / total
+        delay_summary.append({
+            "train_number": train_number, "route_name": route_name,
+            "samples": total, "avg_delay_minutes": round(avg_delay, 1),
+            "pct_over_threshold": round(pct_over_threshold, 1),
+        })
+    delay_summary.sort(key=lambda x: -x["pct_over_threshold"])
+
+    placeholders = ",".join("?" for _ in nec_facilities)
+    with conn() as c:
+        wx_row = c.execute(f"""
+            SELECT COUNT(DISTINCT date(fetched_at, 'unixepoch')) as n
+            FROM nas_programs
+            WHERE fetched_at >= strftime('%s','now',?)
+              AND facility IN ({placeholders})
+              AND json_extract(raw_json,'$.reason') LIKE 'WX:%'
+        """, (f"-{days} days", *nec_facilities)).fetchone()
+        wx_days = wx_row["n"] if wx_row else 0
+
+    return {
+        "delay_summary": delay_summary,
+        "regional_weather_context": {
+            "wx_flagged_days": wx_days, "window_days": days,
+            "facilities_checked": nec_facilities,
+            "note": ("Regional proxy only (aviation WX ground-programs near the NEC), "
+                     "NOT a per-train delay-cause attribution -- see docstring."),
+        },
+        "sample_window": f"train_events (real retained history since 2026-07-28 backfill, {days}-day lookback)",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def analyze_vessel_disruption_summary(days: int = 30) -> dict:
+    """Maritime counterpart to analyze_disruption_weather_split()/
+    analyze_train_disruption_summary(). Structurally ready, but
+    vessel_events has zero rows in production as of 2026-08-09
+    (AIS_AISHUB_ID not registered -- see analyze_vessel_patterns
+    docstring), so this honestly reports insufficient_data rather than
+    fabricating a result from an empty table.
+
+    Once real position data flows, this would compute per-MMSI dwell/
+    delay anomalies (e.g. unusually long time in a port-approach cluster
+    vs. that vessel's own historical norm) the way train delay_minutes
+    does today -- but there is no Amtrak-style pre-computed "delay" field
+    for vessels; it would need deriving from position-cluster dwell time.
+    That derivation is deliberately not built yet since there is no real
+    data to validate it against -- writing untested inference logic
+    against an empty table risks exactly the kind of unverified,
+    plausible-looking-but-wrong signal this session has repeatedly
+    caught and discarded elsewhere (flight_events cancellation noise,
+    the operator/nextcloud silent-fallback bug)."""
+    with conn() as c:
+        row = c.execute("SELECT COUNT(*) as n FROM vessel_events").fetchone()
+        total = row["n"] if row else 0
+
+    if total == 0:
+        return {
+            "status": "insufficient_data",
+            "reason": ("vessel_events has zero rows -- AIS_AISHUB_ID is not configured, "
+                      "so no position data has ever been captured to analyze."),
+            "lookback_days": days,
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+    return {
+        "status": "not_yet_implemented",
+        "reason": (f"vessel_events has {total} rows but the dwell-time-anomaly "
+                  "derivation logic itself hasn't been built/validated yet."),
+        "lookback_days": days,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
@@ -4439,4 +4890,19 @@ def update_watchlist_destination(entry_id: str, destination: str) -> None:
         c.execute(
             "UPDATE watchlist_entries SET destination=? WHERE id=?",
             (destination, entry_id),
+        )
+
+
+def update_watchlist_hex_registration(entry_id: str, hex_id: str, registration: str | None) -> None:
+    """Persist a confirmed tail/airframe reassignment (e.g. an FDPS-
+    detected aircraftAddress/registration change on the same flight
+    plan) onto the watchlist entry itself. Same convergence reasoning as
+    update_watchlist_destination() -- without this, _check_flight_fdps_
+    cache's hex/registration comparison would never converge and the
+    same "tail change" event would re-fire on every tick forever after a
+    genuine reassignment."""
+    with conn() as c:
+        c.execute(
+            "UPDATE watchlist_entries SET hex_id=?, registration=? WHERE id=?",
+            (hex_id, registration, entry_id),
         )

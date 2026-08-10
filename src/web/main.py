@@ -118,6 +118,7 @@ async def startup() -> None:
     db.init_db_v28()
     db.init_db_v29()
     db.init_db_v30()
+    db.init_db_v31()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────

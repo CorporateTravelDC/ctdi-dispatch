@@ -8,6 +8,13 @@
 
 set -uo pipefail
 
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/restore-network.sh"; then
+    echo "restore-network: INTEGRITY CHECK FAILED -- refusing to run" >&2
+    exit 1
+fi
+
 CTDC_USER="corporatetraveldc"
 CTDC_UID=$(id -u "${CTDC_USER}" 2>/dev/null || echo "")
 XDG_USER_DIR="/run/user/${CTDC_UID}"

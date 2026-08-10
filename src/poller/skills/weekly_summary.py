@@ -39,9 +39,18 @@ Summarize the past week covering:
 3. **NAS delays** — airport delay programs and their operational impact
 4. **CPS trend** — how the Critical Predictability State trended this week
 5. **Operational notes** — patterns worth tracking going into next week
+6. **Disruption pattern (30-day rolling)** — facility/volume- vs.
+   weather-driven airports, highest-delay train routes; preserve the
+   flight side's real weather/facility split vs. the train side's
+   regional-proxy-only weather context, don't blur the two.
 
 Keep it under 500 words. Plain text for push notification.
-Be analytical — note patterns, not just events."""
+Be analytical — note patterns, not just events.
+
+NOTE: the real baked-in system prompt for this skill's Ollama model lives
+in corporatetraveldc.weekly-summary (repo root) -- this constant is
+vestigial documentation only (see _call_ollama's system=None), kept in
+sync with that Modelfile by hand."""
 
 
 def build_weekly_content() -> str:
@@ -92,6 +101,37 @@ def build_weekly_content() -> str:
         latest_narrative = alert_rows[0]["route_narrative"]
         if latest_narrative:
             sections.append("Latest route narrative:\n" + latest_narrative[:300])
+
+    # Disruption / weather-vs-facility pattern -- 2026-08-09/10 catch-up
+    # session work, same 30-day analyze_*() functions the new
+    # disruption_weather_digest.py daily skill uses. Called directly here
+    # (matching this file's existing style of direct db queries) rather
+    # than reading that skill's vault output, so weekly-summary has no
+    # dependency on the daily digest having already run.
+    disruption = db.analyze_disruption_weather_split(days=30)
+    train_disruption = db.analyze_train_disruption_summary(days=30)
+    top_facilities = disruption["facility_breakdown"][:8]
+    if top_facilities:
+        sections.append(
+            "30-day disruption (flights, real FAA/SWIM weather-vs-facility split):\n"
+            + "\n".join(
+                f"- {x['facility']}: {x['total_programs']} programs, {x['pct_weather']}% weather-driven"
+                for x in top_facilities
+            )
+        )
+    top_trains = train_disruption["delay_summary"][:6]
+    if top_trains:
+        wx_ctx = train_disruption["regional_weather_context"]
+        sections.append(
+            "30-day train delay rate (regional weather proxy only, NOT a per-train "
+            f"cause attribution -- {wx_ctx['wx_flagged_days']}/{wx_ctx['window_days']} days "
+            "regionally weather-flagged near the NEC):\n"
+            + "\n".join(
+                f"- Train {x['train_number']} ({x['route_name']}): "
+                f"{x['pct_over_threshold']}% of {x['samples']} obs delayed, avg {x['avg_delay_minutes']}min"
+                for x in top_trains
+            )
+        )
 
     return "\n\n".join(sections)
 

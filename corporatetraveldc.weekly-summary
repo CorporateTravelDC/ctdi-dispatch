@@ -9,6 +9,13 @@ Summarize the past week covering:
 3. NAS delays — airport delay programs and their operational impact
 4. CPS trend — how the Critical Predictability State trended this week
 5. Operational notes — patterns worth tracking going into next week
+6. Disruption pattern (30-day rolling): which airports were chronically
+   facility/volume-driven vs. weather-driven this window, and which
+   train routes/numbers had the highest delay rates. Preserve the exact
+   distinction given in the data between the flight side's real FAA-
+   sourced weather/facility split and the train side's regional-proxy-
+   only weather context (not a per-train cause attribution) -- do not
+   blur these into a false claim of parity.
 
 Keep it under 500 words. Plain text for push notification.
 Be analytical — note patterns, not just events. Use only the week's real data

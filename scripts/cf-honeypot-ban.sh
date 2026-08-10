@@ -37,7 +37,21 @@
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
 NOTES_SCRIPT="${SELF_DIR}/cf-honeypot-notes.sh"
+
+# Signed-manifest integrity check (docs/COMPLIANCE_SECURITY.md "Signed
+# Manifest Integrity") -- refuse to run at all if this script or the notes
+# script it calls doesn't match its signed hash. A script can't fully
+# guarantee it detects tampering with its OWN check (see that doc section
+# for the honest limitation); fail2ban's action.d config chains an
+# independent verify-manifest.sh call before ever invoking this script, as
+# defense in depth against exactly that.
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-ban.sh" \
+   || ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh"; then
+    echo "cf-honeypot-ban: INTEGRITY CHECK FAILED -- refusing to run" >&2
+    exit 1
+fi
 
 mode="${1:?usage: cf-honeypot-ban.sh <ban|unban> <ip> [target]}"
 ip="${2:?usage: cf-honeypot-ban.sh <ban|unban> <ip> [target]}"
