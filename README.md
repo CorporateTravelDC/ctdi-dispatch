@@ -609,4 +609,4 @@ same way. Permanent entries: edit the JSON files in
 
 ## License
 
-Proprietary. [operator LLC], LLC. All rights reserved.
+Proprietary. CS Executive Services LLC. All rights reserved.
