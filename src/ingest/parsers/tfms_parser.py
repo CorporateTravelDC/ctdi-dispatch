@@ -800,6 +800,21 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
           > amendmentData > newFlightAircraftSpecs, newSpeed/filedTrueAirSpeed,
               newCoordinationPoint[namedFix | fixRadialDistance],
               newCoordinationTime[type, text], newAltitude, newRouteOfFlight[legacyFormat]
+
+    2026-08-10: added content-aware dedup -- this was the one handler in
+    this file calling _fire_tfms_watchlist_hit with NO layer beyond
+    watchlist_event_hit's own default 5-minute entry+event_type dedup
+    (contrast _handle_track_information just above, which layers
+    _TFMS_ALERT_DEDUP's longer 30-min window on top). TFMS/FDPS rebroadcast
+    the same unchanged amendment on a cadence that can exceed 5 minutes,
+    so operator-observed "several amendments that look like the exact same
+    copy with no changes" were real repeat fires, not a misread. Keyed on
+    route_text (not just entry id, unlike track_approach's key -- ETA/
+    position naturally changes every cycle so entry-id-only keying is
+    fine there; an amendment's actual content does NOT change on a bare
+    rebroadcast, so keying on it here means an unchanged repeat is
+    suppressed indefinitely while a genuinely NEW amendment still fires
+    immediately regardless of the 30-min window).
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
     entry = _match_watchlist_flight(callsign)
@@ -809,6 +824,11 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
     amend = _find_child(body, "amendmentData") if body is not None else None
     new_route = _find_child(amend, "newRouteOfFlight") if amend is not None else None
     route_text = new_route.get("legacyFormat") if new_route is not None else None
+
+    dedup_key = content_hash(f"tfms:amendment:{entry['id']}:{route_text}")
+    if not _TFMS_ALERT_DEDUP.should_push("tfms_amendment", dedup_key):
+        return
+
     summary = "Flight plan amended" + (f": {route_text}" if route_text else "")
     detail = {
         "watchlist_trigger": "tfms_amendment",
@@ -816,6 +836,7 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
         "new_route": route_text,
     }
     _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
+    _TFMS_ALERT_DEDUP.record("tfms_amendment", dedup_key)
 
 
 def _handle_flight_route(fltd_message: ET.Element) -> None:

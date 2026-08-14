@@ -21,6 +21,21 @@ rollup, same "Latest X excerpt" pattern already used for ops-brief below
 that it "feed into second-brain daily," alongside the weekly compile
 already picking it up automatically via the existing 04-Syntheses/daily
 scan (second_brain_weekly.py, 2026-08-06 fix).
+
+2026-08-12: closes a real gap found while adding the COS26/conference
+OSINT scopes -- osint_monitor.py's scored feed (EP/security scopes,
+marketing/brand scopes, and the new "event" scope_type covering DC-area
+conferences) was never read by ANYTHING in the second-brain vault. It
+already reached ep_advance_brief.py (unscoped osint_get_feed() call
+there), but the vault itself had zero visibility into it. _osint_sections()
+below pulls the same feed but groups it by scope_type into separate,
+clearly-labeled sections (EP/security, upcoming events, market/brand
+intel, general) rather than one undifferentiated dump -- an EP threat
+item and a conference-marketing item are relevant to different future
+queries against this vault, and merging them would bury both. No new
+second_brain_weekly.py changes needed: it re-reads the past 7 days of
+THIS skill's own output rather than querying the DB itself, so whatever
+lands in the daily note here is already inherited by the weekly compile.
 """
 import logging
 import sqlite3
@@ -39,7 +54,20 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-daily"
-OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-daily:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+
+# Same scope_type groupings as osint_monitor.py -- kept as a separate copy
+# rather than importing that module's private frozensets, matching this
+# codebase's existing preference for small duplicated constants over a
+# cross-skill import for something this narrow (see route_impact.py's
+# repeated fallback-safety-net comment for the same pattern elsewhere).
+_EP_SCOPE_TYPES = frozenset({
+    "ep_threat", "ep_principal", "ep_venue", "executive_protection",
+})
+_EVENT_SCOPE_TYPES = frozenset({"event"})
+_MARKETING_SCOPE_TYPES = frozenset({
+    "brand_monitor", "market_intel", "competitor", "marketing",
+})
 
 SYSTEM_PROMPT = """You are writing a single day's operational log entry for a
 second-brain knowledge vault used by a DC-area executive chauffeur/dispatch
@@ -59,6 +87,53 @@ Critical rules:
 - Note anything a future weekly compile pass would want to link to
   (notable TFRs, weather events, CPS trend, watchlist activity).
 - Be factual, not promotional."""
+
+
+def _osint_sections(cutoff_ts: float) -> tuple[list[str], int]:
+    """Cross-domain OSINT rollup for the vault, grouped by scope_type so an
+    EP/security item, a named-event item (COS26 and the DC-area conference
+    sweep), and a marketing/brand item each land in their own labeled
+    section instead of one undifferentiated list -- see module docstring,
+    2026-08-12.
+
+    Returns (section_texts, total_item_count). Best-effort: returns ([], 0)
+    on any failure (DB unreachable, no scopes configured) rather than
+    blocking the rest of the daily rollup."""
+    try:
+        items = db.osint_get_feed(scope_id=None, min_score=4, limit=100)
+    except Exception as exc:
+        log.debug("%s: osint feed read failed (non-fatal): %s", SKILL_NAME, exc)
+        return [], 0
+
+    recent = [i for i in items if i.get("ingested_at", 0) >= cutoff_ts]
+    if not recent:
+        return [], 0
+
+    ep_items  = [i for i in recent if i.get("scope_type") in _EP_SCOPE_TYPES]
+    evt_items = [i for i in recent if i.get("scope_type") in _EVENT_SCOPE_TYPES]
+    mkt_items = [i for i in recent if i.get("scope_type") in _MARKETING_SCOPE_TYPES]
+    seen_ids  = {i["id"] for i in ep_items + evt_items + mkt_items}
+    gen_items = [i for i in recent if i["id"] not in seen_ids]
+
+    def _fmt(group: list[dict], header: str) -> str:
+        lines = [
+            f"- [{i.get('score_label', '?')}] {i.get('scope_label', '?')}: "
+            f"{i['title'][:100]}"
+            + (f" — {i['narrative'][:150]}" if i.get("narrative") else "")
+            for i in group[:8]
+        ]
+        return f"{header} ({len(group)} item(s) today):\n" + "\n".join(lines)
+
+    out = []
+    if ep_items:
+        out.append(_fmt(ep_items, "EP/security-relevant OSINT"))
+    if evt_items:
+        out.append(_fmt(evt_items, "Upcoming DC-area event intel"))
+    if mkt_items:
+        out.append(_fmt(mkt_items, "Market/brand intelligence"))
+    if gen_items:
+        out.append(_fmt(gen_items, "General OSINT"))
+    return out, len(recent)
 
 
 def build_daily_content() -> tuple[str, dict]:
@@ -127,6 +202,13 @@ def build_daily_content() -> tuple[str, dict]:
     except Exception:
         pass  # no digest today, or vault unreachable -- not fatal to the daily rollup
 
+    # 2026-08-12: cross-domain OSINT rollup -- see _osint_sections() and
+    # module docstring for why this is grouped by scope_type rather than
+    # one flat list.
+    osint_sections, osint_count = _osint_sections(day_ago)
+    sections.extend(osint_sections)
+    stats["osint_items_today"] = osint_count
+
     return "\n\n".join(sections), stats
 
 
@@ -152,6 +234,10 @@ def main() -> None:
             # headroom under the container's TimeoutStartSec=950 pending a
             # real measurement.
             timeout=300,
+            # 2026-08-12: belt-and-suspenders close of the Anthropic
+            # fallback -- see dispatch.env's ANTHROPIC_FALLBACK_ENABLED
+            # comment for the full rationale.
+            allow_anthropic=False,
         )
         if ollama_result:
             ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")

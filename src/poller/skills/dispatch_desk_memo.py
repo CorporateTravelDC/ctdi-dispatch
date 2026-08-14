@@ -36,7 +36,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 from common import config, ntfy_push as _ntfy
-from common.llm import generate as llm_generate
+from common.llm import generate as llm_generate, trim_to_token_budget
 from common.sr1_log import log_usage
 from second_brain import webdav_client
 from second_brain.index_db import INDEX_DB, index_note
@@ -46,7 +46,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "dispatch-desk-memo"
-OLLAMA_MODEL = "corporatetraveldc-pi5-dispatch-desk:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service
@@ -201,6 +201,15 @@ def main() -> None:
             )
             blocks.append(f"=== {label} ===\n{lines}")
         prompt = "\n\n".join(blocks)
+        # 2026-08-13: this is the largest raw-data prompt in the whole
+        # pipeline (90 items across 6 categories, historically observed up
+        # to ~4082 tokens) -- confirmed via a real smoke test that it alone
+        # can blow a 400s budget on this hardware, on top of the ~2050
+        # tokens DISPATCH_PERSONA now adds to every call (see that
+        # constant's own comment in common/llm.py). 2200 leaves headroom
+        # for persona (2050) + this + max_tokens=1100 output inside the
+        # shared model's num_ctx.
+        prompt = trim_to_token_budget(prompt, 2200)
 
         ollama_result = llm_generate(
             system=None, prompt=prompt,  # dedicated Modelfile carries this now
@@ -211,6 +220,12 @@ def main() -> None:
             # silently inheriting the shared OLLAMA_TIMEOUT=60s. 800s gives
             # headroom under the container's TimeoutStartSec=950.
             timeout=800,
+            # 2026-08-12: belt-and-suspenders -- the global
+            # ANTHROPIC_FALLBACK_ENABLED gate already closes this, but every
+            # skill should also close it per-call rather than rely solely on
+            # the box-wide env var. See dispatch.env's ANTHROPIC_FALLBACK_ENABLED
+            # comment for the full rationale.
+            allow_anthropic=False,
         )
         if ollama_result:
             memo_body = gate(ollama_result, source=f"{SKILL_NAME}-llm")

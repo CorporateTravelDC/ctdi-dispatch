@@ -1,7 +1,7 @@
 """
 ep-advance — Executive Protection advance brief for DC UHNWI principals.
 
-Model: ollama/corporatetraveldc-pi5-osint (mistral-nemo)
+Model: ollama/corporatetraveldc-pi5-brief (mistral-nemo)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :30 ET (corporatetraveldc-ep-advance.timer) — offset from
   ops-brief's :00 so Ollama jobs never stack back-to-back
@@ -47,11 +47,11 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL    = (
     os.getenv("OLLAMA_EP_ADVANCE_MODEL")
     or os.getenv("OLLAMA_MODEL")
-    or "corporatetraveldc-pi5-ep-advance:latest"
+    or "corporatetraveldc-pi5-brief:latest"
 )
 OLLAMA_TREND_MODEL_EP = (
     os.getenv("OLLAMA_EP_ADVANCE_TREND_MODEL")
-    or "corporatetraveldc-pi5-ep-advance-trend:latest"
+    or "corporatetraveldc-pi5-brief:latest"
 )
 MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # 2026-08-06: was 1200s. ep-advance never actually failed outright on
@@ -961,8 +961,10 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_MODEL,
-                # system omitted 2026-08-02: baked into the dedicated
-                # corporatetraveldc-pi5-ep-advance Modelfile now.
+                # system omitted -- common/llm.py's ollama_post_with_retry()
+                # injects the shared DISPATCH_PERSONA (2026-08-13). The
+                # dedicated Modelfile no longer carries any persona to fall
+                # back to; this omission is what makes the injection fire.
                 "prompt": prompt,
                 "stream": False,
                 "options": {"num_predict": 750, "temperature": 0.15},
@@ -1135,8 +1137,9 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_TREND_MODEL_EP,
-                # system omitted 2026-08-02: baked into the dedicated
-                # corporatetraveldc-pi5-ep-advance-trend Modelfile now.
+                # system omitted -- common/llm.py's ollama_post_with_retry()
+                # injects the shared DISPATCH_PERSONA (2026-08-13). See the
+                # matching comment in _call_ollama() above.
                 "prompt": trend_prompt,
                 "stream": False,
                 "options": {"num_predict": 260, "temperature": 0.15},

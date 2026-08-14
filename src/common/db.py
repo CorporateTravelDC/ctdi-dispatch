@@ -2388,15 +2388,23 @@ def init_db_v10() -> None:
 # ── OSINT scope helpers ────────────────────────────────────────────────────────
 
 def osint_add_scope(label: str, scope_type: str, query_terms: str,
-                    feed_urls: str = "", push_threshold: str = "HIGH") -> int:
-    """Create a new OSINT scope. Returns the new id."""
+                    feed_urls: str = "", push_threshold: str = "HIGH",
+                    event_name: str = "", audience: str = "", genre: str = "") -> int:
+    """Create a new OSINT scope. Returns the new id.
+
+    event_name/audience/genre (2026-08-12, SCHEMA_V32): optional structured
+    metadata for scope_type="event" -- the specific named occurrence, who
+    attends it, and what kind of event it is. Empty string (not NULL) when
+    unused so existing callers/scope types are unaffected."""
     import time as _time
     with conn() as c:
         cur = c.execute(
             """INSERT INTO osint_scopes
-               (label, scope_type, query_terms, feed_urls, push_threshold, enabled, created_at)
-               VALUES (?,?,?,?,?,1,?)""",
-            (label, scope_type, query_terms, feed_urls, push_threshold, _time.time()),
+               (label, scope_type, query_terms, feed_urls, push_threshold,
+                event_name, audience, genre, enabled, created_at)
+               VALUES (?,?,?,?,?,?,?,?,1,?)""",
+            (label, scope_type, query_terms, feed_urls, push_threshold,
+             event_name, audience, genre, _time.time()),
         )
         return cur.lastrowid
 
@@ -2424,8 +2432,9 @@ def osint_get_scope(scope_id: int) -> dict | None:
 
 def osint_update_scope(scope_id: int, **kwargs) -> bool:
     """Update specific fields on a scope. Allowed: label, scope_type, query_terms,
-    feed_urls, push_threshold, enabled."""
-    allowed = {"label", "scope_type", "query_terms", "feed_urls", "push_threshold", "enabled"}
+    feed_urls, push_threshold, enabled, event_name, audience, genre."""
+    allowed = {"label", "scope_type", "query_terms", "feed_urls", "push_threshold",
+               "enabled", "event_name", "audience", "genre"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return False
@@ -2446,20 +2455,28 @@ def osint_delete_scope(scope_id: int) -> bool:
 
 def osint_save_item(scope_id: int, title: str, url: str, source_name: str | None,
                     published_at: float | None, score: int, score_label: str,
-                    narrative: str | None, content_hash: str) -> bool:
+                    narrative: str | None, content_hash: str,
+                    headline: str | None = None, outlet: str | None = None,
+                    story_key: str | None = None) -> bool:
     """
     Persist one scored OSINT item. Returns True if new, False if already exists.
     Uses INSERT OR IGNORE so duplicate content_hash is a silent no-op.
+
+    headline/outlet/story_key (2026-08-12, SCHEMA_V33): optional cross-outlet
+    story-clustering fields -- see osint_monitor._split_headline_outlet /
+    _story_key. Callers not aware of clustering can omit them.
     """
     import time as _time
     with conn() as c:
         cur = c.execute(
             """INSERT OR IGNORE INTO osint_items
                (scope_id, title, url, source_name, published_at,
-                ingested_at, score, score_label, narrative, content_hash)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                ingested_at, score, score_label, narrative, content_hash,
+                headline, outlet, story_key)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (scope_id, title, url, source_name, published_at,
-             _time.time(), score, score_label, narrative, content_hash),
+             _time.time(), score, score_label, narrative, content_hash,
+             headline, outlet, story_key),
         )
         return cur.rowcount > 0
 
@@ -2471,7 +2488,7 @@ def osint_get_feed(scope_id: int | None = None, min_score: int = 0,
         c.row_factory = sqlite3.Row
         if scope_id is not None:
             rows = c.execute(
-                """SELECT i.*, s.label AS scope_label
+                """SELECT i.*, s.label AS scope_label, s.scope_type AS scope_type
                    FROM osint_items i JOIN osint_scopes s ON s.id=i.scope_id
                    WHERE i.scope_id=? AND i.score>=?
                    ORDER BY i.ingested_at DESC LIMIT ?""",
@@ -2479,7 +2496,7 @@ def osint_get_feed(scope_id: int | None = None, min_score: int = 0,
             ).fetchall()
         else:
             rows = c.execute(
-                """SELECT i.*, s.label AS scope_label
+                """SELECT i.*, s.label AS scope_label, s.scope_type AS scope_type
                    FROM osint_items i JOIN osint_scopes s ON s.id=i.scope_id
                    WHERE i.score>=?
                    ORDER BY i.ingested_at DESC LIMIT ?""",
@@ -3078,6 +3095,14 @@ def get_bandwidth_priority() -> dict:
     during weather-driven ground stops) keep their full share of this Pi's
     CPU/bandwidth instead of competing with six equally-weighted sessions.
     See ingest/swim_client.py's _bandwidth_priority_says_pause().
+
+    'ollama' added 2026-08-11: same low-priority feed set as 'weather', but
+    auto-triggered from common/llm.py around an in-flight Ollama call rather
+    than an NWS alert -- the active complement to that module's passive
+    load-gate wait (see OLLAMA_BACKPRESSURE_ENABLED there). Built after
+    confirming a cold model load can lose the CPU race entirely on this
+    4-core Pi when ingest is running unshed (docs/benchmarks/
+    OLLAMA_BACKPRESSURE_AB_2026-08-11.md).
     """
     with conn() as c:
         row = c.execute("SELECT * FROM bandwidth_priority_state WHERE id = 1").fetchone()
@@ -3096,10 +3121,10 @@ def get_bandwidth_priority() -> dict:
 def set_bandwidth_priority(priority: str, set_by: str = "", reason: str = "",
                            ttl_seconds: float | None = None) -> dict:
     """Set the bandwidth-priority override. priority must be 'auto', 'swim',
-    'nexrad', or 'weather'. ttl_seconds is optional -- omit for "stays until
-    explicitly changed back."."""
-    if priority not in ("auto", "swim", "nexrad", "weather"):
-        raise ValueError(f"invalid priority: {priority!r} (must be auto/swim/nexrad/weather)")
+    'nexrad', 'weather', or 'ollama'. ttl_seconds is optional -- omit for
+    "stays until explicitly changed back."."""
+    if priority not in ("auto", "swim", "nexrad", "weather", "ollama"):
+        raise ValueError(f"invalid priority: {priority!r} (must be auto/swim/nexrad/weather/ollama)")
     now = time.time()
     expires_at = (now + ttl_seconds) if ttl_seconds else None
     with conn() as c:
@@ -4160,6 +4185,73 @@ def init_db_v31() -> None:
     for every row, honestly, since loa_m is never populated yet."""
     with conn() as c:
         for stmt in SCHEMA_V31.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+# 2026-08-12: additive columns for a new osint_scopes scope_type="event" --
+# a named, dated, venue-bound occurrence (conference, summit, forum) as
+# opposed to the existing scope_types (keyword/ep_*/brand_monitor/
+# market_intel/competitor/marketing), none of which carry any structure
+# beyond a free-text query_terms/label pair. Added for COS26 (the Global
+# Chief of Staff Dialogue, Oct 22-23 2026, Atlantic Council, Washington DC)
+# -- a geopolitical conference relevant to [operator LLC] both as
+# EP/logistics context (VIP ground transport demand around the venue) and
+# as a marketing/positioning opportunity (see osint_monitor.py's
+# _EVENT_SCOPE_TYPES narrative handling). Same idempotent ALTER-TABLE
+# pattern as SCHEMA_V31 -- each statement tried independently, "duplicate
+# column" swallowed so this is safe to re-run.
+SCHEMA_V32 = """
+ALTER TABLE osint_scopes ADD COLUMN event_name TEXT;
+ALTER TABLE osint_scopes ADD COLUMN audience   TEXT;
+ALTER TABLE osint_scopes ADD COLUMN genre      TEXT;
+"""
+
+
+def init_db_v32() -> None:
+    """Apply v32 schema -- osint_scopes.event_name/audience/genre. See
+    SCHEMA_V32 comment above."""
+    with conn() as c:
+        for stmt in SCHEMA_V32.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+# 2026-08-12: cross-outlet story clustering for osint_items. Operator
+# observation: Google News RSS titles are formatted "Headline - Outlet
+# Name", and the same real-world story (e.g. COS26 coverage) routinely
+# shows up as several separate osint_items rows -- one per outlet -- with
+# an identical headline. osint_monitor.py now splits that at ingest time
+# into headline/outlet, and fingerprints the normalized headline into
+# story_key so items covering the same story (same headline, different
+# outlet) can be clustered client-side instead of appearing as unrelated
+# duplicate-looking rows. Deliberately exact-normalized-match, not fuzzy
+# similarity -- see osint_monitor._story_key docstring for why.
+SCHEMA_V33 = """
+ALTER TABLE osint_items ADD COLUMN headline  TEXT;
+ALTER TABLE osint_items ADD COLUMN outlet    TEXT;
+ALTER TABLE osint_items ADD COLUMN story_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_osint_items_story ON osint_items(story_key);
+"""
+
+
+def init_db_v33() -> None:
+    """Apply v33 schema -- osint_items.headline/outlet/story_key. See
+    SCHEMA_V33 comment above."""
+    with conn() as c:
+        for stmt in SCHEMA_V33.strip().split(";"):
             stmt = stmt.strip()
             if not stmt:
                 continue

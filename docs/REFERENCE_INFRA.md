@@ -5,6 +5,8 @@
 > consumption: no real domains, IPs, or repo-internal references. Values
 > shown as placeholders (`ops.example.com`, `100.x.x.x`) follow the same
 > convention as the rest of this repo's README.
+>
+> _Refreshed 2026-08-11 against the reference deployment._
 
 ---
 
@@ -31,7 +33,7 @@ to a different metro area, hub airports, and weather field offices.
 | `ctdi-dispatch-self-managed` | Thinner, self-managed deployment variant. |
 | `pihole-unbound-selinux` | Layer 1: Pi-hole v6 + Unbound recursive resolver + SELinux enforcing, host DNS/hardening. |
 | `corporatetravel-pi-fullstack` | Bundler repo — clones the DNS-hardening layer and the dispatch platform as submodules; one script installs the full stack. |
-| `corporatetravel-dispatch-mcp` | MCP server: thin HTTP client exposing the dispatch platform's REST API as portable agent tools (21 tools). Works with any MCP-compatible agent. |
+| `corporatetravel-dispatch-mcp` | MCP server: thin HTTP client exposing the dispatch platform's REST API as portable agent tools (34 tools; a 26-tool public-safe subset can run as a separate process). Works with any MCP-compatible agent. |
 | `agentic-management-tooling-mcp` | MCP server: vendor-agnostic agentic safety-rail primitives (mutation gates, budget tracking, session snapshots) plus flight/train/weather data tools (54 tools total). No proprietary infrastructure required — runs standalone. |
 
 ---
@@ -51,8 +53,8 @@ to a different metro area, hub airports, and weather field offices.
 | `web` | FastAPI — tiered REST API | Localhost / Tailscale by default |
 | `poller` | Async scheduler — runs fetchers on intervals, invokes skills, watches an admin trigger directory | Internal |
 | `pusher` | ntfy alert sender — polls DB every 30s for unnotified events | Internal |
-| `ingest` | FAA SWIM push feeds (NMS/Solace AMQP), REST fallback via poller when absent | Internal |
-| Runner (ops dashboard) | Operator-facing dashboard | Optionally public, e.g. `https://ops.example.com` |
+| `ingest` ×7 | Push feeds (NMS/Solace) split into per-feed containers — one per SWIM feed (FDPS/STDDS/TFMS/TBFM/ITWS/FNS) plus a "core" container (NWS push, rail, local RF) — so any single feed restarts without dropping the rest; REST fallback via poller when a push feed is absent | Internal |
+| Runner (ops dashboard) | Operator-facing dashboard | Private-overlay-network only in the reference deployment; a second instance can serve a password-gated public demo replaying archived data |
 
 All services share one SQLite database (WAL mode) — a single schema authority (`src/common/db.py`), versioned additively.
 
@@ -85,7 +87,7 @@ Amtrak / weather ──┘                                          │
 | Tier | Requirement |
 |---|---|
 | T0 | Anonymous, no token |
-| T1 | Tailscale identity header, or `cert` bearer token |
+| T1 | `cert` bearer token (network origin alone grants no tier) |
 | T2 (SHARES) | Bearer token, `tier=shares`, audit-logged |
 | Admin | Bearer token, `tier=admin` — required for `/admin/*` |
 
@@ -95,7 +97,7 @@ Token format: `ctdc_<user>_<32-char-random>`. Only a SHA-256 hash is stored serv
 
 ## 7. Watchlist system
 
-- **Permanent** entries: file-backed, watched for changes and merged into the DB.
+- **Permanent** entries: JSON-file-backed (flights, trains, and vessels by MMSI), watched for changes and merged into the DB.
 - **Transient** entries: carry an expiry timestamp, swept automatically.
 - Every watchlist event fires two ntfy pushes: a domain topic (full detail: `flight-alerts` / `train-alerts`) and a concise `dispatch` summary. A short dedup window prevents re-firing the same event repeatedly during routine data churn.
 - Flight tracking defaults to the free `airplanes.live` API, with an optional FlightAware AeroAPI fallback tier if a key is configured, plus schedule inference when live position data is unavailable.

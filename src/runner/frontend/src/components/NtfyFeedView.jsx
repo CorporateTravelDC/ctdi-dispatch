@@ -12,6 +12,7 @@ const ALL_TOPICS = [
   { id: 'train-alerts',      label: 'Rail',        color: 'go'     },
   { id: 'dispatch-debriefs', label: 'Debriefs',    color: 'muted'  },
   { id: 'ops-brief',         label: 'Brief',       color: 'muted'  },
+  { id: 'osint-alerts',      label: 'OSINT',       color: 'cyan'   },
 ]
 
 function relTime(iso) {

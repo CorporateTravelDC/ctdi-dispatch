@@ -52,7 +52,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "transport-pattern-digest"
-OLLAMA_MODEL = "corporatetraveldc-pi5-transport-digest:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
 
 SYSTEM_PROMPT = """You are writing a technical digest entry for a
 second-brain knowledge vault used by a DC-area executive chauffeur/

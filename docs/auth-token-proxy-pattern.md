@@ -1,27 +1,36 @@
 # Auth Token Proxy Pattern
 
-**Version:** 1.0  **Date:** 2026-06-13  
+**Version:** 1.1  **Date:** 2026-08-11 (verified against `src/auth/auth.py`,
+`src/runner/main.py`, and the live web container)  
 **Applies to:** dispatch-runner (port 8001) → dispatch-web (port 8000)
 
 ---
 
 ## Problem
 
-The dispatch web API exposes data at multiple trust tiers:
+The dispatch web API exposes data at multiple trust tiers. Tier resolution
+(`resolve_tier()` in `src/auth/auth.py`) is **purely bearer-token based** —
+network origin grants no tier (the old Tailscale-header/IP grant was removed
+as spoofable), and any request carrying `X-CTDI-Public: 1` (stamped by the
+public nginx vhosts) is pinned to Tier 0 regardless of token:
 
 | Tier | Who can call it | Example endpoints |
 |------|----------------|-------------------|
-| Tier 0 (anonymous) | Anyone on Tailscale | `/api/v1/tfr`, `/api/v1/weather` |
+| Tier 0 (anonymous) | Anyone who can reach the API | `/api/v1/tfr`, `/api/v1/weather` |
 | Tier 1 (cert) | Bearer token with `tier=cert` | `/api/v1/tfr-enriched`, `/api/v1/radio` |
-| Tier 2 (shares) | Bearer token with `tier=shares` | CUI-adjacent data |
-| Admin | Bearer token with `tier=admin` | `/admin/*` management endpoints |
+| Tier 2 (shares) | Bearer token with `tier=shares` | `/api/v1/cui/status` (audit-logged) |
+| Admin | Bearer token with `tier=admin` | `/admin/*`, watchlist mutations, `/api/v1/remember` |
 
 The **dispatch-runner** frontend is a React SPA. Browser JavaScript cannot hold
 secrets safely — any token embedded in the bundle or stored in localStorage is
 readable by anyone with DevTools. Handing the browser a cert-tier token would
 effectively make all Tier-1 data public to anyone who can reach the runner URL.
 
-At the same time, the runner itself is Tailscale-gated (public `ops.example.com` CF Access hostname retired 2026-08-02/03; Tailscale is now the only gate). It is a trusted internal service. It *can* hold a secret.
+At the same time, the runner itself is reachable only from trusted networks
+(`_is_trusted()` in `src/runner/main.py`: Tailscale CGNAT 100.64.0.0/10 +
+RFC1918 + loopback, honoring `CF-Connecting-IP` exclusively when present; the
+public `ops.example.com` hostname was retired 2026-08-02 and is
+hard-404'd). It is a trusted internal service. It *can* hold a secret.
 
 ---
 
@@ -63,7 +72,7 @@ Run inside the `systemd-corporatetraveldc-web` container (where the DB lives):
 
 ```bash
 podman exec systemd-corporatetraveldc-web \
-  python3 /app/ctdc_token/cli.py create \
+  python3 /app/src/ctdc_token/cli.py create \
     --user runner \
     --tier cert \
     --label enriched-proxy-runner
@@ -165,12 +174,12 @@ data. It cannot reach shares-gated (CUI) or admin endpoints.
 ```bash
 # 1. Revoke old token
 podman exec systemd-corporatetraveldc-web \
-  python3 /app/ctdc_token/cli.py revoke \
+  python3 /app/src/ctdc_token/cli.py revoke \
     --prefix ctdc_runner_
 
 # 2. Create new token
 podman exec systemd-corporatetraveldc-web \
-  python3 /app/ctdc_token/cli.py create \
+  python3 /app/src/ctdc_token/cli.py create \
     --user runner --tier cert --label enriched-proxy-runner
 
 # 3. Update secrets file

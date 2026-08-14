@@ -1,5 +1,7 @@
 # Addendum: Email, Phone Call & Regulated-Industry Operator Setup
 
+**Verified against the live system 2026-08-11.**
+
 This addendum covers enabling ntfy email and phone-call notifications on a self-hosted instance, and security guidance for operators working under regulated-industry requirements (aviation/transportation, public-safety/EMS, ARES/EMCOMM).
 
 ---
@@ -91,7 +93,8 @@ No changes to `server.yml` needed — ntfy reads all `NTFY_TWILIO_*` env vars au
 |--------|----------|-------|
 | SMTP bridge password | `dispatch-secrets.env` | Never in server.yml or committed files |
 | Twilio credentials | `dispatch-secrets.env` | Injected at container start via EnvironmentFile |
-| ntfy access tokens | `dispatch-secrets.env` | Rotate via `csex-token rotate` |
+| API bearer tokens | SHA-256 hashes in the dispatch DB | Managed via `ctdc-token` (`src/ctdc_token/cli.py`). There is no `rotate` subcommand — rotate by `ctdc-token revoke --prefix <ctdc_user_>` then `ctdc-token create` |
+| ntfy access token | `dispatch-secrets.env` (`NTFY_TOKEN`) | Rotate in the ntfy server config, then update the env file |
 | GitHub PAT | `~/.secrets/github.token` | 30-day rotation; reminder sent via ntfy |
 
 ### CUI / FOUO handling

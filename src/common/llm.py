@@ -43,9 +43,11 @@ Usage:
 """
 
 import inspect
+import json
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import time
 
@@ -140,7 +142,146 @@ def _verify_before_inference(ollama_model: str | None) -> None:
     if modelfile_relpath:
         _verify_integrity(modelfile_relpath)
 
+    # 2026-08-13: as of the persona-consolidation refactor, the real
+    # persona/discipline/ROE content lives in corporatetraveldc.dispatch-
+    # persona, not in the (now near-empty) Modelfiles -- verify it here too,
+    # or an attacker/accidental edit to the one file that actually carries
+    # every skill's instructions would bypass the integrity gate entirely.
+    _verify_integrity(_PERSONA_PATH.name)
+
 log = logging.getLogger(__name__)
+
+# 2026-08-13: single shared system prompt, replacing 16 separate Modelfiles'
+# baked-in SYSTEM blocks. Modelfiles now carry ONLY FROM + PARAMETER --
+# zero persona content -- so every model can share one resident base
+# without a swap cycle every time a different skill fires. Individual
+# skill .py files carry no persona content either; every call's system=
+# stays None (unchanged -- no call-site edits needed), and the actual
+# persona gets injected once, centrally, in ollama_post_with_retry() below
+# (the true convergence point for every call path, including
+# ep_advance_brief.py's direct calls that bypass generate()/_ollama()
+# entirely -- see that function's own docstring).
+#
+# Private file (corporatetraveldc.dispatch-persona, real firm/operator
+# content) is excluded from the public mirror -- see scrub-public-tree.py
+# DROP_FILES. Public gets corporatetraveldc.dispatch-persona.template only.
+# Loaded once at import time and cached; a missing file logs loudly and
+# falls back to empty (degrades to no persona at all, not a crash -- see
+# _load_dispatch_persona()'s own docstring for why that's the right
+# failure mode here).
+_PERSONA_PATH = _REPO_ROOT / "corporatetraveldc.dispatch-persona"
+
+
+def _load_dispatch_persona() -> str:
+    """Read the shared persona file once at import time.
+
+    Soft-fails to "" rather than raising: a missing persona file means
+    every skill's output silently loses its identity/ROE grounding, which
+    is a real quality problem but not one that should crash the whole
+    poller process over -- the degraded (persona-less) output itself is
+    the visible symptom, logged loudly here so it's not a silent regression.
+    """
+    try:
+        lines = _PERSONA_PATH.read_text(encoding="utf-8").splitlines()
+        first = 0
+        while first < len(lines) and (
+            not lines[first].strip() or lines[first].lstrip().startswith("#")
+        ):
+            first += 1
+        return "\n".join(lines[first:]).strip()
+    except FileNotFoundError:
+        log.error(
+            "llm: shared persona file missing (%s) -- every skill will "
+            "generate without persona/ROE grounding until this is fixed. "
+            "See corporatetraveldc.dispatch-persona.template to rebuild it.",
+            _PERSONA_PATH,
+        )
+        return ""
+
+
+DISPATCH_PERSONA: str = _load_dispatch_persona()
+
+# 2026-08-13: DISPATCH_PERSONA itself measured at ~2050 real tokens (16466
+# chars) via a live prompt_eval_count check against corporatetraveldc-pi5-
+# brief -- sent on every single call now that persona is centralized, so it
+# eats a fixed, non-negotiable chunk of whatever num_ctx the shared model
+# is built with (4096 by default -> see corporatetraveldc.brief). Callers
+# with a large/unbounded raw-data prompt (dispatch_desk_memo.py's 90-item/
+# 6-category feed, second_brain_weekly.py's up-to-7-days of vault notes)
+# need to budget their own prompt against what's actually left, not what
+# num_ctx nominally offers. ~4 chars/token is a conservative average for
+# this kind of headline/prose English text (real content tends to run
+# closer to 4.5-5.5); undercounting the budget (truncating a bit more than
+# strictly necessary) is the safe direction to be wrong in here.
+_CHARS_PER_TOKEN_ESTIMATE = 4.0
+
+
+def trim_to_token_budget(text: str, max_tokens: int) -> str:
+    """Truncate text to roughly max_tokens, cutting on a line boundary
+    where possible so we drop whole headlines/entries rather than mid-word.
+    A cheap chars-per-token heuristic, not a real tokenizer -- exact enough
+    for keeping a prompt inside a fixed num_ctx budget, not for precision
+    token accounting."""
+    max_chars = int(max_tokens * _CHARS_PER_TOKEN_ESTIMATE)
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    last_break = truncated.rfind("\n")
+    if last_break > max_chars * 0.5:  # don't chop a huge tail for a stray early newline
+        truncated = truncated[:last_break]
+    return truncated.rstrip() + "\n[... truncated to fit the model's context budget ...]"
+
+
+# ── Prompt content sanitization (2026-08-13) ────────────────────────────────
+# Operator directive: guard against a prompt padded with injected shell/code
+# content -- e.g. via a compromised or malformed RSS feed item, or a
+# corrupted vault note -- that either inflates compute cost well beyond what
+# real operational data would ("extra load... extra defeat on the box"), or
+# gets echoed verbatim into a brief's output and from there into an ntfy
+# push notification or a rendered view. This is a lightweight defense-in-
+# depth heuristic targeting the actual injection surface here (headline/
+# title/note text assembled into a prompt) -- not a general-purpose WAF.
+_SUSPICIOUS_PROMPT_RES = [
+    re.compile(r"#!\s*/(bin|usr)/"),               # shebang
+    re.compile(r"`[^`\n]{0,200}`"),                 # backtick command substitution
+    re.compile(r"\$\([^)\n]{0,200}\)"),             # $(...) command substitution
+    re.compile(r"<script[\s>]", re.IGNORECASE),     # embedded script tag
+    re.compile(r"\b(eval|exec)\s*\("),              # eval(/exec( call patterns
+    re.compile(r"\brm\s+-rf\b"),
+]
+# A real headline/title/note never has an unbroken "word" this long --
+# injected/obfuscated payloads (base64 blobs, minified code, stuffed URLs)
+# typically do.
+_MAX_SINGLE_TOKEN_CHARS = 300
+
+
+def sanitize_prompt_text(text: str, source: str = "prompt") -> str:
+    """Best-effort content hygiene pass on prompt text assembled from
+    external sources before it reaches Ollama: strips non-printable control
+    characters, redacts segments matching known code/shell-injection
+    markers, and collapses any single unbroken run of 300+ non-whitespace
+    characters. Logs a warning (with before/after length, not the raw
+    content) only when it actually changes something -- silent on clean
+    input, which is the overwhelming common case."""
+    if not text:
+        return text
+    original_len = len(text)
+    cleaned = "".join(ch for ch in text if ch in "\n\t" or ch.isprintable())
+    for pattern in _SUSPICIOUS_PROMPT_RES:
+        cleaned = pattern.sub("[redacted -- suspicious pattern]", cleaned)
+    cleaned = re.sub(
+        rf"\S{{{_MAX_SINGLE_TOKEN_CHARS},}}",
+        lambda m: m.group(0)[:_MAX_SINGLE_TOKEN_CHARS] + "[...truncated long token...]",
+        cleaned,
+    )
+    if cleaned != text:
+        log.warning(
+            "llm: %s sanitized (%d -> %d chars) -- suspicious content redacted/"
+            "truncated. Worth checking the source feed/note if this recurs.",
+            source, original_len, len(cleaned),
+        )
+    return cleaned
+
 
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
 OLLAMA_TIMEOUT    = int(os.getenv("OLLAMA_TIMEOUT", "900"))
@@ -414,6 +555,63 @@ def preflight_load_gate_if_needed(priority: str) -> None:
         )
 
 
+# ── Ollama-priority ingest backpressure (2026-08-11) ────────────────────────
+# Active complement to the passive load gate above: that gate only WAITS for
+# load to drop on its own, which never happens if ingest's steady-state CPU
+# draw IS the contention rather than a transient spike -- confirmed live
+# 2026-08-11 when a cold model load lost the CPU race entirely under normal
+# (non-thermal) ingest load, see docs/benchmarks/
+# OLLAMA_BACKPRESSURE_AB_2026-08-11.md. This engages the same
+# bandwidth_priority backpressure valve weather events use (common/db.py,
+# built 2026-07-26) for the duration of the Ollama call -- pauses the
+# low-priority SWIM feeds (stdds/tbfm/itws/fns), leaves fdps/tfms alone. Soft
+# pause only (stops draining the queue, stays connected) -- no container
+# stop/restart, no backlog-fast-forward-triage; the accepted tradeoff is a
+# burst of queued messages/notifications once released. Skipped for
+# priority="hot", same as every other gate here. Disabled by default until
+# validated -- flip on per-deployment via dispatch.env.
+OLLAMA_BACKPRESSURE_ENABLED = os.getenv("OLLAMA_BACKPRESSURE_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+OLLAMA_BACKPRESSURE_TTL_S   = float(os.getenv("OLLAMA_BACKPRESSURE_TTL_S", "600.0"))
+
+
+def _engage_ollama_backpressure(priority: str) -> bool:
+    """Best-effort: set bandwidth_priority=ollama so ingest's low-priority
+    SWIM feeds stop draining their queue for the duration of this call.
+    Returns True if this call actually engaged it (so the caller knows to
+    release it) -- False if disabled, skipped for "hot", or something else
+    (operator, a real weather event) already has priority engaged. Never
+    raises, never blocks."""
+    if priority == "hot" or not OLLAMA_BACKPRESSURE_ENABLED:
+        return False
+    try:
+        from common import db as _db
+        state = _db.get_bandwidth_priority()
+        if state.get("active") and state.get("set_by") not in (None, "auto", "auto-ollama"):
+            return False
+        _db.set_bandwidth_priority(
+            "ollama", set_by="auto-ollama",
+            reason="Ollama inference in flight", ttl_seconds=OLLAMA_BACKPRESSURE_TTL_S,
+        )
+        return True
+    except Exception as exc:
+        log.info("llm: failed to engage ingest backpressure (non-fatal): %s", exc)
+        return False
+
+
+def _release_ollama_backpressure() -> None:
+    """Clear bandwidth_priority back to auto after a call this module
+    engaged it for. Only clears if still set_by="auto-ollama" -- if an
+    operator or a real weather event took it over in the meantime, leave it
+    alone rather than clobbering their state."""
+    try:
+        from common import db as _db
+        state = _db.get_bandwidth_priority()
+        if state.get("set_by") == "auto-ollama":
+            _db.set_bandwidth_priority("auto", set_by="auto-ollama", reason="Ollama call finished")
+    except Exception as exc:
+        log.info("llm: failed to release ingest backpressure (non-fatal): %s", exc)
+
+
 def _ollama_ready(timeout_s: float = OLLAMA_READY_TIMEOUT_S) -> bool:
     """Cheap health check against Ollama's own API. Never raises -- any
     exception (connection refused, read timeout, DNS failure, whatever)
@@ -481,6 +679,237 @@ def wait_then_budget(effective_timeout: float) -> float | None:
     return max(effective_timeout - elapsed, 5.0)
 
 
+def _abandon_ollama_generation(model: str | None) -> None:
+    """Best-effort: tell Ollama to unload `model` the moment a caller's own
+    request times out, rather than leaving the underlying llama-server
+    child to keep computing for an abandoned client.
+
+    Found 2026-08-10/11: a timed-out httpx call releases ollama_slot()
+    (the caller's process exits/moves to fallback), but that does NOT stop
+    the actual generation running server-side inside Ollama's own
+    llama-server child -- it keeps burning CPU/RAM for a client that's
+    already gone, sometimes for 15-20+ minutes. Because ollama_slot() is a
+    CLIENT-side lock, its release does not mean the resource it was meant
+    to protect is actually free -- the next caller (hot or report) can
+    acquire the now-open slot immediately and fire straight into
+    contention with this orphaned generation, which is exactly how one
+    real timeout cascades into several. Confirmed live: a fresh reboot
+    (14min uptime, no prior test load) already reproduced this with a real
+    ep-advance run whose llama-server child kept running at 200%+ CPU
+    3+ minutes after ep-advance.service itself had exited.
+
+    Deliberately NOT the `ollama` CLI -- that binary lives on the host,
+    not inside the poller/skill containers this module runs in. Uses the
+    documented HTTP-only unload signal instead (empty prompt +
+    keep_alive=0). Best-effort and non-fatal by design: if this fails, the
+    caller's existing fallback behavior is completely unaffected -- this
+    only ever improves the odds for whichever request comes next.
+    """
+    if not model or not OLLAMA_BASE_URL:
+        return
+    try:
+        httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": model, "prompt": "", "keep_alive": 0},
+            timeout=5.0,
+        )
+        log.info("llm: sent unload signal for %s after timeout, so the next caller doesn't inherit it", model)
+    except Exception as exc:
+        log.info("llm: best-effort unload signal for %s failed (non-fatal): %s", model, exc)
+
+
+# ── Load-phase timeout, separate from generation time (2026-08-13) ─────────
+# Operator directive after tonight's diagnostic arc: the ONLY thing worth
+# time-boxing is whether the MODEL LOADS promptly. Once it's loaded,
+# generation can legitimately take 5-15+ minutes for a long-form brief --
+# that's an accepted cost, not a failure, as long as it eventually produces
+# real output. What actually matters is (1) load doesn't stall indefinitely
+# and (2) a model that keeps getting evicted and reloaded doesn't thrash the
+# box. Backpressure (see OLLAMA_BACKPRESSURE_ENABLED above) is what gives
+# the load phase its best shot at the CPU -- this timeout is the bounded
+# backstop if that's not enough.
+OLLAMA_LOAD_TIMEOUT = float(os.getenv("OLLAMA_LOAD_TIMEOUT", "180.0"))
+
+# ── Adaptive load-time baseline (2026-08-13, later same day) ───────────────
+# Refined per operator directive: a fixed guess (the static OLLAMA_LOAD_TIMEOUT
+# above) isn't as sharp a guard as learning what NORMAL load time actually
+# looks like on THIS box and gating on deviation from that -- 125% of the
+# rolling mean over the last 48h. This is deliberately an anomaly/tamper
+# signal, not just a performance guard: "somebody can't ingest something,
+# even when they properly sign a manifest or reload a second model file at
+# the same time" -- an unusually slow load right after a manifest sign or
+# model rebuild is exactly the kind of otherwise-legitimate-looking event
+# this should catch and flag loudly, even if it still technically completes.
+# OLLAMA_LOAD_TIMEOUT remains the fallback used until enough history exists
+# to trust a computed baseline (OLLAMA_LOAD_BASELINE_MIN_SAMPLES).
+_LOAD_HISTORY_PATH = pathlib.Path("/var/lib/corporatetraveldc/ollama-lock/load-duration-history.json")
+OLLAMA_LOAD_BASELINE_WINDOW_S    = float(os.getenv("OLLAMA_LOAD_BASELINE_WINDOW_S", str(48 * 3600)))
+OLLAMA_LOAD_BASELINE_MULTIPLIER  = float(os.getenv("OLLAMA_LOAD_BASELINE_MULTIPLIER", "1.25"))
+OLLAMA_LOAD_BASELINE_MIN_SAMPLES = int(os.getenv("OLLAMA_LOAD_BASELINE_MIN_SAMPLES", "5"))
+# Even at 125% of a suspiciously fast rolling mean, never bound the load
+# phase tighter than this -- real cold loads measured live tonight ran
+# ~30-80s; this leaves room for a fluke fast sample without the guard
+# becoming self-defeating.
+OLLAMA_LOAD_BASELINE_FLOOR_S = float(os.getenv("OLLAMA_LOAD_BASELINE_FLOOR_S", "90.0"))
+
+
+def _load_history() -> list[dict]:
+    if not _LOAD_HISTORY_PATH.exists():
+        return []
+    try:
+        return json.loads(_LOAD_HISTORY_PATH.read_text())
+    except Exception:
+        return []
+
+
+def _record_load_duration_sample(load_s: float) -> None:
+    """Append a real cold-load duration to the rolling baseline history,
+    pruning anything outside OLLAMA_LOAD_BASELINE_WINDOW_S. Best-effort --
+    never raises (a guardrail that can crash the thing it's guarding is
+    worse than no guardrail)."""
+    try:
+        _LOAD_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        samples = [
+            s for s in _load_history()
+            if isinstance(s, dict) and now - s.get("ts", 0) < OLLAMA_LOAD_BASELINE_WINDOW_S
+        ]
+        samples.append({"ts": now, "load_s": load_s})
+        _LOAD_HISTORY_PATH.write_text(json.dumps(samples))
+    except Exception as exc:
+        log.info("llm: failed to record load-duration sample (non-fatal): %s", exc)
+
+
+def _adaptive_load_timeout() -> tuple[float, str]:
+    """(timeout_s, human-readable basis) -- OLLAMA_LOAD_BASELINE_MULTIPLIER
+    (125%) of the rolling mean load time over the last
+    OLLAMA_LOAD_BASELINE_WINDOW_S if enough samples exist, floored at
+    OLLAMA_LOAD_BASELINE_FLOOR_S; falls back to the static OLLAMA_LOAD_TIMEOUT
+    if there isn't yet enough history to trust a computed baseline."""
+    now = time.time()
+    samples = [
+        s.get("load_s") for s in _load_history()
+        if isinstance(s, dict) and now - s.get("ts", 0) < OLLAMA_LOAD_BASELINE_WINDOW_S
+        and isinstance(s.get("load_s"), (int, float))
+    ]
+    if len(samples) < OLLAMA_LOAD_BASELINE_MIN_SAMPLES:
+        return (
+            OLLAMA_LOAD_TIMEOUT,
+            f"static fallback ({len(samples)}/{OLLAMA_LOAD_BASELINE_MIN_SAMPLES} baseline samples so far)",
+        )
+    mean_s = sum(samples) / len(samples)
+    threshold = max(OLLAMA_LOAD_BASELINE_FLOOR_S, mean_s * OLLAMA_LOAD_BASELINE_MULTIPLIER)
+    return (
+        threshold,
+        f"{OLLAMA_LOAD_BASELINE_MULTIPLIER:.0%} of {len(samples)}-sample "
+        f"{OLLAMA_LOAD_BASELINE_WINDOW_S / 3600:.0f}h rolling mean ({mean_s:.1f}s)",
+    )
+
+
+# Reload-storm guardrail: file-backed (not in-process -- every skill run is
+# its own short-lived subprocess, see ollama_lock.py's own module docstring
+# for why cross-process state here has to be a file, not a Python global)
+# record of recent COLD loads (load_duration > 1s, i.e. the model actually
+# had to load, not an already-warm no-op). If the same box needs more than
+# OLLAMA_RELOAD_GUARD_MAX real loads inside OLLAMA_RELOAD_GUARD_WINDOW_S,
+# something is evicting the model repeatedly (OOM, another model competing
+# for OLLAMA_MAX_LOADED_MODELS, ollama.service flapping) -- piling on
+# another load attempt just makes it worse, so this trips a cool-down
+# (skip Ollama, straight to fallback) instead.
+_RELOAD_GUARD_PATH = pathlib.Path("/var/lib/corporatetraveldc/ollama-lock/recent-cold-loads.json")
+OLLAMA_RELOAD_GUARD_MAX       = int(os.getenv("OLLAMA_RELOAD_GUARD_MAX", "4"))
+OLLAMA_RELOAD_GUARD_WINDOW_S  = float(os.getenv("OLLAMA_RELOAD_GUARD_WINDOW_S", "900.0"))
+
+
+def _record_cold_load_and_check_storm(model: str) -> bool:
+    """Record a real cold load for `model`, prune anything outside the
+    guard window, and return True if the count within that window has hit
+    OLLAMA_RELOAD_GUARD_MAX. Never raises -- a guardrail that can crash the
+    thing it's guarding is worse than no guardrail (fails open: on any
+    error, just don't trip)."""
+    try:
+        _RELOAD_GUARD_PATH.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        events: list = []
+        if _RELOAD_GUARD_PATH.exists():
+            try:
+                events = json.loads(_RELOAD_GUARD_PATH.read_text())
+            except Exception:
+                events = []
+        events = [t for t in events if isinstance(t, (int, float)) and now - t < OLLAMA_RELOAD_GUARD_WINDOW_S]
+        events.append(now)
+        _RELOAD_GUARD_PATH.write_text(json.dumps(events))
+        if len(events) >= OLLAMA_RELOAD_GUARD_MAX:
+            log.error(
+                "llm: RELOAD-STORM GUARD TRIPPED -- %s has cold-loaded %d times "
+                "in the last %.0fs. Something is evicting it repeatedly -- "
+                "investigate (OOM? OLLAMA_MAX_LOADED_MODELS contention? "
+                "ollama.service restarting?) rather than letting this clear on "
+                "its own. Skipping Ollama for this call.",
+                model, len(events), OLLAMA_RELOAD_GUARD_WINDOW_S,
+            )
+            return True
+        return False
+    except Exception as exc:
+        log.info("llm: reload-storm guard check failed (non-fatal, fails open): %s", exc)
+        return False
+
+
+def _preload_model(model: str | None, priority: str) -> None:
+    """Bounded, backpressure-assisted probe that the model is loaded,
+    BEFORE the real generate call -- separates "did it load" (time-boxed by
+    the adaptive baseline, see _adaptive_load_timeout()) from "how long did
+    it generate" (no longer tightly bounded, see this section's own comment
+    above). Sends the same empty-prompt technique _abandon_ollama_generation()
+    uses to unload, inverted to load instead.
+
+    Raises httpx.TransportError on a real timeout, or RuntimeError if the
+    reload-storm guard has tripped -- both propagate through
+    ollama_post_with_retry() exactly like any other Ollama-unavailable
+    condition, so no new caller-side exception handling is needed anywhere.
+
+    Skipped for priority="hot" (and if OLLAMA_BASE_URL isn't set) -- a
+    real-time alert can't afford an extra bounded wait on top of its own
+    timeout; hot calls go straight to the real generate call, unchanged."""
+    if priority == "hot" or not OLLAMA_BASE_URL or not model:
+        return
+    load_budget, basis = _adaptive_load_timeout()
+    backpressure_engaged = _engage_ollama_backpressure(priority)
+    try:
+        with ollama_slot(priority=priority, timeout=load_budget):
+            resp = httpx.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": model, "prompt": ""},
+                timeout=load_budget,
+            )
+        resp.raise_for_status()
+        load_s = (resp.json().get("load_duration") or 0) / 1e9
+        if load_s > 1.0:
+            log.info("llm: %s cold-loaded in %.1fs (budget %.0fs, basis: %s; backpressure %s)",
+                      model, load_s, load_budget, basis,
+                      "engaged" if backpressure_engaged else "not engaged")
+            if _record_cold_load_and_check_storm(model):
+                raise RuntimeError(f"reload-storm guard tripped for {model}")
+            # Flag even a SUCCESSFUL load that's abnormally slow vs its own
+            # baseline before folding it into that same baseline -- this is
+            # the tamper/anomaly signal the guardrail exists for. A load
+            # that barely made it under load_budget but is 2-3x the normal
+            # baseline is worth a loud line in the logs even though nothing
+            # here failed.
+            if load_budget > OLLAMA_LOAD_BASELINE_FLOOR_S and load_s > load_budget * 0.8:
+                log.warning(
+                    "llm: %s took %.1fs to load -- within budget (%s) but "
+                    "close to it. If a manifest was just signed or a model "
+                    "file rebuilt, worth confirming it wasn't tampered with "
+                    "or accidentally swapped for something larger.",
+                    model, load_s, basis,
+                )
+            _record_load_duration_sample(load_s)
+    finally:
+        if backpressure_engaged:
+            _release_ollama_backpressure()
+
+
 def ollama_post_with_retry(
     payload: dict,
     timeout: float,
@@ -519,6 +948,34 @@ def ollama_post_with_retry(
     """
     _verify_before_inference(payload.get("model"))
 
+    # 2026-08-13: inject the shared persona if the caller didn't set one.
+    # Every call path converges here (see DISPATCH_PERSONA's own comment
+    # above), so this single line is what makes the Modelfile-stripping
+    # refactor actually take effect for every skill, including
+    # ep_advance_brief.py's direct calls that build their own payload dict
+    # and never pass a "system" key at all.
+    if not payload.get("system"):
+        payload["system"] = DISPATCH_PERSONA
+
+    # 2026-08-13: sanitize the prompt content itself -- see
+    # sanitize_prompt_text()'s own docstring. Applied here, not per-skill,
+    # so every call path gets it with no per-skill changes needed (same
+    # convergence-point pattern as the persona injection just above).
+    # system= is our own trusted persona file, not externally-influenced
+    # content, so it's deliberately left alone.
+    if payload.get("prompt"):
+        payload["prompt"] = sanitize_prompt_text(payload["prompt"], source=f"prompt to {payload.get('model')}")
+
+    # 2026-08-13: bound the LOAD phase specifically, separate from
+    # generation time -- see OLLAMA_LOAD_TIMEOUT's own comment above. On
+    # success this is a near-no-op (model already resident, load_duration
+    # ~0). On failure it raises (httpx.TransportError or RuntimeError for a
+    # tripped reload-storm guard) straight out of this function -- every
+    # caller (generate()'s _ollama(), ep_advance_brief.py's direct calls)
+    # already has a catch-all except Exception around this call, so that's
+    # treated exactly like "Ollama unavailable" with no new handling needed.
+    _preload_model(payload.get("model"), priority)
+
     retries = OLLAMA_MAX_RETRIES if max_retries is None else max_retries
     wait_cap = OLLAMA_RETRY_WAIT_CAP_S if retry_wait_cap is None else retry_wait_cap
 
@@ -533,6 +990,7 @@ def ollama_post_with_retry(
                 )
             return resp
         except httpx.TransportError as exc:
+            _abandon_ollama_generation(payload.get("model"))
             if priority == "hot" or attempt >= retries:
                 raise
             attempt += 1
@@ -657,7 +1115,6 @@ def generate(
     it entirely, same as the pause-aware waits.
     """
     preflight_cool_launch_if_needed(priority)
-    preflight_load_gate_if_needed(priority)
     # Both gates must be open -- see module docstring. Computed once so
     # the two branches below log identically regardless of which path
     # got here, and say WHICH gate is closed (useful for debugging a
@@ -673,20 +1130,37 @@ def generate(
 
     effective_timeout = OLLAMA_TIMEOUT if timeout is None else timeout
     if OLLAMA_BASE_URL:
-        generate_timeout = wait_then_budget(effective_timeout) if priority != "hot" else effective_timeout
-        if generate_timeout is None:
-            log.info(
-                "llm: Ollama not ready after bounded readiness wait "
-                "(governor thermal pause?) — %s",
-                f"Anthropic fallback {anthropic_blocked_reason}, returning None" if not anthropic_gate_open
-                else "trying Anthropic fallback",
-            )
-        else:
-            result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
-                              priority=priority, timeout=generate_timeout,
-                              max_retries=max_retries, retry_wait_cap=retry_wait_cap)
-            if result is not None:
-                return result
+        # Backpressure engaged BEFORE the load gate's own wait (not just
+        # around the final generate call) so that wait period actually
+        # benefits from ingest backing off, rather than passively hoping
+        # load drops on its own -- see OLLAMA_BACKPRESSURE_ENABLED above
+        # for why the passive-only gate wasn't enough. Released once this
+        # whole Ollama attempt (gate wait + generate call) is done,
+        # success or failure.
+        backpressure_engaged = _engage_ollama_backpressure(priority)
+        ollama_attempted = False
+        try:
+            preflight_load_gate_if_needed(priority)
+            generate_timeout = wait_then_budget(effective_timeout) if priority != "hot" else effective_timeout
+            if generate_timeout is None:
+                log.info(
+                    "llm: Ollama not ready after bounded readiness wait "
+                    "(governor thermal pause?) — %s",
+                    f"Anthropic fallback {anthropic_blocked_reason}, returning None" if not anthropic_gate_open
+                    else "trying Anthropic fallback",
+                )
+            else:
+                ollama_attempted = True
+                result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
+                                  priority=priority, timeout=generate_timeout,
+                                  max_retries=max_retries, retry_wait_cap=retry_wait_cap)
+                if result is not None:
+                    return result
+        finally:
+            if backpressure_engaged:
+                _release_ollama_backpressure()
+
+        if ollama_attempted:
             if not anthropic_gate_open:
                 log.info("llm: Ollama unavailable, busy, or failed — Anthropic fallback %s, returning None", anthropic_blocked_reason)
                 return None
@@ -716,9 +1190,11 @@ def _ollama(
         "options": {"num_predict": max_tokens, "temperature": temperature},
     }
     if system:
-        # Non-empty system explicitly overrides the model's Modelfile
-        # SYSTEM for this call. Omitting the key (system None/"") lets
-        # Ollama use the dedicated model's own baked-in default instead.
+        # Non-empty system is an explicit per-call override. Omitting the
+        # key (system None/"") is the normal case for every skill as of
+        # 2026-08-13 -- ollama_post_with_retry() fills in the shared
+        # DISPATCH_PERSONA downstream (Modelfiles no longer carry any
+        # persona of their own to fall back to).
         payload["system"] = system
     try:
         resp = ollama_post_with_retry(

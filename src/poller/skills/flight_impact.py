@@ -1,7 +1,7 @@
 """
 flight-impact — SR-1 + SR-2 compliant.
 
-Model: ollama/mistral (corporatetraveldc-pi5-osint — all inference unified)
+Model: ollama/mistral (corporatetraveldc-pi5-brief — all inference unified)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every 15 minutes normally; drops to 5 minutes when a 'flight' watchlist
           session is active (SKILL_SCHEDULE active_interval/active_check).
@@ -33,7 +33,7 @@ OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_CHAT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-brief:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 
 DC_AIRPORTS = ["KDCA", "KIAD", "KBWI"]

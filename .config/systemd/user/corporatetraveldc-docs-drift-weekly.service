@@ -1,0 +1,10 @@
+[Unit]
+Description=Corporate Travel DC -- weekly documentation drift check (Fable, both repos, live-system verified)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/weekly-doc-drift-check.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

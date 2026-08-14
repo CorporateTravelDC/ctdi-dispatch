@@ -1,10 +1,44 @@
 # Dedicated Per-Task Models — Architecture, RAG Plan, Fine-Tuning Assessment
 
-Written 2026-08-02. Covers the dedicated-Modelfile refactor done tonight, a
+Written 2026-08-02. Covers the dedicated-Modelfile refactor done that night, a
 design for weekly-synthesis mini-RAG, an honest fine-tuning feasibility
 assessment (including the laptop-vs-Pi question), the laptop→Pi model
 transfer workflow, and how this pattern is meant to serve as the benchmark
 for a future executive-assistant back-office platform variant.
+
+> ## Status update — 2026-08-11 (verified against build-models.sh, Modelfiles, and all call sites)
+>
+> The architecture below shipped and is live, but several §1 numbers have
+> moved since 2026-08-02. Current ground truth:
+>
+> - **16 dedicated models** now exist (`build-models.sh` `MODELS` map), not
+>   15: the 2 general-purpose (`chat`, `osint`) plus 14 task models — the
+>   2026-08-02 set grew by `osint-monitor` splitting out,
+>   `aam-watch`/`dispatch-desk`/`transport-digest` additions, and
+>   **`disruption-weather-digest`** (2026-08-09/10), which this doc's original
+>   call-site census predates.
+> - **24 LLM call sites across 19 files** use dedicated models (not 13):
+>   includes `disruption_weather_digest.py`, the six daily category-watch
+>   skills sharing `corporatetraveldc-pi5-aam-watch`, and
+>   `common/entity_tracking.py` (×2, uses `-chat`). `flight_impact.py`,
+>   `train_impact.py`, and `freshness_audit.py` define `OLLAMA_MODEL` for
+>   SR-1 labeling only — they make no LLM call.
+> - **The 4 brief-class models (`ops-brief`, `ops-brief-trend`, `ep-advance`,
+>   `ep-advance-trend`) are now `FROM phi3:mini`, not `gemma3:4b`**
+>   (2026-08-10/11): gemma3's Sliding-Window Attention defeats llama.cpp
+>   KV-cache reuse, forcing full re-processing of the long hourly-brief
+>   prompts, blowing the 240 s `OLLAMA_TIMEOUT` and driving near-100%
+>   deterministic fallback. `build-models.sh` now hard-blocks gemma2/gemma3
+>   bases for brief models (`SWA_DENYLIST_REGEX`) and gates brief-model
+>   promotion to `:latest` behind a 200 s smoke test on a
+>   125%-of-worst-case prompt. All other Modelfiles remain `gemma3:4b`.
+> - `src/common/llm.py` additionally gained `_abandon_ollama_generation()`
+>   (2026-08-11) — sends Ollama a `keep_alive: 0` unload the moment a
+>   caller's request times out, because client timeouts don't stop
+>   server-side generation (orphaned generations piled up to a 52 load
+>   average before this fix).
+> - The §2 mini-RAG design and §3–5 fine-tuning/EA-variant assessments
+>   remain **designed-not-built** — unchanged.
 
 ## 1. What changed tonight
 

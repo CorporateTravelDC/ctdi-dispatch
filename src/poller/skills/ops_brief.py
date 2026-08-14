@@ -1,7 +1,7 @@
 """
 ops-brief — unified operational briefing, now running hourly.
 
-Model: ollama/mistral (corporatetraveldc-pi5-osint:latest, mistral-nemo 12B; Local LLM)
+Model: ollama/mistral (corporatetraveldc-pi5-brief:latest, mistral-nemo 12B; Local LLM)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :00 ET (corporatetraveldc-ops-brief.timer)
   — standard brief every hour
@@ -53,9 +53,9 @@ SKILL_NAME = "ops-brief"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-ops-brief:latest")
+                     or "corporatetraveldc-pi5-brief:latest")
 OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
-                      or "corporatetraveldc-pi5-ops-brief-trend:latest")
+                      or "corporatetraveldc-pi5-brief:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # 2026-08-06: was 900s (+ an automatic same-prompt retry on top) -- root
 # cause of the missing 8:00/3:00/4:00/5:00/6:00 ops-brief runs on
@@ -731,7 +731,7 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     Returns (full_text, concise_text) or None on any Ollama failure --
     caller (main()) already builds a deterministic template on None.
     """
-    # System prompt now lives in the corporatetraveldc-pi5-ops-brief
+    # System prompt now lives in the corporatetraveldc-pi5-brief
     # Modelfile itself (2026-08-02) -- system=None below lets Ollama use
     # that baked-in default instead of resending it every call.
     system = None

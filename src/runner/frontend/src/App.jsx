@@ -13,6 +13,8 @@ import SettingsPanel from './components/SettingsPanel.jsx'
 import OverviewView from './components/OverviewView.jsx'
 import NtfyFeedView from './components/NtfyFeedView.jsx'
 import IntelView from './components/IntelView.jsx'
+import EventIntelView from './components/EventIntelView.jsx'
+import GraphView from './components/GraphView.jsx'
 import WeatherView from './components/WeatherView.jsx'
 import { useLayerConfig } from './hooks/useLayerConfig.js'
 import { useTailnet } from './hooks/useTailnet.js'
@@ -163,6 +165,12 @@ export default function App() {
             <NavLink to="/intel"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">INTEL</NavLink>
+            <NavLink to="/events"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">EVENTS</NavLink>
+            <NavLink to="/graph"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">GRAPH</NavLink>
             <button
               className={`nav-link disp-topbar-btn${dispOpen ? ' active' : ''}`}
               onClick={() => setDispOpen(o => !o)}
@@ -227,6 +235,8 @@ export default function App() {
             <Route path="/brief" element={<BriefView />} />
             <Route path="/feed" element={<NtfyFeedView />} />
             <Route path="/intel" element={<IntelView />} />
+            <Route path="/events" element={<EventIntelView />} />
+            <Route path="/graph" element={<GraphView />} />
             <Route path="/admin" element={tailnet === true ? <AdminView /> : <OverviewView liveState={liveState} />} />
           </Routes>
         </main>

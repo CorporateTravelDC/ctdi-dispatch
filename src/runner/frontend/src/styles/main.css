@@ -914,6 +914,22 @@ body::before {
 .sig-empty, .sig-pending { color: var(--muted); font-family: var(--font-ui); font-size: 0.75rem; padding: 0.5rem 0; }
 .sig-pending { color: var(--orange); }
 
+/* OSINT cross-outlet story clustering (same headline, multiple outlets) */
+.osint-crossover-badge {
+  font-family: var(--font-ui); font-size: 0.58rem; color: var(--cyan);
+  border: 1px solid var(--cyan); border-radius: 2px; padding: 0 0.3rem;
+  flex-shrink: 0; align-self: center;
+}
+.osint-outlet-list {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+.osint-outlet-link {
+  font-family: var(--font-ui); font-size: 0.6rem; color: var(--text-2);
+  opacity: 0.85; border-bottom: 1px dotted var(--border); text-decoration: none;
+}
+.osint-outlet-link:hover { opacity: 1; color: var(--cyan); }
+
 /* NOTAM panel -- click-to-expand rows, parity with wx-alert-msg styling */
 .notam-msg { cursor: pointer; }
 .notam-msg:hover { background: rgba(0, 140, 220, 0.06); }

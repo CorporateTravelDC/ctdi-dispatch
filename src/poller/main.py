@@ -669,6 +669,62 @@ def _acars_reason_context(ident: str, registration: str | None) -> str:
     return "\n".join(lines)
 
 
+# 2026-08-13: standing directive -- prefer the local FAA/OpenSky registry
+# tables for registration/tail -> hex resolution over asking airplanes.live's
+# own /v2/reg/ endpoint, which depends on that specific aircraft currently
+# broadcasting AND airplanes.live's reg-lookup working at all (confirmed
+# live tonight: this box is currently getting 403'd by api.airplanes.live
+# entirely). The local registries are deterministic (a tail's hex barely
+# ever changes) and don't depend on any external service being reachable.
+# airplanes.live is still the only source for LIVE POSITION -- this only
+# changes how we get FROM a tail number TO the hex we then ask
+# airplanes.live's /v2/hex/ endpoint about.
+_REGISTRY_STALENESS_DAYS = 30  # FAA refreshes weekly, OpenSky ~monthly -- generous margin either way
+
+
+def _local_registry_hex_lookup(ident_clean: str) -> str | None:
+    """Try the local FAA (US N-numbers) then OpenSky (any registration)
+    registry tables for a hex mapping, skipping either source if its own
+    last_full_import is older than _REGISTRY_STALENESS_DAYS (a stale table
+    just means "asking it is like guessing" -- fall through to
+    airplanes.live's own /v2/reg/ instead of trusting old data). Returns
+    None on any failure or if neither table has this registration/tail --
+    never raises, this is a best-effort optimization, not a hard
+    dependency."""
+    from datetime import datetime, timezone
+
+    def _is_fresh(meta_get) -> bool:
+        try:
+            raw = meta_get("last_full_import")
+            if not raw:
+                return False
+            last = datetime.fromisoformat(raw)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - last).total_seconds() / 86400
+            return age_days <= _REGISTRY_STALENESS_DAYS
+        except Exception:
+            return False
+
+    try:
+        if _is_fresh(db.faa_registry_meta_get):
+            row = db.faa_lookup_by_n_number(ident_clean)
+            if row and row.get("mode_s_hex"):
+                return row["mode_s_hex"].lower()
+    except Exception as e:
+        log.debug("local FAA registry lookup for %s failed (non-fatal): %s", ident_clean, e)
+
+    try:
+        if _is_fresh(db.opensky_registry_meta_get):
+            row = db.opensky_lookup_by_registration(ident_clean)
+            if row and row.get("icao24"):
+                return row["icao24"].lower()
+    except Exception as e:
+        log.debug("local OpenSky registry lookup for %s failed (non-fatal): %s", ident_clean, e)
+
+    return None
+
+
 def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     """
     Query airplanes.live free API for live ADS-B position.
@@ -747,7 +803,14 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
             ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{notes_hex}")
             resolved_via_hex = True
         if not ac_list:
-            ac_list = _al_fetch(f"https://api.airplanes.live/v2/reg/{ident_clean}")
+            local_hex = _local_registry_hex_lookup(ident_clean)
+            if local_hex:
+                ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{local_hex}")
+                resolved_via_hex = True
+            if not ac_list:
+                # Local registries didn't have it (or were stale) -- last
+                # resort, ask airplanes.live's own reg lookup directly.
+                ac_list = _al_fetch(f"https://api.airplanes.live/v2/reg/{ident_clean}")
 
     if not ac_list:
         return False
@@ -1808,6 +1871,8 @@ async def main() -> None:
     db.init_db_v29()
     db.init_db_v30()
     db.init_db_v31()
+    db.init_db_v32()
+    db.init_db_v33()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

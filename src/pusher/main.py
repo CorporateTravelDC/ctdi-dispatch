@@ -34,9 +34,14 @@ log = logging.getLogger(__name__)
 PUSH_INTERVAL = 30  # Check every 30 seconds.
 
 
-def send_ntfy(topic: str, message: str, priority: int = 3,
-              title: str = "corporatetraveldc") -> bool:
-    """Send a push notification via ntfy. Delegates to common.ntfy_push."""
+def send_ntfy(topic: str, message: str, priority: int = 3, *, title: str) -> bool:
+    """Send a push notification via ntfy. Delegates to common.ntfy_push.
+
+    title required, no default (2026-08-11) -- matches common.ntfy_push.send's
+    own hardening; every real call site here already passed one explicitly,
+    this just closes off a future accidental omission. See that module's
+    docstring for why (title = email Subject:, the only client-side filter
+    ntfy supports)."""
     return ntfy_push.send(topic, message, title=title, priority=priority)
 
 
@@ -192,7 +197,9 @@ _landing_dedup_adsb  = PushDedup("flight-landing-adsb", dedup_secs=7200)    # 2h
 
 
 def _landing_dedup_for(result: str) -> PushDedup:
-    return _landing_dedup_acars if result == "landed_acars" else _landing_dedup_adsb
+    # landed_fids is poller.py's own corroborated (FIDS/FDPS/ACARS) phase --
+    # same authoritative tier as landed_acars, not an ADS-B guess.
+    return _landing_dedup_acars if result in ("landed_acars", "landed_fids") else _landing_dedup_adsb
 
 
 def _ultrafeeder_url() -> str:
@@ -236,11 +243,33 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
         return []
 
 
-def _check_flight_landing(callsign: str) -> str | None:
+_OOOI_PHASE_STALE_SEC = 1800  # 30 min -- matches the same order-of-magnitude
+                              # freshness bar poller.py's own corroboration
+                              # checks use elsewhere; an old phase write is
+                              # not authoritative for "confirmed landed now"
+
+
+def _check_flight_landing(
+    callsign: str,
+    oooi_phase: str | None = None,
+    oooi_phase_updated_at: str | None = None,
+) -> str | None:
     """
     Returns "landed" if the aircraft is confirmed on the ground.
 
     Source priority:
+      0. poller.py's own oooi_phase (watchlist_entries.oooi_phase) — 2026-08-13.
+         poller.py already runs the full "ACARS/FDPS/FIDS/VDL IS the sole
+         authority" corroboration chain (2026-07-28 directive) for every
+         permanent/transient entry it sweeps -- FIDS's Landed/InGate status in
+         particular confirms ON/IN independent of ACARS. This function used to
+         re-derive everything from scratch using ONLY ACARS+ADS-B, meaning
+         pusher never saw FIDS-confirmed landings poller had already
+         established -- exactly the gap that let AS506's predecessor flight go
+         un-pushed with ACARS hardware offline. Only trusted if fresh
+         (_OOOI_PHASE_STALE_SEC); callers with no entry context (the
+         session-based path below) simply omit these params and this check
+         is skipped, unchanged from before.
       1. ACARS/VDL2 — avionics are authoritative; checked first for every call.
          - ACARS OFF  → aircraft is airborne; update state regardless of ADS-B.
          - ACARS ON/IN → aircraft is on ground; fire immediately regardless of
@@ -260,6 +289,26 @@ def _check_flight_landing(callsign: str) -> str | None:
 
     if state["notified"]:
         return None
+
+    # ── 0. poller.py's already-corroborated FIDS/FDPS/ACARS phase ───────────
+    if oooi_phase in ("on", "in") and oooi_phase_updated_at:
+        try:
+            from datetime import datetime, timezone
+            updated = datetime.fromisoformat(oooi_phase_updated_at.replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age_sec = (datetime.now(timezone.utc) - updated).total_seconds()
+            if age_sec <= _OOOI_PHASE_STALE_SEC:
+                log.info(
+                    "%s: poller-confirmed oooi_phase=%s (%.0fs old) -- landed, "
+                    "independent of ACARS/ADS-B state below",
+                    cs, oooi_phase, age_sec,
+                )
+                state["airborne"] = False
+                state["notified"] = True
+                return "landed_fids"
+        except Exception as e:
+            log.debug("%s: oooi_phase freshness check failed (non-fatal): %s", cs, e)
 
     # ── 1. ACARS is authoritative ────────────────────────────────────────────
     acars = _acars_phase(cs, not_before_epoch=state["last_seen"])
@@ -409,7 +458,11 @@ def push_flight_watchlist_landings() -> int:
         callsign = entry.get("identifier", "").strip().upper()
         if not callsign:
             continue
-        result = _check_flight_landing(callsign)
+        result = _check_flight_landing(
+            callsign,
+            oooi_phase=entry.get("oooi_phase"),
+            oooi_phase_updated_at=entry.get("oooi_phase_updated_at"),
+        )
         if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed."
             success = send_ntfy(

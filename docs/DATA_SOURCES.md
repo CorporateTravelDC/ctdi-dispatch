@@ -1,5 +1,8 @@
 # CTDI Data Sources & Access Guide
 
+**Snapshot verified 2026-08-11** (credential variable names checked against
+current source; per-section "last verified" dates track the external portals).
+
 This document covers every integrated data source, how to request access, and email templates for sources that require it. It also serves as the canonical reference for wiring in new sources — any new source that requires API signup or an email request should have an entry added here when it's integrated.
 
 > **Maintenance:** When a portal URL, email address, or signup process changes, update this file in the same commit that updates the code. The last-verified date in each section header tracks when the information was confirmed current.
@@ -106,9 +109,12 @@ SWIM_NMS_QUEUE_FDPS=
 
 **No email required** — portal registration is fully self-serve.
 
-**Credentials location:**
+**Credentials location** (both are required —
+`src/poller/fetchers/notam.py` reads the key *and* the secret; the feed
+reports `awaiting_credentials` until both are set):
 ```bash
 FAA_NOTAM_API_KEY=
+FAA_NOTAM_API_SECRET=
 ```
 
 ---

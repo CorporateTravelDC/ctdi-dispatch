@@ -1,5 +1,15 @@
-# LM Studio — Dispatch AI Prompts for Raspberry Pi 5
+# [RETIRED] LM Studio — Dispatch AI Prompts for Raspberry Pi 5
 ## [operator LLC] / corporatetraveldc-dispatch
+
+> **RETIRED / SUPERSEDED — marked 2026-08-11.** This document planned the
+> Anthropic→local-LLM migration as of 2026-06-05. That migration is long
+> complete — all inference runs locally via **Ollama** (not LM Studio), with
+> one dedicated Modelfile-baked model per skill
+> (`corporatetraveldc-pi5-*`; brief-class models on `phi3:mini`, others on
+> `gemma3:4b`). See **`docs/DEDICATED_MODELS_PLAN.md`** for the current
+> architecture and `build-models.sh` for the build/guard pipeline. The model
+> recommendations and per-skill prompts below are kept only as a historical
+> record of the migration planning; none of them reflect the running system.
 
 Generated from live source read of `src/poller/skills/` — 2026-06-05.
 Drop-in replacement for Anthropic API calls. Each section maps 1:1 to a skill.

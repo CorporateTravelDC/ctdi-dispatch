@@ -33,7 +33,7 @@ claim of parity across the three verticals.
 Schedule: daily (corporatetraveldc-disruption-weather-digest.timer).
 
 Model: same tiered pattern as transport_pattern_digest.py -- Ollama
-first (corporatetraveldc-pi5-disruption-weather-digest, dedicated
+first (corporatetraveldc-pi5-brief, dedicated
 Modelfile), deterministic fallback if unavailable. SR-1 compliant
 (log_usage).
 """
@@ -52,7 +52,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "disruption-weather-digest"
-OLLAMA_MODEL = "corporatetraveldc-pi5-disruption-weather-digest:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
 LOOKBACK_DAYS = 30
 CAPSULE_MAX_CHARS = 500
 

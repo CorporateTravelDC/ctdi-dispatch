@@ -11,6 +11,37 @@ ops script that pushes ntfy directly rather than through the two shared
 Python helpers below — that surface had grown since the original sweep
 and had never been swept the same way._
 
+> **2026-08-11 addendum — read this first.** The per-parser catalog below is
+> the 2026-07-27 sweep and remains accurate for the paths it covers, but it
+> **predates the escalating family-alert rollout (2026-08-02/03)**, which
+> changed how SWIM-parser alerts reach ntfy:
+>
+> - New topic families with per-zone siblings: `tfms-alerts`/`tfms-<zone>`,
+>   `tbfm-alerts`/`tbfm-<zone>`, `fdps-alerts`, `itws-alerts`,
+>   `aim_fns-alerts` (zones: zny, zdc, zid, zob, zatl, zhu, zla, zse) — all
+>   routed through `shared/sector_coalesce.py::fire_family_alert()`,
+>   escalating-only, with a per-topic throttle (default 60 s min interval),
+>   per-topic enable/sanitize switches, and per-(feed, sector) escalation
+>   thresholds, JSON-persisted to
+>   `/var/lib/corporatetraveldc/sector_coalesce_silence.json`. Admin API:
+>   `GET/POST /api/v1/sectors/topic/{topic}[/throttle|/enabled|/sanitize]`
+>   (`web/routes/sectors.py`). `stdds` is deliberately not wired (no
+>   alert-worthy criteria defined yet). Design rationale:
+>   `docs/ALERT_ARCHITECTURE.md`.
+> - `vessel-alerts` now carries vessel add/remove **and position events**:
+>   vessel *position* events used to misroute to `train-alerts`
+>   (`watchlist_event_hit()` had no vessel branch) — **fixed 2026-08-11**
+>   with an explicit vessel branch (`VSL ` title prefix). See
+>   `src/shared/watchlist_README.md`.
+> - **TFMS `flightPlanAmendmentInformation` gained content-hash dedup
+>   2026-08-10**: keyed `tfms:amendment:{entry_id}:{route_text}` against the
+>   30-min `_TFMS_ALERT_DEDUP` window, so unchanged rebroadcasts are
+>   suppressed indefinitely while a genuinely new amendment fires
+>   immediately. It was previously the one TFMS watchlist path with no dedup
+>   beyond the generic 5-minute window.
+> - The brief-class pipeline gained `brief-fallback-monitor` (hourly, loud
+>   alert on deterministic-fallback degradation, 2026-08-08).
+
 ## How to read this
 
 Alert paths in this codebase come from three places. Two are shared

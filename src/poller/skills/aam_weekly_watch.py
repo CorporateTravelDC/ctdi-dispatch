@@ -56,7 +56,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "aam-weekly-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-aam-watch:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service

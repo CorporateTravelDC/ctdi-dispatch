@@ -19,6 +19,16 @@
 #            smoke budget before it is promoted to the live tag. A too-slow/cache-
 #            breaking model can never go live; the last-known-good keeps serving.
 #
+# 2026-08-13: GUARD 2's budget philosophy changed (operator directive after
+# a live diagnostic arc). It is NOT trying to enforce a production speed
+# SLA anymore -- generation legitimately taking several minutes for a
+# long-form brief is fine, not a failure. What it still needs to catch is
+# a genuinely broken/pathological model (the original SWA case: ~100%
+# silent fallback because every prompt was reprocessed from scratch). So
+# the budget is now generous (SMOKE_BUDGET_S below), and the runtime-side
+# load-vs-generation split lives in common/llm.py's OLLAMA_LOAD_TIMEOUT /
+# _preload_model() instead -- THAT is what actually gates load time now.
+#
 # Usage:
 #   build-models.sh                 # build all models
 #   build-models.sh <name> [name..] # build only the named model(s)
@@ -40,37 +50,35 @@ OLLAMA_HOST="${OLLAMA_HOST:-100.x.x.x:11434}"; export OLLAMA_HOST
 OLLAMA_URL="http://${OLLAMA_HOST}"
 
 # name -> Modelfile suffix
+#
+# 2026-08-13: consolidated from 16 dedicated per-skill models down to 2.
+# corporatetraveldc-pi5-brief is now the single shared model behind every
+# batch/report skill (ops-brief[-trend], ep-advance[-trend], tfr-enrichment,
+# route-impact, weekly-summary, osint[-monitor], aam-watch, dispatch-desk,
+# transport-digest, disruption-weather-digest, secondbrain-daily/weekly) --
+# one resident model, zero swap cycle between skills. Persona/ROE content
+# that used to be baked per-Modelfile now lives centrally in
+# corporatetraveldc.dispatch-persona (see common/llm.py). chat stays its
+# own dedicated model -- interactive Dispatch Drawer path, own tuned
+# PARAMETER set (num_predict cap for a human waiting on a reply).
 declare -A MODELS=(
   [corporatetraveldc-pi5-chat]="chat"
-  [corporatetraveldc-pi5-osint]="osint"
-  [corporatetraveldc-pi5-ops-brief]="ops-brief"
-  [corporatetraveldc-pi5-ops-brief-trend]="ops-brief-trend"
-  [corporatetraveldc-pi5-tfr-enrichment]="tfr-enrichment"
-  [corporatetraveldc-pi5-route-impact]="route-impact"
-  [corporatetraveldc-pi5-weekly-summary]="weekly-summary"
-  [corporatetraveldc-pi5-osint-monitor]="osint-monitor"
-  [corporatetraveldc-pi5-ep-advance]="ep-advance"
-  [corporatetraveldc-pi5-ep-advance-trend]="ep-advance-trend"
-  [corporatetraveldc-pi5-aam-watch]="aam-watch"
-  [corporatetraveldc-pi5-dispatch-desk]="dispatch-desk"
-  [corporatetraveldc-pi5-transport-digest]="transport-digest"
-  [corporatetraveldc-pi5-disruption-weather-digest]="disruption-weather-digest"
-  [corporatetraveldc-pi5-secondbrain-daily]="secondbrain-daily"
-  [corporatetraveldc-pi5-secondbrain-weekly]="secondbrain-weekly"
+  [corporatetraveldc-pi5-brief]="brief"
 )
 
 # ── Brief-class models: subject to the two guards above ───────────────────────
 BRIEF_MODELS=(
-  corporatetraveldc-pi5-ops-brief
-  corporatetraveldc-pi5-ops-brief-trend
-  corporatetraveldc-pi5-ep-advance
-  corporatetraveldc-pi5-ep-advance-trend
+  corporatetraveldc-pi5-brief
 )
 # Known cache-breaking base families (Sliding Window Attention / hybrid-recurrent
 # → llama.cpp forces full prompt re-processing → briefs blow the timeout).
 SWA_DENYLIST_REGEX='^FROM[[:space:]]+(gemma3|gemma2)([:._-]|[[:space:]]|$)'
-# Smoke budget MUST beat the runtime OLLAMA_TIMEOUT (240s) with margin.
-SMOKE_BUDGET_S="${BRIEF_SMOKE_BUDGET_S:-200}"
+# 2026-08-13: generous, not tight -- see this section's own comment above.
+# Only needs to catch a genuinely broken/pathological model (the original
+# SWA case effectively never completed at any reasonable budget); a merely
+# slow-but-working model on this Pi 5 is an accepted cost now, gated at
+# runtime by common/llm.py's OLLAMA_LOAD_TIMEOUT instead.
+SMOKE_BUDGET_S="${BRIEF_SMOKE_BUDGET_S:-900}"
 
 is_brief_model() { local n="$1" b; for b in "${BRIEF_MODELS[@]}"; do [ "$b" = "$n" ] && return 0; done; return 1; }
 
@@ -90,11 +98,15 @@ assert_brief_base_ok() {  # GUARD 1
   fi
 }
 
-brief_smoke_prompt() {  # ~5100-token block = 125% of the real 4082-token max prompt observed
-                        # across the pipeline (Ollama logs, 2026-08-08) — the gate must prove a
-                        # model handles the WORST case + margin, not a typical ~2000-token prompt.
+brief_smoke_prompt() {  # ~2200-token block, matching the trimmed real-world cap
+                        # dispatch_desk_memo.py/second_brain_weekly.py now enforce (see
+                        # common/llm.py's trim_to_token_budget()) -- was ~5100 tokens
+                        # (125% of the pre-trim 4082-token observed max) until 2026-08-13's
+                        # persona-consolidation + prompt-normalization pass made that figure
+                        # stale; testing against the old inflated size no longer reflects
+                        # what any real skill actually sends.
   echo "Raw operational data for the executive ground-transport briefing:"
-  for i in $(seq 1 170); do
+  for i in $(seq 1 74); do
     printf 'FEED %02d | METAR KDCA %02d00Z wind 180@12G20 3SM BR OVC008; TFR 9/%d VIP MOVEMENT KDCA %02d00-%02d00Z; Amtrak NEC #%d delayed 25min catenary Baltimore; ADS-B N%dXX sqk1200 alt3500 hdg090 twd IAD; CPS ceiling marginal vis ok wind marginal precip ok airspace restricted gdp active.\n' \
       "$i" "$((i%24))" "$((i+900))" "$((i%20))" "$(((i%20)+2))" "$((i+2100))" "$((i*7))"
   done
@@ -109,6 +121,13 @@ smoke_test_brief_model() {  # GUARD 2 — real generation within budget, non-emp
   end=$(date +%s); elapsed=$((end - start))
   if [ $rc -ne 0 ]; then
     echo "  SMOKE FAIL: ${candidate} did not respond within ${SMOKE_BUDGET_S}s (curl rc=${rc}, ${elapsed}s). Likely a slow/cache-breaking base."
+    # 2026-08-11: curl giving up does NOT stop the generation running
+    # server-side inside Ollama -- confirmed live, this is exactly what
+    # turned one smoke-test timeout into a 52 load-average pile-up (4
+    # sequential FAILs, each leaving its own orphaned llama-server child
+    # still computing). Best-effort unload so the NEXT candidate in this
+    # loop doesn't inherit it.
+    curl -s -m 5 "$OLLAMA_URL/api/generate" -d "$(python3 -c 'import json,sys;print(json.dumps({"model":sys.argv[1],"prompt":"","keep_alive":0}))' "$candidate")" >/dev/null 2>&1 || true
     return 1
   fi
   text="$(printf '%s' "$resp" | python3 -c 'import json,sys
@@ -118,7 +137,7 @@ except Exception: print("")')"
     echo "  SMOKE FAIL: ${candidate} returned an empty response (${elapsed}s)."
     return 1
   fi
-  echo "  SMOKE PASS: ${candidate} produced ${#text} chars in ${elapsed}s (budget ${SMOKE_BUDGET_S}s, runtime timeout 240s)."
+  echo "  SMOKE PASS: ${candidate} produced ${#text} chars in ${elapsed}s (budget ${SMOKE_BUDGET_S}s, runtime load-phase timeout 180s -- see OLLAMA_LOAD_TIMEOUT)."
   return 0
 }
 
@@ -186,3 +205,8 @@ fi
 
 echo ""
 echo "Done. (Skills reference models by name; a base swap needs NO poller rebuild.)"
+
+# 2026-08-11: deployment trigger for the doc-drift check -- same script the
+# post-commit hook uses, fired here too since a model swap changes live
+# behavior docs might describe without necessarily being its own commit.
+"${REPO_DIR}/scripts/post-commit-doc-verify.sh" deploy 2>/dev/null || true

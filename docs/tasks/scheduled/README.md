@@ -1,5 +1,11 @@
 # Scheduled Tasks → Skills
 
+_Verified 2026-08-11: of the three skills below, only `flight-hifi-track`
+ships in this repo (`skills/flight-hifi-track/SKILL.md`);
+`overwater-adsb-handoff-track` and `nec-train-hifi-track` live on the
+Cowork/agent side and are invoked by trigger phrase only. The design
+rationale sections remain current._
+
 These tasks were originally Cowork scheduled tasks (2-min cron) and have been converted to
 on-demand **skills**. The scheduled tasks are now disabled; invoke the skills by trigger phrase.
 

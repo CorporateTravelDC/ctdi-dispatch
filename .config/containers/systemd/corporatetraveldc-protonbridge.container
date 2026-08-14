@@ -10,8 +10,28 @@ Image=docker.io/schklom/protonmail-bridge:latest-arm64
 # No Exec= override -- the image's entrypoint runs the persistent relay
 # daemon by default (only the "init" arg triggers the one-shot interactive
 # login flow, which already ran manually via setup-protonbridge.sh).
-# Loopback-only: this relay is Pi-local, never reachable externally.
-PublishPort=127.0.0.1:1025:1025
+# 2026-08-11: two stacked bugs, both fixed here.
+# (1) was 127.0.0.1:1025 host-side ("loopback-only, never reachable
+#     externally") -- correct INTENT, wrong mechanism, not reachable from
+#     any other container's netns either. Rebound to the tailnet IP, same
+#     pattern as ollama.service (100.x.x.x:11434) -- reachable from
+#     other containers via host.containers.internal/the tailnet IP
+#     directly, still never reachable from the public internet or raw
+#     LAN/WiFi (no cloudflared ingress rule for this port; Tailscale is
+#     the only thing that can reach that IP off-box).
+# (2) container-side port was wrong regardless of (1): the image's own
+#     entrypoint runs `socat TCP-LISTEN:25,fork TCP:127.0.0.1:1025` --
+#     proton-bridge itself only binds ITS OWN loopback 127.0.0.1:1025
+#     inside the container, unreachable from outside that container's own
+#     netns even via its own eth0. socat's :25 listener is the actual
+#     externally-reachable port. PublishPort was mapping host:1025 ->
+#     container:1025 (bridge's unreachable internal bind) instead of
+#     container:25 (socat's real listener) -- this never worked, on any
+#     host binding, confirmed via `podman logs` showing the socat command
+#     and a live "connection reset by peer" even from the host itself
+#     pre-fix. Kept the external-facing port number at 1025 (matches every
+#     consumer's existing config) by mapping to container port 25.
+PublishPort=100.x.x.x:1025:25
 Volume=protonbridge-data:/root
 
 [Service]

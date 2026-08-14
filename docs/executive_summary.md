@@ -1,6 +1,6 @@
 # Executive Summary — Executive Travel Intelligence Platform
 
-_v1.2.0 — Updated 2026-08-02_
+_v1.2.0 — Updated 2026-08-02; claims reverified against the live platform 2026-08-11 (all six FAA feeds connected; public password-gated demo live)._
 
 ## Overview
 

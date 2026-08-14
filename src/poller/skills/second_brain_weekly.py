@@ -30,7 +30,7 @@ import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from common.llm import generate as llm_generate
+from common.llm import generate as llm_generate, trim_to_token_budget
 from common.sr1_log import log_usage
 from second_brain import webdav_client
 from second_brain.index_db import INDEX_DB, index_note
@@ -40,7 +40,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-weekly"
-OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-weekly:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
 
 SYSTEM_PROMPT = """You are compiling a week's worth of daily operational logs
 into one weekly synthesis for a second-brain knowledge vault. Identify
@@ -131,6 +131,12 @@ def main() -> None:
             + "\n\n---\n\n".join(bodies)
         )
         combined = gate(combined, source=SKILL_NAME)
+        # 2026-08-13: unbounded by design (grows with vault content, see the
+        # module comment above) -- now that DISPATCH_PERSONA adds a fixed
+        # ~2050 tokens to every call, this needs its own explicit ceiling
+        # rather than relying on "not yet independently timed" optimism.
+        # 2500 leaves headroom for persona + this + max_tokens=500 output.
+        combined = trim_to_token_budget(combined, 2500)
 
         ollama_result = llm_generate(
             system=None, prompt=combined,  # dedicated Modelfile carries this now
@@ -142,6 +148,10 @@ def main() -> None:
             # container's TimeoutStartSec=950 pending a real measurement
             # against a full 7-day dataset.
             timeout=500,
+            # 2026-08-12: belt-and-suspenders close of the Anthropic
+            # fallback -- see dispatch.env's ANTHROPIC_FALLBACK_ENABLED
+            # comment for the full rationale.
+            allow_anthropic=False,
         )
         if ollama_result:
             ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")

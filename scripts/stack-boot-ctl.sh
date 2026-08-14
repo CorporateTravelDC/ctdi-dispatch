@@ -69,13 +69,17 @@ ORDER=(
   poller
   web
   pusher
-  ultrafeeder
-  acarsrouter
+  # ultrafeeder/acarsrouter/acarshub/dumpvdl2 deliberately OUT of the boot
+  # order 2026-08-11 -- both SDR dongles casualty-suspected (ADS-B off the
+  # USB bus entirely, VDLM present but unqueryable, no physical access to
+  # rule out heat damage from the earlier thermal incidents). Operator is
+  # replacing hardware; running "all external" (airplanes.live for ADS-B
+  # lookups, acars-watcher's airframes.io side for ACARS) until then. Do
+  # NOT re-add without confirming new SDRs are actually in and enumerating
+  # -- re-adding blind just re-triggers the same silent-feed watchdogs.
   protonbridge
   nextcloud-db
   csexec-contact
-  acarshub
-  dumpvdl2
   nextcloud-app
   openwebui
   rss-bridge

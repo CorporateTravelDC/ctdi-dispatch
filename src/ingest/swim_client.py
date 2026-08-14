@@ -301,11 +301,18 @@ def _bandwidth_priority_says_pause(feed_name: str) -> bool:
           endpoint, and the auto-trigger is written to never stomp on a
           manually-set state (checks set_by before acting).
 
-    fdps and tfms are never paused by priority=weather even though fdps is
-    the single largest bandwidth consumer -- during a weather event they are
-    exactly the two feeds this platform exists to surface, so backpressure
-    has to come out of the other four, not out of the ones the user is most
-    likely to be checking against.
+      priority=ollama -- same low-priority tier as weather, pauses for the
+          duration of an in-flight Ollama call instead of a weather event.
+          Auto-set/cleared by common/llm.py (see OLLAMA_BACKPRESSURE_ENABLED
+          there), added 2026-08-11 after confirming a cold model load can
+          lose the CPU race entirely when ingest runs unshed on this 4-core
+          Pi. Same never-stomp discipline via set_by.
+
+    fdps and tfms are never paused by priority=weather/ollama even though
+    fdps is the single largest bandwidth consumer -- those two feeds are
+    exactly what this platform exists to surface, so backpressure has to
+    come out of the other four, not out of the ones the user is most likely
+    to be checking against.
     """
     try:
         state = _db.get_bandwidth_priority()
@@ -318,7 +325,7 @@ def _bandwidth_priority_says_pause(feed_name: str) -> bool:
 
     if priority == "nexrad":
         return feed_name == "fdps"
-    if priority == "weather":
+    if priority in ("weather", "ollama"):
         return feed_name in _LOW_PRIORITY_FEEDS
     return False
 

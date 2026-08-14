@@ -12,7 +12,7 @@ Cloud services and external APIs are **opt-in enhancements** that add capability
 
 ## 2. Vendor-neutral inference — Ollama first and only by default
 
-All LLM inference runs locally via **Ollama**. No cloud inference provider (Anthropic, OpenAI, Google Gemini, Cohere, or any other) is contacted at runtime unless the operator has explicitly opted in and wired a provider into `src/runner/main.py`.
+All LLM inference runs locally via **Ollama**. No cloud inference provider (Anthropic, OpenAI, Google Gemini, Cohere, or any other) is contacted at runtime unless the operator has explicitly opted in — concretely, by setting a provider API key in `dispatch-secrets.env` (the single cloud-fallback path in `src/common/llm.py` is inert without `ANTHROPIC_API_KEY`, and skills can additionally hard-disable it per call with `allow_anthropic=False`, as the brief skills do). _(Wording corrected 2026-08-11 — the opt-in gate lives in `src/common/llm.py`, not `src/runner/main.py`.)_
 
 Rules for contributors:
 

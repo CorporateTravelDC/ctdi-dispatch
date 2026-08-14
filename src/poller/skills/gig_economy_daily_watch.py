@@ -57,7 +57,7 @@ from poller.skills.aam_weekly_watch import _fetch_week_items, _split_framings
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "gig-economy-daily-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-aam-watch:latest"  # shared synthesis-task model, see aviation_daily_watch.py's own comment
+OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"  # shared synthesis-task model, see aviation_daily_watch.py's own comment
 RSS_CATEGORY = "gig_economy"
 LOOKBACK_DAYS = 1
 

@@ -16,7 +16,7 @@ SKILL_NAME = "tfr-enrichment"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_TFR_ENRICHMENT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-tfr-enrichment:latest")
+                     or "corporatetraveldc-pi5-brief:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
 OLLAMA_TIMEOUT    = 900  # stopgap
@@ -124,6 +124,12 @@ def _call_ollama_vip(inputs: dict) -> str | None:
         max_tokens=220,
         temperature=0.2,
         priority="hot",
+        # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
+        # priority="hot" only affects the Ollama-side pre-flight/retry
+        # gates, NOT whether generate() falls through to Anthropic on
+        # failure, so this needed closing explicitly too. See dispatch.env's
+        # ANTHROPIC_FALLBACK_ENABLED comment for the full rationale.
+        allow_anthropic=False,
     )
 
 

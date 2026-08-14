@@ -55,6 +55,20 @@ STATE_DIR = pathlib.Path("/var/lib/corporatetraveldc/ollama-lock")
 LOCK_PATH = STATE_DIR / "ollama.lock"
 HOT_MARKER = STATE_DIR / "hot-pending"
 
+# 2026-08-13: concurrency cap, operator directive after the load/generation
+# timeout split made report-priority calls legitimately run much longer
+# (5-15+ min is now accepted, not a failure -- see common/llm.py). Without
+# a cap, several report-priority skills firing close together would each
+# poll-wait for this single flock in an unbounded queue, each holding its
+# own container's memory the whole time -- a pile-up risk that didn't
+# really exist when every call was forced to finish (or fail) within a few
+# hundred seconds. This is the "report" side's equivalent of the existing
+# hot-pending back-off: past MAX_CONCURRENT_REPORT_WAITERS callers already
+# waiting-for-or-holding the slot, a new report call backs off immediately
+# to its next scheduled cycle instead of adding to the line.
+REPORT_WAITERS_DIR = STATE_DIR / "report-waiters"
+MAX_CONCURRENT_REPORT_WAITERS = int(os.getenv("OLLAMA_MAX_CONCURRENT_REPORT_WAITERS", "2"))
+
 
 class OllamaBusyError(TimeoutError):
     """Raised when the Ollama slot could not be acquired: either a report
@@ -82,29 +96,73 @@ def _hot_marker():
         HOT_MARKER.unlink(missing_ok=True)
 
 
+def _count_report_waiters() -> int:
+    """Count of report-priority callers currently waiting-for-or-holding
+    the slot, self-healing as it goes: a marker whose owning PID no longer
+    exists means that process crashed/was killed before its own cleanup
+    ran, so it's pruned right here rather than needing separate stale-lock
+    cleanup (same crash-safety property flock() gives the lock itself --
+    see this module's docstring)."""
+    if not REPORT_WAITERS_DIR.exists():
+        return 0
+    count = 0
+    for p in REPORT_WAITERS_DIR.iterdir():
+        try:
+            pid = int(p.name)
+        except ValueError:
+            continue
+        try:
+            os.kill(pid, 0)
+            count += 1
+        except OSError:
+            p.unlink(missing_ok=True)
+    return count
+
+
+@contextlib.contextmanager
+def _report_waiter_marker():
+    REPORT_WAITERS_DIR.mkdir(parents=True, exist_ok=True)
+    marker = REPORT_WAITERS_DIR / str(os.getpid())
+    marker.touch(exist_ok=True)
+    try:
+        yield
+    finally:
+        marker.unlink(missing_ok=True)
+
+
 @contextlib.contextmanager
 def ollama_slot(priority: str = "report", timeout: float = 60.0, poll_interval: float = 0.5):
     """Context manager granting exclusive access to Ollama.
 
     priority="hot": always waits for the lock (up to `timeout` seconds),
         marking itself so report callers back off while this is held.
-    priority="report": if a hot caller is currently pending, raises
-        OllamaBusyError immediately instead of queueing. If no hot caller is
-        pending, behaves like a plain mutex acquire with the given timeout.
+    priority="report": backs off immediately (no queueing) if a hot caller
+        is currently pending, OR if MAX_CONCURRENT_REPORT_WAITERS report
+        calls are already waiting-for-or-holding the slot. Otherwise
+        behaves like a plain mutex acquire with the given timeout.
 
     Raises OllamaBusyError if the slot could not be acquired -- immediately
-    for a report call when hot work is pending, or after `timeout` seconds
-    of waiting otherwise.
+    for a report call when hot work is pending or the concurrency cap is
+    already at capacity, or after `timeout` seconds of waiting otherwise.
     """
     _ensure_dir()
 
-    if priority == "report" and is_hot_pending():
-        raise OllamaBusyError(
-            "hot-priority Ollama work is pending -- report call deferred to next scheduled cycle"
-        )
+    if priority == "report":
+        if is_hot_pending():
+            raise OllamaBusyError(
+                "hot-priority Ollama work is pending -- report call deferred to next scheduled cycle"
+            )
+        waiters = _count_report_waiters()
+        if waiters >= MAX_CONCURRENT_REPORT_WAITERS:
+            raise OllamaBusyError(
+                f"{waiters} report-priority calls already waiting-for-or-holding the "
+                f"Ollama slot (cap {MAX_CONCURRENT_REPORT_WAITERS}) -- deferred to next "
+                "scheduled cycle rather than piling onto the queue"
+            )
 
-    ctx = _hot_marker() if priority == "hot" else contextlib.nullcontext()
-    with ctx:
+    hot_ctx = _hot_marker() if priority == "hot" else contextlib.nullcontext()
+    waiter_ctx = _report_waiter_marker() if priority == "report" else contextlib.nullcontext()
+    with hot_ctx, waiter_ctx:
         LOCK_PATH.touch(exist_ok=True)
         fd = os.open(str(LOCK_PATH), os.O_RDWR)
         deadline = time.monotonic() + timeout

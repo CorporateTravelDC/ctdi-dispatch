@@ -1,6 +1,6 @@
 # DCA / IAD FIDS Integration
 
-**Added:** 2026-06-24
+**Added:** 2026-06-24 · **Verified/updated:** 2026-08-11
 
 ## Discovery
 
@@ -101,9 +101,12 @@ manual FIDS verification.
 
 ## Poller schedule
 
-`dca_fids` and `iad_fids` are registered in `FETCH_SCHEDULE` at 60s interval.
-Feed health appears in `GET /api/v1/feeds` alongside other feeds.
-Stale threshold: 180s (3x poll interval).
+`dca_fids` and `iad_fids` are registered in `FETCH_SCHEDULE`
+(`src/poller/main.py`) at a **300 s** interval. Feed health appears in
+`GET /api/v1/feeds` alongside other feeds. Stale threshold: **600 s**
+(2× the poll interval, set 2026-08-10 in `src/web/main.py` — the previous
+180 s value was tighter than the real 300 s interval and guaranteed a false
+"stale" for the last ~2 minutes of every cycle).
 
 ## BWI
 

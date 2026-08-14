@@ -29,7 +29,7 @@ from typing import Any, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1475,6 +1475,33 @@ _TIER1_PATHS: frozenset[str] = frozenset({
 # _TIER1_PATHS -- this proxy will not inject its own service token for it.
 # See _WATCHLIST_PATHS / _is_tailnet_request() below for the actual gate.
 
+# 2026-08-13: second-brain vault content (knowledge-graph viz + raw note
+# GET). Found via a live pentest pass -- these had NO auth at all on
+# dispatch-web (fixed there too, now require_tier(Tier.T1)), but T1 is
+# purely token-based (auth.py's resolve_tier only ever looks at a Bearer
+# token, never request origin), and the PWA's own fetch() calls for these
+# carry no token -- so a straight require_tier fix alone would 403 the
+# feature for its own legitimate (Tailscale) users, not just public
+# callers. Unlike _TIER1_PATHS above, injection here is deliberately
+# CONDITIONAL on _is_trusted(request) -- these paths must stay
+# operator-only (unlike tfr-enriched/radio/watchlist, which are
+# intentionally widened to the public Ops view), so an untrusted-origin
+# caller gets no token injected and then correctly 403s at dispatch-web.
+_TIER1_PATHS_TRUSTED_ORIGIN_ONLY: frozenset[str] = frozenset({
+    "api/v1/knowledge-graph/html",
+    "api/v1/knowledge-graph/meta",
+    "api/v1/vault/file",
+    # 2026-08-13: osint/scopes GET only (config listing, not the item
+    # feed) -- tier-gated after a live pentest found it unauthenticated
+    # on the public vhost. The POST/PATCH/DELETE mutation routes are
+    # deliberately NOT here -- they're require_admin, not require_tier,
+    # and RUNNER_ENRICHED_TOKEN is cert/T1-tier, so injecting it there
+    # would be a no-op (still 403s) while implying a false sense of
+    # reachability. An admin token has to be supplied explicitly for
+    # those, same as any other admin action.
+    "api/v1/osint/scopes",
+})
+
 # UPDATED 2026-07-21 per operator direction: dropped the paired-auth
 # placeholder gate entirely. Ops (public hostname) now sees the REAL
 # watchlist on every GET -- it's a view-only dashboard, not a "hide the
@@ -1522,6 +1549,12 @@ async def proxy_dispatch(path: str, request: Request):
     elif RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS:
         # Server-side token injection for known Tier-1 endpoints.
         headers["Authorization"] = f"Bearer {RUNNER_ENRICHED_TOKEN}"
+    elif (RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS_TRUSTED_ORIGIN_ONLY
+          and _is_trusted(request)):
+        # Same injection, but only for a trusted (Tailscale/LAN) caller --
+        # see _TIER1_PATHS_TRUSTED_ORIGIN_ONLY above for why this set can't
+        # use the unconditional injection above it.
+        headers["Authorization"] = f"Bearer {RUNNER_ENRICHED_TOKEN}"
     params = dict(request.query_params)
     if demo_session_token:
         # Verified above -- overrides any window/speed the browser itself
@@ -1543,6 +1576,13 @@ async def proxy_dispatch(path: str, request: Request):
                                  "Content-Type", "application/json")},
                     timeout=10)
         ct = r.headers.get("content-type", "")
+        # 2026-08-12: the knowledge-graph HTML endpoint (text/html) was
+        # falling into the JSON branch below, which threw on r.json() and
+        # got swallowed by the broad except -> reported as a 502 with no
+        # indication it was actually a content-type mismatch, not a real
+        # upstream failure.
+        if "text/html" in ct:
+            return HTMLResponse(r.text, status_code=r.status_code)
         if "text/plain" in ct:
             return PlainTextResponse(r.text, status_code=r.status_code)
         return JSONResponse(r.json(), status_code=r.status_code)
@@ -1791,7 +1831,7 @@ async def _synthetic_ntfy_stream(request: Request):
 #               dispatch-debriefs, ops-brief
 
 @app.get("/api/ntfy/stream")
-async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight-alerts,tfr-alert,cps,ops-health,train-alerts,ops-brief"):
+async def ntfy_stream(request: Request, topics: str = "dispatch,wx-alerts,flight-alerts,tfr-alert,cps,ops-health,train-alerts,ops-brief,osint-alerts"):
     """Proxy ntfy SSE feed to the frontend.
 
     ?topics=comma,separated,topic,names

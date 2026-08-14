@@ -60,6 +60,19 @@ _RSS_CATALOG: dict[str, list[dict]] = {
         {"name": "Urban Air Mobility News",  "url": "https://urbanairmobilitynews.com/feed/"},
         {"name": "UASWeekly",                "url": "https://uasweekly.com/feed/"},
         {"name": "FAA News",                 "url": "https://www.faa.gov/rss.xml"},
+        # Added 2026-08-13 per operator request -- eVTOL/AAM research had
+        # only covered the corporate-travel/EP framing (vertiport siting,
+        # Part 108, air-taxi commercialization); operator flagged the
+        # emergency-medical-response side (Hyde County NC's first-in-the-
+        # nation live eVTOL EMS deployment, Pivotal BlackFly, Jun 2026) as
+        # a distinct angle worth tracking going forward too. All four
+        # verified live from this Pi 2026-08-13 (real RSS/Atom XML, not
+        # bot-gated HTML). EMS-AI.com evaluated but has no discoverable
+        # feed -- site only, not added here.
+        {"name": "JEMS (EMS trade)",               "url": "https://www.jems.com/feed/"},
+        {"name": "Fire Apparatus Magazine",         "url": "https://www.fireapparatusmagazine.com/feed/"},
+        {"name": "Vertical Aviation International", "url": "https://verticalavi.org/feed/"},
+        {"name": "AvWeb",                            "url": "https://avweb.com/feed/"},
     ],
     # Added 2026-08-07 per operator request (cross-link auto-track feature --
     # gig-platform moves and legal/policy/venture signals came up as explicit

@@ -34,12 +34,34 @@ resume point so restoration only happens once things are genuinely
 settled, not right as Ollama itself is about to resume and add load
 back.
 
+Load-average trigger added 2026-08-11: this guard was temperature-only
+from the start, but a real 2026-08-11 test showed the box can be running
+cool (57-66C, tier=0, nothing shed) while 1-min load climbs past 17 on
+4 cores -- confirmed via common/llm.py's own pre-flight load-gate comment
+("at load ~15 every model, including 1.5B, timed out regardless of
+size", 2026-08-09) and a live ollama.service log showing a cold model
+load losing the CPU race entirely (6m54s stuck in "waiting for
+llama-server to become available", never reaching generation) with
+temps nowhere near either thermal tier. Heat and CPU contention are
+related but not the same signal -- a cool case with 4 ingest processes
+saturating all 4 cores is exactly the gap the temp-only version missed.
+Load tiers reuse the SAME tier1_feeds/tier2_feeds/resume mechanics as
+temperature -- either signal can independently trip a given tier; RESUME
+requires BOTH temp and load to be back under their resume thresholds
+(stricter, to avoid flapping on whichever recovers first). Load values
+are raw 1-min /proc/loadavg (not normalized per-core), matching the
+convention common/llm.py's own OLLAMA_PREFLIGHT_LOAD_TARGET already uses
+on this same 4-core box.
+
 Tunables (dispatch.env, all optional -- defaults shown are what's used
 if the var is absent or unparsable):
   THERMAL_GUARD_ENABLED=true
   THERMAL_GUARD_TIER1_TEMP_C=74.0
   THERMAL_GUARD_TIER2_TEMP_C=79.0
   THERMAL_GUARD_RESUME_TEMP_C=65.0
+  THERMAL_GUARD_TIER1_LOAD=10.0
+  THERMAL_GUARD_TIER2_LOAD=14.0
+  THERMAL_GUARD_RESUME_LOAD=6.0
   THERMAL_GUARD_RESUME_DWELL_S=300
   THERMAL_GUARD_TIER1_FEEDS=tfms,stdds
   THERMAL_GUARD_TIER2_FEEDS=fdps,tbfm,itws
@@ -96,6 +118,36 @@ def _float(v, default):
 def get_temp_c():
     with open(THERMAL_ZONE) as f:
         return float(f.read().strip()) / 1000.0
+
+
+def get_load1():
+    """Raw 1-min load average, or None (never raises) if unreadable."""
+    try:
+        with open("/proc/loadavg") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def get_fan_rpm():
+    """Reads the real cooling fan by hwmon NAME ("pwmfan"), not a fixed
+    hwmonN path -- numbering shifts once the dead gpio-fan overlay (Argon
+    ONE leftover, always-max-duty, no physical fan attached) is removed
+    from /boot/config.txt and the box reboots. Returns None if unreadable."""
+    try:
+        for entry in os.listdir("/sys/class/hwmon"):
+            hw = f"/sys/class/hwmon/{entry}"
+            try:
+                with open(f"{hw}/name") as f:
+                    if f.read().strip() != "pwmfan":
+                        continue
+                with open(f"{hw}/fan1_input") as f:
+                    return int(f.read().strip())
+            except (FileNotFoundError, ValueError):
+                continue
+    except FileNotFoundError:
+        pass
+    return None
 
 
 def load_state():
@@ -221,11 +273,18 @@ def main():
     tier1_temp = _float(cfg.get("THERMAL_GUARD_TIER1_TEMP_C"), 74.0)
     tier2_temp = _float(cfg.get("THERMAL_GUARD_TIER2_TEMP_C"), 79.0)
     resume_temp = _float(cfg.get("THERMAL_GUARD_RESUME_TEMP_C"), 65.0)
+    tier1_load = _float(cfg.get("THERMAL_GUARD_TIER1_LOAD"), 10.0)
+    tier2_load = _float(cfg.get("THERMAL_GUARD_TIER2_LOAD"), 14.0)
+    resume_load = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD"), 6.0)
     resume_dwell = _float(cfg.get("THERMAL_GUARD_RESUME_DWELL_S"), 300)
     tier1_feeds = cfg.get("THERMAL_GUARD_TIER1_FEEDS", "tfms,stdds")
     tier2_feeds = cfg.get("THERMAL_GUARD_TIER2_FEEDS", "fdps,tbfm,itws")
 
     temp = get_temp_c()
+    load1 = get_load1()
+    load_str = f"{load1:.2f}" if load1 is not None else "n/a"
+    fan_rpm = get_fan_rpm()
+    fan_str = f"{fan_rpm}rpm" if fan_rpm is not None else "n/a"
     state = load_state()
     tier = state.get("tier", 0)
     tier = _reconcile_stale_tier(tier, tier1_feeds, tier2_feeds)
@@ -234,35 +293,53 @@ def main():
         save_state(state)
     now = time.time()
 
-    print(f"{LOG_PREFIX} temp={temp:.2f}C tier={tier}")
+    print(f"{LOG_PREFIX} temp={temp:.2f}C load1={load_str} tier={tier} fan={fan_str}")
 
-    if tier < 2 and temp >= tier2_temp:
+    temp2_trip = temp >= tier2_temp
+    load2_trip = load1 is not None and load1 >= tier2_load
+    temp1_trip = temp >= tier1_temp
+    load1_trip = load1 is not None and load1 >= tier1_load
+
+    if tier < 2 and (temp2_trip or load2_trip):
         feed_ctl("stop", tier2_feeds)
         if tier < 1:
             feed_ctl("stop", tier1_feeds)
-        save_state({"tier": 2, "below_resume_since": None, "shed_at": now, "peak_temp": temp})
+        reason = " and ".join(
+            r for r, hit in ((f"{temp:.1f}C", temp2_trip), (f"load {load_str}", load2_trip)) if hit
+        )
+        save_state({"tier": 2, "below_resume_since": None, "shed_at": now,
+                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm})
         ntfy_alert(
             cfg,
-            f"TIER 2: {temp:.1f}C -- stopped {tier1_feeds},{tier2_feeds}. "
+            f"TIER 2: {reason} (fan {fan_str}) -- stopped {tier1_feeds},{tier2_feeds}. "
             f"Ollama governor and cooling not keeping up on their own.",
             "Thermal Guard -- TIER 2 shed", priority=5,
         )
-        print(f"{LOG_PREFIX} tripped tier 2 at {temp:.2f}C")
+        print(f"{LOG_PREFIX} tripped tier 2 ({reason}) fan={fan_str}")
         return
 
-    if tier < 1 and temp >= tier1_temp:
+    if tier < 1 and (temp1_trip or load1_trip):
         feed_ctl("stop", tier1_feeds)
-        save_state({"tier": 1, "below_resume_since": None, "shed_at": now, "peak_temp": temp})
+        reason = " and ".join(
+            r for r, hit in ((f"{temp:.1f}C", temp1_trip), (f"load {load_str}", load1_trip)) if hit
+        )
+        save_state({"tier": 1, "below_resume_since": None, "shed_at": now,
+                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm})
         ntfy_alert(
             cfg,
-            f"TIER 1: {temp:.1f}C -- stopped {tier1_feeds} to cut CPU load.",
+            f"TIER 1: {reason} (fan {fan_str}) -- stopped {tier1_feeds} to cut CPU load.",
             "Thermal Guard -- TIER 1 shed", priority=4,
         )
-        print(f"{LOG_PREFIX} tripped tier 1 at {temp:.2f}C")
+        print(f"{LOG_PREFIX} tripped tier 1 ({reason}) fan={fan_str}")
         return
 
     if tier > 0:
-        if temp < resume_temp:
+        # Resume requires BOTH signals to have recovered -- a cool box
+        # still under heavy load, or a loaded-down box still hot, should
+        # not restore feeds just because the OTHER signal cleared.
+        temp_ok = temp < resume_temp
+        load_ok = load1 is None or load1 < resume_load
+        if temp_ok and load_ok:
             below_since = state.get("below_resume_since") or now
             state["below_resume_since"] = below_since
             if now - below_since >= resume_dwell:
@@ -270,17 +347,17 @@ def main():
                 feed_ctl("restart", restored)
                 ntfy_alert(
                     cfg,
-                    f"{temp:.1f}C held below {resume_temp}C for {resume_dwell:.0f}s -- "
-                    f"restored {restored}.",
+                    f"{temp:.1f}C / load {load_str} held below {resume_temp}C / "
+                    f"{resume_load:.1f} for {resume_dwell:.0f}s -- restored {restored}.",
                     "Thermal Guard -- restored", priority=3,
                 )
-                print(f"{LOG_PREFIX} restored ({restored}) at {temp:.2f}C")
+                print(f"{LOG_PREFIX} restored ({restored}) at {temp:.2f}C load={load_str}")
                 state = {"tier": 0, "below_resume_since": None}
             save_state(state)
         elif state.get("below_resume_since") is not None:
-            # Back above resume temp before the dwell timer completed --
-            # reset the dwell clock so a brief dip doesn't trigger a
-            # premature/flapping restore.
+            # Back above at least one resume threshold before the dwell
+            # timer completed -- reset the dwell clock so a brief dip
+            # doesn't trigger a premature/flapping restore.
             state["below_resume_since"] = None
             save_state(state)
 

@@ -41,7 +41,7 @@ OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
 # Falls back to OLLAMA_MODEL → OLLAMA_CHAT_MODEL if OSINT-specific var unset.
 OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_NARRATOR_MODEL")
                     or os.getenv("OLLAMA_MODEL")
-                    or "corporatetraveldc-pi5-osint-monitor:latest")
+                    or "corporatetraveldc-pi5-brief:latest")
 OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "900"))  # stopgap
 MODEL            = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 FETCH_TIMEOUT    = 20           # seconds per RSS fetch
@@ -93,6 +93,15 @@ _EP_SCOPE_TYPES = frozenset({
 _MARKETING_SCOPE_TYPES = frozenset({
     "brand_monitor", "market_intel", "competitor", "marketing",
 })
+
+# Scope types for a named, dated, venue-bound event (conference/summit/
+# forum) -- added 2026-08-12 (SCHEMA_V32: osint_scopes.event_name/
+# audience/genre) for COS26. Gets its own narrative treatment (see
+# _build_narrative_prompt) that leans on the event/audience/genre
+# metadata directly rather than the generic marketing framing, but still
+# treated as a marketing/positioning context for tagging purposes -- see
+# _ntfy_tags_for_scope/_push_item.
+_EVENT_SCOPE_TYPES = frozenset({"event"})
 
 # ── Feed namespace map for XML parsing ────────────────────────────────────────
 NS = {
@@ -233,6 +242,20 @@ def _score_item(item: dict, terms: list[str], scope_type: str = "keyword") -> tu
         elif in_body:
             body_only_matches += 1
 
+    # 2026-08-12: hard gate -- recency/source/geo bonuses below must never
+    # be the ONLY thing that puts an item above 0. Found the hard way after
+    # adding several high-volume general-news feeds (Guardian/NPR/AJ/CNBC/
+    # UPI/DW) alongside each scope's precise Google News query: those feeds
+    # aren't keyword-filtered upstream the way Google News is, so without
+    # this gate, any sufficiently recent article from a reputable outlet --
+    # regardless of topic -- scored nonzero purely on recency/source-quality
+    # bonuses and passed the `if score == 0: continue` skip in main(). A
+    # scope watching for "AAEI Annual Conference" was picking up Colombia
+    # earthquake coverage and Lakers sale news at LOW/MEDIUM purely because
+    # they were recent Guardian/UPI articles, zero keyword relevance.
+    if title_matches == 0 and body_only_matches == 0:
+        return 0, "LOW"
+
     score += min(title_matches * 3, 6)
     score += min(body_only_matches, 3)
 
@@ -273,11 +296,65 @@ def _content_hash(url: str, title: str) -> str:
     return hashlib.sha256(key).hexdigest()[:32]
 
 
+# ── Cross-outlet story clustering (2026-08-12) ─────────────────────────────────
+#
+# Operator observation: the same real-world story routinely shows up as
+# several separate osint_items rows -- one per outlet -- because several
+# feeds (Google News per-scope queries + the broad Guardian/BBC/NPR/etc.
+# sources) can all carry the same story. Google News item titles are
+# formatted "Headline - Outlet Name"; splitting that apart at ingest time
+# lets the PWA show ONE story with a list of covering outlets instead of
+# what looks like N unrelated duplicate rows.
+_GOOGLE_NEWS_MARKER = "google news"
+_TITLE_SOURCE_SPLIT_RE = re.compile(r"\s+-\s+(?!.*\s+-\s+)")  # last " - "
+_STORY_KEY_STRIP_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _split_headline_outlet(title: str, source_name: str | None) -> tuple[str, str]:
+    """Return (headline, outlet). Google News items are titled
+    "Headline - Outlet"; split on the LAST " - " to recover the real
+    outlet. Non-Google-News feeds already carry the real outlet in
+    source_name, so title is used unsplit as the headline."""
+    src = (source_name or "").lower()
+    if _GOOGLE_NEWS_MARKER in src:
+        parts = _TITLE_SOURCE_SPLIT_RE.split(title, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            return parts[0].strip(), parts[1].strip()
+    return title.strip(), (source_name or "unknown").strip()
+
+
+def _story_key(headline: str) -> str:
+    """Fingerprint a headline for cross-outlet clustering.
+
+    Deliberately an EXACT normalized-string match (lowercase, punctuation
+    stripped, whitespace collapsed) rather than fuzzy/token-similarity
+    matching -- different outlets phrase the same event differently
+    enough ("Colombia quake leaves 110 dead" vs "Scores dead in Colombia
+    earthquake") that a similarity threshold would just as often
+    merge unrelated stories as catch real duplicates. This exact-match
+    approach reliably catches the actual observed case (Google News
+    surfacing the identical headline from multiple outlets) without that
+    false-positive risk. Nothing downstream currently uses this for
+    scoring/routing decisions, only client-side display grouping, so the
+    conservative (miss some, never wrongly-merge) tradeoff is the right
+    one here.
+    """
+    norm = _STORY_KEY_STRIP_RE.sub(" ", headline.lower())
+    norm = re.sub(r"\s+", " ", norm).strip()
+    if not norm:
+        return ""
+    return hashlib.sha256(norm.encode()).hexdigest()[:16]
+
+
 # ── Ollama narrative (optional) ───────────────────────────────────────────────
 
 def _build_narrative_prompt(item: dict, scope_label: str, matched_terms: list[str],
-                             scope_type: str) -> str:
-    """Build a scope-type-aware Ollama prompt for narrative generation."""
+                             scope_type: str, event_name: str = "",
+                             audience: str = "", genre: str = "") -> str:
+    """Build a scope-type-aware Ollama prompt for narrative generation.
+
+    event_name/audience/genre (2026-08-12): only meaningful for
+    scope_type="event" -- ignored otherwise. See _EVENT_SCOPE_TYPES."""
     terms_str = ", ".join(matched_terms) if matched_terms else "see title"
     header = (
         f"Scope: {scope_label} (monitoring: {terms_str})\n"
@@ -292,6 +369,20 @@ def _build_narrative_prompt(item: dict, scope_label: str, matched_terms: list[st
             "in the Washington DC metro area. First sentence: what happened and where. "
             "Second sentence: operational relevance to principal safety, route planning, "
             "or advance work — state if action is required. Plain text only. No markdown."
+        )
+    elif scope_type in _EVENT_SCOPE_TYPES:
+        event_line = f"Event: {event_name}\n" if event_name else ""
+        audience_line = f"Audience: {audience}\n" if audience else ""
+        genre_line = f"Genre: {genre}\n" if genre else ""
+        header = event_line + audience_line + genre_line + header
+        instruction = (
+            "Write a 2-sentence brief for [operator LLC] (a boutique DC-area "
+            "executive services firm: chauffeur transportation, EP-adjacent logistics, "
+            "brand strategy) about this event. First sentence: what this article says "
+            "about the event and why it matters given the stated audience/genre. "
+            "Second sentence: a concrete cross-link opportunity — ground transport "
+            "demand around the venue/dates, a marketing/positioning angle toward this "
+            "audience, or a networking/sponsorship opening. Plain text only. No markdown."
         )
     elif scope_type in _MARKETING_SCOPE_TYPES:
         instruction = (
@@ -313,18 +404,27 @@ def _build_narrative_prompt(item: dict, scope_label: str, matched_terms: list[st
 
 
 def _generate_narrative(item: dict, scope_label: str, matched_terms: list[str],
-                         scope_type: str = "keyword") -> str | None:
+                         scope_type: str = "keyword", event_name: str = "",
+                         audience: str = "", genre: str = "") -> str | None:
     """
-    Call LLM (Ollama-first, Anthropic fallback) for a 2-sentence narrative on a HIGH+ item.
-    Returns None on any failure — caller falls back to deterministic narrative.
+    Call LLM (Ollama-first, deterministic fallback -- Anthropic explicitly
+    closed, see allow_anthropic below) for a 2-sentence narrative on a HIGH+
+    item. Returns None on any failure — caller falls back to deterministic
+    narrative.
     """
-    prompt = _build_narrative_prompt(item, scope_label, matched_terms, scope_type)
+    prompt = _build_narrative_prompt(item, scope_label, matched_terms, scope_type,
+                                      event_name, audience, genre)
     return llm_generate(
         system="",
         prompt=prompt,
         ollama_model=OLLAMA_MODEL,
         max_tokens=100,
         temperature=0.3,
+        # 2026-08-12: was implicitly True (the generate() default) -- this
+        # skill was the one that surfaced the global ANTHROPIC_FALLBACK_ENABLED
+        # gate being unset (silently "true") on an Ollama failure. Belt-and-
+        # suspenders per-call close, same as ops_brief.py.
+        allow_anthropic=False,
     )
 
 
@@ -362,6 +462,8 @@ def _ntfy_tags_for_scope(scope_type: str, score_label: str) -> str:
     urgency = "rotating_light" if score_label == "CRITICAL" else ""
     if scope_type in _EP_SCOPE_TYPES:
         base = "shield,newspaper"
+    elif scope_type in _EVENT_SCOPE_TYPES:
+        base = "calendar,newspaper"
     elif scope_type in _MARKETING_SCOPE_TYPES:
         base = "chart_with_upwards_trend,newspaper"
     else:
@@ -376,6 +478,8 @@ def _push_item(item: dict, scope_label: str, narrative: str,
     # Type indicator prefix for mobile notification title
     if scope_type in _EP_SCOPE_TYPES:
         type_tag = "EP"
+    elif scope_type in _EVENT_SCOPE_TYPES:
+        type_tag = "EVT"
     elif scope_type in _MARKETING_SCOPE_TYPES:
         type_tag = "MKT"
     else:
@@ -417,8 +521,21 @@ def main(force: bool = False) -> None:
             scope_id    = scope["id"]
             scope_label = scope["label"]
             scope_type  = scope.get("scope_type", "keyword")
+            event_name  = scope.get("event_name") or ""
+            audience    = scope.get("audience") or ""
+            genre       = scope.get("genre") or ""
+            # Split on commas ONLY, not whitespace -- 2026-08-12, found via
+            # COS26: comma-and-whitespace splitting shredded a term like
+            # "Chief of Staff Association" into four separate single-word
+            # matches ("Chief", "of", "Staff", "Association"), any one of
+            # which alone triggered a false-positive title-match bonus on
+            # completely unrelated "chief of staff" personnel-change news.
+            # Each comma-separated entry is now kept whole as one phrase,
+            # matched as a substring/word-boundary in _score_item exactly
+            # like a single-word term always was -- multi-word terms just
+            # work correctly now instead of needing to be avoided.
             terms       = [t.strip() for t in
-                           re.split(r"[,\s]+", scope["query_terms"]) if t.strip()]
+                           scope["query_terms"].split(",") if t.strip()]
             if not terms:
                 continue
 
@@ -443,13 +560,18 @@ def main(force: bool = False) -> None:
                         continue   # no match at all — skip
 
                     content_hash = _content_hash(url, title)
+                    headline, outlet = _split_headline_outlet(
+                        title, item.get("source_name")
+                    )
+                    story_key = _story_key(headline)
 
                     # Build narrative (Ollama for HIGH+, deterministic fallback)
                     matched = [t for t in terms
                                if t.lower() in (title + " " + item.get("summary", "")).lower()]
                     narrative: Optional[str] = None
                     if score >= LABEL_THRESHOLDS["HIGH"] and OLLAMA_BASE_URL:
-                        narrative = _generate_narrative(item, scope_label, matched, scope_type)
+                        narrative = _generate_narrative(item, scope_label, matched, scope_type,
+                                                         event_name, audience, genre)
                     if not narrative:
                         # 2026-08-06: narrow safety net around the fallback
                         # ITSELF -- same pattern applied identically across
@@ -482,6 +604,9 @@ def main(force: bool = False) -> None:
                         score_label=score_label,
                         narrative=narrative,
                         content_hash=content_hash,
+                        headline=headline,
+                        outlet=outlet,
+                        story_key=story_key,
                     )
 
                     if is_new:

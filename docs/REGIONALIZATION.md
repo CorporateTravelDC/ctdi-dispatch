@@ -1,5 +1,7 @@
 # CTDI Regionalization Guide
 
+**Verified against current source 2026-08-11.**
+
 This document covers everything you need to deploy Corporate Travel Dispatch Intelligence outside Washington, DC. The core architecture is identical everywhere — only the geographic filters and data source credentials change.
 
 > **Key principle:** The feed credentials themselves don't change when you move regions. You're pointing the same credential infrastructure at different geographic filters. No code restructuring required.
@@ -35,9 +37,13 @@ NWWS_WFO_FILTER=LWX,AKQ,CTP
 
 Find your WFO codes at [weather.gov/srh/nwsoffices](https://www.weather.gov/srh/nwsoffices). Replace with the 3-letter codes for the offices covering your operating area. For non-US deployments, leave this blank and configure a regional weather API instead (see below).
 
-### `src/ingest/config.py` — DC static airspace
+### `src/geo/dc_airspace.py` — DC static airspace
 
-The static airspace definitions (P-56A/B, DC FRZ, DC SFRA) in `src/common/airspace_static.py` are DC-specific. Replace or remove these polygons for deployments where different restricted areas apply. Non-DC deployments will still receive TFR data for their region; only the static "always-on" areas need updating.
+The static airspace definitions (P-56A, P-56B, DC FRZ, DC SFRA — per FAR
+91.161 and FAAO 7400.11) live in **`src/geo/dc_airspace.py`** and are served
+via `GET /api/v1/airspace`. Replace or remove these polygons for deployments
+where different restricted areas apply. Non-DC deployments still receive TFR
+data for their region; only the static "always-on" areas need updating.
 
 ---
 

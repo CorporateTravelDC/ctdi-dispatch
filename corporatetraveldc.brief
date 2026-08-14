@@ -1,0 +1,12 @@
+FROM phi3:mini
+
+# 2026-08-13: raised from 4096 -- DISPATCH_PERSONA alone (sent on every
+# call now that persona is centralized, see common/llm.py) measured ~2050
+# real tokens, which left almost no headroom for brief data + output
+# inside a 4096 window. phi3:mini's native trained context is 4096 (RoPE
+# scaling supports far more), so this is a modest ~50% stretch beyond
+# native, not the full 131072 ceiling -- traded off against the much
+# bigger quality/usability cost of cramming dispatch-desk-memo's 90-item
+# feed down to ~15 items to fit natively.
+PARAMETER num_ctx 6144
+PARAMETER num_thread 2

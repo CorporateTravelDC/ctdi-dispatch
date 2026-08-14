@@ -58,7 +58,11 @@ TOPIC_CLICK: dict[str, str] = {
     "ops-health":           f"{RUNNER_BASE}/status",           # feed health / freshness
     "train-alerts":         f"{RUNNER_BASE}/trains",           # EOTD view
     "wx-alerts":            f"{RUNNER_BASE}/signals#meteorology",
-    "osint-alerts":         f"{RUNNER_BASE}/intel",            # IntelView (custom/RSS feed monitor)
+    # 2026-08-12: was pointed at IntelView (/intel), an unrelated RSS reader
+    # that never queried osint_scopes/osint_items -- tapping an osint-alerts
+    # push landed on a page showing nothing about it. EventIntelView is the
+    # real dedicated view (GET /api/v1/osint/feed, grouped by scope_type).
+    "osint-alerts":         f"{RUNNER_BASE}/events",            # EventIntelView (osint_scopes/items)
     "dispatch":             f"{RUNNER_BASE}/feed",             # live ntfy feed view
     "dispatch-debriefs":    f"{RUNNER_BASE}/brief?tab=ops",
     "ops-brief":            f"{RUNNER_BASE}/brief?tab=ops",
@@ -76,7 +80,7 @@ def send(
     topic: str,
     message: str,
     *,
-    title: str = "corporatetraveldc",
+    title: str,
     priority: int = 3,
     tags: str = "satellite",
     click_url: Optional[str] = None,
@@ -88,7 +92,14 @@ def send(
         topic:     ntfy topic name (e.g. "cps", "tfr-alert")
         message:   Notification body (plain text).  Bodies > 4096 bytes are fine
                    because message-size-limit is set to 65536 in server.yml.
-        title:     Notification title shown on device.
+        title:     Notification title shown on device. REQUIRED, no default
+                   (2026-08-11) -- title becomes the email Subject: line for
+                   every ntfy-relayed SMTP notification, and subject-line
+                   discipline is the only per-alert-category filter available
+                   client-side (ntfy has no per-topic/per-message sender
+                   override, confirmed against its own docs). A generic
+                   fallback here would have silently defeated that for any
+                   call site that forgot to pass one.
         priority:  ntfy priority 1–5 (default 3).
         tags:      Comma-separated ntfy emoji tags (default "satellite").
         click_url: Override the tap-to-open URL.  Defaults to the per-topic

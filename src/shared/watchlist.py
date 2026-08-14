@@ -36,7 +36,7 @@ NTFY_USER = os.environ.get("NTFY_USER", "")
 NTFY_PASS = os.environ.get("NTFY_PASS", "")
 NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
 
-EntryType = Literal["flight", "train"]
+EntryType = Literal["flight", "train", "vessel"]
 
 _ntfy_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy")
 
@@ -183,13 +183,26 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
         route = f"{origin}→{dest}" if origin or dest else ""
         detail_body = f"{ident} {route}\n{event_summary}"
         dispatch_body = f"Flight {ident}: {event_summary}"
+        title_prefix = "FLT "
+    elif etype == "vessel":
+        # 2026-08-11: was falling through to the `else` (train) branch --
+        # a vessel position/status event fired under "train-alerts" with
+        # train-shaped copy ("route_name #{MMSI}"). No dedicated name
+        # column exists for vessels (see watchlist_entries schema);
+        # `notes` is the closest thing populated at add-time.
+        domain_topic = "vessel-alerts"
+        name = entry.get("notes") or ""
+        detail_body = f"{name} (MMSI {ident})\n{event_summary}" if name else f"MMSI {ident}\n{event_summary}"
+        dispatch_body = f"Vessel {ident}: {event_summary}"
+        title_prefix = "VSL "
     else:
         domain_topic = "train-alerts"
         route_name = entry.get("route_name") or ""
         detail_body = f"{route_name} #{ident}\n{event_summary}"
         dispatch_body = f"Train {ident}: {event_summary}"
+        title_prefix = "TRN "
 
-    title = ("FLT " if etype == "flight" else "TRN ") + ident + ": " + event_summary[:60]
+    title = title_prefix + ident + ": " + event_summary[:60]
 
     _fire_ntfy_dual(domain_topic, title, detail_body, dispatch_body, priority)
 

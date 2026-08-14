@@ -1,195 +1,191 @@
-# corporatetraveldc — Ingest Container
+# corporatetraveldc — Ingest Layer
 
-The ingest container connects to FAA SWIM data feeds and pushes events
-into the shared SQLite database. The poller's REST fallback activates
-automatically whenever ingest is not stamping heartbeats.
+**Rewritten 2026-08-11 against the live code and running system.** The previous
+revision was a 2026-07-20 snapshot: it described FDPS FIXM 3.0 parsing and most
+TFMS message types as unimplemented stubs (all live since 2026-07-20), and
+referenced a unified `corporatetraveldc-ingest` systemd unit that was split into
+seven per-feed containers on 2026-07-26 and no longer exists.
 
-## NMS/Solace credentials -- LIVE as of 2026-07-20
+The ingest layer connects to push data feeds (FAA SWIM via NMS/Solace,
+NWWS-OI XMPP, Amtrak) and writes events into the shared SQLite database.
+The poller's REST fallback activates automatically whenever a push feed stops
+stamping heartbeats.
 
-Credentials arrived and are configured; this section's "pending" framing is
-stale and kept only for the setup steps below (still accurate if ever
-reprovisioning from scratch). All six SWIM feeds (fdps, stdds, tfms, tbfm,
-itws, and fns/aim for NOTAMs) are actively connected and receiving live
-traffic. **Real per-parser status, 2026-07-20** (see each parser's own
-module docstring for full schema details):
+## Container topology — 7 per-feed containers (since 2026-07-26)
 
-| Feed  | Parser            | Status                                                                 |
-|-------|-------------------|-------------------------------------------------------------------------|
-| TBFM  | tbfm_parser.py    | FIXED, live -- tbfm_sequences populating, real metering ntfy alerts     |
-| STDDS/TAIS | smes_parser.py (TAIS path) | FIXED, live -- terminal_tracks populating          |
-| STDDS/SMES | smes_parser.py (SMES path) | FIXED, live -- surface_tracks populating (real `asdexMsg` schema, confirmed against FAA's FIXM-Mediated STDDS Data Overview doc + a live captured sample) |
-| TFMS  | tfms_parser.py    | PARTIALLY fixed -- RSTR (restriction) msgType fully live in nas_programs (real ground stops/MIT restrictions). TMI_FLIGHT_LIST/trackInformation/flightPlanInformation/APTC/GADV msgTypes are confirmed-schema but stubbed, pending design decisions (OOOI-coupling for per-flight data, CPS integration for APTC, new table for GADV) |
-| ITWS  | itws_parser.py    | Parse-error bug fixed (stray unescaped `<` in text content); 13+ product types confirmed and taxonomized (simple alert-style vs. raster-heavy), dispatcher/handlers not yet built |
-| FDPS  | fdps_parser.py    | NOT fixed -- confirmed the live feed is FIXM 3.0, not the FIXM 4.2 the parser was written against (a genuinely different message model, confirmed against the official SFDPS Data Consumer Reference Manual). Version-detection scaffold in place (`_detect_fixm_version`), old 4.2 logic preserved as `_parse_fdps_message_fixm42_legacy`, FIXM 3.0 field mapping is a stub (`_parse_fdps_message_fixm30`) pending a dedicated rewrite session |
+There is **no** unified `corporatetraveldc-ingest` unit anymore. One image
+(`localhost/corporatetraveldc-ingest:latest`, entrypoint `python3 -m
+ingest.main`) runs as seven independent Quadlets, differentiated purely by
+environment variables. Quadlet files live in `.config/containers/systemd/`
+(repo copy) / `~/.config/containers/systemd/` (live):
 
-**To enable live SWIM from a fresh setup (credentials lost/reprovisioning):**
+| Unit | Covers | Key env |
+|---|---|---|
+| `corporatetraveldc-ingest-core` | NWWS-OI + Amtrak + local airspace, **zero SWIM feeds** | `SWIM_NMS_ENABLED=false`, `LOCAL_AIRSPACE_ENABLED=true` |
+| `corporatetraveldc-ingest-fdps` | SWIM FDPS only | `SWIM_NMS_SKIP_FEEDS=stdds,tfms,fns,tbfm,itws` |
+| `corporatetraveldc-ingest-stdds` | SWIM STDDS only | skip-all-but-stdds |
+| `corporatetraveldc-ingest-tfms` | SWIM TFMS only | skip-all-but-tfms |
+| `corporatetraveldc-ingest-tbfm` | SWIM TBFM only | skip-all-but-tbfm |
+| `corporatetraveldc-ingest-itws` | SWIM ITWS only | skip-all-but-itws |
+| `corporatetraveldc-ingest-notam` | SWIM FNS (digital NOTAMs) only | skip-all-but-fns — note the unit is named `notam`, the feed name is `fns` |
 
-1. Add credentials to `/etc/corporatetraveldc/dispatch-secrets.env`:
-   ```
-   SWIM_NMS_USER_FDPS=<your-fdps-username>
-   SWIM_NMS_PASS_FDPS=<your-fdps-password>
-   SWIM_NMS_QUEUE_FDPS=<your-queue-name>
-
-   SWIM_NMS_USER_STDDS=<your-stdds-username>
-   SWIM_NMS_PASS_STDDS=<your-stdds-password>
-   SWIM_NMS_QUEUE_STDDS=<your-queue-name>
-   ```
-
-2. Verify the host and VPN names in `/etc/corporatetraveldc/dispatch.env`
-   match what FAA provisioned:
-   ```
-   SWIM_NMS_HOST=tcps://ems2.swim.faa.gov:55443
-   SWIM_NMS_VPN_FDPS=FDPS
-   SWIM_NMS_VPN_STDDS=STDDS
-   ```
-
-3. Rebuild and restart the ingest container:
-   ```bash
-   cd /opt/corporatetraveldc
-   bash build-images.sh
-   systemctl --user daemon-reload
-   systemctl --user restart corporatetraveldc-ingest
-   systemctl --user status corporatetraveldc-ingest
-   ```
-
-4. Confirm the heartbeat is stamping:
-   ```bash
-   curl http://localhost:8000/api/v1/feeds | jq '.feeds[] | select(.feed_name | startswith("push:"))'
-   ```
-
-## Feed heartbeat contract
-
-- Ingest stamps `push:fdps` and `push:stdds` in `feed_state` every 30s while connected.
-- Poller checks `push_is_healthy(feed, max_age=90s)` before each REST poll.
-- If ingest disconnects → heartbeat ages out → poller resumes REST automatically.
-- **Do NOT stamp** `push:metar`, `push:nws`, `push:tfr`, `push:nas`, `push:ops_plan`,
-  `push:amtrak` — those are poller-owned feeds.
-
-## Owned feed names
-
-`fdps`, `stdds`
-
-## Message types parsed
-
-`FH`/`TH`/`CL`/`HP`/`OH`/`HZ` below are the FIXM 4.2 legacy source-type
-model fdps_parser.py was originally written against -- kept for reference
-in `_parse_fdps_message_fixm42_legacy`, but NOT what's actually live (see
-table above: live feed is FIXM 3.0, a different message model entirely,
-still stubbed as of 2026-07-20).
-
-| Source | Feed  | What it carries                            | Live? |
-|--------|-------|---------------------------------------------|-------|
-| `FH`   | FDPS  | Full flight plan (origin, dest, type)        | No -- legacy 4.2 model |
-| `TH`   | FDPS  | Track position (lat, lon, alt, speed)        | No -- legacy 4.2 model |
-| `CL`   | FDPS  | Cancellation                                 | No -- legacy 4.2 model |
-| `HP/OH`| FDPS  | Handoff events                               | No -- legacy 4.2 model |
-| `HZ`   | FDPS  | Heartbeat position (altitude skipped)        | No -- legacy 4.2 model |
-| `asdexMsg` (positionReport/mlatReport/adsbReport) | STDDS/SMES | ASDE-X surface tracks at DCA/IAD/BWI | **Yes**, live 2026-07-20 |
-| `TATrackAndFlightPlan` | STDDS/TAIS | Terminal radar tracks (PCT TRACON, though captures so far have mostly shown other TRACONs) | **Yes**, live 2026-07-20 |
-| `RSTR` (restrictionMessage) | TFMS | GDP/GS/MIT restrictions (program_id, facility, airports, category, mit value, reason) | **Yes**, live 2026-07-20 |
-| `TMI_FLIGHT_LIST`/`FlightModify`/`trackInformation`/`flightPlanInformation` | TFMS | Per-flight TMI/reroute/track/flight-plan data | No -- stubbed, OOOI-coupling planned |
-| `APTC`/`GADV` | TFMS | Airport config/rates; ATCSCC general advisories | No -- stubbed, design pending |
-| various (Microburst/Wind Shear/Tornado ATIS, Terminal Weather Text, Precipitation raster, etc.) | ITWS | Terminal weather products, 13+ distinct types | No -- taxonomized, not parsed |
-
----
-
-## Local airspace monitoring (UltraFeeder ADS-B + ACARS)
-
-`local_airspace.py` runs inside this container and handles two local RF feeds.
-It starts automatically alongside SWIM/NWWS; sources degrade gracefully if unavailable.
-
-### Hardware prerequisites
-
-**Step 1 — Tag dongles by serial number** (one-time, dongles must be idle):
+All 7 are **running and live** as of 2026-08-11 (`podman ps`; all six SWIM
+feeds confirmed connected with fresh heartbeats since 2026-08-07).
+`corporatetraveldc-boot-stagger.service` staggers their startup, and
+`scripts/ingest-feed-ctl.sh` provides per-feed control:
 
 ```bash
-# Stop any rtl-tcp / dump1090 processes first
-rtl_eeprom -d 0 -s ADSB1090
-rtl_eeprom -d 1 -s ACARS0130
-# Unplug and replug both dongles, then verify:
-rtl_test -d ADSB1090 -t
-rtl_test -d ACARS0130 -t
+scripts/ingest-feed-ctl.sh restart all --order=lightest-first --stagger=15
+scripts/ingest-feed-ctl.sh stop tfms
 ```
 
-**Step 2 — Stable udev symlinks** (requires sudo):
+(`ALL_FEEDS=(fdps stdds tfms tbfm itws notam)`; `lightest-first` order is
+notam→itws→tbfm→tfms→stdds→fdps.)
 
-Create `/etc/udev/rules.d/99-rtlsdr.rules`:
+## Modules
+
+| File | Role |
+|---|---|
+| `main.py` | Entrypoint/supervisor — launches `swim_nms`, `nwws`, `amtrak` tasks + `LocalAirspaceMonitor` thread |
+| `config.py` | Env-driven config (`NmsConfig`, `NwwsConfig`, `AmtrakConfig`, …) |
+| `swim_client.py` | Solace PubSub+ subscriber, per-feed sessions, heartbeats, backlog handling |
+| `nwws.py` | NWWS-OI XMPP MUC subscriber (`NWWS_WFO_FILTER` keeps only configured WFOs) |
+| `amtrak.py` | Amtrak push-primary poller (`api.amtraker.com/v3/trains`, 300 s) |
+| `local_airspace.py` | Local RF: UltraFeeder ADS-B poll (15 s) + ACARS router TCP (port 9080) |
+| `failover.py` | Heartbeat contract (`push:` prefix) |
+| `parsers/` | `fdps_parser.py`, `smes_parser.py` (STDDS), `tfms_parser.py`, `tbfm_parser.py`, `itws_parser.py`, `aim_parser.py` (FNS/NOTAM), `geo_filter.py` |
+
+## SWIM feeds and credentials
+
+Six SWIM feeds (`swim_client.py` `_FEED_HANDLERS`): `fdps`, `stdds`, `tfms`,
+`fns` (AIM credentials, `fns` heartbeat key), `tbfm`, `itws`. Per-feed env
+pattern (`<KEY>` = FDPS/STDDS/TFMS/AIM/TBFM/ITWS):
 
 ```
-SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", \
-  ATTRS{serial}=="ADSB1090", SYMLINK+="rtl_sdr_adsb", MODE="0664", GROUP="plugdev"
-
-SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", \
-  ATTRS{serial}=="ACARS0130", SYMLINK+="rtl_sdr_acars", MODE="0664", GROUP="plugdev"
+SWIM_NMS_HOST_<KEY>   (fallback SWIM_NMS_HOST, default tcps://ems1.swim.faa.gov:55443)
+SWIM_NMS_VPN_<KEY>
+SWIM_NMS_USER_<KEY>
+SWIM_NMS_PASS_<KEY>
+SWIM_NMS_QUEUE_<KEY>
 ```
 
-Then:
+All credentials live in `/etc/corporatetraveldc/dispatch-secrets.env` and all
+six feeds are provisioned and live. To re-provision a single feed: update its
+vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 
-```bash
-sudo udevadm control --reload && sudo udevadm trigger
-ls -la /dev/rtl_sdr_adsb /dev/rtl_sdr_acars
-sudo usermod -aG plugdev corporatetraveldc
-```
+## Heartbeat / failover contract
 
-### Deploying UltraFeeder (ADS-B)
+- Each connected feed stamps `push:<feed>` in `feed_state` every 30 s
+  (`HEARTBEAT_INTERVAL = 30`); `PUSH_FEEDS = ("fdps", "stdds", "fns", "tbfm",
+  "tfms", "itws", "nws")`.
+- The poller checks `push_is_healthy(feed, max_age=90s)` before each REST poll
+  it has a push-primary for; a fresh heartbeat means push owns that feed.
+- On disconnect the heartbeat ages out and REST polling resumes automatically.
+- Reconnect backoff: 15/30/60/60/60 s. Stale-backlog handling:
+  `SWIM_BACKLOG_STALE_SECONDS` (default 7200) /
+  `SWIM_BACKLOG_RECENT_FRACTION` (default 0.10).
+- Bad messages are captured to
+  `/var/lib/corporatetraveldc/swim_bad_message_captures` (max 200).
 
-```bash
-systemctl --user daemon-reload
-systemctl --user start corporatetraveldc-ultrafeeder
-# Verify tar1090 web UI:
-curl http://localhost:8080/data/aircraft.json | python3 -c \
-  "import json,sys; d=json.load(sys.stdin); print(len(d.get('aircraft',[])), 'aircraft')"
-```
+## Parser status (all verified 2026-08-11)
 
-`ULTRAFEEDER_URL=http://host.containers.internal:8080` is already set in `dispatch.env`.
-Restart the pusher after UltraFeeder is confirmed running:
+| Feed | Parser | Status |
+|---|---|---|
+| FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). |
+| STDDS/SMES | `smes_parser.py` | Live — ASDE-X surface tracks (`asdexMsg` position/mlat/adsb reports) at DCA/IAD/BWI → `surface_tracks` |
+| STDDS/TAIS | `smes_parser.py` | Live — `TATrackAndFlightPlan` terminal radar tracks → `terminal_tracks` |
+| TFMS | `tfms_parser.py` | Live — see message-type table below |
+| TBFM | `tbfm_parser.py` | Live — `tbfm_sequences`, metering alerts |
+| ITWS | `itws_parser.py` | Live — terminal weather products (microburst/wind shear/precip/etc., 25+ `product_msg_name` values observed), severity-gated `wx-alerts` |
+| FNS/AIM | `aim_parser.py` | Live — digital NOTAMs → `notams` table |
 
-```bash
-systemctl --user restart corporatetraveldc-pusher
-```
+### TFMS message types (`tfms_parser.py`)
 
-The pusher flight monitor will automatically prefer UltraFeeder over airplanes.live.
+Family 1 — `fiOutput > fiMessage[msgType]`, all 8 types implemented:
+`TMI_FLIGHT_LIST`, `RSTR` (restrictions/MIT), `APTC` (airport config —
+cached, alerts on rate drops ≥20% / IMC degradation), `GADV` (general
+advisories → nas-alerts), `GDP`, `GS`, `FXA`, `TMI_UPDATE`.
 
-### Deploying ACARS (VHF)
+Family 2 — `fltdOutput > fltdMessage[msgType]`, all implemented:
+`FlightModify`/`FlightTimes`, `trackInformation`, `departureInformation`,
+`arrivalInformation`, `flightPlanAmendmentInformation`, `FlightRoute`,
+`flightPlanCancellation`, `FlightCreate`, `FlightScheduleActivate`,
+`oceanicReport`.
 
-```bash
-systemctl --user start corporatetraveldc-acarsrouter
-systemctl --user start corporatetraveldc-acarsdec
-# Verify TCP router accessible from ingest:
-# (inside ingest container or from host)
-nc -zv host.containers.internal 9080
-```
+Known-unhandled (silently skipped by design): `flightPlanInformation`
+(a dead-code stub handler exists but is registered in neither dispatch
+table), `FlightSectors`, `boundaryCrossingUpdate`, `RAPT`.
 
-`local_airspace.py` connects to the ACARS router via TCP on port 9080
-(`ACARS_ROUTER_HOST` / `ACARS_ROUTER_PORT` in `dispatch.env`).
-ACARS is bursty — messages may take minutes to appear; check `acars_messages` table:
+**`flightPlanAmendmentInformation` dedup (added 2026-08-10):**
+`_handle_flight_plan_amendment` keys its dedup on message *content* —
+`content_hash(f"tfms:amendment:{entry['id']}:{route_text}")` against the
+shared 30-minute `_TFMS_ALERT_DEDUP` window — so an unchanged rebroadcast of
+the same amendment is suppressed indefinitely while a genuinely new route
+amendment fires immediately. This mirrors `_handle_track_information`'s
+approach-alert pattern (trigger `tfms_track_approach`), which keys on entry-id
+only because positions naturally change every cycle. Previously this handler
+had no dedup beyond the generic 5-minute watchlist window.
 
-```bash
-sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
-  "SELECT received_at, tail, flight, label, msg_text FROM acars_messages \
-   ORDER BY id DESC LIMIT 10;"
-```
+## Local airspace monitoring (inside `ingest-core`)
 
-### Verifying heartbeats
+`local_airspace.py` handles the two local RF feeds; sources degrade gracefully
+if hardware is absent:
 
-After startup, heartbeat files appear within 30 seconds of each feed being reachable:
+- **UltraFeeder ADS-B** — polls `ULTRAFEEDER_URL` `/data/aircraft.json` every
+  15 s, 80 NM scan radius around DCA (`38.8816, -77.0910`). Note: the
+  UltraFeeder container was down ~2026-08-10 → midday 2026-08-11 (ADS-B
+  RTL-SDR dongle stopped enumerating on USB; restored by a hardware reseat —
+  see `docs/INFRA_MAP.md` §11); the monitor degrades cleanly whenever it's
+  dark.
+- **ACARS** — TCP to the acars_router container (`ACARS_ROUTER_HOST` /
+  `ACARS_ROUTER_PORT`, default `host.containers.internal:9080`), 10 s poll.
 
-```bash
-ls -la /var/lib/corporatetraveldc/feed_state/ultrafeeder.heartbeat \
-       /var/lib/corporatetraveldc/feed_state/acars.heartbeat
-```
+Alert routing (canonical, per module docstring):
 
-### Alert routing
-
-| Event | ntfy topics | Priority |
-|-------|-------------|---------|
-| Watchlist aircraft in range (≤30nm) | `flight-alerts` + `dispatch` | 4 |
-| Marine One / VIP callsign (≤50nm) | `dispatch` only | 5 |
+| Event | Topics | Priority |
+|---|---|---|
+| Watchlist aircraft in range (≤30 NM) | `flight-alerts` + `dispatch` | 4 |
+| Marine One / VIP callsign (≤50 NM) | `dispatch` only | 5 |
 | Emergency squawk 7700/7500/7600 | `dispatch` | 4 |
 | ACARS OOOI event for watched flight | `flight-alerts` + `dispatch` | 3–4 |
 
-5-minute deduplication prevents re-firing the same alert per ICAO hex.
+5-minute dedup per ICAO hex. Heartbeat files:
+`/var/lib/corporatetraveldc/feed_state/{ultrafeeder,acars}.heartbeat`.
 
-### Owned feed names
+Tables: `local_aircraft`, `acars_messages`, `local_airspace_alerts`.
 
-`ultrafeeder`, `acars`
+## Hardware setup (RTL-SDR dongles)
+
+Dongles are addressed by EEPROM serial via udev symlinks — see
+`docs/SDR_SERVICES.md` for the full serialization/udev procedure and the
+current enabled/disabled service map. Quick reference:
+
+```bash
+rtl_eeprom -d 0 -s ADSB1090      # tag dongles by serial (one-time, idle)
+rtl_eeprom -d 1 -s ACARS0130
+# udev rules in /etc/udev/rules.d/99-rtlsdr.rules create
+# /dev/rtl_sdr_adsb and /dev/rtl_sdr_acars symlinks
+```
+
+## Verifying
+
+```bash
+# Heartbeats (all push:* feeds should be fresh)
+curl -s http://localhost:8000/api/v1/feeds | \
+  python3 -c "import json,sys; [print(f['feed_name'], f['age_secs']) for f in json.load(sys.stdin)['feeds'] if f['feed_name'].startswith('push:')]"
+
+# Recent ACARS traffic
+sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
+  "SELECT received_at, tail, flight, label FROM acars_messages ORDER BY id DESC LIMIT 10;"
+```
+
+Hourly health watch: `corporatetraveldc-ingest-feed-watch.timer` (at :05) runs
+`src/poller/skills/ingest_feed_watch.py`, which checks `/healthz` +
+`/api/v1/feeds` via `http://host.containers.internal:80` with a
+`Host: dispatch.example.com` header (changed 2026-08-10 from a
+direct `:8000` URL that was unreachable from inside the container), plus the
+ntfy health endpoint — change-only pushes to `ops-health`, 6 h dedup.
+Staleness thresholds live in `src/web/main.py` (`healthz()` and
+`get_feeds()`): most REST feeds 900 s, `nws` 2700 s, `atcscc_opsplan` 7200 s,
+`dca_fids`/`iad_fids` **600 s** (raised 2026-08-10 from 180 s, which was
+tighter than the real 300 s poll interval), push heartbeats 300 s.

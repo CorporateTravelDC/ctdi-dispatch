@@ -33,6 +33,7 @@ Route structure:
   DELETE /admin/vip/{entry}            Admin
 """
 
+import html
 import json
 import os
 import pathlib
@@ -44,7 +45,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -119,6 +120,8 @@ async def startup() -> None:
     db.init_db_v29()
     db.init_db_v30()
     db.init_db_v31()
+    db.init_db_v32()
+    db.init_db_v33()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -249,7 +252,12 @@ async def healthz() -> JSONResponse:
     thresholds = {
         "metar": 900, "tfr": 900, "nas": 900,
         "nws": 2700, "notam": 900, "runsheet": 900, "atcscc_opsplan": 7200,
-        "dca_fids": 180, "iad_fids": 180,
+        # 2026-08-10: was 180 -- tighter than the actual 300s poll interval
+        # (poller/main.py's FETCHERS list), guaranteeing "stale" for the last
+        # ~2 min of every 5-min cycle by construction, not a real degradation.
+        # 600 = 2x the real interval, matching every other REST feed's
+        # threshold convention in this same dict.
+        "dca_fids": 600, "iad_fids": 600,
     }
     # REST feeds that are covered by a push source — skip staleness check when push is healthy.
     push_covers = {"nws": "push:nws", "tfr": "push:stdds", "nas": "push:tfms", "notam": "push:fns"}
@@ -325,11 +333,20 @@ async def get_feeds() -> JSONResponse:
         "metar": 900, "tfr": 900, "nas": 900,
         "nws": 2700, "notam": 900, "runsheet": 900,
         "atcscc_opsplan": 7200,
-        "dca_fids": 180, "iad_fids": 180,
+        # 2026-08-10: was 180 -- tighter than the actual 300s poll interval
+        # (poller/main.py's FETCHERS list), guaranteeing "stale" for the last
+        # ~2 min of every 5-min cycle by construction, not a real degradation.
+        # 600 = 2x the real interval, matching every other REST feed's
+        # threshold convention in this same dict. Also removed a pre-existing
+        # duplicate-key entry for these same two feeds later in this same
+        # dict literal (harmless while both copies agreed on 180, but a
+        # silent footgun -- Python dict literals let a later duplicate key
+        # win with no warning, so editing the wrong copy would have done
+        # nothing).
+        "dca_fids": 600, "iad_fids": 600,
         "push:nws": 300, "push:fdps": 300, "push:stdds": 300,
         "push:fns": 300, "push:itws": 300,
         "push:amtrak": 300,
-        "dca_fids": 180, "iad_fids": 180,
     }
     # REST feeds covered by a push source — stale REST is expected when push is live.
     # "tfr": "push:stdds" and "nas": "push:tfms" removed 2026-07-23 -- same bogus
@@ -1215,6 +1232,11 @@ class OsintScopeRequest(BaseModel):
     query_terms:    str
     feed_urls:      str = ""
     push_threshold: str = "HIGH"
+    # 2026-08-12 (SCHEMA_V32) -- only meaningful for scope_type="event",
+    # ignored otherwise. See osint_monitor.py's _EVENT_SCOPE_TYPES.
+    event_name:     str = ""
+    audience:       str = ""
+    genre:          str = ""
 
 
 @app.get("/api/v1/osint/feed")
@@ -1225,19 +1247,171 @@ async def osint_feed(
 ) -> JSONResponse:
     """Recent OSINT items, newest first. Filter by scope_id and/or min_score."""
     items = db.osint_get_feed(scope_id=scope_id, min_score=min_score, limit=limit)
+
+    # 2026-08-12: cross-outlet story clustering -- annotate each item with
+    # how many distinct outlets in THIS returned batch share its story_key
+    # (see osint_monitor._story_key). Computed here rather than in SQL so
+    # it stays correct regardless of scope/min_score filtering; the PWA
+    # uses crossover_count to group same-story items instead of listing
+    # what looks like duplicate rows.
+    story_outlets: dict[str, set] = {}
+    for it in items:
+        sk = it.get("story_key")
+        if sk:
+            story_outlets.setdefault(sk, set()).add(it.get("outlet") or it.get("source_name") or "")
+    for it in items:
+        sk = it.get("story_key")
+        it["crossover_count"] = len(story_outlets[sk]) if sk else 1
+
     return JSONResponse({"items": items, "count": len(items)})
 
 
+# 2026-08-12: second-brain knowledge graph (src/second_brain/knowledge_graph/
+# build_graph.py). Served from the shared data volume, NOT the repo path
+# baked into this container's image at build time -- see that module's
+# main() for why (a container rebuild shouldn't be required just to see a
+# freshly-regenerated graph).
+_KG_LIVE_DIR = "/var/lib/corporatetraveldc/knowledge_graph"
+
+
+@app.get("/api/v1/knowledge-graph/html", response_class=HTMLResponse)
+async def knowledge_graph_html(
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> HTMLResponse:
+    """Self-contained interactive vault knowledge-graph viz (canvas-rendered,
+    no external assets). Iframed by the PWA's Graph tab.
+
+    2026-08-13: tier-gated after a live pentest pass found this endpoint
+    (and knowledge_graph_meta/vault_file below) had NO auth check at all --
+    every other endpoint touching anything sensitive in this file uses
+    require_tier/require_admin, these three didn't. T1 == Tailscale-origin
+    per auth.py, so this closes public-internet exposure of the full
+    second-brain vault without affecting real (Tailscale) operator use.
+    Deliberately NOT added to runner/main.py's _TIER1_PATHS service-token
+    injection list -- this is an internal operator tool, not something to
+    widen to the public/Ops view the way tfr-enriched/radio/watchlist are.
+    """
+    path = os.path.join(_KG_LIVE_DIR, "vault-graph.html")
+    if not os.path.exists(path):
+        raise HTTPException(
+            404,
+            "Graph not built yet -- run: python3 -m "
+            "second_brain.knowledge_graph.build_graph",
+        )
+    with open(path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+@app.get("/api/v1/knowledge-graph/meta")
+async def knowledge_graph_meta(
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> JSONResponse:
+    """Just the meta block (node/edge counts, generated_at) -- cheap enough
+    to poll for a "graph last built at ..." indicator without pulling the
+    full payload. Tier-gated -- see knowledge_graph_html."""
+    path = os.path.join(_KG_LIVE_DIR, "graph.json")
+    if not os.path.exists(path):
+        raise HTTPException(404, "Graph not built yet")
+    with open(path, encoding="utf-8") as f:
+        graph = json.load(f)
+    return JSONResponse(graph.get("meta", {}))
+
+
+_VAULT_FILE_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  :root {{ color-scheme: light; --bg: #fcfcfb; --fg: #0b0b0b; --muted: #77756f; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ color-scheme: dark; --bg: #1a1a19; --fg: #ffffff; --muted: #8f8d85; }}
+  }}
+  * {{ box-sizing: border-box; margin: 0; }}
+  body {{ background: var(--bg); color: var(--fg); }}
+  header {{ padding: 10px 14px; font: 12px/1.4 system-ui, sans-serif; color: var(--muted);
+            border-bottom: 1px solid var(--muted); }}
+  pre {{ margin: 0; padding: 14px; white-space: pre-wrap; word-break: break-word;
+         font: 13px/1.5 ui-monospace, "SF Mono", Consolas, monospace; }}
+</style>
+<header>{path}</header>
+<pre>{body}</pre>
+"""
+
+
+@app.get("/api/v1/vault/file")
+async def vault_file(
+    path: str = Query(...),
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> HTMLResponse:
+    """Serve one vault file's raw content via a server-side authenticated
+    WebDAV GET. Backs the knowledge-graph viz's "open file" links.
+    Tier-gated -- see knowledge_graph_html.
+
+    2026-08-12: the obvious alternative -- linking straight to Nextcloud's
+    own WebDAV URL -- doesn't work from a browser click. Confirmed live:
+    cloud.example.com only routes the WebDAV API (no web UI,
+    no login page, / and /apps/files/ both 404), and an unauthenticated
+    top-level browser navigation to the DAV endpoint trips Nextcloud's own
+    CSRF "strict cookie" middleware and gets rejected outright -- there's
+    no cookie to have, since there's no login page on this vhost to set
+    one. curl doesn't trigger this (no Accept:text/html / Sec-Fetch-Mode
+    navigate headers), which is why a plain server-side test looked fine.
+    Routing through our own backend sidesteps it entirely: credentials
+    stay server-side (never touch the client), same pattern as every
+    other webdav_client caller in this codebase.
+
+    2026-08-12 (rev 2): originally text/plain, which browsers render with
+    their default white-background text viewer regardless of OS/app dark
+    mode -- a jarring flashbang on a phone at night. Wrapping in a minimal
+    HTML shell with prefers-color-scheme CSS fixes that. Content still
+    goes through html.escape() into a <pre> block rather than being
+    trusted as markup -- same XSS-safety property the plain-text response
+    had (vault notes are operator-authored but not treated as safe HTML),
+    just with theme-aware styling around it.
+    """
+    if ".." in path or path.startswith("/") or not path:
+        raise HTTPException(400, "invalid path")
+    from second_brain import webdav_client
+    content = webdav_client.get(path)
+    if content is None:
+        raise HTTPException(404, "not found in vault")
+    text = content.decode("utf-8", "replace")
+    page = _VAULT_FILE_PAGE.format(
+        title=html.escape(path.rsplit("/", 1)[-1]),
+        path=html.escape(path),
+        body=html.escape(text),
+    )
+    return HTMLResponse(page)
+
+
 @app.get("/api/v1/osint/scopes")
-async def osint_list_scopes() -> JSONResponse:
-    """Return all OSINT scopes (enabled and disabled)."""
+async def osint_list_scopes(
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> JSONResponse:
+    """Return all OSINT scopes (enabled and disabled).
+
+    2026-08-13: tier-gated after a live pentest confirmed this endpoint
+    was reachable unauthenticated on the public vhost, leaking full scope
+    config (including EP-related scope types/query terms/feed URLs) --
+    same class of gap as the vault/knowledge-graph fix earlier tonight,
+    missed because this route lives in a different part of the file.
+    """
     scopes = db.osint_get_scopes(enabled_only=False)
     return JSONResponse({"scopes": scopes, "count": len(scopes)})
 
 
 @app.post("/api/v1/osint/scopes", status_code=201)
-async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
-    """Create a new OSINT monitoring scope."""
+async def osint_create_scope(
+    body: OsintScopeRequest,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Create a new OSINT monitoring scope.
+
+    2026-08-13: admin-gated, not just tier-gated -- scope config controls
+    what URLs osint_monitor.py fetches on a schedule. Unauthenticated
+    write access here is a real SSRF vector (attacker-supplied feed_urls
+    fetched by this box), not just a data-exposure one, so this gets the
+    stricter tier than the read above.
+    """
     allowed_types = {
         # Generic
         "keyword", "person", "org", "topic", "geo",
@@ -1245,6 +1419,10 @@ async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
         "ep_threat", "ep_principal", "ep_venue", "executive_protection",
         # Marketing / brand-intelligence context — [operator LLC abbreviation]Svcs brand narrative framing
         "brand_monitor", "market_intel", "competitor", "marketing",
+        # Named/dated/venue-bound event (conference, summit, forum) — 2026-08-12,
+        # SCHEMA_V32. Gets event/audience/genre metadata + its own narrative
+        # framing, see osint_monitor.py's _EVENT_SCOPE_TYPES.
+        "event",
     }
     if body.scope_type not in allowed_types:
         raise HTTPException(400, f"scope_type must be one of {sorted(allowed_types)}")
@@ -1257,6 +1435,9 @@ async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
         query_terms=body.query_terms.strip(),
         feed_urls=body.feed_urls.strip(),
         push_threshold=body.push_threshold,
+        event_name=body.event_name.strip(),
+        audience=body.audience.strip(),
+        genre=body.genre.strip(),
     )
     return JSONResponse({"id": scope_id, "status": "created"})
 
@@ -1265,8 +1446,10 @@ async def osint_create_scope(body: OsintScopeRequest) -> JSONResponse:
 async def osint_update_scope(
     scope_id: int,
     body: dict,
+    tier: Tier = Depends(require_admin),
 ) -> JSONResponse:
-    """Partially update a scope (label, query_terms, feed_urls, push_threshold, enabled)."""
+    """Partially update a scope (label, query_terms, feed_urls, push_threshold,
+    enabled). Admin-gated -- see osint_create_scope."""
     if not db.osint_get_scope(scope_id):
         raise HTTPException(404, f"Scope {scope_id} not found")
     db.osint_update_scope(scope_id, **body)
@@ -1274,8 +1457,12 @@ async def osint_update_scope(
 
 
 @app.delete("/api/v1/osint/scopes/{scope_id}")
-async def osint_delete_scope(scope_id: int) -> JSONResponse:
-    """Delete an OSINT scope and all its items."""
+async def osint_delete_scope(
+    scope_id: int,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Delete an OSINT scope and all its items. Admin-gated -- see
+    osint_create_scope."""
     if not db.osint_get_scope(scope_id):
         raise HTTPException(404, f"Scope {scope_id} not found")
     db.osint_delete_scope(scope_id)
