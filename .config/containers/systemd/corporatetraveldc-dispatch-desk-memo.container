@@ -30,4 +30,11 @@ Slice=production.slice
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=512M
 Type=oneshot
-TimeoutStartSec=950
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 2 attempts x 4770s memo call (default max_retries=1) = 10340s -> 10400. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+TimeoutStartSec=10400

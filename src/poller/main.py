@@ -59,11 +59,16 @@ FETCH_SCHEDULE: list[dict] = [
 ]
 
 # Skills invoked as subprocesses (own SR-1/SR-2 state, own log entries).
-# Ollama-backed skills get a 950s subprocess timeout -- comfortably past the
-# skill's own internal 900s Ollama call timeout, so a call that's merely queued
-# behind a thermally-paused Ollama (see ollama_governor) gets waited out instead
-# of the subprocess being killed and losing the run. Non-LLM skills keep 120s.
-_OLLAMA_SKILL_TIMEOUT = 950
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# spike-measured per-skill Python timeouts so this subprocess cap never
+# undercuts a legitimately-running call. Coverage: tfr-enrichment (hot, 540s) and
+# route-impact (hot, 480s) fit single-attempt + overhead; osint-monitor's
+# budget allows 2 new HIGH+ items x 2 attempts x 300s narrative calls +
+# generate() preflight gates (240+180) + load phase + overhead. A
+# many-new-item OSINT run can still exceed this; that loses only the
+# remainder of that one sweep, and the next 15-min cycle picks the items
+# back up. Non-LLM skills keep 120s.
+_OLLAMA_SKILL_TIMEOUT = 2000
 
 SKILL_SCHEDULE: list[dict] = [
     {"name": "tfr-enrichment",  "script": "poller/skills/tfr_enrichment.py",  "interval": 300,
@@ -301,7 +306,7 @@ class TriggerReactor:
             args.append("--force")
         # Ollama-backed skills (currently just osint-monitor's manual trigger)
         # get the same queued-not-killed timeout as the scheduled loop.
-        skill_timeout = 950 if "osint_monitor" in script else 120
+        skill_timeout = _OLLAMA_SKILL_TIMEOUT if "osint_monitor" in script else 120
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,

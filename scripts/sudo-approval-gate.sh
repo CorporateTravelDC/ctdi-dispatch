@@ -14,6 +14,28 @@
 #      progress in 10 min" \
 #     -- sudo systemctl restart ollama.service
 #
+# Standing policy, 2026-08-15 (see SUDO_JUSTIFICATION_PROPOSAL.md "DR/
+# time-sensitive auto-promotion"): any DR or time-sensitive request gets
+# max ntfy priority (5) AUTOMATICALLY -- not left to each caller to
+# remember to set, same lesson as tonight's scattered-timeout mess.
+# A request auto-qualifies for priority 5 if ANY of:
+#   1. The command itself is destructive -- contains "kill" (systemctl
+#      kill, SIGKILL, etc.), case-insensitive. Asking to forcibly
+#      terminate something is, by definition, past routine maintenance.
+#   2. The command touches "ollama-governor" -- the thermal safety
+#      mechanism, softened 2026-08-15 from an absolute never-touch rule
+#      to "never silently/automatically" -- any stop/start/restart of it
+#      requires an explicit human Allow, always at max priority. See
+#      SUDO_JUSTIFICATION_PROPOSAL.md "Still fully excluded" for the full
+#      reasoning.
+#   3. The caller explicitly flags it: APPROVAL_GATE_DR=1 -- for DR/
+#      time-sensitive scenarios that don't literally involve "kill" or
+#      the governor (e.g. an urgent dnf removal during an active
+#      incident).
+# Everything else defaults to priority 4 (routine). APPROVAL_GATE_PRIORITY
+# remains available as a raw override on top of both rules, for the rare
+# case a caller genuinely needs something other than 4 or 5.
+#
 # Behavior: creates a pending approval request via the local admin API,
 # pushes an ntfy alert with Allow/Deny action buttons (resolve URL points at
 # the Cloudflare-tunnel hostname so it works whether or not the phone has
@@ -36,6 +58,14 @@ REASON="$2"
 shift 3
 CMD=("$@")
 CMD_STR="$(printf '%q ' "${CMD[@]}")"
+
+if [[ -n "${APPROVAL_GATE_PRIORITY:-}" ]]; then
+    GATE_PRIORITY="$APPROVAL_GATE_PRIORITY"
+elif [[ "${APPROVAL_GATE_DR:-0}" -eq 1 || "${CMD_STR,,}" == *kill* || "${CMD_STR,,}" == *ollama-governor* ]]; then
+    GATE_PRIORITY=5
+else
+    GATE_PRIORITY=4
+fi
 
 BASE_URL="http://127.0.0.1:8000"
 RESOLVE_HOST="https://dispatch.example.com"
@@ -64,14 +94,14 @@ NTFY_BEARER="${NTFY_TOKEN_RAW%%:*}"
 ALLOW_URL="${RESOLVE_HOST}/admin/approval-requests/${REQUEST_ID}/resolve?action=allow"
 DENY_URL="${RESOLVE_HOST}/admin/approval-requests/${REQUEST_ID}/resolve?action=deny"
 
-PAYLOAD=$(python3 - "$REQUEST_ID" "$PATTERN" "$CMD_STR" "$REASON" "$ALLOW_URL" "$DENY_URL" << 'PYEOF'
+PAYLOAD=$(python3 - "$REQUEST_ID" "$PATTERN" "$CMD_STR" "$REASON" "$ALLOW_URL" "$DENY_URL" "$GATE_PRIORITY" << 'PYEOF'
 import json, sys
-req_id, pattern, cmd, reason, allow_url, deny_url = sys.argv[1:7]
+req_id, pattern, cmd, reason, allow_url, deny_url, priority = sys.argv[1:8]
 print(json.dumps({
     "topic": "approval-gate",
     "title": f"Approval needed: {pattern}",
     "message": f"{cmd}\n\nreason: {reason}\n\nexpires in 10 min. no tap = denied.",
-    "priority": 4,
+    "priority": int(priority),
     "actions": [
         {"action": "http", "label": "Allow", "url": allow_url, "method": "GET", "clear": True},
         {"action": "http", "label": "Deny",  "url": deny_url,  "method": "GET", "clear": True},

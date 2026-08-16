@@ -92,13 +92,13 @@ RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
 # MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 # Use with Claude Code, Cline, Cursor, Zed, Windsurf, or Open WebUI via mcpo.
 # Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
-# Both corporatetraveldc-pi5-chat and corporatetraveldc-pi5-osint are Modelfile wrappers on mistral-nemo:latest.
+# corporatetraveldc-pi5-chat is a Modelfile wrapper on phi3:mini (Phase 4
+# rebuild 2026-08-15, persona + chat layer baked into its SYSTEM).
 # llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://host.containers.internal:11434
 OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
-OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "corporatetraveldc-pi5-chat:latest")  # dispatch drawer (mistral-nemo)
-OLLAMA_OSINT_MODEL = os.getenv("OLLAMA_OSINT_MODEL", "corporatetraveldc-pi5-osint:latest") # OSINT narrative (mistral-nemo)
+OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "corporatetraveldc-pi5-chat:latest")  # dispatch drawer
 OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
 
 # Chat endpoint + auth headers: prefer Open WebUI's Ollama proxy; fall back to Ollama direct.
@@ -1273,9 +1273,21 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
                 "messages": [{"role": "system", "content": system}] + messages,
             }
             yield f"data: {json.dumps({'type': 'model_info', 'model': resolved_model})}\n\n"
-            # read timeout of 40s: long enough for the first token on a free Pi 5
-            # 12B model (typically 10-30s), short enough to fail fast when queued.
-            llm_timeout = httpx.Timeout(connect=10, read=40, write=10, pool=10)
+            # Phase 4 2026-08-15 (plan joyful-mapping-crown): measured on the
+            # dedicated corporatetraveldc-pi5-chat model (phi3:mini). Ollama
+            # streams zero bytes until prompt eval finishes, so read= must
+            # cover time-to-first-token. Measured: a 1289-tok chat prompt
+            # (runner system block + ctx + question) evals in ~90s at normal
+            # load (~14 tok/s) and 173s under forced TIER2+ contention
+            # (spike-measured 2026-08-15). 110s therefore covers normal-load
+            # chat but NOT a TIER2+ spike -- that is deliberate: this is the
+            # interactive fail-fast path (falls back to the local-data
+            # answer), and 110 is bounded above by the nginx
+            # proxy_read_timeout=120s ceiling on /api/ask (see
+            # config/nginx-tailnet-runner-https.conf and
+            # nginx/conf.d/tailscale-dispatch-runner.conf) -- raise those
+            # first if this ever needs to go higher.
+            llm_timeout = httpx.Timeout(connect=10, read=110, write=10, pool=10)
             async with httpx.AsyncClient(timeout=llm_timeout) as c:
                 async with c.stream(
                     "POST",

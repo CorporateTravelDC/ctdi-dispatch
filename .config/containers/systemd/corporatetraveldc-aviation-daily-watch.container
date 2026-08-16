@@ -36,4 +36,12 @@ Slice=production.slice
 # live 2026-08-06 -- see the same-day fix across every other container).
 MemoryLow=256M
 Type=oneshot
-TimeoutStartSec=950
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation) + 3 attempts x 1380s brief call (max_retries=2) + 1740s
+# entity extraction + 2 x 150s domain guesses = 6980s -> 7000. A
+# governor-pause retry-wait can still exceed this; systemd remains the
+# deliberate backstop.
+TimeoutStartSec=7000

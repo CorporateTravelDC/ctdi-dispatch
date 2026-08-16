@@ -60,8 +60,6 @@ from second_brain.index_db import init_db as init_vault_db
 from second_brain.scrub_gate import ScrubGateBlocked, gate
 
 from poller.skills.aam_weekly_watch import (
-    OLLAMA_MODEL,
-    SYSTEM_PROMPT,
     RETRIEVE_QUERY,
     RSS_CATEGORY,
     _TODAY_STATUS,
@@ -73,6 +71,9 @@ from poller.skills.aam_weekly_watch import (
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "aam-daily-watch"
+# Phase 4 2026-08-15: no longer shares the weekly skill's model -- own
+# dedicated model (and Modelfile SYSTEM adapted to daily framing).
+OLLAMA_MODEL = "corporatetraveldc-pi5-aam-daily-watch:latest"
 LOOKBACK_DAYS = 1
 # Smaller than the weekly sibling's 20 -- a 1-day corpus is much smaller
 # to begin with, so this just trims genuine noise rather than doing real
@@ -131,10 +132,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=prompt,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=700, temperature=0.25,
-            # 2026-08-07: unified to 240s + max_retries=2 (was 500/0). 3x240=
-            # 720s fits container TimeoutStartSec=950; a cold model launch is
-            # covered because the retry lands on the now-warm model.
-            timeout=240,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 35 at
+            # sample): 1910-tok prompt / 248.3s eval + gen at 0.64 tok/s
+            # -> 1093.2s at the 700-tok cap; delta over the 47.1s
+            # spiked persona-only ref = 1294.4s; x1.13 top-up to the 53s locked bound applied;
+            # (53 + 1457.8) x 1.25 = 1889s -> 1890.
+            timeout=1890,
             # allow_anthropic=False keeps this Ollama-only (no silent cloud
             # fallback/cost). max_retries=2 (2026-08-07): a model-swap/cold-load
             # transport blip retries (up to 2x, each a fresh 240s) instead of

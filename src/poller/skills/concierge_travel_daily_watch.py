@@ -47,7 +47,7 @@ from poller.skills.aam_weekly_watch import _fetch_week_items, _split_framings
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "concierge-travel-daily-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-concierge-travel-daily-watch:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 RSS_CATEGORY = "concierge_luxury_travel"
 LOOKBACK_DAYS = 1
 
@@ -133,7 +133,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=prompt,
             ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.25,
-            timeout=240, allow_anthropic=False, max_retries=2,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 41 at
+            # sample): 1607-tok prompt / 196.4s eval + gen at 0.65 tok/s
+            # -> 773.0s at the 500-tok cap; delta over the 44.0s
+            # spiked persona-only ref = 925.4s; x1.21 top-up to the 53s locked bound applied;
+            # (53 + 1115.1) x 1.25 = 1460s -> 1470.
+            timeout=1470, allow_anthropic=False, max_retries=2,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")

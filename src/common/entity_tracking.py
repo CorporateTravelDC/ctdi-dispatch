@@ -121,9 +121,25 @@ ROLLING_WINDOW_DAYS = 7
 RECURRENCE_THRESHOLD = 5
 DISTINCT_FEED_THRESHOLD = 2
 
-EXTRACTION_MODEL = "corporatetraveldc-pi5-chat"
-EXTRACTION_TIMEOUT = 90
-DOMAIN_GUESS_TIMEOUT = 30
+EXTRACTION_MODEL = "corporatetraveldc-pi5-osint-monitor:latest"
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): repinned onto the
+# osint-monitor dedicated model per operator direction (no separate
+# extraction Modelfile) -- its SYSTEM explicitly handles structured
+# extraction output alongside the 2-sentence narrative shape. Timeouts
+# measured per call shape this session (extraction = batch prompt +
+# up to 500 gen tokens; domain guess = tiny prompt, ~20 gen tokens).
+# Fail-fast design unchanged (allow_anthropic=False, max_retries=0).
+# Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
+# methodology; spiked persona-only refs bracketing: 53.1s / 43.5s;
+# osint-monitor model, both call shapes measured individually):
+# extraction: 2495-tok batch prompt / 314.4s eval + gen at 0.53 tok/s
+#   -> 943s at the 500-tok cap; delta over the 48.3s ref = 1209.5s,
+#   x1.10 top-up to the locked 53s bound = 1327.7s;
+#   (53 + 1327.7) x 1.25 = 1726s -> 1740.
+# domain guess: 836-tok prompt / 95.3s eval + 6.9s at the 20-tok
+#   cap; delta 53.9s -> 59.2s; (53 + 59.2) x 1.25 = 140s -> 150.
+EXTRACTION_TIMEOUT = 1740
+DOMAIN_GUESS_TIMEOUT = 150
 
 # Non-"routine" signal types route a THRESHOLD-CROSSING finding to the
 # novel-findings bucket instead of silent auto-promotion, per operator

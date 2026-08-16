@@ -52,7 +52,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "disruption-weather-digest"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-disruption-weather-digest:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 LOOKBACK_DAYS = 30
 CAPSULE_MAX_CHARS = 500
 
@@ -145,7 +145,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
-            timeout=300,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 43 at
+            # sample): 1066-tok prompt / 121.4s eval + gen at 0.80 tok/s
+            # -> 439.3s at the 350-tok cap; delta over the 47.1s
+            # spiked persona-only ref = 513.7s; x1.13 top-up to the 53s locked bound applied;
+            # (53 + 578.5) x 1.25 = 789s -> 810.
+            timeout=810,
             # Same allow_anthropic=False/max_retries=0 reasoning as
             # transport_pattern_digest.py -- see that skill's comment for
             # the exact 2026-08-06 timeout-stacking incident this avoids.

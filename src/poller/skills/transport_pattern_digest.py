@@ -52,7 +52,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "transport-pattern-digest"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-transport-digest:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 
 SYSTEM_PROMPT = """You are writing a technical digest entry for a
 second-brain knowledge vault used by a DC-area executive chauffeur/
@@ -188,7 +188,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
-            timeout=300,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 49 at
+            # sample): 888-tok prompt / 90.7s eval + gen at 0.94 tok/s
+            # -> 370.7s at the 350-tok cap; delta over the 53.0s
+            # spiked persona-only ref = 408.4s; spike met/exceeded the locked 53s bound, no scaling;
+            # (53 + 408.4) x 1.25 = 577s -> 600.
+            timeout=600,
             # 2026-08-06: found live during a full-container-sweep -- this
             # skill crashed at 12:31-12:36 ET today from the exact same bug
             # already fixed elsewhere (aam_weekly_watch.py etc): a mid-flight

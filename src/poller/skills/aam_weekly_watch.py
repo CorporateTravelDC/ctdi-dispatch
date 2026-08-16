@@ -56,7 +56,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "aam-weekly-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-aam-weekly-watch:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service
@@ -266,26 +266,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=prompt,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=700, temperature=0.25,
-            # Explicit timeout added 2026-07-26: this call legitimately runs
-            # ~5-6 minutes (300-360s observed 2026-07-23 live test), but was
-            # silently inheriting the shared OLLAMA_TIMEOUT=60s tuned for a
-            # completely different, much faster skill chain -- every real
-            # run was failing well before Ollama could finish, falling back
-            # to raw-headline text with no visible error. 500s gives
-            # headroom under the container's TimeoutStartSec=950.
-            #
-            # allow_anthropic=False, max_retries=0 (2026-08-06): retrofit
-            # of the same fail-fast fix already applied to ops_brief.py/
-            # ep_advance_parameter.py -- caught live, this run: a mid-flight
-            # timeout at 500s triggered a retry with a FRESH 500s timeout,
-            # and 500+500=1000s exceeds this container's own
-            # TimeoutStartSec=950, meaning the retry can never actually
-            # finish on its own terms -- the outer timeout kills the whole
-            # run first, same failure shape as the ops-brief/ep-advance
-            # incident this exact pattern was built to fix there. One
-            # attempt, no retry, straight to the deterministic fallback
-            # (already correctly wired below) on any failure.
-            timeout=240, allow_anthropic=False, max_retries=2,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 45 at
+            # sample): 2462-tok prompt / 322.7s eval + gen at 0.55 tok/s
+            # -> 1275.3s at the 700-tok cap; delta over the 47.1s
+            # spiked persona-only ref = 1551.0s; x1.13 top-up to the 53s locked bound applied;
+            # (53 + 1746.7) x 1.25 = 2250s -> 2250.
+            timeout=2250, allow_anthropic=False, max_retries=2,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")

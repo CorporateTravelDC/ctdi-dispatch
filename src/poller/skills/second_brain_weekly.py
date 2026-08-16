@@ -40,7 +40,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-weekly"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-weekly:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 
 SYSTEM_PROMPT = """You are compiling a week's worth of daily operational logs
 into one weekly synthesis for a second-brain knowledge vault. Identify
@@ -141,13 +141,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=combined,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.3,
-            # Explicit timeout added 2026-07-26: reads up to 7 days of daily
-            # notes, prompt size grows as the vault accumulates content, not
-            # yet independently timed -- was silently inheriting the shared
-            # OLLAMA_TIMEOUT=60s. 500s is conservative headroom under the
-            # container's TimeoutStartSec=950 pending a real measurement
-            # against a full 7-day dataset.
-            timeout=500,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 70 at
+            # sample): 3980-tok prompt / 601.5s eval + gen at 0.40 tok/s
+            # -> 1263.1s at the 500-tok cap; delta over the 60.0s
+            # spiked persona-only ref = 1804.7s; spike met/exceeded the locked 53s bound, no scaling;
+            # (53 + 1804.7) x 1.25 = 2322s -> 2340.
+            timeout=2340,
             # 2026-08-12: belt-and-suspenders close of the Anthropic
             # fallback -- see dispatch.env's ANTHROPIC_FALLBACK_ENABLED
             # comment for the full rationale.

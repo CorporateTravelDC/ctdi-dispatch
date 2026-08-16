@@ -46,4 +46,11 @@ Type=oneshot
 # retries, on both the main and 12h-trend call): 150s + 150s (trend,
 # boundary hours only) + ~20s overhead =~ 320s. 600s matches
 # ops-brief's recalculated value for the same reasoning.
-TimeoutStartSec=600
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 2220s main call + 540s trend call (both max_retries=0) = 3560s -> 3600. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+TimeoutStartSec=3600

@@ -188,21 +188,53 @@ stopped adding real judgment for that specific, narrow case. This is a
 proposal only, same bar as every other sudoers change here — it still
 needs an explicit yes before the gate actually comes off for that command.
 
+## DR/time-sensitive auto-promotion, decided 2026-08-15
+
+Standing rule: any approval-gate request that is a DR use case, is
+time-sensitive, or asks for a `systemctl kill`/forceful-restart-class
+action gets promoted to **max ntfy priority (5) automatically** — not
+left to each caller to remember to set. Implemented in
+`scripts/sudo-approval-gate.sh` itself (not per-caller convention, same
+lesson as the scattered-timeout mess this same night's model rebuild was
+about): a request auto-qualifies if the command text contains `kill`
+(case-insensitive — covers `systemctl kill`, `SIGKILL`, etc.) or the
+caller sets `APPROVAL_GATE_DR=1` explicitly for a DR/time-sensitive
+scenario that doesn't literally involve `kill`. Everything else stays at
+the existing default priority 4. `APPROVAL_GATE_PRIORITY` is still
+available as a raw override underneath both rules, for the rare case
+something needs a priority other than 4 or 5.
+
+Same 10-minute TTL, same fail-closed behavior (deny/expiry/silence == do
+not run) as every other approval-gate request — a DR-classed request
+gets seen faster and louder, it does not get a longer window or a
+default-allow. First real caller: `scripts/ollama-wedged-detector.sh`'s
+force-kill stage (T+120s of confirmed zero CPU progress after both
+TIER1/TIER2 mitigation attempts failed — see that script's own header
+comment for the full escalation ladder).
+
 ## Still fully excluded — no change, not part of the new standing rule
 
-**`ollama-governor.service` — no access, in any form, including read-only
-convenience wrappers.** This is the thermal safety mechanism (SIGSTOP/
-SIGCONT pause on the `ollama serve` process at ~75-77°C, resume at
-~67-68°C) protecting a Pi 5 with a confirmed-broken/non-working fan. The
-standing rule from earlier tonight is: never override or disable this
-under any circumstance. Passwordless `restart` on this unit is a bad idea
-even though restart isn't literally "disable" — a restart mid-pause-cycle
-is a state transition I don't have a reason to trust myself with
-unsupervised, and there's no operational need for me to touch it that
-tonight's work surfaced. This one stays exclusively operator-controlled,
-Termux or otherwise, even under the approval-gate model — an Allow tap
-isn't a substitute for judgment about a live thermal-pause state I can't
-fully see.
+**`ollama-governor.service` — softened 2026-08-15, still a hard gate.**
+This is the thermal safety mechanism (SIGSTOP/SIGCONT pause on the
+`ollama serve` process at ~75-77°C, resume at ~67-68°C). The original
+"never override or disable this under any circumstance, in any form"
+rule from earlier tonight was written as an artifact of a specific prior
+incident plus an assumption of a confirmed-broken/non-working fan — real
+conditions all through tonight's actual model-rebuild work never
+approached anywhere near the 75°C trip point that assumption was
+guarding against (60-65°C observed, fan audibly spinning ~2300rpm), so
+an unconditional total-prohibition turned out to be more rigid than the
+real risk warranted. Softened, not removed: this service can **never be
+silently or automatically stopped/started/restarted** — every such
+action requires EITHER (a) the operator acting directly at a terminal
+(interactive sudo, no passwordless grant exists for this and none should),
+OR (b) an explicit Allow tap through `sudo-approval-gate.sh`, which
+auto-promotes any `ollama-governor` request to max ntfy priority (5) —
+see "DR/time-sensitive auto-promotion" above. An Allow tap still isn't a
+substitute for judgment about a live thermal-pause state nobody can fully
+see remotely, which is exactly why it requires an explicit human tap
+every time, not a standing passwordless grant the way `ollama.service`
+restart/start/stop already is.
 
 **`/usr/local/bin/ollama_governor.py` — no write access.** Same reasoning.
 I have no business editing the safety mechanism's own code under a

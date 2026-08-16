@@ -14,6 +14,18 @@
 # this to the public dispatch-runner.example.com hostname
 # is a separate, deliberate step (new public surface, prospect-facing)
 # and should get an explicit go-ahead rather than being silently wired.
+#
+# 2026-08-14: live-dir volume mount removed as part of closing F6
+# (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 4). src/runner/main.py
+# uses /var/lib/corporatetraveldc for two things: a small config JSON and
+# a local chat sqlite DB (CHAT_DB_PATH). Verified before removing: with no
+# volume mounted, those paths resolve inside this container's own
+# ephemeral overlay filesystem instead -- ISOLATED per-container state
+# that resets on restart, not a functional break. That's the *more*
+# private outcome for a demo instance, not less; there's no legitimate
+# reason a public-surface demo runner needs to share persistent chat
+# state with the live app. No container in the demo pipeline mounts
+# /var/lib/corporatetraveldc at all anymore.
 
 [Unit]
 Description=Corporate Travel DC -- dispatch-runner PWA, demo-playback mode (port 8005)
@@ -31,7 +43,6 @@ Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
 Environment=SSE_INTERVAL_SEC=30
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 AutoUpdate=local
-Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the

@@ -47,26 +47,28 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL    = (
     os.getenv("OLLAMA_EP_ADVANCE_MODEL")
     or os.getenv("OLLAMA_MODEL")
-    or "corporatetraveldc-pi5-brief:latest"
+    or "corporatetraveldc-pi5-ep-advance:latest"
 )
 OLLAMA_TREND_MODEL_EP = (
     os.getenv("OLLAMA_EP_ADVANCE_TREND_MODEL")
-    or "corporatetraveldc-pi5-brief:latest"
+    or "corporatetraveldc-pi5-ep-advance-trend:latest"
 )
 MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# 2026-08-06: was 1200s. ep-advance never actually failed outright on
-# 2026-08-06 (unlike ops-brief) purely because its container's
-# TimeoutStartSec=1500 happened to have enough margin to survive one
-# slow generate() call -- every run that night still completed 9-15
-# minutes late instead of on schedule. Same fail-fast redesign as
-# ops-brief (see that module for the full incident writeup): tight
-# timeout, one attempt, no retry against Ollama with the same slow
-# prompt (see max_retries=0 at both ollama_post_with_retry() call sites
-# below) -- falls straight to _fallback_brief()'s deterministic
-# template, already wired into main(), instead of silently running late
-# behind a retry that was never going to help. 150s = same
-# baseline-plus-90s-margin derivation as ops_brief.py's identical fix.
-OLLAMA_TIMEOUT = 240  # 2026-08-07: 150->240, cold-launch coverage (operator directive)
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
+# timeouts, one constant per call site. Fail-fast semantics unchanged
+# (max_retries=0 at both direct call sites -- see git history for the
+# 2026-08-06 incident writeup).
+# Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
+# methodology: guard timer paused, synthetic burn; spiked persona-only
+# refs bracketing these samples ran 53.0s-60.0s, i.e. at/above the
+# locked 53s worst-case bound, so no scale top-up applied):
+# main:  2572-tok prompt / 350.4s eval + gen at 0.53 tok/s -> 1420s
+#        at the 750-tok cap; delta over the 60.0s ref = 1710.5s;
+#        (53 + 1710.5) x 1.25 = 2204s -> 2220.
+# trend: 1165-tok prompt / 134.8s eval + gen at 0.88 tok/s -> 295s
+#        at the 260-tok cap; delta 376.3s; (53 + 376.3) x 1.25 = 537s -> 540.
+OLLAMA_TIMEOUT          = 2220
+OLLAMA_TREND_TIMEOUT_EP = 540
 
 
 # ── Traditional EP threat site categories ─────────────────────────────────────
@@ -961,10 +963,9 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_MODEL,
-                # system omitted -- common/llm.py's ollama_post_with_retry()
-                # injects the shared DISPATCH_PERSONA (2026-08-13). The
-                # dedicated Modelfile no longer carries any persona to fall
-                # back to; this omission is what makes the injection fire.
+                # system omitted -- the dedicated Modelfile's own baked-in
+                # SYSTEM (shared dispatcher persona + this skill's layer)
+                # applies. Central persona injection was removed 2026-08-15.
                 "prompt": prompt,
                 "stream": False,
                 "options": {"num_predict": 750, "temperature": 0.15},
@@ -1127,7 +1128,7 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
         return ""
     # Added 2026-07-27: bounded pause-aware readiness wait -- see
     # common/llm.py's wait_then_budget() and _call_ollama() above.
-    generate_timeout = wait_then_budget(OLLAMA_TIMEOUT)
+    generate_timeout = wait_then_budget(OLLAMA_TREND_TIMEOUT_EP)
     if generate_timeout is None:
         log.info("ep-advance: trend narrative Ollama not ready after bounded readiness wait (governor thermal pause?)")
         return ""
@@ -1137,9 +1138,8 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_TREND_MODEL_EP,
-                # system omitted -- common/llm.py's ollama_post_with_retry()
-                # injects the shared DISPATCH_PERSONA (2026-08-13). See the
-                # matching comment in _call_ollama() above.
+                # system omitted -- the dedicated Modelfile's baked-in
+                # SYSTEM applies; see the matching comment in _call_ollama().
                 "prompt": trend_prompt,
                 "stream": False,
                 "options": {"num_predict": 260, "temperature": 0.15},

@@ -16,10 +16,8 @@ SKILL_NAME = "tfr-enrichment"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_TFR_ENRICHMENT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-brief:latest")
+                     or "corporatetraveldc-pi5-tfr-enrichment:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are a dispatch assistant for an executive chauffeur operation in the Washington DC
 metropolitan area. You have operational knowledge of DC-area airspace, VIP movement patterns,
@@ -124,6 +122,14 @@ def _call_ollama_vip(inputs: dict) -> str | None:
         max_tokens=220,
         temperature=0.2,
         priority="hot",
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 26 at
+        # sample): 1009-tok prompt / 103.5s eval + gen at 0.79 tok/s
+        # -> 266.2s at the 220-tok cap; delta over the 48.4s
+        # spiked persona-only ref = 321.4s; x1.10 top-up to the 53s locked bound applied;
+        # +16s cold-load allowance (hot path skips _preload_model);
+        # (53 + 368.0) x 1.25 = 526s -> 540.
+        timeout=540,
         # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
         # priority="hot" only affects the Ollama-side pre-flight/retry
         # gates, NOT whether generate() falls through to Anthropic on

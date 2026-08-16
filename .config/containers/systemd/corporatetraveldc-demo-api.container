@@ -2,18 +2,34 @@
 # Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
 # Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-demo-api
 #
-# Read-only playback API over demo.db (see src/demo/demo_api.py). Reuses
-# the corporatetraveldc-demo image (recorder image already has fastapi/
-# uvicorn via requirements.txt) with an Exec= override -- no separate
-# Containerfile needed for a second process mode of the same image.
+# Read-only playback API over the sovereign demo-source file (see
+# src/demo/demo_api.py). Reuses the corporatetraveldc-demo image (recorder
+# image already has fastapi/uvicorn via requirements.txt) with an Exec=
+# override -- no separate Containerfile needed for a second process mode
+# of the same image.
 #
 # Internal-only for now (127.0.0.1 + Tailscale IP, no PublishPort to a
 # public interface, no nginx vhost, no Cloudflare Tunnel ingress rule).
 # Standing up a public-facing demo requires a deliberate go-ahead --
 # flagged separately, not wired here.
+#
+# 2026-08-14: mount narrowed as part of closing F6 (redteam pentest
+# finding -- demo/production isolation was logical, not physical). This
+# container used to mount the ENTIRE live /var/lib/corporatetraveldc tree,
+# read-write (no :ro), even though the app code only ever opened it
+# mode=ro at the SQLite URI level -- an app-level convention, not an
+# OS-enforced boundary. A fully compromised demo-api process (a lower-
+# trust, public-surface-by-design component) held real read-write mount
+# permissions on the live production DB. Now: two narrow mounts, the
+# sovereign demo-source directory read-only and the demo-state directory
+# (profiles/passwords, already fully independent of live data)
+# read-write for its own admin writes. This container has ZERO filesystem
+# path to /var/lib/corporatetraveldc at all anymore -- not an app-level
+# choice not to read it, no path to it exists.
+# See docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 4.
 
 [Unit]
-Description=Corporate Travel DC -- demo playback API (port 8004, read-only over demo.db)
+Description=Corporate Travel DC -- demo playback API (port 8004, read-only over sovereign demo-source)
 After=network-online.target corporatetraveldc-demo.service
 Wants=corporatetraveldc-demo.service
 
@@ -24,7 +40,8 @@ Image=localhost/corporatetraveldc-demo:latest
 Exec=scripts/verified-exec.sh uvicorn demo.demo_api:app --host 0.0.0.0 --port 8004
 PublishPort=127.0.0.1:8004:8004
 PublishPort=100.x.x.x:8004:8004
-Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z
+Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 AutoUpdate=local
 

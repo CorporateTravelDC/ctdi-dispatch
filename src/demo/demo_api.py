@@ -1,28 +1,45 @@
 """
-demo.demo_api — read-only playback API over the demo archive (demo.db).
+demo.demo_api — read-only playback API over the sovereign demo archive.
 
 Serves the same GET /api/v1/{endpoint} path shape as the live web app
 (src/web/main.py), so an unmodified `runner` frontend/backend can point
 its DISPATCH_BASE_URL at this service instead of the live one and get a
 drop-in "demo mode" -- no runner code changes required.
 
-Privacy boundary (hard, not cosmetic): this service NEVER reads "now".
-It replays a fixed, looping window anchored to the oldest snapshot ever
-recorded, so today's real operational data can never reach this path,
-no matter how long the service runs or how the archive grows. See
-_virtual_timestamp() for the one function that enforces this.
+Privacy boundary (2026-08-14, physically enforced, not just cosmetic):
+this service reads ONLY /var/lib/corporatetraveldc-demo-source/demo-source.db
+-- a sovereign file, separate top-level directory from the live
+/var/lib/corporatetraveldc tree, populated exclusively by
+scripts/scrub-demo-source.py (the one component trusted to touch live
+data, running host-side on its own schedule, never inside a container).
+This process holds no live-DB connection at all -- not app-level
+"we choose not to query it," but literally no code path that can. See
+docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md for the full design and
+docs/PENTEST_CLEARANCE_CHECK_2026-08-13.md for the F6 finding this closes.
+
+The invariant is stronger than the pre-2026-08-14 version: it used to be
+"only OLD data is reachable" (temporal only, but reading the live DB
+directly). It is now "only data that has passed scrub+verify and been
+PROMOTED is reachable, and it is always at least one promotion cycle
+behind now" (artifact-based AND temporal) -- see _virtual_timestamp() for
+the one function that enforces the temporal half.
 
 Loop design:
-  - ANCHOR = earliest captured_at in the archive (fixed at first query,
-    cached for process lifetime -- an archive only grows forward, so the
-    anchor never needs to move).
+  - ANCHOR = window_end - window_days, where window_end comes from the
+    sovereign file's own meta table, written only by scrub-demo-source.py
+    on a promotion. The anchor advances only when a promotion writes a
+    new window_end -- NEVER as a function of wall-clock time at query
+    time. (Pre-2026-08-14 this was MIN(captured_at) -- the oldest-ever
+    snapshot, permanently. That temporal-only property still holds; this
+    is additionally gated on the artifact having been promoted.)
   - LOOP_DAYS = 14, matching demo.recorder.SEED_TARGET (the point at
     which the archive is considered to have "enough" history for a
     believable demo cycle).
   - virtual_timestamp = ANCHOR + ((now - ANCHOR) mod LOOP_DAYS)
-  - Each endpoint returns its most recent real snapshot at or before
-    virtual_timestamp -- i.e. "what the platform actually showed" at
-    that point in the archived history, replayed on an endless loop.
+  - Each endpoint returns its most recent real (scrubbed, promoted)
+    snapshot at or before virtual_timestamp -- i.e. "what the platform
+    actually showed" at that point in the promoted history, replayed on
+    an endless loop.
 
 If the archive doesn't yet span LOOP_DAYS (seed not ready), endpoints
 return 503 rather than silently serving whatever's on hand -- a partial
@@ -44,8 +61,7 @@ from pydantic import BaseModel
 from demo.recorder import RETENTION_TIERS
 from demo import profiles as demo_profiles
 
-DEMO_DB   = os.environ.get("DEMO_DB", "/var/lib/corporatetraveldc/demo.db")
-LIVE_DB   = os.environ.get("LIVE_DB", "/var/lib/corporatetraveldc/corporatetraveldc.db")
+DEMO_DB   = os.environ.get("DEMO_DB", "/var/lib/corporatetraveldc-demo-source/demo-source.db")
 LOOP_DAYS = int(os.environ.get("DEMO_LOOP_DAYS", "14"))
 
 # Optional fixed anchor override (ISO date/datetime), added 2026-08-02.
@@ -99,48 +115,100 @@ def _current_tier(span_days: int) -> tuple[str, str | None]:
 ENDPOINTS = [
     "tfr", "weather", "alerts", "cps", "notams",
     "amtrak", "opsplan", "route", "brief",
+    "knowledge_graph_meta", "osint_feed", "board", "board_threads",
 ]
+
+# Storage identifier -> demo-served URL path, for entries above whose live
+# path has more than one segment. Keep in sync with
+# demo.recorder.ENDPOINT_PATHS.
+ENDPOINT_PATHS: dict[str, str] = {
+    "knowledge_graph_meta": "knowledge-graph/meta",
+    "osint_feed":           "osint/feed",
+    "board_threads":        "board/threads",
+}
 
 app = FastAPI(title="corporatetraveldc-demo-api")
 
-_anchor_cache: datetime | None = None
+_window_end_cache: datetime | None = None
+_window_end_cache_checked = False
+_legacy_anchor_cache: datetime | None = None
 
 
 def _conn() -> sqlite3.Connection:
-    # Read-only URI connection -- this process must never write demo.db;
-    # the recorder is the only writer, and mixing writers risks lock
-    # contention against a service that also has a public-facing surface.
+    # Read-only URI connection -- this process must never write
+    # DEMO_DB (the sovereign demo-source file); scripts/scrub-demo-source.py
+    # is the only writer, and mixing writers risks lock contention against
+    # a service that also has a public-facing surface.
     return sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
 
 
-def _anchor(conn: sqlite3.Connection) -> datetime | None:
-    """Earliest point where EVERY tracked endpoint has at least some
-    data -- NOT the earliest snapshot of any single endpoint. Found
-    2026-07-31 while testing the access-profile playback: alerts/notams
-    started recording 2026-06-27, but the other 7 endpoint types (tfr,
-    weather, cps, amtrak, opsplan, route, brief) didn't start until
-    2026-07-09 -- a ~13-day cold-start gap. Using a naive global MIN()
-    put the anchor in that gap, so most endpoints 404'd for the first
-    ~13 days of every loop, silently, for both the original fixed
-    LOOP_DAYS behavior and the new profile system. Anchoring on the
-    LATEST of each endpoint's own earliest snapshot guarantees every
-    endpoint has coverage from the anchor forward.
+def _window_end(conn: sqlite3.Connection) -> datetime | None:
+    """The sovereign file's own meta.window_end -- written exclusively by
+    scripts/scrub-demo-source.py when it promotes newly scrubbed content.
+    Deliberately window_days-independent (unlike the anchor derived from
+    it), so it's safe to cache for process lifetime the same way the old
+    single anchor value was: it only changes when a NEW promotion runs,
+    which means restarting this service (a fresh worker/deploy), not
+    within a single process's lifetime."""
+    global _window_end_cache, _window_end_cache_checked
+    if _window_end_cache_checked:
+        return _window_end_cache
+    _window_end_cache_checked = True
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='window_end'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row and row[0]:
+        _window_end_cache = datetime.fromisoformat(row[0])
+    return _window_end_cache
+
+
+def _anchor(conn: sqlite3.Connection, window_days: int = LOOP_DAYS) -> datetime | None:
+    """2026-08-14: trailing anchor derived from _window_end(), NOT the
+    oldest-ever snapshot. anchor = window_end - window_days, so the loop
+    replays the most RECENTLY promoted window_days-sized slice, advancing
+    only on the next promotion (typically nightly -- see the refresh
+    timer), never at query time. This is what makes "seeded from current
+    state, not a fixed old date" (the original usability complaint this
+    whole redesign responds to) hold without weakening the temporal
+    privacy boundary -- the anchor still only moves in discrete,
+    promotion-gated steps. NOT itself cached (unlike _window_end) because
+    it depends on the caller's window_days, which varies by access
+    profile (RETENTION_TIERS) -- the arithmetic is cheap, only the DB read
+    behind _window_end() needs caching.
+
+    Falls back to the pre-2026-08-14 MIN()-based derivation only if
+    meta.window_end is absent (a sovereign file that predates any
+    promotion, or DEMO_ANCHOR_OVERRIDE is set) -- see that fallback's own
+    comment for why LATEST-of-earliest, not naive MIN(), matters there.
     """
-    global _anchor_cache
-    if _anchor_cache is not None:
-        return _anchor_cache
+    global _legacy_anchor_cache
     if DEMO_ANCHOR_OVERRIDE:
-        _anchor_cache = datetime.fromisoformat(DEMO_ANCHOR_OVERRIDE)
-        return _anchor_cache
-    row = conn.execute(
-        "SELECT MAX(first_seen) FROM ("
-        "  SELECT endpoint, MIN(captured_at) AS first_seen FROM snapshots GROUP BY endpoint"
-        ")"
-    ).fetchone()
+        return datetime.fromisoformat(DEMO_ANCHOR_OVERRIDE)
+
+    window_end = _window_end(conn)
+    if window_end is not None:
+        return window_end - timedelta(days=window_days)
+
+    # Fallback: no promotion has ever run (or meta table doesn't exist yet
+    # on an old-shape file) -- same LATEST-of-each-endpoint's-earliest
+    # logic the pre-2026-08-14 version used, so a not-yet-promoted file
+    # still degrades sanely instead of erroring. This one IS cacheable as
+    # a single value -- it doesn't depend on window_days.
+    if _legacy_anchor_cache is not None:
+        return _legacy_anchor_cache
+    try:
+        row = conn.execute(
+            "SELECT MAX(first_seen) FROM ("
+            "  SELECT endpoint, MIN(captured_at) AS first_seen FROM snapshots GROUP BY endpoint"
+            ")"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if not row or not row[0]:
         return None
-    _anchor_cache = datetime.fromisoformat(row[0])
-    return _anchor_cache
+    _legacy_anchor_cache = datetime.fromisoformat(row[0])
+    return _legacy_anchor_cache
 
 
 def _virtual_timestamp(conn: sqlite3.Connection, window_days: int = LOOP_DAYS,
@@ -163,7 +231,7 @@ def _virtual_timestamp(conn: sqlite3.Connection, window_days: int = LOOP_DAYS,
     1.0) so a request with no session/window/speed params is unchanged
     from before this existed.
     """
-    anchor = _anchor(conn)
+    anchor = _anchor(conn, window_days)
     if anchor is None:
         return None
     now = datetime.now(timezone.utc)
@@ -174,7 +242,7 @@ def _virtual_timestamp(conn: sqlite3.Connection, window_days: int = LOOP_DAYS,
 
 
 def _seed_ready(conn: sqlite3.Connection, window_days: int = LOOP_DAYS) -> tuple[bool, int]:
-    anchor = _anchor(conn)
+    anchor = _anchor(conn, window_days)
     if anchor is None:
         return False, 0
     newest_row = conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()
@@ -242,21 +310,19 @@ async def demo_readiness() -> JSONResponse:
         conn.close()
 
 
-def _live_conn() -> sqlite3.Connection:
-    c = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
-    c.row_factory = sqlite3.Row
-    return c
-
-
 def _brief_archive_lookup(brief_type: str, at: datetime) -> dict | None:
     """Most recent brief_archive row of `brief_type` at or before virtual
-    timestamp `at`. Returns None if the live DB is unreachable or empty
-    for that type/window -- callers fall back to the same "not available
-    yet" text the live app itself returns in that case."""
-    try:
-        c = _live_conn()
-    except Exception:
-        return None
+    timestamp `at`. 2026-08-14: reads from the SAME sovereign connection
+    (_conn(), DEMO_DB) as every other endpoint -- brief_archive now lives
+    in the sovereign file, populated by scripts/scrub-demo-source.py's
+    scrub+promote pass, same as `snapshots`. This function used to open a
+    dedicated live-DB connection (_live_conn(), since deleted) and query
+    the real production brief_archive table directly -- that was F6, the
+    thing this whole redesign closes. Returns None if empty for that
+    type/window -- callers fall back to the same "not available yet" text
+    the live app itself returns in that case."""
+    c = _conn()
+    c.row_factory = sqlite3.Row
     try:
         row = c.execute(
             "SELECT id, generated_at, brief_type, content, source FROM brief_archive "
@@ -264,17 +330,20 @@ def _brief_archive_lookup(brief_type: str, at: datetime) -> dict | None:
             (brief_type, at.isoformat()),
         ).fetchone()
         return dict(row) if row else None
+    except sqlite3.OperationalError:
+        # brief_archive table doesn't exist yet on a not-yet-promoted
+        # sovereign file -- same "nothing available" outcome as empty.
+        return None
     finally:
         c.close()
 
 
 def _brief_archive_history(brief_type: str | None, at: datetime, limit: int) -> list[dict]:
     """Most recent `limit` brief_archive rows at or before virtual
-    timestamp `at`, optionally filtered by type -- backs /brief/history."""
-    try:
-        c = _live_conn()
-    except Exception:
-        return []
+    timestamp `at`, optionally filtered by type -- backs /brief/history.
+    Same sovereign-file-only read path as _brief_archive_lookup() above."""
+    c = _conn()
+    c.row_factory = sqlite3.Row
     try:
         if brief_type:
             rows = c.execute(
@@ -289,26 +358,44 @@ def _brief_archive_history(brief_type: str | None, at: datetime, limit: int) -> 
                 (at.isoformat(), limit),
             ).fetchall()
         return [dict(r) for r in rows]
+    except sqlite3.OperationalError:
+        return []
     finally:
         c.close()
 
 
-def _load_snapshot(conn: sqlite3.Connection, endpoint: str, at: datetime) -> tuple[str, str] | None:
+def _load_snapshot(conn: sqlite3.Connection, endpoint: str, at: datetime) -> tuple[str, str, bool] | None:
     """Most recent snapshot for `endpoint` at or before virtual timestamp `at`.
-    Returns (payload_text, captured_at) or None."""
-    row = conn.execute(
-        "SELECT payload, payload_hash, compressed, captured_at FROM snapshots "
-        "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
-        (endpoint, at.isoformat()),
-    ).fetchone()
+    Returns (payload_text, captured_at, synthetic) or None. `synthetic`
+    reflects scripts/scrub-demo-source.py's replay-fill mechanism (2026-08-14)
+    -- a real, already-scrubbed payload re-dated to cover a gap, never
+    fabricated content. Real rows always win: this query has no idea which
+    rows are synthetic, it just picks the newest row <= `at`, and a real
+    row promoted later for that same day naturally out-dates any synthetic
+    filler for that day."""
+    try:
+        row = conn.execute(
+            "SELECT payload, payload_hash, compressed, captured_at, synthetic FROM snapshots "
+            "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
+            (endpoint, at.isoformat()),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Sovereign file predates the synthetic column (pre-2026-08-14).
+        row = conn.execute(
+            "SELECT payload, payload_hash, compressed, captured_at FROM snapshots "
+            "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
+            (endpoint, at.isoformat()),
+        ).fetchone()
+        if row is not None:
+            row = (*row, 0)
     if row is None:
         return None
-    payload, _payload_hash, compressed, captured_at = row
+    payload, _payload_hash, compressed, captured_at, synthetic = row
     if compressed:
         text = zlib.decompress(payload).decode("utf-8", errors="replace")
     else:
         text = payload if isinstance(payload, str) else payload.decode("utf-8", errors="replace")
-    return text, captured_at
+    return text, captured_at, bool(synthetic)
 
 
 def _endpoint_route(endpoint: str):
@@ -337,13 +424,19 @@ def _endpoint_route(endpoint: str):
                 return JSONResponse(
                     {"error": "no_snapshot", "endpoint": endpoint}, status_code=404
                 )
-            text, captured_at = found
+            text, captured_at, synthetic = found
             headers = {
                 "X-Demo-Mode": "true",
                 "X-Demo-Replayed-From": captured_at,
                 "X-Demo-Window-Days": str(window_days),
                 "X-Demo-Speed": str(playback_speed),
             }
+            if synthetic:
+                # Real, already-scrubbed data re-dated to fill a coverage
+                # gap (scripts/scrub-demo-source.py replay_fill_gaps(),
+                # 2026-08-14) -- never fabricated content. Surfaced here for
+                # transparency; not shown in any UI today.
+                headers["X-Demo-Synthetic"] = "true"
             if profile_label:
                 headers["X-Demo-Profile"] = profile_label
             # brief is PlainTextResponse on the live app (src/web/main.py
@@ -362,17 +455,25 @@ def _endpoint_route(endpoint: str):
 # live app (src/web/main.py's /api/v1/{name}) is the whole point: it lets
 # an unmodified runner instance swap DISPATCH_BASE_URL and nothing else.
 for _ep in ENDPOINTS:
-    app.add_api_route(f"/api/v1/{_ep}", _endpoint_route(_ep), methods=["GET"])
+    app.add_api_route(
+        f"/api/v1/{ENDPOINT_PATHS.get(_ep, _ep)}", _endpoint_route(_ep), methods=["GET"]
+    )
 
 
 # ── Brief sub-routes: weekly / history / by-type-or-id ──────────────────────
 # Added 2026-08-02. The bare /api/v1/brief route above (registered via the
 # ENDPOINTS loop, "ops" type) only ever covered the ops brief. weekly and
 # ep-advance were never wired at all -- BriefView.jsx's fetches for those
-# 404'd against this service with no replay data behind them. Fixed by
-# reading brief_archive directly from the live app's DB (see
-# _brief_archive_lookup/_brief_archive_history above) rather than trying to
-# grow a second recorder archive from scratch.
+# 404'd against this service with no replay data behind them. Originally
+# fixed (2026-08-02) by reading brief_archive directly from the live app's
+# DB -- a deliberate shortcut, "rather than trying to grow a second
+# recorder archive from scratch," documented as never paid down. That was
+# F6 (the redteam pentest finding, 2026-08-13): logical-not-physical demo
+# isolation. 2026-08-14: paid down. _brief_archive_lookup()/
+# _brief_archive_history() now read brief_archive from the SOVEREIGN file
+# (populated by scripts/scrub-demo-source.py's scrub+promote pass), the
+# same connection every other route here uses. No live-DB connection
+# exists anywhere in this process anymore.
 
 @app.get("/api/v1/brief/weekly")
 async def demo_brief_weekly(

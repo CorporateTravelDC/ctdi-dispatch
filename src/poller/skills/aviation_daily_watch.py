@@ -57,7 +57,7 @@ from poller.skills.aam_weekly_watch import _fetch_week_items, _split_framings
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "aviation-daily-watch"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"  # shared model -- same synthesis task shape as AAM, reuse rather than pull a second model
+OLLAMA_MODEL = "corporatetraveldc-pi5-aviation-daily-watch:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 RSS_CATEGORY = "aviation"
 LOOKBACK_DAYS = 1
 
@@ -147,10 +147,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=prompt,
             ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.25,
-            # Same fail-fast/no-Anthropic pattern as ops_brief.py/
-            # ep_advance_brief.py (2026-08-06) -- local Ollama or
-            # deterministic only, never a cloud API call from this box.
-            timeout=240, allow_anthropic=False, max_retries=2,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 26 at
+            # sample): 1634-tok prompt / 195.9s eval + gen at 0.63 tok/s
+            # -> 791.6s at the 500-tok cap; delta over the 48.3s
+            # spiked persona-only ref = 939.3s; x1.10 top-up to the 53s locked bound applied;
+            # (53 + 1031.1) x 1.25 = 1355s -> 1380.
+            timeout=1380, allow_anthropic=False, max_retries=2,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")

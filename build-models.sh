@@ -51,24 +51,68 @@ OLLAMA_URL="http://${OLLAMA_HOST}"
 
 # name -> Modelfile suffix
 #
-# 2026-08-13: consolidated from 16 dedicated per-skill models down to 2.
-# corporatetraveldc-pi5-brief is now the single shared model behind every
-# batch/report skill (ops-brief[-trend], ep-advance[-trend], tfr-enrichment,
-# route-impact, weekly-summary, osint[-monitor], aam-watch, dispatch-desk,
-# transport-digest, disruption-weather-digest, secondbrain-daily/weekly) --
-# one resident model, zero swap cycle between skills. Persona/ROE content
-# that used to be baked per-Modelfile now lives centrally in
-# corporatetraveldc.dispatch-persona (see common/llm.py). chat stays its
-# own dedicated model -- interactive Dispatch Drawer path, own tuned
-# PARAMETER set (num_predict cap for a human waiting on a reply).
+# 2026-08-15 (Phase 4 of the full Ollama reset, plan joyful-mapping-crown):
+# back to dedicated per-skill models -- 21 of them, one per real LLM call
+# site (verified by grepping every call site, not assumed), all
+# FROM phi3:mini. The 2026-08-13 2-model consolidation is reverted: the
+# single shared model created a shared-model contention/duty-cycle problem,
+# and the centrally-injected persona it depended on (removed from
+# common/llm.py in Phase 1 of the reset) cost ~5,000 prompt tokens on
+# EVERY call. Each Modelfile now bakes the shared Phase-3 dispatcher
+# persona (~400 tokens, identical across all 21) plus that skill's own
+# task layer into its SYSTEM block. Skills pass system=None and their own
+# measured timeout -- see each skill's .py and the per-skill Modelfiles.
 declare -A MODELS=(
+  [corporatetraveldc-pi5-aam-daily-watch]="aam-daily-watch"
+  [corporatetraveldc-pi5-aam-weekly-watch]="aam-weekly-watch"
+  [corporatetraveldc-pi5-aviation-daily-watch]="aviation-daily-watch"
+  [corporatetraveldc-pi5-concierge-travel-daily-watch]="concierge-travel-daily-watch"
+  [corporatetraveldc-pi5-dispatch-desk-memo]="dispatch-desk-memo"
+  [corporatetraveldc-pi5-disruption-weather-digest]="disruption-weather-digest"
+  [corporatetraveldc-pi5-ep-advance]="ep-advance"
+  [corporatetraveldc-pi5-ep-advance-trend]="ep-advance-trend"
+  [corporatetraveldc-pi5-executive-protection-daily-watch]="executive-protection-daily-watch"
+  [corporatetraveldc-pi5-gig-economy-daily-watch]="gig-economy-daily-watch"
+  [corporatetraveldc-pi5-ops-brief]="ops-brief"
+  [corporatetraveldc-pi5-ops-brief-trend]="ops-brief-trend"
+  [corporatetraveldc-pi5-osint-monitor]="osint-monitor"
+  [corporatetraveldc-pi5-route-impact]="route-impact"
+  [corporatetraveldc-pi5-secondbrain-daily]="secondbrain-daily"
+  [corporatetraveldc-pi5-secondbrain-weekly]="secondbrain-weekly"
+  [corporatetraveldc-pi5-tfr-enrichment]="tfr-enrichment"
+  [corporatetraveldc-pi5-trains-yachts-daily-watch]="trains-yachts-daily-watch"
+  [corporatetraveldc-pi5-transport-digest]="transport-digest"
+  [corporatetraveldc-pi5-weekly-summary]="weekly-summary"
   [corporatetraveldc-pi5-chat]="chat"
-  [corporatetraveldc-pi5-brief]="brief"
 )
 
 # ── Brief-class models: subject to the two guards above ───────────────────────
+# 2026-08-15: every batch/report model is brief-class (guarded candidate/
+# smoke/promote build). Only chat -- the interactive path with its own
+# num_predict cap -- is exempt. A full 21-model rebuild therefore runs 20
+# smoke tests (~3-5 min each under normal load); prefer selective rebuilds
+# (build-models.sh <name> ...) when only one Modelfile changed.
 BRIEF_MODELS=(
-  corporatetraveldc-pi5-brief
+  corporatetraveldc-pi5-aam-daily-watch
+  corporatetraveldc-pi5-aam-weekly-watch
+  corporatetraveldc-pi5-aviation-daily-watch
+  corporatetraveldc-pi5-concierge-travel-daily-watch
+  corporatetraveldc-pi5-dispatch-desk-memo
+  corporatetraveldc-pi5-disruption-weather-digest
+  corporatetraveldc-pi5-ep-advance
+  corporatetraveldc-pi5-ep-advance-trend
+  corporatetraveldc-pi5-executive-protection-daily-watch
+  corporatetraveldc-pi5-gig-economy-daily-watch
+  corporatetraveldc-pi5-ops-brief
+  corporatetraveldc-pi5-ops-brief-trend
+  corporatetraveldc-pi5-osint-monitor
+  corporatetraveldc-pi5-route-impact
+  corporatetraveldc-pi5-secondbrain-daily
+  corporatetraveldc-pi5-secondbrain-weekly
+  corporatetraveldc-pi5-tfr-enrichment
+  corporatetraveldc-pi5-trains-yachts-daily-watch
+  corporatetraveldc-pi5-transport-digest
+  corporatetraveldc-pi5-weekly-summary
 )
 # Known cache-breaking base families (Sliding Window Attention / hybrid-recurrent
 # → llama.cpp forces full prompt re-processing → briefs blow the timeout).

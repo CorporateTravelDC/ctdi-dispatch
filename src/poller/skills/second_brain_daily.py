@@ -54,7 +54,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-daily"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-daily:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 
 # Same scope_type groupings as osint_monitor.py -- kept as a separate copy
 # rather than importing that module's private frozensets, matching this
@@ -226,14 +226,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=raw_content,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=350, temperature=0.3,
-            # Explicit timeout added 2026-07-26: smallest prompt of the
-            # group, not yet independently timed, but was silently
-            # inheriting the shared OLLAMA_TIMEOUT=60s tuned for a
-            # different, faster skill chain -- same failure class as
-            # aam_weekly_watch/dispatch_desk_memo. 300s is conservative
-            # headroom under the container's TimeoutStartSec=950 pending a
-            # real measurement.
-            timeout=300,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 44 at
+            # sample): 1156-tok prompt / 138.2s eval + gen at 0.75 tok/s
+            # -> 464.2s at the 350-tok cap; delta over the 47.1s
+            # spiked persona-only ref = 555.4s; x1.13 top-up to the 53s locked bound applied;
+            # (53 + 625.5) x 1.25 = 848s -> 870.
+            timeout=870,
             # 2026-08-12: belt-and-suspenders close of the Anthropic
             # fallback -- see dispatch.env's ANTHROPIC_FALLBACK_ENABLED
             # comment for the full rationale.

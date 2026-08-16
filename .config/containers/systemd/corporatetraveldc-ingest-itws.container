@@ -47,7 +47,14 @@ Slice=production.slice
 # desktop session under real memory pressure, not just a cap after the
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=85M
-CPUWeight=100
+# 2026-08-14: dropped from the proportional-share default (100) to 30 --
+# a post-reboot SWIM catch-up burst (5 concurrent ingest.main processes)
+# stacked with a demo backfill job pushed load average to ~6 on this
+# 4-core box, starving a production ops-brief generation into a 500/
+# timeout and visibly slowing DNS. Still proportional, not a hard cap --
+# these still get full CPU on an otherwise-idle box, this only makes them
+# yield sooner when something else actually wants the core.
+CPUWeight=30
 CPUQuota=60%
 Restart=always
 RestartSec=15

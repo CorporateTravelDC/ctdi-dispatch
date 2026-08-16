@@ -75,14 +75,23 @@ if command -v firewall-cmd &>/dev/null; then
 fi
 
 # Set OLLAMA_HOST for dispatch user
+# 2026-08-14: was 127.0.0.1 -- but ollama.service itself has only ever
+# bound its tailscale IP (see the systemd Environment=OLLAMA_HOST= a few
+# lines above, and Line ~42's --map-gw note on why). That mismatch meant
+# every fresh install produced a working systemd service alongside a
+# permanently-wrong interactive shell default -- any `ollama` CLI use
+# relying on this default silently failed to connect, a repeating
+# footgun hit multiple times same-day before being root-caused here.
+# Matches the tailscale address for consistency; ollama access is
+# already gated at Cloudflare/tailnet, not by binding to loopback.
 BASHRC="$HOME/.bashrc"
 if ! grep -q "OLLAMA_HOST" "$BASHRC" 2>/dev/null; then
-    echo 'export OLLAMA_HOST=http://127.0.0.1:11434' >> "$BASHRC"
+    echo 'export OLLAMA_HOST=http://100.x.x.x:11434' >> "$BASHRC"
     echo "[OK]  OLLAMA_HOST added to ~/.bashrc"
 else
     echo "[OK]  OLLAMA_HOST already in ~/.bashrc"
 fi
 
 echo ""
-echo "-- Ollama ready at http://127.0.0.1:11434"
+echo "-- Ollama ready at http://100.x.x.x:11434"
 echo "-- Pull model when ready: ollama pull qwen3:8b"

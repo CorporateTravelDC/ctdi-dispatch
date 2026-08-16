@@ -6,16 +6,61 @@ Documentation=man:systemd.slice(5)
 # sibling of app.slice under user@1000.service -- NOT nested under it.
 # systemd's slice naming is hierarchical by dash-segments: a slice named
 # "app-production.slice" would be a CHILD of app.slice and would inherit
-# app.slice's own memory ceiling (see app.slice.d/50-desktop-memory-ceiling.conf),
-# defeating the entire point of separating production from the desktop
-# session. "production.slice" has no such prefix, so it lands as its own
-# top-level slice alongside app.slice/session.slice/background.slice --
-# genuinely independent, not nested.
+# app.slice's own memory ceiling, defeating the entire point of
+# separating production from the desktop session. "production.slice" has
+# no such prefix, so it lands as its own top-level slice alongside
+# app.slice/session.slice/background.slice -- genuinely independent, not
+# nested.
 #
-# Deliberately NO memory ceiling on this slice itself. Protection here
-# comes from each container's own Memory=/MemoryLow= pair (see every
-# .container Quadlet file) -- this slice exists purely to give production
-# its own cgroup namespace so app.slice's new ceiling can't reach it, not
-# to add a second umbrella cap on top of the per-container ones.
+# 2026-08-06 (superseded 2026-08-14, see below): originally deliberately
+# NO memory ceiling on this slice itself, relying only on each
+# container's own Memory=/MemoryLow= pair.
+#
+# 2026-08-14: that no-ceiling design is what let this slice's aggregate
+# usage grow unbounded even though every individual container looked
+# fine on its own. Live incident: a post-reboot SWIM catch-up burst (5
+# concurrent ingest.main processes) stacked with a demo backfill job --
+# no single container was close to its own cap, but the SUM pushed
+# system-wide swap into active churn (949MB+ and climbing, vmstat wa
+# 18-29%), load average to ~6-9 on this 4-core/16GB box, and starved a
+# production ops-brief generation into a 500/timeout. Individual
+# per-container Memory=/MemoryLow= pairs protect containers from each
+# other under reclaim pressure; nothing bounded their combined total.
+#
+# Sized as a matched pair with ollama.service's existing hard cap
+# (MemoryMax=6100M / ~5.96GiB, MemorySwapMax=0 -- ollama.service is a
+# genuine system-level unit at /etc/systemd/system/ollama.service and
+# cannot be nested inside this user-level slice; cgroups don't allow a
+# system unit to join a user manager's slice, different hierarchy
+# entirely). Total box RAM: 16211MiB. Budget: 6100 (ollama) + 7680 (this
+# slice) = 13780MiB = 85.0% of total, leaving a guaranteed 15% (~2.4GiB)
+# headroom for kernel, reclaimable page cache, and app.slice, even if
+# both sides hit their ceiling at the exact same moment.
+#
+# MemoryHigh=6656M: soft threshold -- kernel proactively reclaims from
+# this slice above this point (page cache first), throttling growth
+# before anything gets OOM-killed. Live-tested 2026-08-14 at a lower
+# value (5632M) during the actual incident: 1-min load dropped 8.90 ->
+# 6.88 and swap growth stopped dead (pinned, stopped climbing) within 5
+# minutes of applying it, confirming the mechanism works as intended
+# before this higher, more permanent value was chosen.
+#
+# MemoryMax=7680M: hard ceiling. Exceeding this OOM-kills within this
+# slice specifically (production containers), never reaching over into
+# ollama.service or app.slice/the interactive desktop.
+#
+# Cross-reference: app.slice previously carried its own memory ceiling
+# (app.slice.d/50-desktop-memory-ceiling.conf, added 2026-08-06) sized
+# for Claude Desktop's Electron shell plus its "Cowork" VM (up to
+# 4096MB). That drop-in was removed 2026-08-14 -- Claude Desktop was
+# uninstalled the same day (superseded by /remote-control), and app.slice
+# now holds only lightweight infra (cloudflared, mcpo x2, gnome-keyring,
+# a11y, ollama-swap-alert -- ~400MB observed). app.slice currently relies
+# on systemd's baseline oomd defaults (10-oomd-per-slice-defaults.conf,
+# ManagedOOMMemoryPressure=kill at 80%) rather than a custom ceiling; if
+# Brave or another real desktop app becomes a regular resident again,
+# revisit whether app.slice needs its own ceiling back.
 
 [Slice]
+MemoryHigh=6656M
+MemoryMax=7680M

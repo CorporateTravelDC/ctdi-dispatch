@@ -34,4 +34,15 @@ Slice=production.slice
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=256M
 Type=oneshot
-TimeoutStartSec=600
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 600s digest call (max_retries=0) = 1400s exact sum. 2026-08-16:
+# independent validation flagged this as the one unit with zero cushion
+# above its own formula -- every other reconciled unit carries some
+# margin, this one didn't. +200s (~14%) added; a governor-pause
+# retry-wait can still exceed this, systemd remains the deliberate
+# backstop either way.
+TimeoutStartSec=1600

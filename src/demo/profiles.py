@@ -30,7 +30,15 @@ import string
 import time
 from datetime import datetime, timezone
 
-DB = os.environ.get("DEMO_ACCESS_DB", "/var/lib/corporatetraveldc/demo_access.db")
+# 2026-08-14: moved off the live /var/lib/corporatetraveldc tree entirely --
+# this file is already fully independent of live data (per this module's
+# own docstring), but leaving it in the live directory would force
+# demo-api to keep a live-dir mount forever, defeating the whole point of
+# the sovereign-source cutover (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md
+# Phase 4). Read-write (profile admin writes), separate from the
+# read-only demo-source directory so demo-api's sovereign mount can stay
+# strictly :ro.
+DB = os.environ.get("DEMO_ACCESS_DB", "/var/lib/corporatetraveldc-demo-state/demo_access.db")
 
 # Signs session tokens issued after a successful password check. Falls back
 # to a per-process random secret if not configured -- fine for a single
@@ -43,6 +51,7 @@ PBKDF2_ITERATIONS = 200_000
 
 
 def _conn() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
     conn = sqlite3.connect(DB)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS profiles (

@@ -16,7 +16,12 @@ import sys
 HARD_LIMIT = 900_000
 WARN_LIMIT = 800_000
 
-SKILL_DIR = "/opt/corporatetraveldc/.claude/skills/dispatch-context-guardian"
+# 2026-08-16: was a hardcoded absolute path -- broke silently when the skill
+# got relocated (see git history: "relocate dispatch-context-guardian skill
+# to stable path") because this constant was never updated to match. Derived
+# from the script's own location instead so a future relocate can't break it
+# the same way again.
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE_SCRIPT = os.path.join(SKILL_DIR, "scripts", "save_dispatch_state.py")
 
 

@@ -41,6 +41,14 @@ API         = os.environ.get('DEMO_RECORDER_API_BASE', 'http://100.x.x.x:8000/ap
 INTERVAL    = int(os.environ.get('DEMO_RECORDER_INTERVAL',    '300'))
 RETENTION   = int(os.environ.get('DEMO_RECORDER_RETENTION',   '364'))
 SEED_TARGET = int(os.environ.get('DEMO_RECORDER_SEED_TARGET', '14'))
+# 2026-08-14: cert-tier bearer token so this recorder can also reach
+# Tier-1-gated routes (knowledge-graph, osint/scopes) -- the original 9
+# endpoints below are all Tier-0 public, so this was never needed until the
+# graph/osint/board capture was added. Sent on every request (harmless for
+# the Tier-0 endpoints too, since a higher tier still satisfies a Tier-0
+# check). Minted via src/ctdc_token/cli.py, stored in
+# /etc/corporatetraveldc/dispatch-secrets.env as DEMO_RECORDER_API_TOKEN.
+API_TOKEN   = os.environ.get('DEMO_RECORDER_API_TOKEN', '')
 
 # Retention tiers used by seed_status() / demo readiness endpoint.
 # Keys are human labels; values are days.
@@ -56,7 +64,28 @@ RETENTION_TIERS: dict[str, int] = {
 ENDPOINTS = [
     'tfr', 'weather', 'alerts', 'cps', 'notams',
     'amtrak', 'opsplan', 'route', 'brief',
+    # 2026-08-14: knowledge-graph, OSINT feed, and board -- added so the
+    # demo can show these features live instead of them being permanently
+    # absent (they were never in this list). knowledge_graph_meta is
+    # summary-only (generated_at/node_count/edge_count) -- the live
+    # /knowledge-graph/html canvas render (actual node/edge labels) is
+    # deliberately NOT captured, since scrubbing an arbitrary rendered graph
+    # reliably is a much bigger, unreviewed problem than scrubbing prose/
+    # JSON text. osint/scopes (the config of what's being watched) is also
+    # deliberately excluded -- that's a monitoring-target list, not output,
+    # and is sensitive independent of any literal string it contains.
+    'knowledge_graph_meta', 'osint_feed', 'board', 'board_threads',
 ]
+
+# Storage identifier -> live URL path, for entries above whose live route
+# has more than one path segment (the flat identifiers used as SQL
+# `endpoint` values can't contain slashes). Keep in sync with
+# demo_api.ENDPOINT_PATHS.
+ENDPOINT_PATHS: dict[str, str] = {
+    'knowledge_graph_meta': 'knowledge-graph/meta',
+    'osint_feed':           'osint/feed',
+    'board_threads':        'board/threads',
+}
 
 _last_vacuum: float = 0.0  # epoch timestamp of last VACUUM
 
@@ -150,9 +179,11 @@ def last_hash(conn: sqlite3.Connection, ep: str) -> str | None:
 
 def record(conn: sqlite3.Connection) -> None:
     ts = datetime.now(timezone.utc).isoformat()
+    headers = {'Authorization': f'Bearer {API_TOKEN}'} if API_TOKEN else {}
     for ep in ENDPOINTS:
+        path = ENDPOINT_PATHS.get(ep, ep)
         try:
-            r = requests.get(f'{API}/{ep}', timeout=15)
+            r = requests.get(f'{API}/{path}', headers=headers, timeout=15)
             if not r.ok:
                 continue
             text = r.text

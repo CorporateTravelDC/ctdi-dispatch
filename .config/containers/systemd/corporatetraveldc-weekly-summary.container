@@ -35,4 +35,11 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=120
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 2 attempts x 990s call (default max_retries=1) = 2780s -> 2800. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+TimeoutStartSec=2800

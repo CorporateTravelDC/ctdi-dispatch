@@ -142,77 +142,18 @@ def _verify_before_inference(ollama_model: str | None) -> None:
     if modelfile_relpath:
         _verify_integrity(modelfile_relpath)
 
-    # 2026-08-13: as of the persona-consolidation refactor, the real
-    # persona/discipline/ROE content lives in corporatetraveldc.dispatch-
-    # persona, not in the (now near-empty) Modelfiles -- verify it here too,
-    # or an attacker/accidental edit to the one file that actually carries
-    # every skill's instructions would bypass the integrity gate entirely.
-    _verify_integrity(_PERSONA_PATH.name)
-
 log = logging.getLogger(__name__)
 
-# 2026-08-13: single shared system prompt, replacing 16 separate Modelfiles'
-# baked-in SYSTEM blocks. Modelfiles now carry ONLY FROM + PARAMETER --
-# zero persona content -- so every model can share one resident base
-# without a swap cycle every time a different skill fires. Individual
-# skill .py files carry no persona content either; every call's system=
-# stays None (unchanged -- no call-site edits needed), and the actual
-# persona gets injected once, centrally, in ollama_post_with_retry() below
-# (the true convergence point for every call path, including
-# ep_advance_brief.py's direct calls that bypass generate()/_ollama()
-# entirely -- see that function's own docstring).
-#
-# Private file (corporatetraveldc.dispatch-persona, real firm/operator
-# content) is excluded from the public mirror -- see scrub-public-tree.py
-# DROP_FILES. Public gets corporatetraveldc.dispatch-persona.template only.
-# Loaded once at import time and cached; a missing file logs loudly and
-# falls back to empty (degrades to no persona at all, not a crash -- see
-# _load_dispatch_persona()'s own docstring for why that's the right
-# failure mode here).
-_PERSONA_PATH = _REPO_ROOT / "corporatetraveldc.dispatch-persona"
+# 2026-08-15: persona lives per-Modelfile again (each skill's own SYSTEM
+# block, see build-models.sh and the per-skill corporatetraveldc.<skill>
+# Modelfiles) -- no centrally-loaded/injected persona file here anymore.
 
-
-def _load_dispatch_persona() -> str:
-    """Read the shared persona file once at import time.
-
-    Soft-fails to "" rather than raising: a missing persona file means
-    every skill's output silently loses its identity/ROE grounding, which
-    is a real quality problem but not one that should crash the whole
-    poller process over -- the degraded (persona-less) output itself is
-    the visible symptom, logged loudly here so it's not a silent regression.
-    """
-    try:
-        lines = _PERSONA_PATH.read_text(encoding="utf-8").splitlines()
-        first = 0
-        while first < len(lines) and (
-            not lines[first].strip() or lines[first].lstrip().startswith("#")
-        ):
-            first += 1
-        return "\n".join(lines[first:]).strip()
-    except FileNotFoundError:
-        log.error(
-            "llm: shared persona file missing (%s) -- every skill will "
-            "generate without persona/ROE grounding until this is fixed. "
-            "See corporatetraveldc.dispatch-persona.template to rebuild it.",
-            _PERSONA_PATH,
-        )
-        return ""
-
-
-DISPATCH_PERSONA: str = _load_dispatch_persona()
-
-# 2026-08-13: DISPATCH_PERSONA itself measured at ~2050 real tokens (16466
-# chars) via a live prompt_eval_count check against corporatetraveldc-pi5-
-# brief -- sent on every single call now that persona is centralized, so it
-# eats a fixed, non-negotiable chunk of whatever num_ctx the shared model
-# is built with (4096 by default -> see corporatetraveldc.brief). Callers
-# with a large/unbounded raw-data prompt (dispatch_desk_memo.py's 90-item/
-# 6-category feed, second_brain_weekly.py's up-to-7-days of vault notes)
-# need to budget their own prompt against what's actually left, not what
-# num_ctx nominally offers. ~4 chars/token is a conservative average for
-# this kind of headline/prose English text (real content tends to run
-# closer to 4.5-5.5); undercounting the budget (truncating a bit more than
-# strictly necessary) is the safe direction to be wrong in here.
+# A cheap chars-per-token heuristic (not a real tokenizer) used by
+# trim_to_token_budget() below to keep a prompt inside a model's num_ctx
+# budget. ~4 chars/token is a conservative average for headline/prose
+# English text (real content tends to run closer to 4.5-5.5);
+# undercounting the budget (truncating a bit more than strictly necessary)
+# is the safe direction to be wrong in here.
 _CHARS_PER_TOKEN_ESTIMATE = 4.0
 
 
@@ -876,12 +817,31 @@ def _preload_model(model: str | None, priority: str) -> None:
     load_budget, basis = _adaptive_load_timeout()
     backpressure_engaged = _engage_ollama_backpressure(priority)
     try:
-        with ollama_slot(priority=priority, timeout=load_budget):
-            resp = httpx.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={"model": model, "prompt": ""},
-                timeout=load_budget,
-            )
+        try:
+            with ollama_slot(priority=priority, timeout=load_budget):
+                resp = httpx.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json={"model": model, "prompt": ""},
+                    timeout=load_budget,
+                )
+        except httpx.TransportError:
+            # 2026-08-15: a load attempt that TIMES OUT is still a cold-load
+            # event -- arguably the most important kind. Found live during
+            # the memory-throttle incident (see systemd/ollama.service.d/
+            # 20-resource-limits.conf, 2026-08-15 re-baseline): both guard
+            # state files were missing from /var/lib/corporatetraveldc/
+            # ollama-lock/ despite days of visible reload churn, because
+            # this function only recorded a cold load AFTER a successful
+            # response -- during a storm, loads mostly DON'T complete, so
+            # the storm guard sat blind through the exact scenario it was
+            # built for (timeout -> unload signal -> next skill cold-loads
+            # -> timeout again, repeating). Record the failed attempt into
+            # the same window before propagating, so repeated failing loads
+            # can trip the guard and shed load instead of piling on.
+            # ollama_slot() acquisition failures (OllamaBusyError) are
+            # deliberately NOT recorded -- no load was attempted.
+            _record_cold_load_and_check_storm(model)
+            raise
         resp.raise_for_status()
         load_s = (resp.json().get("load_duration") or 0) / 1e9
         if load_s > 1.0:
@@ -948,14 +908,10 @@ def ollama_post_with_retry(
     """
     _verify_before_inference(payload.get("model"))
 
-    # 2026-08-13: inject the shared persona if the caller didn't set one.
-    # Every call path converges here (see DISPATCH_PERSONA's own comment
-    # above), so this single line is what makes the Modelfile-stripping
-    # refactor actually take effect for every skill, including
-    # ep_advance_brief.py's direct calls that build their own payload dict
-    # and never pass a "system" key at all.
-    if not payload.get("system"):
-        payload["system"] = DISPATCH_PERSONA
+    # 2026-08-15: persona lives per-Modelfile again (see the note near
+    # _CHARS_PER_TOKEN_ESTIMATE above) -- no central injection here.
+    # payload["system"] stays whatever the caller set (normally nothing;
+    # Ollama uses the target model's own baked-in SYSTEM block).
 
     # 2026-08-13: sanitize the prompt content itself -- see
     # sanitize_prompt_text()'s own docstring. Applied here, not per-skill,
@@ -1070,9 +1026,18 @@ def generate(
     mid-flight retry) -- a hot call fails straight to fallback on any
     delay or timeout, exactly like before 2026-07-27.
 
-    timeout: overrides the shared OLLAMA_TIMEOUT (currently 60s, see
-    dispatch.env) for both the lock-wait AND the actual generate() HTTP
-    call. Added 2026-07-26 after the 60s value -- correctly tuned from real
+    timeout: overrides the shared OLLAMA_TIMEOUT (currently 3600s, see
+    dispatch.env; the "60s" this note used to cite predates the 2026-08
+    observation-window raises) for both the lock-wait AND the actual
+    generate() HTTP call. 2026-08-15: per-skill overrides re-baselined
+    against measured throughput (prompt eval ~14-18 tok/s at num_thread=2,
+    shared ~2050-token persona ~150s of that on an uncached slot): the
+    daily watches 240->900, second_brain_daily/disruption_weather 300->900,
+    second_brain_weekly 500->1200, dispatch_desk_memo 800->1200 -- the
+    240-300s class could not complete a single cold-slot call at all
+    post-consolidation. See each skill's own comment and
+    systemd/ollama.service.d/20-resource-limits.conf (2026-08-15) for the
+    memory-throttle root cause that made even these budgets insufficient. Added 2026-07-26 after the 60s value -- correctly tuned from real
     p99/max data for route_impact/tfr_enrichment/osint_monitor/
     weekly_summary/ops_brief's llm_generate path (all sub-minute) -- turned
     out to ALSO be silently applied to aam_weekly_watch.py,
@@ -1191,10 +1156,8 @@ def _ollama(
     }
     if system:
         # Non-empty system is an explicit per-call override. Omitting the
-        # key (system None/"") is the normal case for every skill as of
-        # 2026-08-13 -- ollama_post_with_retry() fills in the shared
-        # DISPATCH_PERSONA downstream (Modelfiles no longer carry any
-        # persona of their own to fall back to).
+        # key (system None/"") is the normal case -- Ollama then uses the
+        # target model's own baked-in Modelfile SYSTEM block.
         payload["system"] = system
     try:
         resp = ollama_post_with_retry(

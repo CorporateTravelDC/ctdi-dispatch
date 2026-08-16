@@ -12,7 +12,7 @@ public mirror `ctdi-dispatch`) receives fixes.
 
 ## Reporting a vulnerability
 
-Email **developer@csexecutiveservices.com**. Please do not open public issues
+Email **developer@example.com**. Please do not open public issues
 for security reports. Encrypt sensitive reports to the current GPG code
 signing key (public keys ship in-repo, named by full fingerprint):
 

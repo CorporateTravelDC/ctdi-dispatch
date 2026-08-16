@@ -53,29 +53,26 @@ SKILL_NAME = "ops-brief"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-brief:latest")
+                     or "corporatetraveldc-pi5-ops-brief:latest")
 OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
-                      or "corporatetraveldc-pi5-brief:latest")
+                      or "corporatetraveldc-pi5-ops-brief-trend:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# 2026-08-06: was 900s (+ an automatic same-prompt retry on top) -- root
-# cause of the missing 8:00/3:00/4:00/5:00/6:00 ops-brief runs on
-# 2026-08-06. That combination let a single slow generate() call
-# consume more wall-clock than the container's own outer
-# TimeoutStartSec, so systemd killed the whole run before either the
-# primary attempt or the retry could finish OR fall back --
-# see docs/COMPLIANCE_SECURITY.md and the 2026-08-06 incident notes.
-# Fail-fast redesign, per operator directive: no cloud (Anthropic)
-# fallback for this skill, and no retry against Ollama with the same
-# slow prompt -- see the llm_generate() calls below (allow_anthropic=
-# False, max_retries=0). On timeout, this now goes straight to
-# _build_fallback_brief()'s deterministic template, which already
-# existed and was already wired into main() -- it just used to be
-# reachable only after also waiting out a doomed Anthropic attempt.
-# 150s = observed healthy baseline for this call (real narrative
-# generate() calls completed in well under 60s on 2026-08-06's clean
-# runs, e.g. 01:00/02:00) plus a 90s margin, same shape as the
-# 60-90s-past-baseline guidance used for ep-advance's identical fix.
-OLLAMA_TIMEOUT    = 240  # 2026-08-07: 150->240, cold-launch coverage (operator directive)
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
+# timeouts, one constant per call site. Fail-fast semantics unchanged
+# (allow_anthropic=False, max_retries=0 -- see the 2026-08-06 incident
+# writeup in git history).
+# Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
+# methodology: guard timer paused, synthetic burn, la 16-27 at sample;
+# spiked persona-only refs bracketing these samples: 43.6s / 53.1s):
+# main:  1164-tok prompt / 121.5s eval + gen at 0.68 tok/s -> 741s
+#        at the 500-tok cap; delta over the 48.4s ref = 813.7s, x1.10
+#        top-up to the locked 53s bound = 891.8s;
+#        (53 + 891.8) x 1.25 = 1181s -> 1200.
+# trend: 1133-tok prompt / 127.6s eval + gen at 0.82 tok/s -> 244s
+#        at the 200-tok cap; delta 323.1s -> 354.1s;
+#        (53 + 354.1) x 1.25 = 509s -> 510.
+OLLAMA_TIMEOUT       = 1200
+OLLAMA_TREND_TIMEOUT = 510
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -678,7 +675,7 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
         ollama_model=OLLAMA_TREND_MODEL,
         max_tokens=200,
         temperature=0.15,
-        timeout=OLLAMA_TIMEOUT,
+        timeout=OLLAMA_TREND_TIMEOUT,
         allow_anthropic=False,
         max_retries=0,
     ) or ""
@@ -698,30 +695,6 @@ def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     bucket, only the concise/"brief" side had the collision.
     """
     _ntfy.send_dual(full_text, concise_text, title=title, topic_brief="ops-brief")
-
-
-def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
-    """
-    Single Ollama /api/generate call. Returns response text or None on any error.
-    Raises httpx.HTTPStatusError so callers can inspect status codes.
-    """
-    # priority="report" (2026-07-26): see common/ollama_lock.py. Raises
-    # OllamaBusyError up to the caller (same as any other httpx failure this
-    # function already lets propagate) if a hot alert is pending.
-    with ollama_slot(priority="report", timeout=OLLAMA_TIMEOUT):
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  model,
-                "system": system,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": 500, "temperature": 0.2},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-    resp.raise_for_status()
-    return resp.json().get("response", "").strip() or None
 
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
@@ -798,6 +771,27 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     ]
     if route:
         parts.append(f"ROUTE NARRATIVE (local DB):\n{route}")
+
+    # 2026-08-16: real production output showed phi3:mini echoing this
+    # raw data pull back verbatim as its "narrative" (confirmed live --
+    # brief_archive content was byte-identical in structure to this
+    # prompt, truncated mid-sentence at the num_predict cap) rather than
+    # synthesizing it, which is why trains/weather (items 6-7 in `parts`)
+    # never appeared -- the echo ran out of token budget on aviation
+    # content (items 1-5) before ever reaching them. This wasn't a
+    # missing-instruction problem (Amtrak/NWS were always in both the
+    # data and the Modelfile's task instructions); it was the model
+    # never being given an unambiguous signal that generation, not
+    # repetition, was expected at this exact boundary. Explicit trailing
+    # trigger fixes the actual failure mode.
+    parts.append(
+        "---\n"
+        "Using ONLY the data above, write the operational briefing now, "
+        "in your own words, per your system instructions. Do NOT copy, "
+        "quote, or restate any of the raw data blocks above verbatim -- "
+        "synthesize them into new narrative prose covering every section "
+        "that has data, including Amtrak and NWS alerts."
+    )
 
     prompt_content = "\n\n".join(parts)
 

@@ -27,8 +27,41 @@ This is a statement about *what CTDI adds to* an operator's existing compliance 
 | **Operational feeds** (weather, TFR, NOTAM, ATCSCC ops-plan, Amtrak, ADS-B/ASDE-X, runsheet) | Internal Podman containers | None by default -- read-only pulls from government/public-interest sources only (see `DESIGN-PRINCIPLES.md` §3) | Local SQLite (WAL mode), on-device |
 | **LLM Inference** | Native host Ollama daemon | None (air-gapped compatible) | Ephemeral -- no query or response is sent to any external provider |
 | **Audit Logs** | Systemd journald + local SQLite `audit_log` table | None (0% outbound) | Append-only, local disk, 90-day retention |
+| **Public demo playback** | Dedicated `demo-api`/`runner-demo` containers, sovereign SQLite file (see below) | Internal-only today (no public DNS/CF Tunnel ingress); password-gated when it is exposed | Sovereign file, physically separate directory, `:ro` container mount |
 
 By default, the platform binds its web interfaces, backend processes, and LLM orchestration layer strictly to the host environment or internal container-network interfaces. Operational data -- flight tracks, TFRs, weather, watchlist entries, runsheet trips -- is processed and stored entirely on the deployed device. Nothing here describes or requires third-party PNR data ingestion; if a future runsheet integration (LimoAnywhere/RingCentral/3CX) is built, the same isolation principles apply to whatever trip-level data that integration actually carries, and this section will be updated to reflect the real data model at that time rather than a hypothetical one.
+
+**Demo/production isolation (2026-08-14, closing F6).** The public demo
+instance reads from `/var/lib/corporatetraveldc-demo-source/demo-source.db`
+-- a physically separate SQLite file, in a separate top-level directory
+from the live `/var/lib/corporatetraveldc` tree, populated exclusively by
+`scripts/scrub-demo-source.py`. That script is the only component
+permitted to touch both sides: it runs host-side (never inside a
+container that could be conflated with the public-facing demo surface),
+self-verifies against the signed manifest before running, reads live data
+read-only, and every row passes a two-layer scrub (`src/demo/scrub_rules.py`
+substitution + fail-closed allowlist verification, modeled on
+`scripts/scrub-public-tree.py`'s public-mirror discipline) before
+promotion -- a row that still matches a forbidden pattern after
+substitution is dropped, never shipped with a warning. `demo-api` and
+`runner-demo` hold no live-DB connection and no live-directory mount at
+all; not an application-level choice not to read it, no filesystem path
+to it exists. A scheduled refresh
+(`corporatetraveldc-demo-source-refresh.timer`, nightly 04:45 ET) keeps
+the demo tracking real platform growth without ever serving data more
+recent than the last promotion. See
+`docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` for the full design and
+`docs/PENTEST_CLEARANCE_CHECK_2026-08-13.md` for the finding this closes.
+
+Housekeeping note found while grounding this section: several code
+comments elsewhere in the repo cite a "Signed Manifest Integrity" section
+of this document that doesn't exist here under that exact heading -- the
+mechanism itself (`scripts/sign-manifest.sh`/`verify-manifest.sh`,
+`_verify_before_inference()` in `src/common/llm.py`, the self-check every
+privileged script in this section runs before proceeding) is real and
+live; the cross-reference is drift, not a missing control. Flagging here
+rather than silently fixing every comment, since some of those comments
+may be intentionally pointing at a future consolidated section.
 
 ---
 

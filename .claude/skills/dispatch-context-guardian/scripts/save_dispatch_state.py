@@ -23,7 +23,15 @@ except ImportError:
 # returns the SPA's index.html (JSON-parse failure), or a bogus stub payload like
 # {"service":"dispatch-runner"} -- confirmed live 2026-07-27. Every endpoint below
 # has been silently capturing garbage or nothing since this script was written.
-DISPATCH_BASE = "https://dispatch.example.com"
+# NOTE 2026-08-16: switched to "https://dispatch.example.com" (the
+# docs said GET-only Tier-0 routes were fine there), but confirmed live that
+# Cloudflare Access now 302s /healthz and the rest of /api/v1/* too -- the
+# 2026-07-17 ACL tightening broadened the Access gate past what the docs
+# assumed. Every other platform component's primary is the Tailscale address
+# (matches dispatch-mcp's DISPATCH_BASE_URL default, agentic-tools MCP's
+# AGENTIC_MCP_DISPATCH_HOST); this script now matches. Override with
+# DISPATCH_BASE env var for a non-Tailscale deployment.
+DISPATCH_BASE = os.environ.get("DISPATCH_BASE", "http://100.x.x.x:8000")
 STATE_FILE = os.path.expanduser("~/.config/Claude/dispatch_state_snapshot.json")
 
 # Tier-0 (no auth) endpoints, reachable over the public Cloudflare tunnel domain.

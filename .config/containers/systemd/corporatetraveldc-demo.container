@@ -14,6 +14,10 @@ PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-demo:latest
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-08-14: added so this recorder can read DEMO_RECORDER_API_TOKEN
+# (needed for the new Tier-1-gated knowledge-graph/osint captures) --
+# matches the runner/web containers' existing two-EnvironmentFile pattern.
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 AutoUpdate=local
 
 [Service]

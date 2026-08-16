@@ -58,7 +58,7 @@ def cmd_create(args: argparse.Namespace) -> None:
     print(f"  Authorization: Bearer {token}")
     print()
     print("To configure in Cowork:")
-    print(f"  CSEX_DISPATCH_TOKEN={token}")
+    print(f"  DISPATCH_TOKEN={token}")
     print()
 
 

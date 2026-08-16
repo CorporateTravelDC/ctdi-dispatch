@@ -37,12 +37,15 @@ log = logging.getLogger(__name__)
 SKILL_NAME  = "osint-monitor"
 
 OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
-# OSINT narratives use the instruction-optimised model (mistral by default).
-# Falls back to OLLAMA_MODEL → OLLAMA_CHAT_MODEL if OSINT-specific var unset.
+# 2026-08-16: dedicated per-skill model from the Phase 4 rebuild, same
+# model entity_tracking.py's repinned EXTRACTION_MODEL points at (both
+# share this Modelfile). The old fallback chain's final default,
+# corporatetraveldc-pi5-brief:latest, no longer exists (deleted in that
+# same rebuild) -- caught by a fresh validation pass, was silently
+# resolving to a 404 -> deterministic fallback on every real call.
 OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_NARRATOR_MODEL")
                     or os.getenv("OLLAMA_MODEL")
-                    or "corporatetraveldc-pi5-brief:latest")
-OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "900"))  # stopgap
+                    or "corporatetraveldc-pi5-osint-monitor:latest")
 MODEL            = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 FETCH_TIMEOUT    = 20           # seconds per RSS fetch
 MAX_ITEMS_SCOPE  = 20           # cap per scope per run to limit CPU
@@ -420,6 +423,13 @@ def _generate_narrative(item: dict, scope_label: str, matched_terms: list[str],
         ollama_model=OLLAMA_MODEL,
         max_tokens=100,
         temperature=0.3,
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 28 at
+        # sample): 974-tok prompt / 98.4s eval + gen at 0.87 tok/s
+        # -> 114.6s at the 100-tok cap; delta over the 48.3s
+        # spiked persona-only ref = 164.8s; x1.10 top-up to the 53s locked bound applied;
+        # (53 + 180.9) x 1.25 = 292s -> 300.
+        timeout=300,
         # 2026-08-12: was implicitly True (the generate() default) -- this
         # skill was the one that surfaced the global ANTHROPIC_FALLBACK_ENABLED
         # gate being unset (silently "true") on an Ollama failure. Belt-and-

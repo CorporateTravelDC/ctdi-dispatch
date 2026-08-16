@@ -25,10 +25,8 @@ SKILL_NAME = "weekly-summary"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_WEEKLY_SUMMARY_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-brief:latest")
+                     or "corporatetraveldc-pi5-weekly-summary:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# Weekly content ~600-800 tokens; mistral-nemo Pi 5 CPU ~200s — 600s gives headroom
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are producing a weekly operational summary for an executive chauffeur
 operation in the Washington DC metropolitan area.
@@ -146,6 +144,13 @@ def _call_ollama(content: str) -> str | None:
         ollama_model=OLLAMA_MODEL,
         max_tokens=400,
         temperature=0.3,
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 57 at
+        # sample): 1475-tok prompt / 186.2s eval + gen at 0.68 tok/s
+        # -> 584.3s at the 400-tok cap; delta over the 53.0s
+        # spiked persona-only ref = 717.6s; spike met/exceeded the locked 53s bound, no scaling;
+        # (53 + 717.6) x 1.25 = 963s -> 990.
+        timeout=990,
         # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
         # see dispatch.env's ANTHROPIC_FALLBACK_ENABLED comment for the full
         # rationale.

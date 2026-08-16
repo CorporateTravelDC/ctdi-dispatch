@@ -307,13 +307,24 @@ def main():
         reason = " and ".join(
             r for r, hit in ((f"{temp:.1f}C", temp2_trip), (f"load {load_str}", load2_trip)) if hit
         )
+        # 2026-08-16: operator directive -- every real trip tonight has
+        # been load, not temperature (box stayed well under trip temp the
+        # whole time), but every alert said "Thermal Guard" regardless,
+        # making it impossible to tell a genuine "I'm cooking" thermal
+        # event (the actual prior incident this guard exists for) apart
+        # from ordinary load-driven shedding at a glance. Title now
+        # reflects what ACTUALLY tripped it, not a fixed "Thermal" label.
+        guard_label = "Thermal+Load Guard" if (temp2_trip and load2_trip) else (
+            "Thermal Guard" if temp2_trip else "Load Guard"
+        )
         save_state({"tier": 2, "below_resume_since": None, "shed_at": now,
-                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm})
+                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm,
+                     "guard_label": guard_label})
         ntfy_alert(
             cfg,
             f"TIER 2: {reason} (fan {fan_str}) -- stopped {tier1_feeds},{tier2_feeds}. "
             f"Ollama governor and cooling not keeping up on their own.",
-            "Thermal Guard -- TIER 2 shed", priority=5,
+            f"{guard_label} -- TIER 2 shed", priority=5,
         )
         print(f"{LOG_PREFIX} tripped tier 2 ({reason}) fan={fan_str}")
         return
@@ -323,12 +334,16 @@ def main():
         reason = " and ".join(
             r for r, hit in ((f"{temp:.1f}C", temp1_trip), (f"load {load_str}", load1_trip)) if hit
         )
+        guard_label = "Thermal+Load Guard" if (temp1_trip and load1_trip) else (
+            "Thermal Guard" if temp1_trip else "Load Guard"
+        )
         save_state({"tier": 1, "below_resume_since": None, "shed_at": now,
-                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm})
+                     "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm,
+                     "guard_label": guard_label})
         ntfy_alert(
             cfg,
             f"TIER 1: {reason} (fan {fan_str}) -- stopped {tier1_feeds} to cut CPU load.",
-            "Thermal Guard -- TIER 1 shed", priority=4,
+            f"{guard_label} -- TIER 1 shed", priority=4,
         )
         print(f"{LOG_PREFIX} tripped tier 1 ({reason}) fan={fan_str}")
         return
@@ -345,11 +360,16 @@ def main():
             if now - below_since >= resume_dwell:
                 restored = tier1_feeds if tier == 1 else f"{tier1_feeds},{tier2_feeds}"
                 feed_ctl("restart", restored)
+                # 2026-08-16: match the trip alert's label (temp vs load vs
+                # both), not a hardcoded "Thermal" -- see the trip-side
+                # comment above. Falls back to the generic label only for a
+                # state file written before this field existed.
+                guard_label = state.get("guard_label", "Thermal/Load Guard")
                 ntfy_alert(
                     cfg,
                     f"{temp:.1f}C / load {load_str} held below {resume_temp}C / "
                     f"{resume_load:.1f} for {resume_dwell:.0f}s -- restored {restored}.",
-                    "Thermal Guard -- restored", priority=3,
+                    f"{guard_label} -- restored", priority=3,
                 )
                 print(f"{LOG_PREFIX} restored ({restored}) at {temp:.2f}C load={load_str}")
                 state = {"tier": 0, "below_resume_since": None}

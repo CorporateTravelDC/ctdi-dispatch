@@ -16,10 +16,8 @@ SKILL_NAME = "route-impact"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL      = (os.getenv("OLLAMA_ROUTE_IMPACT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-brief:latest")
+                     or "corporatetraveldc-pi5-route-impact:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# Route prompt is ~300-400 tokens; mistral-nemo Pi 5 CPU ~120s sufficient
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 _route_dedup = PushDedup("route")
 
@@ -88,6 +86,14 @@ def _call_ollama_vip(inputs: dict) -> str | None:
         max_tokens=200,
         temperature=0.2,
         priority="hot",
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 29 at
+        # sample): 928-tok prompt / 101.0s eval + gen at 0.87 tok/s
+        # -> 229.2s at the 200-tok cap; delta over the 48.4s
+        # spiked persona-only ref = 281.8s; x1.10 top-up to the 53s locked bound applied;
+        # +16s cold-load allowance (hot path skips _preload_model);
+        # (53 + 324.6) x 1.25 = 472s -> 480.
+        timeout=480,
         # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
         # priority="hot" only affects the Ollama-side pre-flight/retry
         # gates, NOT whether generate() falls through to Anthropic on

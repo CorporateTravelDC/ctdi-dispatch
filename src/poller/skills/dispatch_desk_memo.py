@@ -46,7 +46,7 @@ from second_brain.scrub_gate import ScrubGateBlocked, gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "dispatch-desk-memo"
-OLLAMA_MODEL = "corporatetraveldc-pi5-brief:latest"
+OLLAMA_MODEL = "corporatetraveldc-pi5-dispatch-desk-memo:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
 
 # Reach the runner's RSS API via its Tailscale-bound address. Per
 # docs/COMPLIANCE_SECURITY.md (Container Network Isolation): a service
@@ -214,12 +214,13 @@ def main() -> None:
         ollama_result = llm_generate(
             system=None, prompt=prompt,  # dedicated Modelfile carries this now
             ollama_model=OLLAMA_MODEL, max_tokens=1100, temperature=0.4,
-            # Explicit timeout added 2026-07-26: this is the largest prompt
-            # of the group (90 items across 6 categories) and legitimately
-            # ran ~11 minutes (660s observed 2026-07-23 live test), but was
-            # silently inheriting the shared OLLAMA_TIMEOUT=60s. 800s gives
-            # headroom under the container's TimeoutStartSec=950.
-            timeout=800,
+            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+            # methodology: guard timer paused, synthetic burn, la 67 at
+            # sample): 5092-tok prompt / 853.9s eval + gen at 0.37 tok/s
+            # -> 2952.9s at the 1100-tok cap; delta over the 60.0s
+            # spiked persona-only ref = 3746.8s; spike met/exceeded the locked 53s bound, no scaling;
+            # (53 + 3746.8) x 1.25 = 4750s -> 4770.
+            timeout=4770,
             # 2026-08-12: belt-and-suspenders -- the global
             # ANTHROPIC_FALLBACK_ENABLED gate already closes this, but every
             # skill should also close it per-call rather than rely solely on
