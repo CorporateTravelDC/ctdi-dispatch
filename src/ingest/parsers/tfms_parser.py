@@ -430,6 +430,44 @@ def _parse_single_program(elem: ET.Element, raw_xml: str) -> dict | None:
     return payload
 
 
+def _tfms_program_metric(program: dict) -> str:
+    """Return the human-readable METRIC phrase for a TFMS program, honest to
+    what kind of program it actually is.
+
+    2026-08-16 drift audit (operator-confirmed live): the alert display used
+    to hardcode 'avg delay +{avg_delay_minutes, "?"}min' for EVERY program.
+    That is only meaningful for GDP/GS (ground delay / ground stop delay
+    programs, which _handle_gdp/_handle_gs DO populate with avg_delay_minutes).
+    But the overwhelming majority of live TFMS alerts are RSTR restrictions
+    -- MIT/MINIT/APREQ/STOP -- built by _handle_restriction, which never sets
+    an avg_delay_minutes key at all (a MIT is a miles-in-trail SPACING, not a
+    delay; APREQ/STOP have no numeric delay). So `.get('avg_delay_minutes',
+    '?')` returned the '?' fallback and every MIT/APREQ/STOP alert read
+    "avg delay +?min", which is both wrong and useless. Confirmed against
+    live nas_programs rows: MIT LGA carries mit_value="30" (30 NM in-trail),
+    APREQ JFK carries mit_value=null, neither carries any avg delay.
+
+    Root-cause fix: pick the metric that actually exists on this program.
+      - GDP/GS  -> "avg delay +Nmin"  (delay programs; unchanged behavior)
+      - MIT     -> "N NM in-trail"    (miles-in-trail spacing)
+      - MINIT   -> "N min in-trail"   (minutes-in-trail spacing)
+      - anything with a mit_value but another type -> "N in-trail"
+      - APREQ / STOP / others with no metric -> "" (no fake number)
+    """
+    ptype = (program.get("type") or "").upper()
+    avg = program.get("avg_delay_minutes")
+    if avg is not None and str(avg).strip() not in ("", "None"):
+        return f"avg delay +{avg}min"
+    mit = program.get("mit_value")
+    if mit is not None and str(mit).strip() not in ("", "None"):
+        if ptype == "MINIT":
+            return f"{mit} min in-trail"
+        if ptype == "MIT":
+            return f"{mit} NM in-trail"
+        return f"{mit} in-trail"
+    return ""
+
+
 def check_tfms_alerts(programs: list[dict]) -> None:
     """
     Fire nas-alerts ntfy for any TFMS program affecting DC-area facilities.
@@ -470,20 +508,50 @@ def check_tfms_alerts(programs: list[dict]) -> None:
         # matches TBFM's scope instead of just claiming to in a comment.
         if not is_tracked_facility(facility):
             continue
-        dedup_key = content_hash(f"{program['type']}:{facility}")
-        if not _TFMS_ALERT_DEDUP.should_push("tfms", dedup_key):
+        # 2026-08-16: found live -- program_key (per-program identity: WHICH
+        # program) was being passed as should_push/record's CONTENT_KEY
+        # position, with the literal constant string "tfms" passed as KEY
+        # instead. should_push's `key` is the STABLE SLOT -- since every
+        # distinct program (APREQ:PDX, MIT:ATL, MIT:IAH, ...) shared the one
+        # "tfms" slot, each different program's rebroadcast overwrote the
+        # slot and made the NEXT program (or the same one, next cycle) look
+        # "content changed" against whatever was stored last, defeating the
+        # 30-min dedup window entirely for interleaved programs -- exactly
+        # what caused a 3-4min repeat-spam of the same handful of programs.
+        # Confirmed present unchanged since this call site's introduction
+        # (git log -L on this range: 3377a8e, b119b21 both carried it
+        # forward through unrelated refactors, never touched it).
+        # Fix: program_key (per-program identity) is the slot key; a hash
+        # of the actually-varying content (delay minutes + reason) is the
+        # content key, so a genuinely changed delay can still break through
+        # sooner, but an unchanged rebroadcast of the SAME program stays
+        # suppressed for the full 30 min like it was always supposed to.
+        program_key = content_hash(f"{program['type']}:{facility}")
+        # 2026-08-16 drift audit: content_key now includes mit_value, not just
+        # avg_delay_minutes. For a MIT/MINIT restriction avg_delay_minutes is
+        # always None, so the old key ("None:{reason}") never changed when the
+        # spacing value itself changed (20 NM -> 30 NM, same reason), wrongly
+        # suppressing a genuinely tightened restriction for the full 30-min
+        # window. Keying on the actual varying metric fixes that.
+        metric = _tfms_program_metric(program)
+        content_key = content_hash(
+            f"{program.get('avg_delay_minutes')}:{program.get('mit_value')}:{program.get('reason')}"
+        )
+        if not _TFMS_ALERT_DEDUP.should_push(program_key, content_key):
             continue
         title = f"TFMS {program['type']} — {facility}"
-        detail = (
-            f"{program['type']} {facility}: avg delay "
-            f"+{program.get('avg_delay_minutes', '?')}min | {program.get('reason', '')}"
-        )
-        dispatch = f"{facility} {program['type']} +{program.get('avg_delay_minutes', '?')}min"
+        reason = program.get("reason") or ""
+        # Only include the metric segment when this program actually has one
+        # (GDP/GS delay, MIT/MINIT spacing) -- APREQ/STOP show type + reason
+        # with no fabricated "+?min".
+        _metric_seg = f": {metric}" if metric else ""
+        detail = f"{program['type']} {facility}{_metric_seg}" + (f" | {reason}" if reason else "")
+        dispatch = f"{facility} {program['type']}" + (f" {metric}" if metric else "")
         try:
             result = fire_family_alert(
                 "tfms", "tfms", facility, title, detail, dispatch, base_priority=3,
             )
-            _TFMS_ALERT_DEDUP.record("tfms", dedup_key)
+            _TFMS_ALERT_DEDUP.record(program_key, content_key)
             log.info("tfms: alert coalesced for %s %s -> sector=%s escalating=%s fired=%s zone_fired=%s",
                       program['type'], facility, result.get("sector"),
                       result.get("escalating"), result.get("fired"), result.get("zone_fired"))
@@ -775,8 +843,15 @@ def _handle_track_information(fltd_message: ET.Element) -> None:
     if mins_out < 0 or mins_out > 30:
         return
 
+    # 2026-08-16: same shared-slot bug as _parse_single_program's TFMS
+    # program alerts (see that fix's comment for the full explanation) --
+    # the literal "tfms_track" constant was the key, collapsing every
+    # distinct watchlist entry's approach alert into one shared dedup slot.
+    # Fixed the same way: per-entry dedup_key as the slot, a constant
+    # content_key (this alert type has no varying content to track --
+    # it's a one-shot "already alerted for this entry" gate).
     dedup_key = content_hash(f"tfms:approach:{entry['id']}")
-    if not _TFMS_ALERT_DEDUP.should_push("tfms_track", dedup_key):
+    if not _TFMS_ALERT_DEDUP.should_push(dedup_key, "approach"):
         return
 
     lat = _dms_to_decimal(_find_path(body, "position", "latitude", "latitudeDMS"))
@@ -789,7 +864,7 @@ def _handle_track_information(fltd_message: ET.Element) -> None:
         "minutes_out": round(mins_out, 1),
     }
     _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
-    _TFMS_ALERT_DEDUP.record("tfms_track", dedup_key)
+    _TFMS_ALERT_DEDUP.record(dedup_key, "approach")
 
 
 def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
@@ -825,8 +900,18 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
     new_route = _find_child(amend, "newRouteOfFlight") if amend is not None else None
     route_text = new_route.get("legacyFormat") if new_route is not None else None
 
-    dedup_key = content_hash(f"tfms:amendment:{entry['id']}:{route_text}")
-    if not _TFMS_ALERT_DEDUP.should_push("tfms_amendment", dedup_key):
+    # 2026-08-16: same shared-slot bug as the other TFMS dedup call sites in
+    # this file (see _parse_single_program's fix comment) -- "tfms_amendment"
+    # as a literal key collapsed every distinct flight's amendment alerts
+    # into one shared slot. Fixed by splitting the per-flight identity
+    # (key) from the actual amendment content (content_key) -- same
+    # semantic intent as before (unchanged route on a flight = suppressed
+    # for the window; a genuinely new route for that flight, or the first
+    # amendment for a DIFFERENT flight, still fires immediately), just no
+    # longer cross-contaminating between flights.
+    dedup_key = content_hash(f"tfms:amendment:{entry['id']}")
+    content_key = content_hash(route_text or "")
+    if not _TFMS_ALERT_DEDUP.should_push(dedup_key, content_key):
         return
 
     summary = "Flight plan amended" + (f": {route_text}" if route_text else "")
@@ -836,7 +921,7 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
         "new_route": route_text,
     }
     _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
-    _TFMS_ALERT_DEDUP.record("tfms_amendment", dedup_key)
+    _TFMS_ALERT_DEDUP.record(dedup_key, content_key)
 
 
 def _handle_flight_route(fltd_message: ET.Element) -> None:
@@ -1062,8 +1147,14 @@ def _handle_airport_config(fi_message: ET.Element) -> list[dict]:
             and (weather or "").upper() in ("IMC", "LVMC")
         )
         if rate_dropped or weather_degraded:
-            dedup_key = content_hash(f"aptc:{airport_upper}:{arr_rate}:{weather}")
-            if _APTC_ALERT_DEDUP.should_push("tfms_aptc", dedup_key):
+            # 2026-08-16: same shared-slot bug as the other TFMS dedup call
+            # sites in this file -- see _parse_single_program's fix comment.
+            # Split per-airport identity (key) from the varying rate/weather
+            # (content_key) so different airports' config-change alerts stop
+            # cross-contaminating each other's dedup window.
+            dedup_key = content_hash(f"aptc:{airport_upper}")
+            content_key = content_hash(f"{arr_rate}:{weather}")
+            if _APTC_ALERT_DEDUP.should_push(dedup_key, content_key):
                 title = f"Airport config change — {airport_upper}"
                 detail = (
                     f"{airport_upper}: arr {arr_conf or '?'} @ "
@@ -1079,7 +1170,7 @@ def _handle_airport_config(fi_message: ET.Element) -> list[dict]:
                     fire_family_alert(
                         "tfms", "tfms_aptc", airport_upper, title, detail, dispatch, base_priority=3,
                     )
-                    _APTC_ALERT_DEDUP.record("tfms_aptc", dedup_key)
+                    _APTC_ALERT_DEDUP.record(dedup_key, content_key)
                     log.info("tfms: APTC config-change alert fired for %s", airport_upper)
                 except Exception as e:
                     log.error("tfms: APTC alert fire failed for %s: %s", airport_upper, e)
@@ -1129,9 +1220,19 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
     if not dc_hit:
         return []
 
+    # 2026-08-16: same shared-slot bug as the other TFMS dedup call sites in
+    # this file -- see _parse_single_program's fix comment. This is the
+    # exact one that produced the live "[ESCALATING/DC_LOCAL] ATCSCC ADVZY
+    # 0075" spam: with "tfms_gadv" as a global literal key, a DIFFERENT
+    # advisory number (e.g. one rotating in) overwrote the shared slot, so
+    # the next rebroadcast of advisory 0075 looked "new" again. Per-advisory
+    # identity as the key, constant content_key (advisory content for a
+    # given number doesn't meaningfully change -- this is a one-shot "have
+    # we already surfaced this advisory number" gate, same as tfms_track's
+    # approach-alert fix above).
     advisory_number = _fcm_text(ga, "advisoryNumber")
     dedup_key = advisory_number or content_hash(_fcm_text(ga, "advisoryTitle") or "")
-    if not _GADV_ALERT_DEDUP.should_push("tfms_gadv", dedup_key):
+    if not _GADV_ALERT_DEDUP.should_push(dedup_key, "gadv"):
         return []
 
     title_text = _fcm_text(ga, "advisoryTitle") or "ATCSCC General Advisory"
@@ -1155,7 +1256,7 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
         fire_family_alert(
             "tfms", "tfms_gadv", representative_facility, title, detail, dispatch, base_priority=3,
         )
-        _GADV_ALERT_DEDUP.record("tfms_gadv", dedup_key)
+        _GADV_ALERT_DEDUP.record(dedup_key, "gadv")
         log.info("tfms: GADV alert fired for advisory %s (facilities=%s)", advisory_number, dc_hit)
     except Exception as e:
         log.error("tfms: GADV alert fire failed for advisory %s: %s", advisory_number, e)

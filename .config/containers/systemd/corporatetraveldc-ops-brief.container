@@ -45,4 +45,8 @@ Type=oneshot
 # allocation) + 1200s main call + 510s trend call (both max_retries=0)
 # = 2510s -> 2600. A governor-pause retry-wait can still exceed this;
 # systemd remains the deliberate backstop.
-TimeoutStartSec=2600
+# 2026-08-17 (fable sweep): 2600 -> 3600 in parity with the skill's main
+# call going 1200s -> 2000s (num_predict 500 -> 900 truncation fix -- see
+# ops_brief.py's OLLAMA_TIMEOUT comment for the derivation). Budget = 800s
+# fixed + 2000s main + 510s trend = 3310s -> 3600.
+TimeoutStartSec=3600

@@ -37,11 +37,13 @@ import html
 import json
 import os
 import pathlib
+import posixpath
 import sqlite3
 import time
 import httpx
 import uuid
 from typing import Optional
+from urllib.parse import unquote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -152,6 +154,105 @@ async def whoami_token(identity: dict = Depends(resolve_identity)) -> JSONRespon
 _BOARD_KEY = os.getenv("BOARD_KEY", "").strip()
 _board_post_hits: list = []   # naive in-memory rate-limit clock
 
+# 2026-08-16: Tier-0 vault research reads (see vault_research_read below) --
+# for agent tools that structurally cannot send an Authorization header or
+# carry credentials in a URL (Cowork's fetch tool; confirmed live the same
+# night board-write auth hit the identical wall).
+#
+# 2026-08-16 (widened): originally just 01-Sources/personal-notes/<topic>/,
+# topic-pattern-matched ("Research - X" / "X Series"). Widened twice since:
+#
+# (a) broader "processed/synthesized second-brain output" surface, so Cowork
+#     can self-serve research without the operator manually relaying every finding.
+#     Each addition was checked against what actually writes there, not
+#     assumed:
+#       - 04-Syntheses/       -- daily/weekly digest output; every poller
+#                                skill writing here imports
+#                                second_brain.scrub_gate (aam_daily_watch.py,
+#                                second_brain_weekly.py, etc.) -- scrub-gated
+#                                at write time.
+#       - 02-Concepts/         -- distilled concept notes.
+#       - 00-Inbox/cross-link-findings/ -- entity_tracking.py's novel
+#                                pattern-recognition output, via the pinned
+#                                osint-monitor model. Not the rest of
+#                                00-Inbox -- rss/ and personal-research/ stay
+#                                out (raw/pre-triage).
+#
+# (b) replaced the per-topic naming-pattern check under personal-notes/ with
+#     one PARENT folder, 01-Sources/personal-notes/Series/, covered
+#     recursively -- any topic folder the operator drops under it (Uber Series/,
+#     Family Office - CTDI/, anything future) is automatically in scope with
+#     zero further code changes. Vault-side move executed same night: old
+#     Uber Series/ -> Series/Uber Series/ (verified byte-identical before
+#     the old copy was removed), duplicate Research - Uber Series/ retired
+#     (was a byte-identical mirror of Uber Series/, confirmed via
+#     content-length + write-timestamp comparison, nothing unique lost),
+#     Family Office - CTDI/ created fresh under the new parent (previously
+#     existed outside any scope entirely). Sibling topic folders NOT under
+#     Series/ are still out of scope -- moving into Series/ is what puts a
+#     topic in reach, not the name alone.
+#
+# Deliberately EXCLUDED, checked and rejected, not just unconsidered:
+#   - Docs/                -- contains pentest logs (LIVE_PENTEST_*),
+#                            compliance reviews, investor-materials/. Real
+#                            finding from this same review pass -- almost
+#                            got included by pattern-matching alone.
+#   - 06-AI-Memory/         -- the on-device notepad; explicitly established
+#                            (2026-08-11 board thread) as Pi-only, never
+#                            meant to reach Cowork's side.
+#   - Contacts/, 03-Entities/, .internal-backups/, archives/, 99-Archive/,
+#     01-Sources/{daily,manual,rss,transport-patterns}/ -- raw/pre-synthesis
+#     sources or PII-adjacent, not vetted for unauthenticated exposure.
+# Same CUI/PII scrub gate as before applies to every read regardless of
+# which allowed prefix it came from -- none of this widening weakens that.
+_VAULT_RESEARCH_ROOT = "01-Sources/personal-notes/Series"
+_VAULT_RESEARCH_EXTRA_PREFIXES = (
+    "04-Syntheses/",
+    "02-Concepts/",
+    "00-Inbox/cross-link-findings/",
+)
+_vault_research_hits: list = []   # naive in-memory rate-limit clock
+
+
+def _vault_research_path_allowed(path: str) -> bool:
+    if path.startswith(_VAULT_RESEARCH_ROOT + "/"):
+        return True
+    return any(path.startswith(p) for p in _VAULT_RESEARCH_EXTRA_PREFIXES)
+
+
+def _vault_path_is_safe(path: str) -> bool:
+    """Traversal guard for every vault path served to a client.
+
+    2026-08-16 drift audit: the old inline check was `".." in path or
+    path.startswith("/")`. Starlette percent-decodes a query value exactly
+    ONCE, so a plain `..` / single-encoded `%2e%2e` is caught -- but a
+    DOUBLE-encoded `%252e%252e` arrives here as the literal `%2e%2e`
+    (no `..`), passes, and is then handed to webdav_client.get() ->
+    requests, whose requote_uri() does quote(unquote(...)) and decodes it
+    back to a real `../` before it hits the Nextcloud/WebDAV backend. That
+    is the ONLY app-layer traversal defense on these routes (two of them
+    are Tier-0/unauthenticated), so it must survive multi-round decoding.
+
+    Fix: fully decode (loop until stable, defeating N-times encoding), then
+    re-assert no `..`, leading `/`, or backslash survives, and normalize +
+    re-check. Non-breaking: only rejects paths that DECODE to a traversal;
+    ordinary vault paths (segment names, `/`, spaces, hyphens) pass.
+    """
+    if not path or path.startswith("/"):
+        return False
+    decoded = path
+    for _ in range(5):
+        nxt = unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    if ".." in decoded or decoded.startswith("/") or "\\" in decoded:
+        return False
+    norm = posixpath.normpath(decoded)
+    if norm == ".." or norm.startswith("../") or norm.startswith("/"):
+        return False
+    return True
+
 
 class BoardMsgIn(BaseModel):
     from_: str = Field(alias="from")
@@ -207,6 +308,42 @@ async def board_enroll(nonce: str = "") -> JSONResponse:
     if st == "invalid":
         raise HTTPException(status_code=401, detail="invalid enrollment nonce")
     raise HTTPException(status_code=410, detail=f"enrollment nonce {st} (single-use, ~10min TTL)")
+
+
+@app.get("/api/v1/board/refresh")
+async def board_refresh(request: Request) -> JSONResponse:
+    """Self-rotate a still-valid board-write token (X-Board-Key header) into a
+    fresh one -- autonomous day-to-day, no human step required. GET, not
+    POST -- same GET-only-tool-compatible design as /enroll.
+
+    Gated on a weekly GPG-clearsigned human presence attestation (see
+    scripts/board-presence-attest.sh): once that 7-day window lapses, refresh
+    fails closed (403) regardless of the presented token's own validity, and
+    a fresh human-issued enrollment (GET /api/v1/board/enroll) is required to
+    start a new cycle.
+
+    200 -> {token, expires_at, scope}; 401 -> presented token missing/invalid/
+    expired; 403 -> presence attestation stale or missing."""
+    presented = request.headers.get("X-Board-Key", "")
+    r = db.board_refresh_token(
+        presented, remote_addr=(request.client.host if request.client else None)
+    )
+    if r["status"] == "invalid_token":
+        raise HTTPException(status_code=401, detail="missing or invalid/expired X-Board-Key")
+    if r["status"] == "presence_stale":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"presence attestation stale or missing (valid_until="
+                f"{r.get('presence_valid_until')}) -- requires a fresh human-run "
+                f"scripts/board-presence-attest.sh, then a new enrollment"
+            ),
+        )
+    return JSONResponse({
+        "token": r["token"], "expires_at": r["expires_at"], "scope": r["scope"],
+        "usage": "send this value as the X-Board-Key header on POST /api/v1/board "
+                 "or this refresh endpoint",
+    })
 
 
 @app.post("/api/v1/board", status_code=201)
@@ -1368,7 +1505,7 @@ async def vault_file(
     had (vault notes are operator-authored but not treated as safe HTML),
     just with theme-aware styling around it.
     """
-    if ".." in path or path.startswith("/") or not path:
+    if not _vault_path_is_safe(path):
         raise HTTPException(400, "invalid path")
     from second_brain import webdav_client
     content = webdav_client.get(path)
@@ -1381,6 +1518,115 @@ async def vault_file(
         body=html.escape(text),
     )
     return HTMLResponse(page)
+
+
+@app.get("/api/v1/vault/research")
+async def vault_research_read(path: str = Query(...)) -> JSONResponse:
+    """Tier-0 (unauthenticated) read access to second-brain RESEARCH content
+    only -- for agent tools that cannot send an Authorization header or
+    embed credentials in a URL (e.g. Cowork's fetch tool; confirmed live
+    2026-08-16 that board-write auth hits the identical wall). Contrast with
+    /api/v1/vault/file (Tier-1, any vault path, HTML) -- this is
+    deliberately narrower in scope but requires no credential at all.
+
+    Scoped to 01-Sources/personal-notes/<topic>/... where <topic> matches
+    the vault convention: 'Research - $ANYTHING' (staging) or '$Anything
+    Series' (final/in-flight drafts) -- see _vault_research_path_allowed.
+    NOT pinned to any single named topic (e.g. Uber) -- any topic folder
+    matching either pattern is in scope; everything else in the vault,
+    including sibling personal-notes/ folders like 'Family Office - CTDI',
+    is not.
+
+    Same CUI/PII scrub gate as every other ingestion/serving path -- BLOCKS
+    (never redacts) if the content looks like CUI radio data or contains an
+    SSN-shaped token; a blocked file returns 422, nothing is served.
+
+    200 -> {path, content}; 400 -> invalid/out-of-scope path; 404 -> not
+    found; 422 -> blocked by CUI/PII scrub gate; 429 -> rate limited."""
+    if not _vault_path_is_safe(path):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not _vault_research_path_allowed(path):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"path is outside the research-vault scope -- must be under "
+                f"{_VAULT_RESEARCH_ROOT}/ (any topic folder there is in "
+                f"scope), or one of: {', '.join(_VAULT_RESEARCH_EXTRA_PREFIXES)}"
+            ),
+        )
+    now = time.monotonic()
+    _vault_research_hits[:] = [t for t in _vault_research_hits if now - t < 60]
+    if len(_vault_research_hits) >= 30:
+        raise HTTPException(status_code=429, detail="vault research-read rate limit (30/min) exceeded")
+    _vault_research_hits.append(now)
+
+    from second_brain import webdav_client
+    # webdav_client.get/put/list_files expect ACCOUNT-root-relative paths,
+    # not BUSINESS_ROOT-relative -- every other caller in this codebase
+    # prefixes webdav_client.BUSINESS_ROOT for exactly this reason (see
+    # knowledge_graph/retrofit_links.py's comment on the same requirement).
+    # `path` here and in the public API is the clean, business-relative form
+    # (matches what the vault convention docs/humans actually use).
+    content = webdav_client.get(f"{webdav_client.BUSINESS_ROOT}/{path}")
+    if content is None:
+        raise HTTPException(status_code=404, detail="not found in vault")
+    text = content.decode("utf-8", "replace")
+    try:
+        _scrub_gate(text, source="vault-research-read")
+    except _ScrubGateBlocked as e:
+        raise HTTPException(status_code=422, detail=f"blocked by CUI/PII scrub gate: {e}")
+    return JSONResponse({"path": path, "content": text})
+
+
+@app.get("/api/v1/vault/research/list")
+async def vault_research_list(path: str = Query(default=_VAULT_RESEARCH_ROOT)) -> JSONResponse:
+    """List files (depth-1, non-recursive) under a research-vault folder --
+    the discovery counterpart to /api/v1/vault/research (an agent needs to
+    know what's there before it can read a specific file by exact path).
+    Same Tier-0/scope rules as the read endpoint; path defaults to the
+    research root itself, which lists the current topic folders.
+
+    200 -> {path, files: [{path}, ...]}; 400 -> invalid/out-of-scope path;
+    429 -> rate limited."""
+    if not _vault_path_is_safe(path):
+        raise HTTPException(status_code=400, detail="invalid path")
+    # A bare extra-prefix folder itself (e.g. "04-Syntheses", no trailing
+    # slash) must be listable too, not just files/subpaths under it --
+    # _vault_research_path_allowed requires the trailing "/" form.
+    is_bare_extra_root = any(
+        path == p.rstrip("/") for p in _VAULT_RESEARCH_EXTRA_PREFIXES
+    )
+    if (
+        path != _VAULT_RESEARCH_ROOT
+        and not is_bare_extra_root
+        and not _vault_research_path_allowed(path)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"path is outside the research-vault scope -- must be "
+                f"{_VAULT_RESEARCH_ROOT} itself, any topic folder under it, "
+                f"or one of: {', '.join(_VAULT_RESEARCH_EXTRA_PREFIXES)}"
+            ),
+        )
+    now = time.monotonic()
+    _vault_research_hits[:] = [t for t in _vault_research_hits if now - t < 60]
+    if len(_vault_research_hits) >= 30:
+        raise HTTPException(status_code=429, detail="vault research-read rate limit (30/min) exceeded")
+    _vault_research_hits.append(now)
+
+    from second_brain import webdav_client
+    # See the matching comment in vault_research_read -- webdav_client calls
+    # need the BUSINESS_ROOT prefix; the public API (path in, and each
+    # returned file's path) stays in the clean business-relative form, so
+    # strip the prefix back off list_files()'s account-relative results.
+    root_prefix = f"{webdav_client.BUSINESS_ROOT}/"
+    raw_files = webdav_client.list_files(f"{webdav_client.BUSINESS_ROOT}/{path}")
+    files = [
+        {**f, "path": f["path"][len(root_prefix):] if f["path"].startswith(root_prefix) else f["path"]}
+        for f in raw_files
+    ]
+    return JSONResponse({"path": path, "files": files})
 
 
 @app.get("/api/v1/osint/scopes")

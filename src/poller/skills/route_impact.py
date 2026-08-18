@@ -178,7 +178,16 @@ def main(force: bool = False) -> None:
             h = content_hash(
                 "|".join(t["id"] for t in sorted(inputs["tfrs"], key=lambda x: x["id"]) if t["vip"])
             )
-            if _route_dedup.should_push("route-impact", h, hot=True):
+            # 2026-08-16 drift audit: hot=True bypasses dedup entirely per
+            # PushDedup's contract, so should_push always returned True and
+            # the else-branch "suppressed (dedup, same VIP TFR set <1h)" was
+            # unreachable -- every skill run during an active VIP TFR fired
+            # a fresh priority-5 hot-alert. Singleton "route-impact" slot +
+            # VIP-set hash as content is the right shape; it just needs hot
+            # off so a changed VIP set still fires immediately while the
+            # same set is suppressed for the 1h window, exactly what the
+            # else-branch log line always claimed.
+            if _route_dedup.should_push("route-impact", h):
                 _ntfy.send("hot-alerts", narrative, title=title, priority=5,
                            tags="car,rotating_light")
                 _route_dedup.record("route-impact", h)

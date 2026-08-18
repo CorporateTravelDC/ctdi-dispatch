@@ -26,4 +26,14 @@ Type=oneshot
 # allocation)
 # + 810s digest call (max_retries=0) = 1610s -> 1700. A governor-pause retry-wait can still exceed this;
 # systemd remains the deliberate backstop.
-TimeoutStartSec=1700
+# 2026-08-17 (fable sweep): 1700 -> 3000. The 800s fixed allowance does not
+# survive real Ollama-queue contention: live kill today -- manual run
+# 15:27:38 EDT spent ~16min in slot-wait/load before its generate call
+# (preload POST completed 15:44:20), hit this ceiling at 15:55:58, and the
+# narrative that COMPLETED during stop-sigterm (15:57:27, 'narrative
+# generated via Ollama/...disruption-weather-digest') was SIGKILLed before
+# the vault write -- a finished generation thrown away. New budget: 800s
+# fixed + 810s call + ~1200s queue-wait allowance = 2810 -> 3000. The
+# daily-watch timer-grid fix in this same change removes most of the
+# convergence that caused the wait.
+TimeoutStartSec=3000

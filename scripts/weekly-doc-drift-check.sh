@@ -33,4 +33,6 @@ branch or run git checkout/reset/stash."
 }
 
 run_check /opt/corporatetraveldc/private/ctdi-dispatch-internal ctdi-dispatch-internal
-run_check /home/corporatetraveldc/mcp/dispatch-mcp dispatch-mcp
+# dispatch-mcp run_check removed 2026-08-17: repo archived (GitHub repo
+# archived read-only, local dir renamed dispatch-mcp.archived-20260817) --
+# MCP is fully retired from this platform, nothing left to drift-check.

@@ -28,12 +28,13 @@ import argparse
 import json
 import logging
 import pathlib
+import re
 import sqlite3
 import time as _time
 from datetime import datetime, timezone, timedelta
 
 from common.ollama_lock import OllamaBusyError
-from common.llm import wait_then_budget, ollama_post_with_retry
+from common.llm import wait_then_budget, ollama_post_with_retry, sanitize_llm_response
 import requests
 
 from common import config, db, ntfy_push as _ntfy
@@ -67,7 +68,21 @@ MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 #        (53 + 1710.5) x 1.25 = 2204s -> 2220.
 # trend: 1165-tok prompt / 134.8s eval + gen at 0.88 tok/s -> 295s
 #        at the 260-tok cap; delta 376.3s; (53 + 376.3) x 1.25 = 537s -> 540.
-OLLAMA_TIMEOUT          = 2220
+# 2026-08-17 (fable sweep): main-call cap raised 750 -> 1000 tokens
+# (num_predict in the options dict below AND PARAMETER num_predict in
+# corporatetraveldc.ep-advance, kept in parity). Verified truncation class,
+# same as ops-brief/weekly-summary: 4 of the 8 most recent Ollama-generated
+# ep-advance briefs in brief_archive (1588, 1591, 1594, 1598) end
+# mid-sentence or mid-word at the 750-token cap, against the task layer's
+# own 'under 750 words' (~1000 tokens) target.
+# Timeout re-derived with the same 2026-08-15 formula, scaled to 1000 tok:
+#   gen = 1000/0.53 = 1886.8s; delta = 350.4 + 1886.8 - 60.0 = 2177.2s;
+#   (53 + 2177.2) x 1.25 = 2787.7 -> 2800.
+# Unit TimeoutStartSec on corporatetraveldc-ep-advance.container raised
+# 3600 -> 4500 in the same change (800s fixed + 2800s main + 540s trend
+# = 4140s worst case). NOTE: 4500s > the hourly timer interval; systemd
+# skips a trigger while the unit is still activating, same as today.
+OLLAMA_TIMEOUT          = 2800
 OLLAMA_TREND_TIMEOUT_EP = 540
 
 
@@ -968,14 +983,16 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
                 # applies. Central persona injection was removed 2026-08-15.
                 "prompt": prompt,
                 "stream": False,
-                "options": {"num_predict": 750, "temperature": 0.15},
+                "options": {"num_predict": 1000, "temperature": 0.15},  # 2026-08-17: was 750, see OLLAMA_TIMEOUT comment
             },
             timeout=generate_timeout,
             priority="report",
             max_retries=0,
         )
         resp.raise_for_status()
-        narrative = resp.json().get("response", "").strip()
+        _j = resp.json()
+        narrative = _j.get("response", "").strip()
+        _hit_cap = _j.get("done_reason") == "length"
     except OllamaBusyError as exc:
         log.info("ep-advance: Ollama slot unavailable — %s", exc)
         return None
@@ -983,6 +1000,30 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
         log.warning("ep-advance: Ollama failed — %s", exc)
         return None
 
+    if not narrative:
+        return None
+
+    # 2026-08-17: content-sanity guard, defense in depth alongside the
+    # system-prompt fix. Live-confirmed failure mode: phi3:mini occasionally
+    # (1/40 in a sampled window) misreads the venue-matrix input as a
+    # request to "extract a coding task" from it and returns a paragraph of
+    # meta-commentary plus an actual Python code block instead of an EP
+    # brief -- garbage content that still passes the not-empty check above,
+    # so it shipped as a real ntfy push with zero real advance-brief data.
+    # A code fence or an import/def line is never legitimate in this
+    # skill's output; treat it as a failed generation and let the caller
+    # fall through to the deterministic fallback instead of pushing it.
+    if "```" in narrative or re.search(r"^\s*(import |def |class )\w", narrative, re.MULTILINE):
+        log.warning("ep-advance: Ollama returned code-shaped output instead of a brief -- discarding, falling back")
+        return None
+
+    # 2026-08-17 (fable sweep): shared persona-echo / repetition-loop guard,
+    # same failure family as the code leak above but different shapes --
+    # both live-confirmed in THIS skill's archive (brief_archive 1597:
+    # 'Branson, MO' x6; 1598: 'The Grove at Monticello' x9, both pushed as
+    # real briefs). This direct call path bypasses generate()/_ollama(), so
+    # it needs its own wiring -- see sanitize_llm_response() in common/llm.py.
+    narrative = sanitize_llm_response(narrative, source="ep-advance", truncated=_hit_cap)
     if not narrative:
         return None
 
@@ -1149,7 +1190,15 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
             max_retries=0,
         )
         resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+        # 2026-08-17 (fable sweep): same shared response guard as
+        # _call_ollama() above -- this is the other direct call site that
+        # bypasses generate()/_ollama(). Empty string on garbage keeps this
+        # function's existing returns-""-on-failure contract.
+        _j = resp.json()
+        return sanitize_llm_response(
+            _j.get("response", "").strip(), source="ep-advance-trend",
+            truncated=(_j.get("done_reason") == "length"),
+        ) or ""
     except OllamaBusyError as exc:
         log.info("ep-advance: trend narrative Ollama slot unavailable — %s", exc)
     except Exception as exc:

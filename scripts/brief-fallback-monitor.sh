@@ -10,6 +10,18 @@
 # Log strings it classifies (from ops_brief.py / ep_advance.py):
 #   success  -> "...: brief generated (Ollama/<model>)"
 #   fallback -> "...: brief generated (deterministic[ fallback])"
+#
+# 2026-08-18: the alert text below used to hardcode "gemma3-SWA" as the
+# assumed root cause -- accurate for the original 2026-08-08 incident,
+# WRONG since the 2026-08-15 Phase 4 rebuild moved every brief model to
+# phi3:mini (gemma3 is fully evicted, see build-models.sh GUARD 1). Left
+# stale for 3 days, actively misdirecting whoever reads the alert. Text
+# is now failure-class-agnostic -- check the actual journal
+# (`journalctl --user -u <unit>` around the fallback timestamp, grep for
+# "llm:" WARNING/INFO lines from common/llm.py's sanitize_llm_response())
+# for what's actually happening; as of this fix the live cause is
+# repetition-loop hallucinations getting correctly caught and discarded
+# by that guard, not a timeout or connectivity failure.
 set -uo pipefail
 
 ENV_FILE=/etc/corporatetraveldc/dispatch.env
@@ -62,7 +74,7 @@ for unit in "${UNITS[@]}"; do
   if [ "$consec" -ge "$THRESHOLD" ] || { [ "$n" -ge "$WINDOW" ] && [ "$fb" -ge $(((WINDOW + 1) / 2)) ]; }; then
     overall_bad=1
     ntfy_alert "⛔ BRIEF LLM DOWN: ${unit}" \
-"${unit} briefs are falling back to DETERMINISTIC — LLM generation is failing. Last ${n} runs: ${o[*]}. Consecutive fallbacks: ${consec} (threshold ${THRESHOLD}). This is the gemma3-SWA / Ollama-timeout failure class; check the brief model + Ollama now. (memory: brief-ollama-gemma3-swa-fallback)"
+"${unit} briefs are falling back to DETERMINISTIC — LLM generation is failing. Last ${n} runs: ${o[*]}. Consecutive fallbacks: ${consec} (threshold ${THRESHOLD}). Root cause varies -- check journalctl --user -u ${unit} around the failure time for the actual reason (repetition-loop/persona-leak guard discard, real Ollama timeout, connectivity, etc.) before assuming a specific cause."
   fi
 done
 

@@ -432,6 +432,59 @@ async def add_vessel_watchlist(
     return JSONResponse(entry, status_code=201)
 
 
+# ── DELETE /api/v1/watchlist/batch ────────────────────────────────────────────
+# 2026-08-16 drift audit: this static-path route MUST be registered before the
+# dynamic /{entry_id} route below. Starlette matches in registration order, so
+# when /{entry_id} came first (it used to), DELETE /batch was captured by it as
+# entry_id="batch" -> remove_watchlist_entry -> 404 "no entry 'batch'", and this
+# handler was unreachable dead code. Moved above /{entry_id} to fix the shadow.
+
+class BatchDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+@router.delete("/batch", status_code=200)
+async def remove_watchlist_batch(
+    body: BatchDeleteRequest,
+    tier: Tier = Depends(require_admin),
+) -> JSONResponse:
+    """Remove multiple watchlist entries by ID array. Admin required."""
+    now = _now_iso()
+    removed: list[str] = []
+    not_found: list[str] = []
+
+    for entry_id in body.ids:
+        entry = db.delete_watchlist_entry(entry_id)
+        if not entry:
+            not_found.append(entry_id)
+            continue
+        db.insert_watchlist_history(
+            entry_id=entry_id,
+            entry_type=entry["entry_type"],
+            identifier=entry["identifier"],
+            event_type="manual_removed",
+            event_summary="Batch removed via API",
+            event_detail={"removed_by": "api", "batch": True},
+            fired_at=now,
+        )
+        removed.append(entry_id)
+
+    if removed:
+        _fire_ntfy_dual(
+            domain_topic="dispatch",
+            title=f"Watchlist batch: {len(removed)} entr{'y' if len(removed) == 1 else 'ies'} removed",
+            detail_body=f"Removed {len(removed)} watchlist entries",
+            dispatch_body=f"Watchlist batch removed: {len(removed)} entries",
+            priority=2,
+        )
+
+    return JSONResponse({
+        "removed": removed,
+        "not_found": not_found,
+        "count": len(removed),
+    })
+
+
 # ── DELETE /api/v1/watchlist/{id} ─────────────────────────────────────────────
 
 @router.delete("/{entry_id}", status_code=204)
@@ -741,51 +794,3 @@ async def add_permanent_watchlist_batch(
         "vessels": {"added": v_added, "skipped": v_skipped},
         "total_added": total_added,
     }, status_code=201)
-
-
-# ── DELETE /api/v1/watchlist/batch ────────────────────────────────────────────
-
-class BatchDeleteRequest(BaseModel):
-    ids: List[str]
-
-
-@router.delete("/batch", status_code=200)
-async def remove_watchlist_batch(
-    body: BatchDeleteRequest,
-    tier: Tier = Depends(require_admin),
-) -> JSONResponse:
-    """Remove multiple watchlist entries by ID array. Admin required."""
-    now = _now_iso()
-    removed: list[str] = []
-    not_found: list[str] = []
-
-    for entry_id in body.ids:
-        entry = db.delete_watchlist_entry(entry_id)
-        if not entry:
-            not_found.append(entry_id)
-            continue
-        db.insert_watchlist_history(
-            entry_id=entry_id,
-            entry_type=entry["entry_type"],
-            identifier=entry["identifier"],
-            event_type="manual_removed",
-            event_summary="Batch removed via API",
-            event_detail={"removed_by": "api", "batch": True},
-            fired_at=now,
-        )
-        removed.append(entry_id)
-
-    if removed:
-        _fire_ntfy_dual(
-            domain_topic="dispatch",
-            title=f"Watchlist batch: {len(removed)} entr{'y' if len(removed) == 1 else 'ies'} removed",
-            detail_body=f"Removed {len(removed)} watchlist entries",
-            dispatch_body=f"Watchlist batch removed: {len(removed)} entries",
-            priority=2,
-        )
-
-    return JSONResponse({
-        "removed": removed,
-        "not_found": not_found,
-        "count": len(removed),
-    })

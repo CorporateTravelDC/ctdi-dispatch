@@ -76,3 +76,32 @@ def get_aam_watch_section(flavor: str = "ops") -> str:
     except Exception as e:
         log.debug("aam_watch: cache read failed: %s", e)
         return ""
+
+
+def get_aam_watch_summary(flavor: str = "ops") -> str:
+    """
+    2026-08-18: condensed one-paragraph version of get_aam_watch_section(),
+    for callers that want to feed AAM/vertiport context INTO their own
+    Ollama prompt (so the model weaves it into the narrative) rather than
+    string-append the full weekly report as a separate post-hoc section --
+    operator feedback on ops-brief: the bolted-on "=== ADVANCED AIR
+    MOBILITY WATCH ===" block reads as an afterthought, not part of the
+    brief's actual flow.
+
+    Extracts just the "WHAT MATTERS TODAY" framing paragraph the weekly
+    job already writes (aam_weekly_watch.py's own condensed top-line
+    summary) -- not the full "THIS WEEK'S DEVELOPMENTS" bullet list, which
+    is too long to fold into an already token-constrained hourly prompt.
+    Returns "" under the same freshness/missing-cache conditions as
+    get_aam_watch_section().
+    """
+    full = get_aam_watch_section(flavor)
+    if not full:
+        return ""
+    start = full.find("WHAT MATTERS TODAY:")
+    if start == -1:
+        return ""
+    start += len("WHAT MATTERS TODAY:")
+    end = full.find("THIS WEEK'S DEVELOPMENTS:", start)
+    para = full[start:end if end != -1 else None].strip()
+    return para

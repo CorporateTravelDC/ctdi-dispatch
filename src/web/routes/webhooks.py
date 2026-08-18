@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -51,7 +52,10 @@ def _check_secret(source: str, provided: Optional[str], env_key: str) -> None:
             detail=f"{source} webhook not configured -- set {env_key} in "
                    f"dispatch-secrets.env to activate.",
         )
-    if not provided or provided != expected:
+    # 2026-08-16 drift audit: constant-time compare -- a plain `!=` on the
+    # shared secret is a timing side-channel. Matches the compare_digest the
+    # board-write path (web/main.py) already uses for the same class of check.
+    if not provided or not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing webhook secret.")
 
 

@@ -104,7 +104,19 @@ def push_vip_tfrs() -> int:
         key = t["tfr_id"]
         h = content_hash(message)
 
-        if not _tfr_dedup.should_push(key, h, hot=True):  # VIP = always hot
+        # 2026-08-16 drift audit: this passed hot=True ("VIP = always hot"),
+        # but PushDedup's contract says hot=True BYPASSES dedup entirely --
+        # should_push always returned True, so with PUSH_INTERVAL=30s an
+        # active VIP TFR re-fired 2x ntfy p5 + a Pushover Emergency (siren,
+        # auto-retrying) every 30 seconds for its whole active window. The
+        # `hot` flag exists for callers that conditionally skip dedup (e.g.
+        # wx >=30kt); "the pushes themselves are hot/priority-5" was never a
+        # reason to pass it. Docstring contract ("same TFR suppressed for 1
+        # hour unless content changed") is exactly plain should_push, so the
+        # per-TFR slot + enrichment-text content key now actually gate:
+        # first sighting fires immediately, changed enrichment fires
+        # immediately, otherwise one re-push per hour while active.
+        if not _tfr_dedup.should_push(key, h):
             continue
 
         # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.

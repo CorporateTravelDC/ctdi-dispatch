@@ -97,6 +97,7 @@ Vault layout used:
 """
 import json
 import logging
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -243,11 +244,28 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    # 2026-08-16 drift audit: atomic write. The previous version truncated
+    # STATE_PATH in place then json.dump'd -- a crash/OOM/power-cut mid-write
+    # left a half-written (invalid-JSON) file, and load_state() swallows any
+    # parse error and returns {} ("starting fresh"), silently WIPING every
+    # category, all mention history, AND the promotion_history that is the
+    # Tier-2 learning corpus. Write to a temp file in the same directory,
+    # fsync, then os.replace() (atomic on the same filesystem) so a reader
+    # only ever sees the old complete file or the new complete file.
     try:
-        with open(STATE_PATH, "w") as f:
+        tmp = f"{STATE_PATH}.tmp.{os.getpid()}"
+        with open(tmp, "w") as f:
             json.dump(state, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE_PATH)
     except Exception as e:
         log.error("entity_tracking: state save failed: %s", e)
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except Exception:
+            pass
 
 
 def _slug(name: str) -> str:
@@ -617,12 +635,18 @@ def _write_review_note(category: str, key: str, entry: dict, trigger: str | None
         tags += ",uber-series"
 
     webdav_client.put(rel_path, note)
+    # 2026-08-16 drift audit: try/finally so a raise inside _index() (or
+    # init_vault_db) can't leak the sqlite connection and, via the unclosed
+    # handle + propagating exception, abort the rest of the tracking pass
+    # before its in-memory promotion events are saved.
     conn = sqlite3.connect(INDEX_DB)
-    init_vault_db(conn)
-    _index(conn, rel_path, title=f"Cross-link finding: {entry['display']} ({category})",
-           content=note, tags=tags,
-           ingest_method="entity-tracking-novel-finding")
-    conn.close()
+    try:
+        init_vault_db(conn)
+        _index(conn, rel_path, title=f"Cross-link finding: {entry['display']} ({category})",
+               content=note, tags=tags,
+               ingest_method="entity-tracking-novel-finding")
+    finally:
+        conn.close()
     entry["novel_findings_note_path"] = rel_path
 
 
@@ -686,12 +710,16 @@ def _write_entity_note(category: str, key: str, entry: dict, trigger: str) -> No
         tags += ",uber-series"
 
     webdav_client.put(rel_path, note)
+    # 2026-08-16 drift audit: try/finally (see the same fix on the
+    # novel-finding writer above) -- no sqlite leak on an _index() raise.
     conn = sqlite3.connect(INDEX_DB)
-    init_vault_db(conn)
-    _index(conn, rel_path, title=f"{entry['display']} ({category})",
-           content=note, tags=tags,
-           ingest_method="entity-tracking-promotion")
-    conn.close()
+    try:
+        init_vault_db(conn)
+        _index(conn, rel_path, title=f"{entry['display']} ({category})",
+               content=note, tags=tags,
+               ingest_method="entity-tracking-promotion")
+    finally:
+        conn.close()
 
 
 # ── Top-level orchestration ──────────────────────────────────────────────

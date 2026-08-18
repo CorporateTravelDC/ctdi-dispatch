@@ -143,6 +143,16 @@ NSMAP_FIXM30 = {
 _KNOWN_SOURCES_FIXM30 = frozenset({
     "FH", "TH", "CL", "HP", "OH", "HZ",
     "AH", "BA", "LH", "HX",
+    # 2026-08-17: HF and RH confirmed present in a fresh 25-sample capture
+    # batch (5/25 = 20% of that batch) while writing real-data-backed
+    # smoke tests -- were silently dropped (return None, log.debug only,
+    # no warning) by every prior version of this allowlist since the
+    # 2026-07-20 derivation, which never saw them. Same generic
+    # field-extraction path as the AH/BA/LH/HX addition above -- no new
+    # source-specific branching needed, both real samples confirmed to
+    # yield sane callsign/gufi/etc through the existing generic path
+    # before this line was added. See tests/ingest/test_fdps_fixm30_real_samples.py.
+    "HF", "RH",
 })
 
 
@@ -992,11 +1002,19 @@ def _maybe_alert_on_approach(entry: dict, parsed: dict) -> None:
              "dist_nm": round(dist, 1)},
             priority=3,
         )
+        # 2026-08-16: shared-slot dedup bug, same class fixed the same night
+        # in tfms_parser.py (see that file's _parse_single_program comment
+        # for the full explanation) -- a literal "fdps" key collapsed every
+        # distinct aircraft's proximity alert into one shared slot, so a
+        # different aircraft's alert would make the next one look "new"
+        # again regardless of the dedup window. Per-aircraft identity as
+        # the key, constant content_key (one-shot "already alerted for this
+        # aircraft's approach" gate, same pattern as tfms_track's fix).
         hex_id = entry.get("hex_id") or ""
         dedup_key = content_hash(f"fdps:prox:{hex_id or callsign}")
-        if _FDPS_PROX_DEDUP.should_push("fdps", dedup_key):
+        if _FDPS_PROX_DEDUP.should_push(dedup_key, "prox"):
             _fire_fdps_nas_alert(callsign, hex_id, parsed, dist_nm=round(dist, 1))
-            _FDPS_PROX_DEDUP.record("fdps", dedup_key)
+            _FDPS_PROX_DEDUP.record(dedup_key, "prox")
     except Exception as e:
         log.error("approach alert for %s: %s", dest, e)
 

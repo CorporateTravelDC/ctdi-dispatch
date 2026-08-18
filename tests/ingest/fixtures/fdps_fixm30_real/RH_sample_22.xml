@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?><ns5:MessageCollection xmlns:ns5="http://www.faa.aero/nas/3.0" xmlns:ns2="http://www.fixm.aero/base/3.0" xmlns:ns3="http://www.fixm.aero/flight/3.0" xmlns:ns4="http://www.fixm.aero/foundation/3.0">
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZAU" source="RH" system="SLC" timestamp="2026-08-17T02:06:22.508Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KMCW">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T02:19:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KBUU">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:35:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="030" siteSpecificPlanId="524" aircraftIdentification="N621VS"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="DROPPED"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000010</gufi>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="109473703"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T23:00:49Z.000/06/1n4"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="6"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206221391"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_22"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <flightPlan identifier="KG828491n4"/>
+        </flight>
+    </message>
+</ns5:MessageCollection>

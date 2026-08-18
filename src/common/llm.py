@@ -224,6 +224,140 @@ def sanitize_prompt_text(text: str, source: str = "prompt") -> str:
     return cleaned
 
 
+# ── Response content sanitization (2026-08-17) ──────────────────────────────
+# Sibling of sanitize_prompt_text() above, pointed at the OTHER direction:
+# what the model hands back. Two live-confirmed phi3:mini failure shapes from
+# the 2026-08-17 artifact sweep (fable-timing-artifact-sweep), both of which
+# shipped to real sinks because the only output check anywhere was "non-empty":
+#   1. PERSONA ECHO -- after (or instead of) real content, the model
+#      regurgitates its own baked-in Modelfile SYSTEM block. Real specimen:
+#      gig-economy vault note 04-Syntheses/daily/gig-economy-watch-daily-
+#      2026-08-17.md ends with '### Instruction (More Diff0.5, with added
+#      constraints):' followed by the entire shared dispatcher persona,
+#      truncated mid-rule at the num_predict cap -- persisted permanently
+#      to the second-brain vault. The persona text is identical across all
+#      21 models, so its distinctive phrases are reliable cut markers.
+#   2. REPETITION LOOP -- the model locks into emitting the same fabricated
+#      block over and over. Real specimens: brief_archive id 1597 ('Branson,
+#      MO | Branson, MO (~50mi W via I-44)' x6) and id 1598 ('The Grove at
+#      Monticello | Monticello, VA' x9), both pushed as real EP-advance
+#      briefs on 2026-08-17. A >=3x exact repeat of a >40-char line never
+#      occurs in legitimate output (verified against all 290 archived
+#      briefs 2026-08-10..17: only 1597/1598 trip it, both garbage).
+# Applied in _ollama() below (covers every generate() caller) and wired
+# into ep_advance_brief.py's two direct ollama_post_with_retry() call
+# sites. Persona echo keeps the content BEFORE the echo when substantial
+# (the echo is usually trailing garbage after a valid brief); a repetition
+# loop discards the whole response (returns None -> caller's deterministic
+# fallback), since the loop poisons the entire generation.
+_PERSONA_ECHO_MARKERS = (
+    "You are the dispatcher at [operator LLC]",
+    "Rules for every brief",
+    "Stay inside the word count the skill's own instructions",
+    "### Instruction",
+)
+_REPEAT_LINE_MIN_CHARS = 40
+_REPEAT_LINE_MAX_COUNT = 3
+# Short-line degenerate runs (third live shape, brief_archive id 1600,
+# 2026-08-17 18:43Z: the brief tail devolves into '- [ ]' repeated over and
+# over -- too short for the >40-char rule above). >=5 identical CONSECUTIVE
+# non-empty lines is never legitimate; trim the run and everything after it.
+_REPEAT_SHORT_RUN_COUNT = 5
+
+
+def sanitize_llm_response(text: str | None, source: str = "llm",
+                          truncated: bool = False) -> str | None:
+    """Post-generation content guard. Returns the (possibly trimmed) text,
+    or None when the response is garbage the caller should treat exactly
+    like a failed generation (fall through to its deterministic fallback).
+
+    truncated=True means the caller KNOWS the generation hit its num_predict
+    cap (Ollama done_reason == 'length'). In that case the trailing
+    incomplete sentence is dropped so briefs stop shipping mid-word tails
+    like 'Closure SAN at' (brief_archive 1599) / '- Train' (1589) /
+    'scale B' (aam-watch-2026-W33.md) -- all real 2026-08-16/17 output.
+    Only applied on a known cap-hit, so a legitimately unpunctuated final
+    line (e.g. a terse BOTTOM LINE) on a normal stop is never touched."""
+    if not text:
+        return None
+    cleaned = text
+    if truncated:
+        m = None
+        for m in re.finditer(r"[.!?](?=\s|$)", cleaned):
+            pass
+        if m and m.end() < len(cleaned.rstrip()):
+            kept = cleaned[:m.end()].rstrip()
+            if len(kept) >= 200:
+                log.info(
+                    "llm: %s hit its token cap mid-sentence -- trimming the "
+                    "trailing %d-char fragment to the last sentence boundary",
+                    source, len(cleaned.rstrip()) - m.end(),
+                )
+                cleaned = kept
+    # Persona echo: cut at the earliest marker occurrence.
+    cut_at = min(
+        (idx for idx in (cleaned.find(m) for m in _PERSONA_ECHO_MARKERS) if idx != -1),
+        default=-1,
+    )
+    if cut_at != -1:
+        kept = cleaned[:cut_at].rstrip()
+        log.warning(
+            "llm: %s response echoed its own system persona at char %d -- "
+            "%s (specimen class: gig-economy vault note 2026-08-17)",
+            source, cut_at,
+            f"keeping the {len(kept)} chars of real content before it" if len(kept) >= 200
+            else "discarding (no substantial content before the echo)",
+        )
+        if len(kept) < 200:
+            return None
+        cleaned = kept
+    # Repetition loop: >=3 identical long lines anywhere in the response.
+    counts: dict[str, int] = {}
+    for line in cleaned.splitlines():
+        s = line.strip()
+        if len(s) > _REPEAT_LINE_MIN_CHARS:
+            counts[s] = counts.get(s, 0) + 1
+            if counts[s] >= _REPEAT_LINE_MAX_COUNT:
+                log.warning(
+                    "llm: %s response is a repetition loop ('%.60s...' x%d) -- "
+                    "discarding, caller falls back (specimen class: brief_archive "
+                    "1597/1598, 2026-08-17)",
+                    source, s, counts[s],
+                )
+                return None
+    # Short-line degenerate run: >=5 identical consecutive non-empty lines
+    # (specimen: brief_archive 1600's trailing '- [ ]' run -- blank lines
+    # BETWEEN the repeats in the real specimen, so blanks are transparent
+    # here, not run-breakers). Trim from the start of the run; discard
+    # entirely if nothing substantial precedes it.
+    lines = cleaned.splitlines()
+    nonempty = [(i, l.strip()) for i, l in enumerate(lines) if l.strip()]
+    run_start_idx, run_len, prev = 0, 0, None
+    for pos, (i, s) in enumerate(nonempty):
+        if s == prev:
+            run_len += 1
+        else:
+            run_len, run_start_idx, prev = 1, i, s
+        if run_len >= _REPEAT_SHORT_RUN_COUNT:
+            kept = "\n".join(lines[:run_start_idx]).rstrip()
+            log.warning(
+                "llm: %s response degenerated into a repeated-line run "
+                "('%.40s' x%d+) -- %s (specimen class: brief_archive 1600)",
+                source, s, run_len,
+                f"trimming to the {len(kept)} chars before it" if len(kept) >= 200
+                else "discarding (no substantial content before the run)",
+            )
+            return kept if len(kept) >= 200 else None
+    # 2026-08-18: light word-spacing repair -- phi3:mini occasionally drops
+    # the space after a possessive/contraction 's before the next word
+    # (real specimen: "the dispatcher'senvironment", brief_archive 1611,
+    # 2026-08-18). Narrowly scoped to exactly that shape (an apostrophe-s
+    # immediately followed by a letter, no space) so it can't touch a
+    # genuine "'s" mid-word elsewhere.
+    cleaned = re.sub(r"'s(?=[A-Za-z])", "'s ", cleaned)
+    return cleaned or None
+
+
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
 OLLAMA_TIMEOUT    = int(os.getenv("OLLAMA_TIMEOUT", "900"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -1168,8 +1302,19 @@ def _ollama(
             retry_wait_cap=retry_wait_cap,
         )
         resp.raise_for_status()
-        response_text = resp.json().get("response", "").strip()
-        return response_text or None
+        j = resp.json()
+        response_text = j.get("response", "").strip()
+        # 2026-08-17: post-generation content guard -- see
+        # sanitize_llm_response() above. Covers every generate() caller in
+        # one place (same convergence-point pattern as the prompt-side
+        # sanitizer in ollama_post_with_retry()). done_reason == 'length'
+        # (generation hit the num_predict cap) additionally trims the
+        # trailing incomplete sentence.
+        return sanitize_llm_response(
+            response_text,
+            source=f"response from {model}",
+            truncated=(j.get("done_reason") == "length"),
+        )
     except OllamaBusyError as exc:
         log.info("llm: Ollama slot unavailable (priority=%s): %s", priority, exc)
         return None

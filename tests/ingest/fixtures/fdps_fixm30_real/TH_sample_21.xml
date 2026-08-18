@@ -1,0 +1,1042 @@
+<?xml version="1.0" encoding="UTF-8"?><ns5:MessageCollection xmlns:ns5="http://www.faa.aero/nas/3.0" xmlns:ns2="http://www.fixm.aero/base/3.0" xmlns:ns3="http://www.fixm.aero/flight/3.0" xmlns:ns4="http://www.fixm.aero/foundation/3.0">
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KLGA">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T05:11:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="17"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:56:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:09Z" positionTime="2026-08-17T02:06:09Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">425.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">22400.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.748333 -103.416944</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">22400.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.748333 -103.416667</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">427.0</x>
+                        <y uom="KNOTS">-58.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="350" siteSpecificPlanId="351" aircraftIdentification="UAL2033"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000011</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="UAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476934"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:43:50Z.000/03/1Jp"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="4"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="39.748333/-103.416667"/>
+                    <nameValue name="ADSB_ALT_175A" value="22400.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+427/-58"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:09Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A0B81E"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">33000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KD818301Jp"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KMSP">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:38:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="14"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KLAS">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:02:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <boundaryCrossings xsi:type="ns5:NasUnitBoundaryType">
+                    <handoff xsi:type="ns5:NasHandoffType">
+                        <receivingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="34"/>
+                    </handoff>
+                </boundaryCrossings>
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:14Z" positionTime="2026-08-17T02:06:13Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">469.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">35000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>41.016389 -108.090278</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">35000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>41.016944 -108.089167</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">412.0</x>
+                        <y uom="KNOTS">224.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="875" siteSpecificPlanId="100" aircraftIdentification="SCX108"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000012</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="SCX"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476940"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T23:35:38Z.000/11/1rJ"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="4"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_02M_52B" value="-AC7FAF"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">35000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KL849381rJ"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KEWR">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T04:59:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="08"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:50:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:15Z" positionTime="2026-08-17T02:06:15Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">478.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">25600.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.823889 -102.551111</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">25600.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.824167 -102.551111</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">406.0</x>
+                        <y uom="KNOTS">265.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="852" siteSpecificPlanId="514" aircraftIdentification="UAL2613"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000013</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="UAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476933"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T23:15:46Z.000/03/1eQ"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="7"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="39.824167/-102.551111"/>
+                    <nameValue name="ADSB_ALT_175A" value="25600.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+406/+265"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:15Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A0B802"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">31000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KD837461eQ"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KAPA">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T02:31:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="34"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KBFI">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:31:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:15Z" positionTime="2026-08-17T02:06:15Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">513.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">36900.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>41.481944 -106.800833</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">36900.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>41.481944 -106.800556</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">395.0</x>
+                        <y uom="KNOTS">-334.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="774" siteSpecificPlanId="189" aircraftIdentification="N550FR"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000014</gufi>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476939"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T21:15:00Z.139/18/196"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="10"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="41.481944/-106.800556"/>
+                    <nameValue name="ADSB_ALT_175A" value="36900.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+395/-334"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:15Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A6FFF8"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">29000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KS76596196"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KJFK">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T05:09:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="07"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KPHX">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:49:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <boundaryCrossings xsi:type="ns5:NasUnitBoundaryType">
+                    <handoff xsi:type="ns5:NasHandoffType">
+                        <receivingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="08"/>
+                    </handoff>
+                </boundaryCrossings>
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:09Z" positionTime="2026-08-17T02:06:08Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">495.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">35000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.6925 -103.6675</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">35000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.6925 -103.6675</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">495.0</x>
+                        <y uom="KNOTS">67.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="889" siteSpecificPlanId="360" aircraftIdentification="AAL832"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000015</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="AAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476949"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T21:43:36Z.000/00/1HG"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="9"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="39.6925/-103.6675"/>
+                    <nameValue name="ADSB_ALT_175A" value="35000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+495/+67"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:08Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A3B8F5"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">35000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KA782161HG"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KMSP">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:33:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="14"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KLAX">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:36:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:16Z" positionTime="2026-08-17T02:06:17Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">487.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">37000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>40.073056 -107.165</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">37000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>40.072778 -107.165833</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">423.0</x>
+                        <y uom="KNOTS">242.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="360" siteSpecificPlanId="362" aircraftIdentification="SCX426"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000016</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="SCX"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476944"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:41:55Z.000/11/1iW"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="6"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_02M_52B" value="-AB68DD"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">37000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KL817151iW"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KOAK">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T04:08:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="30"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KMEM">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:26:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:13Z" positionTime="2026-08-17T02:06:12Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">448.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">38000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>37.756389 -104.601111</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">38000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>37.756389 -104.601111</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-448.0</x>
+                        <y uom="KNOTS">27.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="157" siteSpecificPlanId="404" aircraftIdentification="FDX982"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000017</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="FDX"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476943"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T23:04:02Z.000/12/1dn"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="10"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="37.756389/-104.601111"/>
+                    <nameValue name="ADSB_ALT_175A" value="38000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="-448/+27"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:12Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A0D98D"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">38000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KM830421dn"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T02:01:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="RDC" sectorIdentifier="1H"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KBOS">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-16T21:34:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:14Z" positionTime="2026-08-17T02:06:14Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">345.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">15300.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>40.326667 -105.228333</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">15300.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>40.326667 -105.228333</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">335.0</x>
+                        <y uom="KNOTS">-59.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="418" siteSpecificPlanId="260" aircraftIdentification="UAL800"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000018</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="UAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476950"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T20:19:18Z.000/01/1jW"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="15"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="40.326667/-105.228333"/>
+                    <nameValue name="ADSB_ALT_175A" value="15300.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+335/-59"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:14Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A0B7BD"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">22000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KB731581jW"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KSGF">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:22:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="30"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KCDC">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:22:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:12Z" positionTime="2026-08-17T02:06:12Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">486.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">45000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>37.7175 -105.963611</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">45000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>37.7175 -105.963611</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">486.0</x>
+                        <y uom="KNOTS">-47.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="454" siteSpecificPlanId="213" aircraftIdentification="N372BT"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000019</gufi>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476942"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:56:02Z.000/20/1Qn"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="7"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="37.7175/-105.963611"/>
+                    <nameValue name="ADSB_ALT_175A" value="45000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+486/-47"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:12Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A43B64"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">45000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KU825621Qn"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KMRY">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T04:18:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="30"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KHSV">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:09:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:16Z" positionTime="2026-08-17T02:06:16Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">434.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">38500.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>37.8 -103.855278</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">38500.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>37.8 -103.854444</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-431.0</x>
+                        <y uom="KNOTS">51.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="531" siteSpecificPlanId="296" aircraftIdentification="N702LT"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000020</gufi>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476937"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T20:41:01Z.000/12/1d7"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="13"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_02M_52B" value="-A95D08"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">40000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KM744611d7"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T02:20:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="16"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KCMH">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-16T23:50:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:16Z" positionTime="2026-08-17T02:06:16Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">371.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">23600.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>40.732778 -102.942222</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">23600.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>40.732778 -102.942222</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-339.0</x>
+                        <y uom="KNOTS">-153.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="097" siteSpecificPlanId="515" aircraftIdentification="SWA2841"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000021</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="SWA"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476947"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T20:31:35Z.000/08/1vc"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="25"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="40.732778/-102.942222"/>
+                    <nameValue name="ADSB_ALT_175A" value="23600.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="-339/-153"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:16Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-AC5ADA"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">17000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KI738951vc"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KIAH">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:55:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="07"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:58:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:06Z" positionTime="2026-08-17T02:06:06Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">424.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">18300.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.779444 -103.696389</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">18300.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.779444 -103.696389</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">427.0</x>
+                        <y uom="KNOTS">-56.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="980" siteSpecificPlanId="54" aircraftIdentification="UAL475"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000022</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="UAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476951"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-17T00:42:17Z.000/03/2fi"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="4"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="39.779444/-103.696389"/>
+                    <nameValue name="ADSB_ALT_175A" value="18300.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+427/-56"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:06Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A0B803"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">33000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KD025372fi"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KSEA">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T04:07:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="32"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDFW">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:13:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:09Z" positionTime="2026-08-17T02:06:09Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">419.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">34000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>43.446389 -105.141667</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">34000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>43.446389 -105.141667</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-360.0</x>
+                        <y uom="KNOTS">217.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="179" siteSpecificPlanId="231" aircraftIdentification="AAL1483"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000023</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="AAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476953"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:05:46Z.000/05/1HR"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="10"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="43.446389/-105.141667"/>
+                    <nameValue name="ADSB_ALT_175A" value="34000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="-360/+217"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:09Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-AD36C8"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">34000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KF795461HR"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KMSP">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:00:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="09"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KPHX">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:33:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <boundaryCrossings xsi:type="ns5:NasUnitBoundaryType">
+                    <handoff xsi:type="ns5:NasHandoffType">
+                        <receivingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="35"/>
+                    </handoff>
+                </boundaryCrossings>
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:07Z" positionTime="2026-08-17T02:06:07Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">520.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">35000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>41.188611 -100.853889</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">35000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>41.188611 -100.853889</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">390.0</x>
+                        <y uom="KNOTS">339.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="338" siteSpecificPlanId="223" aircraftIdentification="DAL2284"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000024</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="DAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476952"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T23:17:02Z.000/00/1Ja"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="5"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="41.188611/-100.853889"/>
+                    <nameValue name="ADSB_ALT_175A" value="35000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="+390/+339"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:07Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-AD1142"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">35000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KA838221Ja"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KLAX">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:39:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="04"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDSM">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:04:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:10Z" positionTime="2026-08-17T02:06:10Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">413.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">34000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.006667 -109.005833</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">34000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.006667 -109.005833</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-310.0</x>
+                        <y uom="KNOTS">-275.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="087" siteSpecificPlanId="612" aircraftIdentification="SKW4971"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000025</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="SKW"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476956"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:49:54Z.000/15/1Au"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="9"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_POS_174A" value="39.006667/-109.005833"/>
+                    <nameValue name="ADSB_ALT_175A" value="34000.0"/>
+                    <nameValue name="ADSB_VEL_176A" value="-310/-275"/>
+                    <nameValue name="ADSB_TIME_177A" value="2026-08-17T02:06:10Z"/>
+                    <nameValue name="ADSB_02M_52B" value="-A651E1"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">34000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KP821941Au"/>
+        </flight>
+    </message>
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZDV" source="TH" system="SLC" timestamp="2026-08-17T02:06:19.643Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KSBP">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:58:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <controllingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZDV" sectorIdentifier="04"/>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDEN">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T01:46:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <position xsi:type="ns5:NasAircraftPositionType" targetPositionTime="2026-08-17T02:06:16Z" positionTime="2026-08-17T02:06:16Z" reportSource="SURVEILLANCE">
+                    <actualSpeed>
+                        <surveillance uom="KNOTS">415.0</surveillance>
+                    </actualSpeed>
+                    <altitude uom="FEET">28000.0</altitude>
+                    <position xsi:type="ns2:LocationPointType">
+                        <location srsName="urn:ogc:def:crs:EPSG::4326">
+                            <pos>39.365278 -107.251389</pos>
+                        </location>
+                    </position>
+                    <targetAltitude uom="FEET">28000.0</targetAltitude>
+                    <targetPosition srsName="urn:ogc:def:crs:EPSG::4326">
+                        <pos>39.365556 -107.251111</pos>
+                    </targetPosition>
+                    <trackVelocity>
+                        <x uom="KNOTS">-385.0</x>
+                        <y uom="KNOTS">-155.0</y>
+                    </trackVelocity>
+                </position>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="446" siteSpecificPlanId="193" aircraftIdentification="UAL2323"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000026</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="UAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="85476955"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-17T00:26:00Z.000/03/23E"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="3"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206193902"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_19"/>
+                    <nameValue name="ADSB_02M_52B" value="-A52C4F"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">28000.0</simple>
+            </assignedAltitude>
+            <flightPlan identifier="KD0156023E"/>
+        </flight>
+    </message>
+</ns5:MessageCollection>

@@ -345,7 +345,17 @@ def board_threads() -> list[dict]:
 # stored HASHED at rest (sha256) -- a DB read never yields a usable secret. The
 # minted token is preferred over handing out the long-lived BOARD_KEY: smaller
 # blast radius, and a leak self-heals when it expires.
-_BOARD_TOKEN_TTL_S = 7 * 86400   # minted board-write tokens live 7 days
+#
+# 2026-08-16: was a flat 7-day TTL with no rotation -- a leaked token stayed
+# live for up to a week untouched. Now: tokens are daily (board_refresh_token
+# below) and self-rotate autonomously, but rotation itself is gated on a
+# weekly GPG-clearsigned human presence attestation (board_presence_set/
+# board_presence_status, scripts/board-presence-attest.sh). Autonomous
+# day-to-day, but a stolen token's rotation chain dies within ~1 day of that
+# 7-day attestation lapsing -- no silent multi-week persistence even if
+# something keeps rotating a compromised token perfectly on schedule.
+_BOARD_TOKEN_TTL_S = 86400          # daily -- board-write tokens self-rotate
+_BOARD_PRESENCE_WINDOW_S = 7 * 86400  # weekly human GPG-clearsigned re-anchor
 
 
 def _board_sha(s: str) -> str:
@@ -372,6 +382,20 @@ def _ensure_board_auth(c) -> None:
             scope       TEXT,
             label       TEXT,
             via_nonce   TEXT
+        )"""
+    )
+    # Single-row table -- one current weekly presence attestation, replaced
+    # outright by the next one (not an append log; the append-only audit
+    # trail for rotation activity is audit_log via the "board_refresh" action,
+    # not this table).
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_presence (
+            id                INTEGER PRIMARY KEY CHECK (id = 1),
+            attestation_text  TEXT,
+            issued_at         REAL,
+            valid_until       REAL,
+            key_fingerprint   TEXT,
+            recorded_at       REAL
         )"""
     )
 
@@ -445,6 +469,87 @@ def board_token_valid(presented: str) -> bool:
         # this function's docstring before adding one / adding a second scope.
         row = c.execute("SELECT expires_at FROM board_tokens WHERE token_hash=?", (_board_sha(presented),)).fetchone()
         return bool(row and row["expires_at"] and row["expires_at"] > now)
+
+
+def board_presence_set(attestation_text: str, issued_at: float, valid_until: float,
+                        key_fingerprint: str) -> None:
+    """Record a verified weekly presence attestation. Caller MUST have already
+    GPG-verified the clearsigned signature before calling this -- see
+    scripts/board-presence-attest.sh -- this function trusts its inputs and
+    does no verification itself. Replaces the prior attestation outright
+    (single current row, not an append log)."""
+    with conn() as c:
+        _ensure_board_auth(c)
+        c.execute("DELETE FROM board_presence")
+        c.execute(
+            "INSERT INTO board_presence (id, attestation_text, issued_at, valid_until, key_fingerprint, recorded_at) "
+            "VALUES (1, ?, ?, ?, ?, ?)",
+            (attestation_text, issued_at, valid_until, key_fingerprint, time.time()),
+        )
+
+
+def board_presence_status() -> dict:
+    """Current presence-attestation state. valid=False (no attestation ever
+    recorded, or its 7-day window has lapsed) means board_refresh_token fails
+    closed regardless of the presented token's own validity."""
+    with conn() as c:
+        _ensure_board_auth(c)
+        row = c.execute(
+            "SELECT issued_at, valid_until, key_fingerprint FROM board_presence WHERE id=1"
+        ).fetchone()
+    if not row:
+        return {"valid": False, "issued_at": None, "valid_until": None, "key_fingerprint": None}
+    now = time.time()
+    return {
+        "valid": bool(row["valid_until"] and row["valid_until"] > now),
+        "issued_at": row["issued_at"],
+        "valid_until": row["valid_until"],
+        "key_fingerprint": row["key_fingerprint"],
+    }
+
+
+def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
+    """Self-rotate a still-valid board-write token into a fresh one -- the
+    autonomous daily-renewal half of the design (board_presence_status above
+    is the weekly human-gated half). Requires BOTH: (1) the presented token
+    itself still valid/unexpired, AND (2) a currently-valid weekly presence
+    attestation. Every attempt, successful or not, is written to the
+    append-only audit_log via audit() (action="board_refresh").
+
+    Returns {"status": "ok", "token", "expires_at", "scope"} or
+    {"status": "invalid_token"} or
+    {"status": "presence_stale", "presence_valid_until"}."""
+    import secrets as _s
+    if not presented or not board_token_valid(presented):
+        audit("board_refresh", "board", (presented or "")[:8] or None, remote_addr,
+              {"result": "invalid_token"})
+        return {"status": "invalid_token"}
+    pres = board_presence_status()
+    if not pres["valid"]:
+        audit("board_refresh", "board", presented[:8], remote_addr,
+              {"result": "presence_stale", "presence_valid_until": pres["valid_until"]})
+        return {"status": "presence_stale", "presence_valid_until": pres["valid_until"]}
+    now = time.time()
+    old_hash = _board_sha(presented)
+    new_token = "btk_" + _s.token_urlsafe(30)
+    texp = now + _BOARD_TOKEN_TTL_S
+    with conn() as c:
+        _ensure_board_auth(c)
+        old_row = c.execute(
+            "SELECT label FROM board_tokens WHERE token_hash=?", (old_hash,)
+        ).fetchone()
+        c.execute(
+            "INSERT INTO board_tokens (token_hash, created_at, expires_at, scope, label, via_nonce) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_board_sha(new_token), now, texp, "board-write",
+             (old_row["label"] if old_row else None), "refresh:" + old_hash[:12]),
+        )
+        # Expire the old token immediately -- rotation supersedes it outright,
+        # no overlap window where both are simultaneously valid.
+        c.execute("UPDATE board_tokens SET expires_at=? WHERE token_hash=?", (now, old_hash))
+    audit("board_refresh", "board", presented[:8], remote_addr,
+          {"result": "ok", "new_expires_at": texp})
+    return {"status": "ok", "token": new_token, "expires_at": texp, "scope": "board-write"}
 
 
 # ── TFR helpers ───────────────────────────────────────────────────────────────

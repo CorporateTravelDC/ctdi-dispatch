@@ -142,7 +142,13 @@ def _call_ollama(content: str) -> str | None:
         system=None,  # dedicated Modelfile carries this now
         prompt=content,
         ollama_model=OLLAMA_MODEL,
-        max_tokens=400,
+        # 2026-08-17 (fable sweep): 400 -> 700 tokens. The task layer asks
+        # for 'under 500 words' (~665 tokens); at the 400-token cap the
+        # real 2026-08-16 18:00 ET run (brief_archive id 1589) was cut off
+        # mid-word ('- Train') before finishing its own section list --
+        # same truncation class verified on ops-brief. Modelfile
+        # num_predict raised in parity (corporatetraveldc.weekly-summary).
+        max_tokens=700,
         temperature=0.3,
         # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
         # methodology: guard timer paused, synthetic burn, la 57 at
@@ -150,7 +156,11 @@ def _call_ollama(content: str) -> str | None:
         # -> 584.3s at the 400-tok cap; delta over the 53.0s
         # spiked persona-only ref = 717.6s; spike met/exceeded the locked 53s bound, no scaling;
         # (53 + 717.6) x 1.25 = 963s -> 990.
-        timeout=990,
+        # 2026-08-17: re-derived at the 700-tok cap, same formula:
+        # 186.2s eval + 700/0.68 = 1215.6s; delta over 53.0s ref = 1162.6s;
+        # (53 + 1162.6) x 1.25 = 1519.5 -> 1530. Unit TimeoutStartSec=2800
+        # still clears it (800s fixed + 1530s = 2330s worst case).
+        timeout=1530,
         # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
         # see dispatch.env's ANTHROPIC_FALLBACK_ENABLED comment for the full
         # rationale.

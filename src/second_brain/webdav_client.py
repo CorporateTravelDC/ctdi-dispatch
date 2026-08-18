@@ -146,6 +146,17 @@ def get(rel_path: str) -> bytes | None:
     return r.content
 
 
+def delete(rel_path: str) -> int:
+    """Delete a file or folder (recursive for folders, standard WebDAV DELETE
+    semantics). 204/200 = deleted, 404 = already absent (both treated as
+    success by the caller if desired). No move/rename verb exists in this
+    module or in WebDAV itself as a single atomic op across arbitrary paths
+    -- relocations are GET+PUT+DELETE at the call site, not here."""
+    url = f"{_base_url()}/{rel_path.strip('/')}"
+    r = requests.request("DELETE", url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=15)
+    return r.status_code
+
+
 def list_files(rel_path: str = "") -> list[dict]:
     """List files (not folders) directly under rel_path (depth 1, non-recursive)."""
     url = f"{_base_url()}/{rel_path.strip('/')}".rstrip("/")

@@ -44,5 +44,10 @@ Slice=production.slice
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=170M
 Type=oneshot
-TimeoutStartSec=300
+# 2026-08-17 (fable sweep): 300 -> 900. Real failure today 14:16 EDT: the
+# first successful-image run after 8 consecutive integrity-fast-fails
+# (22:10 08-16 .. 12:10 08-17, inconsistent 22:07 image) had ~16h of feed
+# backlog and was killed by this ceiling at 6min31s wall. Normal runs are
+# 1-70s; 900s covers backlog-recovery runs without masking a real hang.
+TimeoutStartSec=900
 

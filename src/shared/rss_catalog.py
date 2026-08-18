@@ -45,6 +45,17 @@ _RSS_CATALOG: dict[str, list[dict]] = {
         {"name": "AviationSource",          "url": "https://aviationsourcenews.com/feed/"},
         {"name": "AOPA News",               "url": "https://www.aopa.org/news-and-media/all-news/rss"},
         {"name": "Cranky Flier",            "url": "https://crankyflier.com/feed/"},
+        # Added 2026-08-16 per operator request -- a podcast tracked via a
+        # listening-app share link that sat unwired since it was dropped:
+        # that app's own share page is a JS-rendered shell with no feed
+        # exposed statically, not a real RSS source. Real feed resolved via
+        # scripts/podcast-feed-resolve.py (iTunes Search API) and
+        # independently verified live from this Pi -- real RSS 2.0,
+        # lastBuildDate current. Deliberately no show name in this comment
+        # or the entry below -- operator directive, avoid a discoverable
+        # list of tracked shows even in private-repo history.
+        {"name": "Aviation Podcast 1",
+         "url": "https://api.riverside.fm/hosting/D6ypuoEj.rss"},
     ],
     # Added 2026-07-23 per operator request (vertiport/eVTOL/Part 108
     # research chat). Only URLs independently verified to return real

@@ -202,7 +202,18 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
         dispatch_body = f"Train {ident}: {event_summary}"
         title_prefix = "TRN "
 
-    title = title_prefix + ident + ": " + event_summary[:60]
+    # 2026-08-17: event_summary is frequently multi-line (a tracking URL
+    # and/or ACARS context appended on their own \n-separated lines, see
+    # the OOOI block in poller/main.py) -- slicing it to [:60] before
+    # stripping newlines let an embedded \n survive into the title whenever
+    # the first line was under ~60 chars, and ntfy's HTTP client correctly
+    # rejects a raw LF/CR in a header value, so the send failed outright
+    # (silent alert loss, root-caused live for DAL926's OFF alert: title
+    # came out as "...OFF - airborne\nhttps://globe.air", 3/3 retries
+    # failed with "Invalid ... character(s) in header value"). Collapse to
+    # single-line BEFORE truncating, not after.
+    title_summary = " ".join(event_summary.split())
+    title = title_prefix + ident + ": " + title_summary[:60]
 
     _fire_ntfy_dual(domain_topic, title, detail_body, dispatch_body, priority)
 
@@ -279,6 +290,21 @@ def sweep_landed_flights() -> int:
                 try:
                     arr_dt = datetime.fromisoformat(sched_arr.replace("Z", "+00:00"))
                 except ValueError:
+                    arr_dt = None
+                # 2026-08-16 drift audit: a zone-LESS scheduled_arrival (e.g.
+                # "2026-08-16 14:00:00" -- db.py documents that callers have
+                # historically sent these) parses to a NAIVE datetime, and
+                # `now` (line 265) is tz-aware UTC. `now > naive` raises
+                # TypeError, which was uncaught here and only trapped at the
+                # poller-tick level -- so one bad entry aborted
+                # sweep_landed_flights() for EVERY entry, every tick, until
+                # it expired. Fail safe: a naive timestamp is unusable for
+                # this comparison (we can't know if it's UTC or ET -- and
+                # guessing UTC would sweep ET-sourced FIDS arrivals hours
+                # early, the known premature-sweep failure mode), so treat
+                # it exactly like a parse failure and skip the time-based
+                # sweep for this entry rather than crash or guess.
+                if arr_dt is not None and arr_dt.tzinfo is None:
                     arr_dt = None
                 if arr_dt and now > arr_dt + timedelta(hours=1):
                     history = db.get_watchlist_history(entry_id=entry_id, limit=50)
@@ -406,6 +432,12 @@ def sweep_landed_trains() -> int:
                     arr_dt = datetime.fromisoformat(sched_arr.replace("Z", "+00:00"))
                 except ValueError:
                     arr_dt = None
+                # 2026-08-16 drift audit: same naive-vs-aware TypeError as
+                # sweep_landed_flights() -- see the full comment there. A
+                # zone-less scheduled_arrival must not crash the sweep or be
+                # guessed as UTC; treat it as unusable and skip.
+                if arr_dt is not None and arr_dt.tzinfo is None:
+                    arr_dt = None
                 if arr_dt and now > arr_dt + timedelta(hours=1):
                     history = db.get_watchlist_history(entry_id=entry_id, limit=50)
                     has_anomaly = any(
@@ -485,8 +517,15 @@ def _fire_ntfy_dual(domain_topic: str, title: str, detail_body: str,
     """
     def _push(topic: str, body: str) -> None:
         url = f"{NTFY_BASE}/{topic}"
-        # HTTP headers must be ASCII — strip/replace non-ASCII chars in title
+        # HTTP headers must be ASCII and single-line — strip/replace
+        # non-ASCII chars, then collapse any embedded CR/LF (a raw
+        # newline in a header value is rejected by requests before the
+        # request ever leaves the process). Defense-in-depth: the known
+        # multi-line-summary case is fixed at the caller (watchlist_event_hit),
+        # but this is the actual HTTP boundary and other callers pass
+        # `title` directly.
         safe_title = title.encode("ascii", "replace").decode("ascii")
+        safe_title = " ".join(safe_title.split())
         headers = {
             "Content-Type": "text/plain",
             "X-Priority": str(priority),

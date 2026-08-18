@@ -42,7 +42,7 @@ from common.ollama_lock import ollama_slot, OllamaBusyError
 import requests
 
 from common import config, db, ntfy_push as _ntfy
-from common.aam_watch import get_aam_watch_section
+from common.aam_watch import get_aam_watch_summary
 from common.disruption_weather_watch import get_disruption_weather_capsule
 from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
@@ -71,7 +71,29 @@ MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # trend: 1133-tok prompt / 127.6s eval + gen at 0.82 tok/s -> 244s
 #        at the 200-tok cap; delta 323.1s -> 354.1s;
 #        (53 + 354.1) x 1.25 = 509s -> 510.
-OLLAMA_TIMEOUT       = 1200
+# 2026-08-17 (fable-timing-artifact-sweep): main-call cap raised 500 -> 900
+# tokens (max_tokens below AND PARAMETER num_predict in
+# corporatetraveldc.ops-brief, kept in parity). Root cause, verified against
+# real archived output: every sampled brief in brief_archive (1577..1599)
+# ends mid-sentence at the 500-token cap -- e.g. 1599 stops at 'Closure SAN
+# at' -- because phi3:mini walks the data pull in input order and exhausts
+# the budget on CPS/TFR/METAR/NAS before ever reaching the NWS and Amtrak
+# blocks at the tail of the prompt. 500 tokens is ~375 words; the briefing
+# structure the skill asks for needs ~550 words (~730 tokens) minimum.
+# This is the operator-reported 'prose drops NWS/Amtrak' bug's largest
+# component (the other two: fetch timeouts with no DB fallback -- fixed in
+# _nws_alerts_from_db()/_amtrak_from_db() below -- and the Modelfile task
+# layer never enumerating NWS, which is a staged proposal, not applied).
+#
+# Timeout re-derived with the same Phase-3/4 formula as the 1200s value
+# above, scaled to the 900-tok cap:
+#   total = 121.5s eval + 900 tok / 0.68 tok/s = 1445s; delta over the
+#   48.4s ref = 1396.6s, x1.10 top-up = 1536.3s;
+#   (53 + 1536.3) x 1.25 = 1986.6 -> 2000.
+# systemd TimeoutStartSec on corporatetraveldc-ops-brief.container raised
+# 2600 -> 3600 in the same change (main 2000 + trend 510 + preflight gates
+# 240+180 + 2x load-phase 360 + fetches/overhead ~150 = ~3440 worst case).
+OLLAMA_TIMEOUT       = 2000
 OLLAMA_TREND_TIMEOUT = 510
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
@@ -476,10 +498,34 @@ def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> st
         return f"ATCSCC Operations Plan forecast unavailable ({e})."
 
 
+def _nws_alerts_from_db() -> str | None:
+    """Local-DB fallback for _nws_alerts_section() -- same pattern
+    _metar_section() has had all along. 2026-08-17 (fable sweep): the live
+    api.weather.gov fetch hits its 10s read timeout with some regularity
+    (real logged instances 14:00 and 15:00 EDT today), and until now that
+    turned into a hard 'NWS alerts unavailable.' line even though the
+    platform's own NWS ingest keeps a fresh nws_alerts cache (5 active
+    alerts in it at the moment this was written). Data was present; the
+    brief dropped it."""
+    try:
+        alerts = db.get_active_nws_alerts()
+    except Exception as e:
+        log.warning("ops-brief: nws_alerts DB fallback failed: %s", e)
+        return None
+    if not alerts:
+        return None
+    return "\n".join(
+        f"[{a.get('severity','?')}] {a.get('event_type','?')} — "
+        f"{(a.get('area_desc') or '')[:60]} — "
+        f"{(a.get('headline') or '')[:80]} (local-db)"
+        for a in alerts[:6]
+    )
+
+
 def _nws_alerts_section() -> str:
     raw = _fetch(NWS_ALERTS_URL)
     if not raw:
-        return "NWS alerts unavailable."
+        return _nws_alerts_from_db() or "NWS alerts unavailable."
     try:
         data = json.loads(raw)
         features = data.get("features", [])
@@ -496,10 +542,31 @@ def _nws_alerts_section() -> str:
         return f"NWS alerts parse error: {e}"
 
 
+def _amtrak_from_db() -> str | None:
+    """Local-DB fallback for _amtrak_section() -- see _nws_alerts_from_db()
+    above for the rationale (same 2026-08-17 finding). amtrak_status is
+    refreshed continuously by the amtrak-tracker/ingest paths (rows minutes
+    apart in the live DB, carrying real NEC delays -- e.g. Acela +72min at
+    the time this was written), so a fetch timeout should degrade to the
+    cache, not to 'feed unavailable'. 30-min freshness cap so a genuinely
+    dead feed still reads as unavailable rather than serving stale delays."""
+    try:
+        row = db.get_latest_amtrak_status()
+    except Exception as e:
+        log.warning("ops-brief: amtrak DB fallback failed: %s", e)
+        return None
+    if not row or not row.get("delay_summary"):
+        return None
+    age_s = _time.time() - (row.get("fetched_at") or 0)
+    if age_s > 1800:
+        return None
+    return f"{row['delay_summary']} (local-db, {int(age_s/60)}min old)"
+
+
 def _amtrak_section() -> str:
     raw = _fetch(AMTRAKER_URL, timeout=12)
     if not raw:
-        return "Amtrak feed unavailable (timeout)."
+        return _amtrak_from_db() or "Amtrak feed unavailable (timeout)."
     try:
         data = json.loads(raw)
         nec = []
@@ -717,7 +784,7 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
         system=system,
         prompt=prompt_content,
         ollama_model=OLLAMA_MODEL,
-        max_tokens=500,
+        max_tokens=900,  # 2026-08-17: was 500 -- see OLLAMA_TIMEOUT comment above
         temperature=0.2,
         timeout=OLLAMA_TIMEOUT,
         allow_anthropic=False,
@@ -772,6 +839,17 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     if route:
         parts.append(f"ROUTE NARRATIVE (local DB):\n{route}")
 
+    # 2026-08-18: fed into the actual prompt (not string-appended after
+    # generation, see the old post-hoc AAM block this replaces) so the
+    # model can weave AAM/vertiport context into the narrative flow
+    # instead of it always reading as a bolted-on afterthought section --
+    # operator feedback. Condensed one-paragraph summary only (see
+    # get_aam_watch_summary docstring) -- the full weekly report is too
+    # long to add to an already token-constrained hourly prompt.
+    aam_summary = get_aam_watch_summary("ops")
+    if aam_summary:
+        parts.append(f"ADVANCED AIR MOBILITY (this week's framing):\n{aam_summary}")
+
     # 2026-08-16: real production output showed phi3:mini echoing this
     # raw data pull back verbatim as its "narrative" (confirmed live --
     # brief_archive content was byte-identical in structure to this
@@ -790,7 +868,9 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
         "in your own words, per your system instructions. Do NOT copy, "
         "quote, or restate any of the raw data blocks above verbatim -- "
         "synthesize them into new narrative prose covering every section "
-        "that has data, including Amtrak and NWS alerts."
+        "that has data, including Amtrak, NWS alerts, and Advanced Air "
+        "Mobility (if present) -- work AAM in as part of the same "
+        "narrative flow, not a separate bolted-on section at the end."
     )
 
     prompt_content = "\n\n".join(parts)
@@ -913,16 +993,19 @@ def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = Fa
                 concise = full_text
                 status = "fallback_error"
 
-        # Append raw METAR + NAS appendix to the traditional brief body
-        full_text = full_text.rstrip() + raw_appendix
+        # 2026-08-18: raw METAR/NAS/ATCSCC appendix dropped from the pushed/
+        # archived brief per operator request -- was a debug/verification
+        # aid from when the narrative was unreliable (truncating before
+        # reaching Amtrak/NWS, etc); now that the prose itself is trusted,
+        # the raw dump is just noise at the bottom of every push.
+        # raw_appendix is still returned by build_brief_content() above
+        # (harmless, unused here) rather than changing that signature.
+        _ = raw_appendix
 
-        # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
-        # eVTOL/Part 108) watch section if a fresh one exists -- the scrape
-        # + synthesis runs weekly (aam_weekly_watch.py), this just reads
-        # the cached result, no extra Ollama call on every hourly run.
-        aam_section = get_aam_watch_section("ops")
-        if aam_section:
-            full_text = full_text.rstrip() + "\n\n=== " + aam_section
+        # 2026-08-18: AAM is no longer appended here as a separate section --
+        # it's now fed into build_brief_content()'s prompt above and woven
+        # into the actual narrative by the model itself. See
+        # get_aam_watch_summary()'s docstring for why.
 
         # 2026-08-10 catch-up session: short truncated capsule of the daily
         # disruption/weather digest (poller/skills/disruption_weather_digest.py,

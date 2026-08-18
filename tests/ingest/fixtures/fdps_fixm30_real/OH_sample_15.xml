@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?><ns5:MessageCollection xmlns:ns5="http://www.faa.aero/nas/3.0" xmlns:ns2="http://www.fixm.aero/base/3.0" xmlns:ns3="http://www.fixm.aero/flight/3.0" xmlns:ns4="http://www.fixm.aero/foundation/3.0">
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" centre="ZOB" source="OH" system="SLC" timestamp="2026-08-17T02:06:22.200Z">
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KBDL">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:04:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KMSP">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:57:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <boundaryCrossings xsi:type="ns5:NasUnitBoundaryType">
+                    <handoff xsi:type="ns5:NasHandoffType" event="ACCEPTANCE">
+                        <receivingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZOB" sectorIdentifier="38"/>
+                        <transferringUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZOB" sectorIdentifier="26"/>
+                        <acceptingUnit xsi:type="ns2:IdentifiedUnitReferenceType" unitIdentifier="ZOB" sectorIdentifier="38"/>
+                    </handoff>
+                </boundaryCrossings>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="386" siteSpecificPlanId="538" aircraftIdentification="DAL2871"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000009</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="DAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="133733210"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-17T00:01:01Z.000/15/20I"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="7"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206224062"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_22"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <flightPlan identifier="KP0006120I"/>
+        </flight>
+    </message>
+</ns5:MessageCollection>

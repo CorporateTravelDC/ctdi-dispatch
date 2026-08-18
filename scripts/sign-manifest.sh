@@ -47,8 +47,21 @@ echo "[sign-manifest] Hashing every tracked AND untracked-but-not-ignored file (
 # invisible to the one check meant to catch exactly that. .git internals,
 # build artifacts, and anything actually .gitignore'd are still excluded
 # (via --exclude-standard), same as before.
+#
+# 2026-08-18: docs/LIVE_STATE_CHECK_*.md excluded the same way MANIFEST
+# itself is. These are written autonomously by
+# scripts/post-commit-doc-verify.sh's background Fable pass after every
+# major commit (its own prompt hard-rules it to NEVER stage/commit what it
+# writes), so today's file is routinely sitting modified/untracked at the
+# exact moment someone runs this script -- every prior night this showed
+# up as manifest "drift" that had to be manually explained away as
+# harmless each time. They're real historical docs (every one gets
+# committed eventually) and genuinely worth keeping, but they're
+# informational notes, not security-relevant code/config, so they don't
+# belong in the integrity baseline at all -- same reasoning as excluding
+# MANIFEST.sha256/.asc from their own hash list.
 git ls-files --cached --others --exclude-standard -z \
-    | grep -zvE "^(${MANIFEST}|${SIGNATURE})\$" \
+    | grep -zvE "^(${MANIFEST}|${SIGNATURE}|docs/LIVE_STATE_CHECK_[0-9-]+\.md)\$" \
     | xargs -0 sha256sum \
     | sort -k2 \
     > "${MANIFEST}"

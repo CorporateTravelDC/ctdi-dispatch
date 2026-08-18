@@ -140,14 +140,22 @@ def main() -> None:
 
         ollama_result = llm_generate(
             system=None, prompt=combined,  # dedicated Modelfile carries this now
-            ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.3,
+            # 2026-08-17 (fable sweep): 500 -> 700 tokens. Task layer asks
+            # 'Under 500 words' (~665 tokens); the real 2026-08-16 run
+            # (vault note 04-Syntheses/weekly/2026-W33.md) ends mid-sentence
+            # at the 500-token cap. Modelfile num_predict raised in parity.
+            ollama_model=OLLAMA_MODEL, max_tokens=700, temperature=0.3,
             # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
             # methodology: guard timer paused, synthetic burn, la 70 at
             # sample): 3980-tok prompt / 601.5s eval + gen at 0.40 tok/s
             # -> 1263.1s at the 500-tok cap; delta over the 60.0s
             # spiked persona-only ref = 1804.7s; spike met/exceeded the locked 53s bound, no scaling;
             # (53 + 1804.7) x 1.25 = 2322s -> 2340.
-            timeout=2340,
+            # 2026-08-17: re-derived at the 700-tok cap, same formula:
+            # gen = 700/0.40 = 1750s; delta = 601.5 + 1750 - 60 = 2291.5s;
+            # (53 + 2291.5) x 1.25 = 2930.6 -> 2940. Unit
+            # TimeoutStartSec=5500 still clears it (800 + 2940 = 3740s).
+            timeout=2940,
             # 2026-08-12: belt-and-suspenders close of the Anthropic
             # fallback -- see dispatch.env's ANTHROPIC_FALLBACK_ENABLED
             # comment for the full rationale.
