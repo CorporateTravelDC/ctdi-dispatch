@@ -257,12 +257,24 @@ def index_note(
     conn.commit()
 
 
-def search_notes(conn: sqlite3.Connection, query: str, limit: int = 10) -> list[dict]:
-    """Full-text search over indexed vault notes. Returns path/title/snippet."""
+def search_notes(
+    conn: sqlite3.Connection, query: str, limit: int = 10, raw: bool = False
+) -> list[dict]:
+    """Full-text search over indexed vault notes. Returns path/title/snippet.
+
+    FTS5's MATCH syntax treats bare hyphens as column-filter/NOT operators
+    (e.g. "ep-advance" raises "no such column: advance" instead of matching
+    the literal text). By default (raw=False) a query with no existing
+    double-quote is phrase-wrapped so natural-language input like
+    "ep-advance" or "brief-fallback" always matches literally instead of
+    erroring. Pass raw=True to use FTS5 boolean/column-filter syntax
+    (AND/OR/NOT, col:term) deliberately, unescaped.
+    """
+    fts_query = query if (raw or '"' in query) else f'"{query}"'
     rows = conn.execute(
         "SELECT path, title, snippet(vault_notes_fts, 2, '**', '**', '...', 20) "
         "FROM vault_notes_fts WHERE vault_notes_fts MATCH ? ORDER BY rank LIMIT ?",
-        (query, limit),
+        (fts_query, limit),
     ).fetchall()
     return [{"path": r[0], "title": r[1], "snippet": r[2]} for r in rows]
 
@@ -441,6 +453,10 @@ def main() -> None:
     ap.add_argument("--scan", action="store_true", help="rescan the vault and update the index")
     ap.add_argument("--summary", action="store_true", help="print index summary")
     ap.add_argument("--search", metavar="QUERY", help="full-text search indexed vault notes")
+    ap.add_argument(
+        "--raw", action="store_true",
+        help="don't phrase-wrap --search QUERY; use FTS5 boolean/column-filter syntax as-is",
+    )
     ap.add_argument("--backlinks", metavar="TARGET", help="show notes that link to TARGET")
     args = ap.parse_args()
 
@@ -451,7 +467,7 @@ def main() -> None:
         result = scan_vault(conn)
         print(f"scan complete: {result}")
     if args.search:
-        for r in search_notes(conn, args.search):
+        for r in search_notes(conn, args.search, raw=args.raw):
             print(f"{r['path']}\n  {r['title']}\n  {r['snippet']}\n")
     if args.backlinks:
         hits = get_backlinks(conn, args.backlinks)

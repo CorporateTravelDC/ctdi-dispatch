@@ -48,13 +48,26 @@ whether anything the CURRENT docs (README.md, CLAUDE.md, everything under
 docs/, src/ingest/README.md, src/shared/watchlist_README.md) claim has been
 invalidated by this specific change. Verify against the real live system
 where relevant (systemctl --user status, podman ps, actual file contents,
-curl to local services) rather than trusting old docs. Write findings to a
-new dated file docs/LIVE_STATE_CHECK_${DATE_TAG}.md -- what you checked,
-what (if anything) drifted, what's still accurate. If nothing drifted, say
-so plainly and briefly rather than padding the file. DO NOT commit or stage
-anything -- leave changes as uncommitted working-tree edits only, that is a
-hard rule with no exceptions. DO NOT touch any git branch, checkout, or
-run git commit/add yourself."
+curl to local services) rather than trusting old docs.
+
+BEFORE checking, search the second-brain for prior findings on the same
+area so you don't re-derive or contradict something already known:
+scripts/second-brain-search.sh '<topic terms>' (plain-language query, no
+quoting needed even for hyphenated terms). If this specific drift/area was
+already investigated before, say so and build on it rather than starting
+cold.
+
+Write findings to a new dated file docs/LIVE_STATE_CHECK_${DATE_TAG}.md --
+what you checked, what (if anything) drifted, what's still accurate. If
+nothing drifted, say so plainly and briefly rather than padding the file.
+If you find a REAL, non-trivial drift or bug (not a false alarm), also
+persist it to the second-brain the same way session checkpoints do (see
+src/second_brain/remember.py's remember_text()) so it's searchable by
+future passes -- this file alone isn't enough, it's read-in-repo not
+indexed for search. DO NOT commit or stage anything -- leave changes as
+uncommitted working-tree edits only, that is a hard rule with no
+exceptions. DO NOT touch any git branch, checkout, or run git commit/add
+yourself."
 
 nohup claude --model fable -p "${PROMPT}" --permission-mode acceptEdits \
     --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \

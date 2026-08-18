@@ -15,7 +15,9 @@
     --text-muted: #77756f;
     --note: #2a78d6;      /* categorical slot 1 (all-pairs validated set) */
     --hub: #eb6834;       /* slot 2: entity hub notes (03-Entities/) */
+    --concept: #2fa84f;   /* slot 3: semantic-layer concept nodes (2026-08-18) */
     --edge: #b9b7b2;
+    --semantic-edge: #2fa84f;
     --accent-ring: #0b0b0b;
   }
   @media (prefers-color-scheme: dark) {
@@ -29,7 +31,9 @@
       --text-muted: #8f8d85;
       --note: #3987e5;
       --hub: #d95926;
+      --concept: #3fbf63;
       --edge: #4a4946;
+      --semantic-edge: #3fbf63;
       --accent-ring: #ffffff;
     }
   }
@@ -43,7 +47,9 @@
     --text-muted: #8f8d85;
     --note: #3987e5;
     --hub: #d95926;
+    --concept: #3fbf63;
     --edge: #4a4946;
+    --semantic-edge: #3fbf63;
     --accent-ring: #ffffff;
   }
   * { box-sizing: border-box; margin: 0; }
@@ -155,7 +161,7 @@ for (const n of nodes) n.degree = adj.get(n.id).length;
 // layout state -- seed deterministically on a circle by type band
 const N = nodes.length;
 nodes.forEach((n, i) => {
-  const ring = n.type === "hub" ? 160 : 340;
+  const ring = n.type === "hub" ? 160 : n.type === "concept" ? 250 : 340;
   const a = (i / N) * Math.PI * 2 * 7.13;
   n.x = Math.cos(a) * (ring + (i % 60));
   n.y = Math.sin(a) * (ring + (i % 47));
@@ -215,8 +221,9 @@ function css(name) {
 }
 let C = {};
 function refreshColors() {
-  C = { note: css("--note"), hub: css("--hub"),
-        edge: css("--edge"), text: css("--text-primary"),
+  C = { note: css("--note"), hub: css("--hub"), concept: css("--concept"),
+        edge: css("--edge"), semanticEdge: css("--semantic-edge"),
+        text: css("--text-primary"),
         muted: css("--text-muted"), surface: css("--surface-1"),
         ring: css("--accent-ring") };
 }
@@ -257,11 +264,12 @@ function draw() {
                     (s.id === selected.id || t.id === selected.id ||
                      (focus.has(s.id) && focus.has(t.id))));
     const organic = e.origin === "organic";
+    const semantic = e.origin === "semantic";
     ctx.globalAlpha = focus
       ? ((s.id === selected.id || t.id === selected.id) ? 0.85 : 0.05)
-      : (organic ? 0.85 : 0.3);
-    ctx.strokeStyle = organic ? C.hub : C.edge;
-    ctx.setLineDash(organic ? [] : [4 / view.k, 3 / view.k]);
+      : (organic ? 0.85 : semantic ? 0.55 : 0.3);
+    ctx.strokeStyle = organic ? C.hub : semantic ? C.semanticEdge : C.edge;
+    ctx.setLineDash(organic ? [] : semantic ? [1.5 / view.k, 2.5 / view.k] : [4 / view.k, 3 / view.k]);
     ctx.lineWidth = Math.min(3.2, (organic ? 1.0 : 0.5) + e.weight * 0.28) / view.k;
     ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
     ctx.setLineDash([]);
@@ -381,7 +389,10 @@ function select(n) {
       edge it participates in.</p>`;
     return;
   }
-  const rows = [["type", `${n.type === "hub" ? "entity hub" : "note"} (${n.subtype || "—"})`]];
+  const typeLabel = n.type === "hub" ? "entity hub"
+    : n.type === "concept" ? "concept" : "note";
+  const rows = [["type", `${typeLabel} (${n.subtype || "—"})`]];
+  if (n.definition) rows.push(["definition", n.definition]);
   if (n.source_file) rows.push(["source", n.source_file]);
   rows.push(["links", n.degree]);
 
@@ -445,15 +456,17 @@ document.getElementById("search").addEventListener("input", ev => {
 
 // ── legend + meta ───────────────────────────────────────────────────────────
 function buildLegend() {
-  const counts = { note: 0, hub: 0 };
+  const counts = { note: 0, hub: 0, concept: 0 };
   for (const n of nodes) counts[n.type] = (counts[n.type] || 0) + 1;
   const organicEdges = edges.filter(e => e.origin === "organic").length;
+  const semanticEdges = edges.filter(e => e.origin === "semantic").length;
+  const retrofitEdges = edges.length - organicEdges - semanticEdges;
   document.getElementById("legend").innerHTML =
-    [["note", "notes"], ["hub", "entity hubs"]].map(
+    [["note", "notes"], ["hub", "entity hubs"], ["concept", "concepts"]].map(
       ([t, lbl]) => `<span><span class="sw" style="background:${C[t]}"></span>
         ${counts[t] || 0} ${lbl}</span>`).join("") +
-    `<span>— solid: ${organicEdges} organic · dashed: ` +
-    `${edges.length - organicEdges} retrofit</span>`;
+    `<span>— solid: ${organicEdges} organic · dashed: ${retrofitEdges} ` +
+    `retrofit · dotted: ${semanticEdges} semantic</span>`;
 }
 buildLegend();
 document.getElementById("metabar").textContent =
@@ -462,7 +475,10 @@ document.getElementById("metabar").textContent =
   `${meta.retrofit_links} retrofitted raw links, ` +
   `${meta.unresolved_links} unresolved) · ${meta.isolated_notes} isolated ` +
   `notes · edges are real [[wikilinks]] in the markdown — the retrofit ` +
-  `backfilled the wiki layer the ingestion pipeline never emitted`;
+  `backfilled the wiki layer the ingestion pipeline never emitted · ` +
+  `+${meta.semantic_concept_nodes || 0} semantic-layer concepts / ` +
+  `${meta.semantic_concept_edges || 0} concept edges (broader/related/` +
+  `in-domain/tagged) overlaid from second_brain.semantic`;
 
 requestAnimationFrame(draw);
 </script>

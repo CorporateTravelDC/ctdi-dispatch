@@ -1,0 +1,707 @@
+{
+  "$schema_note": "Hand-authored, human-reviewed source of truth for the second-brain semantic layer. Plain JSON on purpose: PyYAML is installed on the host but is NOT a declared dependency of this repo and is not guaranteed inside the skill/web containers, and CLAUDE.md already establishes JSON-not-YAML as house style for declarative registries (watchlists). Rationale that would otherwise be a YAML comment is carried as real `definition` / `scope_note` / `rationale` FIELDS instead, so it survives into every export (SKOS definitions, the LLM context pack) rather than being lost at parse time.",
+
+  "version": "1.0.0",
+  "namespace": "https://example.com/ns/second-brain/",
+  "prefix": "sb",
+
+  "governance": {
+    "owner": "corporatetraveldc (operator)",
+    "status": "active",
+    "created": "2026-08-18",
+    "change_policy": "Semantics behave like code: this file is versioned, reviewed and diffed in git like any other source. Adding a concept or an alt_label is additive and safe. CHANGING a pref_label or REMOVING a concept id is a breaking change -- it invalidates compiled tables and any exported crosswalk -- and requires a minor version bump plus a note in `changelog` below.",
+    "authoring_rules": [
+      "Every concept must be grounded in something that actually exists in the live system: an RSS category id, a tag observed in the live index, a lexicon label, a vault folder, an ingest_method, or a skill/model name. Record where in `observed_as`. No aspirational concepts.",
+      "Deterministic and reviewable, never LLM-in-the-loop -- matches the standing bias recorded in docs/SECOND_BRAIN_STATUS.md for lexicon.py and retrofit_links.py.",
+      "Never delete an alt_label that was ever emitted by a live writer; historical notes still carry it and would silently stop resolving.",
+      "This file must remain a strict superset of shared/rss_catalog.py's _CONCEPT_ALIASES. `python3 -m second_brain.semantic --drift` enforces that."
+    ],
+    "changelog": [
+      {
+        "version": "1.0.0",
+        "date": "2026-08-18",
+        "change": "Initial layer. Facets, domain/genre/lifecycle/provenance concept schemes, crosswalk to the four pre-existing disjoint vocabularies, metric definitions, producing-agent register."
+      }
+    ]
+  },
+
+  "problem_statement": {
+    "summary": "The vault has FOUR independent, disjoint vocabularies naming overlapping things, plus a free-text tag string with no schema. The same business concept is written five different ways depending on which subsystem emitted it, so any query over one form silently misses the others.",
+    "measured_2026_08_18": {
+      "distinct_live_tags": 95,
+      "resolved_by_preexisting_canonical_concept": 16,
+      "unresolved_by_preexisting_canonical_concept": 79,
+      "lexicon_labels": 68,
+      "lexicon_labels_resolved_by_preexisting_canonical_concept": 4
+    },
+    "worked_example": "Advanced Air Mobility is written as `advanced_air_mobility` (RSS category + 59 note tags), `aam` (17 note tags), `vertiport`/`evtol` (17 each), `Advanced Air Mobility` (lexicon hub label / wikilink target), and `aam-daily-watch` (Ollama model + skill name). A tag query for any one of those returns a fraction of the corpus.",
+    "known_defect_found_while_building": "shared/rss_catalog.py's `trains_yachts` alias cluster contains `rail`, `railways`, `yacht`, `yachts`, `marine` but NOT `trains` -- so the 8 notes tagged `trains` fail to resolve to the very domain they belong to. Fixed here in alt_labels; rss_catalog itself is deliberately left untouched (it is live PWA behaviour and covered by the signed manifest), and `--drift` reports the divergence rather than silently papering over it."
+  },
+
+  "facets": [
+    {
+      "id": "domain",
+      "pref_label": "Domain",
+      "definition": "What the note is ABOUT -- the business or engineering subject matter.",
+      "scope_note": "Roughly one-to-one with the operator-curated RSS category catalog, which is the closest thing this platform already had to a governed subject vocabulary, extended with three domains that demonstrably exist in the vault but had no category anywhere.",
+      "polyhierarchy": true
+    },
+    {
+      "id": "genre",
+      "pref_label": "Genre",
+      "definition": "What KIND of artifact the note is -- its form and cadence, independent of subject.",
+      "scope_note": "Extracted from tags like daily/weekly/synthesis/digest/raw-feed that were flattened into the same comma string as subject tags. Separating them is most of the value: `daily` is not a topic.",
+      "polyhierarchy": false
+    },
+    {
+      "id": "lifecycle",
+      "pref_label": "Lifecycle",
+      "definition": "Where the note sits in the triage/compile workflow.",
+      "scope_note": "Reconciles three separate live encodings of the same idea: the `untriaged` tag, the `triaged: false` frontmatter key on RSS items, and vault_documents.compile_status (which is 'raw' for all 5,706 rows -- the column exists but nothing ever advances it).",
+      "polyhierarchy": false
+    },
+    {
+      "id": "provenance",
+      "pref_label": "Provenance",
+      "definition": "WHO or WHAT produced the note, and under what authority. The context-graph facet.",
+      "scope_note": "A semantic layer that only defines subjects can say what a note is about but not whether to trust it. This facet carries the auto-vs-authored distinction, the producing agent, and whether the content passed a human review gate.",
+      "polyhierarchy": false
+    },
+    {
+      "id": "entity",
+      "pref_label": "Entity",
+      "definition": "A named thing the vault tracks: a person, agent, organisation, place, system, project or cross-cutting topic.",
+      "scope_note": "NOT enumerated in this file. Populated at load time from second_brain.knowledge_graph.lexicon, which is already the curated, deterministic, operator-reviewed entity list and the authority for [[wikilink]] hub names. Duplicating those 68 entries here would create a fifth vocabulary -- exactly the disease this layer is meant to cure. The lexicon's own `subtype` values (person/agent/org/place/system/project/topic) become sub-facets.",
+      "polyhierarchy": false,
+      "populated_from": "second_brain.knowledge_graph.lexicon.LEXICON"
+    }
+  ],
+
+  "concepts": [
+    {
+      "id": "aviation",
+      "facet": "domain",
+      "pref_label": "Aviation",
+      "definition": "Commercial and general aviation: airlines, airports, air traffic operations, aircraft, and the FAA data feeds the platform ingests.",
+      "alt_labels": ["aviation", "aero", "air travel", "airline industry", "airlines", "flight", "flights"],
+      "related": ["advanced_air_mobility", "platform_engineering"],
+      "observed_as": {
+        "rss_category": "aviation",
+        "note_tags": ["aviation"],
+        "skills": ["aviation_daily_watch"],
+        "ollama_models": ["corporatetraveldc-pi5-aviation-daily-watch"]
+      }
+    },
+    {
+      "id": "advanced_air_mobility",
+      "facet": "domain",
+      "pref_label": "Advanced Air Mobility",
+      "definition": "eVTOL/eSTOL aircraft, vertiports, urban air mobility, UTM, and the operators and regulators building that market.",
+      "scope_note": "The single worst-fragmented concept in the vault: five distinct surface forms across five subsystems. `evtoll`/`evtolls` are retained because eVTOL reliably mis-transcribes to 'EV toll' in speech-to-text, a real precedent recorded in AI-memory and already honoured by rss_catalog.",
+      "alt_labels": [
+        "aam", "advancedairmobility", "advanced air mobility",
+        "evtol", "evtols", "estol", "evtolestol",
+        "evtoll", "evtolls",
+        "uam", "urban air mobility", "urbanairmobility",
+        "vertiport", "vertiports", "air taxi", "airtaxi", "airtaxis",
+        "utm", "aam-daily-watch", "aam-weekly-watch"
+      ],
+      "noisy_forms": ["utm"],
+      "noisy_forms_rationale": "`utm` is a legitimate identifier for Unmanned Traffic Management and must keep resolving as one, but it is also the prefix of the near-universal utm_source / utm_medium / utm_campaign URL tracking parameters, which appear in almost every RSS item body in the vault. Left in the full-text expansion it matched hundreds of notes on their tracking URLs -- a live search for 'AAM' returned syndication noise as if it were vertiport coverage. Kept as a resolvable label, excluded from full-text expansion.",
+      "broader": "aviation",
+      "observed_as": {
+        "rss_category": "advanced_air_mobility",
+        "note_tags": ["advanced_air_mobility", "aam", "vertiport", "evtol"],
+        "lexicon_label": "Advanced Air Mobility",
+        "vault_paths": ["03-Entities/advanced_air_mobility-*"],
+        "skills": ["aam_daily_watch", "aam_weekly_watch"],
+        "ollama_models": ["corporatetraveldc-pi5-aam-daily-watch", "corporatetraveldc-pi5-aam-weekly-watch"]
+      }
+    },
+    {
+      "id": "trains_yachts",
+      "facet": "domain",
+      "pref_label": "Rail and Marine",
+      "definition": "Passenger rail and private marine transport as executive-travel modes: Amtrak and the Northeast Corridor, yachts and marine industry news.",
+      "scope_note": "The operator deliberately bundled rail and marine into one RSS category because feed volume for either half alone is thin. Kept as one concept to stay faithful to that decision, with rail and marine as narrower concepts so a rail-only query is still expressible.",
+      "alt_labels": [
+        "trains_yachts", "trainsyachts", "trains and yachts",
+        "trains", "train", "rail", "railways", "railway", "railroad",
+        "yacht", "yachts", "marine", "maritime",
+        "trains-yachts-daily-watch"
+      ],
+      "observed_as": {
+        "rss_category": "trains_yachts",
+        "note_tags": ["trains_yachts", "trains", "rail", "yachts", "marine"],
+        "skills": ["trains_yachts_daily_watch"],
+        "ollama_models": ["corporatetraveldc-pi5-trains-yachts-daily-watch"]
+      }
+    },
+    {
+      "id": "rail_transport",
+      "facet": "domain",
+      "pref_label": "Rail Transport",
+      "definition": "Passenger rail specifically -- Amtrak, Acela, the Northeast Corridor, WMATA.",
+      "alt_labels": ["rail", "railways", "trains", "train", "amtrak", "acela", "northeast corridor", "nec"],
+      "broader": "trains_yachts",
+      "observed_as": { "note_tags": ["trains", "rail"], "lexicon_label": "Amtrak" }
+    },
+    {
+      "id": "marine_transport",
+      "facet": "domain",
+      "pref_label": "Marine Transport",
+      "definition": "Private marine transport: yachts, vessels, MMSI-tracked craft.",
+      "alt_labels": ["marine", "maritime", "yacht", "yachts", "vessel", "vessels", "mmsi"],
+      "broader": "trains_yachts",
+      "observed_as": { "note_tags": ["yachts", "marine"] }
+    },
+    {
+      "id": "executive_protection",
+      "facet": "domain",
+      "pref_label": "Executive Protection",
+      "definition": "Close protection, protective detail operations, threat and security advisories relevant to principals travelling in the DC area, including counter-UAS.",
+      "alt_labels": [
+        "executive_protection", "executive-protection", "executiveprotection",
+        "ep", "close protection", "closeprotection",
+        "protective detail", "protectivedetail",
+        "security", "counter-uas", "counteruas", "counteruav", "cuas",
+        "executive-protection-daily-watch"
+      ],
+      "observed_as": {
+        "rss_category": "executive_protection",
+        "note_tags": ["executive_protection", "executive-protection", "security"],
+        "lexicon_label": "Executive Protection",
+        "skills": ["executive_protection_daily_watch", "ep_advance_brief"],
+        "ollama_models": ["corporatetraveldc-pi5-executive-protection-daily-watch", "corporatetraveldc-pi5-ep-advance"]
+      }
+    },
+    {
+      "id": "gig_economy",
+      "facet": "domain",
+      "pref_label": "Gig Economy",
+      "definition": "Platform labour markets and their operators: rideshare, delivery, and the labour-economics and regulatory coverage around them.",
+      "alt_labels": [
+        "gig_economy", "gig-economy", "gigeconomy", "gig",
+        "rideshare", "ridesharing", "gig work", "gigwork",
+        "doordash", "uber eats", "ubereats", "grubhub",
+        "gig-economy-daily-watch"
+      ],
+      "observed_as": {
+        "rss_category": "gig_economy",
+        "note_tags": ["gig_economy", "gig-economy"],
+        "lexicon_label": "Gig Economy",
+        "skills": ["gig_economy_daily_watch"],
+        "ollama_models": ["corporatetraveldc-pi5-gig-economy-daily-watch"]
+      }
+    },
+    {
+      "id": "concierge_luxury_travel",
+      "facet": "domain",
+      "pref_label": "Concierge and Luxury Travel",
+      "definition": "Concierge service, luxury hospitality, hotels and lodging, and the premium end of the travel market the business sells into.",
+      "alt_labels": [
+        "concierge_luxury_travel", "conciergeluxurytravel",
+        "concierge travel", "conciergetravel",
+        "concierge", "luxury-travel", "luxury travel", "luxurytravel",
+        "hotel", "hotels", "lodging", "hospitality", "resort",
+        "concierge-travel-daily-watch"
+      ],
+      "related": ["travel_trends"],
+      "observed_as": {
+        "rss_category": "concierge_luxury_travel",
+        "note_tags": ["concierge_luxury_travel", "concierge", "luxury-travel"],
+        "lexicon_label": "Concierge",
+        "skills": ["concierge_travel_daily_watch"],
+        "ollama_models": ["corporatetraveldc-pi5-concierge-travel-daily-watch"]
+      }
+    },
+    {
+      "id": "corporate_travel",
+      "facet": "domain",
+      "pref_label": "Corporate Travel",
+      "definition": "Business/corporate travel management: the core service line this platform exists to support.",
+      "scope_note": "Present in the entity lexicon and in the company name itself, but has no RSS category of its own -- corporate_intel and travel_trends are its nearest feed sources. Declared here because it is the commercial centre of gravity and notes about it were otherwise unclassifiable.",
+      "alt_labels": ["corporate travel", "business travel", "corporate_travel", "ground transport", "chauffeur", "limo", "limousine", "black car"],
+      "related": ["corporate_intel", "travel_trends", "concierge_luxury_travel"],
+      "observed_as": { "lexicon_label": "Corporate Travel" }
+    },
+    {
+      "id": "corporate_intel",
+      "facet": "domain",
+      "pref_label": "Corporate Intel",
+      "definition": "General corporate, federal-market and industry intelligence relevant to the business's buyers.",
+      "alt_labels": ["corporate_intel", "corporate intel", "corporateintel", "corporate intelligence"],
+      "observed_as": { "rss_category": "corporate_intel" }
+    },
+    {
+      "id": "marketing_intel",
+      "facet": "domain",
+      "pref_label": "Marketing Intel",
+      "definition": "Marketing, brand and luxury-media intelligence -- what the premium travel market is being told about itself.",
+      "alt_labels": ["marketing_intel", "marketing intel", "marketingintel", "marketing intelligence"],
+      "observed_as": { "rss_category": "marketing_intel" }
+    },
+    {
+      "id": "travel_trends",
+      "facet": "domain",
+      "pref_label": "Travel Trends",
+      "definition": "Consumer and industry travel trend coverage: loyalty, fares, routes, destinations.",
+      "alt_labels": ["travel_trends", "travel trends", "traveltrends"],
+      "observed_as": { "rss_category": "travel_trends" }
+    },
+    {
+      "id": "dc_area",
+      "facet": "domain",
+      "pref_label": "DC Area",
+      "definition": "Washington DC metropolitan area local news, traffic, transit and civic events -- the platform's entire operational geography.",
+      "alt_labels": ["dc_area", "dc area", "dcarea", "washington dc", "dmv", "national capital region", "ncr"],
+      "observed_as": { "rss_category": "dc_area", "lexicon_label": "Washington DC" }
+    },
+    {
+      "id": "osint_cybersecurity_video",
+      "facet": "domain",
+      "pref_label": "OSINT and Cybersecurity",
+      "definition": "Open-source intelligence tradecraft and cybersecurity/offensive-security research, including conference video.",
+      "alt_labels": [
+        "osint_cybersecurity_video", "osintcybersecurityvideo", "osintcybersecurity",
+        "osint", "cybersecurity video", "cybersecurityvideo",
+        "cybersecurity", "cybersec", "infosec",
+        "pentest", "pentesting", "penetration testing", "penetrationtesting",
+        "offsec", "red team", "redteam", "blackhat", "defcon", "security video", "securityvideo",
+        "paintcybersecurity", "paintsecurityvideo", "paintsecurity"
+      ],
+      "related": ["compliance_governance"],
+      "observed_as": {
+        "rss_category": "osint_cybersecurity_video",
+        "skills": ["osint_monitor"],
+        "ollama_models": ["corporatetraveldc-pi5-osint-monitor"]
+      }
+    },
+    {
+      "id": "platform_engineering",
+      "facet": "domain",
+      "pref_label": "Platform Engineering",
+      "definition": "The ctdi-dispatch platform's own engineering knowledge: infrastructure, SWIM feed ingest, containers, thermal and Ollama behaviour, incident root-causes and architecture decisions.",
+      "scope_note": "GAP FOUND 2026-08-18. This is one of the largest bodies of content in the vault -- essentially all of 06-AI-Memory/ and most of Docs/ -- and it had no representation in ANY existing vocabulary: no RSS category, no folder category beyond 'business-uncategorized', and only scattered lexicon system entries. Agents were writing engineering checkpoints into a corpus that could not classify them.",
+      "scope_note_2": "Deliberately does NOT list system proper nouns (SWIM, Ollama, nginx, ...) as alt_labels. Those name ENTITIES that sit inside this domain; they are not synonyms for it. Collapsing them would erase the entity facet entirely -- the first draft of this file did exactly that and swallowed 16 lexicon entities. The entity-to-domain relationship is expressed once, in `entity_domains` below.",
+      "alt_labels": [
+        "platform_engineering", "platform engineering",
+        "infra", "infrastructure", "ops-findings", "opsfindings",
+        "architecture-checkpoint", "architecture checkpoint",
+        "dispatch platform", "root-cause", "recurring-regression",
+        "bug", "regression", "thermal", "phase4", "timeouts",
+        "corporatetraveldc", "project-history",
+        "documentation", "docs-drift", "doc-drift", "drift-check",
+        "git-hooks", "concurrency", "model-consolidation",
+        "measurements", "push-dedup", "ntfy-spam", "fixed"
+      ],
+      "alt_labels_provenance": "The trailing block from 'corporatetraveldc' onward was added 2026-08-18 by working the --drift unmapped-tag backlog: each was a live tag the first compile could not place, verified by reading the notes carrying it. Tags left deliberately unmapped in that pass: date stamps (2026-08-17), test/smoke markers, and one-off identifiers (ua456, ord) -- those are not concepts and should stay in the backlog rather than be forced into one.",
+      "observed_as": {
+        "note_tags": ["infra", "ops-findings", "architecture-checkpoint", "root-cause", "bug", "recurring-regression", "phase4", "timeouts"],
+        "note_tags_belonging_to_entities_not_this_domain": ["ctdi-dispatch", "ollama", "tfms", "fdps", "swim", "mcp"],
+        "vault_paths": ["06-AI-Memory/", "Docs/"]
+      }
+    },
+    {
+      "id": "investor_relations",
+      "facet": "domain",
+      "pref_label": "Investor Relations",
+      "definition": "Investor-facing materials and the diligence trail behind them: pitch deck, executive summary, financial model, data-room documents.",
+      "scope_note": "GAP FOUND 2026-08-18. 48 documents live under Docs/investor-materials/ plus a versioned backup tree, and the topic is an active operator workstream, but no existing vocabulary named it.",
+      "alt_labels": [
+        "investor_relations", "investor relations", "investor-materials", "investor materials",
+        "pitch deck", "pitchdeck", "executive summary", "due diligence", "duediligence",
+        "data room", "dataroom", "cap table", "captable", "fundraising"
+      ],
+      "observed_as": {
+        "note_tags": ["investor-materials", "canonical-path"],
+        "lexicon_label": "Investor Materials",
+        "vault_paths": ["Docs/investor-materials/"]
+      }
+    },
+    {
+      "id": "compliance_governance",
+      "facet": "domain",
+      "pref_label": "Compliance and Governance",
+      "definition": "Regulatory, security-compliance and AI-governance obligations: ISO 42001 alignment, CUI/PII handling, audit trails, penetration-test findings.",
+      "scope_note": "GAP FOUND 2026-08-18. Represented in the lexicon only as the bare topic 'ISO 42001', with no home for the broader compliance corpus (COMPLIANCE_SECURITY, pentest logs, the scrub gate's rationale).",
+      "alt_labels": [
+        "compliance_governance", "compliance", "governance",
+        "iso 42001", "iso42001", "iso-42001",
+        "cui", "pii", "audit", "audit trail", "audit-log", "regulatory"
+      ],
+      "related": ["osint_cybersecurity_video"],
+      "observed_as": {
+        "note_tags": ["reference"],
+        "lexicon_label": "ISO 42001",
+        "vault_paths": ["Docs/"]
+      }
+    },
+    {
+      "id": "transport_patterns",
+      "facet": "domain",
+      "pref_label": "Transport Patterns",
+      "definition": "Longitudinal analysis of observed transport behaviour across modes -- codeshare structure, schedule reliability, disruption and weather-facility impact -- derived from the platform's own accumulated feed data rather than from external news.",
+      "scope_note": "Distinct from `aviation` because its evidence base is this platform's own operational history, not third-party reporting. That provenance difference matters when an agent is deciding what it may assert as fact.",
+      "alt_labels": ["transport-patterns", "transport patterns", "transport_patterns", "codeshare", "disruption", "weather-facility", "nas-programs", "shuttle-flight-reliability"],
+      "related": ["aviation", "rail_transport"],
+      "observed_as": {
+        "note_tags": ["transport-patterns", "codeshare", "disruption", "weather-facility"],
+        "vault_paths": ["01-Sources/transport-patterns/"],
+        "skills": ["transport_pattern_digest", "disruption_weather_digest"],
+        "ollama_models": ["corporatetraveldc-pi5-transport-digest", "corporatetraveldc-pi5-disruption-weather-digest"]
+      }
+    },
+
+    {
+      "id": "raw_feed_item",
+      "facet": "genre",
+      "pref_label": "Raw Feed Item",
+      "definition": "A single unprocessed item captured verbatim from an external feed. Evidence, not analysis.",
+      "scope_note": "4,540 of the vault's 5,706 documents. Any agent summarising 'the vault' without excluding this genre is summarising an RSS reader.",
+      "alt_labels": ["rss", "raw-feed", "rawfeed", "feed item", "raw"],
+      "observed_as": { "note_tags": ["rss", "raw-feed"], "vault_paths": ["00-Inbox/rss/"], "ingest_methods": ["rss"] }
+    },
+    {
+      "id": "daily_synthesis",
+      "facet": "genre",
+      "pref_label": "Daily Synthesis",
+      "definition": "A once-daily model-written roll-up over one domain's feed items.",
+      "alt_labels": ["daily", "daily-watch", "daily synthesis"],
+      "broader": "synthesis",
+      "observed_as": { "note_tags": ["daily", "synthesis"], "vault_paths": ["04-Syntheses/daily/", "01-Sources/daily/"] }
+    },
+    {
+      "id": "weekly_synthesis",
+      "facet": "genre",
+      "pref_label": "Weekly Synthesis",
+      "definition": "A once-weekly roll-up, usually over the week's daily syntheses rather than over raw items.",
+      "alt_labels": ["weekly", "weekly-compile", "weekly synthesis", "digest", "dispatch-desk"],
+      "broader": "synthesis",
+      "observed_as": { "note_tags": ["weekly", "digest", "dispatch-desk"], "vault_paths": ["04-Syntheses/weekly/"] }
+    },
+    {
+      "id": "synthesis",
+      "facet": "genre",
+      "pref_label": "Synthesis",
+      "definition": "Any derived, interpretive note written over other notes rather than captured from a source.",
+      "alt_labels": ["synthesis", "syntheses", "compile", "roll-up", "rollup"],
+      "observed_as": { "note_tags": ["synthesis"], "vault_paths": ["04-Syntheses/"] }
+    },
+    {
+      "id": "entity_hub",
+      "facet": "genre",
+      "pref_label": "Entity Hub",
+      "definition": "A [[wikilink]] hub note for one tracked entity, holding its mention history and backlinks. The join table of the vault, expressed as markdown.",
+      "alt_labels": ["entity", "hub", "entity hub", "entity-hub"],
+      "observed_as": { "note_tags": ["entity"], "vault_paths": ["03-Entities/"], "ingest_methods": ["entity-tracking-promotion"] }
+    },
+    {
+      "id": "cross_link_finding",
+      "facet": "genre",
+      "pref_label": "Cross-Link Finding",
+      "definition": "A note recording that an entity appeared in a domain other than its home domain -- the vault's own novelty detector.",
+      "alt_labels": ["novel-finding", "cross-link", "crosslink", "novel finding", "cross link", "uber-series"],
+      "observed_as": { "note_tags": ["novel-finding", "cross-link"], "vault_paths": ["00-Inbox/cross-link-findings/"], "ingest_methods": ["entity-tracking-novel-finding"] }
+    },
+    {
+      "id": "session_checkpoint",
+      "facet": "genre",
+      "pref_label": "Session Checkpoint",
+      "definition": "A working note left by an agent or the operator to carry context across sessions: notepad entries, architecture checkpoints, coordination notes.",
+      "scope_note": "06-AI-Memory/ was created explicitly as a provider-agnostic shared memory space so context stays congruent across Claude, Ollama and any future model. That makes it the natural home for the semantic layer's own exports.",
+      "alt_labels": ["checkpoint", "architecture-checkpoint", "notepad", "session-log", "ai-memory", "memory"],
+      "observed_as": { "note_tags": ["architecture-checkpoint"], "vault_paths": ["06-AI-Memory/"] }
+    },
+    {
+      "id": "reference_document",
+      "facet": "genre",
+      "pref_label": "Reference Document",
+      "definition": "A durable reference artifact: specification, curriculum, compliance review, investor material, archived report.",
+      "alt_labels": ["reference", "doc", "docs", "document", "specification"],
+      "observed_as": { "note_tags": ["reference"], "vault_paths": ["Docs/"] }
+    },
+    {
+      "id": "manual_capture",
+      "facet": "genre",
+      "pref_label": "Manual Capture",
+      "definition": "A fact, quote or finding deliberately committed to the vault by a human or agent through second_brain.remember.",
+      "scope_note": "The highest-intent genre in the vault: someone chose to keep this. Weight it accordingly when retrieving.",
+      "alt_labels": ["manual", "remember", "high-priority", "authored", "captured"],
+      "observed_as": { "note_tags": ["manual", "high-priority", "authored"], "vault_paths": ["01-Sources/manual/"], "ingest_methods": ["manual"] }
+    },
+
+    {
+      "id": "untriaged",
+      "facet": "lifecycle",
+      "pref_label": "Untriaged",
+      "definition": "Captured but never reviewed or promoted. Present in the index, but not yet part of the curated garden.",
+      "alt_labels": ["untriaged", "raw", "unreviewed", "inbox"],
+      "observed_as": { "note_tags": ["untriaged"], "frontmatter": ["triaged: false"], "compile_status": ["raw"] }
+    },
+    {
+      "id": "triaged",
+      "facet": "lifecycle",
+      "pref_label": "Triaged",
+      "definition": "Reviewed and kept, but not yet woven into a synthesis or an entity hub.",
+      "alt_labels": ["triaged", "reviewed", "kept"],
+      "observed_as": { "frontmatter": ["triaged: true"] }
+    },
+    {
+      "id": "compiled",
+      "facet": "lifecycle",
+      "pref_label": "Compiled",
+      "definition": "Incorporated into a synthesis or an entity hub -- the note has contributed to derived knowledge.",
+      "alt_labels": ["compiled", "woven", "synthesised", "synthesized"],
+      "observed_as": { "compile_status": ["compiled"] }
+    },
+    {
+      "id": "citable",
+      "facet": "lifecycle",
+      "pref_label": "Citable",
+      "definition": "Explicitly cleared for external citation -- operator-approved for use in outward-facing material.",
+      "scope_note": "An authority marker, not a quality marker. It records that a human made a release decision about this content.",
+      "alt_labels": ["citable", "cleared", "publishable"],
+      "observed_as": { "note_tags": ["citable"], "frontmatter": ["citable: true"] }
+    },
+    {
+      "id": "archived",
+      "facet": "lifecycle",
+      "pref_label": "Archived",
+      "definition": "Superseded or retired, retained for the record only.",
+      "alt_labels": ["archive", "archived", "superseded", "retired", "processed"],
+      "observed_as": { "vault_paths": ["99-Archive/", ".internal-backups/", "06-AI-Memory/notepad/processed/"] }
+    },
+
+    {
+      "id": "machine_generated",
+      "facet": "provenance",
+      "pref_label": "Machine Generated",
+      "definition": "Written by an automated skill without a human in the loop, typically by a local Ollama model over feed input.",
+      "scope_note": "Trust implication: the CLAIMS in these notes are model output over real inputs, not verified fact. An agent citing one should attribute it to the producing skill, not to the platform.",
+      "alt_labels": ["auto", "automated", "generated", "machine", "llm-written"],
+      "observed_as": { "note_tags": ["auto"] }
+    },
+    {
+      "id": "human_authored",
+      "facet": "provenance",
+      "pref_label": "Human Authored",
+      "definition": "Written or deliberately captured by the operator.",
+      "alt_labels": ["authored", "personal", "human", "operator", "manual"],
+      "observed_as": { "note_tags": ["authored", "personal", "manual"], "ingest_methods": ["manual", "personal-notes"] }
+    },
+    {
+      "id": "agent_authored",
+      "facet": "provenance",
+      "pref_label": "Agent Authored",
+      "definition": "Written by a reasoning agent (a Claude session or equivalent) working on this repo, as opposed to a scheduled skill.",
+      "scope_note": "Distinguished from machine_generated because the trust profile differs: an agent checkpoint is a considered claim about the system, made with tool access to verify it, whereas a daily-watch synthesis is a summarisation pass over news.",
+      "alt_labels": ["agent-authored", "agent authored", "claude-session", "session-log", "checkpoint"],
+      "observed_as": { "note_tags": ["architecture-checkpoint"], "vault_paths": ["06-AI-Memory/claude/"] }
+    },
+    {
+      "id": "verbatim_capture",
+      "facet": "provenance",
+      "pref_label": "Verbatim Capture",
+      "definition": "Reproduced unaltered from an external source. No interpretation was applied.",
+      "alt_labels": ["verbatim", "raw-feed", "rss", "unmodified"],
+      "observed_as": { "note_tags": ["rss", "raw-feed"], "ingest_methods": ["rss", "demo-archiver-daily"] }
+    },
+    {
+      "id": "scrub_gated",
+      "facet": "provenance",
+      "pref_label": "Scrub Gated",
+      "definition": "Passed the CUI/PII scrub gate before being written to the vault.",
+      "scope_note": "Every write path through second_brain.remember and the automated ingest skills calls scrub_gate.gate(), which BLOCKS rather than redacts. This concept exists so the guarantee is queryable rather than merely documented.",
+      "alt_labels": ["scrub-gated", "scrubbed", "gated", "cui-checked"],
+      "observed_as": { "ingest_methods": ["manual", "personal-notes", "rss"] }
+    }
+  ],
+
+  "entity_domains": {
+    "rationale": "Which domain each curated lexicon entity belongs to. This is the join the vault never had: the lexicon knows WHAT an entity is (its subtype), and the RSS catalog knows WHICH domains exist, but nothing connected the two -- so a note mentioning Joby Aviation could not be found by a query for Advanced Air Mobility unless it also happened to carry the right tag. Expressed once here, as a relation between facets, rather than by flattening entity names into domain alt_labels (which erases the entity facet -- see platform_engineering.scope_note_2). Keys are lexicon labels VERBATIM; unmapped entities are simply un-domained, which is honest and shows up in --drift.",
+    "map": {
+      "FAA": "aviation",
+      "SWIM": "aviation",
+      "FDPS": "aviation",
+      "TFMS": "aviation",
+      "STDDS": "aviation",
+      "ITWS": "aviation",
+      "TBFM": "aviation",
+      "AIM-FNS": "aviation",
+      "NOTAM": "aviation",
+      "TFR": "aviation",
+      "METAR": "aviation",
+      "ACARS": "aviation",
+      "ADS-B": "aviation",
+      "FIDS": "aviation",
+      "CPS": "aviation",
+      "NWS": "aviation",
+      "Boeing": "aviation",
+      "United Airlines": "aviation",
+      "American Airlines": "aviation",
+      "Delta Air Lines": "aviation",
+      "Archer Aviation": "advanced_air_mobility",
+      "Joby Aviation": "advanced_air_mobility",
+      "Washington DC": "dc_area",
+      "DCA": "dc_area",
+      "IAD": "dc_area",
+      "BWI": "dc_area",
+      "Potomac TRACON": "dc_area",
+      "Amtrak": "rail_transport",
+      "Northeast Corridor": "rail_transport",
+      "WMATA": "rail_transport",
+      "Uber": "gig_economy",
+      "Lyft": "gig_economy",
+      "Marriott": "concierge_luxury_travel",
+      "Hilton": "concierge_luxury_travel",
+      "Hotels and Lodging": "concierge_luxury_travel",
+      "Limo Anywhere": "corporate_travel",
+      "RingCentral": "corporate_travel",
+      "3CX": "corporate_travel",
+      "Raspberry Pi 5": "platform_engineering",
+      "Nextcloud": "platform_engineering",
+      "WebDAV": "platform_engineering",
+      "Tailscale": "platform_engineering",
+      "ntfy": "platform_engineering",
+      "Podman": "platform_engineering",
+      "systemd": "platform_engineering",
+      "SELinux": "platform_engineering",
+      "nginx": "platform_engineering",
+      "RTL-SDR": "platform_engineering",
+      "ProtonMail Bridge": "platform_engineering",
+      "MCP": "platform_engineering",
+      "dispatch-mcp": "platform_engineering",
+      "ctdi-dispatch": "platform_engineering",
+      "demo-archiver": "platform_engineering",
+      "Second Brain": "platform_engineering",
+      "Scrub Gate": "compliance_governance",
+      "Watchlist": "platform_engineering",
+      "Thermal Management": "platform_engineering",
+      "Ollama": "platform_engineering",
+      "Claude": "platform_engineering",
+      "the operator": "platform_engineering"
+    }
+  },
+
+  "agents": [
+    { "id": "second_brain_rss", "pref_label": "RSS Ingest", "kind": "scheduled_skill", "writes_genre": "raw_feed_item", "writes_provenance": "verbatim_capture", "authority": "May write only to 00-Inbox/rss/. Never interprets; never promotes.", "domains": "all (whole feed pool)" },
+    { "id": "second_brain_daily", "pref_label": "Daily Compile", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Summarises the day's captures. May not assert facts absent from its inputs.", "domains": "all" },
+    { "id": "second_brain_weekly", "pref_label": "Weekly Compile", "kind": "scheduled_skill", "writes_genre": "weekly_synthesis", "writes_provenance": "machine_generated", "authority": "Summarises the week's daily notes.", "domains": "all" },
+    { "id": "aam_daily_watch", "pref_label": "AAM Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "advanced_air_mobility" },
+    { "id": "aam_weekly_watch", "pref_label": "AAM Weekly Watch", "kind": "scheduled_skill", "writes_genre": "weekly_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "advanced_air_mobility" },
+    { "id": "aviation_daily_watch", "pref_label": "Aviation Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "aviation" },
+    { "id": "executive_protection_daily_watch", "pref_label": "EP Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "executive_protection" },
+    { "id": "gig_economy_daily_watch", "pref_label": "Gig Economy Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "gig_economy" },
+    { "id": "concierge_travel_daily_watch", "pref_label": "Concierge Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "concierge_luxury_travel" },
+    { "id": "trains_yachts_daily_watch", "pref_label": "Rail/Marine Daily Watch", "kind": "scheduled_skill", "writes_genre": "daily_synthesis", "writes_provenance": "machine_generated", "authority": "Domain watch.", "domains": "trains_yachts" },
+    { "id": "transport_pattern_digest", "pref_label": "Transport Pattern Digest", "kind": "scheduled_skill", "writes_genre": "synthesis", "writes_provenance": "machine_generated", "authority": "Analyses the platform's OWN feed history. Its claims are grounded in local operational data, not third-party reporting.", "domains": "transport_patterns" },
+    { "id": "disruption_weather_digest", "pref_label": "Disruption/Weather Digest", "kind": "scheduled_skill", "writes_genre": "synthesis", "writes_provenance": "machine_generated", "authority": "As above.", "domains": "transport_patterns" },
+    { "id": "dispatch_desk_memo", "pref_label": "Dispatch Desk Memo", "kind": "scheduled_skill", "writes_genre": "weekly_synthesis", "writes_provenance": "machine_generated", "authority": "Cross-domain weekly memo.", "domains": "corporate_intel, marketing_intel, travel_trends, dc_area, aviation, advanced_air_mobility" },
+    { "id": "entity_tracking", "pref_label": "Entity Tracking", "kind": "library", "writes_genre": "cross_link_finding", "writes_provenance": "machine_generated", "authority": "May PROMOTE an entity to a tracked hub after recurrence thresholds. Promotion is a durable vocabulary change and is recorded with promotion_trigger.", "domains": "all" },
+    { "id": "remember", "pref_label": "Manual Remember", "kind": "operator_tool", "writes_genre": "manual_capture", "writes_provenance": "human_authored", "authority": "Highest-intent write path. Scrub-gated. CLI and POST /api/v1/remember.", "domains": "all" },
+    { "id": "retrofit_links", "pref_label": "Wikilink Retrofit", "kind": "maintenance_tool", "writes_genre": "entity_hub", "writes_provenance": "machine_generated", "authority": "Deterministic regex only, no LLM. Edits are ADDITIVE and marked with an auto-wikilinks marker so retrofit structure is always separable from organic structure.", "domains": "all" },
+    { "id": "claude_session", "pref_label": "Claude Agent Session", "kind": "reasoning_agent", "writes_genre": "session_checkpoint", "writes_provenance": "agent_authored", "authority": "Writes findings via remember/notepad. Per CLAUDE.md: stages code but does not commit; must check 06-AI-Memory/notepad/ for concurrent-session coordination before touching shared live state.", "domains": "all" },
+    { "id": "ollama_local_model", "pref_label": "Local Ollama Model", "kind": "reasoning_agent", "writes_genre": "synthesis", "writes_provenance": "machine_generated", "authority": "21 dedicated corporatetraveldc-pi5-* models on one Pi 5, single-model residency, thermally governed. Context is scarce -- consumes the token-budgeted context pack, not the full ontology.", "domains": "per-model" }
+  ],
+
+  "metrics": [
+    {
+      "id": "indexed_documents",
+      "pref_label": "Indexed Documents",
+      "definition": "Every file the vault index knows about, including personal media and templates.",
+      "unit": "documents",
+      "sql": "SELECT COUNT(*) FROM vault_documents"
+    },
+    {
+      "id": "searchable_notes",
+      "pref_label": "Searchable Notes",
+      "definition": "Notes with full-text-indexed content. Strictly smaller than indexed_documents: the vault scan records metadata for every file but only fetches bytes for real notes.",
+      "unit": "notes",
+      "sql": "SELECT COUNT(*) FROM vault_notes_fts"
+    },
+    {
+      "id": "curated_notes",
+      "pref_label": "Curated Notes",
+      "definition": "Searchable notes EXCLUDING raw feed items. The actual knowledge garden, as opposed to the intake buffer.",
+      "scope_note": "This is the single most misused number in the vault. 'The vault has 5,706 documents' is true and misleading; the curated corpus is two orders of magnitude smaller. Any agent reporting vault size should report this metric alongside the raw count.",
+      "unit": "notes",
+      "sql": "SELECT COUNT(*) FROM vault_notes_fts WHERE path NOT LIKE '%/00-Inbox/rss/%'"
+    },
+    {
+      "id": "triage_backlog",
+      "pref_label": "Triage Backlog",
+      "definition": "Notes captured but never reviewed.",
+      "unit": "notes",
+      "sql": "SELECT COUNT(*) FROM vault_notes_fts WHERE tags LIKE '%untriaged%'"
+    },
+    {
+      "id": "triage_rate",
+      "pref_label": "Triage Rate",
+      "definition": "Share of searchable notes that are NOT sitting untriaged. A garden-health measure.",
+      "unit": "ratio",
+      "sql": "SELECT ROUND(1.0 - (CAST(SUM(CASE WHEN tags LIKE '%untriaged%' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*),0)), 4) FROM vault_notes_fts"
+    },
+    {
+      "id": "concept_coverage",
+      "pref_label": "Concept Coverage",
+      "definition": "Share of curated notes that the semantic layer can assign at least one DOMAIN concept to. Measures how much of the garden is semantically reachable.",
+      "scope_note": "Requires the compiled semantic_note_concepts table. This is the layer's own scoreboard: it should rise as alt_labels and assignment rules improve, and a fall means a writer started emitting an unmapped vocabulary. The numerator is constrained to paths that are actually IN vault_notes_fts -- assignment also fires on vault_documents rows (PDFs, vCards, HTML) that have no full-text row, and counting those against an FTS denominator produced a coverage ratio above 1.0 in the first compile.",
+      "unit": "ratio",
+      "sql": "SELECT ROUND(CAST((SELECT COUNT(DISTINCT nc.path) FROM semantic_note_concepts nc JOIN semantic_concepts c ON c.id = nc.concept_id WHERE c.facet='domain' AND nc.path NOT LIKE '%/00-Inbox/rss/%' AND nc.path IN (SELECT path FROM vault_notes_fts)) AS REAL) / NULLIF((SELECT COUNT(*) FROM vault_notes_fts WHERE path NOT LIKE '%/00-Inbox/rss/%'),0), 4)"
+    },
+    {
+      "id": "notes_by_domain",
+      "pref_label": "Notes by Domain",
+      "definition": "Curated note count per domain concept, counting every surface form as the one concept.",
+      "scope_note": "The payoff metric. Before this layer, the same figures could only be produced per-tag-spelling, which fragmented every domain across two to five buckets.",
+      "unit": "notes per concept",
+      "grain": "concept",
+      "sql": "SELECT c.pref_label, COUNT(DISTINCT nc.path) AS notes FROM semantic_note_concepts nc JOIN semantic_concepts c ON c.id = nc.concept_id WHERE c.facet='domain' AND nc.path NOT LIKE '%/00-Inbox/rss/%' GROUP BY c.id ORDER BY notes DESC"
+    },
+    {
+      "id": "authored_share",
+      "pref_label": "Human-Authored Share",
+      "definition": "Share of curated notes carrying human or agent provenance rather than pure machine generation. A dilution guard: a garden that is 100% machine-generated is a feed, not a second brain.",
+      "unit": "ratio",
+      "grain": "corpus",
+      "sql": "SELECT ROUND(CAST((SELECT COUNT(DISTINCT nc.path) FROM semantic_note_concepts nc WHERE nc.concept_id IN ('human_authored','agent_authored') AND nc.path NOT LIKE '%/00-Inbox/rss/%' AND nc.path IN (SELECT path FROM vault_notes_fts)) AS REAL) / NULLIF((SELECT COUNT(*) FROM vault_notes_fts WHERE path NOT LIKE '%/00-Inbox/rss/%'),0), 4)"
+    },
+    {
+      "id": "orphan_concepts",
+      "pref_label": "Orphan Concepts",
+      "definition": "Declared concepts with zero notes assigned. Either the vocabulary is aspirational, or an assignment rule is broken.",
+      "unit": "concepts",
+      "sql": "SELECT COUNT(*) FROM semantic_concepts c WHERE NOT EXISTS (SELECT 1 FROM semantic_note_concepts nc WHERE nc.concept_id = c.id)"
+    },
+    {
+      "id": "unmapped_tags",
+      "pref_label": "Unmapped Tags",
+      "definition": "Distinct live tag strings that resolve to no concept in any facet. The governance backlog: every one is either a concept the layer is missing or a typo a writer is emitting.",
+      "unit": "tags",
+      "sql": "SELECT COUNT(*) FROM semantic_unmapped_tags"
+    }
+  ],
+
+  "assignment_rules": {
+    "rationale": "How a note in the live index acquires concepts. Deliberately deterministic and inspectable -- every assignment records which rule fired and what evidence matched, so a wrong assignment is debuggable and a human can audit the whole mapping. No embeddings, no LLM classification: that matches the standing bias recorded for lexicon.py and retrofit_links.py, and it means the layer produces identical output on identical input forever.",
+    "rules": [
+      { "id": "tag_exact", "source": "vault_notes_fts.tags", "method": "Split on commas, normalise (lowercase, strip non-alphanumerics), match against every concept's pref_label and alt_labels.", "confidence": "high" },
+      { "id": "path_prefix", "source": "vault_documents.path", "method": "Match the vault-relative path against each concept's observed_as.vault_paths prefixes.", "confidence": "high" },
+      { "id": "ingest_method", "source": "vault_documents.ingest_method", "method": "Match against each concept's observed_as.ingest_methods.", "confidence": "high" },
+      { "id": "title_entity", "source": "vault_notes_fts.title", "method": "Apply the lexicon's compiled entity regexes to the note title only (not the body -- body matching is retrofit_links.py's job and would double-count).", "confidence": "medium" },
+      { "id": "broader_closure", "source": "derived", "method": "After direct assignment, transitively add every `broader` ancestor of an assigned concept. A note about vertiports is a note about Advanced Air Mobility is a note about Aviation.", "confidence": "inherited" }
+    ]
+  },
+
+  "consumers": {
+    "rationale": "One governed definition, compiled to whatever shape each consumer can actually eat. This is the interoperability contract; adding a consumer must never mean re-authoring the vocabulary.",
+    "targets": [
+      { "id": "python", "for": "ctdi-dispatch platform code", "surface": "second_brain.semantic.model -- load(), resolve(), expand(), fts_query(); imports nothing that needs credentials, so it works in any container and any agent shell." },
+      { "id": "sqlite", "for": "any language, any tool, no Python needed", "surface": "semantic_* tables compiled into the live second_brain_index.db, joinable directly against vault_documents/vault_notes_fts." },
+      { "id": "json", "for": "other AI systems and future tooling", "surface": "semantic_layer.json -- the whole model, resolved and denormalised." },
+      { "id": "skos_turtle", "for": "standards-based interop", "surface": "semantic_layer.ttl -- SKOS/RDF. Concept schemes per facet, skos:prefLabel/altLabel/broader/definition/scopeNote. Loadable by any triplestore or ontology tool without knowing anything about this platform." },
+      { "id": "context_pack", "for": "LLMs: Claude sessions and local Ollama models", "surface": "Token-budgeted markdown. The 3.8B local models have scarce context and single-model residency on one Pi 5, so the pack is explicitly size-capped and degrades by dropping detail, never by truncating mid-concept." }
+    ]
+  }
+}

@@ -56,6 +56,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -64,6 +65,7 @@ from xml.etree import ElementTree as ET
 import requests
 
 from second_brain import webdav_client
+from second_brain.index_db import INDEX_DB
 from second_brain.knowledge_graph.lexicon import SUBTYPE_OF
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -153,6 +155,95 @@ def _norm_target(raw: str) -> str:
     return re.sub(r"\.md$", "", t, flags=re.IGNORECASE).lower()
 
 
+# ── Semantic layer overlay: concept nodes + concept/note edges ────────────────
+# 2026-08-18: the semantic layer (second_brain.semantic, built independently
+# on branch semantic-layer-2026-08-18) computes its own concept vocabulary
+# and per-note concept assignments, materialized into the same index DB this
+# module already knows how to read (INDEX_DB). This overlay folds that in as
+# additional nodes/edges on the SAME graph the wikilink structure already
+# produces, so the visualization and every consumer of graph.json see one
+# graph, not two disconnected ones. Read-only (sqlite3 + second_brain.semantic
+# .model.load()); does not touch the semantic layer's own compiled artifacts.
+
+def _load_semantic(existing_note_ids: set[str]) -> tuple[dict[str, dict], list[dict]]:
+    """Returns (concept_nodes, concept_edges) to merge into build()'s graph.
+    concept_nodes keyed like nodes (concept:<id>); concept_edges include both
+    concept-to-concept (broader/related) and note-to-concept (tagged) edges.
+    Silently returns (empty) if the semantic layer isn't available/compiled
+    yet -- this overlay is additive, never required for the base graph."""
+    try:
+        from second_brain.semantic.model import load as load_semantic
+    except ImportError:
+        return {}, []
+
+    try:
+        model = load_semantic()
+    except Exception:
+        return {}, []
+
+    concept_nodes: dict[str, dict] = {}
+    concept_edges: list[dict] = []
+    for c in model.concepts():
+        cid = f"concept:{c.id}"
+        concept_nodes[cid] = {
+            "id": cid, "label": c.pref_label,
+            "type": "concept", "subtype": c.facet,
+            "definition": getattr(c, "definition", None),
+        }
+        if getattr(c, "broader", None):
+            concept_edges.append({
+                "source": cid, "target": f"concept:{c.broader}",
+                "type": "broader_than", "origin": "semantic", "weight": 1,
+            })
+        for rel in getattr(c, "related", None) or []:
+            concept_edges.append({
+                "source": cid, "target": f"concept:{rel}",
+                "type": "related_to", "origin": "semantic", "weight": 1,
+            })
+        if getattr(c, "in_domain", None):
+            concept_edges.append({
+                "source": cid, "target": f"concept:{c.in_domain}",
+                "type": "in_domain", "origin": "semantic", "weight": 1,
+            })
+
+    # note -> concept assignments, restricted to notes already present as
+    # graph nodes from the wikilink pass (keeps one consistent node universe
+    # -- same excluded-path posture as SKIP_PREFIXES above).
+    try:
+        conn = sqlite3.connect(f"file:{INDEX_DB}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT path, concept_id, facet, rule FROM semantic_note_concepts"
+        ).fetchall()
+        conn.close()
+    except sqlite3.OperationalError:
+        rows = []
+
+    prefix = f"{webdav_client.BUSINESS_ROOT}/"
+    tag_acc: dict[tuple, dict] = {}
+    for path, concept_id, facet, rule in rows:
+        if not path.startswith(prefix):
+            continue
+        note_id = f"note:{path[len(prefix):]}"
+        if note_id not in existing_note_ids:
+            continue
+        cid = f"concept:{concept_id}"
+        if cid not in concept_nodes:
+            continue  # concept referenced by an assignment but not in the
+            # current ontology (e.g. stale/backlog tag) -- skip rather than
+            # invent a node for it.
+        key = (note_id, cid)
+        if key in tag_acc:
+            tag_acc[key]["weight"] += 1
+        else:
+            tag_acc[key] = {
+                "source": note_id, "target": cid, "type": "concept_tag",
+                "origin": "semantic", "facet": facet, "rule": rule, "weight": 1,
+            }
+    concept_edges.extend(tag_acc.values())
+
+    return concept_nodes, concept_edges
+
+
 # ── Graph assembly: nodes = notes, edges = real wikilinks ─────────────────────
 
 def build(paths: list[str], contents: dict[str, str]) -> dict:
@@ -213,6 +304,11 @@ def build(paths: list[str], contents: dict[str, str]) -> dict:
                                  "weight": 1}
     edges = list(edge_acc.values())
 
+    # semantic layer overlay: concept nodes + concept/note edges, additive
+    concept_nodes, concept_edges = _load_semantic(set(nodes.keys()))
+    nodes.update(concept_nodes)
+    edges.extend(concept_edges)
+
     # degree bookkeeping for meta (viz recomputes its own)
     deg: dict[str, int] = defaultdict(int)
     for e in edges:
@@ -224,6 +320,8 @@ def build(paths: list[str], contents: dict[str, str]) -> dict:
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "vault_root": webdav_client.BUSINESS_ROOT,
+            "semantic_concept_nodes": len(concept_nodes),
+            "semantic_concept_edges": len(concept_edges),
             # 2026-08-12: base for the "Open in Nextcloud" deep-link on each
             # node in the viz -- always the public web vhost (not whatever
             # NEXTCLOUD_WEBDAV_BASE happens to be pointed at for this build
