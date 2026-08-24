@@ -1,0 +1,25 @@
+module corporatetraveldc-nginx-proxy 1.0;
+
+# nginx (httpd_t) reverse-proxies every vhost in nginx/conf.d/ to a backend
+# on 127.0.0.1. SELinux's stock policy only grants httpd_t name_connect to
+# http_port_t via the httpd_can_network_connect boolean, which is gated on
+# "port_type" -- effectively every TCP port class in the base policy, not
+# just ours. There is no unconditional allow for this in stock policy, so
+# labeling a port http_port_t (selinux/label-nginx-backend-ports.sh) is
+# necessary but not sufficient -- confirmed live 2026-07-10: nginx was still
+# denied name_connect to :8001 after the label alone was applied.
+#
+# This module grants the same permission at the scope this repo actually
+# needs: httpd_t may connect to whatever is labeled http_port_t (i.e.
+# exactly the ports enumerated in label-nginx-backend-ports.sh, plus
+# Fedora's own stock http_port_t ports) -- not the httpd_can_network_connect
+# boolean's much larger port_type surface.
+
+require {
+	type httpd_t;
+	type http_port_t;
+	class tcp_socket name_connect;
+}
+
+#============= httpd_t ==============
+allow httpd_t http_port_t:tcp_socket name_connect;

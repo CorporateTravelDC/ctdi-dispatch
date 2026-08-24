@@ -1,0 +1,6010 @@
+{
+  "watchlist": [
+    {
+      "id": "perm-train-crescent-19",
+      "identifier": "19",
+      "route_name": "Crescent",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Crescent. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-crescent-20",
+      "identifier": "20",
+      "route_name": "Crescent",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Crescent. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-floridian-40",
+      "identifier": "40",
+      "route_name": "Floridian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Floridian. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-floridian-41",
+      "identifier": "41",
+      "route_name": "Floridian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Floridian. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-cardinal-50",
+      "identifier": "50",
+      "route_name": "Cardinal",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Cardinal. Runs Tue, Thu, Sat only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Tue",
+        "Thu",
+        "Sat"
+      ]
+    },
+    {
+      "id": "perm-train-cardinal-51",
+      "identifier": "51",
+      "route_name": "Cardinal",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Cardinal. Runs Wed, Fri, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Wed",
+        "Fri",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-vermonter-54",
+      "identifier": "54",
+      "route_name": "Vermonter",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Vermonter. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-vermonter-55",
+      "identifier": "55",
+      "route_name": "Vermonter",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Vermonter. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-vermonter-56",
+      "identifier": "56",
+      "route_name": "Vermonter",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Vermonter. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-vermonter-57",
+      "identifier": "57",
+      "route_name": "Vermonter",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Vermonter. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-65",
+      "identifier": "65",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Wed, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-66",
+      "identifier": "66",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-67",
+      "identifier": "67",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-carolinian-79",
+      "identifier": "79",
+      "route_name": "Carolinian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Carolinian. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-carolinian-80",
+      "identifier": "80",
+      "route_name": "Carolinian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Carolinian. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-82",
+      "identifier": "82",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-84",
+      "identifier": "84",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-85",
+      "identifier": "85",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-86",
+      "identifier": "86",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-87",
+      "identifier": "87",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-88",
+      "identifier": "88",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-palmetto-89",
+      "identifier": "89",
+      "route_name": "Palmetto",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Palmetto. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-palmetto-90",
+      "identifier": "90",
+      "route_name": "Palmetto",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Palmetto. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-93",
+      "identifier": "93",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-94",
+      "identifier": "94",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-95",
+      "identifier": "95",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-96",
+      "identifier": "96",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-silver-meteor-97",
+      "identifier": "97",
+      "route_name": "Silver Meteor",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Silver Meteor. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-silver-meteor-98",
+      "identifier": "98",
+      "route_name": "Silver Meteor",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Silver Meteor. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-99",
+      "identifier": "99",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-100",
+      "identifier": "100",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-101",
+      "identifier": "101",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-102",
+      "identifier": "102",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-103",
+      "identifier": "103",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-104",
+      "identifier": "104",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-105",
+      "identifier": "105",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-106",
+      "identifier": "106",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-107",
+      "identifier": "107",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-109",
+      "identifier": "109",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-111",
+      "identifier": "111",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-112",
+      "identifier": "112",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-113",
+      "identifier": "113",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-117",
+      "identifier": "117",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-118",
+      "identifier": "118",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-119",
+      "identifier": "119",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-120",
+      "identifier": "120",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-121",
+      "identifier": "121",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-122",
+      "identifier": "122",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-124",
+      "identifier": "124",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-125",
+      "identifier": "125",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-126",
+      "identifier": "126",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-127",
+      "identifier": "127",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-128",
+      "identifier": "128",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-129",
+      "identifier": "129",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-130",
+      "identifier": "130",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-131",
+      "identifier": "131",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-132",
+      "identifier": "132",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-134",
+      "identifier": "134",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-135",
+      "identifier": "135",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-136",
+      "identifier": "136",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-137",
+      "identifier": "137",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-138",
+      "identifier": "138",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-139",
+      "identifier": "139",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-140",
+      "identifier": "140",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-141",
+      "identifier": "141",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-142",
+      "identifier": "142",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-143",
+      "identifier": "143",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-145",
+      "identifier": "145",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-146",
+      "identifier": "146",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-147",
+      "identifier": "147",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-148",
+      "identifier": "148",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-149",
+      "identifier": "149",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-151",
+      "identifier": "151",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-152",
+      "identifier": "152",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-153",
+      "identifier": "153",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-154",
+      "identifier": "154",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-155",
+      "identifier": "155",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-156",
+      "identifier": "156",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-157",
+      "identifier": "157",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-158",
+      "identifier": "158",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-159",
+      "identifier": "159",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-160",
+      "identifier": "160",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-161",
+      "identifier": "161",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-162",
+      "identifier": "162",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-163",
+      "identifier": "163",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-164",
+      "identifier": "164",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-165",
+      "identifier": "165",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-166",
+      "identifier": "166",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-168",
+      "identifier": "168",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-170",
+      "identifier": "170",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-171",
+      "identifier": "171",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-172",
+      "identifier": "172",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-173",
+      "identifier": "173",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-174",
+      "identifier": "174",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-175",
+      "identifier": "175",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-176",
+      "identifier": "176",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-178",
+      "identifier": "178",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-181",
+      "identifier": "181",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-182",
+      "identifier": "182",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-183",
+      "identifier": "183",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-184",
+      "identifier": "184",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-185",
+      "identifier": "185",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-186",
+      "identifier": "186",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-189",
+      "identifier": "189",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-192",
+      "identifier": "192",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-193",
+      "identifier": "193",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-194",
+      "identifier": "194",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-195",
+      "identifier": "195",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-196",
+      "identifier": "196",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-197",
+      "identifier": "197",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-198",
+      "identifier": "198",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-199",
+      "identifier": "199",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-crescent-1019",
+      "identifier": "1019",
+      "route_name": "Crescent",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Crescent. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-crescent-1020",
+      "identifier": "1020",
+      "route_name": "Crescent",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Crescent. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-floridian-1040",
+      "identifier": "1040",
+      "route_name": "Floridian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Floridian. Runs Sat only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat"
+      ]
+    },
+    {
+      "id": "perm-train-floridian-1041",
+      "identifier": "1041",
+      "route_name": "Floridian",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Floridian. Runs Sat only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat"
+      ]
+    },
+    {
+      "id": "perm-train-palmetto-1089",
+      "identifier": "1089",
+      "route_name": "Palmetto",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Palmetto. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-palmetto-1090",
+      "identifier": "1090",
+      "route_name": "Palmetto",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Palmetto. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-silver-meteor-1097",
+      "identifier": "1097",
+      "route_name": "Silver Meteor",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Silver Meteor. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-silver-meteor-1098",
+      "identifier": "1098",
+      "route_name": "Silver Meteor",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Silver Meteor. Runs daily (all 7 days) through WAS.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1161",
+      "identifier": "1161",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1162",
+      "identifier": "1162",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1172",
+      "identifier": "1172",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Tue, Wed only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Tue",
+        "Wed"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1175",
+      "identifier": "1175",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Tue, Wed only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Tue",
+        "Wed"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1194",
+      "identifier": "1194",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Tue, Wed only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Tue",
+        "Wed"
+      ]
+    },
+    {
+      "id": "perm-train-northeast-regional-1195",
+      "identifier": "1195",
+      "route_name": "Northeast Regional",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Northeast Regional. Runs Tue, Wed only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Tue",
+        "Wed"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2102",
+      "identifier": "2102",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2103",
+      "identifier": "2103",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2104",
+      "identifier": "2104",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2107",
+      "identifier": "2107",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2108",
+      "identifier": "2108",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2109",
+      "identifier": "2109",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2112",
+      "identifier": "2112",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2113",
+      "identifier": "2113",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2115",
+      "identifier": "2115",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2116",
+      "identifier": "2116",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2118",
+      "identifier": "2118",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2119",
+      "identifier": "2119",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2120",
+      "identifier": "2120",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2123",
+      "identifier": "2123",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2124",
+      "identifier": "2124",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2127",
+      "identifier": "2127",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2128",
+      "identifier": "2128",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2131",
+      "identifier": "2131",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2150",
+      "identifier": "2150",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2151",
+      "identifier": "2151",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2152",
+      "identifier": "2152",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2154",
+      "identifier": "2154",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2155",
+      "identifier": "2155",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2158",
+      "identifier": "2158",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2159",
+      "identifier": "2159",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2160",
+      "identifier": "2160",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2162",
+      "identifier": "2162",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2165",
+      "identifier": "2165",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2167",
+      "identifier": "2167",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2171",
+      "identifier": "2171",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Tue, Wed, Thu, Fri only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2207",
+      "identifier": "2207",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2208",
+      "identifier": "2208",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2209",
+      "identifier": "2209",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2211",
+      "identifier": "2211",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2212",
+      "identifier": "2212",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2213",
+      "identifier": "2213",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2215",
+      "identifier": "2215",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2216",
+      "identifier": "2216",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2218",
+      "identifier": "2218",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2219",
+      "identifier": "2219",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2222",
+      "identifier": "2222",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2223",
+      "identifier": "2223",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2224",
+      "identifier": "2224",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2226",
+      "identifier": "2226",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2227",
+      "identifier": "2227",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2233",
+      "identifier": "2233",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2250",
+      "identifier": "2250",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2252",
+      "identifier": "2252",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2254",
+      "identifier": "2254",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2255",
+      "identifier": "2255",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2258",
+      "identifier": "2258",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2259",
+      "identifier": "2259",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2260",
+      "identifier": "2260",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2262",
+      "identifier": "2262",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2264",
+      "identifier": "2264",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2265",
+      "identifier": "2265",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2267",
+      "identifier": "2267",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-acela-2271",
+      "identifier": "2271",
+      "route_name": "Acela",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Acela. Runs Mon, Thu, Fri, Sat, Sun only through WAS -- NOT daily; flag No Service on other days.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "amtrak",
+      "show_national": true,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9400",
+      "identifier": "9400",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9401",
+      "identifier": "9401",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9403",
+      "identifier": "9403",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9404",
+      "identifier": "9404",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9407",
+      "identifier": "9407",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9408",
+      "identifier": "9408",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9409",
+      "identifier": "9409",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9410",
+      "identifier": "9410",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9412",
+      "identifier": "9412",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9413",
+      "identifier": "9413",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9414",
+      "identifier": "9414",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9415",
+      "identifier": "9415",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9416",
+      "identifier": "9416",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9418",
+      "identifier": "9418",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9419",
+      "identifier": "9419",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9421",
+      "identifier": "9421",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9422",
+      "identifier": "9422",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9423",
+      "identifier": "9423",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9424",
+      "identifier": "9424",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9426",
+      "identifier": "9426",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9427",
+      "identifier": "9427",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9428",
+      "identifier": "9428",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9429",
+      "identifier": "9429",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9430",
+      "identifier": "9430",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9431",
+      "identifier": "9431",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9433",
+      "identifier": "9433",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9435",
+      "identifier": "9435",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9438",
+      "identifier": "9438",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9439",
+      "identifier": "9439",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9440",
+      "identifier": "9440",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9443",
+      "identifier": "9443",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9445",
+      "identifier": "9445",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9446",
+      "identifier": "9446",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9447",
+      "identifier": "9447",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9448",
+      "identifier": "9448",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9449",
+      "identifier": "9449",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9451",
+      "identifier": "9451",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9452",
+      "identifier": "9452",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9453",
+      "identifier": "9453",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9455",
+      "identifier": "9455",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9476",
+      "identifier": "9476",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9478",
+      "identifier": "9478",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9480",
+      "identifier": "9480",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9481",
+      "identifier": "9481",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9482",
+      "identifier": "9482",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9484",
+      "identifier": "9484",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9485",
+      "identifier": "9485",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9486",
+      "identifier": "9486",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9487",
+      "identifier": "9487",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9488",
+      "identifier": "9488",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9490",
+      "identifier": "9490",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9491",
+      "identifier": "9491",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9492",
+      "identifier": "9492",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9493",
+      "identifier": "9493",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9494",
+      "identifier": "9494",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9495",
+      "identifier": "9495",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9497",
+      "identifier": "9497",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9499",
+      "identifier": "9499",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9502",
+      "identifier": "9502",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9505",
+      "identifier": "9505",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9511",
+      "identifier": "9511",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9517",
+      "identifier": "9517",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9520",
+      "identifier": "9520",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9525",
+      "identifier": "9525",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9532",
+      "identifier": "9532",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9534",
+      "identifier": "9534",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9536",
+      "identifier": "9536",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9537",
+      "identifier": "9537",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9544",
+      "identifier": "9544",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9548",
+      "identifier": "9548",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9589",
+      "identifier": "9589",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9610",
+      "identifier": "9610",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9612",
+      "identifier": "9612",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9634",
+      "identifier": "9634",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9641",
+      "identifier": "9641",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9642",
+      "identifier": "9642",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9675",
+      "identifier": "9675",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9677",
+      "identifier": "9677",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9679",
+      "identifier": "9679",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9681",
+      "identifier": "9681",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9683",
+      "identifier": "9683",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9685",
+      "identifier": "9685",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9688",
+      "identifier": "9688",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9689",
+      "identifier": "9689",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9692",
+      "identifier": "9692",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9694",
+      "identifier": "9694",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9696",
+      "identifier": "9696",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-commuter-rail-9698",
+      "identifier": "9698",
+      "route_name": "MARC Penn Line",
+      "origin": null,
+      "destination": "WAS",
+      "notes": "MARC Penn Line (Washington Union Station <-> Baltimore Penn/Perryville). Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether.",
+      "added": "2026-07-21",
+      "added_by": "operator",
+      "subsection": "marc",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ]
+    },
+    {
+      "id": "perm-train-vre-300",
+      "identifier": "300",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-302",
+      "identifier": "302",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-304",
+      "identifier": "304",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-306",
+      "identifier": "306",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-308",
+      "identifier": "308",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-310",
+      "identifier": "310",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-312",
+      "identifier": "312",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-314",
+      "identifier": "314",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-301",
+      "identifier": "301",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-303",
+      "identifier": "303",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-305",
+      "identifier": "305",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-307",
+      "identifier": "307",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-309",
+      "identifier": "309",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-311",
+      "identifier": "311",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-313",
+      "identifier": "313",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-315",
+      "identifier": "315",
+      "route_name": "VRE Fredericksburg Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Fredericksburg Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-321",
+      "identifier": "321",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-322",
+      "identifier": "322",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-324",
+      "identifier": "324",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-325",
+      "identifier": "325",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-326",
+      "identifier": "326",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-327",
+      "identifier": "327",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-328",
+      "identifier": "328",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-329",
+      "identifier": "329",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-330",
+      "identifier": "330",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-331",
+      "identifier": "331",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-332",
+      "identifier": "332",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-333",
+      "identifier": "333",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-334",
+      "identifier": "334",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-335",
+      "identifier": "335",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-336",
+      "identifier": "336",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    },
+    {
+      "id": "perm-train-vre-337",
+      "identifier": "337",
+      "route_name": "VRE Manassas Line",
+      "subsection": "vre",
+      "show_national": false,
+      "show_regional": true,
+      "days_active": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "origin": null,
+      "destination": "WAS",
+      "notes": "Virginia Railway Express, Manassas Line. Weekday rush-hour service only -- No Service Sat/Sun. Regional situational awareness, not a national bellwether. Per VRE published timetable effective 2026-03-16.",
+      "added": "2026-07-21",
+      "added_by": "operator"
+    }
+  ]
+}

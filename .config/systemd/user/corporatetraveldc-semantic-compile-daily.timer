@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the second-brain semantic-layer compile daily, fixed grid at 03:47 ET
+Requires=corporatetraveldc-semantic-compile-daily.service
+
+[Timer]
+# Fixed calendar grid, not OnUnitActiveSec -- see trains-yachts-daily-watch.timer's
+# 2026-08-17 comment and entity-tracking-digest.timer's comment for why:
+# OnUnitActiveSec re-arms from each unit's own activation time and coalesces
+# onto the same second over time. 03:47 is off every other timer's
+# :00/:10/:12/:15/:30/:45 marks. No Ollama call here either, so this isn't
+# dodging the Ollama-queue bunching concern those timers were staggered for
+# -- just avoiding piling onto another skill's DB/WebDAV activity at the
+# same instant.
+OnCalendar=*-*-* 03:47:00 America/New_York
+# true, unlike entity-tracking-digest's false: that timer fires 4x/day, so
+# missing one occurrence barely matters; this one fires once/day, so a
+# missed run (box down at 03:47) would otherwise mean a full 24h gap.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

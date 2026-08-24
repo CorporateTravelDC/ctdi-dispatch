@@ -1,0 +1,53 @@
+# /etc/ntfy/server.yml — deployed server config (template)
+# Copy to /etc/ntfy/server.yml on the Pi; fill credentials in dispatch-secrets.env
+base-url: https://ntfy.CHANGE_ME.com
+listen-http: :2586
+cache-file: /var/lib/ntfy/cache.db
+auth-file: /var/lib/ntfy/auth.db
+auth-default-access: deny-all
+behind-proxy: true
+keepalive-interval: 55s
+message-size-limit: "65536"   # default is 4096 -- full brief narratives (ops-brief, ep-advance) exceed that and get silently rejected as unsupported attachments without this
+
+# SMTP outbound email notifications
+# Password injected via NTFY_SMTP_SENDER_PASS in dispatch-secrets.env (never inline here)
+# See docs/regulated-operator-setup.md for ProtonMail Bridge or transactional SMTP setup
+smtp-sender-addr: host.containers.internal:1025   # ProtonMail Bridge default; change for other relays
+smtp-sender-user: CHANGE_ME@pm.me
+smtp-sender-from: ntfy@pm.me
+
+# Phone call notifications via Twilio
+# Credentials injected via NTFY_TWILIO_* env vars in dispatch-secrets.env
+# See docs/regulated-operator-setup.md for Twilio setup
+# No fields needed here — ntfy reads NTFY_TWILIO_* env vars automatically
+
+# Rate limiting -- self-hosted single-operator instance, not multi-tenant
+# public. Defaults are tuned for anti-abuse on a public instance and were
+# 429-ing our own internal container traffic during heavy debugging bursts
+# today (2026-07-20) -- ops-brief, ep-advance, and several parser test
+# alerts all sharing what ntfy sees as very few distinct visitor identities
+# (behind-proxy: true above with no actual reverse proxy in the internal
+# container->host path collapses visitor attribution). Raised generously
+# since every caller here is our own dispatch platform, not an untrusted
+# public visitor.
+visitor-request-limit-burst: 5000
+visitor-request-limit-replenish: 1s
+
+# Subscription cap -- 2026-08-03 per operator: raised from the ntfy default
+# (30) to 100 as a soft working limit. Topic count is growing fast with the
+# family-alert rollout (tbfm/tfms/fdps/itws/aim_fns aggregates+zones = ~45
+# topics alone, on top of ~15-20 legacy ones -- topics_active was already at
+# 61 the day this was raised, with stdds and FIDS-OOOI still to come). 100
+# gives real headroom over todays count without being unbounded; see the
+# ntfy-topic-count-watchdog timer for the early-warning check as we approach
+# 150 (a separate soft ceiling, not enforced by ntfy itself -- just the
+# trigger point for a heads-up alert to reconsider growth or raise this
+# again before subscriptions actually start getting rejected).
+visitor-subscription-limit: 100
+
+# Prometheus metrics -- 2026-08-03, enabled so the topic-count-watchdog can
+# read a real gauge (ntfy_topics) instead of scraping the periodic "Server
+# stats" log line. Attaches to the existing listen-http port (:2586,
+# Tailscale/localhost-only reach per the nginx vhosts proxy_pass target);
+# not separately exposed, no new port opened.
+enable-metrics: true

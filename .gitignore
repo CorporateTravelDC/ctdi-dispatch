@@ -1,0 +1,84 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Frontend build output and dependencies — generated during container build
+src/runner/frontend/node_modules/
+src/runner/static/
+
+# Ollama Modelfiles — committed to private repo; public repo uses Modelfile.*.template only
+
+# Credentials and keys — never commit
+.ssh/
+.pki/
+.proton-bridge-credentials
+.cloudflared/
+.Xauthority
+.claude/.credentials.json
+.claude/dispatch/admin-tokens
+.config/gh/hosts.yml
+.config/rpi-connect-auth
+.config/rpcc/
+.config/com.raspberrypi.connect/
+.linkedin-mcp/
+
+# Browser data (Claude desktop / Chromium / Firefox)
+.config/Claude/
+.config/chromium/
+.config/mozilla/
+
+# Binary desktop databases
+.config/dconf/
+
+# Large binaries / installers
+*.deb
+*.flatpakref
+
+# Ephemeral Claude Code runtime data
+.claude/plugins/cache/
+.claude/backups/
+.claude/cache/
+.claude/file-history/
+.claude/history.jsonl
+.claude/mcp-needs-auth-cache.json
+.claude/paste-cache/
+.claude/projects/*/[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+.claude/projects/**/*.jsonl
+.claude/projects/*/subagents/
+.claude/plugins/cache/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/stats-cache.json
+.claude/.last-cleanup
+.claude/.last-update-result.json
+
+# Shell / system ephemera
+.bash_history
+.viminfo
+.wget-hsts
+.xsession-errors
+.xsession-errors.old
+.sudo_as_admin_successful
+.dmrc
+
+# Package manager caches
+.cache/
+.npm/
+.var/
+.local/
+
+# Personal / ephemeral outputs
+Documents/
+*claudecodeprompt*.md
+*claude-code-prompt*.md
+
+# Runtime secrets — never commit
+secrets.env
+**/secrets.env
+dispatch-secrets.env
+**/dispatch-secrets.env

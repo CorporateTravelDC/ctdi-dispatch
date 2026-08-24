@@ -1,0 +1,80 @@
+[Unit]
+Description=ntfy — primary push broker (container, port 2586)
+After=network-online.target
+StartLimitBurst=3
+StartLimitIntervalSec=120s
+OnFailure=ntfy-container-alert.service
+
+[Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
+Image=docker.io/binwiederhier/ntfy:v2.25.0
+ContainerName=ntfy
+PublishPort=2586:2586
+# 2026-08-06: dropped the trailing ,z here (kept below on /var/lib/ntfy).
+# /etc/ntfy is root-owned (0755) -- rootless podman's :z relabel-on-mount
+# needs write access to the target dir to set the SELinux xattr, and this
+# user (corporatetraveldc) doesn't have it, so every start failed with
+# "lsetxattr(...container_file_t...) /etc/ntfy: operation not permitted"
+# regardless of the Volume= path being correct. Confirmed via `ls -Zd
+# /etc/ntfy` that the directory is ALREADY labeled container_file_t:s0 --
+# exactly what :z would produce anyway -- so the relabel was a permission-
+# denied no-op, not a fix in progress. Read-only mount of an
+# already-correctly-labeled path doesn't need :z at all.
+Volume=/etc/ntfy:/etc/ntfy:ro
+# 2026-08-06: was /var/lib/ntfy-backup:/var/lib/ntfy:z -- that host path
+# doesn't exist and never has (confirmed live). The container had been
+# running 15+ hours without a restart on a stale mount reference from
+# before this line was apparently last edited; restarting it for the
+# MemoryLow fix in this same commit re-evaluated the mount and exposed
+# the mismatch (Error: statfs /var/lib/ntfy-backup: no such file or
+# directory -- container failed to start). Real host data (auth.db,
+# cache.db, ~13MB, in continuous use since 2026-07-08) lives at
+# /var/lib/ntfy with no suffix -- corrected to point there instead of
+# creating a new empty "-backup" directory, which would have started
+# ntfy with blank auth/subscriber state and silently lost a month of it.
+Volume=/var/lib/ntfy:/var/lib/ntfy:z
+
+# SMTP + Twilio credentials (from dispatch-secrets.env)
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=serve
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

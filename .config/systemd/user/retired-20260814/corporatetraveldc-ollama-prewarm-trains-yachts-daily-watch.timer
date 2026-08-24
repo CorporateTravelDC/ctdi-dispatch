@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm ~3min before trains-yachts-daily-watch's 08:30 ET run
+Requires=corporatetraveldc-ollama-prewarm-trains-yachts-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:27:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<msg:Message xmlns:msg="http://www.fixm.aero/messaging/4.2"
+             xmlns:fx="http://www.fixm.aero/flight/4.2"
+             xmlns:fb="http://www.fixm.aero/base/4.2"
+             xmlns:nas="http://www.fixm.aero/nas/4.2"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <msg:flight>
+    <fx:gufi>AAA01234-5678-9abc-def0-000000000002</fx:gufi>
+    <nas:nasFlightInfo source="TH">
+      <nas:acid>JIA5438</nas:acid>
+      <nas:flightStatus>ACTIVE</nas:flightStatus>
+    </nas:nasFlightInfo>
+    <fx:departure>
+      <fb:aerodrome>
+        <fb:icaoIdentifier>KCVG</fb:icaoIdentifier>
+      </fb:aerodrome>
+    </fx:departure>
+    <fx:arrival>
+      <fb:aerodrome>
+        <fb:icaoIdentifier>KPHL</fb:icaoIdentifier>
+      </fb:aerodrome>
+    </fx:arrival>
+    <fx:aircraft>
+      <fx:aircraftType>
+        <fb:icaoAircraftTypeDesignator>CRJ9</fb:icaoAircraftTypeDesignator>
+      </fx:aircraftType>
+    </fx:aircraft>
+    <fx:enRoute>
+      <fx:positionReport>
+        <fb:position>
+          <fb:pos>40.1200 -76.5800</fb:pos>
+        </fb:position>
+        <fb:altitude>
+          <fb:value>28000</fb:value>
+        </fb:altitude>
+        <fb:speed>
+          <fb:value>420</fb:value>
+        </fb:speed>
+        <fb:ssrCode>1234</fb:ssrCode>
+      </fx:positionReport>
+    </fx:enRoute>
+  </msg:flight>
+</msg:Message>

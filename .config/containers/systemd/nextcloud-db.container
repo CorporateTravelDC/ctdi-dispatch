@@ -1,0 +1,60 @@
+# ~/.config/containers/systemd/nextcloud-db.container
+#
+# PostgreSQL backend for Nextcloud. Not published to the host -- only
+# reachable from nextcloud-app over nextcloud-net's internal DNS
+# (hostname "nextcloud-db", matching POSTGRES_HOST in nextcloud.env).
+#
+# Data dir is a named Podman volume (nextcloud-db-data), not a host bind
+# mount -- this account has no root/sudo in this session, so Podman-
+# managed rootless storage under ~/.local/share/containers/storage/
+# is the path of least friction. Fine for a single-operator instance;
+# `podman volume export` covers backup if that's ever needed.
+
+[Unit]
+Description=Nextcloud -- PostgreSQL
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=nextcloud-db
+AutoUpdate=registry
+Network=nextcloud-net.network
+EnvironmentFile=%h/.config/nextcloud/nextcloud.env
+EnvironmentFile=%h/.config/nextcloud/nextcloud-secrets.env
+Volume=nextcloud-db-data:/var/lib/postgresql/data
+Memory=768m
+PodmanArgs=--memory-swap=768m
+NoNewPrivileges=true
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=256M
+CPUWeight=100
+CPUQuota=200%
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

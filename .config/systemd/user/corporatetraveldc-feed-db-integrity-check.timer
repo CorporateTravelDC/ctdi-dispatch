@@ -1,0 +1,10 @@
+[Unit]
+Description=Feed/DB integrity check every 30 min -- catches feed-claims-healthy-but-DB-is-dark or field-level-gap patterns
+Requires=corporatetraveldc-feed-db-integrity-check.service
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

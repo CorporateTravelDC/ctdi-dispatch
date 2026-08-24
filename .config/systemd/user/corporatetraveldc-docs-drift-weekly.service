@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- weekly documentation drift check (Fable, both repos, live-system verified)
+
+[Service]
+Type=oneshot
+# PATH added 2026-08-19. Without it this unit could never work: the systemd
+# *user* manager's PATH is only /usr/local/bin:/usr/bin, but the `claude`
+# CLI the script shells out to lives at ~/.local/bin/claude. Every run since
+# the unit was installed died with
+#   nohup: failed to run command 'claude': No such file or directory
+# leaving a 65-byte log and no drift report. Requires
+# `systemctl --user daemon-reload` to take effect; unproven until a run is
+# observed to succeed (next scheduled fire: Mondays 09:00).
+Environment=PATH=/home/corporatetraveldc/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/weekly-doc-drift-check.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

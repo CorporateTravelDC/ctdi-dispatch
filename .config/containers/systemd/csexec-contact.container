@@ -1,0 +1,44 @@
+[Unit]
+Description=[operator LLC] — Contact Form API
+After=network-online.target
+
+[Container]
+Memory=512m
+# 2026-08-06: previously unguarded -- contact-form API endpoint, not an LLM caller at all -- lightest tier, matches demo-api/rss-bridge.
+# Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
+# runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=512m
+Image=localhost/csexec-contact:latest
+ContainerName=csexec-contact
+PublishPort=127.0.0.1:8002:8002
+EnvironmentFile=/etc/corporatetraveldc/contact.env
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=170M
+Restart=always
+RestartSec=10
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.
