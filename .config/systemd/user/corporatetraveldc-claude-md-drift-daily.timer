@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily CLAUDE.md drift backstop, 05:15 ET -- clear of 04:00 vault index scan, 04:15 demo archiver, 04:35 disruption digest, ahead of the 06:00 freshness audit. No Ollama use, so the inference-stacking constraint governing those slots doesn't apply here, but kept clear of them anyway to keep the scheduling pattern legible.
+Requires=corporatetraveldc-claude-md-drift-daily.service
+
+[Timer]
+OnCalendar=*-*-* 05:15:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

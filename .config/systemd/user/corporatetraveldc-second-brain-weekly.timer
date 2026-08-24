@@ -1,0 +1,11 @@
+[Unit]
+Description=Run second-brain weekly compile Sunday 18:15 ET (15min after weekly-summary so Ollama jobs don't stack)
+Requires=corporatetraveldc-second-brain-weekly.service
+
+[Timer]
+OnCalendar=Sun *-*-* 18:15:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

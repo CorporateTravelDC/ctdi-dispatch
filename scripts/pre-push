@@ -1,0 +1,140 @@
+#!/bin/bash
+# .git/hooks/pre-push — credential scanner + public mirror guard
+# Source of truth: scripts/pre-push (keep in sync)
+#
+# Responsibilities:
+#   1. Block direct `git push public` — use scripts/push-public.sh instead.
+#   2. Credential pattern scanner — rejects commits containing known secret patterns.
+#
+# 2026-08-13: deliberately does NOT auto-sync the public mirror after a push
+# to origin/main -- that used to happen silently as a side effect of this
+# hook. Publishing to the public repo is now an explicit, separate step --
+# see scripts/push-and-sync.sh -- so nothing reaches the public mirror
+# without a confirmed-successful origin push and a human running the sync
+# on purpose.
+
+set -euo pipefail
+
+# 2026-08-24: same fix as scripts/pre-commit, same root cause -- see that
+# file's comment for the full incident writeup. A shadowing `grep` shell
+# function (Claude Code CLI's shell integration, confirmed instance)
+# mangled `grep -E "^+"`'s diff-line filtering badly enough that removed
+# lines matched an added-only check. Strip any shadow before scanning.
+unalias grep 2>/dev/null || true
+unset -f grep 2>/dev/null || true
+
+remote="${1:-}"
+
+# ── 1. Public mirror guard ──────────────────────────────────────────────────────
+# Direct pushes to public risk exposing dispatch-secrets.env.
+if [[ "$remote" == "public" ]]; then
+    echo ""
+    echo "[pre-push] Direct push to public mirror intercepted."
+    echo "           Use the wrapper instead — it auto-injects the dispatch-secrets.env"
+    echo "           gitignore without touching private/main:"
+    echo ""
+    echo "               bash scripts/push-public.sh"
+    echo ""
+    exit 1
+fi
+
+# ── 2. Credential pattern scanner ──────────────────────────────────────────────
+# Read refs being pushed from stdin; also scan commits for credential patterns.
+# stdin format: <local ref> SP <local sha1> SP <remote ref> SP <remote sha1> LF
+
+PUSHING_MAIN=false
+FAIL=0
+SCAN_RANGE=""
+
+while read local_ref local_sha remote_ref remote_sha; do
+    # Track whether main is being pushed to origin
+    if [[ "$remote" == "origin" && "$remote_ref" == "refs/heads/main" ]]; then
+        PUSHING_MAIN=true
+    fi
+
+    # Build commit range to scan.
+    # local_sha all-zero  -> this ref is being DELETED, nothing to scan.
+    # remote_sha all-zero -> brand-new ref on the remote; there's no prior
+    #   state to diff against, so scan against git's well-known empty-tree
+    #   hash instead of the null sha itself. (Using local_sha alone here
+    #   previously meant "diff working tree vs local_sha", which is empty
+    #   whenever the working tree is clean -- silently scanned nothing on
+    #   every new-branch push. Found via a direct self-test 2026-08-13.)
+    EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    if [[ "$local_sha" == "0000000000000000000000000000000000000000" ]]; then
+        SCAN_RANGE=""
+    elif [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
+        SCAN_RANGE="${EMPTY_TREE}..${local_sha}"
+    else
+        SCAN_RANGE="${remote_sha}..${local_sha}"
+    fi
+
+    # Scan new commits being pushed for credential patterns
+    PATTERNS=(
+        "sk_adjs_"
+        "sk-ant-api"
+        "github_pat_"
+        "ghp_[A-Za-z0-9]"
+        "ghs_[A-Za-z0-9]"
+        "Bearer [A-Za-z0-9_\-\.]{20,}"
+        "taile[0-9a-f]{8}"
+    )
+
+    if [[ -n "$SCAN_RANGE" ]]; then
+        DIFF=$(git diff "${SCAN_RANGE}" --unified=0 2>/dev/null || true)
+
+        for pattern in "${PATTERNS[@]}"; do
+            matches=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
+                      grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
+                      grep -v "example" | grep -v "placeholder" | grep -v "REDACTED" | \
+                      grep -v "<.*>" || true)
+            if [[ -n "$matches" ]]; then
+                echo ""
+                echo "[FAIL] pre-push: credential pattern detected — push rejected"
+                echo "       Pattern: ${pattern}"
+                echo "       Matches:"
+                echo "$matches" | head -5 | sed 's/^/         /'
+                echo ""
+                echo "       If this is a false positive:"
+                echo "         1. Move the value to ~/.secrets/ and reference via env var name"
+                echo "         2. Use a placeholder (CHANGE_ME / YOUR_TOKEN_HERE)"
+                echo ""
+                FAIL=1
+            fi
+        done
+
+        # Env-var long-value scan. Same two exemptions added 2026-08-24 as
+        # scripts/pre-commit: bare filesystem paths aren't secrets, and a
+        # variable name containing FINGERPRINT denotes a GPG key fingerprint
+        # (meant to be public by design -- see security/signing.env).
+        env_matches=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
+            grep -v "^+\s*#" 2>/dev/null | \
+            grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" 2>/dev/null | \
+            grep -v "CHANGE_ME" | grep -v "YOUR_" | grep -v "example" | \
+            grep -v "localhost" | grep -v "127\.0\.0" | \
+            grep -v "http" | grep -v "REDACTED" | \
+            grep -Ev "^\+[A-Z0-9_]*=/" | grep -Ev "FINGERPRINT" || true)
+        if [[ -n "$env_matches" ]]; then
+            echo ""
+            echo "[FAIL] pre-push: possible raw credential in env assignment — push rejected"
+            echo "       Matches:"
+            echo "$env_matches" | head -5 | sed 's/^/         /'
+            echo ""
+            echo "       Store values in ~/.secrets/ and run populate-secrets.sh instead."
+            echo ""
+            FAIL=1
+        fi
+    fi
+done
+
+if [[ "$FAIL" -eq 1 ]]; then
+    exit 1
+fi
+
+if [[ "$PUSHING_MAIN" == "true" ]]; then
+    echo "[pre-push] Pushing main -- remember to run scripts/push-and-sync.sh"
+    echo "           (or scripts/push-public.sh directly) to update the public"
+    echo "           mirror once this push completes. Not automatic."
+fi
+
+exit 0

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run demo-source scrub+promote refresh at 04:45 ET (right after the 04:15 demo-archiver, same quiet period, no Ollama use so no stacking concern)
+Requires=corporatetraveldc-demo-source-refresh.service
+
+[Timer]
+OnCalendar=*-*-* 04:45:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run nextcloud-health-check every 5 minutes
+Requires=corporatetraveldc-nextcloud-health.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

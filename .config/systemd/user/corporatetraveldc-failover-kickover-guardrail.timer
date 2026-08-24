@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 minutes -- failover push/pull kickover guardrail (nws, notam)
+Requires=corporatetraveldc-failover-kickover-guardrail.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

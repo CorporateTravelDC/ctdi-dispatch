@@ -1,0 +1,101 @@
+[Unit]
+Description=Corporate Travel DC - UltraFeeder ADS-B (1090 MHz)
+After=network-online.target
+
+[Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
+Image=ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest
+ContainerName=corporatetraveldc-ultrafeeder
+# 2026-08-03: resynced to the definitive SDR passthrough method already
+# used live here and by corporatetraveldc-dumpvdl2.container (the ACARS/
+# VDL2 decoder) -- persistent udev-symlinked device node (see
+# /etc/udev/rules.d/99-rtlsdr-adsb.rules) plus a read-only whole-bus mount
+# for enumeration, instead of a broad read-write bus mount with
+# UserNS=host + SecurityLabelDisable=true (an older, looser passthrough
+# that had drifted out of the repo copy without ever being reverted live).
+# Every SDR-touching container on this box (dumpvdl2, ultrafeeder -- the
+# only two, confirmed via grep across all live quadlets 2026-08-03) now
+# agrees on this pattern; keep new SDR feeders on it unless one is
+# confirmed not to work under a scoped/non-host passthrough.
+AddDevice=/dev/rtl_sdr_adsb:/dev/rtl_sdr_adsb
+Volume=/dev/bus/usb:/dev/bus/usb:ro
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Environment=READSB_DEVICE_TYPE=rtlsdr
+Environment=READSB_RTLSDR_DEVICE=ADSB1090
+# READSB_LAT / READSB_LON / READSB_ALT / TAR1090_DEFAULTCENTERLAT/LON / UUID
+# come from dispatch-secrets.env (EnvironmentFile= above) -- never
+# hardcoded here, see CLAUDE.md.
+Environment=READSB_MODEAC=true
+Environment=READSB_MLAT=true
+Environment=READSB_NET_ENABLE=true
+Environment=READSB_NET_ONLY=false
+Environment=TAR1090_DEFAULTRANGE=80
+Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
+# 2026-08-03: this line had drifted from the live deployed copy (which was
+# re-enabled 2026-07-28 without a matching commit) -- resynced here. Keeps
+# a literal FEEDER_ID rather than untested ${UUID} systemd expansion on an
+# ACTIVE outbound feed; scrub-public-tree.py's SUBSTITUTIONS still catches
+# it for the public mirror.
+#
+# airplanes.live added 2026-08-03: the config drafted into the old disabled
+# comment block had two real bugs that would have silently failed if it had
+# ever been uncommented -- beast port 30005 (collides with FlightAware's
+# port number, not airplanes.live's; their real port is 30004 per
+# https://airplanes.live/how-to-feed/) and mlat.airplanes.live (does not
+# resolve, confirmed NXDOMAIN 2026-08-03 -- their mlat endpoint is the same
+# feed.airplanes.live host, port 31090). Both fixed here and verified live:
+# readsb BeastReduce to feed.airplanes.live:30004 ESTABLISHED, mlat-client
+# full handshake complete on :31090. MLAT_USER=corporatetraveldc added to
+# match the OPENSKY_USERNAME identity-tagging pattern already used below --
+# without it mlat-client falls back to a random per-session ID.
+Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=00000000-0000-0000-0000-000000000000;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;adsb,feed.airplanes.live,30004,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,feed.airplanes.live,31090,name=corporatetraveldc-kdca
+PublishPort=8080:80
+PublishPort=30005:30005
+PublishPort=127.0.0.1:30003:30003
+Environment=OPENSKY_USERNAME=corporatetraveldc
+Environment=MLAT_USER=corporatetraveldc
+AutoUpdate=registry
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

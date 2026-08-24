@@ -1,0 +1,10 @@
+[Unit]
+Description=Run second-brain vault file-inventory scan daily at 04:00 ET (quiet period, ahead of any other timer)
+Requires=corporatetraveldc-second-brain-index-scan.service
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

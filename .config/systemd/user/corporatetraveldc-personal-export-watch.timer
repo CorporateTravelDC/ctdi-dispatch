@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly check for new personal data exports (LinkedIn today, Uber/Lyft later) -- Saturday 10:00 ET, clear of the Sunday weekly-compile cluster
+Requires=corporatetraveldc-personal-export-watch.service
+
+[Timer]
+OnCalendar=Sat *-*-* 10:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

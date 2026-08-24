@@ -1,0 +1,26 @@
+[Unit]
+Description=Corporate Travel DC -- mcpo (MCP-over-OpenAPI bridge for dispatch-mcp, FULL toolset -- private only)
+Documentation=https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
+After=network-online.target
+After=podman-user-wait-network-online.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-08-06: rebound to loopback only -- was unnecessarily bound to
+# 0.0.0.0, reachable from the LAN/WiFi interface with zero auth of its
+# own (admin.py's tool-level check only verifies THIS PROCESS has a
+# token configured, not that the caller presented one). This instance
+# carries the full toolset including admin.py/second_brain.py -- it must
+# NEVER get a public (or LAN-reachable) hostname. Public-safe subset
+# lives on the separate corporatetraveldc-mcpo-public.service, port 8083.
+# See dispatch_mcp/tools/__init__.py's public_safe flag and
+# docs/COMPLIANCE_SECURITY.md for the equivalent reasoning already
+# applied to the dispatch web API's own public/tailnet split.
+ExecStart=/home/corporatetraveldc/.local/bin/mcpo --host 127.0.0.1 --port 8082 -- /home/corporatetraveldc/mcp/dispatch-mcp/dispatch-mcp-wrapper.sh
+
+[Install]
+WantedBy=default.target

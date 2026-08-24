@@ -1,0 +1,146 @@
+# corporatetraveldc-runner-demo.container
+# Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-runner-demo
+#
+# Second instance of the SAME runner image already used by
+# corporatetraveldc-runner.container (live, Tailscale-only, port 8001).
+# This instance is identical except DISPATCH_BASE_URL points at the
+# demo playback API (corporatetraveldc-demo-api, port 8004) instead of
+# the live web app (port 8000) -- zero runner code changes, since the
+# demo API mirrors the live app's /api/v1/{endpoint} path shape exactly.
+#
+# Internal-only for now (127.0.0.1 + Tailscale IP only, port 8005). No
+# nginx vhost, no Cloudflare Tunnel ingress, no public DNS -- exposing
+# this to the public dispatch-runner.example.com hostname
+# is a separate, deliberate step (new public surface, prospect-facing)
+# and should get an explicit go-ahead rather than being silently wired.
+#
+# 2026-08-14: live-dir volume mount removed as part of closing F6
+# (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 4) -- REVERTED
+# 2026-08-24, this removal was the actual root cause of a crash loop that
+# ran continuously from 2026-08-15 through 2026-08-24 (~58,000+ restarts;
+# see CLAUDE.md's "Core containers" section for the full incident writeup).
+# The removed comment's own claim -- "with no volume mounted, those paths
+# resolve inside this container's own ephemeral overlay filesystem
+# instead" -- was never actually verified against the real image: the
+# runner Containerfile never creates /var/lib/corporatetraveldc inside the
+# image itself, so with no host mount the path simply doesn't exist at
+# all, and sqlite3.connect(CHAT_DB_PATH) fails outright rather than
+# falling back to any ephemeral location.
+#
+# The isolation concern behind the original removal was real but solved
+# at the wrong layer. /var/lib/corporatetraveldc/demo.db (~2.5 GB,
+# already-scrubbed demo dataset, see scripts/scrub-demo-source.py and
+# src/demo/recorder.py) and demo_access.db already live safely in this
+# SAME shared directory, used only by DEMO_MODE-gated code paths --
+# isolation here has only ever been enforced by which file the app code
+# chooses to open, never by which host directory is or isn't mounted.
+# Re-mounting the same directory web/poller/pusher already use (same
+# Volume= lines, matching pattern) closes the crash without inventing a
+# new isolation scheme; this container's own CHAT_DB_PATH/config-JSON
+# writes just needed a real directory to land in, same as everywhere else.
+#
+# CORRECTED SAME DAY, 2026-08-24 ~14:25 EDT: the "app code choice, not
+# mount boundary" reasoning above was wrong for THIS container specifically
+# -- a live pentest re-verification found it created two real, confirmed
+# exposures within hours of deploying. (1) The public demo got the real
+# 24 GB corporatetraveldc.db mounted READ-WRITE -- runner code never opens
+# it today, but it removed a containment layer the 2026-08-14 change had
+# deliberately added, so any future file-read/RCE bug in the public demo
+# would have blast radius "all of production, writable" instead of "the
+# ephemeral demo overlay." (2) Concretely exploitable today: CHAT_DB_PATH
+# (src/runner/main.py) defaults to $STATE_DIR/dispatch-chat.db with
+# STATE_DIR unset on both this container and the real production runner --
+# so once both mounted the SAME /var/lib/corporatetraveldc, they resolved
+# to the literal same file (confirmed same inode). GET/DELETE
+# /api/chat/history have no auth, no DEMO_MODE gate, and no _is_trusted
+# check, and dispatch-runner.example.com really does proxy
+# to this container's port publicly (contrary to the "no public DNS"
+# claim in this file's own header above -- same stale-comment pattern
+# CLAUDE.md already documents for runner-demo and ccw-demo) -- so an
+# anonymous internet visitor could read, and could have deleted, the real
+# operator's production dispatch-assistant chat history. Verified live by
+# the 2026-08-24 PENTEST_REVERIFICATION agent (New-Finding 1/2); the
+# destructive DELETE was identified but deliberately never invoked.
+#
+# Fix: this container now mounts a dedicated, demo-only host directory at
+# the SAME container-internal path (/var/lib/corporatetraveldc) instead of
+# the real one -- CHAT_DB_PATH/_CONFIG_PATH resolve identically from the
+# app's point of view (no code change needed), but the underlying file is
+# a fresh, empty, demo-scoped one that shares nothing with production.
+# This container does not need demo.db/demo_access.db directly (confirmed
+# via the pentest's own code read: runner proxies all dispatch data over
+# HTTP to DISPATCH_BASE_URL / the demo-api container on :8004, and opens
+# only dispatch-chat.db + a config JSON locally) -- an empty directory is
+# sufficient, systemd/sqlite create both files on first write.
+#
+# 2026-08-24 ~14:40 EDT, same-day follow-up: the demo-only directory was
+# first stood up at /home/corporatetraveldc/corporatetraveldc-demo-state
+# (the only path this non-root user could create without an interactive
+# sudo password at the time). Operator directive: the home directory isn't
+# hardened for anything and shouldn't be a mount source for a
+# publicly-reachable container -- if a future bug in this image ever
+# allowed host path traversal, a home-directory mount is a pivot point
+# into the rest of that user's files, where a dedicated /var/lib sibling
+# is not. Relocated to /var/lib/corporatetraveldc-demo (root-created,
+# chown'd to corporatetraveldc:corporatetraveldc, mode 700 -- owner-only,
+# tighter than the real /var/lib/corporatetraveldc's 755 since nothing but
+# this rootless container ever needs to read it). This is a sibling of
+# /var/lib/corporatetraveldc, not a subdirectory inside it -- a bind mount
+# only exposes the exact host path given to Volume=, so either location
+# gives the container identical isolation from production; the sibling
+# path was chosen for host-side clarity (anyone browsing
+# /var/lib/corporatetraveldc directly sees only real production files, no
+# demo directory mixed in) and to keep the mount source off any path a
+# home-directory compromise could reach.
+
+[Unit]
+Description=Corporate Travel DC -- dispatch-runner PWA, demo-playback mode (port 8005)
+After=network-online.target corporatetraveldc-demo-api.service
+Wants=corporatetraveldc-demo-api.service
+
+[Container]
+Memory=1536m
+PodmanArgs=--memory-swap=1536m
+Image=localhost/corporatetraveldc-runner:latest
+PublishPort=127.0.0.1:8005:8001
+PublishPort=100.x.x.x:8005:8001
+Environment=DISPATCH_BASE_URL=http://100.x.x.x:8004
+Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
+Environment=SSE_INTERVAL_SEC=30
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
+Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
+AutoUpdate=local
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
+CPUWeight=100
+CPUQuota=300%
+Restart=always
+RestartSec=5
+ExecStartPre=/bin/mkdir -p /run/corporatetraveldc
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

@@ -1,0 +1,40 @@
+# corporatetraveldc-acarsdec.container
+# VHF ACARS decoder using RTL-SDR with ACARS0130 serial.
+# Sends decoded messages to acarsrouter by container name over the acars-net network.
+# USB device access via AddDevice is independent of network mode.
+[Unit]
+Description=Corporate Travel DC — ACARSDEC VHF decoder
+After=network-online.target
+After=corporatetraveldc-acarsrouter.service
+Wants=corporatetraveldc-acarsrouter.service
+
+[Container]
+Image=ghcr.io/sdr-enthusiasts/docker-acarsdec:latest
+ContainerName=corporatetraveldc-acarsdec
+
+# Full USB bus passthrough — libusb enumerates /dev/bus/usb/ to find the dongle.
+AddDevice=/dev/bus/usb
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+Environment=RTL_SERIAL=ACARS0130
+Environment=FEED_ID=corporatetraveldc-arlington
+# Standard US ACARS VHF frequencies (MHz, space-separated)
+Environment=FREQUENCIES=129.125 130.025 130.425 130.450 131.125 131.550
+# Send to acarsrouter by container name on the shared acars-net network
+Environment=OUTPUT_SERVER=corporatetraveldc-acarsrouter
+Environment=OUTPUT_SERVER_PORT=5550
+Environment=OUTPUT_SERVER_MODE=udp
+
+Network=acars-net
+
+AutoUpdate=registry
+
+[Service]
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

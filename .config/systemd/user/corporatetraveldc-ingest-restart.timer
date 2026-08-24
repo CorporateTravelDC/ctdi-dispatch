@@ -1,0 +1,11 @@
+[Unit]
+Description=Check corporatetraveldc-ingest memory every 2 minutes, restart if over threshold
+Requires=corporatetraveldc-ingest-restart.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

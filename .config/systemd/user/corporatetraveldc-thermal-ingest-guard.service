@@ -1,0 +1,19 @@
+[Unit]
+Description=Corporate Travel DC -- thermal/CPU-load fallback guard for SWIM ingest containers
+After=corporatetraveldc-poller.service
+
+[Service]
+Type=oneshot
+# 2026-08-23: explicit, generous timeout -- LOCKDOWN (see thermal-ingest-guard.py's
+# module docstring) now sequentially stops/starts the whole stack, not just
+# 2-3 ingest feeds. Worst case: feed_ctl("all") budgets up to ~265s for 6
+# SWIM feeds, feed_ctl("core") up to ~60s, three --user unit stop/starts
+# (poller/pusher/runner) up to ~30s each, ollama.service up to ~30s --
+# roughly 445s for one direction (stop OR start; a single run only ever
+# does one). systemd's un-overridden default (~90s) would have killed
+# this mid-sequence, leaving the stack in a half-stopped/half-started
+# state. 600s is a deliberate margin above the ~445s worst case, same
+# generous-not-tight philosophy as this repo's other budget tunables
+# (see build-models.sh's SMOKE_BUDGET_S rationale).
+TimeoutStartSec=600
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/thermal-ingest-guard.py

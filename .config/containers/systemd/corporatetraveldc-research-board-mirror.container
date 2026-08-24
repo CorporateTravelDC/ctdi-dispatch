@@ -1,0 +1,23 @@
+[Unit]
+Description=Corporate Travel DC -- mirror vault personal-research -> board research thread (Tier-0 surface for Cowork; 2026-08-09)
+
+[Container]
+Memory=512m
+PodmanArgs=--memory-swap=512m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same sanctioned internal ingress as the other second-brain skills: reach
+# Nextcloud (127.0.0.1:8090, loopback-only) through the host nginx vhost via
+# host.containers.internal with Host-header spoofing. Board write is a local
+# DB insert (db.board_insert), no HTTP.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 poller/skills/second_brain_research_board_mirror.py
+
+[Service]
+Slice=production.slice
+MemoryLow=170M
+Type=oneshot
+TimeoutStartSec=300
