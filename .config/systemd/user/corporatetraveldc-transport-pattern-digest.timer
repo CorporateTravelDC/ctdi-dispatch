@@ -1,0 +1,10 @@
+[Unit]
+Description=Run transport-pattern-digest every 12 hours -- offset to :25 so it never lands on top of ops-brief (:00) or second-brain-rss (:10)
+Requires=corporatetraveldc-transport-pattern-digest.service
+
+[Timer]
+OnCalendar=*-*-* 0/12:25:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

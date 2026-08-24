@@ -1,0 +1,24 @@
+{
+  "name": "dispatch-runner",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.23.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "^6.4.3",
+    "vite-plugin-pwa": "^1.3.0"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}

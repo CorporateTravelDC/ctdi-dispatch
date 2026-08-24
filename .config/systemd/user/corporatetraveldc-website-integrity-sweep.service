@@ -1,0 +1,6 @@
+[Unit]
+Description=Collective signed-manifest integrity sweep for csexecutiveservices-website
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/csexecutiveservices-website/scripts/scheduled-integrity-sweep.sh

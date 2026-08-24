@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Dispatch Desk memo Sunday 09:30 ET (after AAM watch 09:00, before second-brain weekly 18:15)
+Requires=corporatetraveldc-dispatch-desk-memo.service
+
+[Timer]
+OnCalendar=Sun *-*-* 09:30:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

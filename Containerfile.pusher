@@ -1,0 +1,35 @@
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-pusher" \
+      org.opencontainers.image.description="Corporate Travel DC Dispatch — ntfy alert pusher"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+# gnupg: needed at runtime by scripts/verify-manifest.sh (signed-manifest
+# integrity check, see docs/COMPLIANCE_SECURITY.md "Signed Manifest Integrity").
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
+# src/ kept at src/ (not flattened to .) so the container's internal layout
+# matches the repo's own relative paths 1:1 -- the signed manifest's entries
+# resolve correctly against this image without path-translation logic.
+COPY src/ src/
+COPY scripts/verify-manifest.sh scripts/verify-manifest.sh
+COPY scripts/verified-exec.sh scripts/verified-exec.sh
+COPY security/trusted-signing-key.pub.asc security/trusted-signing-key.pub.asc
+COPY MANIFEST.sha256 MANIFEST.sha256.asc ./
+# 2026-08-10: see Containerfile.poller's identical comment -- Modelfiles
+# need to be present for common/llm.py's pre-inference integrity check to
+# ever succeed inside a container. Whole-glob copy, not per-model.
+COPY corporatetraveldc.* ./
+RUN chmod +x scripts/verify-manifest.sh scripts/verified-exec.sh
+
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1
+
+CMD ["python3", "-m", "pusher.main"]

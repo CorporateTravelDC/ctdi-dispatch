@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<smes:positionReport xmlns:smes="urn:us:gov:dot:faa:atm:terminal:entities:v2-0:smes:base"
+                     airport="KDCA"
+                     trackNumber="4501"
+                     targetType="AIRCRAFT">
+  <smes:aircraftIdentification>AAL256</smes:aircraftIdentification>
+  <smes:modeACode>3456</smes:modeACode>
+  <smes:aircraftType>B738</smes:aircraftType>
+  <smes:latitude>38.8499</smes:latitude>
+  <smes:longitude>-77.0350</smes:longitude>
+  <smes:altitude>
+    <smes:value>0</smes:value>
+  </smes:altitude>
+  <smes:speed>15</smes:speed>
+  <smes:heading>120</smes:heading>
+</smes:positionReport>

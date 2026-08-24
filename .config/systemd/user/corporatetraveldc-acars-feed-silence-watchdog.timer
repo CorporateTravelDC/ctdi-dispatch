@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 minutes -- check ACARS/VDLM/HFDL channels for sustained silence on a previously-active channel
+Requires=corporatetraveldc-acars-feed-silence-watchdog.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

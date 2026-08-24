@@ -1,0 +1,75 @@
+# corporatetraveldc-web.container
+# Quadlet — ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-web
+
+[Unit]
+Description=Corporate Travel DC — web (FastAPI)
+After=network-online.target
+After=corporatetraveldc-poller.service
+Wants=corporatetraveldc-poller.service
+
+[Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
+Image=localhost/corporatetraveldc-web:latest
+# 2026-07-23: web now hosts POST /api/v1/remember (second-brain manual
+# capture), which needs WebDAV reach to Nextcloud -- loopback-bound
+# (127.0.0.1:8090), not reachable via host.containers.internal under
+# any pasta flag (kernel anti-spoofing on 127.0.0.0/8, see
+# docs/COMPLIANCE_SECURITY.md). Reuse the existing 0.0.0.0:80 nginx
+# vhost for cloud.example.com instead -- same per-
+# container opt-in already used by the second-brain poller Quadlets.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+PublishPort=127.0.0.1:8000:8000
+# 2026-08-08: tailnet publish restored — the runner (DISPATCH_BASE_URL=
+# http://100.x.x.x:8000) and the PWA reach the web API here. Dropped
+# 2026-08-06; a restart re-applying the quadlet then broke runner->web
+# (CPS/briefs blank, admin-token add-feed 401 via failed whoami-token).
+PublishPort=100.x.x.x:8000:8000
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+AutoUpdate=local
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+[Install]
+# 2026-07-28: no longer auto-started at login. This unit and 17 others
+# used to fire simultaneously via WantedBy=default.target the instant
+# network-online.target was reached -- a boot-storm RAM/CPU/bandwidth
+# risk, the same class of bug already fixed on the SWIM ingest side
+# (see corporatetraveldc-ingest-itws.container). Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service, which staggers all 18 via
+# scripts/stack-boot-ctl.sh in a dependency-aware order, before the
+# existing corporatetraveldc-boot-stagger.service staggers in the seven
+# SWIM ingest units.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run disruption-weather-digest daily at 04:35 ET -- offset from ops-brief (:00 hourly) and transport-pattern-digest (0/12:25) so Ollama jobs never stack
+Requires=corporatetraveldc-disruption-weather-digest.service
+
+[Timer]
+OnCalendar=*-*-* 04:35:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

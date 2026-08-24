@@ -1,0 +1,10 @@
+[Unit]
+Description=Run dispatch weekly summary Sunday 18:00 ET
+Requires=corporatetraveldc-weekly-summary.service
+
+[Timer]
+OnCalendar=Sun *-*-* 18:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

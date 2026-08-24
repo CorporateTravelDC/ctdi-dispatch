@@ -1,0 +1,11 @@
+[Unit]
+Description=Run thermal-ingest-guard every 2 minutes
+Requires=corporatetraveldc-thermal-ingest-guard.service
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=120
+AccuracySec=10
+
+[Install]
+WantedBy=timers.target
