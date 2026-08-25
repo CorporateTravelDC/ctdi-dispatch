@@ -121,7 +121,7 @@ not rotating the account — so this is the **current, valid** credential.
 
 The public-push path does not protect it:
 ```
-$ grep -c 'RESWAY\|NWWS_PASSWORD' scripts/scrub-public-tree.py      # substitutions for this value
+$ grep -c 'NWWS_PASSWORD' scripts/scrub-public-tree.py      # substitutions for this value (fragment-search pattern redacted here, 2026-08-24 -- see CLAUDE.md's "never real secrets in tracked files" rule)
 0
 $ sed -n '41,70p' scripts/scrub-public-tree.py                       # DROP_FILES membership
 DROP_FILES = { "dispatch-secrets.env", "cloud.cs…", "dav.cs…", "HEADLESS_ACCESS.md",

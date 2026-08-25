@@ -283,3 +283,268 @@ the cosmetic orphaned manifest temp file. Files edited by this pass,
 all left uncommitted: this file (coordinate redaction + this
 addendum), `docs/INFRA_MAP.md` (one cadence line), CLAUDE.md (one
 watchdog-section paragraph).
+
+---
+
+## Addendum 2 — post-commit `0a7f643` drift check (~18:30–18:50 EDT)
+
+Independent pass run right after commit `0a7f643` (18:26 EDT, "Security
+remediation: redact leaked NWWS password + GPS coords, harden
+scrub-public-tree.py, drop CLAUDE.md from public") and its 18:27 push to
+`public/main` (`e02c134`). Scope per the task: did *this specific
+change* invalidate anything the current docs claim — not a from-scratch
+rewrite. Everything below was verified against the live system
+(`systemctl --user`, `podman`, real curls, journal reads, public-remote
+tree reads), not against the docs' own text. This pass edited only this
+file; nothing was staged or committed.
+
+### ACTIVE now, not doc drift — 19 units `failed`, one root cause:
+### the sign→build ordering trap, fourth occurrence
+
+`systemctl --user list-units 'corporatetraveldc-*' --all` at 18:31
+showed **19 failed units** (every daily-watch, ops-brief, ep-advance,
+board-sweep, entity-tracking-digest, integrity-sweep, second-brain-daily,
+tbfm-arrival-enrichment, feed-db-integrity-check, ingest-feed-watch,
+personal-notes-import, pull-path-verify, second-brain-rss,
+docs-drift-weekly — see below for that last one, it is a *different*
+cause). Do not debug these individually. Evidence chain:
+
+- All five images carry `build-date=20260824T211010Z` = **17:10 EDT**;
+  `MANIFEST.sha256`/`.asc` were signed at **18:23** EDT. Build predates
+  sign.
+- Internally inconsistent image, proven directly: inside
+  `corporatetraveldc-poller:latest`, `/app/src/web/main.py` hashes
+  `9a6ee3c3…` while the baked `/app/MANIFEST.sha256` records `d39e8cdc…`
+  for that path — the image baked this pass's *new* source against the
+  *pre-sign* manifest. Every `verified-exec.sh`-gated skill fire since
+  ~17:10 has failed exactly as CLAUDE.md's standing entry predicts
+  (`ep-advance` 17:35: `src/runner/main.py`, `src/web/main.py`,
+  `src/web/routes/sectors.py` FAILED).
+- The repo tree itself is fine: `scripts/verify-manifest.sh` → `OK —
+  signature valid, all 762 files match` (up from 706 this morning; the
+  new investor-materials tree, LICENSE, requirements.txt,
+  `src/second_brain/doc_generation.py` + tests account for the growth).
+  The `integrity-sweep` failure on record fired at 18:18 — *before* the
+  18:23 sign — and is the documented normal pre-sign cycle; it
+  self-clears on its next 15-min fire.
+- **Fix is the documented one: `bash build-images.sh` again, now, after
+  the 18:23 sign — then the skill timers clear themselves on their next
+  fires.** Not done by this pass (live deploy, out of scope for a
+  drift-check pass, same precedent as the 08-23 semantic-compile entry).
+  Until rebuilt, every verified-exec skill fire keeps failing, and the
+  running `web`/`poller`/`pusher`/`runner`/`runner-demo` containers
+  carry the same dormant baked-manifest inconsistency (harmless to
+  their own startup — they don't run the gate — same as the 08-23
+  occurrence).
+
+### `docs-drift-weekly`'s first scheduled post-fix fire FAILED — new,
+### undocumented failure mode
+
+CLAUDE.md's top-of-file entry says this unit "was broken, is now fixed
+and proven" with next scheduled fire 2026-08-24 09:00. The 09:00 fire
+**failed** (`status=1`, 9 s wall clock) — not the PATH or archived-dir
+bugs. The run log
+(`/var/lib/corporatetraveldc/docs-drift-check/ctdi-dispatch-internal-2026-08-24.log`,
+67 bytes) contains only: `You've hit your session limit · resets
+10:40am (America/New_York)` — the Claude CLI account was at its usage
+limit at fire time. So the unit's plumbing is fixed (it ran, invoked
+the agent, captured output, exited nonzero honestly) but the scheduled
+path has still never produced a scheduled-fire report, and CLAUDE.md's
+"fixed and proven" should be read as "proven manually, scheduled path
+now blocked by a third cause (API usage limits) nobody has documented."
+The 18:26 commit didn't cause this; recorded because this file is the
+drift benchmark and the claim is now misleading as written.
+
+### Doc drift 1 (largest): the runner-demo crash loop is FIXED — five
+### docs still describe it as the current state
+
+Commit `0a7f643` rewrote
+`.config/containers/systemd/corporatetraveldc-runner-demo.container`:
+the 2026-08-14 F6 mount removal (the root cause) is reverted the right
+way — a dedicated `/var/lib/corporatetraveldc-demo` host dir (root-
+created, `700 corporatetraveldc:corporatetraveldc`, confirmed live with
+a real `dispatch-chat.db` in it) is mounted at the container-internal
+`/var/lib/corporatetraveldc` path, sharing nothing with production.
+Live-verified this pass: `ActiveState=active SubState=running`,
+`NRestarts=0` and **stable across an 8 s re-read** (the doc's own
+detection method), `:8005` → HTTP 200, repo and live quadlet copies
+byte-identical. The container's header comment now tells the whole
+story, including the two same-day pentest-found missteps (production DB
+briefly mounted RW; shared `dispatch-chat.db` inode readable/deletable
+via unauthenticated `/api/chat/history` on the public hostname) and
+their fixes.
+
+Now stale, all describing the crash loop / 502 / "masked only by
+accident" state as current:
+
+- CLAUDE.md "Core containers" warning block (~line 342): "has been
+  crash-looping since 2026-08-15", ":8005 refuses connections and the
+  public hostname 502s", the NRestarts figures, and the F6-mount root
+  cause framed as unfixed.
+- CLAUDE.md "Known bad" table (~line 1911): runner-demo listed as the
+  sole currently-failed unit, "unchanged long-running crash loop" —
+  now false on every column (and superseded by the 19 *actually*
+  failed units above).
+- CLAUDE.md "Crash-looping" entry + the NRestarts/curl detection
+  how-to (~lines 1966–2003): now historical; the method itself is
+  still good general advice.
+- `README.md` lines 70 ("DOWN — crash-looping"), 121, 249 ("Currently
+  502").
+- `docs/INFRA_MAP.md` line 350 (full crash-loop paragraph) and the
+  count-flapping notes at lines 26/34/168.
+
+**The security half of those warnings is now LIVE, not resolved.**
+`DEMO_MODE` is still set nowhere (confirmed: not in the quadlet, not in
+either env file, not in the running container's env), and
+`https://dispatch-runner.example.com/` now returns **200**
+publicly. The exact scenario CLAUDE.md's NEEDS OPERATOR DECISION warned
+about — "fixing the crash without also setting `DEMO_MODE=true` would
+put an ungated demo surface live" — has happened. Partially mitigated
+by the same commit: `frontend_config()` is now trust-gated (untrusted
+callers get a DC-area placeholder + empty `mt_widget_key` — confirmed
+live from the demo instance), the layer-config PUT is trust-gated
+(404), and the chat DB is demo-scoped. But `proxy_dispatch()`'s
+DEMO_MODE hard gate, signal sanitization, and ntfy suppression remain
+inert (`main.py` default `false`), and the same commit's own
+`PENTEST_REVERIFICATION_2026-08-24.md` still lists "Set `DEMO_MODE`
+explicitly" as an open MEDIUM. The operator decision is no longer
+deferrable-by-accident — the crash loop that masked it is gone.
+
+### Doc drift 2: CLAUDE.md is now IN `DROP_FILES` — three CLAUDE.md
+### passages claim the opposite
+
+`scripts/scrub-public-tree.py`'s `DROP_FILES` now contains
+`"CLAUDE.md"` (added by this commit, with a long rationale comment),
+and the 18:27 push confirms it worked: `git show public/main:CLAUDE.md`
+→ file **gone from the public mirror**. Three passages in CLAUDE.md now
+assert the opposite as present-tense fact:
+
+- ~line 493 (approval-requests note): "`CLAUDE.md` is **not** in
+  `scripts/scrub-public-tree.py`'s `DROP_FILES` (confirmed by reading
+  the set)… A real id added here would hard-fail the next `public`
+  push." Both halves now stale — and the *consequence* is inverted: a
+  UUID pasted into CLAUDE.md would no longer block the push, because
+  the file never reaches `verify_scrubbed()` at all (dropped files
+  aren't scanned). The don't-paste-ids rule itself still stands (reason
+  1, the id-is-the-credential argument, is unchanged).
+- ~line 3544 (secrets convention): "CLAUDE.md itself is not in the
+  scrubber's `DROP_FILES` — it publishes with only content
+  substitutions applied." False; it no longer publishes at all.
+- ~line 3555 (NWWS correction): same claim, plus "nothing in that
+  script substitutes credential-shaped example text" — the commit also
+  added a live-secret-value check (`_load_live_secret_values()` reads
+  `dispatch-secrets.env` at scrub time and hard-fails on any live
+  value appearing anywhere in the output tree), so that sentence is
+  accurate only as history of how the leak happened, not as a
+  description of the current scrubber.
+
+### Real finding, introduced AND published by this commit: a stray
+### manifest temp file is tracked and on the public mirror
+
+`MANIFEST.sha256.3zbNoX` — a 762-line `sign-manifest.sh` mktemp orphan
+(the same class as the morning's `MANIFEST.sha256.Cobrrm`, which was
+correctly left untracked) — got **committed** in `0a7f643` and is now
+git-tracked AND present on `public/main` (verified:
+`git show public/main:MANIFEST.sha256.3zbNoX` succeeds). The 2026-08-20
+exclusion-regex fix keeps the whole `MANIFEST.sha256(\..*)?` family out
+of the *signed manifest* (confirmed: it is not a manifest entry and
+`verify-manifest.sh` passes), but `DROP_FILES` is an exact-name set —
+`MANIFEST.sha256` and `.asc` are dropped, the mktemp family is not — so
+the stray sailed through the scrubber and published.
+
+Measured severity, checked against the actual public blob rather than
+assumed: the content **substitutions did apply** (the real domain is
+rewritten — the public copy lists `nginx/conf.d/cloud.example.com.conf`
+/ `dav.example.com.conf`, not the real hostnames), so no hostname or
+credential leaked. What it does disclose: the private tree's complete
+file inventory — including the existence and names of every file
+`DROP_FILES` deliberately withholds (the vault vhost pair, CLAUDE.md,
+HEADLESS_ACCESS.md, etc.) — plus real SHA-256 hashes of the *private*
+(pre-substitution) content of every tracked file. That is precisely the
+"real trust material… must NOT transit" class the `MANIFEST.sha256`
+DROP_FILES entry's own comment describes. Low severity, but real, live
+now, and it also permanently confirms to a public reader that the
+public tree's content differs from the signed private one.
+
+One more wrinkle, confirmed via `git status` at 18:4x: the file is
+**already deleted from disk** (working tree shows an unstaged ` D
+MANIFEST.sha256.3zbNoX`) — it vanished sometime after the 18:26 commit,
+consistent with mktemp-orphan cleanup. So the tracked copy is now a
+phantom in a second sense: HEAD carries a file the working tree doesn't
+have.
+
+**Operator actions** (not done by this pass — both violate its
+no-git-writes rule): stage the already-pending deletion (`git rm`
+reduces to `git add -u` on that path) and commit it; add the
+`MANIFEST.sha256.*` family to the scrubber's drop logic (DROP_FILES is
+exact-name; either enumerate-by-glob at scrub time or add a prefix
+rule) so the next orphan can't repeat this; then re-scrub and push to
+clear it from `public/main`.
+
+### Doc drift 3: admin-audit endpoint count is now 37, not 32
+
+The same commit added `require_admin(...)` gating to the five
+mute/throttle endpoints in `src/web/routes/sectors.py`
+(`sectors.sector.silence` etc.). Re-derived:
+`grep -rc 'require_admin("' src/web/…` → main.py 23 + watchlist.py 8 +
+remember.py 1 + **sectors.py 5** = **37**. Stale: CLAUDE.md's auth-tiers
+section ("Real coverage is **32 endpoints, not 23**") and
+`docs/COMPLIANCE_SECURITY.md:369` (same 32 claim; its action-name map
+also has no `sectors.*` entries). Same undercount mechanism both docs
+themselves describe — a new route file gained `require_admin` and the
+main.py-scoped count wasn't re-derived.
+
+### Smaller notes, checked and either fine or minor
+
+- **Timers**: `ops-brief` fired 18:05, next 19:05; `ep-advance` fired
+  17:35, next 18:35 — matches CLAUDE.md's ":05/:35 restagger" entry;
+  repo and live timer files byte-identical. (Both *services* then
+  failed — that's the image/manifest root cause above, not the timers.)
+- **Test suite: 223 tests, 222 pass** — up from this morning's 218/217
+  (+5 from the new `tests/second_brain/test_doc_generation.py`), same
+  single pre-existing `test_smes_parser_basic` failure. Run live this
+  pass (guard `tier: 0`, Ollama idle, 12 s wall).
+- **GPS/receiver-location**: `ULTRAFEEDER_LAT/LON` moved to
+  `dispatch-secrets.env` (dispatch.env keeps a pointer comment).
+  `docs/GPS_COORDINATE_CONFIGURATION.md`'s normative section already
+  says `dispatch-secrets.env` — correct; its "Incident this codified"
+  narrative says `dispatch.env`, accurate as history of the pre-move
+  state. CLAUDE.md's frontend-conventions bullet ("components fetch
+  them from `GET /api/v1/frontend-config`") is still true but now
+  incomplete: the endpoint is trust-gated, so only trusted (tailnet/
+  loopback) callers get the real coordinate; untrusted callers get a
+  fixed DC placeholder and empty widget key.
+- **`src/shared/watchlist_README.md`**: updated in-commit with the
+  delay-extension entry; checked against `extend_auto_remove_for_delay()`
+  — accurate, no drift.
+- **Board reads are now redacted** (`_redact_board_body()` in
+  `src/web/main.py` masks the vault hostname + app-password mechanism
+  references before serving Tier-0 board reads). New behavior; no
+  existing doc contradicts it, none describes it yet either.
+- **New surface with no doc coverage at all** (gap, not falsified
+  claims): `src/second_brain/doc_generation.py` (+ its tests,
+  `requirements.txt`, `LICENSE`, and the whole
+  `docs/investor-materials/v1.5/` tree). Nothing in the living docs
+  mentions the doc-generation pipeline.
+- **`/healthz`** → `"status":"ok"`, `token_count_active: 5` — matches
+  CLAUDE.md's 2026-08-24 five-active-token accounting. Guard state
+  `{"tier": 0}`; load1 ~9 (normal band, informational only).
+- **Manifest file counts**: 762 now; every doc citing 698/701/706
+  already carries the re-derive-don't-trust caveat, so not drift.
+
+### Verdict
+
+Commit `0a7f643` **did** invalidate current doc claims, in three
+clusters — the runner-demo crash-loop state (CLAUDE.md ×3 sections,
+README ×3 lines, INFRA_MAP ×2 places), the CLAUDE.md-in-DROP_FILES
+claims (CLAUDE.md ×3 passages, one with an inverted safety
+consequence), and the 32-admin-endpoint count (CLAUDE.md +
+COMPLIANCE_SECURITY.md) — plus one new live exposure it introduced
+itself (the published stray manifest temp file) and one urgent
+operational follow-through it left undone (all five images must be
+rebuilt post-sign; 18 skill units are failing on the stale bake right
+now, and the public demo runs with `DEMO_MODE` still unset). The
+morning half of this file remains accurate except where this addendum
+supersedes it (runner-demo, file counts, test counts,
+docs-drift-weekly's "still pending" fire). This pass edited only this
+file and committed/staged nothing.
