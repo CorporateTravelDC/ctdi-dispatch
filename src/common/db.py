@@ -4,6 +4,7 @@ Schema is authoritative here. Migrations are additive (ALTER TABLE only).
 """
 
 import json
+import logging
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Generator
 
 from common import config
+
+log = logging.getLogger(__name__)
 
 
 def _db_path() -> Path:
@@ -2850,16 +2853,50 @@ def faa_upsert_aircraft(records: list[dict]) -> int:
 
 
 def faa_upsert_ladd(n_numbers: list[str]) -> int:
-    """Replace LADD list entirely. Returns final count."""
+    """Replace LADD list entirely. Returns final count.
+
+    2026-08-25 fix (Opus blind review C-31/C-14): this used to
+    unconditionally DELETE + re-insert, so any upstream hiccup that made
+    the caller's parse come back empty (a redirect swallowed as a valid-
+    but-wrong zip, a format change, a transient FAA outage) silently wiped
+    the entire privacy opt-out list to zero with no exception raised --
+    confirmed live, `faa_ladd_aircraft` held 0 rows. LADD (Limiting
+    Aircraft Data Displayed) is an FAA PRIVACY program; wiping it means
+    every previously-protected tail number reports `ladd: false` and
+    loses that protection, which is the opposite of fail-safe for a
+    platform built around VIP/executive tracking. An intentional full
+    clear was never a real use case for this function (`n_numbers` always
+    comes from a fresh FAA download) -- so an empty input now means
+    "the fetch didn't produce anything usable," not "clear the list,"
+    and is refused rather than acted on. The caller must still log this
+    loudly (see faa_registry.py) so a persistently-empty source doesn't
+    go unnoticed.
+    """
+    n_numbers = [n for n in n_numbers if n.strip()]
+    if not n_numbers:
+        log.error(
+            "faa_upsert_ladd: refusing to replace the LADD privacy list "
+            "with an empty result -- leaving the existing %d entries in "
+            "place. An empty parse means the fetch failed to produce a "
+            "usable list, not that the list should be cleared.",
+            faa_ladd_count(),
+        )
+        return faa_ladd_count()
     import time as _time
     now = _time.time()
     with conn() as c:
         c.execute("DELETE FROM faa_ladd_aircraft")
         c.executemany(
             "INSERT OR REPLACE INTO faa_ladd_aircraft (n_number, updated_at) VALUES (?, ?)",
-            [(n.strip().upper(), now) for n in n_numbers if n.strip()],
+            [(n.strip().upper(), now) for n in n_numbers],
         )
     return len(n_numbers)
+
+
+def faa_ladd_count() -> int:
+    with conn() as c:
+        row = c.execute("SELECT COUNT(*) FROM faa_ladd_aircraft").fetchone()
+        return row[0] if row else 0
 
 
 def faa_registry_sweep_removed(cutoff_epoch: float) -> int:

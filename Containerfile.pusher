@@ -30,6 +30,7 @@ COPY corporatetraveldc.* ./
 RUN chmod +x scripts/verify-manifest.sh scripts/verified-exec.sh
 
 ENV PYTHONPATH=/app/src \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 CMD ["python3", "-m", "pusher.main"]

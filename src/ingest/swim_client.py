@@ -399,8 +399,21 @@ class _NmsFeedSession:
         from solace.messaging.errors.pubsubplus_client_error import PubSubPlusClientError
 
         # Explicit timeouts prevent indefinite SDK hang on broker unreachable.
-        # TLS without validation: FAA ems1/ems2 certs may not be in container
-        # trust store; disable for now (same as swim_test.py approach).
+        # CORRECTED 2026-08-25 (confirmed real, live security issue found by
+        # an independent blind audit): TLS validation was disabled entirely
+        # here on the assumption that "FAA ems1/ems2 certs may not be in
+        # container trust store" -- that assumption was never actually
+        # checked against the real certificate and was wrong. Verified live
+        # via `openssl s_client -connect ems{1,2}.swim.faa.gov:55443
+        # -showcerts`: both hosts present a real cert issued by DigiCert
+        # Global G2 TLS RSA SHA256 2020 CA1 (subject CN matches each host
+        # exactly), and the default system trust store validates it cleanly
+        # (`Verify return code: 0 (ok)`) with no special CA bundle needed.
+        # Disabling validation here exposed six real FAA SWIM credential
+        # sets (all six feeds share this connect path) to trivial MITM --
+        # any on-path attacker could present ANY certificate and this code
+        # would accept it and hand over real auth credentials. Restored to
+        # real validation using the container's default trust store.
         props = {
             "solace.messaging.transport.host": self.cfg.host,
             "solace.messaging.service.vpn-name": self.cfg.vpn,
@@ -433,7 +446,9 @@ class _NmsFeedSession:
             "SOLCLIENT_SESSION_PROP_KEEP_ALIVE_INT_MS": "5000",
             "SOLCLIENT_SESSION_PROP_KEEP_ALIVE_LIMIT": "8",
         }
-        tls = TLS.create().without_certificate_validation()
+        tls = TLS.create().with_certificate_validation(
+            ignore_expiration=False, validate_server_name=True
+        )
         service = (
             MessagingService.builder()
             .from_properties(props)

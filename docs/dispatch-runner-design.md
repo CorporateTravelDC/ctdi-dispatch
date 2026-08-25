@@ -17,24 +17,27 @@ runner-specific API routes, proxying the dispatch web API.
 | Instance | Unit | Port | Exposure |
 |---|---|---|---|
 | Live ops dashboard | `corporatetraveldc-runner.service` | 8001 (127.0.0.1 + 100.x.x.x) | **Tailnet-only**: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 vhost → :8001). No public hostname. |
-| Public demo (playback) | `corporatetraveldc-runner-demo.service` | 8005→8001 | **Public hostname, currently down**: `https://dispatch-runner.example.com` (CF tunnel → nginx → :8005). The unit has been **crash-looping since 2026-08-15** (`sqlite3.OperationalError` on startup, `status=3`, auto-restart), so the hostname 502s. `DEMO_MODE` is set **nowhere** (code default `false`) — if the crash were fixed naively, the demo would come up **ungated**. Operator accepted the public-demo-on-sanitized-data exposure 2026-08-20, but setting `DEMO_MODE` explicitly is still pending. Reads the demo API (:8004) instead of live feeds |
+| Public demo (playback) | `corporatetraveldc-runner-demo.service` | 8005→8001 | **Public hostname, LIVE since 2026-08-24 ~14:52**: `https://dispatch-runner.example.com` (CF tunnel → nginx → :8005) serves 200. The 2026-08-15→08-24 crash loop (`sqlite3.OperationalError` from the 08-14 F6 mount removal) was fixed by commit `0a7f643` — a dedicated `/var/lib/corporatetraveldc-demo` host dir is mounted at the container-internal state path, isolated from production (`NRestarts=0`, stable). `DEMO_MODE` is still set **nowhere** (code default `false`), so the demo came up with the DEMO_MODE-dependent gates **inert** — exactly the naive-fix scenario this doc warned about; the operator accepted the public-demo-on-sanitized-data exposure 2026-08-20, but setting `DEMO_MODE` explicitly is still pending (open MEDIUM in `PENTEST_REVERIFICATION_2026-08-24.md`). Reads the demo API (:8004) instead of live feeds |
 
-**Still true — re-verified live 2026-08-23:** `systemctl --user show
-corporatetraveldc-runner-demo.service -p NRestarts` → **49153** (climbing;
-resets only on reboot, so treat it as "constant crash loop", not a
-meaningful number); `curl --max-time 4 http://127.0.0.1:8005/healthz` →
-connection refused (`http_code=000`); and `grep -rn DEMO_MODE` across
-`~/.config/containers/systemd/*.container`, `dispatch.env`, and
-`dispatch-secrets.env` returns **zero hits**. A `podman ps` snapshot can
-catch this container in a momentary `Up N seconds` between crashes — trust
-`SubState`/`NRestarts` and the refused port, not one snapshot.
+**Historical (accurate 2026-08-15 → 2026-08-24 morning, superseded by the
+fix above):** the crash-loop-era detection guidance — a climbing
+`NRestarts`, `curl 127.0.0.1:8005` connection-refused, and not trusting a
+single `podman ps` snapshot — remains good general technique for any
+`Restart=`-carrying unit, but no longer describes this one.
 
-**Mechanism note (verified 2026-08-20):** `_is_trusted()` is purely
-IP-based — it never checks `X-CTDI-Public`. The only app-layer gate on the
-public demo hostname is `proxy_dispatch()`'s `DEMO_MODE`+session-cookie
-check (currently inert, since `DEMO_MODE` is unset), and **no Cloudflare
-Access policy fronts `dispatch-runner.example.com`** — don't
-assume a defense there that doesn't exist.
+**Mechanism note (verified 2026-08-20; updated 2026-08-24):**
+`_is_trusted()` is purely IP-based — it never checks `X-CTDI-Public`, and
+**no Cloudflare Access policy fronts
+`dispatch-runner.example.com`** — don't assume a defense there
+that doesn't exist. As of the two 2026-08-24 commits (`0a7f643`,
+`2bb7fbf`) several individual endpoints are now `_is_trusted`-gated at the
+app layer regardless of `DEMO_MODE`: `PUT /api/v1/config` (404 untrusted),
+`GET /api/v1/frontend-config` (untrusted callers get a placeholder
+coordinate + empty widget key), and `GET`/`DELETE /api/chat/history`
+(404 untrusted — previously readable *and destructively clearable* with
+no credential). `proxy_dispatch()`'s `DEMO_MODE`+session-cookie check
+remains the only *hostname-wide* gate, and it is still inert while
+`DEMO_MODE` is unset.
 
 **Retired:** `ops.example.com` (2026-08-02) — hard-404'd by
 hostname in `_RETIRED_HOSTNAMES` (`src/runner/main.py`), no nginx vhost, no
