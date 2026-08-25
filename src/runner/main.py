@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import posixpath
 import random
 import re
 import sqlite3
@@ -330,13 +331,34 @@ _API_V1_PROXY_PREFIX = "/api/dispatch/api/v1"
 _RETIRED_HOSTNAMES = {"ops.example.com"}
 
 
+def _normalized_path(raw_path: str) -> str:
+    """Collapse `.`/`..` segments and duplicate slashes before the
+    prefix-ACL checks below. 2026-08-25 fix: a request for
+    `/api/dispatch/./admin/...` (or `//admin/...`) doesn't literally
+    start with `_ADMIN_PROXY_PREFIX`/"/admin", so the old plain
+    `.startswith()` check on the raw `request.url.path` let it through
+    -- but Starlette's own `{path:path}` capture on proxy_dispatch()
+    passes the dot-segment through unresolved into the outbound
+    `httpx` request, and a `.`/`..`-segment path is exactly the kind of
+    string a downstream normalizer (or a future routing change) could
+    resolve back to the real admin path. Compare against the normalized
+    form so the gate can't be strung-compared out of matching what would
+    actually get requested."""
+    normalized = posixpath.normpath(raw_path)
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized
+    if raw_path.endswith("/") and not normalized.endswith("/"):
+        normalized += "/"
+    return normalized
+
+
 @app.middleware("http")
 async def tailscale_gate(request: Request, call_next):
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
     if host in _RETIRED_HOSTNAMES:
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
-    path = request.url.path
+    path = _normalized_path(request.url.path)
     is_admin_proxy_path = path.startswith(_ADMIN_PROXY_PREFIX) or path.startswith("/admin")
     is_v1_mutation = (
         path.startswith(_API_V1_PROXY_PREFIX)

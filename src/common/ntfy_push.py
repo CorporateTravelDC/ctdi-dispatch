@@ -144,23 +144,40 @@ def send(
             except requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
                 if status in (401, 403):
-                    # Documented false-negative pattern -- don't resend, mark
-                    # as probable-delivery and stop instead of risking a
-                    # confirmed duplicate for a message that likely already went out.
+                    # 2026-08-25 correction (Opus blind review C-6): this
+                    # branch used to `return True` on 401/403, on the theory
+                    # that ntfy's own messages_published counter kept
+                    # climbing through these windows, so the send probably
+                    # went out and this was a spurious auth error under
+                    # load. That theory has no per-message confirmation
+                    # behind it -- an aggregate counter climbing doesn't
+                    # prove THIS message landed -- and a permanently wrong/
+                    # revoked NTFY_TOKEN produces the exact same status
+                    # code, forever. Returning True either way made a
+                    # revoked token indistinguishable from healthy delivery
+                    # on an alerting platform: 1,274 real dedup entries had
+                    # accumulated under the old code with nothing ever
+                    # correctly reporting failure. Still suppress the
+                    # RESEND (a real transient 401/403 on an otherwise-
+                    # healthy token could otherwise duplicate-alert), but
+                    # never claim success for a request that never got one.
                     if _ambiguous_dedup.should_push(idem_key, idem_key):
                         _ambiguous_dedup.record(idem_key, idem_key)
-                        log.warning(
-                            "ntfy %s: url=%s topic=%s -- known false-negative pattern, "
-                            "treating as delivered, NOT resending: %s",
+                        log.error(
+                            "ntfy %s: url=%s topic=%s -- NOT resending (avoids "
+                            "duplicate-alerting if this is transient), but this "
+                            "is NOT confirmed delivery -- treat as a failed "
+                            "send: %s",
                             status, attempt_url, topic, exc,
                         )
                     else:
-                        log.warning(
-                            "ntfy %s: url=%s topic=%s -- already marked probable-delivery "
-                            "within %ds window, suppressing resend",
+                        log.error(
+                            "ntfy %s: url=%s topic=%s -- already logged as a "
+                            "failed send within %ds window, suppressing resend "
+                            "(still NOT confirmed delivered)",
                             status, attempt_url, topic, _AMBIGUOUS_STATUS_TTL_SECS,
                         )
-                    return True
+                    return False
                 last_exc = exc
                 last_body = getattr(getattr(exc, "response", None), "text", None)
                 if attempt < _RETRY_ATTEMPTS:

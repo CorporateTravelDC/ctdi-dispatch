@@ -548,3 +548,162 @@ morning half of this file remains accurate except where this addendum
 supersedes it (runner-demo, file counts, test counts,
 docs-drift-weekly's "still pending" fire). This pass edited only this
 file and committed/staged nothing.
+
+---
+
+## Addendum 3 — post-commit `2bb7fbf` drift check (~21:53–22:05 EDT)
+
+Independent pass run right after commit `2bb7fbf` (21:51 EDT, "Redact
+residual issues; fix pre-commit/pre-push false positive on placeholder
+tokens"). Scope per the task: did *this specific change* invalidate
+anything the current docs claim, verified live — not a from-scratch
+rewrite. This pass's edits are uncommitted working-tree changes only;
+nothing staged or committed by it.
+
+What the commit actually changed, beyond its subject line: (1) two new
+pre-commit/pre-push credential-scan exemptions (literal `...` and
+`deadbeef`); (2) **`GET /api/v1/osint/feed` gained `require_tier(T1)`**
+(was completely unauthenticated — found by the blind ground-up audit);
+(3) **`GET`/`DELETE /api/chat/history` on the runner gained
+`_is_trusted` gating** (404 for untrusted — both were open to any
+reachable caller, including destructive clear); (4) removed the tracked
+stray `MANIFEST.sha256.3zbNoX`; (5) three audit docs added/redacted.
+
+### Addendum 2's 🔴 stale-image emergency is RESOLVED — and correctly
+
+- All five images rebuilt `build-date=20260825T013027Z` (21:30 EDT),
+  **after** the sign — internally consistent, proven directly: inside
+  `poller:latest`, `sha256sum /app/src/web/main.py` (`6094808d…`)
+  exactly matches the baked `/app/MANIFEST.sha256` entry. The
+  sign→build ordering trap was avoided this time.
+- `web`/`poller`/`pusher`/`runner` all restarted 21:32 EDT; live
+  containers confirmed carrying both auth fixes (`require_tier(Tier.T1)`
+  on `osint_feed` in the running `web`; the `_is_trusted` gate on both
+  chat-history handlers in the running `runner`).
+- **First post-rebuild verified-exec fire already succeeded**:
+  `personal-notes-import` 21:56:08, `Result=success`, container ran the
+  new image. Tree-level: `verify-manifest.sh` → OK, all **764** files;
+  `integrity-sweep` `Result=success` 21:48:40; working tree completely
+  clean at check start.
+- The **12 units still showing `failed`** at 21:53 (aam/aviation/
+  executive-protection/gig-economy/trains-yachts daily-watches,
+  ops-brief, entity-tracking-digest, feed-db-integrity-check,
+  ingest-feed-watch, pull-path-verify, second-brain-rss,
+  docs-drift-weekly) are all stale *pre-rebuild* outcomes — every
+  `ExecMainExitTimestamp` checked predates 21:30 (ops-brief 21:05, aam
+  21:00, entity-tracking-digest 18:12, pull-path-verify 18:00,
+  docs-drift-weekly 09:00 — that last one is the session-limit failure
+  from Addendum 2, a different cause). Expected to self-clear on their
+  next scheduled fires; do not debug individually.
+
+### 🔴 One deployment gap the restart batch missed: `runner-demo` still
+### runs the pre-fix code — the public ungated chat-history is STILL LIVE
+
+`systemd-corporatetraveldc-runner-demo` has been up since **14:52 EDT**
+— it was not restarted at 21:32, so it still runs the pre-rebuild image.
+Confirmed both ways at 21:5x: the running container's `chat_history`/
+`chat_history_clear` handlers have **no** `_is_trusted` check (podman
+exec + grep), and a live unauthenticated
+`curl https://dispatch-runner.example.com/api/chat/history`
+→ **HTTP 200**, `{"messages":[],"count":0}`. So the exact surface this
+commit's runner fix targets — public, unauthenticated, destructive
+`DELETE` included — remains open on the demo instance. Mitigating scope:
+since `0a7f643` the demo chat DB is isolated (`/var/lib/
+corporatetraveldc-demo`, currently empty), so nothing sensitive is
+readable and only demo-scoped chat is deletable; the production runner
+(:8001, restarted 21:32) IS gated. **Fix is one command** (`systemctl
+--user restart corporatetraveldc-runner-demo` — the image is already
+rebuilt and consistent), left to the operator per this pass's
+no-live-deploys scope. `NRestarts=0`, `active/running` — the crash-loop
+fix continues to hold.
+
+### Doc drift from THIS commit — two items, both corrected by this pass
+
+1. **`scripts/pre-commit-README.md` "False positives" section** claimed
+   "The literal skip strings are `CHANGE_ME`, `YOUR_` …, `example`, and
+   `placeholder`". Incomplete twice over: it already omitted the
+   pre-existing `REDACTED` and `<…>` exemptions, and this commit added
+   `...` (truncated-display) and `deadbeef` (placeholder hex). List
+   corrected to match the code.
+2. **`docs/dispatch-runner-design.md` "Mechanism note"** claimed "The
+   only app-layer gate on the public demo hostname is
+   `proxy_dispatch()`'s `DEMO_MODE`+session-cookie check". Invalidated
+   cumulatively today: `0a7f643` trust-gated `frontend-config` (data
+   substitution) and the config `PUT` (404), and this commit trust-gated
+   chat-history `GET`/`DELETE` (404). Note reworded; the still-true
+   core (no CF Access on the hostname, `DEMO_MODE` inert) kept.
+
+### Doc drift found by this pass but caused by `0a7f643` (Addendum 2's
+### list missed it) — corrected here as a sixth stale-crash-loop doc
+
+`docs/dispatch-runner-design.md:20` still described `runner-demo` as
+"**Public hostname, currently down** … crash-looping since 2026-08-15 …
+the hostname 502s". False since ~14:52 EDT (unit `active/running`,
+`NRestarts=0` stable, hostname serving 200). Corrected in place;
+Addendum 2's five-doc list (CLAUDE.md ×3 sections, README ×3 lines,
+INFRA_MAP ×2 places) remains otherwise accurate and **all of those are
+still uncorrected** — carried forward.
+
+### Cleared / verified-no-drift
+
+- **The stray manifest temp file is fully cleared**: `2bb7fbf` deleted
+  `MANIFEST.sha256.3zbNoX` from tracking, and a post-fix sanitized push
+  (`public/main` now at `8a8a2cb`) removed it from the public mirror —
+  `git show public/main:MANIFEST.sha256.3zbNoX` now fails. The
+  *structural* half is still open: `scrub-public-tree.py`'s
+  `DROP_FILES` still lists only the two exact names, no
+  `MANIFEST.sha256.*` family rule, so a future tracked orphan would
+  publish again.
+- **CLAUDE.md's "pre-commit and pre-push are byte-identical to their
+  `scripts/` sources" claim survives this commit** — the installed
+  `.git/hooks` copies were updated in lockstep (diff → identical for
+  both; the 21:51 commit itself could not have passed otherwise).
+  `post-commit` remains the known-stale 2026-08-11 copy.
+- **Test suite: 223 tests, 222 pass**, same lone pre-existing
+  `test_smes_parser_basic` failure — the auth-gating changes broke no
+  tests (run live this pass; guard `tier: 0`, load1 ~9.3, Ollama not
+  mid-generate).
+- No living doc claimed `osint/feed` was unauthenticated (only the dated
+  `DRIFT_AUDIT_2026-08-16.md` snapshot, which recorded it as a finding —
+  historical record, correctly untouched). No living doc enumerated
+  chat-history auth beyond the two `dispatch-runner-design.md` items
+  fixed above. `README.md`'s endpoint list carries no auth claims for
+  these paths — no drift there.
+- **Line-number citations drifted further, aggregate note only**: this
+  commit added +17 lines to `src/runner/main.py` (everything ≥~1503
+  shifted; e.g. the fictional `_WATCHLIST_PATHS` NOTE CLAUDE.md cites at
+  `:1511-1513` is now at ~`:1562-1564`, `CHAT_DB_PATH` cited `:1612` now
+  `:1728` — most of that shift is from earlier commits today) and +6 to
+  `src/web/main.py` (resolve endpoint cited `:2370` now `:2462`,
+  `start_watchlist` cited `:1236` now `:1293`). Every affected citation
+  already carries CLAUDE.md's re-derive-don't-trust caveat; not
+  itemized as drift.
+
+### Still open, carried forward from Addendum 2 (none fixed by `2bb7fbf`
+### or by this pass)
+
+CLAUDE.md's runner-demo crash-loop sections (×3), README lines
+70/121/249, INFRA_MAP crash-loop paragraph + count notes; CLAUDE.md's
+three now-false "CLAUDE.md is not in `DROP_FILES`" passages; the
+admin-audit endpoint count (37, not 32) in CLAUDE.md +
+`docs/COMPLIANCE_SECURITY.md:377`; `DEMO_MODE` still set nowhere with
+the public demo now serving; docs-drift-weekly's scheduled path still
+never having produced a report (session-limit failure mode,
+undocumented in CLAUDE.md's "fixed and proven" entry); scrubber
+MANIFEST-family drop rule.
+
+### Verdict
+
+Commit `2bb7fbf` invalidated exactly **two current-doc claims** (the
+pre-commit-README exemption list and dispatch-runner-design's
+"only app-layer gate" note), both corrected by this pass, and its
+deploy was done in the right order with one omission — `runner-demo`
+was not restarted, leaving the public ungated chat-history endpoints
+(this commit's own headline runner fix) live on the demo instance until
+a one-command restart. Everything else this commit touched either
+matched the docs or cleared previously-flagged findings (stray manifest
+file gone from tracking AND from the public mirror; the 19-failed-unit
+stale-image emergency fully resolved with first post-rebuild
+verified-exec success observed live). Files edited by this pass, all
+left uncommitted: this file, `scripts/pre-commit-README.md`,
+`docs/dispatch-runner-design.md`.

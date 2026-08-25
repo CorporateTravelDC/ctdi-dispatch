@@ -21,6 +21,7 @@ COPY src/runner/main.py .
 COPY src/shared/ ./shared/
 COPY --from=frontend-builder /static ./static
 
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV STATIC_DIR=/app/static
 ENV DISPATCH_BASE_URL=http://127.0.0.1:8000
 ENV ULTRAFEEDER_URL=http://127.0.0.1:8080/data/aircraft.json
