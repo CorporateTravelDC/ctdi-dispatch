@@ -84,10 +84,14 @@ while read local_ref local_sha remote_ref remote_sha; do
         DIFF=$(git diff "${SCAN_RANGE}" --unified=0 2>/dev/null || true)
 
         for pattern in "${PATTERNS[@]}"; do
+            # 2026-08-24: same two exemptions added to scripts/pre-commit --
+            # a literal "..." means a truncated-for-display value (no real
+            # bearer token contains three literal dots), and "deadbeef" is
+            # a universally-recognized placeholder hex pattern.
             matches=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
                       grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
                       grep -v "example" | grep -v "placeholder" | grep -v "REDACTED" | \
-                      grep -v "<.*>" || true)
+                      grep -v "<.*>" | grep -v "\.\.\." | grep -v -i "deadbeef" || true)
             if [[ -n "$matches" ]]; then
                 echo ""
                 echo "[FAIL] pre-push: credential pattern detected — push rejected"
