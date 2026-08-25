@@ -65,10 +65,16 @@ what the code really does.
 If a match is a genuine false positive (e.g. a test fixture with a
 placeholder value), either:
 
-1. Use a placeholder the hook skips. The literal skip strings are
-   `CHANGE_ME`, `YOUR_` (so `YOUR_TOKEN_HERE` works), `example`, and
-   `placeholder`; the env-assignment check additionally skips lines
-   containing `localhost`, `127.0.0`, or `http`.
+1. Use a placeholder the hook skips. The skip patterns are the literal
+   strings `CHANGE_ME`, `YOUR_` (so `YOUR_TOKEN_HERE` works), `example`,
+   `placeholder`, and `REDACTED`; anything matching `<...>` angle-bracket
+   template form; a literal `...` anywhere on the line (a
+   truncated-for-display value — no real token contains three literal
+   dots); and `deadbeef` in any case (placeholder hex) — the last two
+   added 2026-08-24 after an audit report's forged-token evidence table
+   false-positived. The env-assignment check additionally skips lines
+   containing `localhost`, `127.0.0`, or `http`. Same list in both
+   `scripts/pre-commit` and `scripts/pre-push`.
 2. Use `git commit --no-verify` to bypass (use sparingly, document why)
 
 ## Secrets workflow

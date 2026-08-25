@@ -324,6 +324,23 @@ def fetch_faa_registry() -> dict:
     try:
         ladd_zf  = _download_zip(_FAA_LADD_URL)
         n_numbers = _parse_ladd(ladd_zf)
+        if not n_numbers:
+            # 2026-08-25 (Opus blind review C-31/C-14): an empty parse used
+            # to flow straight into db.faa_upsert_ladd([]), which wiped the
+            # entire privacy opt-out list to zero with nothing louder than
+            # an info-level "0 entries stored" line -- confirmed live, the
+            # table had been sitting empty. db.faa_upsert_ladd() now
+            # refuses an empty replacement on its own (defense in depth),
+            # but the real signal belongs here at ERROR, not swallowed into
+            # the same "non-fatal" bucket as an ordinary download hiccup --
+            # a persistently empty LADD source is a privacy-protection
+            # outage, not routine noise.
+            log.error(
+                "FAA LADD: parse produced zero entries -- privacy opt-out "
+                "list NOT updated (existing entries preserved). See the "
+                "_FAA_LADD_URL redirect note at the top of this file: the "
+                "FAA appears to have discontinued this endpoint."
+            )
         ladd_count = db.faa_upsert_ladd(n_numbers)
         log.info("FAA LADD: %d entries stored", ladd_count)
     except Exception as e:

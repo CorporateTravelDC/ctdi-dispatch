@@ -84,8 +84,16 @@ def test_feed(feed: str) -> str:
 
     svc = None
     try:
-        # Use system trust store; skip validation for diagnostic test to isolate auth vs TLS
-        tls = TLS.create().without_certificate_validation()
+        # CORRECTED 2026-08-25: this diagnostic script's TLS-skip was the
+        # same pattern src/ingest/swim_client.py had in production, copied
+        # here to "isolate auth vs TLS" -- no longer needed now that real
+        # validation is confirmed working cleanly against the default
+        # trust store (ems1/ems2 both present valid DigiCert-issued certs).
+        # Use real validation so this diagnostic tool doesn't itself
+        # transmit real FAA credentials over an unverified connection.
+        tls = TLS.create().with_certificate_validation(
+            ignore_expiration=False, validate_server_name=True
+        )
         svc = (MessagingService.builder()
                 .from_properties(props)
                 .with_transport_security_strategy(tls)
