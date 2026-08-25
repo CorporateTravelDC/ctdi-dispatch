@@ -1503,17 +1503,34 @@ async def ask_dispatch(req: AskRequest):
 
 
 # ── Dispatch chat history endpoints ─────────────────────────────────────────
+# CORRECTED 2026-08-24 (found by an independent blind ground-up audit, same
+# day as the runner-demo isolation fix): both endpoints were completely
+# unauthenticated, with no _is_trusted check and outside the
+# tailscale_gate middleware's path prefixes (neither /admin* nor
+# /api/dispatch/api/v1/*), so nothing gated them. The isolation fix earlier
+# today (separate demo/prod chat DB files) closed the cross-instance
+# data-sharing angle, but left the endpoints themselves open -- on the
+# real production runner (:8001, tailnet-only) that still means any
+# tailnet-reachable caller can read, and DESTRUCTIVELY CLEAR, the
+# operator's real dispatch chat with no credential at all. Trust-gated
+# now, same pattern as PUT /api/v1/config above -- 404 rather than 403 for
+# the same don't-confirm-the-surface-exists reason the admin-path
+# middleware uses.
 
 @app.get("/api/chat/history")
-async def chat_history(limit: int = 80):
+async def chat_history(request: Request, limit: int = 80):
     """Return persisted chat history (newest `limit` messages, chronological)."""
+    if not _is_trusted(request):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     msgs = await asyncio.to_thread(_chat_load_history, limit)
     return {"messages": msgs, "count": len(msgs)}
 
 
 @app.delete("/api/chat/history")
-async def chat_history_clear():
+async def chat_history_clear(request: Request):
     """Erase all chat history from the persistent DB."""
+    if not _is_trusted(request):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     def _clear():
         with sqlite3.connect(CHAT_DB_PATH) as c:
             c.execute("DELETE FROM chat_messages")

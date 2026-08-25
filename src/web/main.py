@@ -1440,8 +1440,14 @@ async def osint_feed(
     scope_id: Optional[int] = Query(default=None),
     min_score: int = Query(default=0, ge=0, le=10),
     limit: int = Query(default=50, le=200),
+    tier: Tier = Depends(require_tier(Tier.T1)),
 ) -> JSONResponse:
-    """Recent OSINT items, newest first. Filter by scope_id and/or min_score."""
+    """Recent OSINT items, newest first. Filter by scope_id and/or min_score.
+    CORRECTED 2026-08-24 (found by an independent blind audit): this had no
+    auth at all while its sibling GET /api/v1/osint/scopes already required
+    T1 -- an inconsistent gap, since the actual monitored content (subject/
+    EP-relevant narrative items) is more sensitive than the scope
+    configuration that was already gated. Matched to the same T1 level."""
     items = db.osint_get_feed(scope_id=scope_id, min_score=min_score, limit=limit)
 
     # 2026-08-12: cross-outlet story clustering -- annotate each item with
