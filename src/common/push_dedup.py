@@ -97,7 +97,18 @@ class PushDedup:
 
     def _merge_write(self, key: str, entry: dict) -> None:
         """Atomically merge one key into the on-disk dict under an exclusive
-        lock, then refresh the in-memory cache to match."""
+        lock, then refresh the in-memory cache to match.
+
+        2026-08-26 fix (Opus blind review C-21): this only ever ADDED keys
+        -- nothing ever removed a stale one (a NOTAM ID long expired, a
+        one-off skill-name key from months ago), so the file only grew,
+        confirmed live at 4,814 keys / 328 KB for the notam dedup alone,
+        rewritten in full on every single alert. Entries whose dedup
+        window closed long ago have zero ongoing value, so each write now
+        also evicts anything older than 10x this instance's own
+        dedup_secs (generous margin past the window that actually matters
+        for correctness) before persisting.
+        """
         p = self._path()
         p.parent.mkdir(parents=True, exist_ok=True)
         lock_path = p.with_name(p.name + ".lock")
@@ -106,6 +117,11 @@ class PushDedup:
             try:
                 disk = self._read_disk()   # current truth, incl. peer writes
                 disk[key] = entry
+                stale_cutoff = time.time() - (self.dedup_secs * 10)
+                disk = {
+                    k: v for k, v in disk.items()
+                    if k == key or v.get("ts", 0) >= stale_cutoff
+                }
                 tmp = p.with_name(p.name + ".tmp")
                 tmp.write_text(json.dumps(disk))
                 os.replace(tmp, p)         # atomic swap

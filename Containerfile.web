@@ -22,6 +22,16 @@ COPY src/ src/
 COPY scripts/verify-manifest.sh scripts/verify-manifest.sh
 COPY scripts/verified-exec.sh scripts/verified-exec.sh
 COPY security/trusted-signing-key.pub.asc security/trusted-signing-key.pub.asc
+# 2026-08-25 fix (Opus blind review C-4 follow-up): verify-manifest.sh
+# now requires signing.env (SIGNING_KEY_FINGERPRINT/AGENT_SIGNING_KEY_
+# FINGERPRINT) to pin the signing key -- it was never copied into any
+# image before, so every verify-manifest.sh/verified-exec.sh call
+# inside a container started failing closed the moment that fix
+# shipped (confirmed live: corporatetraveldc-demo-api's verified-exec-
+# wrapped startup crash-looped on "missing security/signing.env").
+# Contains only GPG fingerprints, no private-key/passphrase material --
+# safe to bake in the same as the pubkey above.
+COPY security/signing.env security/signing.env
 COPY MANIFEST.sha256 MANIFEST.sha256.asc ./
 # 2026-08-10: see Containerfile.poller's identical comment -- Modelfiles
 # need to be present for common/llm.py's pre-inference integrity check to

@@ -199,8 +199,15 @@ def main() -> None:
                           help="Auth tier for this token")
     p_create.add_argument("--label", default=None,
                           help="Device/context label (e.g. admin-iphone, cowork-prod)")
-    p_create.add_argument("--expires", type=int, default=None, metavar="DAYS",
-                          help="Expiry in days (default: no expiry)")
+    # 2026-08-26 fix (Opus blind review C-28): default was None ("no
+    # expiry"), and every single one of the 20 real tokens minted through
+    # this CLI to date has a NULL expires_at -- confirming this silent
+    # default, not deliberate per-token intent, is what's actually driving
+    # that. Default flipped to 365 days; --expires 0 is still available
+    # for a genuinely intentional never-expiring token (a real choice now,
+    # not a silent omission).
+    p_create.add_argument("--expires", type=int, default=365, metavar="DAYS",
+                          help="Expiry in days (default: 365; 0 = never expires, not recommended)")
 
     # list
     p_list = sub.add_parser("list", help="List tokens")

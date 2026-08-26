@@ -44,8 +44,8 @@ log = logging.getLogger("ingest.local_airspace")
 _uf_base = os.environ.get("ULTRAFEEDER_URL", "").rstrip("/")
 ULTRAFEEDER_AIRCRAFT_URL = f"{_uf_base}/data/aircraft.json" if _uf_base else ""
 
-RECEIVER_LAT = float(os.environ.get("ULTRAFEEDER_LAT", "38.8816"))
-RECEIVER_LON = float(os.environ.get("ULTRAFEEDER_LON", "-77.0910"))
+RECEIVER_LAT = float(os.environ.get("ULTRAFEEDER_LAT", "39.0000"))
+RECEIVER_LON = float(os.environ.get("ULTRAFEEDER_LON", "-77.0000"))
 SCAN_RADIUS_NM = float(os.environ.get("ULTRAFEEDER_SCAN_RADIUS_NM", "80"))
 ALERT_RADIUS_NM = 30.0
 MARINE_ONE_ALERT_RADIUS_NM = 50.0

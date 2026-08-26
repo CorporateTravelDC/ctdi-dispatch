@@ -37,6 +37,7 @@ import secrets
 import string
 from enum import Enum
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -137,6 +138,59 @@ def require_tier(minimum: Tier):
     return _dep
 
 
+_AUDIT_REDACT_KEY_TERMS = (
+    "password", "passwd", "secret", "api_key", "apikey", "token",
+    "credential", "authorization", "note", "command", "cmd",
+)
+
+
+def _redact_audit_url(value: str) -> str:
+    """Strip userinfo and redact sensitive query params from a URL before
+    it goes into audit_log -- feed_urls commonly carry an embedded API
+    key (`https://host/feed?api_key=...` or `https://user:pass@host/`)."""
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    query = [
+        (k, "<redacted>" if any(t in k.lower() for t in _AUDIT_REDACT_KEY_TERMS) else v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return urlunsplit((parsed.scheme, netloc, parsed.path, urlencode(query), ""))
+
+
+def _redact_audit_value(key: str, value):
+    if isinstance(value, dict):
+        return {k: _redact_audit_value(k, v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_audit_value(key, v) for v in value]
+    if isinstance(value, str):
+        if any(t in key.lower() for t in _AUDIT_REDACT_KEY_TERMS):
+            return f"<redacted:{len(value)} chars>"
+        if value.startswith("http://") or value.startswith("https://"):
+            return _redact_audit_url(value)
+    return value
+
+
+def _redact_audit_detail(detail):
+    """2026-08-25 fix (Opus blind review C-9, redaction half): require_admin
+    used to store the raw request body verbatim in audit_log.detail for 90
+    days -- vault note text, sudo command strings, and feed URLs (which
+    commonly embed an API key) all went in unredacted. This walks the
+    detail dict and blanks values under a sensitive-looking key name, and
+    strips userinfo/sensitive query params from any URL-shaped value, so
+    the audit row still proves an action happened without persisting the
+    sensitive content itself."""
+    if not isinstance(detail, dict):
+        return detail
+    return {k: _redact_audit_value(k, v) for k, v in detail.items()}
+
+
 def require_admin(action: str):
     """Dependency factory: requires Admin tier AND writes an audit row.
 
@@ -165,23 +219,37 @@ def require_admin(action: str):
     Retention: audit_log itself had no prune job (unbounded growth) --
     poller/skills/audit_log_prune.py (added the same day) now deletes rows
     older than 90 days daily.
+
+    2026-08-25 fix (Opus blind review C-9): a failed authorization used to
+    raise its 403 before ever reaching the db.audit() call below, so admin-
+    surface probing left zero trace (confirmed live: 0 denied rows in
+    audit_log despite real probing). Denied attempts are now audited too,
+    before the exception is raised. The stored `detail` also now goes
+    through `_redact_audit_detail()` -- see that function's docstring for
+    why (raw vault notes/sudo commands/feed-embedded API keys were being
+    persisted unredacted for 90 days).
     """
     async def _dep(
         request: Request,
         tier: Tier = Depends(resolve_tier),
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ) -> Tier:
-        if tier != Tier.ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin tier required",
-            )
-
         token_prefix = None
         if credentials and credentials.credentials:
             record = db.lookup_token(_hash_token(credentials.credentials))
             if record:
                 token_prefix = record["token_prefix"]
+
+        if tier != Tier.ADMIN:
+            db.audit(
+                action, tier.value, token_prefix,
+                request.client.host if request.client else None,
+                {"result": "denied"},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin tier required",
+            )
 
         detail = None
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -193,6 +261,7 @@ def require_admin(action: str):
                 detail = None
         if detail is None and request.query_params:
             detail = dict(request.query_params)
+        detail = _redact_audit_detail(detail)
 
         db.audit(
             action, tier.value, token_prefix,

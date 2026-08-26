@@ -70,15 +70,32 @@ app = FastAPI(
     version="1.0.0",
     docs_url=None,   # No public docs — Tailscale-only access.
     redoc_url=None,
+    # 2026-08-26 fix (Opus blind review C-12): docs_url/redoc_url=None
+    # disables the Swagger/ReDoc UI pages but FastAPI still served the raw
+    # schema at GET /openapi.json by default -- confirmed live, 200/76KB
+    # with full schemas for every admin path. openapi_url=None removes the
+    # route entirely.
+    openapi_url=None,
 )
 
-# Tailscale-only deployment — no public CORS needed.
-# Keep permissive for development; tighten at nginx.
+# 2026-08-26 fix (Opus blind review C-11): the "tighten at nginx" TODO
+# above was never fulfilled -- allow_origins=["*"] (plus wildcard
+# methods/headers) shipped live on a tunnel-exposed API. This app has no
+# browser frontend of its own that needs cross-origin access (the runner
+# proxies server-side, never via browser JS to this origin directly), so
+# an explicit allowlist of the real known frontend origins closes the gap
+# without breaking any legitimate caller -- unlike "*", it means a
+# third-party page loaded on the same tailnet can no longer read
+# Tier-0/cookie-ambient responses from this API cross-origin.
+_CORS_ALLOWED_ORIGINS = [
+    "https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net",
+    "https://dispatch-runner.example.com",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_CORS_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(watchlist_router)
@@ -129,9 +146,13 @@ async def startup() -> None:
     db.init_db_v35()
     db.init_db_v36()
     db.init_db_v37()
+    db.init_db_v38()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
+
+_whoami_token_hits: list = []   # naive in-memory rate-limit clock, same pattern as board POST below
+
 
 @app.get("/api/v1/whoami-token")
 async def whoami_token(identity: dict = Depends(resolve_identity)) -> JSONResponse:
@@ -145,7 +166,19 @@ async def whoami_token(identity: dict = Depends(resolve_identity)) -> JSONRespon
     an invalid/missing token isn't an error here, it just resolves to
     anonymous (tier="tier0", the rest null), same as resolve_tier()
     everywhere else in this codebase never raises for anonymous callers.
+
+    2026-08-26 fix (Opus blind review C-26): unauthenticated with no rate
+    limit at all made this a free token-guessing oracle -- any caller
+    could hammer it with candidate tokens and learn which ones resolve to
+    a real tier/user without ever needing that token to succeed anywhere
+    else. Same sliding-window limiter pattern as the board POST endpoint
+    below.
     """
+    now = time.monotonic()
+    _whoami_token_hits[:] = [t for t in _whoami_token_hits if now - t < 60]
+    if len(_whoami_token_hits) >= 60:
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    _whoami_token_hits.append(now)
     return JSONResponse(identity)
 
 
@@ -329,13 +362,36 @@ async def board_health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+_BOARD_ANONYMOUS_THREADS = {"coord"}
+
+
 @app.get("/api/v1/board")
-async def board_get(thread: str = "coord", since: str = "", limit: int = 50) -> JSONResponse:
-    """Read board messages (Tier-0/anonymous -- deliberate, see
-    _redact_board_body's docstring for why reads stay open). since =
-    opaque cursor from a prior read (seq or ISO ts); returns only newer
-    messages plus a fresh cursor. Message bodies are redacted for known
-    internal-infra/credential-mechanism references before serving."""
+async def board_get(
+    thread: str = "coord", since: str = "", limit: int = 50,
+    tier: Tier = Depends(resolve_tier),
+) -> JSONResponse:
+    """Read board messages. Tier-0/anonymous reads are deliberate for the
+    `coord` thread only (see _redact_board_body's docstring for why that
+    one stays open -- Cowork's sandbox has no vault/tailnet access, so
+    token-gating it would break the cross-environment coordination channel
+    entirely).
+
+    2026-08-25 fix (Opus blind review C-5): `second_brain_research_board_
+    mirror.py` mirrors real vault personal-research notes onto a separate
+    `research` thread on this same board, using the same anonymous read
+    path -- confirmed live, 6 real messages (subjects including personal
+    research topics) were anonymously readable from the public internet.
+    That thread was never the one the anonymous-read design decision was
+    actually made for; it just reused the same open endpoint. Every thread
+    other than `coord` now requires at least Tier 1 -- Cowork or any other
+    non-tailnet consumer that genuinely needs `research` can be issued a
+    cert-tier token the same way any other Tier-1 consumer is.
+
+    since = opaque cursor from a prior read (seq or ISO ts); returns only
+    newer messages plus a fresh cursor. Message bodies are redacted for
+    known internal-infra/credential-mechanism references before serving."""
+    if thread not in _BOARD_ANONYMOUS_THREADS and tier == Tier.T0:
+        raise HTTPException(status_code=403, detail=f"Tier 1+ required for thread '{thread}'")
     msgs, cursor = db.board_query(thread=thread, since=since or None, limit=limit)
     for m in msgs:
         if isinstance(m.get("body"), str):
@@ -1439,7 +1495,10 @@ class OsintScopeRequest(BaseModel):
 async def osint_feed(
     scope_id: Optional[int] = Query(default=None),
     min_score: int = Query(default=0, ge=0, le=10),
-    limit: int = Query(default=50, le=200),
+    # ge=1 added 2026-08-26 (Opus blind review C-20): le=200 alone let
+    # limit=-1/0 through, which SQLite's LIMIT clause treats as "no cap"
+    # -- an unbounded table dump instead of the intended page size.
+    limit: int = Query(default=50, ge=1, le=200),
     tier: Tier = Depends(require_tier(Tier.T1)),
 ) -> JSONResponse:
     """Recent OSINT items, newest first. Filter by scope_id and/or min_score.
@@ -2137,7 +2196,8 @@ async def admin_feeds(
 
 @app.get("/admin/audit")
 async def admin_audit(
-    limit: int = Query(default=50, le=500),
+    # ge=1 added 2026-08-26 (Opus blind review C-20), same fix as osint_feed.
+    limit: int = Query(default=50, ge=1, le=500),
     since: Optional[float] = Query(default=None),
     tier: Tier = Depends(require_admin("admin.audit.list")),
 ) -> JSONResponse:

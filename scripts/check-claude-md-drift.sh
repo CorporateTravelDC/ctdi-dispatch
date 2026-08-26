@@ -172,6 +172,62 @@ else
     warn "API at ${API} returned ${CODE:-no response} -- live checks limited"
 fi
 
+# -- 10. installed git hooks match their tracked source (2026-08-26, Opus
+# blind review C-34) -- .git/hooks/* is never tracked by git itself, so a
+# hook edited in scripts/ (pre-commit, pre-push, post-commit-doc-verify.sh)
+# silently stops being what's actually installed and enforced unless
+# someone remembers to re-copy it by hand. Confirmed live: post-commit had
+# drifted this same way before this check existed. Runs on every check
+# (not just --pre-sign) since hook drift has nothing to do with manifest
+# signing timing.
+declare -A HOOK_SOURCES=(
+    [pre-commit]="scripts/pre-commit"
+    [pre-push]="scripts/pre-push"
+    [post-commit]="scripts/post-commit-doc-verify.sh"
+)
+for hook in "${!HOOK_SOURCES[@]}"; do
+    src="${HOOK_SOURCES[${hook}]}"
+    installed=".git/hooks/${hook}"
+    if [[ ! -f "${src}" ]]; then
+        warn "hook source ${src} not found -- skipping drift check for ${hook}"
+    elif [[ ! -f "${installed}" ]]; then
+        drift "${installed} is not installed at all (source: ${src})"
+    elif ! diff -q "${src}" "${installed}" >/dev/null 2>&1; then
+        drift "${installed} does not match ${src} -- re-run: cp ${src} ${installed} && chmod +x ${installed}"
+    else
+        ok "${installed} matches ${src}"
+    fi
+done
+
+# -- 11. tracked .config/ mirrors (systemd units, podman quadlets) match
+# their live installed copy where both exist (2026-08-26) -- same root
+# cause as check 10, one directory up: this repo tracks a mirror of
+# ~/.config/systemd/user/ and ~/.config/containers/systemd/ at the same
+# relative path, kept in sync by hand via cp, with nothing enforcing it.
+# Confirmed live: the C-22 quadlet edits (DEMO_MODE=true, demo-secrets.env
+# EnvironmentFile) were made only to the installed copy and drifted from
+# the tracked mirror for hours before an unrelated doc-verify pass caught
+# it. Deliberately does NOT flag "tracked but not installed" as drift --
+# a *.disabled file or a deliberately-dormant timer (e.g.
+# research-board-mirror.timer, documented elsewhere as intentionally not
+# installed) is a real, legitimate state this repo carries on purpose;
+# only a genuine CONTENT disagreement between two copies that both exist
+# is the failure mode this check exists to catch.
+HOME_DIR="${HOME:-/home/corporatetraveldc}"
+for rel in .config/systemd/user .config/containers/systemd; do
+    [[ -d "${rel}" ]] || continue
+    while IFS= read -r -d '' src; do
+        installed="${HOME_DIR}/${src}"
+        if [[ ! -f "${installed}" ]]; then
+            warn "tracked ${src} has no live installed copy at ${installed} -- fine if deliberately disabled/dormant, otherwise install it"
+        elif ! diff -q "${src}" "${installed}" >/dev/null 2>&1; then
+            drift "${installed} does not match tracked ${src} -- re-run: cp ${src} ${installed}"
+        else
+            ok "${installed} matches tracked ${src}"
+        fi
+    done < <(find "${rel}" -maxdepth 1 -type f -print0)
+done
+
 echo "--"
 if [[ ${DRIFT} -eq 1 ]]; then
     echo "[FAIL] drift found -- reconcile ${DOC} above, then re-run"

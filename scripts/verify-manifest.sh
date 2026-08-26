@@ -42,6 +42,13 @@
 # security/trusted-signing-key.pub.asc using an ISOLATED keyring -- never the
 # caller's ambient GPG keyring, so verification never depends on (or can be
 # confused by) whatever else happens to already be trusted/imported there.
+# The signing key's fingerprint is then asserted against
+# security/signing.env's SIGNING_KEY_FINGERPRINT/AGENT_SIGNING_KEY_FINGERPRINT
+# (2026-08-25 fix, Opus blind review C-4) -- verifying against "whatever
+# key is in the tracked pubkey file" alone trusts exactly the adversary
+# this manifest is meant to defend against: someone who can write tracked
+# files can replace trusted-signing-key.pub.asc with their own key and
+# re-sign MANIFEST.sha256, and the old check would have passed it clean.
 #
 # Exit 0 = verified clean. Any non-zero = do not trust the file(s); the
 # caller must refuse to proceed. Threat model honesty: this catches
@@ -57,13 +64,19 @@ cd "${REPO_DIR}"
 MANIFEST="MANIFEST.sha256"
 SIGNATURE="MANIFEST.sha256.asc"
 PUBKEY="security/trusted-signing-key.pub.asc"
+SIGNING_ENV="security/signing.env"
 
-for f in "${MANIFEST}" "${SIGNATURE}" "${PUBKEY}"; do
+for f in "${MANIFEST}" "${SIGNATURE}" "${PUBKEY}" "${SIGNING_ENV}"; do
     if [[ ! -f "${f}" ]]; then
         echo "verify-manifest: missing ${f} -- cannot verify, refusing to trust anything" >&2
         exit 2
     fi
 done
+
+# shellcheck source=/dev/null
+source "${SIGNING_ENV}"
+: "${SIGNING_KEY_FINGERPRINT:?SIGNING_KEY_FINGERPRINT not set in ${SIGNING_ENV}}"
+: "${AGENT_SIGNING_KEY_FINGERPRINT:?AGENT_SIGNING_KEY_FINGERPRINT not set in ${SIGNING_ENV}}"
 
 GNUPGHOME_TMP="$(mktemp -d)"
 SCOPED_TMP=""
@@ -76,13 +89,30 @@ export GNUPGHOME="${GNUPGHOME_TMP}"
 gpg --quiet --import "${PUBKEY}" >/dev/null 2>&1
 
 gpg_err="$(mktemp)"
-if ! gpg --quiet --verify "${SIGNATURE}" "${MANIFEST}" 2>"${gpg_err}"; then
+gpg_status="$(mktemp)"
+if ! gpg --quiet --status-fd 3 --verify "${SIGNATURE}" "${MANIFEST}" 3>"${gpg_status}" 2>"${gpg_err}"; then
     echo "verify-manifest: SIGNATURE INVALID -- ${SIGNATURE} does not verify against ${PUBKEY}" >&2
     cat "${gpg_err}" >&2
-    rm -f "${gpg_err}"
+    rm -f "${gpg_err}" "${gpg_status}"
     exit 1
 fi
 rm -f "${gpg_err}"
+
+# VALIDSIG line: "[GNUPG:] VALIDSIG <sig-fpr> <date> ... <primary-key-fpr> ..."
+# Use field 3 (the actual signing subkey/key fingerprint) -- this is what
+# actually produced the signature, not just "some key gpg trusts."
+signing_fpr="$(awk '/^\[GNUPG:\] VALIDSIG/ {print $3; exit}' "${gpg_status}")"
+rm -f "${gpg_status}"
+
+if [[ -z "${signing_fpr}" ]]; then
+    echo "verify-manifest: could not determine the signing key's fingerprint from gpg's status output -- refusing to trust" >&2
+    exit 1
+fi
+
+if [[ "${signing_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${signing_fpr}" != "${AGENT_SIGNING_KEY_FINGERPRINT}" ]]; then
+    echo "verify-manifest: SIGNING KEY NOT PINNED -- ${SIGNATURE} verifies against a key in ${PUBKEY} (fingerprint ${signing_fpr}), but that fingerprint matches neither SIGNING_KEY_FINGERPRINT nor AGENT_SIGNING_KEY_FINGERPRINT in ${SIGNING_ENV}. Refusing to trust a key that isn't the operator's own pinned fingerprint -- an attacker who can write tracked files could otherwise replace ${PUBKEY} with their own key and re-sign cleanly." >&2
+    exit 1
+fi
 
 if [[ $# -eq 0 ]]; then
     # Collective mode: every entry in the manifest.
