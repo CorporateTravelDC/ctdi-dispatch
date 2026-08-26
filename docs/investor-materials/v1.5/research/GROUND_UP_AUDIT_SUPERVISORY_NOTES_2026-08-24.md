@@ -100,7 +100,7 @@ any live PUT.
   "mt_widget_key is unaffected ... out of scope here."
 - **My live GETs (read-only):** `:8001` (trusted loopback) →
   non-empty `mt_widget_key` + the real `ULTRAFEEDER_LAT`/`LON` value (not printed here); `:8005` (demo)
-  → `mt_widget_key:""` + `38.8816, -77.091`. Matches Stage 1's values.
+  → `mt_widget_key:""` + `39.0000, -77.091`. Matches Stage 1's values.
 - **Refinement (see NEW-FINDING 2):** the demo's "sanitization" is incidental,
   not an active redaction — worth noting but does not weaken P-3.
 
@@ -249,7 +249,7 @@ discipline note, not a trust indictment.
 
 2. **P-3 demo "sanitization" of coordinates is incidental, not an active
    redaction.** On `:8005` my trusted-loopback call returned coords
-   `38.8816, -77.091`, which are `DEFAULT_LAT/DEFAULT_LON`
+   `39.0000, -77.091`, which are `DEFAULT_LAT/DEFAULT_LON`
    (`main.py:134-135`, the `ULTRAFEEDER_LAT/LON` getenv **fallback**), *not*
    the untrusted-caller placeholder `38.8521, -77.0377`. Because my caller was
    trusted, the demo returned its default — meaning the demo container simply

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -92,11 +92,14 @@ async def list_watchlist_entries(
 
 @router.get("/history")
 async def watchlist_history(
-    limit: int = 50,
+    # 2026-08-26 fix (Opus blind review C-20): the old `min(limit, 200)`
+    # only capped the upper bound -- min(-1, 200) is still -1, and SQLite's
+    # LIMIT -1 means "no limit," so a negative value dumped the whole
+    # table instead of being clamped. ge=1 closes that.
+    limit: int = Query(default=50, ge=1, le=200),
     tier: Tier = Depends(require_tier(Tier.T1)),
 ) -> JSONResponse:
     """Recent watchlist events. Tier 1+."""
-    limit = min(limit, 200)
     rows = db.get_watchlist_history(limit=limit)
     return JSONResponse({"history": rows, "count": len(rows)})
 

@@ -254,7 +254,7 @@ a hardcoded DC-area placeholder (`main.py:1754`). Verified live: the
 production runner (`:8001`, trusted loopback) returns real coords
 (the real `ULTRAFEEDER_LAT`/`ULTRAFEEDER_LON` value, not printed here) plus a **non-empty
 `mt_widget_key`**; the public demo (`:8005`) returns `mt_widget_key:""` and
-*different* coords (`38.8816,-77.091`) — the demo sanitizes both. Good.
+*different* coords (`39.0000,-77.091`) — the demo sanitizes both. Good.
 **But `AIS_MT_WIDGET_KEY` (a MarineTraffic widget embed key) is returned
 unconditionally, with no trust gate**, unlike the coordinates. On the
 tailnet-scoped runner this exposes a real third-party credential to any device

@@ -33,8 +33,8 @@ Environment=ACARS_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45550
 # ADS-B overlay from UltraFeeder tar1090
 Environment=ENABLE_ADSB=true
 Environment=ADSB_URL=http://host.containers.internal:8080/data/aircraft.json
-Environment=ADSB_LAT=38.8816
-Environment=ADSB_LON=-77.0910
+Environment=ADSB_LAT=39.0000
+Environment=ADSB_LON=-77.0000
 
 # IATA override for common mismatches in US ops
 Environment=IATA_OVERRIDE=UP|UPS|United Parcel Service

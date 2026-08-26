@@ -192,7 +192,7 @@ Two adversarial confirmations:
   for public-hostname trust.
 
 **Demo (`:8005`) leaks nothing regardless of trust** — verified: even a
-trust-spoofed request returns `receiver_lat=38.8816` (the hardcoded *code
+trust-spoofed request returns `receiver_lat=39.0000` (the hardcoded *code
 fallback* `ULTRAFEEDER_LAT` default, **not** the real receiver coordinate) and
 `mt_widget_key=""` (empty). The demo container loads only `dispatch.env`, so the
 real coordinate and widget key are structurally absent — it has no secret to

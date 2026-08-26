@@ -108,7 +108,20 @@ PublishPort=100.x.x.x:8005:8001
 Environment=DISPATCH_BASE_URL=http://100.x.x.x:8004
 Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
 Environment=SSE_INTERVAL_SEC=30
+# 2026-08-26 fix (Opus blind review C-22): the password-gated demo login
+# was inert -- DEMO_MODE unset (defaults false) means the password gate,
+# ACARS/VDL2/HFDL signal sanitization, and ntfy suppression are all
+# skipped. This is the surface _is_trusted()'s own docstring already
+# documents as the one thing meant to gate the public demo -- flipping
+# this makes that already-stated intent actually true, not new hardening.
+Environment=DEMO_MODE=true
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# DEMO_SESSION_SECRET -- scoped ONLY to this + demo-api, see that
+# quadlet's identical comment and demo-secrets.env's own header for the
+# shared-secret bug this fixes (both sides previously fell back to their
+# own independent random per-process secret, so a demo-api-issued session
+# token could never actually verify here).
+EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
 Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
 Volume=/run/corporatetraveldc:/run/corporatetraveldc:z
 AutoUpdate=local

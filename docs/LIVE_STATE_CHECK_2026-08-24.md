@@ -185,7 +185,7 @@ committed by it.
   `src/web/main.py:1799`'s twin comment handles the same history
   correctly — it cites the runner writeup without repeating any real
   value; only the runner copy leaks. (The `38.8521/-77.0377` and
-  `38.8816/-77.0910` literals elsewhere are the pre-existing generic
+  `39.0000/-77.0000` literals elsewhere are the pre-existing generic
   placeholders, fine.)
 - This file's own "Overnight change batch" item 1 quoted the live
   current pair verbatim — redacted by this pass; the claim stands.

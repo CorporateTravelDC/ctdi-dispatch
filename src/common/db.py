@@ -465,28 +465,47 @@ def board_mint_nonce(ttl_s: int = 600, label: str | None = None) -> dict:
 def board_consume_nonce(nonce: str) -> dict:
     """Consume a nonce exactly once. On success mints a short-lived board-write
     token and returns it PLAINTEXT (stored hashed). status is one of:
-    ok | invalid | consumed | expired."""
+    ok | invalid | consumed | expired.
+
+    2026-08-26 fix (Opus blind review C-32): this used to SELECT the row,
+    check consumed_at/expires_at in Python, then separately INSERT the
+    token and UPDATE consumed_at -- two concurrent requests against the
+    same nonce could both pass the Python check before either write
+    landed, minting two valid board-write tokens from one single-use
+    nonce. Same atomic-conditional-UPDATE-with-rowcount-check pattern as
+    resolve_approval_request() ~200 lines below: claiming the nonce
+    (marking consumed_at) is now the single atomic operation that decides
+    who wins, not a prior SELECT.
+    """
     import secrets as _s
     now = time.time()
     nh = _board_sha(nonce)
+    token = "btk_" + _s.token_urlsafe(30)
+    texp = now + _BOARD_TOKEN_TTL_S
     with conn() as c:
         _ensure_board_auth(c)
-        row = c.execute("SELECT * FROM board_enroll_nonces WHERE nonce_hash=?", (nh,)).fetchone()
-        if row is None:
-            return {"status": "invalid"}
-        if row["consumed_at"] is not None:
-            return {"status": "consumed"}
-        if now > row["expires_at"]:
+        cur = c.execute(
+            "UPDATE board_enroll_nonces SET consumed_at=?, minted_token_hash=? "
+            "WHERE nonce_hash=? AND consumed_at IS NULL AND expires_at > ?",
+            (now, _board_sha(token), nh, now),
+        )
+        if cur.rowcount == 0:
+            # Not found, already consumed (lost the race or a genuine
+            # reuse), or expired -- disambiguate with a read-only follow-up.
+            row = c.execute(
+                "SELECT * FROM board_enroll_nonces WHERE nonce_hash=?", (nh,)
+            ).fetchone()
+            if row is None:
+                return {"status": "invalid"}
+            if row["consumed_at"] is not None:
+                return {"status": "consumed"}
             return {"status": "expired"}
-        token = "btk_" + _s.token_urlsafe(30)
-        texp = now + _BOARD_TOKEN_TTL_S
+        label = c.execute(
+            "SELECT label FROM board_enroll_nonces WHERE nonce_hash=?", (nh,)
+        ).fetchone()["label"]
         c.execute(
             "INSERT INTO board_tokens (token_hash, created_at, expires_at, scope, label, via_nonce) VALUES (?, ?, ?, ?, ?, ?)",
-            (_board_sha(token), now, texp, "board-write", row["label"], nh[:12]),
-        )
-        c.execute(
-            "UPDATE board_enroll_nonces SET consumed_at=?, minted_token_hash=? WHERE nonce_hash=?",
-            (now, _board_sha(token), nh),
+            (_board_sha(token), now, texp, "board-write", label, nh[:12]),
         )
     return {"status": "ok", "token": token, "expires_at": texp, "scope": "board-write"}
 
@@ -858,6 +877,118 @@ def prune_audit_log(days: int = 90) -> int:
         return cur.rowcount
 
 
+def _iso_cutoff(days: int) -> str:
+    """UTC ISO cutoff string matching this codebase's `%Y-%m-%dT%H:%M:%SZ`
+    timestamp convention (see local_airspace.py's now_iso, db.board_insert's
+    ts) -- string comparison against these columns is correct as long as
+    the cutoff is formatted identically."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days * 86400))
+
+
+# 2026-08-26 fix (Opus blind review C-33): the tables below had no prune
+# path at all -- append-only or upsert-forever growth with nothing ever
+# deleting old rows, the same gap audit_log had before prune_audit_log()
+# above. nas_programs is deliberately excluded -- it's explicitly required
+# to retain long-term, a real design decision, not an oversight. Retention
+# windows below are a first reasonable pass per table's actual audit/
+# trend-analysis value, not derived from any compliance requirement;
+# invoked by poller/skills/retention_prune.py.
+
+def prune_train_events(days: int = 30) -> int:
+    """train_events.fetched_at is REAL/unixepoch."""
+    cutoff = time.time() - days * 86400
+    with conn() as c:
+        cur = c.execute("DELETE FROM train_events WHERE fetched_at < ?", (cutoff,))
+        return cur.rowcount
+
+
+def prune_board_messages(days: int = 180) -> int:
+    """board_messages.ts is TEXT ISO (%Y-%m-%dT%H:%M:%SZ)."""
+    with conn() as c:
+        cur = c.execute("DELETE FROM board_messages WHERE ts < ?", (_iso_cutoff(days),))
+        return cur.rowcount
+
+
+def prune_webhook_events(days: int = 90) -> int:
+    """webhook_events.received_at is REAL/unixepoch. 90d matches
+    audit_log's own retention figure -- both are external-system audit
+    trails."""
+    cutoff = time.time() - days * 86400
+    with conn() as c:
+        cur = c.execute("DELETE FROM webhook_events WHERE received_at < ?", (cutoff,))
+        return cur.rowcount
+
+
+def prune_flight_ooooi_times(days: int = 90) -> int:
+    """flight_ooooi_times.updated_at is REAL/unixepoch. Keyed by gufi
+    (upsert-per-flight, not per-event), but still grows by one row per
+    new flight forever with nothing to cap it."""
+    cutoff = time.time() - days * 86400
+    with conn() as c:
+        cur = c.execute("DELETE FROM flight_ooooi_times WHERE updated_at < ?", (cutoff,))
+        return cur.rowcount
+
+
+def prune_stdds_safety_status_history(days: int = 180) -> int:
+    """stdds_safety_status_history.changed_at is TEXT ISO. Low-volume
+    (only fires on a bitmask transition) but unbounded over years."""
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM stdds_safety_status_history WHERE changed_at < ?", (_iso_cutoff(days),)
+        )
+        return cur.rowcount
+
+
+def prune_local_airspace_alerts(days: int = 90) -> int:
+    """local_airspace_alerts.fired_at is TEXT ISO."""
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM local_airspace_alerts WHERE fired_at < ?", (_iso_cutoff(days),)
+        )
+        return cur.rowcount
+
+
+def prune_international_aviation_feed(days: int = 30) -> int:
+    """international_aviation_feed.fetched_at is REAL/unixepoch. Raw
+    JSON dumps, aggressively bounded since each fetch supersedes the
+    last for trend purposes."""
+    cutoff = time.time() - days * 86400
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM international_aviation_feed WHERE fetched_at < ?", (cutoff,)
+        )
+        return cur.rowcount
+
+
+def prune_expired_session_grants(grace_days: int = 30) -> int:
+    """session_grants each already carry their own expires_at -- this
+    isn't unbounded live data, it's expired rows never being cleared
+    after the fact. Keeps a grace window past expiry for audit purposes
+    before deleting."""
+    cutoff = time.time() - grace_days * 86400
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM session_grants WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (cutoff,),
+        )
+        return cur.rowcount
+
+
+def prune_expired_board_auth(grace_days: int = 7) -> int:
+    """board_enroll_nonces/board_tokens are short-lived auth artifacts
+    (minutes-to-hours TTL) -- zero long-term audit value once expired,
+    unlike session_grants above, so a much shorter grace window."""
+    cutoff = time.time() - grace_days * 86400
+    with conn() as c:
+        n1 = c.execute(
+            "DELETE FROM board_enroll_nonces WHERE expires_at < ?", (cutoff,)
+        ).rowcount
+        n2 = c.execute(
+            "DELETE FROM board_tokens WHERE expires_at < ?", (cutoff,)
+        ).rowcount
+        return n1 + n2
+
+
 # ── Compliance egress (outbound audit push) ──────────────────────────────────
 # 2026-08-03: corrects docs/COMPLIANCE_SECURITY.md, which previously (and
 # inaccurately) stated no outbound audit-push mechanism existed in this
@@ -1162,13 +1293,29 @@ def cleanup_expired_notams() -> int:
 
 
 def expire_nws_alerts(active_ids: list[str]) -> None:
-    """Remove alerts no longer in the feed."""
+    """Remove REST-sourced alerts no longer in the feed.
+
+    2026-08-25 fix (Opus blind review C-14): the only caller
+    (fetchers/nws.py's REST poller) always passes REST-sourced alert_ids
+    here -- it can never include a push-sourced `nwws:*` id, since those
+    come from a completely separate ingest path (ingest/nwws.py). The old
+    unscoped `WHERE alert_id NOT IN (active_ids)` deleted every
+    push-sourced row too, on every single REST poll -- confirmed live: 22
+    real push-sourced rows were wiped on the first REST poll after a
+    push-to-REST failover, exactly the incident window they matter most
+    in. Now scoped to only ever remove REST-sourced rows; a push-sourced
+    row's own time-based expiry (get_active_nws_alerts()'s
+    `WHERE expires > ?` filter) is unaffected and still applies.
+    """
     if not active_ids:
         return
     with conn() as c:
         placeholders = ",".join("?" * len(active_ids))
-        c.execute(f"DELETE FROM nws_alerts WHERE alert_id NOT IN ({placeholders})",
-                  active_ids)
+        c.execute(
+            f"DELETE FROM nws_alerts WHERE alert_id NOT IN ({placeholders}) "
+            f"AND alert_id NOT LIKE 'nwws:%'",
+            active_ids,
+        )
 
 
 def get_active_nws_alerts() -> list[dict]:
@@ -1420,11 +1567,16 @@ def get_atcscc_opsplan(plan_date: str | None = None) -> dict | None:
 
 def get_atcscc_opsplan_range(start_date: str,
                              end_date: str) -> list[dict]:
+    # LIMIT 400 added 2026-08-26 (Opus blind review C-20): this had no cap
+    # at all -- an arbitrarily wide start/end range dumped the whole
+    # table. 400 rows covers more than a year of daily plans, well past
+    # any real pattern-analysis window this endpoint is used for.
     with conn() as c:
         rows = c.execute("""
             SELECT * FROM atcscc_opsplan
             WHERE plan_date BETWEEN ? AND ?
             ORDER BY plan_date DESC
+            LIMIT 400
         """, (start_date, end_date)).fetchall()
         return [dict(r) for r in rows]
 
@@ -4746,6 +4898,40 @@ def init_db_v37() -> None:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
+
+
+SCHEMA_V38 = """
+CREATE INDEX IF NOT EXISTS idx_faa_registry_mode_s_hex_lower
+    ON faa_aircraft_registry(LOWER(mode_s_hex));
+CREATE INDEX IF NOT EXISTS idx_opensky_registry_icao24_lower
+    ON opensky_aircraft_registry(LOWER(icao24));
+CREATE INDEX IF NOT EXISTS idx_opensky_registry_registration_upper_nodash
+    ON opensky_aircraft_registry(UPPER(REPLACE(registration, '-', '')));
+"""
+
+
+def init_db_v38() -> None:
+    """Apply v38 schema -- expression indexes matching the WHERE-clause
+    functions in faa_lookup_by_hex()/opensky_lookup_by_hex()/
+    opensky_lookup_by_registration().
+
+    2026-08-26 fix (Opus blind review C-17): those three lookups wrap the
+    indexed column in LOWER()/UPPER(REPLACE()) in the WHERE clause, which
+    SQLite can't satisfy with a plain index on the bare column -- every
+    call was a full table scan (measured live: ~0.45-1.9s over 519,991
+    rows). GET /api/v1/aircraft/{id} calls this anonymously on the
+    single-worker event loop, so a request loop against it was an
+    unauthenticated remote stack-restart primitive (starves the loop past
+    the watchdog's /healthz timeout). SQLite supports expression indexes
+    on the exact same expression used in the query -- these let the
+    planner use an index seek instead of a scan without changing any
+    query or stored data.
+    """
+    with conn() as c:
+        for stmt in SCHEMA_V38.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                c.execute(stmt)
 
 
 def create_session_grant(command_pattern: str, granted_by: str,

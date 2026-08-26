@@ -205,7 +205,7 @@ had no dedup beyond the generic 5-minute watchlist window.
 if hardware is absent:
 
 - **UltraFeeder ADS-B** — polls `ULTRAFEEDER_URL` `/data/aircraft.json` every
-  15 s, 80 NM scan radius around DCA (`38.8816, -77.0910`). Note: the
+  15 s, 80 NM scan radius around DCA (`39.0000, -77.0000`). Note: the
   UltraFeeder container was down ~2026-08-10 → midday 2026-08-11 (ADS-B
   RTL-SDR dongle stopped enumerating on USB; restored by a hardware reseat —
   see `docs/INFRA_MAP.md` §11); the monitor degrades cleanly whenever it's

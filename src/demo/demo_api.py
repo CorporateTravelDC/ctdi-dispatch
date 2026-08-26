@@ -127,7 +127,12 @@ ENDPOINT_PATHS: dict[str, str] = {
     "board_threads":        "board/threads",
 }
 
-app = FastAPI(title="corporatetraveldc-demo-api")
+# 2026-08-26 fix (Opus blind review C-12 class): this is the API backing
+# the PUBLIC demo runner -- unlike web/main.py and runner/main.py, it
+# never set docs_url/redoc_url/openapi_url at all, so it was serving
+# Swagger UI, ReDoc, AND the raw schema at their FastAPI defaults on the
+# most internet-exposed of the three apps.
+app = FastAPI(title="corporatetraveldc-demo-api", docs_url=None, redoc_url=None, openapi_url=None)
 
 _window_end_cache: datetime | None = None
 _window_end_cache_checked = False

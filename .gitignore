@@ -82,3 +82,11 @@ secrets.env
 **/secrets.env
 dispatch-secrets.env
 **/dispatch-secrets.env
+# Scoped per-demo-instance secrets (2026-08-26, Opus blind review C-22
+# follow-up) -- demo-secrets.env for the current public demo, and the
+# same *-demo-secrets.env naming convention for any future role-specific
+# variant (ea-demo-secrets.env, travel-agent-demo-secrets.env, an
+# internal-only longitudinal-archive-demo-secrets.env, etc.) -- see
+# config/demo-secrets.env.example.
+*demo-secrets.env
+**/*demo-secrets.env

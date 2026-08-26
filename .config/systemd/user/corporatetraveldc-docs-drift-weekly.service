@@ -1,5 +1,11 @@
 [Unit]
 Description=Corporate Travel DC -- weekly documentation drift check (Fable, both repos, live-system verified)
+# 2026-08-26: this unit has a confirmed real failure mode (a Sunday-09:00
+# fire landing during an exhausted Claude usage window exits non-zero with
+# no retry, per docs/LIVE_STATE_CHECK_2026-08-26.md's finding 3) and only
+# runs weekly, so a silent failure sits in --failed for up to 7 days.
+# OnFailure pings ops immediately instead.
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Service]
 Type=oneshot

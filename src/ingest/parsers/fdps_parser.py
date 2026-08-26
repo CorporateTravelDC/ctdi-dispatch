@@ -943,11 +943,24 @@ def check_fdps_watchlist(parsed: dict) -> None:
         return
 
     callsign = (parsed.get("callsign") or "").upper().strip()
-    gufi = parsed.get("gufi", "")
 
+    # 2026-08-26 fix (Opus blind review C-19): this used to also check
+    # `gufi != entry.get("gufi_override", "")` as an OR-arm intended to
+    # match a watchlist entry pinned by exact GUFI -- but no such column
+    # or write path exists anywhere in the codebase ("gufi_override" was
+    # never set on any entry). With the key always missing, the default
+    # ("") meant this arm did nothing when a message's GUFI was populated
+    # (the normal case) but became a live landmine the moment a message's
+    # GUFI parsed empty: `gufi != ""` is then False, collapsing the
+    # `and`-guarded skip to False for every entry, so an unrelated flight
+    # with an unparsed GUFI would match -- and fire a hit for -- every
+    # active watchlist entry regardless of callsign. Callsign matching is
+    # the only real mechanism here; removed the dead arm entirely instead
+    # of pointing it at a real column, since no such per-entry GUFI-pin
+    # feature exists to restore.
     for entry in entries:
         ident = entry["identifier"].upper()
-        if callsign != ident and gufi != entry.get("gufi_override", ""):
+        if callsign != ident:
             continue
 
         try:

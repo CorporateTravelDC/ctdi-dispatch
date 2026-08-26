@@ -6,7 +6,7 @@ MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every 15 minutes normally; drops to 5 minutes when a 'flight' watchlist
           session is active (SKILL_SCHEDULE active_interval/active_check).
 SR-1: log_usage() in finally block
-SR-2: hash_gate() on flight IDs + statuses + arrival times
+SR-2: check_gate()/commit_gate() on flight IDs + statuses + arrival times
 
 Reads flight_events from DB (populated by FAA SWIM / SFDPS push feed).
 Skips cleanly when SFDPS has no data yet (parse_sfdps stub, awaiting live sample).
@@ -24,7 +24,7 @@ import sys
 
 from common import db
 from common.sr1_log import log_usage
-from common.sr2_gate import hash_gate
+from common.sr2_gate import check_gate, commit_gate
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def main(force: bool = False) -> None:
                   SKILL_NAME)
         sys.exit(0)
 
-    gate_result = hash_gate(SKILL_NAME, inputs, force=force)
+    gate_result, _gate_hash = check_gate(SKILL_NAME, inputs, force=force)
     if gate_result == "skipped":
         log.debug("%s: inputs unchanged — skipping API call", SKILL_NAME)
         sys.exit(0)
@@ -115,6 +115,12 @@ def main(force: bool = False) -> None:
         log.info("%s: OK — %d flights", SKILL_NAME, len(flight_ids))
 
     finally:
+        # 2026-08-25 fix (Opus blind review C-7): only commit the gate
+        # hash once we know this run didn't crash -- see
+        # sr2_gate.commit_gate()'s docstring for why the write is
+        # deferred until after the guarded work actually completes.
+        if status != "error":
+            commit_gate(SKILL_NAME, _gate_hash)
         log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 
