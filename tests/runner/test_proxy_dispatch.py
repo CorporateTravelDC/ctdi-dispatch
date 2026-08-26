@@ -109,21 +109,74 @@ def test_is_trusted_true_for_loopback_client_no_cf_header():
 
 
 def test_is_trusted_true_for_real_tailnet_cf_connecting_ip():
-    """CF-Connecting-IP present and within the Tailscale CGNAT range
-    (100.64.0.0/10, in _TRUSTED_NETS) -- e.g. a request that legitimately
-    traversed Cloudflare from a tailnet-adjacent origin."""
-    request = _make_request({"CF-Connecting-IP": "100.x.x.x"})
+    """CF-Connecting-IP present, Host is the actual Cloudflare-fronted
+    hostname, and the IP is within the Tailscale CGNAT range (100.64.0.0/10,
+    in _TRUSTED_NETS) -- e.g. a request that legitimately traversed
+    Cloudflare from a tailnet-adjacent origin."""
+    request = _make_request({
+        "CF-Connecting-IP": "100.x.x.x",
+        "Host": "dispatch-runner.example.com",
+    })
     assert runner_main._is_trusted(request) is True
 
 
 def test_is_trusted_false_for_real_external_cf_connecting_ip():
-    """CF-Connecting-IP present and NOT in any _TRUSTED_NETS range -- a
-    genuine public-internet caller reaching this box through the
-    Cloudflare tunnel. This is the property that actually protects
-    anything gated on _is_trusted() (e.g. _TIER1_PATHS_TRUSTED_ORIGIN_ONLY
-    injection, or a DEMO_MODE-enabled vhost's password gate) -- confirmed
-    it correctly evaluates the real external IP rather than falling
-    through to the trusted loopback hop, per the 2026-07-21 fix in this
-    function's own docstring."""
-    request = _make_request({"CF-Connecting-IP": "8.8.8.8"})
+    """CF-Connecting-IP present, Host is the real Cloudflare-fronted
+    hostname, and the IP is NOT in any _TRUSTED_NETS range -- a genuine
+    public-internet caller reaching this box through the Cloudflare
+    tunnel. This is the property that actually protects anything gated on
+    _is_trusted() (e.g. _TIER1_PATHS_TRUSTED_ORIGIN_ONLY injection, or a
+    DEMO_MODE-enabled vhost's password gate) -- confirmed it correctly
+    evaluates the real external IP rather than falling through to the
+    trusted loopback hop, per the 2026-07-21 fix in this function's own
+    docstring."""
+    request = _make_request({
+        "CF-Connecting-IP": "8.8.8.8",
+        "Host": "dispatch-runner.example.com",
+    })
     assert runner_main._is_trusted(request) is False
+
+
+# ── C-2 regression: CF-Connecting-IP must only be honored on the one
+# hostname actually fronted by Cloudflare (2026-08-25 Opus blind review) ──
+
+def test_is_trusted_ignores_cf_header_on_tailnet_hostname():
+    """The exact live exploit: a caller reaching the tailnet-only vhost
+    directly (no Cloudflare anywhere in that path) sets CF-Connecting-IP
+    to a trusted-looking value itself. Confirmed live pre-fix this
+    returned True; must now fall through to the direct-IP check instead
+    of trusting a self-reported header on a host Cloudflare never fronts."""
+    request = _make_request(
+        {
+            "CF-Connecting-IP": "100.64.1.1",
+            "Host": "corporatetraveldc-dispatch.tailxxxxxxx.ts.net",
+        },
+        client=("8.8.8.8", 12345),
+    )
+    assert runner_main._is_trusted(request) is False
+
+
+def test_is_trusted_ignores_cf_header_with_no_host_at_all():
+    """Same exploit shape with no Host header sent at all (e.g. a raw IP
+    request) -- must not default-trust CF-Connecting-IP just because it's
+    present."""
+    request = _make_request(
+        {"CF-Connecting-IP": "100.64.1.1"},
+        client=("8.8.8.8", 12345),
+    )
+    assert runner_main._is_trusted(request) is False
+
+
+def test_is_trusted_falls_through_correctly_when_cf_header_ignored():
+    """When CF-Connecting-IP is ignored (wrong host) but the ACTUAL peer
+    is genuinely trusted, the direct-IP fallback still correctly grants
+    trust -- the fix narrows which header is honored, it doesn't break
+    the legitimate loopback/tailnet fallback path."""
+    request = _make_request(
+        {
+            "CF-Connecting-IP": "8.8.8.8",  # untrusted, and on the wrong host anyway
+            "Host": "corporatetraveldc-dispatch.tailxxxxxxx.ts.net",
+        },
+        client=("127.0.0.1", 12345),
+    )
+    assert runner_main._is_trusted(request) is True

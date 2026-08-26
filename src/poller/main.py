@@ -93,6 +93,10 @@ SKILL_SCHEDULE: list[dict] = [
     # (auth.py) -- see audit_log_prune.py's module docstring for why this
     # shipped in the same change instead of as a follow-up.
     {"name": "audit-log-prune", "script": "poller/skills/audit_log_prune.py", "interval": 86400},
+    # 2026-08-26 (Opus blind review C-33): same "written but never wired"
+    # failure mode as flight-cleanup/audit-log-prune above -- see
+    # retention_prune.py's module docstring.
+    {"name": "retention-prune", "script": "poller/skills/retention_prune.py", "interval": 86400},
 ]
 
 # Daily/weekly skills are handled by systemd timers, not this scheduler.
@@ -1518,7 +1522,7 @@ def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
     from datetime import datetime, timezone
 
     AIS_AISHUB_BASE = "http://data.aishub.net/ws.php"
-    DEFAULT_LAT, DEFAULT_LON, DIST_NM = 38.8816, -77.0910, 120
+    DEFAULT_LAT, DEFAULT_LON, DIST_NM = 39.0000, -77.0000, 120
     # ~1 deg latitude = 60nm; longitude scaled by cos(latitude) for the DC area.
     dlat = DIST_NM / 60.0
     dlon = DIST_NM / (60.0 * 0.78)
@@ -1766,6 +1770,7 @@ async def main() -> None:
     db.init_db_v35()
     db.init_db_v36()
     db.init_db_v37()
+    db.init_db_v38()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

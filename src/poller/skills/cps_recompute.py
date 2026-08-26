@@ -3,7 +3,7 @@ cps-recompute — SR-1 + SR-2 compliant. API-free deterministic rule engine.
 
 Schedule: hourly at :05 (corporatetraveldc-cps-recompute.timer)
 SR-1: log_usage() in finally block
-SR-2: hash_gate() on raw numeric METAR inputs + active NAS programs
+SR-2: check_gate()/commit_gate() on raw numeric METAR inputs + active NAS programs
 
 Produces a CPS (Critical Predictability State) traffic-light score
 mapped to Part 135.609 HEMS minimums using a deterministic rule engine.
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from common import db
 from common.sr1_log import log_usage
-from common.sr2_gate import hash_gate
+from common.sr2_gate import check_gate, commit_gate
 
 log = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ def _compute_cps(inputs: dict) -> dict:
 
 def main(force: bool = False) -> None:
     inputs = build_inputs()
-    gate_result = hash_gate(SKILL_NAME, inputs, force=force)
+    gate_result, _gate_hash = check_gate(SKILL_NAME, inputs, force=force)
 
     if gate_result == "skipped":
         log.debug("%s: inputs unchanged — skipping recompute", SKILL_NAME)
@@ -276,6 +276,12 @@ def main(force: bool = False) -> None:
         raise
     finally:
         # SR-1: log with 0 tokens (deterministic — no API usage)
+        # 2026-08-25 fix (Opus blind review C-7): only commit the gate
+        # hash once we know this run didn't crash -- see
+        # sr2_gate.commit_gate()'s docstring for why the write is
+        # deferred until after the guarded work actually completes.
+        if status != "error":
+            commit_gate(SKILL_NAME, _gate_hash)
         log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 

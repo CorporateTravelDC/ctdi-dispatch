@@ -6,7 +6,7 @@ Scores each item deterministically; optionally generates narrative via Ollama.
 Fires ntfy push on items meeting scope push_threshold.
 
 SR-1: log_usage() in finally block.
-SR-2: content_hash per item (INSERT OR IGNORE dedup in DB — no hash_gate needed
+SR-2: content_hash per item (INSERT OR IGNORE dedup in DB — no check_gate/commit_gate needed
       since each fetch may produce new articles even with identical inputs).
 
 Model: phi3.5 via Ollama (narrative generation, HIGH+ items only) or "deterministic".
@@ -122,7 +122,18 @@ def _fetch_feed(url: str) -> list[dict]:
     Fetch and parse an RSS 2.0 or Atom 1.0 feed.
     Returns a list of dicts: {title, url, published_at, source_name, summary}.
     Never raises — returns [] on any failure.
+
+    2026-08-26 fix (Opus blind review C-13): feed_urls come from an
+    admin-configured osint scope, not an anonymous caller, but this is
+    still an SSRF-shaped fetch of a URL that isn't hardcoded/reviewed --
+    same host/IP check as runner/main.py's rss_custom() fix, reused via
+    shared.ssrf_guard.
     """
+    from shared.ssrf_guard import is_safe_public_url
+    is_safe, reason = is_safe_public_url(url)
+    if not is_safe:
+        log.warning("osint: refusing to fetch %s: %s", url, reason)
+        return []
     try:
         headers = {
             "User-Agent": "corporatetraveldc-dispatch/1.0 (+https://example.com)",

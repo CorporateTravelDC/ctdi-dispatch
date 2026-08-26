@@ -43,6 +43,12 @@ PublishPort=100.x.x.x:8004:8004
 Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z
 Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-08-26 fix (Opus blind review C-22 follow-up): DEMO_SESSION_SECRET
+# lives here, scoped ONLY to the two public-demo containers -- never load
+# the full dispatch-secrets.env into a public-facing container. See
+# demo-secrets.env's own header comment for the convention this
+# establishes for future role-specific demos (EA, travel-agent, etc.).
+EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
 AutoUpdate=local
 
 [Service]

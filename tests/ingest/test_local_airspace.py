@@ -104,8 +104,8 @@ class TestUltrafeederJsonParse(unittest.TestCase):
 
     @patch("ingest.local_airspace.ULTRAFEEDER_AIRCRAFT_URL",
            "http://mock/data/aircraft.json")
-    @patch("ingest.local_airspace.RECEIVER_LAT", 38.8816)
-    @patch("ingest.local_airspace.RECEIVER_LON", -77.0910)
+    @patch("ingest.local_airspace.RECEIVER_LAT", 39.0000)
+    @patch("ingest.local_airspace.RECEIVER_LON", -77.0000)
     @patch("ingest.local_airspace.ALERT_RADIUS_NM", 100.0)
     @patch("ingest.local_airspace._local_dedup_check", return_value=True)
     @patch("ingest.local_airspace.get_active_entries", return_value=[])
@@ -158,8 +158,8 @@ class TestWatchlistProximity(unittest.TestCase):
 
     @patch("ingest.local_airspace.ULTRAFEEDER_AIRCRAFT_URL",
            "http://mock/data/aircraft.json")
-    @patch("ingest.local_airspace.RECEIVER_LAT", 38.8816)
-    @patch("ingest.local_airspace.RECEIVER_LON", -77.0910)
+    @patch("ingest.local_airspace.RECEIVER_LAT", 39.0000)
+    @patch("ingest.local_airspace.RECEIVER_LON", -77.0000)
     @patch("ingest.local_airspace.ALERT_RADIUS_NM", 50.0)
     @patch("ingest.local_airspace._local_dedup_check", return_value=False)
     @patch("ingest.local_airspace.watchlist_event_hit")
@@ -201,8 +201,8 @@ class TestMarineOneDetectionLocal(unittest.TestCase):
 
     @patch("ingest.local_airspace.ULTRAFEEDER_AIRCRAFT_URL",
            "http://mock/data/aircraft.json")
-    @patch("ingest.local_airspace.RECEIVER_LAT", 38.8816)
-    @patch("ingest.local_airspace.RECEIVER_LON", -77.0910)
+    @patch("ingest.local_airspace.RECEIVER_LAT", 39.0000)
+    @patch("ingest.local_airspace.RECEIVER_LON", -77.0000)
     @patch("ingest.local_airspace.MARINE_ONE_ALERT_RADIUS_NM", 100.0)
     @patch("ingest.local_airspace._local_dedup_check", return_value=False)
     @patch("ingest.local_airspace._fire_ntfy")
@@ -253,8 +253,8 @@ class TestEmergencySquawk7700(unittest.TestCase):
 
     @patch("ingest.local_airspace.ULTRAFEEDER_AIRCRAFT_URL",
            "http://mock/data/aircraft.json")
-    @patch("ingest.local_airspace.RECEIVER_LAT", 38.8816)
-    @patch("ingest.local_airspace.RECEIVER_LON", -77.0910)
+    @patch("ingest.local_airspace.RECEIVER_LAT", 39.0000)
+    @patch("ingest.local_airspace.RECEIVER_LON", -77.0000)
     @patch("ingest.local_airspace.SCAN_RADIUS_NM", 150.0)
     @patch("ingest.local_airspace._local_dedup_check", return_value=False)
     @patch("ingest.local_airspace._fire_ntfy")

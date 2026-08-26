@@ -24,10 +24,34 @@ unalias grep 2>/dev/null || true
 unset -f grep 2>/dev/null || true
 
 remote="${1:-}"
+remote_url="${2:-}"
 
 # ── 1. Public mirror guard ──────────────────────────────────────────────────────
 # Direct pushes to public risk exposing dispatch-secrets.env.
-if [[ "$remote" == "public" ]]; then
+#
+# 2026-08-25 fix (Opus blind review C-0c): this used to check only $1 (the
+# remote NAME git was invoked with) against the literal string "public".
+# `git push public ...` sets $1="public" and is caught -- but
+# `git push https://github.com/.../ctdi-dispatch.git ...` (the same
+# destination, invoked by raw URL instead of the configured remote name)
+# sets $1 to that URL, not "public", and sailed straight through with zero
+# scrub step. Now also resolves the "public" remote's actual configured
+# URL and matches against $2 (the URL git always passes as the second
+# hook argument) -- and against $1 too, since git sets $1 equal to the URL
+# when no matching named remote is used at all.
+public_remote_url="$(git remote get-url public 2>/dev/null || true)"
+# 2026-08-26 fix: push-public.sh's OWN push of the already-scrubbed commit
+# is exactly the URL-based shape the check above exists to catch (it must
+# push via the raw resolved URL, never the named "public" remote, by
+# design -- see that script's own comment). CTDI_PUSH_PUBLIC_INTERNAL is a
+# narrow escape hatch set ONLY by that one call site, immediately before
+# its own git push, for content that has already gone through
+# scrub_tree(). It does not skip the credential-pattern scanner below --
+# only this intercept.
+if [[ -z "${CTDI_PUSH_PUBLIC_INTERNAL:-}" ]] && \
+   { [[ "$remote" == "public" ]] || \
+     { [[ -n "$public_remote_url" ]] && \
+       { [[ "$remote_url" == "$public_remote_url" ]] || [[ "$remote" == "$public_remote_url" ]]; }; }; }; then
     echo ""
     echo "[pre-push] Direct push to public mirror intercepted."
     echo "           Use the wrapper instead — it auto-injects the dispatch-secrets.env"

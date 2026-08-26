@@ -150,26 +150,32 @@ def _chat_headers() -> dict:
 # going forward, since ULTRAFEEDER_LAT/LON's real value is read straight
 # out of dispatch-secrets.env. Falls back to the old KDCA placeholder
 # only if ULTRAFEEDER_LAT/LON is unset.
-DEFAULT_LAT  = float(os.getenv("ULTRAFEEDER_LAT", 38.8816))
-DEFAULT_LON  = float(os.getenv("ULTRAFEEDER_LON", -77.0910))
+DEFAULT_LAT  = float(os.getenv("ULTRAFEEDER_LAT", 39.0000))
+DEFAULT_LON  = float(os.getenv("ULTRAFEEDER_LON", -77.0000))
 DEFAULT_DIST = 250  # nm
 
-app = FastAPI(title="dispatch-runner", docs_url=None, redoc_url=None)
+# openapi_url=None added 2026-08-26 alongside the same fix in web/main.py
+# (Opus blind review C-12) -- docs_url/redoc_url=None only disable the
+# Swagger/ReDoc UI, not the raw schema route, which FastAPI still serves
+# at GET /openapi.json by default.
+app = FastAPI(title="dispatch-runner", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
 # ── Helpers ------------------------------------------------------------------
 
 def _client_ip(request: Request) -> str:
-    # Cloudflare sets CF-Connecting-IP authoritatively at its edge -- it is
-    # not client-spoofable and is present on every request that actually
-    # traversed the Cloudflare tunnel (the public ops.example.com
-    # hostname). Prefer it over X-Forwarded-For, which for tunnel traffic
-    # reduces to cloudflared's own loopback hop into nginx and is not a
-    # reliable signal of the real origin.
-    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_ip:
-        return cf_ip
+    # 2026-08-25 fix (Opus blind review C-2): this used to prefer a raw
+    # CF-Connecting-IP header unconditionally -- the exact same
+    # unauthenticated-header-spoof gap being fixed in _is_trusted()'s own
+    # primary branch, just living in a second place. _is_trusted() (this
+    # function's only caller) now owns ALL of the CF-Connecting-IP
+    # decision itself, host-scoped to _CLOUDFLARE_FRONTED_HOSTNAMES, before
+    # ever reaching this fallback -- so by the time this runs, CF-
+    # Connecting-IP must never be trusted again here even if present
+    # (either there wasn't one, or the host wasn't Cloudflare-fronted and
+    # it was correctly ignored). This is now a plain XFF-or-direct-client
+    # resolver, nothing more.
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         return xff.split(",")[0].strip()
@@ -229,8 +235,23 @@ def _is_trusted(request: Request) -> bool:
     # as available when it should not have been. If CF-Connecting-IP is
     # present, we decide trust from that value alone and never fall
     # through to the loopback-derived candidates.
+    #
+    # 2026-08-25 fix (Opus blind review C-2): the above assumed
+    # CF-Connecting-IP could only ever arrive via a genuine Cloudflare
+    # hop -- true for the real public hostname, but this same function
+    # also runs on the tailnet-only instance (:8001, fronted by
+    # nginx/conf.d/tailscale-dispatch-runner.conf, no Cloudflare in that
+    # path at all). A caller reaching :8001 directly (tailnet/loopback)
+    # could set CF-Connecting-IP itself to any value and be trusted
+    # unconditionally -- confirmed live (`CF-Connecting-IP: 100.64.1.1`
+    # -> trusted). This header is now only honored on the one host that's
+    # actually Cloudflare-fronted; every other host (the tailnet .ts.net
+    # name, a bare IP, anything else) falls straight through to the
+    # direct-IP/X-Forwarded-For check below, same as if the header were
+    # never sent.
     cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_ip:
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if cf_ip and host in _CLOUDFLARE_FRONTED_HOSTNAMES:
         try:
             addr = ipaddress.ip_address(cf_ip)
             trusted = any(addr in net for net in _TRUSTED_NETS)
@@ -329,6 +350,14 @@ _API_V1_PROXY_PREFIX = "/api/dispatch/api/v1"
 # below, so even while the DNS/tunnel route still technically exists,
 # nothing behind it is reachable through that hostname anymore.
 _RETIRED_HOSTNAMES = {"ops.example.com"}
+
+# 2026-08-25 (Opus blind review C-2): the only hostname genuinely fronted
+# by Cloudflare Tunnel for this app -- see _is_trusted()'s docstring for
+# why CF-Connecting-IP is only honored when the request's Host header is
+# in this set. The tailnet instance's own hostname
+# (corporatetraveldc-dispatch.tailxxxxxxx.ts.net) and any other value
+# deliberately are NOT here.
+_CLOUDFLARE_FRONTED_HOSTNAMES = {"dispatch-runner.example.com"}
 
 
 def _normalized_path(raw_path: str) -> str:
@@ -1866,8 +1895,13 @@ async def put_user_config(request: Request):
             json.dump(body, f)
         return JSONResponse({"ok": True})
     except Exception as e:
+        # 2026-08-26 fix (Opus blind review C-26): str(e) in the response
+        # can leak filesystem paths/internals to the caller; this route is
+        # already trust-gated above, but that's tailnet-scoped, not
+        # "nothing untrusted could ever reach it." Real detail still logged
+        # server-side.
         log.warning("runner: config write failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="config write failed")
 
 
 # ── SSE state stream --------------------------------------------------------
@@ -2376,17 +2410,34 @@ async def rss_categories_add(request: Request, body: dict):
     return {"category": entry}
 
 
+from shared.ssrf_guard import is_safe_public_url
+
 # ── Custom RSS proxy (validate + preview a feed URL) ─────────────────────────
 @app.get("/api/rss/custom")
 async def rss_custom(url: str, name: str = "Custom"):
     """Fetch and proxy an arbitrary RSS/Atom feed URL server-side (avoids CORS).
 
     Used for preview/validation before saving. Returns same shape as /api/rss.
+
+    2026-08-26 fix (Opus blind review C-13): used to fetch any http(s) URL
+    with no host/IP check and follow_redirects=True -- unauthenticated
+    SSRF onto 127.0.0.1/tailnet/169.254.169.254/etc, or anywhere a
+    "public" feed URL chose to redirect. See shared.ssrf_guard for the
+    host/IP check.
     """
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    is_safe, reason = is_safe_public_url(url)
+    if not is_safe:
+        raise HTTPException(status_code=400, detail=f"URL not allowed: {reason}")
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        # follow_redirects=False (2026-08-26, same C-13 fix): an
+        # otherwise-public feed URL could redirect to an internal target
+        # after passing the host check above -- this endpoint is
+        # unauthenticated, so a redirect hop isn't worth the risk for a
+        # feed-preview feature. A feed that genuinely needs a redirect can
+        # have its final URL supplied directly instead.
+        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
             items = await _fetch_one_rss(client, {"name": name, "url": url}, "custom")
         if not items:
             raise HTTPException(status_code=422,

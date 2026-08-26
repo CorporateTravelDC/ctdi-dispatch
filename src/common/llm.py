@@ -13,14 +13,14 @@ Two independent gates control step 2, both must be open:
     ep_advance_brief.py never goes through this function at all -- it
     calls ollama_post_with_retry() directly, so it never had Anthropic
     access to gate.
-  - Global: ANTHROPIC_FALLBACK_ENABLED env var (default "true" -- this
-    module ships as a template other deployments may run hybrid
-    local+cloud, so the out-of-the-box default preserves that with zero
-    config needed). 2026-08-06: THIS box's dispatch.env sets it to
-    "false" -- operator directive is no Anthropic/cloud calls at all
-    from this deployment, across every caller (route_impact,
-    tfr_enrichment, osint_monitor, weekly_summary, aam_weekly_watch,
-    dispatch_desk_memo, second_brain_daily/weekly,
+  - Global: ANTHROPIC_FALLBACK_ENABLED env var (default "false" as of
+    2026-08-26 -- see this flag's own comment below for why the default
+    was flipped fail-closed; a deployment that wants cloud fallback
+    opts in explicitly). 2026-08-06: THIS box's dispatch.env also
+    explicitly sets it to "false" -- operator directive is no
+    Anthropic/cloud calls at all from this deployment, across every
+    caller (route_impact, tfr_enrichment, osint_monitor, weekly_summary,
+    aam_weekly_watch, dispatch_desk_memo, second_brain_daily/weekly,
     transport_pattern_digest -- everything, not just the two briefs).
     Deliberately a separate flag from allow_anthropic rather than
     flipping that parameter's own default to False -- changing the
@@ -377,10 +377,22 @@ ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 # Global master gate (2026-08-06) -- see module docstring above for the
 # full two-gate design. Same boolean-parsing style already used for
-# OLLAMA_PREFLIGHT_COOL_ENABLED below. Default "true" so this module
-# behaves exactly as it always has for any deployment that doesn't set
-# this var -- this box's own dispatch.env sets it to "false".
-ANTHROPIC_FALLBACK_ENABLED = os.getenv("ANTHROPIC_FALLBACK_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+# OLLAMA_PREFLIGHT_COOL_ENABLED below.
+#
+# 2026-08-26 fix (Opus blind review C-8): this defaulted to "true" (open)
+# on the theory that a deployment which never sets the var should keep
+# working exactly as before -- but that made cloud egress the default for
+# ANY deployment that forgets to set it, with only the absence of
+# ANTHROPIC_API_KEY actually preventing egress today on this box (verified:
+# dispatch.env DOES set this to "false", but that's one config line away
+# from a live egress path with zero code change, e.g. a future deploy that
+# drops dispatch.env, or someone adding an API key for a quick test without
+# also re-checking this flag). Default flipped to fail-closed ("false") --
+# a deployment that actually wants cloud fallback now opts in explicitly by
+# setting this var, rather than opting out. This box's own dispatch.env
+# already sets it to "false" either way, so this changes nothing here; it
+# only removes the footgun for template reuse elsewhere.
+ANTHROPIC_FALLBACK_ENABLED = os.getenv("ANTHROPIC_FALLBACK_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
 
 # ── Pause-aware readiness wait (added 2026-07-27) ─────────────────────────────
 # ollama_governor.py SIGSTOPs the native `ollama serve` process on a thermal
