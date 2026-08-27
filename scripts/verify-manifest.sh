@@ -98,10 +98,31 @@ if ! gpg --quiet --status-fd 3 --verify "${SIGNATURE}" "${MANIFEST}" 3>"${gpg_st
 fi
 rm -f "${gpg_err}"
 
-# VALIDSIG line: "[GNUPG:] VALIDSIG <sig-fpr> <date> ... <primary-key-fpr> ..."
-# Use field 3 (the actual signing subkey/key fingerprint) -- this is what
-# actually produced the signature, not just "some key gpg trusts."
+# VALIDSIG line: "[GNUPG:] VALIDSIG <sig-fpr> <date> ... <primary-key-fpr>"
+# Field 3 is the fingerprint of whatever key/subkey actually produced the
+# signature; the LAST field is the fingerprint of that key's PRIMARY key
+# (identical to field 3 when the signer has no subkeys, as with the
+# single-key AGENT_SIGNING_KEY_FINGERPRINT setup).
+#
+# CORRECTED 2026-08-27: this used to check field 3 only. A modern GPG key
+# with the default subkey layout (a primary cert-only key plus dedicated
+# signing/auth/encryption subkeys -- exactly what the operator's own key
+# has, see security/trusted-signing-key.pub.asc) always delegates actual
+# signing to its `s`-flagged SUBKEY, whose fingerprint is never equal to
+# the primary key's. SIGNING_KEY_FINGERPRINT below is pinned to the
+# operator's PRIMARY key fingerprint (same value used for
+# `git config user.signingkey` and everywhere else this key is
+# referenced) -- so any manual, passphrase-signed run (as opposed to
+# --agent, whose single-key setup has no subkeys and happened to match
+# field 3 directly every time) failed this pin, live, the first time it
+# was ever exercised: "SIGNING KEY NOT PINNED" against the operator's own
+# just-created signature. A key's subkey signing on the key's own behalf
+# is exactly as trusted as the primary key -- the fingerprint pin exists
+# to reject an ATTACKER-SUBSTITUTED key in ${PUBKEY}, not to reject the
+# pinned identity's own normal subkey delegation. Now matches if either
+# field identifies a pinned fingerprint.
 signing_fpr="$(awk '/^\[GNUPG:\] VALIDSIG/ {print $3; exit}' "${gpg_status}")"
+primary_fpr="$(awk '/^\[GNUPG:\] VALIDSIG/ {print $NF; exit}' "${gpg_status}")"
 rm -f "${gpg_status}"
 
 if [[ -z "${signing_fpr}" ]]; then
@@ -109,8 +130,9 @@ if [[ -z "${signing_fpr}" ]]; then
     exit 1
 fi
 
-if [[ "${signing_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${signing_fpr}" != "${AGENT_SIGNING_KEY_FINGERPRINT}" ]]; then
-    echo "verify-manifest: SIGNING KEY NOT PINNED -- ${SIGNATURE} verifies against a key in ${PUBKEY} (fingerprint ${signing_fpr}), but that fingerprint matches neither SIGNING_KEY_FINGERPRINT nor AGENT_SIGNING_KEY_FINGERPRINT in ${SIGNING_ENV}. Refusing to trust a key that isn't the operator's own pinned fingerprint -- an attacker who can write tracked files could otherwise replace ${PUBKEY} with their own key and re-sign cleanly." >&2
+if [[ "${signing_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${signing_fpr}" != "${AGENT_SIGNING_KEY_FINGERPRINT}" \
+   && "${primary_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${primary_fpr}" != "${AGENT_SIGNING_KEY_FINGERPRINT}" ]]; then
+    echo "verify-manifest: SIGNING KEY NOT PINNED -- ${SIGNATURE} verifies against a key in ${PUBKEY} (signing fingerprint ${signing_fpr}, primary key fingerprint ${primary_fpr}), but neither matches SIGNING_KEY_FINGERPRINT nor AGENT_SIGNING_KEY_FINGERPRINT in ${SIGNING_ENV}. Refusing to trust a key that isn't the operator's own pinned fingerprint -- an attacker who can write tracked files could otherwise replace ${PUBKEY} with their own key and re-sign cleanly." >&2
     exit 1
 fi
 

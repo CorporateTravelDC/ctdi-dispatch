@@ -37,8 +37,11 @@ Volume=/etc/ntfy:/etc/ntfy:ro
 # ntfy with blank auth/subscriber state and silently lost a month of it.
 Volume=/var/lib/ntfy:/var/lib/ntfy:z
 
-# SMTP + Twilio credentials (from dispatch-secrets.env)
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# SMTP + Twilio credentials, scoped to this container only (2026-08-26,
+# Opus blind review C-4) -- used to be the full dispatch-secrets.env for
+# 5 of ~95 keys. NTFY_TOKEN deliberately excluded: that's CTDI's own
+# client auth token for pushing TO ntfy, not something this server reads.
+EnvironmentFile=/etc/corporatetraveldc/ntfy-secrets.env
 Exec=serve
 
 [Service]

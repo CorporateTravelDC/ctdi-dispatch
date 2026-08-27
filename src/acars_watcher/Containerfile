@@ -20,7 +20,10 @@ USER watcher
 #   JUMPSEAT_API_KEY       sk_adjs_...   (or mount ~/.secrets/jumpseat.key)
 #
 # Optional:
-#   AIRFRAMES_API_KEY      (airframes.io auth -- idles without it)
+#   AIRFRAMES_TOKEN        (airframes.io auth -- polls unauthenticated
+#                           without it; 2026-08-26: corrected from
+#                           AIRFRAMES_API_KEY, a name the code read but
+#                           nothing ever set)
 #   ACARS_STATIC_REGS      comma-separated tail list
 #   POLL_INTERVAL          airframes poll seconds (default 60)
 #   JUMPSEAT_POLL_INTERVAL jumpseat poll seconds (default 90)
