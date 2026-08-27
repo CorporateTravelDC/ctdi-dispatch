@@ -499,8 +499,19 @@ def healthz():
 # ── ADS-B proxy -------------------------------------------------------------
 
 @app.get("/api/adsb/local")
-async def adsb_local():
-    """Proxy to local UltraFeeder tar1090 aircraft.json."""
+async def adsb_local(request: Request):
+    """Proxy to local UltraFeeder tar1090 aircraft.json.
+
+    2026-08-27 (Opus blind review C-2): this route had NO DEMO_MODE gate at
+    all -- it returned the real live receiver's exact position/aircraft
+    data completely unauthenticated on the demo-runner instance. Operator
+    directive (reinforced 2026-08-27): the demo runner must never touch
+    ANY real-time source, local or third-party -- only synthetic. Returns
+    a fabricated snapshot (_synthetic_adsb_snapshot) with zero network
+    calls when DEMO_MODE is on, never falls through to airplanes.live.
+    """
+    if DEMO_MODE:
+        return _synthetic_adsb_snapshot(DEFAULT_LAT, DEFAULT_LON)
     try:
         async with httpx.AsyncClient() as c:
             r = await c.get(ULTRAFEEDER_URL, timeout=5)
@@ -511,11 +522,20 @@ async def adsb_local():
 
 @app.get("/api/adsb/live")
 async def adsb_live(
+    request: Request,
     lat: float = Query(DEFAULT_LAT),
     lon: float = Query(DEFAULT_LON),
     dist: int  = Query(DEFAULT_DIST),
 ):
-    """Proxy to airplanes.live -- full area window regardless of antenna range."""
+    """Proxy to airplanes.live -- full area window regardless of antenna range.
+
+    2026-08-27 (Opus blind review C-2, operator follow-up): this route had
+    no DEMO_MODE gate either -- directly reachable by a demo visitor for
+    real-time global traffic at any coordinates, bypassing adsb_local()'s
+    gate entirely. Same synthetic-only rule applies here.
+    """
+    if DEMO_MODE:
+        return _synthetic_adsb_snapshot(lat, lon)
     url = f"{AIRPLANES_LIVE}/aircraft/lat/{lat}/lon/{lon}/dist/{dist}"
     try:
         async with httpx.AsyncClient() as c:
@@ -773,6 +793,70 @@ def _synthetic_flight(real: str) -> str:
     return _signal_flight_map[key]
 
 
+# ── Demo-mode synthetic ADS-B/ACARS data (never real-time, any source) ------
+# 2026-08-27 (Opus blind review C-2, operator follow-up): the fix above
+# (skip the local receiver on DEMO_MODE) still fell through to REAL
+# real-time third-party sources -- airplanes.live for ADS-B,
+# acarsdrama.com/airframes.io for ACARS/VDL2/HFDL. Operator directive:
+# the demo instance must never touch anything real-time, local or
+# third-party -- only synthetic. These generators never make a network
+# call at all; every value is fabricated, using the same
+# _synthetic_tail/_synthetic_flight naming convention already used to
+# mask real identities elsewhere in this file, just with no real input
+# to mask.
+_FAKE_ADSB_HEX_POOL = ["dec0d1", "dec0d2", "dec0d3", "dec0d4", "dec0d5"]
+
+
+def _synthetic_adsb_snapshot(lat: float, lon: float) -> dict:
+    """Small, fixed set of fabricated aircraft slowly circling the given
+    center point -- renders sensibly on the demo map without ever
+    reflecting this box's real receiver or any live third-party feed."""
+    now = time.time()
+    aircraft = []
+    for i, hexcode in enumerate(_FAKE_ADSB_HEX_POOL):
+        angle = (now / 120.0 + i * (360.0 / len(_FAKE_ADSB_HEX_POOL))) % 360.0
+        rad = math.radians(angle)
+        seed = f"demo-adsb-{i}"
+        aircraft.append({
+            "hex": hexcode,
+            "flight": _synthetic_flight(seed),
+            "r": _synthetic_tail(seed),
+            "lat": round(lat + 0.6 * math.sin(rad), 4),
+            "lon": round(lon + 0.6 * math.cos(rad), 4),
+            "alt_baro": 28000 + i * 500,
+            "gs": 420 + i * 10,
+            "track": round(angle),
+            "type": "adsb_icao",
+        })
+    return {"now": now, "aircraft": aircraft, "messages": len(aircraft), "source": "synthetic"}
+
+
+_SYNTHETIC_SIGNAL_TEMPLATES = [
+    "POS RPT {flight}", "OUT {flight} GATE", "OFF {flight}",
+    "ON {flight}", "IN {flight} GATE",
+]
+
+
+def _synthetic_signal_messages(msg_type: str, count: int = 5) -> list:
+    """Small, fixed set of fabricated ACARS/VDL2/HFDL messages -- never
+    derived from any real local or third-party traffic."""
+    now = time.time()
+    out = []
+    for i in range(count):
+        seed = f"demo-signal-{msg_type}-{i}"
+        flight = _synthetic_flight(seed)
+        out.append({
+            "timestamp": now - i * 45,
+            "flight": flight,
+            "registration": _synthetic_tail(seed),
+            "callsign": flight,
+            "text": _SYNTHETIC_SIGNAL_TEMPLATES[i % len(_SYNTHETIC_SIGNAL_TEMPLATES)].format(flight=flight),
+            "station_id": "DC-METRO",
+            "msg_type": msg_type,
+        })
+    return out
+
+
 def _sanitize_signal_message(m: dict) -> dict:
     """Replace registration/callsign/flight with a per-process-consistent
     synthetic identity, scrub the same real substrings out of free-text
@@ -831,24 +915,34 @@ async def vdl2_messages(
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
 ):
-    """VDL2 messages. Local acarshub first; falls back to airframes.io."""
-    sanitize = _should_sanitize_signals(request)
+    """VDL2 messages. Local acarshub first; falls back to airframes.io.
+
+    2026-08-27 (Opus blind review C-2, operator follow-up): DEMO_MODE used
+    to still query real traffic -- first the local acarshub receiver, then
+    (after the first fix) real third-party sources (acarsdrama.com/
+    airframes.io) -- sanitizing only identifying TEXT fields afterward.
+    Operator directive: the demo instance must never touch anything
+    real-time, local or third-party -- only synthetic. Short-circuits to
+    _synthetic_signal_messages() with zero network calls.
+    """
+    if DEMO_MODE:
+        msgs = _synthetic_signal_messages("vdl2")
+        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+    # DEMO_MODE is guaranteed False past this point -- nothing here ever
+    # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("vdl2", since)
-        result = {"source": "local", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "local", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("VDL2 local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("VDLM2", since, lat, lon, dist)
-        result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("VDL2 acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("vdl2", since, lat, lon, dist)
-        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.warning("VDL2 all sources unavailable: %s", e)
     return {"source": "none", "messages": [], "count": 0}
@@ -863,24 +957,30 @@ async def acars_messages(
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
 ):
-    """ACARS messages. Local acarshub first; falls back to airframes.io."""
-    sanitize = _should_sanitize_signals(request)
+    """ACARS messages. Local acarshub first; falls back to airframes.io.
+
+    2026-08-27 (Opus blind review C-2, operator follow-up): same fix as
+    vdl2_messages() above -- the demo instance must never touch anything
+    real-time, local or third-party -- only synthetic.
+    """
+    if DEMO_MODE:
+        msgs = _synthetic_signal_messages("acars")
+        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+    # DEMO_MODE is guaranteed False past this point -- nothing here ever
+    # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("acars", since)
-        result = {"source": "local", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "local", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("ACARS local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("ACARS", since, lat, lon, dist)
-        result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("ACARS acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("acars", since, lat, lon, dist)
-        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.warning("ACARS all sources unavailable: %s", e)
     return {"source": "none", "messages": [], "count": 0}
@@ -910,25 +1010,30 @@ async def hfdl_messages(
     deliberately -- acarsdrama does carry real traffic for those, so a
     legitimately quiet window shouldn't burn an extra airframes.io call.
     """
-    sanitize = _should_sanitize_signals(request)
+    # 2026-08-27 (Opus blind review C-2, operator follow-up): same fix as
+    # vdl2_messages()/acars_messages() above -- the demo instance must
+    # never touch anything real-time, local or third-party -- only
+    # synthetic.
+    if DEMO_MODE:
+        msgs = _synthetic_signal_messages("hfdl")
+        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+    # DEMO_MODE is guaranteed False past this point -- nothing here ever
+    # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("hfdl", since)
-        result = {"source": "local", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "local", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.debug("HFDL local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("HFDL", since, lat, lon, dist)
         if msgs:
-            result = {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
-            return _sanitize_signal_payload(result) if sanitize else result
+            return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
         log.debug("HFDL acarsdrama returned 0 messages (Jumpseat carries no HFDL) -- trying airframes.io")
     except Exception as e:
         log.debug("HFDL acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("hfdl", since, lat, lon, dist)
-        result = {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
-        return _sanitize_signal_payload(result) if sanitize else result
+        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
     except Exception as e:
         log.warning("HFDL all sources unavailable: %s", e)
     hw = "hardware_pending" if not ACARSDRAMA_TOKEN and not AIRFRAMES_TOKEN else "unavailable"

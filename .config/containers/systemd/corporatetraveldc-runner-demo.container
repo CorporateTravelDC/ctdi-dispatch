@@ -106,7 +106,13 @@ Image=localhost/corporatetraveldc-runner:latest
 PublishPort=127.0.0.1:8005:8001
 PublishPort=100.x.x.x:8005:8001
 Environment=DISPATCH_BASE_URL=http://100.x.x.x:8004
-Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
+# 2026-08-27 (Opus blind review C-2): ULTRAFEEDER_URL/ACARSHUB_URL
+# deliberately NOT set here -- the demo runner must never touch local
+# ADS-B/ACARS data at all, not just have it sanitized after a real local
+# fetch (runner/main.py's DEMO_MODE gate on /api/adsb/local and the
+# vdl2/acars/hfdl handlers is the code-level enforcement; leaving these
+# unset here removes the config-level path back to real data too, so a
+# future DEMO_MODE regression like C-22 can't silently restore it).
 Environment=SSE_INTERVAL_SEC=30
 # 2026-08-26 fix (Opus blind review C-22): the password-gated demo login
 # was inert -- DEMO_MODE unset (defaults false) means the password gate,
