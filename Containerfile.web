@@ -43,9 +43,17 @@ ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# --forwarded-allow-ips tightened 2026-08-26 (Opus blind review M-8):
+# "*" meant uvicorn trusted X-Forwarded-For from ANY connecting peer, not
+# just nginx's own hop -- an attacker reaching this container directly
+# (bypassing nginx) could forge the audit-log remote_addr for every admin
+# audit row. Same pasta-networking topology as the runner (Containerfile.
+# runner), where 127.0.0.1 was already empirically verified as what
+# nginx's proxied connections actually look like to a container on this
+# box's network setup.
 CMD ["uvicorn", "web.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--proxy-headers", \
-     "--forwarded-allow-ips=*", \
+     "--forwarded-allow-ips=127.0.0.1", \
      "--log-level", "info"]

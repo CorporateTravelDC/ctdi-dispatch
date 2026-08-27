@@ -3051,6 +3051,48 @@ def faa_ladd_count() -> int:
         return row[0] if row else 0
 
 
+def _safe_mark_and_sweep(table: str, cutoff_epoch: float) -> int:
+    """Shared guard for every mark-and-sweep registry prune (delete rows not
+    touched since cutoff_epoch, meaning they dropped out of the latest
+    full-reimport). Added 2026-08-26 (Opus blind review C-7, same bug class
+    as C-31's faa_upsert_ladd() empty-replace guard, just a different shape
+    of it): the per-caller comments claiming the try/except around the
+    upsert loop already "guards" this were wrong -- an exception-free run
+    that upserts ZERO rows (a 200-OK non-CSV response, an empty-but-valid
+    parse, a silently-truncated body) never raises, so cutoff_epoch predates
+    every existing row and this deleted the ENTIRE table -- confirmed live
+    for both faa_aircraft_registry (316,222 rows) and
+    opensky_aircraft_registry (519,991 rows). Building the guard here once,
+    inside the sweep itself, means every current and future caller gets it
+    for free instead of each fetcher needing to remember its own
+    total_upserted-before-sweeping check (which is exactly what was missing
+    here and is easy to forget again).
+
+    Refuses the delete if it would remove every row in a non-empty table --
+    that specific shape (survivors=0, existing>0) is what "this run upserted
+    nothing" looks like, and a full-table wipe from a stale-data prune is
+    never the intended outcome of an ordinary sweep."""
+    with conn() as c:
+        existing = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if existing == 0:
+            return 0
+        survivors = c.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE updated_at >= ?", (cutoff_epoch,)
+        ).fetchone()[0]
+        if survivors == 0:
+            log.error(
+                "%s: refusing mark-and-sweep -- this run's cutoff predates "
+                "ALL %d existing rows, meaning the upsert step touched "
+                "nothing (likely a bad/empty upstream response), not that "
+                "every row genuinely dropped out of the source. Leaving the "
+                "table untouched.",
+                table, existing,
+            )
+            return 0
+        cur = c.execute(f"DELETE FROM {table} WHERE updated_at < ?", (cutoff_epoch,))
+        return cur.rowcount
+
+
 def faa_registry_sweep_removed(cutoff_epoch: float) -> int:
     """Delete rows not touched since cutoff_epoch -- i.e. aircraft that no
     longer appear in the source file (deregistered/removed). cutoff_epoch
@@ -3058,12 +3100,9 @@ def faa_registry_sweep_removed(cutoff_epoch: float) -> int:
     during the run has updated_at >= cutoff_epoch and survives; anything
     older is from a prior run and genuinely missing from this one.
     Added 2026-07-21 -- the upsert-only import never pruned stale records
-    before this."""
-    with conn() as c:
-        cur = c.execute(
-            "DELETE FROM faa_aircraft_registry WHERE updated_at < ?", (cutoff_epoch,)
-        )
-        return cur.rowcount
+    before this. See _safe_mark_and_sweep() for the 2026-08-26 empty-run
+    guard shared with opensky_registry_sweep_removed()."""
+    return _safe_mark_and_sweep("faa_aircraft_registry", cutoff_epoch)
 
 
 def faa_lookup_by_n_number(n_number: str) -> dict | None:
@@ -3650,12 +3689,9 @@ def opensky_registry_count() -> int:
 
 def opensky_registry_sweep_removed(cutoff_epoch: float) -> int:
     """Delete OpenSky rows not touched since cutoff_epoch -- same mark-and-sweep
-    pattern as faa_registry_sweep_removed(), same reasoning."""
-    with conn() as c:
-        cur = c.execute(
-            "DELETE FROM opensky_aircraft_registry WHERE updated_at < ?", (cutoff_epoch,)
-        )
-        return cur.rowcount
+    pattern as faa_registry_sweep_removed(), same reasoning, same shared
+    empty-run guard (_safe_mark_and_sweep())."""
+    return _safe_mark_and_sweep("opensky_aircraft_registry", cutoff_epoch)
 
 
 def update_watchlist_oooi_phase(entry_id: str, phase: str, updated_at: str) -> None:
@@ -3917,6 +3953,19 @@ def get_flight_plan_by_flight_num(callsign_or_number: str,
     given (recommended -- flight numbers get reused across carriers and
     routes on the same day, e.g. 4044 was seen as SWA/ENY/ASH on 2026-07-28
     alone), but is optional since callers may not have it yet.
+
+    2026-08-27: flight_events.origin is stored in ICAO form (4-letter,
+    e.g. "KPHL" -- confirmed against real FDPS-ingested rows), but callers
+    -- add_flight_watchlist's own body.origin, and any human typing a
+    watchlist entry by hand -- commonly pass the IATA 3-letter form
+    ("PHL") instead. The exact-match WHERE clause silently found nothing
+    for every IATA-form caller: confirmed live,
+    get_flight_plan_by_flight_num("5265", origin="PHL") returned None
+    while origin="KPHL" found a real, live-tracked JIA5265 plan for the
+    identical flight. Every origin value seen in this system so far is
+    CONUS ICAO (K-prefixed) -- widen a bare 3-letter code to also try the
+    K-prefixed form (and the reverse, in case a caller passes ICAO
+    already but a future non-US origin needs the 3-letter form).
     """
     import re
     m = re.match(r"^[A-Za-z]*(\d+[A-Za-z]?)$", callsign_or_number.strip())
@@ -3924,14 +3973,24 @@ def get_flight_plan_by_flight_num(callsign_or_number: str,
         return None
     flight_num = m.group(1)
 
+    origin_candidates: set[str] | None = None
+    if origin:
+        origin_clean = origin.strip().upper()
+        origin_candidates = {origin_clean}
+        if len(origin_clean) == 3 and origin_clean.isalpha():
+            origin_candidates.add("K" + origin_clean)
+        elif len(origin_clean) == 4 and origin_clean.startswith("K") and origin_clean[1:].isalpha():
+            origin_candidates.add(origin_clean[1:])
+
     with conn() as c:
-        if origin:
-            row = c.execute("""
+        if origin_candidates:
+            placeholders = ",".join("?" for _ in origin_candidates)
+            row = c.execute(f"""
                 SELECT * FROM flight_events
-                WHERE flight_num = ? AND origin = ?
+                WHERE flight_num = ? AND origin IN ({placeholders})
                 ORDER BY (status != 'cancelled') DESC, updated_at DESC
                 LIMIT 1
-            """, (flight_num, origin.strip().upper())).fetchone()
+            """, (flight_num, *origin_candidates)).fetchone()
         else:
             row = c.execute("""
                 SELECT * FROM flight_events

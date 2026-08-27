@@ -9,6 +9,7 @@ All notification pushes go through here so that:
 import logging
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
 import requests
 
@@ -76,6 +77,30 @@ TOPIC_CLICK: dict[str, str] = {
 _DEFAULT_CLICK = f"{RUNNER_BASE}/"
 
 
+def _safe_click_url(url: str, fallback: str) -> str:
+    """2026-08-26 (Opus blind review C-9): several callers (osint_monitor.py
+    the one actually exploited in the audit, but any caller passing a
+    third-party-sourced URL through as click_url has the identical
+    exposure) pass an attacker-influenced URL straight through as the tap-
+    through destination with no validation -- a malicious/compromised RSS
+    entry, or any Google-News-indexed page an attacker controls, could set
+    click_url to a javascript:/data: URI and have it delivered unchanged on
+    a priority-4/5 push to the operator's phone. Enforcing this once here,
+    at the one place every caller's click_url actually reaches the wire,
+    protects every current and future caller without each one needing its
+    own scheme check. Only http/https survive; anything else (including an
+    unparseable value) falls back to the safe per-topic default."""
+    try:
+        scheme = urlsplit(url).scheme.lower()
+    except ValueError:
+        scheme = ""
+    if scheme in ("http", "https"):
+        return url
+    log.warning("ntfy: refusing unsafe click_url scheme %r -- falling back to %s",
+                scheme or url, fallback)
+    return fallback
+
+
 def send(
     topic: str,
     message: str,
@@ -110,7 +135,8 @@ def send(
     base  = config.ntfy_url()
     token = config.ntfy_token().split(":")[0]   # strip "token:label" suffix
     url   = f"{base}/{topic}"
-    dest  = click_url or TOPIC_CLICK.get(topic, _DEFAULT_CLICK)
+    topic_default = TOPIC_CLICK.get(topic, _DEFAULT_CLICK)
+    dest  = _safe_click_url(click_url, topic_default) if click_url else topic_default
 
     headers = {
         "Content-Type": "text/plain; charset=utf-8",

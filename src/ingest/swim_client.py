@@ -414,11 +414,25 @@ class _NmsFeedSession:
         # any on-path attacker could present ANY certificate and this code
         # would accept it and hand over real auth credentials. Restored to
         # real validation using the container's default trust store.
+        #
+        # FOLLOW-UP FIX 2026-08-26: the above fix alone silently broke every
+        # SWIM push feed for 6+ hours (SOLCLIENT_SUBCODE_FAILED_LOADING_TRUSTSTORE
+        # on every reconnect) from the moment this code first actually ran in
+        # a rebuilt container -- with_certificate_validation() needs an
+        # explicit solace.messaging.tls.trust-store-path; the native
+        # solclient library does not share Python's own OpenSSL default-path
+        # resolution, so leaving it unset means it never finds a trust store
+        # at all, unlike the `openssl s_client`/Python-ssl checks that
+        # "confirmed" this worked. Pointed explicitly at the same CA
+        # directory Python's own ssl module resolves to.
+        import ssl as _ssl
+        _trust_store_path = _ssl.get_default_verify_paths().openssl_capath
         props = {
             "solace.messaging.transport.host": self.cfg.host,
             "solace.messaging.service.vpn-name": self.cfg.vpn,
             "solace.messaging.authentication.scheme.basic.username": self.cfg.username,
             "solace.messaging.authentication.scheme.basic.password": self.cfg.password,
+            "solace.messaging.tls.trust-store-path": _trust_store_path,
             "SOLCLIENT_SESSION_PROP_CONNECT_TIMEOUT_MS": "15000",
             "SOLCLIENT_SESSION_PROP_CONNECT_RETRIES": "0",
             "SOLCLIENT_SESSION_PROP_RECONNECT_RETRIES": "0",

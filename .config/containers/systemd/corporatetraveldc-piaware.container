@@ -12,11 +12,12 @@ PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-piaware:latest
 ContainerName=corporatetraveldc-piaware
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/piaware-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-# FEEDER_ID / LAT / LONG / ALT_M come from dispatch-secrets.env
-# (EnvironmentFile= above) -- never hardcoded here, see CLAUDE.md.
+# FEEDER_ID / LAT / LONG / ALT_M come from piaware-secrets.env
+# (EnvironmentFile= above), scoped to this container only since 2026-08-26
+# (Opus blind review C-4) -- never hardcoded here, see CLAUDE.md.
 AutoUpdate=registry
 
 [Service]

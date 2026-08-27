@@ -12,11 +12,12 @@ PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-airnavradar:latest
 ContainerName=corporatetraveldc-airnavradar
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/airnavradar-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-# SHARING_KEY / LAT / LONG / ALT come from dispatch-secrets.env
-# (EnvironmentFile= above) -- never hardcoded here, see CLAUDE.md.
+# SHARING_KEY / LAT / LONG / ALT come from airnavradar-secrets.env
+# (EnvironmentFile= above), scoped to this container only since 2026-08-26
+# (Opus blind review C-4) -- never hardcoded here, see CLAUDE.md.
 AutoUpdate=registry
 
 [Service]

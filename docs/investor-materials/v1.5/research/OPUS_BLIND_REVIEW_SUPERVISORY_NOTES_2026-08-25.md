@@ -56,7 +56,7 @@ Live on :8001 (`GET /api/whoami`):
 
 ```
 (no header)                  -> {"tailnet":true}
-X-Forwarded-For: 10.0.0.5    -> {"tailnet":true}
+X-Forwarded-For: 10.x.x.x    -> {"tailnet":true}
 X-Forwarded-For: 8.8.8.8     -> {"tailnet":false}
 CF-Connecting-IP: 8.8.8.8    -> {"tailnet":false}
 CF-Connecting-IP: 100.64.1.1 -> {"tailnet":true}

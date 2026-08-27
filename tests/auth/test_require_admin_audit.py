@@ -33,7 +33,7 @@ def _make_request(method: str = "GET", body: bytes = b"") -> Request:
         "path": "/admin/whatever",
         "headers": [],
         "query_string": b"",
-        "client": ("10.0.0.1", 12345),
+        "client": ("10.x.x.x", 12345),
     }
     return Request(scope, receive=receive)
 

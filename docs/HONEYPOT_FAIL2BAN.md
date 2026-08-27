@@ -172,7 +172,7 @@ one command is the gap in this re-verification, not the config state.
 Jail parameters read straight off
 `jail.d/nginx-honeypot-corporatetraveldc.conf` and confirmed to match this
 doc: `maxretry=1`, `findtime=3600`, `bantime=604800` (1 week), `port=http,https`,
-`ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10 10.0.0.0/24`.
+`ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10 10.x.x.x/24`.
 
 <details><summary>History — how this was blocked, and what unblocked it (2026-08-09)</summary>
 

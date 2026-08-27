@@ -131,8 +131,8 @@ cleaned by it. Flagged for the operator.
 Scope: the follow-on commit `4c0fe5f` ("Allowlist illustrative test IPs
 (C-2 XFF-spoofing examples) in scrub-public-tree.py") — a 12-line
 addition to `ALLOWED_IPV4` in `scripts/scrub-public-tree.py` (five
-illustrative IPs from the two Opus review reports: `10.0.0.5`,
-`192.168.1.1`, `172.16.0.1`, `169.254.169.254`, `100.64.1.1`, each
+illustrative IPs from the two Opus review reports: `10.x.x.x`,
+`192.168.x.x`, `172.x.x.x`, `169.254.169.254`, `100.64.1.1`, each
 justified in an in-file comment). Everything in the first pass above was
 independently spot-re-verified where cheap, not just trusted.
 
@@ -145,7 +145,7 @@ generic ("public-mirror discipline") and still accurate;
 `scripts/pre-commit-README.md` covers the pre-commit/pre-push hooks, not
 the scrubber, and is untouched by this change. The allowlist entries are
 self-documented in-file, consistent with the two pre-existing C-2
-example entries (`10.9.9.9`, `10.0.0.1`) allowlisted the same way.
+example entries (`10.x.x.x`, `10.x.x.x`) allowlisted the same way.
 
 ## Live integrity finding: manifest not re-signed after 4c0fe5f
 
@@ -536,7 +536,7 @@ by design, CLAUDE.md is the fix-status tracker.
 - **Hook sync** — `scripts/pre-push` and `scripts/pre-commit` still
   byte-identical to their `.git/hooks` copies.
 - **Renamed fixture values** — no doc anywhere references the old
-  `10.0.0.9` test IP; the OID rename was covered in the fourth pass.
+  `10.x.x.x` test IP; the OID rename was covered in the fourth pass.
 
 ## Deployment gap: unchanged — and C-30 is exempt from it
 
@@ -1207,7 +1207,7 @@ pass 8 predicted.
 
 At check start the index carried **staged** changes from another
 session: `scripts/scrub-public-tree.py` (+2 `ALLOWED_IPV4` allowlist
-entries, `2.49.0.1` and `10.0.0.9`, so *this file's own* pass-3 prose
+entries, `2.49.0.1` and `10.x.x.x`, so *this file's own* pass-3 prose
 quoting those old fixture values passes the scrubber) and a re-signed
 `MANIFEST.sha256`/`.asc` covering it. Mid-check that session committed
 it as `22a66a6` (23:59:59 EDT) — HEAD moved under this pass, which is

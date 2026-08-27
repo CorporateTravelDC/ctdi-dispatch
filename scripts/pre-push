@@ -40,18 +40,40 @@ remote_url="${2:-}"
 # hook argument) -- and against $1 too, since git sets $1 equal to the URL
 # when no matching named remote is used at all.
 public_remote_url="$(git remote get-url public 2>/dev/null || true)"
-# 2026-08-26 fix: push-public.sh's OWN push of the already-scrubbed commit
-# is exactly the URL-based shape the check above exists to catch (it must
-# push via the raw resolved URL, never the named "public" remote, by
-# design -- see that script's own comment). CTDI_PUSH_PUBLIC_INTERNAL is a
-# narrow escape hatch set ONLY by that one call site, immediately before
-# its own git push, for content that has already gone through
-# scrub_tree(). It does not skip the credential-pattern scanner below --
-# only this intercept.
+# CORRECTED 2026-08-26 (Opus blind review H-6): the URL comparison used
+# to be plain string equality against whatever spelling `git remote
+# get-url public` happened to return -- but git accepts (and this box's
+# own history shows real use of) multiple equivalent spellings of the
+# same destination that never string-match each other: with/without a
+# trailing ".git", with/without a trailing slash, the SSH shorthand
+# (git@github.com:Org/repo.git) vs the HTTPS form
+# (https://github.com/Org/repo.git), and host-case differences. A push
+# to any of the 3 spellings that don't happen to equal the configured
+# remote's exact string sailed straight through unscrubbed. Normalize
+# both sides the same way before comparing: lowercase, strip a trailing
+# "/" then a trailing ".git", and rewrite the SSH shorthand form to the
+# same "host/path" shape the HTTPS form already has.
+_normalize_git_url() {
+    local u="$1"
+    u="${u,,}"                                  # lowercase
+    u="${u%/}"                                   # strip one trailing slash
+    u="${u%.git}"                                 # strip trailing .git
+    if [[ "$u" =~ ^git@([^:]+):(.+)$ ]]; then
+        u="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    else
+        u="${u#https://}"
+        u="${u#http://}"
+        u="${u#ssh://git@}"
+    fi
+    printf '%s' "$u"
+}
+norm_public_url="$(_normalize_git_url "$public_remote_url")"
+norm_remote="$(_normalize_git_url "$remote")"
+norm_remote_url="$(_normalize_git_url "$remote_url")"
 if [[ -z "${CTDI_PUSH_PUBLIC_INTERNAL:-}" ]] && \
    { [[ "$remote" == "public" ]] || \
-     { [[ -n "$public_remote_url" ]] && \
-       { [[ "$remote_url" == "$public_remote_url" ]] || [[ "$remote" == "$public_remote_url" ]]; }; }; }; then
+     { [[ -n "$norm_public_url" ]] && \
+       { [[ "$norm_remote_url" == "$norm_public_url" ]] || [[ "$norm_remote" == "$norm_public_url" ]]; }; }; }; then
     echo ""
     echo "[pre-push] Direct push to public mirror intercepted."
     echo "           Use the wrapper instead — it auto-injects the dispatch-secrets.env"
@@ -94,10 +116,20 @@ while read local_ref local_sha remote_ref remote_sha; do
     fi
 
     # Scan new commits being pushed for credential patterns
+    # CORRECTED 2026-08-27, same class of fix as scripts/pre-commit same
+    # day: sk_adjs_/sk-ant-api/github_pat_ used to be bare prefixes with
+    # no required characters after them -- unlike ghp_/ghs_ below, which
+    # already require at least one token char to follow. A real
+    # security-report doc that merely NAMES the credential type ("zero
+    # GitHub `ghp_`/`github_pat_` tokens found") tripped this every time,
+    # with no actual leaked value present at all -- confirmed live, the
+    # match was inside a doc's own scan-summary prose. Now requires a
+    # minimum run of real token-shaped characters after each prefix, same
+    # discipline ghp_/ghs_ already had.
     PATTERNS=(
-        "sk_adjs_"
-        "sk-ant-api"
-        "github_pat_"
+        "sk_adjs_[A-Za-z0-9_\-]{10,}"
+        "sk-ant-api[A-Za-z0-9_\-]{10,}"
+        "github_pat_[A-Za-z0-9_]{20,}"
         "ghp_[A-Za-z0-9]"
         "ghs_[A-Za-z0-9]"
         "Bearer [A-Za-z0-9_\-\.]{20,}"
@@ -108,14 +140,34 @@ while read local_ref local_sha remote_ref remote_sha; do
         DIFF=$(git diff "${SCAN_RANGE}" --unified=0 2>/dev/null || true)
 
         for pattern in "${PATTERNS[@]}"; do
-            # 2026-08-24: same two exemptions added to scripts/pre-commit --
-            # a literal "..." means a truncated-for-display value (no real
-            # bearer token contains three literal dots), and "deadbeef" is
-            # a universally-recognized placeholder hex pattern.
-            matches=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
-                      grep -E "$pattern" | grep -v "CHANGE_ME" | grep -v "YOUR_" | \
-                      grep -v "example" | grep -v "placeholder" | grep -v "REDACTED" | \
-                      grep -v "<.*>" | grep -v "\.\.\." | grep -v -i "deadbeef" || true)
+            # CORRECTED 2026-08-26 (Opus blind review H-6): the exemptions
+            # below (CHANGE_ME/example/placeholder/REDACTED/<...>/.../
+            # deadbeef) used to be `grep -v` over the WHOLE matched line --
+            # a genuine leaked token survives untouched as long as ANY word
+            # in that placeholder list appears ANYWHERE else on the same
+            # line, e.g. a real `ghp_...` token followed by a trailing
+            # "# example" comment, or on the same diff line as an unrelated
+            # "<some other tag>". Confirmed live via the exact hook
+            # pipeline. Now scoped to a ~20-char window immediately around
+            # the actual match, not the whole line -- a real token 40+
+            # chars from the word "example" is no longer exempted, while
+            # genuine inline illustrative values (the placeholder text
+            # directly adjacent to the fake token) still are.
+            candidates=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
+                         grep -E "$pattern" || true)
+            matches=""
+            if [[ -n "$candidates" ]]; then
+                while IFS= read -r cand_line; do
+                    [[ -z "$cand_line" ]] && continue
+                    window=$(echo "$cand_line" | grep -oE ".{0,20}(${pattern}).{0,20}" | head -1)
+                    [[ -z "$window" ]] && window="$cand_line"
+                    if ! echo "$window" | grep -qE "CHANGE_ME|YOUR_|example|placeholder|REDACTED|<[^>]*>|\.\.\."; then
+                        if ! echo "$window" | grep -qi "deadbeef"; then
+                            matches="${matches}${cand_line}"$'\n'
+                        fi
+                    fi
+                done <<< "$candidates"
+            fi
             if [[ -n "$matches" ]]; then
                 echo ""
                 echo "[FAIL] pre-push: credential pattern detected — push rejected"
@@ -135,13 +187,26 @@ while read local_ref local_sha remote_ref remote_sha; do
         # scripts/pre-commit: bare filesystem paths aren't secrets, and a
         # variable name containing FINGERPRINT denotes a GPG key fingerprint
         # (meant to be public by design -- see security/signing.env).
-        env_matches=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
+        # CORRECTED 2026-08-26 (H-6, same class as the pattern loop above):
+        # exemptions now checked only against the matched KEY=VALUE
+        # assignment itself (first ~80 chars after the match start), not
+        # the full line -- a real secret followed by a trailing "# example"
+        # comment on the same line no longer escapes detection.
+        env_candidates=$(echo "$DIFF" | grep -E "^\+" 2>/dev/null | grep -v "^+++" 2>/dev/null | \
             grep -v "^+\s*#" 2>/dev/null | \
-            grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" 2>/dev/null | \
-            grep -v "CHANGE_ME" | grep -v "YOUR_" | grep -v "example" | \
-            grep -v "localhost" | grep -v "127\.0\.0" | \
-            grep -v "http" | grep -v "REDACTED" | \
-            grep -Ev "^\+[A-Z0-9_]*=/" | grep -Ev "FINGERPRINT" || true)
+            grep -E "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{28,}" 2>/dev/null || true)
+        env_matches=""
+        if [[ -n "$env_candidates" ]]; then
+            while IFS= read -r cand_line; do
+                [[ -z "$cand_line" ]] && continue
+                assignment=$(echo "$cand_line" | grep -oE "^\+[A-Z][A-Z0-9_]{3,}=[A-Za-z0-9/+]{0,80}" | head -1)
+                [[ -z "$assignment" ]] && assignment="$cand_line"
+                if echo "$assignment" | grep -qE "^\+[A-Z0-9_]*=/"; then continue; fi
+                if echo "$assignment" | grep -qE "FINGERPRINT"; then continue; fi
+                if echo "$assignment" | grep -qE "CHANGE_ME|YOUR_|example|localhost|127\.0\.0|http|REDACTED"; then continue; fi
+                env_matches="${env_matches}${cand_line}"$'\n'
+            done <<< "$env_candidates"
+        fi
         if [[ -n "$env_matches" ]]; then
             echo ""
             echo "[FAIL] pre-push: possible raw credential in env assignment — push rejected"

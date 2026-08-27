@@ -38,7 +38,13 @@ DISPATCH_BASE_URL     = os.environ.get("DISPATCH_BASE_URL",       "http://100.x.
 DISPATCH_ADMIN_TOKEN  = os.environ.get("DISPATCH_ADMIN_TOKEN",    "")
 
 AIRFRAMES_API_BASE    = os.environ.get("AIRFRAMES_API_BASE",      "https://api.airframes.io/v1")
-AIRFRAMES_API_KEY     = os.environ.get("AIRFRAMES_API_KEY",       "")
+# CORRECTED 2026-08-26 (found in the same second-brain vault note as the
+# 404 fix above): this read AIRFRAMES_API_KEY, a name that doesn't exist
+# anywhere in dispatch-secrets.env (0 bytes -- always empty), while the
+# real credential common/acars.py and runner/main.py both actually use is
+# AIRFRAMES_TOKEN (68 bytes, present). This watcher has been polling
+# airframes.io completely unauthenticated since it was written.
+AIRFRAMES_API_KEY     = os.environ.get("AIRFRAMES_TOKEN",         "")
 POLL_INTERVAL         = int(os.environ.get("POLL_INTERVAL",       "60"))
 
 JUMPSEAT_API_BASE     = os.environ.get("JUMPSEAT_API_BASE",       "https://api.jumpseat.acarsdrama.com/v1")
@@ -352,9 +358,20 @@ def rest_poller_thread():
         since     = last_poll
         last_poll = datetime.now(timezone.utc)
 
+        # CORRECTED 2026-08-26 (an earlier same-day fix here removed the
+        # `limit` param based on a confounded manual test -- limit was
+        # never the driver; reverted, `limit` is harmless). The real
+        # contract, reproduced directly against the live API: it returns
+        # **404 "Cannot GET", not 200 with an empty list**, whenever the
+        # `since` window contains zero matching messages -- a narrow
+        # ~60s window (this poller's own interval) hits that empty case
+        # constantly on a low-traffic private feed. Treating 404 here as
+        # "no new messages" instead of a failure is the actual fix (this
+        # exact root cause was already documented in the second-brain
+        # vault from an 08-23 pass and was missed by not searching it
+        # first -- see CLAUDE.md's own note on this).
         params = {
             "since": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "limit": 500,
         }
         try:
             resp = SESSION.get(
@@ -375,6 +392,10 @@ def rest_poller_thread():
                             MSG_QUEUE.put_nowait(msg)
                         except queue.Full:
                             pass
+            elif resp.status_code == 404:
+                log.debug("REST airframes: 0 msg(s) since %s (API 404s an "
+                          "empty window instead of returning [])",
+                          since.isoformat())
             elif resp.status_code == 401:
                 log.warning("REST airframes: 401 — API key required, thread idle")
                 time.sleep(3600)
