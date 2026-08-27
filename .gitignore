@@ -90,3 +90,11 @@ dispatch-secrets.env
 # config/demo-secrets.env.example.
 *demo-secrets.env
 **/*demo-secrets.env
+# Scoped per-third-party-container secrets (2026-08-26, Opus blind review
+# C-4) -- same convention extended to every non-CTDI image that used to
+# load the full dispatch-secrets.env: ntfy-secrets.env,
+# ultrafeeder-secrets.env, piaware-secrets.env, planefinder-secrets.env,
+# airnavradar-secrets.env, fr24feed-secrets.env. See the matching
+# config/*-secrets.env.example templates.
+*-secrets.env
+**/*-secrets.env

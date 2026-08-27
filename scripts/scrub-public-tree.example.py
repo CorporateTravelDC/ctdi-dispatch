@@ -65,7 +65,7 @@ SUBSTITUTIONS = {
     b"Real Vendor Name LLC": b"[vendor partner]",
 
     # Real internal IP or VPN-assigned address
-    b"10.20.30.40": b"10.x.x.x",
+    b"10.x.x.x": b"10.x.x.x",
 
     # External tunnel/ingress UUID (e.g. Cloudflare Tunnel)
     b"22222222-2222-2222-2222-222222222222": b"00000000-0000-0000-0000-000000000000",
@@ -110,7 +110,7 @@ ALLOWED_IPV4 = {
     # RFC1918 / CGNAT range bases used in code/docs to describe or match a
     # *range*, not a specific device -- not identifying. Adjust to whatever
     # ranges your own repo's code/docs actually reference.
-    b"10.0.0.0", b"172.16.0.0", b"192.168.0.0", b"100.64.0.0",
+    b"10.x.x.x", b"172.x.x.x", b"192.168.x.x", b"100.64.0.0",
 }
 
 # File extensions that are binary/compressed -- byte-level substitution or
@@ -130,7 +130,7 @@ FORBIDDEN_LITERALS = [
     b"yourrealdomain.com",
     b"real-tailnet-name",
     b"22222222-2222-2222-2222-222222222222",
-    b"10.20.30.40",
+    b"10.x.x.x",
 ]
 
 # Binary files that HAVE been manually reviewed for sensitive content and are

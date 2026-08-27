@@ -463,6 +463,65 @@ def test_sweep_does_not_remove_permanent_expired_by_time():
         assert len(db.get_watchlist_entries()) == 1
 
 
+def test_resolve_flight_identity_callsign_shaped_hex_collision_uses_callsign():
+    """2026-08-27: "AA5265" (American 5265) lowercases to "aa5265", which is
+    ALSO a syntactically valid 6-char Mode-S hex address by pure coincidence
+    -- confirmed live, this hex-locked a real watchlist entry to whatever
+    unrelated airframe actually carries that Mode-S address instead of
+    resolving American 5265 itself. A flight identifier with the standard
+    callsign shape (2-3 leading letters, then digits) must resolve via the
+    callsign endpoint, never the bare-hex fast path, even when it happens
+    to also be valid hex."""
+    with _IsolatedDB():
+        from shared.watchlist import resolve_flight_identity
+
+        entry = _make_transient_flight(identifier="AA5265")
+        entry["hex_id"] = None
+
+        fake_ac = {"hex": "a12345", "r": "N123AA"}
+        with patch("shared.watchlist.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"ac": [fake_ac]}
+            mock_resp.raise_for_status.return_value = None
+            mock_get.return_value = mock_resp
+
+            resolve_flight_identity(entry, "AA5265", source="test")
+
+            called_url = mock_get.call_args[0][0]
+            assert "/v2/callsign/AA5265" in called_url, (
+                f"expected callsign lookup, got: {called_url}"
+            )
+            assert "/v2/hex/aa5265" not in called_url
+
+
+def test_resolve_flight_identity_genuine_hex_still_uses_hex_path():
+    """Sanity check for the same fix: a bare identifier that is hex-shaped
+    but does NOT match the callsign pattern (no 2-3 leading letters) must
+    still resolve via the hex fast path -- the fix narrows the collision
+    case only, it doesn't disable bare-hex identifiers entirely."""
+    with _IsolatedDB():
+        from shared.watchlist import resolve_flight_identity
+
+        entry = _make_transient_flight(identifier="A835F2")
+        entry["hex_id"] = None
+
+        fake_ac = {"hex": "a835f2", "r": "N999ZZ"}
+        with patch("shared.watchlist.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"ac": [fake_ac]}
+            mock_resp.raise_for_status.return_value = None
+            mock_get.return_value = mock_resp
+
+            resolve_flight_identity(entry, "A835F2", source="test")
+
+            called_url = mock_get.call_args[0][0]
+            assert "/v2/hex/a835f2" in called_url, (
+                f"expected hex lookup, got: {called_url}"
+            )
+
+
 if __name__ == "__main__":
     # Quick smoke-run without pytest.
     import traceback
@@ -473,6 +532,8 @@ if __name__ == "__main__":
         test_watchlist_event_hit_deduplication,
         test_watchlist_event_hit_different_types_not_deduped,
         test_sweep_does_not_remove_permanent_expired_by_time,
+        test_resolve_flight_identity_callsign_shaped_hex_collision_uses_callsign,
+        test_resolve_flight_identity_genuine_hex_still_uses_hex_path,
     ]
     for fn in tests:
         try:

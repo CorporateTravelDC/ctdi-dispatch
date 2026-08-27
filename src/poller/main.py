@@ -1309,6 +1309,56 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
     try:
         plan = db.get_flight_plan_by_callsign(ident)
         if not plan:
+            # 2026-08-27: ident's marketing carrier (e.g. "AAL") often never
+            # appears in FDPS at all for codeshare/regional-operated flights
+            # -- see get_flight_plan_by_flight_num's docstring (the
+            # UAL4044/ASH4044 case). add_flight_watchlist's own add-time
+            # flow already has a fallback for this; this PERIODIC recheck
+            # never did, so any such entry's FDPS status silently never
+            # updated after the initial add. Prefer a CONFIRMED
+            # operating-carrier mapping (codeshare_map) over a blind
+            # ignore-the-carrier flight_num+origin scan every tick --
+            # flight numbers are reused across entirely unrelated
+            # carriers/routes on the same day (confirmed live: bare
+            # flight_num 5265 alone matched CAL/SKW/EDV/JIA -- four
+            # different routes -- the same day), so guessing by number
+            # alone on every tick risks locking onto the wrong flight.
+            # Only fall back to the broad origin-scoped discovery scan when
+            # no mapping exists yet; a successful fallback hit both answers
+            # this tick and seeds codeshare_map (same shape
+            # add_flight_watchlist already writes) so future ticks for this
+            # marketing identifier go straight to the precise path.
+            import re
+            m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
+            if m:
+                marketing_carrier, marketing_num = m.group(1).upper(), m.group(2)
+                mappings = db.get_codeshare_mapping_by_marketing(marketing_carrier, marketing_num)
+                if mappings:
+                    top = mappings[0]
+                    op_carrier = top.get("operating_carrier")
+                    op_num = top.get("operating_flight_num") or marketing_num
+                    if op_carrier:
+                        plan = db.get_flight_plan_by_callsign(f"{op_carrier}{op_num}")
+                if not plan:
+                    fallback_plan = db.get_flight_plan_by_flight_num(
+                        marketing_num, origin=entry.get("origin"))
+                    if fallback_plan:
+                        operating_carrier = (fallback_plan.get("airline") or "").upper() or None
+                        if operating_carrier and operating_carrier != marketing_carrier:
+                            try:
+                                db.upsert_codeshare_mapping(
+                                    marketing_carrier=marketing_carrier,
+                                    marketing_flight_num=marketing_num,
+                                    operating_carrier=operating_carrier,
+                                    operating_flight_num=fallback_plan.get("flight_num"),
+                                    origin=fallback_plan.get("origin"),
+                                    destination=fallback_plan.get("destination"),
+                                    source="fdps_periodic_recheck_fallback",
+                                )
+                            except Exception as e:
+                                log.debug("codeshare_map upsert %s: %s", ident, e)
+                        plan = fallback_plan
+        if not plan:
             return
         status = (plan.get("status") or "").lower()
         dest = plan.get("destination")

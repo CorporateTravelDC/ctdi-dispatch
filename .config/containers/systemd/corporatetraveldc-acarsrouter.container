@@ -11,7 +11,10 @@ Image=ghcr.io/sdr-enthusiasts/acars_router:latest
 ContainerName=corporatetraveldc-acarsrouter
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-08-26 (Opus blind review C-4): dispatch-secrets.env intentionally
+# NOT loaded here -- third-party code parsing untrusted network input,
+# never referenced any value from that file, used to get the full ~95-key
+# secrets set for nothing it actually uses.
 # Inbound
 Environment=AR_LISTEN_UDP_ACARS=5550
 Environment=AR_RECV_ZMQ_VDLM2=corporatetraveldc-dumpvdl2:45555

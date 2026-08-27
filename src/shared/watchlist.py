@@ -263,7 +263,20 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
     resolved_via_hex = False
     callsign_live_confirmed = False
 
-    if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()):
+    # 2026-08-27: a 6-character flight identifier composed only of letters
+    # a-f and digits (IATA/ICAO carrier code + flight number, e.g. "AA5265")
+    # is ALSO a syntactically valid Mode-S hex address by pure coincidence
+    # -- confirmed live, AA5265 (American 5265, PHL-DCA) got hex-locked to
+    # whatever unrelated airframe actually carries Mode-S address AA5265,
+    # because the bare-hex fast path below fired before callsign resolution
+    # ever got a chance to run. Exclude identifiers with the standard
+    # callsign shape (2-3 leading letters, then 1-4 digits, optional
+    # trailing letter) from the bare-hex fast path -- a genuine bare-hex
+    # identifier (entered directly with no known flight number) essentially
+    # never has this exact shape, so this only changes behavior for the
+    # ambiguous collision case, not real hex lookups (e.g. "A835F2").
+    _looks_like_callsign = bool(_re.fullmatch(r'[A-Za-z]{2,3}\d{1,4}[A-Za-z]?', ident))
+    if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()) and not _looks_like_callsign:
         ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{ident.lower()}")
         resolved_via_hex = True
     elif expected_hex:

@@ -173,7 +173,7 @@ Results classified against the known untrusted placeholder `(38.8521,-77.0377)`;
 | `CF-Connecting-IP: 8.8.8.8` (public) | **placeholder** (correct reject) |
 | `CF-Connecting-IP: ::1` (IPv6 loopback) | **placeholder** (correct — `_TRUSTED_NETS` is IPv4-only, fail-closed) |
 | `CF-Connecting-IP: not-an-ip` (malformed) | **placeholder** (correct — `ValueError → trusted=False`) |
-| `CF-Connecting-IP: 10.9.9.9` (spoofed private) | real coords (documented residual) |
+| `CF-Connecting-IP: 10.x.x.x` (spoofed private) | real coords (documented residual) |
 | two `CF-Connecting-IP` headers, public-then-private | **placeholder** |
 | two `CF-Connecting-IP` headers, private-then-public | real coords |
 

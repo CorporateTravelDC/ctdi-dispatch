@@ -12,11 +12,12 @@ PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-planefinder:latest
 ContainerName=corporatetraveldc-planefinder
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/planefinder-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-# SHARECODE / LAT / LONG / ALT come from dispatch-secrets.env
-# (EnvironmentFile= above) -- never hardcoded here, see CLAUDE.md.
+# SHARECODE / LAT / LONG / ALT come from planefinder-secrets.env
+# (EnvironmentFile= above), scoped to this container only since 2026-08-26
+# (Opus blind review C-4) -- never hardcoded here, see CLAUDE.md.
 PublishPort=127.0.0.1:30053:30053
 AutoUpdate=registry
 

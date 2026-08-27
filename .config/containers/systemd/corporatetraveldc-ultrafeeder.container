@@ -24,12 +24,14 @@ AddDevice=/dev/rtl_sdr_adsb:/dev/rtl_sdr_adsb
 Volume=/dev/bus/usb:/dev/bus/usb:ro
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/ultrafeeder-secrets.env
 Environment=READSB_DEVICE_TYPE=rtlsdr
 Environment=READSB_RTLSDR_DEVICE=ADSB1090
 # READSB_LAT / READSB_LON / READSB_ALT / TAR1090_DEFAULTCENTERLAT/LON / UUID
-# come from dispatch-secrets.env (EnvironmentFile= above) -- never
-# hardcoded here, see CLAUDE.md.
+# come from ultrafeeder-secrets.env (EnvironmentFile= above), scoped to
+# this container only since 2026-08-26 (Opus blind review C-4) -- used to
+# be the full dispatch-secrets.env for 6 of ~95 keys. Never hardcoded
+# here, see CLAUDE.md.
 Environment=READSB_MODEAC=true
 Environment=READSB_MLAT=true
 Environment=READSB_NET_ENABLE=true

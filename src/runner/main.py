@@ -159,8 +159,20 @@ DEFAULT_DIST = 250  # nm
 # Swagger/ReDoc UI, not the raw schema route, which FastAPI still serves
 # at GET /openapi.json by default.
 app = FastAPI(title="dispatch-runner", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+# CORRECTED 2026-08-26 (Opus blind review H-1): wildcard CORS here is worse
+# than an ordinary open-CORS finding, because this proxy injects its own
+# Tier-1 service token server-side for _TIER1_PATHS (watchlist, tfr-enriched,
+# radio, cui-status) -- confirmed live, a cross-origin page could read the
+# real EP watchlist and private chat via this path even though the same
+# request direct to the web API 403s. web/main.py got the equivalent fix
+# (C-11) already; this mirrors the same explicit allowlist.
+_CORS_ALLOWED_ORIGINS = [
+    "https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net",
+    "https://dispatch-runner.example.com",
+]
+app.add_middleware(CORSMiddleware, allow_origins=_CORS_ALLOWED_ORIGINS,
+                   allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                   allow_headers=["Authorization", "Content-Type"])
 
 # ── Helpers ------------------------------------------------------------------
 
@@ -191,9 +203,9 @@ def _is_tailscale(ip: str) -> bool:
 _TRUSTED_NETS = [
     ipaddress.ip_network("100.64.0.0/10"),
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("10.x.x.x/8"),
+    ipaddress.ip_network("172.x.x.x/12"),
+    ipaddress.ip_network("192.168.x.x/16"),
 ]
 
 
@@ -1610,9 +1622,6 @@ _TIER1_PATHS: frozenset[str] = frozenset({
     "api/v1/watchlist",
     "api/v1/watchlist/history",
 })
-# NOTE: watchlist (VIP flight/person tracking) deliberately excluded from
-# _TIER1_PATHS -- this proxy will not inject its own service token for it.
-# See _WATCHLIST_PATHS / _is_tailnet_request() below for the actual gate.
 
 # 2026-08-13: second-brain vault content (knowledge-graph viz + raw note
 # GET). Found via a live pentest pass -- these had NO auth at all on

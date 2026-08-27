@@ -7,10 +7,26 @@ rss_custom() fix so poller.osint_monitor's admin-configured feed_urls
 fetch path can use the same check -- both are "this process makes an
 outbound HTTP request to a URL that ultimately traces back to something
 other than a hardcoded, reviewed source," the class of bug SSRF is.
+
+2026-08-26 follow-up (found live, same day): plain socket.getaddrinfo()
+has NO timeout of its own -- a single feed whose hostname's DNS
+resolution hangs (dead resolver, black-holed query, slow authoritative
+server) blocked here indefinitely, with nothing downstream to catch it.
+This defeated osint_monitor.py's own FETCH_TIMEOUT=20s on the httpx.get()
+that comes AFTER this check, since the hang happened before the fetch
+ever started. Confirmed live: `Skill osint-monitor timed out after 2000s`
+fired on every single poller cycle since this guard was added -- the
+skill-level watchdog was the only thing ever stopping it. Wrapped in a
+bounded thread with a short deadline; a DNS resolution that can't
+complete in DNS_TIMEOUT_SECS is treated as unsafe (fail closed) rather
+than hung forever.
 """
 import ipaddress
 import socket
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from urllib.parse import urlsplit
+
+DNS_TIMEOUT_SECS = 5
 
 
 def is_safe_public_url(url: str) -> tuple[bool, str]:
@@ -21,10 +37,22 @@ def is_safe_public_url(url: str) -> tuple[bool, str]:
     host = parsed.hostname
     if not host:
         return False, "URL has no host"
+    # NOT a context manager on purpose: `with ThreadPoolExecutor()` calls
+    # shutdown(wait=True) on exit, which would block on the very same
+    # hung getaddrinfo() call we're trying to time out on -- reintroducing
+    # the exact indefinite hang this fix exists to prevent. shutdown(wait=
+    # False) lets the orphaned resolver thread finish (or not) on its own
+    # in the background without this function ever waiting on it again.
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        addrs = {info[4][0] for info in socket.getaddrinfo(host, None)}
+        future = pool.submit(socket.getaddrinfo, host, None)
+        addrs = {info[4][0] for info in future.result(timeout=DNS_TIMEOUT_SECS)}
     except socket.gaierror as e:
         return False, f"could not resolve host: {e}"
+    except _FutureTimeoutError:
+        return False, f"DNS resolution did not complete within {DNS_TIMEOUT_SECS}s"
+    finally:
+        pool.shutdown(wait=False)
     for addr in addrs:
         try:
             ip = ipaddress.ip_address(addr)

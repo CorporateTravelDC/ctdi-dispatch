@@ -124,8 +124,18 @@ else
 fi
 
 # -- 5. failed units vs the Known bad section -------------------------------
-FAILED=$(systemctl --user list-units 'corporatetraveldc-*' --all --no-legend --no-pager 2>/dev/null \
-         | awk '$0 ~ /failed|auto-restart/ {print $2}' | sed 's/\.service$//')
+# 2026-08-26: was `awk '$0 ~ /failed|auto-restart/ {print $2}'` over the
+# unfiltered --all listing -- matched the literal word anywhere on the
+# line, including inside a unit's own DESCRIPTION text (e.g.
+# corporatetraveldc-unit-failure-notify@... whose description is "ntfy
+# alert for a failed weekly unit"), and $2 is only really the unit name
+# when the line has no leading bullet and a short-enough unit name for
+# awk's default field splitting to line up -- false positives printed
+# "loaded" as the unit. --state= filters server-side on the real ACTIVE/
+# SUB state, --plain drops the bullet, so $1 is always the actual unit.
+FAILED=$(systemctl --user list-units 'corporatetraveldc-*' --all --plain --no-legend \
+             --state=failed,auto-restart --no-pager 2>/dev/null \
+         | awk '{print $1}' | sed 's/\.service$//')
 if [[ -n "${FAILED}" ]]; then
     while IFS= read -r u; do
         [[ -z "${u}" ]] && continue

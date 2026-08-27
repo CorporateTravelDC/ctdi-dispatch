@@ -11,11 +11,22 @@ Memory=1536m
 PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest
 ContainerName=corporatetraveldc-dumpvdl2
-AddDevice=/dev/bus/usb:/dev/bus/usb
-UserNS=host
-SecurityLabelDisable=true
+# CORRECTED 2026-08-26 (Opus blind review H-7): this was the older, looser
+# whole-USB-bus-read-write + UserNS=host + SecurityLabelDisable=true
+# passthrough -- confirmed live via /proc/<pid>/attr/current showing
+# spc_t (SELinux-unconfined) vs container_t everywhere else, the one SDR
+# container the 2026-08-03 hardening pass (see corporatetraveldc-ultrafeeder
+# .container's own history) skipped, despite that pass's own comment
+# incorrectly claiming both dumpvdl2 and ultrafeeder already agreed on the
+# scoped pattern. The udev rule for this exact dongle (serial ACARS0130 ->
+# /dev/rtl_sdr_acars) already existed and was simply never wired in.
+AddDevice=/dev/rtl_sdr_acars:/dev/rtl_sdr_acars
+Volume=/dev/bus/usb:/dev/bus/usb:ro
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-08-26 (Opus blind review C-4): dispatch-secrets.env intentionally
+# NOT loaded here -- third-party code parsing untrusted RF input, never
+# referenced any value from that file, used to get the full ~95-key
+# secrets set for nothing it actually uses.
 Environment=TZ=America/New_York
 Environment=RTL_SERIAL=ACARS0130
 Environment=FEED_ID=corporatetraveldc-kdca-vdl2

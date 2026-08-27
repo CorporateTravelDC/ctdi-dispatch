@@ -347,9 +347,13 @@ def fetch_faa_registry() -> dict:
         log.warning("FAA LADD import failed (non-fatal): %s", e)
 
     # ── Sweep removed/deregistered aircraft ─────────────────────────────────
-    # Added 2026-07-21. Only sweeps if the registry import itself succeeded
-    # (guarded above by the try/except return) -- a failed/partial download
-    # must never be allowed to look like mass deregistration.
+    # Added 2026-07-21. CORRECTED 2026-08-26 (Opus blind review C-7): this
+    # comment used to claim the try/except above already guards this --
+    # false. That only catches an exception; a 200-OK response that parses
+    # to zero batches raises nothing, so total_upserted stays 0 and this
+    # sweep ran anyway with run_cutoff predating every row, wiping the
+    # entire registry. The real guard now lives in db._safe_mark_and_sweep()
+    # (refuses to delete if it would empty a non-empty table), not here.
     removed_count = 0
     try:
         removed_count = db.faa_registry_sweep_removed(run_cutoff)
