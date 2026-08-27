@@ -35,7 +35,16 @@ Environment=ACARS_CONNECTIONS=zmq://corporatetraveldc-acarsrouter:45550
 
 # ADS-B overlay from UltraFeeder tar1090
 Environment=ENABLE_ADSB=true
-Environment=ADSB_URL=http://host.containers.internal:8080/data/aircraft.json
+# 2026-08-27: host.containers.internal (this container's bridge-network
+# gateway, acars-net.network) only reaches ports UltraFeeder publishes on
+# 0.0.0.0 -- confirmed live, it 000/connection-refuses against a
+# tailnet-IP-only or loopback-only bind. Now that UltraFeeder's web port
+# is scoped to the tailnet IP only (Opus blind review C-2 lockdown, see
+# corporatetraveldc-ultrafeeder.container), reach it the same way the
+# runner already does: directly by that IP, not the bridge gateway alias.
+# Confirmed live: this container can reach 100.x.x.x directly (hairpin
+# NAT back through the host), same as any other tailnet-scoped host port.
+Environment=ADSB_URL=http://100.x.x.x:8080/data/aircraft.json
 Environment=ADSB_LAT=39.0000
 Environment=ADSB_LON=-77.0000
 
@@ -45,8 +54,16 @@ Environment=IATA_OVERRIDE=UP|UPS|United Parcel Service
 # Prune DB after 14 days (default 7 — bump slightly for dispatch use)
 Environment=DB_SAVE_DAYS=14
 
-# Web UI on port 9081
-PublishPort=127.0.0.1:9081:80
+# Web UI -- 2026-08-27 (Opus blind review C-2): moved off 127.0.0.1:9081
+# (localhost-only, unreachable for a direct human bookmark) and off the
+# old public acars.example.com tunnel route (removed from
+# cloudflared/config.yml the same day) onto the tailnet IP only, port
+# 8092 -- operator directive: Tailscale-only access, no public exposure,
+# reachable at 100.x.x.x:8092 or the tailxxxxxxx.ts.net hostname.
+# (8091 was the original choice but is already Pi-hole's admin webserver
+# on this box -- confirmed via nginx/conf.d/pihole.example.com.conf
+# and selinux/label-nginx-backend-ports.sh -- picked 8092 instead, confirmed free.)
+PublishPort=100.x.x.x:8092:80
 
 AutoUpdate=registry
 

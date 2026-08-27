@@ -29,6 +29,16 @@ PublishPort=127.0.0.1:8001:8001
 PublishPort=100.x.x.x:8001:8001
 Environment=DISPATCH_BASE_URL=http://100.x.x.x:8000
 Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
+# 2026-08-27: main.py's own default (http://127.0.0.1:9081) has never
+# actually worked under this container's pasta networking -- confirmed
+# live, "connection refused" -- same class of issue ULTRAFEEDER_URL above
+# was already overridden for. Never caught because acarshub's VDL2/ACARS
+# path falls back to airplanes.live when the local fetch fails (see
+# runner/main.py's "local acarshub first" comment), so the symptom was
+# just "always uses the fallback," not an outright error. Fixed the same
+# way, alongside the Opus blind review C-2 tailnet lockdown that moved
+# acarshub's web port to 100.x.x.x:8092.
+Environment=ACARSHUB_URL=http://100.x.x.x:8092
 Environment=SSE_INTERVAL_SEC=30
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env

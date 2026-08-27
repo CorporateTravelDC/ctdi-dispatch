@@ -43,13 +43,14 @@ ingress:
   - hostname: ollama.example.com
     service: http://127.0.0.1:80
 
-  # adsb — UltraFeeder tar1090
-  - hostname: adsb.example.com
-    service: http://127.0.0.1:80
-
-  # acars — acarshub
-  - hostname: acars.example.com
-    service: http://127.0.0.1:80
+  # adsb/acars removed 2026-08-27 (Opus blind review C-2): both were public,
+  # unauthenticated tunnel routes exposing the receiver's live position, GPS
+  # coordinates, and every tracked ACARS/VDL2 message to the raw internet.
+  # Operator directive: lock down to Tailscale-only instead of CF Access
+  # gating or removing outright -- both UIs are now reachable ONLY via the
+  # tailnet, at 100.x.x.x:8081 (adsb/tar1090) and :8091 (acars/acarshub),
+  # or the corresponding corporatetraveldc-dispatch.tailxxxxxxx.ts.net names.
+  # No tunnel route means no public path to either exists at all.
 
   # cloud -- Nextcloud second-brain vault (WebDAV/CalDAV)
   - hostname: cloud.example.com

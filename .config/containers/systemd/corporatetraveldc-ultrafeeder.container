@@ -56,7 +56,20 @@ Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
 # match the OPENSKY_USERNAME identity-tagging pattern already used below --
 # without it mlat-client falls back to a random per-session ID.
 Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=00000000-0000-0000-0000-000000000000;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,data.adsbhub.org,5002,beast_reduce_out;adsb,feed.airplanes.live,30004,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,feed.airplanes.live,31090,name=corporatetraveldc-kdca
-PublishPort=8080:80
+# 2026-08-27 (Opus blind review C-2): tar1090's web UI + /data/aircraft.json
+# used to publish on 0.0.0.0:8080 -- reachable from anything that could
+# route to this host, and also tunneled publicly as
+# adsb.example.com (route removed same day, cloudflared/config.yml).
+# Operator directive: Tailscale-only, no public exposure. Both ports now
+# bind exclusively to the tailnet IP -- 8080 stays for existing internal
+# consumers (runner's ULTRAFEEDER_URL, acarshub's ADSB_URL, both already
+# using this same tailnet IP directly rather than loopback/bridge-gateway
+# aliases, neither of which this host's pasta/bridge networking actually
+# routes to a scoped bind -- confirmed live), 8081 is the new dedicated
+# human-bookmark port. Reachable at 100.x.x.x:8081 or
+# corporatetraveldc-dispatch.tailxxxxxxx.ts.net:8081, tailnet-only either way.
+PublishPort=100.x.x.x:8080:80
+PublishPort=100.x.x.x:8081:80
 PublishPort=30005:30005
 PublishPort=127.0.0.1:30003:30003
 Environment=OPENSKY_USERNAME=corporatetraveldc
