@@ -1,0 +1,13 @@
+[Unit]
+Description=Fire the daily llama-hot/chat preventive restart at 03:00 ET (quiet slot, clear of the 04:00 vault index scan / 04:15 demo archiver / 04:35 disruption digest / 05:15 drift check / 06:00 freshness audit chain)
+Requires=corporatetraveldc-llama-restart.service
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 America/New_York
+Persistent=true
+# Persistent=true means a missed fire (box down at 03:00) runs on next
+# boot instead of waiting a full day -- keeps the real gap between
+# restarts inside the operator's <=24h cap even across a reboot.
+
+[Install]
+WantedBy=timers.target
