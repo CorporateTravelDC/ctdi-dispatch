@@ -129,7 +129,9 @@ EXTRACTION_MODEL = "corporatetraveldc-pi5-osint-monitor:latest"
 # extraction output alongside the 2-sentence narrative shape. Timeouts
 # measured per call shape this session (extraction = batch prompt +
 # up to 500 gen tokens; domain guess = tiny prompt, ~20 gen tokens).
-# Fail-fast design unchanged (allow_anthropic=False, max_retries=0).
+# Fail-fast design unchanged (allow_anthropic=False). (max_retries=0 was
+# part of this design; removed from generate() 2026-08-30 -- silently
+# unused by the current llama-server-routing implementation.)
 # Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
 # methodology; spiked persona-only refs bracketing: 53.1s / 43.5s;
 # osint-monitor model, both call shapes measured individually):
@@ -320,7 +322,7 @@ def extract_entities(items: list[dict]) -> dict[str, dict]:
             system=None, prompt=prompt,
             ollama_model=EXTRACTION_MODEL, max_tokens=500, temperature=0.1,
             timeout=EXTRACTION_TIMEOUT,
-            allow_anthropic=False, max_retries=0,
+            allow_anthropic=False,
         )
     except Exception as e:
         log.warning("entity_tracking: extraction call failed: %s", e)
@@ -466,7 +468,7 @@ def _guess_domain(entity_name: str) -> str | None:
         result = llm_generate(
             system=None, prompt=prompt,
             ollama_model=EXTRACTION_MODEL, max_tokens=20, temperature=0.0,
-            timeout=DOMAIN_GUESS_TIMEOUT, allow_anthropic=False, max_retries=0,
+            timeout=DOMAIN_GUESS_TIMEOUT, allow_anthropic=False,
         )
     except Exception as e:
         log.warning("entity_tracking: domain guess call failed for %r: %s", entity_name, e)
