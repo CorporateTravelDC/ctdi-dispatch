@@ -31,12 +31,42 @@ LOG_FILE="${STATE_DIR}/restart.log"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 
+# Port -> service, so we can idle-wait each one before restarting it.
+declare -A SERVICE_PORT=(
+    [corporatetraveldc-llama-hot.service]=8093
+    [corporatetraveldc-llama-chat.service]=8094
+)
 SERVICES=(
     corporatetraveldc-llama-hot.service
     corporatetraveldc-llama-chat.service
 )
+LLAMA_HOST="100.x.x.x"
+IDLE_WAIT_MAX_SEC=120
 
 mkdir -p "${STATE_DIR}"
+
+# 2026-08-30 (H1 fix): this timer's slot is NOT actually quiet -- it
+# collides to the second with aam-daily-watch every night (see the
+# timer's own Description), and more generally there is no gap on this
+# box's schedule where SOME llama skill isn't running. A mid-skill
+# restart previously killed gig-economy-daily-watch's in-flight call at
+# 08:08:55 ET (one second before chat came back). Wait (bounded) for the
+# target port to report idle before restarting it, instead of assuming
+# the clock slot is safe.
+wait_for_idle() {
+    local port="$1" waited=0
+    while (( waited < IDLE_WAIT_MAX_SEC )); do
+        local slots
+        slots="$(curl -sf --max-time 3 "http://${LLAMA_HOST}:${port}/slots" 2>/dev/null)"
+        if [[ -n "${slots}" ]] && ! grep -q '"is_processing":true' <<<"${slots}"; then
+            return 0
+        fi
+        sleep 3
+        (( waited += 3 ))
+    done
+    log "warn" "port ${port} still processing (or unreachable) after ${IDLE_WAIT_MAX_SEC}s idle-wait -- restarting anyway"
+    return 1
+}
 
 # See scheduled-ingest-restart.sh's identical comment -- dispatch.env is a
 # podman --env-file (simple KEY=VALUE), not bash-source-safe.
@@ -84,6 +114,12 @@ for SERVICE in "${SERVICES[@]}"; do
     if [[ "${MODE}" == "dry-run" ]]; then
         log "info" "[DRY-RUN] would run: systemctl --user restart ${SERVICE}"
         continue
+    fi
+
+    port="${SERVICE_PORT[${SERVICE}]:-}"
+    if [[ -n "${port}" ]]; then
+        log "info" "waiting for ${SERVICE} (port ${port}) to go idle before restart"
+        wait_for_idle "${port}"
     fi
 
     log "info" "restarting ${SERVICE}"

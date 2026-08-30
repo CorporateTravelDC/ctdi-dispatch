@@ -60,7 +60,39 @@ Documentation=man:systemd.slice(5)
 # ManagedOOMMemoryPressure=kill at 80%) rather than a custom ceiling; if
 # Brave or another real desktop app becomes a regular resident again,
 # revisit whether app.slice needs its own ceiling back.
+#
+# 2026-08-30: the 6100M "ollama" half of the budget above was never
+# reclaimed when ollama.service was retired (2026-08-27 cutover to
+# llama.cpp) -- corporatetraveldc-llama-hot/chat.service moved INSIDE
+# this slice (Slice=production.slice in both unit files) instead of
+# staying a separate system-level unit, but this slice's own ceiling
+# was never widened to absorb the budget that move freed up. Root-caused
+# live today: production.slice MemoryCurrent pinned at 6.93G against the
+# old 6656M/7680M ceiling with 6.1G already in swap, while llama-hot and
+# llama-chat -- now children of THIS slice with no ceiling of their own
+# -- were the ones getting reclaimed for it (0.09-0.11 tok/s generation
+# observed). The two tiers now carry their own MemoryLow/High/Max/
+# SwapMax=0 (see corporatetraveldc-llama-hot/chat.service), but cgroup v2
+# low/high propagation is capped by the PARENT's own ceiling regardless
+# of what a child requests, so the parent had to grow too.
+#
+# New ceiling: same total 13780M budget the operator already approved
+# 2026-08-14 (6100 ollama + 7680 production), simply consolidated into
+# one slice now that there's no separate ollama.service to split it
+# with. Total box RAM unchanged (16211MiB) -- same ~15% (~2.4GiB)
+# headroom for kernel/page cache/app.slice as before, none of it new
+# risk, just re-drawing the line between the two halves that used to be
+# separate cgroup trees and now aren't.
+#
+# MemoryLow=6144M: new -- the old design had zero slice-level floor
+# (MemoryLow=0), which Finding 1 (2026-08-29 live-state check) named
+# directly: "nothing anywhere protects the resident models from being
+# paged out" against EXTERNAL pressure from app.slice (the desktop
+# session / claude --remote-control). Floored below the slice's
+# currently-observed real (non-swapped) working set so normal internal
+# reclaim among this slice's own children still functions.
 
 [Slice]
-MemoryHigh=6656M
-MemoryMax=7680M
+MemoryLow=6144M
+MemoryHigh=12000M
+MemoryMax=13780M

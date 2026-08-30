@@ -1,7 +1,10 @@
 #!/bin/bash
 # /opt/corporatetraveldc/scripts/restore-network.sh
-# Reverses lockdown.sh -- restores the host-reach opt-ins for Ollama,
-# corporatetraveldc-pusher, and corporatetraveldc-acarshub.
+# Reverses lockdown.sh -- restores the host-reach opt-ins for
+# corporatetraveldc-pusher and corporatetraveldc-acarshub.
+#
+# 2026-08-30: the Ollama bind-restore step this script used to carry was
+# removed -- see lockdown.sh's matching removal for why.
 #
 # Usage: sudo restore-network.sh [--dry-run] [--reason TEXT]
 # ASCII output only
@@ -21,7 +24,6 @@ XDG_USER_DIR="/run/user/${CTDC_UID}"
 DBUS_ADDR="unix:path=${XDG_USER_DIR}/bus"
 QUADLET_DIR="/home/${CTDC_USER}/.config/containers/systemd"
 CONTAINERS_CONF="/home/${CTDC_USER}/.config/containers/containers.conf"
-OLLAMA_BINDING_CONF="/etc/systemd/system/ollama.service.d/10-binding.conf"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 STATE_FILE="/run/corporatetraveldc-lockdown-active"
 
@@ -108,16 +110,6 @@ if [[ ! -f "${STATE_FILE}" ]]; then
     exit 0
 fi
 
-say "Restoring Ollama's bind..."
-if [[ -f "${OLLAMA_BINDING_CONF}" ]] && grep -q '^Environment="OLLAMA_HOST=127\.0\.0\.1:11434"' "${OLLAMA_BINDING_CONF}"; then
-    say "  ollama: OLLAMA_HOST -> 100.x.x.x:11434"
-    run sed -i 's/^Environment="OLLAMA_HOST=127\.0\.0\.1:11434"/Environment="OLLAMA_HOST=100.x.x.x:11434"/' "${OLLAMA_BINDING_CONF}"
-    run systemctl daemon-reload
-    run systemctl restart ollama.service
-else
-    say "  [SKIP] ollama -- not currently locked down or binding conf not found"
-fi
-
 say "Restoring pasta-mode host-reach opt-ins..."
 for svc in "${PASTA_MAPGW_CONTAINERS[@]}"; do
     quadlet="${QUADLET_DIR}/${svc}.container"
@@ -159,7 +151,7 @@ say "Restored. Host-reach opt-ins are back in place."
 if (( ! DRY_RUN )); then
     ntfy_send "${NTFY_OPS}" \
         "Stack Lockdown Lifted" \
-        "Host-reach opt-ins restored (ollama, pusher, acarshub). Reason: ${REASON}."
+        "Host-reach opt-ins restored (pusher, acarshub). Reason: ${REASON}."
 fi
 
 say "Done."

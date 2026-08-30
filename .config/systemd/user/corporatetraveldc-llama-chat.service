@@ -31,5 +31,23 @@ Slice=production.slice
 # comment: "a human is waiting on the reply") -- same priority tier as hot.
 CPUWeight=9000
 
+# 2026-08-30: memory governance, ported from the retired ollama.service.d/
+# 20-resource-limits.conf -- same gap as llama-hot.service (see that
+# unit's comment for the full writeup and the paired production.slice
+# ceiling fix). Sized larger than hot: this tier also carries ALL
+# report-tier traffic since 2026-08-27 (report-1/2 route here, see
+# common/llm.py's ollama_post_with_retry()), so it sees longer prompts
+# (live-measured up to 1013 tokens) and more concurrent demand. B taken
+# from this same day's live measurement (swap peak 3.4G under
+# contention), rounded up to 4096M for the report-tier headroom, same
+# 100%/125%/150% formula.
+MemoryLow=4096M
+MemoryHigh=5120M
+MemoryMax=6144M
+# Same reasoning as llama-hot.service: zero swap converts the slow
+# zram page-out/page-in thrash into fast reclaim or a loud, fast
+# (Restart=always/RestartSec=5) self-healing OOM instead.
+MemorySwapMax=0
+
 [Install]
 WantedBy=default.target
