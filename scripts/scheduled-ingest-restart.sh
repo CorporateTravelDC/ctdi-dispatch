@@ -100,6 +100,20 @@ RESTART_THRESHOLD_PCT="${INGEST_RESTART_THRESHOLD_PCT:-90}"
 # (queues replaying backlog) can't trigger a restart-loop.
 COOLDOWN_SECS="${INGEST_RESTART_COOLDOWN_SECS:-300}"
 
+# 2026-08-27 (operator directive): coordinate with thermal-ingest-guard.py,
+# an independent watchdog that also restarts these same ingest containers
+# (via ingest-feed-ctl.sh) as part of its own LOCKDOWN shed/restore cycle.
+# Without this, a guard-triggered restore's own reconnect/backlog memory
+# burst could look identical to this script's genuine-leak signal,
+# triggering a second, compounding restart on top of a stack that's
+# already mid-recovery -- a real foot-gun, since each restart's own
+# startup cost can itself be enough to re-trip the guard's load
+# threshold, flapping the two watchdogs against each other. Skip this
+# entire run whenever the guard is currently shed (tier > 0) or restored
+# within the last GUARD_GRACE_SECS.
+THERMAL_GUARD_STATE="/var/lib/corporatetraveldc/thermal_ingest_guard_state.json"
+GUARD_GRACE_SECS="${INGEST_RESTART_GUARD_GRACE_SECS:-300}"
+
 MODE="run"
 case "${1:-}" in
     --dry-run) MODE="dry-run" ;;
@@ -145,6 +159,36 @@ write_state() {
         "${epoch}" "${pct}" "$(date -d "@${epoch}" '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" \
         > "${state_file}"
 }
+
+# See the GUARD_GRACE_SECS comment above for why this exists. Returns
+# 0 (true, "back off") if the guard is currently shed (tier > 0) or
+# restored the stack within the last GUARD_GRACE_SECS seconds.
+guard_recently_active() {
+    [[ -f "${THERMAL_GUARD_STATE}" ]] || return 1
+    local tier restored_at now
+    # Note the space after ":" -- Python's json.dump (thermal-ingest-guard.py's
+    # save_state()) uses ": " as its default key-value separator, not ":".
+    # A grep pattern without \s* here silently never matches at all, always
+    # returning "not active" regardless of real guard state -- confirmed
+    # live against thermal_ingest_guard_state.json before shipping this.
+    tier=$(grep -oE '"tier": *[0-9]+' "${THERMAL_GUARD_STATE}" 2>/dev/null | grep -oE '[0-9]+$')
+    if [[ -n "${tier}" && "${tier}" -gt 0 ]]; then
+        return 0
+    fi
+    restored_at=$(grep -oE '"restored_at": *[0-9.]+' "${THERMAL_GUARD_STATE}" 2>/dev/null | grep -oE '[0-9.]+$')
+    [[ -n "${restored_at}" ]] || return 1
+    now=$(date +%s)
+    # restored_at is a Python time.time() float epoch -- integer-truncate
+    # for a plain bash arithmetic comparison, sub-second precision doesn't
+    # matter for a 300s grace window.
+    restored_at="${restored_at%%.*}"
+    (( now - restored_at < GUARD_GRACE_SECS ))
+}
+
+if [[ "${MODE}" != "status" ]] && guard_recently_active; then
+    log "info" "thermal-ingest-guard is shed or restored within the last ${GUARD_GRACE_SECS}s -- skipping this entire run to avoid a compounding restart on a stack already mid-recovery"
+    exit 0
+fi
 
 if [[ "${MODE}" == "status" ]]; then
     echo "threshold:          ${RESTART_THRESHOLD_PCT}%"
