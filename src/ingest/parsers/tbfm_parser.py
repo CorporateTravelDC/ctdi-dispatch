@@ -330,6 +330,88 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
             log.error("tbfm: tbfm-alert fire failed for %s: %s", fix, e)
 
 
+def _match_watchlist_flight(identifier: str | None) -> dict | None:
+    """Find an active flight watchlist entry matching this identifier
+    (callsign), case-insensitive. Same matching convention as
+    tfms_parser.py's own copy (kept file-local rather than shared -- each
+    ingest parser already does this, see that copy's docstring)."""
+    if not identifier:
+        return None
+    try:
+        from shared.watchlist import get_active_entries
+        entries = get_active_entries(entry_type="flight")
+    except Exception as e:
+        log.error("tbfm: watchlist lookup failed: %s", e)
+        return None
+    ident_upper = identifier.upper().strip()
+    for entry in entries:
+        if entry["identifier"].upper() == ident_upper:
+            return entry
+    return None
+
+
+_TBFM_WATCHLIST_DEDUP = PushDedup("tbfm_watchlist", dedup_secs=1800)
+
+
+def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
+    """Per-flight TBFM arrival-sequencing update for any watched flight.
+
+    2026-08-28 (operator directive: "let TBFM also be in the authority
+    chain"): before this, TBFM had ZERO connection to individual watchlist
+    entries -- check_tbfm_alerts() above only ever fires an AGGREGATE
+    nationwide/per-sector congestion alert (5+ aircraft at one fix), never
+    a per-flight one, so a watched flight being actively sequenced for
+    arrival into DCA/IAD/BWI was invisible to its own watchlist entry no
+    matter how much TBFM data existed for it.
+
+    Does NOT force this into oooi_phase (TBFM has no literal OUT/OFF/ON/IN
+    timestamp, only a meter-fix/runway crossing ETA -- forcing an
+    inaccurate phase transition would be worse than not having one) --
+    uses its own dedicated column instead (update_watchlist_tbfm_status),
+    the same shared-field-bug-avoidance pattern already established for
+    FDPS/FIDS (see common/db.py SCHEMA_V23's history).
+
+    30-min dedup per (entry, meter fix) -- TBFM re-sends the same
+    sequence/ETA on a short cadence while a flight sits in the metering
+    queue; this fires once per fix per flight, not on every re-send,
+    matching _handle_track_information's TFMS-side 30-min approach-alert
+    cadence in tfms_parser.py.
+    """
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for s in sequences:
+        entry = _match_watchlist_flight(s.get("flight_id"))
+        if entry is None:
+            continue
+        fix = s.get("meter_fix") or "?"
+        eta = s.get("eta") or ""
+        apt = s.get("apt") or "?"
+        status = f"{apt} arrival, meter fix {fix}" + (f", ETA {eta}" if eta else "")
+
+        dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}")
+        if not _TBFM_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
+            continue
+
+        try:
+            db.update_watchlist_tbfm_status(entry["id"], status, now_iso)
+        except Exception as e:
+            log.error("tbfm: update_watchlist_tbfm_status failed for %s: %s", entry["id"], e)
+
+        summary = f"{s.get('flight_id')} TBFM: {status}"
+        try:
+            from shared.watchlist import watchlist_event_hit
+            watchlist_event_hit(
+                entry["id"], summary,
+                {"watchlist_trigger": "tbfm_sequenced", "meter_fix": fix,
+                 "eta": eta, "airport": apt, "facility": s.get("facility")},
+                priority=3,
+            )
+        except Exception as e:
+            log.error("tbfm: watchlist_event_hit failed for %s: %s", entry["id"], e)
+
+        _TBFM_WATCHLIST_DEDUP.record(entry["id"], dedup_key)
+
+
 def write_tbfm_sequences(sequences: list[dict]) -> int:
     """Upsert TBFM sequences into tbfm_sequences table. Returns count written."""
     written = 0
@@ -351,4 +433,5 @@ def write_tbfm_sequences(sequences: list[dict]) -> int:
                       s.get("flight_id"), s.get("meter_fix"), e)
     if sequences:
         check_tbfm_alerts(sequences)
+        _check_tbfm_watchlist_hits(sequences)
     return written

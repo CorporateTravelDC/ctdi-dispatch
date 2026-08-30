@@ -38,6 +38,24 @@ NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
 
 EntryType = Literal["flight", "train", "vessel"]
 
+# 2026-08-27 (operator directive: "everything is meant to be local" --
+# reinforced a second time after this box hit a live 429 from
+# api.airplanes.live while already under load): every live-position/
+# identity lookup in this module now comes from either (a) this box's own
+# local ADS-B receiver via ultrafeeder's local aircraft.json, or (b) FAA
+# SWIM data already ingested and stored locally (FDPS, via
+# common.db.get_flight_plan_by_callsign -- see that function and
+# common/db.py's _find_flight_element/_extract_aircraft_* for the
+# per-flight-scoped extraction). No third-party API is ever queried for
+# position/identity data. The globe.airplanes.live/?icao= tracking-URL
+# links fired in notifications below are kept -- those are just a
+# click-through convenience link for the operator's own phone, not a
+# lookup this box performs.
+# Base only (host:port, no path) -- matches ingest/local_airspace.py and
+# pusher/main.py's existing convention for this same env var, not
+# runner/main.py's outlier full-path default.
+ULTRAFEEDER_BASE = os.environ.get("ULTRAFEEDER_URL", "http://100.x.x.x:8080").rstrip("/")
+
 _ntfy_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy")
 
 # Dedup window: don't re-fire the same event_type for the same entry within this many seconds.
@@ -197,13 +215,87 @@ def _local_registry_hex_lookup(ident_clean: str) -> str | None:
     return None
 
 
+_ULTRAFEEDER_TAILNET_FALLBACK = "http://100.x.x.x:8080"
+
+
+def _fetch_local_adsb() -> list:
+    """One fetch of this box's own ADS-B receiver (ultrafeeder/readsb local
+    aircraft.json -- same field schema as airplanes.live's `ac` records:
+    hex/flight/lat/lon/alt_baro/gs/track/squawk/r) -- never a third-party
+    call. Never raises.
+
+    2026-08-27: `host.containers.internal` (this env var's value in at
+    least the poller container's shared dispatch.env) is unreachable
+    (connection refused) from containers using this box's `pasta`
+    network mode, even though the same host:port over the tailnet IP
+    (100.x.x.x) answers fine -- confirmed live. Rather than touch the
+    shared env file (used by many other containers/network modes where it
+    may be correct), fall back to the known-working tailnet address on any
+    connection failure against the configured base."""
+    for base in (ULTRAFEEDER_BASE, _ULTRAFEEDER_TAILNET_FALLBACK):
+        try:
+            resp = requests.get(f"{base}/data/aircraft.json", timeout=5)
+            resp.raise_for_status()
+            return resp.json().get("aircraft") or []
+        except Exception as e:
+            log.debug("local ADS-B fetch via %s failed (non-fatal): %s", base, e)
+        if base == ULTRAFEEDER_BASE == _ULTRAFEEDER_TAILNET_FALLBACK:
+            break
+    return []
+
+
+def _local_ac_by_hex(hex_code: str) -> dict | None:
+    hex_code = hex_code.lower().strip()
+    for ac in _fetch_local_adsb():
+        if (ac.get("hex") or "").lower().strip() == hex_code:
+            return ac
+    return None
+
+
+def _local_ac_by_callsign(callsign: str) -> dict | None:
+    callsign = callsign.upper().strip()
+    for ac in _fetch_local_adsb():
+        if (ac.get("flight") or "").strip().upper() == callsign:
+            return ac
+    return None
+
+
+def _local_fdps_ac(callsign: str) -> dict | None:
+    """FDPS-backed fallback when local ADS-B has no contact (out of local
+    receiver range) -- SWIM data already ingested and stored locally, see
+    common.db.get_flight_plan_by_callsign()/_find_flight_element() for the
+    per-flight-scoped extraction this depends on. Returns an ac-shaped dict
+    (hex/r/lat/lon/alt_baro/gs/dst) so callers need no branching on which
+    local source actually answered, or None if FDPS has nothing for this
+    callsign or nothing beyond a bare flight plan (no hex/position yet)."""
+    try:
+        plan = db.get_flight_plan_by_callsign(callsign)
+    except Exception as e:
+        log.debug("local FDPS lookup for %s failed (non-fatal): %s", callsign, e)
+        return None
+    if not plan or not plan.get("hex"):
+        return None
+    return {
+        "hex": plan["hex"].lower(),
+        "r": plan.get("registration"),
+        "lat": plan.get("position_lat"),
+        "lon": plan.get("position_lon"),
+        "alt_baro": plan.get("altitude_ft"),
+        "gs": plan.get("ground_speed_kt"),
+        "dst": plan.get("destination"),
+    }
+
+
 def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> dict | None:
-    """Resolve hex_id/registration for a flight watchlist entry via
-    airplanes.live, hex-locking the entry (db.set_watchlist_identity) on
-    first live contact and firing a watchlist_event_hit notification with
-    the resolved hex/tail + a click-through airplanes.live tracking URL --
-    but only the FIRST time this entry gets a hex, never on repeat calls
-    against an already-resolved entry.
+    """Resolve hex_id/registration for a flight watchlist entry from LOCAL
+    sources only (this box's own ADS-B receiver, then already-ingested FDPS
+    SWIM data -- see _fetch_local_adsb/_local_fdps_ac above; no third-party
+    API is ever queried), hex-locking the entry (db.set_watchlist_identity)
+    on first live contact and firing a watchlist_event_hit notification with
+    the resolved hex/tail + a click-through airplanes.live tracking URL (a
+    convenience link for the operator's own phone, not a lookup this box
+    performs) -- but only the FIRST time this entry gets a hex, never on
+    repeat calls against an already-resolved entry.
 
     Extracted 2026-08-22 from poller's _check_flight_airplanes_live (that
     function's identity-resolution portion, unchanged in behavior) so
@@ -214,41 +306,39 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
     resolve." Both callers share this one resolution path (and its
     notification), so the false-positive protections baked into the
     lookup-priority order below (hex-authoritative-once-known, callsign
-    only during bootstrap, local registries before airplanes.live's own
-    flaky /v2/reg/) live in exactly one place, not two.
+    only during bootstrap) live in exactly one place, not two.
+
+    2026-08-27: rewired off airplanes.live entirely (operator directive,
+    "everything is meant to be local") -- was a live third-party HTTP call
+    per lookup; now two local reads (ADS-B JSON, already-ingested FDPS).
+    Local ADS-B only has range for aircraft near this box; FDPS covers the
+    whole NAS but doesn't always carry a hex/position (see common/db.py's
+    _extract_aircraft_hex_registration/_extract_aircraft_position
+    docstrings) -- a flight genuinely out of range of both sources returns
+    None here, same as airplanes.live returning no contact used to.
 
     `source` is a free-text tag recorded in the fired notification's detail
     (e.g. "tfms_out" vs "sweep") -- purely informational, does not change
     matching behavior.
 
-    Returns the raw airplanes.live `ac` dict (hex/reg/alt/gs/lat/lon/squawk/
-    dst -- see https://airplanes.live's API), PLUS an injected
-    "_resolved_via_hex" bool key (see the resolved_via_hex comment below --
-    callers doing an identity-mismatch check must pop/check this before
-    comparing observed vs. expected hex), if a live contact was found, else
-    None. Never raises -- best-effort, same discipline as
-    _local_registry_hex_lookup; callers that need the entry's identity
-    fields after calling this should re-read the entry or use the returned
-    hex/reg directly rather than assuming this always succeeds."""
+    Returns an ac-shaped dict (hex/r/alt_baro/gs/lat/lon/dst -- see
+    _local_fdps_ac's docstring for the exact shape all local sources are
+    normalized to), PLUS an injected "_resolved_via_hex" bool key (see the
+    resolved_via_hex comment below -- callers doing an identity-mismatch
+    check must pop/check this before comparing observed vs. expected hex),
+    if a live contact was found, else None. Never raises -- best-effort,
+    same discipline as _local_registry_hex_lookup; callers that need the
+    entry's identity fields after calling this should re-read the entry or
+    use the returned hex/reg directly rather than assuming this always
+    succeeds."""
     import re as _re
 
-    def _al_fetch(url: str) -> list:
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 404:
-                return []
-            resp.raise_for_status()
-            return resp.json().get("ac") or []
-        except Exception as e:
-            log.debug("airplanes.live %s: %s", url, e)
-            return []
-
     # Resolve ICAO hex: explicit hex identifier > callsign > known hex
-    # (structured hex_id column, then legacy notes text) > reg fallback.
-    # See the docstring above -- this ordering is deliberate and
-    # incident-tested, do not reorder without reading poller/main.py's
-    # original _check_flight_airplanes_live history (2026-07-23,
-    # 2026-08-13 comments) first.
+    # (structured hex_id column, then legacy notes text). See the docstring
+    # above -- this ordering is deliberate and incident-tested, do not
+    # reorder without reading poller/main.py's original
+    # _check_flight_airplanes_live history (2026-07-23, 2026-08-13
+    # comments) first.
     expected_hex = (entry.get("hex_id") or "").lower().strip() or None
     notes_hex: str | None = None
     m = _re.search(r'\bHex:\s*([0-9a-fA-F]{6})\b', entry.get("notes") or "", _re.IGNORECASE)
@@ -276,29 +366,65 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
     # never has this exact shape, so this only changes behavior for the
     # ambiguous collision case, not real hex lookups (e.g. "A835F2").
     _looks_like_callsign = bool(_re.fullmatch(r'[A-Za-z]{2,3}\d{1,4}[A-Za-z]?', ident))
+    ident_clean = ident.upper().replace(" ", "")
     if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()) and not _looks_like_callsign:
-        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{ident.lower()}")
+        ac = _local_ac_by_hex(ident.lower())
         resolved_via_hex = True
     elif expected_hex:
-        ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{expected_hex}")
-        resolved_via_hex = True
+        # 2026-08-28 (operator directive, guardrail against a confirmed
+        # incident -- see common/db.py SCHEMA_V39's docstring for the full
+        # writeup): querying BY expected_hex here, unconditionally, is
+        # exactly the bug. Once ANY hex is set this way, resolved_via_hex
+        # is always True, which is precisely what the identity-mismatch
+        # check below is gated to SKIP -- so a hex that was never actually
+        # right (operator typo, stale registry data) could never be
+        # independently caught by a later real local sighting. An
+        # operator-supplied hex that hasn't yet been corroborated by an
+        # actual local CALLSIGN match gets one here: same discovery path
+        # as the bootstrap branch below, so a genuine match marks it
+        # corroborated, and a genuine mismatch flows into the SAME
+        # identity_mismatch alert an auto-resolved flight would get
+        # (resolved_via_hex stays False on this path, deliberately, so
+        # that check isn't skipped).
+        needs_corroboration = (
+            entry.get("hex_source") == "operator"
+            and not entry.get("hex_corroborated_at")
+        )
+        if needs_corroboration:
+            ac = _local_ac_by_callsign(ident_clean) or _local_fdps_ac(ident_clean)
+            if ac:
+                observed_hex = (ac.get("hex") or "").lower().strip()
+                if observed_hex == expected_hex:
+                    try:
+                        db.mark_watchlist_hex_corroborated(entry["id"])
+                    except Exception as e:
+                        log.debug("%s: hex corroboration mark failed (non-fatal): %s", ident, e)
+                # else: leave resolved_via_hex False -- downstream
+                # identity-mismatch check handles a genuine disagreement.
+        else:
+            ac = _local_ac_by_hex(expected_hex)
+            resolved_via_hex = True
     else:
         # Bootstrap phase only -- no confirmed hex exists yet, callsign is
         # the only way to discover one.
-        ident_clean = ident.upper().replace(" ", "")
-        ac_list = _al_fetch(f"https://api.airplanes.live/v2/callsign/{ident_clean}")
-        if ac_list:
+        ac = _local_ac_by_callsign(ident_clean)
+        if ac:
             callsign_live_confirmed = True
-        if not ac_list and notes_hex:
-            ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{notes_hex}")
+        if not ac and notes_hex:
+            ac = _local_ac_by_hex(notes_hex)
             resolved_via_hex = True
-        if not ac_list:
+        if not ac:
             local_hex = _local_registry_hex_lookup(ident_clean)
             if local_hex:
-                ac_list = _al_fetch(f"https://api.airplanes.live/v2/hex/{local_hex}")
+                ac = _local_ac_by_hex(local_hex)
                 resolved_via_hex = True
-            if not ac_list:
-                ac_list = _al_fetch(f"https://api.airplanes.live/v2/reg/{ident_clean}")
+        if not ac:
+            # Local ADS-B has nothing (likely out of receiver range) --
+            # fall back to already-ingested FDPS SWIM data, still local.
+            ac = _local_fdps_ac(ident_clean)
+            if ac:
+                callsign_live_confirmed = True
+    ac_list = [ac] if ac else []
 
     if not ac_list:
         return None

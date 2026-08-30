@@ -2047,10 +2047,21 @@ def upsert_watchlist_entry(entry: dict) -> None:
 
 
 def set_watchlist_identity(entry_id: str, hex_id: str | None = None,
-                           registration: str | None = None) -> None:
+                           registration: str | None = None,
+                           source: str = "adsb") -> None:
     """Directly set/backfill hex_id and/or registration on an existing
     entry without touching any other field. Used by the one-time notes-hex
-    backfill and by any future admin "confirm identity" action."""
+    backfill and by any future admin "confirm identity" action.
+
+    2026-08-28: `source` ("adsb" | "fdps" | "operator") records provenance
+    in hex_source, and stamps hex_updated_at -- see SCHEMA_V39's own
+    docstring for the incident this closes (an operator-entered hex was
+    indistinguishable from a locally-corroborated one, so it could never
+    be independently re-verified or flagged as stale). Callers setting an
+    operator-confirmed value should use
+    set_watchlist_identity_operator_confirmed() instead of calling this
+    directly with source="operator", so the intent is unambiguous at the
+    call site."""
     sets, params = [], {}
     if hex_id is not None:
         sets.append("hex_id=:hex_id")
@@ -2060,9 +2071,36 @@ def set_watchlist_identity(entry_id: str, hex_id: str | None = None,
         params["registration"] = registration.upper().strip() or None
     if not sets:
         return
+    sets.append("hex_source=:hex_source")
+    sets.append("hex_updated_at=:hex_updated_at")
+    params["hex_source"] = source
+    params["hex_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     params["id"] = entry_id
     with conn() as c:
         c.execute(f"UPDATE watchlist_entries SET {', '.join(sets)} WHERE id=:id", params)
+
+
+def set_watchlist_identity_operator_confirmed(entry_id: str, hex_id: str,
+                                              registration: str | None = None) -> None:
+    """The sanctioned way to record an operator-supplied hex/tail (e.g.
+    cross-checked against FlightAware or another external display by the
+    human, NOT this codebase -- see common/llm.py-adjacent standing rule:
+    no third-party API calls from this codebase's own code, but a human
+    relaying what they personally looked up is not that).
+
+    2026-08-28: added after UA1453's SFO-IAD leg needed exactly this --
+    operator had a tail (N38479) from FlightAware, this codebase's own
+    local FDPS/ADS-B had nothing yet. Before this function existed, the
+    only way to record that was direct SQL against hex_id/registration
+    with no provenance trail -- indistinguishable from a real local
+    sighting, and (see SCHEMA_V39's docstring) permanently unable to be
+    corroborated or contradicted by a later real local sighting once set.
+    Marks hex_corroborated_at NULL (unconfirmed) on purpose -- see
+    shared.watchlist.resolve_flight_identity()'s corroboration pass, which
+    specifically looks for hex_source="operator" entries with no
+    corroboration yet and still tries a callsign-based (not hex-based)
+    local lookup to confirm or flag a mismatch."""
+    set_watchlist_identity(entry_id, hex_id=hex_id, registration=registration, source="operator")
 
 
 def extend_watchlist_auto_remove_for_delay(entry_id: str, new_auto_remove_at: str,
@@ -3555,13 +3593,18 @@ def get_bandwidth_priority() -> dict:
     CPU/bandwidth instead of competing with six equally-weighted sessions.
     See ingest/swim_client.py's _bandwidth_priority_says_pause().
 
-    'ollama' added 2026-08-11: same low-priority feed set as 'weather', but
-    auto-triggered from common/llm.py around an in-flight Ollama call rather
-    than an NWS alert -- the active complement to that module's passive
-    load-gate wait (see OLLAMA_BACKPRESSURE_ENABLED there). Built after
-    confirming a cold model load can lose the CPU race entirely on this
-    4-core Pi when ingest is running unshed (docs/benchmarks/
-    OLLAMA_BACKPRESSURE_AB_2026-08-11.md).
+    'ollama' priority REMOVED 2026-08-28: existed 2026-08-11 through the
+    llama.cpp cutover as the active complement to common/llm.py's passive
+    load-gate wait, built after confirming a cold Ollama model load could
+    lose the CPU race on this 4-core Pi when ingest ran unshed. That
+    problem no longer exists -- llama.cpp's hot/chat tiers are permanent,
+    always-resident processes with their own cgroup CPUWeight=9000 already
+    giving them continuous OS-level priority over ingest, a strictly
+    better mitigation than a manually-toggled DB flag. Confirmed live
+    2026-08-27/28 that leaving the flag wired up post-migration made it
+    fire on nearly every non-hot generate() call for no benefit, needlessly
+    pausing stdds/tbfm/itws/fns twice in one night. 'ollama' is no longer a
+    valid value for set_bandwidth_priority() below.
     """
     with conn() as c:
         row = c.execute("SELECT * FROM bandwidth_priority_state WHERE id = 1").fetchone()
@@ -3580,10 +3623,10 @@ def get_bandwidth_priority() -> dict:
 def set_bandwidth_priority(priority: str, set_by: str = "", reason: str = "",
                            ttl_seconds: float | None = None) -> dict:
     """Set the bandwidth-priority override. priority must be 'auto', 'swim',
-    'nexrad', 'weather', or 'ollama'. ttl_seconds is optional -- omit for
+    'nexrad', or 'weather'. ttl_seconds is optional -- omit for
     "stays until explicitly changed back."."""
-    if priority not in ("auto", "swim", "nexrad", "weather", "ollama"):
-        raise ValueError(f"invalid priority: {priority!r} (must be auto/swim/nexrad/weather/ollama)")
+    if priority not in ("auto", "swim", "nexrad", "weather"):
+        raise ValueError(f"invalid priority: {priority!r} (must be auto/swim/nexrad/weather)")
     now = time.time()
     expires_at = (now + ttl_seconds) if ttl_seconds else None
     with conn() as c:
@@ -3870,33 +3913,138 @@ def init_db_v22() -> None:
                 c.execute(stmt)
 
 
-def _extract_aircraft_hex_registration(raw_xml: str | None) -> tuple[str | None, str | None]:
+def _strip_xml_namespaces(raw_xml: str) -> str:
+    """Drop namespace prefixes (ns2:, ns3:, xsi:, etc.) and xmlns declarations
+    so ElementTree can be walked with plain local tag/attribute names.
+    FDPS FIXM documents declare 4+ namespaces (see fdps_parser.py) purely as
+    prefixes on otherwise-flat element/attribute names -- this codebase has
+    no need to distinguish them, only to read the data."""
+    import re
+    raw_xml = re.sub(r'\sxmlns(:\w+)?="[^"]*"', '', raw_xml)
+    raw_xml = re.sub(r'(</?)\w+:', r'\1', raw_xml)
+    raw_xml = re.sub(r'(<\w+[^>]*?)\s\w+:(\w+=)', r'\1 \2', raw_xml)
+    return raw_xml
+
+
+def _find_flight_element(raw_xml: str | None, callsign: str):
     """flight_events.raw_json actually holds the raw FDPS FIXM XML text
     (not JSON, despite the column name) -- see ingest/parsers/fdps_parser.py
     for the full namespace-aware parse this mirrors a narrow slice of.
-    The <aircraftDescription> element carries aircraftAddress (ICAO 24-bit
-    hex) and registration (tail number) as plain XML attributes, e.g.:
-        <aircraftDescription ... aircraftAddress="AB2C8E" ... registration="N819UA" ...>
 
-    A small targeted regex is used here rather than importing
-    fdps_parser.py's namespace-aware ElementTree helpers (those are
-    module-private and this only needs two flat attributes, not a full
-    tree walk) or a fresh XML parse in common/db.py (keeps this module's
-    dependency footprint as-is). Returns (None, None) if either attribute
-    is absent -- normal for a flight plan that hasn't had an aircraft
-    assigned yet, not an error."""
+    CRITICAL: one stored raw_json document is a FDPS MessageCollection
+    batch that can bundle 20+ UNRELATED flights' <message> blocks together
+    (confirmed live 2026-08-27: a single stored row for UAL1240 also
+    contained MXY1019, N121TS, UAL2787, AAL1881, and 16 others). Any
+    extraction that regex-searches the WHOLE raw_xml blindly returns the
+    FIRST match in the document, which is only correct for the flight that
+    happens to be listed first -- a real, previously-undiscovered
+    cross-contamination risk for every other flight in the batch. This
+    parses properly and returns ONLY the <flight> element whose
+    flightIdentification aircraftIdentification matches `callsign`, or
+    None if not found in this document. Every extractor below must be
+    scoped to this element, never to the raw string as a whole."""
     if not raw_xml:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(_strip_xml_namespaces(raw_xml))
+    except ET.ParseError:
+        return None
+    for flight in root.iter("flight"):
+        ident = flight.find(".//flightIdentification")
+        if ident is not None and ident.get("aircraftIdentification") == callsign:
+            return flight
+    return None
+
+
+def _extract_aircraft_hex_registration(flight) -> tuple[str | None, str | None]:
+    """Extract Mode-S hex + registration from ONE already-scoped <flight>
+    element (see _find_flight_element -- never pass it a whole raw_xml
+    document). Two known shapes carry the hex, checked in order:
+      1. <aircraftDescription aircraftAddress="AB2C8E" registration="N819UA" .../>
+         -- carries both hex AND registration together.
+      2. <supplementalData><additionalFlightInformation>
+           <nameValue name="ADSB_02M_52B" value="-AB2C8E"/>
+         -- hex only (leading "-" prefix, stripped here), no registration in
+         this shape. Confirmed live 2026-08-27: en-route/surveillance-type
+         messages (source="TH") carry ONLY this shape, not
+         <aircraftDescription> at all -- shape 1 alone silently returned
+         (None, None) for every such message with zero error surfaced,
+         which looked like "FDPS never has the hex" for any flight whose
+         stored messages happen to all be this shape (confirmed on a real
+         UA1453 sweep, see CLAUDE.md's Known bad section).
+
+    Returns (None, None) if neither shape is present on this flight --
+    normal for a flight plan that hasn't had an aircraft assigned yet
+    (shape 1) or carries no en-route surveillance ping yet (shape 2), not
+    an error."""
+    if flight is None:
         return None, None
-    import re
-    hex_m = re.search(r'aircraftAddress="([0-9A-Fa-f]{6})"', raw_xml)
-    reg_m = re.search(r'\bregistration="([^"]+)"', raw_xml)
-    return (
-        hex_m.group(1).upper() if hex_m else None,
-        reg_m.group(1) if reg_m else None,
-    )
+    hex_id = registration = None
+    desc = flight.find(".//aircraftDescription")
+    if desc is not None:
+        addr = desc.get("aircraftAddress")
+        if addr:
+            hex_id = addr.upper()
+        registration = desc.get("registration") or None
+    if not hex_id:
+        for nv in flight.iter("nameValue"):
+            if nv.get("name") == "ADSB_02M_52B":
+                val = (nv.get("value") or "").lstrip("-")
+                if val:
+                    hex_id = val.upper()
+                break
+    return hex_id, registration
 
 
-def get_flight_plan_by_callsign(callsign: str) -> dict | None:
+def _extract_aircraft_position(flight) -> dict:
+    """Extract live en-route surveillance position/altitude/speed from ONE
+    already-scoped <flight> element (see _find_flight_element -- never pass
+    it a whole raw_xml document). Shape (confirmed live 2026-08-27):
+        <enRoute><position reportSource="SURVEILLANCE" positionTime="...">
+          <actualSpeed><surveillance uom="KNOTS">518.0</surveillance></actualSpeed>
+          <altitude uom="FEET">31000.0</altitude>
+          <position><location><pos>36.83 -84.72</pos></location></position>
+        </position></enRoute>
+
+    Returns {} if not present (normal -- most stored FDPS messages are
+    flight-plan/status updates with no surveillance ping attached, not an
+    error). Never raises. Added alongside the ADSB_02M_52B hex fix above --
+    get_flight_plan_by_callsign()'s position_lat/position_lon/altitude_ft/
+    ground_speed_kt columns were unconditionally NULL because no extractor
+    for this data existed at all, even though it's present in raw_json for
+    plenty of stored messages."""
+    if flight is None:
+        return {}
+    pos_elem = None
+    for p in flight.iter("position"):
+        if p.get("reportSource") == "SURVEILLANCE":
+            pos_elem = p
+            break
+    if pos_elem is None:
+        return {}
+    speed = pos_elem.find(".//actualSpeed/surveillance")
+    altitude = pos_elem.find("altitude")
+    pos_text = pos_elem.find(".//location/pos")
+    if speed is None or altitude is None or pos_text is None or not pos_text.text:
+        return {}
+    try:
+        lat_str, lon_str = pos_text.text.split()
+        return {
+            "position_lat": float(lat_str),
+            "position_lon": float(lon_str),
+            "altitude_ft": float(altitude.text),
+            "ground_speed_kt": float(speed.text),
+            "position_time": pos_elem.get("positionTime"),
+        }
+    except (ValueError, AttributeError):
+        return {}
+
+
+_DC_AREA_AIRPORTS = ("KDCA", "DCA", "KIAD", "IAD", "KBWI", "BWI")
+
+
+def get_flight_plan_by_callsign(callsign: str, destination_hint: str | None = None) -> dict | None:
     """Confirmed flight-plan details from FAA FDPS (SWIM/SFDPS FIXM feed),
     keyed by ICAO callsign (e.g. 'UAL2185' -> airline='UAL', flight_num='2185').
 
@@ -3905,6 +4053,24 @@ def get_flight_plan_by_callsign(callsign: str) -> dict | None:
     (feed coverage gap, callsign not yet filed, or genuinely no match).
     Prefers a non-cancelled row when both a stale cancelled entry and a
     fresher active/proposed one exist for the same reused callsign.
+
+    2026-08-27: a flight number can be legitimately reused for two
+    DIFFERENT same-day legs (confirmed live: UA1453 flies an evening
+    KBUR->KSFO hop, then a separate later KSFO->KIAD leg most days, same
+    aircraft turning around) -- picking the single latest-updated row
+    blind can silently resolve to the WRONG leg's identity/OOOI data. This
+    disambiguates in two passes:
+      1. If `destination_hint` is given (any ICAO/IATA airport), prefer
+         rows matching that destination.
+      2. Otherwise, prefer rows arriving at DCA/IAD/BWI -- operator
+         directive: every flight this deployment watches arrives at one of
+         those three, so among reused-number candidates, a DC-area
+         destination is the correct disambiguator far more often than
+         "whichever leg's FDPS message happened to update most recently."
+    Falls back to the original latest-row behavior if neither pass finds a
+    match (a genuinely non-DC-bound flight, or no destination recorded
+    yet), so this is additive, not a behavior change for the common case
+    of a flight number that is NOT reused.
 
     2026-08-10: the returned dict now also carries "hex" and
     "registration" keys, parsed from raw_json via
@@ -3921,16 +4087,55 @@ def get_flight_plan_by_callsign(callsign: str) -> dict | None:
     airline, flight_num = m.group(1).upper(), m.group(2)
 
     with conn() as c:
-        row = c.execute("""
-            SELECT * FROM flight_events
-            WHERE airline = ? AND flight_num = ?
-            ORDER BY (status != 'cancelled') DESC, updated_at DESC
-            LIMIT 1
-        """, (airline, flight_num)).fetchone()
+        row = None
+        if destination_hint:
+            row = c.execute("""
+                SELECT * FROM flight_events
+                WHERE airline = ? AND flight_num = ? AND destination = ?
+                ORDER BY (status != 'cancelled') DESC, updated_at DESC
+                LIMIT 1
+            """, (airline, flight_num, destination_hint.upper())).fetchone()
+        if not row and not destination_hint:
+            # 2026-08-27: a DC-bound row from days ago (a stale "proposed"
+            # filing that was never superseded, e.g. this exact scheduled
+            # leg not yet re-filed for today) is worse than no match at
+            # all -- confirmed live, UA1453's KSFO->KIAD leg had a
+            # 2026-08-24 "proposed" row still sitting there with no
+            # 2026-08-27 row yet, and blindly preferring "DC-bound" over
+            # "recent" would have presented 3-day-old data as tonight's
+            # flight. Require the match to be from within the last 20h
+            # (covers this leg's own irregular filing-time pattern,
+            # ~04:00-05:00Z most nights but 22:00-00:30Z on others) --
+            # anything older falls through to the plain latest-row query
+            # below, same as if no DC-bound row existed.
+            placeholders = ",".join("?" * len(_DC_AREA_AIRPORTS))
+            cutoff = time.time() - 20 * 3600
+            row = c.execute(f"""
+                SELECT * FROM flight_events
+                WHERE airline = ? AND flight_num = ? AND destination IN ({placeholders})
+                  AND updated_at > ?
+                ORDER BY (status != 'cancelled') DESC, updated_at DESC
+                LIMIT 1
+            """, (airline, flight_num, *_DC_AREA_AIRPORTS, cutoff)).fetchone()
+        if not row:
+            row = c.execute("""
+                SELECT * FROM flight_events
+                WHERE airline = ? AND flight_num = ?
+                ORDER BY (status != 'cancelled') DESC, updated_at DESC
+                LIMIT 1
+            """, (airline, flight_num)).fetchone()
         if not row:
             return None
         plan = dict(row)
-        plan["hex"], plan["registration"] = _extract_aircraft_hex_registration(plan.get("raw_json"))
+        flight = _find_flight_element(plan.get("raw_json"), f"{airline}{flight_num}")
+        plan["hex"], plan["registration"] = _extract_aircraft_hex_registration(flight)
+        pos = _extract_aircraft_position(flight)
+        if pos:
+            plan["position_lat"] = pos["position_lat"]
+            plan["position_lon"] = pos["position_lon"]
+            plan["altitude_ft"] = pos["altitude_ft"]
+            plan["ground_speed_kt"] = pos["ground_speed_kt"]
+            plan["position_time"] = pos["position_time"]
         return plan
 
 
@@ -4993,6 +5198,170 @@ def init_db_v38() -> None:
                 c.execute(stmt)
 
 
+SCHEMA_V39 = """
+ALTER TABLE watchlist_entries ADD COLUMN hex_source TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN hex_updated_at TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN hex_corroborated_at TEXT;
+"""
+
+
+def init_db_v39() -> None:
+    """Apply v39 schema -- hex/registration provenance tracking.
+
+    2026-08-28 (operator directive, "figure out what fix or guardrail we
+    need to put in to prevent this in the future"): root cause was a real,
+    confirmed gap -- once an entry has ANY hex_id set, resolve_flight_
+    identity()'s lookup priority order queries FUTURE local sources BY
+    that hex (`elif expected_hex: ac = _local_ac_by_hex(expected_hex)`),
+    never again by callsign, and always sets resolved_via_hex=True on that
+    path -- which is exactly the flag the existing identity-mismatch check
+    (`if expected_hex and hex_id and hex_id != expected_hex and not
+    resolved_via_hex`) is gated to SKIP. So once ANY hex is set -- correct
+    or not, operator-typed or auto-resolved -- the system can never again
+    independently notice it was wrong. Confirmed live: UA1453's SFO-IAD
+    leg got an operator-supplied tail (N38479, cross-checked against
+    FlightAware) hand-written directly into hex_id/registration with no
+    way to distinguish "operator claim, never corroborated locally" from
+    "this box's own ADS-B/FDPS actually saw it" -- and no future local
+    sighting would ever have been allowed to confirm OR contradict it.
+
+    hex_source ("operator" | "adsb" | "fdps") records provenance.
+    hex_updated_at is when it was last set (any source). hex_corroborated_
+    at is when local ADS-B/FDPS last independently confirmed it via a
+    CALLSIGN-based (not hex-based) match -- NULL means "never
+    corroborated," the exact gap this closes. See
+    shared.watchlist.resolve_flight_identity()'s corroboration pass (added
+    alongside this migration) and common.db.set_watchlist_identity()'s
+    now-required `source` param."""
+    with conn() as c:
+        for stmt in SCHEMA_V39.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+SCHEMA_V40 = """
+ALTER TABLE watchlist_entries ADD COLUMN oooi_source TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_status TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_updated_at TEXT;
+"""
+
+# Source authority for oooi_phase specifically (2026-08-28, operator
+# directive: "given the lack of any others, let TBFM also be in the
+# authority chain"). Higher wins a same-phase update; a strictly LOWER
+# phase (using _OOOI_PHASE_ORDER below) is never accepted regardless of
+# source -- OOOI only moves forward. ACARS is the aircraft's own avionics
+# reporting wheels/gate events directly -- most authoritative by
+# construction. TFMS's flightTimeData carries the airline's own literal
+# reported OUT/OFF/ON/IN times -- second. TBFM doesn't carry a literal
+# OOOI timestamp (see update_watchlist_tbfm_status below, a dedicated
+# field instead, not forced into this enum) but is listed here for when a
+# future signal from it legitimately does. ADS-B/inferred is last --
+# useful for filling in when nothing else has reported yet, but never
+# allowed to overwrite a real report from one of the others.
+_OOOI_SOURCE_PRIORITY = {"adsb": 0, "tbfm": 1, "tfms": 2, "acars": 3}
+_OOOI_PHASE_ORDER = ["pre_departure", "out", "off", "on", "in"]
+
+
+def init_db_v40() -> None:
+    """Apply v40 schema -- oooi_source (provenance for oooi_phase, mirrors
+    v39's hex_source) and dedicated TBFM status columns (mirrors v23's
+    last_fdps_status/last_fids_status -- same reasoning: a shared field
+    across source types causes false "changed" re-fires, see v23's own
+    history).
+
+    2026-08-28 (operator directive, following directly from the hex-
+    corroboration guardrail above): "let's wire in those flight OOOOI
+    times from TFMS as well [into the live watchlist -- see
+    common.db.upsert_flight_ooooi()'s docstring/CLAUDE.md for the finding
+    that this data existed but was never read back into a watchlist
+    entry's live state]. Given the lack of any others, let TBFM also be in
+    the authority chain." See update_watchlist_oooi_phase_authoritative()
+    (wired into ingest/parsers/tfms_parser.py's _handle_flight_times, which
+    already had the real airlineOutTime/airlineOffTime/airlineOnTime/
+    airlineInTime data and was only ever persisting it to the separate,
+    never-read-back flight_ooooi_times table) and
+    update_watchlist_tbfm_status() (wired into
+    ingest/parsers/tbfm_parser.py, which previously had ZERO connection to
+    individual watchlist entries at all -- only fired aggregate
+    nationwide congestion alerts, never a per-flight one)."""
+    with conn() as c:
+        for stmt in SCHEMA_V40.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+def update_watchlist_oooi_phase_authoritative(entry_id: str, phase: str, source: str,
+                                              updated_at: str) -> bool:
+    """Authority-gated variant of update_watchlist_oooi_phase() -- OOOI
+    only ever moves FORWARD (pre_departure -> out -> off -> on -> in,
+    never backward regardless of source), and a same-phase update from a
+    LOWER-authority source than whatever already recorded that phase is
+    rejected (see _OOOI_SOURCE_PRIORITY's docstring). Returns True if the
+    update was applied, False if rejected (stale/regressive, or
+    outranked) -- callers can use this to decide whether to also fire a
+    notification.
+
+    This is deliberately a narrow, safe slice of the full "immutable
+    authority" framework discussed 2026-08-27/28 (see CLAUDE.md and memory
+    watchlist-standards for why the FULL framework -- per-fact staleness
+    rules, cross-source conflict resolution, FIDS-not-authoritative-for-
+    landed style exceptions -- is real design work, not this function).
+    This only handles the one case that was concretely actionable tonight:
+    TFMS's real airline-reported OOOI times were being computed and
+    discarded (written to flight_ooooi_times, never read back) instead of
+    updating the entry callers actually see."""
+    if phase not in _OOOI_PHASE_ORDER:
+        return False
+    new_idx = _OOOI_PHASE_ORDER.index(phase)
+    with conn() as c:
+        row = c.execute(
+            "SELECT oooi_phase, oooi_source FROM watchlist_entries WHERE id=?", (entry_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        current_phase, current_source = row["oooi_phase"], row["oooi_source"]
+        cur_idx = _OOOI_PHASE_ORDER.index(current_phase) if current_phase in _OOOI_PHASE_ORDER else -1
+        if new_idx < cur_idx:
+            return False  # never regress, regardless of source
+        if new_idx == cur_idx and current_source:
+            if _OOOI_SOURCE_PRIORITY.get(source, 0) < _OOOI_SOURCE_PRIORITY.get(current_source, 0):
+                return False  # a lower-authority source can't "re-confirm" over a higher one
+        c.execute(
+            "UPDATE watchlist_entries SET oooi_phase=?, oooi_phase_updated_at=?, oooi_source=? WHERE id=?",
+            (phase, updated_at, source, entry_id),
+        )
+        return True
+
+
+def update_watchlist_tbfm_status(entry_id: str, status: str, updated_at: str) -> None:
+    """Persist TBFM arrival-sequencing state for entry_id -- own dedicated
+    column, same reasoning as update_watchlist_fdps_status()/
+    update_watchlist_fids_status() (SCHEMA_V23): a shared field across
+    source types causes false "changed" re-fires when an unrelated check
+    type writes to it in between. TBFM covers DC-area (DCA/IAD/BWI)
+    arrivals only -- see ingest/parsers/tbfm_parser.py's module docstring
+    -- so this is NULL for the large majority of entries (departures, or
+    arrivals anywhere else), same normal-not-an-error shape as
+    last_fids_status."""
+    with conn() as c:
+        c.execute(
+            "UPDATE watchlist_entries SET last_tbfm_status=?, last_tbfm_updated_at=? WHERE id=?",
+            (status, updated_at, entry_id),
+        )
+
+
 def create_session_grant(command_pattern: str, granted_by: str,
                           reasoning: str = "", scope: str = "session",
                           ttl_seconds: float = 14400.0) -> dict:
@@ -5952,16 +6321,39 @@ def update_watchlist_destination(entry_id: str, destination: str) -> None:
         )
 
 
-def update_watchlist_hex_registration(entry_id: str, hex_id: str, registration: str | None) -> None:
+def update_watchlist_hex_registration(entry_id: str, hex_id: str, registration: str | None,
+                                      source: str = "fdps") -> None:
     """Persist a confirmed tail/airframe reassignment (e.g. an FDPS-
     detected aircraftAddress/registration change on the same flight
     plan) onto the watchlist entry itself. Same convergence reasoning as
     update_watchlist_destination() -- without this, _check_flight_fdps_
     cache's hex/registration comparison would never converge and the
     same "tail change" event would re-fire on every tick forever after a
-    genuine reassignment."""
+    genuine reassignment.
+
+    2026-08-28: `source` records provenance (hex_source) same as
+    set_watchlist_identity() -- see that function's docstring and
+    SCHEMA_V39. A real local reassignment detected here also counts as
+    corroboration (hex_corroborated_at), since it came from an actual
+    fresh FDPS read, not a caller's unverified claim."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with conn() as c:
         c.execute(
-            "UPDATE watchlist_entries SET hex_id=?, registration=? WHERE id=?",
-            (hex_id, registration, entry_id),
+            "UPDATE watchlist_entries SET hex_id=?, registration=?, hex_source=?, "
+            "hex_updated_at=?, hex_corroborated_at=? WHERE id=?",
+            (hex_id, registration, source, now, now, entry_id),
+        )
+
+
+def mark_watchlist_hex_corroborated(entry_id: str) -> None:
+    """Record that this entry's existing hex_id was just independently
+    confirmed by a fresh CALLSIGN-based (not hex-based) local ADS-B/FDPS
+    match -- see shared.watchlist.resolve_flight_identity()'s
+    corroboration pass. Does not touch hex_id/registration/hex_source
+    themselves, only the timestamp -- this is confirmation of an existing
+    value, not a new value."""
+    with conn() as c:
+        c.execute(
+            "UPDATE watchlist_entries SET hex_corroborated_at=? WHERE id=?",
+            (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), entry_id),
         )
