@@ -2466,6 +2466,37 @@ def upsert_tbfm_sequence(meter_fix: str, facility: str, flight_id: str,
         """, (meter_fix, facility, flight_id, eta, sequence_num, assigned_speed, now))
 
 
+def get_active_tbfm_sequence_count(meter_fix: str, max_age_seconds: float = 1800) -> int:
+    """Count of flights CURRENTLY sequenced at meter_fix -- last_seen within
+    max_age_seconds (default 1800s/30min, matching the queue-dwell
+    assumption already baked into ingest/parsers/tbfm_parser.py's own
+    _TBFM_WATCHLIST_DEDUP comment: "TBFM re-sends the same sequence/ETA on
+    a short cadence while a flight sits in the metering queue").
+
+    Added 2026-08-30 (real bug found live): check_tbfm_alerts() was
+    comparing its _MIN_SEQ_FOR_ALERT (5) floor against len(sequences) from
+    a SINGLE incoming SWIM message, not the fix's actual current queue --
+    TBFM sends incremental per-flight updates, so a real 40+-aircraft
+    queue at one fix (confirmed live: ZDC had 57, DC_MET 43) never
+    produced a batch anywhere near 5 in one message, permanently
+    suppressing every TBFM alert regardless of real congestion. This is
+    the live-queue-size query the threshold should have been checking
+    against all along.
+
+    tbfm_sequences.last_seen is stored as an ISO 8601 UTC string
+    ("%Y-%m-%dT%H:%M:%SZ", see upsert_tbfm_sequence() above) -- plain
+    string comparison against another ISO-formatted cutoff works correctly
+    here since both sides share that exact format (no timezone-offset
+    variants to normalize)."""
+    cutoff = (datetime.utcnow() - timedelta(seconds=max_age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM tbfm_sequences WHERE meter_fix=? AND last_seen > ?",
+            (meter_fix, cutoff),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
 SCHEMA_V7 = """
 -- Aircraft seen by local UltraFeeder ADS-B receiver.
 -- One row per ICAO hex, updated in-place on each position report.
