@@ -50,5 +50,27 @@ Slice=production.slice
 # TFR alerting is exactly the kind of call this box exists to never miss.
 CPUWeight=9000
 
+# 2026-08-30: memory governance, ported from the retired ollama.service.d/
+# 20-resource-limits.conf (see that file's extensive history) -- the
+# migration to per-tier llama-server units carried CPUWeight over but
+# NOT the memory lessons, and this tier was measured live fully swapped
+# out (VmRSS 42MB / VmSwap 3.6GB) with a real completion taking >90s for
+# 12 tokens. B (steady-state footprint) taken from this same day's live
+# measurement: journal-logged "2.3G memory peak, 3.4G memory swap peak"
+# for a single restart cycle under production.slice contention (see that
+# slice's own comment for the paired ceiling fix) -- rounded up to 3072M
+# for headroom, same 100%/125%/150% Low/High/Max formula the retired
+# drop-in used.
+MemoryLow=3072M
+MemoryHigh=3840M
+MemoryMax=4608M
+# Same reasoning as the retired drop-in's MemorySwapMax=0: this box's
+# zram swap makes a partial page-out/page-in cycle genuinely slow
+# (compression/decompression, not just an address remap), which is what
+# produced the 0.1 tok/s stalls -- zero swap turns that into fast reclaim
+# or a loud OOM, and Restart=always/RestartSec=5 above makes a hard
+# OOM-kill self-heal in seconds rather than degrade silently for minutes.
+MemorySwapMax=0
+
 [Install]
 WantedBy=default.target
