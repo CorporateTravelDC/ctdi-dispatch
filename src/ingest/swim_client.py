@@ -301,18 +301,22 @@ def _bandwidth_priority_says_pause(feed_name: str) -> bool:
           endpoint, and the auto-trigger is written to never stomp on a
           manually-set state (checks set_by before acting).
 
-      priority=ollama -- same low-priority tier as weather, pauses for the
-          duration of an in-flight Ollama call instead of a weather event.
-          Auto-set/cleared by common/llm.py (see OLLAMA_BACKPRESSURE_ENABLED
-          there), added 2026-08-11 after confirming a cold model load can
-          lose the CPU race entirely when ingest runs unshed on this 4-core
-          Pi. Same never-stomp discipline via set_by.
+      priority=ollama -- REMOVED 2026-08-28. Existed 2026-08-11 through the
+          llama.cpp cutover as the same low-priority pause, auto-triggered
+          around an in-flight Ollama call to protect a cold model load from
+          losing the CPU race on this 4-core Pi. No longer needed:
+          llama.cpp's hot/chat tiers are permanent, always-resident
+          processes with their own cgroup CPUWeight=9000 already giving
+          continuous OS-level priority over ingest -- there's no cold load
+          left to protect, and leaving this wired up post-migration just
+          paused these feeds for no benefit. common/db.py's
+          set_bandwidth_priority() no longer accepts 'ollama' at all.
 
-    fdps and tfms are never paused by priority=weather/ollama even though
-    fdps is the single largest bandwidth consumer -- those two feeds are
-    exactly what this platform exists to surface, so backpressure has to
-    come out of the other four, not out of the ones the user is most likely
-    to be checking against.
+    fdps and tfms are never paused by priority=weather even though fdps is
+    the single largest bandwidth consumer -- those two feeds are exactly
+    what this platform exists to surface, so backpressure has to come out
+    of the other four, not out of the ones the user is most likely to be
+    checking against.
     """
     try:
         state = _db.get_bandwidth_priority()
@@ -325,7 +329,7 @@ def _bandwidth_priority_says_pause(feed_name: str) -> bool:
 
     if priority == "nexrad":
         return feed_name == "fdps"
-    if priority in ("weather", "ollama"):
+    if priority == "weather":
         return feed_name in _LOW_PRIORITY_FEEDS
     return False
 

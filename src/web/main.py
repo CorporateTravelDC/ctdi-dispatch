@@ -1943,18 +1943,42 @@ _ADSB_DEFAULT_LAT = float(os.getenv("ULTRAFEEDER_LAT", 38.8521))
 _ADSB_DEFAULT_LON = float(os.getenv("ULTRAFEEDER_LON", -77.0377))
 
 
+def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in nautical miles. Local, dependency-free --
+    added 2026-08-27 alongside the airplanes.live removal below, since the
+    local ultrafeeder aircraft.json has no server-side radius filtering of
+    its own (it just returns everything currently visible) and this
+    endpoint's contract includes a `radius` param."""
+    import math
+    r_nm = 3440.065  # Earth radius in nautical miles
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r_nm * math.asin(math.sqrt(a))
+
+
 @app.get("/api/v1/adsb")
 def get_adsb_live(
     lat: float = _ADSB_DEFAULT_LAT,
     lon: float = _ADSB_DEFAULT_LON,
     radius: int = 250,
 ) -> JSONResponse:
-    """Proxy ADS-B snapshot from airplanes.live around a configurable map center.
+    """ADS-B snapshot from this box's own local ADS-B receiver (ultrafeeder/
+    readsb), filtered to a radius around a configurable map center.
+
+    2026-08-27 (operator directive, "everything is meant to be local",
+    reinforced after a live 429 from api.airplanes.live under load): this
+    used to proxy airplanes.live's global /v2/point/ endpoint, which could
+    show traffic anywhere regardless of this box's actual receiver range.
+    No third-party API is queried now -- results are necessarily bounded
+    by local receiver range (~150-250nm depending on antenna/altitude),
+    same real trade-off as /api/v1/watchlist's flight tracking.
 
     Query params:
       lat    — center latitude  (default: real receiver location, FEEDER_LAT)
       lon    — center longitude (default: real receiver location, FEEDER_LON)
-      radius — search radius in NM, 1-250 (max enforced; API hard-limits at 250)
+      radius — search radius in NM, 1-250
 
     Cache key is rounded to ~0.1-degree precision (~6 NM) to share results across
     minor pan events.  TTL is 30 seconds, matching the PWA poll interval.
@@ -1974,11 +1998,8 @@ def get_adsb_live(
 
     try:
         import requests as _req
-        r = _req.get(
-            f"https://api.airplanes.live/v2/point/{lat:.4f}/{lon:.4f}/{radius}",
-            timeout=10,
-            headers={"Accept": "application/json", "User-Agent": "corporatetraveldc-dispatch/1.0"},
-        )
+        uf_base = os.environ.get("ULTRAFEEDER_URL", "http://100.x.x.x:8080").rstrip("/")
+        r = _req.get(f"{uf_base}/data/aircraft.json", timeout=5)
         r.raise_for_status()
         raw = r.json()
     except Exception as exc:
@@ -1987,17 +2008,19 @@ def get_adsb_live(
             stale["stale"] = True
             return JSONResponse(stale)
         return JSONResponse(
-            {"source": "airplanes.live", "count": 0, "aircraft": [],
+            {"source": "local", "count": 0, "aircraft": [],
              "center": {"lat": lat, "lon": lon, "radius_nm": radius},
              "error": str(exc)},
             status_code=503,
         )
 
     aircraft = []
-    for ac in raw.get("ac", []):
+    for ac in raw.get("aircraft", []):
         ac_lat = ac.get("lat")
         ac_lon = ac.get("lon")
         if ac_lat is None or ac_lon is None:
+            continue
+        if _haversine_nm(lat, lon, ac_lat, ac_lon) > radius:
             continue
         aircraft.append({
             "hex":      ac.get("hex", ""),
@@ -2015,7 +2038,7 @@ def get_adsb_live(
         })
 
     result = {
-        "source":    "airplanes.live",
+        "source":    "local",
         "count":     len(aircraft),
         "cached_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
         "center":    {"lat": lat, "lon": lon, "radius_nm": radius},

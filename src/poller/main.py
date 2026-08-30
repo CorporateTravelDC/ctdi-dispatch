@@ -683,31 +683,40 @@ def _acars_reason_context(ident: str, registration: str | None) -> str:
 
 
 # 2026-08-13: standing directive -- prefer the local FAA/OpenSky registry
-# tables for registration/tail -> hex resolution over asking airplanes.live's
-# own /v2/reg/ endpoint, which depends on that specific aircraft currently
-# broadcasting AND airplanes.live's reg-lookup working at all (confirmed
-# live tonight: this box is currently getting 403'd by api.airplanes.live
+# tables for registration/tail -> hex resolution over a third-party
+# reg-lookup API, which depends on that specific aircraft currently
+# broadcasting AND the external service being reachable at all (confirmed
+# live that night: this box was getting 403'd by api.airplanes.live
 # entirely). The local registries are deterministic (a tail's hex barely
 # ever changes) and don't depend on any external service being reachable.
-# airplanes.live is still the only source for LIVE POSITION -- this only
-# changes how we get FROM a tail number TO the hex we then ask
-# airplanes.live's /v2/hex/ endpoint about.
 #
 # 2026-08-22: _local_registry_hex_lookup itself moved to
 # shared/watchlist.py alongside the rest of identity resolution (see
 # resolve_flight_identity's docstring) -- this comment block stays here as
 # the historical rationale for the lookup-priority order it now lives
 # inside of.
+#
+# 2026-08-27: airplanes.live removed entirely (operator directive,
+# "everything is meant to be local") -- resolve_flight_identity() now
+# sources live position from this box's own ADS-B receiver first, then
+# already-ingested local FDPS SWIM data, never a third-party API. The
+# globe.airplanes.live/?icao= tracking-URL link fired in notifications is
+# kept (a click-through convenience for the operator's own phone, not a
+# lookup this box performs).
 
 
 def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     """
-    Query airplanes.live free API for live ADS-B position.
+    Despite the name (kept for minimal call-site diff -- this function is
+    called from the main sweep loop and by name in several comments this
+    session already updated), this queries LOCAL sources only as of
+    2026-08-27: this box's own ADS-B receiver, then already-ingested FDPS
+    SWIM data (see shared.watchlist.resolve_flight_identity, which this
+    delegates to). No third-party API is queried.
     Returns True if data found (even if no new event fired), False if no data.
     Derives OOOI phase from position/altitude/speed.
     Also captures ICAO hex ID and updates watchlist notes.
 
-    URL: https://api.airplanes.live/v2/callsign/{CALLSIGN}
     Hex-based tracking link: https://globe.airplanes.live/?icao={HEX}
     Standing directive: always use hex ID for tracking URL, never tail/flight number.
     """
