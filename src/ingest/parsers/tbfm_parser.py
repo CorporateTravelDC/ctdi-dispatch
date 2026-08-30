@@ -288,7 +288,18 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
         by_fix.setdefault(fix, []).append(s)
 
     for fix, fix_seqs in by_fix.items():
-        seq_count = len(fix_seqs)
+        # 2026-08-30 (real bug found live): this used to be len(fix_seqs)
+        # -- the count of flights in THIS single incoming SWIM message,
+        # not the fix's actual current queue. TBFM sends incremental
+        # per-flight updates, so a real 40+-aircraft queue (confirmed
+        # live: ZDC had 57, DC_MET 43 in tbfm_sequences) almost never
+        # produces a single-message batch anywhere near
+        # _MIN_SEQ_FOR_ALERT, permanently suppressing every TBFM alert
+        # regardless of real congestion -- exactly what the operator
+        # observed (TBFM ingest healthy and writing data, zero alerts
+        # ever reaching ntfy). See db.get_active_tbfm_sequence_count()'s
+        # own docstring for the full writeup.
+        seq_count = db.get_active_tbfm_sequence_count(fix)
         if seq_count < _MIN_SEQ_FOR_ALERT:
             continue
         dedup_key = content_hash(f"tbfm:{fix}:{seq_count}")
