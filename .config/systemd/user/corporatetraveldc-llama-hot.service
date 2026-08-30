@@ -1,0 +1,54 @@
+[Unit]
+Description=llama.cpp hot tier (VIP/POTUS TFR + route-impact, permanent, never thermally paused)
+After=network-online.target
+
+[Service]
+# Ollama migration (2026-08-27): replaces the "hot" priority half of
+# common/ollama_lock.py's single shared Ollama slot -- see
+# common/llama_pool.py's module docstring for the full port map. This is
+# the ONLY tier that must never wait behind anything; it is a dedicated
+# always-resident process, not a claim out of the elastic report pool.
+#
+# --cache-ram 0 is load-bearing, not cosmetic: LLAMA_ARG_CACHE_RAM's
+# default (8192 MiB host-RAM prompt cache) triggers a known memory.high
+# cgroup throttling bug on this box (confirmed identically on this same
+# binary that Ollama itself works around by disabling it -- see
+# systemd/ollama.service.d/20-resource-limits.conf history).
+#
+# Incident 2026-08-27: starting this unit and llama-chat.service at the
+# same moment (both WantedBy=default.target, no ordering between them)
+# drove load1 to 41+ -- two llama-server processes cold-reading the same
+# 2.1GB GGUF concurrently is a thundering-herd hit on the page cache/disk,
+# not a steady-state RAM problem (the box has 15GB RAM; llama.cpp mmaps
+# the model, so once ANY process has faulted a page in, every other
+# process sharing this exact file path reads it from cache, not disk --
+# same physical pages, not N copies). It tripped thermal-ingest-guard's
+# Load Guard and force-killed corporatetraveldc-poller. This ExecStartPre
+# sequentially reads the whole model file once, up front, so hot's own
+# load is a clean single disk read and the page cache is warm for
+# whichever process starts next (see llama-chat.service's After= +
+# health-wait, which now blocks on this one finishing first).
+ExecStartPre=/usr/bin/dd if=/var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf of=/dev/null bs=4M status=none
+# 2026-08-27: deliberately NO --chat-template flag. `--chat-template phi3`
+# (llama-server's generic built-in) produced garbage on this exact GGUF --
+# confirmed live: prompt_n=3 (should be ~20-30+ for a real system+user
+# message), output was nonsense token fragments, not text. Omitting the
+# flag entirely lets llama-server read the correct template straight from
+# this GGUF's own embedded tokenizer.chat_template metadata, which
+# produced a coherent, correctly-tokenized response in the same test.
+ExecStart=/usr/local/lib/ollama/llama-server \
+    -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
+    --host 100.x.x.x --port 8093 \
+    -np 1 -t 2 -c 4096 \
+    --cache-ram 0 \
+    --no-webui
+Restart=always
+RestartSec=5
+Slice=production.slice
+# Priority tier matches ntfy.container/cloudflared.service (must-never-die
+# alongside the box's native pihole-FTL/unbound/tailscaled) -- VIP/POTUS
+# TFR alerting is exactly the kind of call this box exists to never miss.
+CPUWeight=9000
+
+[Install]
+WantedBy=default.target

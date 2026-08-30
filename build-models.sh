@@ -46,8 +46,8 @@ if ! "${REPO_DIR}/scripts/verify-manifest.sh"; then
     exit 5
 fi
 
-OLLAMA_HOST="${OLLAMA_HOST:-100.x.x.x:11434}"; export OLLAMA_HOST
-OLLAMA_URL="http://${OLLAMA_HOST}"
+LLAMA_HOST="${LLAMA_HOST:-100.x.x.x:11434}"; export LLAMA_HOST
+LLAMA_URL="http://${LLAMA_HOST}"
 
 # name -> Modelfile suffix
 #
@@ -206,19 +206,19 @@ build_one() {
     echo "=== BRIEF model ${name} (guarded build) ==="
     assert_brief_base_ok "$modelfile" "$name"
     echo "  building ${name}:candidate ..."
-    ollama create "${name}:candidate" -f "$modelfile"
+    llama create "${name}:candidate" -f "$modelfile"
     if smoke_test_brief_model "${name}:candidate"; then
-      ollama cp "${name}:candidate" "${name}:latest"
-      ollama rm "${name}:candidate" >/dev/null 2>&1 || true
+      llama cp "${name}:candidate" "${name}:latest"
+      llama rm "${name}:candidate" >/dev/null 2>&1 || true
       echo "  ✅ PROMOTED ${name} -> :latest"
     else
-      ollama rm "${name}:candidate" >/dev/null 2>&1 || true
+      llama rm "${name}:candidate" >/dev/null 2>&1 || true
       echo "  ⛔ NOT PROMOTED — ${name}:latest left as last-known-good. Fix the base and rebuild."
       FAILED_BRIEF=1
     fi
   else
     echo "=== Building ${name} (${suffix}) ==="
-    ollama create "${name}" -f "$modelfile"
+    llama create "${name}" -f "$modelfile"
   fi
   echo ""
 }
@@ -238,7 +238,7 @@ FAILED_BRIEF=0
 for name in "${TO_BUILD[@]}"; do build_one "$name" "${MODELS[$name]}"; done
 
 echo "=== Verifying models ==="
-ollama list | grep -E "corporatetraveldc|gemma|qwen|llama" || true
+llama list | grep -E "corporatetraveldc|gemma|qwen|llama" || true
 
 if [ "$FAILED_BRIEF" = "1" ]; then
   echo ""

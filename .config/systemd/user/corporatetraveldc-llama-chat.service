@@ -1,0 +1,35 @@
+[Unit]
+Description=llama.cpp chat tier (interactive Dispatch Drawer, permanent)
+After=network-online.target corporatetraveldc-llama-hot.service
+Wants=corporatetraveldc-llama-hot.service
+
+[Service]
+# Ollama migration (2026-08-27): replaces corporatetraveldc-pi5-chat.
+# See common/llama_pool.py's module docstring for the full port map.
+# num_ctx 4096 matches corporatetraveldc.chat's Modelfile exactly (see
+# common/personas.py PERSONAS["chat"]).
+#
+# Incident 2026-08-27 (see llama-hot.service's own comment for the full
+# writeup): After= alone only orders unit ACTIVATION, not readiness --
+# systemd fires both ExecStarts within moments of each other regardless,
+# which is exactly what caused the load1=41 spike. This ExecStartPre
+# blocks on hot's /health actually returning 200 (model fully loaded, not
+# just process started) before this unit's own llama-server touches the
+# same file, so the two loads are genuinely sequential rather than merely
+# unit-ordered.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://100.x.x.x:8093/health >/dev/null && exit 0; sleep 2; done; echo "llama-hot did not become healthy in time" >&2; exit 1'
+ExecStart=/usr/local/lib/ollama/llama-server \
+    -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
+    --host 100.x.x.x --port 8094 \
+    -np 1 -t 2 -c 4096 \
+    --cache-ram 0 \
+    --no-webui
+Restart=always
+RestartSec=5
+Slice=production.slice
+# A human is waiting on the reply here (see corporatetraveldc.chat's own
+# comment: "a human is waiting on the reply") -- same priority tier as hot.
+CPUWeight=9000
+
+[Install]
+WantedBy=default.target
