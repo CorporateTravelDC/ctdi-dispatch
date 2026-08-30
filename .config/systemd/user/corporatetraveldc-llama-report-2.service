@@ -1,0 +1,24 @@
+[Unit]
+Description=llama.cpp report tier #2 (ops-brief/ep-advance/weekly-summary/osint-monitor/etc, permanent)
+After=network-online.target corporatetraveldc-llama-report-1.service
+Wants=corporatetraveldc-llama-report-1.service
+
+[Service]
+# See corporatetraveldc-llama-report-1.service's comment for the full
+# rationale -- this is the second of the fixed report-tier ports,
+# health-gated to start strictly after report-1 for the same
+# cold-load-thundering-herd reason hot->chat->report-1 are chained.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://100.x.x.x:8095/health >/dev/null && exit 0; sleep 2; done; echo "llama-report-1 did not become healthy in time" >&2; exit 1'
+ExecStart=/usr/local/lib/ollama/llama-server \
+    -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
+    --host 100.x.x.x --port 8096 \
+    -np 1 -t 2 -c 8192 \
+    --cache-ram 0 \
+    --no-webui
+Restart=always
+RestartSec=5
+Slice=production.slice
+CPUWeight=100
+
+[Install]
+WantedBy=default.target
