@@ -31,6 +31,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 from common.llm import generate as llm_generate, trim_to_token_budget
+from common.ntfy_push import send_run_status
 from common.sr1_log import log_usage
 from second_brain import webdav_client
 from second_brain.index_db import INDEX_DB, index_note
@@ -92,6 +93,7 @@ def main() -> None:
     gate_result = "new"
     status = "error"
     today = date.today()
+    rel_path = None
 
     try:
         # 2026-08-06: 01-Sources/daily (raw daily logs) + 04-Syntheses/daily
@@ -217,6 +219,8 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, gate_result)
+        send_run_status(SKILL_NAME, status, detail=rel_path,
+                        ok_statuses=("ok", "fallback", "no-content"))
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 from common import config
+from common import ntfy_push
 from common.llm import generate as llm_generate
 from common.rss_retrieval import retrieve, format_citations
 from common.sr1_log import log_usage
@@ -242,6 +243,7 @@ def _split_framings(raw: str) -> tuple[str, str]:
 def main() -> None:
     status = "error"
     today = date.today()
+    rel_path = None
 
     try:
         items = _fetch_week_items()
@@ -353,6 +355,7 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, "new")
+        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path)
 
 
 if __name__ == "__main__":

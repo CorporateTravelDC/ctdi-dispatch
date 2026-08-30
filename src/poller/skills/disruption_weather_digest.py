@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 
 from common import config, db
 from common.llm import generate as llm_generate
+from common.ntfy_push import send_run_status
 from common.sr1_log import log_usage
 from second_brain import webdav_client
 from second_brain.index_db import INDEX_DB, index_note
@@ -133,6 +134,7 @@ def main() -> None:
     status = "error"
     now = datetime.now(timezone.utc)
     stamp = now.strftime("%Y-%m-%dT%H%M")
+    rel_path = None
 
     try:
         raw_content, stats = build_digest_content()
@@ -203,6 +205,7 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, "n/a")
+        send_run_status(SKILL_NAME, status, detail=rel_path)
 
 
 if __name__ == "__main__":

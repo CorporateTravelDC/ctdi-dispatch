@@ -99,6 +99,7 @@ def _day_label(d: date) -> str:
 
 def main() -> None:
     status = "error"
+    rel_path = None
     today = date.today()
 
     try:
@@ -214,6 +215,7 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, "new")
+        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path)
 
 
 if __name__ == "__main__":

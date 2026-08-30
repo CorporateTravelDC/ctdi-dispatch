@@ -257,3 +257,44 @@ def send_dual(
          tags="airplane,partly_sunny")
     send(topic_brief, concise_message,  title=title, priority=priority,
          tags="airplane")
+
+
+def send_run_status(
+    skill_name: str,
+    status: str,
+    *,
+    ok_statuses: tuple = ("ok", "fallback"),
+    detail: str | None = None,
+    systemd_unit: str | None = None,
+    topic: str = "dispatch-ops",
+) -> None:
+    """Lightweight health-check ping for a daily/weekly digest skill's own
+    run outcome -- NOT the report content itself. The report stays
+    vault-only, per each skill's own established convention (see each
+    skill's module docstring for why); this is just "did today's/this
+    week's report actually run", added 2026-08-30 per operator directive
+    so dispatch-ops carries a real per-skill signal instead of only
+    lighting up on weekly_summary's own fire.
+
+    status: whatever value the calling skill's own local status variable
+    already holds (e.g. "ok"/"fallback"/"blocked"/"error"). ok_statuses
+    lists which of those count as success for this ping's wording -- a
+    "fallback" run still produced a usable report via the deterministic
+    path, so it still counts as success here even though the skill's own
+    log_usage() call records it as a distinct outcome.
+    detail: vault path or other one-line specifics to include when the
+    caller has one on hand -- optional, since not every call site has an
+    easy handle on it (e.g. an exception before the write completed).
+    systemd_unit: the corporatetraveldc-<name> unit to point at for log
+    investigation on failure -- defaults to a name derived from
+    skill_name (underscores -> hyphens) if not given.
+    """
+    unit = systemd_unit or f"corporatetraveldc-{skill_name.replace('_', '-')}"
+    if status in ok_statuses:
+        msg = f"{skill_name} ran (status={status})"
+        if detail:
+            msg += f" — available at {detail}"
+        send(topic, msg, title=f"{skill_name}: complete", priority=2, tags="white_check_mark")
+    else:
+        msg = f"{skill_name} failed (status={status}) — check: journalctl --user -u {unit}"
+        send(topic, msg, title=f"{skill_name}: FAILED", priority=4, tags="x")
