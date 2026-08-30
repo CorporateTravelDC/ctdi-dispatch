@@ -17,7 +17,7 @@ Environment=AR_SERVE_ZMQ_ACARS=45550
 Environment=AR_SERVE_ZMQ_VDLM2=45555
 # Outbound feeds: acarsdrama + airframes.io + local watcher
 # VDL2: acarsdrama, airframes.io, local acars-watcher
-Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5555;corporatetraveldc-acars-watcher:5005
+Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5553;corporatetraveldc-acars-watcher:5005
 # ACARS: acarsdrama, airframes.io (acarsdec re-enable pending)
 Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550;feed.airframes.io:5550
 Environment=AR_OVERRIDE_STATION_NAME=corporatetraveldc-kdca-vdl2
