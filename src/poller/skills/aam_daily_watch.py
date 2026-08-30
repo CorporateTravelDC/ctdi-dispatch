@@ -141,10 +141,11 @@ def main() -> None:
             # (53 + 1457.8) x 1.25 = 1889s -> 1890.
             timeout=1890,
             # allow_anthropic=False keeps this Ollama-only (no silent cloud
-            # fallback/cost). max_retries=2 (2026-08-07): a model-swap/cold-load
-            # transport blip retries (up to 2x, each a fresh 240s) instead of
-            # falling straight back -- 3x240=720s still fits TimeoutStartSec=950.
-            allow_anthropic=False, max_retries=2,
+            # fallback/cost). (max_retries=2 -- 2026-08-07, retried a
+            # model-swap/cold-load transport blip -- was removed from
+            # generate() 2026-08-30: silently unused by the current
+            # llama-server-routing implementation.)
+            allow_anthropic=False,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")

@@ -38,7 +38,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from common.ollama_lock import ollama_slot, OllamaBusyError
 import requests
 
 from common import config, db, ntfy_push as _ntfy
@@ -59,8 +58,9 @@ OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
 # Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
 # timeouts, one constant per call site. Fail-fast semantics unchanged
-# (allow_anthropic=False, max_retries=0 -- see the 2026-08-06 incident
-# writeup in git history).
+# (allow_anthropic=False -- see the 2026-08-06 incident writeup in git
+# history; max_retries=0 was part of that same fix but the parameter was
+# removed from generate() 2026-08-30, see common/llm.py).
 # Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
 # methodology: guard timer paused, synthetic burn, la 16-27 at sample;
 # spiked persona-only refs bracketing these samples: 43.6s / 53.1s):
@@ -730,11 +730,12 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
     """Generate trend analysis via local Ollama only. Returns empty string on failure.
 
     2026-08-06: allow_anthropic=False (never call the cloud API for this
-    skill, operator directive) and max_retries=0 (a slow call gets ONE
-    attempt at the tight OLLAMA_TIMEOUT above, then straight to the
-    deterministic fallback the caller already builds on empty string --
-    no retry against Ollama with the same slow prompt, which is what let
-    a single call consume more time than the container's own timeout).
+    skill, operator directive) -- a slow call gets ONE attempt at the
+    tight OLLAMA_TIMEOUT above, then straight to the deterministic
+    fallback the caller already builds on empty string. (Originally also
+    max_retries=0 for the same reason; that parameter was removed from
+    generate() 2026-08-30 -- it had been silently unused by the current
+    llama-server-routing implementation anyway.)
     """
     return llm_generate(
         system=None,  # dedicated Modelfile carries this now
@@ -744,7 +745,6 @@ def _generate_trend_narrative(trend_prompt: str) -> str:
         temperature=0.15,
         timeout=OLLAMA_TREND_TIMEOUT,
         allow_anthropic=False,
-        max_retries=0,
     ) or ""
 
 
@@ -777,9 +777,10 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     system = None
 
     model_used = OLLAMA_MODEL
-    # 2026-08-06: allow_anthropic=False, max_retries=0 -- see
-    # _generate_trend_narrative above for the full explanation. Same
-    # fail-fast redesign, same root cause it fixes.
+    # 2026-08-06: allow_anthropic=False -- see _generate_trend_narrative
+    # above for the full explanation. Same fail-fast redesign, same root
+    # cause it fixes. (max_retries=0 removed 2026-08-30, see that function's
+    # own comment.)
     narrative = llm_generate(
         system=system,
         prompt=prompt_content,
@@ -788,7 +789,6 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
         temperature=0.2,
         timeout=OLLAMA_TIMEOUT,
         allow_anthropic=False,
-        max_retries=0,
     )
 
     if not narrative:

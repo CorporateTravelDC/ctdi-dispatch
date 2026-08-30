@@ -251,9 +251,12 @@ def main() -> None:
             # Ollama pause triggered a retry with a fresh 300s timeout, and
             # 300+300=600s hits this container's own TimeoutStartSec=600
             # with zero headroom. allow_anthropic=False keeps this Ollama-
-            # only; max_retries=0 sends one failed attempt straight to the
-            # deterministic fallback below instead of risking the kill.
-            allow_anthropic=False, max_retries=0,
+            # only, sending one failed attempt straight to the deterministic
+            # fallback below instead of risking the kill. (max_retries=0 was
+            # part of this same fix; removed from generate() 2026-08-30 --
+            # silently unused by the current llama-server-routing
+            # implementation.)
+            allow_anthropic=False,
         )
         if ollama_result:
             ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")

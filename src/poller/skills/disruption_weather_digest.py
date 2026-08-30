@@ -154,10 +154,11 @@ def main() -> None:
             # spiked persona-only ref = 513.7s; x1.13 top-up to the 53s locked bound applied;
             # (53 + 578.5) x 1.25 = 789s -> 810.
             timeout=810,
-            # Same allow_anthropic=False/max_retries=0 reasoning as
+            # Same allow_anthropic=False reasoning as
             # transport_pattern_digest.py -- see that skill's comment for
             # the exact 2026-08-06 timeout-stacking incident this avoids.
-            allow_anthropic=False, max_retries=0,
+            # (max_retries=0 removed from generate() 2026-08-30.)
+            allow_anthropic=False,
         )
         if ollama_result:
             ollama_result = gate(ollama_result, source=f"{SKILL_NAME}-llm")

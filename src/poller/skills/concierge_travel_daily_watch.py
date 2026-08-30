@@ -140,7 +140,7 @@ def main() -> None:
             # -> 773.0s at the 500-tok cap; delta over the 44.0s
             # spiked persona-only ref = 925.4s; x1.21 top-up to the 53s locked bound applied;
             # (53 + 1115.1) x 1.25 = 1460s -> 1470.
-            timeout=1470, allow_anthropic=False, max_retries=2,
+            timeout=1470, allow_anthropic=False,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")
