@@ -1,0 +1,6 @@
+[Unit]
+Description=Daily preventive restart of llama-hot + llama-chat (24h freshness cycle, per operator directive)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-llama-restart.sh
