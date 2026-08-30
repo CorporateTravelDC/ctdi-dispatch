@@ -34,7 +34,7 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 
 from common.ollama_lock import OllamaBusyError
-from common.llm import wait_then_budget, ollama_post_with_retry, sanitize_llm_response
+from common.llm import ollama_post_with_retry, sanitize_llm_response
 import requests
 
 from common import config, db, ntfy_push as _ntfy
@@ -955,18 +955,14 @@ Keep total brief under 750 words. Threat posture first; bottom line last."""
 def _call_ollama(prompt: str) -> tuple[str, str] | None:
     if not OLLAMA_BASE_URL:
         return None
-    # Added 2026-07-27: bounded pause-aware readiness wait, carved out of
-    # OLLAMA_TIMEOUT rather than stacked on top -- see
-    # common/llm.py's wait_then_budget() for the full rationale (a
-    # governor thermal SIGSTOP otherwise burns the entire 1200s timeout
-    # silently before falling back). This call bypasses common.llm.generate()
-    # (its own direct httpx path, kept for ep-advance's larger prompt/token
-    # budget), so it routes its wait through the same shared helper instead
-    # of duplicating the mechanism.
-    generate_timeout = wait_then_budget(OLLAMA_TIMEOUT)
-    if generate_timeout is None:
-        log.info("ep-advance: Ollama not ready after bounded readiness wait (governor thermal pause?)")
-        return None
+    # 2026-08-30: wait_then_budget()'s bounded pause-aware readiness wait
+    # (added 2026-07-27 for ollama_governor.py's thermal SIGSTOP) was
+    # removed from common/llm.py -- llama-server has no equivalent
+    # SIGSTOP/SIGCONT pause to wait out, so this now just uses the caller's
+    # own timeout budget directly, unmodified, matching common.llm.generate()'s
+    # own post-cutover behavior (see that module's "Ollama governor-pause
+    # readiness/unload apparatus -- REMOVED" comment).
+    generate_timeout = OLLAMA_TIMEOUT
     # priority="report" (2026-07-26): full advance brief, not a hot alert --
     # backs off immediately if a hot VIP/TFR call is pending, retries next
     # scheduled cycle. See common/ollama_lock.py.
@@ -987,7 +983,6 @@ def _call_ollama(prompt: str) -> tuple[str, str] | None:
             },
             timeout=generate_timeout,
             priority="report",
-            max_retries=0,
         )
         resp.raise_for_status()
         _j = resp.json()
@@ -1167,15 +1162,10 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
     """Generate the 12h trend narrative via Ollama. Returns empty string on failure."""
     if not OLLAMA_BASE_URL:
         return ""
-    # Added 2026-07-27: bounded pause-aware readiness wait -- see
-    # common/llm.py's wait_then_budget() and _call_ollama() above.
-    generate_timeout = wait_then_budget(OLLAMA_TREND_TIMEOUT_EP)
-    if generate_timeout is None:
-        log.info("ep-advance: trend narrative Ollama not ready after bounded readiness wait (governor thermal pause?)")
-        return ""
+    # 2026-08-30: wait_then_budget() removed -- see _call_ollama() above.
+    generate_timeout = OLLAMA_TREND_TIMEOUT_EP
     # priority="report" (2026-07-26): see common/ollama_lock.py.
     try:
-        # max_retries=0 (2026-08-06): see _call_ollama above.
         resp = ollama_post_with_retry(
             {
                 "model":  OLLAMA_TREND_MODEL_EP,
@@ -1187,7 +1177,6 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
             },
             timeout=generate_timeout,
             priority="report",
-            max_retries=0,
         )
         resp.raise_for_status()
         # 2026-08-17 (fable sweep): same shared response guard as

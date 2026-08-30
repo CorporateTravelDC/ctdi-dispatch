@@ -53,7 +53,7 @@ import time
 
 import httpx
 
-from common.ollama_lock import ollama_slot, OllamaBusyError
+from common.ollama_lock import OllamaBusyError
 
 # Signed-manifest integrity gate (docs/COMPLIANCE_SECURITY.md "Signed
 # Manifest Integrity") -- see _verify_before_inference() below, called at
@@ -394,62 +394,27 @@ ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 # only removes the footgun for template reuse elsewhere.
 ANTHROPIC_FALLBACK_ENABLED = os.getenv("ANTHROPIC_FALLBACK_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
 
-# ── Pause-aware readiness wait (added 2026-07-27) ─────────────────────────────
-# ollama_governor.py SIGSTOPs the native `ollama serve` process on a thermal
-# trip (~75C) and SIGCONTs it back around 65-68C. A SIGSTOPped process does
-# not refuse connections or error -- it just never responds, so a plain
-# generate() call sits fully silent until ITS OWN timeout expires and only
-# THEN falls back. Real pauses have run up to ~19 minutes; our timeouts are
-# tuned to real per-skill p99 generation time (60s-1200s depending on prompt
-# size, see OLLAMA_TIMEOUT usage note in generate()) and were never meant to
-# also absorb a governor pause on top of normal inference time.
-#
-# The fix is NOT "wait out the whole pause" (that would blow every caller's
-# timeout budget for a 19-minute event). It's: do a cheap, bounded poll for
-# readiness FIRST, carved OUT of the caller's existing timeout rather than
-# stacked additively on top of it. If Ollama comes back within that bounded
-# slice, proceed to generate with whatever time remains. If it doesn't,
-# skip straight to the Anthropic/deterministic fallback -- same total worst
-# case as before (never exceeds effective_timeout), but the common case
-# (governor not paused) costs nothing extra because the first readiness
-# check succeeds immediately.
-OLLAMA_READY_TIMEOUT_S      = float(os.getenv("OLLAMA_READY_TIMEOUT_S", "3.0"))
-OLLAMA_READY_POLL_INTERVAL_S = float(os.getenv("OLLAMA_READY_POLL_INTERVAL_S", "3.0"))
-OLLAMA_READY_WAIT_FRACTION  = float(os.getenv("OLLAMA_READY_WAIT_FRACTION", "0.34"))
-OLLAMA_READY_WAIT_CAP_S     = float(os.getenv("OLLAMA_READY_WAIT_CAP_S", "45.0"))
-
-# ── Mid-flight pause retry (added 2026-07-27) ─────────────────────────────────
-# wait_then_budget() only covers a pause that's already active BEFORE the
-# request starts. A pause that lands mid-request (governor trips while a
-# generate() call is in flight) still hits a hard httpx timeout, because
-# httpx's timeout is wall-clock and has no idea the far end is SIGSTOPped
-# rather than just slow. Operator ask: when THAT happens, don't count the
-# paused time against the request and fall back -- let it pick back up with
-# a full fresh timeout once the pause releases.
-#
-# Ollama's /api/generate is non-streaming here ("stream": False) and there
-# is no API-level checkpoint to resume a SIGSTOPped request's partial
-# output from -- so "resume" in practice means: detect that the timeout
-# was very likely pause-caused, wait (bounded) for the engine to answer a
-# cheap health check again, then RE-ISSUE the same prompt with a brand new
-# full-length timeout, rather than immediately handing the caller a
-# deterministic/Anthropic fallback. This is an honest approximation of
-# "reset the clock on resume," not a literal mid-generation resume -- flag
-# this distinction if it matters for a given caller's cost/latency budget.
-#
-# Bounded on two axes so a genuinely broken (not just paused) engine can't
-# retry forever: OLLAMA_MAX_RETRIES caps how many times a single generate()
-# call will re-issue the prompt, OLLAMA_RETRY_WAIT_CAP_S caps how long each
-# retry will wait for readiness before giving up (default matches the
-# worst governor pause observed so far, ~19min, plus margin).
-#
-# "hot" priority (real-time VIP/TFR alert paths, see common/ollama_lock.py)
-# NEVER enters this retry path -- a hot call must fail straight to fallback
-# on any timeout, the same as before this change. Retrying through a
-# possible 20-minute pause-wait is never acceptable for a call that exists
-# specifically to never wait behind anything.
-OLLAMA_MAX_RETRIES      = int(os.getenv("OLLAMA_MAX_RETRIES", "1"))
-OLLAMA_RETRY_WAIT_CAP_S = float(os.getenv("OLLAMA_RETRY_WAIT_CAP_S", "1200.0"))
+# ── Pause-aware readiness wait / mid-flight pause retry -- REMOVED 2026-08-30 ─
+# Both mechanisms (pre-flight _ollama_ready()/wait_for_ollama_ready()/
+# reserve_ready_wait_budget()/wait_then_budget(), and mid-flight retry via
+# OLLAMA_MAX_RETRIES/OLLAMA_RETRY_WAIT_CAP_S/max_retries/retry_wait_cap)
+# existed to detect and ride out ollama_governor.py's thermal SIGSTOP/SIGCONT
+# pauses on the native `ollama serve` process. Confirmed dead in two
+# different ways: the pre-flight half had zero callers left anywhere in this
+# file (generate() stopped calling wait_then_budget() during the 2026-08-27
+# llama.cpp cutover), and the mid-flight half's parameters were still
+# threaded through generate()/_ollama()/ollama_post_with_retry()'s
+# signatures and 12 external callers, but ollama_post_with_retry()'s current
+# llama-server-routing body never reads either one -- every caller passing
+# e.g. max_retries=0 believing it controlled real behavior was being
+# silently ignored. Gutted entirely rather than left inert: llama-server has
+# no SIGSTOP/SIGCONT governor pause to detect or retry through in the first
+# place, so neither mechanism could ever do anything useful even if some
+# future change accidentally wired it back in -- at best a no-op, at worst
+# something that quietly eats a caller's timeout budget polling a port
+# nothing meaningful listens on. max_retries/retry_wait_cap removed from
+# generate()/_ollama()/ollama_post_with_retry()'s signatures; all 12 external
+# call sites updated to drop the now-nonexistent kwargs.
 
 
 # ── Pre-flight thermal cool-launch gate (added 2026-07-27) ────────────────────
@@ -676,110 +641,17 @@ def preflight_load_gate_if_needed(priority: str) -> None:
 # still-legitimate triggers with their own real-event basis.
 
 
-def _ollama_ready(timeout_s: float = OLLAMA_READY_TIMEOUT_S) -> bool:
-    """Cheap health check against Ollama's own API. Never raises -- any
-    exception (connection refused, read timeout, DNS failure, whatever)
-    just means "not ready right now." This is what actually detects a
-    governor thermal pause: a SIGSTOPped process accepts the TCP connection
-    (backlog) but never completes the HTTP response, so this call reliably
-    times out during a real pause and returns instantly when the engine is
-    live.
-    """
-    if not OLLAMA_BASE_URL:
-        return False
-    try:
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=timeout_s)
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def wait_for_ollama_ready(max_wait_s: float, poll_interval_s: float = OLLAMA_READY_POLL_INTERVAL_S) -> bool:
-    """Poll _ollama_ready() until it returns True or max_wait_s elapses.
-    Returns True on the first check in the common case (engine not paused)
-    at the cost of one _ollama_ready() call -- effectively free. Bounded
-    so this never blocks longer than max_wait_s regardless of how it's
-    called.
-    """
-    if max_wait_s <= 0:
-        return _ollama_ready()
-    deadline = time.monotonic() + max_wait_s
-    while True:
-        if _ollama_ready():
-            return True
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        time.sleep(min(poll_interval_s, remaining))
-
-
-def reserve_ready_wait_budget(effective_timeout: float) -> float:
-    """How much of a caller's own timeout budget to spend polling for
-    Ollama readiness before attempting the real generate call. Bounded by
-    BOTH a fraction of that timeout and an absolute cap -- this wait is
-    carved OUT of the caller's existing budget, never stacked on top of it.
-    """
-    return min(OLLAMA_READY_WAIT_CAP_S, effective_timeout * OLLAMA_READY_WAIT_FRACTION)
-
-
-def wait_then_budget(effective_timeout: float) -> float | None:
-    """Wait for Ollama readiness (bounded, carved out of effective_timeout),
-    then return the timeout remaining for the actual generate/httpx call.
-
-    Returns None if Ollama never became ready inside the bounded wait --
-    the caller should skip straight to its own Anthropic/deterministic
-    fallback rather than hand a still-paused engine a full-length generate
-    call (which would just hang again until ITS timeout, paying the wait
-    twice for nothing). This is the pre-flight half of pause-awareness --
-    see ollama_post_with_retry() below for the mid-flight half (a pause
-    that starts only after the request is already underway).
-    """
-    wait_budget = reserve_ready_wait_budget(effective_timeout)
-    start = time.monotonic()
-    ready = wait_for_ollama_ready(wait_budget)
-    elapsed = time.monotonic() - start
-    if not ready:
-        return None
-    return max(effective_timeout - elapsed, 5.0)
-
-
-def _abandon_ollama_generation(model: str | None) -> None:
-    """Best-effort: tell Ollama to unload `model` the moment a caller's own
-    request times out, rather than leaving the underlying llama-server
-    child to keep computing for an abandoned client.
-
-    Found 2026-08-10/11: a timed-out httpx call releases ollama_slot()
-    (the caller's process exits/moves to fallback), but that does NOT stop
-    the actual generation running server-side inside Ollama's own
-    llama-server child -- it keeps burning CPU/RAM for a client that's
-    already gone, sometimes for 15-20+ minutes. Because ollama_slot() is a
-    CLIENT-side lock, its release does not mean the resource it was meant
-    to protect is actually free -- the next caller (hot or report) can
-    acquire the now-open slot immediately and fire straight into
-    contention with this orphaned generation, which is exactly how one
-    real timeout cascades into several. Confirmed live: a fresh reboot
-    (14min uptime, no prior test load) already reproduced this with a real
-    ep-advance run whose llama-server child kept running at 200%+ CPU
-    3+ minutes after ep-advance.service itself had exited.
-
-    Deliberately NOT the `ollama` CLI -- that binary lives on the host,
-    not inside the poller/skill containers this module runs in. Uses the
-    documented HTTP-only unload signal instead (empty prompt +
-    keep_alive=0). Best-effort and non-fatal by design: if this fails, the
-    caller's existing fallback behavior is completely unaffected -- this
-    only ever improves the odds for whichever request comes next.
-    """
-    if not model or not OLLAMA_BASE_URL:
-        return
-    try:
-        httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": model, "prompt": "", "keep_alive": 0},
-            timeout=5.0,
-        )
-        log.info("llm: sent unload signal for %s after timeout, so the next caller doesn't inherit it", model)
-    except Exception as exc:
-        log.info("llm: best-effort unload signal for %s failed (non-fatal): %s", model, exc)
+# ── Ollama governor-pause readiness/unload apparatus -- REMOVED 2026-08-30 ──
+# _ollama_ready(), wait_for_ollama_ready(), reserve_ready_wait_budget(),
+# wait_then_budget(), and _abandon_ollama_generation() (a real, live HTTP
+# call to OLLAMA_BASE_URL's /api/generate with keep_alive=0 -- the one
+# function in this cluster that WOULD have actually fired a request to the
+# dead port 11434 if anything still called it) all existed to manage
+# ollama_governor.py's thermal SIGSTOP/SIGCONT behavior and Ollama's
+# per-model keep_alive unload signal. Confirmed zero callers for all five
+# anywhere in this file or the rest of src/ -- deleted outright rather than
+# left dead-but-installed, per the same reasoning as the readiness-wait
+# constants removed just above.
 
 
 # ── Load-phase cold-load apparatus -- REMOVED 2026-08-28 ───────────────────
@@ -801,8 +673,6 @@ def ollama_post_with_retry(
     payload: dict,
     timeout: float,
     priority: str = "report",
-    max_retries: int | None = None,
-    retry_wait_cap: float | None = None,
 ) -> httpx.Response:
     """Despite the name and the Ollama-shaped payload/response contract
     (kept verbatim so every existing caller -- _ollama() via generate(),
@@ -929,8 +799,6 @@ def generate(
     priority: str = "report",
     timeout: float | None = None,
     allow_anthropic: bool = True,
-    max_retries: int | None = None,
-    retry_wait_cap: float | None = None,
 ) -> str | None:
     """
     Try Ollama, then Anthropic. Returns generated text or None if both fail.
@@ -959,23 +827,20 @@ def generate(
     working correctly if this box's env var is ever reverted without
     the code being touched).
 
-    max_retries/retry_wait_cap (2026-08-06): pass through to
-    ollama_post_with_retry() to override OLLAMA_MAX_RETRIES/
-    OLLAMA_RETRY_WAIT_CAP_S per call. Added alongside allow_anthropic for
-    ops_brief.py's fail-fast redesign -- see that module for why 0 retries
-    is now correct there (a genuinely slow generate call was being retried
-    with the identical slow prompt, guaranteeing the outer container
-    timeout would kill the whole run before either attempt finished). None
-    (default) keeps today's shared module-level defaults for every other
-    caller.
+    max_retries/retry_wait_cap REMOVED 2026-08-30 -- see the "Ollama
+    governor-pause readiness/unload apparatus" comment above generate()'s
+    old readiness-wait constants for why: ollama_post_with_retry()'s
+    current llama-server-routing body never read either one, so every
+    caller passing e.g. max_retries=0 (added 2026-08-06 for ops_brief.py's
+    fail-fast redesign) was being silently ignored.
 
     priority: "hot" for real-time VIP/TFR alert paths that must never wait
     behind a report job -- see common/ollama_lock.py. Defaults to "report"
     (the safe/conservative default: an unclassified caller defers to any
     pending hot work rather than risk starving a real-time alert). "hot"
-    also disables both pause-handling paths below (pre-flight wait and
-    mid-flight retry) -- a hot call fails straight to fallback on any
-    delay or timeout, exactly like before 2026-07-27.
+    also disables the pre-flight cool-launch/load gates below -- a hot
+    call fails straight to fallback on any delay or timeout, exactly like
+    before 2026-07-27.
 
     timeout: overrides the shared OLLAMA_TIMEOUT (currently 3600s, see
     dispatch.env; the "60s" this note used to cite predates the 2026-08
@@ -1070,8 +935,7 @@ def generate(
         else:
             ollama_attempted = True
             result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
-                              priority=priority, timeout=generate_timeout,
-                              max_retries=max_retries, retry_wait_cap=retry_wait_cap)
+                              priority=priority, timeout=generate_timeout)
             if result is not None:
                 return result
 
@@ -1124,8 +988,6 @@ def _ollama(
     temperature: float,
     priority: str = "report",
     timeout: float = OLLAMA_TIMEOUT,
-    max_retries: int | None = None,
-    retry_wait_cap: float | None = None,
 ) -> str | None:
     payload = {
         "model":   model,
@@ -1143,8 +1005,6 @@ def _ollama(
             payload,
             timeout=timeout,
             priority=priority,
-            max_retries=max_retries,
-            retry_wait_cap=retry_wait_cap,
         )
         resp.raise_for_status()
         j = resp.json()

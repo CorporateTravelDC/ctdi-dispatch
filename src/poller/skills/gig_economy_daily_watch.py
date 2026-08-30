@@ -17,7 +17,7 @@ docstring for the full cross-link/novel-findings/backlink-discovery
 design) -- this category didn't exist before the cross-link auto-track
 feature did, so there's no "retrofit the fix" note here the way AAM/
 aviation's daily skills have; it launches with the fail-fast Ollama
-pattern (allow_anthropic=False, max_retries=0) already in place.
+pattern (allow_anthropic=False) already in place.
 
 No ntfy push for the brief itself -- matches aam_daily_watch.py's
 established convention; entity_tracking's own ntfy ping on newly-promoted
@@ -149,7 +149,7 @@ def main() -> None:
             # -> 702.6s at the 500-tok cap; delta over the 43.8s
             # spiked persona-only ref = 852.9s; x1.21 top-up to the 53s locked bound applied;
             # (53 + 1031.6) x 1.25 = 1356s -> 1380.
-            timeout=1380, allow_anthropic=False, max_retries=2,
+            timeout=1380, allow_anthropic=False,
         )
         if ollama_result:
             gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")
