@@ -54,7 +54,6 @@ NTFY_TOKEN         = os.getenv("NTFY_TOKEN",                "")
 ULTRAFEEDER_URL    = os.getenv("ULTRAFEEDER_URL",           "http://127.0.0.1:8080/data/aircraft.json")
 ACARSHUB_URL       = os.getenv("ACARSHUB_URL",             "http://127.0.0.1:9081")
 AIS_CATCHER_URL    = os.getenv("AIS_CATCHER_URL",          "http://127.0.0.1:8110")
-AIRPLANES_LIVE     = "https://api.airplanes.live/v2"
 
 # acarsdrama Jumpseat -- primary external fallback for VDL2/ACARS/HFDL
 # Endpoint: https://api.jumpseat.acarsdrama.com/v1/messages/search
@@ -102,19 +101,6 @@ OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
 OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "corporatetraveldc-pi5-chat:latest")  # dispatch drawer
 OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",      OLLAMA_CHAT_MODEL) # backward-compat alias
-
-# Chat endpoint + auth headers: prefer Open WebUI's Ollama proxy; fall back to Ollama direct.
-def _chat_endpoint() -> str:
-    if OPENWEBUI_URL:
-        return f"{OPENWEBUI_URL.rstrip('/')}/ollama/api/chat"
-    if OLLAMA_BASE_URL:
-        return f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat"
-    return ""
-
-def _chat_headers() -> dict:
-    if OPENWEBUI_URL and OPENWEBUI_API_KEY:
-        return {"Authorization": f"Bearer {OPENWEBUI_API_KEY}"}
-    return {}
 
 # 2026-08-24 FIXED, and corrected again same pass: this was hardcoded to
 # a generic KDCA-area placeholder that never matched the real receiver --
@@ -520,6 +506,17 @@ async def adsb_local(request: Request):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"UltraFeeder unavailable: {e}")
 
+def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in nautical miles, dependency-free."""
+    import math
+    r_nm = 3440.065
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r_nm * math.asin(math.sqrt(a))
+
+
 @app.get("/api/adsb/live")
 async def adsb_live(
     request: Request,
@@ -527,24 +524,35 @@ async def adsb_live(
     lon: float = Query(DEFAULT_LON),
     dist: int  = Query(DEFAULT_DIST),
 ):
-    """Proxy to airplanes.live -- full area window regardless of antenna range.
+    """ADS-B snapshot from this box's own local ADS-B receiver, filtered to
+    a radius around the given center.
 
-    2026-08-27 (Opus blind review C-2, operator follow-up): this route had
-    no DEMO_MODE gate either -- directly reachable by a demo visitor for
-    real-time global traffic at any coordinates, bypassing adsb_local()'s
-    gate entirely. Same synthetic-only rule applies here.
+    2026-08-27 (operator directive, "everything is meant to be local",
+    reinforced after a live 429 from api.airplanes.live under load): this
+    used to proxy airplanes.live's global endpoint ("full area window
+    regardless of antenna range"). No third-party API is queried now --
+    results are necessarily bounded by this box's actual local receiver
+    range (~150-250nm), same real trade-off as adsb_local() and
+    /api/v1/watchlist's flight tracking. DEMO_MODE gate unchanged (Opus
+    blind review C-2): still synthetic-only, never touches the real
+    receiver, local or otherwise.
     """
     if DEMO_MODE:
         return _synthetic_adsb_snapshot(lat, lon)
-    url = f"{AIRPLANES_LIVE}/aircraft/lat/{lat}/lon/{lon}/dist/{dist}"
     try:
         async with httpx.AsyncClient() as c:
-            r = await c.get(url, timeout=12,
-                            headers={"User-Agent": "corporatetraveldc/1.0"})
+            r = await c.get(f"{ULTRAFEEDER_URL}", timeout=5)
             r.raise_for_status()
-            return {**r.json(), "source": "airplanes.live"}
+            raw = r.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"airplanes.live unavailable: {e}")
+        raise HTTPException(status_code=502, detail=f"UltraFeeder unavailable: {e}")
+
+    aircraft = [
+        ac for ac in raw.get("aircraft", [])
+        if ac.get("lat") is not None and ac.get("lon") is not None
+        and _haversine_nm(lat, lon, ac["lat"], ac["lon"]) <= dist
+    ]
+    return {**raw, "aircraft": aircraft, "source": "local"}
 
 # ── Signal proxy helpers -----------------------------------------------------
 
@@ -1464,81 +1472,98 @@ def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
 
 async def _llm_stream(system: str, messages: list[dict], model: str | None = None):
     """
-    Async generator — yields raw SSE data lines from Ollama.
+    Async generator — yields raw SSE data lines for the frontend.
     model: explicit override; falls back to OLLAMA_CHAT_MODEL if None.
-    Yields {"type":"no_llm"} if Ollama is not configured.
+    Yields {"type":"no_llm"} if no llama.cpp tier is configured/reachable.
     Yields {"type":"model_info","model":"..."} as first event so the frontend
     can display which model serviced the request.
+
+    2026-08-27 cutover: routes to llama-server (common/llama_pool.py,
+    common/personas.py) instead of Ollama's /api/chat -- OLLAMA_CHAT_MODEL
+    is kept as the env var name (zero-touch deploy compat) but is now
+    looked up as a persona key via persona_key_for(), same mapping
+    common/llm.py's ollama_post_with_retry() uses. The default model
+    always resolves to the "chat" tier's permanent port; an explicit
+    "/model <name>" override can resolve to "hot" or a "report" persona
+    too -- the report-tier branch trades away token-by-token streaming
+    (collects the full response via the pool, then yields it as one
+    chunk) since claim_port() is a blocking call and this is an
+    infrequent, operator-invoked edge case, not the common path.
     """
-    # ── Open WebUI proxy → Ollama (local LLM, no external deps) ─────────────
-    endpoint = _chat_endpoint()
-    if endpoint:
-        resolved_model = model or OLLAMA_CHAT_MODEL
+    from common.personas import persona_key_for, build_system_prompt, PERSONAS
+    from common import llama_pool
 
-        # ── Pre-flight: check if Ollama is saturated (single-slot, Pi 5) ──────
-        # /api/ps returns currently loaded/running models. If a model shows
-        # size_vram > 0 it means inference is active and the slot is occupied.
-        # We probe the direct Ollama URL regardless of OPENWEBUI_URL routing.
-        ollama_direct = OLLAMA_BASE_URL.rstrip("/") if OLLAMA_BASE_URL else "http://host.containers.internal:11434"
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3, read=5, write=3, pool=3)) as probe:
-                ps = await probe.get(f"{ollama_direct}/api/ps")
-                if ps.status_code == 200:
-                    ps_data = ps.json()
-                    models_running = ps_data.get("models", [])
-                    if models_running and any(m.get("size_vram", 0) > 0 for m in models_running):
-                        log.info("Ollama slot occupied — yielding model_busy, falling back to local data")
-                        yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
+    resolved_model = model or OLLAMA_CHAT_MODEL
+    persona_key = persona_key_for(resolved_model)
+    if persona_key is None:
+        log.warning("chat: model %r has no persona mapping -- no LLM fallback", resolved_model)
+        yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
+        return
+
+    tier = PERSONAS[persona_key]["tier"]
+    effective_system = system or build_system_prompt(persona_key)
+    payload = {
+        "messages": [{"role": "system", "content": effective_system}] + messages,
+        "temperature": PERSONAS[persona_key]["temperature"],
+        "top_p": PERSONAS[persona_key]["top_p"],
+        "max_tokens": PERSONAS[persona_key]["num_predict"],
+    }
+    yield f"data: {json.dumps({'type': 'model_info', 'model': resolved_model})}\n\n"
+
+    # Phase 4 2026-08-15 (plan joyful-mapping-crown) measurement carried
+    # forward: a 1289-tok chat prompt evals in ~90s at normal load
+    # (~14 tok/s). 110s is deliberately the interactive fail-fast bound
+    # (falls back to the local-data answer), bounded above by the nginx
+    # proxy_read_timeout=120s ceiling on /api/ask (see
+    # config/nginx-tailnet-runner-https.conf and
+    # nginx/conf.d/tailscale-dispatch-runner.conf) -- raise those first if
+    # this ever needs to go higher. No longer Ollama-specific but the
+    # underlying box/model haven't changed, so the budget still applies.
+    llm_timeout = httpx.Timeout(connect=10, read=110, write=10, pool=10)
+
+    async def _stream_from(port: int):
+        async with httpx.AsyncClient(timeout=llm_timeout) as c:
+            async with c.stream(
+                "POST",
+                f"http://{llama_pool.HOST}:{port}/v1/chat/completions",
+                json={**payload, "stream": True},
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[len("data: "):].strip()
+                    if data == "[DONE]":
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
                         return
-        except Exception as probe_err:
-            log.debug("Ollama /api/ps probe failed (%s) — proceeding", probe_err)
+                    try:
+                        obj = json.loads(data)
+                        choice = obj["choices"][0]
+                        content = choice.get("delta", {}).get("content", "")
+                        if content:
+                            yield f"data: {json.dumps({'type': 'text', 'text': content})}\n\n"
+                        if choice.get("finish_reason"):
+                            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                            return
+                    except Exception:
+                        pass
 
-        try:
-            payload = {
-                "model":    resolved_model,
-                "stream":   True,
-                "messages": [{"role": "system", "content": system}] + messages,
-            }
-            yield f"data: {json.dumps({'type': 'model_info', 'model': resolved_model})}\n\n"
-            # Phase 4 2026-08-15 (plan joyful-mapping-crown): measured on the
-            # dedicated corporatetraveldc-pi5-chat model (phi3:mini). Ollama
-            # streams zero bytes until prompt eval finishes, so read= must
-            # cover time-to-first-token. Measured: a 1289-tok chat prompt
-            # (runner system block + ctx + question) evals in ~90s at normal
-            # load (~14 tok/s) and 173s under forced TIER2+ contention
-            # (spike-measured 2026-08-15). 110s therefore covers normal-load
-            # chat but NOT a TIER2+ spike -- that is deliberate: this is the
-            # interactive fail-fast path (falls back to the local-data
-            # answer), and 110 is bounded above by the nginx
-            # proxy_read_timeout=120s ceiling on /api/ask (see
-            # config/nginx-tailnet-runner-https.conf and
-            # nginx/conf.d/tailscale-dispatch-runner.conf) -- raise those
-            # first if this ever needs to go higher.
-            llm_timeout = httpx.Timeout(connect=10, read=110, write=10, pool=10)
-            async with httpx.AsyncClient(timeout=llm_timeout) as c:
-                async with c.stream(
-                    "POST",
-                    endpoint,
-                    json=payload,
-                    headers=_chat_headers(),
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        try:
-                            obj     = json.loads(line)
-                            content = obj.get("message", {}).get("content", "")
-                            if content:
-                                yield f"data: {json.dumps({'type': 'text', 'text': content})}\n\n"
-                            if obj.get("done"):
-                                yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                                return
-                        except Exception:
-                            pass
+    try:
+        if tier == "hot":
+            async for chunk in _stream_from(llama_pool.HOT_PORT):
+                yield chunk
             return
-        except Exception as e:
-            log.warning("LLM backend unavailable (%s) — no LLM fallback", e)
+        # 2026-08-27: "chat" AND "report" both route to the permanent chat
+        # port for now -- see common/llm.py's ollama_post_with_retry() for
+        # the full rationale (dedicated report-tier ports caused two real
+        # near-OOM incidents tonight). An operator "/model <report-persona>"
+        # override in chat therefore shares chat's single slot rather than
+        # getting its own claim_port() instance.
+        async for chunk in _stream_from(llama_pool.CHAT_PORT):
+            yield chunk
+        return
+    except Exception as e:
+        log.warning("LLM backend unavailable (%s) — no LLM fallback", e)
 
     # ── No LLM configured or backend unreachable ──────────────────────────────
     yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
@@ -1562,7 +1587,11 @@ async def ask_dispatch(req: AskRequest):
 
     SSE events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
     """
-    has_llm = bool(OPENWEBUI_URL or OLLAMA_BASE_URL)
+    # 2026-08-27 cutover: llama.cpp (common/llama_pool.py) is always
+    # configured on this box -- no env var gate anymore. Actual
+    # reachability failures are handled inside _llm_stream()'s own
+    # try/except, which degrades to {"type": "no_llm"} same as before.
+    has_llm = True
 
     # ── Operator model override: "/model <name> <rest-of-message>" ────────────
     # Stripping before history insertion so the model directive doesn't

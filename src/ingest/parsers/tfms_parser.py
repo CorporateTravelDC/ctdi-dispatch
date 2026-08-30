@@ -809,6 +809,34 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
         except Exception as e:
             log.error("tfms: upsert_flight_ooooi failed for %s (%s): %s", callsign, gufi, e)
 
+    # 2026-08-28 (operator directive: "let's wire in those flight OOOOI
+    # times from TFMS as well"): the real airline-reported OUT/OFF/ON/IN
+    # times just computed above were, until now, ONLY ever persisted to
+    # flight_ooooi_times (for on-time-rate analytics) or fired as a
+    # one-shot watchlist alert below -- never used to actually advance
+    # this entry's own oooi_phase, which every notification and live
+    # status check reads. Prefer the LATEST phase present on this message
+    # (in > on > off > out) so a message carrying multiple times at once
+    # doesn't undercount. update_watchlist_oooi_phase_authoritative()
+    # rejects a regressive or lower-authority-tied update on its own --
+    # see common/db.py's _OOOI_SOURCE_PRIORITY -- so this is safe to call
+    # unconditionally whenever any OOOI time is present.
+    if ooooi:
+        _tfms_phase, _tfms_time = None, None
+        for _key, _phase in (("airlineInTime", "in"), ("airlineOnTime", "on"),
+                             ("airlineOffTime", "off"), ("airlineOutTime", "out")):
+            if _key in ooooi:
+                _tfms_phase, _tfms_time = _phase, ooooi[_key]
+                break
+        if _tfms_phase:
+            try:
+                db.update_watchlist_oooi_phase_authoritative(
+                    entry["id"], _tfms_phase, source="tfms",
+                    updated_at=_tfms_time or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                )
+            except Exception as e:
+                log.debug("tfms: authoritative OOOI update failed for %s (non-fatal): %s", callsign, e)
+
     if not ooooi:
         # No OOOI times on this particular message (plain FlightTimes without
         # airlineData) -- not worth a watchlist hit on its own. Persistence

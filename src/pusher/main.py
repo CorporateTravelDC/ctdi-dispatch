@@ -165,12 +165,16 @@ def push_cps_update() -> None:
 # Sources (priority order):
 #   1. Local UltraFeeder tar1090  — ULTRAFEEDER_URL/data/aircraft.json
 #      Fast, local, zero rate-limit. Used when UltraFeeder container is up.
-#   2. airplanes.live API         — https://api.airplanes.live/v2/callsign/
-#      Free, no key, same JSON schema as adsb.lol. Used as fallback.
+#   2. FDPS SWIM cache (already ingested locally) — shared.watchlist._local_fdps_ac
+#      Covers aircraft out of local ADS-B range; still entirely local.
 #   3. ACARS/VDL2 WOW confirmation — acarshub messages DB (authoritative bypass)
 #      Weight-on-Wheels ON event from aircraft avionics overrides ADS-B guardrail.
+#
+# 2026-08-27 (operator directive, "everything is meant to be local",
+# reinforced after a live 429 from api.airplanes.live under load): dropped
+# the airplanes.live fallback (previously step 2) entirely -- no
+# third-party API is queried anywhere in this monitor now.
 # ---------------------------------------------------------------------------
-AIRPLANES_LIVE_URL = "https://api.airplanes.live/v2/callsign/{callsign}"
 FLIGHT_MONITOR_INTERVAL = 60  # seconds between checks per flight
 
 # How long a flight must be absent from ALL feeds before declaring "presumed landed".
@@ -221,8 +225,12 @@ def _ultrafeeder_url() -> str:
 
 def _fetch_aircraft_callsign(callsign: str) -> list:
     """
-    Return list of matching aircraft dicts. Tries UltraFeeder first,
-    then airplanes.live. Each dict has at least: alt_baro, gnd/ground.
+    Return list of matching aircraft dicts. Tries UltraFeeder first, then
+    already-ingested local FDPS SWIM data. Each dict has at least:
+    alt_baro, gnd/ground.
+
+    2026-08-27: no third-party API queried -- see this section's header
+    comment for the full rationale.
     """
     cs = callsign.strip().upper()
 
@@ -240,19 +248,15 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
             if matched:
                 log.debug("%s: found via UltraFeeder (%d match)", cs, len(matched))
                 return matched
-            # UltraFeeder up but callsign not local — fall through to airplanes.live
+            # UltraFeeder up but callsign not local — fall through to FDPS
             log.debug("%s: UltraFeeder up but callsign not in feed", cs)
         except Exception as e:
             log.debug("UltraFeeder fetch failed: %s", e)
 
-    # 2 — airplanes.live
-    try:
-        r = requests.get(AIRPLANES_LIVE_URL.format(callsign=cs), timeout=8)
-        r.raise_for_status()
-        return r.json().get("ac", [])
-    except Exception as e:
-        log.debug("airplanes.live fetch failed for %s: %s", cs, e)
-        return []
+    # 2 — local FDPS SWIM cache (out-of-range aircraft, still local)
+    from shared.watchlist import _local_fdps_ac
+    ac = _local_fdps_ac(cs)
+    return [ac] if ac else []
 
 
 _OOOI_PHASE_STALE_SEC = 1800  # 30 min -- matches the same order-of-magnitude
