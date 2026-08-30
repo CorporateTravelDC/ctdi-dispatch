@@ -60,12 +60,16 @@ Not just the ingest feed groups anymore. When LOCKDOWN trips, this stops
 ALL SIX real SWIM feeds (fdps/stdds/tfms/tbfm/itws/notam -- notam runs
 the AIM/FNS feed, it is a real 6th SWIM feed, not a NOTAM-only
 afterthought -- see docs/DATA_SOURCES.md), `ingest-core` (NWWS/Amtrak/
-local airspace), `poller`, `pusher`, `runner`, AND `ollama.service`
-itself (stopped via the standing NOPASSWD sudoers grant documented in
-docs/SUDO_JUSTIFICATION_PROPOSAL.md -- confirmed live 2026-08-23, `sudo
--n systemctl {stop,start} ollama.service` needs no password). `web`
-alone stays up, so /healthz and the API remain observable through the
-whole event. This is deliberately more aggressive than the pre-2026-08-23
+local airspace), `poller`, `pusher`, `runner`. `web` alone stays up, so
+/healthz and the API remain observable through the whole event.
+
+2026-08-27 Ollama -> llama.cpp cutover: this no longer stops/starts
+ollama.service (see _lockdown_stop_stack()/_lockdown_start_stack() for
+the full removal rationale -- Ollama is being fully retired, and this
+guard restarting it during LOCKDOWN was silently undoing deliberate
+operator shutdowns during migration testing).
+
+This is deliberately more aggressive than the pre-2026-08-23
 version, which only ever touched 5 of the 6 SWIM feeds and nothing else
 -- the operator's own framing: an emergency this severe (roughly 10x
 baseline load, or repeated genuine Ollama-contention fallbacks) calls
@@ -73,21 +77,29 @@ for shedding everything that could be contributing, not guessing at
 which subset matters. See _lockdown_stop_stack()/_lockdown_start_stack()
 below for the actual mechanics.
 
-Ollama-fallback trigger, ALSO 2026-08-23: common/llm.py now records an
-event to LOAD_FALLBACK_LOG whenever a generate() call fails for a reason
-attributable to Ollama being CONTENDED specifically (slot-lock busy, or
-a timeout talking to an already-loaded model) -- see
-_record_load_fallback()'s docstring there for the exact attribution
-rule, and why a deliberately-stopped Ollama does NOT count (that
-attribution split matters even more now that LOCKDOWN itself stops
-Ollama -- the fallback signal must never fire BECAUSE of a lockdown
-that's already in progress, only because of genuine pre-lockdown
-contention). If FALLBACK_TRIGGER_COUNT (default 2) or more such events
-land inside FALLBACK_WINDOW_S (default 300s), that ALSO trips the same
-LOCKDOWN as load>=40 -- a second, independent signal for "the box is
-too contended for LLM work to succeed," catching cases raw load1 might
-miss (e.g. contention concentrated in bursts the 1-minute average
-smooths over).
+Ollama-fallback signal, added 2026-08-23, DEMOTED TO INFORMATIONAL-ONLY
+2026-08-27 (operator directive, after one night produced ~15 LOCKDOWN
+trips, every single one fallback-attributed, real load1 never once near
+the 40 lockdown line -- peak_load1 in every trip's own state snapshot
+was 4-9). common/llm.py still records an event to LOAD_FALLBACK_LOG
+whenever a generate() call fails for a reason attributable to Ollama
+being CONTENDED specifically (slot-lock busy, or a timeout talking to an
+already-loaded model) -- see _record_load_fallback()'s docstring there
+for the exact attribution rule. count_recent_load_fallbacks() still runs
+every cycle and the count is still logged (see the main() print()) for
+visibility. It no longer triggers LOCKDOWN and no longer blocks resume.
+Two structural reasons, not just a bad threshold: (1) shedding the SWIM/
+ingest stack does nothing to relieve Ollama contention -- SWIM feeds
+never call Ollama at all -- so this was engaging the wrong remedy,
+losing hours of real ingest data for zero benefit; (2) the old resume
+gate required fallback_count to ALSO drop back under threshold and STAY
+there for the full dwell, but a legitimately busy Ollama (real usage,
+not a bug) can keep re-arming that dwell clock indefinitely -- exactly
+the "stack dead for hours" failure this reversal exists to close. If
+Ollama contention itself needs a remedy, the fix belongs on Ollama's own
+side (see CPUWeight in systemd/ollama.service.d/20-resource-limits.conf,
+raised the same day for the same reason), not on an unrelated ingest
+stack that can't fix it.
 
 TEMPERATURE is explicitly UNCHANGED in its own thresholds by this
 redesign, but tier 2 (79C) now triggers the SAME full-stack LOCKDOWN
@@ -308,45 +320,28 @@ def _user_unit_is_active(unit):
         return False
 
 
-def _ollama_ctl(action):
-    """Stop/start ollama.service via the standing NOPASSWD sudoers grant
-    (docs/SUDO_JUSTIFICATION_PROPOSAL.md: `corporatetraveldc ALL=(root)
-    NOPASSWD: /usr/bin/systemctl restart ollama.service, start
-    ollama.service, stop ollama.service`) -- confirmed live 2026-08-23.
-    `-n` (non-interactive) so this NEVER hangs waiting for a password it
-    will never get if the grant is somehow missing on a future box --
-    fails fast and silently (best-effort, matches every other stack-control
-    primitive here) instead of blocking the whole 2-minute guard cycle."""
-    try:
-        subprocess.run(
-            ["sudo", "-n", "systemctl", action, "ollama.service"],
-            check=False, capture_output=True, text=True, timeout=30,
-        )
-    except Exception:
-        pass
-
-
-def _ollama_is_active():
-    try:
-        r = subprocess.run(
-            ["systemctl", "is-active", "ollama.service"],
-            check=False, capture_output=True, text=True, timeout=10,
-        )
-        return r.stdout.strip() == "active"
-    except Exception:
-        return False
-
-
 def _lockdown_stop_stack():
     """LOCKDOWN, 2026-08-23 redesign: shed the entire stack except web --
-    all six real SWIM feeds, ingest-core, poller, pusher, runner, and
-    Ollama itself. See the module docstring's LOCKDOWN paragraph for the
-    "only localhost survives" rationale."""
+    all six real SWIM feeds, ingest-core, poller, pusher, runner. See the
+    module docstring's LOCKDOWN paragraph for the "only localhost
+    survives" rationale.
+
+    2026-08-27 Ollama -> llama.cpp cutover: this no longer touches
+    ollama.service at all (previously stopped/started it here via
+    _ollama_ctl(), removed along with that function and _ollama_is_active()
+    below). Ollama is being fully retired -- LOCKDOWN controlling it was
+    silently undoing a deliberate `systemctl stop ollama.service` done for
+    migration testing, since this guard has no way to distinguish
+    "Ollama down because the operator wants it off" from "Ollama down
+    because LOCKDOWN shed it." The corporatetraveldc-llama-hot/chat/
+    report-* services are NOT included in LOCKDOWN_USER_UNITS either --
+    they are permanent, always-resident, and (hot especially) must
+    survive exactly the kind of event LOCKDOWN responds to, not be shed
+    by it."""
     feed_ctl("stop", "all")   # 6 SWIM feeds: fdps,stdds,tfms,tbfm,itws,notam
     feed_ctl("stop", "core")  # NWWS-OI / Amtrak / local airspace
     for unit in LOCKDOWN_USER_UNITS:
         _user_unit_ctl("stop", unit)
-    _ollama_ctl("stop")
 
 
 def _lockdown_start_stack():
@@ -354,7 +349,6 @@ def _lockdown_start_stack():
     feed_ctl("restart", "core")
     for unit in LOCKDOWN_USER_UNITS:
         _user_unit_ctl("start", unit)
-    _ollama_ctl("start")
 
 
 def _lockdown_stack_down_list():
@@ -367,8 +361,6 @@ def _lockdown_stack_down_list():
     if not _feed_is_active("core"):
         down.append("ingest-core")
     down += [u for u in LOCKDOWN_USER_UNITS if not _user_unit_is_active(u)]
-    if not _ollama_is_active():
-        down.append("ollama.service")
     return down
 
 
@@ -530,14 +522,28 @@ def main():
     # trigger (see the module docstring for why -- it's never actually
     # been the cause of a trip in this box's history, but keeps real
     # teeth as an unattended-hardware backstop). Load collapses to a
-    # single real trigger (lockdown, >= load_lockdown) plus an
-    # independent fallback-count trigger -- either one jumps straight to
-    # the full-shed state, matching temperature's tier-2 severity, since
-    # anything that severe warrants no half-measure partial shed.
+    # single real trigger (lockdown, >= load_lockdown).
+    #
+    # 2026-08-27 (operator directive, REVERSAL of the 2026-08-23
+    # fallback-count trigger): demoted to informational-only after a
+    # single night produced ~15 LOCKDOWN trips, every one of them
+    # fallback-attributed -- confirmed live, every state snapshot's
+    # peak_load1 at shed time was 4-9, nowhere near load_lockdown (40).
+    # Two structural problems, not just a bad threshold: (1) shedding the
+    # SWIM/ingest stack does nothing to relieve Ollama contention -- SWIM
+    # feeds never call Ollama -- so this trigger was engaging the wrong
+    # remedy for a problem it structurally cannot fix, taking down hours
+    # of real ingest data as collateral damage for zero benefit; (2) the
+    # resume gate required fallback_count to ALSO drop back under
+    # threshold and STAY there for the full dwell, but a legitimately busy
+    # Ollama (real usage, not a bug) can keep re-arming that dwell clock
+    # indefinitely, which is exactly the "stack dead for hours" failure
+    # mode this reversal exists to close. fallback_count is still computed
+    # and logged every cycle for visibility -- see the print() below --
+    # it just no longer shreds the ingest stack or blocks recovery.
     temp2_trip = temp >= tier2_temp
     temp1_trip = temp >= tier1_temp
     load_lockdown_trip = load1 is not None and load1 >= load_lockdown
-    fallback_trip = fallback_count >= fallback_trigger_count
 
     # Informational-only bands -- log for visibility, never shed anything.
     # Deliberately no ntfy push here: these bands cover this box's entire
@@ -552,7 +558,7 @@ def main():
             print(f"{LOG_PREFIX} INFO: load1 {load_str} in watch band "
                   f"[{load_info_min:.0f}-{load_lockdown:.0f}) -- normal-to-busy range, no action")
 
-    if tier < 2 and (temp2_trip or load_lockdown_trip or fallback_trip):
+    if tier < 2 and (temp2_trip or load_lockdown_trip):
         # 2026-08-23: LOCKDOWN sheds the whole stack (see module docstring
         # and _lockdown_stop_stack()) -- not just the feed groups anymore.
         _lockdown_stop_stack()
@@ -560,7 +566,6 @@ def main():
             r for r, hit in (
                 (f"{temp:.1f}C", temp2_trip),
                 (f"load {load_str}", load_lockdown_trip),
-                (f"{fallback_count} load-attributed brief fallbacks/{fallback_window_s:.0f}s", fallback_trip),
             ) if hit
         )
         # 2026-08-16: operator directive -- every real trip tonight has
@@ -570,9 +575,10 @@ def main():
         # event (the actual prior incident this guard exists for) apart
         # from ordinary load-driven shedding at a glance. Title now
         # reflects what ACTUALLY tripped it, not a fixed "Thermal" label.
-        # 2026-08-23: extended for the new fallback-count trigger.
-        causes = [c for c, hit in (("Thermal", temp2_trip), ("Load", load_lockdown_trip),
-                                    ("Ollama-contention", fallback_trip)) if hit]
+        # 2026-08-27: "Ollama-contention" removed as a possible cause here
+        # -- fallback_count no longer triggers LOCKDOWN, see the trigger
+        # comment above.
+        causes = [c for c, hit in (("Thermal", temp2_trip), ("Load", load_lockdown_trip)) if hit]
         guard_label = "+".join(causes) + " Guard"
         save_state({"tier": 2, "below_resume_since": None, "shed_at": now,
                      "peak_temp": temp, "peak_load1": load1, "peak_fan_rpm": fan_rpm,
@@ -580,9 +586,8 @@ def main():
         ntfy_alert(
             cfg,
             f"LOCKDOWN: {reason} (fan {fan_str}) -- stopped the entire stack except web "
-            f"(all 6 SWIM feeds, ingest-core, poller, pusher, runner, ollama.service). "
-            f"Held until load < {resume_load:.0f}, temp < {resume_temp:.0f}C, and "
-            f"fallbacks < {fallback_trigger_count}.",
+            f"(all 6 SWIM feeds, ingest-core, poller, pusher, runner). "
+            f"Held until load < {resume_load:.0f} and temp < {resume_temp:.0f}C.",
             f"{guard_label} -- LOCKDOWN shed", priority=5,
         )
         print(f"{LOG_PREFIX} tripped LOCKDOWN ({reason}) fan={fan_str}")
@@ -606,15 +611,19 @@ def main():
         return
 
     if tier > 0:
-        # Resume requires ALL signals to have recovered -- a cool box
-        # still under heavy load, or a loaded-down box still hot, or one
-        # still mid-fallback-storm, should not restore feeds just because
-        # the OTHER signals cleared. 2026-08-23: added fallback_ok
-        # alongside the original temp/load pair.
+        # Resume requires temp and load to have recovered -- a cool box
+        # still under heavy load, or a loaded-down box still hot, should
+        # not restore feeds just because the other signal cleared.
+        #
+        # 2026-08-27 (operator directive, REVERSAL): fallback_ok removed
+        # from this gate -- see the trigger-side comment above for the
+        # full rationale. A legitimately busy Ollama could keep
+        # fallback_count re-arming indefinitely, holding the whole ingest
+        # stack down for hours after temp/load had already recovered.
+        # fallback_count no longer blocks recovery, only load and temp do.
         temp_ok = temp < resume_temp
         load_ok = load1 is None or load1 < resume_load
-        fallback_ok = fallback_count < fallback_trigger_count
-        if temp_ok and load_ok and fallback_ok:
+        if temp_ok and load_ok:
             below_since = state.get("below_resume_since") or now
             state["below_resume_since"] = below_since
             if now - below_since >= resume_dwell:
@@ -636,7 +645,7 @@ def main():
                     restored_feeds = [f.strip() for f in tier1_feeds.split(",") if f.strip()]
                     failed = [f for f in restored_feeds if not _feed_is_active(f)]
                 else:
-                    restored_desc = "the whole stack (all 6 SWIM feeds, ingest-core, poller, pusher, runner, ollama.service)"
+                    restored_desc = "the whole stack (all 6 SWIM feeds, ingest-core, poller, pusher, runner)"
                     _lockdown_start_stack()
                     time.sleep(5)
                     failed = _lockdown_stack_down_list()
@@ -662,13 +671,23 @@ def main():
                     # existed.
                     ntfy_alert(
                         cfg,
-                        f"{temp:.1f}C / load {load_str} / {fallback_count} fallbacks held below "
-                        f"{resume_temp}C / {resume_load:.0f} / {fallback_trigger_count} for "
-                        f"{resume_dwell:.0f}s -- restored {restored_desc} (verified active).",
+                        f"{temp:.1f}C / load {load_str} held below {resume_temp}C / "
+                        f"{resume_load:.0f} for {resume_dwell:.0f}s -- restored {restored_desc} "
+                        f"(verified active).",
                         f"{guard_label} -- restored", priority=3,
                     )
                     print(f"{LOG_PREFIX} restored ({restored_desc}) at {temp:.2f}C load={load_str}")
-                    state = {"tier": 0, "below_resume_since": None}
+                    # restored_at (2026-08-27): lets scheduled-ingest-restart.sh
+                    # (an independent memory-threshold watchdog on the same
+                    # ingest containers) skip its own restart checks for a
+                    # short grace period right after a guard-triggered
+                    # restore -- a fresh restart's own reconnect/backlog
+                    # burst can spike memory% briefly, and without this that
+                    # watchdog can't tell "just restarted by the other
+                    # guard" from "genuinely leaking," triggering a second,
+                    # compounding restart on top of the first. See that
+                    # script's own GUARD_GRACE_SECS check.
+                    state = {"tier": 0, "below_resume_since": None, "restored_at": now}
             save_state(state)
         elif state.get("below_resume_since") is not None:
             # Back above at least one resume threshold before the dwell
