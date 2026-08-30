@@ -1,0 +1,30 @@
+[Unit]
+Description=llama.cpp report tier #1 (ops-brief/ep-advance/weekly-summary/osint-monitor/etc, permanent)
+After=network-online.target corporatetraveldc-llama-chat.service
+Wants=corporatetraveldc-llama-chat.service
+
+[Service]
+# Ollama migration (2026-08-27): fixed report-tier port -- see
+# common/llama_pool.py's module docstring for why this is a small FIXED
+# set of permanent ports rather than the originally-planned elastic pool
+# (container/host process-spawn boundary made on-demand spawning
+# impossible from skill code). ctx-size 8192 = REPORT_POOL_NUM_CTX, the
+# largest ctx any report persona needs (common/personas.py) -- launch args
+# must be uniform across this fixed pool since llama-server can't change
+# ctx-size per request.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://100.x.x.x:8094/health >/dev/null && exit 0; sleep 2; done; echo "llama-chat did not become healthy in time" >&2; exit 1'
+ExecStart=/usr/local/lib/ollama/llama-server \
+    -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
+    --host 100.x.x.x --port 8095 \
+    -np 1 -t 2 -c 8192 \
+    --cache-ram 0 \
+    --no-webui
+Restart=always
+RestartSec=5
+Slice=production.slice
+# Report tier: lowest priority of the three -- fine to lose CPU races to
+# hot/chat/ntfy/cloudflared, never fine to starve them.
+CPUWeight=100
+
+[Install]
+WantedBy=default.target

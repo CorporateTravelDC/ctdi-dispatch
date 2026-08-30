@@ -652,61 +652,28 @@ def preflight_load_gate_if_needed(priority: str) -> None:
         )
 
 
-# ── Ollama-priority ingest backpressure (2026-08-11) ────────────────────────
-# Active complement to the passive load gate above: that gate only WAITS for
-# load to drop on its own, which never happens if ingest's steady-state CPU
-# draw IS the contention rather than a transient spike -- confirmed live
-# 2026-08-11 when a cold model load lost the CPU race entirely under normal
-# (non-thermal) ingest load, see docs/benchmarks/
-# OLLAMA_BACKPRESSURE_AB_2026-08-11.md. This engages the same
-# bandwidth_priority backpressure valve weather events use (common/db.py,
-# built 2026-07-26) for the duration of the Ollama call -- pauses the
-# low-priority SWIM feeds (stdds/tbfm/itws/fns), leaves fdps/tfms alone. Soft
-# pause only (stops draining the queue, stays connected) -- no container
-# stop/restart, no backlog-fast-forward-triage; the accepted tradeoff is a
-# burst of queued messages/notifications once released. Skipped for
-# priority="hot", same as every other gate here. Disabled by default until
-# validated -- flip on per-deployment via dispatch.env.
-OLLAMA_BACKPRESSURE_ENABLED = os.getenv("OLLAMA_BACKPRESSURE_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
-OLLAMA_BACKPRESSURE_TTL_S   = float(os.getenv("OLLAMA_BACKPRESSURE_TTL_S", "600.0"))
-
-
-def _engage_ollama_backpressure(priority: str) -> bool:
-    """Best-effort: set bandwidth_priority=ollama so ingest's low-priority
-    SWIM feeds stop draining their queue for the duration of this call.
-    Returns True if this call actually engaged it (so the caller knows to
-    release it) -- False if disabled, skipped for "hot", or something else
-    (operator, a real weather event) already has priority engaged. Never
-    raises, never blocks."""
-    if priority == "hot" or not OLLAMA_BACKPRESSURE_ENABLED:
-        return False
-    try:
-        from common import db as _db
-        state = _db.get_bandwidth_priority()
-        if state.get("active") and state.get("set_by") not in (None, "auto", "auto-ollama"):
-            return False
-        _db.set_bandwidth_priority(
-            "ollama", set_by="auto-ollama",
-            reason="Ollama inference in flight", ttl_seconds=OLLAMA_BACKPRESSURE_TTL_S,
-        )
-        return True
-    except Exception as exc:
-        log.info("llm: failed to engage ingest backpressure (non-fatal): %s", exc)
-        return False
-
-
-def _release_ollama_backpressure() -> None:
-    """Clear bandwidth_priority back to auto after a call this module
-    engaged it for. Only clears if still set_by="auto-ollama" -- if an
-    operator or a real weather event took it over in the meantime, leave it
-    alone rather than clobbering their state."""
-    try:
-        from common import db as _db
-        state = _db.get_bandwidth_priority()
-        if state.get("set_by") == "auto-ollama":
-            _db.set_bandwidth_priority("auto", set_by="auto-ollama", reason="Ollama call finished")
-    except Exception as exc:
-        log.info("llm: failed to release ingest backpressure (non-fatal): %s", exc)
+# ── Ollama-priority ingest backpressure -- REMOVED 2026-08-27 ───────────────
+# Built 2026-08-11 to solve one specific problem: a cold Ollama model load
+# losing the CPU race against unshed ingest on this 4-core Pi (the passive
+# load gate above only waits for load to drop on its own, which never
+# happens if ingest's steady-state draw IS the contention). That problem no
+# longer exists post llama.cpp-cutover: "hot" and "chat" are permanent,
+# always-resident llama-server processes (common/llama_pool.py) -- there is
+# no per-call cold load left to protect against, and "report" now shares
+# chat's single slot instead of spinning up its own resource-hungry
+# instance. Both tiers already carry CPUWeight=9000 (continuous,
+# cgroup-enforced OS-level priority over ingest, unlike a manually-toggled
+# DB flag) and a hard -t 2 thread cap in their systemd units. Confirmed live
+# 2026-08-27: with OLLAMA_BACKPRESSURE_ENABLED=true left on post-migration,
+# this fired on effectively every non-hot generate() call and needlessly
+# paused stdds/tbfm/itws/fns twice in one night for zero measurable
+# benefit -- an active liability, not a stale no-op. Removed entirely
+# rather than re-justified: _engage_ollama_backpressure()/
+# _release_ollama_backpressure(), OLLAMA_BACKPRESSURE_ENABLED/
+# OLLAMA_BACKPRESSURE_TTL_S, the bandwidth_priority="ollama" mode in
+# common/db.py, and its handling in ingest/swim_client.py are all gone.
+# "weather"/"nexrad" bandwidth-priority modes are untouched -- unrelated,
+# still-legitimate triggers with their own real-event basis.
 
 
 def _ollama_ready(timeout_s: float = OLLAMA_READY_TIMEOUT_S) -> bool:
@@ -815,215 +782,19 @@ def _abandon_ollama_generation(model: str | None) -> None:
         log.info("llm: best-effort unload signal for %s failed (non-fatal): %s", model, exc)
 
 
-# ── Load-phase timeout, separate from generation time (2026-08-13) ─────────
-# Operator directive after tonight's diagnostic arc: the ONLY thing worth
-# time-boxing is whether the MODEL LOADS promptly. Once it's loaded,
-# generation can legitimately take 5-15+ minutes for a long-form brief --
-# that's an accepted cost, not a failure, as long as it eventually produces
-# real output. What actually matters is (1) load doesn't stall indefinitely
-# and (2) a model that keeps getting evicted and reloaded doesn't thrash the
-# box. Backpressure (see OLLAMA_BACKPRESSURE_ENABLED above) is what gives
-# the load phase its best shot at the CPU -- this timeout is the bounded
-# backstop if that's not enough.
-OLLAMA_LOAD_TIMEOUT = float(os.getenv("OLLAMA_LOAD_TIMEOUT", "180.0"))
-
-# ── Adaptive load-time baseline (2026-08-13, later same day) ───────────────
-# Refined per operator directive: a fixed guess (the static OLLAMA_LOAD_TIMEOUT
-# above) isn't as sharp a guard as learning what NORMAL load time actually
-# looks like on THIS box and gating on deviation from that -- 125% of the
-# rolling mean over the last 48h. This is deliberately an anomaly/tamper
-# signal, not just a performance guard: "somebody can't ingest something,
-# even when they properly sign a manifest or reload a second model file at
-# the same time" -- an unusually slow load right after a manifest sign or
-# model rebuild is exactly the kind of otherwise-legitimate-looking event
-# this should catch and flag loudly, even if it still technically completes.
-# OLLAMA_LOAD_TIMEOUT remains the fallback used until enough history exists
-# to trust a computed baseline (OLLAMA_LOAD_BASELINE_MIN_SAMPLES).
-_LOAD_HISTORY_PATH = pathlib.Path("/var/lib/corporatetraveldc/ollama-lock/load-duration-history.json")
-OLLAMA_LOAD_BASELINE_WINDOW_S    = float(os.getenv("OLLAMA_LOAD_BASELINE_WINDOW_S", str(48 * 3600)))
-OLLAMA_LOAD_BASELINE_MULTIPLIER  = float(os.getenv("OLLAMA_LOAD_BASELINE_MULTIPLIER", "1.25"))
-OLLAMA_LOAD_BASELINE_MIN_SAMPLES = int(os.getenv("OLLAMA_LOAD_BASELINE_MIN_SAMPLES", "5"))
-# Even at 125% of a suspiciously fast rolling mean, never bound the load
-# phase tighter than this -- real cold loads measured live tonight ran
-# ~30-80s; this leaves room for a fluke fast sample without the guard
-# becoming self-defeating.
-OLLAMA_LOAD_BASELINE_FLOOR_S = float(os.getenv("OLLAMA_LOAD_BASELINE_FLOOR_S", "90.0"))
-
-
-def _load_history() -> list[dict]:
-    if not _LOAD_HISTORY_PATH.exists():
-        return []
-    try:
-        return json.loads(_LOAD_HISTORY_PATH.read_text())
-    except Exception:
-        return []
-
-
-def _record_load_duration_sample(load_s: float) -> None:
-    """Append a real cold-load duration to the rolling baseline history,
-    pruning anything outside OLLAMA_LOAD_BASELINE_WINDOW_S. Best-effort --
-    never raises (a guardrail that can crash the thing it's guarding is
-    worse than no guardrail)."""
-    try:
-        _LOAD_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        now = time.time()
-        samples = [
-            s for s in _load_history()
-            if isinstance(s, dict) and now - s.get("ts", 0) < OLLAMA_LOAD_BASELINE_WINDOW_S
-        ]
-        samples.append({"ts": now, "load_s": load_s})
-        _LOAD_HISTORY_PATH.write_text(json.dumps(samples))
-    except Exception as exc:
-        log.info("llm: failed to record load-duration sample (non-fatal): %s", exc)
-
-
-def _adaptive_load_timeout() -> tuple[float, str]:
-    """(timeout_s, human-readable basis) -- OLLAMA_LOAD_BASELINE_MULTIPLIER
-    (125%) of the rolling mean load time over the last
-    OLLAMA_LOAD_BASELINE_WINDOW_S if enough samples exist, floored at
-    OLLAMA_LOAD_BASELINE_FLOOR_S; falls back to the static OLLAMA_LOAD_TIMEOUT
-    if there isn't yet enough history to trust a computed baseline."""
-    now = time.time()
-    samples = [
-        s.get("load_s") for s in _load_history()
-        if isinstance(s, dict) and now - s.get("ts", 0) < OLLAMA_LOAD_BASELINE_WINDOW_S
-        and isinstance(s.get("load_s"), (int, float))
-    ]
-    if len(samples) < OLLAMA_LOAD_BASELINE_MIN_SAMPLES:
-        return (
-            OLLAMA_LOAD_TIMEOUT,
-            f"static fallback ({len(samples)}/{OLLAMA_LOAD_BASELINE_MIN_SAMPLES} baseline samples so far)",
-        )
-    mean_s = sum(samples) / len(samples)
-    threshold = max(OLLAMA_LOAD_BASELINE_FLOOR_S, mean_s * OLLAMA_LOAD_BASELINE_MULTIPLIER)
-    return (
-        threshold,
-        f"{OLLAMA_LOAD_BASELINE_MULTIPLIER:.0%} of {len(samples)}-sample "
-        f"{OLLAMA_LOAD_BASELINE_WINDOW_S / 3600:.0f}h rolling mean ({mean_s:.1f}s)",
-    )
-
-
-# Reload-storm guardrail: file-backed (not in-process -- every skill run is
-# its own short-lived subprocess, see ollama_lock.py's own module docstring
-# for why cross-process state here has to be a file, not a Python global)
-# record of recent COLD loads (load_duration > 1s, i.e. the model actually
-# had to load, not an already-warm no-op). If the same box needs more than
-# OLLAMA_RELOAD_GUARD_MAX real loads inside OLLAMA_RELOAD_GUARD_WINDOW_S,
-# something is evicting the model repeatedly (OOM, another model competing
-# for OLLAMA_MAX_LOADED_MODELS, ollama.service flapping) -- piling on
-# another load attempt just makes it worse, so this trips a cool-down
-# (skip Ollama, straight to fallback) instead.
-_RELOAD_GUARD_PATH = pathlib.Path("/var/lib/corporatetraveldc/ollama-lock/recent-cold-loads.json")
-OLLAMA_RELOAD_GUARD_MAX       = int(os.getenv("OLLAMA_RELOAD_GUARD_MAX", "4"))
-OLLAMA_RELOAD_GUARD_WINDOW_S  = float(os.getenv("OLLAMA_RELOAD_GUARD_WINDOW_S", "900.0"))
-
-
-def _record_cold_load_and_check_storm(model: str) -> bool:
-    """Record a real cold load for `model`, prune anything outside the
-    guard window, and return True if the count within that window has hit
-    OLLAMA_RELOAD_GUARD_MAX. Never raises -- a guardrail that can crash the
-    thing it's guarding is worse than no guardrail (fails open: on any
-    error, just don't trip)."""
-    try:
-        _RELOAD_GUARD_PATH.parent.mkdir(parents=True, exist_ok=True)
-        now = time.time()
-        events: list = []
-        if _RELOAD_GUARD_PATH.exists():
-            try:
-                events = json.loads(_RELOAD_GUARD_PATH.read_text())
-            except Exception:
-                events = []
-        events = [t for t in events if isinstance(t, (int, float)) and now - t < OLLAMA_RELOAD_GUARD_WINDOW_S]
-        events.append(now)
-        _RELOAD_GUARD_PATH.write_text(json.dumps(events))
-        if len(events) >= OLLAMA_RELOAD_GUARD_MAX:
-            log.error(
-                "llm: RELOAD-STORM GUARD TRIPPED -- %s has cold-loaded %d times "
-                "in the last %.0fs. Something is evicting it repeatedly -- "
-                "investigate (OOM? OLLAMA_MAX_LOADED_MODELS contention? "
-                "ollama.service restarting?) rather than letting this clear on "
-                "its own. Skipping Ollama for this call.",
-                model, len(events), OLLAMA_RELOAD_GUARD_WINDOW_S,
-            )
-            return True
-        return False
-    except Exception as exc:
-        log.info("llm: reload-storm guard check failed (non-fatal, fails open): %s", exc)
-        return False
-
-
-def _preload_model(model: str | None, priority: str) -> None:
-    """Bounded, backpressure-assisted probe that the model is loaded,
-    BEFORE the real generate call -- separates "did it load" (time-boxed by
-    the adaptive baseline, see _adaptive_load_timeout()) from "how long did
-    it generate" (no longer tightly bounded, see this section's own comment
-    above). Sends the same empty-prompt technique _abandon_ollama_generation()
-    uses to unload, inverted to load instead.
-
-    Raises httpx.TransportError on a real timeout, or RuntimeError if the
-    reload-storm guard has tripped -- both propagate through
-    ollama_post_with_retry() exactly like any other Ollama-unavailable
-    condition, so no new caller-side exception handling is needed anywhere.
-
-    Skipped for priority="hot" (and if OLLAMA_BASE_URL isn't set) -- a
-    real-time alert can't afford an extra bounded wait on top of its own
-    timeout; hot calls go straight to the real generate call, unchanged."""
-    if priority == "hot" or not OLLAMA_BASE_URL or not model:
-        return
-    load_budget, basis = _adaptive_load_timeout()
-    backpressure_engaged = _engage_ollama_backpressure(priority)
-    try:
-        try:
-            with ollama_slot(priority=priority, timeout=load_budget):
-                resp = httpx.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
-                    json={"model": model, "prompt": ""},
-                    timeout=load_budget,
-                )
-        except httpx.TransportError:
-            # 2026-08-15: a load attempt that TIMES OUT is still a cold-load
-            # event -- arguably the most important kind. Found live during
-            # the memory-throttle incident (see systemd/ollama.service.d/
-            # 20-resource-limits.conf, 2026-08-15 re-baseline): both guard
-            # state files were missing from /var/lib/corporatetraveldc/
-            # ollama-lock/ despite days of visible reload churn, because
-            # this function only recorded a cold load AFTER a successful
-            # response -- during a storm, loads mostly DON'T complete, so
-            # the storm guard sat blind through the exact scenario it was
-            # built for (timeout -> unload signal -> next skill cold-loads
-            # -> timeout again, repeating). Record the failed attempt into
-            # the same window before propagating, so repeated failing loads
-            # can trip the guard and shed load instead of piling on.
-            # ollama_slot() acquisition failures (OllamaBusyError) are
-            # deliberately NOT recorded -- no load was attempted.
-            _record_cold_load_and_check_storm(model)
-            raise
-        resp.raise_for_status()
-        load_s = (resp.json().get("load_duration") or 0) / 1e9
-        if load_s > 1.0:
-            log.info("llm: %s cold-loaded in %.1fs (budget %.0fs, basis: %s; backpressure %s)",
-                      model, load_s, load_budget, basis,
-                      "engaged" if backpressure_engaged else "not engaged")
-            if _record_cold_load_and_check_storm(model):
-                raise RuntimeError(f"reload-storm guard tripped for {model}")
-            # Flag even a SUCCESSFUL load that's abnormally slow vs its own
-            # baseline before folding it into that same baseline -- this is
-            # the tamper/anomaly signal the guardrail exists for. A load
-            # that barely made it under load_budget but is 2-3x the normal
-            # baseline is worth a loud line in the logs even though nothing
-            # here failed.
-            if load_budget > OLLAMA_LOAD_BASELINE_FLOOR_S and load_s > load_budget * 0.8:
-                log.warning(
-                    "llm: %s took %.1fs to load -- within budget (%s) but "
-                    "close to it. If a manifest was just signed or a model "
-                    "file rebuilt, worth confirming it wasn't tampered with "
-                    "or accidentally swapped for something larger.",
-                    model, load_s, basis,
-                )
-            _record_load_duration_sample(load_s)
-    finally:
-        if backpressure_engaged:
-            _release_ollama_backpressure()
+# ── Load-phase cold-load apparatus -- REMOVED 2026-08-28 ───────────────────
+# _preload_model() (adaptive load-time baseline, reload-storm guard,
+# OLLAMA_LOAD_TIMEOUT/OLLAMA_LOAD_BASELINE_*/OLLAMA_RELOAD_GUARD_*) was
+# already fully dead code before tonight -- confirmed zero callers anywhere
+# in this file or the rest of src/. It existed to time-box and guard against
+# a cold Ollama model load via a direct httpx call to OLLAMA_BASE_URL's
+# real /api/generate endpoint, which nothing has listened on since the
+# llama.cpp cutover (hot/chat are permanent always-resident processes now,
+# see common/llama_pool.py -- there is no cold load left to guard). It also
+# called the ingest-backpressure functions removed just above, so it would
+# have thrown NameError the moment anything tried to call it. Deleted
+# outright rather than patched, since patching it would leave a
+# fully-unreachable function pretending to still do something.
 
 
 def ollama_post_with_retry(
@@ -1033,96 +804,120 @@ def ollama_post_with_retry(
     max_retries: int | None = None,
     retry_wait_cap: float | None = None,
 ) -> httpx.Response:
-    """POST payload to Ollama's /api/generate, with mid-flight-pause retry.
+    """Despite the name and the Ollama-shaped payload/response contract
+    (kept verbatim so every existing caller -- _ollama() via generate(),
+    and ep_advance_brief.py's two direct calls -- needed ZERO changes),
+    this now routes to a llama-server process instead of Ollama's HTTP API.
+    See the 2026-08-27 Ollama -> llama.cpp cutover: common/personas.py
+    (persona/system-prompt registry, replacing the 21 Modelfiles) and
+    common/llama_pool.py (hot/chat permanent ports + elastic report pool).
 
-    On a transport-level failure (read timeout, connect timeout, connection
-    error -- anything httpx.TransportError covers) for a non-"hot" caller,
-    this does NOT immediately give up. It checks/waits (bounded by
-    retry_wait_cap) for Ollama to answer its own health check again, and if
-    it does, re-issues the SAME request with a FRESH full-length timeout --
-    effectively resetting the clock rather than counting the paused time
-    against the original attempt. If the wait ceiling expires with the
-    engine still unreachable, or max_retries is exhausted, the exception
-    propagates to the caller same as before this change (caller's existing
-    except OllamaBusyError / except Exception handling is unaffected).
+    `payload` keeps its Ollama shape in: {"model", "prompt", "system"?,
+    "options": {"num_predict", "temperature"}}. `model` is still a
+    corporatetraveldc-pi5-<x> string -- persona_key_for() maps it to a
+    persona + tier exactly as it used to map to a dedicated Ollama model
+    built from that persona's Modelfile. The return value keeps Ollama's
+    shape too: an httpx.Response whose .json() is {"response": ...,
+    "done_reason": ...}.
 
-    Each attempt acquires ollama_slot() fresh -- the slot is released
-    while waiting for readiness between attempts, so a paused engine
-    doesn't also block other "report"-priority callers from getting a
-    turn once it resumes.
+    priority="hot"/"chat" hit their permanent, always-resident port
+    directly -- no lock, no queueing, matching the "must never wait"
+    guarantee hot previously got from common/ollama_lock.py's HOT_MARKER
+    (there's nothing to wait behind: each tier has its own dedicated
+    process now instead of arbitrating one shared Ollama slot).
+    priority="report" (or any tier not hot/chat) claims a report-pool slot
+    via llama_pool.claim_port() -- raises OllamaBusyError (same exception
+    every existing caller already catches) if the pool is at its
+    concurrency cap or the governor refuses a new instance, exactly
+    matching the busy/backoff contract report callers already handle.
 
-    priority="hot" never retries here -- raises immediately on the first
-    transport failure, exactly like the pre-2026-07-27 behavior. A hot
-    VIP/TFR alert path must never wait out a possible 20-minute pause.
-
-    Added 2026-08-09: verifies the calling skill's source file (and, for a
-    dedicated corporatetraveldc-pi5-* model, its Modelfile) against the
-    signed manifest before ever reaching Ollama -- see
+    Added 2026-08-09, still enforced: verifies the calling skill's source
+    file (and, for a dedicated corporatetraveldc-pi5-* model, its
+    Modelfile) against the signed manifest before ever generating -- see
     _verify_before_inference() and docs/COMPLIANCE_SECURITY.md's "Signed
     Manifest Integrity". Raises IntegrityCheckFailed (not returned as a
-    normal failure) if either doesn't match.
+    normal failure) if either doesn't match. The Modelfiles remain in
+    place (unmodified, personas.py was extracted from them verbatim) for
+    this reason until they're formally retired alongside the rest of the
+    Ollama stack.
     """
-    _verify_before_inference(payload.get("model"))
+    from common import llama_pool
+    from common.personas import PERSONAS, build_system_prompt, persona_key_for
 
-    # 2026-08-15: persona lives per-Modelfile again (see the note near
-    # _CHARS_PER_TOKEN_ESTIMATE above) -- no central injection here.
-    # payload["system"] stays whatever the caller set (normally nothing;
-    # Ollama uses the target model's own baked-in SYSTEM block).
+    model = payload.get("model")
+    _verify_before_inference(model)
 
     # 2026-08-13: sanitize the prompt content itself -- see
     # sanitize_prompt_text()'s own docstring. Applied here, not per-skill,
-    # so every call path gets it with no per-skill changes needed (same
-    # convergence-point pattern as the persona injection just above).
-    # system= is our own trusted persona file, not externally-influenced
-    # content, so it's deliberately left alone.
-    if payload.get("prompt"):
-        payload["prompt"] = sanitize_prompt_text(payload["prompt"], source=f"prompt to {payload.get('model')}")
+    # so every call path gets it with no per-skill changes needed. system=
+    # is our own trusted persona text, not externally-influenced content,
+    # so it's deliberately left alone.
+    prompt = payload.get("prompt") or ""
+    if prompt:
+        prompt = sanitize_prompt_text(prompt, source=f"prompt to {model}")
 
-    # 2026-08-13: bound the LOAD phase specifically, separate from
-    # generation time -- see OLLAMA_LOAD_TIMEOUT's own comment above. On
-    # success this is a near-no-op (model already resident, load_duration
-    # ~0). On failure it raises (httpx.TransportError or RuntimeError for a
-    # tripped reload-storm guard) straight out of this function -- every
-    # caller (generate()'s _ollama(), ep_advance_brief.py's direct calls)
-    # already has a catch-all except Exception around this call, so that's
-    # treated exactly like "Ollama unavailable" with no new handling needed.
-    _preload_model(payload.get("model"), priority)
+    persona_key = persona_key_for(model)
+    if persona_key is None:
+        log.warning("llm: model %r has no persona mapping -- cannot route to llama.cpp", model)
+        req = httpx.Request("POST", "http://llama-pool/no-persona")
+        return httpx.Response(502, json={"error": f"no persona mapping for model {model!r}"}, request=req)
 
-    retries = OLLAMA_MAX_RETRIES if max_retries is None else max_retries
-    wait_cap = OLLAMA_RETRY_WAIT_CAP_S if retry_wait_cap is None else retry_wait_cap
+    tier = PERSONAS[persona_key]["tier"]
+    system = payload.get("system") or build_system_prompt(persona_key)
+    options = payload.get("options", {})
+    body = {
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": options.get("temperature", 0.2),
+        "max_tokens": options.get("num_predict", 300),
+        "top_p": PERSONAS[persona_key]["top_p"],
+        "stream": False,
+    }
 
-    attempt = 0
-    while True:
-        try:
-            with ollama_slot(priority=priority, timeout=timeout):
-                resp = httpx.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
-                    json=payload,
-                    timeout=timeout,
-                )
-            return resp
-        except httpx.TransportError as exc:
-            _abandon_ollama_generation(payload.get("model"))
-            if priority == "hot" or attempt >= retries:
-                raise
-            attempt += 1
-            log.info(
-                "llm: Ollama request failed mid-flight (attempt %d/%d, %s) — "
-                "checking for a governor pause before giving up",
-                attempt, retries, exc,
-            )
-            if wait_for_ollama_ready(wait_cap):
-                log.info(
-                    "llm: Ollama reachable again after mid-flight pause — "
-                    "retrying with a fresh %.0fs timeout (attempt %d/%d)",
-                    timeout, attempt, retries,
-                )
-                continue
-            log.warning(
-                "llm: Ollama still unreachable after %.0fs retry-wait — giving up",
-                wait_cap,
-            )
-            raise
+    def _post(port: int) -> httpx.Response:
+        return httpx.post(
+            f"http://{llama_pool.HOST}:{port}/v1/chat/completions",
+            json=body,
+            timeout=timeout,
+        )
+
+    try:
+        if tier == "hot":
+            resp = _post(llama_pool.HOT_PORT)
+        else:
+            # 2026-08-27: "chat" AND "report" both route to the permanent
+            # chat port for now. Dedicated report-tier ports
+            # (corporatetraveldc-llama-report-1/2.service,
+            # llama_pool.claim_port()) caused two real near-OOM incidents
+            # tonight when started alongside hot+chat -- see those units'
+            # own comments and llama_pool.py's module docstring. Sharing
+            # chat's single slot means a report job and an interactive
+            # chat message can queue behind each other, a real fidelity
+            # loss the operator explicitly accepted in exchange for not
+            # risking a third incident. Revisit dedicated report ports in
+            # a calmer session now that Ollama (and its governor) are
+            # fully stopped and no longer competing for the ~4-7GB they
+            # used to hold.
+            resp = _post(llama_pool.CHAT_PORT)
+    except llama_pool.PoolBusyError as exc:
+        raise OllamaBusyError(str(exc)) from exc
+
+    resp.raise_for_status()
+    j = resp.json()
+    choice = j["choices"][0]
+    response_text = (choice.get("message", {}).get("content") or "").strip()
+    finish_reason = choice.get("finish_reason")
+
+    return httpx.Response(
+        resp.status_code,
+        json={
+            "response": response_text,
+            "done_reason": "length" if finish_reason == "length" else "stop",
+        },
+        request=resp.request,
+    )
 
 
 def generate(
@@ -1251,35 +1046,34 @@ def generate(
 
     effective_timeout = OLLAMA_TIMEOUT if timeout is None else timeout
     if OLLAMA_BASE_URL:
-        # Backpressure engaged BEFORE the load gate's own wait (not just
-        # around the final generate call) so that wait period actually
-        # benefits from ingest backing off, rather than passively hoping
-        # load drops on its own -- see OLLAMA_BACKPRESSURE_ENABLED above
-        # for why the passive-only gate wasn't enough. Released once this
-        # whole Ollama attempt (gate wait + generate call) is done,
-        # success or failure.
-        backpressure_engaged = _engage_ollama_backpressure(priority)
+        # Ollama-priority ingest backpressure removed 2026-08-27 -- see the
+        # module-level comment above _ollama_ready() for why. No engage/
+        # release wrapping here anymore.
         ollama_attempted = False
-        try:
-            preflight_load_gate_if_needed(priority)
-            generate_timeout = wait_then_budget(effective_timeout) if priority != "hot" else effective_timeout
-            if generate_timeout is None:
-                log.info(
-                    "llm: Ollama not ready after bounded readiness wait "
-                    "(governor thermal pause?) — %s",
-                    f"Anthropic fallback {anthropic_blocked_reason}, returning None" if not anthropic_gate_open
-                    else "trying Anthropic fallback",
-                )
-            else:
-                ollama_attempted = True
-                result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
-                                  priority=priority, timeout=generate_timeout,
-                                  max_retries=max_retries, retry_wait_cap=retry_wait_cap)
-                if result is not None:
-                    return result
-        finally:
-            if backpressure_engaged:
-                _release_ollama_backpressure()
+        preflight_load_gate_if_needed(priority)
+        # 2026-08-27 cutover: wait_then_budget() polls Ollama's own
+        # /api/tags readiness endpoint -- a pause-detection mechanism
+        # for Ollama's governor-SIGSTOP behavior that has no equivalent
+        # (and no need) against always-resident llama-server processes.
+        # Skipping it for every priority now (previously only "hot"
+        # did) -- see common/llama_pool.py's module docstring for the
+        # new backend. generate_timeout is just the caller's own
+        # budget, unmodified.
+        generate_timeout = effective_timeout
+        if generate_timeout is None:
+            log.info(
+                "llm: Ollama not ready after bounded readiness wait "
+                "(governor thermal pause?) — %s",
+                f"Anthropic fallback {anthropic_blocked_reason}, returning None" if not anthropic_gate_open
+                else "trying Anthropic fallback",
+            )
+        else:
+            ollama_attempted = True
+            result = _ollama(system, prompt, ollama_model, max_tokens, temperature,
+                              priority=priority, timeout=generate_timeout,
+                              max_retries=max_retries, retry_wait_cap=retry_wait_cap)
+            if result is not None:
+                return result
 
         if ollama_attempted:
             if not anthropic_gate_open:
