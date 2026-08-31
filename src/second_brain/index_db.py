@@ -257,6 +257,31 @@ def index_note(
     conn.commit()
 
 
+_FTS_BOOLEAN_KEYWORDS = frozenset({"AND", "OR", "NOT"})
+
+
+def _quote_hyphenated_raw_terms(query: str) -> str:
+    """2026-08-31 fix: raw=True mode passed the query straight to FTS5
+    unescaped (by design, so real AND/OR/col:term syntax works), but that
+    means a raw query with a hyphenated bareword ALWAYS hit the exact
+    same "bare hyphen parsed as a column filter" problem this function's
+    caller already documents and defends against for the non-raw path --
+    confirmed live: --raw 'report-1 AND ondemand' raised "no such column:
+    1" instead of matching. Quote each token that isn't a boolean
+    keyword, isn't already quoted, and doesn't itself look like col:term
+    column-filter syntax (a colon with no space) -- quoting a plain
+    single-word token changes nothing about FTS5 match semantics, so this
+    is safe even for tokens that never had a hyphen to begin with.
+    """
+    out = []
+    for tok in query.split():
+        if tok.upper() in _FTS_BOOLEAN_KEYWORDS or tok.startswith('"') or ":" in tok:
+            out.append(tok)
+        else:
+            out.append(f'"{tok}"')
+    return " ".join(out)
+
+
 def search_notes(
     conn: sqlite3.Connection, query: str, limit: int = 10, raw: bool = False
 ) -> list[dict]:
@@ -268,9 +293,16 @@ def search_notes(
     double-quote is phrase-wrapped so natural-language input like
     "ep-advance" or "brief-fallback" always matches literally instead of
     erroring. Pass raw=True to use FTS5 boolean/column-filter syntax
-    (AND/OR/NOT, col:term) deliberately, unescaped.
+    (AND/OR/NOT, col:term) deliberately -- individual terms are still
+    quoted (see _quote_hyphenated_raw_terms) so a hyphenated term like
+    "report-1" inside a raw boolean query doesn't hit the same bug.
     """
-    fts_query = query if (raw or '"' in query) else f'"{query}"'
+    if raw:
+        fts_query = _quote_hyphenated_raw_terms(query)
+    elif '"' in query:
+        fts_query = query
+    else:
+        fts_query = f'"{query}"'
     rows = conn.execute(
         "SELECT path, title, snippet(vault_notes_fts, 2, '**', '**', '...', 20) "
         "FROM vault_notes_fts WHERE vault_notes_fts MATCH ? ORDER BY rank LIMIT ?",

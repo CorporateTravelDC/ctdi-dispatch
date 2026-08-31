@@ -54,8 +54,31 @@ MemoryLow=128M
 # timeout and visibly slowing DNS. Still proportional, not a hard cap --
 # these still get full CPU on an otherwise-idle box, this only makes them
 # yield sooner when something else actually wants the core.
-CPUWeight=30
-CPUQuota=120%
+# 2026-08-30: raised 30 -> 5030 (operator directive). The 2026-08-14
+# incident above was never actually about Ollama contention (that
+# reasoning lived in thermal-ingest-guard.py's now-removed
+# "Ollama-contention" trigger, a separate, already-fixed false lead) --
+# it was a real SWIM-catch-up-burst-vs-ops-brief contention event. But
+# the retired ollama.service's own CPUWeight tier (5000, see the deleted
+# ollama.service.d/20-resource-limits.conf) is now unclaimed: llama-hot/
+# chat are statically resident processes with no on-demand cold-load CPU
+# spike to protect against (unlike Ollama's old per-call model-swap
+# behavior), so there is no longer a real contention pattern between
+# SWIM ingest and local LLM inference to defend against by keeping
+# ingest this low. New value is simply old(30) + Ollama's old
+# weight(5000) = 5000 (2026-08-30, refined same day: dropped the +30 remainder --
+# it carried no meaning once the jump itself is the point; flat 5000
+# reads as exactly what it is, "Ollama's old priority, full stop."), well under the 9000 must-never-die tier
+# (ntfy/cloudflared/llama-hot/chat) -- still proportional-share, not a
+# hard cap, and this feed's own CPUQuota below is unchanged.
+CPUWeight=5000
+# 2026-08-30: raised (operator directive) -- this feed is one of the
+# three real OOOI-correlation sources (see common/db.py's
+# _OOOI_SOURCE_PRIORITY: tbfm/tfms/smes -- smes lives in this STDDS
+# handler alongside tbfm/tfms themselves), unlike fdps/itws/notam/core.
+# Modest +20-point bump, not a large jump -- relative ordering
+# (stdds > tfms > tbfm) preserved, no live incident forcing more.
+CPUQuota=140%
 Restart=always
 RestartSec=15
 TimeoutStartSec=30

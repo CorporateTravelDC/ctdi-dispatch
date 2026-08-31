@@ -147,6 +147,11 @@ async def startup() -> None:
     db.init_db_v36()
     db.init_db_v37()
     db.init_db_v38()
+    # 2026-08-30: v43 = uas_phase columns for entry_type="drone" (v39/v40
+    # are ingest-owned, v41/v42 live in db_swim -- see init_db_v43's
+    # docstring). web serves /api/v1/watchlist, which utm_watcher syncs
+    # drone entries from, so web applies this one.
+    db.init_db_v43()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -1133,24 +1138,20 @@ _HAZARD_COLOR = {
 
 
 def _normalize_airsigmet(r: dict) -> dict | None:
-    coords = r.get("coords") or []
-    latlngs = [[c["lat"], c["lon"]] for c in coords if "lat" in c and "lon" in c]
-    if len(latlngs) < 3:
+    # 2026-08-31: field extraction factored into common/airsigmet.py so
+    # the convective-SIGMET archiver (poller/skills/
+    # convective_sigmet_archiver.py, Detector D's weather-history half)
+    # normalizes identically to this overlay -- importing, not copying,
+    # per the db_swim.py conn() precedent. This wrapper only adds the UI
+    # color. Payload superset note: the shared normalizer also carries
+    # issued_at/movement_dir/movement_spd, which the Leaflet layer
+    # simply ignores; every previously-served key is unchanged.
+    from common.airsigmet import normalize_airsigmet
+    n = normalize_airsigmet(r)  # default 600-char raw_text truncation preserved
+    if n is None:
         return None
-    hazard = (r.get("hazard") or "").upper().replace(" ", "_")
-    return {
-        "id": f"{r.get('icaoId','')}-{r.get('seriesId','')}-{r.get('alphaChar','')}",
-        "type": r.get("airSigmetType") or "AIRMET",
-        "hazard": hazard,
-        "color": _HAZARD_COLOR.get(hazard, "#9ca3af"),
-        "severity": r.get("severity"),
-        "altitude_low": r.get("altitudeLow1"),
-        "altitude_high": r.get("altitudeHi1"),
-        "valid_from": r.get("validTimeFrom"),
-        "valid_to": r.get("validTimeTo"),
-        "coords": latlngs,
-        "raw_text": (r.get("rawAirSigmet") or "")[:600],
-    }
+    n["color"] = _HAZARD_COLOR.get(n["hazard"], "#9ca3af")
+    return n
 
 
 async def _fetch_airmets() -> list:

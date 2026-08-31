@@ -1,6 +1,9 @@
 # Security Policy
 
-_Last Verified 2026-08-11.
+_Rewritten 2026-08-11. The previous revision was untouched GitHub template
+boilerplate (fictional "5.1.x / 4.0.x" version tables) and described nothing
+about this project._
+
 ## Supported versions
 
 This repository tracks a single continuously-deployed reference system —

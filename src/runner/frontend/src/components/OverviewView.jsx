@@ -233,6 +233,30 @@ function MarinePanel() {
   )
 }
 
+function DronePanel() {
+  const [drones, setDrones] = useState(null)
+  const [source, setSource] = useState(null)
+  useEffect(() => {
+    fetch('/api/utm/drones').then(r => r.json()).then(d => {
+      setDrones(Array.isArray(d) ? d : (d.drones ?? []))
+      setSource(d.source ?? null)
+    }).catch(() => setDrones([]))
+  }, [])
+  const count = drones?.length ?? null
+  const noSource = source === 'none'
+  return (
+    <div className="fp-stat-row">
+      {count === null
+        ? <span className="fp-stat-value muted">…</span>
+        : noSource
+          ? <span className="fp-stat-value muted">NO UTM SOURCE CONFIGURED</span>
+          : <span className="fp-stat-value cyan">{count}</span>}
+      {!noSource && count !== null && <span className="fp-stat-label">drones in range</span>}
+      <Link to="/utm" className="fp-panel-link">UTM view →</Link>
+    </div>
+  )
+}
+
 function WeatherPanel({ alerts, liveState }) {
   const [metar, setMetar] = useState(null)
   useEffect(() => {
@@ -467,6 +491,17 @@ export default function OverviewView({ liveState }) {
             className="ov-panel"
           >
             <MarinePanel />
+          </FeedPanel>
+        )}
+
+        {(panels.utm !== false) && (
+          <FeedPanel
+            id="ov-utm"
+            title="UTM / Drone Remote ID"
+            badgeVariant="muted"
+            className="ov-panel"
+          >
+            <DronePanel />
           </FeedPanel>
         )}
 

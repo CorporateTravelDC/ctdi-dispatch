@@ -698,19 +698,24 @@ class _NmsFeedSession:
 # ── Message dispatch ──────────────────────────────────────────────────────────
 
 def _handle_fdps_message(payload: bytes) -> bool:
+    # 2026-08-30 (SWIM audit): switched from parse_fdps_message() (first
+    # message only) to the batch-aware parse_fdps_messages() -- real FIXM
+    # 3.0 MessageCollection documents batch up to 100 flights per document
+    # and everything past message[0] was being silently dropped before any
+    # filter, Marine One check, or watchlist check ran. See
+    # parse_fdps_messages' docstring for the full evidence trail.
     from ingest.parsers.fdps_parser import (
-        parse_fdps_message, write_flight_event,
+        parse_fdps_messages, write_flight_event,
         check_marine_one, check_fdps_watchlist,
     )
-    parsed = parse_fdps_message(payload)
-    if parsed is None:
-        return False
-    source = parsed.get("source", "")
     accepted = False
-    if source in ("FH", "TH", "CL", "HP", "OH"):
-        accepted = write_flight_event(parsed)
-    check_marine_one(parsed)
-    check_fdps_watchlist(parsed)
+    for parsed in parse_fdps_messages(payload):
+        source = parsed.get("source", "")
+        if source in ("FH", "TH", "CL", "HP", "OH"):
+            if write_flight_event(parsed):
+                accepted = True
+        check_marine_one(parsed)
+        check_fdps_watchlist(parsed)
     return accepted
 
 
@@ -721,7 +726,7 @@ def _handle_stdds_message(payload: bytes) -> bool:
         check_stdds_alerts, check_surface_alerts,
         parse_safety_logic_message, write_safety_status, check_incursion_alert,
         parse_surface_movement_event_message, write_surface_movement_event,
-        check_taxi_alerts,
+        check_taxi_alerts, check_smes_watchlist_oooi,
     )
     smes_tracks = parse_smes_message(payload)
     if smes_tracks:
@@ -754,7 +759,21 @@ def _handle_stdds_message(payload: bytes) -> bool:
                 taxi_record["airport"], taxi_record.get("event"), taxi_record.get("status"),
             )
             check_taxi_alerts(taxi_record)
+            check_smes_watchlist_oooi(taxi_record)
         return ok
+
+    # 2026-08-30 (SWIM audit): the four TDES/APDS shapes this queue also
+    # carries -- RVR, D-ATIS, TDLS clearances, tower departure events (gate
+    # numbers) -- previously fell through to `return False` here and were
+    # dropped despite real captured samples of all four sitting in
+    # smes_debug/ since the 2026-08-03 tag-keyed capture rework. See
+    # smes_parser.parse_tdes_apds_message's section comment.
+    from ingest.parsers.smes_parser import (
+        parse_tdes_apds_message, handle_tdes_apds_record,
+    )
+    apds_record = parse_tdes_apds_message(payload)
+    if apds_record:
+        return handle_tdes_apds_record(apds_record)
 
     return False
 

@@ -1220,6 +1220,71 @@ async def ais_vessels(
 
     return {"source": "none", "vessels": [], "count": 0, "detail": "no_source_configured"}
 
+
+def _norm_drone(d: dict, source: str) -> dict:
+    """Normalise a drone/UAS dict from any source to a common schema.
+    Mirrors _norm_vessel's per-source branching, one source today."""
+    if source == "local":
+        return {
+            "uas_id":    str(d.get("uas_id") or d.get("id") or ""),
+            "lat":       d.get("lat"),
+            "lon":       d.get("lon"),
+            "alt_m":     d.get("altitude") or d.get("alt_m"),
+            "speed_ms":  d.get("speed"),
+            "operator_lat": d.get("operator_lat"),
+            "operator_lon": d.get("operator_lon"),
+        }
+    return d
+
+
+@app.get("/api/utm/drones")
+async def utm_drones():
+    """
+    UTM/drone Remote ID positions.
+    Fallback chain: local OpenDroneID receiver -> USS API -> none.
+
+    2026-08-30: added alongside src/utm_watcher/utm_watcher.py (which
+    handles WATCHLIST ALERTING only, same division of labor as
+    ais_watcher.py/api/ais/vessels above -- the watcher fires ntfy on a
+    match, this route serves positions for the map). Neither
+    UTM_LOCAL_URL nor UTM_USS_API_BASE has a default value: unlike
+    AIS_CATCHER_URL (a real, installable local decoder this box just
+    doesn't happen to be running), no OpenDroneID receiver or USS API
+    integration exists on this box at all yet -- inventing a plausible-
+    looking default URL here would silently probe a made-up endpoint on
+    every poll instead of honestly reporting no_source_configured. Wire
+    the real values in once a receiver/API exists.
+    """
+    local_url = os.getenv("UTM_LOCAL_URL", "")
+    if local_url:
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(f"{local_url}/drones.json", timeout=5)
+                r.raise_for_status()
+                data = r.json()
+                raw = data.get("drones") or (data if isinstance(data, list) else [])
+                drones = [_norm_drone(d, "local") for d in raw if isinstance(d, dict)]
+                return {"source": "local", "drones": drones, "count": len(drones)}
+        except Exception as e:
+            log.debug("UTM local unavailable: %s", e)
+
+    uss_base = os.getenv("UTM_USS_API_BASE", "")
+    uss_key  = os.getenv("UTM_USS_API_KEY", "")
+    if uss_base and uss_key:
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(f"{uss_base}/drones",
+                                 headers={"Authorization": f"Bearer {uss_key}"}, timeout=12)
+                r.raise_for_status()
+                data = r.json()
+                raw = data.get("drones") or (data if isinstance(data, list) else [])
+                drones = [_norm_drone(d, "uss") for d in raw if isinstance(d, dict)]
+                return {"source": "uss", "drones": drones, "count": len(drones)}
+        except Exception as e:
+            log.warning("UTM USS API unavailable: %s", e)
+
+    return {"source": "none", "drones": [], "count": 0, "detail": "no_source_configured"}
+
 # ── Dispatch AI chat (Local/Cloud LLM) -------------------------------------
 # These local inference endpoints are also exposed as portable MCP tools.
 # MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp

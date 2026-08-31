@@ -115,6 +115,47 @@ def _maybe_capture_debug_sample(xml_bytes: bytes) -> None:
         log.warning("tbfm: debug sample capture failed: %s", e)
 
 
+# Unknown <air>-child capture -- added 2026-08-30 (SWIM audit), mirroring
+# tfms_parser's unknown-msgType bypass capture that surfaced GDP/GS/AFP/
+# FADT one by one. Context: an external SWIM consumer's document claims
+# TBFM also publishes STA schedule messages (an <sta> sibling to the
+# <eta>/<flt> children we parse, carrying sta_rwy/sta_mfx/... -- runway
+# schedule times, i.e. the metering delay when diffed against eta_rwy).
+# NOTHING in this box's real captures confirms that: all 10 messages ever
+# captured here (5 on 2026-07-20, 5 on 2026-08-30) carry only <flt> and
+# <eta> children, and this feed's handler never reads the Solace topic
+# string, so whether our FAA-provisioned queue subscription even includes
+# a schedule topic kind is genuinely unknown from this side. Per this
+# repo's own repeatedly-proven rule (tbfm/tfms/smes tag-guess history:
+# every schema guessed without a captured sample was wrong), we do NOT
+# parse <sta> speculatively -- this capture answers the question
+# empirically instead: if an <air> child with any tag other than flt/eta
+# ever arrives, its full message lands here (per-tag capped, same pattern
+# as smes_parser's tag-keyed capture) and the STA claim can be settled
+# against a real sample before a single parsing line is written.
+_KNOWN_AIR_CHILD_TAGS = frozenset({"flt", "eta"})
+_UNKNOWN_KIND_DIR = "/var/lib/corporatetraveldc/tbfm_debug_unknown_kind"
+_UNKNOWN_KIND_MAX_PER_TAG = 5
+_unknown_kind_counts: dict[str, int] = {}
+
+
+def _maybe_capture_unknown_air_kind(xml_bytes: bytes, tag: str) -> None:
+    count = _unknown_kind_counts.get(tag, 0)
+    if count >= _UNKNOWN_KIND_MAX_PER_TAG:
+        return
+    try:
+        safe_tag = "".join(c if c.isalnum() else "_" for c in tag)[:40] or "unknown"
+        os.makedirs(_UNKNOWN_KIND_DIR, exist_ok=True)
+        path = f"{_UNKNOWN_KIND_DIR}/{safe_tag}_{count}.xml"
+        with open(path, "wb") as f:
+            f.write(xml_bytes)
+        log.info("tbfm: captured unknown <air> child kind %r -> %s (%d bytes)",
+                 tag, path, len(xml_bytes))
+    except Exception as e:
+        log.warning("tbfm: unknown-air-kind capture failed for %r: %s", tag, e)
+    _unknown_kind_counts[tag] = count + 1
+
+
 def _local(tag: str) -> str:
     return tag.split("}")[-1]
 
@@ -223,6 +264,14 @@ def parse_tbfm_message(xml_bytes: bytes) -> list[dict]:
     sequences: list[dict] = []
     for elem in root.iter():
         if _local(elem.tag) == "air":
+            # 2026-08-30 (SWIM audit): capture any <air> child shape we
+            # don't parse -- settles empirically whether this queue ever
+            # delivers the claimed <sta> schedule family (or anything
+            # else). See _maybe_capture_unknown_air_kind's comment block.
+            for child in elem:
+                child_tag = _local(child.tag)
+                if child_tag not in _KNOWN_AIR_CHILD_TAGS:
+                    _maybe_capture_unknown_air_kind(xml_bytes, child_tag)
             seq = _parse_air_element(elem, facility)
             if seq:
                 sequences.append(seq)

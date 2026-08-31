@@ -5295,7 +5295,21 @@ ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_updated_at TEXT;
 # future signal from it legitimately does. ADS-B/inferred is last --
 # useful for filling in when nothing else has reported yet, but never
 # allowed to overwrite a real report from one of the others.
-_OOOI_SOURCE_PRIORITY = {"adsb": 0, "tbfm": 1, "tfms": 2, "acars": 3}
+_OOOI_SOURCE_PRIORITY = {"adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3, "acars": 4}
+# 2026-08-30: "smes" added (STDDS SurfaceMovementEventMessage, ASDE-X
+# ground-radar-observed spotout/off/on/spotin events -- see
+# ingest/parsers/smes_parser.py's check_smes_watchlist_oooi()). Ranked
+# above "tfms" (airline-reported OOOI times) and below "acars" (direct
+# from the aircraft's own systems): SMES is an independent FAA sensor
+# observation of the actual physical event, not a self-report from an
+# interested party, but it's still third-party surveillance rather than
+# the aircraft transmitting its own state. Note this ranking mostly only
+# matters for same-phase re-confirmation bookkeeping (which source's
+# timestamp/label wins) -- update_watchlist_oooi_phase_authoritative()
+# always accepts a genuine FORWARD phase move regardless of source
+# priority, which is what actually delivers SMES's real value (it tends
+# to observe OUT/OFF/ON/IN minutes before TFMS's airline report catches
+# up).
 _OOOI_PHASE_ORDER = ["pre_departure", "out", "off", "on", "in"]
 
 
@@ -5391,6 +5405,111 @@ def update_watchlist_tbfm_status(entry_id: str, status: str, updated_at: str) ->
             "UPDATE watchlist_entries SET last_tbfm_status=?, last_tbfm_updated_at=? WHERE id=?",
             (status, updated_at, entry_id),
         )
+
+
+# ── UAS (drone) phase -- SCHEMA_V43, 2026-08-30 night pass ───────────────────
+#
+# Operator design decision, implemented exactly as specified: a Part 107
+# UAS (`entry_type="drone"`, added to shared/watchlist.py the same pass)
+# does NOT use the 5-phase pre_departure->out->off->on->in machine above --
+# a gate-pushback ("out") phase has no physical referent for a drone. The
+# vocabulary collapses to exactly two phases: "launched" / "landed".
+#
+# PATTERN CHOICE (the two candidates were a parallel _OOOI_PHASE_ORDER
+# scoped to entry_type=="drone" inside update_watchlist_oooi_phase_
+# authoritative(), or a dedicated status column a la
+# update_watchlist_tbfm_status()): the DEDICATED-COLUMN pattern wins,
+# for the same reason TBFM got one on 2026-08-28 -- the literal event
+# vocabulary doesn't fit the shared enum, and forcing it in would make
+# the authority machine entry_type-aware (a schema lookup per call on the
+# hottest OOOI path, plus two phase-order lists to keep coherent inside
+# forward-only index math that hard rules say must not change for
+# flight/train/vessel). A drone also BREAKS the machine's core invariant
+# outright: OOOI only ever moves forward because a flight leg ends at
+# "in", but a UAS cycles launched->landed->launched many times per
+# battery day, so "never regress" is semantically wrong for it -- not
+# just awkward. Separate columns keep the invariant true where it's true
+# and absent where it's false. AAM/eVTOL air-taxi operations are
+# explicitly NOT this: if those ever become live-tracked entries the
+# operator wants them on the FULL 5-phase machine (leaving a charging
+# pad/staging dock is a real pushback-equivalent) -- as of this pass AAM
+# exists only as the weekly OSINT text watch in common/aam_watch.py
+# (no watchlist entry type, no OOOI tie-in), so nothing there is touched.
+
+SCHEMA_V43 = """
+ALTER TABLE watchlist_entries ADD COLUMN uas_phase TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN uas_phase_updated_at TEXT;
+ALTER TABLE watchlist_entries ADD COLUMN uas_phase_source TEXT;
+"""
+
+# The full two-word vocabulary. No order list on purpose -- launched and
+# landed alternate freely (multiple sorties per day), unlike
+# _OOOI_PHASE_ORDER's strictly forward leg.
+_UAS_PHASES = ("launched", "landed")
+
+
+def init_db_v43() -> None:
+    """Apply v43 schema -- uas_phase/uas_phase_updated_at/uas_phase_source
+    on watchlist_entries, the collapsed two-phase (launched/landed) status
+    for entry_type="drone". v41/v42 live in common/db_swim.py (SWIM-audit
+    tables); this continues the shared number line from there. See the
+    SCHEMA_V43 comment block above for the full pattern-choice rationale."""
+    with conn() as c:
+        for stmt in SCHEMA_V43.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+
+def update_watchlist_uas_phase(entry_id: str, phase: str, source: str,
+                               updated_at: str) -> bool:
+    """Persist a UAS launched/landed observation for a drone watchlist
+    entry -- the entry_type="drone" counterpart of the 5-phase
+    update_watchlist_oooi_phase_authoritative(), deliberately NOT routed
+    through it (see the SCHEMA_V43 comment block). Semantics:
+
+    - phase must be in _UAS_PHASES; anything else is rejected (False).
+    - launched <-> landed transitions are always accepted in EITHER
+      direction (a relaunch is a new sortie, not a regression).
+    - a SAME-phase re-report is rejected (False) so callers can use the
+      return value as their "actually changed -> maybe alert" gate, the
+      same contract shape the OOOI function gives its callers. No source
+      -priority table yet -- with exactly one live source class (a local
+      Remote ID receiver via utm_watcher; no USS API credential exists),
+      an authority chain would be speculation. Add one when a second
+      real source does -- the column layout (source stored per update)
+      already supports it.
+
+    Returns True if the row changed, False otherwise. Nothing calls this
+    yet in production -- it is the landing point for drone-phase ingest
+    once real Remote ID data exists (utm_watcher currently alerts only,
+    matching ais_watcher's interim posture)."""
+    if phase not in _UAS_PHASES:
+        return False
+    with conn() as c:
+        row = c.execute(
+            "SELECT entry_type, uas_phase FROM watchlist_entries WHERE id=?",
+            (entry_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if row["entry_type"] != "drone":
+            # flight/train/vessel entries keep the shared OOOI machine
+            # untouched -- this function is drone-only by contract.
+            return False
+        if row["uas_phase"] == phase:
+            return False
+        c.execute(
+            "UPDATE watchlist_entries SET uas_phase=?, uas_phase_updated_at=?, "
+            "uas_phase_source=? WHERE id=?",
+            (phase, updated_at, source, entry_id),
+        )
+        return True
 
 
 def create_session_grant(command_pattern: str, granted_by: str,

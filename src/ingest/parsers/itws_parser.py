@@ -338,6 +338,61 @@ def _handle_terminal_weather_graphics(body: ET.Element) -> tuple[int, str] | Non
     return (3, f"Terminal weather graphics: {graphics_text}")
 
 
+def _handle_runway_configuration(body: ET.Element) -> tuple[int, str] | None:
+    """Runway Configuration Product -- IMPLEMENTED 2026-08-30 (SWIM audit
+    blind sweep). Confirmed real structure via
+    itws_debug_by_product/Runway_Configuration_Product.xml (captured
+    2026-08-30, PCT site, airport IAD):
+        rwy_config > rc_ap_id (airport), rc_config_name (e.g.
+                     "IAD-19L-19C-12" -- the ACTIVE runway configuration),
+                     rc_rbdt_location > rc_rbdt > rc_rbdt_line* (ribbon
+                     display line status -- not extracted, display detail)
+    This product was hitting the unrecognized-product log path and being
+    dropped, despite being exactly the "which runways are active right
+    now" signal several other consumers here want (per-runway RVR
+    preference, arrival-runway ETA context). Stored as a severity-0
+    current-state row (itws_alerts is keyed (airport, product_type), so
+    the latest config is always queryable); never fires a push on its own
+    -- an operator alert on config CHANGE is deliberately left for a later
+    pass once enough history confirms how often configs legitimately flip.
+    """
+    rc = _find30(body, "rwy_config")
+    if rc is None:
+        return None
+    config_name = _child_text(rc, "rc_config_name")
+    if not config_name:
+        return None
+    return (0, f"Active runway configuration: {config_name}")
+
+
+def _handle_terminal_weather_text(body: ET.Element) -> tuple[int, str] | None:
+    """Terminal Weather Text Normal/Special Product -- IMPLEMENTED
+    2026-08-30 (SWIM audit blind sweep). Confirmed real structure via
+    itws_debug_by_product/Terminal_Weather_Text_{Normal,Special}_Product.xml
+    (both PCT-site, IAD/DCA -- DC-local, tiny payloads):
+        twx_text_prod > twx_msg_type, twx_size, twx_text (free text, e.g.
+            "KIAD 1249 ITWS TERMINAL WX -NO STORM WITHIN 15NM"     [Normal]
+            "KDCA WSA CANC 21"                                     [Special]
+    The module docstring's earlier "named-but-never-captured" note for the
+    Normal product is now stale -- both products have real captures and
+    the Special variant was never even in _KNOWN_UNHANDLED_PRODUCTS, so it
+    was logging as unrecognized on every arrival. Same shape as
+    _handle_terminal_weather_graphics: ITWS renders its own summary line;
+    "NO STORM" prefix marks the quiet state, anything else is surfaced
+    verbatim at severity 3 (recorded/queryable, below the push threshold
+    of 4 -- the ATIS/microburst/gust-front products remain the push-worthy
+    hazard channel; this is corroborating context, not a new alarm)."""
+    twx = _find30(body, "twx_text_prod")
+    if twx is None:
+        return None
+    text = " ".join((_child_text(twx, "twx_text") or "").split())
+    if not text:
+        return None
+    if "NO STORM" in text.upper():
+        return (0, f"Terminal weather text: {text}")
+    return (3, f"Terminal weather text: {text}")
+
+
 def _handle_tornado_alert(body: ET.Element) -> tuple[int, str] | None:
     """tornado_alert -- IMPLEMENTED 2026-07-21. Confirmed real structure
     via itws_debug_by_product/Tornado_Alert_Product.xml:
@@ -378,6 +433,14 @@ _PRODUCT_HANDLERS: dict[str, callable] = {
     "Hazard Text 5nm Product": _handle_hazard_text,
     "Terminal Weather Graphics Product": _handle_terminal_weather_graphics,
     "Tornado Alert Product": _handle_tornado_alert,
+    # 2026-08-30 SWIM-audit additions -- all three confirmed against real
+    # captures in itws_debug_by_product/ (see each handler's docstring).
+    # Runway Configuration and Terminal Weather Text Special were never in
+    # _KNOWN_UNHANDLED_PRODUCTS either, so they were logging as
+    # unrecognized and being dropped on every arrival.
+    "Runway Configuration Product": _handle_runway_configuration,
+    "Terminal Weather Text Normal Product": _handle_terminal_weather_text,
+    "Terminal Weather Text Special Product": _handle_terminal_weather_text,
 }
 
 # Confirmed-live but intentionally not handled yet -- raster/heavy payloads
@@ -399,7 +462,14 @@ _KNOWN_UNHANDLED_PRODUCTS = frozenset({
     "Forecast Image Product", "Forecast Contour Product",
     "Forecast Accuracy Product", "Gust Front TRACON Map Product",
     "Wind Profile Product", "Tornado Detections Product",
-    "Terminal Weather Text Normal Product", "Configured Alerts Product",
+    "Configured Alerts Product",
+    # "Terminal Weather Text Normal Product" moved OUT of this set
+    # 2026-08-30 -- real captures landed for both the Normal and Special
+    # text variants (tiny DC-local free-text payloads, nothing like the
+    # raster products this set exists for) and both now have a real
+    # handler, alongside the newly-recognized Runway Configuration
+    # Product. See _handle_terminal_weather_text /
+    # _handle_runway_configuration.
 })
 
 
