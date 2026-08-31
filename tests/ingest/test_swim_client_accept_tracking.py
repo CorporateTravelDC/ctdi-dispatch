@@ -19,9 +19,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 import ingest.swim_client as swim_client
 
 
+# 2026-08-30: the fdps handler consumes the batch-aware
+# parse_fdps_messages() (list of dicts) instead of parse_fdps_message()
+# (single dict) -- see that function's docstring for the batched-
+# MessageCollection drop bug. These three tests mock the new entry point
+# with list semantics; the accept contract itself is unchanged.
 def test_fdps_handler_returns_false_when_filtered():
-    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_message",
-                     return_value={"source": "FH", "callsign": "TEST123"}), \
+    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_messages",
+                     return_value=[{"source": "FH", "callsign": "TEST123"}]), \
          mock.patch("ingest.parsers.fdps_parser.write_flight_event", return_value=False), \
          mock.patch("ingest.parsers.fdps_parser.check_marine_one"), \
          mock.patch("ingest.parsers.fdps_parser.check_fdps_watchlist"):
@@ -30,8 +35,8 @@ def test_fdps_handler_returns_false_when_filtered():
 
 
 def test_fdps_handler_returns_true_when_accepted():
-    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_message",
-                     return_value={"source": "FH", "callsign": "TEST123"}), \
+    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_messages",
+                     return_value=[{"source": "FH", "callsign": "TEST123"}]), \
          mock.patch("ingest.parsers.fdps_parser.write_flight_event", return_value=True), \
          mock.patch("ingest.parsers.fdps_parser.check_marine_one"), \
          mock.patch("ingest.parsers.fdps_parser.check_fdps_watchlist"):
@@ -39,8 +44,28 @@ def test_fdps_handler_returns_true_when_accepted():
     assert result is True
 
 
+def test_fdps_handler_returns_true_when_any_batched_message_accepted():
+    """A batch where only ONE of three flights passes the geo filter must
+    still count the payload as accepted -- and every batched flight must
+    reach the Marine One + watchlist checks (the pre-2026-08-30 handler
+    checked only message[0])."""
+    batch = [{"source": "FH", "callsign": f"T{i}"} for i in range(3)]
+    marine = mock.MagicMock()
+    watch = mock.MagicMock()
+    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_messages",
+                     return_value=batch), \
+         mock.patch("ingest.parsers.fdps_parser.write_flight_event",
+                     side_effect=[False, True, False]), \
+         mock.patch("ingest.parsers.fdps_parser.check_marine_one", marine), \
+         mock.patch("ingest.parsers.fdps_parser.check_fdps_watchlist", watch):
+        result = swim_client._handle_fdps_message(b"<xml/>")
+    assert result is True
+    assert marine.call_count == 3
+    assert watch.call_count == 3
+
+
 def test_fdps_handler_returns_false_on_unparseable_payload():
-    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_message", return_value=None):
+    with mock.patch("ingest.parsers.fdps_parser.parse_fdps_messages", return_value=[]):
         result = swim_client._handle_fdps_message(b"garbage")
     assert result is False
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=llama.cpp report tier #1 (ops-brief/ep-advance/weekly-summary/osint-monitor/etc, permanent)
+Description=llama.cpp report tier #1 (>4096-ctx personas, ON-DEMAND -- started/stopped by consumer quadlet hooks)
 After=network-online.target corporatetraveldc-llama-chat.service
 Wants=corporatetraveldc-llama-chat.service
 
@@ -12,11 +12,46 @@ Wants=corporatetraveldc-llama-chat.service
 # largest ctx any report persona needs (common/personas.py) -- launch args
 # must be uniform across this fixed pool since llama-server can't change
 # ctx-size per request.
+#
+# 2026-08-30: ON-DEMAND, never permanently resident. Shelved (disabled/
+# inactive) 2026-08-27 after two near-OOM incidents running alongside
+# hot+chat -- which silently broke every persona declaring num_ctx > 4096
+# (ep-advance 6144, dispatch-desk-memo 8192, secondbrain-weekly 6144):
+# their report traffic was rerouted to chat's -c 4096 slot and rejected
+# with "request (5908 tokens) exceeds the available context size". Fix:
+# the three consumer quadlets now start this unit via a host-level
+# ExecStartPre and stop it via a reference-checked ExecStopPost
+# (scripts/llama-report-ondemand.sh -- quadlet hooks run on the HOST, so
+# the container privilege boundary above doesn't apply), and
+# common/llm.py routes to port 8095 by the calling persona's declared
+# num_ctx. Deliberately NOT enabled for boot -- [Install] kept only so a
+# deliberate `enable` remains possible; the unit must otherwise only ever
+# run for the duration of a consumer skill's own run.
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://100.x.x.x:8094/health >/dev/null && exit 0; sleep 2; done; echo "llama-chat did not become healthy in time" >&2; exit 1'
+# 2026-08-30 (same pass as the on-demand redesign): -fa on + q8_0 KV
+# quantization, this unit ONLY (hot/chat untouched). Live-measured
+# tonight: the f16 8192-ctx KV is ~3.1G, putting this unit's full
+# working set at ~5.3G ("2.8G memory peak, 4.9G memory swap peak" on
+# stop) -- and a real ep-advance run proved that does NOT fit next to
+# hot+chat's ~7.7G pinned residency: production.slice pegged at
+# MemoryHigh, the kernel's only swappable target was this unit's anon
+# (hot/chat are MemorySwapMax=0), and generation thrashed at 0.09 tok/s
+# until the skill's 2800s budget expired. q8_0 halves the KV (~1.6G,
+# near-lossless -- standard llama.cpp practice) so the whole working
+# set (~3.9G) fits inside the slice envelope during a run. -fa on is
+# required for the quantized V cache; verified coherent output on this
+# exact GGUF before deploying (see the pass's test notes).
+# NOTE (2026-08-30): --no-repack was tried on this pass (mmap'd
+# file-backed weights as a cheaper reclaim target than zram'd anon) and
+# REVERTED the same night on live measurement: losing the aarch64 Q4_0
+# repack kernels dropped prompt eval to ~1.8-2.2 tok/s even on a
+# near-idle box (vs ~10 tok/s repacked) -- a far bigger loss than the
+# paging it avoided. Weights stay repacked (anon, ~2.1G) like hot/chat.
 ExecStart=/usr/local/lib/ollama/llama-server \
     -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
     --host 100.x.x.x --port 8095 \
     -np 1 -t 2 -c 8192 \
+    -fa on -ctk q8_0 -ctv q8_0 \
     --cache-ram 0 \
     --no-webui
 Restart=always
@@ -24,7 +59,63 @@ RestartSec=5
 Slice=production.slice
 # Report tier: lowest priority of the three -- fine to lose CPU races to
 # hot/chat/ntfy/cloudflared, never fine to starve them.
-CPUWeight=100
+# 2026-08-30: 100 -> 2000. At weight 100 vs chat's 9000, this unit is
+# effectively frozen (0.5% share) whenever chat serves the six
+# *-daily-watch skills' dual cadence (some :00/:15/:30/:45 mark most of
+# every hour), and its on-demand runs sit squarely inside those bursts.
+# Honest caveat from the same night's measurements: CPU share was ONE
+# component -- zram paging of this unit's anon under slice reclaim was
+# the larger one (see the memory comments below) -- so this bump alone
+# doesn't close the budget; it removes the starvation floor. 2000 still
+# loses contended races to hot/chat 4.5:1 (tier doctrine intact -- they
+# can never be starved by this unit).
+CPUWeight=2000
+
+# 2026-08-30: bound the stop. Live-observed twice tonight: stopping this
+# unit while a cancelled request's KV pages sat in zram took ~85s
+# (SIGTERM ignored mid-page-in -> 'stop-watchdog' timeout -> SIGABRT
+# with a 2.9G coredump). 30s is generous for the normal idle-stop case
+# (sub-second) and converts the pathological case into a quick SIGKILL
+# -- nothing of value is lost; the process is stateless between runs.
+TimeoutStopSec=30
+# ...and when that 30s is exceeded anyway (only seen after a CANCELLED
+# request left KV pages in zram -- an idle-server stop is sub-second),
+# plain SIGKILL, not the distro default's abort-with-coredump
+# (10-timeout-abort.conf): a llama-server core is ~3G of worthless disk
+# churn per occurrence, observed twice on 2026-08-30/31 before this.
+TimeoutStopFailureMode=kill
+
+# 2026-08-30: memory governance, same live-measurement methodology as
+# corporatetraveldc-llama-hot/chat.service the same day. Two live
+# measurements tonight, both with real full-context traffic under
+# genuine production contention:
+#   f16 KV (pre-q8_0):  "2.8G memory peak, 4.9G memory swap peak" on
+#     stop; combined anon working set (VmRSS+VmSwap) 5.1-5.4G -- weights
+#     ~2.1G (anon, not shareable: aarch64 Q4_0 repack forces a copy) +
+#     8192-ctx f16 KV ~3.1G. That number is what proved f16 could never
+#     fit next to hot+chat (see the ExecStart comment) and drove the
+#     q8_0 KV change.
+#   q8_0 KV (deployed): 4.23G resident immediately after load (KV fully
+#     allocated+touched under -fa), "4.1G memory peak, 2G memory swap
+#     peak" across a real 5850-token ep-advance brief run.
+# B for the deployed q8_0 shape rounded up to 4608M, same 100%/125%/150%
+# Low/High/Max formula.
+MemoryLow=4608M
+MemoryHigh=5760M
+MemoryMax=6912M
+# DELIBERATELY NO MemorySwapMax=0, unlike hot/chat -- the arithmetic
+# doesn't allow it: pinning this tier's 5.5G on top of hot+chat's pinned
+# ~7.1G real footprint = ~12.6G unreclaimable anon against
+# production.slice's approved 13780M total, leaving <1.2G for every other
+# production container -- under any real contention that ends in an
+# in-slice OOM kill of a resident model tier, the exact incident class
+# that got this unit shelved on 2026-08-27. Swap stays the pressure valve
+# for the LOWEST-priority tier only: a contended report run degrades to
+# slow (zram page-in) instead of killing hot/chat, the report tier's
+# fail-soft timeouts (e.g. ep-advance's 2800s) absorb the slowdown, and
+# the on-demand lifecycle bounds the exposure to the duration of a single
+# consumer skill run. See production.slice's paired 2026-08-30
+# MemoryHigh widening for the quiet-case fit.
 
 [Install]
 WantedBy=default.target

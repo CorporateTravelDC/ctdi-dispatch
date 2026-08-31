@@ -199,6 +199,16 @@ _TFMS_REAL_NS = {
 _KNOWN_MSG_TYPES = frozenset({
     "TMI_FLIGHT_LIST", "RSTR", "APTC", "GADV", "GDP", "GS", "FXA", "TMI_UPDATE",
     "AFP",
+    # FADT added 2026-08-30 (SWIM audit) -- same discovery path as
+    # GDP/GS/AFP before it: 15 real captured samples sitting in the
+    # unknown-msgType bypass directory (tfms_debug_unknown_msgtype/FADT_*).
+    # See _handle_fadt. PARAM (GS/GDP model delay statistics) and REROUTE
+    # (reroute advisories -- general data + waypoint-free segment summary)
+    # followed the same afternoon, same discovery path -- see
+    # _handle_param / _handle_reroute. Still deliberately unhandled from
+    # that same directory: FXASF (FCA show-filter metadata), CMPR (single
+    # sample, compression event).
+    "FADT", "PARAM", "REROUTE",
 })
 
 # Real namespace prefix used by RSTR/APTC/GADV-style messages (distinct
@@ -652,6 +662,20 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
             if _local(fltd_message.tag) != "fltdMessage":
                 continue
             msg_type = fltd_message.get("msgType") or ""
+            # 2026-08-30 late-night (Detector C): every fltdMessage --
+            # handled or not -- is first checked against the pending
+            # plan-removal watch (did a removed flight subsequently fly /
+            # get reinstated?). Runs BEFORE the handler-is-None continue
+            # because flew-evidence can arrive on types we deliberately
+            # don't handle (flightPlanInformation, boundaryCrossingUpdate).
+            # One dict probe on the acid attribute when nothing is
+            # pending; never fatal.
+            if msg_type != "flightPlanCancellation":
+                try:
+                    _note_plan_removal_activity(fltd_message, msg_type)
+                except Exception as e:
+                    log.debug("tfms: removal-activity check failed "
+                              "(non-fatal): %s", e)
             handler = _FLTD_MSG_TYPE_HANDLERS.get(msg_type)
             if handler is None:
                 if msg_type not in _KNOWN_UNHANDLED_FLTD_TYPES:
@@ -664,6 +688,9 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
                 handler(fltd_message)
             except Exception as e:
                 log.error("tfms: fltdMessage handler error (msgType=%s): %s", msg_type, e)
+        # Throttled Detector C confirmation sweep (every ~5 min while fltd
+        # traffic flows) -- see _maybe_sweep_removals.
+        _maybe_sweep_removals()
 
     if programs:
         check_tfms_alerts(programs)
@@ -1059,6 +1086,47 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
     _TFMS_ALERT_DEDUP.record(dedup_key, content_key)
 
 
+# 2026-08-30 late pass: closed vocabulary for diversionIndicator, per the
+# external SWIM diversion-detection document (its measured one-day
+# nationwide distribution: NO_DIVERSION 45,257 / AIRBORN_NOCTL 251 /
+# GROUND_NOCTL 193 / AIRBORN_CTL 4 / GROUND_CTL 2 / absent 43,144).
+# AIRBORN_* = a real airborne divert (aircraft turning NOW -- highest
+# urgency); GROUND_* = plan abandoned/re-filed on the ground (real, but
+# not an in-flight emergency). A value outside this set is a silent NAS
+# behavior change and is WARN-logged once per value per process --
+# locally only ""/NO_DIVERSION have ever been captured, so the non-quiet
+# members are transcribed from the document, not locally verified.
+_DIVERSION_INDICATOR_VOCAB = frozenset({
+    "NO_DIVERSION",
+    "AIRBORN_NOCTL", "AIRBORN_CTL",
+    "GROUND_NOCTL", "GROUND_CTL",
+})
+_UNKNOWN_DIVERSION_VALUES_SEEN: set[str] = set()
+
+
+def _classify_diversion_indicator(value: str | None) -> tuple[bool, str | None]:
+    """(flagged, kind) for a raw diversionIndicator value. kind is
+    'airborne' / 'ground' / 'unknown' when flagged, None when quiet
+    (empty or NO_DIVERSION). Unknown members of the closed vocabulary are
+    WARN-logged once per value per process -- the alarm the external
+    document prescribes for every closed enum ('a new value is a NAS
+    behavior change; without the assertion it's a slow silent drop')."""
+    v = (value or "").strip().upper()
+    if not v or v == "NO_DIVERSION":
+        return False, None
+    if v not in _DIVERSION_INDICATOR_VOCAB and v not in _UNKNOWN_DIVERSION_VALUES_SEEN:
+        _UNKNOWN_DIVERSION_VALUES_SEEN.add(v)
+        log.warning("tfms: diversionIndicator value %r outside the known "
+                    "closed vocabulary %s -- possible NAS behavior change, "
+                    "treating as a flagged diversion", v,
+                    sorted(_DIVERSION_INDICATOR_VOCAB))
+    if v.startswith("AIRBORN"):
+        return True, "airborne"
+    if v.startswith("GROUND"):
+        return True, "ground"
+    return True, "unknown"
+
+
 def _handle_flight_route(fltd_message: ET.Element) -> None:
     """
     FlightRoute -- IMPLEMENTED 2026-07-20. Confirmed real structure via
@@ -1117,7 +1185,21 @@ def _handle_flight_route(fltd_message: ET.Element) -> None:
                 if name:
                     fix_sequence.append(name)
 
-    if not (sid_name or star_name):
+    # 2026-08-30 (SWIM audit): diversionIndicator was documented in this
+    # function's own docstring since 2026-07-20 but never actually read.
+    # Real captured values (grep across FlightRoute_*.xml samples): empty,
+    # or "NO_DIVERSION" -- the quiet states.
+    # 2026-08-30 late pass: flagged values are now split by kind per the
+    # external SWIM document -- AIRBORN_* (a real airborne divert, the
+    # aircraft is turning NOW: priority 4) vs GROUND_* (plan abandoned/
+    # re-filed on the ground: real but not an in-flight event, priority
+    # 3); anything outside the closed vocabulary WARN-logs once and is
+    # treated at airborne urgency (see _classify_diversion_indicator).
+    diversion_indicator = _text(_find_child(route_data, "diversionIndicator"))
+    diversion_flagged, diversion_kind = _classify_diversion_indicator(
+        diversion_indicator)
+
+    if not (sid_name or star_name) and not diversion_flagged:
         # No named procedure on this particular message -- not worth a
         # watchlist hit on its own (would just be a bare fix list).
         return
@@ -1127,7 +1209,12 @@ def _handle_flight_route(fltd_message: ET.Element) -> None:
         summary_parts.append(f"SID {sid_name}" + (f"/{dp_transition}" if dp_transition else ""))
     if star_name:
         summary_parts.append(f"STAR {star_name}" + (f"/{star_transition}" if star_transition else ""))
-    summary = f"Route: {' -> '.join(summary_parts)}"
+    summary = f"Route: {' -> '.join(summary_parts)}" if summary_parts else "Route update"
+    if diversion_flagged:
+        kind_label = {"airborne": "AIRBORNE DIVERSION",
+                      "ground": "GROUND RE-FILE (plan abandoned)",
+                      }.get(diversion_kind or "", "DIVERSION INDICATOR")
+        summary = f"{kind_label} ({diversion_indicator}) -- {summary}"
 
     detail = {
         "watchlist_trigger": "tfms_flight_route",
@@ -1135,8 +1222,16 @@ def _handle_flight_route(fltd_message: ET.Element) -> None:
         "sid_name": sid_name, "sid_type": sid_type, "dp_transition_fix": dp_transition,
         "star_name": star_name, "star_type": star_type, "star_transition_fix": star_transition,
         "fix_sequence": fix_sequence,
+        "diversion_indicator": diversion_indicator,
+        "diversion_kind": diversion_kind,
     }
-    _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
+    # airborne/unknown flagged -> 4 (an aircraft is diverting NOW, or TFMS
+    # said something we don't recognize); ground re-file -> 3 (real event,
+    # not an in-flight emergency -- document's population split).
+    priority = 3
+    if diversion_flagged:
+        priority = 3 if diversion_kind == "ground" else 4
+    _fire_tfms_watchlist_hit(entry, summary, detail, priority=priority)
 
 
 def _handle_flight_plan_information(fi_message: ET.Element) -> list[dict]:
@@ -1875,6 +1970,540 @@ def _handle_tmi_update(fi_message: ET.Element) -> list[dict]:
 # so far, returns nas_programs-shaped rows (or [] for TMI_FLIGHT_LIST/GDP-
 # adjacent handlers that do their own watchlist/cache/alert side effect
 # instead -- see each handler's docstring for which).
+# TBFM-style 3-letter DC-area airport codes as they appear in FADT slot
+# lists (real sample: departureAirport IAD, arrivalAirport EWR -- FAA
+# 3-letter, not ICAO).
+_FADT_DC_APTS = frozenset({"DCA", "IAD", "BWI"})
+
+
+def _fadt_ddhhmm_to_iso(raw: str | None, report_time_iso: str | None) -> str | None:
+    """Normalize FADT's DDHHMM compact times ('030559' = day 03, 05:59Z --
+    confirmed against the real FADT_0.xml sample, where slotTime 030559
+    sits inside a program window of 2026-08-03T04:05Z-05:15Z) to full ISO,
+    borrowing year/month from the broadcast's own reportTime. Month
+    boundary: a slot day far below the report day means the slot is in the
+    NEXT month (a program spanning month-end), far above means the
+    PREVIOUS -- +/-15-day windows, same tolerance style as
+    get_flight_plan_by_callsign's staleness cutoffs. Returns None when the
+    raw value doesn't fit the shape (caller stores the raw string
+    regardless, so nothing is lost to a normalization miss)."""
+    if not raw or not report_time_iso:
+        return None
+    raw = raw.strip()
+    if len(raw) != 6 or not raw.isdigit():
+        return None
+    try:
+        report_dt = datetime.fromisoformat(report_time_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    day, hour, minute = int(raw[:2]), int(raw[2:4]), int(raw[4:6])
+    if not (1 <= day <= 31 and hour <= 23 and minute <= 59):
+        return None
+    year, month = report_dt.year, report_dt.month
+    if day < report_dt.day - 15:
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    elif day > report_dt.day + 15:
+        month -= 1
+        if month < 1:
+            month, year = 12, year - 1
+    try:
+        dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:
+        return None  # e.g. day 31 in a 30-day month -- refuse to guess
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _handle_fadt(fi_message: ET.Element) -> list[dict]:
+    """
+    FADT -- IMPLEMENTED 2026-08-30 (SWIM audit). Per-flight EDCT/slot
+    broadcast for an active GS/GDP program: FAA's own answer to "when will
+    this controlled flight actually be allowed to depart, and when will it
+    actually arrive." Confirmed real structure via 15 captured samples
+    (tfms_debug_unknown_msgtype/FADT_*.xml, e.g. an EWR ground stop):
+
+        fi:fiMessage[msgType="FADT"] > fadtBcast
+          > controlElement (EWR), reportTime, parameter (GS|GDP),
+            delayMode (DAS|GAAP|...), startTime/endTime,
+            cumulativeStartTime/cumulativeEndTime
+          > slotList > slot*  (full slot list, resent on every revision)
+              > aircraftId
+              > assignedArrivalSlot > controlledElement/slotTime/uniqueLetter
+              > departureAirport / arrivalAirport   (3-letter FAA codes)
+              > controlledDepartureTime / controlledArrivalTime   (DDHHMM --
+                the controlledDepartureTime IS the flight's EDCT)
+              > controlType, exemptFlag/cancelFlag/slotHoldFlag
+              > earliestRunwayArrivalTimeOrEntryTime, initialGateDepartureTime
+
+    Nothing in this repo read any of it before -- FADT sat in the
+    unknown-msgType bypass exactly the way GDP/GS did until 2026-07-20 and
+    AFP did until 2026-08-22. The program-level declaration (GDP/GS row in
+    nas_programs) says "a program exists"; this is the only message that
+    says what the program did to a SPECIFIC flight, which for a car-at-
+    the-curb product is the actionable half.
+
+    Storage: slots whose departure or arrival airport is DC-area
+    (_FADT_DC_APTS) upsert into tfms_edct_slots (common.db_swim), keyed
+    (control_element, aircraft_id) since revisions resend the full list.
+    Watchlist: a watched callsign's slot fires a watchlist hit (trigger
+    "tfms_edct", priority 4 -- a controlled departure time IS the pickup
+    time moving) regardless of DC scoping, deduped on the EDCT value so a
+    resent unchanged slot list stays quiet while a REVISED EDCT fires
+    immediately. Returns [] -- writes its own tables, never nas_programs.
+    """
+    from common import db_swim
+
+    bcast = _find_child(fi_message, "fadtBcast")
+    if bcast is None:
+        return []
+    control_element = _text(_find_child(bcast, "controlElement"))
+    report_time = _text(_find_child(bcast, "reportTime"))
+    parameter = _text(_find_child(bcast, "parameter"))
+    delay_mode = _text(_find_child(bcast, "delayMode"))
+    slot_list = _find_child(bcast, "slotList")
+    if slot_list is None or not control_element:
+        return []
+
+    # One watchlist fetch per BROADCAST, not per slot -- a big GDP's slot
+    # list can run to hundreds of flights, and _match_watchlist_flight()
+    # opens a fresh DB read every call (fine for the one-flight-per-message
+    # fltd handlers it was written for, pathological inside this loop).
+    watchlist_by_ident: dict[str, dict] = {}
+    try:
+        from shared.watchlist import get_active_entries
+        for _e in get_active_entries(entry_type="flight"):
+            watchlist_by_ident[_e["identifier"].upper().strip()] = _e
+    except Exception as e:
+        log.error("tfms: FADT watchlist prefetch failed (continuing storage-only): %s", e)
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stored = 0
+    for slot in slot_list:
+        if _local(slot.tag) != "slot":
+            continue
+        aircraft_id = _text(_find_child(slot, "aircraftId"))
+        if not aircraft_id:
+            continue
+        dep_apt = (_text(_find_child(slot, "departureAirport")) or "").upper() or None
+        arr_apt = (_text(_find_child(slot, "arrivalAirport")) or "").upper() or None
+        edct_raw = _text(_find_child(slot, "controlledDepartureTime"))
+        cta_raw = _text(_find_child(slot, "controlledArrivalTime"))
+        assigned = _find_child(slot, "assignedArrivalSlot")
+        slot_time = _text(_find_child(assigned, "slotTime")) if assigned is not None else None
+
+        def _flag(tag: str) -> int | None:
+            v = _text(_find_child(slot, tag))
+            if v is None:
+                return None
+            return 1 if v.strip().lower() == "true" else 0
+
+        entry = watchlist_by_ident.get(aircraft_id.upper().strip())
+        dc_relevant = dep_apt in _FADT_DC_APTS or arr_apt in _FADT_DC_APTS
+        if not dc_relevant and entry is None:
+            continue
+
+        edct_iso = _fadt_ddhhmm_to_iso(edct_raw, report_time)
+        try:
+            db_swim.upsert_tfms_edct_slot(
+                control_element=control_element, aircraft_id=aircraft_id.upper(),
+                control_type=_text(_find_child(slot, "controlType")),
+                program_parameter=parameter, delay_mode=delay_mode,
+                departure_airport=dep_apt, arrival_airport=arr_apt,
+                slot_time=slot_time,
+                controlled_departure_time=edct_raw,
+                controlled_arrival_time=cta_raw,
+                controlled_departure_iso=edct_iso,
+                exempt_flag=_flag("exemptFlag"),
+                cancel_flag=_flag("cancelFlag"),
+                slot_hold_flag=_flag("slotHoldFlag"),
+                earliest_arrival_or_entry=_text(
+                    _find_child(slot, "earliestRunwayArrivalTimeOrEntryTime")),
+                initial_gate_departure_time=_text(
+                    _find_child(slot, "initialGateDepartureTime")),
+                report_time=report_time, last_seen=now_iso,
+            )
+            stored += 1
+        except Exception as e:
+            log.error("tfms: FADT slot write failed for %s@%s: %s",
+                      aircraft_id, control_element, e)
+
+        if entry is not None:
+            dedup_key = content_hash(f"tfms:edct:{entry['id']}")
+            content_key = content_hash(f"{edct_raw}:{cta_raw}:{_flag('cancelFlag')}")
+            if _TFMS_ALERT_DEDUP.should_push(dedup_key, content_key):
+                summary = (f"EDCT assigned ({parameter or 'TMI'} at {control_element}): "
+                           f"controlled departure {edct_iso or edct_raw or '?'}"
+                           + (f", controlled arrival {cta_raw}" if cta_raw else ""))
+                detail = {
+                    "watchlist_trigger": "tfms_edct",
+                    "control_element": control_element,
+                    "program_parameter": parameter,
+                    "origin": dep_apt, "destination": arr_apt,
+                    "edct": edct_iso or edct_raw,
+                    "controlled_arrival_time": cta_raw,
+                    "cancelled": _flag("cancelFlag") == 1,
+                }
+                _fire_tfms_watchlist_hit(entry, summary, detail, priority=4)
+                _TFMS_ALERT_DEDUP.record(dedup_key, content_key)
+
+    if stored:
+        log.info("tfms: FADT %s (%s) -- stored %d DC/watchlist slot(s)",
+                 control_element, parameter, stored)
+    return []
+
+
+def _int_or_none(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
+def _float_or_none(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return None
+
+
+def _handle_param(fi_message: ET.Element) -> list[dict]:
+    """
+    PARAM -- IMPLEMENTED 2026-08-30 afternoon pass (SWIM-audit backlog
+    #4). TFMS's modeled delay statistics for a GS/GDP/AFP revision --
+    the quantified "how bad" (total/affected flights, min/max/avg delay
+    before and after the revision) that the bare program declaration row
+    in nas_programs never carries. Confirmed real structure via all 15
+    captured samples (tfms_debug_unknown_msgtype/PARAM_*.xml):
+
+        fi:fiMessage[msgType="PARAM"] > paramGsUpdt | paramAfpGdpUpdt
+          > tmiState (ACTUAL|PROPOSED), parametersType (GS|GDP),
+            elemName/elemType (EWR/APT), ctlProgram,
+            eventStartTime/EndTime, cumulativeStartTime/EndTime,
+            impactingConditionCode, totalFlights, affectedFlights,
+            {total,max,min,average}Delay{Before,After}, and (AfpGdp only)
+            delayMode/operationType/programRates/exemption detail.
+
+    Both observed variant tags carry every field stored here; the
+    AfpGdp-only program-parameter block (rates, exemption tiers, RBS++
+    knobs) is deliberately not modeled -- delay statistics are the
+    dispatch signal. tmiState is part of the storage key because the SAME
+    SAN GDP was observed broadcasting PROPOSED (model run) and ACTUAL
+    rows in parallel, and a proposal must never overwrite reality.
+    Nationwide storage, matching how GDP/GS/AFP rows land in nas_programs
+    (delay stats for an EWR/JFK program are exactly what the route-impact
+    skills want for DC-touching itineraries). Storage-only -- no alert;
+    the GDP/GS declaration path already alerts, this adds queryable depth.
+    Returns [] (writes its own table, never nas_programs).
+    """
+    from common import db_swim
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stored = 0
+    for upd in fi_message:
+        tag = _local(upd.tag)
+        if tag not in ("paramGsUpdt", "paramAfpGdpUpdt"):
+            if tag.startswith("param"):
+                # A third variant would be new schema -- surface it rather
+                # than silently skipping (msgType is known here, so the
+                # unknown-msgType capture path can never see it).
+                log.info("tfms: PARAM carried unobserved variant tag %r -- "
+                         "not stored, needs a schema look", tag)
+            continue
+
+        def t(name: str) -> str | None:
+            return _fcm_text(upd, name)
+
+        elem_name = t("elemName")
+        parameters_type = t("parametersType")
+        tmi_state = t("tmiState")
+        if not elem_name or not parameters_type or not tmi_state:
+            continue
+        try:
+            db_swim.upsert_tfms_param_delay_stats(
+                elem_name=elem_name, parameters_type=parameters_type,
+                tmi_state=tmi_state, elem_type=t("elemType"),
+                ctl_program=t("ctlProgram"),
+                event_start_time=t("eventStartTime"),
+                event_end_time=t("eventEndTime"),
+                cumulative_start_time=t("cumulativeStartTime"),
+                cumulative_end_time=t("cumulativeEndTime"),
+                impacting_condition_code=t("impactingConditionCode"),
+                total_flights=_int_or_none(t("totalFlights")),
+                affected_flights=_int_or_none(t("affectedFlights")),
+                total_delay_before_min=_int_or_none(t("totalDelayBefore")),
+                total_delay_after_min=_int_or_none(t("totalDelayAfter")),
+                max_delay_before_min=_int_or_none(t("maxDelayBefore")),
+                max_delay_after_min=_int_or_none(t("maxDelayAfter")),
+                avg_delay_before_min=_float_or_none(t("averageDelayBefore")),
+                avg_delay_after_min=_float_or_none(t("averageDelayAfter")),
+                delay_mode=t("delayMode"),
+                report_time=t("reportTimeFull"),
+                last_seen=now_iso,
+            )
+            stored += 1
+        except Exception as e:
+            log.error("tfms: PARAM write failed for %s/%s: %s",
+                      elem_name, parameters_type, e)
+    if stored:
+        log.debug("tfms: PARAM stored %d delay-stat row(s)", stored)
+    return []
+
+
+# DC relevance for REROUTE segments: the three DC airports in both the
+# ICAO spelling the segment origin/destin lists actually use (KDCA/KEWR
+# observed) and the bare FAA spelling, plus the ZDC center.
+_REROUTE_DC_TOKENS = frozenset({
+    "KDCA", "KIAD", "KBWI", "DCA", "IAD", "BWI", "ZDC",
+})
+
+# 2026-08-30 evening pass (audit backlog #2): per-watched-flight REROUTE
+# matching. REROUTE advisories carry NO per-flight identifier of any kind
+# -- re-verified against all 15 captured samples before building this
+# (grep for aircraftId/gufi/callsign/tailNumber across REROUTE_*.xml:
+# zero hits; the full element inventory is airport/center scope lists,
+# route strings, waypoints, and display metadata). So a watched flight
+# can only be matched by IMPLICATION: a segment whose originList contains
+# the flight's origin AND whose destinList contains its destination
+# scopes that flight into the reroute (e.g. the real SERMN_SOUTH_1
+# capture scopes KJFK->KDCA / KJFK->KBWI / KJFK->KIAD segment by
+# segment). Segments scoped only by ARTCC center -- very common, and the
+# center codes sometimes even arrive inside <airport> tags ('ZOB'
+# observed there) -- can NOT be matched without an airport->center table
+# this repo doesn't carry, so center-only segments are deliberately a
+# false NEGATIVE, never a guessed match.
+#
+# Dedicated dedup (not the shared 30-min _TFMS_ALERT_DEDUP): an ACTIVE
+# advisory can live for many hours and is rebroadcast on every TFMS
+# update cycle; with the shared window an unchanged advisory would
+# re-page the same flight every 30 minutes for its whole life. 6-hour
+# window, keyed per (entry, rerouteId) with the advisory's meaningful
+# content as the content-key, so an identical rebroadcast stays quiet
+# while a real revision (route/window/status change) fires immediately
+# -- same key/content split as _handle_flight_plan_amendment's
+# 2026-08-16 shared-slot fix.
+_REROUTE_WATCHLIST_DEDUP = PushDedup("tfms_reroute_watchlist", dedup_secs=21600)
+
+
+def _norm_apt_token(code: str | None) -> str | None:
+    """Normalize an airport spelling for equality checks: the FAA
+    3-letter and ICAO K-prefixed 4-letter forms are the same airport
+    (KJFK == JFK, KE25 == E25 -- both spellings observed live in this
+    feed family, see fdps_parser's 2026-08-30 destination-flap note).
+    Non-K 4-letter codes (international) pass through unchanged."""
+    if not code:
+        return None
+    c = code.strip().upper()
+    if len(c) == 4 and c.startswith("K"):
+        return c[1:]
+    return c or None
+
+
+def _check_reroute_watchlist_hits(entries: list[dict], reroute_id: str,
+                                  reroute_name: str | None,
+                                  reroute_status: str | None,
+                                  start_time: str | None, end_time: str | None,
+                                  segments: list[dict]) -> None:
+    """Fire a watchlist_event_hit for every watched flight whose known
+    origin AND destination fall inside one of this advisory's INCLUDE
+    segments (see the module comment above _REROUTE_WATCHLIST_DEDUP for
+    why implication is the only possible match). ACTIVE advisories only
+    -- a CANCELLED/expired rebroadcast is not a per-flight page.
+    Deliberately NOT time-gated on rerouteEndTime: swim_client's
+    stale-backlog handling (SWIM_BACKLOG_STALE_SECONDS) already drops
+    old replays upstream, and advisory windows are routinely extended in
+    place, so gating here would suppress real extensions.
+
+    Flight origin/destination come from the watchlist entry's own
+    origin/destination fields first, falling back to the flight's FDPS
+    filed plan (db.get_flight_plan_by_callsign). A flight with either
+    end unknown is skipped -- no forced half-matches."""
+    if (reroute_status or "").upper() != "ACTIVE":
+        return
+    for entry in entries:
+        try:
+            e_orig = _norm_apt_token(entry.get("origin"))
+            e_dest = _norm_apt_token(entry.get("destination"))
+            if not e_orig or not e_dest:
+                try:
+                    fp = db.get_flight_plan_by_callsign(
+                        entry["identifier"], destination_hint=entry.get("destination"))
+                except Exception as e:
+                    log.debug("tfms: reroute flight-plan lookup failed for %s: %s",
+                              entry.get("identifier"), e)
+                    fp = None
+                if fp:
+                    e_orig = e_orig or _norm_apt_token(fp.get("origin"))
+                    e_dest = e_dest or _norm_apt_token(fp.get("destination"))
+            if not e_orig or not e_dest:
+                continue
+
+            matched_route = None
+            for seg in segments:
+                if (seg.get("include") or "").upper() != "INCLUDE":
+                    continue
+                origins = {_norm_apt_token(t) for t in seg.get("origins", [])}
+                destins = {_norm_apt_token(t) for t in seg.get("destins", [])}
+                if e_orig in origins and e_dest in destins:
+                    matched_route = seg.get("route")
+                    break
+            if matched_route is None:
+                continue
+
+            dedup_key = content_hash(f"tfms:reroute:{entry['id']}:{reroute_id}")
+            content_key = content_hash(
+                f"{reroute_status}:{matched_route}:{start_time}:{end_time}")
+            if not _REROUTE_WATCHLIST_DEDUP.should_push(dedup_key, content_key):
+                continue
+            label = reroute_name or reroute_id
+            summary = (f"{entry['identifier']} subject to reroute {label}: "
+                       f"{entry.get('origin') or e_orig}->"
+                       f"{entry.get('destination') or e_dest}"
+                       + (f" via {matched_route[:80]}" if matched_route else ""))
+            detail = {
+                "watchlist_trigger": "tfms_reroute",
+                "reroute_id": reroute_id,
+                "reroute_name": reroute_name,
+                "reroute_status": reroute_status,
+                "start_time": start_time, "end_time": end_time,
+                "required_route": matched_route,
+            }
+            _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
+            _REROUTE_WATCHLIST_DEDUP.record(dedup_key, content_key)
+        except Exception as e:
+            log.error("tfms: reroute watchlist check failed for %s: %s",
+                      entry.get("identifier"), e)
+
+
+def _handle_reroute(fi_message: ET.Element) -> list[dict]:
+    """
+    REROUTE -- IMPLEMENTED 2026-08-30 afternoon pass (SWIM-audit backlog
+    #4), advisory level only. Confirmed real structure via 15 captured
+    samples (tfms_debug_unknown_msgtype/REROUTE_*.xml):
+
+        fi:fiMessage[msgType="REROUTE"] > reroute
+          > rerouteGeneralData > rerouteId (FAA's stable advisory key),
+              rerouteName, rerouteStatus (ACTIVE|...), tmiId, tmiStatus,
+              rerouteAirborne, rerouteTimeType (FCA|ETD),
+              rerouteStartTime/EndTime, fcaName/fcaStart/End,
+              originalCreateTime/lastUpdateDateTime, protectedSegment,
+              display-only draw*/colorId fields
+          > rerouteRouteData > rerouteSegmentData*  (5-44 per advisory
+              observed) > includeSeg, originList/destinList (airport and
+              center children), routeSegment (route string), waypoint*
+              (named fixes WITH lat/lon -- up to 264 per segment observed)
+
+    What is stored (tfms_reroutes, keyed on FAA's own rerouteId): the
+    general data plus a WAYPOINT-FREE per-segment summary (include flag,
+    origin/destin airport+center lists, route string). The waypoint
+    lat/lon lists and the protectedSegment blob are deliberately dropped
+    -- plotting detail, re-derivable from a fresh broadcast if a map
+    consumer ever materializes, and carrying them would put ~100 KB rows
+    in SQLite for zero current reader. No AGGREGATE volume alert yet (a
+    few weeks of rows are still needed to establish real advisory
+    volume; dc_relevant is precomputed so that later alert can be one
+    WHERE clause) -- but since 2026-08-30 evening a WATCHED flight whose
+    origin+destination fall inside an ACTIVE advisory's INCLUDE-segment
+    scope gets a per-flight hit via _check_reroute_watchlist_hits (see
+    that function and the comment above _REROUTE_WATCHLIST_DEDUP: the
+    advisory carries no flight identifiers, so scope implication is the
+    only possible per-flight match). Returns [] (writes its own table,
+    never nas_programs).
+    """
+    from common import db_swim
+
+    # One watchlist fetch per MESSAGE, same reasoning as _handle_fadt's
+    # per-broadcast prefetch. Failure degrades to storage-only.
+    watchlist_entries: list[dict] = []
+    try:
+        from shared.watchlist import get_active_entries
+        watchlist_entries = get_active_entries(entry_type="flight")
+    except Exception as e:
+        log.error("tfms: REROUTE watchlist prefetch failed (continuing storage-only): %s", e)
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stored = 0
+    for reroute in fi_message:
+        if _local(reroute.tag) != "reroute":
+            continue
+        gen = _find_child(reroute, "rerouteGeneralData")
+        if gen is None:
+            continue
+
+        def g(name: str) -> str | None:
+            return _fcm_text(gen, name)
+
+        reroute_id = g("rerouteId")
+        if not reroute_id:
+            continue
+
+        segments: list[dict] = []
+        dc_relevant = 0
+        route_data = _find_child(reroute, "rerouteRouteData")
+        if route_data is not None:
+            for seg in route_data:
+                if _local(seg.tag) != "rerouteSegmentData":
+                    continue
+                origins: list[str] = []
+                destins: list[str] = []
+                for list_tag, acc in (("originList", origins),
+                                      ("destinList", destins)):
+                    lst = _find_child(seg, list_tag)
+                    if lst is None:
+                        continue
+                    for child in lst.iter():
+                        if _local(child.tag) in ("airport", "center"):
+                            val = (child.text or "").strip().upper()
+                            if val:
+                                acc.append(val)
+                if any(tok in _REROUTE_DC_TOKENS for tok in origins + destins):
+                    dc_relevant = 1
+                segments.append({
+                    "include": _fcm_text(seg, "includeSeg"),
+                    "origins": origins,
+                    "destins": destins,
+                    "route": _fcm_text(seg, "routeSegment"),
+                })
+
+        try:
+            db_swim.upsert_tfms_reroute(
+                reroute_id=reroute_id,
+                reroute_name=g("rerouteName"),
+                reroute_status=g("rerouteStatus"),
+                tmi_id=g("tmiId"), tmi_status=g("tmiStatus"),
+                reroute_airborne=g("rerouteAirborne"),
+                time_type=g("rerouteTimeType"),
+                start_time=g("rerouteStartTime"),
+                end_time=g("rerouteEndTime"),
+                fca_name=g("fcaName"),
+                original_create_time=g("originalCreateTime"),
+                last_update_time=g("lastUpdateDateTime"),
+                segment_count=len(segments),
+                dc_relevant=dc_relevant,
+                segments_json=json.dumps(segments),
+                last_seen=now_iso,
+            )
+            stored += 1
+        except Exception as e:
+            log.error("tfms: REROUTE write failed for %s: %s", reroute_id, e)
+
+        # Watchlist matching runs even if the storage write above failed
+        # -- the alert is derived from the message itself, not the row
+        # (same independence _handle_fadt's slot loop has).
+        if watchlist_entries:
+            _check_reroute_watchlist_hits(
+                watchlist_entries, reroute_id, g("rerouteName"),
+                g("rerouteStatus"), g("rerouteStartTime"),
+                g("rerouteEndTime"), segments)
+    if stored:
+        log.info("tfms: REROUTE stored %d advisory row(s)", stored)
+    return []
+
+
 _MSG_TYPE_HANDLERS = {
     "TMI_FLIGHT_LIST": _handle_tmi_flight_list,
     "RSTR": _handle_restriction,
@@ -1885,7 +2514,133 @@ _MSG_TYPE_HANDLERS = {
     "AFP": _handle_airspace_flow_program,
     "FXA": _handle_fxa,
     "TMI_UPDATE": _handle_tmi_update,
+    "FADT": _handle_fadt,
+    "PARAM": _handle_param,
+    "REROUTE": _handle_reroute,
 }
+
+# ── Detector C: plan-removal classification (2026-08-30 late-night pass) ─────
+#
+# There is NO cancellation message in the NAS -- only plan removal
+# (msgType="flightPlanCancellation") for several distinct reasons carried
+# in the fltdMessage's fdTrigger attribute, and the reasons mean OPPOSITE
+# things. Closed vocabulary per the external SWIM document (its 7-day
+# 59,458-leg reference measurement of "did the flight subsequently fly",
+# per LEG -- per plan reference inverts the whole ranking):
+#
+#   FD_FLIGHT_CANCEL_MSG      20.9% flew anyway -> cancellation (strongest)
+#   UPDATE_CANCEL_TIMEOUT     23.8% flew anyway -> cancellation
+#   HCS_CANCELLATION_MSG      70.6% flew anyway -> superseded, DESPITE THE NAME
+#   CANCEL_CMD                91.8% flew anyway -> superseded
+#   TMI_UPDATE                92.7% flew anyway -> superseded
+#   UPDATE_INTERNATIONAL_CANCEL_TIMEOUT  0.1% "flew anyway" -> left_coverage:
+#       looks like the cleanest signal, is the OPPOSITE -- the flight left
+#       US surveillance, it did not stop flying. Excluded from every count.
+#
+# Those percentages are the REFERENCE system's, not ours -- they are the
+# reason this table classifies-and-stores instead of alerting, and
+# db_swim.measure_removal_fly_rates() re-derives OUR distribution from
+# our own accumulated evidence once real rows exist. Locally observed so
+# far (12 real captures, tfms_debug_unknown_msgtype/flightPlanCancellation_*,
+# all 2026-07-20): FD_FLIGHT_CANCEL_MSG x8, HCS_CANCELLATION_MSG x4 --
+# a subset of the vocabulary, consistent with its shape. A value outside
+# the vocabulary WARN-logs once per process and stores kind='unknown'
+# (same closed-enum alarm discipline as _DIVERSION_INDICATOR_VOCAB).
+_REMOVAL_TRIGGER_KINDS = {
+    "FD_FLIGHT_CANCEL_MSG": "cancellation",
+    "UPDATE_CANCEL_TIMEOUT": "cancellation",
+    "HCS_CANCELLATION_MSG": "superseded",
+    "CANCEL_CMD": "superseded",
+    "TMI_UPDATE": "superseded",
+    "UPDATE_INTERNATIONAL_CANCEL_TIMEOUT": "left_coverage",
+}
+_UNKNOWN_REMOVAL_TRIGGERS_SEEN: set[str] = set()
+
+# Settle window before a removal may confirm as a real cancellation --
+# the reference system saw removals reinstated 57% of the time over 7
+# days, so a detector that fires on removal and never revisits is wrong
+# more often than right. COLD-START value (no local removal history
+# existed when this shipped) -- retune from live reinstated_at rates.
+_REMOVAL_SETTLE_SECS = float(os.environ.get("TFMS_CANCEL_SETTLE_SECS", "3600"))
+
+
+def _classify_removal_trigger(trigger: str | None) -> str:
+    """Closed-vocabulary kind for an fdTrigger value on a plan-removal
+    message: 'cancellation' / 'superseded' / 'left_coverage' / 'unknown'."""
+    t = (trigger or "").strip().upper()
+    if not t:
+        return "unknown"
+    kind = _REMOVAL_TRIGGER_KINDS.get(t)
+    if kind is None:
+        if t not in _UNKNOWN_REMOVAL_TRIGGERS_SEEN:
+            _UNKNOWN_REMOVAL_TRIGGERS_SEEN.add(t)
+            log.warning("tfms: plan-removal fdTrigger %r outside the known "
+                        "closed vocabulary %s -- possible NAS behavior "
+                        "change, storing kind='unknown'", t,
+                        sorted(_REMOVAL_TRIGGER_KINDS))
+        return "unknown"
+    return kind
+
+
+def _norm_airport_code(code: str | None) -> str | None:
+    """FAA-3-letter / ICAO-K-4-letter spelling normalization -- same rule
+    as fdps_parser._norm_airport (kept in lockstep; see that function's
+    2026-08-30 evening comment for why normalized comparison is a
+    correctness requirement, not polish)."""
+    if not code:
+        return None
+    c = code.strip().upper()
+    if len(c) == 4 and c.startswith("K"):
+        return c[1:]
+    return c or None
+
+
+def _origin_is_surveilled(origin: str | None) -> bool:
+    """Would we have SEEN departure evidence if this flight flew? The
+    external document's reference test uses US/territories ICAO-prefix
+    patterns; our departure/track evidence comes from this same national
+    TFMS feed, so the same scope applies. Accepts FAA 3-letter domestic
+    identifiers (already US by definition) and ICAO K* / PA*/PH*/PG*
+    (Alaska/Hawaii/Guam) / TJ*/TI* (PR/USVI) 4-letter codes. Everything
+    else -- international origins -- fails the test: a removal there can
+    never confirm, because 'no departure evidence' is exactly what
+    leaving US surveillance looks like."""
+    if not origin:
+        return False
+    c = origin.strip().upper()
+    if len(c) == 3 and c.isalnum():
+        return True
+    if len(c) == 4:
+        return (c.startswith("K")
+                or c[:2] in ("PA", "PH", "PG", "TJ", "TI"))
+    return False
+
+
+def _qid_igtd(fltd_message: ET.Element) -> str | None:
+    """Extract nxce:igtd (initial gate time of departure -- the leg's
+    schedule-time identity) from the qualifiedAircraftId block. Cheap:
+    only called on plan-removal messages and on activity messages whose
+    acid already matched the pending-removal watch."""
+    for child in fltd_message:
+        qid = child if _local(child.tag) == "qualifiedAircraftId" \
+            else _find_child(child, "qualifiedAircraftId")
+        if qid is not None:
+            return _text(_find_child(qid, "igtd"))
+    return None
+
+
+def _filed_lead_hours(removed_at: str | None, igtd: str | None) -> float | None:
+    """Hours between the removal message and the leg's igtd (positive =
+    removed ahead of scheduled departure)."""
+    if not removed_at or not igtd:
+        return None
+    try:
+        r = datetime.fromisoformat(removed_at.replace("Z", "+00:00"))
+        g = datetime.fromisoformat(igtd.replace("Z", "+00:00"))
+        return round((g - r).total_seconds() / 3600.0, 2)
+    except ValueError:
+        return None
+
 
 def _handle_flight_plan_cancellation(fltd_message: ET.Element) -> None:
     """
@@ -1898,22 +2653,235 @@ def _handle_flight_plan_cancellation(fltd_message: ET.Element) -> None:
     string. A cancelled flight plan for a watchlist-tracked flight is
     high-priority: the pickup this entry was tracking may no longer be
     happening as planned, distinct from a routine delay/reroute.
+
+    2026-08-30 late-night pass (Detector C): every removal is now ALSO
+    stored to tfms_plan_removals with its fdTrigger classified through
+    the closed vocabulary above -- previously fdTrigger was read into a
+    watchlist alert detail dict and dropped for every unwatched flight,
+    so no fly-rate measurement was ever possible. Storage is
+    unconditional (national scope, not watchlist- or DC-gated: the
+    cluster analysis this feeds needs cross-airport baselines); the
+    watchlist alert below is unchanged in trigger and priority for
+    cancellation-classified removals, and DOWNGRADED to priority 3 with
+    an honest summary for superseded-classified ones -- per the
+    reference measurement a CANCEL_CMD/HCS_CANCELLATION_MSG removal is
+    a plan being replaced, and paging the operator "Flight plan
+    cancelled" for a flight that is ~70-92% likely to fly anyway is a
+    false alarm, not caution.
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
+
+    dep_arpt = fltd_message.get("depArpt") or origin
+    arr_arpt = fltd_message.get("arrArpt") or destination
+    trigger = fltd_message.get("fdTrigger")
+    kind = _classify_removal_trigger(trigger)
+    removed_at = fltd_message.get("sourceTimeStamp")
+    igtd = _qid_igtd(fltd_message)
+    acid = callsign or fltd_message.get("acid")
+
+    if acid:
+        # Defensive, non-fatal: the removal store must never break the
+        # live ingest loop (same discipline as every other DB write here).
+        try:
+            from common import db_swim
+            row_id = db_swim.upsert_tfms_plan_removal(
+                callsign=acid,
+                igtd=igtd,
+                carrier=fltd_message.get("airline") or fltd_message.get("major"),
+                origin=_norm_airport_code(dep_arpt),
+                destination=_norm_airport_code(arr_arpt),
+                flight_ref=fltd_message.get("flightRef"),
+                removed_at=removed_at,
+                removal_trigger=(trigger or "").strip().upper() or None,
+                kind=kind,
+                source_facility=fltd_message.get("sourceFacility"),
+                filed_lead_h=_filed_lead_hours(removed_at, igtd),
+                origin_surveilled=_origin_is_surveilled(dep_arpt),
+            )
+            # Make the new row visible to the in-process activity watch
+            # immediately (don't wait out the refresh interval) -- a
+            # reinstatement can follow the removal within seconds.
+            if row_id is not None:
+                _REMOVAL_WATCH.setdefault(acid.upper(), []).append({
+                    "id": row_id, "callsign": acid.upper(),
+                    "igtd": (igtd or "").strip(),
+                    "origin": _norm_airport_code(dep_arpt),
+                    "destination": _norm_airport_code(arr_arpt),
+                    "kind": kind, "reinstated_at": None,
+                })
+        except Exception as e:
+            log.error("tfms: plan-removal store failed for %s (non-fatal): %s",
+                      acid, e)
+
     entry = _match_watchlist_flight(callsign)
     if entry is None:
         return
 
-    dep_arpt = fltd_message.get("depArpt") or origin
-    arr_arpt = fltd_message.get("arrArpt") or destination
-    summary = f"Flight plan cancelled: {callsign or entry['identifier']} ({dep_arpt or '?'} -> {arr_arpt or '?'})"
+    if kind == "cancellation":
+        summary = f"Flight plan cancelled: {callsign or entry['identifier']} ({dep_arpt or '?'} -> {arr_arpt or '?'})"
+        priority = 4
+    else:
+        # superseded / left_coverage / unknown -- a removal, but per the
+        # reference measurement most likely NOT the flight ceasing to
+        # exist. Still watch-worthy (the tracked plan reference is gone),
+        # just not a page.
+        summary = (f"Flight plan removed ({kind}): "
+                   f"{callsign or entry['identifier']} "
+                   f"({dep_arpt or '?'} -> {arr_arpt or '?'})")
+        priority = 3
     detail = {
         "watchlist_trigger": "tfms_flight_plan_cancellation",
         "gufi": gufi, "origin": dep_arpt, "destination": arr_arpt,
-        "fd_trigger": fltd_message.get("fdTrigger"),
+        "fd_trigger": trigger,
+        "removal_kind": kind,
         "source_facility": fltd_message.get("sourceFacility"),
     }
-    _fire_tfms_watchlist_hit(entry, summary, detail, priority=4)
+    _fire_tfms_watchlist_hit(entry, summary, detail, priority=priority)
+
+
+# ── Detector C: activity watch + settle-window confirmation ──────────────────
+#
+# "Did the flight subsequently fly?" is answered by the SAME national
+# fltdMessage stream the removals arrive on: a later departureInformation
+# / trackInformation / arrivalInformation for the removed leg is flew-
+# evidence; a later FlightCreate / FlightScheduleActivate / FlightModify /
+# amendment / FlightRoute for it is a replan (reinstatement). The watch
+# is an in-memory dict keyed on the acid ATTRIBUTE (no XML traversal on
+# the hot path -- one dict lookup per fltdMessage; leg corroboration via
+# igtd or the depArpt/arrArpt attributes only runs on a callsign hit),
+# refreshed from tfms_plan_removals at most every _REMOVAL_WATCH_REFRESH_S.
+_REMOVAL_WATCH: dict[str, list[dict]] = {}
+_REMOVAL_WATCH_REFRESHED = 0.0
+_REMOVAL_WATCH_REFRESH_S = 60.0
+_REMOVAL_WATCH_WINDOW_S = 48 * 3600.0
+
+# Evidence classes by msgType. Values are the evidence-json key written.
+_REMOVAL_FLEW_TYPES = {
+    "departureInformation": "departure_msg",
+    "trackInformation": "track_msg",
+    "arrivalInformation": "arrival_msg",
+    "oceanicReport": "track_msg",
+    "boundaryCrossingUpdate": "track_msg",
+}
+_REMOVAL_REPLAN_TYPES = frozenset({
+    "FlightCreate", "FlightScheduleActivate", "FlightModify", "FlightTimes",
+    "flightPlanAmendmentInformation", "FlightRoute", "flightPlanInformation",
+})
+
+_REMOVAL_SWEEP_TS = 0.0
+_REMOVAL_SWEEP_INTERVAL_S = 300.0
+
+
+def _refresh_removal_watch(now_mono: float) -> None:
+    global _REMOVAL_WATCH_REFRESHED, _REMOVAL_WATCH
+    if now_mono - _REMOVAL_WATCH_REFRESHED < _REMOVAL_WATCH_REFRESH_S:
+        return
+    _REMOVAL_WATCH_REFRESHED = now_mono
+    try:
+        from common import db_swim
+        rows = db_swim.get_removal_activity_watch(_REMOVAL_WATCH_WINDOW_S)
+    except Exception as e:
+        log.debug("tfms: removal-watch refresh failed (non-fatal): %s", e)
+        return
+    watch: dict[str, list[dict]] = {}
+    for r in rows:
+        cs = (r.get("callsign") or "").upper()
+        if cs:
+            r["callsign"] = cs
+            watch.setdefault(cs, []).append(r)
+    _REMOVAL_WATCH = watch
+
+
+def _note_plan_removal_activity(fltd_message: ET.Element, msg_type: str) -> None:
+    """Called for EVERY fltdMessage (all types, handled or not) before
+    dispatch: if its acid is on the pending-removal watch and the message
+    corroborates the same LEG (igtd equality when both sides have one,
+    else matching origin+destination attributes -- a bare callsign match
+    alone is deliberately insufficient, because the same callsign flies
+    tomorrow's leg too), record flew-evidence or a reinstatement on the
+    stored removal row. O(1) dict probe on the hot path; XML traversal
+    only on a hit."""
+    import time as _time
+    _refresh_removal_watch(_time.monotonic())
+    if not _REMOVAL_WATCH:
+        return
+    acid = (fltd_message.get("acid") or "").strip().upper()
+    if not acid or acid not in _REMOVAL_WATCH:
+        return
+
+    flew_key = _REMOVAL_FLEW_TYPES.get(msg_type)
+    is_replan = msg_type in _REMOVAL_REPLAN_TYPES
+    if not flew_key and not is_replan:
+        return
+
+    msg_igtd = (_qid_igtd(fltd_message) or "").strip()
+    msg_dep = _norm_airport_code(fltd_message.get("depArpt"))
+    msg_arr = _norm_airport_code(fltd_message.get("arrArpt"))
+    stamp = fltd_message.get("sourceTimeStamp")
+
+    for entry in list(_REMOVAL_WATCH.get(acid, [])):
+        leg_igtd = (entry.get("igtd") or "").strip()
+        if leg_igtd and msg_igtd:
+            if leg_igtd != msg_igtd:
+                continue
+        elif msg_dep and msg_arr and entry.get("origin") and entry.get("destination"):
+            if (msg_dep, msg_arr) != (entry["origin"], entry["destination"]):
+                continue
+        else:
+            # No corroborating field available on either side -- skip
+            # rather than guess (conservative false negative).
+            continue
+        try:
+            from common import db_swim
+            if flew_key:
+                if not entry.get("_noted_flew"):
+                    db_swim.record_removal_activity(
+                        entry["id"], flew_key, stamp or True,
+                        flew=True, reinstated=False)
+                    entry["_noted_flew"] = True
+                    log.info("tfms: removed plan %s (%s) flew anyway "
+                             "(evidence=%s)", acid, entry.get("kind"), flew_key)
+                    # Flew-evidence ends the watch for this leg.
+                    _REMOVAL_WATCH[acid].remove(entry)
+                    if not _REMOVAL_WATCH[acid]:
+                        _REMOVAL_WATCH.pop(acid, None)
+            elif not entry.get("_noted_replan"):
+                db_swim.record_removal_activity(
+                    entry["id"], "replanned_after",
+                    f"{msg_type}@{stamp}" if stamp else msg_type,
+                    flew=False, reinstated=True)
+                entry["_noted_replan"] = True
+                entry["reinstated_at"] = stamp or "now"
+                log.info("tfms: removed plan %s reinstated via %s",
+                         acid, msg_type)
+        except Exception as e:
+            log.debug("tfms: removal-activity record failed for %s "
+                      "(non-fatal): %s", acid, e)
+
+
+def _maybe_sweep_removals() -> None:
+    """Throttled settle-window confirmation sweep (inline in the parser
+    like every other detector here -- no new service). Confirmation is
+    storage-only: no alert fires on confirm in this pass (a nationwide
+    confirmed cancellation is analytics material; the per-airport cluster
+    detection the document builds on top is deliberately NOT built until
+    real rows exist to size its thresholds against -- same cold-start
+    discipline as _ALT_SAT_* in fdps_parser)."""
+    global _REMOVAL_SWEEP_TS
+    import time as _time
+    now_mono = _time.monotonic()
+    if now_mono - _REMOVAL_SWEEP_TS < _REMOVAL_SWEEP_INTERVAL_S:
+        return
+    _REMOVAL_SWEEP_TS = now_mono
+    try:
+        from common import db_swim
+        n = db_swim.sweep_confirm_removals(_REMOVAL_SETTLE_SECS)
+        if n:
+            log.info("tfms: confirmed %d plan removal(s) as cancellations "
+                     "(settle window %.0fs passed, no flew-evidence, not "
+                     "reinstated)", n, _REMOVAL_SETTLE_SECS)
+    except Exception as e:
+        log.debug("tfms: removal confirmation sweep failed (non-fatal): %s", e)
 
 
 def _handle_flight_create(fltd_message: ET.Element) -> None:

@@ -3,6 +3,7 @@ import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import AriaCompassRegion from './AriaCompassRegion.jsx'
 import AccessibleTable   from './AccessibleTable.jsx'
+import UpcomingFeatureWatermark from './UpcomingFeatureWatermark.jsx'
 import { useCompassSummary } from '../hooks/useCompassSummary.js'
 import { useWatchlist, FALLBACK_PLANE_SVG } from '../hooks/useWatchlist.js'
 import { useDemoStatus } from '../hooks/useDemoStatus.js'
@@ -300,6 +301,18 @@ export default function AisMapView() {
           ref={mapRef}
           className={`ais-leaflet-layer${mode === 'iframe' ? ' ais-overlay-mode' : ' ais-local-mode'}`}
         />
+
+        {/* Our own /api/ais/vessels overlay has no source, AND nothing
+            real is otherwise on screen -- in iframe mode the MarineTraffic
+            embed itself may still be showing real third-party data even
+            when our overlay is empty, so only show this when that embed
+            also isn't up (local mode, or the iframe failed to load). */}
+        {dataSource === 'none' && (mode !== 'iframe' || iframeError) && (
+          <UpcomingFeatureWatermark
+            label="AIS / Vessel Tracking"
+            detail="No local AIS-catcher or AISHub source configured yet"
+          />
+        )}
 
         <div className="map-overlay-stats globe-stats">
           {vesselCount > 0

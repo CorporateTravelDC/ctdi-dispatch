@@ -1,0 +1,10 @@
+[Unit]
+Description=Convective SIGMET archive fetch every 10 min -- convective SIGMETs issue hourly at H+55 (+specials anytime, ~2 h validity), so 10 min bounds archival latency well inside any attribution window
+Requires=corporatetraveldc-convective-sigmet-archiver.service
+
+[Timer]
+OnCalendar=*:4/10
+Persistent=false
+
+[Install]
+WantedBy=timers.target

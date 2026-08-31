@@ -11,6 +11,18 @@ Architecture (revised 2026-08-27 -- see below for why):
     (corporatetraveldc-llama-report-N.service, N=1..len(REPORT_PORTS)),
     claimed exclusively for one request via a per-port flock.
 
+2026-08-30 amendment: report-1 (REPORT_PORTS[0], port 8095) is now
+ON-DEMAND, not permanently resident -- it was shelved 2026-08-27 after two
+near-OOM incidents running alongside hot+chat, which silently broke every
+persona with num_ctx > chat's -c 4096. The consumer skills' own quadlets
+now start/stop it at the HOST level (ExecStartPre / guarded ExecStopPost,
+scripts/llama-report-ondemand.sh) -- quadlet hooks run on the host, so the
+container/host privilege boundary documented below doesn't apply to them.
+common/llm.py's ollama_post_with_retry() routes to it by the calling
+persona's declared num_ctx; claim_port()'s flock path is currently unused
+(report-1 is single-slot, -np 1 -- llama-server queues concurrent
+requests itself).
+
 Originally designed as an ELASTIC pool (ports 8095-9005, spin up on demand,
 5-min idle self-timeout) -- abandoned same day, before ever shipping,
 because it doesn't fit this deployment's actual topology: every caller of

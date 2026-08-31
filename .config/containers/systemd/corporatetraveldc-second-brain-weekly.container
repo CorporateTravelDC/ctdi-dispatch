@@ -43,6 +43,18 @@ Slice=production.slice
 # desktop session under real memory pressure, not just a cap after the
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=341M
+# 2026-08-30: on-demand report-tier llama-server. This skill's persona
+# (secondbrain-weekly, common/personas.py) declares num_ctx 6144 >
+# llama-chat's -c 4096 -- its real weekly compile overflowed the shared
+# chat port (4219 tokens vs 4096, journal-confirmed 2026-08-30 18:17)
+# and fell back to a deterministic W-note. common/llm.py now routes
+# >4096-ctx personas to report-1 (port 8095, -c 8192); these HOST-level
+# hooks start it just for this run and stop it after unless another
+# consumer skill (ep-advance hourly at :35 -- this unit's ~1.5h budget
+# spans one) is still mid-run. See scripts/llama-report-ondemand.sh's
+# header and corporatetraveldc-ep-advance.container's matching comment.
+ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh start
+ExecStopPost=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh stop-if-idle %n
 Type=oneshot
 # Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
 # skill's spike-measured Python timeouts (forced TIER2+ contention, same

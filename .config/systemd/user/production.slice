@@ -91,8 +91,30 @@ Documentation=man:systemd.slice(5)
 # session / claude --remote-control). Floored below the slice's
 # currently-observed real (non-swapped) working set so normal internal
 # reclaim among this slice's own children still functions.
+#
+# 2026-08-30 (evening, on-demand report-1 pass): MemoryHigh 12000M ->
+# 13400M. corporatetraveldc-llama-report-1.service now runs ON-DEMAND
+# inside this slice for the duration of any >4096-ctx skill run
+# (ep-advance hourly, dispatch-desk-memo / second-brain-weekly weekly --
+# see that unit and scripts/llama-report-ondemand.sh). Its live-measured
+# full-context footprint is ~5.3G (journal: "2.8G memory peak, 4.9G
+# memory swap peak"), on top of hot+chat's ~7.1G resident: a quiet-case
+# report run puts the slice's genuine working set at ~13.0-13.5G. With
+# High still at 12000M the kernel throttled + swapped report-1's hot KV
+# on every run (live-observed tonight: report-1 crushed to 0.3G resident
+# / 4.8G in zram mid-inference, prompt eval at 10-14 tok/s). 13400M lets
+# the quiet-case run stay resident while keeping a real soft band below
+# the unchanged 13780M hard ceiling (the operator-approved 85%-of-RAM
+# envelope from 2026-08-14 -- NOT widened; the full measured demand
+# under WORST-case contention (report-1 + a busy chat) still exceeds it
+# by design, and the deliberate overflow valve for that case is report-1
+# riding zram, the only tier without MemorySwapMax=0 -- see its unit's
+# comment). Risk note: raising High thins the runaway-growth throttle
+# band (13400 -> 13780 = 380M); acceptable now that every individual
+# container carries its own Memory=/--memory-swap cap and hot/chat carry
+# their own MemoryMax, none of which was true on 2026-08-14.
 
 [Slice]
 MemoryLow=6144M
-MemoryHigh=12000M
+MemoryHigh=13400M
 MemoryMax=13780M
