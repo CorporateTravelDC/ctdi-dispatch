@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 REPO_DIR = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_DIR / "src"))
 
-from demo.scrub_rules import scrub_text, verify_scrubbed  # noqa: E402
+from demo.scrub_rules import scrub_text, verify_scrubbed, find_ladd_violations  # noqa: E402
 
 LIVE_DB = "/var/lib/corporatetraveldc/corporatetraveldc.db"
 STAGING_DB = "/var/lib/corporatetraveldc/demo.db"
@@ -112,7 +112,20 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def scrub_payload_bytes(payload: bytes, compressed: bool) -> tuple[bytes | None, list[str]]:
+def load_ladd_idents(live: sqlite3.Connection) -> frozenset[str]:
+    """2026-08-31 (operator directive): LADD-listed tails/regs/idents can
+    never reach a demo surface. Loaded once per run from the live DB
+    (faa_ladd_aircraft, populated by scripts/import-ladd-filter.py) --
+    never hardcoded here, since the list itself is CUI (SP-PRVCY)."""
+    try:
+        rows = live.execute("SELECT n_number FROM faa_ladd_aircraft").fetchall()
+    except sqlite3.OperationalError:
+        return frozenset()  # table doesn't exist yet -- nothing to check against
+    return frozenset(r[0] for r in rows if r[0])
+
+
+def scrub_payload_bytes(payload: bytes, compressed: bool,
+                         ladd_idents: frozenset[str]) -> tuple[bytes | None, list[str]]:
     """Decompress if needed, decode, scrub, verify. Returns
     (recompressed_scrubbed_bytes_or_None, violations). None means DROP."""
     try:
@@ -122,14 +135,15 @@ def scrub_payload_bytes(payload: bytes, compressed: bool) -> tuple[bytes | None,
         return None, [f"decode failure: {e}"]
 
     scrubbed = scrub_text(text)
-    violations = verify_scrubbed(scrubbed)
+    violations = verify_scrubbed(scrubbed) + find_ladd_violations(scrubbed, ladd_idents)
     if violations:
         return None, violations
     return zlib.compress(scrubbed.encode("utf-8"), 6), []
 
 
 def promote_snapshots(live_staging: sqlite3.Connection, sovereign: sqlite3.Connection,
-                       since_iso: str) -> tuple[int, int, Counter, str | None]:
+                       since_iso: str, ladd_idents: frozenset[str],
+                       ) -> tuple[int, int, Counter, str | None]:
     rows = live_staging.execute(
         "SELECT endpoint, captured_at, payload, payload_hash, compressed "
         "FROM snapshots WHERE captured_at > ? ORDER BY captured_at",
@@ -142,7 +156,7 @@ def promote_snapshots(live_staging: sqlite3.Connection, sovereign: sqlite3.Conne
     max_captured_at = None
 
     for endpoint, captured_at, payload, payload_hash, compressed in rows:
-        clean, violations = scrub_payload_bytes(payload, bool(compressed))
+        clean, violations = scrub_payload_bytes(payload, bool(compressed), ladd_idents)
         if clean is None:
             dropped += 1
             for v in violations:
@@ -163,7 +177,8 @@ def promote_snapshots(live_staging: sqlite3.Connection, sovereign: sqlite3.Conne
 
 
 def promote_briefs(live: sqlite3.Connection, sovereign: sqlite3.Connection,
-                    since_iso: str) -> tuple[int, int, Counter, str | None]:
+                    since_iso: str, ladd_idents: frozenset[str],
+                    ) -> tuple[int, int, Counter, str | None]:
     rows = live.execute(
         "SELECT generated_at, brief_type, content, source FROM brief_archive "
         "WHERE generated_at > ? ORDER BY generated_at",
@@ -177,7 +192,7 @@ def promote_briefs(live: sqlite3.Connection, sovereign: sqlite3.Connection,
 
     for generated_at, brief_type, content, source in rows:
         scrubbed = scrub_text(content)
-        violations = verify_scrubbed(scrubbed)
+        violations = verify_scrubbed(scrubbed) + find_ladd_violations(scrubbed, ladd_idents)
         if violations:
             dropped += 1
             for v in violations:
@@ -311,11 +326,14 @@ def main() -> None:
     staging = sqlite3.connect(f"file:{STAGING_DB}?mode=ro", uri=True)
     live = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
 
+    ladd_idents = load_ladd_idents(live)
+    print(f"[scrub-demo-source] LADD blocklist: {len(ladd_idents)} identifiers loaded")
+
     snap_promoted, snap_dropped, snap_reasons, snap_max = promote_snapshots(
-        staging, sovereign, since_iso_snap
+        staging, sovereign, since_iso_snap, ladd_idents
     )
     brief_promoted, brief_dropped, brief_reasons, brief_max = promote_briefs(
-        live, sovereign, since_iso_brief
+        live, sovereign, since_iso_brief, ladd_idents
     )
 
     new_window_end = max(x for x in (snap_max, brief_max) if x is not None) \
