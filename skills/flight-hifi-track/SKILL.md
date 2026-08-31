@@ -56,6 +56,8 @@ ac = _local_fdps_ac("<ICAO_CALLSIGN>")
 ```
 `None` means FDPS has no plan for this callsign, or only a bare plan with no hex/position yet (pre-filing).
 
+**A non-`None` result is NOT proof of freshness — confirmed live 2026-08-31 on DAL2962.** `_local_fdps_ac()`/`get_flight_plan_by_callsign()` return the *most recent* row for that callsign, full stop — no same-day check. For a route that flies daily, that can be a FULL CALENDAR DAY stale (the DAL2962 case: the "match" was the previous night's already-completed flight — its own embedded FDPS timestamp and actual departure/arrival times were plainly from the day before, not today). This is a third, distinct trap from the multi-leg-rotation case (Step 1h) and the shuttle-frequency case (also Step 1h) — always sanity-check the returned record's actual timestamp/position against what you'd expect for *today's* specific instance before treating it as current. If in doubt, run Step 1h's Query 2 (`date(updated_at,...)=date('now','localtime')`) explicitly rather than trusting this shortcut's freshness.
+
 **1d. Registration → hex cross-check** (once a registration is known, e.g. from FIDS): local registry tables only, no live call:
 ```python
 from shared.watchlist import _local_registry_hex_lookup
