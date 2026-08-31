@@ -3,11 +3,21 @@ ingest.parsers.smes_parser -- STDDS surface and terminal track parser.
 
 SMES (Surface Movement Events): ASDE-X surface positions at DCA/IAD/BWI.
 TAIS (Terminal Automation Information Service): PCT TRACON radar tracks.
+
+Since 2026-08-30 (SWIM ingest audit) this module also parses the four
+TDES/APDS shapes confirmed live on the same STDDS queue -- per-runway RVR
+(RVRDataUpdateMessage), tower departure events with gate numbers
+(TowerDepartureEventMessage), TDLS PDC/CPDLC clearance text
+(TDLSCSPMessage), and digital ATIS (DATISData) -- see the APDS/TDES
+section at the bottom of this file. Still known-unparsed on this queue
+(deliberately, low value): AssetMessage/AssetMonitorMessage and the
+various *ServiceStatus/STDDSStatus heartbeat shapes.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -1013,6 +1023,111 @@ def write_surface_movement_event(record: dict) -> bool:
         return False
 
 
+# 2026-08-30 (operator directive, following up on the surface-events-are-
+# already-parsed-but-only-used-for-an-aggregate-count gap): map SMES's
+# discrete event/status pairs onto the OOOI phases they actually
+# represent. Matches this parser's own docstring above
+# parse_surface_movement_event_message() (spotout=gate pushback, on=
+# touchdown) -- not copied from any external source, this vocabulary was
+# already independently documented here. runwayin/runwayout are
+# deliberately absent: those are mid-taxi runway-crossing events, not a
+# gate/wheels transition, and don't correspond to any OOOI phase.
+_SMES_OOOI_MAP: dict[tuple[str, str], str] = {
+    ("spotout", "onsurface"): "out",   # left the gate/ramp spot -- pushback complete
+    ("off", "airborne"): "off",         # wheels up
+    ("on", "onrunway"): "on",           # touchdown
+    ("on", "onsurface"): "on",          # touchdown, already clear of the runway surface
+    ("spotin", "onramp"): "in",         # entered the gate/ramp spot
+}
+
+
+def _match_watchlist_flight(identifier: str | None) -> dict | None:
+    """Find an active flight watchlist entry matching this identifier
+    (callsign), case-insensitive. Same matching convention as
+    tbfm_parser.py's/tfms_parser.py's own copies (kept file-local rather
+    than shared -- each ingest parser already does this)."""
+    if not identifier:
+        return None
+    try:
+        from shared.watchlist import get_active_entries
+        entries = get_active_entries(entry_type="flight")
+    except Exception as e:
+        log.error("stdds: watchlist lookup failed: %s", e)
+        return None
+    ident_upper = identifier.upper().strip()
+    for entry in entries:
+        if entry["identifier"].upper() == ident_upper:
+            return entry
+    return None
+
+
+_SMES_OOOI_DEDUP = PushDedup("smes_oooi", dedup_secs=1800)
+
+
+def check_smes_watchlist_oooi(record: dict) -> None:
+    """Advance a watched flight's authoritative OOOI phase from a real
+    ASDE-X-observed surface event, instead of waiting on TFMS's slower,
+    self-reported airlineOutTime/OffTime/OnTime/InTime (see
+    tfms_parser.py's _handle_flight_times) -- surface events are FAA's
+    own ground-radar observation of the actual physical event and
+    typically land minutes ahead of the airline's own report for the
+    same transition.
+
+    Deliberately does NOT touch _OOOI_SOURCE_PRIORITY/_OOOI_PHASE_ORDER
+    semantics or update_watchlist_oooi_phase_authoritative() itself --
+    that authority-gating logic (forward-only, source-priority-ranked)
+    already handles this call safely: a stale/regressive event is
+    rejected on its own, so this function can call it unconditionally
+    whenever the event/status pair maps to a known phase.
+
+    30-min dedup per (entry, phase) -- an aircraft only genuinely
+    transitions through each OOOI phase once, so a second SMES message
+    reporting the same phase (a resend, or a lower-authority re-confirm)
+    shouldn't re-fire a watchlist notification, matching
+    tbfm_parser.py's _check_tbfm_watchlist_hits' identical reasoning.
+    """
+    event = (record.get("event") or "").strip().lower()
+    status = (record.get("status") or "").strip().lower()
+    phase = _SMES_OOOI_MAP.get((event, status))
+    if phase is None:
+        return
+
+    entry = _match_watchlist_flight(record.get("callsign"))
+    if entry is None:
+        return
+
+    updated_at = record.get("event_time") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        applied = db.update_watchlist_oooi_phase_authoritative(
+            entry["id"], phase, source="smes", updated_at=updated_at,
+        )
+    except Exception as e:
+        log.error("stdds: authoritative OOOI update failed for %s: %s", record.get("callsign"), e)
+        return
+    if not applied:
+        return  # regressive, or already confirmed by an equal/higher-authority source
+
+    dedup_key = content_hash(f"smes_oooi:{entry['id']}:{phase}")
+    if not _SMES_OOOI_DEDUP.should_push(entry["id"], dedup_key):
+        return
+
+    try:
+        from shared.watchlist import watchlist_event_hit
+        watchlist_event_hit(
+            entry["id"],
+            f"{record.get('callsign')} OOOI ({phase.upper()}): surface-observed at "
+            f"{record.get('airport')}{' rwy ' + record['runway'] if record.get('runway') else ''}",
+            {"watchlist_trigger": "smes_oooi", "phase": phase, "event": event,
+             "status": status, "airport": record.get("airport"),
+             "runway": record.get("runway")},
+            priority=3,
+        )
+    except Exception as e:
+        log.error("stdds: watchlist_event_hit failed for %s: %s", record.get("callsign"), e)
+
+    _SMES_OOOI_DEDUP.record(entry["id"], dedup_key)
+
+
 _MIN_ONSURFACE_FOR_ALERT = 10
 
 
@@ -1057,3 +1172,487 @@ def check_taxi_alerts(record: dict) -> None:
         )
     except Exception as e:
         log.error("stdds: stdds-taxi alert fire failed for %s: %s", airport, e)
+
+
+# ── APDS / TDES message family (RVR, D-ATIS, TDLS clearances, departure
+#    events) -- added 2026-08-30 (SWIM ingest audit) ─────────────────────────
+#
+# The tag-keyed debug capture above (2026-08-03 rework) had already proven
+# these four message shapes arrive continuously on this same STDDS queue --
+# smes_debug/ holds real captured samples of every one of them
+# (RVRDataUpdateMessage_*, DATISData_*, TDLSCSPMessage_*,
+# TowerDepartureEventMessage_*) -- but _handle_stdds_message's dispatch
+# chain only ever tried asdexMsg/TAIS/SafetyLogicHoldBar/
+# SurfaceMovementEventMessage and let everything else fall through the
+# final `return False`, dropped unparsed. This section adds one combined
+# root-tag dispatcher for the four TDES/APDS shapes.
+#
+# Field mappings below are derived from THIS BOX's own captured samples
+# (paths cited per function), not from the external "unread SWIM fields"
+# document that prompted the audit -- that document's specific claims were
+# only trusted where a real local capture agreed with them.
+#
+# Scope: rows are stored for DC-area airports (SMES_AIRPORTS) -- these are
+# nationwide streams and e.g. PDC text for every US tower is unbounded
+# growth for zero dispatch value -- EXCEPT that a TDES/TDLS message for a
+# watchlisted callsign is stored (and fires a watchlist hit) regardless of
+# airport, matching how every other parser treats watched flights as
+# always-relevant.
+
+_TDES_WATCHLIST_DEDUP = PushDedup("tdes_watchlist", dedup_secs=1800)
+_TDLS_WATCHLIST_DEDUP = PushDedup("tdls_watchlist", dedup_secs=1800)
+
+# RVR trend characters: FAA docs describe U/D/S(/N), but the live feed
+# sends +/-/S/blank (confirmed in every captured RVRDataUpdateMessage_*
+# sample: "+" and " "). Normalized to U/D/S at parse time; blank/unknown
+# -> None.
+_RVR_TREND_MAP = {"U": "U", "D": "D", "S": "S", "N": "S", "+": "U", "-": "D"}
+
+
+def _rvr_value_ft(raw: str | None) -> int | None:
+    """APDS RVR values arrive in HUNDREDS of feet ('60' = 6000 ft --
+    consistent with every captured sample, where '60' appears alongside
+    clear-weather METARs; RVR's max reportable value is 6000+ ft).
+    Blank ('  ') means the sensor isn't reporting that position --
+    confirmed directly in captured samples (midpoint blank while
+    touchdown/rollout report). '00'/0 is also treated as no-report rather
+    than zero visibility: RVR's minimum reportable value is ~100 ft, a
+    literal 0 is not a real observation, and defaulting a dead sensor to
+    worst-possible visibility would poison any downstream consumer (e.g.
+    a future CPS integration) in the dangerous direction. Returns feet or
+    None."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw or not raw.isdigit():
+        return None
+    v = int(raw)
+    if v <= 0:
+        return None
+    return v * 100
+
+
+def _rvr_trend(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    return _RVR_TREND_MAP.get(raw.strip().upper() or None)
+
+
+def _norm_k_airport(code: str | None) -> str | None:
+    if not code:
+        return None
+    code = code.upper().strip()
+    if len(code) == 3:
+        code = "K" + code
+    return code or None
+
+
+def _tdls_time_to_iso(raw: str | None) -> str | None:
+    """TDLS <time> is MMDDYYYYHHMMSS (confirmed: captured TDLSCSPMessage
+    carried 08302026124553 and was received 2026-08-30 12:45:53Z).
+    Returns ISO 8601 Z, or the raw string if it doesn't fit that shape
+    (never None-out a timestamp we did receive)."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        dt = datetime.strptime(raw, "%m%d%Y%H%M%S").replace(tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return raw
+
+
+# ── TDLS PDC/DCL body parsing -- added 2026-08-30 afternoon pass ─────────────
+#
+# Every pattern below is derived from REAL captured bodies on this box
+# (smes_debug/TDLSCSPMessage_{0..4}.xml plus the first live tdls_messages
+# rows written earlier today: KIAD UAL1952, KMIA SWA3740, KMCI SWA2487,
+# KSLC DAL2282, KPHX AAL501), NOT from any external document's claimed
+# formats. Observed body shapes:
+#
+#   CPDLC DCL (the only clearance shape captured so far):
+#     "003 CPDLC DCL DISPATCH MSG - NOT TO BE USED AS A CLEARANCE SWA3740
+#      KMIA B738/L P1725 /AN N8569Z 00Y FL370 CLEARED TO KBWI AIRPORT
+#      ALTNN2.DUCEN THEN AS FILED CLIMB VIA SID   DEP FREQ 126.85 GROUND
+#      CTRL FREQ 121.8 KMIA.ALTNN2.DUCEN.Q87...RAVNN9.KBWI"
+#     variants observed: "PILOT RESPONSE - WILCO" prefix block, "MODIFIED
+#     RTE", "MAINT 3000FT" / "MAINTAIN 240KTS MAINT 9000FT" instead of
+#     "CLIMB VIA SID", "DEP FREQ SEE SID", "EXPECT RWY 16L".
+#   Non-clearance administrative shapes (e.g. KPHX "AAL501 001 N303RG
+#     KPHX GA26") parse to all-None -- the raw body is always stored
+#     verbatim regardless, so nothing is lost on a shape this misses.
+#
+# EDCT: confirmed real -- the morning pass's own committed capture
+# (tests/ingest/fixtures/swim_audit/TDLSCSPMessage_0.xml, UAL1803 KPIT)
+# carries "REVISED EDCT 1330", which the "EDCT hhmm" regex below matches.
+# That same body also shows the SID as a standalone token with no dotted
+# route string at all ("... FL360 PIT5 CLIMB VIA SID ..."), hence the
+# route-less SID fallback in parse_tdls_dcl_body().
+
+# "\*?" -- a REVISED RTE body marks the origin airport with an asterisk
+# ("KMIA*.FOLZZ3.ALYRA..GRUBR.Y299...CAPSS4.KDCA", real AAL861 body
+# captured live 2026-08-30); the asterisk is stripped for element parsing
+# but the route is stored as matched.
+_TDLS_ROUTE_RE = re.compile(r"\bK[A-Z]{3}\*?(?:\.{1,2}[A-Z0-9]+)+")
+_TDLS_AIRWAY_RE = re.compile(r"^[QJVT]\d+[A-Z]?$")
+_TDLS_PATTERNS = {
+    # "003 CPDLC DCL DISPATCH MSG" / hypothetical "PDC" bodies
+    "response_type": re.compile(r"\bPILOT RESPONSE\s*-\s*([A-Z]+)\b"),
+    "registration": re.compile(r"/AN\s+(N[A-Z0-9]{2,6})\b"),
+    "cleared_to": re.compile(r"\bCLEARED TO\s+(K[A-Z]{3})\s+AIRPORT\b"),
+    "expected_runway": re.compile(r"\bEXPECT RWY\s+(\d{1,2}[LRC]?)\b"),
+    # anchored to the "TYPE/suffix Phhmm" shape ("B738/L P1725") so a bare
+    # P#### elsewhere in free text can't false-positive
+    "proposed_dep_time": re.compile(r"/[A-Z]\s+P(\d{4})\b"),
+    "initial_altitude_ft": re.compile(r"\bMAINT\s+(\d{3,5})\s?FT\b"),
+    "cruise_fl": re.compile(r"\b(FL\d{2,3})\b"),
+    "dep_frequency": re.compile(r"\bDEP FREQ\s+(\d{3}\.\d{1,3})\b"),
+    "edct_time": re.compile(r"\bEDCT\s+(\d{4})\b"),
+}
+
+
+def parse_tdls_dcl_body(body: str | None) -> dict:
+    """Best-effort field extraction from a raw TDLS dataBody. Returns a
+    dict whose keys match the v42 tdls_messages parsed columns; every
+    value is None when the pattern isn't present. Pure function, never
+    raises on any input -- the caller stores the raw body verbatim either
+    way, so a miss here costs queryability, not data."""
+    out: dict = {
+        "dcl_type": None, "response_type": None, "registration": None,
+        "cleared_to": None, "sid": None, "sid_transition": None,
+        "expected_runway": None, "climb_via_sid": None,
+        "initial_altitude_ft": None, "cruise_fl": None,
+        "dep_frequency": None, "proposed_dep_time": None,
+        "edct_time": None, "route_text": None,
+    }
+    if not body:
+        return out
+    text = " ".join(body.split()).upper()
+
+    if "CPDLC DCL" in text:
+        out["dcl_type"] = "CPDLC_DCL"
+    elif re.search(r"\bPDC\b", text):
+        # not yet observed live -- kept so a plain-PDC tower doesn't land
+        # unlabeled the day one shows up
+        out["dcl_type"] = "PDC"
+
+    for field, pat in _TDLS_PATTERNS.items():
+        m = pat.search(text)
+        if m:
+            out[field] = m.group(1)
+    if out["initial_altitude_ft"] is not None:
+        try:
+            out["initial_altitude_ft"] = int(out["initial_altitude_ft"])
+        except ValueError:
+            out["initial_altitude_ft"] = None
+    if "CLIMB VIA SID" in text:
+        out["climb_via_sid"] = 1
+
+    # Full cleared route: the longest dotted K###.-prefixed token ("KMCI.
+    # LAKES5.COU..STL.J24...KBWI"). Longest wins because the SID.TRANS
+    # fragment repeated elsewhere ("LAKES5.COU THEN AS FILED") must not
+    # shadow the real route string.
+    routes = _TDLS_ROUTE_RE.findall(text)
+    if routes:
+        route = max(routes, key=len)
+        if route.count(".") >= 2:
+            out["route_text"] = route
+            # SID = element after the origin airport when it carries the
+            # RNAV-SID trailing digit ("JCOBY4"); transition = the next
+            # element unless it's an airway designator (Q/J/V/T + number).
+            elems = [e for e in route.replace("*", "").replace("..", ".").split(".") if e]
+            if len(elems) >= 2 and re.fullmatch(r"[A-Z]{3,6}\d", elems[1]):
+                out["sid"] = elems[1]
+                if len(elems) >= 3 and not _TDLS_AIRWAY_RE.match(elems[2]):
+                    out["sid_transition"] = elems[2]
+    if out["sid"] is None:
+        # No usable route-derived SID. Two real fallback shapes:
+        #   "FOLZZ3.ALYRA CLIMB VIA SID" / "LAKES5.COU THEN AS FILED" --
+        #     the SID.TRANSITION fragment restated before the climb/route
+        #     instruction (AAL861 / SWA2487 live bodies);
+        #   "... FL360 PIT5 CLIMB VIA SID ..." -- a standalone SID with no
+        #     dotted route anywhere in the body (UAL1803 KPIT capture).
+        # Anchoring on the instruction keywords keeps either from matching
+        # arbitrary alphanumerics in free text.
+        m = re.search(r"\b([A-Z]{2,6}\d)(?:\.([A-Z]{2,6}\d?))?\s+"
+                      r"(?:CLIMB VIA\b|MAINT\b|THEN AS FILED\b)", text)
+        if m:
+            out["sid"] = m.group(1)
+            if m.group(2) and not _TDLS_AIRWAY_RE.match(m.group(2)):
+                out["sid_transition"] = m.group(2)
+    return out
+
+
+def parse_tdes_apds_message(xml_bytes: bytes) -> dict | None:
+    """Root-tag dispatcher for the four TDES/APDS shapes confirmed live on
+    this queue. Returns {"kind": <rvr|tdes_departure|tdls|datis>, ...} or
+    None (any other root tag / parse error). Pure parse -- no DB writes,
+    no alerts (see handle_tdes_apds_record)."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return None
+    tag = _local_tag(root.tag)
+
+    if tag == "RVRDataUpdateMessage":
+        # Real sample: smes_debug/RVRDataUpdateMessage_0.xml --
+        # airport, then repeating runwayData > runwayID>{numericRunwayID,
+        # runwaySubID}, {touchdown,midpoint,rollout}VisualRange + *Trend,
+        # runwayEdgeLightSetting, runwayCenterLineLightSetting.
+        airport = _norm_k_airport(_child_local_text(root, "airport"))
+        if not airport:
+            return None
+        runways: list[dict] = []
+        for rd in root:
+            if _local_tag(rd.tag) != "runwayData":
+                continue
+            rid = _find_path_local(rd, "runwayID")
+            num = _path_text(rid, "numericRunwayID") or ""
+            sub = _path_text(rid, "runwaySubID") or ""
+            runway = (num + sub).strip()
+            if not runway:
+                continue
+            runways.append({
+                "runway": runway,
+                "touchdown_rvr_ft": _rvr_value_ft(_child_local_text(rd, "touchdownVisualRange")),
+                "touchdown_trend": _rvr_trend(_child_local_text(rd, "touchdownTrend")),
+                "midpoint_rvr_ft": _rvr_value_ft(_child_local_text(rd, "midpointVisualRange")),
+                "midpoint_trend": _rvr_trend(_child_local_text(rd, "midpointTrend")),
+                "rollout_rvr_ft": _rvr_value_ft(_child_local_text(rd, "rolloutVisualRange")),
+                "rollout_trend": _rvr_trend(_child_local_text(rd, "rolloutTrend")),
+                "edge_light_setting": _child_local_text(rd, "runwayEdgeLightSetting"),
+                "centerline_light_setting": _child_local_text(rd, "runwayCenterLineLightSetting"),
+            })
+        if not runways:
+            return None
+        return {"kind": "rvr", "airport": airport, "runways": runways,
+                "last_seen": _now_iso()}
+
+    if tag == "TowerDepartureEventMessage":
+        # Real sample: smes_debug/TowerDepartureEventMessage_0.xml --
+        # eventTime, aircraftID, beaconCode, aircraftType, computerID,
+        # departureAirport, clearanceDeliveryTime, parkingGate,
+        # enhancedData > eramGufi/sfdpsGufi/destinationAirport.
+        callsign = _child_local_text(root, "aircraftID")
+        airport = _norm_k_airport(_child_local_text(root, "departureAirport"))
+        event_time = _child_local_text(root, "eventTime")
+        if not callsign or not airport or not event_time:
+            return None
+        enhanced = _find_path_local(root, "enhancedData")
+        return {
+            "kind": "tdes_departure",
+            "airport": airport,
+            "callsign": callsign.upper(),
+            "event_time": event_time,
+            "beacon_code": _child_local_text(root, "beaconCode"),
+            "aircraft_type": _child_local_text(root, "aircraftType"),
+            "computer_id": _child_local_text(root, "computerID"),
+            "clearance_delivery_time": _child_local_text(root, "clearanceDeliveryTime"),
+            "parking_gate": _child_local_text(root, "parkingGate"),
+            "eram_gufi": _path_text(enhanced, "eramGufi") if enhanced is not None else None,
+            "sfdps_gufi": _path_text(enhanced, "sfdpsGufi") if enhanced is not None else None,
+            "destination_airport": _norm_k_airport(
+                _path_text(enhanced, "destinationAirport") if enhanced is not None else None),
+            "last_seen": _now_iso(),
+        }
+
+    if tag == "TDLSCSPMessage":
+        # Real sample: smes_debug/TDLSCSPMessage_0.xml -- time
+        # (MMDDYYYYHHMMSS), airportID, aircraftID, beaconCode,
+        # aircraftType, computerID, dataHeader, dataBody (raw PDC/CPDLC/
+        # dispatch text -- stored verbatim; since the 2026-08-30 afternoon
+        # pass ALSO regex-parsed via parse_tdls_dcl_body(), the morning
+        # pass's deliberate raw-only non-goal now being done against the
+        # first real accumulated bodies), enhancedData as above.
+        airport = _norm_k_airport(_child_local_text(root, "airportID"))
+        if not airport:
+            return None
+        enhanced = _find_path_local(root, "enhancedData")
+        callsign = _child_local_text(root, "aircraftID")
+        data_body = _child_local_text(root, "dataBody")
+        return {
+            "kind": "tdls",
+            "airport": airport,
+            "callsign": callsign.upper() if callsign else None,
+            "message_time": _tdls_time_to_iso(_child_local_text(root, "time")),
+            "beacon_code": _child_local_text(root, "beaconCode"),
+            "aircraft_type": _child_local_text(root, "aircraftType"),
+            "computer_id": _child_local_text(root, "computerID"),
+            "data_header": _child_local_text(root, "dataHeader"),
+            "data_body": data_body,
+            "parsed": parse_tdls_dcl_body(data_body),
+            "eram_gufi": _path_text(enhanced, "eramGufi") if enhanced is not None else None,
+            "sfdps_gufi": _path_text(enhanced, "sfdpsGufi") if enhanced is not None else None,
+            "destination_airport": _norm_k_airport(
+                _path_text(enhanced, "destinationAirport") if enhanced is not None else None),
+            "last_seen": _now_iso(),
+        }
+
+    if tag == "DATISData":
+        # Real sample: smes_debug/DATISData_0.xml -- airportID, DATISTime,
+        # editType, atisCode, dataBody (the full D-ATIS broadcast text,
+        # which carries the active runway configuration in prose, e.g.
+        # "ILS RY 22 APCH IN USE LND RY 22. DEPART RY 31.").
+        airport = _norm_k_airport(_child_local_text(root, "airportID"))
+        if not airport:
+            return None
+        return {
+            "kind": "datis",
+            "airport": airport,
+            "atis_code": _child_local_text(root, "atisCode"),
+            "edit_type": _child_local_text(root, "editType"),
+            "datis_time": _child_local_text(root, "DATISTime"),
+            "body": _child_local_text(root, "dataBody"),
+            "last_seen": _now_iso(),
+        }
+
+    return None
+
+
+def handle_tdes_apds_record(rec: dict) -> bool:
+    """Persist one parse_tdes_apds_message() result and fire the watchlist
+    hit where applicable. Returns True if anything was written (feeds the
+    records_accepted counter in swim_client). All DB/notify failures are
+    caught and logged -- this runs inside the live ingest loop and must
+    never raise."""
+    from common import db_swim
+
+    kind = rec.get("kind")
+
+    if kind == "rvr":
+        if rec["airport"] not in SMES_AIRPORTS:
+            return False
+        written = 0
+        for rw in rec["runways"]:
+            try:
+                db_swim.upsert_stdds_rvr(
+                    airport=rec["airport"], runway=rw["runway"],
+                    touchdown_rvr_ft=rw["touchdown_rvr_ft"],
+                    touchdown_trend=rw["touchdown_trend"],
+                    midpoint_rvr_ft=rw["midpoint_rvr_ft"],
+                    midpoint_trend=rw["midpoint_trend"],
+                    rollout_rvr_ft=rw["rollout_rvr_ft"],
+                    rollout_trend=rw["rollout_trend"],
+                    edge_light_setting=rw["edge_light_setting"],
+                    centerline_light_setting=rw["centerline_light_setting"],
+                    last_seen=rec["last_seen"],
+                )
+                written += 1
+            except Exception as e:
+                log.error("stdds: RVR write failed for %s rwy %s: %s",
+                          rec["airport"], rw.get("runway"), e)
+        return written > 0
+
+    if kind == "tdes_departure":
+        entry = _match_watchlist_flight(rec.get("callsign"))
+        dc_relevant = (rec["airport"] in SMES_AIRPORTS
+                       or rec.get("destination_airport") in SMES_AIRPORTS)
+        if entry is None and not dc_relevant:
+            return False
+        stored = False
+        try:
+            stored = db_swim.insert_tdes_departure_event(
+                airport=rec["airport"], callsign=rec["callsign"],
+                event_time=rec["event_time"], beacon_code=rec.get("beacon_code"),
+                aircraft_type=rec.get("aircraft_type"),
+                computer_id=rec.get("computer_id"),
+                clearance_delivery_time=rec.get("clearance_delivery_time"),
+                parking_gate=rec.get("parking_gate"),
+                eram_gufi=rec.get("eram_gufi"), sfdps_gufi=rec.get("sfdps_gufi"),
+                destination_airport=rec.get("destination_airport"),
+                last_seen=rec["last_seen"],
+            )
+        except Exception as e:
+            log.error("stdds: TDES departure-event write failed for %s at %s: %s",
+                      rec.get("callsign"), rec.get("airport"), e)
+        if entry is not None:
+            # The gate number + clearance-delivery time, before pushback --
+            # exactly the curb-side detail a dispatcher can act on. 30-min
+            # dedup per (entry, event content) so a rebroadcast doesn't
+            # re-fire, matching _check_tbfm_watchlist_hits' cadence.
+            dedup_key = content_hash(
+                f"tdes:{entry['id']}:{rec['event_time']}:{rec.get('parking_gate')}")
+            if _TDES_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
+                gate = rec.get("parking_gate")
+                summary = (f"{rec['callsign']} clearance delivered at {rec['airport']}"
+                           + (f", gate {gate}" if gate else "")
+                           + (f" -> {rec['destination_airport']}"
+                              if rec.get("destination_airport") else ""))
+                try:
+                    from shared.watchlist import watchlist_event_hit
+                    watchlist_event_hit(
+                        entry["id"], summary,
+                        {"watchlist_trigger": "tdes_departure",
+                         "airport": rec["airport"], "parking_gate": gate,
+                         "clearance_delivery_time": rec.get("clearance_delivery_time"),
+                         "destination": rec.get("destination_airport"),
+                         "beacon_code": rec.get("beacon_code")},
+                        priority=3,
+                    )
+                    _TDES_WATCHLIST_DEDUP.record(entry["id"], dedup_key)
+                except Exception as e:
+                    log.error("stdds: TDES watchlist hit failed for %s: %s",
+                              rec.get("callsign"), e)
+        return stored
+
+    if kind == "tdls":
+        entry = _match_watchlist_flight(rec.get("callsign"))
+        dc_relevant = (rec["airport"] in SMES_AIRPORTS
+                       or rec.get("destination_airport") in SMES_AIRPORTS)
+        if entry is None and not dc_relevant:
+            return False
+        try:
+            db_swim.insert_tdls_message(
+                airport=rec["airport"], callsign=rec.get("callsign"),
+                message_time=rec.get("message_time"),
+                beacon_code=rec.get("beacon_code"),
+                aircraft_type=rec.get("aircraft_type"),
+                computer_id=rec.get("computer_id"),
+                data_header=rec.get("data_header"),
+                data_body=rec.get("data_body"),
+                eram_gufi=rec.get("eram_gufi"), sfdps_gufi=rec.get("sfdps_gufi"),
+                destination_airport=rec.get("destination_airport"),
+                received_at=rec["last_seen"],
+                parsed=rec.get("parsed"),
+            )
+        except Exception as e:
+            log.error("stdds: TDLS write failed for %s at %s: %s",
+                      rec.get("callsign"), rec.get("airport"), e)
+            return False
+        if entry is not None:
+            body = " ".join((rec.get("data_body") or "").split())
+            dedup_key = content_hash(f"tdls:{entry['id']}:{body}")
+            if _TDLS_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
+                summary = (f"{rec.get('callsign')} TDLS message at {rec['airport']}: "
+                           f"{body[:140]}" + ("…" if len(body) > 140 else ""))
+                try:
+                    from shared.watchlist import watchlist_event_hit
+                    watchlist_event_hit(
+                        entry["id"], summary,
+                        {"watchlist_trigger": "tdls_clearance",
+                         "airport": rec["airport"],
+                         "destination": rec.get("destination_airport"),
+                         "message_time": rec.get("message_time")},
+                        priority=3,
+                    )
+                    _TDLS_WATCHLIST_DEDUP.record(entry["id"], dedup_key)
+                except Exception as e:
+                    log.error("stdds: TDLS watchlist hit failed for %s: %s",
+                              rec.get("callsign"), e)
+        return True
+
+    if kind == "datis":
+        if rec["airport"] not in SMES_AIRPORTS:
+            return False
+        try:
+            db_swim.upsert_datis_snapshot(
+                airport=rec["airport"], atis_code=rec.get("atis_code"),
+                edit_type=rec.get("edit_type"), datis_time=rec.get("datis_time"),
+                body=rec.get("body"), last_seen=rec["last_seen"],
+            )
+            return True
+        except Exception as e:
+            log.error("stdds: D-ATIS write failed for %s: %s", rec.get("airport"), e)
+            return False
+
+    return False

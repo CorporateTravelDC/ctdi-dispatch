@@ -26,6 +26,7 @@ export const DEFAULT_CONFIG = {
     trains:   false,
     marine:   false,
     weather:  false,
+    utm:      false,
   },
   // Per-feed panel collapse state
   panels: {
@@ -33,6 +34,7 @@ export const DEFAULT_CONFIG = {
     trains:  true,
     marine:  true,
     weather: true,
+    utm:     true,
     tfr:     true,
     signals: true,
     amtrak:  true,

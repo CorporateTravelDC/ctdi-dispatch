@@ -1,0 +1,53 @@
+[Unit]
+Description=UTM / Drone Remote ID Watcher — local OpenDroneID UDP feed + USS API stub (FUTURE: dedicated Remote ID receiver)
+# DISABLED — enable when a Remote ID receiver (OpenDroneID-shaped JSON over
+# UDP) is available. The USS API poller inside stays idle regardless until
+# USS_API_BASE/USS_API_KEY are provisioned (no USS provider exists yet).
+#
+# To enable:
+#   1. Ensure a Remote ID decoder is feeding JSON to UDP :5007
+#   2. Build the image:
+#        cd /opt/corporatetraveldc/src/utm_watcher
+#        podman build -t localhost/corporatetraveldc-utm-watcher:latest .
+#   3. Rename this file:
+#        cp corporatetraveldc-utm-watcher.container.disabled corporatetraveldc-utm-watcher.container
+#   4. Reload and start:
+#        systemctl --user daemon-reload
+#        systemctl --user enable --now corporatetraveldc-utm-watcher
+#
+# Watchlist: syncs entry_type="drone" entries from the dispatch API
+# (watchlists/permanent_drones.json is the permanent-tier file). Pin extra
+# UAS IDs via UTM_STATIC_IDS in dispatch.env:
+#   UTM_STATIC_IDS=1596F123456789ABCDEF,SESSION-ID-EXAMPLE
+After=network-online.target corporatetraveldc-web.service
+Wants=network-online.target
+
+[Container]
+Image=localhost/corporatetraveldc-utm-watcher:latest
+ContainerName=corporatetraveldc-utm-watcher
+AutoUpdate=local
+
+# UDP port for the local OpenDroneID decoder JSON stream
+PublishPort=5007:5007/udp
+
+Network=corporatetraveldc.network
+
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+
+Environment=DISPATCH_BASE_URL=http://100.x.x.x:8000
+Environment=NTFY_TOPIC=flight-alerts
+Environment=UTM_UDP_PORT=5007
+Environment=WATCHLIST_REFRESH_INTERVAL=300
+Environment=LOG_LEVEL=INFO
+# UTM_STATIC_IDS=...            — set in dispatch.env when needed
+# USS_API_BASE= / USS_API_KEY=  — set in dispatch-secrets.env when a USS
+#                                 provider is provisioned (poller idles
+#                                 until both exist)
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

@@ -347,6 +347,40 @@ body::before {
 .globe-iframe-wrap { position: relative; flex: 1; min-height: 0; }
 .ais-demo-placeholder-wrap { display: flex; align-items: center; justify-content: center; overflow: hidden; background: #0a0e14; }
 .ais-demo-placeholder-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Upcoming-feature watermark -- prominent, permanent, independent of demo
+   mode (see UpcomingFeatureWatermark.jsx). Sits above the empty map/table
+   but never blocks interaction with them (pointer-events: none), and
+   sizes itself with clamp() rather than a mobile breakpoint so it reads
+   clearly from a phone up through a wide desktop window without a
+   separate @media rule to keep in sync. */
+.upcoming-feature-watermark {
+  position: absolute; inset: 0; z-index: 500;
+  display: flex; align-items: center; justify-content: center;
+  padding: 1.5rem; pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(4,8,18,0.35) 0%, rgba(4,8,18,0.6) 100%);
+}
+.ufw-inner {
+  display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+  text-align: center; max-width: 22rem;
+  background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--orange); border-radius: var(--radius-lg);
+  padding: clamp(1rem, 4vw, 1.75rem) clamp(1.2rem, 5vw, 2.25rem);
+  box-shadow: 0 4px 28px rgba(0,0,0,0.55), 0 0 0 1px var(--orange-dim);
+}
+.ufw-icon { font-size: clamp(1.8rem, 6vw, 2.6rem); line-height: 1; }
+.ufw-label {
+  font-family: var(--font-ui); font-weight: 800; letter-spacing: 0.02em;
+  font-size: clamp(1rem, 4vw, 1.35rem); color: var(--text);
+}
+.ufw-sub {
+  font-family: var(--font-ui); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: clamp(0.62rem, 2.6vw, 0.75rem); color: var(--orange);
+}
+.ufw-detail {
+  font-family: var(--font-data); font-size: clamp(0.6rem, 2.4vw, 0.68rem); color: var(--text-2);
+  margin-top: 0.15rem;
+}
 .globe-iframe {
   position: absolute; inset: 0; width: 100%; height: 100%;
   border: none; z-index: 1;

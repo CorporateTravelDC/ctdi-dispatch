@@ -717,3 +717,161 @@ commit / fail2ban lockdown path), I2 (chat tier 1.15 t/s, the 4.58 figure
 is hot-tier) and I3 (SIGABRT→coredump→DB-lock mechanism), with the I5
 residue as secondary payload, via `remember_text()` (author_kind=agent).
 I0/I4/I6 are repo-state, tracked here only.
+
+---
+
+# Pass 5 — post-9489c7c/410fb01 (manifest re-sign + docs checkpoint), ~09:33–09:45 EDT
+
+Scope: the two commits after `a6cacfb` — `9489c7c` (CLAUDE.md: OPEN
+swap-thrash paragraph → FIXED, plus a new demo-archiver Known-bad entry;
+manifest re-signed, 793 files) and `410fb01` (this file and the 08-29 one
+committed; drift report timestamp refresh). Neither touched code, units, or
+live config, so this pass is mostly *closing* Pass 4 items and checking
+what the re-sign gate let through. Second-brain search first: `--raw
+'llama AND slice'` surfaces Pass 4's note (`20260830T131615Z`), Pass 3
+(`20260830T122137Z`), and `20260830T030328Z` — this pass builds on those,
+nothing here re-derives them. Verified against: `git show/status`,
+`verify-manifest.sh`, `check-claude-md-drift.sh` (read-only by its own
+header), `systemctl --user show/status/--failed/list-timers`, `journalctl
+--user`, `coredumpctl`, `sudo -n -l`, `podman ps`, `free`, live
+`/slots` on both tiers, `curl -H Host:` against nginx, live
+`/etc/corporatetraveldc/dispatch.env` (key names only). Read-only except
+this file and one second-brain note. Nothing staged, committed, or signed.
+
+(Tool note, adds to Pass 4's: `second-brain-search.sh` default mode is
+*phrase* search — a multi-word query like `production.slice llama swap`
+returns **nothing** even though every word is in Pass 4's note. Use
+`--raw 'a AND b'` or a single term. `--semantic` falls back to the same
+literal phrase and also returns 0. Three plain queries this pass came
+back empty before `--raw` found four notes.)
+
+## J0 — Closed since Pass 4 (verified live)
+
+- **I1 CLOSED.** `verify-manifest.sh` whole-tree: `OK -- signature valid,
+  all 793 files match`; `MANIFEST.sha256` last touched in `9489c7c`.
+  `scripts/lockdown.sh` / `restore-network.sh` are covered again, so the
+  fail2ban `actionban`/`actionunban` stack-lockdown path is live again.
+  `integrity-sweep` last ran **09:25:01** (pre-re-sign, still the 10
+  missing + 8 mismatched from I1) and is `failed` at time of writing; next
+  elapse 09:40:01 — result recorded in J5 below.
+- **I4's "CLAUDE.md OPEN paragraph" item CLOSED** by `9489c7c`. The
+  replacement text's numbers check out live: production.slice
+  Low/High/Max = 6144M/12000M/13780M, llama-hot 3072/3840/4608M,
+  llama-chat 4096/5120/6144M, both `MemorySwapMax=0`, both
+  `MemorySwapCurrent=0`, system swap **478M** used (Pass 4: 479M), both
+  tiers `enabled`, timer `Wants=` only, next 2026-08-31 03:00 EDT. The
+  one caveat it carries forward is I2's: "4.58 tok/s" is the hot tier's
+  3-token sample, not the chat tier (see J4 for today's chat numbers).
+- `9489c7c`'s new demo-archiver entry is accurate as far as it goes
+  (`502` at 08:24:37, `nextcloud-app` up 08:24:38) — but it is only one
+  of three identical boot-race failures, and the other two are the
+  subject of J1.
+- Manifest coverage note, not drift: the manifest is over `9489c7c`'s
+  tree; `410fb01`'s three `docs/` files are unlisted (`grep` → 0 hits).
+  `verify-manifest.sh` only checks listed files, so this pass's append to
+  this file does **not** re-open the sweep window (Pass 4's caution about
+  editing tracked files applied to manifest-listed ones).
+
+## J1 — REAL: `check-claude-md-drift.sh` §5 is a bare substring match, so stale or longer-named Known-bad entries mask new failures — the 09:28 `--pre-sign` gate passed with 3 of 5 failed units unlogged
+
+`scripts/check-claude-md-drift.sh:136-142`: takes each failed unit,
+strips `.service`, then `grep -qF "${u}" CLAUDE.md`. Anywhere the bare
+name appears — in any entry, for any cause, any date — counts as
+"logged". Run read-only at 09:36: exit 0, `[OK] CLAUDE.md matches live
+state`, with these five units in `--state=failed`:
+
+| unit | actual failure (this boot) | what §5 matched in CLAUDE.md |
+|---|---|---|
+| `second-brain-demo-archiver-daily` | 502 boot race, 08:24:37 | line 31 — the real entry `9489c7c` added ✅ |
+| `integrity-sweep` | I1 unsigned tree, 09:25 | line 17 — 08-29 acarsrouter entry (different cause, already "resolves once signing completes") |
+| `second-brain-rss` | **502 boot race, 08:24:26** (same as demo-archiver) | line 11 — the **08-28** INTEGRITY-FAILURE list, an entry that explicitly says it already self-resolved |
+| `transport-pattern-digest` | **SIGKILL on `TimeoutStop`, 08:51:30** (chronic, Pass 2/08-29 P3-2) | line 11 — same 08-28 list |
+| `second-brain-weekly` | **502 boot race, 08:24:19** | line 25 — the `second-brain-weekly-dump` entry: a *different unit* whose name merely starts with this one |
+
+The third row is the sharpest: `corporatetraveldc-second-brain-weekly` is
+a prefix of `corporatetraveldc-second-brain-weekly-dump`, so as long as
+weekly-dump has any Known-bad entry, weekly can never trip the gate. The
+first two rows are the softer, more common form: the 08-28 consolidation
+entry names nine units at once and will keep "covering" any of them for
+as long as it stays in the file (the section is dated 08-28 and check 6
+only complains at age, so it will stay for days).
+
+Consequence, concretely: `9489c7c`'s message says the pre-sign check
+"blocked ... demo-archiver ... wasn't logged" and that entry was added —
+correct, but two more units failed the *same way at the same minute* and
+one (`transport-pattern-digest`) is a real, chronic, still-unexplained
+SIGKILL that has now been failed and unlogged across Passes 2–5. The gate
+that exists to force CLAUDE.md to be current at every sign-off signed off
+on a Known-bad section that under-reports by 3.
+
+Fix shape (not applied — read-only pass; two-line change): match the
+unit as a whole token, e.g. `grep -qE "(^|[^A-Za-z0-9-])${u}\.service"`
+(the doc always writes names with `.service`), or `grep -qF
+"\`${u}.service\`"` given the doc's backtick convention; and, separately,
+have the entry's *date* matter — a unit whose last failure is newer than
+the newest date on the line that mentions it is not logged. The second
+part is what would have caught rows 2–4. **Persisted to second brain.**
+
+## J2 — Doc drift delta since Pass 4
+
+- **Nothing new.** `9489c7c`/`410fb01` changed CLAUDE.md (verified, J0)
+  and added dated check files; no other doc moved. Every I4 item was
+  re-grepped and is still present verbatim: `README.md:140/:191/:198/
+  :217/:636-645/:728-740`, `docs/INFRA_MAP.md:37/:111/:128-144/:396/
+  :456-464/:562/:569`, `docs/GUARDRAILS_JUSTIFICATION.md:146-184/:204-207`,
+  `docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md`, `docs/COMPLIANCE_SECURITY.md`,
+  `docs/ALERT_REFERENCE.md`, `docs/HONEYPOT_FAIL2BAN.md:68`,
+  `docs/TAILNET_MIGRATION_INVENTORY.md`, `docs/DATA_SOURCES.md:100/
+  :1064-1092`, `docs/ALERT_ARCHITECTURE.md:60`, `docs/HARDWARE_GUIDANCE.md:74`,
+  `src/ingest/README.md:58` (LOCKDOWN row "host `ollama.service`"). I4
+  stands in full as the open edit list; none of it is this pass's to fix.
+- The two newly committed `LIVE_STATE_CHECK_2026-08-29/30.md` files now
+  contain claims that are *already* stale (I1 "landed unsigned", Pass 3
+  H2's `Requires=`) — they are dated records of what was true at each
+  timestamp, not living claims, and this section is the correction
+  trail. Not drift.
+- `docs/CLAUDE_MD_DRIFT_REPORT.md` says "No drift found" at 08:23:18 —
+  true at 08:23:18 (the boot-race failures began 08:24:19). Its next
+  daily run will also say "No drift found" for the J1 reason, which is
+  the report now being *wrong* rather than merely stale.
+- `README.md`, `src/shared/watchlist_README.md`: no claim touched by
+  either commit.
+
+## J3 — Live residue: I5 unchanged, I3 levers unchanged
+
+- `~/.config/systemd/user/corporatetraveldc-ollama-swap-alert.service`
+  still installed (disabled, `ExecStart` → deleted script);
+  `/usr/local/bin/ollama_governor.py` (root) still present; `sudo -n -l`
+  still grants `ollama.service` start/stop/restart, `kill -SIGKILL
+  ollama.service` (×2) and `ollama-governor.service` — all `not-found`
+  units. Live `dispatch.env` still sets `OLLAMA_LOAD_TIMEOUT`,
+  `OLLAMA_READY_TIMEOUT_S`, `OLLAMA_READY_WAIT_CAP_S` (no readers).
+  `openwebui.example.com.conf` live + tracked, vhost → **502**.
+  `openwebui.container` tracked = live (the drift checker's §11 even
+  reports it `[OK]`), container stopped.
+- Both tiers still `LimitCORE=infinity`, `KillSignal=SIGTERM`,
+  `TimeoutStopSec=45s`, `TimeoutStopFailureMode=abort` — none of I3's
+  levers pulled. `coredumpctl`: no new dumps since 08:59:19 (the 2.4 G
+  one); the 07:32 / 08:09 / 08:59 trio is the full set for this boot.
+
+## J4 — Measurements update (extends I2, not a new finding)
+
+Chat tier (pid 128982, up since 08:59:19) `print_timing` 09:28–09:33:
+prompt eval **14.3–14.6 t/s** (385–557-token prompts), generation
+**2.39–2.42 t/s** (49–55-token answers) — roughly 2× I2's 1.15 t/s, which
+was measured mid-generation on a longer (382-token) output at load1 7.7.
+At 09:33 a **2,048+-token** prompt (`progress = 0.74` at 2048, ≈2.7 k
+total) was 151 s into prompt processing at 13.5 t/s, slot
+`is_processing:true` at 09:35; hot tier idle. Zero `deterministic` /
+`Ollama unavailable` journal lines since 09:15. Still CPU-bound, still
+nowhere near CLAUDE.md's "10–18 tok/s baseline", which remains an
+unsupported number.
+
+## J5 — Failed-unit reconciliation vs Pass 4
+
+Same five as I6 at 09:36: `integrity-sweep` (I1 — awaiting its first
+post-re-sign fire), `second-brain-demo-archiver-daily`, `second-brain-rss`,
+`second-brain-weekly` (all 502 boot race 08:24), `transport-pattern-digest`
+(SIGKILL 08:51, chronic). CLAUDE.md now logs exactly one of the five for
+its current cause (demo-archiver); J1 explains why the gate didn't
+notice the other four. Cleared: none. New: none.

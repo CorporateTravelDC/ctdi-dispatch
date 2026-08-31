@@ -130,6 +130,330 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 
 ## Parser status (verified 2026-08-11; TFMS/NWWS updates 2026-08-22 noted inline)
 
+> **2026-08-30 SWIM-audit update** (external "unread SWIM fields" document
+> + independent blind sweep; every item below verified against real
+> captured samples under `/var/lib/corporatetraveldc/*_debug*`, never
+> against the document's own claims):
+> - **FDPS batch fix**: real FIXM 3.0 `MessageCollection` documents batch
+>   up to 100 `message` children; the parser only ever unwrapped the
+>   first, silently dropping the rest before any geo filter, Marine One
+>   check, or watchlist check. Fixed via `parse_fdps_messages()` (one
+>   dict per child). `flight_events` gains
+>   squawk/registration/controlling_facility (parsed since 2026-07-20,
+>   dropped at write time until now), plus same-GUFI destination-change
+>   logging to `fdps_destination_changes`.
+> - **STDDS/TDES/APDS**: the queue also carries RVR
+>   (`RVRDataUpdateMessage` → `stdds_rvr`), tower departure events with
+>   gate numbers (`TowerDepartureEventMessage` → `tdes_departure_events`
+>   + watchlist hit), TDLS PDC/CPDLC text (`TDLSCSPMessage` →
+>   `tdls_messages`, envelope+raw body only), and digital ATIS
+>   (`DATISData` → `datis_snapshots`) -- all previously fell through the
+>   handler chain unparsed despite real captures in `smes_debug/`.
+> - **TFMS FADT**: per-flight EDCT/slot broadcasts (GS/GDP controlled
+>   departure/arrival times) → `tfms_edct_slots` + watchlist hit; was in
+>   the unknown-msgType bypass like GDP/GS/AFP before it. Still
+>   deliberately unhandled there: REROUTE, PARAM, FXASF, CMPR.
+> - **ITWS**: Runway Configuration Product (active runway config,
+>   DC-sited), Terminal Weather Text Normal/Special -- all three real,
+>   tiny, previously dropped as unrecognized.
+> - **TBFM**: no `<sta>` schedule family has EVER been observed in a real
+>   capture on this queue (the external document's flagship claim);
+>   rather than parse a guessed schema, an unknown-`<air>`-child capture
+>   (`tbfm_debug_unknown_kind/`) now records any non-flt/eta shape that
+>   ever arrives, settling the question empirically.
+>
+> New tables live in `common/db_swim.py` (`init_db_swim_v41()`, called
+> from `ingest/main.py`) -- see that module's docstring for why they are
+> not a `db.py` `SCHEMA_Vn` this time.
+>
+> **2026-08-30 afternoon pass** (audit backlog items; built + tested,
+> **staged only -- deliberately NOT deployed**, see below):
+> - **RVR -> CPS**: `poller/skills/cps_recompute.py` now prefers
+>   touchdown RVR on the ITWS-active-config runways (worst-of fallback
+>   across all reporting runways) over METAR `visibility_sm`, converting
+>   via the official 14 CFR 91.175(h) RVR/visibility correlation table
+>   (values transcribed in that file -- operator must verify against the
+>   CFR at sign-off). Saturated 6000+ readings and offline sensors
+>   (NULL) defer to METAR; the chosen source is recorded in the score's
+>   own narrative and the RVR rows ride the SR-2 input hash. **This is a
+>   Part 135.609 scoring change and must not go live before the
+>   operator's own sign-off** -- hence staged-not-deployed for the whole
+>   pass.
+> - **TDLS body parsing**: `smes_parser.parse_tdls_dcl_body()` regex-
+>   extracts SID/transition/expected runway/EDCT/altitudes/frequency/
+>   route from the raw PDC/CPDLC-DCL bodies (v42 nullable columns on
+>   `tdls_messages`; raw body still stored verbatim). Every pattern
+>   derived from real captured bodies -- including a real
+>   "REVISED EDCT 1330" (UAL1803/KPIT) and the asterisked REVISED-RTE
+>   origin ("KMIA*.FOLZZ3...", AAL861 KMIA->KDCA).
+> - **TFMS PARAM + REROUTE**: both left the unknown-msgType bypass.
+>   PARAM (paramGsUpdt/paramAfpGdpUpdt) -> `tfms_param_delay_stats`
+>   (modeled GS/GDP delay statistics, PROPOSED never overwrites ACTUAL);
+>   REROUTE -> `tfms_reroutes` (advisory general data + waypoint-free
+>   segment summary, `dc_relevant` precomputed; 7 of the 11 distinct
+>   captured advisories were DC-relevant). Storage-only, no new alerts
+>   yet. Still unhandled: FXASF, CMPR.
+> - Schema: `db_swim.init_db_swim_v42()` (called from `ingest/main.py`).
+>   Tests: `tests/poller/test_cps_rvr_20260830.py`,
+>   `tests/ingest/test_swim_audit_20260830_pm.py`.
+> - Deferred again: alternate-saturation detectors
+>   (`fdps_destination_changes` had 0 rows when checked -- needs weeks of
+>   accumulation), ITWS raster/heavy products (real grid-decode work).
+>
+> **2026-08-30 evening pass** (backlog items 2 & 3; built + tested,
+> staged only, same not-deployed discipline as the afternoon pass):
+> - **REROUTE -> watchlist**: REROUTE advisories carry NO per-flight
+>   identifier (re-verified against all 15 captures: zero
+>   aircraftId/gufi/callsign hits -- only airport/center scope lists,
+>   route strings, waypoints), so per-flight matching is by SCOPE
+>   IMPLICATION: a watched flight whose origin AND destination both sit
+>   in an ACTIVE advisory's INCLUDE-segment origin/destin lists fires a
+>   `tfms_reroute` hit (`_check_reroute_watchlist_hits`, 6 h dedicated
+>   dedup keyed per entry+rerouteId, content-keyed on route/status/
+>   window so a real revision fires immediately). Center-only-scoped
+>   segments (very common; center codes even appear inside `<airport>`
+>   tags) are a deliberate false negative -- no airport->center table
+>   exists here to guess with. The FADT EDCT watchlist hit already
+>   shipped in the morning pass; this pass pins its
+>   quiet-on-identical-rebroadcast contract with a test.
+> - **Destination-change normalization fix**: the detector's entire
+>   first live day (7/7 rows) was FAA-vs-ICAO spelling flapping of one
+>   airport across FDPS source types (E25->KE25, KMFR->MFR->KMFR,
+>   KACK->ACK via FH/TH/CL), zero real diversions -- comparison is now
+>   on normalized spellings (`fdps_parser._norm_airport`). The 7 noise
+>   rows were left in place (append-only table; they age out of every
+>   detector window).
+> - **Alternate-saturation detector**
+>   (`fdps_parser._check_alternate_saturation`): >=3 distinct flights
+>   re-filing TO the same normalized airport within 60 min (return-to-
+>   origin rows excluded) fires one `fdps_alt_saturation` family alert
+>   (escalating_only=False, isolate=True; content-keyed on the flight
+>   set so each additional convergent flight re-fires). **Threshold is a
+>   conservative cold-start value, not a tuned one**: the planned
+>   backfill-from-`flight_events` derivation is impossible -- that table
+>   keys `flight_id` as PRIMARY KEY (verified: 910,138 rows == 910,138
+>   distinct GUFIs), one current-state row per flight, no history to
+>   reconstruct -- and the only live observation is a real-change rate
+>   of ~0/hour. RETUNE from live rows in a few weeks.
+> - Tests: `tests/ingest/test_swim_audit_20260830_eve.py` (8, all real
+>   captures/isolated DBs). No schema change this pass.
+>
+> **2026-08-30 night pass** (backlog + new components; built + tested,
+> staged only, same not-deployed discipline as the afternoon/evening
+> passes):
+> - **Diversion-continuation detector**
+>   (`fdps_parser._check_diversion_continuation`): a
+>   `fdps_destination_changes` B->C diversion followed within 6 h by a
+>   NEW-GUFI filing C->B from the same callsign (or same registration
+>   via `flight_events.registration` -- no continuation-naming
+>   convention exists in this repo to match on) is recorded to
+>   `fdps_diversion_continuations` (`db_swim.init_db_swim_v44`) and
+>   fires ONE `fdps_diversion_continuation` family alert per pair,
+>   gated by the table's own UNIQUE constraint. ACARS corroboration
+>   (`acars_messages`, same tail, route/divert-consistent text) is
+>   attached as `confidence="fdps+acars"` when present -- a bonus,
+>   never a gate (operator refinement; this box's ACARS feed has never
+>   produced a row). Runs only on first-sighting FH/AH filings. No real
+>   pairs exist yet to validate against (0 real diversions on record) --
+>   synthetic-row tests only, window is a cold-start value.
+> - **`drone` watchlist entry type** (`shared/watchlist.py` EntryType +
+>   `permanent_drones.json` in `_FILE_MAP`, same hot-reload as
+>   train/vessel). Part 107 UAS deliberately do NOT use the 5-phase
+>   OOOI machine: collapsed `launched`/`landed` status lives in
+>   dedicated `uas_phase*` columns (`db.init_db_v43`,
+>   `update_watchlist_uas_phase()` -- the TBFM dedicated-column
+>   pattern, chosen over a parallel phase-order list because a UAS
+>   cycles launched<->landed and would break the machine's forward-only
+>   invariant; see the SCHEMA_V43 comment block). flight/train/vessel
+>   OOOI is untouched; AAM/eVTOL remains OSINT-only (`common/aam_watch`),
+>   no watchlist tie-in exists to migrate.
+> - **utm_watcher** (`src/utm_watcher/`, quadlet shipped `.disabled`
+>   like ais-watcher): OpenDroneID-shaped UDP listener (:5007, parser
+>   is defensive best-effort -- NO receiver or vendored schema exists
+>   to verify against) + inert USS API poller stub
+>   (`USS_API_BASE`/`USS_API_KEY` empty by default, idles like the
+>   pre-credential airframes.io precedent); watchlist synced from
+>   entry_type=="drone" with `UTM_STATIC_IDS` pins.
+> - **EP-Advance LLM path unified** onto `common.llm.generate()`
+>   (both direct `ollama_post_with_retry()` call sites replaced,
+>   matching ops_brief). Root cause of its reliable failures CONFIRMED
+>   from llama-chat's journal: "request (5908 tokens) exceeds the
+>   available context size (4096 tokens)" -- since the 2026-08-27
+>   cutover all report traffic shares the chat port (`-c 4096`) while
+>   this skill's prompt+persona is ~5908 tokens. The refactor does NOT
+>   fix that (service-level sizing decision, operator's call);
+>   `ollama_post_with_retry()` now logs the backend error body so the
+>   next such failure is not an opaque 400.
+> - Tests: `tests/ingest/test_swim_audit_20260830_night.py` (9,
+>   isolated DBs; synthetic rows -- see above).
+>
+> **2026-08-30 late pass** (external SWIM diversion-detection document
+> applied to the now-live continuation/alt-saturation detectors; built +
+> tested, staged only, same not-deployed discipline):
+> - **Operator-class gate** (`fdps_parser._operator_class`): per the
+>   document, ~85% of raw continuation-shaped candidates nationwide are
+>   fractional/charter (airline-SHAPED callsigns -- EJA/LXJ/... -- which
+>   pass a tail-number filter) or tail-number GA running normal
+>   multi-leg trips. Pairs from either class are STORED
+>   (`operator_class` column, `db_swim.init_db_swim_v45`) but never
+>   alerted; only `scheduled` fires. Prefix set is a starter allowlist
+>   (only EJA/LXJ are document-measured; the rest common knowledge) --
+>   extend from live stored rows.
+> - **Net-change collapse** (`_net_destination_changes`): both detectors
+>   now read each flight's NET change (earliest filed vs latest current,
+>   normalized) instead of raw rows -- a destination that oscillates and
+>   returns home (the document's KPHL<->KPIT flap) no longer counts as
+>   converging or seeds a false continuation, and "originally filed
+>   destination" now genuinely means the earliest value on multi-hop
+>   amendments (chaining-rule condition 3). The evening spelling
+>   normalization handled the SPELLING flavor only; this handles genuine
+>   oscillation. Alt-saturation additionally got a growth-only re-fire
+>   gate (`_ALT_SAT_LAST_ALERTED` subset check): a set SHRINKING as rows
+>   age out / flap home was a new content-key under the old dedup and
+>   would have re-alerted on fewer flights.
+> - **Trap-5 guard**: a diverted leg FILED origin==destination
+>   (maintenance/positioning) can never seed a continuation pair.
+> - **diversionIndicator closed vocabulary** (`tfms_parser`):
+>   AIRBORN_* (airborne divert, priority 4) split from GROUND_* (plan
+>   abandoned/re-filed on ground, priority 3); values outside
+>   {NO_DIVERSION, AIRBORN_NOCTL/CTL, GROUND_NOCTL/CTL} WARN once per
+>   value per process (NAS behavior change alarm) and alert at airborne
+>   urgency. Non-quiet members transcribed from the document -- locally
+>   only ""/NO_DIVERSION have ever been captured.
+> - Succession storage verified already directional (ordered
+>   diverted->continuation columns + ordered UNIQUE); GUFI-keyed
+>   matching means the document's match-by-recency wrong-plan bug does
+>   not apply here. Deliberately NOT built (real, wanted, larger):
+>   Detector C (cancellation classification via fdTrigger + never-flew
+>   test + settle window) and Detector D (weather-attributed reroute
+>   cost). Retention spot-check: no prune job touches
+>   `fdps_destination_changes`/`fdps_diversion_continuations`.
+> - Tests: `tests/ingest/test_swim_audit_20260830_late.py` (13, all
+>   synthetic -- zero real diversions/non-quiet indicators on record).
+>
+> **2026-08-30 late-night pass** (the two detectors the late pass
+> deferred, from the same external document; investigate-first scope --
+> built only what real, already-flowing data supports; built + tested,
+> staged only, same not-deployed discipline):
+> - **Detector C (cancellations)**: there is no cancellation message,
+>   only plan removal (`flightPlanCancellation` + `fdTrigger`) for
+>   opposite-meaning reasons. `fdTrigger` WAS already flowing but went
+>   nowhere: read only in `_handle_flight_plan_cancellation`, only for
+>   watchlist-matched callsigns, into an alert detail dict -- never
+>   stored. Now EVERY removal (national scope) is stored to
+>   `tfms_plan_removals` (`db_swim.init_db_swim_v46`) with the closed-
+>   vocabulary classification (`_REMOVAL_TRIGGER_KINDS`: cancellation /
+>   superseded / left_coverage, warn-once on unknown values), LEG-keyed
+>   (callsign+igtd+airports -- flightRef would invert the ranking, and
+>   locally verified: TFMS removal messages carry NO gufi element).
+>   Flew-anyway/reinstatement evidence comes from the same fltd stream:
+>   an O(1) acid-attribute watch in the dispatch loop
+>   (`_note_plan_removal_activity`, leg-corroborated by igtd or airport
+>   pair) records departure/track/arrival (flew) vs FlightCreate/Modify/
+>   etc (reinstated) into the row's evidence JSON; a throttled inline
+>   sweep (`_maybe_sweep_removals`, 5 min) applies the document's full
+>   confirmation conjunction (cancellation-kind AND US-surveilled origin
+>   AND no flew-evidence AND not reinstated AND settle window past igtd
+>   AND removal -- `TFMS_CANCEL_SETTLE_SECS`, default 3600, cold-start).
+>   Watchlist alert behavior: cancellation-kind unchanged (priority 4);
+>   superseded/unknown now honestly labeled "plan removed (kind)" at
+>   priority 3 (reference data: 70-92% of those fly anyway). Storage
+>   only otherwise -- NO confirmed-cancellation alert and NO per-airport
+>   cluster detector yet (cold start: zero local removal history existed;
+>   `db_swim.measure_removal_fly_rates()` re-derives OUR fly-rate
+>   distribution once ~a week of rows accumulates -- the reference
+>   percentages are a prior, not ground truth). Locally observed
+>   triggers (12 real 2026-07-20 captures, snapshotted to
+>   `tests/ingest/fixtures/swim_audit/tfms_plan_removals/`):
+>   FD_FLIGHT_CANCEL_MSG x8, HCS_CANCELLATION_MSG x4 -- the other four
+>   vocabulary members are document-transcribed, not yet locally seen.
+>   No prune job covers the new table (same open item as
+>   `fdps_destination_changes`).
+> - **Detector D (weather-reroute cost) -- partial by design**: the
+>   route-side half is real and built; the weather half is NOT, because
+>   its required data does not exist on this box. Found: FDPS FIXM 3.0
+>   carries the full agreed route (`agreed > route/@nasRouteText`) plus
+>   the arrival runway estimate -- confirmed in fresh captures (JIA5230
+>   filed "KDCA.CLTCH3.MAULS..." then re-expressed "KDCA./.MAULS...",
+>   same GUFI) and 42,893 live `flight_events.raw_json` blobs -- but the
+>   parser never extracted it, and the HU source type (which carried the
+>   filed-route half of that very pair) was silently DROPPED by
+>   `_KNOWN_SOURCES_FIXM30` (now added, same discovery path as HF/RH).
+>   Built: route_text/eta extraction, `fdps_route_versions` incremental
+>   distinct-(flight,route) table (v46; rides INSIDE write_flight_event's
+>   DC-area gate for bounded growth), and the document's genuine-vs-noise
+>   classifier (`_parse_nas_route`/`_classify_route_change`: genuine =
+>   arrival-procedure change / dep-procedure change both-non-null / body
+>   divergence; noise = re_expression, suffix_trim, entry_fix_only,
+>   notation_only) with `eta_delta_min` cost per new version. Storage +
+>   classification ONLY -- no alert (document: median reroute costs
+>   nothing; the signal is the p90 tail, which needs accumulated rows).
+>   BLOCKED, honestly: weather attribution requires an ARCHIVED,
+>   timestamped convective-SIGMET polygon history ("was there weather
+>   when THIS reroute happened") and none exists -- `web/main.py`/
+>   `demo_api.py`'s airsigmet endpoints are LIVE-snapshot proxies that
+>   store nothing, NWWS is WFO-filtered (LWX/AKQ/CTP/PHI) so AWC KKCI
+>   convective SIGMETs never arrive, `international_aviation_feed` has 0
+>   rows, and ITWS is terminal-scale. Legwork for a future pass: a small
+>   poller fetcher on AWC's `/api/data/airsigmet` (hazard=CONV) + an
+>   append-only polygon archive table; `tfms_reroutes` (archiving since
+>   this afternoon, with declared origin/destin scope lists) is the
+>   document-preferred scope-based attribution source once it has depth.
+> - **Test-suite capture protection**: running the ingest test suite had
+>   ALWAYS silently overwritten live `/var/lib/corporatetraveldc/*_debug*`
+>   capture files (per-process capture counters restart at 0 under
+>   pytest) -- proven this pass when a full-suite run destroyed the only
+>   captured copies of the JIA5230 route pair minutes after capture
+>   (field values survive as repo fixtures with provenance headers;
+>   `fdps_debug_fixm30/sample_{0,1}.xml` + `fdps_debug/sample_{0,1}_unk.xml`
+>   currently hold fixture-derived content from the same incident until
+>   the next fdps container restart naturally re-captures).
+>   `tests/ingest/conftest.py` now redirects every capture-dir constant
+>   (all 6 parsers + swim_client bad-message captures) into a session
+>   temp dir, with hard asserts so a renamed constant can't silently
+>   re-open the hole.
+> - Tests: `tests/ingest/test_swim_audit_20260830_ln.py` (17: 12 real
+>   removal captures + real route fixtures; synthetic XML only for
+>   shapes with no real capture, labeled). Pre-existing, unrelated:
+>   2 `tests/shared/test_watchlist.py` resolve_flight_identity tests
+>   fail against COMMITTED code (ultrafeeder-first resolve vs stale
+>   test expectations) -- not touched by this pass.
+>
+> **2026-08-31 pass** (the late-night pass's one explicit blocker:
+> Detector D's convective-SIGMET archive; built + tested, staged only,
+> same not-deployed discipline):
+> - **Convective SIGMET fetcher + archive**
+>   (`poller/skills/convective_sigmet_archiver.py`, 10-min quadlet
+>   timer `corporatetraveldc-convective-sigmet-archiver.{container,timer}`):
+>   independent fetch of AWC's `/api/data/airsigmet` JSON (the same
+>   unblocked Data API the web overlay uses; live-verified this pass --
+>   16 convective SIGMETs active nationwide at test time), filtered to
+>   `hazard == CONVECTIVE`, archived append-only to
+>   `convective_sigmet_archive` (`db_swim.init_db_swim_v47()`, called by
+>   the SKILL itself -- poller-owned, ingest/main.py deliberately does
+>   not call it). Normalization factored into `common/airsigmet.py` and
+>   `web/main.py._normalize_airsigmet` now wraps it (color-only;
+>   behavior-identical, response gains 3 ignorable keys). Two
+>   live-observed corrections to the design brief: AWC serves
+>   `validTimeFrom/To` as EPOCH INTS (converted to ISO at archive
+>   time), and composite series ids RECYCLE across days (today's
+>   KKCI-38E-E != tomorrow's), so the insert-once key is
+>   `UNIQUE(sigmet_id, valid_from)`, not id alone. Full raw product
+>   text stored (12/16 real records exceed the overlay's 600-char
+>   display cap). NO prune job may cover the table (attribution
+>   backtesting needs seasons of depth; verified absent from
+>   `retention_prune._PRUNE_JOBS`, with a test pinning that).
+> - **Deliberately NOT built**: the attribution matching itself
+>   (joining a reroute's timing/route against archived polygons) --
+>   zero archive history exists until this timer runs for a while, and
+>   building match logic against near-zero data is the faked-data
+>   anti-pattern every pass has refused. Future pass, once depth exists.
+> - Tests: `tests/poller/test_convective_sigmet_archiver_20260831.py`
+>   (13, against the verbatim live capture
+>   `tests/poller/fixtures/awc_airsigmet_live_20260831.json`; synthetic
+>   only for degenerate shapes, labeled). End-to-end smoke against a
+>   scratch DB hit the live endpoint: 16 archived, re-run 0 (insert-once).
+
 | Feed | Parser | Status |
 |---|---|---|
 | FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). |

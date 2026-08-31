@@ -36,7 +36,14 @@ NTFY_USER = os.environ.get("NTFY_USER", "")
 NTFY_PASS = os.environ.get("NTFY_PASS", "")
 NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
 
-EntryType = Literal["flight", "train", "vessel"]
+# "drone" added 2026-08-30 (night pass): Part 107 UAS tracked via Remote ID
+# (identifier = the broadcast UAS ID -- serial number or session ID), the
+# entry type src/utm_watcher/utm_watcher.py syncs against, mirroring how
+# acars_watcher syncs entry_type=="flight". Deliberately does NOT
+# participate in the 5-phase OOOI machine -- see common/db.py's
+# update_watchlist_uas_phase() for the collapsed launched/landed status
+# columns (dedicated-column pattern, same as TBFM's last_tbfm_status).
+EntryType = Literal["flight", "train", "vessel", "drone"]
 
 # 2026-08-27 (operator directive: "everything is meant to be local" --
 # reinforced a second time after this box hit a live 429 from
@@ -1031,6 +1038,10 @@ class WatchlistFileWatcher:
         "permanent_flights.json": "flight",
         "permanent_trains.json": "train",
         "permanent_vessels.json": "vessel",  # yachts/cruise ships, identifier=MMSI
+        # 2026-08-30: Part 107 UAS, identifier = Remote ID UAS ID (serial
+        # or session ID). Same hot-reload/permanent-tier semantics as the
+        # other three; consumed by utm_watcher via /api/v1/watchlist.
+        "permanent_drones.json": "drone",
     }
 
     def __init__(self) -> None:

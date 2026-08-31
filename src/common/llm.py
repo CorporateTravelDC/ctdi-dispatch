@@ -770,10 +770,48 @@ def ollama_post_with_retry(
             # a calmer session now that Ollama (and its governor) are
             # fully stopped and no longer competing for the ~4-7GB they
             # used to hold.
-            resp = _post(llama_pool.CHAT_PORT)
+            #
+            # 2026-08-30 (revisited, operator-approved): the 2026-08-27
+            # share-chat's-slot compromise silently BROKE every persona
+            # whose declared num_ctx exceeds chat's launch-time -c 4096 --
+            # llama-server rejects the request outright ("request (5908
+            # tokens) exceeds the available context size (4096 tokens)",
+            # ep-advance's real main brief, root-caused tonight in
+            # llama-chat's own journal), so ep-advance / dispatch-desk-memo
+            # / secondbrain-weekly ran deterministic-fallback-only for
+            # days. Fix: route by the calling persona's own declared
+            # num_ctx (personas.py, the same signed-manifest-protected
+            # registry that already provisions each persona) -- anything
+            # needing more ctx than chat was launched with goes to
+            # report-1 (REPORT_PORTS[0], -c 8192 = REPORT_POOL_NUM_CTX).
+            # No skill list to maintain; the routing can't drift from what
+            # a persona actually declares. report-1 is NOT resident: the
+            # three >4096 consumers' own quadlets start it on demand via
+            # host-level ExecStartPre and stop it via a guarded
+            # ExecStopPost (scripts/llama-report-ondemand.sh -- the
+            # container/host privilege boundary that killed the elastic
+            # pool design doesn't apply to quadlet hooks, which run on the
+            # host). PERSONAS["chat"]["num_ctx"] is the comparison point
+            # because llama-chat.service's -c is deliberately kept equal
+            # to it (see that unit's own comment).
+            if PERSONAS[persona_key]["num_ctx"] > PERSONAS["chat"]["num_ctx"]:
+                resp = _post(llama_pool.REPORT_PORTS[0])
+            else:
+                resp = _post(llama_pool.CHAT_PORT)
     except llama_pool.PoolBusyError as exc:
         raise OllamaBusyError(str(exc)) from exc
 
+    # 2026-08-30: surface llama-server's own error body before raising --
+    # httpx's HTTPStatusError message carries only the status + URL, so a
+    # caller's log line reads "Client error '400 Bad Request'" with zero
+    # indication of WHY. Root-caused tonight: ep-advance failed every main
+    # brief for days with exactly that opaque line, while the body (and
+    # llama-chat's journal) said "request (5908 tokens) exceeds the
+    # available context size (4096 tokens)" the whole time. One log line
+    # here covers every caller.
+    if resp.status_code >= 400:
+        log.warning("llm: llama-server HTTP %s for model %s: %s",
+                    resp.status_code, model, resp.text[:300])
     resp.raise_for_status()
     j = resp.json()
     choice = j["choices"][0]

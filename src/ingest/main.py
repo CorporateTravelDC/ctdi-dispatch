@@ -81,6 +81,37 @@ async def main() -> None:
     db.init_db_v34()
     db.init_db_v36()
     db.init_db_v37()
+    db.init_db_v40()  # 2026-08-30: oooi_source/TBFM columns -- ingest's own
+                      # tbfm/tfms/smes watchlist writes touch them, so this
+                      # container must not depend on web/poller having run
+                      # first on a fresh DB.
+    # 2026-08-30 SWIM-audit tables (stdds_rvr / tdes_departure_events /
+    # tdls_messages / datis_snapshots / tfms_edct_slots /
+    # fdps_destination_changes + flight_events extras columns). Lives in
+    # its own module (NOT picked up by db.init_db_all()'s introspection) --
+    # see common/db_swim.py's docstring for why.
+    from common import db_swim
+    db_swim.init_db_swim_v41()
+    # 2026-08-30 afternoon pass: TFMS PARAM delay stats + REROUTE
+    # advisories + tdls_messages parsed PDC/DCL columns. Must run before
+    # the smes/tfms handlers that write them, for the same fresh-DB
+    # reason as the v40/v41 calls above.
+    db_swim.init_db_swim_v42()
+    # 2026-08-30 night pass: fdps_diversion_continuations (diversion ->
+    # follow-on C->B filing pairs, written inline by fdps_parser). Same
+    # fresh-DB reasoning as above. (v43 is db.py's uas_phase columns,
+    # web/poller-owned -- not needed here.)
+    db_swim.init_db_swim_v44()
+    # 2026-08-30 late pass: operator_class column on
+    # fdps_diversion_continuations (fractional/GA continuation pairs are
+    # stored-not-alerted -- see fdps_parser._operator_class).
+    db_swim.init_db_swim_v45()
+    # 2026-08-30 late-night pass: tfms_plan_removals (Detector C --
+    # plan-removal/cancellation classification, written inline by
+    # tfms_parser) + fdps_route_versions (Detector D groundwork --
+    # distinct route versions + genuine-reroute classification, written
+    # inline by fdps_parser). Same fresh-DB reasoning as above.
+    db_swim.init_db_swim_v46()
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()

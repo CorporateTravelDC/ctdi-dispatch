@@ -430,8 +430,22 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
             client.connect((cfg.server, cfg.port))
 
             async def _beat():
+                # 2026-08-31: mark_push_healthy() writes to the shared SQLite
+                # DB and can raise "database is locked" under write
+                # contention (confirmed live -- ingest.amtrak hit the same
+                # error same day). Uncaught, that silently kills this task
+                # forever (create_task'd, never awaited except in the
+                # disconnect-path finally below) while the XMPP session
+                # itself stays perfectly healthy -- push:nws then reads
+                # stale for hours with zero connection errors logged,
+                # self-healing only on the next real disconnect/reconnect
+                # or a container restart. Root-caused live: NWWS-OI logged
+                # zero errors for 3+ hours while push:nws sat stale.
                 while not stop.is_set():
-                    failover.mark_push_healthy("nws")
+                    try:
+                        failover.mark_push_healthy("nws")
+                    except Exception as e:
+                        log.warning("push:nws heartbeat write failed (%s); retrying next tick", e)
                     await asyncio.sleep(heartbeat)
 
             beat = asyncio.create_task(_beat())

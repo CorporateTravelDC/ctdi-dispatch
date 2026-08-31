@@ -1830,6 +1830,11 @@ async def main() -> None:
     db.init_db_v36()
     db.init_db_v37()
     db.init_db_v38()
+    # 2026-08-30: v43 = uas_phase columns for entry_type="drone" (v39/v40
+    # are ingest-owned, v41/v42 live in db_swim). The poller runs
+    # WatchlistFileWatcher, which loads permanent_drones.json entries, so
+    # it applies this one too (idempotent alongside web's own call).
+    db.init_db_v43()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

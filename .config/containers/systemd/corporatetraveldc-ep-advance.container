@@ -37,6 +37,22 @@ CPUWeight=100
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
 CPUQuota=300%
+# 2026-08-30: on-demand report-tier llama-server. This skill's persona
+# (ep-advance, common/personas.py) declares num_ctx 6144 > llama-chat's
+# -c 4096, so its real main brief (measured 5908 tokens live) was
+# rejected by the shared chat port on every run since the 2026-08-27
+# cutover. common/llm.py now routes >4096-ctx personas to report-1
+# (port 8095, -c 8192), and these two HOST-level hooks give report-1 its
+# on-demand lifecycle (resident only while a consumer runs -- it must
+# never be permanently resident alongside hot+chat, see its own unit's
+# 2026-08-27/30 comments). ExecStartPre blocks on /health (bounded,
+# <=120s -- within this unit's existing 800s fixed startup budget);
+# ExecStopPost stops report-1 only if no other consumer skill is
+# mid-run (real overlap: this unit fires hourly at :35 and both weekly
+# consumers' budgets span multiple :35 marks). See the script's own
+# header for the full design.
+ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh start
+ExecStopPost=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh stop-if-idle %n
 Type=oneshot
 # 2026-08-06: was 1500s, sized for the old 1200s-primary-timeout design.
 # ep-advance never actually failed outright on 2026-08-06 (that margin
@@ -57,4 +73,8 @@ Type=oneshot
 # call going 2220s -> 2800s (num_predict 750 -> 1000 truncation fix -- see
 # ep_advance_brief.py's OLLAMA_TIMEOUT comment). 800s fixed + 2800s main
 # + 540s trend = 4140s worst case.
-TimeoutStartSec=4500
+# 2026-08-31 (report-1 on-demand pass): 4500 -> 5000 in parity with the
+# skill's main call going 2800s -> 3600s (re-derived from live-measured
+# report-1 throughput -- see ep_advance_brief.py's OLLAMA_TIMEOUT
+# comment). 800s fixed + 3600s main + 540s trend = 4940s worst case.
+TimeoutStartSec=5000

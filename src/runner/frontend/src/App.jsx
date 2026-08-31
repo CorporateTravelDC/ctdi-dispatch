@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, createContext, useContext } from 'rea
 import MapView from './components/MapView.jsx'
 import TrainMapView from './components/TrainMapView.jsx'
 import AisMapView from './components/AisMapView.jsx'
+import UtmMapView from './components/UtmMapView.jsx'
 import StatusView from './components/StatusView.jsx'
 import BriefView from './components/BriefView.jsx'
 import AdminView from './components/AdminView.jsx'
@@ -147,6 +148,9 @@ export default function App() {
             <NavLink to="/ais"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">AIS</NavLink>
+            <NavLink to="/utm"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">UTM</NavLink>
             <NavLink to="/status"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">CPS</NavLink>
@@ -228,6 +232,7 @@ export default function App() {
             <Route path="/map" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
             <Route path="/trains" element={<TrainMapView />} />
             <Route path="/ais" element={<AisMapView />} />
+            <Route path="/utm" element={<UtmMapView />} />
             <Route path="/status" element={<StatusView liveState={liveState} />} />
             <Route path="/wx" element={<WeatherView />} />
             <Route path="/tfr" element={<SignalsView />} />
