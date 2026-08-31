@@ -52,6 +52,15 @@ ingress:
   # or the corresponding corporatetraveldc-dispatch.tailxxxxxxx.ts.net names.
   # No tunnel route means no public path to either exists at all.
 
+  # executivestandard -- self-hosted mirror of "The Executive Standard"
+  # (corporatetraveldc.substack.com), static files served by nginx. Same
+  # caveat as every entry in this file: live routing is dashboard/API-
+  # managed (see the "ops" note above) -- operator confirmed this hostname
+  # is already provisioned on the real tunnel; this entry exists for
+  # documentation accuracy, not to create the route.
+  - hostname: executivestandard.example.com
+    service: http://127.0.0.1:80
+
   # cloud -- Nextcloud second-brain vault (WebDAV/CalDAV)
   - hostname: cloud.example.com
     service: http://127.0.0.1:80

@@ -893,6 +893,25 @@ def _venue_summary() -> str:
     return "\n".join(lines)
 
 
+def _cached_venue_section() -> str:
+    """2026-08-31: read ep_advance_venues.py's last output (once-daily +
+    manual-trigger, see that skill and personas.py's 'ep-advance' comment
+    for why this is no longer generated inline every hour). Staleness is
+    informational only -- never blocks the hourly brief; a stale venue
+    section is still more useful than none, and the venue matrix itself
+    changes far less often than once a day anyway."""
+    path = pathlib.Path(config.state_dir()) / "ep-advance-venues.txt"
+    if not path.exists():
+        return (
+            "=== VENUE ADVISORY (DAILY) ===\n"
+            "Not yet generated -- run poller/skills/ep_advance_venues.py."
+        )
+    age_h = (_time.time() - path.stat().st_mtime) / 3600
+    stale_note = f" (stale — {age_h:.0f}h old)" if age_h > 30 else ""
+    body = path.read_text().strip()
+    return f"=== VENUE ADVISORY (DAILY{stale_note}) ===\n{body}"
+
+
 def _extended_venues_summary() -> str:
     """50-mile radius venue matrix for day trips and alternative staging."""
     lines = ["=== EXTENDED VENUE MATRIX — 50-MILE RADIUS ==="]
@@ -1226,11 +1245,15 @@ def main(force: bool = False, run_trend: bool = False) -> None:
         nws      = _nws_section()
         route    = _route_section()
         cps      = _cps_section()
-        venues   = _venue_summary()
-        extended = _extended_venues_summary()
         threats  = _threat_sites_section()
         osint    = _osint_section()
 
+        # 2026-08-31 (operator directive): venues/extended dropped from this
+        # hourly prompt -- see personas.py's 'ep-advance' comment for the
+        # full root-cause. The venue matrix doesn't change hour-to-hour;
+        # ep_advance_venues.py regenerates it once daily (plus manual
+        # trigger) and this hourly run just splices in whatever it last
+        # wrote, below.
         prompt = "\n\n".join([
             f"=== EP-ADVANCE DATA PULL {now_utc} ===",
             f"TFR / SECURITY INDICATORS:\n{tfr}",
@@ -1240,8 +1263,6 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             f"ROUTE / GROUND IMPACT:\n{route}",
             osint,
             threats,
-            venues,
-            extended,
         ])
 
         result = _call_ollama(prompt)
@@ -1288,6 +1309,8 @@ def main(force: bool = False, run_trend: bool = False) -> None:
                 f"=== TRADITIONAL BRIEF ===\n{full_text}"
             )
             log.info("ep-advance: trend section prepended")
+
+        full_text = full_text.rstrip() + "\n\n" + _cached_venue_section()
 
         # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
         # eVTOL/Part 108) watch section if a fresh one exists -- last-mile
