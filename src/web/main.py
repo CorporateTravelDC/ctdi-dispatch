@@ -2057,7 +2057,7 @@ def get_adsb_live(
 # ── FAA Aircraft Registry — Tier 0 ────────────────────────────────────────────
 
 @app.get("/api/v1/aircraft/{identifier}")
-async def get_aircraft(identifier: str) -> JSONResponse:
+async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> JSONResponse:
     """Look up an aircraft by N-number/tail or ICAO hex, cross-referencing
     the local FAA registry cache AND OpenSky's registry (added 2026-07-23,
     operator directive: flight numbers resolve to a tail number, then that
@@ -2114,6 +2114,16 @@ async def get_aircraft(identifier: str) -> JSONResponse:
             status_code=404,
         )
 
+    # 2026-08-31 (operator directive): this endpoint was Tier-0/public and
+    # returned the real ladd flag for any queried identifier -- a live CUI
+    # (SP-PRVCY) disclosure, since the FAA does not publish the LADD list
+    # itself and this box holds it precisely because it's non-public. This
+    # endpoint's other fields (registry/manufacturer lookup) aren't
+    # sensitive and stay Tier-0; only the ladd flag is gated, to avoid a
+    # Tier-0 caller distinguishing "not LADD" from "info withheld" -- always
+    # emit False below that tier rather than omitting the field.
+    ladd_visible = tier != Tier.T0
+
     faa_hex = (faa_record.get("mode_s_hex") or "").lower() if faa_record else None
     osky_hex = (osky_record.get("icao24") or "").lower() if osky_record else None
 
@@ -2159,7 +2169,7 @@ async def get_aircraft(identifier: str) -> JSONResponse:
             "type_engine":     faa_record.get("type_engine"),
             "expiration_date": faa_record.get("expiration_date"),
             "last_action_date":faa_record.get("last_action_date"),
-            "ladd":            faa_record.get("ladd", False),
+            "ladd":            faa_record.get("ladd", False) if ladd_visible else False,
             "manufacturer":    acftref_record.get("manufacturer") if acftref_record else None,
             "model":           acftref_record.get("model") if acftref_record else None,
         } if faa_record else None),
@@ -2179,7 +2189,7 @@ async def get_aircraft(identifier: str) -> JSONResponse:
         "n_number":        faa_record.get("n_number") if faa_record else None,
         "mode_s_hex":      authoritative_hex,
         "registrant_name": faa_record.get("registrant_name") if faa_record else osky_record.get("owner"),
-        "ladd":            faa_record.get("ladd", False) if faa_record else False,
+        "ladd":            (faa_record.get("ladd", False) if faa_record else False) if ladd_visible else False,
     })
 
 
