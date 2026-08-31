@@ -5295,7 +5295,20 @@ ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_updated_at TEXT;
 # future signal from it legitimately does. ADS-B/inferred is last --
 # useful for filling in when nothing else has reported yet, but never
 # allowed to overwrite a real report from one of the others.
-_OOOI_SOURCE_PRIORITY = {"adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3, "acars": 4}
+_OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3, "acars": 4}
+# 2026-08-31: "fids" added, ranked BELOW adsb (the previous floor) -- MWAA's
+# airport display, not a sensor or the aircraft's own report, and already
+# known unreliable on exact timing (2026-07-27 UAL2670 incident: FIDS said
+# "Landed" 15 min before the aircraft was actually at the gate). Only ever
+# reaches update_watchlist_oooi_phase_authoritative() at all via
+# poller.main._check_flight_fids()'s own ACARS check-and-balance (accepted
+# unless ACARS actively disagrees) -- this ranking is the second line of
+# defense: any higher-confidence source's own claim on the same phase
+# always wins over a same-phase fids "re-confirmation". Exists to fill a
+# real gap, not to compete with better sources: a flight with no ADS-B/FDPS
+# ground contact and no ACARS coverage for its terminal phase would
+# otherwise sit at oooi_phase=None forever even after FIDS-confirmed
+# landing (confirmed live, UAL347, 2026-08-31).
 # 2026-08-30: "smes" added (STDDS SurfaceMovementEventMessage, ASDE-X
 # ground-radar-observed spotout/off/on/spotin events -- see
 # ingest/parsers/smes_parser.py's check_smes_watchlist_oooi()). Ranked

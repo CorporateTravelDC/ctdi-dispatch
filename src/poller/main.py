@@ -1555,6 +1555,22 @@ def _check_flight_fids(entry: dict, ident: str) -> None:
         log.info("fids %s: landed claim accepted (FIDS-confirmed, ACARS phase=%s)",
                   ident, acars_check[0] if acars_check else "unavailable")
 
+        # 2026-08-31 (operator directive): an accepted FIDS landed claim
+        # used to fire the notification above and stop there -- oooi_phase
+        # itself was never promoted, so a flight with no ADS-B/FDPS ground
+        # contact and no ACARS coverage for its terminal phase (confirmed
+        # live on UAL347: local ADS-B never had contact, FDPS's own last
+        # position update predated touchdown, ACARS had nothing at all)
+        # sat at oooi_phase=None forever even though FIDS -- independently
+        # cross-checked against ACARS just above -- knew it had landed.
+        # "fids" ranked lowest in _OOOI_SOURCE_PRIORITY (below adsb): any
+        # higher-confidence source's own claim on the same phase always
+        # wins if one ever arrives; this only fills the gap when nothing
+        # else ever does. The ACARS check-and-balance above is what makes
+        # this safe to promote, not just log -- same acceptance test as
+        # the notification, this just also acts on it.
+        db.update_watchlist_oooi_phase_authoritative(entry["id"], "in", "fids", now_iso)
+
     from shared.watchlist import watchlist_event_hit
     watchlist_event_hit(
         entry["id"], summary,
