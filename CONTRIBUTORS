@@ -1,0 +1,32 @@
+(Living Document)
+
+listing of contributors who Assisted in the initial and on-going development of this platform:
+
+Georou
+https://github.com/georou/pihole-selinux
+Core Submodule allowing for the hardened baseline for DNS Filtering/Blocking while under SELinux
+Personal Blog: https://tellmeaboot.com
+
+Thomas Eibner
+https://github.com/thomaseibner
+Considerable overall Code review, and heavy lift on rewokring parsing logic for Hold and Diversion Detection
+Twitter: https://twitter.com/thomaseibner
+
+Airframes.io & Community Contributors
+Special thanks to the following members and fellow feeders from Airframes.io community
+Drops - Debugging, Assistance with ADX / LADD / Associated tweaks and documentation
+BenCos18 - Amazing assitance on debugging several container issues initially and optimzations to rx signal and metrics
+PhillyRox - Amazing source of knowledge on containerized feeders and metrics
+KevinE - Badass Moderation and optimizations and understanding of several backend protocols
+Lothar_of_the_hill_people - Amazing resource for debugging and designing antennas and overall feeder support guru
+D4rken - Maintainer of Airplanes.live mobile application, amazing supporter of the community overall
+All the AirFrames.io community Moderators on Discord whom are all amazing multi-feed providers and an amazing wealth of knowledge
+
+Airplanes.live community as a whole.
+
+FAA Offices/Initiatives:
+ADX
+SWIM
+LADD
+NSSR
+NASR
