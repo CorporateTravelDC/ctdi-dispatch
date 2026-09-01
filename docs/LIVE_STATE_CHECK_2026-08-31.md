@@ -477,3 +477,141 @@ Net: everything staged in this working set (LADD rebuild, Tier-gate
 fix, demo-scrub enforcement, react-router CVEs) verified live and
 functioning as intended across all three rebuilt images. No new drift
 introduced. CONTRIBUTORS remains the one real open item from Part 4.
+
+---
+
+# Part 6 — post-a412558/b468502 (the Part 5 working set, committed)
+
+Sixth pass, run ~12:15–12:25 EDT, scoped to commits `a412558` (LADD
+rebuild / Tier-gate / react-router / CONTRIBUTORS adoption) and
+`b468502` (scrub allowlist for `noreply@github.com` — exists because
+Part 4's verbatim committer-line quote tripped `verify_scrubbed()`).
+Prior art: Parts 4–5 above (this is the post-commit close-out of
+exactly the set Part 5 checked pre-commit) and the vault note
+`20260831T135808Z.md`. Working tree was clean at check start;
+integrity sweep OK 12:04 EDT (847 files).
+
+## REAL finding 1 — real LADD-listed identifiers committed; publish
+## pending on next push-public
+
+`docs/LADD_CUI_HANDLING.md:29-30` and `scripts/import-ladd-filter.py:19`
+each quote, verbatim, three example flight-ID/callsign entries from the
+operator-supplied CUI SP-PRVCY filter files ("entries like …"). All
+three verified present in the live `faa_ladd_aircraft` table (70,874
+rows) — they are real list members, not synthetic examples, and the
+files themselves say so ("confirmed live"). The values are deliberately
+NOT repeated in this doc or the vault note. This contradicts three
+things at once:
+
+- the doc's own rule 12 lines up (`:13-16`: never commit these "…not
+  embedded literal values in a script or fixture");
+- the commit message's "no CUI content is committed anywhere, only
+  parsing/import logic";
+- `LADD_CUI_HANDLING.md:15-16`'s claim that "`scrub-public-tree.py`
+  treats this the same as any other real, non-synthetic identifier" —
+  **that scrubber has zero LADD awareness** (verified: its only
+  LADD-adjacent line is the `LADD@faa.gov` email allowlist at `:425`;
+  its scans cover emails/UUIDs/IPv4, never callsign strings; neither
+  file is in `DROP_FILES`). The LADD-aware scrub added by this commit
+  (`find_ladd_violations()`) lives in the *demo-promotion* path
+  (`src/demo/scrub_rules.py`), which never sees the repo tree.
+
+Exposure state: NOT yet public. The mirror tip is still `ed55efa`
+(09:54 EDT, parents predate the commit) and `push-public.sh` only runs
+manually / via push-and-sync's y/N prompt — no timer. But the next
+push publishes both files as-is, stating list membership for three
+identifiers in the platform's own authoritative voice. Mitigation
+honestly noted: `docs/DATA_SOURCES.md:358` records that laddlist.com
+already republishes both LADD lists publicly, so this is a policy/
+consistency breach more than a novel disclosure — but the repo's
+absolute rule (CLAUDE.md header) and this commit's own policy doc both
+prohibit it regardless.
+
+**Deliberately not fixed by this pass**: both files are signed-manifest
+covered, so redacting them un-signs the tree and trips `verified-exec`
+on every scheduled unit until the operator re-signs. Operator decision
+needed BEFORE the next push-public run: either redact the three values
+(both files) + re-sign, or explicitly allowlist them in
+`scrub-public-tree.py` with a written justification (the laddlist.com
+precedent). Note the same push is also the one that finally propagates
+CONTRIBUTORS.md (Part 4's fix) — resolve this first, then push.
+
+## REAL finding 2 — public demo still serving the pre-CVE-fix bundle
+
+`corporatetraveldc-runner-demo` (**public**: 200 on :8005 and on
+`dispatch-runner.example.com`, `DEMO_MODE=true` — the
+08-15 crash-loop/502 README block at :70/:121/:249 is long-stale,
+already logged 08-24) was started 06:48 EDT on image `4e722dd9…` built
+06:47 — four hours BEFORE the react-router fix image (`1d93f0b6…`,
+10:59 EDT). Verified at the asset level: demo serves bundle
+`index-D9z1OcN2.js`, the live runner serves `index-qBCklq9q.js` — the
+demo still ships react-router 6.30.4, in the GHSA-flagged `<7.18.0`
+range, on the one instance untrusted browsers actually reach. Same
+miss-one-instance deploy class as the 08-24 check's runner-demo
+finding. Fix is one command once the operator chooses the moment:
+`systemctl --user restart corporatetraveldc-runner-demo` (the rebuilt
+image is already tagged `:latest`). CLAUDE.md's "corporatetraveldc-
+runner needs a rebuild+redeploy … (not yet done)" line was therefore
+half-stale at commit time: runner done 11:00 EDT, runner-demo missed.
+Severity moderate (declarative-API-only usage, open-redirect class),
+but it is the public surface.
+
+## Doc drift — recorded, not edited (write-only convention)
+
+- **`docs/DATA_SOURCES.md:305-320` (FAA LADD section)** — now
+  materially stale: "the working half is dead upstream … reliably
+  imports nothing" (`:305,:315`), "the ADX / IndustryLADD access path
+  … has no code behind it at all" (`:315-317`), "Treat everything
+  below … as research" (`:318`) are all invalidated by
+  `scripts/import-ladd-filter.py` + the live 70,874-row import; and
+  "A boolean flag per N-number" (`:320`) — the set is *not*
+  exclusively N-numbers (mixes foreign regs and callsign strings, per
+  `docs/LADD_CUI_HANDLING.md`). The section's code line-refs
+  (`_FAA_LADD_URL :45`, `_parse_ladd :259`) remain correct —
+  `faa_registry.py` was untouched.
+- **`CLAUDE.md`** — both "needs a rebuild+redeploy … (not yet done as
+  of this entry)" sentences (web Tier-gate, runner react-router) were
+  already stale when committed: web and runner redeployed 11:00 EDT
+  (Part 5), runner-demo excepted per finding 2.
+- `docs/COGS_VENDOR_COMPARISON_2026-08-18.md:828` ("faa_ladd_aircraft
+  holds **0 rows**") — dated snapshot doc, noted per convention, not
+  counted.
+
+## Checked, still accurate
+
+- **`db.faa_upsert_ladd()` fail-safe verified in code**
+  (`src/common/db.py:3096-3105`): empty parse → refuses + logs,
+  returns existing count. The still-running weekly dead LADD fetch in
+  `_FAARegistrySweep` cannot clobber the manual 70,874-row import.
+  `LADD_CUI_HANDLING.md:26-27`'s claim holds.
+- **`/api/v1/aircraft-registry/status`** anonymous → aggregate only
+  (`ladd: 70874`, no per-tail data), exactly as
+  `LADD_CUI_HANDLING.md:43-44` claims.
+- **README tier/route claims unaffected**: the gate is
+  `Depends(resolve_tier)` on the existing route (no new route, no new
+  `require_tier` dependency), so the `:254-257` route/tier counts and
+  the `:283` Tier-0 table row (endpoint stays anonymously reachable;
+  only the `ladd` field masks) remain literally true.
+- **Part 5's live Tier-gate/scrub/CVE verifications stand post-commit**:
+  web/runner/poller containers unchanged since 11:00 EDT and the
+  commit introduced no src delta beyond the signed set the images were
+  built from.
+- `src/ingest/README.md`, `src/shared/watchlist_README.md` — untouched
+  by and unaffected by both commits (no LADD/router/aircraft-endpoint
+  claims).
+- `b468502` invalidates no doc claim; it unblocks pushing a tree
+  containing Part 4's verbatim `noreply@github.com` quote.
+- **CONTRIBUTORS (Part 4) — resolved in-tree, propagation pending**:
+  `CONTRIBUTORS.md` is at private HEAD; the mirror tip (`ed55efa`)
+  predates it. Next push carries it (as `CONTRIBUTORS.md`; the
+  web-UI-era extensionless `CONTRIBUTORS` stays history-only — matches
+  the commit's stated intent). Gated behind finding 1.
+
+Net: two REAL findings — three live-verified LADD identifiers sitting
+in two tracked files that the public-tree scrubber does not cover
+(publish pending, blocked only by push-public being manual; fix before
+next push) and the public demo instance still on the pre-CVE-fix
+frontend bundle (one restart to fix) — plus one substantive doc drift
+(DATA_SOURCES' LADD section now describes a dead integration that is
+in fact live via the manual import path). Both REAL findings persisted
+to the vault by this pass.

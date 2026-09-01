@@ -19,19 +19,15 @@ volume). Schedule: not yet wired to a timer -- run manually
 (`python3 src/poller/skills/executive_standard_sync.py`) until the
 operator wants it recurring.
 
-SELinux note (2026-08-31, confirmed live): this box runs SELinux
-Enforcing. `/var/lib/corporatetraveldc/` is `container_file_t` (correct
--- it's bind-mounted into podman containers elsewhere), but nginx runs
-as a native systemd service and can only read `httpd_sys_content_t`.
-One-time fix (operator, needs root -- this script/skill has neither
-sudo nor any business requesting it):
-    sudo semanage fcontext -a -t httpd_sys_content_t \
-        '/var/lib/corporatetraveldc/executive-standard-site(/.*)?'
-    sudo restorecon -Rv /var/lib/corporatetraveldc/executive-standard-site
-The `semanage fcontext` rule persists as policy, but individual file
-labels can still drift back after this script rewrites every file on a
-future run -- re-run `restorecon` (no need to re-add the fcontext rule)
-after every sync until this gets wired into a privileged wrapper.
+Site directory (2026-08-31): lives at /var/www/executivestandard.example.com,
+same as example.com itself -- NOT under /var/lib/corporatetraveldc.
+That tree already carries a container_file_t SELinux default (for the
+podman bind-mounts elsewhere under it), which fought any httpd-served
+subdirectory nested inside it: every file this script wrote inherited
+container_file_t from the parent on creation, needing a manual
+`restorecon` after every single sync. /var/www is root-owned
+(operator pre-created and chowned it once) and covered by SELinux's own
+stock httpd_sys_content_t default, so nothing here ever needs relabeling.
 """
 import logging
 import re
@@ -40,13 +36,26 @@ from pathlib import Path
 
 import requests
 
-from common import config
-from executive_standard.render import Post, render_post, render_index
+from executive_standard.render import (
+    Post, render_post, render_index, render_llms_txt, render_sitemap_xml,
+)
 
 log = logging.getLogger(__name__)
 
+# Substack embeds its own subscribe-CTA widget directly into a post's stored
+# HTML (sometimes more than once per post) -- confirmed live 2026-09-01 by
+# inspecting the raw feed: a self-contained
+# <div class="subscription-widget-wrap-editor">...</div> block, always
+# closing with this exact tag sequence regardless of the caption text inside
+# it. We render our own single top-nav Subscribe link instead, so every one
+# of these gets stripped rather than rendered inline mid-article.
+_SUBSCRIBE_WIDGET_RE = re.compile(
+    r'<div class="subscription-widget-wrap-editor".*?</div></div></form></div></div>',
+    re.DOTALL,
+)
+
 FEED_URL = "https://corporatetraveldc.substack.com/feed"
-SITE_DIR_NAME = "executive-standard-site"
+SITE_DIR = Path("/var/www/executivestandard.example.com")
 _NS = {"content": "http://purl.org/rss/1.0/modules/content/"}
 
 
@@ -72,6 +81,7 @@ def fetch_feed_posts() -> list[Post]:
         desc = _strip_html(item.find("description").text or "")
         enc = item.find("content:encoded", _NS)
         body_html = (enc.text or "").strip() if enc is not None else ""
+        body_html = _SUBSCRIBE_WIDGET_RE.sub("", body_html)
 
         # RFC 2822 pubDate -> ISO 8601 (RSS gives e.g. "Sat, 22 Aug 2026 22:33:47 GMT")
         from email.utils import parsedate_to_datetime
@@ -135,20 +145,37 @@ def build_site(posts: list[Post], site_dir: Path) -> None:
     posts_by_date = sorted(posts, key=lambda p: p.date_iso, reverse=True)
     site_dir.mkdir(parents=True, exist_ok=True)
     (site_dir / "assets").mkdir(exist_ok=True)
+    (site_dir / "icons").mkdir(exist_ok=True)
 
-    # wordmark asset ships with the repo, copy into the generated site
-    src_wordmark = (
-        Path(__file__).resolve().parent.parent.parent
-        / "executive_standard" / "assets" / "wordmark.png"
-    )
+    # Static assets (wordmark, PWA manifest/service-worker, icon set) all
+    # ship with the repo -- copy verbatim into the generated site on every
+    # sync, same treatment as the wordmark always got.
+    assets_root = Path(__file__).resolve().parent.parent.parent / "executive_standard" / "assets"
+
+    src_wordmark = assets_root / "wordmark.png"
     if src_wordmark.exists():
         (site_dir / "assets" / "wordmark.png").write_bytes(src_wordmark.read_bytes())
 
-    (site_dir / "index.html").write_text(render_index(posts_by_date))
+    for name in ("manifest.json", "sw.js", "robots.txt", "llm.txt"):
+        src = assets_root / name
+        if src.exists():
+            (site_dir / name).write_bytes(src.read_bytes())
+
+    icons_src = assets_root / "icons"
+    if icons_src.is_dir():
+        for icon_file in icons_src.iterdir():
+            (site_dir / "icons" / icon_file.name).write_bytes(icon_file.read_bytes())
+
+    # llms.txt / sitemap.xml regenerate from the live post list every sync --
+    # never go stale by hand as new memos publish.
+    (site_dir / "llms.txt").write_text(render_llms_txt(posts_by_date), encoding="utf-8")
+    (site_dir / "sitemap.xml").write_text(render_sitemap_xml(posts_by_date), encoding="utf-8")
+
+    (site_dir / "index.html").write_text(render_index(posts_by_date), encoding="utf-8")
 
     for i, post in enumerate(posts_by_date):
         teaser = [p for p in posts_by_date if p.slug != post.slug][:5]
-        (site_dir / f"{post.slug}.html").write_text(render_post(post, archive_teaser=teaser))
+        (site_dir / f"{post.slug}.html").write_text(render_post(post, archive_teaser=teaser), encoding="utf-8")
 
     log.info("executive-standard-sync: wrote %d posts + index to %s", len(posts_by_date), site_dir)
 
@@ -159,8 +186,7 @@ def main() -> None:
 
     apply_full_text_overrides(posts)
 
-    site_dir = Path(config.state_dir()) / SITE_DIR_NAME
-    build_site(posts, site_dir)
+    build_site(posts, SITE_DIR)
 
 
 if __name__ == "__main__":
