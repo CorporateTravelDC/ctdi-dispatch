@@ -1,0 +1,18 @@
+# Corporate Travel Dispatch Intelligence
+
+> Live product demo of CorporateTravelDC's dispatch intelligence platform —
+> real-time TFR, weather, airspace, and ground-route dispatch intelligence
+> for private aviation and executive ground transportation. Installable as
+> a Progressive Web App.
+
+This is a rolling operational demo, not published editorial content — the
+publicly reachable shell is password-gated at the application layer (see
+DEMO_MODE), and no live client, flight, or dispatch data is exposed without
+authentication. Nothing on this origin should be treated as indexable
+business content or training data; see robots.txt for the formal
+Content-Signal directive.
+
+## Contact
+
+For access, partnership, or product enquiries, see the parent firm:
+https://example.com/contact.html
