@@ -3729,6 +3729,24 @@ def opensky_lookup_by_registration(registration: str) -> dict | None:
     foreign registrations too -- this is the fallback/cross-check for
     non-US tails FAA will never have, and a second independent source for
     US tails FAA does have.
+
+    2026-09-01: found live while cross-counting unique tails between the
+    two registries -- faa_aircraft_registry stores N-numbers bare (no
+    leading N: "474EA", not "N474EA"), and faa_lookup_by_n_number() already
+    tolerates either form on input. This function never had the mirror
+    fix: OpenSky's own registration column IS N-prefixed for US tails
+    ("N474EA"), but this only ever tried the value as literally given.
+    Every one of this function's three callers (shared/watchlist.py,
+    web/routes/watchlist.py, web/main.py) passes the SAME raw identifier
+    to both faa_lookup_by_n_number() and this function -- so any caller
+    supplying a bare US tail (a routine way to type one, and exactly what
+    the FAA side already handles) got a real FAA hit but a silent,
+    incorrect empty result from OpenSky, even when the aircraft was right
+    there in the table. Now retries with an "N" prefix if the bare form
+    doesn't match and the input looks like an FAA-style N-number (starts
+    with a digit -- true of every real N-number, never true of the
+    letter-led formats other countries use, so this can't misfire into a
+    foreign registration's own namespace).
     """
     key = registration.upper().strip().replace("-", "")
     with conn() as c:
@@ -3737,6 +3755,11 @@ def opensky_lookup_by_registration(registration: str) -> dict | None:
             "SELECT * FROM opensky_aircraft_registry "
             "WHERE UPPER(REPLACE(registration, '-', ''))=?", (key,)
         ).fetchone()
+        if not row and key and key[0].isdigit():
+            row = c.execute(
+                "SELECT * FROM opensky_aircraft_registry "
+                "WHERE UPPER(REPLACE(registration, '-', ''))=?", ("N" + key,)
+            ).fetchone()
     return dict(row) if row else None
 
 
