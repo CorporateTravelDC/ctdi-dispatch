@@ -1,21 +1,36 @@
 """
-executive-standard-sync -- pulls the operator's Substack RSS feed and
-regenerates the self-hosted static mirror at
+executive-standard-sync -- regenerates the self-hosted static mirror at
 executivestandard.example.com (nginx serves this directory
-directly, see nginx/conf.d/executivestandard.example.com.conf).
+directly, see nginx/conf.d/executivestandard.example.com.conf)
+from TWO sources, merged:
 
-Design: corporatetraveldc.substack.com/feed carries the operator's full
-publication (confirmed live 2026-08-31: 14 posts total, matches the
-Substack archive API exactly -- this IS the full archive, not a
-recent-N-items window) with full post HTML in <content:encoded> for
-free posts. One post ("Skills Are Not Systems") is paid-tier and comes
-through truncated in the public feed -- the operator supplied the full
+1. corporatetraveldc.substack.com/feed -- the 14-post legacy archive this
+   site was originally backfilled from (confirmed live 2026-08-31: this IS
+   the full archive, not a recent-N-items window), plus a defensive
+   fallback for anything that ever gets posted to Substack first again.
+2. ORIGINALS_DIR (2026-09-01) -- posts authored directly for the Pi, which
+   is now the canonical source per operator direction: cowork drafts an
+   article, the operator hands the finished text to Claude, Claude writes
+   it into ORIGINALS_DIR and re-runs this sync, and it's live immediately
+   -- Substack cross-posting happens later (16-24h, manually, on the
+   operator's own schedule), never the other way around. See
+   load_pi_native_posts()'s docstring for the file format.
+
+On a slug collision, the Pi-native original wins (it's canonical) and the
+Substack version is dropped -- this only matters if something is ever
+posted to Substack first by mistake, or during the transition period.
+
+One post ("Skills Are Not Systems") is paid-tier and comes through
+truncated in the public Substack feed -- the operator supplied the full
 original text directly for that one; this skill does not attempt to
-scrape around the paywall.
+scrape around the paywall. Same OVERRIDES_DIR mechanism as before,
+unrelated to ORIGINALS_DIR (overrides patch an existing Substack-sourced
+post's body; originals are whole posts that never came from Substack
+at all).
 
-Idempotent: always regenerates every file from the current feed state
-(cheap -- 14 posts, no incremental-diff complexity needed at this
-volume). Schedule: not yet wired to a timer -- run manually
+Idempotent: always regenerates every file from current source state
+(cheap -- a few dozen posts, no incremental-diff complexity needed at
+this volume). Schedule: not yet wired to a timer -- run manually
 (`python3 src/poller/skills/executive_standard_sync.py`) until the
 operator wants it recurring.
 
@@ -118,6 +133,80 @@ def _markdown_to_html(md: str) -> str:
     return "\n".join(out)
 
 
+ORIGINALS_DIR = Path("/var/lib/corporatetraveldc/executive-standard-originals")
+
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Tiny hand-rolled front-matter parser -- flat `key: value` lines only,
+    no nesting/lists, deliberately narrow to what a post needs (title, dek,
+    date, kicker). Not a YAML parser; don't reach for this outside this one
+    file format."""
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        raise ValueError("no --- frontmatter block found at top of file")
+    fm_block, body = m.groups()
+    fm: dict[str, str] = {}
+    for line in fm_block.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        fm[key.strip()] = value.strip()
+    return fm, body
+
+
+def load_pi_native_posts() -> list[Post]:
+    """Posts authored directly for the Pi (see module docstring). One file
+    per post: ORIGINALS_DIR/<slug>.md, slug = filename stem (same
+    convention as OVERRIDES_DIR). Format:
+
+        ---
+        title: The Post Title
+        dek: One-line subtitle/teaser
+        date: 2026-09-01
+        kicker: Desk Memo
+        ---
+
+        # The Post Title
+
+        Body in the same plain-paragraphs-plus-*italic* markdown
+        _markdown_to_html() already handles (same style as the existing
+        operator-supplied override posts).
+
+    `kicker` is optional (defaults to Post's own default). `date` accepts
+    either a bare YYYY-MM-DD (noon UTC is assumed) or a full ISO 8601
+    timestamp."""
+    if not ORIGINALS_DIR.is_dir():
+        return []
+    posts = []
+    for md_path in sorted(ORIGINALS_DIR.glob("*.md")):
+        slug = md_path.stem
+        try:
+            fm, body_md = _parse_frontmatter(md_path.read_text())
+            title = fm["title"]
+            dek = fm["dek"]
+            date = fm["date"]
+        except (ValueError, KeyError) as e:
+            log.error("originals/%s: skipping, malformed (%s)", md_path.name, e)
+            continue
+        date_iso = date if "T" in date else f"{date}T12:00:00Z"
+        kwargs = {}
+        if fm.get("kicker"):
+            kwargs["kicker"] = fm["kicker"]
+        posts.append(Post(
+            slug=slug,
+            title=title,
+            dek=dek,
+            date_iso=date_iso,
+            body_html=_markdown_to_html(body_md),
+            **kwargs,
+        ))
+        log.info("loaded Pi-native original: %s", slug)
+    return posts
+
+
 OVERRIDES_DIR = Path("/var/lib/corporatetraveldc/executive-standard-overrides")
 
 
@@ -181,10 +270,25 @@ def build_site(posts: list[Post], site_dir: Path) -> None:
 
 
 def main() -> None:
-    posts = fetch_feed_posts()
-    log.info("executive-standard-sync: fetched %d posts from feed", len(posts))
+    try:
+        posts = fetch_feed_posts()
+        log.info("executive-standard-sync: fetched %d posts from feed", len(posts))
+    except Exception:
+        # A Pi-native publish (see load_pi_native_posts) shouldn't be
+        # blocked by a transient Substack outage -- log and carry on with
+        # whatever's Pi-native only this run rather than crash.
+        log.exception("executive-standard-sync: feed fetch failed, continuing with Pi-native posts only")
+        posts = []
 
     apply_full_text_overrides(posts)
+
+    originals = load_pi_native_posts()
+    by_slug = {p.slug: p for p in posts}
+    for orig in originals:
+        if orig.slug in by_slug:
+            log.info("Pi-native original %s supersedes the Substack-feed version", orig.slug)
+        by_slug[orig.slug] = orig  # Pi-native wins on collision -- it's canonical
+    posts = list(by_slug.values())
 
     build_site(posts, SITE_DIR)
 
