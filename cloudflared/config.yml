@@ -1,6 +1,30 @@
 tunnel: 00000000-0000-0000-0000-000000000000
 credentials-file: /home/corporatetraveldc/.cloudflared/00000000-0000-0000-0000-000000000000.json
 
+# 2026-09-01 incident: the prior tunnel (a different, now-dead UUID) was
+# deleted from the Cloudflare dashboard by accident (fat-fingered on
+# mobile while trying to add a hostname route). Deleting a tunnel deletes
+# every dashboard-managed Public Hostname/Published Application route with
+# it -- there is no undelete. Recreated as a brand-new tunnel above and
+# rebuilt every route from scratch, this time as a FULLY locally-managed
+# ingress list (this file), not dashboard-managed -- so this file is now
+# the actual source of truth for routing, unlike the old tunnel where the
+# comment below (kept for history) had to warn that it wasn't.
+#
+# --- pre-incident history, no longer applicable now that routing is local ---
+# CORRECTION 2026-08-05: that old tunnel was dashboard/API-managed, not
+# locally-managed -- confirmed by restarting cloudflared and diffing this
+# file's ingress list against the "Updated to new configuration" log line
+# it printed on registration: the two lists didn't match at all (the live
+# remote config included mcp./cockpit./dav.example.com, none
+# of which appeared anywhere in this file). mcp./cockpit./dav. were flagged
+# then as undocumented and worth an audit -- that audit happened as part of
+# this incident: dav. is real and kept below; cockpit. had no live backend
+# anywhere on the box (retired since the Raspbian->Fedora move) and was
+# dropped entirely; mcp. is kept as a reserved hostname (sinkholed, no
+# backend) per operator instruction, since it's demo-only/decommissioned
+# right now but the hostname itself should keep existing.
+
 ingress:
   # dispatch — CF Access gated (Tailscale + auth required)
   - hostname: dispatch.example.com
@@ -8,32 +32,15 @@ ingress:
 
   # ops.example.com RETIRED 2026-08-02 -- app layer already
   # hard-rejected this hostname (runner/main.py _RETIRED_HOSTNAMES) and no
-  # nginx vhost has matched it since. Live dispatch access is Tailscale-
-  # only now: https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net
-  #
-  # 2026-08-05: this tunnel is dashboard/API-managed -- confirmed by
-  # restarting cloudflared and diffing this file's ingress list against
-  # the "Updated to new configuration" log line it printed on
-  # registration: the two don't match (live remote config includes
-  # mcp./cockpit./dav.example.com, none of which are in this
-  # file; this file's apex/www entries aren't in the remote list either).
-  # This local ingress: block does not actually route tunnel traffic --
-  # cloudflared only reads tunnel:/credentials-file: from it and fetches
-  # real ingress rules from Cloudflare. The ops entry here was removed for
-  # accuracy only (had no live effect either way); the record that
-  # actually matters -- the live remote push -- already had no ops entry,
-  # confirming the 2026-08-02 retirement was done correctly via the
-  # dashboard/API, same as the earlier (now-replaced) version of this
-  # comment claimed. Separately flagged: mcp./cockpit./dav. are live on
-  # the real tunnel and undocumented anywhere in this repo -- worth an
-  # audit, not addressed here.
+  # nginx vhost has matched it since (falls to the default_server 444
+  # catch-all). Live dispatch access is Tailscale-only now:
+  # https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net
 
   # dispatch-runner — public rolling demo (password-gated at the app
   # layer, see runner main.py DEMO_MODE). Open over tunnel same as ops,
   # since the gate happens after this hop, not before it. Added 2026-08-01.
   - hostname: dispatch-runner.example.com
     service: http://127.0.0.1:80
-
 
   # openwebui — Open WebUI (Ollama chat frontend) — CF Access gated
   - hostname: openwebui.example.com
@@ -52,23 +59,27 @@ ingress:
   # or the corresponding corporatetraveldc-dispatch.tailxxxxxxx.ts.net names.
   # No tunnel route means no public path to either exists at all.
 
-  # executivestandard -- self-hosted mirror of "The Executive Standard"
-  # (corporatetraveldc.substack.com), static files served by nginx. Same
-  # caveat as every entry in this file: live routing is dashboard/API-
-  # managed (see the "ops" note above) -- operator confirmed this hostname
-  # is already provisioned on the real tunnel; this entry exists for
-  # documentation accuracy, not to create the route.
-  - hostname: executivestandard.example.com
-    service: http://127.0.0.1:80
-
   # cloud -- Nextcloud second-brain vault (WebDAV/CalDAV)
   - hostname: cloud.example.com
     service: http://127.0.0.1:80
 
+  # dav -- confirmed 2026-09-01: nginx vhost proxies to 127.0.0.1:8090,
+  # same pattern as everything else here (tunnel -> nginx:80 -> nginx does
+  # the real proxy_pass by Host header). Recovered from the incident audit.
+  - hostname: dav.example.com
+    service: http://127.0.0.1:80
+
+  # mcp -- SINKHOLED 2026-09-01 per operator instruction: demo-only/
+  # decommissioned right now, but the hostname should keep existing rather
+  # than disappear. No backend -- cloudflared answers directly, nothing is
+  # exposed. Re-point at http://127.0.0.1:80 (nginx already has a vhost,
+  # proxies to 127.0.0.1:8083) if/when it comes back into real use.
+  - hostname: mcp.example.com
+    service: http_status:404
+
   # ntfy
   - hostname: ntfy.example.com
     service: http://127.0.0.1:80
-
 
   # pihole — CF Access gated (Tailscale + auth required)
   - hostname: pihole.example.com
@@ -87,6 +98,11 @@ ingress:
   - hostname: example.com
     service: http://127.0.0.1:80
   - hostname: www.example.com
+    service: http://127.0.0.1:80
+
+  # executivestandard -- self-hosted "The Executive Standard" blog mirror,
+  # see nginx/conf.d/executivestandard.example.com.conf
+  - hostname: executivestandard.example.com
     service: http://127.0.0.1:80
 
   # catch-all
