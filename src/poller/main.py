@@ -1534,7 +1534,23 @@ def _check_flight_fids(entry: dict, ident: str) -> None:
     # re-evaluate as "changed" every tick and doesn't emit a duplicate once
     # OOOI does catch up), just don't push it standalone.
     status_lower = (result.get("status") or "").lower()
-    if "land" in status_lower and entry.get("oooi_phase") != "in":
+
+    # 2026-09-01: found live -- every flight tracked overnight (UAL347,
+    # UAL2136, DAL2962) got swept as "landed" 0-1 SECONDS after FIDS first
+    # reported "Landed", via this block promoting straight to "in". That's
+    # wrong on two counts: (1) "Landed" means wheels-down, not at-gate --
+    # _fids_confirms_phase's own _FIDS_STATUS_TO_PHASE map already has this
+    # right ("landed": "on", "ingate": "in"), this block just didn't match
+    # it; (2) it meant oooi_phase="on" was NEVER recorded for any flight
+    # that reached "in" via this FIDS path instead of the ADS-B/ACARS event
+    # pipeline in _check_flight_airplanes_live -- confirmed live: zero
+    # oooi_* events fired for any of the three flights all night, yet all
+    # three got auto_swept_landed (which reads oooi_phase=="in"). UAL347's
+    # own FIDS history shows genuine InGate arriving 10+ minutes AFTER
+    # Landed -- real taxi time this block was skipping straight over.
+    # Now promotes to "on" here; a separate branch below promotes to "in"
+    # only once FIDS itself reports the aircraft actually at the gate.
+    if "land" in status_lower and entry.get("oooi_phase") not in ("on", "in"):
         # 2026-07-28: was gated on oooi_phase == "in" (ADS-B/OOOI agreement)
         # -- but ADS-B is no longer a trusted independent source for landed
         # confirmation (local DC-metro receiver coverage gaps were firing
@@ -1569,6 +1585,16 @@ def _check_flight_fids(entry: dict, ident: str) -> None:
         # else ever does. The ACARS check-and-balance above is what makes
         # this safe to promote, not just log -- same acceptance test as
         # the notification, this just also acts on it.
+        db.update_watchlist_oooi_phase_authoritative(entry["id"], "on", "fids", now_iso)
+
+    # 2026-09-01: companion to the "on" promotion above -- FIDS reporting
+    # the aircraft genuinely at the gate (not just landed) is the actual
+    # "in" signal. No ACARS cross-check gate here the way "landed" has one:
+    # an InGate status is ground-ops-confirmed docking, not a raw ADS-B/
+    # receiver artifact, so it doesn't carry the same false-early-report
+    # risk that motivated the ACARS check-and-balance above.
+    elif "ingate" in status_lower.replace(" ", "") and entry.get("oooi_phase") != "in":
+        log.info("fids %s: in-gate claim accepted (FIDS-confirmed)", ident)
         db.update_watchlist_oooi_phase_authoritative(entry["id"], "in", "fids", now_iso)
 
     from shared.watchlist import watchlist_event_hit
