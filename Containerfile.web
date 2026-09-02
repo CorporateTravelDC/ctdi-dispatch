@@ -5,6 +5,13 @@ LABEL org.opencontainers.image.title="corporatetraveldc-web" \
 
 WORKDIR /app
 
+# 2026-09-01: box runs a permanently-busy shared LLM chat tier (150%+ CPU
+# sustained) alongside 30+ containers -- pip's 15s default read-timeout is
+# too tight under that contention and kills slow-but-alive downloads,
+# surfacing as "Connection interrupted"/ResolutionImpossible mid-build.
+ENV PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=10
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
