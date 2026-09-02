@@ -289,7 +289,12 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, gate_result)
-        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path)
+        # email=True 2026-09-02 (operator directive) -- was push-only before.
+        # NOTE: this is a "did it run" ping (see send_run_status()'s own
+        # docstring) -- the synthesis stays vault-only per this skill's
+        # established convention, so the email body is just a status line
+        # + vault path, not the report content itself.
+        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path, email=True)
 
 
 if __name__ == "__main__":

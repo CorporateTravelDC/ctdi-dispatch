@@ -109,6 +109,7 @@ def send(
     priority: int = 3,
     tags: str = "satellite",
     click_url: Optional[str] = None,
+    email: bool = False,
 ) -> bool:
     """
     Send a plain-text push notification via ntfy.
@@ -129,6 +130,18 @@ def send(
         tags:      Comma-separated ntfy emoji tags (default "satellite").
         click_url: Override the tap-to-open URL.  Defaults to the per-topic
                    mapping in TOPIC_CLICK, falling back to RUNNER_BASE.
+        email:     2026-09-02 (operator directive) -- opt-in per-call. When
+                   True, adds X-Email so ntfy's SMTP relay also delivers this
+                   push to config.operator_email(). Default False: before
+                   this, NO skill in this codebase ever set X-Email (confirmed
+                   via full-repo grep + ntfy's own lifetime log showing every
+                   email ever sent came from the one-off blog-substack-
+                   reminder.sh script, not through this shared helper) --
+                   every report skill using send()/send_dual()/
+                   send_run_status() was push-notification-only, silently,
+                   the whole time. Opt-in (not a global default) so turning
+                   this on for one report doesn't suddenly email-blast every
+                   other push topic that already goes through this function.
 
     Returns True on HTTP 2xx, False on any failure.
     """
@@ -145,6 +158,8 @@ def send(
         "X-Tags":       tags,
         "Click":        dest,
     }
+    if email:
+        headers["X-Email"] = config.operator_email()
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -251,10 +266,16 @@ def send_dual(
     topic_full: str  = "dispatch-debriefs",
     topic_brief: str = "dispatch-ops",
     priority: int = 3,
+    email: bool = False,
 ) -> None:
-    """Send the same alert to two topics — full narrative + concise one-liner."""
+    """Send the same alert to two topics — full narrative + concise one-liner.
+
+    email: passed to the FULL-narrative send only (see send()'s email= doc)
+    -- the concise one-liner is a duplicate summary, not worth a second
+    email for the same report.
+    """
     send(topic_full,  full_message,     title=title, priority=priority,
-         tags="airplane,partly_sunny")
+         tags="airplane,partly_sunny", email=email)
     send(topic_brief, concise_message,  title=title, priority=priority,
          tags="airplane")
 
@@ -267,6 +288,7 @@ def send_run_status(
     detail: str | None = None,
     systemd_unit: str | None = None,
     topic: str = "dispatch-ops",
+    email: bool = False,
 ) -> None:
     """Lightweight health-check ping for a daily/weekly digest skill's own
     run outcome -- NOT the report content itself. The report stays
@@ -294,7 +316,8 @@ def send_run_status(
         msg = f"{skill_name} ran (status={status})"
         if detail:
             msg += f" — available at {detail}"
-        send(topic, msg, title=f"{skill_name}: complete", priority=2, tags="white_check_mark")
+        send(topic, msg, title=f"{skill_name}: complete", priority=2, tags="white_check_mark",
+             email=email)
     else:
         msg = f"{skill_name} failed (status={status}) — check: journalctl --user -u {unit}"
-        send(topic, msg, title=f"{skill_name}: FAILED", priority=4, tags="x")
+        send(topic, msg, title=f"{skill_name}: FAILED", priority=4, tags="x", email=email)

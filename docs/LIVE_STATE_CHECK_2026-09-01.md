@@ -156,3 +156,130 @@ Two real findings persisted to the second-brain (F1 bug, F2 deployment
 lag incl. the not-yet-live FIDS OOOI fix); one modest doc drift (F3)
 queued for the next signing pass; everything else checked clean. No
 files staged or committed; this file is the only working-tree addition.
+
+---
+
+# Part 2 — post-b903f7b (ingest CPUWeight 5000→9500 + SWIM session health watch)
+
+Checked ~22:05–22:15 EDT, immediately after commit `b903f7b` (22:05 EDT).
+Same brief as Part 1, applied to this commit's surface: 7 ingest quadlets
+(CPUWeight only), new `swim-session-health` service/timer/script.
+
+Prior-knowledge check (second-brain, before deriving): the GUARDRAILS
+ingest-CPUWeight drift is ALREADY on record
+(`corporatetraveldc/01-Sources/manual/20260831T102922Z.md`, when live
+moved 30→5000) — G1 below builds on that, not a new discovery. Nothing
+in the second-brain covers the swim-session-health watcher or today's
+keep-alive/OOOI incident itself (only an unrelated AAL2077
+cancellation-rate transport-patterns note): the incident narrative
+exists solely in this commit's code comments until this pass's
+`remember_text` note.
+
+## G1 — Known doc drift WIDENED and now inverted: `docs/GUARDRAILS_JUSTIFICATION.md` §3
+
+Line 128 still claims "The seven ingest containers carry `CPUWeight=30`".
+Flagged 2026-08-31 when live was 5000; this commit makes it 9500 —
+verified live on all seven units both via `systemctl --user show -p
+CPUWeight` AND the actual cgroup `cpu.weight` files. Beyond the stale
+number, §3's framing is now backwards: it presents ingest as the
+lowest-priority class (app class at 100 above it), while ingest is now
+deliberately the *highest*-weighted class on the box, above the 9000
+ntfy/cloudflared/llama tier (operator directive, rationale in the
+quadlet comment: llama-chat at 9000/150%+ CPU correlated live with SWIM
+keep-alive-failure bursts that silently dropped OOOI coverage). The §3
+CPUQuota table is NOT invalidated — quotas unchanged in this commit
+(core still 80% etc.). Same-axis pre-existing staleness, listed not
+re-derived: `SINGLE_EDGE_UNIT_ASSUMPTIONS.md:30`'s "CPUWeight 100"
+per-container baseline (flagged 2026-08-30). Not fixed here (signed
+files; queued for next signing pass).
+
+## G2 — New watcher verified live end-to-end, including its first GENUINE alert
+
+Deliberately re-checked the research-board-mirror failure class
+(tracked-but-never-installed) and the llama-restart failure class
+(config shown ≠ cgroup applied):
+
+- Timer installed and enabled (22:00:43), service fired 22:00:43 /
+  22:05:43 / 22:10:43, exit 0 each; tracked and installed unit/quadlet
+  copies byte-identical (diffed ingest-core).
+- `cpu.weight=9500` confirmed in the RUNNING containers' cgroups with
+  ActiveEnterTimestamps unchanged (08-30/08-31) — applied via reload
+  without restarting anything, so no SWIM session was dropped to deploy
+  a fix about SWIM sessions dropping.
+- The degradation the watcher exists for was live during this check:
+  251 KEEP_ALIVE_FAILURE journal lines in the trailing 10 min at 22:08,
+  load avg 4.4–7.5 on 4 cores, the bare `podman build`
+  (corporatetraveldc-web, running since 20:33 — Part 1 F2's build,
+  still going 1h35m+) grinding throughout. At 22:10:55 the watcher
+  emitted its first genuine alert ("125 keep-alive failures … 10min
+  sustained. By VPN: ITWS=33, STDDS=24, FDPS=22, TFMS=22, TBFM=20")
+  and delivery was independently confirmed by polling ntfy's
+  `ops-health` topic (message present, alongside the deploy session's
+  own 22:01 TEST push). Sustained/cooldown state machine behaved
+  exactly as designed (2 quiet-logged runs before the 600s threshold).
+- Real data point qualifying the commit's premise: even WITH 9500 live,
+  keep-alive failures continued at incident rate under the bare build —
+  so weight alone doesn't eliminate churn when the pressure isn't
+  CPU-share against llama (this build bypasses `build-images.sh`'s
+  maintenance window, same observation as Part 1 F4). The alerting half
+  of the commit is what covers this case, and it demonstrably does.
+
+## G3 — Checked, NOT drifted
+
+- `docs/DATA_SOURCES.md` topology table: lists Memory/CPUQuota only, no
+  CPUWeight — unaffected. Its 2026-07-26 keep-alive known-note remains
+  accurate (this commit finally adds the alerting that note's era
+  lacked); its "backpressure scheme tracked separately" pointer is
+  pre-existing staleness (backpressure removed 08-28), not this commit's.
+- `src/ingest/README.md`: hourly `ingest-feed-watch` section still
+  accurate — the new watcher is additive and watches a different failure
+  mode (keep-alive churn on still-"connected" sessions vs feed
+  staleness). No claim invalidated; a one-line mention of the new
+  watcher is a nice-to-have for the next signing pass, not drift.
+- `src/shared/watchlist_README.md`: no OOOI source-priority or
+  session-health claims — unaffected.
+- `README.md` / `CLAUDE.md`: no ingest-CPUWeight claims (README's
+  Ollama-era CPUWeight text is pre-existing cutover staleness, out of
+  scope).
+- The ingest quadlets' own comment blocks: self-consistent — the new
+  2026-09-01 paragraph explicitly supersedes the "well under the 9000
+  must-never-die tier" rationale it sits beneath.
+
+## G4 — Observations, no action taken
+
+- CLAUDE.md's open flag "operator decision needed on whether to flip
+  `common/acars.py` `get_latest_phase()` aggregator-first ordering"
+  (2026-08-31 entry) is CLOSED by this commit's script header, which
+  records the 2026-09-01 decision: OOOI confirmation is SWIM + ACARS
+  aggregator authority only, never the local receiver — i.e. current
+  code behavior is confirmed-intended, no flip. Recorded here and in the
+  second-brain since CLAUDE.md is write-only by its own header.
+- Watcher cost: 2.6–3.6G memory peak + ~2.9s CPU per 5-min run —
+  `journalctl --user -u 'corporatetraveldc-ingest-*'` mapping the 3.3G
+  user journal set (file-backed pages; swap peak <1M). Benign in
+  mechanism but a real periodic page-cache churn on a memory-tight box;
+  if it ever matters, journal vacuuming (3.9G system + 3.3G user) or a
+  MemoryMax on the oneshot are cheap levers.
+- Env-name mismatch, works-by-fallback: the script reads `NTFY_BASE_URL`
+  from dispatch.env, which defines `NTFY_URL` — the override can never
+  apply, so it always uses the hardcoded `http://127.0.0.1:2586`
+  fallback. That fallback is correct today (verified listening +
+  delivery). Fragile only if ntfy's binding changes; one-word fix
+  whenever the script is next touched.
+- The timer uses `Requires=` (the pattern flipped to `Wants=` on
+  scheduled-llama-restart 08-30). Here it's harmless and arguably
+  load-bearing: the immediate run at timer activation is what seeds the
+  `OnUnitActiveSec=5min` chain for an observation-only oneshot. No
+  action.
+
+## Part 2 net
+
+No NEW drift created by b903f7b beyond widening the already-known
+GUARDRAILS §3 ingest-CPUWeight claim (now inverted in direction, not
+just stale in value). The new watcher is fully live and proved itself
+during the check itself — first genuine sustained-degradation alert
+fired and confirmed delivered to ntfy while the Part 1 F2 web build was
+still running. One consolidated note persisted to the second-brain
+(GUARDRAILS widening, live-validation record, acars.py flag closure,
+NTFY env-name fallback). Nothing staged or committed; this file edit is
+the only new working-tree change from Part 2.
