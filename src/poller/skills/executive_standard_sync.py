@@ -49,11 +49,28 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import html2text
 import requests
 
 from executive_standard.render import (
     Post, render_post, render_index, render_llms_txt, render_sitemap_xml,
+    render_markdown, render_index_markdown,
 )
+
+# 2026-09-02: Accept: text/markdown content negotiation needs a real
+# markdown source per post. Pi-native posts already have one (their own
+# .md file, see load_pi_native_posts() below); Substack-sourced posts
+# only ever had body_html, so those get converted once here at sync time
+# rather than re-converted per-request (this is a static site -- there's
+# no per-request handler to do it lazily in).
+_h2t = html2text.HTML2Text()
+_h2t.body_width = 0          # don't hard-wrap -- let it read as normal prose
+_h2t.ignore_images = False
+_h2t.unicode_snob = True     # keep real em-dashes/curly quotes, not ascii approximations
+
+
+def _html_to_markdown(body_html: str) -> str:
+    return _h2t.handle(body_html).strip()
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +129,7 @@ def fetch_feed_posts() -> list[Post]:
             dek=desc,
             date_iso=date_iso,
             body_html=body_html,
+            body_md=_html_to_markdown(body_html),
         ))
     return posts
 
@@ -201,6 +219,7 @@ def load_pi_native_posts() -> list[Post]:
             dek=dek,
             date_iso=date_iso,
             body_html=_markdown_to_html(body_md),
+            body_md=body_md.strip(),
             **kwargs,
         ))
         log.info("loaded Pi-native original: %s", slug)
@@ -226,7 +245,9 @@ def apply_full_text_overrides(posts: list[Post]) -> None:
         if not post:
             log.warning("override file %s: no post with slug=%s found in feed", md_path.name, slug)
             continue
-        post.body_html = _markdown_to_html(md_path.read_text())
+        override_md = md_path.read_text()
+        post.body_html = _markdown_to_html(override_md)
+        post.body_md = override_md.strip()
         log.info("applied full-text override for %s", slug)
 
 
@@ -261,10 +282,23 @@ def build_site(posts: list[Post], site_dir: Path) -> None:
     (site_dir / "sitemap.xml").write_text(render_sitemap_xml(posts_by_date), encoding="utf-8")
 
     (site_dir / "index.html").write_text(render_index(posts_by_date), encoding="utf-8")
+    # Accept: text/markdown content negotiation (2026-09-02, operator
+    # directive). _md/ subdir, not alongside the .html files -- matches
+    # the already-proven pattern on csexecutiveservices-website's own
+    # nginx config (see nginx/www.example.com.conf there):
+    # nginx serves this directory only via an `internal` location reached
+    # through the negotiated rewrite, never directly browsable at its own
+    # URL regardless of Accept header. See nginx/conf.d/executivestandard
+    # ...conf for the request-side negotiation, render_markdown()/
+    # render_index_markdown() for the "why" of the format.
+    md_dir = site_dir / "_md"
+    md_dir.mkdir(exist_ok=True)
+    (md_dir / "index.md").write_text(render_index_markdown(posts_by_date), encoding="utf-8")
 
     for i, post in enumerate(posts_by_date):
         teaser = [p for p in posts_by_date if p.slug != post.slug][:5]
         (site_dir / f"{post.slug}.html").write_text(render_post(post, archive_teaser=teaser), encoding="utf-8")
+        (md_dir / f"{post.slug}.md").write_text(render_markdown(post), encoding="utf-8")
 
     log.info("executive-standard-sync: wrote %d posts + index to %s", len(posts_by_date), site_dir)
 
