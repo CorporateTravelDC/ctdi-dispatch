@@ -1828,6 +1828,7 @@ def check_fdps_watchlist(parsed: dict) -> None:
 
             elif source == "TH":
                 _maybe_alert_on_approach(entry, parsed)
+                _maybe_alert_on_meter_fix_approach(entry, parsed)
 
             elif source == "CL":
                 summary = f"{callsign} cancelled (FDPS CL)"
@@ -1882,6 +1883,69 @@ def _maybe_alert_on_approach(entry: dict, parsed: dict) -> None:
             _FDPS_PROX_DEDUP.record(dedup_key, "prox")
     except Exception as e:
         log.error("approach alert for %s: %s", dest, e)
+
+
+_FDPS_METERFIX_PROX_DEDUP = PushDedup("fdps_meterfix_prox", dedup_secs=600)
+
+
+def _maybe_alert_on_meter_fix_approach(entry: dict, parsed: dict) -> None:
+    """Fire an alert when a watched flight's TH position is within 50nm
+    (~30min flight time) of a DC-area TBFM meter fix.
+
+    2026-09-02 (operator directive): distinct from _maybe_alert_on_approach
+    above (which checks distance to the whole DESTINATION AIRPORT) -- this
+    checks distance to the specific arrival meter fixes DC-area STARs
+    actually funnel through, giving an earlier/more precise heads-up than
+    the blunt airport-radius check regardless of which direction a flight
+    is inbound from. Only 5 of TBFM's 10 known DC meter fixes have a real,
+    confirmed lat/lon (see tbfm_parser.DC_METER_FIXES's module-level note
+    for why the other 5 are unresolved) -- checks every fix with a non-None
+    coordinate and fires on whichever one is closest, if any is within
+    50nm. Independent of whether TBFM has actually started sequencing this
+    flight yet (no tbfm_sequences lookup) -- position-based, so it can fire
+    before TBFM's own automation horizon picks the flight up.
+    """
+    from ingest.parsers.tbfm_parser import DC_METER_FIXES
+
+    lat = parsed.get("latitude")
+    lon = parsed.get("longitude")
+    if lat is None or lon is None:
+        return
+
+    closest_fix = None
+    closest_dist = None
+    for fix_id, coords in DC_METER_FIXES.items():
+        if coords is None:
+            continue
+        dist = _haversine_nm(lat, lon, coords[0], coords[1])
+        if closest_dist is None or dist < closest_dist:
+            closest_fix, closest_dist = fix_id, dist
+
+    if closest_fix is None or closest_dist > 50.0:
+        return
+
+    try:
+        from shared.watchlist import watchlist_event_hit
+        callsign = (parsed.get("callsign") or "").upper()
+        gs = parsed.get("ground_speed") or 0
+        eta_min = f" (~{round(closest_dist / gs * 60)}min)" if gs else ""
+        alt_str = f" FL{int(parsed['altitude_ft']/100):03d}" if parsed.get("altitude_ft") else ""
+        summary = f"{callsign} approaching {closest_fix}{alt_str} ({closest_dist:.0f}nm out{eta_min})"
+        watchlist_event_hit(
+            entry["id"], summary,
+            {**parsed, "watchlist_trigger": "fdps_th_meterfix_approach",
+             "meter_fix": closest_fix, "dist_nm": round(closest_dist, 1)},
+            priority=3,
+        )
+        hex_id = entry.get("hex_id") or ""
+        # Per-aircraft one-shot gate, same pattern as _FDPS_PROX_DEDUP above
+        # (see that dedup call's comment for the shared-slot bug this avoids).
+        dedup_key = content_hash(f"fdps:meterfix_prox:{hex_id or callsign}")
+        if _FDPS_METERFIX_PROX_DEDUP.should_push(dedup_key, "prox"):
+            _fire_fdps_nas_alert(callsign, hex_id, parsed, dist_nm=round(closest_dist, 1))
+            _FDPS_METERFIX_PROX_DEDUP.record(dedup_key, "prox")
+    except Exception as e:
+        log.error("meter-fix approach alert for %s: %s", closest_fix, e)
 
 
 # DC-area airport coordinates (lat, lon) for approach detection.

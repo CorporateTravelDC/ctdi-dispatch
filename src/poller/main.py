@@ -340,11 +340,15 @@ class WatchlistSweep:
     # changes that once/day regardless, so this mostly buys faster recovery
     # if an import fails rather than more frequent real data. (Was weekly;
     # changed 2026-07-13 per operator request.)
-    OPENSKY_FRESHNESS_INTERVAL = 30 * 86400  # monthly HEAD-only freshness probe
-    # Added 2026-07-21. OpenSky's bulk aircraft metadata CSV is a frozen
-    # snapshot (confirmed stale since Nov 2024, "on hold" per their own
-    # site) -- this only does a HEAD request unless the source has actually
-    # changed, see poller/fetchers/opensky_registry.py module docstring.
+    OPENSKY_FRESHNESS_INTERVAL = 30 * 86400  # monthly dated-snapshot check
+    # Added 2026-07-21. OpenSky's rolling bulk aircraft metadata CSV is a
+    # frozen snapshot (confirmed stale since Nov 2024, "on hold" per their
+    # own site) -- but real dated monthly snapshots DO appear at a
+    # different S3 path. Repointed 2026-09-02 (operator directive) to a
+    # cheap prefix-filtered S3 listing against that path instead of the
+    # rolling file's dead HEAD check; only pulls the real ~103MB+ import
+    # when a genuinely new aircraft-database-complete-YYYY-MM.csv has
+    # appeared. See poller/fetchers/opensky_registry.py module docstring.
     # NOT a full-download interval like FAA_REGISTRY_INTERVAL above.
 
     def __init__(self) -> None:

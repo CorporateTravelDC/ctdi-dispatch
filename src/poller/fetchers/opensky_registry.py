@@ -33,18 +33,29 @@ dated snapshot has appeared -- no HEAD-based freshness check exists yet
 for the dated-snapshot path, since the exact next filename can't be
 predicted the way the rolling URL's staleness can be polled).
 
-So this fetcher is NOT wired into poller's recurring interval loop the way
-FAA_REGISTRY_INTERVAL is. Instead:
+CORRECTION 2026-09-02 (operator directive): check_opensky_freshness() used
+to HEAD-check the rolling file above -- which, per the confirmed-frozen
+finding above, can NEVER detect a new dated snapshot, since the thing it
+was polling never changes. It's IS wired into poller's recurring interval
+loop (WatchlistSweep.OPENSKY_FRESHNESS_INTERVAL, poller/main.py, monthly)
+-- that part was already correct -- it was just checking the wrong URL.
+Repointed to do a cheap, prefix-filtered S3 ListBucket query against the
+dated-snapshot path instead (a few KB response, not a bulk download),
+find the lexicographically-newest aircraft-database-complete-YYYY-MM.csv,
+and compare its filename against opensky_registry_meta's
+"dated_snapshot_imported" key -- only running the real ~103MB import when
+a genuinely new monthly file has appeared:
   - fetch_opensky_registry()   does the actual full import -- run manually /
                                 on demand, or by check_opensky_freshness()
-                                when it detects the source has changed.
-  - check_opensky_freshness()  cheap HEAD-only check (~0 bytes transferred);
-                                compares the remote Last-Modified header
-                                against what's stored in opensky_registry_meta
-                                and only triggers a real download if it has
-                                changed. This is the piece safe to run on a
-                                recurring schedule (e.g. poller could call it
-                                monthly) without wasting bandwidth.
+                                when it detects a new dated snapshot.
+  - check_opensky_freshness()  cheap S3-listing check (~a few KB
+                                transferred, prefix-filtered so the
+                                response only contains matching keys);
+                                compares the newest dated-snapshot filename
+                                against what's stored in
+                                opensky_registry_meta and only triggers a
+                                real download+import if it's changed. This
+                                is the piece the poller calls monthly.
 """
 
 from __future__ import annotations
@@ -52,6 +63,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import sqlite3
 import time
 from typing import Generator
@@ -61,6 +73,18 @@ import requests
 log = logging.getLogger(__name__)
 
 _OPENSKY_CSV_URL = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
+# 2026-09-02: same bucket the rolling file redirects into (see module
+# docstring) -- ?list-type=2&prefix=... is S3's standard ListObjectsV2
+# query API, prefix-filtered so the response only contains matching keys
+# (a few hundred bytes, not the bucket's full ~79-key listing).
+_DATED_SNAPSHOT_LIST_URL = (
+    "https://s3.opensky-network.org/data-samples/"
+    "?list-type=2&prefix=metadata/aircraft-database-complete-"
+)
+_DATED_SNAPSHOT_BASE = "https://s3.opensky-network.org/data-samples/metadata/"
+_DATED_SNAPSHOT_RE = re.compile(
+    r"<Key>metadata/(aircraft-database-complete-\d{4}-\d{2}\.csv)</Key>"
+)
 _BATCH_SIZE = 2000
 _TIMEOUT = 300
 
@@ -107,39 +131,54 @@ _FIELD_MAP = {
 }
 
 
-def _head_last_modified() -> str | None:
-    """Cheap freshness probe -- HEAD only, no body transferred."""
+def _latest_dated_snapshot() -> tuple[str, str] | None:
+    """Cheap, prefix-filtered S3 listing for the newest
+    aircraft-database-complete-YYYY-MM.csv. Returns (filename, full_url),
+    or None if the listing request failed or matched nothing. Filenames
+    sort correctly lexicographically (YYYY-MM), so the max() of the
+    matched keys is genuinely the newest snapshot.
+    """
     try:
-        resp = requests.head(_OPENSKY_CSV_URL, timeout=15, allow_redirects=True)
+        resp = requests.get(_DATED_SNAPSHOT_LIST_URL, timeout=15)
         resp.raise_for_status()
-        return resp.headers.get("Last-Modified")
     except Exception as e:
-        log.warning("opensky registry: HEAD freshness check failed: %s", e)
+        log.warning("opensky registry: dated-snapshot listing failed: %s", e)
         return None
+    matches = _DATED_SNAPSHOT_RE.findall(resp.text)
+    if not matches:
+        log.warning("opensky registry: dated-snapshot listing returned no matches")
+        return None
+    latest = max(matches)
+    return latest, _DATED_SNAPSHOT_BASE + latest
 
 
 def check_opensky_freshness() -> dict:
-    """Compare remote Last-Modified against stored value. Triggers a full
-    import only if the source has actually changed since our last pull.
-    Safe to call on a recurring (e.g. monthly) schedule -- costs one HEAD
-    request, no bulk download unless something changed.
+    """Compare the newest dated-snapshot filename against what's stored.
+    Triggers a full import only if a genuinely new monthly snapshot has
+    appeared since our last pull. Safe to call on a recurring (e.g.
+    monthly) schedule -- costs one prefix-filtered S3 listing request
+    (a few KB), no bulk download unless something changed.
     """
     from common import db
     db.init_db_v17()
 
-    remote_lm = _head_last_modified()
-    if remote_lm is None:
-        return {"ok": False, "error": "HEAD request failed"}
+    found = _latest_dated_snapshot()
+    if found is None:
+        return {"ok": False, "error": "dated-snapshot listing failed or empty"}
+    latest_name, latest_url = found
 
-    stored_lm = db.opensky_registry_meta_get("source_last_modified")
-    if remote_lm == stored_lm:
-        log.info("opensky registry: source unchanged (Last-Modified=%s), skipping re-import", remote_lm)
-        return {"ok": True, "changed": False, "source_last_modified": remote_lm}
+    stored_name = db.opensky_registry_meta_get("dated_snapshot_imported")
+    if latest_name == stored_name:
+        log.info("opensky registry: dated snapshot unchanged (%s), skipping re-import", latest_name)
+        return {"ok": True, "changed": False, "dated_snapshot": latest_name}
 
-    log.info("opensky registry: source changed (was %s, now %s) -- running full import",
-              stored_lm, remote_lm)
-    stats = fetch_opensky_registry()
+    log.info("opensky registry: new dated snapshot detected (was %s, now %s) -- running full import",
+              stored_name, latest_name)
+    stats = fetch_opensky_registry(url=latest_url, quotechar="'")
     stats["changed"] = True
+    stats["dated_snapshot"] = latest_name
+    if stats.get("ok"):
+        db.opensky_registry_meta_set("dated_snapshot_imported", latest_name)
     return stats
 
 

@@ -24,6 +24,15 @@ Pushes to:
   dispatch-debriefs  — full narrative (priority 3) — click → /brief?tab=ops
   dispatch           — concise bottom line (priority 3)
 Both fire simultaneously.
+
+2026-09-02 context-budget fix: the main-call prompt had outgrown the chat
+tier's 4096-token window (persona + data pull + num_predict 900) and every
+hourly run from 2026-08-31 ~22:00 ET was silently falling back to the
+deterministic brief on llama-server's exceed_context_size_error 400. See
+OPS_BRIEF_DATA_TOKEN_BUDGET below for the arithmetic and the per-section
+caps that keep it inside the window. The live system prompts are
+common/personas.py's "ops-brief"/"ops-brief-trend" entries (the in-file
+copies that used to live here were dead code and are gone).
 """
 
 import os
@@ -43,7 +52,7 @@ import requests
 from common import config, db, ntfy_push as _ntfy
 from common.aam_watch import get_aam_watch_summary
 from common.disruption_weather_watch import get_disruption_weather_capsule
-from common.llm import generate as llm_generate
+from common.llm import generate as llm_generate, trim_to_token_budget
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
@@ -147,61 +156,35 @@ AMTRAK_STATIONS: dict[str, str] = {
     "NFK": "Norfolk",
 }
 
-SYSTEM_PROMPT = """You are producing a 6-hour operational briefing for [operator LLC],
-an executive chauffeur operation based in Arlington, VA (Washington DC metro).
-The operator is also a credentialed CERT/ARES/Skywarn volunteer (NoVA).
+# 2026-09-02: the SYSTEM_PROMPT constant that lived here was DEAD CODE and
+# has been removed -- _call_ollama() passes system=None, and the live system
+# prompt is common/personas.py's PERSONAS["ops-brief"] entry (preamble +
+# task layer), served per-request by common/llm.py since the 2026-08-27
+# llama.cpp cutover. Edit the persona registry (and its paired
+# corporatetraveldc.ops-brief Modelfile source text), NOT this file, to
+# change the prompt. The constant here had drifted from the promoted
+# 2026-08-19 task layer and was a trap for future prompt edits.
 
-Your audience is a professional — be dense, direct, and use aviation/dispatch shorthand
-where natural (VFR, IMC, GDP, G/S, kt, SM, CPS, etc.). No filler.
-
-Produce a structured plain-text briefing with these sections in order.
-Use ALL CAPS section labels — no markdown, no bullets, just clean readable paragraphs.
-
-LEAD: Single most operationally significant item right now (one sentence max).
-
-DC METRO: Current conditions at DCA/IAD/BWI — ceiling, vis, wind, precip.
-Note any delay programs, closure NOTAMs, or significant frontal activity.
-
-NORTHEAST: JFK/EWR/LGA/BOS/PHL conditions. Flag gusty winds, convection, or
-approaching systems. Note any NAS programs.
-
-TRANSCON HUBS: LAX/SFO/SEA/ORD/DFW/ATL/DEN — one line each unless a GDP
-or ground stop is active (expand those). Flag marine layer, convection, wind events.
-
-NAS PROGRAMS: All active ground stops, GDPs, and departure delay programs nationwide.
-Include avg/max delay times and trend. If none, state that explicitly.
-
-ATCSCC FORECAST: Planned/possible/probable ground stops, GDPs, and airspace
-constraints from today's ATCSCC Operations Plan advisory — FAA's own forward-
-looking outlook for later today/overnight, distinct from the currently-active
-NAS PROGRAMS above. State timing (e.g. "after 1800Z") and probability language
-(possible/probable/expected) exactly as FAA states it. Flag any VIP MOVEMENT(S)
-noted in the advisory. If unavailable, state that explicitly.
-
-TFRs: VIP/POTUS TFRs active or expected. Include TFR ID if known. Note any
-impacts to DC-area airspace. If none active, state that.
-
-NWS ALERTS: Any active Severe or Extreme weather alerts for DC/Northeast.
-If none, one line stating that.
-
-AMTRAK NEC: Status of Northeast Corridor trains — Acela and NE Regional.
-Note any delays over 15 minutes. If feed unavailable, say so.
-CRITICAL: Amtrak station names (Washington Union Station, New York Penn Station,
-Boston South Station, etc.) are RAIL stations, NOT airports. NEVER list train
-delays under airport sections. Airport delays come ONLY from FAA NAS PROGRAMS.
-Train delays come ONLY from AMTRAK NEC. These are strictly separate modes.
-
-ROUTE IMPACT: Any ground transportation impacts — road closures, POTUS movement
-advisories, major events affecting DC metro routes. Omit if nothing notable.
-
-OPERATIONAL NOTES: Anything a professional DC-area executive chauffeur and
-CERT/ARES volunteer should know for this operational period — unusual airspace
-activity, security events, weather hazards relevant to ground ops, etc.
-Omit if nothing notable.
-
-BOTTOM LINE: 1-2 sentence operational summary. What matters most right now.
-
-Keep total brief under 550 words. Lead section first, bottom line last."""
+# Context budget (2026-09-02): the ops-brief persona routes to the chat
+# tier (num_ctx 4096 -- see personas.py and llama-chat.service's -c 4096).
+# Live persona (preamble+task) measures 902 real tokens (/tokenize against
+# the chat server); num_predict is 900. Root-caused tonight in llama-chat's
+# journal: the hourly main-call prompt had grown to 4300-5200 tokens total
+# and EVERY run from 2026-08-31 ~22:00 ET onward was rejected with
+# exceed_context_size_error (HTTP 400) and silently shipped the
+# deterministic fallback -- the exact bug class that hit ep-advance
+# 2026-08-30. Budget arithmetic, in REAL tokens:
+#   4096 ctx - 902 persona - 900 gen - ~120 instruction - overhead/margin
+#   => ~2000 real tokens for the trimmed data pull.
+#
+# UNIT WARNING: trim_to_token_budget() estimates at 4.0 chars/token, but
+# this skill's content is aviation-dense (raw METAR/NAS/ATCSCC groups like
+# "020654Z 07007KT 10SM SCT010") and measures ~1.9-2.1 chars/token against
+# the real phi3 tokenizer (validated live 2026-09-02 via /tokenize: 5780
+# chars -> 3024 tokens). So every heuristic budget in this file is set at
+# ~HALF the real-token target it is meant to enforce: 1000 heuristic
+# tokens = 4000 chars = ~2000 real tokens.
+OPS_BRIEF_DATA_TOKEN_BUDGET = 1000
 
 
 def _fetch(url: str, timeout: int = 10) -> str | None:
@@ -227,7 +210,25 @@ def _metar_section() -> str:
             + (f" ({m['precip_code']})" if m.get("precip_code") else "")
             for m in primary
         )
-    lines = [l.strip() for l in raw.splitlines() if l.strip().startswith(("METAR", "SPECI"))]
+    # 2026-09-02 (context-budget fix, see OPS_BRIEF_DATA_TOKEN_BUDGET):
+    # - RMK groups stripped -- remarks (sensor metadata, SLP, T-groups)
+    #   routinely double a METAR line's length and carry nothing the
+    #   brief's sections use.
+    # - Deduped to the newest obs per station -- the hours=1 API returns
+    #   every METAR+SPECI in the window, newest first, so busy weather
+    #   hours were feeding the model 2-3 near-identical lines per field.
+    lines = []
+    seen_stations: set[str] = set()
+    for l in raw.splitlines():
+        l = l.strip()
+        if not l.startswith(("METAR", "SPECI")):
+            continue
+        toks = l.split()
+        station = toks[1] if len(toks) > 1 else l
+        if station in seen_stations:
+            continue
+        seen_stations.add(station)
+        lines.append(l.split(" RMK ")[0])
     # Supplement missing primary DC airports from local DB
     # (aviationweather.gov occasionally drops KDCA/KIAD from the response)
     present = {l.split()[1] for l in lines if len(l.split()) > 1}
@@ -468,14 +469,19 @@ def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> st
             return "ATCSCC Operations Plan advisory not yet posted or unavailable for today."
         advn, sections = data
 
-        def _clean(body: str, max_lines: int = 14) -> str:
+        # 2026-09-02: line caps tightened (10/14/14/4 -> 6/9/9/3) as part of
+        # the context-budget fix (OPS_BRIEF_DATA_TOKEN_BUDGET above) -- the
+        # full-width advisory blocks were the single largest contributor to
+        # the >4096-token overflow. The list is newest/most-significant-first
+        # in FAA's own advisory layout, so a tail cap loses the least.
+        def _clean(body: str, max_lines: int = 9) -> str:
             lines = [
                 l.strip() for l in body.splitlines()
                 if l.strip() and not set(l.strip()) <= {"_"}
             ]
             return "\n".join(lines[:max_lines]) if lines else "None."
 
-        intro            = _clean(sections.get("_intro", ""), max_lines=10)
+        intro            = _clean(sections.get("_intro", ""), max_lines=6)
         terminal_planned = _clean(sections.get("TERMINAL PLANNED", ""))
         enroute_planned  = _clean(sections.get("EN ROUTE PLANNED", ""))
         vip_raw = sections.get("VIP MOVEMENT(S)", "")
@@ -483,7 +489,7 @@ def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> st
         # body runs to end-of-text and picks up the trailing signature block
         # (planning webinar time, sequence code, sender tag) -- trim those off.
         vip_raw = vip_raw.split("NEXT PLANNING WEBINAR")[0]
-        vip              = _clean(vip_raw, max_lines=4)
+        vip              = _clean(vip_raw, max_lines=3)
 
         parts = [f"ATCSCC ADVZY {advn} DCC OPERATIONS PLAN (advisory text, forward-looking):"]
         if intro:
@@ -599,7 +605,10 @@ def _amtrak_section() -> str:
             f"Train {t.get('trainNum','?')} ({t.get('routeName','?')}) "
             f"{_stn(t.get('origCode','?'))} → {_stn(t.get('destCode','?'))} "
             f"{'+'if d>0 else ''}{d}min {t.get('trainState','?')} at {t.get('eventName','?')}"
-            for d, t in nec[:12]
+            # 2026-09-02: 12 -> 8 rows, sorted worst-delay-first above, so
+            # the cap sheds only the least-delayed trains (context-budget
+            # fix, see OPS_BRIEF_DATA_TOKEN_BUDGET).
+            for d, t in nec[:8]
         )
     except Exception as e:
         return f"Amtrak parse error: {e}"
@@ -668,6 +677,33 @@ def _brief_history_6h() -> list[dict]:
         return []
 
 
+def _brief_key_lines(content: str) -> str:
+    """Extract the LEAD and BOTTOM LINE lines from an archived brief.
+
+    2026-09-02: the trend pass used to feed the model the first 150 chars of
+    each archived brief -- which is the title header ("OPS BRIEF <ts>
+    (Ollama/...)") plus the first words of whatever followed, i.e. nearly
+    byte-identical hour to hour and carrying no delta signal at all. The
+    LEAD and BOTTOM LINE sections are the brief's actual hour-over-hour
+    signal (mirrors what ep-advance's richer 12h snippets achieve). Falls
+    back to the old snippet for briefs without those markers (e.g. the
+    deterministic fallback format).
+    """
+    lead, bottom = "", ""
+    for line in content.splitlines():
+        s = line.strip()
+        u = s.upper()
+        if not lead and u.startswith("LEAD:"):
+            lead = s[:140]
+        elif not bottom and u.startswith("BOTTOM LINE"):
+            bottom = s[:140]
+        if lead and bottom:
+            break
+    if lead or bottom:
+        return " | ".join(x for x in (lead, bottom) if x)
+    return (content or "").replace("\n", " ").strip()[:150] + "…"
+
+
 def _trend_analysis_prompt() -> str:
     """
     Build a trend context block from the last 6h of CPS scores and brief archives.
@@ -698,32 +734,43 @@ def _trend_analysis_prompt() -> str:
     else:
         lines.append("\nCPS history: No data in last 6h.")
 
-    # Brief archive snapshot comparison
+    # Brief archive snapshot comparison -- LEAD/BOTTOM LINE per hour, the
+    # real hour-over-hour signal (see _brief_key_lines above). Last 6 briefs
+    # at most so the trend prompt stays well inside the chat tier's window.
     if len(brief_hist) >= 2:
-        lines.append(f"\nBrief archive (last 6h, {len(brief_hist)} briefs):")
-        for b in brief_hist:
+        recent = brief_hist[-6:]
+        lines.append(f"\nBrief archive (last 6h, showing {len(recent)} of {len(brief_hist)} briefs):")
+        for b in recent:
             ts = datetime.fromisoformat(b["generated_at"].replace("Z", "+00:00")).strftime("%H:%MZ")
-            # Extract first 150 chars of content for trend context
-            snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
-            lines.append(f"  {ts}: {snippet}…")
+            lines.append(f"  {ts}: {_brief_key_lines(b.get('content') or '')}")
     elif len(brief_hist) == 1:
         lines.append(f"\nBrief archive: 1 prior brief in 6h window.")
     else:
         lines.append("\nBrief archive: No prior briefs in 6h window (first run of interval).")
 
-    return "\n".join(lines)
+    # 2026-09-02: current-state anchor for the PREDICTIVE paragraph -- the
+    # persona asks for an outlook grounded in "active NAS programs ... and
+    # any known TFR/schedule changes", but this prompt previously carried
+    # only history, so the model had to infer the present from stale
+    # snippets. Both accessors are local-DB reads, no network.
+    lines.append("\nCURRENT STATE (anchor for the predictive outlook):")
+    lines.append(f"  {_cps_section()[:200]}")
+    lines.append(f"  {_tfr_section()[:200]}")
+
+    # Belt-and-suspenders: same chat-tier 4096 window as the main call
+    # (persona 764 real tokens + num_predict 200), so cap the package well
+    # under it. Cap is in the trimmer's 4-chars/token heuristic units
+    # (~half the real-token target, see OPS_BRIEF_DATA_TOKEN_BUDGET's UNIT
+    # WARNING): 600 heuristic = 2400 chars = ~1200 real tokens worst case.
+    # Rarely triggers -- 6 CPS rows + 6 key-line rows measured 784 real.
+    return trim_to_token_budget("\n".join(lines), 600)
 
 
-TREND_SYSTEM_PROMPT = (
-    "You are the dispatch intelligence officer for [operator LLC]. "
-    "You have just received a 6-hour data trend package showing CPS scores and brief snapshots. "
-    "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
-    "RETROSPECTIVE (LAST 6H): whether conditions improved, degraded, or stayed stable over "
-    "the past 6 hours, and the single most significant change, if any.\n\n"
-    "PREDICTIVE (NEXT 6H): the outlook for the next 6 hours based on current trajectory, "
-    "active NAS programs, weather systems in motion, and any known TFR/schedule changes.\n\n"
-    "Aviation/dispatch shorthand is expected. No filler. Use exactly those two labels, nothing else."
-)
+# 2026-09-02: the TREND_SYSTEM_PROMPT constant that lived here was dead
+# code (same story as SYSTEM_PROMPT above) -- the live trend system prompt
+# is common/personas.py's PERSONAS["ops-brief-trend"] entry, which had
+# already evolved past this copy (thin-window and uncertainty guards).
+# Edit the persona registry, not this file.
 
 
 def _generate_trend_narrative(trend_prompt: str) -> str:
@@ -760,8 +807,10 @@ def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
     documented name instead. topic_full stays on the shared default
     ("dispatch-debriefs") -- that one's fine as a general full-narrative
     bucket, only the concise/"brief" side had the collision.
+
+    email=True 2026-09-02 (operator directive) -- was push-only before.
     """
-    _ntfy.send_dual(full_text, concise_text, title=title, topic_brief="ops-brief")
+    _ntfy.send_dual(full_text, concise_text, title=title, topic_brief="ops-brief", email=True)
 
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
@@ -821,20 +870,27 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     route = _route_section()
 
-    # Raw sections stored separately so they can be appended to final brief
-    raw_metar = _metar_section()
-    raw_nas   = _nas_section()
-    raw_atcscc = _atcscc_forecast_section(prefetched_atcscc)
+    # Raw sections stored separately so they can be appended to final brief.
+    # 2026-09-02: per-section token caps (context-budget fix, see
+    # OPS_BRIEF_DATA_TOKEN_BUDGET above -- caps are in the trimmer's
+    # 4-chars/token heuristic units, i.e. ~HALF the real-token target,
+    # per the UNIT WARNING there). Caps are sized so the worst-case sum
+    # stays inside the data budget; each section's own formatter already
+    # orders content most-significant-first, so a tail trim sheds the
+    # least important lines.
+    raw_metar  = trim_to_token_budget(_metar_section(), 150)
+    raw_nas    = trim_to_token_budget(_nas_section(), 200)
+    raw_atcscc = trim_to_token_budget(_atcscc_forecast_section(prefetched_atcscc), 200)
 
     parts = [
         f"=== OPS BRIEF DATA PULL {now_utc} ===",
-        f"CPS:\n{_cps_section()}",
+        f"CPS:\n{trim_to_token_budget(_cps_section(), 50)}",
         f"TFRs:\n{_tfr_section()}",
         f"METARs (hub airports):\n{raw_metar}",
         f"FAA NAS PROGRAMS:\n{raw_nas}",
         f"ATCSCC OPERATIONS PLAN FORECAST:\n{raw_atcscc}",
-        f"NWS ALERTS (DC/Northeast):\n{_nws_alerts_section()}",
-        f"AMTRAK NEC:\n{_amtrak_section()}",
+        f"NWS ALERTS (DC/Northeast):\n{trim_to_token_budget(_nws_alerts_section(), 100)}",
+        f"AMTRAK NEC:\n{trim_to_token_budget(_amtrak_section(), 90)}",
     ]
     if route:
         parts.append(f"ROUTE NARRATIVE (local DB):\n{route}")
@@ -848,7 +904,10 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     # long to add to an already token-constrained hourly prompt.
     aam_summary = get_aam_watch_summary("ops")
     if aam_summary:
-        parts.append(f"ADVANCED AIR MOBILITY (this week's framing):\n{aam_summary}")
+        parts.append(
+            "ADVANCED AIR MOBILITY (this week's framing):\n"
+            f"{trim_to_token_budget(aam_summary, 90)}"
+        )
 
     # 2026-08-16: real production output showed phi3:mini echoing this
     # raw data pull back verbatim as its "narrative" (confirmed live --
@@ -862,7 +921,7 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     # never being given an unambiguous signal that generation, not
     # repetition, was expected at this exact boundary. Explicit trailing
     # trigger fixes the actual failure mode.
-    parts.append(
+    instruction = (
         "---\n"
         "Using ONLY the data above, write the operational briefing now, "
         "in your own words, per your system instructions. Do NOT copy, "
@@ -873,7 +932,14 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
         "narrative flow, not a separate bolted-on section at the end."
     )
 
-    prompt_content = "\n\n".join(parts)
+    # 2026-09-02: final hard guard on the assembled data pull, then the
+    # synthesis instruction appended AFTER the trim so it can never be cut
+    # (the 2026-08-16 echo-instead-of-synthesize failure mode returns the
+    # moment that trailing trigger disappears). With the per-section caps
+    # above this trim rarely fires; when it does, the tail sections (ROUTE,
+    # AAM -- enrichment, not core) are shed first.
+    data_block = trim_to_token_budget("\n\n".join(parts), OPS_BRIEF_DATA_TOKEN_BUDGET)
+    prompt_content = data_block + "\n\n" + instruction
 
     # Raw appendix — appended verbatim to the bottom of every push
     raw_appendix = (
