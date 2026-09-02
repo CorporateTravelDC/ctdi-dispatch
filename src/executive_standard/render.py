@@ -32,6 +32,7 @@ returned strings to disk.
 from __future__ import annotations
 
 import html as _html
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -44,6 +45,13 @@ class Post:
     date_iso: str          # e.g. "2026-08-20T12:54:01Z"
     body_html: str         # already-safe HTML (paragraphs), not markdown
     kicker: str = "Desk Memo"
+    body_md: str = ""      # 2026-09-02: raw markdown body, for the
+                            # Accept: text/markdown content-negotiation
+                            # path (render_markdown() below) -- real
+                            # source for Pi-native posts, html2text-
+                            # converted for Substack-sourced ones (see
+                            # executive_standard_sync.py). Empty string
+                            # falls back to a plain body_html strip.
 
 
 SITE_TITLE = "The Executive Standard"
@@ -353,6 +361,66 @@ def render_post(post: Post, archive_teaser: list[Post]) -> str:
 
 
 _SITE_URL = "https://executivestandard.example.com"
+
+
+def render_markdown(post: "Post") -> str:
+    """Markdown representation for Accept: text/markdown content
+    negotiation (2026-09-02, per developers.cloudflare.com/fundamentals/
+    reference/markdown-for-agents/ and isitagentready.com's markdown-
+    negotiation skill). YAML frontmatter + body, the same "predictable
+    three-part layout" those specs describe minus the optional JSON-LD
+    block (nothing on this site emits JSON-LD to carry over).
+
+    Falls back to a plain-text strip of body_html when body_md wasn't
+    populated (shouldn't happen in practice -- both post sources set it,
+    see executive_standard_sync.py -- but never emit an empty document).
+    """
+    dek = _html.unescape(post.dek)
+    body = post.body_md.strip() if post.body_md else re.sub(r"<[^>]+>", "", post.body_html).strip()
+    # Pi-native sources embed their own "# Title" line (see
+    # load_pi_native_posts()'s documented file format) -- strip a leading
+    # H1 so it isn't duplicated against the one this function adds below.
+    # A no-op for Substack-sourced posts, whose html2text conversion
+    # doesn't carry a title heading in the body to begin with.
+    body = re.sub(r"^#\s+.+\n+", "", body, count=1)
+    frontmatter = (
+        "---\n"
+        f"title: {title_yaml_escape(post.title)}\n"
+        f"description: {title_yaml_escape(dek)}\n"
+        f"date: {post.date_iso}\n"
+        f"source: {_SITE_URL}/{post.slug}.html\n"
+        "---\n"
+    )
+    return f"{frontmatter}\n# {post.title}\n\n{body}\n"
+
+
+def title_yaml_escape(s: str) -> str:
+    """Quote a scalar for single-line YAML frontmatter if it contains
+    anything that would otherwise need escaping (colon, quote)."""
+    if any(c in s for c in (':', '"', "'", "\n")):
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    return s
+
+
+def render_index_markdown(posts: list[Post]) -> str:
+    """Markdown representation of the homepage/archive listing -- same
+    content-negotiation path as render_markdown(), for the root URL."""
+    posts_by_date = sorted(posts, key=lambda p: p.date_iso, reverse=True)
+    lines = [
+        "---",
+        f"title: {title_yaml_escape(SITE_TITLE)}",
+        f"source: {_SITE_URL}/",
+        "---",
+        "",
+        f"# {SITE_TITLE}",
+        "",
+        SITE_TAGLINE,
+        "",
+    ]
+    for p in posts_by_date:
+        dek = _html.unescape(p.dek)
+        lines.append(f"- [{p.title}]({_SITE_URL}/{p.slug}.html) ({_fmt_date(p.date_iso)}) -- {dek}")
+    return "\n".join(lines) + "\n"
 
 
 def render_llms_txt(posts: list[Post]) -> str:

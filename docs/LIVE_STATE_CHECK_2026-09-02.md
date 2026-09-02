@@ -169,3 +169,124 @@ independently re-verified rather than re-deriving:
 No new drift found; nothing persisted to the vault by the second pass —
 the 09:16 note already covers all three drifts, and duplicating it would
 pollute future searches.
+
+---
+
+# Third pass — post-commit ebb5b7c (cowork-coord timers), ~10:00 EDT
+
+Scoped to `ebb5b7c` ("cowork board coord: 24h/7d belt-and-suspenders
+backup checkpoints"): two new scripts (`scripts/cowork-coord-24h-check.sh`,
+`cowork-coord-7d-check.sh`) and four user units
+(`.config/systemd/user/corporatetraveldc-cowork-coord-{24h,7d}.{service,timer}`).
+Second-brain searched first (`cowork`, `board refresh token`, `presence
+attestation`): no prior findings on this area exist — the only "cowork"
+hits are unrelated (coworking-space RSS, personal LinkedIn notes, the
+Cowork mobile client mention in the infra-map note). This check starts
+cold; nothing below contradicts prior art because there is none.
+
+## Documentation drift: none
+
+Checked every doc surface that mentions the board/attestation chain —
+none of their claims are invalidated by this commit:
+
+- `docs/COMPLIANCE_SECURITY.md` (~line 268) — describes `board_refresh`
+  audit events from `board_refresh_token()`'s three call sites; the new
+  scripts call `db.board_insert()`/`board_presence_status()` only, never
+  the token path. Still accurate.
+- `scripts/board-presence-attest.sh` docstring — "run it yourself on a
+  ~7-day cadence, whenever a reminder fires (or proactively)": the 7d
+  timer now *satisfies* this previously-aspirational line rather than
+  contradicting it (the 7d script's own header says "this IS that
+  reminder"). Reverse-drift closed, not opened.
+- `src/common/db.py`'s board-chain comment block (~line 397) — unchanged
+  semantics, still accurate.
+- `docs/tasks/scheduled/README.md` — skills doc, not a timer inventory;
+  no exhaustiveness claim to break. `docs/REFERENCE_INFRA.md` line ~287
+  (`/api/v1/board*` posts need `X-Board-Key`) — unaffected (scripts write
+  via `db.board_insert` directly, not the HTTP surface).
+- `README.md`, `src/ingest/README.md`, `src/shared/watchlist_README.md`,
+  CLAUDE.md — no claims touching this area.
+
+## Real findings (behavioral, confirmed live — persisted to vault)
+
+### 1. Both timers use `Requires=` — the documented 2026-08-30 llama-restart bug pattern, re-introduced
+
+CLAUDE.md's 2026-08-30 entry records fixing exactly this on
+`scheduled-llama-restart`: `Requires=` in a timer's `[Unit]` pulls the
+service into the same transaction the moment the *timer* activates, firing
+it immediately rather than at scheduled time. Both new timers copy the
+pattern, and it fired live: timers enabled 09:34:31 EDT → both services
+ran at 09:34:31, posting board coord messages seq=37/38. Stakes are far
+lower than the llama case (a duplicate board post + operator ping, not a
+killed in-flight LLM run), but every future
+`systemctl --user restart`/re-enable of either timer will fire a spurious
+checkpoint. (`OnBootSec` being long-elapsed would also have fired them on
+first enable — but `Requires=` makes it recur on every timer restart.)
+Fix is the same one-word change as last time: `Wants=`.
+
+### 2. That premature 09:34 fire ran a pre-fix script — both first-run operator pings were silently lost
+
+Journal shows both 09:34:32 runs failed the ntfy leg:
+`ntfy unreachable: url=http://host.containers.internal:2586` — the
+committed scripts' `export NTFY_URL="http://127.0.0.1:2586"` override was
+added at 09:34:50 (file mtime), 19 seconds *after* that run, and the
+commit landed 09:46. So the exact host-vs-container `ntfy_url()` gotcha
+the committed comment warns about is what ate the first checkpoint's
+operator ping+email (board posts landed fine). The committed version is
+verified correct mechanically (`config.ntfy_url()` resolves to
+`127.0.0.1:2586` under the export — `config.get` prefers already-set
+process env over dispatch.env — and ntfy answers `{"healthy":true}`
+there), **but the ntfy/email leg has never run successfully live**; first
+real test is the next 24h fire, Thu 2026-09-03 16:51 EDT.
+
+### 3. The 7d reminder is scheduled to fire ~10h AFTER the attestation it guards expires
+
+Current attestation: issued 2026-09-02 09:03:54 EDT, expires 2026-09-09
+09:03:54 EDT. First scheduled 7d fire: **2026-09-09 19:23:45 EDT** —
+10h20m after expiry, i.e. after `board_refresh_token` has already been
+failing closed. The script handles the lapsed case (priority-4 "failing
+closed" wording), but as a *pre-lapse* reminder it structurally can't
+work: `OnUnitActiveSec=7d` + `RandomizedDelaySec=12h` anchors each fire
+to the previous *activation* (period 7d + 0–12h, drifting later every
+cycle) while the attestation window anchors to whenever the operator
+actually runs attest — the two clocks decouple over weeks. A reminder
+that keys off `board_presence_status()['valid_until']` (e.g. daily
+OnCalendar + fire-only-when `<36h` remaining) would track the real
+deadline. Until then, expect fail-closed gaps between attestation lapse
+and reminder.
+
+## Minor / cosmetic (noted, not vault-worthy)
+
+- Failed operator ping doesn't fail the unit: both scripts ignore
+  `ntfy_push.send()`'s boolean return, so the 09:34 half-failed runs show
+  `status=0/SUCCESS` — a dead alert leg is invisible to failed-unit
+  sweeps, journal-warning only. For a unit whose whole purpose is
+  operator visibility, exiting nonzero on a failed send would be truer.
+- `Persistent=true` is inert on both timers — it only applies to
+  `OnCalendar=` timers, and these are monotonic-only. Harmless copy-paste
+  (and unlike the ep-advance-venues case, can't even cause a catch-up
+  fire).
+- Timer descriptions say "6-12h grace window"; `RandomizedDelaySec=12h`
+  actually gives 0–12h. Also the effective 24h-timer period is 24–36h
+  (mean ~30h) against an 86400s token TTL — accepted grace-window design
+  per the script header, just noting the real numbers.
+
+## Live-state verification / continuity with the morning passes
+
+- `verify-manifest: OK -- signature valid, all 879 files match` (working
+  tree, post-ebb5b7c). `git status` clean at check time.
+- Live installed copies of all four units are byte-identical to tracked;
+  timers enabled and waiting (24h → Sep 3 16:51 EDT, 7d → Sep 9 19:23
+  EDT). Board messages seq=37/38 confirmed posted by the first fire.
+- Still 22 failed user units, unchanged set — all the expected
+  verify-manifest pattern; `poller:latest` still build-date
+  `20260902T032046Z` (pre-signing). **The post-signing poller rebuild is
+  still pending**, so ops-brief's context-budget fix has still never run
+  live.
+- The morning passes' prediction about the in-flight ingest build came
+  true: `corporatetraveldc-ingest:latest` finished 09:41 EDT but carries
+  build-date label `20260902T032046Z` — context snapshotted pre-signing,
+  so it will fail verified-exec; that 2.5h build was wasted as predicted
+  and needs a re-run against the signed tree (ingest containers are still
+  on the old image anyway, up 2+ days).
+- Presence attestation currently valid (~167h remaining at check time).
