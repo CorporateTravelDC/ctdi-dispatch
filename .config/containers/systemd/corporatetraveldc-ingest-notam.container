@@ -71,7 +71,16 @@ MemoryLow=85M
 # reads as exactly what it is, "Ollama's old priority, full stop."), well under the 9000 must-never-die tier
 # (ntfy/cloudflared/llama-hot/chat) -- still proportional-share, not a
 # hard cap, and this feed's own CPUQuota below is unchanged.
-CPUWeight=5000
+# 2026-09-01 (operator directive): raised 5000 -> 9500 -- above the
+# 9000 "must-never-die" tier this was deliberately kept under. That
+# earlier reasoning assumed no real contention with local LLM inference;
+# live investigation today found llama-chat (CPUWeight=9000, sustained
+# 150%+ CPU) directly correlated with SWIM Solace keep-alive-failure
+# bursts (FDPS/TBFM/TFMS/STDDS/ITWS all flapping ~1/13s), which silently
+# dropped OOOI coverage for at least one live flight. SWIM ingest now
+# outranks everything else on this box, deliberately -- see
+# scripts/swim-session-health-watch.sh for the alerting side of this fix.
+CPUWeight=9500
 CPUQuota=60%
 Restart=always
 RestartSec=15
