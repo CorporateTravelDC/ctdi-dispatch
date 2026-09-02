@@ -24,6 +24,16 @@ aviation_daily_watch.py writes to the exact same vault path a scheduled
 run would, this compile step picking up 04-Syntheses/daily/ alongside
 01-Sources/daily/ is what makes that true for both trigger paths
 identically -- no separate "manual mode" data path to keep in sync.
+
+2026-09-01: also scans 01-Sources/transport-patterns/ -- where
+transport_pattern_digest.py writes (route-locks, on-time drift, and
+anything a flight-hifi-track investigation surfaces ad hoc, e.g. a
+cancellation-rate finding on a specific route-and-flight-number
+combination). Operator directive: any subsequent transport pattern like
+that should be automatically promoted into this same weekly
+reconciliation, not just sit as an isolated source note -- same principle
+as the 2026-08-06 fix above, applied to the one source directory that
+had been left out of it.
 """
 import logging
 import re
@@ -67,7 +77,7 @@ def _week_label(d: date) -> str:
     return f"{iso[0]}-W{iso[1]:02d}"
 
 
-_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+_DATE_RE = re.compile(r"(\d{4})-?(\d{2})-?(\d{2})")
 
 
 def _file_date(path: str) -> str:
@@ -84,9 +94,23 @@ def _file_date(path: str) -> str:
     position slice handles both filename shapes correctly, and any
     future per-category skill's naming without needing another special
     case here.
+
+    2026-09-01: hyphens made optional in the pattern, and the three date
+    parts re-joined with hyphens explicitly on return -- found while
+    wiring 01-Sources/transport-patterns/ into this compile step.
+    transport_pattern_digest.py's own stamps are hyphenated
+    (2026-09-01T1933.md), but second_brain.remember_text() -- the general-
+    purpose tool an operator or agent would actually reach for to log a
+    one-off finding into that same directory -- stamps unhyphenated
+    (20260901T193321Z.md). The un-normalized regex only matched the first
+    form; a note written the second way would silently get "" back from
+    this function and drop out of the recency filter entirely, the exact
+    failure this whole function exists to prevent for 04-Syntheses/daily's
+    differently-shaped filenames. Both forms now resolve to the same
+    normalized YYYY-MM-DD string.
     """
     m = _DATE_RE.search(path.rsplit("/", 1)[-1])
-    return m.group(1) if m else ""
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
 
 
 def main() -> None:
@@ -105,9 +129,22 @@ def main() -> None:
         category_watch_files = webdav_client.list_files(
             f"{webdav_client.BUSINESS_ROOT}/04-Syntheses/daily"
         )
+        # 2026-09-01 (operator directive): transport_pattern_digest.py has
+        # been writing to 01-Sources/transport-patterns/ since its own
+        # 2026-07-28 wiring, but this compile step never scanned that
+        # directory -- every transport-pattern finding (route-locks,
+        # on-time drift, and anything surfaced ad hoc via flight-hifi-
+        # track's Step 1h cancellation-rate check, like UAL1678's DCA-IAH
+        # leg) sat in 01-Sources forever, never reconciled into a weekly
+        # synthesis, same class of gap the 2026-08-06 fix above closed for
+        # category daily-watch briefs. Filenames are YYYY-MM-DDTHHMM.md --
+        # date at the start, same shape _file_date already handles.
+        transport_pattern_files = webdav_client.list_files(
+            f"{webdav_client.BUSINESS_ROOT}/01-Sources/transport-patterns"
+        )
         cutoff = today - timedelta(days=7)
         recent = [
-            f for f in daily_files + category_watch_files
+            f for f in daily_files + category_watch_files + transport_pattern_files
             if _file_date(f["path"]) >= cutoff.isoformat()
         ]
         # Sort by actual date, not filename -- 01-Sources/daily and
