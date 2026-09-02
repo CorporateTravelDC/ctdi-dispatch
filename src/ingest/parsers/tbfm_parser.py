@@ -78,11 +78,38 @@ _TBFM_ALERT_DEDUP = PushDedup("tbfm_alerts", dedup_secs=300)
 # DC-area meter fixes — kept for alert labeling / cross-checks, no longer the
 # primary relevance filter (see module docstring -- <air apt="..."> is now
 # the primary filter).
-DC_METER_FIXES = frozenset({
-    "LUCIT", "SWANN", "RAVNN", "FLUKY", "SFARA",   # IAD
-    "JIMBO", "WAVER", "WOOLY",                       # DCA
-    "PALEO", "MERIT",                                # BWI
-})
+#
+# 2026-09-02 (operator directive, backfilled against real FAA data): values
+# are (lat, lon) in decimal degrees where known, None where not. Checked
+# BOTH the NASR 28-Day Subscription FIX file (national reporting-point
+# database, cycle effective 2026-08-06) AND the CIFP (Coded Instrument
+# Flight Procedures, ARINC 424, same cycle) -- the authoritative source for
+# procedure-only RNAV waypoints that never appear in the general FIX file.
+# PALEO/RAVNN/SWANN/WOOLY/FLUKY confirmed in the NASR FIX file, each
+# independently cross-checked against its ARTCC field (all ZDC = Washington
+# Center, consistent with real DC-area metering). LUCIT/MERIT/JIMBO/WAVER/
+# SFARA do NOT exist as DC-area records in either source: each of LUCIT/
+# MERIT/JIMBO/WAVER matched exactly one national FIX/CIFP record under that
+# exact identifier, and every single one was somewhere else entirely
+# (Indiana/ZAU, Connecticut/ZBW, Oklahoma/ZKC military, Texas/ZHU) -- not a
+# lookup miss, a genuine same-name-different-place collision. SFARA had no
+# match in either source at all. Conclusion: these 5 are almost certainly
+# TBFM-internal automation labels, not charted/public navigation fixes --
+# geolocating them would need a fundamentally different approach (e.g.
+# inferring position empirically from many live TBFM ETA/sequence messages
+# cross-referenced against real radar tracks), not another data lookup.
+DC_METER_FIXES: dict[str, tuple[float, float] | None] = {
+    "LUCIT": None,                                  # IAD -- unresolved, see note above
+    "SWANN": (39.151467, -76.228872),                # IAD
+    "RAVNN": (38.778628, -76.577564),                # IAD
+    "FLUKY": (38.506444, -77.729222),                # IAD
+    "SFARA": None,                                   # IAD -- unresolved, see note above
+    "JIMBO": None,                                   # DCA -- unresolved, see note above
+    "WAVER": None,                                   # DCA -- unresolved, see note above
+    "WOOLY": (39.338661, -77.036436),                # DCA
+    "PALEO": (39.027994, -76.372725),                # BWI
+    "MERIT": None,                                   # BWI -- unresolved, see note above
+}
 
 # TBFM's <air apt="..."> uses 3-letter airport codes, not ICAO.
 DC_AREA_APTS = frozenset({"DCA", "IAD", "BWI"})

@@ -206,7 +206,8 @@ def main(force: bool = False) -> None:
 
         title = f"Weekly Ops Summary{' [FALLBACK]' if status == 'fallback' else ''}"
         # Use same topics as ops_brief so subscribers don't need a separate topic
-        _ntfy.send_dual(summary, summary[:280], title=title)
+        # email=True 2026-09-02 (operator directive) -- was push-only before.
+        _ntfy.send_dual(summary, summary[:280], title=title, email=True)
         log.info("%s: pushed to ops-brief", SKILL_NAME)
 
     finally:

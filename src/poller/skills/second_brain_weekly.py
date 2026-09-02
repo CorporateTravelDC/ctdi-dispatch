@@ -256,8 +256,10 @@ def main() -> None:
     finally:
         log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
                    0, 0, status, gate_result)
+        # email=True 2026-09-02 (operator directive) -- was push-only before.
+        # NOTE: same "ran OK, see vault path" caveat as second_brain_daily.py.
         send_run_status(SKILL_NAME, status, detail=rel_path,
-                        ok_statuses=("ok", "fallback", "no-content"))
+                        ok_statuses=("ok", "fallback", "no-content"), email=True)
 
 
 if __name__ == "__main__":

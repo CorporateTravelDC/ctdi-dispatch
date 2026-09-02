@@ -54,6 +54,13 @@ def ntfy_fallback_url() -> str:
 def ntfy_token() -> str:
     return get("NTFY_TOKEN", "")
 
+def operator_email() -> str:
+    """Inbox destination for ntfy's X-Email relay (send(..., email=True)).
+    2026-09-02: same address blog-substack-reminder.sh already delivers to
+    -- a Gmail forwarder, not a mailbox itself (see memory: no Gmail for
+    outbound, this is inbound-only)."""
+    return get("OPERATOR_EMAIL", "csexecutiveservices@gmail.com")
+
 def db_path() -> str:
     return get("DISPATCH_DB", "/var/lib/corporatetraveldc/corporatetraveldc.db")
 
