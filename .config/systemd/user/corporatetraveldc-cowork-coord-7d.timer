@@ -1,0 +1,12 @@
+[Unit]
+Description=Run cowork-coord-7d-check every ~7 days (6-12h grace window)
+Requires=corporatetraveldc-cowork-coord-7d.service
+
+[Timer]
+OnBootSec=45min
+OnUnitActiveSec=7d
+RandomizedDelaySec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
