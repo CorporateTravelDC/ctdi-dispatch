@@ -36,3 +36,9 @@ trendspy>=0.1.6
 # installed too, not just these two packages.
 python-docx>=1.1.0
 python-pptx>=0.6.23
+
+# HTML->Markdown conversion for Accept: text/markdown content negotiation
+# on the executive-standard blog (executive_standard_sync.py, 2026-09-02)
+# -- Substack-sourced posts only ever have body_html, not a markdown
+# source, so this converts once at sync time.
+html2text>=2024.2.26
