@@ -442,10 +442,32 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
                 # or a container restart. Root-caused live: NWWS-OI logged
                 # zero errors for 3+ hours while push:nws sat stale.
                 while not stop.is_set():
-                    try:
-                        failover.mark_push_healthy("nws")
-                    except Exception as e:
-                        log.warning("push:nws heartbeat write failed (%s); retrying next tick", e)
+                    # 2026-09-02 (operator directive): bounded retry-with-
+                    # backoff, same pattern as opensky_registry.py's bulk-
+                    # import fix for the identical "database is locked"
+                    # class of error -- a single failed write used to just
+                    # wait for the next full `heartbeat` tick (commonly
+                    # 30s), and 2-3 consecutive contention hits under real
+                    # load (confirmed live 2026-09-01/02, box under swap
+                    # pressure) was enough to push push:nws's age past the
+                    # guardrail's 90s FALLBACK_MAX_AGE and trip a false
+                    # "push is down" kickover even though NWWS-OI itself
+                    # was perfectly healthy the whole time. Retrying a
+                    # handful of times within the SAME tick (short, fixed
+                    # backoff -- this is a lightweight heartbeat write, not
+                    # a bulk job, so no need for the longer escalating
+                    # backoff opensky_registry.py uses) makes a single
+                    # contention event much less likely to ever surface as
+                    # staleness at all.
+                    for attempt in range(4):
+                        try:
+                            failover.mark_push_healthy("nws")
+                            break
+                        except Exception as e:
+                            if attempt == 3:
+                                log.warning("push:nws heartbeat write failed after 4 attempts (%s); retrying next tick", e)
+                            else:
+                                await asyncio.sleep(1.5)
                     await asyncio.sleep(heartbeat)
 
             beat = asyncio.create_task(_beat())
