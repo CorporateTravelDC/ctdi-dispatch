@@ -603,6 +603,13 @@ systemctl --user restart corporatetraveldc-web corporatetraveldc-poller \
                          corporatetraveldc-pusher corporatetraveldc-runner
 ```
 
+This flow only ever touches our own `localhost/corporatetraveldc-*` images.
+The external/third-party containers (the SDR feeders, nextcloud, etc.) are
+deliberately on a separate cadence — a weekly `podman auto-update` check via
+`corporatetraveldc-weekly-external-image-update.timer` (Sundays 04:15 ET;
+standing rule 2026-09-03, see `scripts/weekly-external-image-update.sh`'s
+header for the Nextcloud major-version-jump incident behind its alerting).
+
 **If you're self-hosting a real ADS-B receiver, hard-code your actual GPS
 coordinates — don't run on the placeholder.** Set `ULTRAFEEDER_LAT`/
 `ULTRAFEEDER_LON` in `dispatch-secrets.env` (see the template's own note)

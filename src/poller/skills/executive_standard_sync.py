@@ -276,6 +276,19 @@ def build_site(posts: list[Post], site_dir: Path) -> None:
         for icon_file in icons_src.iterdir():
             (site_dir / "icons" / icon_file.name).write_bytes(icon_file.read_bytes())
 
+    # GPG public keys (2026-09-03, operator directive) -- same verbatim-copy
+    # treatment as the rest of assets/ above, so a fresh site_dir rebuild
+    # never silently drops them. Canonical set of 5 -- see
+    # docs/GPG_KEYS_PUBLISHED.md for what each one is and why. This loop
+    # picks up whatever's actually present in assets/keys/ rather than
+    # hardcoding filenames, so adding/retiring a key later is just a file
+    # change here (plus updating that doc).
+    keys_src = assets_root / "keys"
+    if keys_src.is_dir():
+        (site_dir / "keys").mkdir(exist_ok=True)
+        for key_file in keys_src.iterdir():
+            (site_dir / "keys" / key_file.name).write_bytes(key_file.read_bytes())
+
     # llms.txt / sitemap.xml regenerate from the live post list every sync --
     # never go stale by hand as new memos publish.
     (site_dir / "llms.txt").write_text(render_llms_txt(posts_by_date), encoding="utf-8")

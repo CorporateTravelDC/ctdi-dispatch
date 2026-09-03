@@ -154,3 +154,474 @@ Code verified clean: `watchlist.py`'s remaining references are historical
 comments plus the allowed `globe.airplanes.live/?icao=` click-through URL.
 These three doc spots pre-date this commit and were not previously
 recorded in the vault (searched `airplanes.live`, `README AND airplanes`).
+
+---
+
+# Pass 2 — post-commit e7bb241 (docs parity pass), ~09:50–10:05 EDT
+
+Scoped to commit `e7bb241` ("Docs parity pass: reconcile living reference
+docs against a fresh codebase audit" — README + 21 docs/ + the new
+1,122-line CODEBASE_REFERENCE_DRAFT). Since the commit under check IS a
+docs commit, this pass verifies (a) whether its new claims hold against
+the live system and current source, (b) whether it actually closed Pass
+1's findings, and (c) live-system health. Prior art consulted first
+(second-brain: `docs parity`, `LIVE_STATE_CHECK`, `top_p`,
+`rtl_sdr_adsb`; plus the in-repo 09-01/09-02 check files).
+
+## Parity claims spot-checked against live system — all TRUE
+
+- **LOCKDOWN corrections** (ALERT_ARCHITECTURE et al.): verified against
+  `scripts/thermal-ingest-guard.py` — fallback trigger is indeed
+  "DEMOTED TO INFORMATIONAL-ONLY" (script's own words), LLM units out of
+  scope. Matches the docs' new text exactly.
+- **llama.cpp tier claims** (README:701 report-1 on-demand): all three
+  units active right now; today's 06:10 venues fire's journal shows the
+  `llama-report-ondemand.sh` ExecStartPre/ExecStopPost hooks working
+  exactly as README describes (including the "leaving report-1 running —
+  ep-advance is activating" idle-check path).
+- **Second-brain semantic layer "confirmed real and live"**
+  (SECOND_BRAIN_STATUS/INFRA_MAP): `--semantic` queries run the concept
+  layer live (graceful literal fallback for unknown concepts) — the
+  "pending build"→"live" correction is right.
+- **SDR_SERVICES additions** (acars-watcher triple-source, utm-watcher
+  stub row): match the quadlet tree; no stale crash-loop-era claims.
+- **DEDICATED_MODELS_PLAN superseded banner**: present and accurate.
+- **runner-demo restored to docs**: container up 9h. **Amtrak
+  push-primary** (DATA_SOURCES): amtrak-tracker up, unchanged since the
+  08-30 verified redeploy.
+- **Pass-1 findings #2 (partially), #4, and the pre-existing
+  airplanes.live doc drift — CLOSED** by this commit: README:412 /
+  INFRA_MAP:648 / REFERENCE_INFRA:173 "5-minute" one-liners gone;
+  README:443 now correctly describes airplanes.live as purged;
+  REFERENCE_INFRA's pre-purge chain description gone.
+
+## Residual drift (real, small — the parity pass's addendum doesn't cover these)
+
+The pass handled ALERT_REFERENCE's per-parser dedup-window framing with a
+global "2026-09-03 addendum" (lines ~113–130) telling readers to
+reinterpret *window* language via the periodic/forward-only split — a
+legitimate fix for the window claims. But two per-parser entries are
+factually inverted in ways the addendum's caveat does not reach:
+
+- **GADV, ALERT_REFERENCE.md:319–322** — still says "on the advisory
+  number (**not content hash** — … the number itself is the correct
+  'have we shown this one' key, 1-hour window)". Code
+  (`src/ingest/parsers/tfms_parser.py:1484–1498`): slot = advisory
+  number, change-detector = content hash of
+  `advisoryTitle|advisoryText`, forward-only. The doc asserts the
+  opposite of the live mechanism, not merely a stale window.
+- **NOTAM, ALERT_REFERENCE.md:348–350** — still says "a NOTAM
+  re-transmitted unchanged won't re-fire; an amended NOTAM (**new ID**)
+  will". Code (`src/ingest/parsers/aim_parser.py:285–301`): slot = NOTAM
+  ID, content = classification + effective window + full text — an
+  amendment under the **same** ID now re-alerts, the doc's central
+  distinction.
+- Lesser: APTC (:313) and TBFM (:279) still print pre-split key shapes
+  (`aptc:{airport}:{rate}:{weather}`, `tbfm:{fix}:{seq_count}`) — the
+  addendum's window caveat applies, but the key shapes themselves predate
+  the 2026-08-16 slot/content split and the 09-02 band-bucketing.
+
+Report-only, same rationale as Pass 1 (doc edits = another sign cycle).
+
+## Pass-1 findings NOT closed — deliberately out of the parity pass's scope
+
+`src/ingest/README.md` and `src/shared/watchlist_README.md` were not
+touched (the commit scoped itself to README + docs/). Verified still
+present: watchlist_README:190–192's headline "will not re-fire within 5
+minutes" paragraph, :200–202's pre-purge airplanes.live chain described
+as current; ingest README's 30-min `_TFMS_ALERT_DEDUP` / "generic
+5-minute window" / REROUTE "6 h dedup" framing. All Pass-1 findings #1
+and #3 carry forward unchanged — next doc-fix cycle should include these
+two files explicitly, since repo-wide parity passes keep scoping to
+docs/ and missing them.
+
+## Known bug still live: ep-advance-venues — 3rd consecutive daily crash
+
+`corporatetraveldc-ep-advance-venues.service` failed today's 06:10 fire
+(exit 1, 06:11:44) on the **known** `TypeError: generate() got an
+unexpected keyword argument 'top_p'` — found 09-01 (this file's sibling,
+LIVE_STATE_CHECK_2026-09-01.md F1; vault `20260902T015337Z.md`), fix
+deliberately deferred to an operator sign cycle that hasn't happened.
+Journal confirms failures 09-01, 09-02, 09-03; the skill has **never**
+produced a venue advisory. New wrinkle from this commit: the fresh
+CODEBASE_REFERENCE_DRAFT (:449) and README (:701/:736) now list
+`ep-advance-venues` as a live daily skill with no caveat — technically
+accurate as *design* documentation (the draft was written from source,
+where a call-time TypeError is invisible), but a reader would infer an
+operating skill. `ep_advance_venues.py:63` (`top_p=0.9`) and `:65`
+(`max_retries=0`) both still need removal + sign + poller rebuild.
+
+## Live-state resolution not previously recorded anywhere: ADS-B dongle is BACK
+
+CLAUDE.md's 2026-08-29/30 "REAL, hardware, NOT fixable remotely" entry
+(ultrafeeder crash-looping 541+ restarts, `/dev/rtl_sdr_adsb` absent
+from the USB bus) is **resolved**: the device node exists (udev symlink
+`/dev/rtl_sdr_adsb -> bus/usb/003/002`, created at the 08-30 08:23
+reboot — physical intervention + reboot evidently fixed it),
+`corporatetraveldc-ultrafeeder` is stably up 9h, and a live poll of
+`100.x.x.x:8080/data/aircraft.json` returns 15 aircraft with a
+current timestamp. Searched the vault (`rtl_sdr_adsb`) and the 09-01/
+09-02 check files — nowhere recorded; persisted to the vault this pass.
+
+## Live-system health
+
+- Failed user units: exactly 1 (`ep-advance-venues`, the known bug
+  above). Everything else clean — including all units CLAUDE.md's
+  09-02 entries predicted would self-resolve.
+- All platform containers up; poller image build-date `20260903T043438Z`
+  (00:34 EDT, pre-dating the 09:46 EDT parity commit — fine: the commit
+  touched no `src/`, so `verified-exec` is unaffected and no rebuild is
+  owed for it). Uncommitted
+  working-tree state: only `docs/CLAUDE_MD_DRIFT_REPORT.md` (the
+  auto-regeneration the commit message deliberately excluded) plus this
+  file's Pass-2 edit.
+
+---
+
+# Pass 3 — post-commit 6b5d46c (client-demo template), ~11:20–11:30 EDT
+
+Scoped to commit `6b5d46c` ("Generalize the client-demo preview pattern
+into a reusable template"). Prior art consulted first (second-brain:
+`client-demo`, `ccw-demo`, `webdev`, `--raw 'client AND demo AND
+preview'`): vault note `20260824T011337Z.md` (the 08-24 full CLAUDE.md
+dump) is the canonical prior investigation of this exact area — it
+documents the original `ccw-demo` as deliberately untracked, its Quadlet
+comment's false Cloudflare-Tunnel claim, and an open "NEEDS OPERATOR
+DECISION: track it or record deliberately as out-of-scope." This commit
+is the direct follow-on: the *pattern* is now tracked for all future
+demos, and the original instance's untracked status is now explicitly
+recorded as deliberate ("stays running exactly as it was, not migrated")
+in the commit message, `docs/CLIENT_DEMO_PATTERN.md`, and the template's
+own header — the 08-24 open decision is effectively answered by
+direction rather than by migration.
+
+## Commit claims verified against the live system — all TRUE
+
+- The three unit files (`client-demo@.container`,
+  `client-demo-webdev-expiry@.service`/`@.timer`) are installed live
+  under `~/.config/` and byte-identical to the tracked copies (diff'd).
+- The `zzz-validation-test` instance is fully gone: no instance symlink,
+  no `.container.d/` drop-in dir, no `~/demos/zzz-*` dir, no timer
+  instance in `list-timers --all` or `list-units --all`.
+- Original `ccw-demo` genuinely untouched: Up 4 days, still publishing
+  `127.0.0.1:8085` + `100.x.x.x:8085`, Basic Auth live (curl → 401).
+- `docs/CLIENT_DEMO_PATTERN.md`'s functional claims all match the real
+  files: no `PublishPort=` in the base template ✓; scaffold writes the
+  symlink + `10-instance.conf` drop-in ✓; enables-but-does-not-start the
+  expiry timer ✓ (see finding below for the caveat); doesn't create
+  `.htpasswd`/site content/Tunnel route ✓; nginx template's
+  `/.well-known/` allow + cache headers ✓; removal steps match the
+  artifact set the scaffold creates ✓.
+
+## Existing docs checked for invalidation — no drift
+
+- `README.md:32` and `docs/INFRA_MAP.md` (§4 62-vs-63 gap analysis,
+  §11 item 11 live-only-untracked list, the misc-container list at
+  ~:451): every "ccw-demo is untracked" claim is still true — the commit
+  deliberately did not migrate or track it. The Quadlet counts those
+  passages cite move in lockstep (+1 repo, +1 live from the template),
+  so the "exactly one extra live `.container`" structure still holds;
+  README explicitly says to re-run the commands rather than trust the
+  numbers anyway.
+- No doc index references `docs/CLIENT_DEMO_PATTERN.md` (grep repo-wide:
+  zero mentions outside the file itself) — but docs/ has no master index
+  file, so there is no index to have drifted. Nothing in README, docs/,
+  src/ingest/README.md, or src/shared/watchlist_README.md makes any
+  claim this commit invalidates.
+
+## Real finding — the new expiry timer's 7-day guarantee does not survive reboots
+
+The one non-trivial issue, in the commit's own new code/doc rather than
+in pre-existing docs (persisted to the vault this pass):
+
+`corporatetraveldc-client-demo-webdev-expiry@.timer` uses
+`OnActiveSec=7d` + `Persistent=true`. Two problems, verified against
+this box's systemd.timer(5) man page:
+
+1. **`Persistent=true` is a no-op here** — the man page is explicit that
+   `Persistent=` "only has an effect on timers configured with
+   `OnCalendar=`". It was carried over from the original one-off's
+   `OnCalendar=`-based timer, where it was load-bearing.
+2. **The 7-day countdown restarts from zero on every reboot.**
+   `OnActiveSec=` is monotonic, relative to the moment the timer unit is
+   activated — and because the scaffold `enable`s the timer
+   (`WantedBy=timers.target`), every boot re-activates it and resets the
+   clock. A box that reboots more often than every 7 days **never fires
+   the expiry**, so the time-limited `webdev` credential on a
+   Cloudflare-Tunnel-exposed preview lives indefinitely. This is not
+   theoretical cadence: this box rebooted 2026-08-23 and 2026-08-30
+   (~weekly, right at the boundary). The failure direction is open
+   (credential persists), on an auth-limiting control. The original
+   one-off's absolute `OnCalendar=` date + `Persistent=true` had exactly
+   the right semantics (survives reboots, catches up if missed); the
+   generalization traded that away for parameterlessness.
+   - Lesser corollary: because the timer is *enabled*, after the next
+     reboot it auto-activates even for an instance the operator never
+     manually started (scaffold step 5 skipped) — harmless in effect
+     (`client-demo-webdev-expire.sh` no-ops cleanly when the credential
+     or `.htpasswd` is absent), but it makes the "enables (does not
+     start)" doc claim true only until the next boot.
+   - Fix direction (report-only; a fix is a new sign cycle): have
+     `new-client-demo.sh` render a per-instance timer drop-in with an
+     absolute `OnCalendar=` (now + 7d) — restores the original's correct
+     reboot-proof semantics while keeping the template generic. Cosmetic
+     nit in the same file: the `systemctl --user enable ... || true`
+     swallows enable failures, so scaffolding reports success even if
+     the timer never got enabled.
+
+## Observed in passing — active deploy in flight (NOT this commit's scope)
+
+During this pass a second commit landed (`2dddf7d`, 11:22 EDT,
+"/board/refresh token rotation + manual-notes vault scope") and its
+deploy cycle was mid-flight: `poller`/`pusher` deliberately stopped
+11:16–11:17 (the known clean-stop-then-SIGKILL-under-load pattern from
+CLAUDE.md's 09-02 entries — both landed in `failed`, exit 137),
+`ingest-core` stopped (`inactive`), and the earlier
+`integrity-sweep`/daily-watch failures were the usual `verify-manifest`
+refusals against `src/common/db.py`/`src/web/main.py` while those edits
+awaited the 11:22 signing. As of 11:24 no image rebuild had started yet
+(all images still 00:36 EDT builds). **Deliberately not touched** — the
+committing session owns that cycle; the failed units are its to restart
+post-rebuild. If `poller`/`pusher`/`ingest-core` are still down well
+after that deploy completes, that's the known needs-manual-`reset-failed`+
+`start` pattern, not a new bug. (`ep-advance-venues` remains failed from
+its known, separate `top_p` TypeError — see Pass 2.)
+
+---
+
+# Pass 4 — post-commit 2dddf7d (/board/refresh grace relay + manual-notes vault scope), ~11:23–11:35 EDT
+
+Dedicated drift check for `2dddf7d` ("Harden /board/refresh token
+rotation + open manual-notes vault scope to Cowork"): new
+`board_refresh_grace` table + 120s grace-relay in
+`board_refresh_token()` (`src/common/db.py`), `relayed: true/false` in
+the `/api/v1/board/refresh` response, and `01-Sources/manual/` added to
+`_VAULT_RESEARCH_EXTRA_PREFIXES` (`src/web/main.py`).
+
+Prior art consulted first (second-brain: `board-refresh`, `--raw 'board
+AND refresh AND token'`, `_VAULT_RESEARCH_EXTRA_PREFIXES`,
+`vault-research`, `--raw 'manual AND vetted'`): vault note
+`corporatetraveldc/01-Sources/manual/20260902T135256Z.md` (yesterday's
+ebb5b7c check) confirmed the COMPLIANCE_SECURITY board_refresh section
+accurate as of 2026-09-02 — this commit is what invalidates part of it
+(below). Its finding 3 (the 7d presence reminder fires ~10h after the
+2026-09-09 attestation expiry) is NOT affected by this commit: the grace
+relay only re-serves an already-minted token for 120s; a fresh rotation
+still 403s on stale presence exactly as before.
+
+## Drift found (real, both fixed in place this pass)
+
+1. **docs/COMPLIANCE_SECURITY.md:280** claimed `board_refresh_token()`
+   has "three call sites as of 2026-08-23" for the `board_refresh`
+   audit action. The grace-relay path added a fourth
+   (`src/common/db.py:637`, `"relayed": True`). Corrected to four /
+   dated 2026-09-03.
+2. **docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md** — committed only ~2h
+   before this commit in e7bb241 — drifted the same morning: "63
+   `CREATE TABLE` statements in db.py ≈ 75 tables" is now 64/≈76, and
+   its board-table inventory (`board_messages`, `board_enroll_nonces`,
+   `board_tokens`, `board_presence`) was missing `board_refresh_grace`.
+   Both corrected in place.
+
+## Checked, NOT invalidated
+
+- README.md, src/ingest/README.md, src/shared/watchlist_README.md,
+  CLAUDE.md: no claims about board auth, token rotation, or the
+  vault-research prefix scope (grep-verified) — unaffected.
+- docs/REFERENCE_INFRA.md:182 ("only a SHA-256 hash is stored
+  server-side") is about `ctdc_` bearer tokens — untouched and still
+  true. `board_tokens` itself also still stores only hashes; the
+  plaintext lives solely in the new grace table for ≤120s, exactly as
+  the commit message frames it.
+- Dated point-in-time records left unedited per convention, but two are
+  now consciously superseded rather than silently wrong:
+  - `docs/investor-materials/v1.5/research/PENTEST_2026-08-24.md`
+    recommended keeping `01-Sources/{daily,manual,rss}` out of the
+    research-read scope. `manual/` is now deliberately in scope by
+    operator directive (the commit's stated rationale: the 2026-08-24
+    X-Board-Key gate on the whole endpoint removed the
+    "unauthenticated" premise of the original 2026-08-16 exclusion).
+    `daily/`, `rss/`, `transport-patterns/`, `06-AI-Memory/` stay
+    excluded.
+  - `due-diligence-faq.md`'s "the token table has no plaintext column
+    (hashes only)" stays literally true, but the next investor-materials
+    reverification pass should disclose the bounded exception: a
+    just-minted board token's plaintext now sits at rest in
+    `board_refresh_grace` for up to 120s per rotation.
+- Nuance noted, not drift: the grace lookup runs BEFORE both the
+  validity and presence-attestation checks, so a relay retry inside the
+  120s window skips the presence gate. Only reachable within 120s of a
+  rotation that itself passed that gate, so exposure is bounded by
+  design; recording it so nobody rediscovers it as a "bypass."
+
+## Live verification
+
+- `verify-manifest: OK — 887 files` at 11:26 (the 11:22 signing is
+  complete and clean). This pass's own doc edits re-open the usual
+  unsigned-docs window until the next signing — expected pattern.
+- **The commit is NOT deployed.** All platform images still carry
+  build-date 20260903T043438Z (00:35–00:38 EDT, pre-commit); the
+  running `corporatetraveldc-web` container's source has zero
+  occurrences of `board_refresh_grace` or `01-Sources/manual/`.
+  Matches the commit's own closing note ("had not shipped yet",
+  board reply brd-a9abbd70f8a2). Until web is rebuilt+redeployed, a
+  dropped refresh response still strands the session and Cowork still
+  gets 400 on `01-Sources/manual/` reads. **Rebuild+redeploy of `web`
+  (and the usual poller/pusher/ingest rebuild for the shared
+  `common/db.py`) is the outstanding action.**
+- Live DB: `board_refresh_grace` already exists (created by the
+  pre-commit validation) with **0 rows** — the commit's "test token
+  and grace-cache row removed" cleanup claim verified true.
+- **Deploy cycle judged abandoned; services restarted by this pass.**
+  Pass 3 (11:24) deferred to the committing session, but by 11:27 no
+  rebuild had started and the stop set turned out to be wider than
+  Pass 3 saw: not just poller/pusher/ingest-core but ALL SEVEN ingest
+  units (core + fdps/itws/notam/stdds/tbfm/tfms) were down — a total
+  SWIM/NWWS/Amtrak feed outage on a forward-only pipeline with no
+  backfill. This pass restarted poller + pusher (`reset-failed` +
+  `start`, the documented remediation for the clean-stop-SIGKILL
+  pattern) and started all 7 ingest units; **all 9 confirmed active by
+  ~11:30**, on the existing internally-consistent 00:35 images (no
+  integrity refusals). Net unrecoverable feed gap: ~11:16–11:29 EDT
+  (~13 min). If/when the pending rebuild happens these simply restart
+  again onto the new image.
+- Remaining failed units, all classified, none from this commit, left
+  in `failed` deliberately (the daily runs genuinely didn't produce
+  output; clearing the flag would hide that from the operator sweep):
+  `integrity-sweep` (11:12 pre-signing refusal — will next fail on this
+  pass's doc edits instead, same expected pattern),
+  `executive-protection-daily-watch` / `trains-yachts-daily-watch` /
+  `second-brain-daily` (report-tier LLM stall under this session's
+  sustained load — the known llama-report-1 degradation, tracebacks
+  after "Ollama unavailable" fallback-disabled returns, ~05:00–08:00),
+  and `ep-advance-venues` (4th consecutive daily `top_p` TypeError,
+  known since Pass 2 / 09-01 — still unfixed, still zero successful
+  runs ever; every hourly EP brief continues to ship the "Not yet
+  generated" venue placeholder).
+
+Working-tree note for the next signing pass: besides this pass's three
+doc edits, `docs/CLAUDE_MD_DRIFT_REPORT.md` carries a pre-existing
+1-line modification (its generated-at timestamp, rewritten 05:15 EDT by
+`corporatetraveldc-claude-md-drift-daily`) — automated, not from this
+pass and not from 2dddf7d.
+
+Real findings persisted to the vault this pass (deploy-gap/feed-outage
++ the two doc corrections): `01-Sources/manual/20260903T153246Z.md`.
+The top_p bug was NOT re-persisted (already in the vault from the
+09-01/Pass-2 checks).
+
+---
+
+# Pass 5 — post-commit 422bd15 (GPG keys /keys/ + weekly external-image
+# timer + delta docs), ~19:12–19:30 EDT
+
+Scoped to commit `422bd15` ("Publish GPG keys via blog /keys/ + weekly
+external-image-update timer; delta docs pass", 19:12 EDT). Prior art
+consulted first (second-brain: `weekly-external-image-update`, `GPG`,
+`executive-standard`): vault note
+`corporatetraveldc/01-Sources/manual/20260903T214620Z.md` (tonight's
+session reconciliation, written 17:46 EDT by the committing session
+itself) is the canonical record of the work behind this commit — the
+client-demo pattern, board grace-relay, GPG publishing, the consolidated
+Cloudflare token, and the weekly-update standing rule. This pass builds
+on it rather than re-deriving; it also turned out to be the tiebreaker
+for the first drift finding below.
+
+## Commit claims verified against the live system — all TRUE
+
+- **Weekly external-image timer**: installed, `enabled`, `active`, next
+  fire Sun 2026-09-06 04:15 EDT; tracked copies
+  (`.config/systemd/user/…`) byte-identical to the installed ones (the
+  research-board-mirror never-installed / wrong-Exec-path bug class does
+  NOT recur here — ExecStart path exists and is executable).
+  `Persistent=true` is correctly paired with `OnCalendar=` (with an
+  explicit `America/New_York`), unlike the ep-advance-venues timer nit —
+  right semantics this time.
+- **"~11 external/registry-policy containers"**: exactly 11 live
+  containers carry `io.containers.autoupdate=registry` right now.
+- **/keys/ live on the blog**: `executivestandard…/keys/developer.pub`
+  → 200, sha256 identical to the repo copy. `build_site()`'s keys loop
+  verified in source (`executive_standard_sync.py:288–290`); confirmed
+  it writes in place without wiping `site_dir`, so a sync from a
+  pre-commit poller image cannot drop the already-published keys.
+- **All 5 fingerprints** in `docs/GPG_KEYS_PUBLISHED.md` match
+  `gpg --show-keys` on the actual tracked `.pub` files.
+- **Manifest**: `verify-manifest: OK — 896 files`, matching the commit
+  message. `db.py` spot-checks hold: 64 `CREATE TABLE`, four
+  `board_refresh` `audit()` call sites (`db.py:637/:645/:650/:680`).
+- README's new external-vs-own-images paragraph and INFRA_MAP's timer
+  entry match reality; INFRA_MAP deliberately keeps no timer total
+  (defers to `list-timers`), so no count drifted.
+
+## Drift found — 2 factual errors in the new doc itself (both FIXED in place)
+
+Both in `docs/GPG_KEYS_PUBLISHED.md`, born stale/wrong at commit time:
+
+1. **Main site claimed "staged pending `./deploy.sh`" — it was already
+   live.** `www.example.com/keys/developer.pub` → 200,
+   byte-identical to the repo copy (and to the blog's). The vault note
+   written 1.5h before the commit already said "confirmed live after
+   the deploy-pipeline fix" — the doc contradicted the committing
+   session's own earlier finding.
+2. **`developer-legacy.pub` "created 2026-07-03, five days before
+   `developer.pub`'s 2026-07-08" — contradicted by the key material.**
+   The `.pub` itself says created 2025-10-25 (epoch 1761378009; same
+   day as `operator_sheldon`/`operatorwsheldon`). `developer.pub`'s 2026-07-08
+   is correct; the legacy key's date and the "five days before"
+   narrative are not.
+
+Fixed in place (uncommitted, per this pass's no-commit rule); these
+edits re-open the usual unsigned-docs integrity window until the next
+signing — expected pattern, same as Pass 4.
+
+## Second abandoned deploy cycle today — full feed pipeline down 41 min (restarted by this pass)
+
+Same shape as Pass 4's finding, second occurrence in one day:
+`poller`/`pusher`/`runner` were deliberately stopped 18:36–18:37 EDT
+(each hit the known clean-stop-then-SIGKILL-under-load pattern, exit
+137 → `failed`) and ALL SEVEN ingest units were left `inactive` — then
+the committing session signed, committed at 19:12, and **exited without
+rebuilding or restarting anything** (verified: no build process, no
+newer images than 15:32 UTC, and the only live claude process on the
+box was this drift-check session). Total SWIM/NWWS feed outage
+18:37→19:18, ~41 min, forward-only pipeline, no backfill. This pass
+applied the documented remediation (`reset-failed` + `start`): all 10
+units confirmed `active` by 19:18 on the existing internally-consistent
+15:32 UTC images. `web` was never down (up 3h, carries the 2dddf7d
+grace-relay fix).
+
+**Still owed: one poller image rebuild** for this commit's
+`executive_standard_sync.py` change (the only `src/` file it touched).
+Not urgent — the 15:32 image is internally consistent (no verified-exec
+refusals), the blog's /keys/ is already live, and stale-image syncs
+can't remove it (see above) — but until the rebuild, the poller's
+executive-standard-sync skill runs pre-/keys/ code. Standing rule says
+rebuild after every major code change; the committing session didn't.
+
+## Checked, NOT invalidated
+
+README.md (its only GPG claim, :62 "public releases are GPG signed", is
+untouched), CLAUDE.md, docs/COMPLIANCE_SECURITY.md +
+docs/CODEBASE_REFERENCE_DRAFT (both updated by the commit itself,
+claims verified above), src/ingest/README.md,
+src/shared/watchlist_README.md (no claims about keys, timers, or
+external images — grep-verified). The Pass-1/-2 residual dedup-doc
+drift in the two src/ READMEs carries forward unchanged (this commit
+didn't touch them; still waiting on the next doc-fix cycle).
+
+## Live-system health at close
+
+Failed units after this pass's restarts: `website-integrity-sweep`
+(KNOWN, per CLAUDE.md — re-fails each fire until the operator's
+human-only re-sign of the website repo; don't re-diagnose) and
+`executive-protection-daily-watch` (left `failed` deliberately by
+Pass 4's rationale — though note its container was seen freshly
+restarting at 19:15, so it may clear itself on this run;
+`ep-advance-venues`'s `top_p` fix remains undone). Working tree at
+close: this file, `docs/GPG_KEYS_PUBLISHED.md` (the two corrections),
+and the automated `docs/CLAUDE_MD_DRIFT_REPORT.md` timestamp rewrite —
+all uncommitted, nothing staged.
+
+Real findings persisted to the vault this pass (abandoned deploy #2 /
+41-min feed outage + the two GPG-doc corrections):
+`corporatetraveldc/01-Sources/manual/20260903T231926Z.md`.
