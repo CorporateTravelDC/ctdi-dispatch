@@ -25,6 +25,16 @@
 > row also implied the public demo instance is password-gated as-shipped — it
 > is not: the gate is an off-by-default flag, and in the reference deployment
 > it is unset. Both were misleading in a doc whose staleness ships publicly.
+>
+> **2026-09-03 correction.** Three updates against the reference deployment:
+> the guard's LLM-contention lockdown trigger was demoted to
+> informational-only and the guard no longer touches the LLM services at all
+> (2026-08-27 — the reference deployment also replaced its Ollama daemon
+> with per-tier llama.cpp `llama-server` units the same week); the demo
+> runner instance now sets its `DEMO_MODE` flag explicitly and its password
+> gate is active (§4); and watchlist flight tracking is local-first — the
+> third-party position-API default described in §7 was removed (2026-08-27
+> local-only directive).
 
 ---
 
@@ -74,9 +84,9 @@ to a different metro area, hub airports, and weather field offices.
 | `poller` | Async scheduler — runs fetchers on intervals, invokes skills, watches an admin trigger directory | Internal |
 | `pusher` | ntfy alert sender — polls DB every 30s for unnotified events | Internal |
 | `ingest` ×7 | Push feeds (NMS/Solace) split into per-feed containers — one per SWIM feed (FDPS/STDDS/TFMS/TBFM/ITWS/FNS) plus a "core" container (NWS push, rail, local RF) — so any single feed restarts without dropping the rest; REST fallback via poller when a push feed is absent. On constrained single-node hardware these are also individually **load-shed** — see §4a | Internal |
-| Runner (ops dashboard) | Operator-facing dashboard | Private-overlay-network only in the reference deployment. A second instance *can* serve a public demo replaying archived data behind an app-layer password gate — but note that gate is opt-in via a `DEMO_MODE` environment flag that is **off by default**, and in the reference deployment it is currently unset, so that instance's demo protections are inert (it is also crash-looping, so the public hostname returns 502). Treat "public demo" as a mode you must explicitly turn on and verify, not something that happens by deploying a second instance |
+| Runner (ops dashboard) | Operator-facing dashboard | Private-overlay-network only in the reference deployment. A second instance *can* serve a public demo replaying archived, scrubbed data behind an app-layer password gate — the gate is opt-in via a `DEMO_MODE` environment flag that is **off by default**. As of 2026-08-24 the reference deployment sets it explicitly (`DEMO_MODE=true` plus the session secret in the instance's own unit) and its demo protections are active. The lesson stands: treat "public demo" as a mode you must explicitly turn on and verify, not something that happens by deploying a second instance |
 
-All services share one SQLite database (WAL mode) — a single schema authority (`src/common/db.py`), versioned additively.
+All services share one SQLite database (WAL mode) — one schema authority versioned additively across `src/common/db.py` and `src/common/db_swim.py`.
 
 ### 4a. SWIM feeds: provisioned ≠ continuously running
 
@@ -93,9 +103,16 @@ box recovers**. In the reference deployment (`scripts/thermal-ingest-guard.py`,
 | Trip | Condition | What is shed |
 |---|---|---|
 | Temp, mild | CPU temp ≥ 74 °C | two heaviest SWIM feeds only |
-| **Lockdown** | CPU temp ≥ 79 °C **or** 1-min load ≥ 40.0 **or** ≥ 2 contention-attributed LLM fallbacks within 5 min | **everything except the API service** — all six SWIM feeds, the core ingest container, scheduler, alert sender, ops dashboard, and the local LLM daemon |
-| Informational only | temp 70–74 °C, or load 15–40 | nothing |
-| Restore | temp < 65 °C **and** load < 15.0 **and** fallback count < 2, sustained 5 min | mild restores its two feeds; lockdown restores the whole stack |
+| **Lockdown** | CPU temp ≥ 79 °C **or** 1-min load ≥ 40.0 | **everything except the API service** — all six SWIM feeds, the core ingest container, scheduler, alert sender, ops dashboard |
+| Informational only | temp 70–74 °C, or load 15–40, or any contention-attributed LLM fallback count | nothing |
+| Restore | temp < 65 °C **and** load < 15.0, sustained 5 min | mild restores its two feeds; lockdown restores the whole stack |
+
+(2026-08-27 refinements, from the reference deployment's own operating data:
+the third lockdown trigger — contention-attributed LLM fallbacks — was
+demoted to informational-only after one night of false trips at normal load,
+and the guard was changed to never stop or start the LLM services at all —
+shedding ingest does nothing to relieve LLM contention, and the hot alert
+path should survive exactly the events lockdown responds to.)
 
 Thresholds are configurable. **This model replaced an earlier two-stage load
 ladder (trip at 10/14, restore below 6.0) on 2026-08-23**, on the strength of
@@ -171,7 +188,7 @@ Token format: `ctdc_<user>_<32-char-random>`. Only a SHA-256 hash is stored serv
 - **Permanent** entries: JSON-file-backed (flights, trains, and vessels by MMSI), watched for changes and merged into the DB.
 - **Transient** entries: carry an expiry timestamp, swept automatically.
 - Every watchlist event fires two ntfy pushes: a domain topic (full detail: `flight-alerts` / `train-alerts`) and a concise `dispatch` summary. A short dedup window prevents re-firing the same event repeatedly during routine data churn.
-- Flight tracking defaults to the free `airplanes.live` API, with an optional FlightAware AeroAPI fallback tier if a key is configured, plus schedule inference when live position data is unavailable.
+- Flight tracking is **local-first** (2026-08-27 directive): the deployment's own ADS-B receiver, then its already-ingested SWIM flight data and locally-imported aircraft registries, plus schedule inference when live position data is unavailable. Third-party position APIs are no longer queried by default; an optional FlightAware AeroAPI tier remains in the code but is dormant without a key.
 
 ---
 

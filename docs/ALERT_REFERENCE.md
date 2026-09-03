@@ -110,6 +110,25 @@ swept the same way._
 > - The brief-class pipeline gained `brief-fallback-monitor` (hourly, loud
 >   alert on deterministic-fallback degradation, 2026-08-08).
 
+> **2026-09-03 addendum — `common/push_dedup.py` was redesigned to
+> forward-only semantics.** Root cause: UAL1369 — three unchanged TFMS TMI
+> assignments each re-paged 7× in 42 min, because TFMS rebroadcasts active
+> TMIs every ~5–8 min and the old "content changed OR window elapsed"
+> semantics re-fired on the clock. `should_push(key, content_key)` now fires
+> on first sighting or a genuine content-hash change only; an unchanged hash
+> stays suppressed indefinitely (up to a `max(dedup_secs*10, 7 days)`
+> retention horizon, past which one deliberate slow re-fire occurs).
+> `hot=True` (VIP/POTUS p5) bypasses dedup entirely. The old OR semantics
+> survive under an explicit name, `should_push_periodic()`, reserved for
+> genuinely time-based designs: TTL idempotency guards (the ntfy ambiguous
+> 401/403 guard), constant-content episode gates (fdps proximity, flight
+> landing), and deliberate still-active heartbeats (severe ITWS, feed
+> health, pusher's hourly active-VIP-TFR re-push). Where a per-parser entry
+> below describes a dedup *window* re-firing on elapse, read it against
+> this: only `should_push_periodic()` callers still do that; plain
+> `should_push()` callers are forward-only now. New alert paths should
+> default to `should_push()`.
+
 ## How to read this
 
 Alert paths in this codebase come from three places. Two are shared
@@ -173,7 +192,7 @@ push paths do X" should be read as covering the two shared helpers only.
 | `dispatch` | every `_fire_ntfy_dual` call (paired with domain topic); `ingest/local_airspace.py` Marine One / squawk 7700-7500-7600 local alerts (`dispatch` only, no paired domain topic); `poller/skills/dispatch_desk_memo.py` (priority 2); `poller/tools/watchlist_import.py` | matches paired topic | Concise everything-feed — one line per event across all domains |
 | `dispatch-debriefs` / `dispatch-ops` | `common.ntfy_push.send_dual` default topics — **`weekly_summary.py` only** for real report content (see the poller-skills section) plus `ops_brief.py`'s full leg on `dispatch-debriefs`. **Added 2026-08-30:** `dispatch-ops` also now carries a lightweight `common.ntfy_push.send_run_status()` health-check ping ("skill ran, report at `<vault path>`" / "skill failed, check `journalctl --user -u <unit>`") from every daily/weekly digest skill that was previously vault-only-silent for its actual report content: `aam_daily_watch.py`, `aviation_daily_watch.py`, `concierge_travel_daily_watch.py`, `executive_protection_daily_watch.py`, `gig_economy_daily_watch.py`, `trains_yachts_daily_watch.py`, `aam_weekly_watch.py`, `second_brain_daily.py`, `second_brain_weekly.py`, `disruption_weather_digest.py`, `transport_pattern_digest.py`. This is deliberately NOT the report content itself (that stays vault-only, per each skill's own module docstring) — just a per-run success/failure signal, added by operator directive so dispatch-ops reflects whether today's/this week's reports actually ran, not just weekly_summary's own cadence. `ops_brief.py` was deliberately left off this list — it runs hourly, not daily/weekly, and its own topic split (`ops-brief`, separate from `dispatch-ops`) was an explicit 2026-08-02 operator directive to avoid exactly the topic-name collision this change is otherwise trying to consolidate. | 2 (success) / 4 (failure) for the health-check pings; 3 for the original full/concise pair | Generic full/concise pair when a skill doesn't specify its own topics, plus (as of 2026-08-30) the daily/weekly digest fleet's run-status health checks. |
 | `ops-brief` | **`ops_brief.py` only** (`_send_ntfy_dual` → `topic_brief="ops-brief"`, `ops_brief.py:764`; also the webinar-defer path at `:450`) | 3 | Hourly operational brief, concise leg. **Corrected 2026-08-19: `daily_brief.py` does NOT push here — it does not push anywhere.** See the poller-skills section. |
-| `ops-health` | container-mem-watch.sh, scheduled-ingest-restart.sh, thermal-ingest-guard.py, restore-network.sh, threat-resolve.sh, renew-tailscale-cert.sh, restart-stack.sh, nextcloud-health-check.sh, **plus** scheduled-integrity-sweep.sh, feed_db_integrity_check.py, brief-fallback-monitor.sh, ingest_feed_watch.py, ollama-swap-alert.sh, ollama-wedged-detector.sh, pull_path_verify.py, sdr-crashloop-guard.sh, nms_v240_post_deploy_check.py, claude-md-drift-daily.sh, governor-watch.py, uber-traffic-watch.py, ntfy-topic-count-watchdog.sh, acars/adsb-feed-silence-watchdog.sh, adsb-link-watchdog.sh, board_sweep.py, the six `*_daily_watch.py` skills, scripts/watchdog.sh (p2/p3 container-restart and warn-only paths), and scripts/failover-kickover-guardrail.py | 1–5 | Feed staleness, container memory pressure, preventive restarts, thermal/load tier shed+resume, network lockdown lift, cert renewal, stack restart status, Nextcloud health, integrity-sweep failures, Ollama swap/wedge, SDR guard, cross-link digests. By far the busiest topic — 63 messages in the 12 h before the 2026-08-19 reconciliation (dated observation, not a current count). The publishers in bold were absent from every prior revision of this table; see "Publishers this catalog previously missed" below. **`freshness_audit.py` is NOT a publisher** despite its own docstring — corrected 2026-08-19, see the poller-skills section. |
+| `ops-health` | container-mem-watch.sh, scheduled-ingest-restart.sh, thermal-ingest-guard.py, restore-network.sh, threat-resolve.sh, renew-tailscale-cert.sh, restart-stack.sh, nextcloud-health-check.sh, **plus** scheduled-integrity-sweep.sh, feed_db_integrity_check.py, brief-fallback-monitor.sh, ingest_feed_watch.py, ~~ollama-swap-alert.sh, ollama-wedged-detector.sh~~ (retired at the 2026-08-27 llama.cpp cutover), pull_path_verify.py, sdr-crashloop-guard.sh, nms_v240_post_deploy_check.py, claude-md-drift-daily.sh, governor-watch.py, uber-traffic-watch.py, ntfy-topic-count-watchdog.sh, acars/adsb-feed-silence-watchdog.sh, adsb-link-watchdog.sh, board_sweep.py, the six `*_daily_watch.py` skills, scripts/watchdog.sh (p2/p3 container-restart and warn-only paths), and scripts/failover-kickover-guardrail.py | 1–5 | Feed staleness, container memory pressure, preventive restarts, thermal/load tier shed+resume, network lockdown lift, cert renewal, stack restart status, Nextcloud health, integrity-sweep failures, Ollama swap/wedge, SDR guard, cross-link digests. By far the busiest topic — 63 messages in the 12 h before the 2026-08-19 reconciliation (dated observation, not a current count). The publishers in bold were absent from every prior revision of this table; see "Publishers this catalog previously missed" below. **`freshness_audit.py` is NOT a publisher** despite its own docstring — corrected 2026-08-19, see the poller-skills section. |
 | `hot-alerts` | fdps_parser (Marine One only, via tfr-alert not this), tfr_enrichment, route_impact, aim_parser (VIP NOTAMs, priority 5), lockdown.sh (lockdown engaged, priority 4), threat-initiate.sh (manual threat response, **priority 5**), watchdog.sh (p5 manual-run-required alert; p4 full-stack-restart notice only on an operator `--allow-system-restart` run) | 4–5 | VIP-only / severe-ops escalation feed. Originally documented as VIP-only (fdps/tfr/route); as of 2026-07-27 also carries non-VIP severe-ops events (network lockdown, manual threat response) — same "wake someone up now" intent, different domain. Worth deciding later whether ops-severity events belong on a separate topic from VIP-movement events, since they're currently sharing one feed for two different kinds of urgency. See "Standalone bash/script alerts" below. |
 | `ep` / `ep-advance` | ep_advance_brief.py | 3 / 4 | Executive-protection concise / full narrative |
 | `ep-briefs` | (reserved, on-demand EP snapshots) | — | — |
@@ -641,14 +660,19 @@ or drop the endpoint.
     - **Temp tier 1** at `temp >= 74C` stops `tfms,stdds`
       (`THERMAL_GUARD_TIER1_FEEDS`). Load no longer participates in this
       stage at all.
-    - **LOCKDOWN** at `temp >= 79C` **or** `load1 >= 40.0` **or** `>= 2`
-      load-attributed brief fallbacks in 300 s stops **the entire stack
-      except `web`**: all six SWIM feeds (`fdps,stdds,tfms,tbfm,itws,notam`),
-      `ingest-core`, `poller`, `pusher`, `runner`, and `ollama.service`.
+    - **LOCKDOWN** at `temp >= 79C` **or** `load1 >= 40.0` stops **the
+      entire stack except `web`**: all six SWIM feeds
+      (`fdps,stdds,tfms,tbfm,itws,notam`),
+      `ingest-core`, `poller`, `pusher`, `runner`. (**2026-08-27
+      corrections, verified against the script 2026-09-03:** the third
+      trigger — `>= 2` load-attributed brief fallbacks in 300 s — was
+      demoted to informational-only, and the guard no longer stops any LLM
+      service: `ollama.service` is gone with the llama.cpp cutover and the
+      `corporatetraveldc-llama-*` units are deliberately out of scope.)
       There is no intermediate load stage — `load1` 15–40 is logged as
       informational and sheds nothing.
-    - **Restore** requires temp `< 65C` **and** `load1 < 15.0` **and**
-      fallback count `< 2`, held continuously for 300 s.
+    - **Restore** requires temp `< 65C` **and** `load1 < 15.0`, held
+      continuously for 300 s (the fallback count no longer blocks resume).
 
   A shed feed produces no alerts of any kind while it is stopped: no
   `tfms-alerts`, no `stdds-alerts`, no `wx-alerts` from ITWS, no FDPS
@@ -662,9 +686,13 @@ or drop the endpoint.
 
   Live example from this pass — the first real LOCKDOWN on record (a
   **second** followed the same day, 14:34:42 → 14:45:51 EDT, same trigger
-  and also a clean restore, so treat these as recurring rather than
-  one-off), and notably triggered by the *Ollama-contention* signal rather
-  than raw load or heat: at 2026-08-23 12:18:22 EDT the guard logged
+  and also a clean restore), and notably triggered by the
+  *Ollama-contention* signal rather
+  than raw load or heat — **which is exactly why that trigger was demoted to
+  informational-only on 2026-08-27** (~15 fallback-attributed trips in one
+  night with real load1 of 4–9); do not read these two events as a
+  recurring pattern under the current code: at 2026-08-23 12:18:22 EDT the
+  guard logged
   `tripped LOCKDOWN (2 load-attributed brief fallbacks/300s) fan=2313rpm`
   and pushed `Ollama-contention Guard -- LOCKDOWN shed` at priority 5; it
   restored cleanly 11 minutes later at 12:29:35
@@ -733,10 +761,10 @@ All post to `ops-health` unless noted; each rolls its own `ntfy_send`/
 |---|---|---|
 | `scheduled-integrity-sweep.sh` | default 2 | ✅ "INTEGRITY SWEEP FAILED" — 10 pushes in 12 h. Fires whenever tracked files are edited but not yet re-signed; see CLAUDE.md's manifest note before treating it as an incident |
 | `brief-fallback-monitor.sh` | **`max`** (5) | ✅ "⛔ BRIEF LLM DOWN: corporatetraveldc-ops-brief" (8) and "…-ep-advance" (2). Topic overridable via `BRIEF_FALLBACK_TOPIC`. One of only a handful of max-priority publishers |
-| `ollama-swap-alert.sh` | explicit per call | ✅ "Ollama swap climbing" (4), "Ollama swap engaged", "Ollama swap cleared". Hardcodes `NTFY_TOPIC="ops-health"` rather than reading `NTFY_OPS_TOPIC` |
+| ~~`ollama-swap-alert.sh`~~ | — | **Retired with the 2026-08-27 Ollama → llama.cpp cutover** — the script no longer exists in `scripts/` (verified 2026-09-03) |
 | `sdr-crashloop-guard.sh` | default 4 | ✅ "SDR stack auto-stopped: ultrafeeder". Like thermal-ingest-guard, this one *stops* things — a stopped SDR stack means no local ADS-B/ACARS alerting |
 | `claude-md-drift-daily.sh` | default 3 | ✅ "CLAUDE.md drift found", tags `memo` |
-| `ollama-wedged-detector.sh` | default 4 | Topic overridable via `WEDGE_ALERT_TOPIC` |
+| ~~`ollama-wedged-detector.sh`~~ | — | **Retired with the 2026-08-27 Ollama → llama.cpp cutover** — the script no longer exists in `scripts/` (verified 2026-09-03) |
 | `governor-watch.py:134` | 3 on corrected drift, **5** on "FIX FAILED" | Hand-rolled `ntfy_alert`, posts to `/ops-health` |
 | `uber-traffic-watch.py` | 4 default, **5** on "ANOMALY" or a denylist gap | Hand-rolled `ntfy_alert`, posts to `/ops-health`. Consolidated 2026-08-29: adds blocked-hit-frequency tracking (how often a denylisted `TRACKED_ANOMALY_ENDPOINTS` domain still gets queried, Pi-hole `STATUS_DENYLIST` code) and discovery-pattern gap stats (mean/median days between new anomalies found), plus a read-only denylist-gap check (priority 5) since this script has no privilege to run `pihole deny` itself. Generalized, platform-agnostic twin of the same four capabilities lives in the public `agentic-management-tooling-mcp` repo as `gig_mobility/endpoint_anomaly.py` — a separate implementation, not imported by this script (see this script's own docstring for why) |
 | `failover-kickover-guardrail.py:131` | 4 default, **5** on double failure | Hand-rolled `_ntfy_alert()`, posts to `ops-health`. Priority 5 when it detects a push AND REST double failure for `nws` (`push:nws`) / `notam` (`push:fns`) and force-fires a `refresh_feed` trigger — the only feed guard on the platform that takes an action rather than only reporting. User timer `corporatetraveldc-failover-kickover-guardrail.timer`, every 5 min, enabled 2026-08-21 |

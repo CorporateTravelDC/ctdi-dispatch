@@ -1,14 +1,18 @@
 # [RETIRED] LM Studio — Dispatch AI Prompts for Raspberry Pi 5
 ## [operator LLC] / corporatetraveldc-dispatch
 
-> **RETIRED / SUPERSEDED — marked 2026-08-11.** This document planned the
+> **RETIRED / SUPERSEDED — marked 2026-08-11; banner updated 2026-09-03.**
+> This document planned the
 > Anthropic→local-LLM migration as of 2026-06-05. That migration is long
-> complete — all inference runs locally via **Ollama** (not LM Studio), with
-> one dedicated Modelfile-baked model per skill
-> (`corporatetraveldc-pi5-*`; all 21 models `phi3:mini`-derived as of the
-> 2026-08-15/16 rebuild — gemma is absent from the box entirely).
-> See **`docs/DEDICATED_MODELS_PLAN.md`** for the current
-> architecture and `build-models.sh` for the build/guard pipeline. The model
+> complete — and the intermediate Ollama architecture (21 dedicated
+> Modelfile-baked `corporatetraveldc-pi5-*` models, all `phi3:mini`) has
+> itself been superseded: since the **2026-08-27 llama.cpp cutover**,
+> inference is host-level `llama-server` tier units (hot/chat/report) over
+> one shared phi3-mini GGUF, with per-skill personas in
+> `src/common/personas.py`. Neither LM Studio **nor Ollama** runs on the
+> box; `ollama list` is no longer a valid command here.
+> See **`docs/DEDICATED_MODELS_PLAN.md`**'s 2026-09-03 status banner for the
+> current architecture. The model
 > recommendations and per-skill prompts below are kept only as a historical
 > record of the migration planning; none of them reflect the running system.
 >

@@ -6,7 +6,39 @@ assessment (including the laptop-vs-Pi question), the laptop→Pi model
 transfer workflow, and how this pattern is meant to serve as the benchmark
 for a future executive-assistant back-office platform variant.
 
-> ## Status update — reconciled 2026-08-19 against `build-models.sh`, the repo-root Modelfiles, `ollama list`, and the call sites
+> ## Status update — SUPERSEDED by the 2026-08-27 Ollama → llama.cpp cutover (noted 2026-09-03)
+>
+> **The per-task-Ollama-model architecture this document designed no longer
+> runs.** On 2026-08-27 Ollama was retired: inference is now host-level
+> `llama-server` (llama.cpp) systemd user units — permanent **hot** (:8093,
+> route-impact/tfr-enrichment) and **chat** (:8094) tiers plus an on-demand
+> **report-1** (:8095, `-c 8192`, started/stopped by the consuming skills'
+> quadlet hooks) — each serving one shared phi3-mini GGUF. The 21 per-skill
+> models were each really that same GGUF with a different SYSTEM block, so
+> the SYSTEM blocks were extracted verbatim into a **persona registry**,
+> `src/common/personas.py` (~23 entries; `persona_key_for()` maps the old
+> `corporatetraveldc-pi5-<task>` model strings, which every call site still
+> passes, onto personas — zero call sites changed). Consequences:
+>
+> - There is **no per-skill model artifact** to build, promote, or roll
+>   back. `build-models.sh` was reworked 2026-08-30 into a *verifier* that
+>   diffs each repo-root Modelfile's SYSTEM block against `personas.py`;
+>   the Modelfiles survive only as manifest-covered canonical source text.
+> - The candidate/smoke/promote gate, `SWA_DENYLIST_REGEX`, prewarm
+>   reasoning, model-swap-overhead analysis, and
+>   `_abandon_ollama_generation()` below are all **Ollama-era history** —
+>   models are permanently resident per tier now.
+> - Editing a persona takes effect on the next request (edit
+>   `personas.py`, re-sign the manifest) — no rebuild, no restart.
+> - The `ollama.service` host-governance bullet below is obsolete: each
+>   `corporatetraveldc-llama-*` unit carries its own CPUWeight/MemoryMax.
+>
+> The block below is kept verbatim as the record of the
+> dedicated-Ollama-model era (the persona *content* it catalogs lives on in
+> `personas.py`); the §2 mini-RAG and §3–5 fine-tuning assessments remain
+> designed-not-built and are unaffected by the cutover.
+>
+> ## Status update — reconciled 2026-08-19 against `build-models.sh`, the repo-root Modelfiles, `ollama list`, and the call sites (SUPERSEDED — see above)
 >
 > The architecture below shipped and is live, but every §1 number has moved
 > since 2026-08-02 — and the 2026-08-11 revision of this block, which called

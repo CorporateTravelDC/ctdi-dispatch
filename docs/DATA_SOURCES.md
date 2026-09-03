@@ -10,6 +10,15 @@ caveat, thermal-guard restore verification, runsheet duplicate-insert fix).
 section for the same-day load/LOCKDOWN redesign, retired the
 `disabled: SWIM_NMS_SKIP_FEEDS` paragraph (that DB write was removed), pinned
 `_LOW_PRIORITY_FEEDS`, and refreshed the cadence table's live-state column.
+**Reconciled 2026-09-03** against
+`docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md`: the `bandwidth_priority=ollama`
+mode was **removed 2026-08-28** (post-llama.cpp-cutover — weather/nexrad are
+the surviving modes); the thermal guard's fallback-count LOCKDOWN trigger was
+demoted to informational-only and the guard no longer touches any LLM
+service (2026-08-27); Amtrak's deployed push-primary is the `amtrak-tracker`
+container; airplanes.live is no longer queried programmatically (2026-08-27
+local-only rule); LADD data now arrives via a manual weekly CUI-handled
+import (`docs/LADD_CUI_HANDLING.md`).
 
 This document covers two distinct categories of source, and the distinction
 matters — an earlier version of this line claimed the document "covers every
@@ -89,7 +98,7 @@ being stopped is a credential problem.
 > individual SWIM feeds as *designed behaviour*:
 >
 > * **`thermal-ingest-guard` hard-stops** whole ingest containers under CPU
->   load, heat, or Ollama contention (see
+>   load or heat (see
 >   [Thermal ingest guard](#thermal-ingest-guard-2026-07-26-load-model-redesigned-2026-08-23)
 >   at the end of this file). A shed unit shows `inactive (dead)` with
 >   `Result=success` -- it exited 0, so **it will never appear in a
@@ -97,8 +106,12 @@ being stopped is a credential problem.
 >   the 2026-08-23 redesign there are two shed shapes, not two tiers of
 >   feeds: a mild **temp tier 1** stops `tfms,stdds` only, and a
 >   **LOCKDOWN** stops all six SWIM feeds (`fdps,stdds,tfms,tbfm,itws,notam`)
->   *plus* `ingest-core`, `poller`, `pusher`, `runner` and `ollama.service`
->   — everything except `web`. A LOCKDOWN therefore looks like a
+>   *plus* `ingest-core`, `poller`, `pusher`, `runner`
+>   — everything except `web`. (2026-08-27 corrections: the third,
+>   LLM-contention-fallback trigger was demoted to informational-only, and
+>   the guard no longer stops any LLM service — `ollama.service` is gone
+>   with the llama.cpp cutover and the `corporatetraveldc-llama-*` units are
+>   deliberately out of LOCKDOWN scope.) A LOCKDOWN therefore looks like a
 >   platform-wide outage while being entirely by design. The tier flips on a
 >   2-minute cadence (a real LOCKDOWN fired and fully restored on
 >   2026-08-23 between 12:18 and 12:30 EDT), so always check the state file
@@ -114,12 +127,14 @@ being stopped is a credential problem.
 > concluding a feed is broken.
 
 **`push:*` feeds reporting `suspended: bandwidth_priority=<label>` --
-corrected 2026-08-19.** An earlier version of this section recorded the
+corrected 2026-08-19; label set updated 2026-09-03.** An earlier version of
+this section recorded the
 `push:fns` entry's error string as a stale, un-root-caused
 `"disabled: SWIM_NMS_SKIP_FEEDS"` display bug. That is no longer what the live
 API reports, and the current string has a real, fully-understood mechanism
 behind it. Live `/api/v1/feeds` has shown `push:fns`, `push:itws`,
-`push:stdds` and `push:tbfm` carrying:
+`push:stdds` and `push:tbfm` carrying (historical example — the `ollama`
+label no longer exists, see below):
 
 ```
 "error": "suspended: bandwidth_priority=ollama"
@@ -146,18 +161,19 @@ display bug:
   queue, leaves the Solace session connected, and stamps
   `suspended: bandwidth_priority=<label>` into `feed_state`
   (`swim_client.py` ~line 541). The string clears on resume.
-* It is set automatically from two places, plus manually:
-  * `src/common/llm.py` (`_engage_ollama_backpressure()`, ~line 662) sets
-    `priority=ollama`, `set_by=auto-ollama` around an inference call, with a
-    TTL (`OLLAMA_BACKPRESSURE_TTL_S`, default 600 s). Gated on
-    `OLLAMA_BACKPRESSURE_ENABLED` (`llm.py:658`), which the module defaults
-    to `false` but **`dispatch.env` sets to `true`** (line 187, verified
-    live) -- so this is live on this box, and `bandwidth_priority=ollama` is
-    the common everyday cause.
-  * `src/poller/fetchers/nws.py` (`_maybe_set_weather_priority()`, line 89)
+* It is set automatically from one place, plus manually
+  (**corrected 2026-09-03**):
+  * ~~`src/common/llm.py` `_engage_ollama_backpressure()` setting
+    `priority=ollama` around inference calls~~ — **REMOVED 2026-08-28**,
+    post-llama.cpp-cutover: the whole `OLLAMA_BACKPRESSURE_*` apparatus was
+    deleted from `llm.py` (tombstone comment at the old site) and
+    `swim_client.py`'s docstring records the mode's removal. The surviving
+    labels are `weather` (pauses the low tier — `_LOW_PRIORITY_FEEDS`) and
+    `nexrad` (pauses `fdps` only).
+  * `src/poller/fetchers/nws.py` (`_maybe_set_weather_priority()`)
     sets `priority=weather`, `set_by=auto-weather` on an active
     Severe/Extreme NWS alert for the DC region, and clears it afterwards.
-    Neither auto-trigger will override an operator's manual setting.
+    The auto-trigger will not override an operator's manual setting.
   * `POST`/`DELETE /admin/bandwidth-priority` (admin tier) for manual control;
     `GET /api/v1/bandwidth-priority` is Tier 0 so the state is readable
     without a token.
@@ -301,6 +317,16 @@ Only covers US-registered (N-number) aircraft — foreign-registered aircraft (U
 ### FAA LADD (Limiting Aircraft Data Displayed)
 
 **Last verified:** 2026-07 (integration status re-verified 2026-08-19)
+
+> **Update 2026-09-03 — LADD data is live again via a different path.** The
+> operator now downloads the two LADD filter files (FAA Source + Industry,
+> both CUI SP-PRVCY) manually each week and imports them with
+> `scripts/import-ladd-filter.py` into the `faa_ladd_aircraft` table (full
+> replace, fail-safe on empty parse). Handling rules, exposure tiering, and
+> scrub-gate coverage live in **`docs/LADD_CUI_HANDLING.md`** — read that
+> before touching anything LADD-shaped. The paragraphs below about the dead
+> anonymous ZIP and the un-built ADX path remain accurate as far as the
+> *automated* fetcher goes.
 
 **Integration status — partial, and the working half is dead upstream.**
 Unlike the sources in the "Researched / not yet integrated" section, LADD
@@ -475,14 +501,20 @@ NWWS_PASSWORD=
 
 **Note:** This is not an official Amtrak API. Amtrak does not provide a public developer API as of this writing. If an official API becomes available, migrate to it — it will be more reliable. For rail data outside the US (UK National Rail, Deutsche Bahn, SNCF, etc.), see [REGIONALIZATION.md](REGIONALIZATION.md).
 
-**Integration path (verified 2026-08-22):** consumed by
-`corporatetraveldc-ingest-core` (`src/ingest/amtrak.py`, 300 s poll,
-heartbeats `push:amtrak`). **This is the only live train-data path** —
-`poller/fetchers/amtrak.py` is dead code (no schedule entry, no importer)
-despite the ingest module's docstring claiming it acts as a fallback, so
-there is no automatic recovery if the ingest-core loop stops. NEEDS OPERATOR
-DECISION (tracked in CLAUDE.md): wire the fetcher in with a heartbeat gate,
-or correct the docstring.
+**Integration path (verified 2026-08-22; updated 2026-09-03):** the deployed
+push-primary is now the **`amtrak-tracker` container**
+(`src/amtrak_tracker/main.py`, quadlet `amtrak-tracker.container`, active —
+polls api.amtraker.com, serves locally on :8898, heartbeats `push:amtrak`).
+`src/ingest/amtrak.py` inside `ingest-core` is a *second* implementation of
+the same capability (gated `AMTRAK_ENABLED`, same heartbeat key — the
+failover contract keeps the two from double-writing, but two implementations
+exist and which is authoritative is only discoverable from quadlet
+enablement state). **Still no scheduled REST fallback** —
+`poller/fetchers/amtrak.py` remains absent from `FETCH_SCHEDULE`
+(re-verified 2026-09-03), so there is no automatic recovery if both push
+writers stop. NEEDS OPERATOR DECISION (tracked in CLAUDE.md): wire the
+fetcher in with a heartbeat gate, or correct the docstrings — and pick one
+push-primary implementation as authoritative on paper.
 
 ---
 
@@ -677,9 +709,20 @@ JASDAT_PASS=
 
 ### airplanes.live
 
-**Last verified:** 2025-12
+**Last verified:** 2025-12 · **No longer queried programmatically as of
+2026-08-27.**
 
-**What it provides:** Crowdsourced ADS-B flight tracking worldwide. No registration required. Used as primary FlightAware fallback for watchlist tracking.
+**What it provides:** Crowdsourced ADS-B flight tracking worldwide. No registration required.
+
+> **Status (2026-08-27 operator directive, "everything is meant to be
+> local"):** every programmatic airplanes.live call was removed — the
+> watchlist flight chain, `/api/v1/adsb`, and the runner's `/api/adsb/live`
+> all resolve from the box's own receiver, ingested FDPS, and local registry
+> tables instead. What remains is click-through/embed use only:
+> `globe.airplanes.live` URLs in push bodies and the runner's globe-mode
+> iframe (allowed as phone conveniences), and the box still *feeds* the
+> aggregator via ultrafeeder. Kept here as source research, not as a live
+> integration.
 
 **API documentation:** [https://airplanes.live/api-guide/](https://airplanes.live/api-guide/)
 
@@ -691,15 +734,26 @@ JASDAT_PASS=
 
 **Last verified:** 2025-12
 
-**What it provides:** Premium flight tracking with historical data, filing status, and OOOI timestamps. Used as the top-tier watchlist data source when an API key is configured.
+**What it provides:** Premium flight tracking with historical data, filing status, and OOOI timestamps.
+
+> **Status (2026-09-03):** dormant remnant, not the top tier. The 2026-08-27
+> local-only directive made local sources primary everywhere; the AeroAPI
+> code survives (`poller/main.py::_check_flight_aeroapi()` and
+> `common/flight_resolver.py` tier 3) but is inert without a key — no key is
+> configured on this box. Whether it survived the local-only rewire as an
+> intentional exception or an oversight is not stated in the code.
 
 **Portal:** [https://flightaware.com/aeroapi/](https://flightaware.com/aeroapi/)
 
 **Pricing:** Tiered; personal/hobbyist tier available at low cost. Commercial use requires a higher tier.
 
-**Credentials location:**
+**Credentials location** (note the two consumers read **different** var
+names — `common/flight_resolver.py` reads `FLIGHTAWARE_API_KEY`, while
+`poller/main.py`'s watchlist check reads `FLIGHTAWARE_AEROAPI_KEY`; set both
+if ever enabling this):
 ```bash
 FLIGHTAWARE_API_KEY=
+FLIGHTAWARE_AEROAPI_KEY=
 ```
 
 ---
@@ -1058,12 +1112,15 @@ escalation (the 08-19 framing — tier 1 at load 10, tier 2 at load 14,
 resume at 6.0). Load and temperature are now deliberately asymmetric.
 
 `scripts/thermal-ingest-guard.py` -- automatic fallback that sheds ingest
-(and, under LOCKDOWN, effectively the whole stack) when the box runs hot,
-when the CPU run queue gets extreme, or when Ollama contention is provably
-degrading LLM work; it restores once *all* signals hold clear for a dwell
-period. Independent of `ollama_governor.py` (which does its own thermal
-SIGSTOP/SIGCONT on the Ollama process and is never touched here — though
-LOCKDOWN does `systemctl stop ollama.service` outright, see below). Runs
+(and, under LOCKDOWN, effectively the whole stack) when the box runs hot or
+when the CPU run queue gets extreme; it restores once the signals hold clear
+for a dwell period. **2026-08-27 updates (verified against the script
+2026-09-03):** the guard no longer touches any LLM service — `ollama.service`
+and `ollama_governor.py` were retired at the llama.cpp cutover, and the
+`corporatetraveldc-llama-*` units are deliberately excluded from LOCKDOWN
+scope; and the LLM-contention-fallback trigger was demoted to
+informational-only (still computed and logged, no longer trips or blocks
+anything). Runs
 every 2 minutes via `corporatetraveldc-thermal-ingest-guard.timer`
 (systemd --user). Fires an ntfy alert (`ops-health` topic) on every
 trip/restore/restore-failure.
@@ -1073,9 +1130,9 @@ trip/restore/restore-failure.
 | Trip | Condition | What is shed |
 |---|---|---|
 | Temp tier 1 (mild) | `temp >= 74.0C` | `tfms`, `stdds` only (`THERMAL_GUARD_TIER1_FEEDS`) |
-| **LOCKDOWN** | `temp >= 79.0C` **OR** `load1 >= 40.0` **OR** `>= 2` load-attributed brief fallbacks inside 300 s | **the entire stack except `web`**, immediately, with no intermediate stage |
-| Informational only | `temp` 70–74C, or `load1` 15–40 | nothing — logged to the journal, no ntfy push, no action |
-| Restore | `temp < 65.0C` **AND** `load1 < 15.0` **AND** fallback count `< 2`, held for `THERMAL_GUARD_RESUME_DWELL_S` (300 s) | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+| **LOCKDOWN** | `temp >= 79.0C` **OR** `load1 >= 40.0` (the third, fallback-count trigger was demoted to informational-only 2026-08-27) | **the entire stack except `web`**, immediately, with no intermediate stage |
+| Informational only | `temp` 70–74C, or `load1` 15–40, or any LLM-contention fallback count | nothing — logged to the journal, no ntfy push, no action |
+| Restore | `temp < 65.0C` **AND** `load1 < 15.0`, held for `THERMAL_GUARD_RESUME_DWELL_S` (300 s) — fallback count no longer blocks resume | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
 
 **Load no longer has a mild stage at all.** 15–40 covers this box's entire
 normal-to-busy operating range and is logged only; the sole load-driven
@@ -1089,21 +1146,28 @@ deliberately *not* tunable via `dispatch.env`): all six real SWIM feeds
 (`ALL_SWIM_FEEDS = fdps, stdds, tfms, tbfm, itws, notam` — `notam` runs the
 AIM/FNS feed and is a real 6th SWIM feed, not a NOTAM-only afterthought),
 `ingest-core` (NWWS-OI/Amtrak/local airspace), and
-`LOCKDOWN_USER_UNITS = poller, pusher, runner`, plus `ollama.service` via
-the standing NOPASSWD sudoers grant. `web` is deliberately absent from
-every list, so `/healthz` and the API stay observable through the event.
-The guard's own `TimeoutStartSec` was raised to 600 s to survive a full
-sequential stop/start.
+`LOCKDOWN_USER_UNITS = poller, pusher, runner`. Since 2026-08-27 it does
+**not** touch any LLM service: `ollama.service` is gone with the llama.cpp
+cutover, and the `corporatetraveldc-llama-hot/chat/report-*` units are
+deliberately excluded so the hot alert path survives the event. `web` is
+deliberately absent from every list, so `/healthz` and the API stay
+observable through the event. The guard's own `TimeoutStartSec` was raised
+to 600 s to survive a full sequential stop/start.
 
-**The Ollama-contention trigger** is a third, independent signal:
-`src/common/llm.py::_record_load_fallback()` appends to
+**The LLM-contention signal** (formerly the third trigger, **demoted to
+informational-only 2026-08-27** — one night produced ~15 fallback-attributed
+LOCKDOWN trips with real load1 of only 4–9; shedding SWIM ingest does nothing
+to relieve LLM contention, and the fallback-count restore gate could hold the
+stack down indefinitely): `src/common/llm.py::_record_load_fallback()`
+appends to
 `/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl` only for
-`OllamaBusyError` (client slot lock busy) or an `httpx.TimeoutException`
-from a real generate call — never for a plain `ConnectError`, so a
-deliberately-stopped Ollama (including one stopped by LOCKDOWN itself)
-can never feed the trigger that caused the lockdown.
-`count_recent_load_fallbacks()` reads and prunes that log each cycle
-(1 h retention, independent of the 300 s trigger window).
+`OllamaBusyError` (slot busy — name kept from the Ollama era) or an
+`httpx.TimeoutException` from a real generate call — never for a plain
+`ConnectError`, so a deliberately-stopped LLM server can never look like
+contention.
+`count_recent_load_fallbacks()` still reads and prunes that log each cycle
+(1 h retention) and logs the count for visibility; it no longer triggers
+LOCKDOWN and no longer blocks resume.
 
 ### Tunability
 
@@ -1132,6 +1196,12 @@ operator working from `dispatch.env` will not find them. Note also that
 the fixed `ALL_SWIM_FEEDS` list plus the stack, not that variable.
 
 ### Observed reality (2026-08-23, since the redesign went live)
+
+> **Historical — read with the 2026-08-27 demotion in mind.** The two
+> LOCKDOWNs below were both fired by the contention-fallback trigger, which
+> no longer trips LOCKDOWN at all; the "roughly every two hours on a busy
+> afternoon" recurrence prediction died with that trigger. Kept as the
+> record that motivated the demotion.
 
 * **Two real LOCKDOWNs fired on 2026-08-23, both triggered by the new
   Ollama-contention signal, neither by load or heat** — 12:18:22 → 12:29:35

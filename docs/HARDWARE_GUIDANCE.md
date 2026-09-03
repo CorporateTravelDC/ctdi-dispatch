@@ -67,11 +67,15 @@ containers under pressure, so the observed steady state is often lighter
 than the design load. **Corrected 2026-08-23:** this paragraph used to
 describe hours-long "tier-2" sheds leaving just ingest-core +
 ingest-notam running — that tier no longer exists. The guard was
-redesigned the same day to a single-stage model: a mild temperature trip
+redesigned the same day to a single-stage model, then refined 2026-08-27:
+a mild temperature trip
 at 74 °C sheds only `tfms`/`stdds`, and a LOCKDOWN (79 °C, or 1-min load
-≥ 40, or repeated LLM-contention fallbacks) sheds the *entire* stack
+≥ 40 — the LLM-contention-fallback trigger was demoted to
+informational-only 2026-08-27) sheds the *entire* stack
 except `web` — all six SWIM feeds, `ingest-core` included, plus poller,
-pusher, runner and host `ollama.service`. Expect materially fewer and
+pusher and runner. The guard no longer touches any LLM service (Ollama
+itself was retired for per-tier llama.cpp units the same week). Expect
+materially fewer and
 shorter sheds than the figures in the sections above were captured under.
 See `docs/INFRA_MAP.md` §4.1 and CLAUDE.md "Ingest load-shedding".)
 
