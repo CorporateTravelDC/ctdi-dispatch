@@ -1876,9 +1876,19 @@ def _maybe_alert_on_approach(entry: dict, parsed: dict) -> None:
         # again regardless of the dedup window. Per-aircraft identity as
         # the key, constant content_key (one-shot "already alerted for this
         # aircraft's approach" gate, same pattern as tfms_track's fix).
+        # 2026-09-03 (forward-only push_dedup redesign): stays on the
+        # explicit PERIODIC api -- this alert has no varying content (the
+        # content key is a constant; proximity itself is the event), so
+        # forward-only semantics would fire once per aircraft and then
+        # never again for PushDedup's whole retention horizon (days) --
+        # wrong for a permanent-watchlist tail that flies into DC daily,
+        # where each day's approach is a genuinely new episode. The 600s
+        # window is the episode gate: one approach fires once (maybe
+        # twice on a long final), and a later same-day return leg still
+        # alerts.
         hex_id = entry.get("hex_id") or ""
         dedup_key = content_hash(f"fdps:prox:{hex_id or callsign}")
-        if _FDPS_PROX_DEDUP.should_push(dedup_key, "prox"):
+        if _FDPS_PROX_DEDUP.should_push_periodic(dedup_key, "prox"):
             _fire_fdps_nas_alert(callsign, hex_id, parsed, dist_nm=round(dist, 1))
             _FDPS_PROX_DEDUP.record(dedup_key, "prox")
     except Exception as e:
@@ -1938,10 +1948,13 @@ def _maybe_alert_on_meter_fix_approach(entry: dict, parsed: dict) -> None:
             priority=3,
         )
         hex_id = entry.get("hex_id") or ""
-        # Per-aircraft one-shot gate, same pattern as _FDPS_PROX_DEDUP above
-        # (see that dedup call's comment for the shared-slot bug this avoids).
+        # Per-aircraft episode gate, same pattern as _FDPS_PROX_DEDUP above
+        # (see that dedup call's comments for both the shared-slot bug this
+        # avoids and the 2026-09-03 reason it stays on the explicit
+        # PERIODIC api: constant content key, so forward-only would
+        # silence a recurring tail's later approaches for days).
         dedup_key = content_hash(f"fdps:meterfix_prox:{hex_id or callsign}")
-        if _FDPS_METERFIX_PROX_DEDUP.should_push(dedup_key, "prox"):
+        if _FDPS_METERFIX_PROX_DEDUP.should_push_periodic(dedup_key, "prox"):
             _fire_fdps_nas_alert(callsign, hex_id, parsed, dist_nm=round(closest_dist, 1))
             _FDPS_METERFIX_PROX_DEDUP.record(dedup_key, "prox")
     except Exception as e:

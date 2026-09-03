@@ -187,7 +187,12 @@ def main(force: bool = False) -> None:
             # off so a changed VIP set still fires immediately while the
             # same set is suppressed for the 1h window, exactly what the
             # else-branch log line always claimed.
-            if _route_dedup.should_push("route-impact", h):
+            # 2026-09-03 (forward-only push_dedup redesign): PERIODIC api,
+            # deliberately -- the hourly re-page while the SAME VIP TFR
+            # set stays active is this block's documented 2026-08-16
+            # contract (still-active heartbeat for POTUS-grade airspace),
+            # matching pusher/main.py's push_vip_tfrs.
+            if _route_dedup.should_push_periodic("route-impact", h):
                 _ntfy.send("hot-alerts", narrative, title=title, priority=5,
                            tags="car,rotating_light")
                 _route_dedup.record("route-impact", h)

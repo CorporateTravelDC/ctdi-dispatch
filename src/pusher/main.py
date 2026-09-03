@@ -68,7 +68,6 @@ def hot_push(topic: str, message: str, title: str) -> bool:
 # Dedup instances -- one per logical alert channel
 _tfr_dedup   = PushDedup("tfr")
 _wx_dedup    = PushDedup("wx")
-_route_dedup = PushDedup("route")
 
 # Wind-change thresholds
 _WX_SPEED_THRESHOLD_KT  = 10   # alert on >= 10kt speed change
@@ -116,7 +115,12 @@ def push_vip_tfrs() -> int:
         # per-TFR slot + enrichment-text content key now actually gate:
         # first sighting fires immediately, changed enrichment fires
         # immediately, otherwise one re-push per hour while active.
-        if not _tfr_dedup.should_push(key, h):
+        # 2026-09-03 (forward-only push_dedup redesign): stays on the
+        # explicit PERIODIC api -- the hourly re-push while a VIP/POTUS
+        # TFR is ACTIVE is the 2026-08-16 contract above, a deliberate
+        # still-active heartbeat for the highest-consequence airspace
+        # state on this platform, not rebroadcast spam.
+        if not _tfr_dedup.should_push_periodic(key, h):
             continue
 
         # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
@@ -208,6 +212,13 @@ _flight_state: dict = {}
 # wheels-on-ground directly), so a 1h re-arm is safe. ADS-B/absence-based
 # confirmation is corroborative/inferred, so it gets a longer 2h window to guard
 # against a restart re-chasing stale ground/low-alt readings before they age out.
+# 2026-09-03 (forward-only push_dedup redesign): these stay on the
+# explicit PERIODIC api at the call sites below -- the content key is the
+# constant "landed" (a landing has no varying content), keyed per
+# CALLSIGN, and callsigns recur daily (same flight number, next day's
+# leg). Forward-only semantics would fire one landing alert per callsign
+# per retention horizon (days) and silently swallow every subsequent
+# day's landing; the 1h/2h re-arm windows above ARE the episode design.
 _landing_dedup_acars = PushDedup("flight-landing-acars", dedup_secs=3600)   # 1h
 _landing_dedup_adsb  = PushDedup("flight-landing-adsb", dedup_secs=7200)    # 2h
 
@@ -448,7 +459,8 @@ def push_flight_watchlist_landings() -> int:
         if not callsign:
             continue
         result = _check_flight_landing(callsign)
-        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
+        # PERIODIC api by design -- see the _landing_dedup_* comment block.
+        if result and _landing_dedup_for(result).should_push_periodic(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed.\nWatchlist monitoring complete."
             success = send_ntfy(
                 topic="flight-alerts",
@@ -479,7 +491,8 @@ def push_flight_watchlist_landings() -> int:
             oooi_phase=entry.get("oooi_phase"),
             oooi_phase_updated_at=entry.get("oooi_phase_updated_at"),
         )
-        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
+        # PERIODIC api by design -- see the _landing_dedup_* comment block.
+        if result and _landing_dedup_for(result).should_push_periodic(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed."
             success = send_ntfy(
                 topic="flight-alerts",

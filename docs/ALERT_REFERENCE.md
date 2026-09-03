@@ -707,12 +707,12 @@ publisher.
 | `nms_v240_post_deploy_check.py:154` | `ops-health` | — | ✅ "NMS v2.4.0 post-deploy check: NEEDS REVIEW" |
 | `board_sweep.py:94` | `ops-health` | 3 | tags `incoming_envelope` |
 | `dispatch_desk_memo.py:296` | `dispatch` | 2 | ✅ "The Dispatch Desk — 2026-W34", tags `newspaper` |
-| `aam_daily_watch.py:104` | `ops-health` | 2 | ✅ "advanced_air_mobility cross-link auto-promote" |
-| `aviation_daily_watch.py:123` | `ops-health` | 2 | ✅ "aviation cross-link auto-promote" |
-| `concierge_travel_daily_watch.py:109` | `ops-health` | 2 | one of the six daily category watches |
-| `executive_protection_daily_watch.py:112` | `ops-health` | 2 | one of the six daily category watches |
-| `gig_economy_daily_watch.py:118` | `ops-health` | 2 | one of the six daily category watches |
-| `trains_yachts_daily_watch.py:109` | `ops-health` | 2 | one of the six daily category watches |
+| `aam_daily_watch.py:223` | `ops-health` | 2 | ✅ "advanced_air_mobility cross-link auto-promote" |
+| `aviation_daily_watch.py:175` | `ops-health` | 2 | ✅ "aviation cross-link auto-promote" |
+| `concierge_travel_daily_watch.py:153` | `ops-health` | 2 | one of the six daily category watches |
+| `executive_protection_daily_watch.py:162` | `ops-health` | 2 | one of the six daily category watches |
+| `gig_economy_daily_watch.py:164` | `ops-health` | 2 | one of the six daily category watches |
+| `trains_yachts_daily_watch.py:154` | `ops-health` | 2 | one of the six daily category watches |
 
 ### Non-poller Python services
 

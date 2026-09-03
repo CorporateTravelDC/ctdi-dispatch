@@ -576,7 +576,17 @@ def check_tfms_alerts(programs: list[dict]) -> None:
         # suppressing a genuinely tightened restriction for the full 30-min
         # window. Keying on the actual varying metric fixes that.
         metric = _tfms_program_metric(program)
+        # 2026-09-03 (forward-only push_dedup redesign): program_id +
+        # start_time folded into the content key. The slot key
+        # (type:facility, e.g. "GS:ZDC") is stable across program
+        # INSTANCES, and under forward-only semantics a brand-new program
+        # days later with coincidentally identical delay/spacing/reason
+        # would have hashed identically to the last one and never alerted.
+        # The instance identity makes every new program fire exactly once
+        # while an unchanged rebroadcast of the SAME program stays
+        # suppressed for its whole life (no more one-repeat-per-30min).
         content_key = content_hash(
+            f"{program.get('program_id')}:{program.get('start_time')}:"
             f"{program.get('avg_delay_minutes')}:{program.get('mit_value')}:{program.get('reason')}"
         )
         if not _TFMS_ALERT_DEDUP.should_push(program_key, content_key):
@@ -1013,7 +1023,17 @@ def _handle_track_information(fltd_message: ET.Element) -> None:
     # content_key (this alert type has no varying content to track --
     # it's a one-shot "already alerted for this entry" gate).
     dedup_key = content_hash(f"tfms:approach:{entry['id']}")
-    if not _TFMS_ALERT_DEDUP.should_push(dedup_key, "approach"):
+    # 2026-09-03 (forward-only push_dedup redesign): the constant
+    # "approach" content key is replaced with the flight's gufi (unique
+    # per leg; ETA date as fallback when TFMS omits it). The constant was
+    # fine while the 30-min window re-armed the slot, but under
+    # forward-only semantics -- which now makes the docstring's "ONE
+    # 'getting close' ping" literally true for a given leg -- it would
+    # have silenced every later leg of a PERMANENT watchlist entry (same
+    # entry_id every day). gufi changes per leg, so each day's approach
+    # fires exactly once.
+    approach_content_key = content_hash(f"approach:{gufi or (eta_str or '')[:10]}")
+    if not _TFMS_ALERT_DEDUP.should_push(dedup_key, approach_content_key):
         return
 
     lat = _dms_to_decimal(_find_path(body, "position", "latitude", "latitudeDMS"))
@@ -1026,7 +1046,7 @@ def _handle_track_information(fltd_message: ET.Element) -> None:
         "minutes_out": round(mins_out, 1),
     }
     _fire_tfms_watchlist_hit(entry, summary, detail, priority=3)
-    _TFMS_ALERT_DEDUP.record(dedup_key, "approach")
+    _TFMS_ALERT_DEDUP.record(dedup_key, approach_content_key)
 
 
 def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
@@ -1462,7 +1482,20 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
     # approach-alert fix above).
     advisory_number = _fcm_text(ga, "advisoryNumber")
     dedup_key = advisory_number or content_hash(_fcm_text(ga, "advisoryTitle") or "")
-    if not _GADV_ALERT_DEDUP.should_push(dedup_key, "gadv"):
+    # 2026-09-03 (forward-only push_dedup redesign): content key is now a
+    # hash of the advisory's actual title + text, replacing the constant
+    # "gadv". The constant was fine while the 1h window did the re-firing
+    # (though that window was itself the residual ADVZY-rebroadcast spam:
+    # every active advisory re-paged hourly); under forward-only semantics
+    # a constant hash would have made an IN-PLACE UPDATE to an advisory
+    # (same advisoryNumber, revised text -- extensions/amendments do get
+    # rebroadcast under the same number) permanently invisible. Now: new
+    # advisory fires once, verbatim rebroadcast never re-fires, revised
+    # text under the same number fires immediately.
+    gadv_content_key = content_hash(
+        f"{_fcm_text(ga, 'advisoryTitle') or ''}|{_fcm_text(ga, 'advisoryText') or ''}"
+    )
+    if not _GADV_ALERT_DEDUP.should_push(dedup_key, gadv_content_key):
         return []
 
     title_text = _fcm_text(ga, "advisoryTitle") or "ATCSCC General Advisory"
@@ -1486,7 +1519,7 @@ def _handle_general_advisory(fi_message: ET.Element) -> list[dict]:
         fire_family_alert(
             "tfms", "tfms_gadv", representative_facility, title, detail, dispatch, base_priority=3,
         )
-        _GADV_ALERT_DEDUP.record(dedup_key, "gadv")
+        _GADV_ALERT_DEDUP.record(dedup_key, gadv_content_key)
         log.info("tfms: GADV alert fired for advisory %s (facilities=%s)", advisory_number, dc_hit)
     except Exception as e:
         log.error("tfms: GADV alert fire failed for advisory %s: %s", advisory_number, e)
