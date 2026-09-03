@@ -1053,11 +1053,30 @@ def _ollama(
         # sanitizer in ollama_post_with_retry()). done_reason == 'length'
         # (generation hit the num_predict cap) additionally trims the
         # trailing incomplete sentence.
-        return sanitize_llm_response(
+        sanitized = sanitize_llm_response(
             response_text,
             source=f"response from {model}",
             truncated=(j.get("done_reason") == "length"),
         )
+        if sanitized is None and response_text:
+            # 2026-09-02: split the two failure classes in the logs. The
+            # model DID respond here -- sanitize_llm_response() rejected
+            # the content (its own warning line directly above says which
+            # guard fired and why). Without this line, the only summary an
+            # operator sees is generate()'s generic "Ollama unavailable,
+            # busy, or failed", which conflates a content-quality rejection
+            # with a real availability failure -- root-caused 2026-09-02
+            # auditing aam-daily-watch's ~83% fallback rate: 21 of 24
+            # classified fallback events were the repetition-loop guard,
+            # none of them availability. Log-only; the None return (and
+            # every caller's fallback contract) is unchanged.
+            log.info(
+                "llm: %s DID respond (%d chars) -- returning None because the "
+                "post-generation content guard rejected it, not because the "
+                "backend was unavailable",
+                model, len(response_text),
+            )
+        return sanitized
     except OllamaBusyError as exc:
         log.info("llm: Ollama slot unavailable (priority=%s): %s", priority, exc)
         _record_load_fallback("slot_busy")
