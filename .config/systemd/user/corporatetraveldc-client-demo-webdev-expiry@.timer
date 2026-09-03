@@ -1,0 +1,17 @@
+# corporatetraveldc-client-demo-webdev-expiry@.timer
+# Generalized 2026-09-03 from an earlier one-off client-preview's expiry
+# timer (which used a hardcoded absolute OnCalendar= date -- fine for a one-off,
+# not reusable). OnActiveSec=7d fires exactly once, 7 days after this
+# timer instance is started (i.e. 7 days after the demo was created),
+# with no per-instance date math needed -- start it the same moment you
+# start the matching corporatetraveldc-client-demo@<slug>.service.
+[Unit]
+Description=Fire once, 7 days after start -- expire client demo %i's webdev credential
+
+[Timer]
+OnActiveSec=7d
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

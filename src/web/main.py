@@ -258,15 +258,30 @@ def _require_board_key(request: Request) -> None:
 #                            (2026-08-11 board thread) as Pi-only, never
 #                            meant to reach Cowork's side.
 #   - Contacts/, 03-Entities/, .internal-backups/, archives/, 99-Archive/,
-#     01-Sources/{daily,manual,rss,transport-patterns}/ -- raw/pre-synthesis
+#     01-Sources/{daily,rss,transport-patterns}/ -- raw/pre-synthesis
 #     sources or PII-adjacent, not vetted for unauthenticated exposure.
-# Same CUI/PII scrub gate as before applies to every read regardless of
-# which allowed prefix it came from -- none of this widening weakens that.
+#
+# 2026-09-03 (operator directive, Cowork board thread `coord`): added
+# 01-Sources/manual/ -- the manual-capture note stream (second_brain.
+# remember.py / src/web/routes/remember.py; also where this session's own
+# Jarvis reconciliation notes land) -- so Cowork can pull real-world
+# context/prior findings directly instead of re-deriving them each time.
+# Narrower than it looks: this is the ONE folder under 01-Sources/ pulled
+# back out of the block above, not a re-opening of daily/rss/
+# transport-patterns, which stay excluded for the same reasons as before.
+# The original "not vetted for unauthenticated exposure" concern this
+# folder was excluded under (2026-08-16) no longer applies as originally
+# written -- this whole endpoint has required the same X-Board-Key
+# credential board writes do since the 2026-08-24 pentest fix (Finding
+# N-1, see vault_research_read()'s docstring), so "unauthenticated" isn't
+# the live threat model for anything reachable through it anymore. Same
+# CUI/PII scrub gate as every other prefix applies regardless.
 _VAULT_RESEARCH_ROOT = "01-Sources/personal-notes/Series"
 _VAULT_RESEARCH_EXTRA_PREFIXES = (
     "04-Syntheses/",
     "02-Concepts/",
     "00-Inbox/cross-link-findings/",
+    "01-Sources/manual/",
 )
 _vault_research_hits: list = []   # naive in-memory rate-limit clock
 
@@ -448,8 +463,17 @@ async def board_refresh(request: Request) -> JSONResponse:
     a fresh human-issued enrollment (GET /api/v1/board/enroll) is required to
     start a new cycle.
 
-    200 -> {token, expires_at, scope}; 401 -> presented token missing/invalid/
-    expired; 403 -> presence attestation stale or missing."""
+    2026-09-03: retrying with the SAME (just-superseded) token within
+    _BOARD_REFRESH_GRACE_S of a successful rotation re-relays that same
+    replacement token instead of failing -- see board_refresh_token()'s
+    docstring for the incident this closes. `relayed: true` in the response
+    means this call returned an already-minted token rather than performing
+    a fresh rotation; safe to retry a dropped response with the identical
+    request.
+
+    200 -> {token, expires_at, scope, relayed}; 401 -> presented token
+    missing/invalid/expired (and not within any grace window); 403 ->
+    presence attestation stale or missing."""
     presented = request.headers.get("X-Board-Key", "")
     r = db.board_refresh_token(
         presented, remote_addr=(request.client.host if request.client else None)
@@ -467,6 +491,7 @@ async def board_refresh(request: Request) -> JSONResponse:
         )
     return JSONResponse({
         "token": r["token"], "expires_at": r["expires_at"], "scope": r["scope"],
+        "relayed": r.get("relayed", False),
         "usage": "send this value as the X-Board-Key header on POST /api/v1/board "
                  "or this refresh endpoint",
     })

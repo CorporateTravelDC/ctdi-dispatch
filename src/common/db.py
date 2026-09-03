@@ -445,6 +445,24 @@ def _ensure_board_auth(c) -> None:
             recorded_at       REAL
         )"""
     )
+    # 2026-09-03 (operator directive, after a real incident -- see
+    # board_refresh_token()'s docstring): a bounded, short-lived exception
+    # to "never persist a usable secret at rest" (board_tokens above stores
+    # only hashes). This table holds the PLAINTEXT of a just-minted token,
+    # keyed by the hash of the OLD token it replaced, so a retried refresh
+    # whose original response was lost in transit gets the SAME token back
+    # instead of a 401 -- rather than stranding the caller or minting yet
+    # another rotation on every retry. grace_expires_at bounds how long
+    # that plaintext is recoverable; rows past it are treated as absent and
+    # opportunistically deleted (see board_refresh_token()).
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_refresh_grace (
+            old_token_hash    TEXT PRIMARY KEY,
+            new_token         TEXT NOT NULL,
+            new_expires_at    REAL NOT NULL,
+            grace_expires_at  REAL NOT NULL
+        )"""
+    )
 
 
 def board_mint_nonce(ttl_s: int = 600, label: str | None = None) -> dict:
@@ -574,6 +592,9 @@ def board_presence_status() -> dict:
     }
 
 
+_BOARD_REFRESH_GRACE_S = 120  # how long a just-rotated token's replacement is re-relayable
+
+
 def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
     """Self-rotate a still-valid board-write token into a fresh one -- the
     autonomous daily-renewal half of the design (board_presence_status above
@@ -582,10 +603,44 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
     attestation. Every attempt, successful or not, is written to the
     append-only audit_log via audit() (action="board_refresh").
 
-    Returns {"status": "ok", "token", "expires_at", "scope"} or
+    2026-09-03 incident (operator + Cowork, board thread `coord`): a refresh
+    coincided with a network blip -- the token WAS rotated server-side, but
+    the HTTP response carrying the new token never reached the caller. The
+    old token was already dead (rotation is immediate, no overlap window)
+    and the new one was never received, stranding the session with no
+    recovery but a human re-mint. Root cause: the new token existed only in
+    that one response body. Fixed with a bounded grace-relay: for
+    `_BOARD_REFRESH_GRACE_S` after a successful rotation, re-presenting the
+    OLD (just-superseded) token re-relays the SAME new token again instead
+    of 401 -- see board_refresh_grace in _ensure_board_auth's docstring for
+    why this is a deliberate, narrowly-scoped exception to "never persist a
+    plaintext secret." A retry within the window recovers; past it, the
+    original behavior (401, human re-mint) is unchanged.
+
+    Returns {"status": "ok", "token", "expires_at", "scope", "relayed"} or
     {"status": "invalid_token"} or
-    {"status": "presence_stale", "presence_valid_until"}."""
+    {"status": "presence_stale", "presence_valid_until"}. "relayed" is True
+    only when this call returned an already-minted token from the grace
+    cache rather than performing a fresh rotation."""
     import secrets as _s
+    now = time.time()
+    if presented:
+        old_hash_check = _board_sha(presented)
+        with conn() as c:
+            _ensure_board_auth(c)
+            c.execute("DELETE FROM board_refresh_grace WHERE grace_expires_at < ?", (now,))
+            grace_row = c.execute(
+                "SELECT new_token, new_expires_at FROM board_refresh_grace WHERE old_token_hash=?",
+                (old_hash_check,),
+            ).fetchone()
+        if grace_row is not None:
+            audit("board_refresh", "board", presented[:8], remote_addr,
+                  {"result": "ok", "relayed": True, "new_expires_at": grace_row["new_expires_at"]})
+            return {
+                "status": "ok", "token": grace_row["new_token"],
+                "expires_at": grace_row["new_expires_at"], "scope": "board-write",
+                "relayed": True,
+            }
     if not presented or not board_token_valid(presented):
         audit("board_refresh", "board", (presented or "")[:8] or None, remote_addr,
               {"result": "invalid_token"})
@@ -595,7 +650,6 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
         audit("board_refresh", "board", presented[:8], remote_addr,
               {"result": "presence_stale", "presence_valid_until": pres["valid_until"]})
         return {"status": "presence_stale", "presence_valid_until": pres["valid_until"]}
-    now = time.time()
     old_hash = _board_sha(presented)
     new_token = "btk_" + _s.token_urlsafe(30)
     texp = now + _BOARD_TOKEN_TTL_S
@@ -611,11 +665,22 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
              (old_row["label"] if old_row else None), "refresh:" + old_hash[:12]),
         )
         # Expire the old token immediately -- rotation supersedes it outright,
-        # no overlap window where both are simultaneously valid.
+        # no overlap window where both are simultaneously valid. The old
+        # token stays *recoverable* (via the grace table below) without
+        # staying *valid* -- board_token_valid(old) is still False the
+        # instant this returns; only the exact-match grace lookup above
+        # (checked BEFORE this validity check on the next call) hands the
+        # new token back out.
         c.execute("UPDATE board_tokens SET expires_at=? WHERE token_hash=?", (now, old_hash))
+        c.execute(
+            "INSERT OR REPLACE INTO board_refresh_grace "
+            "(old_token_hash, new_token, new_expires_at, grace_expires_at) VALUES (?, ?, ?, ?)",
+            (old_hash, new_token, texp, now + _BOARD_REFRESH_GRACE_S),
+        )
     audit("board_refresh", "board", presented[:8], remote_addr,
           {"result": "ok", "new_expires_at": texp})
-    return {"status": "ok", "token": new_token, "expires_at": texp, "scope": "board-write"}
+    return {"status": "ok", "token": new_token, "expires_at": texp, "scope": "board-write",
+            "relayed": False}
 
 
 # ── TFR helpers ───────────────────────────────────────────────────────────────
