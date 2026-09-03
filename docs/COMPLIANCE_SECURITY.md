@@ -277,8 +277,9 @@ Verified 2026-08-19 against `src/web/main.py` and the live database:
   real and are the substantive audit content today.
 * **`board_refresh`.** Rotation activity on the research board, written via
   `audit()` from `src/common/db.py` — the real call sites are inside
-  `board_refresh_token()` (`grep -n '"board_refresh"' src/common/db.py`; three
-  call sites as of 2026-08-23).
+  `board_refresh_token()` (`grep -n '"board_refresh"' src/common/db.py`; four
+  call sites as of 2026-09-03 — the 120s grace-relay retry path added a
+  fourth, audited with `"relayed": true`).
 
 ### What was not audited (pre-2026-08-19)
 

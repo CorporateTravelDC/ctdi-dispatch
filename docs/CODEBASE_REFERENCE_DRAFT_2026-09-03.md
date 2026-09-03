@@ -508,7 +508,7 @@ startup; `init_db_all()` exists as the introspective run-everything variant
 callers needing those must call them explicitly (documented in db_swim's
 docstring).
 
-63 `CREATE TABLE` statements in db.py + 12 in db_swim.py ≈ 75 tables. Major
+64 `CREATE TABLE` statements in db.py + 12 in db_swim.py ≈ 76 tables. Major
 groups: feed health (`feed_state`, `feed_data_usage`, `pull_path_status`,
 `bandwidth_priority_state`), aviation state (`tfrs`, `metar_snapshot`,
 `nas_programs`, `notams`, `nws_alerts/forecast`, `wpc_discussions`,
@@ -529,7 +529,8 @@ output (`cps_scores`, `hot_alerts`, `brief_archive`, `swim_alerts`,
 (`osint_scopes`, `osint_items`), governance (`audit_log`, `auth_tokens`,
 `trigger_log`, `webhook_events`, `approval_requests`, `session_grants`), and
 the agent coordination board (`board_messages`, `board_enroll_nonces`,
-`board_tokens`, `board_presence`).
+`board_tokens`, `board_presence`, `board_refresh_grace` — the last added
+2026-09-03, a 120s plaintext relay cache for dropped rotation responses).
 
 **OOOI authority machine** (db.py around SCHEMA_V40):
 `_OOOI_SOURCE_PRIORITY = {fids:-1, adsb:0, tbfm:1, tfms:2, smes:3, acars:4}`
@@ -959,7 +960,12 @@ quiet-luxury editorial design, real document structure/ARIA/PWA manifest.
 RSS archive and `ORIGINALS_DIR` (Pi-native posts, now canonical; on slug
 collision the Pi original wins) — plus an `OVERRIDES_DIR` for the one
 paywalled post supplied in full by the operator. Idempotent full regeneration;
-**not yet timer-wired** (manual runs, per its docstring). A
+**not yet timer-wired** (manual runs, per its docstring). Since 2026-09-03
+`build_site()` also copies `src/executive_standard/assets/keys/*.pub` (5
+published GPG public keys — canonical inventory, fingerprints, and the
+deliberately-unpublished internal keys in `docs/GPG_KEYS_PUBLISHED.md`) into
+the served site's `/keys/` on every sync; the loop is filename-generic, so
+adding/retiring a key is just a file change in `assets/keys/` plus that doc. A
 "markdown-negotiation-for-agents" feature was looked for and **not found** in
 `render.py` or the sync skill as read — if it exists it is elsewhere or not
 yet built; the closest things found are the runner's markdown chat rendering
