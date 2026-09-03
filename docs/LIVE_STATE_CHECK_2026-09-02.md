@@ -535,3 +535,204 @@ it needs `systemctl --user start corporatetraveldc-runner.service`.
   docstring requires so the public-mirror email scrub doesn't block it.
   Concurrent session mid-pass; expected, resolves when they sign+commit.
   (This file's own edit re-opens the usual unsigned window on top.)
+
+---
+
+# Sixth pass — post-commit 3fce346 (NOTAM NMS-API rewrite + aam split-call), ~22:40 EDT
+
+Scoped to `3fce346` ("notam: real NMS-API REST fallback (OAuth2, AIXM
+reuse, validated live); aam-daily-watch: split-call fallback fix"):
+`src/poller/fetchers/notam.py` rewritten from the retired
+api.faa.gov/notamSearch product to the real NMS-API
+(api-nms.aim.faa.gov, OAuth2 client-credentials, AIXM 5.1 responses fed
+through the existing `ingest/parsers/aim_parser.py` pipeline);
+`aam_daily_watch.py` rearchitected from one shared 700-token call +
+`_split_framings()` into two independent 350-token per-framing calls
+(root cause: ~83% fallback rate, 21/24 events being the repetition-loop
+content guard, not availability); a matching log-only split in
+`common/llm.py` (content-guard rejection now logged distinctly from
+availability failure); `nms_v240_baseline_capture.py` docstring update;
+`notams@faa.gov` scrub allowlist; a CLAUDE.md pusher-restart entry; and
+the fifth pass's edits to this file.
+
+Prior art consulted first: pass 5's vault note
+(`corporatetraveldc/01-Sources/manual/20260902T181116Z.md`) already
+flagged the DATA_SOURCES.md NOTAM access-process drift — this pass
+builds on it (the drift's shape changed, below). Searched `NMS-API`,
+`split-call`, `--raw 'notam AND oauth'`, `notam`, `--semantic`: **no
+vault note exists yet on the NMS-API rewrite itself** — this pass's
+note is the first searchable record of it.
+
+## Drift found (real)
+
+### 1. docs/DATA_SOURCES.md §"FAA NOTAM API" — pass-5's drift widened: the whole section now describes the wrong product AND the wrong live state
+
+Pass 5 flagged the access-process half (self-serve signup for a retired
+product). This commit invalidates the rest of the section (~lines
+237–267): the credential block (`FAA_NOTAM_API_KEY=` /
+`FAA_NOTAM_API_SECRET=`), the "Live status (verified 2026-08-19):
+neither … is present … never been credentialed … optional redundancy"
+paragraph, and the api.faa.gov URLs all describe a fetcher that no
+longer exists. Reality: the fetcher targets
+`api-nms.aim.faa.gov/nmsapi/v1/notams`, reads `NMS_API_CLIENT_ID` /
+`NMS_API_CLIENT_SECRET`, and **those keys are now present in the live
+`/etc/corporatetraveldc/dispatch-secrets.env`** (verified key-names-only;
+operator recovered real onboarding credentials). Still accurate in that
+section: the push-primary suppression claim (`push_feed: "fns"` skips
+the REST poll while the push heartbeat is <90 s old — re-verified at
+`poller/main.py:52` and `:149`).
+
+### 2. README.md:154 NOTAM feed row + :525 setup comment — invalidated
+
+"⚠️ Needs `FAA_NOTAM_API_KEY` + `FAA_NOTAM_API_SECRET`
+(`awaiting_credentials`)" is wrong on env-var names, API identity, and
+(post-rebuild) status; the ":525" setup comment "populate credentials
+(…, FAA NOTAM key, …)" names the dead credential.
+
+### 3. dispatch-secrets.env.template — missing the new credential keys
+
+The tracked template has no `NMS_API_CLIENT_ID=` / `NMS_API_CLIENT_SECRET=`
+entries (only the SWIM_NMS_* sets). The live env has them. A fresh
+deploy following README's "cp template" setup would silently miss the
+new feed's credentials — graceful skip (`awaiting_credentials`), so
+degraded not broken, but the template is the canonical secrets surface
+and now lags the code.
+
+### 4. src/poller/skills/pull_path_verify.py:82–85 — notam pull-path characterization now false
+
+The comment ("the REST pull needs FAA_NOTAM_API_KEY (not provisioned),
+so it is NOT a viable fallback -- report, don't alert") and the
+`active: False` classification are both stale: credentials are
+provisioned and the fetcher is rewritten/validated. It imports
+`NOTAM_URL` from the fetcher, so it now probes the NMS endpoint
+unauthenticated and will forever report `auth_gated`/inactive for a
+pull path that is actually viable. Whether to flip it to an active
+(authenticated or 401-expected) probe is a code decision — flagged, not
+edited this pass.
+
+### 5. Lesser echoes (noted, mostly cosmetic)
+
+- `src/common/config.py:105` `faa_notam_api_key()` — now **zero
+  callers**, and its docstring ("register free at https://api.faa.gov")
+  recommends the exact dead flow the commit's own research documents as
+  retired.
+- `scripts/session-restore.sh:103` migrates the dead
+  `FAA_NOTAM_API_KEY` and not the new NMS pair. Runtime is unaffected
+  (the poller quadlet loads `dispatch-secrets.env` directly via
+  `EnvironmentFile=`, verified) — only the migrate/populate-secrets
+  flow lags.
+- `src/web/routes/webhooks.py:11` comment cites "the existing
+  FAA_NOTAM_API_KEY gating" as its precedent — the referenced pattern
+  no longer exists.
+- `docs/ALERT_REFERENCE.md` §AIM/NOTAM implicitly assumes
+  `aim_parser`'s alert paths fire only from the ingest push process;
+  the rewritten REST fallback reuses the same `_fire_notam_alert`
+  pipeline from the *poller* process during push:fns-stale windows, and
+  `_NOTAM_DEDUP` is per-process — so a failover overlap can re-fire an
+  alert the push path already sent. Failover-window-only, arguably
+  desirable; one-line doc note warranted.
+- Reverse-drift closed by this commit: `aam_daily_watch.py`'s docstring
+  claimed "run daily" — the timer has been a 90-minute OnCalendar grid
+  since 2026-08-17 (verified live: `1/3:30:00` + `0/3:00:00` ET); the
+  docstring now says so. ALERT_REFERENCE:174's grouping of
+  aam-daily-watch into the "daily/weekly digest fleet" has been
+  imprecise since 08-17 — pre-existing, not this commit. The new
+  `partial` run status pings success-class via `ok_statuses` —
+  `send_run_status` genuinely supports it (`ntfy_push.py:287`), no doc
+  claim broken.
+
+## Real findings (live) — persisted to vault
+
+### 1. FIXED THIS PASS: the entire ingest fleet was left stopped — total SWIM+NWWS push outage, ~22:21–22:44 EDT
+
+All 7 ingest units (`ingest-core` + fdps/stdds/tfms/tbfm/itws/notam)
+were **cleanly, deliberately stopped at 22:21:52–58 EDT**
+(`Result=success`, journal shows a plain `Stopping`, no start after) —
+the same pre-commit stop-cycle whose pusher half is recorded in this
+commit's CLAUDE.md entry ("restarted, confirmed active"). poller/web/
+pusher were brought back; **the ingest fleet was forgotten**. Every
+push heartbeat except amtrak (carried by the separate amtrak-tracker
+container) was frozen at 22:21; the platform's primary data paths
+(FDPS/STDDS/TFMS/TBFM/ITWS/FNS/NWWS) were dark ~22 minutes, and
+FDPS/STDDS/TBFM/ITWS have **no REST fallback at all**. No image build
+was in progress and no reason to hold them down was found, so this pass
+restarted all 7 at 22:43 — all active, **all 8 push heartbeats 25–27 s
+fresh by 22:45**. SWIM backlog re-drains from the Solace queues on
+reconnect; the NWWS XMPP gap is unrecoverable but was covered by the
+poller's NWS REST fallback (which, by design, was polling throughout
+the stale window). Side-note this explains: `feed_state.notam` got
+stamped `awaiting_credentials` at 22:36 because push:fns was stale, so
+the REST fallback genuinely ran — old image, old env-var check.
+
+### 2. FIXED THIS PASS: runner PWA restarted after 10 h down (closes pass-5 finding 4)
+
+Still stopped at 22:41 (down since the 12:47 EDT deliberate stop); the
+committing session has wound up (22:34 commit + signing), which is the
+condition pass 5 set for restarting it. Started 22:46; active, HTTP 200
+on :8001.
+
+### 3. Pending-deploy leg (recurring class): nothing in this commit is live yet
+
+All four images are build-date `20260902T151152Z` (11:11 EDT) —
+pre-commit. Consequences, recorded here because nothing else records
+them: (a) the NMS-API fetcher isn't running — the live poller still
+checks the old env var and marks `awaiting_credentials` (seen live at
+22:36). Credentials are already in the live env and the quadlet
+delivers them, so the first post-rebuild poller run during a
+push:fns-stale window is the first real production test. (b) the aam
+split-call fix has never run live — the 22:30 fire (in flight during
+this pass, on the old image) is the old shared-call code; the commit
+message itself says "pending final validation confirmation". Manifest
+verified OK against the committed tree at check start, so a rebuild was
+safe then (this pass's own edit to this file re-opens the usual
+unsigned window until next signing).
+
+### 4. Validation-evidence caveat on "validated live"
+
+The baseline-capture docstring's "1,472 real NOTAMs written from a 24h
+nationwide backfill" left **no trace in the production DB** — the live
+`notams` table shows only the normal push-path drip (465 inserts in
+12 h, no burst). The validation evidently ran against a scratch DB.
+That's the right way to do it (avoids duplicate-alert and bulk-write
+risk against production); recording it so nobody goes hunting for the
+1,472 rows in `corporatetraveldc.db`.
+
+## Still accurate (checked, no drift)
+
+- `src/ingest/README.md` — describes the push side only
+  (`ingest-notam` unit = AIM/FNS SWIM feed); nothing it claims touches
+  the poller-side REST fetcher. Unaffected.
+- `src/shared/watchlist_README.md` — no NOTAM/aam claims. Unaffected.
+- `docs/DATA_SOURCES.md:179` heartbeat claim and README's
+  push-primary/fallback mechanism section — unchanged by this commit.
+- `PERSONAS["aam-daily-watch"]["task"]` — the new code's claim that
+  nothing else consumes it checks out (no other references in `src/`);
+  `aam_weekly_watch.py` still uses its own shared-call path +
+  `_split_framings` unchanged (flagged 08-31 as at-risk for the same
+  wall; unchanged by this commit).
+
+## Live-state continuity
+
+- Failed units at check start: daily-opsplan, ep-advance-venues,
+  freshness-audit (pass-5's expected stragglers — clear on tomorrow's
+  fires), plus two new: `integrity-sweep` failed 22:27 EDT on
+  verify-manifest INTEGRITY FAILURE against 4 files including
+  `aam_daily_watch.py` — the pre-signing window of *this very commit*
+  (landed 22:34); expected, self-resolves next sweep. And
+  `second-brain-rss` failed 22:25 EDT with `Result=timeout` after
+  15 m 22 s wall — a **different failure mode** from pass-5 finding 3's
+  12:13 sqlite-lock crash on the same unit (second failure, second
+  cause, same day; plausibly the load1-30 stretch). Self-heals next
+  fire; two-causes-in-one-day makes this unit worth watching.
+- Box load receding during this pass: load1 22.6 → 11.2.
+- aam-daily-watch service `activating` throughout this pass (22:30
+  fire, old image) — its outcome is the old code's, not the fix's.
+- Concurrent session active at pass end (~22:48 EDT): uncommitted
+  edits to `aviation_daily_watch.py` and `gig_economy_daily_watch.py`
+  applying this commit's split-call rearchitecture to the rest of the
+  daily-watch family (their docstrings cite aam_daily_watch's
+  root-cause writeup; that family audited at 10–17% fallback, same
+  mechanism). Not touched by this pass; the 22:21 stop-cycle that
+  stranded the ingest fleet was presumably theirs — worth them knowing
+  it's been restarted (finding 1) so a future full-stack restart
+  includes the ingest units.
