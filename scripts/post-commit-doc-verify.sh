@@ -51,9 +51,13 @@ where relevant (systemctl --user status, podman ps, actual file contents,
 curl to local services) rather than trusting old docs.
 
 BEFORE checking, search the second-brain for prior findings on the same
-area so you don't re-derive or contradict something already known:
-scripts/second-brain-search.sh '<topic terms>' (plain-language query, no
-quoting needed even for hyphenated terms). If this specific drift/area was
+area so you don't re-derive or contradict something already known, using
+scripts/second-brain-search.sh. Default mode is an EXACT-PHRASE match
+(2026-09-02: hyphenated terms are safe, but a multi-word query only hits
+notes containing that literal phrase and silently under-returns) -- so use
+a single distinctive word or a phrase you expect verbatim; for multi-word
+topic queries use --raw 'term1 AND term2', and --semantic for concept
+queries with variant spellings. If this specific drift/area was
 already investigated before, say so and build on it rather than starting
 cold.
 

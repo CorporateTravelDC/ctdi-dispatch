@@ -290,3 +290,248 @@ and reminder.
   and needs a re-run against the signed tree (ingest containers are still
   on the old image anyway, up 2+ days).
 - Presence attestation currently valid (~167h remaining at check time).
+
+---
+
+# Fourth pass — post-commit 98ea231 (blog Accept: text/markdown), ~11:15 EDT
+
+Scoped to `98ea231` ("blog: Accept: text/markdown content negotiation"):
+nginx vhost negotiation maps + internal `/_md/` location, `render_markdown()`/
+`render_index_markdown()`/`title_yaml_escape()` in
+`src/executive_standard/render.py`, `body_md` sourcing (html2text for
+Substack, real source for Pi-native, overrides patch both) + `_md/`
+emission in `executive_standard_sync.py`, `html2text>=2024.2.26` in
+requirements.txt.
+
+Second-brain searched first (`substack`, `executivestandard`, `llms.txt`,
+`html2text`, raw `markdown AND negotiation`): **no prior findings on this
+area** — the blog/markdown-negotiation surface has never been investigated;
+this check legitimately starts cold. (The search itself surfaced a separate
+real finding — see finding 2.)
+
+## Documentation drift from this commit: none
+
+No doc in the checked set (README.md, CLAUDE.md, docs/, src/ingest/README.md,
+src/shared/watchlist_README.md) mentions the Executive Standard blog, the
+sync skill, or this vhost at all — there were no claims to invalidate.
+`executive_standard_sync.py`'s own docstring ("not yet wired to a timer --
+run manually") is still accurate; confirmed no unit/timer references it.
+Pre-existing, NOT from this commit: `docs/INFRA_MAP.md`'s hostname table
+(§7, ~line 556) has never listed `executivestandard.example.com`
+(the vhost predates this commit) and still lists `ollama.` as live though
+the 2026-08-30 pass purged that vhost — both fall under INFRA_MAP's
+already-documented §6b "repo/live nginx drift, operator decision pending"
+territory, noted here for the next INFRA_MAP refresh, not re-derived.
+
+## Real findings
+
+### 1. The feature is committed+signed but 100% inert live — all three deploy legs missing, and nothing records them as pending
+
+Verified live at 11:12 EDT: `curl -H 'Accept: text/markdown'` against the
+vhost (root and a post URL) returns `200 text/html` — the HTML page, no
+`Link`/`Vary` headers. Because:
+
+- **Live nginx conf is the pre-commit version.** Byte-diffed
+  `/etc/nginx/conf.d/executivestandard.example.com.conf`
+  against `HEAD:nginx/conf.d/…` — the entire negotiation block (3 maps,
+  server-level headers, gzip, the rewrite, the internal `/_md/` location)
+  exists only in the tracked copy. Root-owned target; needs operator
+  `sudo cp` + `nginx -t` + reload (no deploy script exists for nginx
+  confs — consistent with INFRA_MAP §6b).
+- **`/var/www/executivestandard.example.com/_md/` does not
+  exist.** The webroot's last build is 01:37 EDT — pre-commit code. The
+  sync (manual-run by design) has not been re-run since the commit.
+- Unlike the same-day precedents in CLAUDE.md ("needs rebuild+redeploy,
+  not yet done" for runner/web on 08-31), **no note anywhere records the
+  pending deploy steps** — a future session reading the present-tense
+  commit message would assume this is live.
+
+Host-side prerequisites all verified in place, so deploy is genuinely just
+those two steps: `html2text` 2025.4.15 importable on the host, both new
+render functions import and produce correct output (smoke-tested offline:
+YAML escaping of colon/quote titles, H1 dedup for Pi-native bodies, the
+body_html-strip fallback), and the tracked conf **passes `nginx -t`**
+standalone (syntax ok; tested with a stubbed `corporatetraveldc_lr` zone).
+
+**Deploy checklist:** (1) `python3 src/poller/skills/executive_standard_sync.py`
+(writes `_md/`); (2) sudo cp the vhost conf + `nginx -t` + reload. Order
+doesn't matter for safety: conf-first 404s markdown requests until sync
+runs (the `internal` location can't leak); sync-first leaves `_md/*.md`
+directly browsable as plain files until the conf lands (same public
+content, no exposure).
+
+### 2. `scripts/post-commit-doc-verify.sh`'s search guidance drifted — default second-brain search now silently under-returns multi-word queries (fixed in-tree, uncommitted)
+
+The prompt this very check runs under (tracked,
+`scripts/post-commit-doc-verify.sh:55`) says "plain-language query, no
+quoting needed even for hyphenated terms." That guidance predates the
+phrase-wrap change in `index_db.search_notes()` (commit `893b6b0`,
+semantic-layer): a default-mode multi-word query is now wrapped as an FTS5
+**exact phrase**, not implicit-AND. Confirmed live:
+`second-brain-search.sh llama swap` → **0 results**;
+`--raw llama AND swap` → the real swap-thrash notes. Every automated pass
+following the script's guidance verbatim has been silently under-searching
+its "prior findings" step (this pass's own first four queries came back
+empty for exactly this reason). Same agent-facing-procedural-doc drift
+class as the 08-31 flight-hifi-track SKILL.md case. Fixed the guidance
+line in the script (uncommitted working-tree edit): single word or exact
+phrase for default mode, `--raw X AND Y` for multi-word, `--semantic` for
+concept queries. The `search_notes()` behavior itself is deliberate and
+documented in its docstring — not touched.
+
+## Minor / cosmetic (noted, not vault-worthy)
+
+- `gzip_types text/html` in the new conf triggers
+  `nginx: [warn] duplicate MIME type "text/html"` on every `nginx -t`/
+  reload (text/html is always gzipped implicitly) — harmless, confirmed
+  in the standalone syntax test; operator will see the warning at deploy.
+- Extensionless-URL gap: `try_files $uri $uri/ $uri.html` serves posts at
+  `/slug` too, but the negotiation and Link-header maps only match `/`
+  and `*.html` — an agent hitting the extensionless variant gets HTML
+  with no alternate advertised. All canonical links the site emits use
+  `.html`, so cosmetic.
+- `html2text` lands in all 7 container images on their next rebuilds
+  (every Containerfile pip-installs requirements.txt) though only the
+  host-run sync uses it — small image bloat, nothing functional.
+- No tests cover the new render functions (this surface had zero test
+  coverage before; not a regression).
+
+## Live-state continuity
+
+- `verify-manifest: OK -- signature valid, all 879 files match` at check
+  start (this pass's own edits — this file + the script fix — re-open the
+  usual unsigned window until next signing; expected, self-resolving).
+- Failed-unit set and pre-signing `poller:latest`/`ingest:latest` builds:
+  unchanged from the third pass; post-signing rebuilds still pending.
+  Nothing in this commit changes container-side behavior until those
+  rebuilds happen anyway (html2text is host-side for this feature).
+
+---
+
+# Fifth pass — post-commit 8a5fa26 (nwws retry + NOTAM retirement), ~14:10 EDT
+
+Scoped to `8a5fa26`: bounded retry-with-backoff for `push:nws` heartbeat
+writes in `src/ingest/nwws.py`, the FAA NOTAM Search API retirement research
+documented into `src/poller/fetchers/notam.py`'s docstring, and committing
+the fourth pass's search-guidance fix in `scripts/post-commit-doc-verify.sh`.
+
+Prior art consulted first: the nwws heartbeat area is well-trodden — vault
+notes `20260831T161751Z` (the original try/except fix this commit upgrades),
+`20260831T120046Z` (doc-drift pass on that commit), and the 08-20/21/23
+NWWS incident chain. This pass builds on those. The NOTAM Search API
+retirement has NO prior vault note (searched `notam`, plus `--raw` variants)
+— it is new research introduced by this commit, which is exactly why the
+docs below now lag it. (Meta: this pass's prior-art step ran under the
+freshly committed search guidance and it worked — single-word and `--raw`
+queries all returned; the pass-4 under-searching failure mode is gone.)
+
+## Drift found (real)
+
+### 1. docs/DATA_SOURCES.md §"FAA NOTAM API" — access process is now factually wrong
+
+Lines ~237–251 ("Last verified: 2025-12"): signup portal
+`api.faa.gov/signup`, API docs link, "**Access process:** Self-serve API
+key registration… Key is issued immediately after email verification",
+"**No email required** — portal registration is fully self-serve."
+All of that is invalidated by this commit's documented research: the legacy
+NOTAM Search API this fetcher targets was retired 2026-04-18 with the rest
+of legacy FNS, replaced by NMS, whose API access is **email-request-only**
+(`notams@faa.gov`) — there is no self-serve path, and a key from the old
+portal flow would not work against a retired product. DATA_SOURCES.md is
+the canonical access-process reference; an operator following it today
+would chase a dead registration. Lesser echoes of the same claim:
+README.md:154's "⚠️ Needs `FAA_NOTAM_API_KEY` + `FAA_NOTAM_API_SECRET`"
+row and the README.md:525 setup comment ("populate credentials (…, FAA
+NOTAM key, …)") both frame the credentials as pending-but-obtainable;
+the truth is now "unobtainable without an NMS-API rewrite of the fetcher."
+Suggested fix: mirror `notam.py`'s new docstring into the DATA_SOURCES
+section. **Not edited this pass** — a concurrent session is mid-sign (see
+continuity below) and pass-1 precedent is to document doc-drift, not
+rewrite under someone's feet. Left alone deliberately: the dated snapshot
+docs (COGS_VENDOR_COMPARISON's "free via public NOTAM Search") are
+historical records; DESIGN-PRINCIPLES.md:36's "credentials always
+optional / a missing key degrades one feed" remains true.
+
+### 2. The nwws retry fix is committed+signed but not deployed — pending-deploy-leg class again
+
+Running ingest image is build-date `20260902T151152Z` (11:11 EDT), which
+predates the 14:01 EDT commit; grep inside the running `ingest-core`
+confirms the retry loop ("after 4 attempts") is absent. The image is
+self-consistent (built from the signed post-`98ea231` tree), so
+verified-exec passes and all 7 ingest containers run fine — they just run
+the OLD one-attempt-per-tick heartbeat, so the false-kickover window the
+commit closes stays open until the ingest image is rebuilt (post-signing)
+and `ingest-core` restarted. Harmless right now: all 8 push heartbeats
+were 1–28 s fresh at 14:08 EDT, `push:nws` at 1 s. The poller image
+likewise predates the commit, but `notam.py`'s change is docstring-only —
+no behavioral gap, rebuild is routine. Recording this here because (same
+as pass-4 finding 1) nothing else records the pending leg.
+
+## Real findings, not from this commit (both persisted to vault)
+
+### 3. The commit's own sqlite-lock class claimed a third victim the same day: `index_db.index_note()`
+
+`corporatetraveldc-second-brain-rss.service` failed at 12:13:20 EDT on
+`sqlite3.OperationalError: database is locked` — a hard, uncaught crash in
+`src/second_brain/index_db.py`'s `index_note()` (`vault_documents` INSERT)
+against the vault-index DB. This is the exact error class `8a5fa26` fixes
+for the nwws heartbeat and yesterday's opensky fix addressed for bulk
+imports — now surfacing at a third call site, in a *different* database
+(the vault index, not the dispatch DB). `index_db.py`'s writers have no
+retry/backoff at all, so any rss/indexer run that collides with a
+concurrent vault write (agent sessions write notes constantly) dies
+outright. Self-heals on the timer's next fire, but the class is picking
+off call sites one at a time; a connection-level `busy_timeout` on the
+index DB (rather than a fourth per-call-site retry loop) looks like the
+structural fix. Operator decision on approach; nothing changed this pass.
+
+### 4. runner PWA is down — stopped 12:47 EDT, never restarted
+
+`corporatetraveldc-runner.service`: journal shows a clean `Stopping` at
+12:47:15 (then the known uvicorn-slow-shutdown SIGKILL-after-10s, exit
+137, unit `failed`), and **no `Starting` line since** — a deliberate stop,
+not a crash, most likely the concurrent session iterating (runner had been
+up only ~11 min at that point; web was restarted again at ~14:04). Port
+8001 confirmed connection-refused at 14:10. NOT restarted by this pass —
+restarting under an active session's feet risks clashing with whatever
+they stopped it for — but if it's still down when that session winds up,
+it needs `systemctl --user start corporatetraveldc-runner.service`.
+(`runner-demo` is unaffected, up 2 days.)
+
+## Still accurate (checked, no drift)
+
+- README.md §push-primary/heartbeat mechanism (~lines 232–235, 90 s
+  `FALLBACK_MAX_AGE`) — matches the commit's own rationale; the retry is
+  internal behavior, no doc claim touches attempt counts.
+- `src/ingest/README.md` — heartbeat-stamping and feed-key table
+  unaffected; `docs/DATA_SOURCES.md:179`'s "30 s mark_push_healthy
+  heartbeat" still accurate.
+- `notam` feed live state: still `awaiting_credentials` in `feed_state`,
+  skip-gracefully behavior unchanged — the new docstring's "same as
+  today" claim verified live.
+- CLAUDE.md's 08-31 entry ("logs and retries next tick instead of dying")
+  now describes superseded behavior, but it's a dated log entry in a
+  write-only scratchpad, not living-doc drift.
+
+## Live-state continuity
+
+- Failed units 22 → 6 since the fourth pass: the post-signing rebuild
+  finally happened (all four images rebuilt `20260902T151152Z`, containers
+  restarted ~12:05–13:32 EDT), clearing the morning verify-manifest
+  pattern. Remaining 6 = four *expected* stragglers whose only fire today
+  hit the pre-signing image (daily-opsplan 07:00, ep-advance-venues 06:10,
+  freshness-audit + pull-path-verify 06:00 — all clear on next scheduled
+  fire) + findings 3 and 4 above. Note: ep-advance-venues' 06:10 failure
+  means the venue half of the ep-advance split has *still* never run live;
+  next real test 06:10 ET tomorrow.
+- **ops-brief's context-budget fix has now run live** (the thing passes
+  1–4 were tracking): the 12:05 EDT fire ran 47 min against the new image
+  and deactivated cleanly; 13:05 and 14:05 fires followed (13:05 finished
+  in 30 s — plausibly the trend-vs-hourly branch, not investigated;
+  neither failed). Output-quality verification out of scope here.
+- verify-manifest at check time: INTEGRITY FAILURE on exactly one file,
+  `scripts/scrub-public-tree.py` — a *staged, uncommitted* 14:03 EDT edit
+  allowlisting `notams@faa.gov`, i.e. the direct follow-up this commit's
+  docstring requires so the public-mirror email scrub doesn't block it.
+  Concurrent session mid-pass; expected, resolves when they sign+commit.
+  (This file's own edit re-opens the usual unsigned window on top.)

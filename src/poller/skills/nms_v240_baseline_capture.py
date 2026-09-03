@@ -6,11 +6,18 @@ nms_v240_baseline_capture -- one-shot pre-deploy snapshot for the FAA NMS
 Our live NOTAM ingest path is push:fns -> ingest/parsers/aim_parser.py
 (AIXM 5.1 AIXMBasicMessage over Solace AMQP) -> notams table -- confirmed
 live and healthy 2026-08-07 (5,697 rows total, 24 in the last hour,
-zero parse errors in the last 6h of ingest logs). This is a DIFFERENT
-path from the poller/fetchers/notam.py REST fetcher, which is dead
-(feed_state shows "awaiting_credentials" -- FAA_NOTAM_API_KEY was never
-provisioned). NMS v2.4.0 is a risk to the AIXM/FNS push path, not the
-REST fetcher.
+zero parse errors in the last 6h of ingest logs).
+
+UPDATE 2026-09-02: poller/fetchers/notam.py is NO LONGER dead -- the
+operator recovered real NMS-API (REST) onboarding credentials from a
+months-old spam-folder email and the fetcher was rewritten against the
+real, current API (api-nms.aim.faa.gov, OAuth2 client-credentials, NOT
+the old retired api.faa.gov/notamSearch this comment originally
+referred to). Confirmed live: 1,472 real NOTAMs written from a 24h
+nationwide backfill pull. It reuses this SAME aim_parser.py parsing/
+write pipeline (the REST response is AIXM 5.1, identical format to the
+SWIM push path) -- so NMS v2.4.0-class FAA-side changes are now a risk
+to BOTH paths, not just the push one.
 
 The FAA notice claims no impact to origination/distribution during the
 maintenance window, but a version bump can still change response
