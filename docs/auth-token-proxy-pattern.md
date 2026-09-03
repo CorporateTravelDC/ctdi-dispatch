@@ -161,11 +161,12 @@ proxy gets the service token attached, including a request arriving from the
 public `dispatch-runner.example.com` hostname. Use this only for
 data that is *intentionally* visible to the public Ops view.
 
-> **Status note (2026-08-23):** `dispatch-runner.example.com`
-> has returned 502 since 2026-08-15 (the `runner-demo` unit is
-> crash-looping) and `DEMO_MODE` is unset. The policy guidance in this
-> document stands unchanged — but do not try to *validate* behavior against
-> the live public hostname while it's down.
+> **Status note (2026-08-23; superseded 2026-09-03):**
+> `dispatch-runner.example.com` was restored 2026-08-24 and
+> serves 200, and the `runner-demo` Quadlet now sets `DEMO_MODE=true` +
+> `DEMO_SESSION_SECRET` — so on the public path the demo session gate runs
+> *in addition to* the injection rules described here. The policy guidance
+> in this document stands unchanged.
 
 ```python
 # src/runner/main.py:1494 as of 2026-08-23 (line numbers drift — search the symbol)

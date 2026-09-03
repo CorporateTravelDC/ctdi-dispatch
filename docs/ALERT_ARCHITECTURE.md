@@ -52,20 +52,26 @@ the platform doesn't decide this for them.
 > per entry) and the two alert-only guards (`corporatetraveldc-watchdog.timer`
 > root-scope, `failover-kickover-guardrail.timer` user-scope).
 >
-> **Second scope caveat, added 2026-08-23 — the layer model assumes the
-> stack is running, and there is now a designed state in which it isn't.**
-> `scripts/thermal-ingest-guard.py`'s LOCKDOWN (redesigned 2026-08-23:
-> trips at `temp >= 79C`, `load1 >= 40`, or ≥2 load-attributed brief
-> fallbacks in 300 s) stops all six SWIM ingest containers, `ingest-core`,
-> `poller`, `pusher`, `runner` and `ollama.service` — everything except
-> `web`. Every layer above therefore goes dark simultaneously and silently:
+> **Second scope caveat, added 2026-08-23; triggers updated 2026-09-03 —
+> the layer model assumes the stack is running, and there is a designed
+> state in which it isn't.**
+> `scripts/thermal-ingest-guard.py`'s LOCKDOWN (as of the 2026-08-27
+> corrections: trips at `temp >= 79C` or `load1 >= 40` — the third,
+> contention-fallback trigger was demoted to informational-only) stops all
+> six SWIM ingest containers, `ingest-core`,
+> `poller`, `pusher`, and `runner` — everything except
+> `web` (the guard no longer touches any LLM service — `ollama.service` is
+> gone with the llama.cpp cutover and the `corporatetraveldc-llama-*` units
+> are deliberately out of scope). Every layer above therefore goes dark
+> simultaneously and silently:
 > the parsers that call `fire_family_alert()` are not running, and `pusher`
 > is stopped so even non-family paths like `cps` cannot fire. The guard's
 > own priority-5 `ops-health` push is one of the only things still able to
-> publish. This is not hypothetical, and it is not rare — **two** real
-> LOCKDOWNs fired on 2026-08-23, both triggered by the Ollama-contention
-> signal: 12:18 → 12:29 EDT and 14:34:42 → 14:45:51 EDT. Roughly one
-> every two hours on a busy afternoon, not a once-ever event. Treat a
+> publish. (Historical frequency note: **two** real
+> LOCKDOWNs fired on 2026-08-23, both triggered by the since-demoted
+> Ollama-contention signal — 12:18 → 12:29 EDT and 14:34:42 → 14:45:51 EDT.
+> With that trigger demoted, expect LOCKDOWNs to be rare genuine
+> load/thermal events, not a bi-hourly occurrence.) Treat a
 > total absence of family alerts as a state to
 > check the guard about, not as a quiet NAS. See `docs/DATA_SOURCES.md`
 > §"Thermal ingest guard".
@@ -388,11 +394,15 @@ Every family in the table above (except the intentionally-unsplit `aim_fns`/lega
 - ~~**STDDS alert criteria**~~ -- resolved 2026-08-03: ASDE-X ground
   congestion, SafetyLogicHoldBar incursion signals, and
   SurfaceMovementEventMessage taxi-phase gauges are all built and
-  extended to the 8-zone model (§6). Genuinely open follow-on: the other
-  ~11 STDDS message types confirmed live but never wired (DATISData,
-  RVRDataUpdateMessage, TowerDepartureEventMessage, several
-  `*ServiceStatus` health-check types) -- real, confirmed-live, completely
-  unbuilt, not a quick add.
+  extended to the 8-zone model (§6). ~~Genuinely open follow-on: the other
+  ~11 STDDS message types confirmed live but never wired~~ — **largely
+  closed 2026-08-30**: `smes_parser.py` now parses the four TDES/APDS
+  shapes on the same queue — `RVRDataUpdateMessage` (→ `stdds_rvr`),
+  `TowerDepartureEventMessage` (→ `tdes_departure_events`),
+  `TDLSCSPMessage` (PDC/CPDLC text → `tdls_messages`, with regex-extracted
+  EDCT/route), and `DATISData` (→ `datis_snapshots`) — as **storage**, not
+  new alert paths. The `Asset*`/`*ServiceStatus` health-check shapes remain
+  deliberately unparsed (documented in the parser).
 - **FDPS/FIDS OOOI standing-record channel** — a planned always-on log of
   OOOI milestone events (separate concern from the alert families above,
   intended as a sanitizable demo/reporting source of truth).

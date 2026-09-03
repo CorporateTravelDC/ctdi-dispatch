@@ -21,6 +21,25 @@ Every performance/resource guardrail in this repository was tuned for **one depl
 > NOT DEPLOYED by that morning audit. Rows marked **STALE→corrected** keep
 > their 2026-08-19 corrections. `OLLAMA_MAX_LOADED_MODELS` remains genuinely
 > unconfigured — that row's correction still stands.
+>
+> ## Superseded again 2026-08-27 — Ollama retired for llama.cpp (verified 2026-09-03)
+>
+> The Ollama daemon, its `20-resource-limits.conf` drop-in, and the
+> `ollama-governor` unit **no longer exist** — inference is now the
+> per-tier `corporatetraveldc-llama-{hot,chat,report-1}` systemd user units
+> (llama.cpp `llama-server`, tailnet-IP-bound :8093/8094/8095, one shared
+> phi3-mini GGUF, report-1 on-demand). The *principle* of every row below
+> stands — everything still shares 4 cores and one thermal envelope — but
+> the `ollama.service`, `LLAMA_ARG_CACHE_RAM`, governor,
+> `OLLAMA_MAX_LOADED_MODELS`, and `OLLAMA_TIMEOUT`/`OLLAMA_LOAD_TIMEOUT`
+> rows now describe a retired unit; the current single-box carve-out lives
+> in each llama unit's own directives (e.g. llama-hot `CPUWeight=9000`,
+> `MemoryMax=4608M`, never thermally paused). The thermal-ingest-guard row
+> also changed 2026-08-27: the fallback-count LOCKDOWN trigger is
+> informational-only, and LOCKDOWN no longer stops any LLM service (the
+> llama units are deliberately out of scope). Read the Ollama-era rows as
+> the historical record of this box's shared-resource tuning, not as
+> current config.
 
 ## The guardrails this applies to (non-exhaustive)
 

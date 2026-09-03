@@ -63,11 +63,14 @@ so overriding them there would clobber the real ones.
 | `www.example.com` (+ apex, `wrangler.`) | `snippets/honeypot-website.conf` | ✅ |
 | `000-default-catchall` (`server_name _`, `default_server`) | *(none)* | ❌ |
 
-Note the table lists the *trapped* vhosts only. Re-counted live 2026-08-23:
-`/etc/nginx/conf.d/` carries **10** more untrapped vhost files — acars,
-adsb, dispatch-runner, mcp, ntfy, ollama, openwebui, pihole,
+Note the table lists the *trapped* vhosts only. Re-counted live 2026-09-03
+(previously 2026-08-23):
+`/etc/nginx/conf.d/` carries **9** more untrapped vhost files — acars,
+adsb, dispatch-runner, mcp, ntfy, openwebui, pihole,
 `tailscale-dispatch-runner` (the tailnet-only runner vhost, missed by an
-earlier revision of this list), plus a `cloud…conf.bak-20260807` copy —
+earlier revision of this list), plus a `cloud…conf.bak-20260807` copy (the
+`ollama` vhost the 2026-08-23 count included is gone, removed with the
+2026-08-27 Ollama retirement) —
 alongside the two non-vhost includes (`00-honeypot.conf`,
 `00-rate-limit-corporatetraveldc.conf`) and `000-default-catchall.conf`. Do
 not read the table above as the full vhost inventory.
