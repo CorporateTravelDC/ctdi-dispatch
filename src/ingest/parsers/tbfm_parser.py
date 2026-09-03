@@ -68,7 +68,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
-from common.push_dedup import PushDedup, content_hash
+from common.push_dedup import PushDedup, bucket_count, content_hash
 from shared.watchlist import _fire_ntfy_dual
 
 log = logging.getLogger("ingest.parsers.tbfm")
@@ -378,7 +378,14 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
         seq_count = db.get_active_tbfm_sequence_count(fix)
         if seq_count < _MIN_SEQ_FOR_ALERT:
             continue
-        dedup_key = content_hash(f"tbfm:{fix}:{seq_count}")
+        # 2026-09-03 (forward-only push_dedup redesign + content-hash
+        # audit): seq_count is band-of-5 bucketed -- the raw count churned
+        # by 1-2 on nearly every incremental TBFM update, so it read as
+        # "changed content" and re-fired constantly regardless of the old
+        # 300s window; and under forward-only semantics only a genuine
+        # band jump (real queue growth/shrink) should fire. Same numeric
+        # bucketing as smes_parser's STDDS count alerts.
+        dedup_key = content_hash(f"tbfm:{fix}:{bucket_count(seq_count)}")
         # Bug fixed 2026-07-21: dedup slot key was the constant string "tbfm"
         # for every meter fix, so with ~100 fixes active nationwide on this
         # feed, each fix's check evicted every other fix's dedup state --
@@ -475,7 +482,18 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
         apt = s.get("apt") or "?"
         status = f"{apt} arrival, meter fix {fix}" + (f", ETA {eta}" if eta else "")
 
-        dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}")
+        # 2026-09-03 (forward-only push_dedup redesign): the ETA's DATE is
+        # folded into the content key as the per-leg episode identity.
+        # entry_id+fix alone is stable across days for a PERMANENT
+        # watchlist entry (a daily flight meters through the same arrival
+        # fix every day), and under forward-only semantics -- which now
+        # delivers this docstring's stated "fires once per fix per flight,
+        # not on every re-send" for real, instead of re-firing every 30
+        # min while queued -- an unchanged hash would have silenced every
+        # later day's leg. TBFM's parsed sequence carries no gufi, so the
+        # ETA date is the leg discriminator; a cross-midnight ETA roll can
+        # cost one extra fire, which is the acceptable direction.
+        dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}:{(eta or '')[:10]}")
         if not _TBFM_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
             continue
 

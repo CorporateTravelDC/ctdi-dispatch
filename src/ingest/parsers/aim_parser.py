@@ -26,7 +26,12 @@ Storage/alert routing:
                         outside the DC region is dropped at write time.
   VIP (POTUS/VP/AF1/AF2/Marine One) : always stored + alerted, nationwide,
                         regardless of facility.
-  Dedup               : 24h window keyed on notam_id (PushDedup "notam")
+  Dedup               : forward-only, keyed on notam_id with a full
+                        content hash (classification + effective window +
+                        text) -- an unchanged NOTAM never re-alerts, an
+                        amendment under the same ID re-alerts immediately
+                        (2026-09-03 redesign; was a 24h re-fire window on
+                        a hash of just the ID)
   Alert routing (refined 2026-08-03): VIP -> hot-alerts priority=5.
                         Flight-restriction NOTAMs (TFRs, restricted/
                         prohibited airspace) -> fdps-alerts/fdps-<zone>
@@ -72,7 +77,18 @@ _PERMANENT_AIRPORTS: frozenset[str] = frozenset({
 })
 
 _ICAO_RE = re.compile(r"\b(K[A-Z]{3})\b")
-_DEDUP_TTL = 86400   # 24 hours — one push per NOTAM per day
+# 2026-09-03 (forward-only push_dedup redesign): dedup_secs no longer forces
+# a daily re-push -- under the old semantics every active NOTAM that kept
+# getting rebroadcast re-alerted once per 24h for its entire life (1,300+
+# live entries in pusher-notam-dedup.json, i.e. 1,300+ re-alerts per day at
+# steady state). Now an unchanged NOTAM alerts exactly once and only a
+# genuine amendment (see _fire_notam_alert's content hash) re-alerts.
+# dedup_secs=86400 is retained so the eviction/retention horizon stays at
+# the proven 10x = 10 days (any longer and the full-file rewrite per alert
+# regrows toward the 328KB problem the 2026-08-26 C-21 fix addressed; a
+# NOTAM rebroadcast unchanged past 10 days re-alerts once, which is still
+# 10x quieter than the old daily repeat).
+_DEDUP_TTL = 86400
 _NOTAM_DEDUP = PushDedup("notam", dedup_secs=_DEDUP_TTL)
 
 _VIP_KEYWORDS = frozenset({
@@ -266,7 +282,22 @@ def _fire_notam_alert(notam: dict) -> None:
     dispatch-alerts is not used for NOTAMs.
     """
     notam_id = notam["notam_id"]
-    dedup_key = content_hash(notam_id)
+    # 2026-09-03: the content key is now a hash of the NOTAM's actual
+    # meaningful content, not of notam_id (which is already the slot key,
+    # so hashing it produced a constant -- fine while the 24h window did
+    # the re-firing, but under forward-only semantics a constant hash
+    # would have made a genuine AMENDMENT under the same NOTAM ID
+    # permanently invisible). classification + effective window + full
+    # text: any of those changing is a real amendment worth a fresh
+    # alert; a byte-identical rebroadcast stays suppressed. Migration
+    # note: existing on-disk entries store the old hash-of-ID value, so
+    # each already-alerted live NOTAM re-alerts ONCE when next
+    # rebroadcast (comparable to one day's worth of the old daily
+    # repeats), then goes quiet for good.
+    dedup_key = content_hash(
+        f"{notam.get('classification')}|{notam.get('effective_start')}|"
+        f"{notam.get('effective_end')}|{notam.get('text_body') or ''}"
+    )
     if not _NOTAM_DEDUP.should_push(notam_id, dedup_key):
         return
 

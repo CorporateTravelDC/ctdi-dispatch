@@ -724,6 +724,18 @@ def write_itws_alerts(alerts: list[dict]) -> int:
 # on a persisting hazard without spamming every SWIM tick, and any real
 # content change (new severity, new detail text) fires immediately
 # regardless of the window via PushDedup's content-hash comparison.
+#
+# 2026-09-03 (forward-only push_dedup redesign): DELIBERATELY kept on the
+# explicit PERIODIC api (should_push_periodic), not migrated to
+# forward-only like the rest of the SWIM parsers. This is the one SWIM
+# alert class where the paragraph above's safety reasoning still holds: a
+# severity>=4 hazard (microburst/gust front/LLWS at a tracked airport)
+# that persists UNCHANGED for an hour genuinely warrants a 20-min
+# still-active reminder -- silence until the storm text happens to change
+# is the wrong direction for weather an operator may be dispatching into.
+# Flag to the operator: if the 20-min repeats on long-lived unchanged
+# ITWS conditions are unwanted after all, this is a one-word change
+# (should_push_periodic -> should_push).
 _itws_dedup = PushDedup("itws-alerts", dedup_secs=1200)  # 20 min
 
 
@@ -751,7 +763,7 @@ def check_itws_alerts(alerts: list[dict]) -> None:
         detail = a.get("detail") or product_type
         dedup_key = f"{airport}:{product_type}"
         hash_key = content_hash(f"{sev}:{detail}")
-        if not _itws_dedup.should_push(dedup_key, hash_key):
+        if not _itws_dedup.should_push_periodic(dedup_key, hash_key):
             log.debug("itws: suppressing duplicate alert %s (unchanged within window)", dedup_key)
             continue
         title = f"ITWS {product_type} — {airport} (sev {sev})"

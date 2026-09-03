@@ -736,3 +736,124 @@ risk against production); recording it so nobody goes hunting for the
   stranded the ingest fleet was presumably theirs — worth them knowing
   it's been restarted (finding 1) so a future full-stack restart
   includes the ingest units.
+
+---
+
+# Seventh pass — post-commit 8e280ca (split-call fix, 5 daily-watch siblings), ~23:15 EDT
+
+Scoped to `8e280ca` ("Split-call fallback fix: 4 remaining daily-watch
+siblings + poller/guardrail drift"): the aam split-call rearchitecture
+replicated verbatim across `aviation`/`concierge_travel`/
+`executive_protection`/`gig_economy`/`trains_yachts` `_daily_watch.py`
+(two independent per-framing `llm_generate()` calls, max_tokens 500→250,
+per-skill timeouts preserved unchanged, `_split_framings` import dropped,
+new `partial` status, `ok_statuses=("ok","partial","fallback")`), plus
+two CLAUDE.md self-resolving entries (poller stop/SIGKILL, guardrail
+sqlite lock). All five files verified `py_compile`-clean; the diffs are
+structurally identical across the family (checked, not assumed).
+
+Prior art consulted first: vault notes
+`corporatetraveldc/01-Sources/manual/20260903T023550Z.md` (the aam
+root-cause + split-call writeup this commit replicates — it already
+names the sibling family and its 10–17% fallback audit) and
+`20260903T024557Z.md` (pass 6, which watched this commit's edits in
+progress as "concurrent session activity"). This pass builds on both;
+nothing below contradicts them.
+
+## Documentation drift from this commit: one, minor (fixed in-tree, uncommitted)
+
+**docs/ALERT_REFERENCE.md poller-skills table — all six daily-watch
+line citations stale.** The table cites each skill's ops-health
+cross-link publish by line number; the ~30-line docstring/preamble
+growth shifted every one: `aam_daily_watch.py:104`→223 (drifted at
+`3fce346`, the commit before), `aviation:123`→175, `concierge:109`→153,
+`executive_protection:112`→162, `gig_economy:118`→164,
+`trains_yachts:109`→154. Topic/priority/message behavior all unchanged —
+the cross-link push itself is untouched by the rearchitecture — so this
+is citation drift only. Fixed the six line numbers in place (uncommitted
+working-tree edit, same as this file).
+
+Checked, no other drift — the claims that could have broken, didn't:
+
+- No living doc describes the old shared-call/`_split_framings`
+  architecture for these five skills (only their own docstrings, which
+  this commit updated). `_split_framings` retains exactly one caller,
+  `aam_weekly_watch.py` itself — the 08-31 "at-risk, retrofit if it hits
+  the same wall" flag stands unchanged.
+- The new `partial` status breaks no consumer: `send_run_status`
+  genuinely honors `ok_statuses` (`ntfy_push.py:287`, same as pass 6
+  verified for aam); the SR-1 usage CSV (`common/sr1_log.py`) is
+  open-vocabulary with no automated reader keyed to a fixed status set;
+  `brief-fallback-monitor.sh` classifies journal strings from
+  ops-brief/ep-advance only — the daily-watch family was never in its
+  scope. The dropped `fallback_error` status survives in nine *other*
+  skills' own vocab; nothing external referenced the five siblings'.
+  One bookkeeping note for future fallback-rate audits off the CSV: a
+  half-failed run now logs `partial` (with the model name, not
+  "deterministic"), so a query counting only `status="fallback"`
+  under-counts partial degradation — that visibility is the point.
+- README.md, INFRA_MAP.md, SECOND_BRAIN_STATUS.md,
+  COMPLIANCE_SECURITY.md mention the family only at
+  cadence/membership level (timers untouched); `src/ingest/README.md`
+  and `src/shared/watchlist_README.md` don't mention it at all.
+
+## Real findings (live) — persisted to vault
+
+### 1. FIXED THIS PASS: the 23:02 stop-cycle stranded the ingest fleet AGAIN, plus pusher and runner — second occurrence in 40 minutes
+
+The pre-commit stop-cycle whose poller half this commit's CLAUDE.md
+entry records ("Restarted, confirmed active") also cleanly stopped, in
+the same minute: **all 7 ingest units** (ingest-core 23:01:51 — 19
+minutes after pass 6 restarted it from the *previous* forgotten
+stop-cycle), **pusher** (23:02:23, SIGKILL after the 10 s grace, exit
+137, `failed`) and **runner** (23:02:42, same). Only poller was brought
+back. Consequences until this pass caught it at ~23:12: all 7 SWIM/NWWS
+push heartbeats ~745 s stale (second total push outage tonight,
+~23:02–23:15), and — worse than the 22:21 iteration — **pusher was down,
+so the ntfy alert-delivery path itself was dark**, meaning even a
+watchlist hit written to the DB wouldn't have been pushed.
+amtrak-tracker kept `push:amtrak` fresh throughout (it lives outside the
+stop-cycle's blast radius). Restarted all 9 units 23:13; verified 8/8
+push heartbeats <60 s, all units active, runner HTTP 200 on :8001. This
+is now a recurring pattern, not a one-off: two full-stack stop-cycles in
+one evening each restarted only the unit that prompted the check.
+A `restart-stack.sh`-style postcondition check (assert every
+long-running unit active after a stop-cycle) would close the class.
+
+### 2. Pending-deploy leg (recurring class): the split-call fix has never run live — and tonight's fires are all old-code
+
+All four images remain build-date `20260902T151152Z` (11:11 EDT),
+predating both `3fce346` and this commit. At check time all four
+non-EP siblings were simultaneously `activating` on the old image
+(trains-yachts at ~75 min wall since its 22:00 fire — the old
+shared-call under tonight's load1 ~21–26 contention is itself a live
+illustration of why the halved-budget split matters). Every outcome
+tonight is the old code's; the first real test of the family fix is the
+first fire of each after a post-`8e280ca` poller rebuild. The aam fix
+(one commit older) is in the same boat. Nothing else records this leg.
+
+### 3. executive-protection-daily-watch's 22:15 fire failed on a Nextcloud WebDAV read-timeout — transient class, not this commit
+
+Failed 23:05:12 after 50 min wall: `requests` ReadTimeout (30 s) against
+`host.containers.internal:80` (Nextcloud WebDAV) — old-image run, box
+under sustained load. Same transient class as the 08-31
+concierge-travel WebDAV-timeout entry in CLAUDE.md: oneshot timer unit,
+self-tests on its next fire (23:45 EDT tonight). `reset-failed` run, no
+code change. Worth attention only if the WebDAV-timeout class starts
+recurring under normal load.
+
+## Live-state continuity
+
+- Failed units at check start: daily-opsplan, ep-advance-venues,
+  freshness-audit (known stragglers — clear on tomorrow's fires),
+  second-brain-rss (pass-6's watch item, unchanged, next fire is its
+  test), plus pusher/runner/EP-watch (all three findings above, all
+  cleared this pass).
+- `verify-manifest: OK -- signature valid, all 879 files match` at
+  check start against the committed tree — this pass's two edits (this
+  file + ALERT_REFERENCE.md) re-open the usual unsigned window until
+  next signing; expected, self-resolving.
+- Box load receding: load1 20.7 at pass end (was 22–26 through the
+  evening).
+- aam-daily-watch's 22:30 old-code fire completed 22:45:15,
+  status=0/SUCCESS.
