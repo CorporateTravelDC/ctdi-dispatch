@@ -1,10 +1,13 @@
 # dispatch-runner — Design & Reference
 
-**Rewritten 2026-08-11 against `src/runner/main.py` (2484 lines as of
-2026-08-23), the live
+**Rewritten 2026-08-11 against `src/runner/main.py` (2,876 lines as of
+2026-09-03), the live
 Quadlets, and nginx/cloudflared config.** Supersedes the v2.0 (2026-06-14)
 design doc, which predated the ops-hostname retirement, demo mode, the
-AIS/ACARS views, and roughly half the current API surface.
+AIS/ACARS views, and roughly half the current API surface. (The frontend has
+also grown views this doc's table predates — UtmMapView, GraphView
+(knowledge graph), EventIntelView, and the DispatchDrawer chat — see
+`src/runner/frontend/src/App.jsx` for the live route set.)
 
 ## Overview
 
@@ -17,7 +20,7 @@ runner-specific API routes, proxying the dispatch web API.
 | Instance | Unit | Port | Exposure |
 |---|---|---|---|
 | Live ops dashboard | `corporatetraveldc-runner.service` | 8001 (127.0.0.1 + 100.x.x.x) | **Tailnet-only**: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 vhost → :8001). No public hostname. |
-| Public demo (playback) | `corporatetraveldc-runner-demo.service` | 8005→8001 | **Public hostname, LIVE since 2026-08-24 ~14:52**: `https://dispatch-runner.example.com` (CF tunnel → nginx → :8005) serves 200. The 2026-08-15→08-24 crash loop (`sqlite3.OperationalError` from the 08-14 F6 mount removal) was fixed by commit `0a7f643` — a dedicated `/var/lib/corporatetraveldc-demo` host dir is mounted at the container-internal state path, isolated from production (`NRestarts=0`, stable). `DEMO_MODE` is still set **nowhere** (code default `false`), so the demo came up with the DEMO_MODE-dependent gates **inert** — exactly the naive-fix scenario this doc warned about; the operator accepted the public-demo-on-sanitized-data exposure 2026-08-20, but setting `DEMO_MODE` explicitly is still pending (open MEDIUM in `PENTEST_REVERIFICATION_2026-08-24.md`). Reads the demo API (:8004) instead of live feeds |
+| Public demo (playback) | `corporatetraveldc-runner-demo.service` | 8005→8001 | **Public hostname, LIVE since 2026-08-24 ~14:52**: `https://dispatch-runner.example.com` (CF tunnel → nginx → :8005) serves 200. The 2026-08-15→08-24 crash loop (`sqlite3.OperationalError` from the 08-14 F6 mount removal) was fixed by commit `0a7f643` — a dedicated `/var/lib/corporatetraveldc-demo` host dir is mounted at the container-internal state path, isolated from production (`NRestarts=0`, stable — re-verified 2026-09-03). **The open `DEMO_MODE` MEDIUM is closed**: the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET` explicitly, so the DEMO_MODE-dependent gates (password sessions via `src/demo/profiles.py`, signal sanitization, ntfy suppression) are **armed**. Reads the demo API (:8004) instead of live feeds |
 
 **Historical (accurate 2026-08-15 → 2026-08-24 morning, superseded by the
 fix above):** the crash-loop-era detection guidance — a climbing
@@ -36,8 +39,9 @@ app layer regardless of `DEMO_MODE`: `PUT /api/v1/config` (404 untrusted),
 coordinate + empty widget key), and `GET`/`DELETE /api/chat/history`
 (404 untrusted — previously readable *and destructively clearable* with
 no credential). `proxy_dispatch()`'s `DEMO_MODE`+session-cookie check
-remains the only *hostname-wide* gate, and it is still inert while
-`DEMO_MODE` is unset.
+remains the only *hostname-wide* gate — and it is **active** on the demo
+instance now that its Quadlet sets `DEMO_MODE=true` (updated 2026-09-03; the
+live runner instance still never sets it).
 
 **Retired:** `ops.example.com` (2026-08-02) — hard-404'd by
 hostname in `_RETIRED_HOSTNAMES` (`src/runner/main.py`), no nginx vhost, no
@@ -52,7 +56,7 @@ fix.
 | Maps | Leaflet + OSM dark basemap; airplanes.live iframe for globe mode |
 | Realtime | FastAPI SSE (`/api/stream`, 30 s) + ntfy stream proxy |
 | Backend | FastAPI/uvicorn, port 8001 |
-| Chat | Ollama via `OLLAMA_CHAT_MODEL` (default `corporatetraveldc-pi5-chat:latest`) |
+| Chat | Local llama.cpp chat tier since 2026-08-27 (via `OLLAMA_CHAT_MODEL`, default `corporatetraveldc-pi5-chat:latest` — a persona key in `src/common/personas.py`, not an Ollama model) |
 | Container | `Containerfile.runner`; Quadlet in `.config/containers/systemd/` |
 
 ## Auth model
@@ -113,7 +117,7 @@ fix.
 | GET | `/api/demo/status` | `{demo_mode, authenticated, trusted_origin}` |
 | GET | `/api/demo/webhook-log` | Demo webhook activity log |
 | GET | `/api/adsb/local` | Proxy → UltraFeeder `aircraft.json` |
-| GET | `/api/adsb/live` | Proxy → airplanes.live v2 (250 nm of KDCA) |
+| GET | `/api/adsb/live` | **Local-receiver-only since 2026-08-27** (used to proxy airplanes.live; removed under the "everything is meant to be local" directive after a live 429 — results bounded by the box's own receiver range) |
 | GET | `/api/vdl2/messages` | VDL2 decode feed (acarshub) |
 | GET | `/api/acars/messages` | ACARS feed |
 | GET | `/api/hfdl/messages` | HFDL feed (hardware pending) |
@@ -154,7 +158,7 @@ process-scoped.
 | Route | View |
 |---|---|
 | `/` | Overview — CPS, weather, TFR, feed-health cards |
-| `/map` | ADS-B map (globe iframe / LOCAL UltraFeeder / LIVE airplanes.live) |
+| `/map` | ADS-B map (globe.airplanes.live iframe embed / LOCAL UltraFeeder / LIVE — since 2026-08-27 also local-receiver-sourced, see `/api/adsb/live`) |
 | `/trains` | NEC train tracking with watchlist highlighting |
 | `/ais` | AIS maritime map |
 | `/status` | Feed freshness / error state |

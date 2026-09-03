@@ -175,8 +175,11 @@ compounding the 2026-07-26 problem; `thermal-ingest-guard.py`'s shedding
 is only effective because those containers already have a bounded CPU
 footprint to fully stop, not an unbounded one to fight.
 
-**Ollama memory guardrail (added 2026-08-19):** the same
-`20-resource-limits.conf` drop-in now also bounds Ollama's memory:
+**Ollama memory guardrail (added 2026-08-19; superseded 2026-08-27 — the
+drop-in and `ollama.service` are gone, and the equivalent hard
+ceiling/no-swap limits now live inside each `corporatetraveldc-llama-*`
+unit, e.g. llama-hot `MemoryMax=4608M`):** the
+`20-resource-limits.conf` drop-in bounded Ollama's memory:
 `MemoryLow=4850M`, `MemoryHigh=6050M`, `MemoryMax=7250M`,
 `MemorySwapMax=0`, plus `OLLAMA_KEEP_ALIVE=10m` and
 `LLAMA_ARG_CACHE_RAM=0` -- installed to
@@ -196,15 +199,29 @@ was in application code, not a cgroup limit.
 
 ---
 
-## 4. Thermal + load guardrails — `ollama_governor.py` + `thermal-ingest-guard.py`
+## 4. Thermal + load guardrails — `thermal-ingest-guard.py` (the Ollama governor is retired)
+
+> **2026-08-27 update (verified 2026-09-03):** with the Ollama → llama.cpp
+> cutover, `ollama.service`, its `20-resource-limits.conf` drop-in, and the
+> `ollama-governor` unit were all retired (no such unit files exist; the
+> repo's `systemd/` copies are gone). The per-tier
+> `corporatetraveldc-llama-{hot,chat,report-1}` user units carry their own
+> `CPUWeight`/`MemoryMax` limits, llama-hot is documented in its own unit as
+> "never thermally paused", and a daily
+> `corporatetraveldc-llama-restart.timer` (03:00 ET) provides the freshness
+> cycle. `thermal-ingest-guard.py` also no longer touches any LLM service,
+> and its third LOCKDOWN trigger (contention-attributed fallbacks) was
+> demoted to informational-only the same day. The governor description and
+> the LOCKDOWN table below are kept as the record of the Ollama era and of
+> the 2026-08-23 design they justified.
 
 Two independent, non-interacting safety mechanisms (one thermal-only,
 one thermal *and* CPU-load):
 
-- **`ollama_governor.py`** (runs as a managed, enabled systemd unit,
-  `ollama-governor.service` — the unit file is repo-tracked at
-  `systemd/ollama-governor.service`; only the script itself, at
-  `/usr/local/bin/ollama_governor.py`, is untracked): SIGSTOP/SIGCONT on
+- **`ollama_governor.py`** (**RETIRED 2026-08-27** — historically ran as a
+  managed systemd unit, `ollama-governor.service`; the stale script copy may
+  linger at `/usr/local/bin/ollama_governor.py` but no unit runs it):
+  SIGSTOP/SIGCONT on
   the Ollama inference process at 75.0°C pause / 68.0°C resume.
 - **`thermal-ingest-guard.py`** (added 2026-07-26, `docs/benchmarks/
   THERMAL_BASELINE_2026-07-26.md` has the full build rationale): a
@@ -220,9 +237,9 @@ one thermal *and* CPU-load):
   | Trip | Condition | What's shed |
   |---|---|---|
   | Temp tier 1 (mild) | `temp ≥ 74.0 °C` (temperature only — load no longer participates here) | `tfms,stdds` |
-  | **LOCKDOWN** | `temp ≥ 79.0 °C` **or** `load1 ≥ 40.0` **or** `≥2` load-attributed brief fallbacks in 300 s | the entire stack except `web` — all 6 SWIM feeds, `ingest-core`, `poller`, `pusher`, `runner`, and `ollama.service` |
-  | Informational only (logged, no ntfy, no shed) | `temp` 70–74 °C, or `load1` 15–40 | — |
-  | Restore | `temp < 65.0 °C` **and** `load1 < 15.0` **and** fallback count `< 2`, held 300 s | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+  | **LOCKDOWN** | `temp ≥ 79.0 °C` **or** `load1 ≥ 40.0` *(the third, fallback-count trigger was demoted to informational-only 2026-08-27)* | the entire stack except `web` — all 6 SWIM feeds, `ingest-core`, `poller`, `pusher`, `runner` *(no LLM service since 2026-08-27)* |
+  | Informational only (logged, no ntfy, no shed) | `temp` 70–74 °C, or `load1` 15–40, or any fallback count | — |
+  | Restore | `temp < 65.0 °C` **and** `load1 < 15.0`, held 300 s *(fallback count no longer blocks resume)* | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
 
   Why the asymmetry: **every real trip on this box's recorded history has
   been load-driven, never temperature-driven** (peak temp ever observed

@@ -9,8 +9,19 @@ _v1.2.0 — Updated 2026-08-02; claims reverified against the live platform 2026
 > claims is **no longer true** and would mislead a reader who took this
 > document as current.
 >
+> **Update, verified live 2026-09-03 — the demo is BACK UP and
+> password-gated.** The 2026-08-23 correction below described a real outage
+> at the time it was written; it was resolved 2026-08-24: the crash was
+> fixed (dedicated demo state mount), `DEMO_MODE=true` and the demo session
+> secret are now set explicitly in the demo instance's own unit, and the
+> public hostname serves the password-gated demo again. The header's demo
+> claim is therefore accurate once more — a demo link and access code may be
+> offered. The correction below is preserved as the record of the
+> 2026-08-15→24 gap.
+>
 > **Correction, verified live 2026-08-23 — the public demo is DOWN, not
-> live.** The "What's New Since v1.1.0" section and the header line above
+> live [RESOLVED 2026-08-24 — see the update above].** The "What's New Since
+> v1.1.0" section and the header line above
 > both describe a password-protected public demo reachable over the
 > internet. As of this check it is not reachable and has not been since
 > 2026-08-15:

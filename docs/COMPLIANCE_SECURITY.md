@@ -25,9 +25,9 @@ This is a statement about *what CTDI adds to* an operator's existing compliance 
 | Data Classification | Processing Location | External Network Escape | Storage State |
 | :--- | :--- | :--- | :--- |
 | **Operational feeds** (weather, TFR, NOTAM, ATCSCC ops-plan, Amtrak, ADS-B/ASDE-X, runsheet) | Internal Podman containers | None by default -- read-only pulls from government/public-interest sources only (see `DESIGN-PRINCIPLES.md` §3) | Local SQLite (WAL mode), on-device |
-| **LLM Inference** | Native host Ollama daemon | None (air-gapped compatible) | Ephemeral -- no query or response is sent to any external provider |
+| **LLM Inference** | Native host llama.cpp (`llama-server`) systemd user units — per-tier, tailnet-IP-bound (the Ollama daemon was retired 2026-08-27) | None (air-gapped compatible) | Ephemeral -- no query or response is sent to any external provider |
 | **Audit Logs** | Systemd journald + local SQLite `audit_log` table | None (0% outbound) | Append-only, local disk, 90-day retention via `poller/skills/audit_log_prune.py` (daily, `db.prune_audit_log(days=90)`) |
-| **Public demo playback** | Dedicated `demo-api`/`runner-demo` containers, sovereign SQLite file (see below) | **A public nginx vhost exists today** (`dispatch-runner.example.com` → `127.0.0.1:8005`); the app-layer password gate is **inert because `DEMO_MODE` is unset** — see the demo-runner note in §2 | Sovereign file, physically separate directory, `:ro` container mount |
+| **Public demo playback** | Dedicated `demo-api`/`runner-demo` containers, sovereign SQLite file (see below) | **A public nginx vhost exists** (`dispatch-runner.example.com` → `127.0.0.1:8005`); the app-layer password gate is **active — `DEMO_MODE=true` + `DEMO_SESSION_SECRET` are set in the runner-demo Quadlet since the 2026-08-24 restore** (see the demo-runner note in §2) | Sovereign file, physically separate directory, `:ro` container mount |
 
 Retention note: an earlier 2026-08-19 correction here recorded that the
 90-day claim had no implementation behind it. That gap was closed the same
@@ -78,8 +78,23 @@ recorded here because a compliance document that claims an automated control
 which has never executed is making a false statement regardless of which way
 the failure leans.
 
+> **RESOLVED 2026-08-24, re-verified 2026-09-03 — the three-way disagreement
+> below is settled.** The runner-demo Quadlet now sets
+> `Environment=DEMO_MODE=true` and `DEMO_SESSION_SECRET` explicitly (its
+> header comment records the 2026-08-2x decision), the 2026-08-15→24 crash
+> loop was fixed by mounting a dedicated `/var/lib/corporatetraveldc-demo`
+> state dir (commit `0a7f643`), and live state confirms: unit
+> `active (running)`, `NRestarts=0`, `:8005/healthz` → `ok`, and the public
+> vhost serves 200. The password gate, signal sanitization, and ntfy
+> suppression are therefore **armed**, and the exposure model is the
+> operator-accepted public-demo-on-sanitized-data (2026-08-20 directive; no
+> CF Access policy fronts the hostname). The section below is kept as the
+> record of the pre-resolution state and of how the three authorities
+> disagreed.
+
 **Demo runner exposure and `DEMO_MODE` — three sources disagree, and the
-disagreement is not resolved here (2026-08-19).** The Data Sovereignty table
+disagreement is not resolved here (2026-08-19). [SUPERSEDED — see the
+resolution note above.]** The Data Sovereignty table
 above previously described the demo runner as internal-only. Live state is
 contradictory, and each of the three authorities says something different:
 
@@ -129,22 +144,17 @@ bind. Either way the vhost 502s. **The only
 thing preventing an ungated public demo surface is a crash.** That is not a
 control.
 
-**NEEDS OPERATOR DECISION:** DEMO_MODE is unset everywhere, so the demo
-runner's password gate and data-sanitization paths do not activate. Today this
-is masked only by the runner-demo crash loop. If that crash is fixed without
-also setting DEMO_MODE=true, an ungated demo surface goes live at
-dispatch-runner.example.com. Partially resolved 2026-08-20:
-operator directive accepts this as an intentionally-public demo over
-sanitized data, so the exposure question is settled; note no Cloudflare
-Access policy fronts the hostname — re-confirmed live 2026-08-23 by listing
-the account's Access applications
-(`GET /accounts/{id}/access/apps` with `CF_MANAGEMENT_API_TOKEN`): eight apps
-exist (`dispatch`, `dispatch-approval-resolve-bypass`,
+~~**NEEDS OPERATOR DECISION:** DEMO_MODE is unset everywhere…~~ —
+**RESOLVED 2026-08-24 (see the note at the top of this block):** the crash
+was fixed *and* `DEMO_MODE=true` was set explicitly in the same window, so
+the ungated-surface scenario this decision guarded against did not occur.
+The 2026-08-20 exposure acceptance stands (intentionally-public demo over
+sanitized data). The 2026-08-23 CF Access listing is kept as history: eight
+apps existed (`dispatch`, `dispatch-approval-resolve-bypass`,
 `dispatch-vault-research`, `dispatch-robots-bypass`,
-`dispatch-board-public-bypass`, `openwebui`, `pihole`, `ollama`) and **none**
-covers `dispatch-runner.example.com`. Still open: `DEMO_MODE` has not been set
-explicitly either way, so the sanitization and ntfy-suppression paths remain
-inert if the crash loop is ever fixed.
+`dispatch-board-public-bypass`, `openwebui`, `pihole`, `ollama`) and none
+covered `dispatch-runner.example.com` — the demo's gate is the
+app-layer password session, not Access.
 
 Two secondary points fall out of the same decision and should be settled with
 it rather than separately: whether the Quadlet's "no nginx vhost" comment or
@@ -499,7 +509,7 @@ What *is* true, and is the actual basis for this section: CTDI's core design pri
 
 | ISO/IEC 42001 Annex A control area | What CTDI actually does |
 | :--- | :--- |
-| A.7 -- Data for AI systems | No operator query or model input/output is sent to any external party. Ollama-only local inference is a hard default (`DESIGN-PRINCIPLES.md` §2); CUI-classified radio data is handled under an explicit, non-negotiable ruleset (never in code, configs, or exports). |
+| A.7 -- Data for AI systems | No operator query or model input/output is sent to any external party. Local-only inference (host llama.cpp since 2026-08-27; previously Ollama) is a hard default (`DESIGN-PRINCIPLES.md` §2); CUI-classified radio data is handled under an explicit, non-negotiable ruleset (never in code, configs, or exports). |
 | A.9 -- Responsible use of the AI system | Deterministic fallback is required when local inference is unavailable -- the system does not silently fail over to a cloud provider. Any cloud LLM integration must be an explicit, operator-controlled opt-in, never a default. |
 | A.10 -- Third-party / supplier relationships | Local-only inference removes the AI supply-chain risk (model-vendor data handling, training-data exposure, vendor outage dependency) that ISO/IEC 42001 is partly designed to help organizations manage. |
 | A.4 -- Resources for AI systems | Real, evidenced resource guardrails (network, memory, CPU, thermal) exist for every AI-adjacent process, each backed by dated incident data and telemetry, not a theoretical worst case (`GUARDRAILS_JUSTIFICATION.md`). |
@@ -536,14 +546,19 @@ previous wording were wrong, one factual and one about strength of guarantee:
   non-inference work and all 30-plus containers — competes freely for the
   remainder.
 
-  **Host-level CPU/memory governance is now installed**
-  (`/etc/systemd/system/ollama.service.d/20-resource-limits.conf`, installed
-  2026-08-19): `CPUWeight=500`, `CPUQuota=300%`,
-  `MemoryLow/High/Max=4850M/6050M/7250M`, `MemorySwapMax=0`,
-  `OLLAMA_KEEP_ALIVE=10m`, `LLAMA_ARG_CACHE_RAM=0` (prompt cache confirmed
-  disabled in the journal). `num_thread 2` remains a voluntary in-Ollama
-  cap; the cgroup limits are the enforced layer. `OLLAMA_MAX_LOADED_MODELS`
-  remains unset (auto).
+  **Host-level CPU/memory governance was installed 2026-08-19**
+  (`ollama.service.d/20-resource-limits.conf`: `CPUWeight=500`,
+  `CPUQuota=300%`, `MemoryLow/High/Max=4850M/6050M/7250M`,
+  `MemorySwapMax=0`, `OLLAMA_KEEP_ALIVE=10m`, `LLAMA_ARG_CACHE_RAM=0`).
+  **Superseded 2026-08-27 at the llama.cpp cutover:** `ollama.service` and
+  that drop-in are gone; the enforced cgroup layer now lives inside each
+  per-tier `corporatetraveldc-llama-*` user unit (e.g. llama-hot:
+  `CPUWeight=9000`, `MemoryMax=4608M`), with the same
+  hard-ceiling/no-swap-escape philosophy. The Modelfiles' `num_thread`
+  parameters ceased to be live config at the same cutover — thread counts
+  are `llama-server` command-line arguments in those unit files, and the
+  Modelfiles survive only as manifest-verified canonical source text for
+  `src/common/personas.py`.
 
 ### SELinux Grant Policy: Scoped Labels Over Domain-Wide Booleans
 
@@ -654,9 +669,12 @@ the count and to the impression the old sentence created, not to the design.
 
 The
 LLM inference layer stays true to the "None (Air-gapped compatible)" row in
-the Data Sovereignty & Isolation Matrix above -- Ollama listens on this
-host's own Tailscale IP only, never on the public-WiFi-facing interface or
-any container-default-reachable address.
+the Data Sovereignty & Isolation Matrix above -- the `llama-server` tier
+units listen on this
+host's own Tailscale IP only (100.x.x.x:8093/8094/8095), never on the
+public-WiFi-facing interface or
+any container-default-reachable address (same binding discipline the retired
+Ollama daemon followed).
 
 **Three opt-in mechanisms, chosen by network mode and by what the target
 service itself binds to, all scoped to the one container or the one

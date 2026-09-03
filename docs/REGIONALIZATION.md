@@ -260,13 +260,13 @@ Separate from the live flight-plan/NOTAM feeds above, aircraft *ownership/regist
 | Global fallback | OpenSky Network Aircraft Database | Free bulk CSV, 127 countries, irregular updates -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
 | Europe (other) | No single EU-wide registry -- each country's CAA maintains its own (DGAC in France, LBA in Germany, ENAC in Italy, etc.) | Integrate per-country following the FAA/UK CAA pattern if needed |
 
-The local registry lookup endpoint (`GET /api/v1/aircraft/<N-NUMBER-or-HEX>`) currently only serves US N-number data. A non-US deployment that needs fast local hex/registration lookups would need to either import a regional registry (UK CAA G-INFO, etc.) into the same table structure, or fall back to airplanes.live/OpenSky for registration cross-checks -- see the `flight-hifi-track` skill's fallback chain for the pattern.
+The local registry lookup endpoint (`GET /api/v1/aircraft/<N-NUMBER-or-HEX>`) serves US N-number data plus the locally-imported OpenSky registry cross-check. A non-US deployment that needs fast local hex/registration lookups would need to import a regional registry (UK CAA G-INFO, etc.) into the same table structure — note the reference deployment resolves identity **local-only** as of 2026-08-27 (own ADS-B → ingested SWIM → locally-imported FAA/OpenSky registry tables) and no longer queries airplanes.live programmatically; a deployment choosing a live third-party lookup instead is departing from that rule deliberately.
 
 ---
 
 ## Ops brief naming conventions
 
-The ops brief sections that use DC-specific names (`DC METRO`, `NORTHEAST`, `TRANSCON HUBS`) are labels in the Ollama system prompt inside `ops_brief.py`. They're cosmetic — rename them to match your operating context:
+The ops brief sections that use DC-specific names (`DC METRO`, `NORTHEAST`, `TRANSCON HUBS`) are labels in the ops-brief persona's system prompt — which, since the 2026-08-27 llama.cpp cutover, lives in **`src/common/personas.py`** (the `ops-brief` entry), not in a Modelfile or in `ops_brief.py` itself. They're cosmetic — rename them to match your operating context (edits take effect on the next request, no rebuild):
 
 **European example:**
 ```python
@@ -292,7 +292,7 @@ or significant weather active. Note JMA SIGMET issuances for typhoon/frontal act
 ...
 ```
 
-No code changes outside the prompt string. The Ollama model doesn't care what the sections are called — it follows the structure you define.
+No code changes outside the persona text (remember to re-sign the manifest — `personas.py` and the Modelfiles are integrity-covered). The local model doesn't care what the sections are called — it follows the structure you define.
 
 ---
 

@@ -1,15 +1,23 @@
 # Corporate Travel Dispatch Intelligence (CTDI)
 
-**Documentation snapshot: 2026-08-23** — factual claims below were verified
-against the running system and current source on this date (previous full
-verification 2026-08-11, partial reconciliation 2026-08-19).
+**Documentation snapshot: 2026-08-23; reconciled 2026-09-03** — factual claims
+below were verified against the running system and current source (previous
+full verification 2026-08-11, partial reconciliation 2026-08-19). The
+2026-09-03 pass reconciled this file against
+`docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md` (a fresh code-verified audit):
+the Ollama → llama.cpp cutover (2026-08-27), the runner-demo restore +
+`DEMO_MODE=true`, the thermal-guard trigger demotion (2026-08-27), and the
+2026-09-03 forward-only push-dedup redesign.
 
 Multi-region real-time travel intelligence platform. Monitors commercial
 aviation (FAA SWIM push feeds plus REST fallbacks), rail, weather, and airspace
 restrictions — delivering push alerts the moment something operationally
 relevant changes. Runs as rootless Podman containers managed by systemd
 Quadlets under a single deployment user, alongside timer-driven skill
-containers, a local SDR receive stack, and host-local Ollama LLM inference.
+containers, a local SDR receive stack, and host-local llama.cpp
+(`llama-server`) LLM inference — the Ollama daemon was retired 2026-08-27,
+though `OLLAMA_*` env-var/parameter names survive as compatibility vocabulary
+(see the Local LLM section).
 Container/unit counts drift as feeds and skills are added, so this README does
 not pin them — check the live picture instead:
 
@@ -67,12 +75,12 @@ Active keys ship their pubkeys in-repo, named by full fingerprint.
 | Component | State |
 |---|---|
 | Ops dashboard (runner app) | **Tailnet-only.** `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx → :8001). The former public `ops.example.com` hostname was **retired 2026-08-02** and is hard-404'd by hostname in `src/runner/main.py` (`_RETIRED_HOSTNAMES`). |
-| Public demo (runner, demo-playback) | **DOWN — crash-looping since 2026-08-15, and the password gate was never actually enabled.** `corporatetraveldc-runner-demo` exits on startup (`sqlite3.OperationalError: unable to open database file` — the 2026-08-14 F6 mount change removed `/var/lib/corporatetraveldc` from this container), auto-restarts continuously (NRestarts in the tens of thousands), `:8005` refuses connections, and `https://dispatch-runner.example.com` returns 502. `DEMO_MODE` is set **nowhere** (defaults `false`), so the password gate, signal sanitization, and ntfy suppression are all inert — the crash loop is the only thing keeping the surface dark. **Operator decision needed before fixing**: see CLAUDE.md → "Core containers". (Operator directive 2026-08-20: the intentionally-public-demo-on-sanitized-data exposure model is accepted, but `DEMO_MODE` must be set explicitly either way.) |
+| Public demo (runner, demo-playback) | **UP — restored 2026-08-24, and `DEMO_MODE=true` is now set explicitly** (verified live 2026-09-03: unit `active (running)`, `NRestarts=0`, `:8005 /healthz` → `ok`, and the `dispatch-runner.example.com` vhost serves 200). The 2026-08-15→24 crash loop (`sqlite3.OperationalError` from the 2026-08-14 F6 mount change) was fixed by mounting a dedicated `/var/lib/corporatetraveldc-demo` state dir (commit `0a7f643`), and the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET`, so the password gate (`demo.profiles` sessions), signal sanitization, and ntfy suppression are armed — closing the "explicit either way" operator directive of 2026-08-20. |
 | Web API (browser / programmatic) | `https://dispatch.example.com` (Cloudflare Access gated; nginx stamps `X-CTDI-Public: 1`, which pins the request to Tier 0 regardless of token) |
 | Tailscale direct API | `http://100.x.x.x:8000` |
 | Public MCP (OpenAPI bridge) | **Retired 2026-08-18.** `mcpo`/`mcpo-public` units are gone (`systemctl --user list-units 'corporatetraveldc-mcpo*' --all` → 0 units); ports 8082/8083 refuse connections; the server checkout was renamed to `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The `mcp.example.com` nginx vhost still exists and proxies to the now-gone `:8083`, so the hostname currently returns **502** — removing that vhost is still pending. Restoring the bridge would mean un-archiving the checkout, reinstating the `mcpo`/`mcpo-public` Quadlets, and re-pointing the vhost. |
 | FAA SWIM NMS push feeds | ✅ All 6 provisioned and credentialed (FDPS/STDDS/TFMS/TBFM/ITWS/FNS) — provisioned 2026-07-20, split into per-feed containers 2026-07-26. **Not continuously running by design:** `scripts/thermal-ingest-guard.py` sheds SWIM ingest containers under CPU-load/thermal pressure (see "SWIM feed liveness and thermal load-shedding"). |
-| Local LLM (Ollama) | 21 dedicated `corporatetraveldc-pi5-*` Modelfile models, **all `FROM phi3:mini`** as of the 2026-08-15/16 rebuild — gemma is fully removed from every running system (see Local LLM section) |
+| Local LLM (llama.cpp) | **Ollama retired 2026-08-27.** Inference is host-level `llama-server` (llama.cpp) systemd user units — `corporatetraveldc-llama-hot` (:8093, permanent), `-llama-chat` (:8094, permanent), `-llama-report-1` (:8095, on-demand) — all serving one shared phi3-mini GGUF; per-skill personas live in `src/common/personas.py`, not in per-skill Ollama models (see Local LLM section) |
 | ADS-B receive (UltraFeeder) | ✅ **Restored 2026-08-11** — the ADS-B RTL-SDR dongle had stopped enumerating on USB (~2026-08-10, container crash-looping; `adsb-feed-silence-watchdog` detected and alerted correctly); hardware reseat brought it back midday 2026-08-11 (dongle enumerates, container up, live decode confirmed). All other SDR containers (ACARS/VDL2 chain, feeders) up throughout. |
 
 ---
@@ -118,7 +126,7 @@ owns the ops frontend and its own JSON state:
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
 | `corporatetraveldc-ingest-{core,fdps,stdds,tfms,tbfm,itws,notam}` | `localhost/corporatetraveldc-ingest:latest` (one image, 7 Quadlets) | Push ingest, split 2026-07-26 into 7 independent containers — one per SWIM feed plus "core" (NWWS-OI/Amtrak/local airspace) — so any single feed restarts without dropping the rest. See `src/ingest/README.md` and `scripts/ingest-feed-ctl.sh`. |
 | `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Ops dashboard SPA + API (port 8001) — Tailnet-only |
-| `corporatetraveldc-runner-demo` | same runner image | Demo-playback instance (port 8005 → container 8001), intended to read the demo API (:8004) instead of live feeds — public vhost at `dispatch-runner.example.com`. **Currently crash-looping (see Status), and `DEMO_MODE` is set nowhere** — the Quadlet does not set it, so every demo-mode protection is inert. Do not "fix" the crash without reading CLAUDE.md → "Core containers" first. |
+| `corporatetraveldc-runner-demo` | same runner image | Demo-playback instance (port 8005 → container 8001), reads the demo API (:8004) instead of live feeds — public vhost at `dispatch-runner.example.com`. **Running since the 2026-08-24 fix, with `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET` set in the Quadlet** — password gate and sanitization armed (see Status). |
 | `corporatetraveldc-demo` / `corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Archive recorder / read-only playback API (port 8004) over `demo.db` |
 
 ### Auxiliary containers (same host)
@@ -153,7 +161,7 @@ Infra/comms: `ntfy` (:2586), `protonbridge` (SMTP relay,
 | NAS programs | nasstatus.faa.gov/api/airport-status-information | 5 min | ✅ Active |
 | NOTAMs (REST) | FAA NOTAM API | 5 min | ⚠️ Needs `FAA_NOTAM_API_KEY` + `FAA_NOTAM_API_SECRET` (`awaiting_credentials`). Live NOTAM data already flows via the SWIM FNS push feed regardless. |
 | DCA / IAD FIDS | MWAA JSON endpoints | 5 min | ✅ Active (600 s staleness threshold — see `docs/DCA_IAD_FIDS.md`) |
-| Amtrak | Push-primary in `ingest-core` (api.amtraker.com) — **no working fallback**: `poller/fetchers/amtrak.py` exists but is wired into no schedule (dead code), so `ingest-core`'s poll loop is the *only* live train-data path | Push | ✅ Active (single-path — see CLAUDE.md "Known bad") |
+| Amtrak | Push-primary is the **`amtrak-tracker` container** (`src/amtrak_tracker/`, api.amtraker.com, port 8898, stamps `push:amtrak`); `src/ingest/amtrak.py` is a *second* implementation of the same capability inside `ingest-core` (gated `AMTRAK_ENABLED`, same heartbeat key — the failover contract keeps them from double-writing, but which is authoritative is only discoverable from quadlet enablement state). **Still no REST fallback**: `poller/fetchers/amtrak.py` exists but has no `FETCH_SCHEDULE` entry (re-verified 2026-09-03) | Push | ✅ Active (see CLAUDE.md "Known bad") |
 | FDPS (flight plan + track, FIXM 3.0) | FAA SWIM NMS | Push | ✅ Live (LOCKDOWN-only shed †) |
 | STDDS (surface + terminal tracks) | FAA SWIM NMS | Push | ✅ Live — carries no TFR data (temp tier-1 shed candidate †) |
 | TFMS (GDP/GS/AFP/restrictions/per-flight TMI) | FAA SWIM NMS | Push | ✅ Live (temp tier-1 shed candidate †) |
@@ -188,22 +196,34 @@ informational/LOCKDOWN split:
 | Trip | Condition | What's shed |
 |---|---|---|
 | Temp tier 1 (mild) | `temp >= 74.0 °C` | `tfms`, `stdds` only |
-| **LOCKDOWN** | `temp >= 79.0 °C` **or** `load1 >= 40.0` **or** `>= 2` load-attributed brief fallbacks in 300 s | **the entire stack except `web`**, immediately, no partial stage: all 6 SWIM feeds (`fdps,stdds,tfms,tbfm,itws,notam`), `ingest-core`, `poller`, `pusher`, `runner`, and host `ollama.service` |
+| **LOCKDOWN** | `temp >= 79.0 °C` **or** `load1 >= 40.0` | **the entire stack except `web`**, immediately, no partial stage: all 6 SWIM feeds (`fdps,stdds,tfms,tbfm,itws,notam`), `ingest-core`, `poller`, `pusher`, `runner` |
 | Informational only, no shed | `temp` 70–74 °C, or `load1` 15–40 | — |
-| Restore | `temp < 65 °C` **and** `load1 < 15.0` **and** fallback count `< 2`, held 300 s | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+| Restore | `temp < 65 °C` **and** `load1 < 15.0`, held 300 s | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
 
 Note the two consequences a reader of the old table would get wrong: the
 `notam` container (which runs the AIM/**FNS** feed, a real 6th SWIM feed — not a
 NOTAM-only afterthought) is now shed under LOCKDOWN, where it previously never
-was; and LOCKDOWN stops `poller`/`pusher`/`runner`/`ollama.service` too, so a
+was; and LOCKDOWN stops `poller`/`pusher`/`runner` too, so a
 stopped core container is no longer automatically a fault either. `web` is the
 only thing guaranteed to survive.
 
+**Two 2026-08-27 changes to the 2026-08-23 model (verified against the guard
+script 2026-09-03):** (1) the third LOCKDOWN trigger — "≥ 2 load-attributed
+brief fallbacks in 300 s" — was **demoted to informational-only** after one
+night produced ~15 fallback-attributed LOCKDOWN trips with real load1 of only
+4–9; the count is still computed and logged every cycle but no longer trips
+LOCKDOWN or blocks restore. (2) With the same-day Ollama → llama.cpp cutover,
+the guard **no longer stops or starts any LLM service**: `ollama.service` is
+gone, and the `corporatetraveldc-llama-hot/chat/report-*` units are
+deliberately excluded from LOCKDOWN scope so the hot alert path survives
+exactly the events LOCKDOWN responds to.
+
 "Load-attributed brief fallback" is a signal from `src/common/llm.py`
 (`_record_load_fallback()` → `/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl`),
-logged only for `OllamaBusyError` or a generate-call `httpx.TimeoutException`
-— deliberately *not* for `httpx.ConnectError`, so a deliberately-stopped Ollama
-can never cause ingest to shed itself.
+logged only for `OllamaBusyError` (slot busy — the exception class name is
+kept from the Ollama era) or a generate-call `httpx.TimeoutException`
+— deliberately *not* for `httpx.ConnectError`, so a deliberately-stopped LLM
+server can never look like contention. Informational-only since 2026-08-27.
 
 A real LOCKDOWN fired and fully restored on 2026-08-23; verify current state
 from the guard's own journal and state file rather than from this table.
@@ -214,7 +234,8 @@ from the guard's own journal and state file rather than from this table.
   `Result=success` is **expected** and is not something to "fix" by restarting
   it — the guard will start it again on its own, and a manual start just gets
   shed again on the next 2-minute pass. Under LOCKDOWN the same is true of
-  `poller`, `pusher`, `runner`, and host `ollama.service`.
+  `poller`, `pusher`, and `runner` (the `corporatetraveldc-llama-*` units are
+  never touched by the guard).
 - These sheds are **silent to `systemctl list-units` failure greps**, because
   the units exit 0.
 - The authoritative check is the guard's own state, not `systemctl`:
@@ -246,7 +267,7 @@ out and REST polling resumes automatically.
 | Ops dashboard (runner) | `http://100.x.x.x:8001` / `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` | Tailnet only; no public hostname |
 | API | `https://dispatch.example.com` | CF Access gated; served as Tier 0 (nginx sets `X-CTDI-Public: 1`) |
 | API (tailnet) | `http://100.x.x.x:8000` | Full tier resolution via bearer token |
-| Public demo | `https://dispatch-runner.example.com` | **Currently 502** (runner-demo crash loop, see Status); password gate not enabled (`DEMO_MODE` unset) |
+| Public demo | `https://dispatch-runner.example.com` | Live (restored 2026-08-24); password-gated (`DEMO_MODE=true` set in the Quadlet — see Status) |
 | ~~Public MCP bridge~~ | ~~`https://mcp.example.com`~~ | **Retired 2026-08-18** — mcpo/mcpo-public units removed, ports 8082/8083 refuse connections, server checkout archived at `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The nginx vhost still exists and proxies to the dead `:8083`, so the hostname returns **502**; vhost removal is still pending. |
 
 ### Tier 0 — Anonymous (selection)
@@ -279,7 +300,7 @@ selection of the Tier-0 subset, not an exhaustive list.
 | GET | `/api/v1/train-config` · `/api/v1/wx-config` | Operator rail / meteorology config |
 | GET | `/api/v1/flightplan/{callsign}` | FDPS-confirmed flight plan |
 | GET | `/api/v1/fids/{airport}` · `/{airport}/arrivals` · `/{airport}/{flight}` | DCA/IAD FIDS |
-| GET | `/api/v1/adsb` | airplanes.live proxy (250 NM of KDCA, 30 s cache) |
+| GET | `/api/v1/adsb` | **Local-receiver-only** ADS-B snapshot (since 2026-08-27 — no third-party proxy; bounded by the box's own receiver range) |
 | GET | `/api/v1/aircraft/{identifier}` · `/api/v1/aircraft-registry/status` | FAA/OpenSky registry lookup |
 | GET | `/api/v1/airspace[/{feature_id}]` | Static DC airspace features |
 | GET | `/api/v1/demo/readiness` | Demo archive seed status |
@@ -338,7 +359,8 @@ need the password-gated session cookie.
 
 Routes: `/healthz`, `/api/whoami`, `/api/demo/{login,status,webhook-log}`,
 `/api/adsb/{local,live}`, `/api/{vdl2,acars,hfdl}/messages`,
-`/api/ais/vessels`, `/api/ask` + `/api/chat/history` (Ollama chat),
+`/api/ais/vessels`, `/api/ask` + `/api/chat/history` (Dispatch Drawer chat —
+llama.cpp chat tier since 2026-08-27),
 `/api/dispatch/{path}` (transparent proxy → :8000, with Tier-1 token
 injection for an allowlist of paths — see
 `docs/auth-token-proxy-pattern.md`), `/api/stream` (SSE),
@@ -401,19 +423,29 @@ Two tiers share one monitoring/alert pipeline — full detail in
 `src/shared/watchlist_README.md`:
 
 **Permanent** — **JSON** files in `/opt/corporatetraveldc/watchlists/`
-(`permanent_flights.json`, `permanent_trains.json`, `permanent_vessels.json`).
-Hot-reloaded by `WatchlistFileWatcher` within ~65 s, no restart.
+(`permanent_flights.json`, `permanent_trains.json`, `permanent_vessels.json`,
+`permanent_drones.json`). Hot-reloaded by `WatchlistFileWatcher` within
+~65 s, no restart.
 
 **Transient** — added via REST (`POST /api/v1/watchlist/{flights,trains,vessels}`,
 admin token). Auto-expire via `auto_remove_at`, swept every 60 s.
 
-Three entry types: flight (callsign), train (Amtrak number), **vessel (MMSI —
-AISHub sweep every 300 s, requires `AIS_AISHUB_ID`)**. Events fire dual ntfy
-pushes (domain topic + concise `dispatch`), 5-minute content-aware dedup.
-Flight monitoring source chain: FlightAware AeroAPI (if key set) →
-airplanes.live (free) → local UltraFeeder ADS-B → FDPS push cache → schedule
-inference. OOOI phase state machine: `pre_departure → out → off → on → in`,
-phases never revert.
+Four entry types: flight (callsign), train (Amtrak number), **vessel (MMSI —
+AISHub sweep every 300 s, requires `AIS_AISHUB_ID`)**, and drone
+(Remote-ID/UAS — separate `uas_phase` columns, not the OOOI machine, since
+multi-sortie UAS legitimately alternate launched/landed). Events fire dual
+ntfy pushes (domain topic + concise `dispatch`) with **forward-only,
+content-hash dedup** (redesigned 2026-09-03 after the UAL1369 re-page
+incident: an unchanged event stays suppressed indefinitely; only a genuine
+content change re-fires). Flight monitoring is **local-only since
+2026-08-27**: local UltraFeeder ADS-B → FDPS push cache → FIDS → schedule
+inference (identity resolution likewise local: own ADS-B → ingested FDPS →
+local FAA/OpenSky registry tables). airplanes.live is no longer queried
+programmatically; FlightAware AeroAPI code survives but is dormant without
+`FLIGHTAWARE_AEROAPI_KEY`. OOOI phase state machine:
+`pre_departure → out → off → on → in`, phases never revert; same-phase
+confirmations resolve by source authority (ACARS > SMES > TFMS > TBFM/ADS-B >
+FIDS).
 
 ---
 
@@ -432,7 +464,7 @@ phases never revert.
 | `ops-brief` / `ep` / `ep-advance` | Hourly briefs | 2–4 |
 | `ops-health` | Freshness audit, watchdogs, thermal guard | 2–5 |
 | `osint-alerts` | OSINT scope hits | 2–3 |
-| `approval-gate` | Sudo/ollama approval prompts (Allow/Deny) | 4 |
+| `approval-gate` | Sudo / agent-signing approval prompts (Allow/Deny) | 4 |
 
 Full catalog + trigger/dedup logic: `docs/ALERT_REFERENCE.md`; design
 rationale: `docs/ALERT_ARCHITECTURE.md`.
@@ -455,18 +487,24 @@ A built-in archive recorder (`corporatetraveldc-demo.service`) captures
 rolling snapshots of every live feed into `demo.db` (zlib-compressed, ~52-week
 retention on <500 MB). The demo-playback stack:
 
-- `corporatetraveldc-demo-api.service` — read-only playback API, port 8004
+- `corporatetraveldc-demo-api.service` — read-only playback API, port 8004,
+  serving **only the sovereign scrubbed DB**
+  (`/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount) —
+  it holds no live-DB code path; rows reach that file only via the host-side
+  `scripts/scrub-demo-source.py` scrub+promote pass (two-layer scrub, rows
+  that fail the allowlist post-scan are dropped, never shipped). Playback
+  time is virtualized against a 14-day window anchored at the last
+  promotion.
 - `corporatetraveldc-runner-demo.service` — second runner instance, port 8005,
-  `DISPATCH_BASE_URL=http://100.x.x.x:8004`. **Down since 2026-08-15**
-  (startup crash loop — see Status) — and `DEMO_MODE` is **not set anywhere**
-  (defaults `false`), so the app-layer protections below are configured in
-  code but not active.
+  `DISPATCH_BASE_URL=http://100.x.x.x:8004`. **Restored 2026-08-24**
+  (dedicated `/var/lib/corporatetraveldc-demo` state mount, commit `0a7f643`)
+  and the Quadlet now sets **`DEMO_MODE=true` + `DEMO_SESSION_SECRET`**, so
+  the app-layer protections below are active.
 - Public hostname: **`https://dispatch-runner.example.com`** —
-  currently returns 502. When the instance runs *with* `DEMO_MODE=true`, it
-  is password-gated (`POST /api/demo/login`, HMAC-signed `ctdc_demo_session`
-  cookie, 8 h default) with signals sanitized server-side; fixing the crash
-  without setting `DEMO_MODE=true` would put the surface live **ungated**
-  (operator decision pending — see CLAUDE.md).
+  serving 200 (verified 2026-09-03). With `DEMO_MODE=true` the instance is
+  password-gated (`POST /api/demo/login`, HMAC-signed `ctdc_demo_session`
+  cookie via `src/demo/profiles.py` access profiles, 8 h default) with
+  signals sanitized server-side.
 
 Seed readiness: `GET /api/v1/demo/readiness` reports per-tier
 (2w/8w/12w/24w/36w/52w) archive readiness. Config
@@ -490,7 +528,7 @@ normal operation.
 
 > Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)**.
 
-| Platform | Server stack | Containers | Local Ollama | Install script |
+| Platform | Server stack | Containers | Local LLM (llama.cpp) | Install script |
 |---|---|---|---|---|
 | **Linux x86_64 / ARM64** (Pi 5 reference) | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
 | **macOS** (Apple Silicon / Intel) | ✅ Full | Podman/Docker ✅ | ✅ | `install/install.sh` |
@@ -511,7 +549,10 @@ run the REST-fallback feed set.
 - Linux host running Fedora (reference deployment: Fedora 44 aarch64 on a
   Pi 5, SELinux enforcing), Debian, or Ubuntu
 - Rootless Podman with a systemd user session (linger enabled)
-- Ollama on the host — all inference is local, no cloud LLM key required
+- llama.cpp (`llama-server`) on the host — all inference is local, no cloud
+  LLM key required. The reference deployment runs it as per-tier systemd user
+  units (`.config/systemd/user/corporatetraveldc-llama-{hot,chat,report-1}.service`)
+  over one shared phi3-mini GGUF; Ollama itself was retired 2026-08-27.
 
 ### First-time setup
 
@@ -528,8 +569,14 @@ chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
 # Build container images
 bash build-images.sh
 
-# Build the dedicated Ollama models (SWA-guarded, smoke-gated)
+# Verify the Modelfile↔personas.py sync (build-models.sh no longer builds
+# anything — since the 2026-08-27 llama.cpp cutover there is no per-skill
+# model artifact; it now diffs each corporatetraveldc.<skill> Modelfile's
+# SYSTEM block against src/common/personas.py)
 bash build-models.sh
+
+# Install the llama.cpp host units (hot/chat permanent, report-1 on-demand)
+cp .config/systemd/user/corporatetraveldc-llama-*.{service,timer} ~/.config/systemd/user/
 
 # Install Quadlets
 cp .config/containers/systemd/*.container ~/.config/containers/systemd/
@@ -615,129 +662,114 @@ python -m pytest tests/ -x --tb=short
 **SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block —
 always. Logged to `/var/lib/corporatetraveldc/api-usage.csv`.
 
-**SR-2** (`src/common/sr2_gate.py`): call `hash_gate()` before any expensive
-computation or LLM call. Hash only content-bearing fields (never timestamps).
-If it returns `"skipped"`, `sys.exit(0)` immediately. Support `--force`.
+**SR-2** (`src/common/sr2_gate.py`): call `check_gate()` before any expensive
+computation or LLM call, and `commit_gate()` only *after* the guarded work
+succeeded (the check/commit split landed 2026-08-25 so a mid-run crash leaves
+the gate open instead of permanently suppressing retries). Hash only
+content-bearing fields (never timestamps). If the check says skip,
+`sys.exit(0)` immediately. Support `--force`. Skills with inherently
+time-bounded inputs declare an SR-2 exemption in their docstrings instead.
 
 ### Schema migrations
 
-`src/common/db.py` is the single schema authority, versioned additively
-(`SCHEMA`, `SCHEMA_V2`, … — check the file for the current top version with
-`grep -oE 'SCHEMA_V[0-9]+' src/common/db.py | sort -u -V | tail -1`; **V36** is
-the top as of 2026-08-23 — this number moves fast, re-run the grep rather
-than trusting it). Never drop or rename columns — only
-`ALTER TABLE ADD COLUMN`.
+The schema authority is versioned additively across **two** modules since
+2026-08-30: `src/common/db.py` (`SCHEMA`, `SCHEMA_V2`…`SCHEMA_V40`, plus
+`SCHEMA_V43`) and `src/common/db_swim.py` (`SCHEMA_SWIM_V41/V42/V44+` — the
+v41+ SWIM tables were deliberately split into their own module during the
+2026-08-30 SWIM audit; the numbering continues across both files). Check the
+current top with
+`grep -ohE 'SCHEMA(_SWIM)?_V[0-9]+' src/common/db.py src/common/db_swim.py | sort -u -V | tail -1`
+— the number moves fast, re-run rather than trusting any figure here.
+**Trap:** `init_db_all()` does *not* pick up db_swim's versions — any
+consumer of the v41+ tables must call the `init_db_swim_v4x()` functions
+explicitly (documented in db_swim's docstring). Never drop or rename columns
+— only `ALTER TABLE ADD COLUMN`.
 
 ---
 
-## Local LLM — Ollama
+## Local LLM — llama.cpp (Ollama retired 2026-08-27)
 
-**All inference is local.** No external LLM API key is required. Ollama runs
-on the host, bound to the tailnet IP (`OLLAMA_BASE_URL=http://100.x.x.x:11434`),
-CPU-only — effectively **one model resident at a time** on this hardware.
+**All inference is local.** No external LLM API key is required. Since the
+**2026-08-27 cutover**, inference runs as raw host-level `llama-server`
+(llama.cpp) processes — systemd user units bound to the tailnet IP, CPU-only,
+each holding one shared **phi3-mini** GGUF resident for the life of the unit:
 
-> **Update 2026-08-19 (verified live 2026-08-23):** the resource drop-in
-> `systemd/ollama.service.d/20-resource-limits.conf` — which a 2026-08-19
-> morning audit found had never been installed — **was installed the same day**
-> (copied to `/etc/systemd/system/ollama.service.d/`, daemon-reload, restart).
-> Live `ollama.service` now runs governed: `CPUWeight=500`, `CPUQuota=300%`,
-> `MemoryLow=4850M` / `MemoryHigh=6050M` / `MemoryMax=7250M`,
-> `MemorySwapMax=0`, `OLLAMA_KEEP_ALIVE=10m`, `LLAMA_ARG_CACHE_RAM=0`. The
-> drop-in's own acceptance test is confirmed: since the governed restart,
-> every model load logs `prompt cache is disabled` (previously
-> `prompt cache is enabled, size limit: 8192 MiB`). `OLLAMA_MAX_LOADED_MODELS`
-> remains unset (auto) — single-model residency is still emergent from memory
-> pressure, not enforced.
+| Tier | Unit / port | Serves | Lifecycle |
+|---|---|---|---|
+| **hot** | `corporatetraveldc-llama-hot.service` → `100.x.x.x:8093` | `route-impact`, `tfr-enrichment` (VIP/TFR path) | Permanent, never queues, never thermally shed |
+| **chat** | `corporatetraveldc-llama-chat.service` → `:8094` | Dispatch Drawer + every report skill whose persona fits 4096 ctx | Permanent |
+| **report-1** | `corporatetraveldc-llama-report-1.service` → `:8095`, `-c 8192` | Large-context skills (ep-advance, dispatch-desk-memo, second-brain-weekly, ep-advance-venues) | **On-demand** — started/stopped by those skills' quadlet `ExecStartPre`/`ExecStopPost` hooks running `scripts/llama-report-ondemand.sh` |
 
-### Dedicated per-task models (since 2026-08-02)
+Per-skill behavior comes from **`src/common/personas.py`** — a registry of
+~23 personas (system preamble + task text + `num_ctx`/`num_predict`/sampling
+params), extracted verbatim from the old per-skill Ollama Modelfiles. Editing
+a persona takes effect on the next request: no rebuild, no restart, no smoke
+test. The `corporatetraveldc.*` Modelfiles at repo root are kept **only** as
+human-readable canonical source text that the signed-manifest integrity check
+still verifies; `build-models.sh` (reworked 2026-08-30) no longer builds
+anything — it diffs each Modelfile's SYSTEM block against `personas.py`.
 
-Each LLM-calling skill has its own Ollama model built from a Modelfile at repo
-root (`corporatetraveldc.<task>` → `corporatetraveldc-pi5-<task>:latest`) that
-bakes the task's system prompt in as the model default. **21 models exist, all
-`FROM phi3:mini`** (verified 2026-08-19 with
-`grep -h '^FROM' corporatetraveldc.* | sort | uniq -c` → `21 FROM phi3:mini`,
-cross-checked against `ollama list`):
+**Naming note — deliberate:** `OLLAMA_BASE_URL`, `ollama_model=`,
+`OllamaBusyError`, and "Ollama unavailable" log lines all survive verbatim so
+zero call sites changed at cutover. They now mean llama.cpp. Resource
+governance moved with the cutover: the old `ollama.service` +
+`20-resource-limits.conf` drop-in and the `ollama-governor` SIGSTOP/SIGCONT
+unit are gone; each `corporatetraveldc-llama-*` unit carries its own
+`CPUWeight`/`MemoryMax` limits in its unit file, and a daily
+`corporatetraveldc-llama-restart.timer` (03:00 ET) cycles hot+chat for
+freshness.
 
-| Base | Models |
-|---|---|
-| **`phi3:mini`** (every model) | `ops-brief`, `ops-brief-trend`, `ep-advance`, `ep-advance-trend`, `chat`, `osint-monitor`, `tfr-enrichment`, `route-impact`, `weekly-summary`, `transport-digest`, `disruption-weather-digest`, `dispatch-desk-memo`, `secondbrain-daily`, `secondbrain-weekly`, `aam-daily-watch`, `aam-weekly-watch`, `aviation-daily-watch`, `concierge-travel-daily-watch`, `executive-protection-daily-watch`, `gig-economy-daily-watch`, `trains-yachts-daily-watch` |
+A daily preventive restart plus the on-demand report tier replaced both the
+prewarm-timer fleet and the elastic report pool that were designed earlier
+(the pool's `llama_pool.claim_port()` flock path remains in-tree but unused —
+a containerized caller cannot spawn host processes).
 
-> **This section was stale until 2026-08-19.** README's previous revision was
-> commit `ff5e005` (2026-08-14), *"Consolidate 16 brief models into one shared
-> model + centralized persona"* — **that change was reversed the next day and is
-> dead.** A future reader must not reinstate it from that commit message. Three
-> models this section used to name (`osint`, `dispatch-desk`, `aam-watch`) do
-> not exist; the live equivalents are `osint-monitor`, `dispatch-desk-memo`,
-> and per-domain `*-daily-watch` / `aam-weekly-watch` models. Likewise
-> `corporatetraveldc.dispatch-persona` **no longer exists as a file** — since
-> the 2026-08-15/16 rebuild the dispatcher persona is baked into each per-skill
-> Modelfile's own `SYSTEM` line rather than injected centrally. Gemma is fully
-> removed from every running system.
->
-> 20 of the 21 models are brief-class (guarded candidate/smoke/promote build);
-> only `chat` — the interactive path, which has its own `num_predict` cap — is
-> exempt.
+### Per-skill personas (successor to the dedicated per-task models)
 
-**Why phi3:mini for the brief class (2026-08-10/11):** gemma3's Sliding
-Window Attention defeats llama.cpp's KV-cache reuse, forcing full prompt
-re-processing on the hourly briefs' long prompts — blowing the 240 s
-`OLLAMA_TIMEOUT` and driving near-100% deterministic fallback.
-`build-models.sh` now has:
+Each LLM-calling skill still requests a `corporatetraveldc-pi5-<task>:latest`
+model string, but since 2026-08-27 that name resolves to a **persona** in
+`src/common/personas.py` (`persona_key_for()`), not an Ollama model — the ~21
+per-skill Modelfiles were each really the same phi3:mini GGUF with a
+different SYSTEM block, so the SYSTEM blocks were extracted into the
+registry and one shared GGUF per tier is served instead. Personas exist for:
+`ops-brief`, `ops-brief-trend`, `ep-advance`, `ep-advance-trend`,
+`ep-advance-venues`, `chat`, `osint-monitor`, `tfr-enrichment`,
+`route-impact`, `weekly-summary`, `transport-digest`,
+`disruption-weather-digest`, `dispatch-desk-memo`, `secondbrain-daily`,
+`secondbrain-weekly`, and the seven `aam-*`/`*-daily-watch` watches
+(re-derive from `personas.py` — the registry grows).
 
-- a hard **`SWA_DENYLIST_REGEX`** guard (`^FROM[[:space:]]+(gemma3|gemma2)…`)
-  that refuses to build any brief-class model from a gemma2/gemma3 base
-  (override: `BRIEF_BASE_OVERRIDE=1`), and
-- a **smoke-test promotion gate**: brief models build as `:candidate`, must
-  produce a real, non-empty generation for a 125%-of-worst-case prompt within
-  `SMOKE_BUDGET_S`, and only then get promoted to `:latest` — a failed
-  candidate is deleted and last-known-good stays live.
-
-  The budget is **900 s** by default, not the 200 s this README used to claim
-  (`build-models.sh:125` → `SMOKE_BUDGET_S="${BRIEF_SMOKE_BUDGET_S:-900}"`).
-  The operator deliberately changed the philosophy on 2026-08-13 from a tight
-  build-time budget to a generous one, moving the real gate to the runtime-side
-  load-phase timeout (`OLLAMA_LOAD_TIMEOUT`). Don't tighten it back down
-  without reading that rationale in `build-models.sh` first.
-
-**Orphaned-generation fix (2026-08-11):** a client-side timeout does *not*
-stop Ollama's server-side generation. `src/common/llm.py` now sends
-`_abandon_ollama_generation()` — a `keep_alive: 0` unload signal — the moment
-a caller's request hits a transport error/timeout (this previously piled up
-orphaned `llama-server` generations to a 52 load average). The same fix is in
-`build-models.sh`'s smoke test.
-
-Guard 3: `corporatetraveldc-brief-fallback-monitor.timer` (hourly) alerts
-loudly if briefs degrade to deterministic fallback anyway.
+**Guards that survived the cutover:** the deterministic-fallback contract
+(`generate()` returns `None` on any failure → the skill renders its own
+template), the response guard (`sanitize_llm_response` — repetition-loop /
+persona-echo / truncation trims, each validated against real 2026-08-17
+failure specimens), central prompt sanitization, thermal cool-launch and
+load pre-flight gates, and `corporatetraveldc-brief-fallback-monitor.timer`
+(hourly) alerting loudly if briefs degrade to deterministic fallback.
+**Retired with Ollama:** the candidate/smoke/promote model build, the
+gemma SWA denylist, `_abandon_ollama_generation()` and the model-swap
+overhead problem itself (models are now permanently resident per tier).
 
 Cloud fallback: **closed on this box — zero cloud calls.**
-`/etc/corporatetraveldc/dispatch.env` sets `ANTHROPIC_FALLBACK_ENABLED=false`
-(since 2026-08-12; the `true` default only applies when the var is unset,
-which it is not here — every skill container loads that env file). Brief
-skills additionally pass `allow_anthropic=False` as a second, narrower
-opt-out. With Ollama unavailable, skills fall back to deterministic
-templates; `brief-fallback-monitor` (hourly) alerts when that happens.
-Design history: `docs/DEDICATED_MODELS_PLAN.md`.
+`ANTHROPIC_FALLBACK_ENABLED` is **fail-closed by default since 2026-08-26**
+(module default `false`), *and* `/etc/corporatetraveldc/dispatch.env` sets it
+`false` explicitly. Brief skills additionally pass `allow_anthropic=False`
+as a second, narrower opt-out. With the local server unavailable, skills
+fall back to deterministic templates; `brief-fallback-monitor` (hourly)
+alerts when that happens. Design history (Ollama era, superseded):
+`docs/DEDICATED_MODELS_PLAN.md`.
 
-### Rebuilding models
+### Changing a persona
 
 ```bash
-bash build-models.sh          # verifies signed manifest, applies guards, builds all 21
+$EDITOR src/common/personas.py    # takes effect on the next request
+bash build-models.sh              # verify Modelfile↔personas.py sync (no build step exists anymore)
+scripts/sign-manifest.sh          # both files are manifest-covered
 ```
 
-> **Correction 2026-08-23 — model prewarming is retired; this README claimed
-> otherwise.** There are **no** `corporatetraveldc-ollama-prewarm-*` units
-> anywhere on this box or in this repo's live unit directory
-> (`systemctl --user list-unit-files 'corporatetraveldc-ollama-prewarm*'` → 0;
-> `ls ~/.config/systemd/user/ | grep -c prewarm` → 0). The original single
-> prewarm unit was retired 2026-08-03 and the 28 per-skill prewarm
-> `.service`/`.timer` files were retired 2026-08-14 — all of them now sit in
-> `.config/systemd/user/retired-20260803/` and `retired-20260814/`. Skills
-> therefore pay the cold model-load cost themselves, bounded by
-> `OLLAMA_LOAD_TIMEOUT`, which is exactly why the load-phase timeout (not the
-> build-time smoke budget) is the real runtime gate — see the
-> `SMOKE_BUDGET_S` note above. `scripts/ollama-prewarm.sh` still exists but is
-> **orphaned**: no live unit references it
-> (`grep -rIl ollama-prewarm ~/.config/systemd/user/` → 0 files).
+(Prewarm timers, the candidate/smoke/promote pipeline, and per-skill model
+rebuilds are all Ollama-era history — models are permanently resident per
+tier now, and there is no per-skill model artifact to build.)
 
 ---
 

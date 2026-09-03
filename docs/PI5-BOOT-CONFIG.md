@@ -163,4 +163,8 @@ verify or change it, boot a Raspberry Pi OS medium that ships the
    (native `tailscaled.service` — see `docs/HEADLESS_ACCESS.md`), Pi-hole +
    Unbound (`pihole-unbound-selinux-internal` repo), nginx vhosts
    (`nginx/conf.d/` in this repo is the reference copy), cloudflared,
-   Nextcloud, and Ollama + `build-models.sh`.
+   Nextcloud, and the llama.cpp inference layer — the `llama-server`
+   binary + shared phi3-mini GGUF plus the `corporatetraveldc-llama-*`
+   systemd user units from `.config/systemd/user/` (Ollama was retired at
+   the 2026-08-27 cutover; `build-models.sh` is now only a
+   Modelfile↔personas.py verifier, not a build step).

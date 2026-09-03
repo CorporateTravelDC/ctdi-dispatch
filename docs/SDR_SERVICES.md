@@ -37,7 +37,7 @@ were stale**, and the `.disabled` file paths were understated.
 | `corporatetraveldc-acarsrouter` | ACARS/VDL2 message router (:9080) | |
 | `corporatetraveldc-dumpvdl2` | VDL Mode 2 decoder — shares the `ACARS0130` dongle (`Environment=RTL_SERIAL=ACARS0130`, whole-bus `AddDevice=/dev/bus/usb`, not the `/dev/rtl_sdr_acars` symlink) | |
 | `corporatetraveldc-acarshub` | ACARS web UI (127.0.0.1:9081) | |
-| `corporatetraveldc-acars-watcher` | Dual-source watcher — local UDP 5005 + airframes.io REST | custom local image |
+| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST | custom local image |
 | `corporatetraveldc-piaware` / `-fr24feed` / `-planefinder` / `-airnavradar` | Aggregator feeders (FlightAware / FR24 / PlaneFinder / RadarBox) | |
 
 **Still `.disabled` (hardware not yet acquired).** Serials below are the real
@@ -52,6 +52,7 @@ were stale**, and the `.disabled` file paths were understated.
 | `systemd/corporatetraveldc-dumphfdl.container.disabled` — **superseded** by the three above | comments say `hfdl0HF`; no live udev rule matches it | 2–22 MHz HF | acars-watcher (UDP 5005) |
 | `systemd/quadlets/corporatetraveldc-ais-catcher.container.disabled` (AIS-catcher; NMEA/JSON on :8110) | `AIS0162` (commented `AddDevice=/dev/rtl_sdr_ais0162`) | 161–162 MHz | `systemd/corporatetraveldc-ais-watcher.container.disabled` (UDP 5006) |
 | `systemd/corporatetraveldc-ais.container.disabled` — **superseded** by ais-catcher above | comments say `ais0AIS`; no live udev rule matches it | 161–162 MHz | same |
+| `systemd/corporatetraveldc-utm-watcher.container.disabled` (OpenDroneID / Remote-ID drone watcher, `src/utm_watcher/`) | n/a — listens for UDP Remote-ID broadcasts (no RTL-SDR serial assigned yet) | 2.4/5.8 GHz Remote-ID (WiFi/BT beacons) | utm-watcher itself (its UDP parser is defensive/best-effort pending real captures; the USS REST poller is an honest inert stub) |
 
 Note the three locations: **only** the `acarsdec` one is staged in
 `.config/containers/systemd/`; everything else sits under `systemd/` or
