@@ -8,9 +8,23 @@ first-mover signal worth tracking -- that put gig-economy in scope as its
 own watched category, not just something incidentally mentioned inside
 AAM/aviation feeds.
 
-Reuses aam_weekly_watch.py's _fetch_week_items()/_split_framings() --
-genuinely shared code. Own model, system prompt, and rss_retrieval query
-since the content/audience framing differs from AAM/aviation.
+Reuses aam_weekly_watch.py's _fetch_week_items() -- genuinely shared
+code. No longer reuses _split_framings() (see 2026-09-02 note below).
+Own model, system prompt, and rss_retrieval query since the
+content/audience framing differs from AAM/aviation.
+
+2026-09-02 (operator-directed rearchitecture, same pattern applied
+across the whole daily-watch family -- see aam_daily_watch.py's
+docstring for the full root-cause writeup): ops and EP framings are now
+TWO INDEPENDENT llm_generate() calls joined afterward, not one shared
+500-token call mechanically split via _split_framings(). A live
+usage-log audit found this family falling back at 10-17%, the same
+mechanism root-caused on aam-daily-watch (83% there): the single shared
+call instructs the model to write two versions back to back, which on a
+quiet news day collapse into near-duplicate text and loop past the
+token cap, tripping common.llm's repetition-loop guard into discarding
+the whole response. Per-framing calls remove the instructed
+duplication and isolate failures.
 
 Wired into common.entity_tracking from creation (see that module's
 docstring for the full cross-link/novel-findings/backlink-discovery
@@ -52,7 +66,7 @@ from second_brain.index_db import INDEX_DB, index_note
 from second_brain.index_db import init_db as init_vault_db
 from second_brain.scrub_gate import ScrubGateBlocked, gate
 
-from poller.skills.aam_weekly_watch import _fetch_week_items, _split_framings
+from poller.skills.aam_weekly_watch import _fetch_week_items
 
 log = logging.getLogger(__name__)
 
@@ -68,39 +82,70 @@ RETRIEVE_QUERY = (
 )
 RETRIEVE_TOP_N = 10
 
-_OPS_MARKER = "=== OPS FRAMING ==="
-_EP_MARKER = "=== EP FRAMING ==="
-
-SYSTEM_PROMPT = f"""You are writing the daily gig-economy/platform-labor
+# 2026-09-02 split-call rearchitecture (see module docstring).
+_SPLIT_TASK_PREAMBLE = """You are writing the daily gig-economy/platform-labor
 watch section for an executive dispatch platform serving a DC-area
 chauffeur and executive-protection business that also tracks broader
 market/competitive signal. You will be given today's raw gig-economy
-headlines.
+headlines and a FRAMING INSTRUCTION at the end telling you which single
+analytical framing to write.
 
-Produce TWO separate versions back to back, each focused on today's most
-notable developments, but different analytical framing. Use these exact
-section markers, each on its own line, in this exact order:
+Produce exactly ONE version:
 
-{_OPS_MARKER}
-TODAY'S DEVELOPMENTS: 2-5 sentences focused on competitive/market
-relevance -- pricing moves, new venture launches, platform policy shifts
-that could affect the ground-transport competitive landscape. If nothing
-today is notable, say so plainly rather than manufacturing significance.
+TODAY'S DEVELOPMENTS: 2-5 sentences in the framing the FRAMING
+INSTRUCTION asks for. If nothing today fits that framing, say so
+plainly rather than manufacturing significance.
 
-{_EP_MARKER}
-TODAY'S DEVELOPMENTS: 2-5 sentences focused on the legal/regulatory/labor
-angle -- classification lawsuits, regulatory action, labor organizing,
-anything with liability or compliance relevance to a business operating
-in the same broad transport-labor space. If nothing today is relevant,
-say so plainly rather than manufacturing an angle that isn't there.
+Plain text, no markdown headers beyond the label above, no filler. Cite
+specific stories from the provided list -- do not invent developments
+not present in the retrieved items. Once written, stop -- do not add
+further versions, framings, or repetitions."""
 
-Plain text within each section, no markdown headers beyond the labels
-above, no filler. Cite specific stories from the provided list -- do not
-invent developments not present in the retrieved items."""
+_FRAMING_INSTRUCTIONS = {
+    "ops": (
+        "FRAMING INSTRUCTION: write TODAY'S DEVELOPMENTS focused on "
+        "competitive/market relevance -- pricing moves, new venture "
+        "launches, platform policy shifts that could affect the "
+        "ground-transport competitive landscape."
+    ),
+    "ep": (
+        "FRAMING INSTRUCTION: write TODAY'S DEVELOPMENTS focused on the "
+        "legal/regulatory/labor angle -- classification lawsuits, "
+        "regulatory action, labor organizing, anything with liability "
+        "or compliance relevance to a business operating in the same "
+        "broad transport-labor space."
+    ),
+}
 
 
 def _day_label(d: date) -> str:
     return d.isoformat()
+
+
+def _generate_framing(flavor: str, base_prompt: str, headline_block: str) -> tuple[str, bool]:
+    """One independent generation for one framing. See aam_daily_watch.py's
+    module docstring for the full 2026-09-02 rationale."""
+    result = llm_generate(
+        system=None,
+        prompt=f"{_SPLIT_TASK_PREAMBLE}\n\n{base_prompt}\n\n{_FRAMING_INSTRUCTIONS[flavor]}",
+        ollama_model=OLLAMA_MODEL, max_tokens=250, temperature=0.25,
+        timeout=1380, allow_anthropic=False,
+    )
+    if result:
+        gated = gate(result, source=f"{SKILL_NAME}-llm-{flavor}")
+        return gated, True
+    try:
+        fallback = (
+            f"TODAY'S DEVELOPMENTS ({flavor} framing generation failed -- raw headlines):\n"
+            + headline_block
+        )
+    except Exception as fallback_err:
+        log.error("%s: %s fallback also failed — %s", SKILL_NAME, flavor, fallback_err)
+        fallback = (
+            f"[{SKILL_NAME.upper()}] {flavor} generation failed -- both the LLM "
+            f"call and the deterministic fallback errored. See logs."
+        )
+    return fallback, False
 
 
 def main() -> None:
@@ -140,40 +185,22 @@ def main() -> None:
             f"\n{headline_block}"
         )
 
-        ollama_result = llm_generate(
-            system=None, prompt=prompt,
-            ollama_model=OLLAMA_MODEL, max_tokens=500, temperature=0.25,
-            # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
-            # methodology: guard timer paused, synthetic burn, la 27 at
-            # sample): 1618-tok prompt / 194.1s eval + gen at 0.71 tok/s
-            # -> 702.6s at the 500-tok cap; delta over the 43.8s
-            # spiked persona-only ref = 852.9s; x1.21 top-up to the 53s locked bound applied;
-            # (53 + 1031.6) x 1.25 = 1356s -> 1380.
-            timeout=1380, allow_anthropic=False,
-        )
-        if ollama_result:
-            gated = gate(ollama_result, source=f"{SKILL_NAME}-llm")
-            ops_synthesis, ep_synthesis = _split_framings(gated)
+        # 2026-09-02: two independent per-framing calls, joined below --
+        # see module docstring / aam_daily_watch.py for the full rationale.
+        ops_synthesis, ops_ok = _generate_framing("ops", prompt, headline_block)
+        ep_synthesis, ep_ok = _generate_framing("ep", prompt, headline_block)
+        if ops_ok and ep_ok:
             status = "ok"
-            log.info("%s: split synthesis generated via Ollama/%s (%d of %d items retrieved)",
+            log.info("%s: both framings generated independently via %s (%d of %d items retrieved)",
                       SKILL_NAME, OLLAMA_MODEL, len(retrieved), len(items))
+        elif ops_ok or ep_ok:
+            status = "partial"
+            log.info("%s: %s framing generated, %s framing fell back to raw headlines",
+                      SKILL_NAME, "ops" if ops_ok else "ep", "ep" if ops_ok else "ops")
         else:
-            try:
-                fallback = (
-                    "TODAY'S DEVELOPMENTS (Ollama unavailable -- raw headlines):\n"
-                    + headline_block
-                )
-                ops_synthesis = ep_synthesis = fallback
-                status = "fallback"
-                log.info("%s: Ollama unavailable -- using raw headline fallback for both flavors",
-                          SKILL_NAME)
-            except Exception as fallback_err:
-                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
-                ops_synthesis = ep_synthesis = (
-                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
-                    f"deterministic fallback errored. See logs."
-                )
-                status = "fallback_error"
+            status = "fallback"
+            log.info("%s: both framing generations failed -- raw headline fallback for both flavors",
+                      SKILL_NAME)
 
         day_label = _day_label(today)
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -219,9 +246,10 @@ def main() -> None:
         status = "blocked"
         log.error("%s: BLOCKED by scrub gate: %s", SKILL_NAME, e)
     finally:
-        log_usage(SKILL_NAME, OLLAMA_MODEL if status == "ok" else "deterministic",
+        log_usage(SKILL_NAME, OLLAMA_MODEL if status in ("ok", "partial") else "deterministic",
                    0, 0, status, "new")
-        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path)
+        ntfy_push.send_run_status(SKILL_NAME, status, detail=rel_path,
+                                  ok_statuses=("ok", "partial", "fallback"))
 
 
 if __name__ == "__main__":
