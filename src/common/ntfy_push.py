@@ -38,8 +38,13 @@ _RETRY_BACKOFF_SECS = 0.5  # doubles each retry: 0.5s, 1s
 # the full false-negative-403 root cause). Narrowly targets 401/403 only;
 # genuine failure signals (timeouts, connection errors, other statuses)
 # still retry-and-resend exactly as before.
+# retention_secs pinned to the old 10x-TTL eviction (2026-09-03 push_dedup
+# redesign): pure TTL guard, key == content hash, checked via
+# should_push_periodic() so the exact TTL behavior is preserved.
 _AMBIGUOUS_STATUS_TTL_SECS = 90
-_ambiguous_dedup = PushDedup("ntfy-ambiguous-status", dedup_secs=_AMBIGUOUS_STATUS_TTL_SECS)
+_ambiguous_dedup = PushDedup("ntfy-ambiguous-status",
+                             dedup_secs=_AMBIGUOUS_STATUS_TTL_SECS,
+                             retention_secs=_AMBIGUOUS_STATUS_TTL_SECS * 10)
 
 RUNNER_BASE = config.runner_click_base()
 # 2026-08-03: defaults to the Tailscale hostname (corporatetraveldc-dispatch.
@@ -202,7 +207,7 @@ def send(
                     # RESEND (a real transient 401/403 on an otherwise-
                     # healthy token could otherwise duplicate-alert), but
                     # never claim success for a request that never got one.
-                    if _ambiguous_dedup.should_push(idem_key, idem_key):
+                    if _ambiguous_dedup.should_push_periodic(idem_key, idem_key):
                         _ambiguous_dedup.record(idem_key, idem_key)
                         log.error(
                             "ntfy %s: url=%s topic=%s -- NOT resending (avoids "

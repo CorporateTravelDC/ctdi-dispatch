@@ -47,7 +47,11 @@ def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -
     key = f"enrichment_{SKILL_NAME}"
     h = _ch(stable_key) if stable_key else _ch(text)
     hot = "vip=True" in stable_key or "vip=1" in stable_key
-    if not _tfr_skill_dedup.should_push(key, h, hot=hot):
+    # 2026-09-03 (forward-only push_dedup redesign): PERIODIC api,
+    # deliberately -- same still-active-TFR hourly re-push contract as
+    # pusher/main.py's push_vip_tfrs and route_impact's hot-alerts gate
+    # (all three share the "tfr"/"route" dedup design from 2026-08-16).
+    if not _tfr_skill_dedup.should_push_periodic(key, h, hot=hot):
         log.debug("%s: tfr-alert suppressed (dedup, same content <1h)", SKILL_NAME)
         return
     _ntfy.send("tfr-alert",  text, title=title, priority=priority, tags="rotating_light")

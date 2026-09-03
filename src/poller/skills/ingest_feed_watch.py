@@ -66,6 +66,10 @@ NTFY_HEALTH_URL = "http://host.containers.internal:2586/v1/health"
 # Re-notify at most every 6h if a degraded state persists unchanged --
 # frequent enough that a standing problem doesn't go silent for a whole
 # night, infrequent enough not to page repeatedly on the same thing.
+# 2026-09-03 (forward-only push_dedup redesign): stays on the explicit
+# PERIODIC api -- the 6h still-degraded re-page is this skill's documented
+# design (health monitoring wants a heartbeat while broken, unlike the
+# SWIM alert paths where elapsed-time re-fires were pure spam).
 _dedup = PushDedup("ingest-feed-watch", dedup_secs=21600)
 
 
@@ -164,7 +168,7 @@ def main() -> None:
         should_notify = False
         if problems:
             status = "degraded"
-            should_notify = _dedup.should_push("state", key)
+            should_notify = _dedup.should_push_periodic("state", key)
         elif was_degraded:
             should_notify = True  # recovery from a prior degraded state -- always worth one ping
 

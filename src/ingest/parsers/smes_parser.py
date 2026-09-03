@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from common import db
-from common.push_dedup import PushDedup, content_hash
+from common.push_dedup import PushDedup, bucket_count, content_hash
 
 log = logging.getLogger("ingest.parsers.smes")
 
@@ -387,7 +387,14 @@ def check_stdds_alerts(tracks: list[dict]) -> None:
     if track_count < _MIN_TAIS_TRACKS_FOR_ALERT:
         return
 
-    dedup_key = content_hash(str(track_count))
+    # 2026-09-03 (forward-only push_dedup redesign + content-hash audit):
+    # the raw count was too fine-grained a "content" -- +/-1 jitter between
+    # consecutive messages read as changed content and re-fired every time,
+    # so the old 300s window never actually suppressed anything while
+    # traffic churned. Band-of-5 bucketing (numeric counterpart of the
+    # watchlist's timestamp bucketing) makes jitter hash identically while
+    # a genuine band jump (real congestion change) still fires immediately.
+    dedup_key = content_hash(bucket_count(track_count))
     if not _STDDS_PCT_DEDUP.should_push("pct", dedup_key):
         return
 
@@ -547,6 +554,10 @@ def _stdds_priority(airport: str | None, base_priority: int) -> int:
 # content change, and it's explicitly safety-adjacent (escalating_only=False
 # for the same reason); a redundant time-based suppression on top of that
 # would risk delaying a real runway safety-logic change.
+# 2026-09-03: push_dedup's should_push() is now forward-only -- the 300s
+# window no longer re-fires an unchanged (band-bucketed, see the call
+# sites) count on the clock; only a genuine band change fires. dedup_secs
+# kept for PushDedup's retention parameter.
 _STDDS_PCT_DEDUP = PushDedup("stdds_pct_alerts", dedup_secs=300)
 _STDDS_SURFACE_DEDUP = PushDedup("stdds_surface_alerts", dedup_secs=300)
 _STDDS_TAXI_DEDUP = PushDedup("stdds_taxi_alerts", dedup_secs=300)
@@ -584,7 +595,9 @@ def check_surface_alerts(tracks: list[dict]) -> None:
         sector = _stdds_sector_for(airport)
         if sector is None:
             continue
-        dedup_key = content_hash(str(track_count))
+        # 2026-09-03: band-of-5 bucketed count as content -- see
+        # check_stdds_alerts' identical fix comment for the reasoning.
+        dedup_key = content_hash(bucket_count(track_count))
         if not _STDDS_SURFACE_DEDUP.should_push(airport, dedup_key):
             continue
         title = f"STDDS/ASDE-X -- {airport} ground traffic"
@@ -1148,7 +1161,9 @@ def check_taxi_alerts(record: dict) -> None:
     if onsurface_count < _MIN_ONSURFACE_FOR_ALERT:
         return
 
-    dedup_key = content_hash(str(onsurface_count))
+    # 2026-09-03: band-of-5 bucketed count as content -- see
+    # check_stdds_alerts' identical fix comment for the reasoning.
+    dedup_key = content_hash(bucket_count(onsurface_count))
     if not _STDDS_TAXI_DEDUP.should_push(airport, dedup_key):
         return
 

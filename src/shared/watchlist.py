@@ -65,13 +65,26 @@ ULTRAFEEDER_BASE = os.environ.get("ULTRAFEEDER_URL", "http://100.x.x.x:8080").rs
 
 _ntfy_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy")
 
-# Dedup window: don't re-fire the same event_type for the same entry within this many seconds.
+# Watchlist event dedup -- FORWARD-ONLY as of the 2026-09-03 push_dedup
+# redesign: an event fires when its (per-sub-identity) content hash first
+# appears or genuinely changes, and an unchanged rebroadcast stays
+# suppressed indefinitely (up to PushDedup's retention horizon), NOT just
+# for a 5-minute window. The old 300s window was the last leg of the
+# UAL1573/UAL1369 duplicate-TMI saga: the 2026-07-21/22 content-hash +
+# timestamp-bucketing + per-fca-key fixes below correctly made unchanged
+# rebroadcasts hash identically, but should_push() still re-fired purely
+# because the window had elapsed -- and TFMS rebroadcasts an active,
+# unchanged TMI assignment every ~5-8 min as routine SWIM chatter, which
+# straddles 300s, so UAL1369's three concurrent constraints each re-paged
+# 7 times in 42 minutes (2026-09-02, byte-identical event_detail rows in
+# watchlist_history). dedup_secs is retained only as PushDedup's periodic/
+# retention parameter; it no longer forces a re-fire.
 # Persisted (not in-memory) — survives container restarts and is shared between
 # the ingest container and the poller, which both call watchlist_event_hit() for
 # the same entities via different paths (push-primary vs. REST fallback). An
 # in-memory-only cache would let both fire independently during handoff windows
 # or after either process restarts.
-_DEDUP_WINDOW_SECS = 300  # 5 minutes
+_DEDUP_WINDOW_SECS = 300
 _watchlist_dedup = PushDedup("watchlist-event", dedup_secs=_DEDUP_WINDOW_SECS)
 
 # Idempotency guard added 2026-07-21 -- narrowly targets the 401/403
@@ -89,8 +102,15 @@ _watchlist_dedup = PushDedup("watchlist-event", dedup_secs=_DEDUP_WINDOW_SECS)
 # not on genuine failure signals (timeouts, connection errors, 5xx),
 # which still retry-and-resend exactly as before since those really do
 # mean the message didn't get through.
+# retention_secs pinned to the old 10x-TTL eviction: this is a pure TTL
+# guard (key == content hash, so forward-only semantics would never apply)
+# and its state has zero value minutes after the retry window closes --
+# checked via should_push_periodic() below, which keeps the exact
+# pre-2026-09-03 TTL behavior.
 _NTFY_AMBIGUOUS_STATUS_TTL_SECS = 90
-_ntfy_ambiguous_dedup = PushDedup("ntfy-ambiguous-status", dedup_secs=_NTFY_AMBIGUOUS_STATUS_TTL_SECS)
+_ntfy_ambiguous_dedup = PushDedup("ntfy-ambiguous-status",
+                                  dedup_secs=_NTFY_AMBIGUOUS_STATUS_TTL_SECS,
+                                  retention_secs=_NTFY_AMBIGUOUS_STATUS_TTL_SECS * 10)
 
 
 # 2026-07-22: content-aware dedup. Previously ck was content_hash(event_type)
@@ -114,6 +134,37 @@ _ntfy_ambiguous_dedup = PushDedup("ntfy-ambiguous-status", dedup_secs=_NTFY_AMBI
 _TS_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?')
 _TS_BUCKET_MINUTES = 10
 
+# 2026-09-03 (forward-only dedup redesign, content-hash quality audit):
+# per-trigger continuous-telemetry keys excluded from the dedup hash.
+# Timestamp bucketing above already stops ISO-time churn from reading as
+# "changed content", but several triggers spread raw position telemetry
+# into event_detail (fdps TH handlers do {**parsed, ...}), so
+# latitude/longitude/altitude/speed/distance churned the hash on every
+# single position update and the dedup never suppressed anything -- under
+# the old semantics OR the new. These triggers are episode notifications
+# ("getting close" / "in local range"): the aircraft's exact coordinates
+# are incidental, so they're dropped from the HASH only (event_detail
+# itself, and what lands in watchlist_history, is untouched). Deliberately
+# per-trigger, NOT global: vessel_position's meaningful content IS its
+# lat/lon/speed (a moving vessel should re-fire), so a blanket drop would
+# silence real movement updates.
+_PROX_TELEMETRY_KEYS = frozenset({
+    "latitude", "longitude", "altitude_ft", "ground_speed", "dist_nm",
+})
+_TRIGGER_NOISE_KEYS: dict[str, frozenset[str]] = {
+    "fdps_th_approach": _PROX_TELEMETRY_KEYS,
+    "fdps_th_meterfix_approach": _PROX_TELEMETRY_KEYS,
+    "tfms_track_approach": frozenset({"latitude", "longitude", "minutes_out"}),
+    "watchlist_proximity": frozenset({"distance_nm", "altitude_ft"}),
+}
+# Raw message payloads are dropped from the hash for EVERY trigger:
+# fdps_parser's TH/FH/CL handlers spread {**parsed} into event_detail, and
+# parsed carries raw_xml -- the whole broadcast message, unique per
+# transmission -- so any dedup hash that includes it can never match twice
+# and the dedup silently never suppressed those triggers at all. Raw
+# payloads are provenance, not alert content.
+_ALWAYS_NOISE_KEYS = frozenset({"raw_xml", "raw_json"})
+
 
 def _bucket_timestamp(value: str, bucket_minutes: int = _TS_BUCKET_MINUTES) -> str:
     """Round an ISO-8601 timestamp string to a coarse bucket so continuous
@@ -130,12 +181,15 @@ def _bucket_timestamp(value: str, bucket_minutes: int = _TS_BUCKET_MINUTES) -> s
 
 
 def _normalize_detail_for_hash(event_detail: dict) -> dict:
-    """Drop the redundant trigger key and coarse-bucket any ISO-8601
+    """Drop the redundant trigger key plus any per-trigger continuous
+    telemetry (see _TRIGGER_NOISE_KEYS), and coarse-bucket any ISO-8601
     timestamp values so continuous ETA/boundary-time refinement doesn't
     read as a new event -- only genuine identity/value changes do."""
+    trigger = (event_detail or {}).get("watchlist_trigger", "")
+    noise_keys = _TRIGGER_NOISE_KEYS.get(trigger, frozenset()) | _ALWAYS_NOISE_KEYS
     out = {}
     for k, v in sorted((event_detail or {}).items()):
-        if k == "watchlist_trigger":
+        if k == "watchlist_trigger" or k in noise_keys:
             continue
         if isinstance(v, str) and _TS_RE.match(v):
             out[k] = _bucket_timestamp(v)
@@ -145,10 +199,11 @@ def _normalize_detail_for_hash(event_detail: dict) -> dict:
 
 
 def _check_dedup(entry_id: str, event_type: str, event_detail: dict) -> bool:
-    """Return True if we should suppress (already fired within dedup window).
-    Content-aware: same entry_id + event_type + sub-identity + same
-    normalized payload within the window is suppressed; a real content
-    change or the window elapsing pushes again.
+    """Return True if we should suppress (already fired with this content).
+    Content-aware and forward-only (2026-09-03): same entry_id +
+    event_type + sub-identity + same normalized payload stays suppressed
+    for as long as PushDedup remembers it; only a real content change
+    pushes again -- elapsed time alone never does.
 
     2026-07-22 follow-up fix: a single flight can carry MULTIPLE concurrent
     tfms_tmi assignments at once (e.g. IAD_ZID + IAD_OUT + -ZOB all active
@@ -570,7 +625,9 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
     """
     Called when a watched entity has a status event.
     Fires dual ntfy push (domain topic + dispatch) and writes to watchlist_history.
-    Deduplicates: same entry_id + event_type will not fire again within 5 minutes.
+    Deduplicates forward-only: the same entry_id + event_type +
+    sub-identity with unchanged (normalized) content will not fire again;
+    a genuine content change fires immediately (see _check_dedup).
     """
     entries = db.get_watchlist_entries()
     entry = next((e for e in entries if e["id"] == entry_id), None)
@@ -980,7 +1037,7 @@ def _fire_ntfy_dual(domain_topic: str, title: str, detail_body: str,
                     # Documented false-negative pattern -- don't resend, mark
                     # as probable-delivery and stop instead of risking a
                     # confirmed duplicate for a message that likely already went out.
-                    if _ntfy_ambiguous_dedup.should_push(idem_key, idem_key):
+                    if _ntfy_ambiguous_dedup.should_push_periodic(idem_key, idem_key):
                         _ntfy_ambiguous_dedup.record(idem_key, idem_key)
                         log.warning(
                             "ntfy %s on topic=%s -- known false-negative pattern "
