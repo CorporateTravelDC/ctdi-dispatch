@@ -6,6 +6,7 @@ Schema is authoritative here. Migrations are additive (ALTER TABLE only).
 import json
 import logging
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
@@ -23,21 +24,72 @@ def _db_path() -> Path:
     return p
 
 
-@contextmanager
-def conn() -> Generator[sqlite3.Connection, None, None]:
-    """Context manager: autocommit on success, rollback on exception."""
+# 2026-09-04: one persistent connection per thread, reused across calls,
+# instead of a fresh sqlite3.connect() on every single conn() call (root
+# cause of the day/night load baseline gap -- 271 call sites, 57 inside
+# loops, connection-per-call under WAL writer contention scaling worse
+# than linearly with SWIM message volume; see the fdps_parser/tfms_parser
+# hot paths). Thread-local, not one shared connection, because poller
+# skills run blocking DB work via run_in_executor() threadpool threads
+# and sqlite3 connections are not safe to share across threads.
+_local = threading.local()
+
+
+def _open_connection() -> sqlite3.Connection:
     c = sqlite3.connect(str(_db_path()), timeout=10)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
+    return c
+
+
+def close_thread_connection() -> None:
+    """Close and drop this thread's cached connection, if any.
+
+    Every existing call site is either a long-lived daemon thread (runs
+    for the life of the process -- ais_watcher/acars_watcher listener
+    threads, ingest/main.py's local_monitor, swim_client.py's per-feed
+    threads, shared/watchlist.py's _poll_loop) or a run_in_executor()
+    threadpool worker (bounded pool, threads persist and get reused
+    across many calls). Neither needs this. A future SHORT-LIVED ad hoc
+    threading.Thread that calls db.*() and then exits DOES need it --
+    otherwise its cached connection leaks (open file handle) until
+    Python's GC finalizes the thread object, which is not guaranteed to
+    happen promptly. Call this at the end of such a thread's target
+    function.
+    """
+    c = getattr(_local, "conn", None)
+    if c is not None:
+        try:
+            c.close()
+        except sqlite3.Error:
+            pass
+        _local.conn = None
+
+
+@contextmanager
+def conn() -> Generator[sqlite3.Connection, None, None]:
+    """Context manager: autocommit on success, rollback on exception.
+
+    Reuses this thread's persistent connection rather than opening a new
+    one every call (see _local above). If the connection itself turns
+    out to be broken (disk I/O error, corruption) rather than just the
+    current statement failing, drop it so the next call opens a fresh
+    one instead of reusing a dead connection forever.
+    """
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = _open_connection()
+        _local.conn = c
     try:
         yield c
         c.commit()
     except Exception:
-        c.rollback()
+        try:
+            c.rollback()
+        except sqlite3.Error:
+            close_thread_connection()
         raise
-    finally:
-        c.close()
 
 
 # ── Schema ─────────────────────────────────────────────────────────────────────

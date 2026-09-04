@@ -16,6 +16,11 @@
 #   - a per-instance drop-in supplying PublishPort= (ports collide across
 #     clients, so every instance needs its own -- pick one not already in
 #     use; this script does not check for collisions)
+#   - a per-instance expiry-timer drop-in pinning an absolute
+#     OnCalendar= expiry (creation time + 7 days, America/New_York),
+#     overriding the shared template's OnActiveSec=7d -- see the comment
+#     at the drop-in generation below for why the monotonic form is
+#     broken across reboots
 #   - enables (does not start) the matching webdev-credential-expiry timer
 #     instance
 #
@@ -73,6 +78,32 @@ cat > "${QUADLET_DIR}/corporatetraveldc-client-demo@${SLUG}.container.d/10-insta
 PublishPort=127.0.0.1:${PORT}:${PORT}
 EOF
 
+# Expiry-timer drop-in (added 2026-09-03). The shared template's
+# OnActiveSec=7d is monotonic, measured from timer-unit ACTIVATION -- and
+# because the timer is enabled into timers.target, every reboot
+# re-activates it and restarts the 7-day countdown from zero.
+# Persistent=true does not rescue it: per systemd.timer(5), Persistent=
+# only takes effect for OnCalendar= timers. Net effect: a box that
+# reboots more often than every 7 days would NEVER fire the expiry, and
+# the time-limited webdev credential would stay live indefinitely on a
+# Tunnel-exposed site. Fix: pin each instance to an absolute calendar
+# date -- creation time + 7 days, America/New_York -- via the same
+# instanced-template + drop-in convention as the port drop-in above.
+# OnActiveSec= (empty) clears the template's monotonic setting;
+# Persistent=true inherited from the template now genuinely applies, so
+# an expiry moment slept/powered-off through still fires on next boot.
+EXPIRY_LOCAL="$(TZ=America/New_York date -d '+7 days' '+%Y-%m-%d %H:%M:%S')"
+echo "[new-client-demo] writing expiry-timer drop-in (fires ${EXPIRY_LOCAL} America/New_York)..."
+mkdir -p "${SYSTEMD_USER_DIR}/corporatetraveldc-client-demo-webdev-expiry@${SLUG}.timer.d"
+cat > "${SYSTEMD_USER_DIR}/corporatetraveldc-client-demo-webdev-expiry@${SLUG}.timer.d/10-instance.conf" <<EOF
+[Timer]
+# Written by new-client-demo.sh for '${SLUG}' -- absolute expiry replacing
+# the template's reboot-resettable OnActiveSec=7d (Persistent= is a no-op
+# on monotonic timers per systemd.timer(5); with OnCalendar= it works).
+OnActiveSec=
+OnCalendar=${EXPIRY_LOCAL} America/New_York
+EOF
+
 echo "[new-client-demo] enabling webdev-credential-expiry timer for '${SLUG}' (not started)..."
 systemctl --user daemon-reload
 systemctl --user enable "corporatetraveldc-client-demo-webdev-expiry@${SLUG}.timer" 2>&1 || true
@@ -85,7 +116,8 @@ cat <<EOF
   3. systemctl --user daemon-reload
   4. systemctl --user start corporatetraveldc-client-demo@${SLUG}.service
   5. systemctl --user start corporatetraveldc-client-demo-webdev-expiry@${SLUG}.timer
-     (starts the 7-day countdown for the 'webdev' credential -- skip if
+     (the 'webdev' credential expires at ${EXPIRY_LOCAL} America/New_York,
+     pinned by this instance's timer drop-in; survives reboots -- skip if
      there's no time-limited credential to expire for this client)
   6. Add the Cloudflare Tunnel route for this demo's public hostname ->
      127.0.0.1:${PORT} (manual, same as every prior demo).

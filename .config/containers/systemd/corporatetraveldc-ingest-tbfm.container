@@ -80,7 +80,24 @@ MemoryLow=106M
 # dropped OOOI coverage for at least one live flight. SWIM ingest now
 # outranks everything else on this box, deliberately -- see
 # scripts/swim-session-health-watch.sh for the alerting side of this fix.
-CPUWeight=9500
+#
+# 2026-09-03 (operator directive, dialed back): 9500 traded the
+# keep-alive problem for a worse one. Live investigation found llama-chat
+# (CPUWeight=9000) is the SHARED single-slot server for basically the
+# entire report/chat-tier skill fleet (common/llm.py routes every
+# num_ctx<=4096 persona here) -- ranking all 7 SWIM feeds above it meant
+# llama-chat systematically lost every contention round, crawled at
+# ~1.2-1.3 tok/s, and the resulting request backlog inflated system load
+# average past the thermal-ingest-guard's LOCKDOWN threshold (>=40) 17
+# times in 36h -- each trip shedding the ENTIRE stack (all 6 SWIM feeds +
+# ingest-core + poller/pusher/runner), which is strictly worse for SWIM
+# fidelity than the keep-alive flapping this was meant to fix. New value
+# 7500 -- still meaningfully above the original 5000 baseline (keeps some
+# real protection against keep-alive drops) but below llama-chat's 9000,
+# so SWIM always gets real CPU share without categorically starving the
+# report/chat tier. Operator-accepted tradeoff: a delayed/slowed brief
+# under contention is fine; the SWIM feeds must always run.
+CPUWeight=7500
 # 2026-08-30: raised (operator directive) -- this feed is one of the
 # three real OOOI-correlation sources (see common/db.py's
 # _OOOI_SOURCE_PRIORITY: tbfm/tfms/smes -- smes lives in this STDDS

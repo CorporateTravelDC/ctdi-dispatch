@@ -187,9 +187,16 @@ doubling backoff.
 > `EntryType = Literal["flight", "train", "vessel"]`, so the annotation
 > matches the three types the code actually handles.
 
-**Deduplication:** the same `entry_id` + `event_type` (content-aware — detail
-hashed with timestamps bucketed to 10-minute windows) will not re-fire within
-5 minutes (`_DEDUP_WINDOW_SECS = 300`).
+**Deduplication:** forward-only as of the 2026-09-03 `common/push_dedup.py`
+redesign (`_watchlist_dedup.should_push()`). The slot key is
+`entry_id:event_type[:fca_id]` (a per-constraint sub-identity so concurrent
+TMI assignments on one flight don't share a slot); the content key hashes
+the normalized event detail with ISO-8601 timestamps bucketed to 10-minute
+windows. An unchanged event stays suppressed indefinitely (up to PushDedup's
+retention horizon) — elapsed time alone never re-fires it — while a real
+content change fires immediately. `_DEDUP_WINDOW_SECS = 300` still exists
+but is only passed through as PushDedup's periodic/retention parameter; it
+is no longer a re-fire window.
 
 ---
 
@@ -199,8 +206,14 @@ hashed with timestamps bucketed to 10-minute windows) will not re-fire within
 owns hex/tail resolution for flight entries — extracted from the poller's
 `_check_flight_airplanes_live()` sweep (same lookup-priority order and
 false-positive protections: hex-authoritative-once-known, callsign-only
-during bootstrap, local FAA/OpenSky registries before airplanes.live's flaky
-`/v2/reg/`). Two callers:
+during bootstrap, local FAA/OpenSky registry tables for tail→hex). Since
+2026-08-27 resolution is LOCAL-ONLY (operator directive, "everything is
+meant to be local"): live contact comes from this box's own ADS-B receiver
+first, then already-ingested FDPS SWIM data — the airplanes.live API
+(previously the primary live source, with its flaky `/v2/reg/` fallback)
+is no longer queried at all. Only the `globe.airplanes.live/?icao=`
+click-through URL in notifications survives, as a phone convenience link,
+not a lookup this box performs. Two callers:
 
 - the poller's 120 s flight sweep (unchanged behavior), and
 - `ingest/parsers/tfms_parser.py::_handle_flight_times`, which forces a

@@ -49,10 +49,24 @@ Slice=production.slice
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
-# live, every tick. Only matters when something else (notably Ollama,
-# CPUWeight=500) is actually contending for CPU right now; an idle box
-# still lets this container burst across all cores for free.
-CPUWeight=100
+# live, every tick.
+#
+# 2026-09-04 (operator directive, real incident): this comment's
+# "the only real contender is Ollama at weight 500" premise is dead --
+# Ollama is fully retired (llama.cpp now), and the actual current
+# landscape is llama-chat at CPUWeight=9000 and SWIM ingest at 7500.
+# Web sitting at 100 against those is a 90:1 / 75:1 ratio, not the 5:1
+# this comment's math assumed -- under any real contention web gets
+# starved to the point of not responding to its OWN SIGTERM in time,
+# so Podman's 10s stop-timeout escalates to SIGKILL (confirmed live
+# tonight: exit 137, "StopSignal SIGTERM failed to stop container...
+# in 10 seconds, resorting to SIGKILL", twice in under 10 minutes).
+# Web is the operator-facing API/PWA backend -- every admin action,
+# the watchlist, CPS, the whole dispatch surface depends on it
+# responding -- it belongs in the same "must-never-die" tier as
+# llama-chat/llama-hot/ntfy/cloudflared, not two orders of magnitude
+# below the containers it needs to survive contention with.
+CPUWeight=9000
 # Hard ceiling regardless of contention -- never more than 3 of the
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".

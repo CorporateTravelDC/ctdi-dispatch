@@ -40,10 +40,21 @@ Slice=production.slice
 # fact. Previously 0 (unset) everywhere, including ollama.service.
 MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
-# live, every tick. Only matters when something else (notably Ollama,
-# CPUWeight=500) is actually contending for CPU right now; an idle box
-# still lets this container burst across all cores for free.
-CPUWeight=100
+# live, every tick.
+#
+# 2026-09-04 (operator directive, real incident): this comment's
+# "the only real contender is Ollama at weight 500" premise is dead --
+# Ollama is fully retired (llama.cpp now), and the current landscape is
+# llama-chat at CPUWeight=9000 and SWIM ingest at 7500. Poller at 100
+# against those is a 90:1 / 75:1 ratio -- confirmed live tonight: a
+# LOCKDOWN-triggered `systemctl stop` couldn't get SIGTERM handled in
+# Podman's 10s window, escalated to SIGKILL (exit 137), and poller sat
+# in `failed` state until manually restarted, extending a real outage.
+# Same root cause and same fix as corporatetraveldc-web.container's
+# CPUWeight=9000 change earlier the same night. Poller drives every
+# fetch/skill/watchlist-sweep cycle -- it belongs in the same
+# "must-never-die" tier as web/llama-chat/ntfy/cloudflared.
+CPUWeight=9000
 # Hard ceiling regardless of contention -- never more than 3 of the
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
