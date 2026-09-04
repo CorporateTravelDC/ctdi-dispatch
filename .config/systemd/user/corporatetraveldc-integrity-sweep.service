@@ -1,6 +1,0 @@
-[Unit]
-Description=Collective signed-manifest integrity sweep (defense in depth beyond entrypoint-level checks)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-integrity-sweep.sh

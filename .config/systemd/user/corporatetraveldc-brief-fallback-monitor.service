@@ -1,8 +1,0 @@
-[Unit]
-Description=Corporate Travel DC -- brief LLM-fallback monitor (Guard 3: alert loudly if ops-brief/ep-advance degrade to the deterministic fallback)
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/brief-fallback-monitor.sh
-# Detection + alert only; never restarts anything.

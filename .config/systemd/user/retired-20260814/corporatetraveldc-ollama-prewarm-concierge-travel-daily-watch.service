@@ -1,6 +1,0 @@
-[Unit]
-Description=Prewarm corporatetraveldc-pi5-aam-watch:latest ~2-3min before concierge-travel-daily-watch (bounded keep_alive, not permanent; same model AAM/aviation/gig-economy use -- no separate pull needed)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-prewarm.sh corporatetraveldc-pi5-aam-watch:latest

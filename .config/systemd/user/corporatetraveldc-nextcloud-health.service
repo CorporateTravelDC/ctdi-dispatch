@@ -1,6 +1,0 @@
-[Unit]
-Description=Nextcloud health check (occ status + https + cron freshness -- alerts ops-health)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/nextcloud-health-check.sh

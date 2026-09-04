@@ -1,9 +1,0 @@
-[Unit]
-Description=Run data-usage snapshot daily at 00:05 ET (per script's own documented schedule)
-
-[Timer]
-OnCalendar=*-*-* 00:05:00 America/New_York
-Persistent=true
-
-[Install]
-WantedBy=timers.target

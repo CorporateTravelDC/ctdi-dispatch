@@ -1,9 +1,0 @@
-[Unit]
-Description=Monitor + force-kickover backstop for the poller push/pull failover mechanism (nws, notam)
-
-[Service]
-Type=oneshot
-Environment=PYTHONPATH=/opt/corporatetraveldc/private/ctdi-dispatch-internal/src
-EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=-/etc/corporatetraveldc/dispatch-secrets.env
-ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/failover-kickover-guardrail.py

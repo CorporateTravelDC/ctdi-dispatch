@@ -1,6 +1,0 @@
-[Unit]
-Description=SWIM/ACARS session health watcher (observation only -- no restarts)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/swim-session-health-watch.sh

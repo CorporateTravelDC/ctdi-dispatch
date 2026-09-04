@@ -1,8 +1,0 @@
-# The Executive Standard -- llm.txt
-# Directives for AI agents / LLM crawlers. Mirrors robots.txt intent
-# (Content-Signal: search=yes, ai-train=no, use=reference).
-
-User-agent: *
-Allow: /
-
-Sitemap: https://executivestandard.example.com/sitemap.xml
