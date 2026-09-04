@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the second-brain knowledge-graph compile every 6h, fixed grid (00/06/12/18:08 ET)
+Requires=corporatetraveldc-knowledge-graph-compile.service
+
+[Timer]
+# New sibling to corporatetraveldc-semantic-compile-daily.timer, same
+# 2026-09-03 operator directive and same reasoning: the fixed 00/06/12/18
+# grid includes the midnight boundary, so "every 6 hours" and "on a day
+# change" are one schedule. :08 (6 minutes after the semantic timer's :02)
+# staggers this from its sibling -- this one does a full vault WebDAV
+# fetch (heavier, real network I/O) rather than semantic-compile's
+# near-instant local SQLite recompute, so it shouldn't start at the exact
+# same second. A THIRD, event-driven trigger lives in the sibling .path
+# unit (corporatetraveldc-knowledge-graph-compile.path), watching the same
+# sentinel file second_brain.remember_text() touches on every
+# "Jarvis reconciliation" note (01-Sources/manual/ write).
+OnCalendar=*-*-* 00,06,12,18:08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

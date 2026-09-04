@@ -4,7 +4,7 @@
 - Self-hosted on ~$765 of owned edge hardware; zero cloud dependency for core ops
 - Built and operated by a single founder — [operator LLC], LLC, Arlington, VA
 - Investor briefing — platform overview — August 2026
-- Every claim re-verified live against the production system 2026-08-24
+- Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
 ## The problem
 
@@ -40,9 +40,9 @@
 
 ## The economics
 
-- Runs on ~$765 one-time hardware + ~$23-39/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 25,147 logged calls, 46 days
-- Purchasable subset of live capability lists at ~$55k-113k/yr in commercial subscriptions — a floor, since the largest equivalents are quote-only
-- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $55k-113k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
+- Runs on ~$765 one-time hardware + ~$22-38/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 35,217 logged calls, 57 days
+- Purchasable subset of live capability lists at ~$55k-230k/yr in commercial subscriptions — still a floor: the largest equivalents (FlightAware Firehose, Spire) are now priced from federal-contract records; the remainder stay excluded after a documented exhausted search
+- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $55k-230k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
 - Ten live capabilities are not purchasable at any price (next slide)
 
 ## What money cannot buy

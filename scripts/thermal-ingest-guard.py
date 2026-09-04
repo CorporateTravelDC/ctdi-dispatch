@@ -145,6 +145,8 @@ if the var is absent or unparsable):
   THERMAL_GUARD_LOAD_LOCKDOWN=40.0
   THERMAL_GUARD_RESUME_LOAD=15.0
   THERMAL_GUARD_RESUME_DWELL_S=300
+  THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C=1.0
+  THERMAL_GUARD_RESUME_LOAD_HYSTERESIS=3.0
   THERMAL_GUARD_FALLBACK_TRIGGER_COUNT=2
   THERMAL_GUARD_FALLBACK_WINDOW_S=300
   THERMAL_GUARD_TIER1_FEEDS=tfms,stdds
@@ -496,6 +498,8 @@ def main():
     load_lockdown = _float(cfg.get("THERMAL_GUARD_LOAD_LOCKDOWN"), 40.0)
     resume_load = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD"), 15.0)
     resume_dwell = _float(cfg.get("THERMAL_GUARD_RESUME_DWELL_S"), 300)
+    resume_temp_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C"), 1.0)
+    resume_load_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD_HYSTERESIS"), 3.0)
     fallback_trigger_count = int(_float(cfg.get("THERMAL_GUARD_FALLBACK_TRIGGER_COUNT"), 2))
     fallback_window_s = _float(cfg.get("THERMAL_GUARD_FALLBACK_WINDOW_S"), 300)
     tier1_feeds = cfg.get("THERMAL_GUARD_TIER1_FEEDS", "tfms,stdds")
@@ -690,11 +694,24 @@ def main():
                     state = {"tier": 0, "below_resume_since": None, "restored_at": now}
             save_state(state)
         elif state.get("below_resume_since") is not None:
-            # Back above at least one resume threshold before the dwell
-            # timer completed -- reset the dwell clock so a brief dip
-            # doesn't trigger a premature/flapping restore.
-            state["below_resume_since"] = None
-            save_state(state)
+            # 2026-09-04 (operator directive, real incident): only reset
+            # the dwell clock on a CLEARLY bad reading, not a boundary-
+            # touch blip. Confirmed live: temp oscillated 63.90 -> 64.45
+            # -> 65.00 -> 64.45C across four consecutive 2-min cycles: the
+            # single 65.00C reading (== resume_temp, failing the strict
+            # `< resume_temp` check by sensor noise, not a real reheat)
+            # wiped out 8 minutes of already-accumulated dwell time,
+            # extending a real outage to 26+ minutes with load genuinely
+            # fine (9-14) almost the entire time. A blip that's close to
+            # the threshold now freezes the dwell clock (doesn't advance,
+            # doesn't reset) instead of zeroing it -- only a reading
+            # clearly past resume_temp/resume_load (+ hysteresis margin)
+            # counts as a genuine reheat/reload and resets progress.
+            temp_clearly_bad = temp >= resume_temp + resume_temp_hysteresis
+            load_clearly_bad = load1 is not None and load1 >= resume_load + resume_load_hysteresis
+            if temp_clearly_bad or load_clearly_bad:
+                state["below_resume_since"] = None
+                save_state(state)
 
 
 if __name__ == "__main__":

@@ -125,9 +125,24 @@ uncap it.
 
 Every container also carries a `CPUWeight=` (proportional share, not a
 hard pin -- only matters under real contention) and a `CPUQuota=`
-ceiling. The seven ingest containers carry `CPUWeight=30`; the app-class
-containers are at `CPUWeight=100` (nextcloud-app excepted, below). Real
-values:
+ceiling.
+
+**2026-09-04 (operator directive, real incident) -- superseding the
+CPUWeight figures below:** the "seven ingest containers carry
+`CPUWeight=30`; app-class containers at `CPUWeight=100`" premise this
+section originally described is stale and was actively dangerous under
+real contention. Current live values: the 7 SWIM ingest containers are
+at `CPUWeight=7500` (raised from an earlier 9500, then corrected down --
+see docs/LIVE_STATE_CHECK entries for that history); `web`, `poller`,
+and `pusher` are each at `CPUWeight=9000`, the same "must-never-die" tier
+as `llama-chat`/`llama-hot`/`ntfy`/`cloudflared`. All three were
+confirmed live tonight getting SIGKILLed (exit 137, `StopSignal SIGTERM
+failed to stop container ... in 10 seconds`) during a LOCKDOWN-triggered
+stop while still at `CPUWeight=100` -- a container that can't respond to
+its own SIGTERM within Podman's 10s window under load extends every
+outage it's caught in. `runner` remains at `CPUWeight=100` (not yet
+revisited). `CPUQuota=` values are unaffected -- the table below is
+still accurate for those.
 
 | Container class | `CPUQuota=` | Notes |
 |---|---|---|
@@ -239,7 +254,7 @@ one thermal *and* CPU-load):
   | Temp tier 1 (mild) | `temp ≥ 74.0 °C` (temperature only — load no longer participates here) | `tfms,stdds` |
   | **LOCKDOWN** | `temp ≥ 79.0 °C` **or** `load1 ≥ 40.0` *(the third, fallback-count trigger was demoted to informational-only 2026-08-27)* | the entire stack except `web` — all 6 SWIM feeds, `ingest-core`, `poller`, `pusher`, `runner` *(no LLM service since 2026-08-27)* |
   | Informational only (logged, no ntfy, no shed) | `temp` 70–74 °C, or `load1` 15–40, or any fallback count | — |
-  | Restore | `temp < 65.0 °C` **and** `load1 < 15.0`, held 300 s *(fallback count no longer blocks resume)* | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+  | Restore | `temp < 65.0 °C` **and** `load1 < 15.0`, held 300 s *(fallback count no longer blocks resume; see 2026-09-04 hysteresis note below)* | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
 
   Why the asymmetry: **every real trip on this box's recorded history has
   been load-driven, never temperature-driven** (peak temp ever observed
@@ -252,6 +267,26 @@ one thermal *and* CPU-load):
   brief fallbacks, logged by `common/llm.py::_record_load_fallback()` to
   `/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl` — catches
   contention the 1-minute load average smooths over.
+
+  **2026-09-04 hysteresis fix (real incident):** the restore dwell clock
+  used a bare strict-less-than comparison against `resume_temp`/
+  `resume_load` with no tolerance band. Confirmed live: box temp
+  oscillated 63.90 -> 64.45 -> **65.00** -> 64.45 °C across four
+  consecutive 2-minute cycles while load stayed genuinely fine (9-14,
+  well under `resume_load=15`) — the single 65.00 °C reading (exactly
+  `== resume_temp`, failing `< 65.0` by sensor noise, not a real reheat)
+  wiped out 8 minutes of already-accumulated dwell time and reset the
+  300s clock to zero, extending a real outage to 26+ minutes with
+  conditions objectively safe almost the whole time. Fixed by adding
+  `THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C` (default 1.0) and
+  `THERMAL_GUARD_RESUME_LOAD_HYSTERESIS` (default 3.0): a reading within
+  the hysteresis margin of the threshold now FREEZES the dwell clock
+  (doesn't advance, doesn't reset) instead of zeroing it; only a reading
+  clearly past threshold+hysteresis counts as a genuine reheat/reload
+  and resets progress. `resume_temp`/`resume_load` themselves are
+  unchanged — a reading still has to be strictly under them to count as
+  "good" and complete the dwell; the fix only changes what counts as bad
+  enough to erase progress already made.
 
   Since 2026-08-21 the restore path verifies each restarted feed
   (`_feed_is_active()`) and fires a priority-5 "RESTORE FAILED" alert

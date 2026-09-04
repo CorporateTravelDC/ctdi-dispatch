@@ -625,3 +625,138 @@ all uncommitted, nothing staged.
 Real findings persisted to the vault this pass (abandoned deploy #2 /
 41-min feed outage + the two GPG-doc corrections):
 `corporatetraveldc/01-Sources/manual/20260903T231926Z.md`.
+
+---
+
+# Pass 6 — post-commit b623db9 (docs drift corrections + drift-report
+# regen), ~19:45–20:10 EDT
+
+Scoped to `b623db9` (19:45 EDT — Pass 2–5's own corrections committed).
+Prior art consulted first (second-brain: `drift-report`,
+`GPG_KEYS_PUBLISHED`, `--raw 'manifest AND re-signed'`): Pass 5's vault
+note `20260903T231926Z.md`, plus `20260830T131615Z.md` — the prior
+instance of the signed-against-stale-content manifest class that commit
+`54efc2a` existed to fix. That class recurred tonight (finding 1).
+
+## Finding 1 (REAL): b623db9 does NOT contain the re-sign its own
+## message claims — the committed tree fails verify-manifest
+
+- The commit message says "MANIFEST re-signed against current tree (896
+  files)", but the commit's stat is 3 docs files only — `git diff
+  422bd15..HEAD -- MANIFEST.sha256 MANIFEST.sha256.asc` is empty. HEAD
+  carries 422bd15's manifest unchanged (signed 17:54:41 EDT), which
+  records the PRE-correction hash (`2a5ee968…`) for
+  `docs/GPG_KEYS_PUBLISHED.md`.
+- Net effect: a clean checkout of HEAD fails `sha256sum -c` on exactly
+  the file the commit fixed (verified: 1 mismatch, signature itself
+  Good — the pair is internally consistent, just stale vs. the tree).
+  Any consumer of the committed tree — public-mirror push, audit
+  checkout — sees an integrity failure.
+- The REAL 19:40–19:41 EDT re-sign (correct hash `a96b5a0c…`, Good
+  signature) exists only as the uncommitted working-tree
+  `MANIFEST.sha256`/`.asc` this pass found on entry. The live box
+  therefore verifies clean (`OK — 896 files`), and the 19:43–19:46
+  image rebuilds baked the good manifest — zero verified-exec
+  exposure. Purely a committed-state problem.
+- Likely mechanics: selective `git add` of the three docs files at
+  19:45 that forgot the two manifest files the 19:41 re-sign had just
+  rewritten. Second occurrence of the `54efc2a` bug class in four
+  commits.
+- Fix owed (report-only — this pass is barred from committing): the
+  next commit must include the working-tree MANIFEST pair, or the next
+  signing (owed anyway for this pass's edits) supersedes it. Also
+  noted: `docs/LIVE_STATE_CHECK_2026-09-03.md` appears in NO manifest
+  yet (untracked at both signings; sign-manifest covers tracked files)
+  — the next sign picks it up now that b623db9 tracked it.
+
+## Finding 2 (REAL, new failure class): never-expiring Nextcloud Text
+## locks blocked all vault synthesis writes from 12:17 — four daily
+## watches lost today's output
+
+- `concierge-travel`/`executive-protection`/`gig-economy`/
+  `trains-yachts-daily-watch` all `failed` between 19:18–19:39 EDT:
+  each ran its full watch (24–56 min wall) and died at the final
+  WebDAV PUT with `423 Client Error: Locked` on its own
+  `04-Syntheses/daily/*-2026-09-03.md`. Journal shows 423s from 12:17
+  EDT onward, 10–12 attempts per file across the afternoon (aviation's
+  file included).
+- Root cause (Nextcloud Postgres, read-only queries): 9 rows in
+  `oc_files_lock` — owner `Text` (the collaborative-editor app),
+  created sequentially 03:20–03:29 EDT (pattern of each file being
+  opened in the Nextcloud web editor in one sitting), `ttl = -60` —
+  negative, never honored as expired, and never cleaned despite
+  background cron being verifiably healthy. The transactional
+  `oc_file_locks` table is empty; this is purely the files_lock app
+  layer. Prime suspect for the broken TTL: the unplanned Nextcloud
+  33→34 major jump ~00:45 this morning (per 422bd15's commit message)
+  — plausible, unproven.
+- Locked files: today's five daily watch notes, THREE weekly W35 files
+  (`04-Syntheses/weekly/2026-W35.md`, `dispatch-desk-2026-W35.md`,
+  `aam-watch-2026-W35.md`), and one personal-voice-profile note. So
+  beyond today's lost dailies, the weekend's weekly writers
+  (`dispatch-desk-memo`, `second-brain-weekly`, aam weekly, ~2026-09-06)
+  WILL hit the same 423 unless the locks are cleared first.
+- Tomorrow's dailies are NOT blocked (new dated filenames).
+  `aviation-daily-watch`, re-running during this pass, will fail again
+  at write time — same lock, expected.
+- Deliberately NOT remediated here: clearing means deleting rows from
+  the live Nextcloud DB (or unlocking via the files_lock app) —
+  destructive against state possibly owned by still-open operator
+  editor tabs. Operator action: close any open Text tabs on those
+  files, delete the 9 `oc_files_lock` rows (ids 1–9 as of this pass),
+  then re-run the four watches to recover today's output. The four
+  units were left `failed` deliberately (they genuinely produced
+  nothing).
+- Disclosure: while diagnosing, this pass meant to LIST background-job
+  mode but ran `occ background:cron`, which SETS it. Verified a no-op:
+  25 background jobs had already run earlier today, i.e. cron mode was
+  already the active mode before the command.
+
+## Finding 3: CLAUDE.md's website-integrity-sweep entry is RESOLVED
+
+The operator ran the human-only re-sign in the website repo at 19:11
+EDT (`ab4c97c` "chore: re-sign manifest after csexec-pages deploy
+fixes") and the 19:36 sweep fire passed clean ("sweep OK … all 64
+files match"; unit now `inactive`, not `failed`). CLAUDE.md's "WILL
+re-fail on each sweep fire" prediction no longer holds — annotated
+RESOLVED in place this pass.
+
+## Checked, NOT invalidated / carried forward
+
+- b623db9's committed `GPG_KEYS_PUBLISHED.md` corrections are intact
+  (byte-identical to Pass 5's fix); the CLAUDE_MD_DRIFT_REPORT regen
+  is the benign timestamp rewrite the message claims.
+- The commit message's follow-ups list (expiry-timer reboot hole,
+  ALERT_REFERENCE GADV/NOTAM inversions, abandoned-deploy pattern) —
+  accurate; all carried forward, none re-derived here.
+- Feed pipeline: Pass 5's 19:18 restarts are holding — all 9
+  poller/pusher/ingest units + web active; no third abandoned stop
+  today.
+- Pass 5's "owed poller rebuild": DONE — poller/pusher/ingest/web
+  images all rebuilt 19:43–19:46 EDT (post-commit, good manifest
+  baked) by the still-live operator session. The running containers
+  (started 19:18) predate those images; restarting onto them belongs
+  to that session's deploy cycle — deliberately not touched. If
+  they're still on the old (internally consistent) images much later,
+  that's the known finish-the-deploy pattern, not a new bug.
+- `ep-advance-venues`: no longer `failed` (now `inactive` — presumably
+  reset during the rebuild cycle), but the `top_p`/`max_retries` bug
+  is STILL in source (`ep_advance_venues.py:63`/`:65`) — expect the
+  5th consecutive failure at tomorrow's 06:10 fire unless fixed in the
+  interim.
+
+Working tree at close: this file (Pass 6 append), CLAUDE.md (one
+RESOLVED annotation), plus the pre-existing uncommitted MANIFEST pair
+from the 19:41 re-sign (finding 1 — deliberately left for the next
+signing/commit to pick up). Nothing staged, nothing committed by this
+pass. Separately, observed at close (~20:03 EDT): the live operator
+session had concurrently STAGED edits to `docs/ALERT_REFERENCE.md`,
+`src/ingest/README.md`, `src/shared/watchlist_README.md`, and
+`scripts/new-client-demo.sh` — i.e. the long-carried Pass 1/2/3
+findings (dedup inversions, the two src READMEs, the expiry-timer
+reboot hole) appear to be being fixed in-flight by that session; not
+this pass's work, deliberately untouched.
+
+Real findings persisted to the vault this pass (stale committed
+manifest + Nextcloud Text-lock write outage + sweep resolution):
+`corporatetraveldc/01-Sources/manual/20260904T000100Z.md`.

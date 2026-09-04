@@ -4,7 +4,7 @@
 - Self-hosted on ~$765 of owned edge hardware the operator controls and can unplug
 - Built and run daily by a single founder — [operator LLC], LLC, Arlington, VA
 - Investor briefing — executive-protection segment — August 2026
-- Every claim re-verified live against the production system 2026-08-24
+- Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
 ## The problem
 
@@ -24,7 +24,7 @@
 
 - Real-time flight tracking (6 FAA SWIM feeds + own-RF ADS-B); aircraft watchlists with hex-resolution, OOOI phase tracking, and real airline-reported 14-day on-time history with delay-drift flags
 - Live Amtrak rail tracking; DC-area METARs; NWS/NWWS-OI severe-weather alerts; TFR and NAS airspace awareness
-- Scheduled on-device `ep-advance`/`ep` protective-movement briefs — 21 local models, $0 cloud spend (measured over 25,147 calls, 46 days)
+- Scheduled on-device `ep-advance`/`ep` protective-movement briefs — 21 local models, $0 cloud spend (measured over 35,217 calls, 57 days)
 - Cross-category entity tracking across six intelligence watches + OSINT, with independent-feed corroboration, a human review gate, and silence/embargo detection
 - Institutional memory: a 6,742-document knowledge vault under a semantic + causal layer (99 concepts, 51,317 edges), recompiled daily — advance knowledge that accumulates on client-controlled hardware
 
@@ -51,9 +51,10 @@
 
 ## The economics
 
-- Runs on ~$765 one-time hardware + ~$23-39/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured, not assumed
-- Purchasable subset of live capability lists at ~$55k-113k/yr in commercial subscriptions — a floor, since the largest equivalents are quote-only
-- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $55k-113k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
+- Runs on ~$765 one-time hardware + ~$22-38/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured, not assumed
+- Purchasable subset of this vertical's live capability lists at ~$59.3k-255.3k/yr — an EP/GSOC buyer needs complements summed (event detection + OSINT monitoring + critical-event notification + movement monitoring + push), where the platform-wide ~$55.2k-230.4k/yr band takes one correlation platform; independent figures, never summed
+- No product in that basket does TFR/airspace-threat correlation or airline-reported OOOI movement monitoring at all — the floor buys adjacent capability, not equivalence
+- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $59.3k-255.3k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
 - Ten live capabilities cannot be bought at any price: TFMS flow programs, TBFM metering, ITWS wind-shear, unfiltered blocked-aircraft visibility, receive-side ACARS/VDL, a permanently-owned corpus, and the signed execution gate
 
 ## Licensing — BSL 1.1

@@ -18,10 +18,14 @@ still-live unit file for which client and hostname it actually is.
   its own.
 - `.config/systemd/user/corporatetraveldc-client-demo-webdev-expiry@.service`
   / `@.timer` — a generic one-shot + timer pair that strips a time-limited
-  `webdev` Basic Auth credential 7 days after the timer instance starts
-  (`OnActiveSec=7d`, not a hardcoded calendar date — the timer instance
-  itself carries no client-specific state, unlike the original one-off's
-  hand-written absolute-date version).
+  `webdev` Basic Auth credential 7 days after the instance is scaffolded.
+  The base `@.timer`'s own `OnActiveSec=7d` is **not** what enforces the
+  deadline (found 2026-09-03: it's monotonic from unit activation and
+  resets on every reboot, so a box rebooting more often than weekly would
+  never fire it) — the generator now pins the real per-instance deadline
+  via a `10-instance.conf` timer drop-in setting an absolute
+  `OnCalendar=<creation+7d> America/New_York`, the same reboot-proof
+  semantics the original one-off's hand-written absolute-date version had.
 - `scripts/client-demo-webdev-expire.sh <slug>` — the script the expiry
   service calls.
 - `scripts/templates/client-demo-nginx.conf.tmpl` — nginx config template
@@ -33,8 +37,10 @@ still-live unit file for which client and hostname it actually is.
   (`podman-systemd.unit(5)`'s documented instanced-template pattern —
   `foo@<instance>.container` as a symlink to `foo@.container`), writes a
   `corporatetraveldc-client-demo@<slug>.container.d/10-instance.conf`
-  drop-in supplying `PublishPort=`, and enables (does not start) the
-  matching expiry timer instance.
+  drop-in supplying `PublishPort=`, writes a matching
+  `corporatetraveldc-client-demo-webdev-expiry@<slug>.timer.d/10-instance.conf`
+  drop-in pinning the absolute 7-day `OnCalendar=` deadline, and enables
+  (does not start) the timer instance.
 
 ## What the generator does NOT do
 

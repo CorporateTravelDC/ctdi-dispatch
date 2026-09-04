@@ -57,16 +57,21 @@ real oceanic/Gulf-tagged program is captured and confirmed.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
+import pathlib
 import re
 import time
 import threading
 
 log = logging.getLogger("shared.sector_coalesce")
 
-_STATE_FILE = "/var/lib/corporatetraveldc/sector_coalesce_silence.json"
+_STATE_FILE = os.environ.get(
+    "SECTOR_COALESCE_SILENCE_FILE",
+    "/var/lib/corporatetraveldc/sector_coalesce_silence.json",
+)
 _WINDOW_SECS = 900          # 15-minute rolling window
 _ESCALATE_MULTIPLIER = 3.0  # current window >= this x prior window -> escalating
 _ESCALATE_FLOOR = 3         # minimum current-window count to ever escalate off an empty prior window
@@ -230,7 +235,69 @@ _DEFAULT_MIN_INTERVAL_SECS = 60.0   # no topic pushes more than once/min unless 
 _topic_min_interval: dict[str, float] = {}   # topic -> override seconds (absent = default)
 _topic_enabled: dict[str, bool] = {}          # topic -> explicit False = off (absent = enabled)
 _topic_sanitize: dict[str, bool] = {}         # topic -> True = mask identifiers before push (demo/source-of-truth reuse)
-_last_fired: dict[str, float] = {}            # topic -> epoch of last successful push (in-process, resets on restart -- fine, same as rolling windows)
+
+# 2026-09-04 (operator directive, real incident): _last_fired used to be a
+# bare in-process dict -- correct back when this ran as one monolithic
+# process, silently wrong since the SWIM feeds were split into one
+# container per feed. A handful of ntfy topics are pushed to by MORE THAN
+# ONE container -- confirmed live: "fdps-alerts"/"fdps-<zone>" gets pushes
+# from both ingest-fdps (fdps_parser.py's own proximity/saturation/
+# diversion events) AND ingest-notam (aim_parser.py's fdps_notam
+# restriction alerts, escalating_only=False so it fires unconditionally on
+# every qualifying NOTAM). Two separate OS processes each held their own
+# private copy of "the last time fdps-alerts fired" -- neither ever saw
+# the other's pushes, so the documented "no topic pushes more than
+# once/min" guarantee silently became "no topic pushes more than once/min
+# PER PROCESS", i.e. up to 2x the configured rate on any topic shared
+# across containers. Manifested as both spurious rebroadcast (throttle
+# not actually shared) and confusing escalation tagging (each process's
+# isolated event count could independently cross its own threshold and
+# tag ESCALATING on the same shared topic, unaware of the other).
+#
+# Fix: move the throttle clock to shared, flock-guarded file state -- the
+# same proven pattern common/push_dedup.py already uses for exactly this
+# cross-process problem. Deliberately NOT doing the same for
+# _sector_events/_feed_sector_events (the escalation *windows*): those are
+# checked on every single ingest message (thousands/hour), not just on a
+# qualifying alert-fire, so file I/O there would reintroduce the same
+# per-call lock-contention problem fixed in common/db.py this same night.
+# The escalation window staying per-process/per-feed-isolated is also the
+# CORRECT design intent (isolate=True exists specifically so one feed's
+# burst doesn't sympathetically trigger another's escalation tag) --only
+# the shared-topic throttle needed to become genuinely shared.
+_THROTTLE_STATE_FILE = os.environ.get(
+    "SECTOR_COALESCE_THROTTLE_FILE",
+    "/var/lib/corporatetraveldc/sector_coalesce_throttle.json",
+)
+_throttle_cache: dict[str, float] = {}
+_throttle_cache_mtime: float | None = None
+
+
+def _read_throttle_disk() -> dict:
+    try:
+        with open(_THROTTLE_STATE_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning("sector_coalesce: failed to read throttle state: %s", e)
+        return {}
+
+
+def _load_throttle_cache() -> dict:
+    """mtime-aware cached read, same pattern as push_dedup.py's _load() --
+    reload only when a peer process has written since we last read, so a
+    hot check loop doesn't hit disk when nothing changed."""
+    global _throttle_cache, _throttle_cache_mtime
+    p = pathlib.Path(_THROTTLE_STATE_FILE)
+    try:
+        mtime = p.stat().st_mtime
+    except FileNotFoundError:
+        mtime = None
+    if mtime != _throttle_cache_mtime:
+        _throttle_cache = _read_throttle_disk() if mtime is not None else {}
+        _throttle_cache_mtime = mtime
+    return _throttle_cache
 
 # Very small, deliberately conservative identifier masker for sanitized
 # topics -- replaces N-number-shaped tokens and 6-hex-char ICAO addresses
@@ -301,27 +368,58 @@ def is_topic_sanitize(topic: str) -> bool:
 def _throttle_allows(topic: str) -> bool:
     """True if `topic` is enabled AND outside its throttle window right
     now. Does not record anything -- call _record_fire() only after an
-    actual successful push."""
+    actual successful push.
+
+    Reads the shared on-disk throttle state (see _load_throttle_cache),
+    not an in-process dict -- a topic like "fdps-alerts" is pushed to by
+    more than one ingest container/process, so this check must see every
+    process's last fire, not just this one's."""
     if not is_topic_enabled(topic):
         return False
     now = time.time()
-    last = _last_fired.get(topic, 0.0)
+    last = _load_throttle_cache().get(topic, 0.0)
     return (now - last) >= get_topic_throttle(topic)
 
 
 def _record_fire(topic: str) -> None:
-    _last_fired[topic] = time.time()
+    """Record a successful push for `topic` in shared, cross-process state.
+
+    Merges onto the CURRENT on-disk dict under an exclusive lock (same
+    read-modify-write-atomic-replace pattern as push_dedup.py's
+    _merge_write) rather than overwriting it with this process's stale
+    cached copy -- otherwise process B's write could silently erase
+    process A's more recent fire for a different topic."""
+    global _throttle_cache, _throttle_cache_mtime
+    p = pathlib.Path(_THROTTLE_STATE_FILE)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = p.with_name(p.name + ".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            disk = _read_throttle_disk()
+            disk[topic] = time.time()
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(disk))
+            os.replace(tmp, p)
+            _throttle_cache = disk
+            try:
+                _throttle_cache_mtime = p.stat().st_mtime
+            except OSError:
+                _throttle_cache_mtime = None
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def get_topic_settings(topic: str) -> dict:
     """Effective settings for one topic, for the admin API / debugging."""
+    last = _load_throttle_cache().get(topic)
     return {
         "topic": topic,
         "enabled": is_topic_enabled(topic),
         "min_interval_secs": get_topic_throttle(topic),
         "sanitize": is_topic_sanitize(topic),
         "seconds_since_last_fire": (
-            None if topic not in _last_fired else round(time.time() - _last_fired[topic], 1)
+            None if last is None else round(time.time() - last, 1)
         ),
     }
 

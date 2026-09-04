@@ -47,20 +47,20 @@ The alert path is short and self-hosted end to end. Push feeds stamp freshness h
 
 **The availability caveat that travels with every feed claim:** the platform deliberately sheds its ingest tier under compute contention. In the ~32 hours before the 2026-08-24 check it executed 10 automatic shed-and-restore cycles of ~9-11 minutes each, every one restoring cleanly without intervention. Feeds are governed and duty-cycled under contention on this single node — they are not "always-on," and no SLA exists yet. Trigger calibration is a known, documented open tuning item.
 
-# The economics: near-zero cost against a five-figure subscription floor
+# The economics: near-zero cost against a commercial subscription floor
 
-A live-recomputed cost analysis (2026-08-24) in which every commercial price cites a dated vendor source, business-judgment figures are flagged as assumptions, and quote-only vendors are excluded from totals rather than guessed.
+A live-recomputed cost analysis (2026-08-24; re-derived live 2026-09-03, the source of every figure below) in which every commercial price cites a dated vendor source, business-judgment figures are flagged as assumptions, and vendors with no citable price anywhere are excluded from totals rather than guessed.
 
 | Quantity | Figure |
 | One-time hardware, actually deployed (single node, itemized BOM) | ~$765 |
-| Actual recurring cost (electricity only; DC tariff re-confirmed 2026-08-24) | ~$23-39 / yr |
+| Actual recurring cost (electricity only; DC tariff re-fetched 2026-09-03) | ~$22-38 / yr |
 | Recurring data-feed fees | $0 |
-| Recurring cloud-LLM spend | $0 — measured: 25,147 logged LLM invocations over 46.4 days of continuous production contain zero cloud-model rows |
-| Defensible avoided cost, this instance, conservative | ~$2,160-2,655 / yr net |
-| Subscription-replacement floor (purchasable subset of live capability) | ~$55,200-112,900 / yr |
+| Recurring cloud-LLM spend | $0 — measured: 35,217 logged LLM invocations over 56.9 days of continuous production contain zero cloud-model rows |
+| Defensible avoided cost, this instance, conservative | ~$2,160-2,656 / yr net |
+| Subscription-replacement floor (this vertical's purchasable subset; independent of the platform-wide ~$55,200-230,400/yr band) | ~$4,200-64,300 / yr (mid ~$16,700) |
 | Live capabilities not purchasable at any price | 10 |
 
-The one-line version: the platform runs on ~$765 of owned hardware and ~$23-39/yr of electricity, with $0 in data-feed fees and $0 in cloud-LLM spend, while the purchasable subset of its live capability lists at roughly $55k-113k/yr in commercial subscriptions. Honest boundary, stated as the source analysis requires: most ingested data is free at the source to any approved subscriber, so the avoided cost is an integration cost, not a data-license cost. The $55k-113k figure is a replacement-cost floor for a buyer without FAA vetting and must not be presented as avoided spend; the honest avoided-spend number is the ~$2.2-2.7k/yr line, roughly two-thirds of which is reciprocal data-sharing barter rather than cash. Cost avoidance does not carry a valuation, and the analysis says so.
+The one-line version: the platform runs on ~$765 of owned hardware and ~$22-38/yr of electricity, with $0 in data-feed fees and $0 in cloud-LLM spend, while the purchasable subset of this vertical's live capability — a flight status/alerts API, passenger-rail realtime, a travel-risk/traveler-care platform, and push delivery — lists at roughly $4.2k-64.3k/yr in commercial subscriptions (mid ~$16.7k). This is an independent single-vertical figure, new in the 2026-09-03 extension pass: it shares the flight/rail/push lines with the platform-wide ~$55.2k-230.4k/yr band and adds a traveler-care platform line that band does not carry — not a subset, not additive, and never summed with the platform-wide number or any other vertical's floor. The honest low end says what the analysis found: no product in this basket watches a booking's specific flight and train automatically from a reservation webhook and pushes recovery-window alerts through self-hosted infrastructure — the integration capability is the product here. Honest boundary, stated as the source analysis requires: most ingested data is free at the source to any approved subscriber, so the avoided cost is an integration cost, not a data-license cost. The $4.2k-64.3k figure is a replacement-cost floor for a buyer without FAA vetting and must not be presented as avoided spend; the honest avoided-spend number is the ~$2.2-2.7k/yr line, roughly two-thirds of which is reciprocal data-sharing barter rather than cash. Cost avoidance does not carry a valuation, and the analysis says so.
 
 # Security posture: tested, broken, fixed, re-verified — same day
 
