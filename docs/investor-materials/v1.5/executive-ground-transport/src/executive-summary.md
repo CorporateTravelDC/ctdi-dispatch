@@ -46,18 +46,20 @@ Disclosed candidly: on-time history capture is watchlist-gated by design (a flig
 
 # The economics an operator actually cares about
 
-From the live-recomputed 2026-08-24 cost analysis (every commercial price cites a dated vendor source; quote-only vendors are excluded from totals rather than guessed):
+From the live-recomputed cost analysis (2026-08-24; re-derived live 2026-09-03, the source of every figure below — every commercial price cites a dated vendor source; vendors with no citable price anywhere are excluded from totals rather than guessed):
 
 | Quantity | Figure |
 | One-time hardware, actually deployed (single node, itemized BOM) | ~$765 |
-| Actual recurring cost (electricity only; DC tariff re-confirmed 2026-08-24) | ~$23-39 / yr |
+| Actual recurring cost (electricity only; DC tariff re-fetched 2026-09-03) | ~$22-38 / yr |
 | Recurring data-feed fees | $0 |
-| Recurring cloud-LLM spend | $0 — measured over 25,147 logged calls across 46.4 days, zero cloud-model rows |
-| Subscription-replacement floor (purchasable subset of live capability) | ~$55,200-112,900 / yr |
+| Recurring cloud-LLM spend | $0 — measured over 35,217 logged calls across 56.9 days, zero cloud-model rows |
+| Subscription-replacement floor (this vertical's purchasable subset; independent of the platform-wide ~$55,200-230,400/yr band) | ~$1,700-8,000 / yr (bare-feature minimum $240/yr) |
+
+The vertical figure is honest about why it is small, and that is the sales argument: the purchasable version of this capability is shallow. Bundled "flight tracking" in commercial dispatch platforms runs on FlightStats-class estimates — not airline-reported OOOI times, not TFMS flow programs, not SWIM push — and its citable bundled-feature price is $240/yr (the published price delta for "Flight Status Tracking" as a dispatch-platform add-on); no limo/dispatch platform in the sweep offers rail tracking at all. Because CTDI deliberately relays into dispatch software rather than replacing it, the floor prices the flight/train-intelligence and alerting capability alone. It is an independent single-vertical calculation, never summed with the platform-wide band (which prices the full cross-vertical capability) or with any other vertical's floor.
 
 The parts that matter most to a dispatch decision cannot be bought at any price: no commercial vendor sells TFMS ground-stop/GDP/airspace-flow-program data, TBFM arrival metering, or ITWS terminal wind-shear alerts, and every commercial flight feed obfuscates LADD-blocked aircraft that CTDI's own receivers see directly — precisely the tail numbers an executive fleet is most likely to meet.
 
-Honest boundary, stated with the numbers: most of the ingested data is free at the source to any approved subscriber, so the big figure is a replacement-cost floor for a buyer without FAA vetting — not avoided spend (the honest avoided-spend number for this instance is ~$2,160-2,655/yr, roughly two-thirds of it reciprocal data-sharing barter). Cost avoidance does not carry a valuation, and the analysis says so.
+Honest boundary, stated with the numbers: most of the ingested data is free at the source to any approved subscriber, so both replacement figures are floors for a buyer without FAA vetting — not avoided spend (the honest avoided-spend number for this instance is ~$2,160-2,656/yr, roughly two-thirds of it reciprocal data-sharing barter). Cost avoidance does not carry a valuation, and the analysis says so.
 
 # Security posture — tested, broken, fixed, re-verified, same day
 

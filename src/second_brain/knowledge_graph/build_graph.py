@@ -31,12 +31,24 @@ webdav_client has no delete, so iterating on generated files inside the
 vault would strand stale copies. Pushing a rendered copy into the vault is
 a one-line webdav_client.put() if wanted -- deliberately not automatic.
 
-Access pattern: hits Nextcloud DIRECTLY on 127.0.0.1:8090 (the default
-WEBDAV_BASE webdav_client already uses, with its Host-header spoof), NOT
-the public cloud.* vhost -- that vhost requires an extra business-root path
-segment webdav_client doesn't add (known separate bug, deliberately worked
-around here, not fixed). Credentials come from webdav_client._auth(), i.e.
-the NEXTCLOUD_ADMIN_USER / NEXTCLOUD_APP_PASSWORD pattern backed by
+Access pattern (corrected 2026-09-03, see enumerate_vault()'s own comment
+for the full root-cause): this module was only ever run by hand before
+2026-09-03, always outside a container, where 127.0.0.1:8090 genuinely
+reaches Nextcloud's loopback-bound WebDAV port directly. That path is
+structurally unreachable from inside a container (the port is strictly
+loopback-bound on the host, under any pasta flag) -- when actually
+scheduled as a container (corporatetraveldc-knowledge-graph-compile.
+container), it must go through the nginx vhost like every other
+containerized second-brain script does (host.containers.internal:80,
+Host-header spoofed to cloud.example.com, same pattern as
+corporatetraveldc-second-brain-daily.container). The vhost's real
+"extra business-root path segment" requirement is a trailing slash on
+the bare business-root PROPFIND -- omit it and nginx 301s to the public
+https:// URL regardless of which host/port the request arrived on,
+which is what looked like "the public vhost is broken" before this was
+actually run in the environment it's scheduled to run in. Credentials
+come from webdav_client._auth(), i.e. the NEXTCLOUD_ADMIN_USER /
+NEXTCLOUD_APP_PASSWORD pattern backed by
 /etc/corporatetraveldc/dispatch-secrets.env. This module is read-only
 (PROPFIND + GET); only retrofit_links.py writes.
 
@@ -93,8 +105,22 @@ def _session() -> requests.Session:
 
 def enumerate_vault(sess: requests.Session) -> list[str]:
     """All file paths (relative to BUSINESS_ROOT) via one Depth:infinity
-    PROPFIND -- the workaround path described in the module docstring."""
-    url = f"{webdav_client._base_url()}/{webdav_client.BUSINESS_ROOT}"
+    PROPFIND -- the workaround path described in the module docstring.
+
+    2026-09-03: root-caused the module docstring's "extra business-root
+    path segment" bug precisely, while wiring the first-ever scheduled
+    run of this script (previously only ever invoked by hand). It's a
+    missing TRAILING SLASH: PROPFINDing the bare business-root path (no
+    trailing slash) makes nginx's cloud.example.com vhost
+    issue a 301 to the canonical public https:// URL regardless of which
+    host/port the request actually arrived on (confirmed live: same 301
+    whether hit via the public domain or host.containers.internal) --
+    and requests' default allow_redirects=True follows it transparently,
+    landing on a URL/auth context that then 401s. A trailing slash routes
+    correctly with no redirect at all (confirmed live: 207 Multi-Status).
+    fetch_all() below never hit this because it always PROPFINDs/GETs a
+    real sub-path, never the bare root."""
+    url = f"{webdav_client._base_url()}/{webdav_client.BUSINESS_ROOT}/"
     body = ('<?xml version="1.0" encoding="utf-8"?>'
             '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop>'
             '</d:propfind>')

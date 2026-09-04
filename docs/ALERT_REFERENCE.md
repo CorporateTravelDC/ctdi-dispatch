@@ -69,8 +69,13 @@ swept the same way._
 >   routed through `shared/sector_coalesce.py::fire_family_alert()`,
 >   escalating-only, with a per-topic throttle (default 60 s min interval),
 >   per-topic enable/sanitize switches, and per-(feed, sector) escalation
->   thresholds, JSON-persisted to
->   `/var/lib/corporatetraveldc/sector_coalesce_silence.json`. Admin API:
+>   thresholds. The *settings* (enable/throttle-interval-override/sanitize/
+>   escalation-threshold-override) are JSON-persisted to
+>   `/var/lib/corporatetraveldc/sector_coalesce_silence.json`; the
+>   throttle's live "last fired" clock is a SEPARATE file,
+>   `/var/lib/corporatetraveldc/sector_coalesce_throttle.json` (added
+>   2026-09-04 -- see `docs/ALERT_ARCHITECTURE.md` §2 Layer 1 for why the
+>   clock needed its own cross-process-shared file). Admin API:
 >   `GET/POST /api/v1/sectors/topic/{topic}[/throttle|/enabled|/sanitize]`
 >   (`web/routes/sectors.py`). Design rationale:
 >   `docs/ALERT_ARCHITECTURE.md`. **Note (2026-08-19): the per-topic
@@ -276,9 +281,14 @@ push paths do X" should be read as covering the two shared helpers only.
   ARTCCs (ZNY/ZDC/ZID/ZOB/ZATL/ZHU/ZLA/ZSE)
   (lowest of any NAS alert — metering updates are routine, high-volume,
   and only useful as a trend signal, not an individual-event alert).
-  Deduped via `_TBFM_ALERT_DEDUP` on `tbfm:{fix}:{seq_count}` — a fix
-  holding steady at the same count won't re-fire; a genuine change in
-  count will.
+  Deduped via `_TBFM_ALERT_DEDUP.should_push()` (forward-only): slot key
+  `tbfm:{fix}`, content key
+  `content_hash("tbfm:{fix}:{bucket_count(seq_count)}")` — the sequence
+  count is band-of-5 bucketed (`common/push_dedup.py::bucket_count`,
+  2026-09-03) so the +/-1 churn on nearly every incremental TBFM update
+  hashes identically. A fix holding steady within the same band never
+  re-fires; a jump to a different band (real queue growth/shrink) fires
+  immediately.
 
 ### TFMS (`ingest/parsers/tfms_parser.py`) — most alert paths of any single feed
 
@@ -309,17 +319,24 @@ are written to `nas_programs` (if applicable) but never alerted.
 - **APTC** (airport config): not a program alert, doesn't share the RSTR/
   GDP/GS dedup. Fires only on a *change* for a DC-area airport — arrival
   rate drop of >=20% from the last-seen config, or weather category
-  degrading to IMC/LVMC from VMC/unknown. Deduped via `_APTC_ALERT_DEDUP`
-  on `aptc:{airport}:{rate}:{weather}` (15-min window). Also
-  sector-coalesced.
+  degrading to IMC/LVMC from VMC/unknown. Deduped via
+  `_APTC_ALERT_DEDUP.should_push()` (forward-only): slot key
+  `content_hash("aptc:{airport}")` (per-airport identity), content key
+  `content_hash("{arr_rate}:{weather}")` — a repeat of the same
+  rate/weather for an airport never re-fires regardless of elapsed time;
+  a changed rate or weather fires immediately. Also sector-coalesced.
 - **GADV** (ATCSCC general advisory): fires only when the advisory's
   `facilities` field names one of the 8 tracked ARTCCs/airports
   (`is_tracked_facility()`, `:1311` — not DC-only, despite the `dc_hit`
-  variable name). Deduped via
-  `_GADV_ALERT_DEDUP` on the advisory number (not content hash — ATCSCC
-  re-broadcasts the same numbered advisory verbatim on every SWIM refresh,
-  so the number itself is the correct "have we shown this one" key, 1-hour
-  window). Also sector-coalesced.
+  variable name). Deduped via `_GADV_ALERT_DEDUP.should_push()`
+  (forward-only): the slot key is the advisory number (falling back to a
+  hash of the title if the number is missing), and the content key is a
+  content hash of `advisoryTitle|advisoryText`. A new advisory number
+  fires once; ATCSCC's verbatim rebroadcasts of the same numbered
+  advisory never re-fire, no matter how much time passes; a revision
+  under the same number (extensions/amendments are rebroadcast under the
+  same advisory number) fires immediately on the content change. Also
+  sector-coalesced.
 - **Per-flight watchlist events** (TMI_FLIGHT_LIST, FlightTimes/
   FlightModify OOOI, departureInformation, arrivalInformation,
   trackInformation approach-proximity, flightPlanAmendmentInformation,
@@ -345,10 +362,15 @@ are written to `nas_programs` (if applicable) but never alerted.
 
 - `_fire_notam_alert`: fires for any NOTAM matching the operator's watch
   set (facility/keyword scope, evaluated upstream of this function).
-  Deduped via `_NOTAM_DEDUP` on the NOTAM ID — a NOTAM re-transmitted
-  unchanged won't re-fire; an amended NOTAM (new ID) will. Note the dedup
-  is only `record()`ed when at least one of the pushes below actually
-  fired, so a total push failure leaves the NOTAM eligible to retry.
+  Deduped via `_NOTAM_DEDUP.should_push()` (forward-only): the slot key
+  is the NOTAM ID, the content key is a content hash of
+  `classification|effective_start|effective_end|text_body`. A NOTAM
+  re-transmitted byte-identical never re-fires regardless of elapsed
+  time; an amendment under the SAME NOTAM ID (changed classification,
+  effective window, or text) re-fires immediately — as does a new ID.
+  Note the dedup is only `record()`ed when at least one of the pushes
+  below actually fired, so a total push failure leaves the NOTAM
+  eligible to retry.
 
   **Corrected 2026-08-19: there are THREE routing branches, not two.** The
   earlier "VIP → hot-alerts, everything else → nas-alerts" description

@@ -4,7 +4,7 @@
 - All six FAA SWIM data services as native push feeds — deterministic go/no-go scoring — real airline-reported on-time data — on edge hardware you own
 - Built and operated by a single founder — [operator LLC], LLC, Arlington, VA
 - Investor briefing — aviation-ops overview — August 2026
-- Every claim re-verified live against the production system 2026-08-24
+- Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 - DECISION-SUPPORT ONLY. Not an FAA-certified dispatch system; not a substitute for a certificated dispatcher or operational control; no regulatory claim. Part 135.609 minimums used solely as a published threshold reference.
 
 ## The problem — the ops desk flies blind between fragmented sources
@@ -68,9 +68,10 @@
 
 ## The economics — measured, then honestly split
 
-- Runs on ~$765 one-time hardware + ~$23–39/yr electricity; $0 data-feed fees (SWIM is free to approved subscribers); $0 cloud-LLM spend — measured over 25,147 calls, 46 days
+- Runs on ~$765 one-time hardware + ~$22–38/yr electricity; $0 data-feed fees (SWIM is free to approved subscribers); $0 cloud-LLM spend — measured over 35,217 calls, 57 days
 - Honest avoided cost for this instance: ~$2.2–2.7k/yr net (conservative, mostly reciprocal barter) — never presented as the big number
-- Subscription-replacement floor for a buyer without FAA vetting: ~$55k–113k/yr — a floor, since the largest equivalents (FlightAware Firehose, SWIM-class feeds) are quote-only and excluded
+- Subscription-replacement floor for a buyer of this vertical without FAA vetting: ~$32.0k–157.6k/yr — the high end now anchored by the first citable FlightAware Firehose price (~$148k–224k/yr, U.S. Secret Service federal contract; Spire ~$159k–200k/yr corroborates); FAA SWIM data itself is $0 by the FAA's own policy
+- Independent single-vertical figure — a strict subset of the platform-wide ~$55.2k–230.4k/yr band, never summed with it
 - The point for an ops desk: the data you actually dispatch on is not for sale (next slide)
 
 ## What money cannot buy — the aviation-ops moat

@@ -231,6 +231,48 @@ this case: the feed_name's events are counted only against its own
 history, never mixed into the shared sector bucket, while both still
 publish to the same operator-facing topics.
 
+**FIXED 2026-09-04 — the push-rate throttle itself is now cross-process
+shared; the read-once-at-import config problem above is NOT.** These are
+two separate pieces of state and it matters which one this fix touches:
+
+- **What was broken:** `_last_fired` (the "epoch of this topic's last
+  successful push," consulted by `_throttle_allows()` before every
+  qualifying fire) was a bare in-process Python dict — not even
+  persisted to disk, reset on every restart. `fdps-alerts`/`fdps-<zone>`
+  is pushed to by BOTH `fdps_parser.py` (`ingest-fdps` container) and
+  `aim_parser.py`'s `fdps_notam` sibling (`ingest-notam` container) --
+  two separate OS processes, each keeping its own private copy of "when
+  did fdps-alerts last fire." The documented "no topic pushes more than
+  once/min" guarantee was silently only ever "once/min per process" for
+  any topic shared across containers -- confirmed live as the root
+  cause of an operator-reported rebroadcast/erroneous-escalation
+  complaint.
+- **The fix:** `_last_fired` moved to flock-guarded shared file state
+  (`/var/lib/corporatetraveldc/sector_coalesce_throttle.json`), same
+  proven pattern `common/push_dedup.py` already uses. Every ingest
+  process now reads and writes the SAME on-disk clock, so the throttle
+  guarantee is genuinely platform-wide again, not per-process.
+- **What this does NOT fix:** the "Two compounding facts" above --
+  the admin config (`_topic_enabled`/`_topic_min_interval`/
+  `_topic_sanitize`/`_silenced_sectors`/`_silenced_feeds`/
+  `_escalate_overrides`, in `sector_coalesce_silence.json`) is still
+  read once at module import with no reload path, and the web
+  container's admin setters still don't propagate to already-running
+  ingest containers without a restart. That's a different variable, a
+  different failure mode (a human's mute/throttle-override setting not
+  taking effect, vs. two processes independently double-firing), and
+  remains exactly as open as the "NEEDS OPERATOR DECISION" note above
+  describes it. Fixing it the same way (shared file + reload) is a
+  reasonable follow-up, not yet done.
+- **The escalation window (`_sector_events`/`_feed_sector_events`)
+  deliberately stayed in-process** -- it's checked on every single
+  ingest message (thousands/hour), not just on a qualifying alert-fire,
+  so making it file-backed would reintroduce real lock-contention
+  overhead (the same class of problem fixed in `common/db.py` this same
+  night). Per-feed-name isolation across the container boundary is also
+  the *correct* behavior for `isolate=True` siblings, not a bug --see
+  "Isolation between siblings" above.
+
 ## 3. Why escalation, not raw event count or keyword matching alone
 
 A simpler design would fire on every event matching a watch condition

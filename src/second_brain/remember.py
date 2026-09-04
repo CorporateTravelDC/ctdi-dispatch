@@ -97,6 +97,25 @@ def remember_text(text: str, tags: str = "", author_kind: str = "human",
                tags=tags, ingest_method="manual")
     conn.close()
 
+    # 2026-09-03 (operator directive): a note landing in 01-Sources/manual/
+    # IS a "Jarvis reconciliation" by this module's own naming (see
+    # web/main.py's _VAULT_RESEARCH_EXTRA_PREFIXES comment) -- touch a
+    # local sentinel so the host-side semantic-compile and knowledge-graph
+    # .path units (watching this file via the shared /var/lib/corporatetraveldc
+    # bind mount every dispatch container already has) fire a recompile,
+    # on top of their own 6-hour timer. Deliberately scoped to dest_subdir
+    # == "manual" only -- personal-notes writes are a different stream and
+    # don't count as a reconciliation event. Best-effort: a failure here
+    # must never fail the caller's actual remember() write.
+    if dest_subdir == "manual":
+        try:
+            trigger_dir = "/var/lib/corporatetraveldc/second-brain-triggers"
+            os.makedirs(trigger_dir, exist_ok=True)
+            with open(os.path.join(trigger_dir, "manual-note-written"), "w") as f:
+                f.write(now.isoformat())
+        except OSError:
+            pass
+
     return rel_path
 
 

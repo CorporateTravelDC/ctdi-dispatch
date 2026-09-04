@@ -4,7 +4,7 @@
 - A relay/middleware layer by design and by license: CTDI feeds LimoAnywhere-class dispatch platforms, it never replaces them
 - Built and operated by a chauffeur-operation principal — [operator LLC], LLC, Arlington, VA
 - Investor briefing — executive ground transportation — August 2026
-- Every claim re-verified live against the production system 2026-08-24
+- Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
 ## The problem: dispatch finds out last
 
@@ -41,9 +41,10 @@
 
 ## The economics
 
-- Runs on ~$765 one-time hardware + ~$23-39/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 25,147 logged calls, 46 days
-- Purchasable subset of live capability lists at ~$55k-113k/yr in commercial subscriptions — a floor, since the largest equivalents are quote-only
-- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $55k-113k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
+- Runs on ~$765 one-time hardware + ~$22-38/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 35,217 logged calls, 57 days
+- Purchasable subset of this vertical's live capability lists at ~$1.7k-8.0k/yr (bare-feature minimum $240/yr — the published add-on price for bundled "Flight Status Tracking"); small because the purchasable version is shallow: FlightStats-class estimates, not OOOI or SWIM push, and no dispatch platform offers rail at all
+- Independent single-vertical figure — never summed with the platform-wide ~$55.2k-230.4k/yr replacement band
+- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); both replacement figures are floors for a buyer without FAA vetting — never presented as avoided spend
 - Self-hosted means client movement data never leaves the operator's premises to get the intelligence
 
 ## What money cannot buy — and a dispatcher needs

@@ -4,7 +4,7 @@
 - A 24/7 self-hosted dispatch-intelligence platform that watches every principal's flight and Amtrak train, scores operational risk, and pushes the alert — built to sit behind your existing booking system
 - For corporate travel management, executive concierge, and traveler-care teams
 - [operator LLC], LLC · Arlington, VA · Investor briefing — August 2026
-- Every claim re-verified live against the production system 2026-08-24
+- Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
 ## The problem — today, the traveler finds out first
 
@@ -62,9 +62,10 @@
 
 ## The economics
 
-- Runs on ~$765 one-time hardware plus ~$23-39/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 25,147 logged calls across 46 days
-- Purchasable subset of live capability lists at ~$55k-113k/yr in commercial subscriptions — a floor, since the largest equivalents are quote-only
-- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $55k-113k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
+- Runs on ~$765 one-time hardware plus ~$22-38/yr electricity; $0 data-feed fees; $0 cloud-LLM spend — measured over 35,217 logged calls across 57 days
+- Purchasable subset of this vertical's live capability (flight status API + rail realtime + traveler-care platform + push) lists at ~$4.2k-64.3k/yr, mid ~$16.7k — an independent single-vertical figure, never summed with the platform-wide ~$55.2k-230.4k/yr band
+- No product in that basket watches a booking's specific flight and train from a reservation webhook — the integration is the product
+- Honest split: actual avoided cost is ~$2.2-2.7k/yr (mostly barter); the $4.2k-64.3k figure is replacement cost for a buyer without FAA vetting — never presented as avoided spend
 - Ten live capabilities are not purchasable at any price: FAA flow programs (TFMS), arrival metering (TBFM), terminal wind-shear alerts (ITWS), unfiltered blocked-aircraft visibility, receive-side ACARS, a permanently-owned corpus, and the integrity gates
 
 ## Security and trust posture

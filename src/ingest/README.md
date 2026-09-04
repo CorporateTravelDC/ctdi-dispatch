@@ -208,9 +208,12 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 >   route strings, waypoints), so per-flight matching is by SCOPE
 >   IMPLICATION: a watched flight whose origin AND destination both sit
 >   in an ACTIVE advisory's INCLUDE-segment origin/destin lists fires a
->   `tfms_reroute` hit (`_check_reroute_watchlist_hits`, 6 h dedicated
->   dedup keyed per entry+rerouteId, content-keyed on route/status/
->   window so a real revision fires immediately). Center-only-scoped
+>   `tfms_reroute` hit (`_check_reroute_watchlist_hits`, dedicated
+>   `_REROUTE_WATCHLIST_DEDUP.should_push()` — forward-only since the
+>   2026-09-03 push_dedup redesign; the former 6 h `dedup_secs=21600`
+>   now only feeds retention — keyed per entry+rerouteId, content-keyed
+>   on route/status/window so an unchanged rebroadcast never re-fires
+>   and a real revision fires immediately). Center-only-scoped
 >   segments (very common; center codes even appear inside `<airport>`
 >   tags) are a deliberate false negative -- no airport->center table
 >   exists here to guess with. The FADT EDCT watchlist hit already
@@ -515,13 +518,17 @@ table), `FlightSectors`, `boundaryCrossingUpdate`, `RAPT`.
 `dedup_key = content_hash(f"tfms:amendment:{entry['id']}")` (per-flight
 identity) paired with `content_key = content_hash(route_text or "")` (the
 amendment content), split this way by the 2026-08-16 shared-slot fix so
-distinct flights no longer collapse into one dedup slot — against the
-shared 30-minute `_TFMS_ALERT_DEDUP` window, so an unchanged rebroadcast of
-the same amendment is suppressed indefinitely while a genuinely new route
-amendment fires immediately. This mirrors `_handle_track_information`'s
-approach-alert pattern (trigger `tfms_track_approach`), which keys on entry-id
-only because positions naturally change every cycle. Previously this handler
-had no dedup beyond the generic 5-minute watchlist window.
+distinct flights no longer collapse into one dedup slot — via the shared
+`_TFMS_ALERT_DEDUP.should_push()`, which is forward-only as of the
+2026-09-03 `common/push_dedup.py` redesign (its `dedup_secs=1800` no
+longer forces a re-fire; it only feeds the retention horizon): an
+unchanged rebroadcast of the same amendment is suppressed indefinitely
+while a genuinely new route amendment fires immediately. This mirrors
+`_handle_track_information`'s approach-alert pattern (trigger
+`tfms_track_approach`), which keys on entry-id only because positions
+naturally change every cycle. Previously this handler had no dedup beyond
+the watchlist's then-5-minute window (itself forward-only since
+2026-09-03 — see `src/shared/watchlist_README.md`).
 
 ## Local airspace monitoring (inside `ingest-core`)
 
