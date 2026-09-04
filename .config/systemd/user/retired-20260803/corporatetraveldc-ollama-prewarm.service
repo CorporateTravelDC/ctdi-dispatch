@@ -1,6 +1,0 @@
-[Unit]
-Description=Prewarm OLLAMA_OSINT_MODEL ~2min before a scheduled brief, bounded keep_alive (not permanent)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-prewarm.sh

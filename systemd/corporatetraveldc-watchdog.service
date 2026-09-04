@@ -1,9 +1,0 @@
-[Unit]
-Description=Corporate Travel DC dispatch stack health watchdog (thermal/throttle/services/containers/API/feed-freshness)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/watchdog.sh
-User=root

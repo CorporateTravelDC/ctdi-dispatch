@@ -1,6 +1,0 @@
-[Unit]
-Description=Watch UltraFeeder/ADS-B local receive heartbeat for the feed going silent (2026-08-10, sibling of acars-feed-silence-watchdog)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/adsb-feed-silence-watchdog.sh

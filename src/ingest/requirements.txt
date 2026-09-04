@@ -1,3 +1,0 @@
-# Ingest-container-specific dependencies (installed in addition to /app/requirements.txt)
-# Solace PubSub+ native Python client — NMS/SCDS SWIM broker connectivity
-solace-pubsubplus>=1.7.0

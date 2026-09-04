@@ -1,8 +1,0 @@
-[Unit]
-Description=Nextcloud background job runner (cron.php)
-After=nextcloud-app.service
-Requires=nextcloud-app.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/podman exec --user www-data nextcloud-app php -f /var/www/html/cron.php

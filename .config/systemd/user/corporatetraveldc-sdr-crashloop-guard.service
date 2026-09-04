@@ -1,6 +1,0 @@
-[Unit]
-Description=Watch ultrafeeder/dumpvdl2 SDR hardware for crash-loop or lost USB device, auto-stop on either (2026-08-14)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/sdr-crashloop-guard.sh

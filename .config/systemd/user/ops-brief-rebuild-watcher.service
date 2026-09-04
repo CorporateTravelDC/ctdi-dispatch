@@ -1,7 +1,0 @@
-[Unit]
-Description=One-shot: rebuild poller image once thermal-ingest-guard returns to tier 0
-
-[Service]
-Type=oneshot
-ExecStart=%h/ops-brief-rebuild-watcher.sh
-TimeoutStartSec=600
