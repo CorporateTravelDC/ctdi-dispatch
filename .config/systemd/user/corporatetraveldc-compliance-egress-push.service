@@ -1,6 +1,0 @@
-[Unit]
-Description=Push pending audit_log rows to COMPLIANCE_TARGET_URL, if COMPLIANCE_HOOK_ENABLED=true (2026-08-03)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/compliance-egress-push.sh

@@ -1,6 +1,0 @@
-[Unit]
-Description=Prewarm corporatetraveldc-pi5-ops-brief:latest ~2-3min before ops-brief (bounded keep_alive, not permanent)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-prewarm.sh corporatetraveldc-pi5-ops-brief:latest

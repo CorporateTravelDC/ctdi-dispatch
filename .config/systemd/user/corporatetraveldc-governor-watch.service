@@ -1,9 +1,0 @@
-[Unit]
-Description=Corporate Travel DC -- CPU governor drift watch (schedutil, inference-aware)
-
-[Service]
-Type=oneshot
-# TimeoutStartSec covers the worst case: up to GOVERNOR_WATCH_BACKOFF_S
-# (default 900s) waiting out a live inference run, plus the fix itself.
-TimeoutStartSec=960
-ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/governor-watch.py

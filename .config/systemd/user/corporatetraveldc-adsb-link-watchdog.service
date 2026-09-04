@@ -1,6 +1,0 @@
-[Unit]
-Description=Watch all UltraFeeder ADS-B outbound links for sustained sub-5s reconnect flapping (2026-08-03)
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/adsb-link-watchdog.sh

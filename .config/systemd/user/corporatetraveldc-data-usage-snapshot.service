@@ -1,6 +1,0 @@
-[Unit]
-Description=Daily vnstat data-usage CSV snapshot for /api/v1/data-usage (2026-08-06 -- script existed since 2026-07-09 but was never wired to a timer, which is the entire reason the endpoint always returned "No data-usage log yet")
-
-[Service]
-Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/snapshot-data-usage.py
