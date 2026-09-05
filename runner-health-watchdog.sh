@@ -15,6 +15,21 @@
 # this class of outage; a periodic external check is a genuinely
 # different, necessary layer, not a duplicate of what's already there.
 #
+# 2026-09-05, same day (real finding, caught by an automated doc-drift
+# pass on this very commit before the LOCKDOWN-unaware version ever hit
+# a real LOCKDOWN): the first version of this script unconditionally
+# restarted a not-active runner -- but a not-active runner is a DESIGNED
+# state during a thermal-ingest-guard LOCKDOWN (runner is one of the
+# units `_lockdown_stop_stack()` deliberately sheds at temp>=79C or
+# load1>=40, see thermal-ingest-guard.py's LOCKDOWN_USER_UNITS). Left
+# alone, this watchdog would have restarted runner mid-emergency,
+# defeating that shed and paging a misleading "auto-restarted" success
+# notice for what was actually a defeated safety action. This is
+# precisely the "watchdog-vs-LOCKDOWN collision" class already
+# root-caused in August for the root-scope scripts/watchdog.sh -- ported
+# that script's exact fail-open _guard_tier() mitigation here rather
+# than inventing a new one. See _guard_tier()'s own docstring below.
+#
 # Runs as corporatetraveldc via a user systemd timer every 5 minutes
 # (matches the cadence of the other watchdogs in this directory).
 #
@@ -36,6 +51,10 @@ SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 UNIT="corporatetraveldc-runner.service"
 RESTART_SETTLE_SECS=6
 ALERT_COOLDOWN_SECS=1800   # 30 min -- don't re-page every 5-min cycle if a restart keeps failing
+
+# Same state file thermal-ingest-guard.py itself writes -- see that
+# script's own STATE_FILE constant.
+GUARD_STATE_FILE="/var/lib/corporatetraveldc/thermal_ingest_guard_state.json"
 
 mkdir -p "${STATE_DIR}"
 
@@ -80,6 +99,25 @@ ntfy_send() {
         || log "warn" "ntfy_send failed (base=${NTFY_BASE} topic=${NTFY_HOT} token_set=$([[ -n "${NTFY_TOKEN}" ]] && echo yes || echo no))"
 }
 
+# Reads thermal-ingest-guard.py's own state file and echoes its "tier"
+# field (0 = normal, 1 = mild temp-only shed, 2 = LOCKDOWN -- runner is
+# only ever shed at tier 2). Echoes 0 -- fails OPEN, not closed -- if the
+# file is missing, unreadable, or unparseable, so a broken/stale state
+# file can never permanently mask a real outage; it just means this
+# specific LOCKDOWN-aware suppression doesn't apply for that one cycle,
+# same as if the guard had never existed. Ported verbatim (same logic,
+# same fail-open reasoning) from scripts/watchdog.sh's own _guard_tier().
+_guard_tier() {
+    python3 -c "
+import json
+try:
+    with open('${GUARD_STATE_FILE}') as f:
+        print(int(json.load(f).get('tier', 0)))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0
+}
+
 read_state() {
     [[ -f "${STATE_FILE}" ]] && cat "${STATE_FILE}" || echo "0 0"  # down_since_epoch last_alert_epoch
 }
@@ -112,6 +150,17 @@ now=$(date +%s)
 
 if systemctl --user is-active --quiet "${UNIT}"; then
     log "info" "${UNIT} active -- ok"
+    write_state 0 0
+    exit 0
+fi
+
+guard_tier="$(_guard_tier)"
+if [[ "${guard_tier}" == "2" ]]; then
+    log "info" "${UNIT} is not active, but thermal-ingest-guard tier=2 (LOCKDOWN) --" \
+        "this is a deliberate shed, not an outage. Skipping restart+page so this" \
+        "watchdog doesn't defeat the guard's own load-shedding mid-emergency." \
+        "Will re-check next cycle; the guard's own restore logic (or its" \
+        "stale-tier reconciliation) brings runner back once conditions clear."
     write_state 0 0
     exit 0
 fi
