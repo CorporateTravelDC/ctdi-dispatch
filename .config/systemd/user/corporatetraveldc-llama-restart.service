@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily preventive restart of llama-hot + llama-chat (24h freshness cycle, per operator directive)
+Description=Daily preventive restart of corporatetraveldc-llama.service (24h freshness cycle; skips if a run is in flight)
 
 [Service]
 Type=oneshot

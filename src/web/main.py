@@ -207,15 +207,21 @@ _BOARD_KEY = os.getenv("BOARD_KEY", "").strip()
 _board_post_hits: list = []   # naive in-memory rate-limit clock
 
 
-def _require_board_key(request: Request) -> None:
+def _require_board_key(request: Request, required_scope: str = db.BOARD_SCOPE_WRITE) -> None:
     """Shared X-Board-Key check -- board_post's own original logic,
     extracted 2026-08-24 so vault_research_read/vault_research_list can
     reuse the identical credential instead of duplicating the check (or
-    worse, drifting from it). Raises 401 on missing/invalid key."""
+    worse, drifting from it). Raises 401 on missing/invalid key.
+
+    2026-09-06: scope-aware. The master BOARD_KEY satisfies everything; a
+    minted token must carry a scope that satisfies `required_scope` (see
+    db.board_token_valid). Default is board-write -- the strict end -- so a
+    caller that does not name its scope can never be loosened by omission;
+    read-only endpoints pass db.BOARD_SCOPE_READ explicitly."""
     presented = request.headers.get("X-Board-Key", "")
     authorized = bool(presented) and (
         (bool(_BOARD_KEY) and _secrets.compare_digest(presented, _BOARD_KEY))
-        or db.board_token_valid(presented)
+        or db.board_token_valid(presented, required_scope)
     )
     if not authorized:
         raise HTTPException(status_code=401, detail="missing or invalid X-Board-Key")
@@ -396,6 +402,7 @@ _BOARD_ANONYMOUS_THREADS = {"coord"}
 
 @app.get("/api/v1/board")
 async def board_get(
+    request: Request,
     thread: str = "coord", since: str = "", limit: int = 50,
     tier: Tier = Depends(resolve_tier),
 ) -> JSONResponse:
@@ -416,11 +423,29 @@ async def board_get(
     non-tailnet consumer that genuinely needs `research` can be issued a
     cert-tier token the same way any other Tier-1 consumer is.
 
+    2026-09-06: the 08-25 fix above assumed Cowork "can be issued a
+    cert-tier token" -- it cannot use one: the tunnel strips Authorization
+    and nginx stamps X-CTDI-Public on that host, forcing Tier 0 for every
+    tunnel caller (docs/INFRA_MAP.md). Net effect, confirmed live by Cowork
+    headless: `research` was 403 to its only consumer from the day it was
+    locked, so the research board mirror had been posting into a thread
+    nobody could read. Fix mirrors vault_research_read()'s 08-24 answer to
+    the identical wall: a valid X-Board-Key -- the credential Cowork
+    already holds for writes and for /api/v1/vault/research -- satisfies
+    the non-anonymous-thread gate. Anonymous reads of `research` stay
+    closed (the C-5 exposure is not reopened); `coord` is unchanged.
+
     since = opaque cursor from a prior read (seq or ISO ts); returns only
     newer messages plus a fresh cursor. Message bodies are redacted for
     known internal-infra/credential-mechanism references before serving."""
     if thread not in _BOARD_ANONYMOUS_THREADS and tier == Tier.T0:
-        raise HTTPException(status_code=403, detail=f"Tier 1+ required for thread '{thread}'")
+        try:
+            _require_board_key(request, db.BOARD_SCOPE_READ)
+        except HTTPException:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Tier 1+ or a valid X-Board-Key required for thread '{thread}'",
+            )
     msgs, cursor = db.board_query(thread=thread, since=since or None, limit=limit)
     for m in msgs:
         if isinstance(m.get("body"), str):
@@ -1715,7 +1740,7 @@ async def vault_research_read(request: Request, path: str = Query(...)) -> JSONR
     200 -> {path, content}; 400 -> invalid/out-of-scope path; 401 -> missing/
     invalid X-Board-Key; 404 -> not found; 422 -> blocked by CUI/PII scrub
     gate; 429 -> rate limited."""
-    _require_board_key(request)
+    _require_board_key(request, db.BOARD_SCOPE_READ)  # read-only surface: a board-read token suffices
     if not _vault_path_is_safe(path):
         raise HTTPException(status_code=400, detail="invalid path")
     if not _vault_research_path_allowed(path):
@@ -1762,7 +1787,7 @@ async def vault_research_list(request: Request, path: str = Query(default=_VAULT
 
     200 -> {path, files: [{path}, ...]}; 400 -> invalid/out-of-scope path;
     401 -> missing/invalid X-Board-Key; 429 -> rate limited."""
-    _require_board_key(request)
+    _require_board_key(request, db.BOARD_SCOPE_READ)  # read-only surface: a board-read token suffices
     if not _vault_path_is_safe(path):
         raise HTTPException(status_code=400, detail="invalid path")
     # A bare extra-prefix folder itself (e.g. "04-Syntheses", no trailing

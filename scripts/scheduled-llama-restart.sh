@@ -1,24 +1,17 @@
 #!/bin/bash
 # scripts/scheduled-llama-restart.sh
-# Unconditional daily preventive restart of llama-hot + llama-chat
-# (operator directive 2026-08-30, alongside the llama-chat swap-thrashing
-# investigation in CLAUDE.md -- restart cadence capped at <=24h so both
-# tiers get kicked fresh at least once a day regardless of whether the
-# 0.21 tok/s root cause turns out to be memory fragmentation from
-# multi-day uptime. This is a preventive mitigation for a still-open
-# investigation, not a fix -- see CLAUDE.md's "OPEN, root cause..." entry.
+# Daily preventive restart of corporatetraveldc-llama.service -- the ONE
+# llama-server (2026-09-06: replaces the hot/chat/report tiers; see that
+# unit's header for the operator directive). Restart cadence capped at
+# <=24h so the resident model gets kicked fresh once a day (originally
+# 2026-08-30, mitigating the multi-day-uptime slowdown investigation).
 #
-# Restarts hot THEN chat, one at a time via blocking `systemctl --user
-# restart` calls, deliberately in this order and never in parallel:
-# chat.service's own ExecStartPre blocks on hot's /health before loading
-# the model, so restarting hot first and waiting for it to report active
-# (systemctl restart already blocks until ExecStartPre+ExecStart both
-# succeed) means chat's restart lands on an already-healthy hot instead
-# of racing it -- the exact thundering-herd pattern from the 2026-08-27
-# incident (load1=41, two llama-server processes cold-reading the same
-# 2.1GB GGUF at once) this ordering is designed to avoid. report-1/
-# report-2 are NOT touched here -- operator directive scoped this to
-# hot/chat only; the report tier isn't implicated in the open investigation.
+# 2026-09-06 rule, non-negotiable: "NOTHING running kills another ongoing
+# run only you or I." This script therefore NEVER restarts a server that
+# is mid-generation. It waits for both slots to go idle (up to
+# IDLE_WAIT_MAX_SEC) and, if they don't, it SKIPS the restart, logs it and
+# notifies -- the next day's timer tries again. The old "restarting
+# anyway" branch is gone.
 #
 # Usage:
 #   scheduled-llama-restart.sh          # normal run (called by the timer)
@@ -33,15 +26,15 @@ SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 
 # Port -> service, so we can idle-wait each one before restarting it.
 declare -A SERVICE_PORT=(
-    [corporatetraveldc-llama-hot.service]=8093
-    [corporatetraveldc-llama-chat.service]=8094
+    [corporatetraveldc-llama.service]=8093
 )
 SERVICES=(
-    corporatetraveldc-llama-hot.service
-    corporatetraveldc-llama-chat.service
+    corporatetraveldc-llama.service
 )
 LLAMA_HOST="100.x.x.x"
-IDLE_WAIT_MAX_SEC=120
+# 03:00 ET sits between the overnight report slots; a long runner can
+# legitimately still be in flight. Wait up to 45 min for idle, then skip.
+IDLE_WAIT_MAX_SEC=2700
 
 mkdir -p "${STATE_DIR}"
 
@@ -64,7 +57,7 @@ wait_for_idle() {
         sleep 3
         (( waited += 3 ))
     done
-    log "warn" "port ${port} still processing (or unreachable) after ${IDLE_WAIT_MAX_SEC}s idle-wait -- restarting anyway"
+    log "warn" "port ${port} still processing (or unreachable) after ${IDLE_WAIT_MAX_SEC}s idle-wait -- SKIPPING restart (never kill an in-flight run)"
     return 1
 }
 
@@ -107,9 +100,10 @@ ntfy_send() {
         "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 || log "warn" "ntfy_send failed (token_set=$([[ -n \"${NTFY_TOKEN}\" ]] && echo yes || echo no))"
 }
 
-log "info" "-------- daily preventive llama-hot/chat restart starting --------"
+log "info" "-------- daily preventive llama restart starting --------"
 
 FAILED=()
+SKIPPED=()
 for SERVICE in "${SERVICES[@]}"; do
     if [[ "${MODE}" == "dry-run" ]]; then
         log "info" "[DRY-RUN] would run: systemctl --user restart ${SERVICE}"
@@ -119,7 +113,10 @@ for SERVICE in "${SERVICES[@]}"; do
     port="${SERVICE_PORT[${SERVICE}]:-}"
     if [[ -n "${port}" ]]; then
         log "info" "waiting for ${SERVICE} (port ${port}) to go idle before restart"
-        wait_for_idle "${port}"
+        if ! wait_for_idle "${port}"; then
+            SKIPPED+=("${SERVICE}")
+            continue
+        fi
     fi
 
     log "info" "restarting ${SERVICE}"
@@ -141,13 +138,20 @@ if [[ "${MODE}" == "dry-run" ]]; then
     exit 0
 fi
 
+if (( ${#SKIPPED[@]} > 0 )); then
+    ntfy_send "llama: daily preventive restart SKIPPED" \
+        "A generation was still in flight after ${IDLE_WAIT_MAX_SEC}s -- not restarted (rule: nothing kills an ongoing run). Next attempt: tomorrow's timer." \
+        3
+    log "warn" "-------- daily preventive restart complete: skipped ${SKIPPED[*]} (in-flight run) --------"
+    exit 0
+fi
 if (( ${#FAILED[@]} == 0 )); then
-    ntfy_send "llama-hot/chat: daily preventive restart" \
-        "Both tiers restarted and healthy (24h freshness cycle, mitigating the open swap-thrashing investigation -- see CLAUDE.md)." \
+    ntfy_send "llama: daily preventive restart" \
+        "corporatetraveldc-llama.service restarted and healthy (24h freshness cycle)." \
         2
-    log "info" "-------- daily preventive restart complete: all healthy --------"
+    log "info" "-------- daily preventive restart complete: healthy --------"
 else
-    ntfy_send "llama-hot/chat: daily preventive restart FAILED" \
+    ntfy_send "llama: daily preventive restart FAILED" \
         "Failed/unhealthy after restart: ${FAILED[*]} -- check journalctl --user -u <service>." \
         4
     log "error" "-------- daily preventive restart complete: failures: ${FAILED[*]} --------"

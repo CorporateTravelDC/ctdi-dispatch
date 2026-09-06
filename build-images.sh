@@ -25,12 +25,13 @@ log "Build context: ${SCRIPT_DIR}"
 log "Build date: ${BUILD_DATE}"
 log ""
 
-# 2026-09-01: maintenance window -- llama-chat runs at CPUWeight=9000
+# 2026-09-01: maintenance window -- the llama unit runs at CPUWeight=9000
+# (2026-09-06: single corporatetraveldc-llama.service replaced llama-chat)
 # (see scripts/maintenance-window-on.sh for why), which starved this
 # build of CPU during real-world runs and surfaced as pip read-timeouts.
 # Engage suppression for the duration of this build; the trap guarantees
 # it's released on any exit path (success, die(), or Ctrl-C).
-if command -v systemctl &>/dev/null && systemctl --user is-active --quiet corporatetraveldc-llama-chat.service 2>/dev/null; then
+if command -v systemctl &>/dev/null && systemctl --user is-active --quiet corporatetraveldc-llama.service 2>/dev/null; then
     "${SCRIPT_DIR}/scripts/maintenance-window-on.sh"
     trap '"${SCRIPT_DIR}/scripts/maintenance-window-off.sh"' EXIT
 fi

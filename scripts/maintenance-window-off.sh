@@ -5,7 +5,7 @@
 # was never actually engaged -- it just re-asserts the tracked baseline.
 set -euo pipefail
 
-UNIT="corporatetraveldc-llama-chat.service"
+UNIT="corporatetraveldc-llama.service"
 BASELINE_WEIGHT=9000
 
 echo "[maintenance-window] restoring ${UNIT} CPUWeight -> ${BASELINE_WEIGHT}"
