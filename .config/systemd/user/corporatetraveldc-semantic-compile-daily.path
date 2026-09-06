@@ -1,0 +1,19 @@
+[Unit]
+Description=Trigger a semantic-layer recompile whenever a Jarvis reconciliation note lands
+Requires=corporatetraveldc-semantic-compile-daily.service
+
+[Path]
+# 2026-09-03 (operator directive): event-driven third trigger, alongside
+# the 6-hour timer grid. second_brain.remember_text() (src/second_brain/
+# remember.py) touches this sentinel every time it writes a note to
+# 01-Sources/manual/ with dest_subdir=="manual" -- i.e. every "Jarvis
+# reconciliation" by this codebase's own naming (see that comment for the
+# full reasoning). The sentinel lives under /var/lib/corporatetraveldc,
+# the same shared bind mount every dispatch container (including the web
+# container remember_text() actually runs in) already has, so this
+# host-side .path unit sees the write with no extra plumbing.
+PathModified=/var/lib/corporatetraveldc/second-brain-triggers/manual-note-written
+Unit=corporatetraveldc-semantic-compile-daily.service
+
+[Install]
+WantedBy=paths.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Dispatch Desk memo Sunday 09:30 ET (after AAM watch 09:00, before second-brain weekly 18:15)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=Sun *-*-* 09:30:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

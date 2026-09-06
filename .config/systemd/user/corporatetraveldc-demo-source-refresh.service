@@ -1,0 +1,7 @@
+[Unit]
+Description=Scrub+promote newly staged demo content into the sovereign demo-source file (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 5)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scrub-demo-source.py --refresh

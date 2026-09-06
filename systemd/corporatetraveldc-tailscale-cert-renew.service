@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Tailscale HTTPS cert for corporatetraveldc-dispatch.tailxxxxxxx.ts.net
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/renew-tailscale-cert.sh

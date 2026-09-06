@@ -1,0 +1,44 @@
+[Unit]
+Description=Corporate Travel DC -- weekly Advanced Air Mobility (vertiport/eVTOL/Part 108) watch
+
+[Container]
+Memory=1024m
+# 2026-08-06: previously unguarded -- moderate LLM prompt -- 21 items, ~5-6min runs (see OLLAMA_TIMEOUT=500 in aam_weekly_watch.py).
+# Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
+# runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=1024m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Same scoped opt-in as corporatetraveldc-second-brain-weekly.container --
+# reaches Nextcloud WebDAV via the existing cloud.example.com
+# nginx vhost (0.0.0.0:80 -> 127.0.0.1:8090) through the internal alias,
+# not host networking. See docs/COMPLIANCE_SECURITY.md.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/skills/aam_weekly_watch.py
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=341M
+Type=oneshot
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 3 attempts x 2250s brief call (max_retries=2; no entity extraction in this skill) = 7550s -> 7600. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+TimeoutStartSec=7600

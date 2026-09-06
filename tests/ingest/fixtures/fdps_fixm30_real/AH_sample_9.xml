@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?><ns5:MessageCollection xmlns:ns5="http://www.faa.aero/nas/3.0" xmlns:ns2="http://www.fixm.aero/base/3.0" xmlns:ns3="http://www.fixm.aero/flight/3.0" xmlns:ns4="http://www.fixm.aero/foundation/3.0">
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" flightType="SCHEDULED" centre="ZOB" source="AH" system="SLC" timestamp="2026-08-17T02:06:22.183Z">
+            <agreed>
+                <route xsi:type="ns5:NasRouteType" nasRouteText="KDFW./.ROD237028..DKK..KBUF/0302" initialFlightRules="IFR">
+                    <estimatedElapsedTime elapsedTime="P0Y0M0DT0H33M0S">
+                        <location>
+                            <region airspaceType="FIR">KZME</region>
+                        </location>
+                    </estimatedElapsedTime>
+                    <estimatedElapsedTime elapsedTime="P0Y0M0DT1H15M0S">
+                        <location>
+                            <region airspaceType="FIR">KZID</region>
+                        </location>
+                    </estimatedElapsedTime>
+                    <estimatedElapsedTime elapsedTime="P0Y0M0DT1H51M0S">
+                        <location>
+                            <region airspaceType="FIR">KZOB</region>
+                        </location>
+                    </estimatedElapsedTime>
+                </route>
+            </agreed>
+            <aircraftDescription xsi:type="ns5:NasAircraftType" equipmentQualifier="L" aircraftAddress="A37EC4" registration="N324SH" wakeTurbulence="M">
+                <aircraftType>
+                    <icaoModelIdentifier>B38M</icaoModelIdentifier>
+                </aircraftType>
+                <capabilities standardCapabilities="STANDARD">
+                    <communication otherDataLinkCapabilities="1FANSE2PDC" selectiveCallingCode="DHFK">
+                        <communicationCode>E3 H</communicationCode>
+                        <dataLinkCode>J4</dataLinkCode>
+                    </communication>
+                    <navigation>
+                        <navigationCode>D G I W X</navigationCode>
+                        <performanceBasedCode>A1 B1 C1 D1 L1 O1 S2 T1</performanceBasedCode>
+                    </navigation>
+                    <surveillance otherSurveillanceCapabilities="260B CANMANDATE">
+                        <surveillanceCode>L B1</surveillanceCode>
+                    </surveillance>
+                </capabilities>
+                <accuracy>
+                    <cmsFieldType phase="ARRIVAL" type="RNV" uom="NAUTICAL_MILES">1.0</cmsFieldType>
+                    <cmsFieldType phase="ENROUTE" type="RNV" uom="NAUTICAL_MILES">2.0</cmsFieldType>
+                    <cmsFieldType phase="DEPARTURE" type="RNV" uom="NAUTICAL_MILES">1.0</cmsFieldType>
+                </accuracy>
+            </aircraftDescription>
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KBUF">
+                <arrivalAerodromeAlternate xsi:type="ns2:IcaoAerodromeReferenceType" code="KDTW"/>
+                <arrivalAerodromeAlternate xsi:type="ns2:IcaoAerodromeReferenceType" code="KROC"/>
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-17T03:02:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDFW">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-17T00:28:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <beaconCodeAssignment>
+                    <currentBeaconCode>3460</currentBeaconCode>
+                </beaconCodeAssignment>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="923" siteSpecificPlanId="459" aircraftIdentification="AAL574"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000004</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="AAL"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="133733207"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-16T22:45:32Z.000/05/1mg"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="6"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0206224059"/>
+                    <nameValue name="SOURCE_TIME" value="02_06_22"/>
+                    <nameValue name="FLIGHT_PLAN_REV_NO" value="02"/>
+                </additionalFlightInformation>
+            </supplementalData>
+            <assignedAltitude>
+                <simple uom="FEET">37000.0</simple>
+            </assignedAltitude>
+            <coordination coordinationTime="2026-08-17T02:15:00Z" coordinationTimeHandling="E">
+                <coordinationFix xsi:type="ns2:RelativePointType" fix="ROD">
+                    <distance uom="NAUTICAL_MILES">42.0</distance>
+                    <radial uom="DEGREES">64.0</radial>
+                </coordinationFix>
+            </coordination>
+            <flightPlan identifier="KF819321mg"/>
+            <requestedAirspeed>
+                <nasAirspeed uom="KNOTS">455.0</nasAirspeed>
+            </requestedAirspeed>
+        </flight>
+    </message>
+</ns5:MessageCollection>

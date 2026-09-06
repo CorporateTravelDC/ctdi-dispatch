@@ -1,0 +1,14 @@
+[Unit]
+Description=Dispatch-side board sweep every 15min -- surface new to:dispatch coordination messages (bidirectional mirror of Cowork's research sweep, cadence confirmed explicit on the board 2026-08-11)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=false
+
+[Install]
+WantedBy=timers.target

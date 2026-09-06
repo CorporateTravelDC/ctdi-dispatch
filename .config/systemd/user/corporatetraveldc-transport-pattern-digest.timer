@@ -1,0 +1,14 @@
+[Unit]
+Description=Run transport-pattern-digest every 12 hours -- offset to :25 so it never lands on top of ops-brief (:00) or second-brain-rss (:10)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*-*-* 0/12:25:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

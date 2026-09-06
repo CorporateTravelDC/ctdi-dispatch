@@ -1,0 +1,16 @@
+[Unit]
+Description=Run governor-watch every 6 hours
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnBootSec=300
+OnUnitActiveSec=6h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

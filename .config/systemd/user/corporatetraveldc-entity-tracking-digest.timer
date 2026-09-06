@@ -1,0 +1,23 @@
+[Unit]
+Description=Run entity-tracking digest every 6h, fixed grid at :12 past 00/06/12/18 ET
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+# Fixed calendar grid, not OnUnitActiveSec -- see trains-yachts-daily-watch.timer's
+# 2026-08-17 comment for why: OnUnitActiveSec re-arms from each unit's own
+# activation time and systemd's default AccuracySec=1min coalesces nearby
+# wakeups, so timers drift onto the same second over time and stay there.
+# :12 is deliberately off every other timer's :00/:15/:30/:45 marks (and
+# off second-brain-rss's own :10 offset) -- this skill makes no Ollama
+# call so it doesn't need to dodge the Ollama-queue bunching concern
+# those timers were staggered for, but a distinct offset still avoids
+# piling straight onto another skill's WebDAV write at the same instant.
+OnCalendar=*-*-* 00,06,12,18:12:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Run ep-advance every hour at :35 (script adds 12h trend at 00:30/12:30 ET)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+# 2026-08-24: moved from :30 -> :35, same reasoning as ops-brief.timer's
+# :00 -> :05 move (see that file's comment) -- the six *-daily-watch
+# skills' dual-cadence design covers every :00/:15/:30/:45 mark every
+# hour, so ep-advance's old :30 mark was structurally guaranteed to
+# collide with whichever daily-watch skill's own slot landed on :30
+# that hour. Confirmed live 2026-08-23 23:35: executive-protection-
+# daily-watch and concierge-travel-daily-watch both logged `fallback`
+# seconds after ep-advance started. :35 is off every family member's
+# grid. First step only -- see ops-brief.timer's comment for the
+# planned follow-up review.
+OnCalendar=*-*-* *:35:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

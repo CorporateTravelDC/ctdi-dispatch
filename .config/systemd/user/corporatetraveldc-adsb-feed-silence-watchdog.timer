@@ -1,0 +1,14 @@
+[Unit]
+Description=Every 5 minutes -- check UltraFeeder/ADS-B local receive heartbeat for sustained silence
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*:1/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

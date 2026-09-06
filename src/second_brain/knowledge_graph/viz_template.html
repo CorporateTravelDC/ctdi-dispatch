@@ -1,0 +1,484 @@
+<!-- Template consumed by build_graph.render_html(): the JSON payload is
+     injected over the __GRAPH_DATA__ placeholder. Self-contained by design:
+     no CDN, no fetch, works from file:// or any static host. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CTDI Second-Brain Knowledge Graph</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f1f0ee;
+    --border: #d8d6d2;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #77756f;
+    --note: #2a78d6;      /* categorical slot 1 (all-pairs validated set) */
+    --hub: #eb6834;       /* slot 2: entity hub notes (03-Entities/) */
+    --concept: #2fa84f;   /* slot 3: semantic-layer concept nodes (2026-08-18) */
+    --edge: #b9b7b2;
+    --semantic-edge: #2fa84f;
+    --accent-ring: #0b0b0b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --border: #3a3936;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8d85;
+      --note: #3987e5;
+      --hub: #d95926;
+      --concept: #3fbf63;
+      --edge: #4a4946;
+      --semantic-edge: #3fbf63;
+      --accent-ring: #ffffff;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border: #3a3936;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8d85;
+    --note: #3987e5;
+    --hub: #d95926;
+    --concept: #3fbf63;
+    --edge: #4a4946;
+    --semantic-edge: #3fbf63;
+    --accent-ring: #ffffff;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 650; }
+  header .meta { color: var(--text-muted); font-size: 12px; }
+  #search {
+    margin-left: auto; padding: 5px 10px; min-width: 220px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--surface-2); color: var(--text-primary); font: inherit;
+  }
+  #legend { display: flex; gap: 14px; align-items: center; font-size: 12px;
+            color: var(--text-secondary); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+        margin-right: 5px; vertical-align: -1px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1; position: relative; min-width: 0; }
+  canvas { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  #tip {
+    position: absolute; pointer-events: none; display: none; max-width: 320px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 6px 9px; font-size: 12px;
+    color: var(--text-primary); box-shadow: 0 2px 10px rgba(0,0,0,.18);
+    z-index: 5;
+  }
+  #tip .k { color: var(--text-muted); }
+  aside {
+    width: 320px; max-width: 40vw; border-left: 1px solid var(--border);
+    background: var(--surface-1); overflow-y: auto; padding: 14px;
+  }
+  aside h2 { font-size: 14px; margin-bottom: 4px; overflow-wrap: anywhere; }
+  aside .sub { color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
+  aside dl { font-size: 12px; display: grid; grid-template-columns: auto 1fr;
+             gap: 3px 10px; margin-bottom: 12px; }
+  aside dt { color: var(--text-muted); }
+  aside dd { overflow-wrap: anywhere; }
+  aside h3 { font-size: 12px; color: var(--text-secondary);
+             margin: 12px 0 6px; font-weight: 600; }
+  .nb { display: flex; align-items: baseline; gap: 7px; width: 100%;
+        border: 0; background: none; color: var(--text-primary); font: inherit;
+        font-size: 12.5px; text-align: left; padding: 3px 2px; cursor: pointer;
+        border-radius: 5px; }
+  .nb:hover { background: var(--surface-2); }
+  .nb .rel { color: var(--text-muted); margin-left: auto; white-space: nowrap;
+             font-size: 11px; }
+  .hint { color: var(--text-muted); font-size: 12px; }
+  footer { padding: 6px 14px; border-top: 1px solid var(--border);
+           color: var(--text-muted); font-size: 11.5px; }
+  /* 2026-08-12: mobile previously hid `aside` entirely via display:none,
+     which meant tapping a node silently populated a panel nobody could
+     see -- looked exactly like click-through being broken. Stack the
+     panel below the canvas instead of hiding it. */
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    #stage { flex: 1 1 55%; min-height: 0; }
+    aside {
+      display: block; width: 100%; max-width: 100%; height: 40vh;
+      flex: 0 0 auto; border-left: none; border-top: 1px solid var(--border);
+    }
+  }
+</style>
+
+<header>
+  <h1>CTDI Second-Brain Knowledge Graph</h1>
+  <div id="legend"></div>
+  <input id="search" type="search" placeholder="Search nodes…"
+         aria-label="Search nodes">
+</header>
+<main>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="tip"></div>
+  </div>
+  <aside id="panel">
+    <h2>Nothing selected</h2>
+    <p class="hint">Click a node to see its type, source file, and every
+    edge it participates in. Drag the background to pan, scroll to zoom,
+    drag nodes to rearrange. Search above to highlight matches.</p>
+  </aside>
+</main>
+<footer id="metabar"></footer>
+
+<script id="graph-data" type="application/json">/*__GRAPH_DATA__*/null</script>
+<script>
+"use strict";
+const GRAPH = JSON.parse(document.getElementById("graph-data").textContent);
+const nodes = GRAPH.nodes, edges = GRAPH.edges, meta = GRAPH.meta;
+const byId = new Map(nodes.map(n => [n.id, n]));
+
+// adjacency + degree
+const adj = new Map(nodes.map(n => [n.id, []]));
+for (const e of edges) {
+  if (!byId.has(e.source) || !byId.has(e.target)) continue;
+  adj.get(e.source).push(e);
+  adj.get(e.target).push(e);
+}
+for (const n of nodes) n.degree = adj.get(n.id).length;
+
+// layout state -- seed deterministically on a circle by type band
+const N = nodes.length;
+nodes.forEach((n, i) => {
+  const ring = n.type === "hub" ? 160 : n.type === "concept" ? 250 : 340;
+  const a = (i / N) * Math.PI * 2 * 7.13;
+  n.x = Math.cos(a) * (ring + (i % 60));
+  n.y = Math.sin(a) * (ring + (i % 47));
+  n.vx = 0; n.vy = 0; n.fixed = false;
+});
+function radius(n) {
+  return Math.max(3.5, Math.min(19, 3 + Math.sqrt(n.degree) * 1.35));
+}
+
+// ── force simulation (plain O(n^2); ~300 nodes) ─────────────────────────────
+let alpha = 1;
+const springK = 0.02, springLen = 70;
+function tick() {
+  if (alpha < 0.003) return;
+  for (let i = 0; i < N; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < N; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { d2 = 1; dx = 1; }
+      if (d2 > 250000) continue;
+      const f = 900 / d2;
+      const d = Math.sqrt(d2), ux = dx / d, uy = dy / d;
+      a.vx += ux * f; a.vy += uy * f;
+      b.vx -= ux * f; b.vy -= uy * f;
+    }
+  }
+  for (const e of edges) {
+    const s = byId.get(e.source), t = byId.get(e.target);
+    if (!s || !t) continue;
+    const dx = t.x - s.x, dy = t.y - s.y;
+    const d = Math.max(1, Math.hypot(dx, dy));
+    const w = Math.min(1.6, 0.5 + e.weight * 0.08);
+    const f = springK * w * (d - springLen) / d;
+    s.vx += dx * f; s.vy += dy * f;
+    t.vx -= dx * f; t.vy -= dy * f;
+  }
+  for (const n of nodes) {
+    n.vx -= n.x * 0.0016; n.vy -= n.y * 0.0016;   // centering gravity
+    if (!n.fixed) {
+      n.x += n.vx * alpha; n.y += n.vy * alpha;
+    }
+    n.vx *= 0.6; n.vy *= 0.6;
+  }
+  alpha *= 0.994;
+}
+
+// ── rendering ───────────────────────────────────────────────────────────────
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const tip = document.getElementById("tip");
+let view = { x: 0, y: 0, k: 1 };
+let selected = null, hovered = null, searchHits = null;
+
+function css(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+let C = {};
+function refreshColors() {
+  C = { note: css("--note"), hub: css("--hub"), concept: css("--concept"),
+        edge: css("--edge"), semanticEdge: css("--semantic-edge"),
+        text: css("--text-primary"),
+        muted: css("--text-muted"), surface: css("--surface-1"),
+        ring: css("--accent-ring") };
+}
+refreshColors();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  refreshColors(); buildLegend();
+});
+
+function resize() {
+  const r = cv.parentElement.getBoundingClientRect();
+  cv.width = r.width * devicePixelRatio;
+  cv.height = r.height * devicePixelRatio;
+  cv.style.width = r.width + "px"; cv.style.height = r.height + "px";
+  if (view.x === 0 && view.y === 0) { view.x = r.width / 2; view.y = r.height / 2; }
+}
+addEventListener("resize", resize); resize();
+
+function neighborSet(id) {
+  const s = new Set([id]);
+  for (const e of adj.get(id) || []) { s.add(e.source); s.add(e.target); }
+  return s;
+}
+
+function draw() {
+  tick();
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.k, view.k);
+
+  const focus = selected ? neighborSet(selected.id) : null;
+
+  // edges
+  for (const e of edges) {
+    const s = byId.get(e.source), t = byId.get(e.target);
+    if (!s || !t) continue;
+    const inFocus = !focus || (focus.has(s.id) && focus.has(t.id) &&
+                    (s.id === selected.id || t.id === selected.id ||
+                     (focus.has(s.id) && focus.has(t.id))));
+    const organic = e.origin === "organic";
+    const semantic = e.origin === "semantic";
+    ctx.globalAlpha = focus
+      ? ((s.id === selected.id || t.id === selected.id) ? 0.85 : 0.05)
+      : (organic ? 0.85 : semantic ? 0.55 : 0.3);
+    ctx.strokeStyle = organic ? C.hub : semantic ? C.semanticEdge : C.edge;
+    ctx.setLineDash(organic ? [] : semantic ? [1.5 / view.k, 2.5 / view.k] : [4 / view.k, 3 / view.k]);
+    ctx.lineWidth = Math.min(3.2, (organic ? 1.0 : 0.5) + e.weight * 0.28) / view.k;
+    ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.globalAlpha = 1;
+
+  // nodes
+  for (const n of nodes) {
+    const r = radius(n);
+    const dim = (focus && !focus.has(n.id)) ||
+                (searchHits && !searchHits.has(n.id));
+    ctx.globalAlpha = dim ? 0.12 : 1;
+    ctx.fillStyle = C[n.type] || C.muted;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 7); ctx.fill();
+    // 2px surface ring separates overlapping marks
+    ctx.lineWidth = 2 / view.k; ctx.strokeStyle = C.surface; ctx.stroke();
+    if (n === selected || n === hovered) {
+      ctx.lineWidth = 2.5 / view.k; ctx.strokeStyle = C.ring; ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // selective direct labels: high-degree nodes, hovered, selected, hits
+  ctx.fillStyle = C.text;
+  ctx.font = `${11 / view.k}px system-ui, sans-serif`;
+  const labelFloor = 12;
+  for (const n of nodes) {
+    const dim = (focus && !focus.has(n.id)) ||
+                (searchHits && !searchHits.has(n.id));
+    if (dim) continue;
+    if (n.degree >= labelFloor || n === selected || n === hovered ||
+        (searchHits && searchHits.has(n.id)) ||
+        (focus && focus.has(n.id) && view.k > 0.9)) {
+      ctx.fillText(trunc(n.label, 34), n.x + radius(n) + 3 / view.k, n.y + 3 / view.k);
+    }
+  }
+  requestAnimationFrame(draw);
+}
+function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+// ── interaction ─────────────────────────────────────────────────────────────
+function toWorld(px, py) {
+  return { x: (px - view.x) / view.k, y: (py - view.y) / view.k };
+}
+function pick(px, py) {
+  const w = toWorld(px, py);
+  let best = null, bestD = Infinity;
+  for (const n of nodes) {
+    const d = Math.hypot(n.x - w.x, n.y - w.y);
+    const hit = Math.max(radius(n) + 3, 8 / view.k);   // generous hit target
+    if (d < hit && d < bestD) { best = n; bestD = d; }
+  }
+  return best;
+}
+let drag = null, panning = null;
+cv.addEventListener("pointerdown", ev => {
+  cv.setPointerCapture(ev.pointerId);
+  const n = pick(ev.offsetX, ev.offsetY);
+  if (n) { drag = n; n.fixed = true; alpha = Math.max(alpha, 0.25); }
+  else panning = { x: ev.offsetX, y: ev.offsetY, vx: view.x, vy: view.y };
+  cv.classList.add("dragging");
+});
+cv.addEventListener("pointermove", ev => {
+  if (drag) {
+    const w = toWorld(ev.offsetX, ev.offsetY);
+    drag.x = w.x; drag.y = w.y; alpha = Math.max(alpha, 0.12);
+    tip.style.display = "none"; return;
+  }
+  if (panning) {
+    view.x = panning.vx + (ev.offsetX - panning.x);
+    view.y = panning.vy + (ev.offsetY - panning.y);
+    tip.style.display = "none"; return;
+  }
+  const n = pick(ev.offsetX, ev.offsetY);
+  hovered = n;
+  if (n) {
+    tip.style.display = "block";
+    tip.style.left = (ev.offsetX + 14) + "px";
+    tip.style.top = (ev.offsetY + 10) + "px";
+    tip.innerHTML = `<strong>${esc(n.label)}</strong><br>` +
+      `<span class="k">${n.type} · ${esc(n.subtype || "")} · ` +
+      `${n.degree} edge${n.degree === 1 ? "" : "s"}</span>`;
+  } else tip.style.display = "none";
+});
+cv.addEventListener("pointerup", ev => {
+  if (drag) {
+    const moved = Math.hypot(drag.vx, drag.vy);
+    drag.fixed = false;
+    if (!panning && moved < 50) { /* click-ish handled below */ }
+  }
+  drag = null; panning = null; cv.classList.remove("dragging");
+});
+cv.addEventListener("click", ev => {
+  const n = pick(ev.offsetX, ev.offsetY);
+  select(n);
+});
+cv.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const f = Math.exp(-ev.deltaY * 0.0016);
+  const k2 = Math.min(6, Math.max(0.12, view.k * f));
+  view.x = ev.offsetX - (ev.offsetX - view.x) * (k2 / view.k);
+  view.y = ev.offsetY - (ev.offsetY - view.y) * (k2 / view.k);
+  view.k = k2;
+}, { passive: false });
+
+// ── sidebar ─────────────────────────────────────────────────────────────────
+const panel = document.getElementById("panel");
+function esc(s) {
+  return String(s).replace(/[&<>"]/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function select(n) {
+  selected = n;
+  if (!n) {
+    panel.innerHTML = `<h2>Nothing selected</h2>
+      <p class="hint">Click a node to see its type, source file, and every
+      edge it participates in.</p>`;
+    return;
+  }
+  const typeLabel = n.type === "hub" ? "entity hub"
+    : n.type === "concept" ? "concept" : "note";
+  const rows = [["type", `${typeLabel} (${n.subtype || "—"})`]];
+  if (n.definition) rows.push(["definition", n.definition]);
+  if (n.source_file) rows.push(["source", n.source_file]);
+  rows.push(["links", n.degree]);
+
+  // 2026-08-12 (rev 4): meta.file_open_base is an absolute URL, and
+  // hardcoding ANY specific hostname there breaks whichever context isn't
+  // that exact host -- rev 3 hardcoded the public demo domain, which
+  // broke internal (Tailscale) use. Fix: when this page is iframed (the
+  // normal PWA case, GraphView.jsx), use a SAME-ORIGIN RELATIVE path
+  // instead -- it inherits whatever host is actually serving the PWA
+  // right now (internal Tailscale hostname, public demo domain, whatever)
+  // with no hardcoding at all. meta.file_open_base is only the fallback
+  // for the standalone vault-hosted copy, which has no parent origin to
+  // inherit from.
+  const iframed = window.self !== window.top;
+  const openBase = iframed ? "/api/dispatch/api/v1/vault/file?path=" : meta.file_open_base;
+  let openLink = "";
+  if (n.source_file && openBase) {
+    const url = `${openBase}${encodeURIComponent(n.source_file)}`;
+    openLink = `<a class="nb open-link" href="${esc(url)}" target="_blank" rel="noopener">Open file &rarr;</a>`;
+  }
+
+  const groups = new Map();
+  for (const e of adj.get(n.id)) {
+    const otherId = e.source === n.id ? e.target : e.source;
+    const other = byId.get(otherId);
+    if (!other) continue;
+    const g = e.origin === "organic" ? "organic links" : "retrofitted links";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push({ other, w: e.weight });
+  }
+  let html = `<h2>${esc(n.label)}</h2>
+    <div class="sub">${esc(n.id)}</div>
+    <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${openLink}`;
+  for (const [type, list] of groups) {
+    list.sort((a, b) => b.w - a.w);
+    html += `<h3>${esc(type)} (${list.length})</h3>` + list.slice(0, 60).map(x =>
+      `<button class="nb" data-id="${esc(x.other.id)}">
+         <span class="sw" style="background:${C[x.other.type] || C.muted}"></span>
+         <span>${esc(trunc(x.other.label, 44))}</span>
+         <span class="rel">w ${x.w}</span></button>`).join("");
+    if (list.length > 60) html += `<p class="hint">…and ${list.length - 60} more</p>`;
+  }
+  panel.innerHTML = html;
+  panel.querySelectorAll(".nb").forEach(b =>
+    b.addEventListener("click", () => {
+      const t = byId.get(b.dataset.id);
+      if (t) { select(t); view.x = cv.clientWidth / 2 - t.x * view.k;
+               view.y = cv.clientHeight / 2 - t.y * view.k; }
+    }));
+}
+
+// ── search ──────────────────────────────────────────────────────────────────
+document.getElementById("search").addEventListener("input", ev => {
+  const q = ev.target.value.trim().toLowerCase();
+  if (!q) { searchHits = null; return; }
+  searchHits = new Set(nodes.filter(n =>
+    n.label.toLowerCase().includes(q) ||
+    (n.source_file || "").toLowerCase().includes(q)).map(n => n.id));
+});
+
+// ── legend + meta ───────────────────────────────────────────────────────────
+function buildLegend() {
+  const counts = { note: 0, hub: 0, concept: 0 };
+  for (const n of nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+  const organicEdges = edges.filter(e => e.origin === "organic").length;
+  const semanticEdges = edges.filter(e => e.origin === "semantic").length;
+  const retrofitEdges = edges.length - organicEdges - semanticEdges;
+  document.getElementById("legend").innerHTML =
+    [["note", "notes"], ["hub", "entity hubs"], ["concept", "concepts"]].map(
+      ([t, lbl]) => `<span><span class="sw" style="background:${C[t]}"></span>
+        ${counts[t] || 0} ${lbl}</span>`).join("") +
+    `<span>— solid: ${organicEdges} organic · dashed: ${retrofitEdges} ` +
+    `retrofit · dotted: ${semanticEdges} semantic</span>`;
+}
+buildLegend();
+document.getElementById("metabar").textContent =
+  `Generated ${meta.generated_at} · ${meta.node_count} notes / ` +
+  `${meta.edge_count} wikilink edges (${meta.organic_links} organic + ` +
+  `${meta.retrofit_links} retrofitted raw links, ` +
+  `${meta.unresolved_links} unresolved) · ${meta.isolated_notes} isolated ` +
+  `notes · edges are real [[wikilinks]] in the markdown — the retrofit ` +
+  `backfilled the wiki layer the ingestion pipeline never emitted · ` +
+  `+${meta.semantic_concept_nodes || 0} semantic-layer concepts / ` +
+  `${meta.semantic_concept_edges || 0} concept edges (broader/related/` +
+  `in-domain/tagged) overlaid from second_brain.semantic`;
+
+requestAnimationFrame(draw);
+</script>

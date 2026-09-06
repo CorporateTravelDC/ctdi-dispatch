@@ -1,0 +1,22 @@
+[Unit]
+Description=Every 60s -- probe both uplinks, fail the default route over to the backup if the primary is dead, fail back when it recovers
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+# 60s with a 3-strike threshold = ~3 min to fail over. The incident this
+# was built for lasted ~100 minutes with no failover at all, so a 3-min
+# detection floor is a large win; going faster mostly buys route flapping
+# on transient blips.
+OnCalendar=*:*:0
+# Persistent=false: a catch-up run after downtime is pointless here (the
+# check is instantaneous and stateless w.r.t. missed windows), and a
+# catch-up firing during boot is exactly the load this box does not need
+# while the boot-stagger sequences are still running.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

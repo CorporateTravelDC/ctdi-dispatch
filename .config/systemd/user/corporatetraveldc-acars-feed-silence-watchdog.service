@@ -1,0 +1,6 @@
+[Unit]
+Description=Watch acarsrouter ACARS/VDLM/HFDL channels for a previously-active channel going silent (2026-08-03)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/acars-feed-silence-watchdog.sh

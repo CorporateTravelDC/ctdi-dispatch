@@ -1,0 +1,62 @@
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-docgen" \
+      org.opencontainers.image.description="Corporate Travel DC Dispatch — second_brain.doc_generation renderer (markdown -> docx/pptx/PDF)"
+
+WORKDIR /app
+
+# 2026-09-04: dedicated image for second_brain.doc_generation's to_pdf()
+# step -- LibreOffice headless (`soffice --convert-to pdf`) is not, and
+# should not be, baked into corporatetraveldc-poller: it's ~200MB+ even
+# scoped to just Writer+Impress, and poller runs 30+ unrelated scheduled
+# skills that never touch a document-rendering codepath. Same "dedicated
+# on-demand tooling container, not baked into an always-loaded image"
+# pattern as scripts/wrangler-container.sh's node:20-alpine use.
+# gnupg: same reason as Containerfile.poller (scripts/verify-manifest.sh).
+# --no-install-recommends keeps this to the Writer/Impress conversion
+# filters only, not the full office suite (Base, Calc's extra locale
+# packs, clipart, etc.) -- docx/pptx -> PDF is the only conversion this
+# image is ever asked to do.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        gnupg \
+        libreoffice-writer \
+        libreoffice-impress \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=10
+
+# Deliberately NOT the full requirements.txt (poller's whole skill-
+# scheduler dependency set) -- this image only ever runs
+# second_brain.doc_generation + webdav_client, so its dependency surface
+# is scoped to exactly what those two modules import.
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir \
+        "requests>=2.32.0" \
+        "python-docx>=1.1.0" \
+        "python-pptx>=0.6.23"
+
+# Full src/ tree (not just second_brain/+common/), even though this image
+# only ever runs second_brain.doc_generation -- scripts/verified-exec.sh's
+# integrity check is hardcoded to scope "src/" as a whole (not
+# parameterized per-image), so a partial copy would fail closed with
+# false "file not found" mismatches for everything not copied in, same
+# bug class its own comment already documents avoiding for Containerfile.
+# poller. LibreOffice's ~200MB already dominates this image's size, so
+# the marginal cost of the full tree is negligible by comparison.
+COPY src/ src/
+COPY scripts/verify-manifest.sh scripts/verify-manifest.sh
+COPY scripts/verified-exec.sh scripts/verified-exec.sh
+COPY security/trusted-signing-key.pub.asc security/trusted-signing-key.pub.asc
+COPY security/signing.env security/signing.env
+COPY MANIFEST.sha256 MANIFEST.sha256.asc ./
+RUN chmod +x scripts/verify-manifest.sh scripts/verified-exec.sh
+
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# No CMD -- always invoked on-demand with an explicit command, same
+# convention as scripts/wrangler-container.sh's node:20-alpine, never a
+# resident/scheduled service of its own.

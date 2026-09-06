@@ -1,0 +1,6 @@
+[Unit]
+Description=Check corporatetraveldc-runner.service is active; self-heal + alert loudly (ntfy + email) if not (2026-09-05)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/runner-health-watchdog.sh

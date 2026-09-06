@@ -1,0 +1,61 @@
+module corporatetraveldc-fail2ban-lockdown 1.0;
+
+# fail2ban's actionban/actionunban (jail.d/nginx-limit-req-corporatetraveldc.conf,
+# action.d/corporatetraveldc-lockdown.conf) invoke scripts/lockdown.sh and
+# scripts/restore-network.sh from fail2ban_t, not unconfined_t. Confirmed
+# live 2026-07-10 via a full enforcing sweep: direct root invocation of
+# these scripts produces zero denials, but the SAME scripts invoked through
+# fail2ban's ban/unban lifecycle are denied. Two rounds of this so far
+# (cascading -- fixing the dir search surfaced a file-level getattr denial
+# on the one path the scripts actually stat before acting):
+#   - search on systemd_unit_file_t (dir): blocks reaching
+#     /etc/systemd/system/ollama.service.d/ at all, and blocks
+#     `systemctl daemon-reload`/`restart`.
+#   - getattr on systemd_unit_file_t (file): blocks
+#     `[[ -f "$OLLAMA_BINDING_CONF" ]]` -- silently short-circuits the
+#     Ollama bind revert to a no-op (bash's -f test reads EACCES as "not a
+#     file", not as an error), which is worse than a loud failure.
+#   - search on user_home_dir_t: blocks reaching
+#     /home/corporatetraveldc/.config/containers/systemd/*.container and
+#     containers.conf (the actual files the scripts edit).
+#   - name_connect on http_port_t: blocks the ntfy incident notification
+#     (curl to 127.0.0.1:2586).
+#
+# Round 3 (2026-08-09, discovered incidentally while wiring the honeypot's
+# Cloudflare-edge ban action -- `ausearch -m avc -se fail2ban_t` surfaced
+# these as still-pending fail2ban_t denials from the SAME lockdown.sh/
+# restore-network.sh path, unrelated to the Cloudflare work itself):
+#   - getattr on systemd_systemctl_exec_t (file): blocks lockdown.sh from
+#     even stat-ing /usr/bin/systemctl before invoking it, short-circuiting
+#     `systemctl daemon-reload`/`restart` before the exec attempt.
+#   - write on systemd_unit_file_t (dir): blocks the sed -i temp-file+rename
+#     sequence used to edit ollama.service.d/10-binding.conf in place.
+#   - ioctl on systemd_unit_file_t (file): sed's own ioctl probe on the file
+#     it's about to rewrite (isatty/blocksize-style checks), denied even
+#     after the round-2 getattr/open/read grants above.
+# This is the "another round or two" the comment above predicted -- same
+# mechanism, no new script, no new action, just the actual sed -i sequence
+# finally surfacing the rest of what it touches.
+#
+# Scoped to exactly these grants for fail2ban_t -- not a broader domain
+# transition or an unconfined exec, matching the same
+# narrowest-scope-that-resolves-it principle as every other module in this
+# repo (see COMPLIANCE_SECURITY.md's "SELinux Grant Policy").
+
+require {
+	type fail2ban_t;
+	type systemd_unit_file_t;
+	type user_home_dir_t;
+	type http_port_t;
+	type systemd_systemctl_exec_t;
+	class dir { search write };
+	class file { getattr open read ioctl };
+	class tcp_socket name_connect;
+}
+
+#============= fail2ban_t ==============
+allow fail2ban_t systemd_unit_file_t:dir { search write };
+allow fail2ban_t systemd_unit_file_t:file { getattr open read ioctl };
+allow fail2ban_t user_home_dir_t:dir search;
+allow fail2ban_t http_port_t:tcp_socket name_connect;
+allow fail2ban_t systemd_systemctl_exec_t:file getattr;

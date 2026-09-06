@@ -1,0 +1,6 @@
+[Unit]
+Description=Cowork daily refresh-checkpoint backup (board coord thread + operator ping)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/cowork-coord-24h-check.sh

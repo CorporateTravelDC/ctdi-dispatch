@@ -1,0 +1,20 @@
+[Unit]
+Description=Corporate Travel DC -- dispatch-side board sweep (poll coord/research threads for new to:dispatch coordination messages)
+
+[Container]
+Memory=256m
+PodmanArgs=--memory-swap=256m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/skills/board_sweep.py
+
+[Service]
+Slice=production.slice
+MemoryLow=85M
+Type=oneshot
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

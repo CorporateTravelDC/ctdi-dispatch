@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Derived from the REAL captured fdps_debug_fixm30/sample_4.xml (live
+capture 2026-08-31T02:39:11.319Z, JIA5230 KDCA->KBTR): every attribute
+and element below is verbatim from that capture. The ORIGINAL file was
+overwritten minutes after capture by the test-process capture-writer bug
+tests/ingest/conftest.py now fixes; elements of the original that were
+not on record when it was lost (an <assignedAltitude> block and
+capabilities/accuracy details irrelevant to the parser) are OMITTED here
+rather than guessed at. This is the only surviving copy of the filed
+half of a real HU/AH agreed-route re-expression pair.
+-->
+<ns5:MessageCollection xmlns:ns5="http://www.faa.aero/nas/3.0" xmlns:ns2="http://www.fixm.aero/base/3.0" xmlns:ns3="http://www.fixm.aero/flight/3.0" xmlns:ns4="http://www.fixm.aero/foundation/3.0">
+    <message xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:FlightMessageType">
+        <flight xsi:type="ns5:NasFlightType" flightType="SCHEDULED" centre="ZME" source="HU" system="ATL" timestamp="2026-08-31T02:39:11.319Z">
+            <agreed>
+                <route xsi:type="ns5:NasRouteType" nasRouteText="KDCA.CLTCH3.MAULS.Q40.NIOLA..MCB..KBTR/0319" initialFlightRules="IFR"/>
+            </agreed>
+            <aircraftDescription xsi:type="ns5:NasAircraftType" equipmentQualifier="L" aircraftAddress="A7F3AE" registration="N611NN" wakeTurbulence="M">
+                <aircraftType>
+                    <icaoModelIdentifier>CRJ9</icaoModelIdentifier>
+                </aircraftType>
+            </aircraftDescription>
+            <arrival xsi:type="ns5:NasArrivalType" arrivalPoint="KBTR">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <estimated time="2026-08-31T03:19:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </arrival>
+            <departure xsi:type="ns5:NasDepartureType" departurePoint="KDCA">
+                <runwayPositionAndTime>
+                    <runwayTime>
+                        <actual time="2026-08-31T01:15:00Z"/>
+                    </runwayTime>
+                </runwayPositionAndTime>
+            </departure>
+            <enRoute xsi:type="ns5:NasEnRouteType">
+                <beaconCodeAssignment>
+                    <currentBeaconCode>3617</currentBeaconCode>
+                </beaconCodeAssignment>
+            </enRoute>
+            <flightIdentification xsi:type="ns5:NasFlightIdentificationType" computerId="626" siteSpecificPlanId="117" aircraftIdentification="JIA5230"/>
+            <flightStatus xsi:type="ns5:NasFlightStatusType" fdpsFlightStatus="ACTIVE"/>
+            <gufi codeSpace="urn:uuid">AAA01234-5678-9abc-def0-000000000027</gufi>
+            <operator>
+                <operatingOrganization>
+                    <organization name="JIA"/>
+                </operatingOrganization>
+            </operator>
+            <supplementalData xsi:type="ns5:NasSupplementalDataType">
+                <additionalFlightInformation>
+                    <nameValue name="MSG_SEQ_NO" value="14821855"/>
+                    <nameValue name="FDPS_GUFI" value="us.fdps.2026-08-30T23:35:38Z.000/22/1Cg"/>
+                    <nameValue name="FLIGHT_PLAN_SEQ_NO" value="6"/>
+                    <nameValue name="SOURCE_TIME_AND_SEQ" value="0239119994"/>
+                    <nameValue name="SOURCE_TIME" value="02_39_11"/>
+                    <nameValue name="FLIGHT_PLAN_REV_NO" value="00"/>
+                </additionalFlightInformation>
+            </supplementalData>
+        </flight>
+    </message>
+</ns5:MessageCollection>

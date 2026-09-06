@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ollama-keepwarm every 2 minutes
+Requires=corporatetraveldc-ollama-keepwarm.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

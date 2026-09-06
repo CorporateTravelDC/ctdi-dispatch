@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull-path connectivity/validity probe every 12h -- confirms each PULL fallback endpoint still works, independent of push freshness
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*-*-* 06,18:00:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

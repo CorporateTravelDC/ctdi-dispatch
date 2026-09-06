@@ -1,0 +1,53 @@
+[Unit]
+Description=Corporate Travel DC -- second-brain RSS poller (seeded from shared rss_catalog, 2026-07-28)
+
+[Container]
+Memory=512m
+# 2026-08-06: previously unguarded -- per-item RSS ingest loop, not a single large narrative generation -- lighter footprint.
+# Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
+# runaway here gets a clean OOM-kill instead of swap-thrashing the
+# whole box -- same pattern as every other production container.
+PodmanArgs=--memory-swap=512m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# Nextcloud WebDAV (port 8090) is published on 127.0.0.1 only, by
+# design (nginx-fronted) -- host.containers.internal cannot reach a
+# strictly loopback-bound service under any pasta flag (see
+# docs/COMPLIANCE_SECURITY.md, "Container Network Isolation"). Rather
+# than widening Nextcloud's bind or granting this container the
+# host's full network stack, reach Nextcloud through the *existing*
+# nginx vhost for cloud.example.com, which already listens
+# on 0.0.0.0:80 and proxies to 127.0.0.1:8090 -- the same sanctioned
+# ingress real WebDAV clients use, just via the internal alias instead
+# of the public path. That is a 0.0.0.0-bound host service, so the
+# documented per-container opt-in applies: Network=pasta:--map-gw
+# restores host.containers.internal for this container only (same
+# pattern as corporatetraveldc-pusher.container reaching ntfy). No
+# change to Nextcloud's publish scope, no host networking.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/skills/second_brain_rss.py
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=170M
+Type=oneshot
+# 2026-08-17 (fable sweep): 300 -> 900. Real failure today 14:16 EDT: the
+# first successful-image run after 8 consecutive integrity-fast-fails
+# (22:10 08-16 .. 12:10 08-17, inconsistent 22:07 image) had ~16h of feed
+# backlog and was killed by this ceiling at 6min31s wall. Normal runs are
+# 1-70s; 900s covers backlog-recovery runs without masking a real hang.
+TimeoutStartSec=900
+
