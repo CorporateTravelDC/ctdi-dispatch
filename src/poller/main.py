@@ -11,6 +11,7 @@ Poller also watches the trigger directory for admin-issued manual refresh comman
 import asyncio
 import json
 import logging
+import os
 import pathlib
 import signal
 import subprocess
@@ -109,6 +110,23 @@ SKILL_SCHEDULE: list[dict] = [
 # Must exceed ingest heartbeat interval (30s) with margin to avoid flapping.
 FALLBACK_MAX_AGE = 90  # seconds
 
+# 2026-09-06 (operator directive): NOTHING fires immediately on a restart.
+# Every FetchLoop/SkillLoop used to start with _last_run = 0.0, so on the
+# first 10 s tick after any start every fetcher, every skill (8 of them,
+# several LLM-backed) and every piled-up trigger file ran at once -- on top
+# of the SWIM feeds draining their durable-queue backlog. Measured
+# 2026-09-06: that cold-start burst is ~+20 load1 on a 4-core box whose
+# baseline is 15-20 whenever an LLM job is alive, i.e. it crosses the
+# thermal-ingest-guard's LOCKDOWN line (40) about half the time, and last
+# night the same burst drew a 429 from the FAA NMS API. Now: a hold-off
+# after start during which no scheduled job, trigger or sweep runs, then a
+# fixed stagger so jobs become eligible one at a time instead of all at
+# once. Both tunable via dispatch.env; defaults chosen so a 300 s fetcher
+# first fires ~2-5 min after start and the guard's 2-min cycle sees the
+# ingest backlog drain and the poller's first jobs as separate humps.
+POLLER_STARTUP_HOLDOFF_S = float(os.environ.get("POLLER_STARTUP_HOLDOFF_S", "120"))
+POLLER_STARTUP_STAGGER_S = float(os.environ.get("POLLER_STARTUP_STAGGER_S", "15"))
+
 
 class FetchLoop:
     """Runs a fetcher function on a fixed interval.
@@ -130,6 +148,10 @@ class FetchLoop:
         self.active_interval = active_interval  # faster cadence when trip leg active
         self.active_check = active_check        # watchlist session_type: 'train'|'flight'
         self._last_run = 0.0
+        # 2026-09-06: earliest wall-clock time this job may run at all; set
+        # by main() to boot + hold-off + this job's stagger slot. Until then
+        # maybe_run() is a no-op -- see POLLER_STARTUP_HOLDOFF_S.
+        self.not_before = 0.0
 
     def _effective_interval(self) -> int:
         """Return active_interval if a matching watchlist session is live, else interval."""
@@ -144,6 +166,8 @@ class FetchLoop:
 
     async def maybe_run(self) -> None:
         now = time.time()
+        if now < self.not_before:
+            return
         if now - self._last_run < self._effective_interval():
             return
         if self.push_feed and failover.push_is_healthy(self.push_feed, FALLBACK_MAX_AGE):
@@ -185,6 +209,7 @@ class SkillLoop:
         self.active_check = active_check
         self.timeout = timeout
         self._last_run = 0.0
+        self.not_before = 0.0  # 2026-09-06: see FetchLoop.not_before
         self._task: asyncio.Task | None = None
 
     def _effective_interval(self) -> int:
@@ -199,6 +224,8 @@ class SkillLoop:
 
     async def maybe_run(self, src_dir: Path) -> None:
         now = time.time()
+        if now < self.not_before:
+            return
         if now - self._last_run < self._effective_interval():
             return
         if self._task is not None and not self._task.done():
@@ -246,9 +273,20 @@ class TriggerReactor:
     def __init__(self, trigger_dir: Path, src_dir: Path):
         self.trigger_dir = trigger_dir
         self.src_dir = src_dir
+        self.not_before = 0.0  # 2026-09-06: see FetchLoop.not_before
 
     async def process(self) -> None:
+        if time.time() < self.not_before:
+            return
         self.trigger_dir.mkdir(parents=True, exist_ok=True)
+        # 2026-09-06: coalesce piled-up refresh_feed triggers per feed. While
+        # the poller is down (LOCKDOWN shed, restart) the kickover guardrail
+        # keeps dropping one refresh_feed per feed every 5 min; on the next
+        # start every one of them ran -- 18 back-to-back NOTAM pulls last
+        # night, which is what earned the FAA NMS API's 429. One fetch of a
+        # feed satisfies every queued request for it; the extra trigger rows
+        # resolve as success with a note instead of each hitting the API.
+        seen_feeds: set[str] = set()
         for path in sorted(self.trigger_dir.glob("*.json")):
             try:
                 data = json.loads(path.read_text())
@@ -256,6 +294,16 @@ class TriggerReactor:
                 trigger_type = data.get("type")
                 payload = data.get("payload", {})
                 path.unlink(missing_ok=True)  # Consume trigger file.
+
+                if trigger_type == "refresh_feed":
+                    feed = payload.get("feed_name")
+                    if feed in seen_feeds:
+                        log.info("Trigger %s: refresh_feed %s coalesced into the "
+                                 "fetch already run this pass", trigger_id, feed)
+                        db.resolve_trigger(trigger_id, "success",
+                                           f"coalesced: {feed} already refreshed this pass")
+                        continue
+                    seen_feeds.add(feed)
 
                 log.info("Trigger %s: %s", trigger_id, trigger_type)
                 await self._dispatch(trigger_id, trigger_type, payload)
@@ -352,6 +400,7 @@ class WatchlistSweep:
     # NOT a full-download interval like FAA_REGISTRY_INTERVAL above.
 
     def __init__(self) -> None:
+        self.not_before = 0.0  # 2026-09-06: see FetchLoop.not_before
         self._last_expiry = 0.0
         self._last_flight = 0.0
         self._last_train = 0.0
@@ -392,6 +441,8 @@ class WatchlistSweep:
 
     async def run_all(self) -> None:
         now = time.time()
+        if now < self.not_before:
+            return
         if now - self._last_expiry >= self.EXPIRY_INTERVAL:
             self._last_expiry = now
             await asyncio.get_event_loop().run_in_executor(None, self._do_expiry_sweep)
@@ -1897,6 +1948,27 @@ async def main() -> None:
     skills = [SkillLoop(**s) for s in SKILL_SCHEDULE]
     reactor = TriggerReactor(trigger_dir, src_dir)
     watchlist_sweep = WatchlistSweep()
+
+    # 2026-09-06 restart hold-off (operator directive: nothing may fire
+    # immediately on a restart). Every loop gets a slot: nothing before
+    # boot+HOLDOFF, then fetchers one per STAGGER, skills continuing the
+    # same sequence after the last fetcher. Triggers and watchlist sweeps
+    # are held until the plain HOLDOFF. Set POLLER_STARTUP_HOLDOFF_S=0 to
+    # get the old fire-everything-at-t0 behaviour back.
+    boot = time.time()
+    slot = 0
+    for f in fetchers:
+        f.not_before = boot + POLLER_STARTUP_HOLDOFF_S + slot * POLLER_STARTUP_STAGGER_S
+        slot += 1
+    for s in skills:
+        s.not_before = boot + POLLER_STARTUP_HOLDOFF_S + slot * POLLER_STARTUP_STAGGER_S
+        slot += 1
+    reactor.not_before = boot + POLLER_STARTUP_HOLDOFF_S
+    watchlist_sweep.not_before = boot + POLLER_STARTUP_HOLDOFF_S
+    last_slot_s = POLLER_STARTUP_HOLDOFF_S + max(slot - 1, 0) * POLLER_STARTUP_STAGGER_S
+    log.info("Startup hold-off: no fetch/skill/trigger/sweep for %.0fs; %d loops "
+             "staggered %.0fs apart, last slot at +%.0fs",
+             POLLER_STARTUP_HOLDOFF_S, slot, POLLER_STARTUP_STAGGER_S, last_slot_s)
 
     # Start permanent watchlist file watcher.
     watcher_stop = threading.Event()

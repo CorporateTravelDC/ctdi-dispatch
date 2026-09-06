@@ -16,9 +16,20 @@ import common.db as db
 
 def _isolated_db(tmp_path):
     orig_db_path = db._db_path
+    # conn() caches one connection per thread (2026-09-04). Without dropping
+    # it, the main thread keeps using the FIRST temp DB of the process while
+    # fresh worker threads open the newly patched path -> the concurrent
+    # test's 20 workers all see "invalid" (0 winners) rather than the race.
+    db.close_thread_connection()
     db._db_path = lambda: Path(tmp_path)
     db.init_db_all()
     return orig_db_path
+
+
+def _restore(orig_db_path, tmp_name):
+    db.close_thread_connection()
+    db._db_path = orig_db_path
+    Path(tmp_name).unlink(missing_ok=True)
 
 
 def test_sequential_reuse_is_rejected():
@@ -33,8 +44,7 @@ def test_sequential_reuse_is_rejected():
         assert second["status"] == "consumed"
         assert first["token"] != second.get("token")
     finally:
-        db._db_path = orig
-        Path(tmp.name).unlink(missing_ok=True)
+        _restore(orig, tmp.name)
 
 
 def test_concurrent_consume_mints_exactly_one_token():
@@ -68,8 +78,7 @@ def test_concurrent_consume_mints_exactly_one_token():
         )
         assert len(consumed_results) == 19
     finally:
-        db._db_path = orig
-        Path(tmp.name).unlink(missing_ok=True)
+        _restore(orig, tmp.name)
 
 
 def test_invalid_nonce_reports_invalid():
@@ -80,8 +89,7 @@ def test_invalid_nonce_reports_invalid():
         result = db.board_consume_nonce("bnc_this-was-never-minted")
         assert result["status"] == "invalid"
     finally:
-        db._db_path = orig
-        Path(tmp.name).unlink(missing_ok=True)
+        _restore(orig, tmp.name)
 
 
 def test_expired_nonce_reports_expired():
@@ -93,5 +101,4 @@ def test_expired_nonce_reports_expired():
         result = db.board_consume_nonce(minted["nonce"])
         assert result["status"] == "expired"
     finally:
-        db._db_path = orig
-        Path(tmp.name).unlink(missing_ok=True)
+        _restore(orig, tmp.name)

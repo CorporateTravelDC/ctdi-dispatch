@@ -1,5 +1,11 @@
 [Unit]
-Description=Run transport-pattern-digest every 12 hours -- offset to :25 so it never lands on top of ops-brief (:00) or second-brain-rss (:10)
+Description=Run transport-pattern-digest once nightly at 00:25 ET (overnight-only window; was every 12h)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): the 12:25 daytime run is
+# retired -- it timed out at its 28-min cap today (12:25-12:53 EDT) under
+# load 28 while queued behind the daily watches on the report LLM. The
+# 00:25 run stays (:25 keeps it off ops-brief :05 / second-brain-rss :10
+# / second-brain-daily 23:45). Persistent=false so a missed night is
+# skipped, not replayed at the next daytime boot.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -7,8 +13,8 @@ Description=Run transport-pattern-digest every 12 hours -- offset to :25 so it n
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=*-*-* 0/12:25:00 America/New_York
-Persistent=true
+OnCalendar=*-*-* 00:25:00 America/New_York
+Persistent=false
 
 [Install]
 WantedBy=timers.target

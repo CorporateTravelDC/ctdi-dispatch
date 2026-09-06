@@ -753,53 +753,22 @@ def ollama_post_with_retry(
             timeout=timeout,
         )
 
-    try:
-        if tier == "hot":
-            resp = _post(llama_pool.HOT_PORT)
-        else:
-            # 2026-08-27: "chat" AND "report" both route to the permanent
-            # chat port for now. Dedicated report-tier ports
-            # (corporatetraveldc-llama-report-1/2.service,
-            # llama_pool.claim_port()) caused two real near-OOM incidents
-            # tonight when started alongside hot+chat -- see those units'
-            # own comments and llama_pool.py's module docstring. Sharing
-            # chat's single slot means a report job and an interactive
-            # chat message can queue behind each other, a real fidelity
-            # loss the operator explicitly accepted in exchange for not
-            # risking a third incident. Revisit dedicated report ports in
-            # a calmer session now that Ollama (and its governor) are
-            # fully stopped and no longer competing for the ~4-7GB they
-            # used to hold.
-            #
-            # 2026-08-30 (revisited, operator-approved): the 2026-08-27
-            # share-chat's-slot compromise silently BROKE every persona
-            # whose declared num_ctx exceeds chat's launch-time -c 4096 --
-            # llama-server rejects the request outright ("request (5908
-            # tokens) exceeds the available context size (4096 tokens)",
-            # ep-advance's real main brief, root-caused tonight in
-            # llama-chat's own journal), so ep-advance / dispatch-desk-memo
-            # / secondbrain-weekly ran deterministic-fallback-only for
-            # days. Fix: route by the calling persona's own declared
-            # num_ctx (personas.py, the same signed-manifest-protected
-            # registry that already provisions each persona) -- anything
-            # needing more ctx than chat was launched with goes to
-            # report-1 (REPORT_PORTS[0], -c 8192 = REPORT_POOL_NUM_CTX).
-            # No skill list to maintain; the routing can't drift from what
-            # a persona actually declares. report-1 is NOT resident: the
-            # three >4096 consumers' own quadlets start it on demand via
-            # host-level ExecStartPre and stop it via a guarded
-            # ExecStopPost (scripts/llama-report-ondemand.sh -- the
-            # container/host privilege boundary that killed the elastic
-            # pool design doesn't apply to quadlet hooks, which run on the
-            # host). PERSONAS["chat"]["num_ctx"] is the comparison point
-            # because llama-chat.service's -c is deliberately kept equal
-            # to it (see that unit's own comment).
-            if PERSONAS[persona_key]["num_ctx"] > PERSONAS["chat"]["num_ctx"]:
-                resp = _post(llama_pool.REPORT_PORTS[0])
-            else:
-                resp = _post(llama_pool.CHAT_PORT)
-    except llama_pool.PoolBusyError as exc:
-        raise OllamaBusyError(str(exc)) from exc
+    # 2026-09-06 (operator directive): ONE llama-server, one model resident,
+    # two slots, CPUQuota=200% -- see llama_pool.py's module docstring for
+    # the full rule set. The earlier per-tier ports (2026-08-27) and the
+    # on-demand report-1 routing by num_ctx (2026-08-30) are gone: the one
+    # server is launched with a unified KV pool large enough for the
+    # largest report persona (8192) plus a hot request beside it. Routing
+    # is now slot DISCIPLINE, not port selection:
+    #   hot / chat  -> post immediately (fast lane, second slot is theirs)
+    #   everything  -> hold the box-wide long-runner lock for the request:
+    #   else           one report in flight, ever; the next one WAITS and
+    #                  is never refused, never preempted, never killed.
+    if tier in ("hot", "chat"):
+        resp = _post(llama_pool.LLAMA_PORT)
+    else:
+        with llama_pool.long_runner_lock(persona_key) as port:
+            resp = _post(port)
 
     # 2026-08-30: surface llama-server's own error body before raising --
     # httpx's HTTPStatusError message carries only the status + URL, so a

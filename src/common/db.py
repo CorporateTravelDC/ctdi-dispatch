@@ -580,31 +580,118 @@ def board_consume_nonce(nonce: str) -> dict:
     return {"status": "ok", "token": token, "expires_at": texp, "scope": "board-write"}
 
 
-def board_token_valid(presented: str) -> bool:
-    """True if `presented` is a minted board-write token that hasn't expired.
+BOARD_SCOPE_WRITE = "board-write"
+BOARD_SCOPE_READ = "board-read"
+# Scope lattice: a write token satisfies every requirement (write ⊇ read);
+# a read token satisfies only "board-read". Anything else is unknown -> no.
+_BOARD_SCOPE_SATISFIES = {
+    BOARD_SCOPE_WRITE: {BOARD_SCOPE_WRITE, BOARD_SCOPE_READ},
+    BOARD_SCOPE_READ: {BOARD_SCOPE_READ},
+}
+_BOARD_READ_TOKEN_TTL_S = 30 * 86400   # operator decision 2026-09-06: 30-day read tokens
 
-    SCOPE-BLIND BY DESIGN (2026-08-07): every minted token today is
-    scope="board-write" (see board_consume_nonce), so this deliberately does
-    NOT filter on scope -- existence + expiry is sufficient.
 
-    !! FOOTGUN GUARD: if you ever add a SECOND token scope (board-read,
-    board-admin, a different resource, etc.), you MUST make this check
-    scope-aware AT THE SAME TIME -- e.g. board_token_valid(presented,
-    required_scope) filtering on `scope` -- and update the POST /api/v1/board
-    caller to pass the scope it requires. As written, a token minted under ANY
-    scope string still passes this check, so a second scope added alone would
-    silently grant board-write to tokens that were meant to be restricted.
-    Adding a second scope without fixing this is a privilege-escalation bug.
+def board_token_valid(presented: str, required_scope: str = BOARD_SCOPE_WRITE) -> bool:
+    """True if `presented` is a minted, unexpired token whose scope satisfies
+    `required_scope`.
+
+    2026-08-07..09-06: scope-blind (every token was board-write). 2026-09-06
+    added the SECOND scope, board-read, for Cowork's headless scheduled runs
+    (see board_mint_read_token) -- per the footgun guard that lived here,
+    this check became scope-aware in the same change and every caller passes
+    the scope it needs. Default stays board-write so any caller not updated
+    keeps the STRICTER requirement; a read token presented to a write path
+    fails here. A write token still satisfies a read requirement (write ⊇
+    read), so the existing interactive Cowork token keeps working on the
+    read endpoints unchanged.
     """
     if not presented:
         return False
     now = time.time()
     with conn() as c:
         _ensure_board_auth(c)
-        # NOTE: no `AND scope=?` here on purpose -- see the scope-blind guard in
-        # this function's docstring before adding one / adding a second scope.
-        row = c.execute("SELECT expires_at FROM board_tokens WHERE token_hash=?", (_board_sha(presented),)).fetchone()
-        return bool(row and row["expires_at"] and row["expires_at"] > now)
+        row = c.execute(
+            "SELECT expires_at, scope FROM board_tokens WHERE token_hash=?",
+            (_board_sha(presented),),
+        ).fetchone()
+    if not row or not row["expires_at"] or row["expires_at"] <= now:
+        return False
+    return required_scope in _BOARD_SCOPE_SATISFIES.get(row["scope"] or "", set())
+
+
+def board_mint_read_token(ttl_s: int = _BOARD_READ_TOKEN_TTL_S, label: str | None = None) -> dict:
+    """Mint a READ-ONLY board token directly (no nonce handshake) -- for a
+    consumer that cold-boots with no state and therefore cannot enroll or
+    self-rotate: Cowork's scheduled research run (2026-09-06). It is stored
+    hashed like every other token; the plaintext is returned exactly once and
+    the operator pastes it into the scheduled task's environment out-of-band.
+
+    Why not the nonce/refresh chain: a headless run has nowhere safe to
+    persist a rotated token, so a daily-rotating credential would strand it
+    within a day. A read token is instead LONG-lived (default 30 d, operator
+    decision), NON-rotating (board_refresh_token refuses it), and NARROW:
+    it satisfies only board-read -- GET /api/v1/board gated threads and
+    /api/v1/vault/research{,/list} -- never a board write. Leak blast radius
+    is "read the research surface"; revoke with board_revoke_token(label)."""
+    import secrets as _s
+    token = "brd_" + _s.token_urlsafe(30)
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        c.execute(
+            "INSERT INTO board_tokens (token_hash, created_at, expires_at, scope, label, via_nonce) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_board_sha(token), now, now + ttl_s, BOARD_SCOPE_READ, label, "direct-read"),
+        )
+    audit("board_mint_read_token", "board", token[:8], None,
+          {"label": label, "expires_at": now + ttl_s, "scope": BOARD_SCOPE_READ})
+    return {"token": token, "expires_at": now + ttl_s, "scope": BOARD_SCOPE_READ, "label": label}
+
+
+def board_list_tokens(include_expired: bool = False) -> list[dict]:
+    """Operator inventory of minted tokens -- hash prefixes only, never a
+    usable secret. Used by scripts/board-token.py."""
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        rows = c.execute(
+            "SELECT token_hash, created_at, expires_at, scope, label, via_nonce "
+            "FROM board_tokens ORDER BY created_at DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        active = bool(r["expires_at"] and r["expires_at"] > now)
+        if active or include_expired:
+            out.append({
+                "hash_prefix": (r["token_hash"] or "")[:12], "created_at": r["created_at"],
+                "expires_at": r["expires_at"], "scope": r["scope"], "label": r["label"],
+                "via": r["via_nonce"], "active": active,
+            })
+    return out
+
+
+def board_revoke_token(*, label: str | None = None, hash_prefix: str | None = None) -> int:
+    """Expire every ACTIVE token matching `label` or `hash_prefix` immediately
+    (expires_at := now; rows are kept for the audit trail). Returns the count.
+    Exactly one selector must be given."""
+    if bool(label) == bool(hash_prefix):
+        raise ValueError("give exactly one of label= or hash_prefix=")
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        if label:
+            cur = c.execute(
+                "UPDATE board_tokens SET expires_at=? WHERE label=? AND expires_at > ?",
+                (now, label, now),
+            )
+        else:
+            cur = c.execute(
+                "UPDATE board_tokens SET expires_at=? WHERE token_hash LIKE ? AND expires_at > ?",
+                (now, hash_prefix + "%", now),
+            )
+        n = cur.rowcount
+    audit("board_revoke_token", "board", label or hash_prefix, None, {"revoked": n})
+    return n
 
 
 def board_presence_set(attestation_text: str, issued_at: float, valid_until: float,
@@ -693,7 +780,10 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
                 "expires_at": grace_row["new_expires_at"], "scope": "board-write",
                 "relayed": True,
             }
-    if not presented or not board_token_valid(presented):
+    # Explicit board-write requirement: a board-read token (2026-09-06) is
+    # non-rotating by design -- refreshing it would mint a WRITE token from a
+    # read credential, a scope escalation. It gets invalid_token here.
+    if not presented or not board_token_valid(presented, BOARD_SCOPE_WRITE):
         audit("board_refresh", "board", (presented or "")[:8] or None, remote_addr,
               {"result": "invalid_token"})
         return {"status": "invalid_token"}

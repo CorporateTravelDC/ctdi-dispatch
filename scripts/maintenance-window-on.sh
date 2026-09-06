@@ -17,7 +17,7 @@
 # Usage: scripts/maintenance-window-on.sh [suppressed-weight]
 set -euo pipefail
 
-UNIT="corporatetraveldc-llama-chat.service"
+UNIT="corporatetraveldc-llama.service"
 SUPPRESSED_WEIGHT="${1:-50}"
 
 echo "[maintenance-window] suppressing ${UNIT} CPUWeight -> ${SUPPRESSED_WEIGHT} (runtime-only)"

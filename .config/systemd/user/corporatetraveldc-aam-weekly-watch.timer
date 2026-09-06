@@ -1,27 +1,15 @@
 [Unit]
-Description=Run AAM weekly watch Sunday 09:00 ET (ahead of Dispatch Desk 09:30 and second-brain weekly 18:15, so Ollama jobs don't stack)
+Description=Run AAM weekly watch Sunday night (Mon 02:00 ET) (overnight-only window; first of the Sunday overnight LLM trio: 02:00 -> desk memo 03:00 -> weekly summary 03:45)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): all long-running LLM
+# jobs run inside 20:00-05:30 ET, when measured load is 5-9 vs 19-24
+# mid-morning. Persistent=false: a missed slot is skipped rather
+# than fired at the next daytime boot -- one lost weekly is cheaper than
+# a daytime LOCKDOWN. Kick it by hand (systemctl --user start) if needed.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
-# that makes systemd start the service the instant this TIMER starts
-# (i.e. every boot, at timers.target), independent of OnCalendar/
-# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
-# binding is implicit from the filename; the line was never needed.
+# see docs/BOOT_STORM_TIMER_REQUIRES.md.
 
 [Timer]
-OnCalendar=Sun *-*-* 09:00:00 America/New_York
-# Persistent=false (2026-08-06, was true): confirmed live this was the
-# actual cause of a real incident, not theoretical -- this timer WAS
-# firing correctly on schedule (verified: it fired exactly on time
-# Sun 2026-08-02 09:00:08), but Persistent=true also caught up and
-# re-fired it on every one of this box's reboots this week (4 extra runs
-# across Aug 5-6 alone), racing the runner container before it was fully
-# up. Each of those boot-time runs failed its RSS fetch with
-# "Connection refused" (too early in the boot-stagger sequence), then
-# burned ~8-9 minutes failing to acquire the Ollama slot, then wrote an
-# empty-fallback "(no items -- quiet week)" result over the previously-
-# good cache -- which is what every hourly ops-brief/ep-advance run was
-# actually serving as of this fix. A missed Sunday 09:00 run because the
-# box happened to be rebooting at that exact moment is a far smaller
-# loss than this.
+OnCalendar=Mon *-*-* 02:00:00 America/New_York
 Persistent=false
 
 [Install]

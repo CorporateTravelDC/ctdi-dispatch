@@ -1,5 +1,5 @@
 [Unit]
-Description=Fire the daily llama-hot/chat preventive restart at 03:00 ET (NOT a quiet slot -- collides with aam-daily-watch every day, see scheduled-llama-restart.sh's idle-wait for how that's handled)
+Description=Fire the daily llama preventive restart at 19:45 ET (the idle gap before the overnight report grid opens at 20:20; scheduled-llama-restart.sh waits for idle and SKIPS rather than kill an in-flight run)
 # 2026-08-30: was Requires=, which pulls the service in the instant the
 # TIMER unit itself is activated (enabled/started), not just at each
 # scheduled fire -- confirmed live: enabling this timer triggered an
@@ -14,7 +14,13 @@ Description=Fire the daily llama-hot/chat preventive restart at 03:00 ET (NOT a 
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=*-*-* 03:00:00 America/New_York
+# 2026-09-06: moved 03:00 -> 19:45 ET. 03:00 collided with dispatch-desk-memo
+# (Mon 03:00) once the weeklies moved to Sunday night; 19:45 is empty on
+# every day of the overnight-only grid (last job ep-advance-venues 05:20,
+# first job executive-protection 20:20) and gives the whole batch a
+# fresh server. Persistent=true is safe here: a replayed fire still
+# waits for idle and skips if busy.
+OnCalendar=*-*-* 19:45:00 America/New_York
 Persistent=true
 # Persistent=true means a missed fire (box down at 03:00) runs on next
 # boot instead of waiting a full day -- keeps the real gap between

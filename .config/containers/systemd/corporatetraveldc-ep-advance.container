@@ -13,7 +13,13 @@ Image=localhost/corporatetraveldc-poller:latest
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=scripts/verified-exec.sh python3 src/poller/skills/ep_advance_brief.py
+# 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
+# together either EVER"): flock on the box-wide unit lock wraps the whole
+# run, so a second report container blocks here -- inside its own
+# container, holding no model, no threads -- until the one ahead exits.
+# It waits; it is never refused and never kills the run ahead of it.
+# common/llama_pool.py takes a separate per-generation lock on top.
+Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ep_advance_brief.py
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the
@@ -51,8 +57,10 @@ CPUQuota=300%
 # mid-run (real overlap: this unit fires hourly at :35 and both weekly
 # consumers' budgets span multiple :35 marks). See the script's own
 # header for the full design.
-ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh start
-ExecStopPost=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-report-ondemand.sh stop-if-idle %n
+# 2026-09-06: the llama-report-ondemand.sh ExecStartPre/ExecStopPost hooks
+# are gone -- there is ONE permanent llama-server now
+# (corporatetraveldc-llama.service, -np 2, CPUQuota=200%); nothing
+# starts or stops a model server per job any more.
 Type=oneshot
 # 2026-08-06: was 1500s, sized for the old 1200s-primary-timeout design.
 # ep-advance never actually failed outright on 2026-08-06 (that margin

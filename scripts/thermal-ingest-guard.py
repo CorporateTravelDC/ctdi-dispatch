@@ -147,8 +147,22 @@ if the var is absent or unparsable):
   THERMAL_GUARD_RESUME_DWELL_S=300
   THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C=1.0
   THERMAL_GUARD_RESUME_LOAD_HYSTERESIS=3.0
+  THERMAL_GUARD_RESTORE_DORMANT_S=600
   THERMAL_GUARD_FALLBACK_TRIGGER_COUNT=2
   THERMAL_GUARD_FALLBACK_WINDOW_S=300
+
+**Restore-aware dormancy (2026-09-06, operator directive).** Twice on
+2026-09-06 the guard shed the stack ~2 minutes after it had come back up:
+a cold start of all ten units is itself a load storm (SWIM durable-queue
+backlog drain at ~30x steady rate, every poller job due at once) and on top
+of the LLM baseline that burst crossed load_lockdown -- so the guard was
+measuring the restart it had just caused and punishing it, growing the
+backlog for the next attempt. Now: for THERMAL_GUARD_RESTORE_DORMANT_S
+(default 600 s) after ANY restore -- the guard's own, or an external
+`systemctl start` detected by the stale-tier reconcile -- the guard is
+dormant: it logs readings and takes no action, neither shedding nor
+restoring. Sole exception: temp >= tier2_temp (79C, the hardware backstop)
+still trips; load never does while dormant.
   THERMAL_GUARD_TIER1_FEEDS=tfms,stdds
   THERMAL_GUARD_TIER2_FEEDS=fdps,tbfm,itws
 """
@@ -502,6 +516,7 @@ def main():
     resume_load_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD_HYSTERESIS"), 3.0)
     fallback_trigger_count = int(_float(cfg.get("THERMAL_GUARD_FALLBACK_TRIGGER_COUNT"), 2))
     fallback_window_s = _float(cfg.get("THERMAL_GUARD_FALLBACK_WINDOW_S"), 300)
+    restore_dormant_s = _float(cfg.get("THERMAL_GUARD_RESTORE_DORMANT_S"), 600)
     tier1_feeds = cfg.get("THERMAL_GUARD_TIER1_FEEDS", "tfms,stdds")
     tier2_feeds = cfg.get("THERMAL_GUARD_TIER2_FEEDS", "fdps,tbfm,itws")
 
@@ -512,15 +527,32 @@ def main():
     fan_str = f"{fan_rpm}rpm" if fan_rpm is not None else "n/a"
     fallback_count = count_recent_load_fallbacks(fallback_window_s)
     state = load_state()
+    now = time.time()
     tier = state.get("tier", 0)
     tier = _reconcile_stale_tier(tier, tier1_feeds, tier2_feeds)
     if tier != state.get("tier", 0):
-        state = {"tier": tier, "below_resume_since": None}
+        # 2026-09-06: an external restart (operator `systemctl start`, a
+        # cooldown script, a reboot) IS a restore for dormancy purposes --
+        # the cold-start burst is identical whoever issued the start. Stamp
+        # restored_at here so the dormant window below covers it; before
+        # this the reconcile dropped the field and the guard re-shed the
+        # stack two minutes after a manual restart (2026-09-06 11:23 EDT).
+        state = {"tier": tier, "below_resume_since": None,
+                 "restored_at": now, "restored_via": "external"}
         save_state(state)
-    now = time.time()
 
     print(f"{LOG_PREFIX} temp={temp:.2f}C load1={load_str} tier={tier} fan={fan_str} "
           f"fallbacks={fallback_count}/{fallback_window_s:.0f}s")
+
+    # Restore-aware dormancy (2026-09-06, operator directive; see module
+    # docstring): within restore_dormant_s of ANY restore, observe only.
+    # The hardware backstop (temp >= tier2_temp) is the single exception.
+    restored_at = state.get("restored_at")
+    if restored_at and 0 <= now - restored_at < restore_dormant_s and temp < tier2_temp:
+        print(f"{LOG_PREFIX} DORMANT: restored {now - restored_at:.0f}s ago "
+              f"(via {state.get('restored_via', 'guard')}, window {restore_dormant_s:.0f}s) "
+              f"-- observing only, no shed/restore evaluated this cycle")
+        return
 
     # 2026-08-23 redesign: temperature keeps its original two-stage real
     # trigger (see the module docstring for why -- it's never actually
@@ -691,7 +723,8 @@ def main():
                     # guard" from "genuinely leaking," triggering a second,
                     # compounding restart on top of the first. See that
                     # script's own GUARD_GRACE_SECS check.
-                    state = {"tier": 0, "below_resume_since": None, "restored_at": now}
+                    state = {"tier": 0, "below_resume_since": None, "restored_at": now,
+                             "restored_via": "guard"}
             save_state(state)
         elif state.get("below_resume_since") is not None:
             # 2026-09-04 (operator directive, real incident): only reset

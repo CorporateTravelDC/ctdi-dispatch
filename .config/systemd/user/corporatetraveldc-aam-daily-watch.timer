@@ -1,5 +1,20 @@
 [Unit]
-Description=Run AAM watch every 90min, anchored 07:30 ET (after daily-opsplan 07:00, clear of the hourly ops-brief/ep-advance :00/:30 Ollama-slot marks by 30min either side); stagger vs siblings (15min apart) preserved indefinitely since 90min is a multiple of 15min
+Description=Run AAM watch once nightly at 21:00 ET (overnight-only window, see 2026-09-06 note)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): every long-running LLM
+# digest/watch now runs ONCE nightly inside the 20:00-05:30 ET window and
+# never during the day. Evidence (thermal-ingest-guard 2-min readings,
+# Sep 2-6): load 19:00-06:00 ET mean 5-9, max <=27, zero readings >=30;
+# 09:00-13:00 mean 19-24, max 40-58, every LOCKDOWN trip. The same watch
+# that takes 5-25min at 03:00 took 50-88min mid-morning because it queued
+# behind its siblings on the single-slot report LLM (-np 1) and dragged
+# load to 30+ for the whole morning. The previous every-90min grid (two
+# OnCalendar lines, 3h offset, 2026-08-17) is retired. Slots are 40min
+# apart, off the hourly ops-brief :05 / ep-advance :35 marks, clear of
+# second-brain-daily 23:45 and transport-pattern-digest 00:25.
+# Persistent=false is now doing double duty: a slot missed (box down,
+# LOCKDOWN shed) is skipped, NOT fired at the next boot in daylight.
+# Nightly order: executive-protection 20:20, aam 21:00, aviation 21:40,
+# gig-economy 22:20, concierge-travel 23:00, trains-yachts 01:00.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -7,37 +22,7 @@ Description=Run AAM watch every 90min, anchored 07:30 ET (after daily-opsplan 07
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-# 2026-08-17 (fable-timing-artifact-sweep): the OnCalendar-anchor +
-# OnUnitActiveSec=90min combination does NOT preserve the sibling stagger
-# the comment above assumed. OnUnitActiveSec re-arms from each unit's own
-# ACTIVATION time, and systemd's default AccuracySec=1min coalesces nearby
-# wakeups -- so one bunching event makes the convergence PERMANENT.
-# Observed live today: five watch timers all fired at literally the same
-# second (13:16:35, then again 14:46:36, exactly 90min later), producing a
-# 6-deep Ollama queue, repeated 150s lock-timeout fallbacks (aam-daily
-# 12:39/14:49, concierge 13:31, trains-yachts 13:35), and trains-yachts
-# being KILLED at its 7000s TimeoutStartSec ceiling at 15:14 -- today's
-# vault note lost. Replaced with a fixed 24h calendar grid (same 90min
-# cadence, same anchor, stagger structurally guaranteed). A slot arriving
-# while the previous run is still active is skipped entirely -- graceful
-# load-shedding, same behavior the old comment believed it had.
-OnCalendar=*-*-* 1/3:30:00 America/New_York
-OnCalendar=*-*-* 0/3:00:00 America/New_York
-# 2026-08-16: added recurring cadence on top of the daily anchor above --
-# re-arms 90min after every activation regardless of what triggered it,
-# so this now fires ~16x/day instead of once. If a run is still active
-# when the next 90min mark hits (worst-case measured ceiling is ~2h23min
-# under contention -- see TimeoutStartSec), systemd just skips that
-# firing rather than starting a second concurrent instance -- graceful
-# cadence degradation under load, not overlap/conflict.
-# Persistent=false (2026-08-06): deliberately NOT persistent, unlike the
-# weekly sibling's original setting -- see that timer's own fix note.
-# Persistent=true fires a catch-up run immediately on the next boot if
-# the scheduled time was missed, which raced this box's own recent
-# reboots against the runner container before it was up, repeatedly
-# failing with connection-refused and burning an Ollama cycle for
-# nothing. A missed daily run (box happened to be rebooting at 07:30) is
-# a much smaller loss than firing redundantly on every reboot.
+OnCalendar=*-*-* 21:00:00 America/New_York
 Persistent=false
 
 [Install]
