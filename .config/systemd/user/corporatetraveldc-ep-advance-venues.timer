@@ -1,5 +1,9 @@
 [Unit]
-Description=Run ep-advance-venues once daily at 06:10 ET (plus manual trigger)
+Description=Run ep-advance-venues once daily at 05:20 ET (overnight-only window; plus manual trigger)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): 06:10 -> 05:20 ET so the
+# report-tier run finishes before the 06:00 load ramp; Persistent=false
+# so a missed slot is skipped, never replayed in daylight (the 09-05
+# boot replayed it at 17:54 ET under Persistent=true).
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -7,13 +11,13 @@ Description=Run ep-advance-venues once daily at 06:10 ET (plus manual trigger)
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-# 06:10 ET -- ahead of the day's EP activity, off the top-of-hour
-# daily-watch herd's :00/:15/:30/:45 grid (same collision-avoidance
-# reasoning as ep-advance.timer's :35 mark). Manual re-run any time:
+# 05:20 ET -- ahead of the day's EP activity, after the Sunday-night
+# weekly trio (02:00/03:00/03:45/04:30) has cleared the report tier, off
+# ep-advance.timer's :35 mark. Manual re-run any time:
 # `python3 src/poller/skills/ep_advance_venues.py` refreshes the cached
 # section the hourly ep-advance brief splices in.
-OnCalendar=*-*-* 06:10:00 America/New_York
-Persistent=true
+OnCalendar=*-*-* 05:20:00 America/New_York
+Persistent=false
 
 [Install]
 WantedBy=timers.target

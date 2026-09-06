@@ -1,0 +1,68 @@
+[Unit]
+Description=llama.cpp -- the ONE model server (one model resident 24/7, two slots, hard-capped at two cores)
+After=network-online.target
+# 2026-09-06 operator directive, verbatim and non-negotiable:
+#   "2 slots, only one model weight EVER loaded (resident 24/7)"
+#   "NOTHING EVER breaks the 2 or 200% limit period"
+#   "hot briefs/alerts can ONLY ever preempt another report not add a 3rd
+#    core or server"
+#   "NOTHING running kills another ongoing run only you or I"
+#   "No 2 long runners can run together either EVER"
+# This unit replaces corporatetraveldc-llama-hot / -chat / -report-1 /
+# -report-2 and scripts/llama-report-ondemand.sh. Three resident copies of
+# the same 2.18 GB phi3-mini (8.2 GB RSS on a 16 GB box) drove 4 GB into
+# zram, 14 MB/s swap-in and ~0.5 tok/s on 2026-09-06; 15-minute reports
+# became 90-minute reports, stacked on one slot, load 30-40 all afternoon.
+#
+# Slot discipline lives in common/llama_pool.py + common/llm.py, not here:
+# slot 1 = one long runner at a time (box-wide flock, waits, never
+# refuses); slot 2 = hot/chat fast lane, posts immediately. The consumer
+# quadlets also flock the unit-level lock in their Exec= so two report
+# CONTAINERS cannot start together.
+
+[Service]
+# Pre-warm the page cache so the load is one sequential read, not a
+# fault storm during the first request (carried over from llama-hot).
+ExecStartPre=/usr/bin/dd if=/var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf of=/dev/null bs=4M status=none
+# -np 2 --kv-unified -c 12288: two sequences sharing ONE 12288-token KV
+#   pool, so the largest report persona (8192, dispatch-desk-memo /
+#   ep-advance-venues) and a 4096-token hot request fit side by side.
+#   VERIFY on first start: the journal must print n_ctx_seq = 12288 (or
+#   n_ctx_slot = 12288). If this build divides -c across slots and prints
+#   6144, change to `-c 16384` without --kv-unified (8192 per slot).
+# -fa on -ctk q8_0 -ctv q8_0: quantised KV cache, ~2.4 GB for the pool
+#   instead of ~4.8 GB fp16 (the report tier already ran this way).
+# -t 2: two generation threads. -tb 2: two prompt-eval threads too --
+#   prompt eval is the compute-bound phase and would otherwise spawn one
+#   thread per core. The cgroup quota below is the hard ceiling either way.
+ExecStart=/usr/local/lib/ollama/llama-server \
+    -m /var/lib/corporatetraveldc/models/phi3-mini-q4_0.gguf \
+    --host 100.x.x.x --port 8093 \
+    -np 2 --kv-unified -c 12288 \
+    -fa on -ctk q8_0 -ctv q8_0 \
+    -t 2 -tb 2 \
+    --cache-ram 0 \
+    --no-webui
+Restart=always
+RestartSec=5
+Slice=production.slice
+
+# THE CAP. Kernel-enforced: this cgroup can never consume more than two
+# cores' worth of CPU time, prompt eval included, whatever the thread
+# pool does. Not a flag the code can raise. High CPUWeight keeps the two
+# cores it is allowed responsive under contention (a human or an alert
+# is usually waiting) -- weight never exceeds quota.
+CPUQuota=200%
+CPUWeight=9000
+
+# Memory: 2.18 GB weights (mmap) + ~2.4 GB KV pool + compute buffers.
+# Same formula as the retired tiers (100%/125%/150% of measured), sized
+# for the unified pool. MemorySwapMax=0 keeps the 2026-08-30 decision: a
+# fast, loud OOM restart beats the slow zram thrash that produced today.
+MemoryLow=5120M
+MemoryHigh=6400M
+MemoryMax=7680M
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target

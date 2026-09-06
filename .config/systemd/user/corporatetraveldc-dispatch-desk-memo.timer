@@ -1,14 +1,16 @@
 [Unit]
-Description=Run Dispatch Desk memo Sunday 09:30 ET (after AAM watch 09:00, before second-brain weekly 18:15)
+Description=Run Dispatch Desk memo Sunday night (Mon 03:00 ET) (overnight-only window; after AAM weekly 02:00, before weekly summary 03:45; was Sun 09:30 -- today's 09:30 run died with 'database is locked' under the morning pile-up)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): all long-running LLM
+# jobs run inside 20:00-05:30 ET, when measured load is 5-9 vs 19-24
+# mid-morning. Persistent=false: a missed slot is skipped rather
+# than fired at the next daytime boot -- one lost weekly is cheaper than
+# a daytime LOCKDOWN. Kick it by hand (systemctl --user start) if needed.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
-# that makes systemd start the service the instant this TIMER starts
-# (i.e. every boot, at timers.target), independent of OnCalendar/
-# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
-# binding is implicit from the filename; the line was never needed.
+# see docs/BOOT_STORM_TIMER_REQUIRES.md.
 
 [Timer]
-OnCalendar=Sun *-*-* 09:30:00 America/New_York
-Persistent=true
+OnCalendar=Mon *-*-* 03:00:00 America/New_York
+Persistent=false
 
 [Install]
 WantedBy=timers.target

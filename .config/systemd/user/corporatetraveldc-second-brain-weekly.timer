@@ -1,5 +1,15 @@
 [Unit]
-Description=Run second-brain weekly compile Sunday 18:15 ET (15min after weekly-summary so Ollama jobs don't stack)
+Description=Run second-brain weekly compile Sunday night (Mon 04:30 ET; overnight-only window, after weekly-summary 03:45 so report-tier jobs don't stack; was Sun 18:15 ET, inside the worst measured load hour)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): all long-running LLM
+# jobs run inside 20:00-05:30 ET, when measured load is 5-9 vs 19-24
+# mid-morning. Persistent=false: a missed slot is skipped rather than
+# fired at the next daytime boot -- one lost weekly is cheaper than a
+# daytime LOCKDOWN. Kick it by hand (systemctl --user start) if needed.
+# INSTALL NOTE: systemd computes next elapse from LastTriggerUSec; if the
+# first occurrence of the new calendar after the last trigger is already
+# past, the timer fires the instant daemon-reload runs. Stop the service
+# right after reload when installing a calendar change on a timer that
+# has not triggered since the new slot last occurred.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -7,9 +17,8 @@ Description=Run second-brain weekly compile Sunday 18:15 ET (15min after weekly-
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=Sun *-*-* 18:15:00 America/New_York
-Persistent=true
+OnCalendar=Mon *-*-* 04:30:00 America/New_York
+Persistent=false
 
 [Install]
 WantedBy=timers.target
-

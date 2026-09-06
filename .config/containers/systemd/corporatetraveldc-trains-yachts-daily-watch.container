@@ -10,7 +10,13 @@ Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=scripts/verified-exec.sh python3 src/poller/skills/trains_yachts_daily_watch.py
+# 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
+# together either EVER"): flock on the box-wide unit lock wraps the whole
+# run, so a second report container blocks here -- inside its own
+# container, holding no model, no threads -- until the one ahead exits.
+# It waits; it is never refused and never kills the run ahead of it.
+# common/llama_pool.py takes a separate per-generation lock on top.
+Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/trains_yachts_daily_watch.py
 
 [Service]
 Slice=production.slice
