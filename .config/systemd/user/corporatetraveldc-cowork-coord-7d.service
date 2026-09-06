@@ -1,0 +1,6 @@
+[Unit]
+Description=Cowork weekly presence-attestation checkpoint backup (board coord thread + operator ping)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/cowork-coord-7d-check.sh

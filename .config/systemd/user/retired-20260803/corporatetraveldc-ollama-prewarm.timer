@@ -1,0 +1,11 @@
+[Unit]
+Description=Prewarm Ollama 2 minutes before ops-brief (:00) and ep-advance (:30) -- bounded keep_alive, replaces the always-on keepwarm timer
+Requires=corporatetraveldc-ollama-prewarm.service
+
+[Timer]
+OnCalendar=*-*-* *:58:00 America/New_York
+OnCalendar=*-*-* *:28:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

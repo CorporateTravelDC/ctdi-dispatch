@@ -1,0 +1,38 @@
+[Unit]
+Description=Corporate Travel DC — daily ATCSCC ops plan snapshot (07:00 ET)
+
+[Container]
+Memory=1536m
+# No additional swap beyond the RAM cap -- forces a clean OOM-kill
+# instead of swap-thrashing (zram) if a container leaks past Memory=.
+PodmanArgs=--memory-swap=1536m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/fetchers/atcscc_opsplan.py
+
+[Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
+# Proportional CPU share, not a hard pin -- kernel scheduler enforces
+# live, every tick. Only matters when something else (notably Ollama,
+# CPUWeight=500) is actually contending for CPU right now; an idle box
+# still lets this container burst across all cores for free.
+CPUWeight=100
+# Hard ceiling regardless of contention -- never more than 3 of the
+# Pi's 4 cores for this container alone. See CLAUDE.md "Container
+# resource limits".
+CPUQuota=300%
+Type=oneshot
+TimeoutStartSec=120
