@@ -1,0 +1,17 @@
+[Unit]
+Description=Personal Notes -> vault one-way import, every 2 minutes (no-op until PERSONAL_NOTES_SRC_APP_PASSWORD is set)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+# Persistent so a missed interval (box asleep/busy) triggers one catch-up run
+# rather than waiting a full cycle.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

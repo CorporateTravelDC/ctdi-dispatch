@@ -1,0 +1,98 @@
+# corporatetraveldc-pgsql -- PostgreSQL 16 for the dispatch platform's WRITE
+# path (2026-09-06). See docs/POSTGRES_MIGRATION.md for the migration plan and
+# the sizing that produced every number below.
+#
+# Why this exists: every writer on the box (7 ingest containers, poller,
+# pusher, web, runner, amtrak-tracker, oneshot skills -- 14 containers) shared
+# one SQLite file and serialised on its single writer lock: ~728
+# `database is locked` failures/day measured 2026-09-05, 672 of them the six
+# SWIM feeds fighting each other, each after a full 10s busy-wait. Postgres
+# (MVCC, row-level locking) removes that class of failure structurally.
+# Read-mostly reference tables (aircraft registries, CIFP, LADD) stay on
+# SQLite -- they never contend and moving them buys nothing.
+#
+# Networking: app containers connect over a UNIX SOCKET, not TCP. The socket
+# directory is the named volume corporatetraveldc-pgsql-sock, mounted here at
+# /var/run/postgresql and at the same path in every app container
+# (DISPATCH_PG_HOST=/var/run/postgresql -- psycopg treats a path as a socket
+# dir). Why not TCP via host.containers.internal like ntfy: on this podman
+# (5.8, pasta --map-guest-addr) that name maps to the host's DEFAULT-ROUTE
+# interface address (10.0.0.x on wld0), never loopback -- a loopback-only
+# publish is unreachable from containers (measured 2026-09-06), and a LAN
+# publish would be exposed AND break on wld0<->enu1 failover. The socket has
+# no network exposure at all, survives failover, and skips pasta's
+# per-packet userspace hop. TCP is published on 127.0.0.1:5432 ONLY for
+# bare-host tools (psql, migration scripts) on the box itself.
+#
+# Memory: the box is a 15 GB Pi 5 with production.slice at ~10.5 G of its
+# 13.8 G cap (llama hot+chat hold 7.2 G). Postgres's CONCURRENCY win (MVCC)
+# does not depend on RAM; buffer size only affects cache hit rate, and the
+# hot working set is small (~2.4k active flights, ~300 live TBFM rows). The
+# 1.5 G cap fits only with the NVMe overflow swapfile
+# (scripts/setup-disk-swap.sh) -- zram absorbs first, the file is overflow.
+[Unit]
+Description=corporatetraveldc -- PostgreSQL 16 (dispatch write path)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=corporatetraveldc-pgsql
+AutoUpdate=registry
+# TCP on host loopback ONLY, for bare-host tools -- containers use the socket
+# volume below, see header.
+PublishPort=127.0.0.1:5432:5432
+Network=pasta:--map-gw
+# Non-secret identity. The password lives ONLY in
+# /etc/corporatetraveldc/pgsql-secrets.env (template:
+# pgsql-secrets.env.template) -- a DEDICATED file so this container never
+# sees the SWIM/NWWS/API secrets. An EnvironmentFile= hands the WHOLE file
+# to the container, so giving it dispatch-secrets.env would put every
+# credential on the box into the postgres process environment.
+# NEVER quote values in any env file here (podman --env-file does no
+# quote-stripping; see scripts/check-env-quoting.sh).
+Environment=POSTGRES_DB=corporatetraveldc
+Environment=POSTGRES_USER=dispatch
+Environment=PGDATA=/var/lib/postgresql/data/pgdata
+Environment=TZ=UTC
+EnvironmentFile=/etc/corporatetraveldc/pgsql-secrets.env
+Volume=corporatetraveldc-pgsql-data:/var/lib/postgresql/data
+# Unix socket directory, shared with every app container (see header). The
+# image ships /var/run/postgresql as mode 3777 and the socket as 0777, so
+# any container user can connect; auth is still scram (config/pg_hba.conf).
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+# Tuned config + hba rules are TRACKED in the repo and bind-mounted
+# read-only, so they are reviewed, signed and diffable like everything else
+# -- not hand-edited inside a volume.
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro,Z
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro,Z
+Exec=postgres -c config_file=/etc/postgresql/postgresql.conf
+# Parallel workers + dynamic shared memory need /dev/shm larger than the
+# 64 MB container default.
+ShmSize=512m
+HealthCmd=pg_isready -U dispatch -d corporatetraveldc
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+# Hard cap 1.5 G RAM; up to 1.5 G more may spill to swap (overflow file,
+# NOT zram-only -- see header). A swapped-out Postgres is slow, not broken;
+# a swapped-out llama tier thrashes the whole box, which is why this has a
+# cap and llama-hot/chat have MemoryLow floors.
+Memory=1536m
+PodmanArgs=--memory-swap=3072m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+MemoryLow=512M
+CPUWeight=100
+CPUQuota=200%
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+# Give a checkpoint time to finish on stop -- a SIGKILL mid-checkpoint is
+# recoverable (WAL) but forces a slower crash-recovery start.
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

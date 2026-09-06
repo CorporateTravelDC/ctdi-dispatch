@@ -1,0 +1,22 @@
+[Unit]
+Description=Corporate Travel DC -- daily second-brain semantic layer recompile
+
+[Container]
+Memory=384m
+PodmanArgs=--memory-swap=384m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Network=pasta:--map-gw
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/skills/semantic_compile_daily.py
+
+[Service]
+Slice=production.slice
+MemoryLow=128M
+Type=oneshot
+# No Ollama call (pure SQLite recompute over the vault index -- see
+# compile.py's own docstring: "well under a second on the real
+# 5,700-document index"). Generous margin anyway, same philosophy as
+# entity_tracking_digest's TimeoutStartSec.
+TimeoutStartSec=300

@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm ~3min before executive-protection-daily-watch's 08:45 ET run
+Requires=corporatetraveldc-ollama-prewarm-executive-protection-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:42:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

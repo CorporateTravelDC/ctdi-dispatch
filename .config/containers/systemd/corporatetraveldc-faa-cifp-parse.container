@@ -1,0 +1,21 @@
+[Unit]
+Description=Corporate Travel DC -- parse the downloaded FAA CIFP cycle into queryable DB tables
+After=corporatetraveldc-faa-cifp-pull.service
+
+[Container]
+Memory=384m
+PodmanArgs=--memory-swap=384m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 src/poller/skills/faa_cifp_parse.py
+
+[Service]
+Slice=production.slice
+MemoryLow=85M
+Type=oneshot
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target
