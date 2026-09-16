@@ -21,6 +21,20 @@ import re
 log = logging.getLogger(__name__)
 
 _RSS_CATALOG: dict[str, list[dict]] = {
+    # Added 2026-09 -- deliberately empty here. Unlike every other category,
+    # ground_news content doesn't come from a plain anonymously-fetchable
+    # feed URL; it's the operator's own credentialed Ground News feed,
+    # fetched server-side by poller/fetchers/ground_news.py and merged in
+    # by runner/main.py::rss_feed()'s ground_news special-case (see that
+    # function's docstring). The category still exists here -- as an empty
+    # entry -- purely so it appears in list_all_categories()/rss_categories
+    # and an operator can layer their own additional plain-RSS feeds onto
+    # it via the normal Add Feed flow (e.g. a public Ground News Blindspot
+    # RSS export, if one is ever published) without any code change. That's
+    # the "bidirectional" property: the credentialed fetch and the existing
+    # generic add-a-feed mechanism both land in the same category and the
+    # same merged /api/rss?category=ground_news response.
+    "ground_news": [],
     "corporate_intel": [
         {"name": "Skift",                   "url": "https://skift.com/feed/"},
         {"name": "Federal News Network",    "url": "https://federalnewsnetwork.com/feed/"},

@@ -57,6 +57,12 @@ FETCH_SCHEDULE: list[dict] = [
     {"name": "iad_fids",         "module": "poller.fetchers.iad_fids",         "interval": 300},
     {"name": "eurocontrol",    "module": "poller.fetchers.eurocontrol",    "interval": 900},
     {"name": "jasdat",         "module": "poller.fetchers.jasdat",         "interval": 900},
+    # Operator's own Ground News account -- credential-gated, pending
+    # sign-off on the access model. See poller/fetchers/ground_news.py
+    # and docs/GROUND_NEWS_ACCESS_REQUEST.md. 900s matches the
+    # eurocontrol/jasdat interval -- a personalized news feed doesn't
+    # need faster polling than either of those.
+    {"name": "ground_news",    "module": "poller.fetchers.ground_news",    "interval": 900},
 ]
 
 # Skills invoked as subprocesses (own SR-1/SR-2 state, own log entries).
@@ -1939,6 +1945,11 @@ async def main() -> None:
     # 2026-09-05: cifp_fixes/cifp_procedure_legs/cifp_holds -- faa_cifp_parse.py
     # (fired via its own weekly timer, after faa_cifp_pull.py) writes here.
     db.init_db_v45()
+    # ground_news_items -- poller.fetchers.ground_news.run() (fired via
+    # FETCH_SCHEDULE every 900s) writes here; must exist before the first
+    # fetch on a fresh DB. Credential-gated pending Ground News sign-off
+    # -- see docs/GROUND_NEWS_ACCESS_REQUEST.md.
+    db.init_db_v47()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

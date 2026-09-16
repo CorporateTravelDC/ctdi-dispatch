@@ -7032,6 +7032,104 @@ def init_db_v46() -> None:
             c.execute("ALTER TABLE tbfm_sequences ADD COLUMN eta_kind TEXT")
 
 
+# ── Ground News bias/coverage items -- SCHEMA_V47, 2026-09 ─────────────────
+# Backing store for poller/fetchers/ground_news.py. Deliberately its own
+# table rather than reusing international_aviation_feed (V15) -- these are
+# news/media-bias items, not aviation records, and carry Ground News-
+# specific fields (bias distribution, factuality, blindspot flag) that
+# don't belong on a generic aviation raw_json blob. Normalized fields are
+# broken out (not just raw_json) so /api/v1/ground-news and the runner's
+# RSS merge can query/sort without re-parsing JSON per row.
+#
+# Pending Ground News's sign-off on the access model this integration is
+# built around -- see docs/GROUND_NEWS_ACCESS_REQUEST.md -- this table and
+# its fetcher exist and are tested, but ship credential-gated
+# (awaiting_credentials) same as EUROCONTROL/JASDAT above until an
+# operator explicitly configures GROUND_NEWS_SESSION_TOKEN or
+# GROUND_NEWS_EMAIL/PASSWORD.
+
+SCHEMA_V47 = """
+CREATE TABLE IF NOT EXISTS ground_news_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    title               TEXT    NOT NULL,
+    link                TEXT    NOT NULL,
+    summary             TEXT,
+    published           TEXT,
+    bias_left           INTEGER,
+    bias_center         INTEGER,
+    bias_right          INTEGER,
+    factuality          TEXT,
+    blindspot           INTEGER NOT NULL DEFAULT 0,
+    fetched_at          REAL    NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_ground_news_fetched_at
+    ON ground_news_items(fetched_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ground_news_link
+    ON ground_news_items(link);
+"""
+
+
+def init_db_v47() -> None:
+    """Apply v47 schema -- ground_news_items (see comment block above)."""
+    with conn() as c:
+        c.executescript(SCHEMA_V47)
+
+
+def upsert_ground_news_items(items: list[dict]) -> int:
+    """Bulk-insert normalized Ground News items (see
+    common/ground_news_client.py::fetch_my_feed for the input shape).
+    Upserts on `link` so re-fetching the same personalized feed doesn't
+    duplicate rows every poll cycle -- same idea as this repo's other
+    feeds that re-poll a mostly-unchanged upstream. Returns count written
+    (inserted or refreshed)."""
+    with conn() as c:
+        n = 0
+        for it in items:
+            bias = it.get("bias_distribution") or {}
+            c.execute(
+                """INSERT INTO ground_news_items
+                       (title, link, summary, published,
+                        bias_left, bias_center, bias_right,
+                        factuality, blindspot, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+                   ON CONFLICT(link) DO UPDATE SET
+                       title=excluded.title,
+                       summary=excluded.summary,
+                       published=excluded.published,
+                       bias_left=excluded.bias_left,
+                       bias_center=excluded.bias_center,
+                       bias_right=excluded.bias_right,
+                       factuality=excluded.factuality,
+                       blindspot=excluded.blindspot,
+                       fetched_at=excluded.fetched_at""",
+                (
+                    it.get("title", ""), it.get("link", ""),
+                    it.get("summary", ""), it.get("published", ""),
+                    bias.get("left"), bias.get("center"), bias.get("right"),
+                    it.get("factuality"), int(bool(it.get("blindspot"))),
+                ),
+            )
+            n += 1
+        return n
+
+
+def get_recent_ground_news_items(limit: int = 100) -> list[dict]:
+    """Most recently fetched Ground News items, newest-published first.
+    Used by web/main.py's /api/v1/ground-news (Tier 0) and, via the
+    dispatch proxy, by the runner's /api/rss?category=ground_news merge."""
+    with conn() as c:
+        rows = c.execute(
+            """SELECT title, link, summary, published,
+                      bias_left, bias_center, bias_right,
+                      factuality, blindspot, fetched_at
+               FROM ground_news_items
+               ORDER BY published DESC, fetched_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def cifp_meta_set(key: str, value: str) -> None:
     with conn() as c:
         c.execute(
