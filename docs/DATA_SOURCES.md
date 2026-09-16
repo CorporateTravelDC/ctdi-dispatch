@@ -847,6 +847,91 @@ AIS_MARINETRAFFIC_KEY=   # MarineTraffic embed widget ID, not a data API token
 
 ---
 
+## News & Media Bias Sources
+
+### Ground News (operator's own account — bias/coverage/blindspot feed)
+
+**Last verified:** 2026-09 (branch drafted, not yet deployed)
+
+> **Integration status: code exists and is tested, but gated pending
+> Ground News's sign-off — do not enable in production before that
+> conversation happens.** This is a different situation from every other
+> "awaiting_credentials" entry in this file: those are waiting on the
+> *operator* to obtain and enter a key. This one is waiting on *Ground
+> News* to confirm they're comfortable with the access model at all,
+> because Ground News publishes no developer API — see
+> [docs/GROUND_NEWS_ACCESS_REQUEST.md](GROUND_NEWS_ACCESS_REQUEST.md) for
+> the drafted request. `src/poller/fetchers/ground_news.py` and
+> `src/common/ground_news_client.py` exist, have unit test coverage
+> (`tests/poller/test_ground_news_fetcher.py`), and follow this repo's
+> normal credential-gated skip pattern (`awaiting_credentials` until
+> configured) — but the actual authenticated request/response contract
+> in `ground_news_client.py` is a deliberate placeholder, not a
+> reverse-engineered private endpoint. Filling that in is the one piece
+> intentionally left for after Ground News responds.
+
+**What it provides:** The operator's own personalized Ground News feed —
+bias-rated stories from their saved interests/topics, source diversity
+(left/center/right split per story), factuality ratings, and "Blindspot"
+stories under-reported by one side of the political spectrum.
+
+**Why this is structured differently from every other feed in this
+file:** Ground News has no public API, no RSS export, and no self-serve
+developer program as of this writing. Third-party options exist
+(scraping-as-a-service wrappers, unofficial Apify actors) but those
+either resell/proxy access through a vendor account or scrape without an
+agreement — both explicitly rejected for this integration per operator
+directive. The model here is instead the same one this repo already uses
+for FAA SWIM and NWWS-OI: **each deployment authenticates with its own
+operator's own account**, self-hosted, not redistributed, not resold, not
+shared across deployments. See
+[docs/GROUND_NEWS_ACCESS_REQUEST.md](GROUND_NEWS_ACCESS_REQUEST.md) for
+the full request being sent to Ground News asking them to confirm (or
+provide) a sanctioned way to do exactly that.
+
+**Portal:** <https://ground.news/>
+
+**Access process (pending):** No self-serve API signup exists yet. See
+the drafted access-request document linked above — this is being sent to
+Ground News directly rather than assumed. Two fallback auth modes are
+wired in the code so this can proceed either way Ground News responds:
+a session-token mode (operator copies a cookie/token out of their own
+already-authenticated browser session — no login flow to reimplement,
+including whatever MFA/CAPTCHA it has) and a direct email/password mode
+(not yet wired to a confirmed endpoint — see `_login()`'s docstring in
+`common/ground_news_client.py`).
+
+**Credentials location in dispatch-secrets.env** (configure ONE mode):
+
+```bash
+# Preferred
+GROUND_NEWS_SESSION_TOKEN=
+
+# Alternative (not yet wired to a real endpoint)
+GROUND_NEWS_EMAIL=
+GROUND_NEWS_PASSWORD=
+```
+
+**Exposed as:** `GET /api/v1/ground-news` (Tier 0, web/main.py) — same
+`{title, link, summary, published, source}` item shape the rest of the
+platform's RSS pipeline uses, plus `bias_distribution`, `factuality`, and
+`blindspot` fields. The runner merges this into
+`GET /api/rss?category=ground_news` alongside any plain-RSS feeds an
+operator adds to that category by hand through the existing Add Feed flow
+— see `runner/main.py::_fetch_ground_news_items()` for why that merge
+point was chosen (the credentialed fetch and the pre-existing generic
+feed-add mechanism both land in the same place, so this isn't a bespoke
+one-off pipeline bolted onto the side of the real RSS system).
+
+**Do not enable this feed in a production deployment, and do not extend
+`ground_news_client.py`'s placeholder endpoint with a reverse-engineered
+private API contract, until Ground News has responded to the access
+request.** The infrastructure exists so that response is a fast, low-risk
+"flip the credential-gate on" once it arrives — not so anyone is tempted
+to skip asking.
+
+---
+
 ## Researched / not yet integrated — no fetcher, parser, or credential wiring exists
 
 Everything in this section is **access research**, not running software. For
