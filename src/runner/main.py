@@ -2492,6 +2492,46 @@ async def _fetch_one_rss(client: "httpx.AsyncClient", feed: dict, cache_prefix: 
     return []
 
 
+_GROUND_NEWS_CACHE_KEY = "ground_news:dispatch"
+
+
+async def _fetch_ground_news_items(client: "httpx.AsyncClient") -> list[dict]:
+    """Merge-in point for the operator's credentialed Ground News feed.
+
+    Unlike _fetch_one_rss, this doesn't GET a public feed URL directly --
+    ground_news_items live in the shared DB, written by
+    poller/fetchers/ground_news.py and served out by web/main.py's
+    /api/v1/ground-news (Tier 0). The runner proxies to that endpoint
+    exactly the way it already proxies everything else at :8000 (see
+    /api/dispatch/{path} above) rather than touching the DB directly --
+    same runner/web boundary _resolve_operator_identity()'s docstring
+    describes.
+
+    Returns [] (not an error) whenever Ground News access isn't
+    configured/signed-off yet, or the request fails -- an unconfigured
+    credentialed source should degrade to "no extra items" for this
+    category, not break the whole merged response for feeds that ARE
+    working. Cached on the same TTL/cache dict as plain feed fetches so a
+    burst of category requests doesn't hammer the dispatch API.
+    """
+    now = time.time()
+    cached = _rss_cache.get(_GROUND_NEWS_CACHE_KEY)
+    if cached and (now - cached[0]) < _RSS_TTL:
+        return cached[1]
+    items: list[dict] = []
+    try:
+        r = await client.get(f"{DISPATCH_BASE}/api/v1/ground-news", params={"limit": 100})
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+        else:
+            log.info("ground_news: dispatch API returned %d (likely awaiting_credentials)",
+                      r.status_code)
+    except Exception as e:
+        log.warning("ground_news: dispatch API call failed: %s", e)
+    _rss_cache[_GROUND_NEWS_CACHE_KEY] = (now, items)
+    return items
+
+
 @app.get("/api/rss")
 async def rss_feed(request: Request, category: str = "corporate_intel", limit: int = 200):
     """Fetch and return normalised RSS items for a category.
@@ -2500,7 +2540,15 @@ async def rss_feed(request: Request, category: str = "corporate_intel", limit: i
     that are visible to the caller (company-scope always included;
     department/personal-scope only if the caller's resolved identity
     matches -- see shared.rss_catalog.visible_to(), added 2026-08-02).
-    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation|<user-category-id>|__custom__
+
+    2026-09: category="ground_news" additionally merges in the operator's
+    own credentialed Ground News items via _fetch_ground_news_items() --
+    see that function's docstring and docs/GROUND_NEWS_ACCESS_REQUEST.md.
+    The built-in catalog entry for "ground_news" is deliberately empty
+    (shared/rss_catalog.py); any user-added plain-RSS feeds tagged with
+    this category still merge in too, same as every other category.
+
+    ?category=corporate_intel|marketing_intel|travel_trends|dc_area|aviation|ground_news|<user-category-id>|__custom__
     ?limit=N  — max items to return (default 200, max 500). Each feed is capped at
                100 items before merging to prevent podcast archives from swamping news.
     """
@@ -2528,6 +2576,9 @@ async def rss_feed(request: Request, category: str = "corporate_intel", limit: i
                 for it in items:
                     it["discovered"] = True
             all_items.extend(items)
+
+        if category == "ground_news":
+            all_items.extend(await _fetch_ground_news_items(client))
 
     all_items.sort(key=lambda x: x.get("published", ""), reverse=True)
     return {"category": category, "count": len(all_items), "items": all_items[:limit]}

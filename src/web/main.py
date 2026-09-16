@@ -161,6 +161,11 @@ async def startup() -> None:
     # write these either, but a future route-visualization/hole-detection
     # endpoint querying them needs the tables to exist on a fresh DB.
     db.init_db_v45()
+    # ground_news_items -- web doesn't write this (poller's
+    # poller/fetchers/ground_news.py does), but /api/v1/ground-news below
+    # needs the table to exist on a fresh DB. Credential-gated pending
+    # Ground News sign-off -- see docs/GROUND_NEWS_ACCESS_REQUEST.md.
+    db.init_db_v47()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────
@@ -663,6 +668,11 @@ async def get_feeds() -> JSONResponse:
         "push:nws": 300, "push:fdps": 300, "push:stdds": 300,
         "push:fns": 300, "push:itws": 300,
         "push:amtrak": 300,
+        # 900s = 2x the ground_news poll interval (FETCH_SCHEDULE,
+        # poller/main.py), matching the eurocontrol/jasdat convention
+        # above. Credential-gated -- reads awaiting_credentials, not
+        # stale, until an operator configures Ground News access.
+        "ground_news": 1800,
     }
     # REST feeds covered by a push source — stale REST is expected when push is live.
     # "tfr": "push:stdds" and "nas": "push:tfms" removed 2026-07-23 -- same bogus
@@ -937,6 +947,40 @@ async def get_notams() -> JSONResponse:
         for n in notams
     ]
     return JSONResponse({"notams": result, "count": len(result)})
+
+
+@app.get("/api/v1/ground-news")
+async def get_ground_news(limit: int = 100) -> JSONResponse:
+    """Operator's own Ground News bias/coverage items — Tier 0.
+
+    Credential-gated (see poller/fetchers/ground_news.py and
+    docs/GROUND_NEWS_ACCESS_REQUEST.md) -- returns an empty list, not an
+    error, until GROUND_NEWS_SESSION_TOKEN or GROUND_NEWS_EMAIL/PASSWORD
+    are configured and the feed has completed at least one fetch. Items
+    are in the same {title, link, summary, published, source} shape the
+    runner's RSS pipeline already uses (see runner/main.py::_parse_rss),
+    with bias/factuality/blindspot fields alongside -- this is what lets
+    the runner's /api/rss?category=ground_news merge treat it like any
+    other feed source rather than a bespoke one-off.
+    """
+    limit = min(max(limit, 1), 500)
+    rows = db.get_recent_ground_news_items(limit)
+    items = [
+        {
+            "title": r["title"],
+            "link": r["link"],
+            "summary": r["summary"] or "",
+            "published": r["published"] or "",
+            "source": "Ground News",
+            "bias_distribution": {
+                "left": r["bias_left"], "center": r["bias_center"], "right": r["bias_right"],
+            },
+            "factuality": r["factuality"],
+            "blindspot": bool(r["blindspot"]),
+        }
+        for r in rows
+    ]
+    return JSONResponse({"items": items, "count": len(items)})
 
 
 @app.get("/api/v1/amtrak")
