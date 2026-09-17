@@ -91,50 +91,6 @@ One of, in order of preference:
    [docs/DATA_SOURCES.md](DATA_SOURCES.md)'s note against enabling this
    feed before sign-off.
 
-## Email template
-
-```
-To: [Ground News contact — support@ground.news or a developer-relations
-    address, if one exists; confirm the right address before sending]
-Subject: Personal-account API/automation access request — self-hosted use
-
-Ground News Team,
-
-I run a self-hosted, personal dispatch-intelligence platform (CTDI —
-Corporate Travel Dispatch Intelligence, open-source reference
-implementation at https://github.com/CorporateTravelDC/ctdi-dispatch)
-that aggregates news, weather, and operational data feeds I'm personally
-entitled to access, running entirely on hardware I control.
-
-I have an active Ground News [subscription tier] account and would like
-to pull my own personalized feed (my saved interests/topics) and public
-bias/coverage/Blindspot story data into this platform, the same way I
-already do with FAA SWIM/NMS and NWWS-OI (both credentialed, per-operator
-feeds I have direct access agreements for).
-
-Model:
-- One account per deployment — my own account only, never shared or
-  resold to other users of this software.
-- Self-hosted — all fetched data stays on hardware I control; nothing is
-  redistributed, re-served to third parties, or made public.
-- Low-frequency polling — at most once every 15 minutes per deployment.
-- No resale — this is personal-use software, not a product built on top
-  of Ground News data.
-
-Could you confirm whether this kind of personal-account automation is
-something Ground News is comfortable with, and if so, point me to (or
-help me define) a supported way to authenticate programmatically —
-whether that's an API key, a documented session-token approach, or
-something else you'd prefer. If this isn't something Ground News wants to
-support, that's a completely fine answer too — I'd rather ask directly
-than build against an undocumented endpoint.
-
-Technical contact: [Your name, email]
-Repository (for context, if useful): https://github.com/CorporateTravelDC/ctdi-dispatch
-
-Thank you,
-[Your name]
-```
 
 ## What happens after a response
 
