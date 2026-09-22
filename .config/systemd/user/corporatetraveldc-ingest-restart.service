@@ -1,0 +1,6 @@
+[Unit]
+Description=Threshold-triggered preventive restart of corporatetraveldc-ingest (mitigates known OOM leak)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-ingest-restart.sh

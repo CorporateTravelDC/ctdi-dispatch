@@ -181,6 +181,24 @@ def run() -> dict:
                 precip_code=rec.precip_code,
                 obs_time=rec.obs_time or fetched_at,
             )
+            # 2026-09-04: metar_snapshot is current-state-only (overwritten
+            # every fetch) -- metar_history logs every observation so wind
+            # direction over time can be correlated against the
+            # stdds_safety_status_history bitmask-flip timing to infer
+            # which active runway configuration a given bit/pair
+            # corresponds to. wind_dir_deg was previously parsed
+            # transiently (see parse_wind_dir()'s own docstring) but never
+            # persisted anywhere.
+            db.insert_metar_history(
+                station=rec.station,
+                raw_metar=rec.raw_metar,
+                ceiling_ft=rec.ceiling_ft,
+                visibility_sm=rec.visibility_sm,
+                wind_kt=rec.wind_kt,
+                wind_dir_deg=parse_wind_dir(rec.raw_metar),
+                precip_code=rec.precip_code,
+                obs_time=rec.obs_time or fetched_at,
+            )
 
         db.upsert_feed(feed_name, fetched_at, error=None,
                        payload_hash=payload_hash)

@@ -18,6 +18,7 @@ export const DEFAULT_CONFIG = {
     metar:    true,
     // Map overlays (gated per-view; Steps 3-5 will wire toggles)
     tfr:      true,
+    airmet:   true,
     airspace: true,
     rings:    true,
     localFeed: true,
@@ -25,6 +26,7 @@ export const DEFAULT_CONFIG = {
     trains:   false,
     marine:   false,
     weather:  false,
+    utm:      false,
   },
   // Per-feed panel collapse state
   panels: {
@@ -32,6 +34,7 @@ export const DEFAULT_CONFIG = {
     trains:  true,
     marine:  true,
     weather: true,
+    utm:     true,
     tfr:     true,
     signals: true,
     amtrak:  true,
@@ -174,6 +177,11 @@ export function useLayerConfig() {
 /** Returns true if the user has a stored admin token (sync mode active) */
 export function hasSyncToken() {
   return !!localStorage.getItem(TOKEN_KEY)
+}
+
+/** Returns the stored admin token, or null if none is set. */
+export function getSyncToken() {
+  return localStorage.getItem(TOKEN_KEY)
 }
 
 /** Store or clear admin token for backend sync */

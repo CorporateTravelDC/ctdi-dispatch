@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
 
 // ── Built-in brief type configs ───────────────────────────────────────────────
 // Any undiscovered type gets the default config (ops-style schedule/workflow).
@@ -87,11 +88,14 @@ function BriefTab({ type }) {
     }).catch(() => { if (isInitial) setLoading(false) })
   }, [type])
 
+  // Initial load only -- shows the spinner and resets view state. Recurring
+  // background refreshes (interval + visibility-return) are handled below
+  // via loadCurrent(false), which never touches the spinner/selected state.
   useEffect(() => {
     loadCurrent(true)
-    const id = setInterval(() => loadCurrent(false), BRIEF_POLL_MS)
-    return () => clearInterval(id)
   }, [loadCurrent])
+
+  useVisibilityAwareInterval(() => loadCurrent(false), BRIEF_POLL_MS)
 
   useEffect(() => {
     if (selected === null) { setArchText(null); return }

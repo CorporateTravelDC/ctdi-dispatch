@@ -71,11 +71,19 @@ def test_feed(feed: str) -> str:
     if not host.startswith(("tcp://", "tcps://", "ws://", "wss://")):
         host = f"tcp://{host}"
 
+    # FOLLOW-UP FIX 2026-08-26: without an explicit trust-store-path, the
+    # native solclient library fails to load any trust store at all
+    # (SOLCLIENT_SUBCODE_FAILED_LOADING_TRUSTSTORE) -- it doesn't share
+    # Python's own OpenSSL default-path resolution. See the matching fix
+    # (and postmortem) in src/ingest/swim_client.py.
+    import ssl as _ssl
+    _trust_store_path = _ssl.get_default_verify_paths().openssl_capath
     props = {
         "solace.messaging.transport.host": host,
         "solace.messaging.service.vpn-name": vpn,
         "solace.messaging.authentication.scheme.basic.username": user,
         "solace.messaging.authentication.scheme.basic.password": passwd,
+        "solace.messaging.tls.trust-store-path": _trust_store_path,
         # Prevent indefinite hangs on slow broker handshake
         "SOLCLIENT_SESSION_PROP_CONNECT_TIMEOUT_MS": "15000",
         "SOLCLIENT_SESSION_PROP_CONNECT_RETRIES": "0",
@@ -84,8 +92,16 @@ def test_feed(feed: str) -> str:
 
     svc = None
     try:
-        # Use system trust store; skip validation for diagnostic test to isolate auth vs TLS
-        tls = TLS.create().without_certificate_validation()
+        # CORRECTED 2026-08-25: this diagnostic script's TLS-skip was the
+        # same pattern src/ingest/swim_client.py had in production, copied
+        # here to "isolate auth vs TLS" -- no longer needed now that real
+        # validation is confirmed working cleanly against the default
+        # trust store (ems1/ems2 both present valid DigiCert-issued certs).
+        # Use real validation so this diagnostic tool doesn't itself
+        # transmit real FAA credentials over an unverified connection.
+        tls = TLS.create().with_certificate_validation(
+            ignore_expiration=False, validate_server_name=True
+        )
         svc = (MessagingService.builder()
                 .from_properties(props)
                 .with_transport_security_strategy(tls)

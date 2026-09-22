@@ -10,6 +10,7 @@ const LAYERS = [
   { key: 'localFeed', icon: '✈', label: 'Traffic',     title: 'ADS-B traffic (airplanes.live aggregator feed)' },
   { key: 'tracked',   icon: '◎', label: 'Tracked',     title: 'Tracked/watchlisted flights (cyan)' },
   { key: 'tfr',       icon: '⊘', label: 'TFR Rings',   title: 'TFR restriction circles' },
+  { key: 'airmet',    icon: '▲', label: 'AIRMET/SIGMET', title: 'FAA aviation hazards (icing, turbulence, IFR, convective, mtn obscuration)' },
   { key: 'airspace',  icon: '⬡', label: 'Airspace',    title: 'FRZ / SFRA boundaries' },
   { key: 'rings',     icon: '◯', label: 'Range Rings', title: '50 / 100 / 150 / 250 nm rings' },
   { key: 'trains',    icon: '⟹', label: 'Trains',      title: 'NEC train positions' },

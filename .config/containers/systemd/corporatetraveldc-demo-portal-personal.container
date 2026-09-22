@@ -1,0 +1,60 @@
+# corporatetraveldc-demo-portal-personal.container
+# PERSISTENT demo portal #1 of 2 -- "personal" (2026-09-06, see
+# docs/DEMO_PORTALS.md). Password-gated public preview slot for the
+# operator's own website work: own-site refreshes, theme experiments,
+# a client rewrite the operator wants to look at before it goes on the
+# client portal. The port (8087) and the Cloudflare Tunnel hostname
+# (preview.example.com -> http://127.0.0.1:8087) are fixed
+# once and never change; what sits behind them is swapped by
+#   scripts/demo-portal.sh personal mount <slug>
+# which only re-points the symlink
+#   /home/corporatetraveldc/demos/_portal/personal/current -> ../../<slug>
+# The whole demos/ tree is mounted read-only so nginx follows that
+# symlink per request -- no restart on swap. When nothing is mounted the
+# portal serves _portal/personal/placeholder/index.html with auth off.
+# Each demo keeps its own auth/.htpasswd (read through the symlink), so
+# whoever is looking at the portal sees only that demo's credential.
+#
+# The three demo surfaces: corporatetraveldc-runner-demo (product demo,
+# already running) / this unit (personal + website work) /
+# corporatetraveldc-demo-portal-client (one client at a time).
+#
+# Init the tree once: scripts/demo-portal-init.sh
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-demo-portal-personal
+
+[Unit]
+Description=Demo portal (personal) -- persistent password-gated website preview slot
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:alpine
+ContainerName=corporatetraveldc-demo-portal-personal
+# Whole demos tree, read-only, so the relative `current` symlink resolves
+# inside the container and can be swapped without a restart. Mounted at
+# /demos -- the rendered nginx.conf hard-codes that path.
+Volume=/home/corporatetraveldc/demos:/demos:ro,z
+Volume=/home/corporatetraveldc/demos/_portal/personal/nginx.conf:/etc/nginx/nginx.conf:ro,z
+# 127.0.0.1 -- what the Cloudflare Tunnel route reaches.
+# 100.x.x.x (tailnet) kept too, for direct internal checks without
+# going out over the public hostname.
+PublishPort=127.0.0.1:8087:8087
+PublishPort=100.x.x.x:8087:8087
+Memory=128m
+
+[Service]
+Slice=production.slice
+Restart=on-failure
+RestartSec=30
+
+[Install]
+# 2026-09-06: NOT auto-started at login -- no WantedBy=default.target.
+# WantedBy=default.target on 13 long-running containers pulled them up
+# flat in the first seconds of the user session (Sep 5 boot journal:
+# all seven ingest units started at 17:49:07, a full minute BEFORE
+# corporatetraveldc-stack-boot-stagger.service began), so the staggered
+# boot never actually owned the boot. Startup is owned by
+# corporatetraveldc-stack-boot-stagger.service (scripts/stack-boot-ctl.sh,
+# serialized + load-gated via scripts/lib/serial-bringup.sh), which lists
+# this unit in its ORDER.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

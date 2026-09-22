@@ -54,6 +54,13 @@ def ntfy_fallback_url() -> str:
 def ntfy_token() -> str:
     return get("NTFY_TOKEN", "")
 
+def operator_email() -> str:
+    """Inbox destination for ntfy's X-Email relay (send(..., email=True)).
+    2026-09-02: same address blog-substack-reminder.sh already delivers to
+    -- a Gmail forwarder, not a mailbox itself (see memory: no Gmail for
+    outbound, this is inbound-only)."""
+    return get("OPERATOR_EMAIL", "csexecutiveservices@gmail.com")
+
 def db_path() -> str:
     return get("DISPATCH_DB", "/var/lib/corporatetraveldc/corporatetraveldc.db")
 
@@ -79,6 +86,20 @@ def vip_watchlist_path() -> str:
 def tailscale_domain_suffix() -> str:
     """Tailscale magic DNS suffix — used by Tier 1 auth."""
     return get("TAILSCALE_DOMAIN_SUFFIX", ".example.ts.net")
+
+def runner_click_base() -> str:
+    """
+    Base URL for ntfy click-through links (common/ntfy_push.py TOPIC_CLICK).
+
+    2026-08-03: defaults to the Tailscale hostname, not a public domain --
+    ops.example.com was retired 2026-08-02 (see runner/main.py's
+    _RETIRED_HOSTNAMES) and now hard-rejects requests, so every click-through
+    still pointing at it was landing on a dead link, not just an insecure one.
+    Override with NTFY_CLICK_BASE only for a deliberately public-facing
+    deployment (the demo instance does not use this module at all -- it
+    never imports common.ntfy_push, see src/demo/*.py).
+    """
+    return get("NTFY_CLICK_BASE", "https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net")
 
 
 def faa_notam_api_key() -> str:

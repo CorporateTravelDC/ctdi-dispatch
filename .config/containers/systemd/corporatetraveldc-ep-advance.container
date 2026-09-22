@@ -10,12 +10,32 @@ Memory=1536m
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=python3 poller/skills/ep_advance_brief.py
+# 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
+# together either EVER"): flock on the box-wide unit lock wraps the whole
+# run, so a second report container blocks here -- inside its own
+# container, holding no model, no threads -- until the one ahead exits.
+# It waits; it is never refused and never kills the run ahead of it.
+# common/llama_pool.py takes a separate per-generation lock on top.
+Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ep_advance_brief.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -25,5 +45,46 @@ CPUWeight=100
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".
 CPUQuota=300%
+# 2026-08-30: on-demand report-tier llama-server. This skill's persona
+# (ep-advance, common/personas.py) declares num_ctx 6144 > llama-chat's
+# -c 4096, so its real main brief (measured 5908 tokens live) was
+# rejected by the shared chat port on every run since the 2026-08-27
+# cutover. common/llm.py now routes >4096-ctx personas to report-1
+# (port 8095, -c 8192), and these two HOST-level hooks give report-1 its
+# on-demand lifecycle (resident only while a consumer runs -- it must
+# never be permanently resident alongside hot+chat, see its own unit's
+# 2026-08-27/30 comments). ExecStartPre blocks on /health (bounded,
+# <=120s -- within this unit's existing 800s fixed startup budget);
+# ExecStopPost stops report-1 only if no other consumer skill is
+# mid-run (real overlap: this unit fires hourly at :35 and both weekly
+# consumers' budgets span multiple :35 marks). See the script's own
+# header for the full design.
+# 2026-09-06: the llama-report-ondemand.sh ExecStartPre/ExecStopPost hooks
+# are gone -- there is ONE permanent llama-server now
+# (corporatetraveldc-llama.service, -np 2, CPUQuota=200%); nothing
+# starts or stops a model server per job any more.
 Type=oneshot
-TimeoutStartSec=950
+# 2026-08-06: was 1500s, sized for the old 1200s-primary-timeout design.
+# ep-advance never actually failed outright on 2026-08-06 (that margin
+# was enough to survive one slow call), but every run was 9-15 minutes
+# late -- see src/poller/skills/ep_advance_brief.py's OLLAMA_TIMEOUT
+# comment. New worst case with the fail-fast redesign (150s timeout, 0
+# retries, on both the main and 12h-trend call): 150s + 150s (trend,
+# boundary hours only) + ~20s overhead =~ 320s. 600s matches
+# ops-brief's recalculated value for the same reasoning.
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation)
+# + 2220s main call + 540s trend call (both max_retries=0) = 3560s -> 3600. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+# 2026-08-17 (fable sweep): 3600 -> 4500 in parity with the skill's main
+# call going 2220s -> 2800s (num_predict 750 -> 1000 truncation fix -- see
+# ep_advance_brief.py's OLLAMA_TIMEOUT comment). 800s fixed + 2800s main
+# + 540s trend = 4140s worst case.
+# 2026-08-31 (report-1 on-demand pass): 4500 -> 5000 in parity with the
+# skill's main call going 2800s -> 3600s (re-derived from live-measured
+# report-1 throughput -- see ep_advance_brief.py's OLLAMA_TIMEOUT
+# comment). 800s fixed + 3600s main + 540s trend = 4940s worst case.
+TimeoutStartSec=5000

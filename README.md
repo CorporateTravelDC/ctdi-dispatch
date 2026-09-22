@@ -1,170 +1,266 @@
 # Corporate Travel Dispatch Intelligence (CTDI)
 
-Multi-region real-time travel intelligence platform. Monitors commercial aviation (via FAA SWIM or equivalent regional feeds), rail, weather, and airspace restrictions — delivering push alerts the moment something operationally relevant changes. Runs as four rootless Podman containers managed by systemd Quadlets on any Linux system.
+**Documentation snapshot: 2026-08-23; reconciled 2026-09-03** — factual claims
+below were verified against the running system and current source (previous
+full verification 2026-08-11, partial reconciliation 2026-08-19). The
+2026-09-03 pass reconciled this file against
+`docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md` (a fresh code-verified audit):
+the Ollama → llama.cpp cutover (2026-08-27), the runner-demo restore +
+`DEMO_MODE=true`, the thermal-guard trigger demotion (2026-08-27), and the
+2026-09-03 forward-only push-dedup redesign.
 
-> **Origin note:** CTDI was originally built for Washington, DC metro operations (executive chauffeur + CERT/ARES/Skywarn). The system is designed for global deployment from day one — the DC configuration is the reference implementation, not a constraint. See **[docs/REGIONALIZATION.md](docs/REGIONALIZATION.md)** for a full guide to deploying elsewhere.
+Multi-region real-time travel intelligence platform. Monitors commercial
+aviation (FAA SWIM push feeds plus REST fallbacks), rail, weather, and airspace
+restrictions — delivering push alerts the moment something operationally
+relevant changes. Runs as rootless Podman containers managed by systemd
+Quadlets under a single deployment user, alongside timer-driven skill
+containers, a local SDR receive stack, and host-local llama.cpp
+(`llama-server`) LLM inference — the Ollama daemon was retired 2026-08-27,
+though `OLLAMA_*` env-var/parameter names survive as compatibility vocabulary
+(see the Local LLM section).
+Container/unit counts drift as feeds and skills are added, so this README does
+not pin them — check the live picture instead:
 
-> **Repository note:** The system user, container prefix, and filesystem paths use `corporatetraveldc` — the original deployment name. These are preserved for backward compatibility on the reference Pi deployment. New deployments can substitute any username; only the env config and Quadlet paths need to reflect it.
+```bash
+systemctl --user list-units 'corporatetraveldc-*' --all --no-legend | wc -l
+podman ps -a --format '{{.Names}}' | wc -l
+ls .config/containers/systemd/*.container | wc -l
+```
 
-> **Repository rename (2026-06):** This repository was renamed from `CorporateTravelDC/corporatetraveldc-dispatch` to `CorporateTravelDC/ctdi-dispatch` when the project was rebranded as Corporate Travel Dispatch Intelligence. GitHub automatically redirects all previous URLs — any link or `git remote` pointing at `github.com/CorporateTravelDC/corporatetraveldc-dispatch` will resolve correctly. If you arrived here via a redirect and want to confirm you're in the right place: the project description, commit history, and this note are the canonical confirmation. No content was moved to a new repository.
+(As of 2026-08-23 14:0x EDT those returned 122 loaded units, 39 containers and
+63 `.container` Quadlets in the repo — 64 are installed live, the extra being
+`corporatetraveldc-ccw-demo.container`, a client-preview service that is
+running but deliberately not tracked here; see `docs/INFRA_MAP.md`. Re-run the
+commands rather than trusting any number written here. The container count is
+especially volatile in *both* directions, for two independent reasons:
+Quadlet-managed containers are *removed*, not just stopped, when their unit
+stops, so a thermal LOCKDOWN or tier-1 shed makes even `podman ps -a` shrink
+(the same command read 30 during a shed earlier the same morning); and the
+timer-triggered **skill** containers are short-lived oneshots that exist only
+while they run, so a moment when several `*-daily-watch` / brief / digest
+timers overlap pushes the count *above* the long-running baseline — 34 with
+the long-running stack up and no skills firing, 39 with five skill containers
+mid-run. Neither direction is a fault.)
+
+> **Origin note:** CTDI was originally built for Washington, DC metro
+> operations (executive chauffeur + CERT/ARES/Skywarn). The DC configuration
+> is the reference implementation, not a constraint — see
+> **[docs/REGIONALIZATION.md](docs/REGIONALIZATION.md)** for deploying elsewhere.
+
+> **Repository note:** The system user, container prefix, and filesystem paths
+> use `corporatetraveldc` — the original deployment name, preserved for
+> backward compatibility. New deployments can substitute any username; only
+> env config and Quadlet paths need to reflect it.
 
 📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS.
-📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral architecture. Read before contributing.
-🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC: airports, weather offices, European and Asia-Pacific feed equivalents.
-📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — API signup portals, email templates, and policy links for every integrated feed — US, European, and Asia-Pacific.
+📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral. Read before contributing.
+🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC.
+📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — signup portals, email templates, and policy links for every integrated feed.
+🗺️ **[Internal Infra Map](docs/INFRA_MAP.md)** — full private service/host/domain map (private repo only).
+⚠️ **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail in this stack is tuned for **one Raspberry Pi 5 under shared-resource contention**. Read before de-consolidating or reusing values.
 
+All public releases are GPG signed:
 
-All Public releases are GPG signed with the following key(s):
+```
+ABD3976FCC006E0F3FE559177286B3118BA4EFB2 — Corporate Travel DC 'the operator' (original default key)
+419A864CC29A09513039B6E03033FB4D01903159 — Rotated key, new default as of July 7, 2026
+```
 
-ABD3976FCC006E0F3FE559177286B3118BA4EFB2 - Corporate Travel DC 'the operator' (Default GPG Code Signing Key for CorporateTravelDC Repositories) <developer@example.com>
-419A864CC29A09513039B6E03033FB4D01903159 - Rotated Key  (July 2026) New Default Key as of July 7, 2026 
-
-All Active keys will have their Pubkey included in the repo listed by FULL Fingerprint. 
-
+Active keys ship their pubkeys in-repo, named by full fingerprint.
 
 ---
 
-## Status
+## Status (2026-08-23)
 
 | Component | State |
 |---|---|
-| Ops dashboard (runner app) | `https://ops.example.com` *(React SPA, screen-reader accessible — no CF Access gate required)* |
-| Web API (browser / programmatic) | `https://dispatch.example.com` *(CF Access gated)* |
-| Tailscale direct | `http://100.x.x.x:8000` |
-| CPS | YELLOW / MARGINAL |
-| All containers | Running |
-| FAA SWIM NMS push feeds | ✅ Live — all 6 feeds connected (CS Exec subscription, 2026-06) |
-| Local LLM (Ollama) | mistral-nemo 12B — corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint Modelfile wrappers |
-| Dispatch Drawer | Streaming chat via corporatetraveldc-pi5-chat (gemma3) |
+| Ops dashboard (runner app) | **Tailnet-only.** `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx → :8001). The former public `ops.example.com` hostname was **retired 2026-08-02** and is hard-404'd by hostname in `src/runner/main.py` (`_RETIRED_HOSTNAMES`). |
+| Public demo (runner, demo-playback) | **UP — restored 2026-08-24, and `DEMO_MODE=true` is now set explicitly** (verified live 2026-09-03: unit `active (running)`, `NRestarts=0`, `:8005 /healthz` → `ok`, and the `dispatch-runner.example.com` vhost serves 200). The 2026-08-15→24 crash loop (`sqlite3.OperationalError` from the 2026-08-14 F6 mount change) was fixed by mounting a dedicated `/var/lib/corporatetraveldc-demo` state dir (commit `0a7f643`), and the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET`, so the password gate (`demo.profiles` sessions), signal sanitization, and ntfy suppression are armed — closing the "explicit either way" operator directive of 2026-08-20. |
+| Web API (browser / programmatic) | `https://dispatch.example.com` (Cloudflare Access gated; nginx stamps `X-CTDI-Public: 1`, which pins the request to Tier 0 regardless of token) |
+| Tailscale direct API | `http://100.x.x.x:8000` |
+| Public MCP (OpenAPI bridge) | **Retired 2026-08-18.** `mcpo`/`mcpo-public` units are gone (`systemctl --user list-units 'corporatetraveldc-mcpo*' --all` → 0 units); ports 8082/8083 refuse connections; the server checkout was renamed to `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The `mcp.example.com` nginx vhost still exists and proxies to the now-gone `:8083`, so the hostname currently returns **502** — removing that vhost is still pending. Restoring the bridge would mean un-archiving the checkout, reinstating the `mcpo`/`mcpo-public` Quadlets, and re-pointing the vhost. |
+| FAA SWIM NMS push feeds | ✅ All 6 provisioned and credentialed (FDPS/STDDS/TFMS/TBFM/ITWS/FNS) — provisioned 2026-07-20, split into per-feed containers 2026-07-26. **Not continuously running by design:** `scripts/thermal-ingest-guard.py` sheds SWIM ingest containers under CPU-load/thermal pressure (see "SWIM feed liveness and thermal load-shedding"). |
+| Local LLM (llama.cpp) | **Ollama retired 2026-08-27.** Inference is one host-level `llama-server` (llama.cpp) systemd user unit — `corporatetraveldc-llama.service` (:8093, consolidated from separate hot/chat/report-1 tiers 2026-09-06) — serving one shared GGUF (Qwen3-4B-Instruct-2507 as of 2026-09-21); per-skill personas live in `src/common/personas.py`, not in per-skill Ollama models (see Local LLM section) |
+| ADS-B receive (UltraFeeder) | ✅ **Restored 2026-08-11** — the ADS-B RTL-SDR dongle had stopped enumerating on USB (~2026-08-10, container crash-looping; `adsb-feed-silence-watchdog` detected and alerted correctly); hardware reseat brought it back midday 2026-08-11 (dongle enumerates, container up, live decode confirmed). All other SDR containers (ACARS/VDL2 chain, feeders) up throughout. |
 
 ---
 
 ## Architecture
 
-Five containers share a SQLite database (WAL mode) under the deployment user. The runner is the only container that does not touch the shared DB — it owns the ops.example.com frontend and its own JSON state:
+web, poller, pusher, and all 7 ingest containers share one database. The
+backend is selected by `DISPATCH_DB_BACKEND` in
+`/etc/corporatetraveldc/dispatch.env` — `sqlite` (single WAL file, dev/
+rollback) or `postgres` (live since the 2026-09-20 cutover); see
+`docs/POSTGRES_MIGRATION.md` for which tables live where and for the
+cutover/rollback procedure. The runner mostly stays off the shared DB — it
+owns the ops frontend and its own JSON state — with one exception: its
+Dispatch Drawer chat history (`chat_messages`) now goes through the same
+shared `db.conn()` write path as everything else, since 2026-09-20:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │                    deployment user (corporatetraveldc)             │
 │                                                                    │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌─────────┐         │
-│  │   web     │  │  poller   │  │  pusher   │  │ ingest  │         │
-│  │ FastAPI   │  │ Scheduler │  │  ntfy     │  │  SWIM   │         │
-│  │ REST API  │  │ + Skills  │  │  sender   │  │  NWWS   │         │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └────┬────┘         │
-│        └──────────────┴──────────────┴──────────────┘             │
-│                      SQLite (WAL) shared DB                        │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────────┐    │
+│  │   web     │  │  poller   │  │  pusher   │  │ ingest ×7    │    │
+│  │ FastAPI   │  │ Scheduler │  │  ntfy     │  │ SWIM ×6 +    │    │
+│  │ REST API  │  │ + Skills  │  │  sender   │  │ core (NWWS/  │    │
+│  │  :8000    │  │           │  │           │  │ Amtrak/RF)   │    │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └──────┬───────┘    │
+│        └──────────────┴──────────────┴───────────────┘            │
+│              Postgres shared DB (DISPATCH_DB_BACKEND=postgres)     │
 │                                                                    │
-│  ┌─────────────────────────────────────────────────┐               │
-│  │  runner (port 8001) → served at ops.example.com  │               │
-│  │  FastAPI + React/Vite SPA, screen-reader ready   │               │
-│  │  Intel Feed · ADS-B Map · Status · Brief · Chat  │               │
-│  │  proxies dispatch web API at :8000               │               │
-│  │  owns user_rss_feeds.json (separate from DB)     │               │
-│  └─────────────────────────────────────────────────┘               │
+│  ┌──────────────────────────────────────────────────┐             │
+│  │  runner (:8001) — Tailnet-only ops dashboard     │             │
+│  │  FastAPI + React/Vite SPA, screen-reader ready   │             │
+│  │  Intel Feed · ADS-B Map · Trains · AIS · Brief   │             │
+│  │  proxies dispatch web API at :8000               │             │
+│  │  owns user_rss_feeds.json (separate from DB)     │             │
+│  └──────────────────────────────────────────────────┘             │
+│                                                                    │
+│  + runner-demo (:8005, public demo) · demo recorder · demo-api    │
+│    (:8004) · SDR stack · ntfy · Nextcloud · Open WebUI · timers   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-### Containers
+### Core containers
 
 | Container | Image | Role |
 |---|---|---|
-| `corporatetraveldc-web` | `localhost/corporatetraveldc-web:latest` | FastAPI REST API, tiered auth |
-| `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills |
+| `corporatetraveldc-web` | `localhost/corporatetraveldc-web:latest` | FastAPI REST API (port 8000, published on 127.0.0.1 + tailnet IP), tiered auth |
+| `corporatetraveldc-poller` | `localhost/corporatetraveldc-poller:latest` | Async scheduler — fetchers + AI skills as subprocesses, watchlist sweeps |
 | `corporatetraveldc-pusher` | `localhost/corporatetraveldc-pusher:latest` | ntfy alert dispatcher |
-| `corporatetraveldc-ingest` | `localhost/corporatetraveldc-ingest:latest` | SWIM/NWWS/Amtrak push ingest — all 6 NMS feeds + NWWS-OI live |
-| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Screen-reader-accessible React/Vite SPA + API (port 8001) — served publicly at `ops.example.com` |
+| `corporatetraveldc-ingest-{core,fdps,stdds,tfms,tbfm,itws,notam}` | `localhost/corporatetraveldc-ingest:latest` (one image, 7 Quadlets) | Push ingest, split 2026-07-26 into 7 independent containers — one per SWIM feed plus "core" (NWWS-OI/Amtrak/local airspace) — so any single feed restarts without dropping the rest. See `src/ingest/README.md` and `scripts/ingest-feed-ctl.sh`. |
+| `corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Ops dashboard SPA + API (port 8001) — Tailnet-only |
+| `corporatetraveldc-runner-demo` | same runner image | Demo-playback instance (port 8005 → container 8001), reads the demo API (:8004) instead of live feeds — public vhost at `dispatch-runner.example.com`. **Running since the 2026-08-24 fix, with `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET` set in the Quadlet** — password gate and sanitization armed (see Status). |
+| `corporatetraveldc-demo` / `corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Archive recorder / read-only playback API (port 8004) over `demo.db` |
+
+### Auxiliary containers (same host)
+
+SDR/RF: `ultrafeeder` (ADS-B + tar1090, port 8080 — restored 2026-08-11, see
+Status), `acarsrouter` (:9080), `acarshub` (:9081), `dumpvdl2`,
+`acars-watcher` (UDP 5005), plus aggregator feeders `piaware`, `fr24feed`
+(:8754), `planefinder` (:30053), `airnavradar`. Disabled pending hardware:
+`acarsdec`, `dumphfdl`, `ais`/`ais-catcher`, `ais-watcher` — these exist only
+as staged `*.container.disabled` files under `systemd/`,
+`systemd/quadlets/` and (for `acarsdec`) `.config/containers/systemd/`. None
+is installed in `~/.config/containers/systemd/`, so they have **no systemd
+unit at all** — `systemctl --user list-unit-files` matching any of those names
+returns 0, which is expected, not a fault. See `docs/SDR_SERVICES.md`.
+
+Infra/comms: `ntfy` (:2586), `protonbridge` (SMTP relay,
+100.x.x.x:1025 → container port 25 — tailnet-only, see
+`docs/INFRA_MAP.md` §4),
+`nextcloud-app` (:8090) + `nextcloud-db` (Postgres 16), `openwebui` (:3000),
+`rss-bridge` (:3001), `csexec-contact` (website contact API, :8002),
+`amtrak-tracker`.
 
 ### Data feeds
 
 | Feed | Source | Interval | Status |
 |---|---|---|---|
 | METAR | AviationWeather.gov ADDS | 5 min | ✅ Active |
-| NWS alerts | api.weather.gov | 5 min | ✅ Active |
+| NWS alerts | api.weather.gov | 5 min | ✅ Active (REST fallback; push-primary via NWWS-OI) |
 | ATCSCC ops plan | ATCSCC | 1 hr | ✅ Active |
 | Runsheet | Local file | 5 min | ✅ Active |
-| TFR | tfr.faa.gov XML | 5 min | ⚠️ FAA upstream issue |
-| NAS programs | FAA NAS/OIS | 5 min | ⚠️ Empty upstream response |
-| NOTAMs | FAA NOTAM API | 5 min | ⚠️ Needs `FAA_NOTAM_API_KEY` |
-| Amtrak | Push ingest / poller fallback | Push / 5 min | ✅ Active |
-| FDPS (flight plan + track) | FAA SWIM NMS | Push | ✅ Live — push:fdps heartbeat active |
-| STDDS (surface + terminal tracks + TFRs) | FAA SWIM NMS | Push | ✅ Live — push:stdds heartbeat active |
-| TFMS (GDP/GS/AFP/AAR) | FAA SWIM NMS | Push | ✅ Live — push:tfms heartbeat active |
-| AIM/FNS (digital NOTAMs) | FAA SWIM NMS | Push | ✅ Live — push:fns heartbeat active |
-| TBFM (arrival sequencing) | FAA SWIM NMS | Push | ✅ Live — push:tbfm heartbeat active |
-| ITWS (terminal weather) | FAA SWIM NMS | Push | ✅ Live — push:itws heartbeat active |
-| NWWS-OI (NWS push) | NWWS-OI XMPP MUC | Push | ✅ Live — push:nws heartbeat active |
+| TFR | tfr.faa.gov/tfrapi/getTfrList (JSON) | 5 min | ✅ Active — independent REST poll; **no** push-primary exists for TFRs |
+| NAS programs | nasstatus.faa.gov/api/airport-status-information | 5 min | ✅ Active |
+| NOTAMs (REST) | FAA NOTAM API | 5 min | ⚠️ Needs `FAA_NOTAM_API_KEY` + `FAA_NOTAM_API_SECRET` (`awaiting_credentials`). Live NOTAM data already flows via the SWIM FNS push feed regardless. |
+| DCA / IAD FIDS | MWAA JSON endpoints | 5 min | ✅ Active (600 s staleness threshold — see `docs/DCA_IAD_FIDS.md`) |
+| Amtrak | Push-primary is the **`amtrak-tracker` container** (`src/amtrak_tracker/`, api.amtraker.com, port 8898, stamps `push:amtrak`); `src/ingest/amtrak.py` is a *second* implementation of the same capability inside `ingest-core` (gated `AMTRAK_ENABLED`, same heartbeat key — the failover contract keeps them from double-writing, but which is authoritative is only discoverable from quadlet enablement state). **Still no REST fallback**: `poller/fetchers/amtrak.py` exists but has no `FETCH_SCHEDULE` entry (re-verified 2026-09-03) | Push | ✅ Active (see CLAUDE.md "Known bad") |
+| FDPS (flight plan + track, FIXM 3.0) | FAA SWIM NMS | Push | ✅ Live (LOCKDOWN-only shed †) |
+| STDDS (surface + terminal tracks) | FAA SWIM NMS | Push | ✅ Live — carries no TFR data (temp tier-1 shed candidate †) |
+| TFMS (GDP/GS/AFP/restrictions/per-flight TMI) | FAA SWIM NMS | Push | ✅ Live (temp tier-1 shed candidate †) |
+| AIM/FNS (digital NOTAMs) | FAA SWIM NMS | Push | ✅ Live (LOCKDOWN-only shed † — **no longer "never shed"**, see the 2026-08-23 redesign) |
+| TBFM (arrival sequencing) | FAA SWIM NMS | Push | ✅ Live (LOCKDOWN-only shed †) |
+| ITWS (terminal weather) | FAA SWIM NMS | Push | ✅ Live (LOCKDOWN-only shed †) |
+| NWWS-OI (NWS push) | NWWS-OI XMPP MUC | Push | ✅ Live |
+| EUROCONTROL NM B2B | EUROCONTROL | 15 min | ⚠️ Needs credentials — code ships ready |
+| JASDAT (Japan) | JCAB/MLIT | 15 min | ⚠️ Needs credentials — code ships ready |
+
+### † SWIM feed liveness and thermal load-shedding
+
+"Live" above means **provisioned, credentialed, and eligible to run** — not
+"running continuously". All six `SWIM_NMS_{HOST,USER,PASS,QUEUE}_{FDPS,STDDS,
+TFMS,AIM,TBFM,ITWS}` credential sets are present in
+`/etc/corporatetraveldc/dispatch-secrets.env`, but `scripts/thermal-ingest-guard.py`
+(2-minute timer) **stops SWIM ingest containers — and, under LOCKDOWN, the
+entire dispatch stack except `web` — under CPU-load / thermal pressure, and
+starts them again when the box recovers**. This is designed behaviour, not a
+fault:
+
+**Redesigned 2026-08-23 by operator directive — the two-tier load ladder this
+README used to describe (tier 1 `load1 >= 10`, tier 2 `load1 >= 14`, resume
+`load1 < 6.0`) is gone.** Every real trip on record had been load-driven, never
+temperature-driven (peak temp across the guard's whole journal history was
+~71 °C, under the 74 °C line, with an independent auto-ramping PWM fan
+regulating underneath), and the old 6.0 resume bar sat *inside* normal load
+noise — so load and temperature are no longer symmetric. Temperature keeps its
+original two-stage trigger as a backstop; load collapses to a single
+informational/LOCKDOWN split:
+
+| Trip | Condition | What's shed |
+|---|---|---|
+| Temp tier 1 (mild) | `temp >= 74.0 °C` | `tfms`, `stdds` only |
+| **LOCKDOWN** | `temp >= 79.0 °C` **or** `load1 >= 40.0` | **the entire stack except `web`**, immediately, no partial stage: all 6 SWIM feeds (`fdps,stdds,tfms,tbfm,itws,notam`), `ingest-core`, `poller`, `pusher`, `runner` |
+| Informational only, no shed | `temp` 70–74 °C, or `load1` 15–40 | — |
+| Restore | `temp < 65 °C` **and** `load1 < 15.0`, held 300 s | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+
+Note the two consequences a reader of the old table would get wrong: the
+`notam` container (which runs the AIM/**FNS** feed, a real 6th SWIM feed — not a
+NOTAM-only afterthought) is now shed under LOCKDOWN, where it previously never
+was; and LOCKDOWN stops `poller`/`pusher`/`runner` too, so a
+stopped core container is no longer automatically a fault either. `web` is the
+only thing guaranteed to survive.
+
+**Two 2026-08-27 changes to the 2026-08-23 model (verified against the guard
+script 2026-09-03):** (1) the third LOCKDOWN trigger — "≥ 2 load-attributed
+brief fallbacks in 300 s" — was **demoted to informational-only** after one
+night produced ~15 fallback-attributed LOCKDOWN trips with real load1 of only
+4–9; the count is still computed and logged every cycle but no longer trips
+LOCKDOWN or blocks restore. (2) With the same-day Ollama → llama.cpp cutover,
+the guard **no longer stops or starts any LLM service**: `ollama.service` is
+gone, and the `corporatetraveldc-llama-hot/chat/report-*` units are
+deliberately excluded from LOCKDOWN scope so the hot alert path survives
+exactly the events LOCKDOWN responds to.
+
+"Load-attributed brief fallback" is a signal from `src/common/llm.py`
+(`_record_load_fallback()` → `/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl`),
+logged only for `OllamaBusyError` (slot busy — the exception class name is
+kept from the Ollama era) or a generate-call `httpx.TimeoutException`
+— deliberately *not* for `httpx.ConnectError`, so a deliberately-stopped LLM
+server can never look like contention. Informational-only since 2026-08-27.
+
+A real LOCKDOWN fired and fully restored on 2026-08-23; verify current state
+from the guard's own journal and state file rather than from this table.
+
+**Consequences for anyone reading unit state:**
+
+- Finding `corporatetraveldc-ingest-<feed>.service` `inactive (dead)` with
+  `Result=success` is **expected** and is not something to "fix" by restarting
+  it — the guard will start it again on its own, and a manual start just gets
+  shed again on the next 2-minute pass. Under LOCKDOWN the same is true of
+  `poller`, `pusher`, and `runner` (the `corporatetraveldc-llama-*` units are
+  never touched by the guard).
+- These sheds are **silent to `systemctl list-units` failure greps**, because
+  the units exit 0.
+- The authoritative check is the guard's own state, not `systemctl`:
+
+```bash
+cat /var/lib/corporatetraveldc/thermal_ingest_guard_state.json
+journalctl --user -u corporatetraveldc-thermal-ingest-guard --since "24 hours ago"
+```
+
+Thresholds are overridable via `THERMAL_GUARD_*` in `dispatch.env` (defaults
+listed in the script header).
 
 ### Push/pull failover
 
-The ingest container stamps heartbeats into `feed_state` every 30 seconds. Before each REST poll, the poller checks whether the heartbeat for that feed is fresher than 90 seconds. If so, it skips the REST fetch — ingest owns that feed. When ingest disconnects, the heartbeat ages out and REST polling resumes automatically. No manual intervention required.
-
----
-
-<div>
-
-### Operational Topology
-* **Core Network Interface:** System workloads are managed via rootless Podman container layers operating inside your private security grid.
-* **Data Transit Protocol:** Outbound alerting payloads communicate exclusively via standard local network loopback or localized LAN HTTP POST sequences.
-* **Local Inference Pipeline:** Upstream tasks interact directly via local sockets with the host-bound Ollama execution engine.
-
-### Key Security Safeguards
-* **Absolute Data Sovereignty:** 0% of PNR, itinerary data, or employee travel records escape to public cloud networks. All AI inference is computed locally on-device using host-bound engines.
-* **Native Compliance Hook Egress:** Outbound alert logs are wrapped in strict, immutable JSON payloads and routed directly to your internal network's archival proxy endpoints.
-* **Resource Hardening:** System execution caps (`num_thread`) are baked natively into the custom LLM wrappers, ensuring that network routers, proxies, and infrastructure always maintain dedicated CPU headroom.
-
-For a deep-dive review of system telemetry mapping, SEC Rule 17a-4/FINRA Rule 4511 alignment, and SELinux Type Enforcement variables, see the [Enterprise Security & Compliance Technical Datasheet](docs/COMPLIANCE_SECURITY.md).
-
-</div>
-
-## Deploying outside DC
-
-**The feed credentials themselves don't change when you move regions — only the flags for what you're monitoring do.** You're pointing the same credential infrastructure at different geographic filters.
-
-Three files contain all DC-specific geography. Swap these and the system works anywhere:
-
-### 1. Airport hub list — `src/poller/skills/ops_brief.py`
-
-```python
-# Line ~48 — replace with your local primary + regional hub airports
-HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
-```
-
-For example, a Chicago-based deployment might be:
-```python
-HUB_AIRPORTS = "KORD,KMDW,KMKE,KDTW,KSTL,KDEN,KLAX,KJFK,KBOS,KSFO"
-```
-
-For European deployments, use ICAO 4-letter codes (same format — AviationWeather.gov covers them):
-```python
-HUB_AIRPORTS = "EGLL,EGKK,EHAM,LFPG,EDDF,LEMD,LIRF,EBBR,LPPT,LSZH"
-```
-
-The `_metar_section()` function already handles ICAO format correctly. The "transcontinental hubs" label in briefings is cosmetic — rename it in the Ollama system prompt (`SYSTEM_PROMPT` in ops_brief.py) to match your context: "EUROPEAN HUBS", "INTL CONNECTIONS", whatever reads naturally for your operation.
-
-### 2. NWS alert area — `src/poller/skills/ops_brief.py`
-
-```python
-# Line ~51-53 — replace state/territory codes for your region
-NWS_ALERTS_URL = (
-    "https://api.weather.gov/alerts/active"
-    "?area=VA,MD,DC,NY,NJ,CT,MA,PA,DE,RI&status=actual&severity=Extreme,Severe,Moderate"
-)
-```
-
-This uses NWS FIPS state codes. Replace with your states/territories. Outside the US, the NWS feed won't apply — see [docs/REGIONALIZATION.md](docs/REGIONALIZATION.md) for international weather API equivalents.
-
-### 3. NWS weather field office filter — `dispatch.env`
-
-```bash
-# DC reference deployment: LWX (Sterling VA), AKQ (Wakefield VA), CTP (State College PA)
-# Replace with your local WFO codes — find yours at https://www.weather.gov/srh/nwsoffices
-NWWS_WFO_FILTER=LWX,AKQ,CTP
-```
-
-The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter keeps only the ones you care about. Without it, every WFO's output lands in your ingest queue.
-
-> **Note for operators outside the US:** The NWS API (`api.weather.gov`) and NWWS-OI feed cover US territory only. For international deployments, replace these with regional equivalents — see [docs/REGIONALIZATION.md](docs/REGIONALIZATION.md) for EUROCONTROL, JMA (Japan), BoM (Australia), and other regional weather APIs that integrate into the same poller slots.
+Each connected push feed stamps a `push:<feed>` heartbeat into `feed_state`
+every 30 seconds. Before each REST poll that has a push-primary, the poller
+checks whether the heartbeat is fresher than 90 seconds (`FALLBACK_MAX_AGE`);
+if so the REST fetch is skipped. When ingest disconnects, the heartbeat ages
+out and REST polling resumes automatically.
 
 ---
 
@@ -174,306 +270,281 @@ The NWWS-OI XMPP feed delivers products from all WFOs nationwide. This filter ke
 
 | Endpoint | URL | Notes |
 |---|---|---|
-| Ops dashboard (runner app) | `https://ops.example.com` | React SPA, screen-reader accessible; no CF Access gate |
-| API (browser / programmatic) | `https://dispatch.example.com` | CF Access gated; use for browser-based API calls and admin work |
-| Tailscale direct | `http://100.x.x.x:8000` | Always available on tailnet; preferred fallback |
+| Ops dashboard (runner) | `http://100.x.x.x:8001` / `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` | Tailnet only; no public hostname |
+| API | `https://dispatch.example.com` | CF Access gated; served as Tier 0 (nginx sets `X-CTDI-Public: 1`) |
+| API (tailnet) | `http://100.x.x.x:8000` | Full tier resolution via bearer token |
+| Public demo | `https://dispatch-runner.example.com` | Live (restored 2026-08-24); password-gated (`DEMO_MODE=true` set in the Quadlet — see Status) |
+| ~~Public MCP bridge~~ | ~~`https://mcp.example.com`~~ | **Retired 2026-08-18** — mcpo/mcpo-public units removed, ports 8082/8083 refuse connections, server checkout archived at `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The nginx vhost still exists and proxies to the dead `:8083`, so the hostname returns **502**; vhost removal is still pending. |
 
-> **Note:** `ops.example.com` proxies to the runner app (port 8001) via nginx — it is the live operational dashboard (map, TFR/signals, EOTD trains, briefs, admin, feed). `dispatch.example.com` is the CF Access-gated API gateway the runner calls internally. Bearer token provides the actual API authorization. `dispatch-runner.example.com` is retired as a live public endpoint — reserved for a future demo-archiver stub serving time-delayed data (see *Demo Mode & Travel Pattern Intelligence* below).
+### Tier 0 — Anonymous (selection)
 
-### Tier 0 — Anonymous
+`src/web/main.py` declares **57** `@app.get()` routes across all tiers
+(re-count with `grep -c '^@app\.get(' src/web/main.py` — this grows; an
+earlier revision said "~50"). Of those, 37 are anonymous, 10 carry a
+`require_tier` dependency (T1/T2) and 10 carry `require_admin` (re-derived
+2026-08-23 by AST-classifying every `@app.get` decorator + signature, not by
+grepping mention counts); the
+`src/web/routes/*.py` modules add further routes on top. The table below is a
+selection of the Tier-0 subset, not an exhaustive list.
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/healthz` | Service health + snapshot age |
 | GET | `/api/v1/feeds` | Feed freshness + error state |
-| GET | `/api/v1/cps` | Critical Predictability State (HEMS go/no-go) |
+| GET | `/api/v1/cps` | Critical Predictability State (go/no-go) |
 | GET | `/api/v1/tfr` | Active TFRs (no enrichment) |
-| GET | `/api/v1/weather` | METAR snapshot — DCA, IAD, BWI + surrounding stations |
+| GET | `/api/v1/weather` | METAR snapshot |
 | GET | `/api/v1/alerts` | Active NWS hazardous weather alerts |
+| GET | `/api/v1/wx/discussion[/{awips_id}]` | WPC forecast discussions |
+| GET | `/api/v1/airmets` | AIRMET/SIGMET hazard polygons |
 | GET | `/api/v1/notams` | Active NOTAMs for DC-area airports |
 | GET | `/api/v1/amtrak` | Amtrak DC-area status |
 | GET | `/api/v1/opsplan` | ATCSCC daily ops plan |
-| GET | `/api/v1/brief` | Latest daily brief text |
-| GET | `/api/v1/route` | Latest ground route impact narrative |
-| GET | `/api/v1/events` | Live SSE event stream (PWA-ready) |
-| GET | `/api/v1/train-config` | Operator rail config — primary station, regional filter, map center |
-| GET | `/api/v1/demo/readiness` | Demo archive seed status — days collected, tier readiness, DB size |
-| GET | `/api/v1/adsb` | Global ADS-B snapshot — airplanes.live proxy, 250 NM radius from KDCA, 30s cache |
+| GET | `/api/v1/brief` · `/brief/history` · `/brief/weekly` · `/brief/{ref}` | Brief texts + history |
+| GET | `/api/v1/route` | Ground route impact narrative |
+| GET | `/api/v1/events` | Live SSE event stream |
+| GET | `/api/v1/train-config` · `/api/v1/wx-config` | Operator rail / meteorology config |
+| GET | `/api/v1/flightplan/{callsign}` | FDPS-confirmed flight plan |
+| GET | `/api/v1/fids/{airport}` · `/{airport}/arrivals` · `/{airport}/{flight}` | DCA/IAD FIDS |
+| GET | `/api/v1/adsb` | **Local-receiver-only** ADS-B snapshot (since 2026-08-27 — no third-party proxy; bounded by the box's own receiver range) |
+| GET | `/api/v1/aircraft/{identifier}` · `/api/v1/aircraft-registry/status` | FAA/OpenSky registry lookup |
+| GET | `/api/v1/airspace[/{feature_id}]` | Static DC airspace features |
+| GET | `/api/v1/demo/readiness` | Demo archive seed status |
+| GET/POST/PATCH/DELETE | `/api/v1/osint/*` | OSINT feed + scopes |
+| GET | `/api/v1/board*` | Coordination board (read; posts need `X-Board-Key`) |
+| GET | `/api/v1/sectors*` | Sector/family alert topic state |
 
-### Tier 1 — Tailscale / CERT bearer token
+### Tier 1 — `cert` bearer token
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/tfr-enriched` | TFRs with AI enrichment text |
-| GET | `/api/v1/radio` | Radio reference placeholder |
+| GET | `/api/v1/radio` | Radio reference |
 | GET | `/api/v1/runsheet` | Daily runsheet + watchlist sessions |
-| GET | `/api/v1/opsplan/range` | Ops plan date range (pattern analysis) |
-| GET/POST/DELETE | `/api/v1/watchlist` | Watchlist session management |
+| GET | `/api/v1/opsplan/range` | Ops plan date range |
+| GET/POST/DELETE | `/api/v1/watchlist` (sessions) | Watchlist session management |
+| GET | `/api/v1/watchlist` + `/history` (entries) | Watchlist entries + event history |
 
-### Admin — admin bearer token
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/admin/healthz` | Admin health |
-| GET | `/admin/feeds` | Feed state (admin view) |
-| GET | `/admin/audit` | Audit log |
-| GET | `/admin/tokens` | Active auth tokens |
-| GET | `/admin/version` | Build/version info |
-| GET | `/admin/triggers` | Trigger queue |
-| POST | `/admin/refresh-feed/{feed}` | Manual feed refresh |
-| POST | `/admin/force-recompute-cps` | Force CPS recalculation |
-| POST | `/admin/force-opsplan-snapshot` | Force ops plan snapshot |
-| POST | `/admin/push-test-alert` | Send test ntfy alert |
-| GET/POST/DELETE | `/admin/vip` | VIP watchlist management |
-
-### Runner API (port 8001 — served publicly at `ops.example.com`)
-
-The runner exposes its own API alongside its React/Vite SPA build (the same screen-reader-accessible app now served at `ops.example.com`). All routes are Tailscale-gated (100.64.0.0/10 enforced by FastAPI middleware). `dispatch-runner.example.com` no longer routes here in production — it is retired as a live endpoint and reserved for a future demo-archiver stub (time-delayed data replay; see *Demo Mode & Travel Pattern Intelligence*).
-
-**ADS-B**
+### Tier 2 — `shares` bearer token
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/adsb/local` | Proxy → UltraFeeder aircraft.json (local antenna) |
-| GET | `/api/adsb/live` | Proxy → airplanes.live v2, 250nm radius from KDCA |
+| GET | `/api/v1/cui/status` | CUI status — audit-logged |
 
-**Intel Feed — RSS/Atom**
+### Admin — `admin` bearer token
 
-| Method | Path | Description |
+`/admin/healthz`, `/admin/feeds`, `/admin/audit`, `/admin/tokens`,
+`/admin/version`, `/admin/triggers`, `POST /admin/refresh-feed/{feed}`,
+`POST /admin/force-recompute-cps`, `POST /admin/force-opsplan-snapshot`,
+`POST /admin/force-osint-scrape`, `POST /admin/push-alert` (legacy alias
+`/admin/push-test-alert`), `GET/POST/DELETE /admin/vip`,
+`GET/POST/DELETE /admin/bandwidth-priority`, `/admin/approval-requests*`,
+`/admin/watchdog/status`, plus admin-gated watchlist entry mutations
+(`POST /api/v1/watchlist/{flights,trains,vessels}[,/batch]`,
+`POST /api/v1/watchlist/permanent/batch`, `DELETE /api/v1/watchlist/{id}`)
+and `POST /api/v1/remember` (second-brain capture).
+
+### Inbound webhooks — shared-secret header (`X-Webhook-Secret`)
+
+Credential-gated: each returns 503 until its `*_WEBHOOK_SECRET` is set in
+`dispatch-secrets.env`. See `src/web/routes/webhooks.py`.
+
+| Method | Path | Source |
 |---|---|---|
-| GET | `/api/rss` | Merged feed: catalog + user-defined feeds for `?category=` |
-| GET | `/api/rss/categories` | Available categories and their catalog sources |
-| GET | `/api/rss/custom` | Fetch and proxy an arbitrary feed URL server-side (CORS bypass) |
-| GET | `/api/rss/user-feeds` | List all user-defined feeds |
-| POST | `/api/rss/user-feeds` | Add a user-defined feed (validates by fetching before saving) |
-| DELETE | `/api/rss/user-feeds/{id}` | Remove a user-defined feed by UUID |
+| POST | `/webhooks/limoanywhere/reservations` | LimoAnywhere Customer API |
+| POST | `/webhooks/ringcentral/events` | RingCentral (handles Validation-Token handshake) |
+| POST | `/webhooks/3cx/events` | 3CX Call Control API |
 
-`?category=` accepts: `corporate_intel`, `marketing_intel`, `travel_trends`, `dc_area`, `aviation`, `__custom__`.
-`?limit=N` (default 200, max 500) controls max items returned. Each individual feed is capped at 100 items before merging. Dates are normalized to ISO 8601 on parse so sort order is always correct regardless of source date format.
+### Runner API (port 8001, Tailnet-only)
 
-RSS items with `<enclosure type="audio/*">` or `<enclosure type="video/*">` tags are returned with an `audio_url` field. The frontend renders these as podcast episodes with an inline HTML5 player.
+The runner serves its React/Vite SPA plus its own API. Sensitive surfaces
+(admin proxy, non-GET API proxy) are gated by `_is_trusted()` (Tailscale
+CGNAT 100.64.0.0/10 + RFC1918 + loopback; `CF-Connecting-IP` honored
+exclusively when present). In demo mode, untrusted origins additionally
+need the password-gated session cookie.
 
-User-defined feeds are persisted to `/var/lib/corporatetraveldc/user_rss_feeds.json` (volume-mounted; survives container rebuilds). Each entry has: `id` (UUID), `name`, `url`, `category`.
+Routes: `/healthz`, `/api/whoami`, `/api/demo/{login,status,webhook-log}`,
+`/api/adsb/{local,live}`, `/api/{vdl2,acars,hfdl}/messages`,
+`/api/ais/vessels`, `/api/ask` + `/api/chat/history` (Dispatch Drawer chat —
+llama.cpp chat tier since 2026-08-27),
+`/api/dispatch/{path}` (transparent proxy → :8000, with Tier-1 token
+injection for an allowlist of paths — see
+`docs/auth-token-proxy-pattern.md`), `/api/stream` (SSE),
+`/api/ntfy/stream`, `/api/v1/config` (GET/PUT), `/api/v1/frontend-config`,
+and the RSS engine: `/api/rss`, `/api/rss/categories` (GET/POST),
+`/api/rss/custom`, `/api/rss/resolve-source`, `/api/rss/user-feeds`
+(GET/POST/DELETE).
 
-**Dispatch proxy**
-
-| Method | Path | Description |
-|---|---|---|
-| GET/POST | `/api/dispatch/{path}` | Transparent proxy → dispatch web API at :8000 |
-| GET | `/api/stream` | SSE stream: CPS + TFR count + feed health (30s interval) |
-| GET | `/healthz` | Runner service health |
+**RSS catalog** (`src/shared/rss_catalog.py`, shared with the second-brain
+RSS poller): **11 built-in categories, 32 built-in feeds** (re-verified live
+2026-08-23; the catalog grows, so re-count with
+`PYTHONPATH=src python3 -c "import shared.rss_catalog as r; print(len(r._RSS_CATALOG), sum(len(v) for v in r._RSS_CATALOG.values()), len(r.all_feed_urls()))"`
+— which also reports the whole pool including operator-added feeds, **34**
+unique URLs as of 2026-08-23) — `corporate_intel`,
+`marketing_intel`, `travel_trends`, `dc_area`, `aviation`,
+`advanced_air_mobility`, `gig_economy`, `concierge_luxury_travel`,
+`trains_yachts`, `executive_protection`, `osint_cybersecurity_video` — plus
+`__custom__` for user-defined feeds. User feeds persist in
+`/var/lib/corporatetraveldc/user_rss_feeds.json` (custom categories in
+`user_rss_categories.json`). `?limit=N` default 200 max 500; each feed capped
+at 100 items pre-merge; dates normalized to ISO 8601; `<enclosure
+type="audio/*|video/*">` items get an `audio_url` for the inline podcast
+player.
 
 ### Auth model
 
-Tokens are created with `csex-token`. Format: `ctdc_<user>_<32-char-random>`. Only the SHA-256 hash is stored in the database; plaintext is shown once at creation and never stored.
+Tokens are created with **`ctdc-token`** (`src/ctdc_token/cli.py`). Format:
+`ctdc_<user>_<32-char-random>`. Only the SHA-256 hash is stored; plaintext is
+shown once at creation.
 
 ```
-Tier 0 → anonymous (all /api/v1/* data endpoints)
-Tier 1 → Tailscale-User-Login header | 100.x.x.x source IP | cert bearer token
+Tier 0 → anonymous (all /api/v1/* data endpoints), and ANY request carrying
+         X-CTDI-Public: 1 (stamped by the public nginx vhosts) regardless of token
+Tier 1 → bearer token tier=cert
 Tier 2 → bearer token tier=shares (audit-logged; CUI-adjacent)
-Admin  → bearer token tier=admin (all /admin/* endpoints)
+Admin  → bearer token tier=admin (all /admin/* endpoints except one
+         deliberate exception, below)
 ```
+
+**One `/admin/*` endpoint is unauthenticated by design.**
+`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2373`)
+carries no auth dependency — Cloudflare strips `Authorization` through the
+tunnel, so a token-gated resolve link would be untappable from a phone off
+the tailnet. Security rests on the UUID4 request id plus single-use
+enforcement in `resolve_approval_request()`. Verified live 2026-08-23: an
+unauthenticated request to that path returns an app-level `404` (reaches
+the handler), while `/admin/healthz` returns `403`. See
+`docs/COMPLIANCE_SECURITY.md`.
+
+**Network origin no longer grants any tier.** The old
+`Tailscale-User-Login`-header / source-IP tier grant was removed (it was
+confirmed spoofable via XFF against the live container); a real bearer token
+is required for T1+ on every path. See `src/auth/auth.py`.
 
 ---
 
 ## Watchlist system
 
-Two tiers of watchlist entries share the same monitoring and alert infrastructure:
+Two tiers share one monitoring/alert pipeline — full detail in
+`src/shared/watchlist_README.md`:
 
-**Permanent** — loaded from YAML files in `/opt/corporatetraveldc/watchlists/`. Monitored every operating day indefinitely. File changes are picked up by `WatchlistFileWatcher` without a restart.
+**Permanent** — **JSON** files in `/opt/corporatetraveldc/watchlists/`
+(`permanent_flights.json`, `permanent_trains.json`, `permanent_vessels.json`,
+`permanent_drones.json`). Hot-reloaded by `WatchlistFileWatcher` within
+~65 s, no restart.
 
-**Transient** — added via REST API (`POST /api/v1/watchlist`). Have an `auto_remove_at` timestamp. Swept automatically by `WatchlistSweep` every 60 seconds.
+**Transient** — added via REST (`POST /api/v1/watchlist/{flights,trains,vessels}`,
+admin token). Auto-expire via `auto_remove_at`, swept every 60 s.
 
-Both types fire dual ntfy pushes on every event: a detailed push to the domain topic (`flight-alerts` / `train-alerts`) and a concise push to `dispatch`. A 5-minute dedup window suppresses re-fires of the same event type for the same entry.
-
-Flight monitoring uses a priority source chain: FlightAware AeroAPI (if key set) → airplanes.live (free, no key) → local UltraFeeder ADS-B → FDPS cache (when NMS provisioned) → schedule inference fallback.
-
-OOOI phase state machine: `pre_departure → out → off → on → in`. Phases never revert.
+Four entry types: flight (callsign), train (Amtrak number), **vessel (MMSI —
+AISHub sweep every 300 s, requires `AIS_AISHUB_ID`)**, and drone
+(Remote-ID/UAS — separate `uas_phase` columns, not the OOOI machine, since
+multi-sortie UAS legitimately alternate launched/landed). Events fire dual
+ntfy pushes (domain topic + concise `dispatch`) with **forward-only,
+content-hash dedup** (redesigned 2026-09-03 after the UAL1369 re-page
+incident: an unchanged event stays suppressed indefinitely; only a genuine
+content change re-fires). Flight monitoring is **local-only since
+2026-08-27**: local UltraFeeder ADS-B → FDPS push cache → FIDS → schedule
+inference (identity resolution likewise local: own ADS-B → ingested FDPS →
+local FAA/OpenSky registry tables). airplanes.live is no longer queried
+programmatically; FlightAware AeroAPI code survives but is dormant without
+`FLIGHTAWARE_AEROAPI_KEY`. OOOI phase state machine:
+`pre_departure → out → off → on → in`, phases never revert; same-phase
+confirmations resolve by source authority (ACARS > SMES > TFMS > TBFM/ADS-B >
+FIDS).
 
 ---
 
-## ntfy topics
+## ntfy topics (core set)
 
 | Topic | Content | Priority |
 |---|---|---|
-| `tfr-alert` | VIP/POTUS TFR active | 5 (max) |
-| `hot-alerts` | VIP TFR + operationally critical events | 5 |
-| `flight-alerts` | OOOI events, diversions, landings | 4–5 |
-| `train-alerts` | Amtrak delay events | 4–5 |
+| `tfr-alert` / `hot-alerts` | VIP/POTUS TFR, Marine One/AF1, severe-ops events | 5 |
+| `flight-alerts` / `train-alerts` / `vessel-alerts` | Watchlist events per domain | 2–5 |
 | `dispatch` | Concise bottom line for all events | mirrors source |
+| `dispatch-debriefs` / `dispatch-ops` | Full debrief tables / weekly aggregate | 2–3 |
 | `cps` | CPS score changes | 3–5 |
-| `wx-alerts` | NWS hazardous weather | 3–4 |
-| `ops-brief` | Daily / weekly brief | 3 |
-| `ops-health` | Freshness audit | 2 |
+| `wx-alerts` | NWS + ITWS hazardous weather | 3–4 |
+| `nas-alerts` | NAS program/restriction/NOTAM alerts | 2–5 |
+| `<family>-alerts` + `<family>-<zone>` (tfms/tbfm/fdps/itws/aim_fns × zny/zdc/zid/zob/zatl/zhu/zla/zse) | Escalating family/sector alerts, per-topic throttled | 2–4 |
+| `ops-brief` / `ep` / `ep-advance` | Hourly briefs | 2–4 |
+| `ops-health` | Freshness audit, watchdogs, thermal guard | 2–5 |
+| `osint-alerts` | OSINT scope hits | 2–3 |
+| `approval-gate` | Sudo / agent-signing approval prompts (Allow/Deny) | 4 |
+
+Full catalog + trigger/dedup logic: `docs/ALERT_REFERENCE.md`; design
+rationale: `docs/ALERT_ARCHITECTURE.md`.
 
 ---
 
 ## CPS — Critical Predictability State
 
-The CPS score is a Part 135.609-informed go/no-go assessment for HEMS operations. Six factors are evaluated and combined:
-
-| Factor | Source |
-|---|---|
-| Ceiling | METAR — primary airports |
-| Visibility | METAR |
-| Wind | METAR |
-| Precipitation | METAR precip_code |
-| Airspace | Active TFRs, static restricted areas |
-| GDP | Active NAS ground delay programs |
-
-Output: `GREEN / GO`, `YELLOW / MARGINAL`, `RED / NO-GO`. Computed by `poller/skills/cps_recompute.py` every 60 minutes and on demand via `POST /admin/force-recompute-cps`.
+Part 135.609-informed go/no-go score. Factors: ceiling, visibility, wind,
+precipitation (METAR), airspace (TFRs + static restricted areas), GDP (NAS
+programs). Output `GREEN/GO`, `YELLOW/MARGINAL`, `RED/NO-GO`. Computed by
+`poller/skills/cps_recompute.py` hourly and on demand via
+`POST /admin/force-recompute-cps`.
 
 ---
 
 ## Demo Mode & Travel Pattern Intelligence
 
-CTDI includes a built-in **archive recorder** that captures rolling snapshots of every live intelligence feed into a local SQLite database (`demo.db`). After a seed period of at least two weeks, this archive becomes two distinct assets:
+A built-in archive recorder (`corporatetraveldc-demo.service`) captures
+rolling snapshots of every live feed into `demo.db` (zlib-compressed, ~52-week
+retention on <500 MB). The demo-playback stack:
 
-### 1. Client demo site
+- `corporatetraveldc-demo-api.service` — read-only playback API, port 8004,
+  serving **only the sovereign scrubbed DB**
+  (`/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount) —
+  it holds no live-DB code path; rows reach that file only via the host-side
+  `scripts/scrub-demo-source.py` scrub+promote pass (two-layer scrub, rows
+  that fail the allowlist post-scan are dropped, never shipped). Playback
+  time is virtualized against a 14-day window anchored at the last
+  promotion.
+- `corporatetraveldc-runner-demo.service` — second runner instance, port 8005,
+  `DISPATCH_BASE_URL=http://100.x.x.x:8004`. **Restored 2026-08-24**
+  (dedicated `/var/lib/corporatetraveldc-demo` state mount, commit `0a7f643`)
+  and the Quadlet now sets **`DEMO_MODE=true` + `DEMO_SESSION_SECRET`**, so
+  the app-layer protections below are active.
+- Public hostname: **`https://dispatch-runner.example.com`** —
+  serving 200 (verified 2026-09-03). With `DEMO_MODE=true` the instance is
+  password-gated (`POST /api/demo/login`, HMAC-signed `ctdc_demo_session`
+  cookie via `src/demo/profiles.py` access profiles, 8 h default) with
+  signals sanitized server-side.
 
-The archive lets you run a fully live-looking demo without connecting to a real deployment. A demo site replays historical snapshots through the same REST API surface as the live system — the client sees a real dispatch dashboard with real historical data (NOTAMs, weather, train status, TFRs, ops plans) without any credentials or live feeds being required.
+Seed readiness: `GET /api/v1/demo/readiness` reports per-tier
+(2w/8w/12w/24w/36w/52w) archive readiness. Config
+(`DEMO_RECORDER_INTERVAL=300`, `DEMO_RECORDER_RETENTION=364`,
+`DEMO_RECORDER_SEED_TARGET=14`) — these values are correct, but they are **not
+set in `dispatch.env`**; they exist only as `os.environ.get` defaults in
+`src/demo/recorder.py:41-43` (alongside `DEMO_RECORDER_API_BASE`, and
+`DEMO_RECORDER_API_TOKEN` which *is* read from
+`/etc/corporatetraveldc/dispatch-secrets.env`). To change one, either add it to
+`dispatch.env` (nothing reads it from there today) or edit the default in
+`recorder.py`.
 
-**Planned endpoint:** `dispatch-runner.example.com` is the expected home for this demo site once built. It is currently retired from live production traffic — all real operational traffic now lives at `ops.example.com` — and is reserved specifically for this future time-delayed-data demo/stub use.
-
-**Seed readiness check:**
-
-```bash
-curl https://dispatch.example.com/api/v1/demo/readiness
-# → {
-#     "seed_days": 21, "seed_target": 14, "ready": true,
-#     "total_snapshots": 18240, "oldest": "2026-06-16", "newest": "2026-07-07",
-#     "db_size_mb": 48.5, "retention_days": 364,
-#     "tiers": {
-#       "2w":  {"days_required": 14,  "days_available": 21,  "ready": true},
-#       "8w":  {"days_required": 56,  "days_available": 21,  "ready": false},
-#       "12w": {"days_required": 84,  "days_available": 21,  "ready": false},
-#       "24w": {"days_required": 168, "days_available": 21,  "ready": false},
-#       "36w": {"days_required": 252, "days_available": 21,  "ready": false},
-#       "52w": {"days_required": 364, "days_available": 21,  "ready": false}
-#     }
-#   }
-```
-
-The demo site gates itself on `ready: true` (2-week seed). Once seeded, it auto-activates and rolls forward. Each retention tier (`2w` → `52w`) reports separately, enabling quarterly / semi-annual / annual snapshot readiness for QBR and marketing use.
-
-**Storage:** All payloads are zlib-compressed on write (~95% reduction for NOTAM JSON). A full 52-week archive of all feeds fits under 500 MB on a Raspberry Pi.
-
----
-
-### 2. Traffic pattern intelligence for corporate travel planning
-
-The same archive is a **longitudinal dataset** of real airspace, rail, and weather activity — updated every five minutes, 24/7, without any manual curation. Over multiple quarters it reveals patterns that are invisible in real-time views:
-
-**Quarterly planning signals:**
-
-| Data type | What the archive reveals |
-|---|---|
-| NOTAMs | Airport construction windows, runway closures, seasonal airspace changes — by corridor and month |
-| TFRs | Frequency and duration of VIP / security TFRs at key airports — useful for client advisories |
-| NAS programs | GDP / ground stop frequency by airport and season — historically predicts Q4 hub congestion |
-| METAR | Ceiling / visibility / wind patterns — builds a local weather climatology for risk scoring |
-| Amtrak | NEC corridor on-time performance trends — informs car-vs-rail upsell recommendations |
-| Ops plan | ATCSCC initiative patterns — captures systemic NAS stress periods by route |
-
-**Example use cases:**
-
-- *"Based on the last two quarters of NOTAM and NAS program data, DCA Friday afternoons carry 30–45 min average ground delay exposure in Q4 — recommend IAD or BWI for westbound bank corridor departures after 14:00."*
-- *"Amtrak NEC on-time performance degraded 18% in the 60-day window — conversion opportunity for ground transport partnerships on BOS–WAS corridor."*
-- *"The archive shows three recurring TFR activations at DCA in the past six weeks consistent with POTUS departure windows — sufficient pattern for a standing advisory to clients traveling Friday mornings."*
-
----
-
-### 3. Sales and marketing data for travel concierge partnerships
-
-The archive provides objective, time-stamped evidence of the operational complexity CTDI monitors and manages — directly useful in partnership conversations:
-
-- **Volume metrics**: total NOTAMs active per day by corridor, number of NAS ground programs per quarter, TFR frequency at key airports
-- **Service-level evidence**: gap between a NOTAM or TFR activation and the first push alert to the client device — demonstrable response time
-- **Route performance data**: rail vs. air delay comparison by corridor and month — grounding upsell recommendations in historical data rather than anecdote
-- **Incident archives**: specific dates and durations of major disruptions with the client advisory that was issued — a concrete deliverable for RFP responses and partnership renewals
-
-None of this requires any additional data collection beyond what the recorder already does. The intelligence is a byproduct of running the live dispatch platform.
-
----
-
-### Archive configuration
-
-```bash
-# /etc/corporatetraveldc/dispatch.env
-
-# Demo archive settings — all optional, defaults shown
-DEMO_RECORDER_INTERVAL=300       # poll interval in seconds (default: 5 min)
-DEMO_RECORDER_RETENTION=364      # rolling window in days (default: 52 weeks / 1 year)
-DEMO_RECORDER_SEED_TARGET=14     # seed days before demo site activates (default: 2 weeks)
-```
-
-Retention tiers tracked automatically for QBR and marketing snapshot readiness:
-
-| Tier | Days | Cadence |
-|---|---|---|
-| `2w`  |  14 | Always-ready seed buffer |
-| `8w`  |  56 | Bi-monthly snapshot |
-| `12w` |  84 | Quarterly (3 months) |
-| `24w` | 168 | Semi-annual (6 months) |
-| `36w` | 252 | 9-month snapshot |
-| `52w` | 364 | Annual (12 months) |
-
-The recorder runs as a standalone systemd user service (`demo-recorder.service`) outside the container stack — no rebuild required for config changes.
+The same archive doubles as a longitudinal dataset (NOTAM construction
+windows, TFR frequency, GDP seasonality, METAR climatology, Amtrak OTP) for
+quarterly planning and partnership evidence — collected as a byproduct of
+normal operation.
 
 ---
 
 ## Supported Platforms
 
-> Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)** — feature matrix, per-platform notes, and package compatibility table.
+> Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)**.
 
-| Platform | Architecture | Server stack | Containers | Local Ollama | Install script |
-|---|---|---|---|---|---|
-| **Linux x86_64** | AMD64 | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
-| **Linux ARM64** (Pi 5, SBCs) | aarch64 | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
-| **macOS Apple Silicon** | arm64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
-| **macOS Intel** | x86_64 | ✅ Full | Podman / Docker ✅ | ✅ | `install/install.sh` |
-| **Windows x64** | AMD64 | ✅ via WSL2 | Docker Desktop / Podman Desktop | ✅ native | `install/install-windows.ps1` |
-| **Android ARM64** | aarch64 | ✅ bare Python | ❌ (Termux) | ✅ (Termux) | `install/install-android.sh` |
-| **iOS / iPadOS** | arm64 | ❌ (web client only) | ❌ | ❌ | — browse to deployment URL |
+| Platform | Server stack | Containers | Local LLM (llama.cpp) | Install script |
+|---|---|---|---|---|
+| **Linux x86_64 / ARM64** (Pi 5 reference) | ✅ Full | Podman ✅ | ✅ | `install/install.sh` |
+| **macOS** (Apple Silicon / Intel) | ✅ Full | Podman/Docker ✅ | ✅ | `install/install.sh` |
+| **Windows x64** | ✅ via WSL2 | Docker/Podman Desktop | ✅ native | `install/install-windows.ps1` |
+| **Android ARM64** (Termux) | ✅ bare Python | ❌ | ✅ | `install/install-android.sh` |
+| **iOS / iPadOS** | ❌ web client only | ❌ | ❌ | browse to deployment URL |
 
-### Notes by platform
-
-**Linux (x86_64 / ARM64)** — primary deployment target. Full Podman rootless container stack with systemd Quadlets. Fedora preferred. The `solace-pubsubplus` SWIM ingest library has prebuilt wheels for x86_64; ARM64 requires a source build.
-
-**macOS (Apple Silicon / Intel)** — full Python stack runs natively; Podman Machine or Docker Desktop provides the container layer. `solace-pubsubplus` (FAA SWIM NMS) is Linux-only — SWIM push feeds require running in a Linux VM or forwarding from a Pi.
-
-**Windows x64** — the installer sets up WSL2 and runs the Linux stack inside it. Ollama installs natively on Windows and is accessible from WSL2 at the host IP.
-
-**Android ARM64 (tablet / kiosk)** — runs via Termux (install from F-Droid). All REST feeds and Ollama work; SWIM push ingest is not supported. Recommended models for constrained memory: `llama3.2:3b` (2.0 GB) or `phi3.5` (2.2 GB).
-
-**iOS / iPadOS (iPhone, iPad)** — no server-side install. Browse to your Cloudflare Tunnel URL. Add to Home Screen for a PWA experience.
-
----
-
-## Ops Dashboard — Runner App
-
-`https://ops.example.com` now serves the full runner application — the same screen-reader-accessible React/Vite SPA previously reachable only at `dispatch-runner.example.com`. The old single-page static-HTML PWA (`src/pwa/`) has been permanently removed from this codebase; nothing under `ops.example.com` is static HTML anymore. The runner calls the dispatch API same-origin via its `/api/dispatch/*` proxy and requires no authentication for Tier 0 data.
-
-**Add to home screen:** the app declares `apple-mobile-web-app-capable` meta tags, so iOS/iPadOS Safari → Share → Add to Home Screen still works. It does not yet ship a `manifest.json` + service worker, so it is not currently full-install-eligible in Chrome/Edge (no install-button prompt) — that's a known gap, not a regression from the retired static PWA.
-
-**Routed views:**
-
-| Route | View | Description |
-|---|---|---|
-| `/` | Overview | Landing dashboard — CPS, weather, TFR, feed-health summary cards |
-| `/map` | Map | Global ADS-B traffic (airplanes.live proxy / local UltraFeeder) |
-| `/trains` | EOTD | NEC train tracking with watchlist highlighting |
-| `/ais` | AIS Map | Maritime traffic overlay |
-| `/status` | Status | Feed freshness / error state for all data sources |
-| `/tfr`, `/signals` | Signals | Active TFRs, NWS alerts, meteorology (`#meteorology`) |
-| `/brief` | Brief | Ops brief, weekly summary, and custom/EP brief tabs (`?tab=`) |
-| `/feed` | Feed | Live ntfy notification stream |
-| `/intel` | Intel | Curated + user-defined RSS/Atom intelligence feeds |
-| `/admin` | Admin | Tailscale-gated administrative controls |
-
-The CPS badge is shown in the global header on every view, not a dedicated route.
-
-**Accessibility:** the runner app uses `aria-live` regions, `role="status"`, and `aria-label` attributes across its live-data components. A full WCAG AA audit pass (contrast ratios, focus-visible rings, skip-nav) has not been re-run since the migration off the old static PWA — treat as a follow-up, not a confirmed guarantee, until re-verified against this app specifically.
+The `solace-pubsubplus` SWIM library is Linux-only (prebuilt wheels x86_64;
+ARM64 builds from source) — SWIM push ingest requires Linux; other platforms
+run the REST-fallback feed set.
 
 ---
 
@@ -481,173 +552,278 @@ The CPS badge is shown in the global header on every view, not a dedicated route
 
 ### Prerequisites
 
-- Linux host running Fedora (preferred), Debian, or Ubuntu
-- Rootless Podman with systemd user session enabled
-- Ollama installed on the host (all inference runs locally — no cloud LLM key required)
+- Linux host running Fedora (reference deployment: Fedora 44 aarch64 on a
+  Pi 5, SELinux enforcing), Debian, or Ubuntu
+- Rootless Podman with a systemd user session (linger enabled)
+- llama.cpp (`llama-server`) on the host — all inference is local, no cloud
+  LLM key required. The reference deployment runs it as ONE systemd user
+  unit (`.config/systemd/user/corporatetraveldc-llama.service`, consolidated
+  2026-09-06 from the earlier separate hot/chat/report-1 tiers) over one
+  shared GGUF (Qwen3-4B-Instruct-2507 as of 2026-09-21, previously
+  phi3-mini); Ollama itself was retired 2026-08-27.
 
 ### First-time setup
 
 ```bash
-git clone https://github.com/CorporateTravelDC/corporatetraveldc-dispatch.git /opt/corporatetraveldc
-cd /opt/corporatetraveldc
+git clone <this-repo> /opt/corporatetraveldc/private/ctdi-dispatch-internal
+cd /opt/corporatetraveldc/private/ctdi-dispatch-internal
 
-# Copy and populate secrets
+# Secrets
 cp dispatch-secrets.env.template /etc/corporatetraveldc/dispatch-secrets.env
 chmod 0600 /etc/corporatetraveldc/dispatch-secrets.env
-# Edit dispatch-secrets.env — add FAA_NOTAM_API_KEY, NTFY_TOKEN, and any feed credentials
-# No LLM API key required — all inference runs locally via Ollama
+# populate credentials (SWIM, NTFY_TOKEN, FAA NOTAM key, …)
+# AND set ULTRAFEEDER_LAT / ULTRAFEEDER_LON — see the note below
 
-# Build all container images
+# Build container images
 bash build-images.sh
 
-# Install Quadlets
-cp .config/containers/systemd/corporatetraveldc-*.container \
-   ~/.config/containers/systemd/
+# Verify the Modelfile↔personas.py sync (build-models.sh no longer builds
+# anything — since the 2026-08-27 llama.cpp cutover there is no per-skill
+# model artifact; it now diffs each corporatetraveldc.<skill> Modelfile's
+# SYSTEM block against src/common/personas.py)
+bash build-models.sh
 
-# Start services
+# Install the llama.cpp host units (hot/chat permanent, report-1 on-demand)
+cp .config/systemd/user/corporatetraveldc-llama-*.{service,timer} ~/.config/systemd/user/
+
+# Install Quadlets
+cp .config/containers/systemd/*.container ~/.config/containers/systemd/
 systemctl --user daemon-reload
-systemctl --user start corporatetraveldc-web
-systemctl --user start corporatetraveldc-poller
-systemctl --user start corporatetraveldc-pusher
+
+# Start the core stack (production uses the stagger units:
+# corporatetraveldc-stack-boot-stagger + corporatetraveldc-boot-stagger)
+systemctl --user start corporatetraveldc-web corporatetraveldc-poller corporatetraveldc-pusher
 
 # Verify
 curl http://127.0.0.1:8000/healthz
 
-# Create admin token
-PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py create \
+# Create an admin token
+PYTHONPATH=src python3 src/ctdc_token/cli.py create \
   --user operator --tier admin --label admin-phone
 ```
 
 ### After any code change
 
 ```bash
-cd /opt/corporatetraveldc
-bash build-images.sh          # rebuilds all images; pass a target name to rebuild one
+bash build-images.sh          # pass a target name to rebuild one image
 systemctl --user daemon-reload
 systemctl --user restart corporatetraveldc-web corporatetraveldc-poller \
-                              corporatetraveldc-pusher corporatetraveldc-runner
+                         corporatetraveldc-pusher corporatetraveldc-runner
 ```
+
+This flow only ever touches our own `localhost/corporatetraveldc-*` images.
+The external/third-party containers (the SDR feeders, nextcloud, etc.) are
+deliberately on a separate cadence — a weekly `podman auto-update` check via
+`corporatetraveldc-weekly-external-image-update.timer` (Sundays 04:15 ET;
+standing rule 2026-09-03, see `scripts/weekly-external-image-update.sh`'s
+header for the Nextcloud major-version-jump incident behind its alerting).
+
+**If you're self-hosting a real ADS-B receiver, hard-code your actual GPS
+coordinates — don't run on the placeholder.** Set `ULTRAFEEDER_LAT`/
+`ULTRAFEEDER_LON` in `dispatch-secrets.env` (see the template's own note)
+to your antenna's real position, and set the UltraFeeder Quadlet's
+`READSB_LAT`/`READSB_LON`/`TAR1090_DEFAULTCENTERLAT`/
+`TAR1090_DEFAULTCENTERLON` to match. Left unset, the platform still runs —
+it silently falls back to a generic Washington-DC-area placeholder — but
+every distance-from-you calculation, the compass summary, the tactical
+map's range rings, and the ADS-B embed's native "H"/home key and per-
+aircraft distance columns will all be wrong, and MLAT positioning accuracy
+depends on the receiver's own site position being correct, not just the
+display. `runner`'s `/api/v1/frontend-config` endpoint is the one place
+the frontend reads this from — if you're extending the UI, read from
+there rather than hardcoding a literal into a `.jsx`/`.js` file (see
+`docs/GPS_COORDINATE_CONFIGURATION.md` for the incident that made this a
+documented rule instead of an assumption).
+
+Note on signed-manifest integrity (scope verified 2026-08-19): the
+`verified-exec.sh` gate covers the timer-triggered **skill** quadlets,
+`src/common/llm.py` before every inference, and the 15-minute
+`corporatetraveldc-integrity-sweep` timer. The long-running core containers
+(web/poller/pusher/ingest/runner) do **not** run the check at startup — but a
+stale manifest still blocks every skill run and inference, so re-sign
+(`scripts/sign-manifest.sh`) after any code change, **before** rebuilding
+images: web/poller bake `MANIFEST.sha256` into the image, and building
+against an unsigned tree ships a permanently-mismatched manifest (correct
+order is **sign → build → restart**).
 
 ---
 
 ## Development
 
-All Python commands run from `/opt/corporatetraveldc` with `PYTHONPATH=src`:
+All Python commands run from the repo root with `PYTHONPATH=src`:
 
 ```bash
-# Run a skill manually (--force bypasses SR-2 hash gate)
-PYTHONPATH=src ./venv/bin/python src/poller/skills/cps_recompute.py --force
-PYTHONPATH=src ./venv/bin/python src/poller/skills/route_impact.py --force
-PYTHONPATH=src ./venv/bin/python src/poller/skills/tfr_enrichment.py --force
+# Run a skill manually (--force bypasses the SR-2 hash gate)
+PYTHONPATH=src python3 src/poller/skills/cps_recompute.py --force
+PYTHONPATH=src python3 src/poller/skills/tfr_enrichment.py --force
 
 # Run a fetcher manually
-PYTHONPATH=src ./venv/bin/python src/poller/fetchers/metar.py
-PYTHONPATH=src ./venv/bin/python src/poller/fetchers/tfr.py
+PYTHONPATH=src python3 src/poller/fetchers/metar.py
 
 # Token management
-PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py list
-PYTHONPATH=src ./venv/bin/python src/ctdc_token/cli.py show-cost
+PYTHONPATH=src python3 src/ctdc_token/cli.py list
+PYTHONPATH=src python3 src/ctdc_token/cli.py revoke --prefix ctdc_user_
 
-# Inspect the database directly
-sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
-  "SELECT * FROM cps_scores ORDER BY computed_at DESC LIMIT 3;"
+# Inspect the database (Postgres; see docs/POSTGRES_MIGRATION.md §3.1
+# for why it's a unix socket, not a TCP host, from inside a container --
+# from the bare host, use `psql -h 127.0.0.1 -p 5432 -U dispatch corporatetraveldc`)
+psql -h /var/run/postgresql -U dispatch -d corporatetraveldc \
+  -c "SELECT * FROM cps_scores ORDER BY computed_at DESC LIMIT 3;"
 
-# Run tests
+# Tests
 python -m pytest tests/ -x --tb=short
 ```
 
 ### Skill runtime rules
 
-Every automated skill must follow two rules:
+**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block —
+always. Logged to `/var/lib/corporatetraveldc/api-usage.csv`.
 
-**SR-1** (`src/common/sr1_log.py`): call `log_usage()` in a `finally` block — always, including on error. Usage is logged to `/var/lib/corporatetraveldc/api-usage.csv`.
-
-**SR-2** (`src/common/sr2_gate.py`): call `hash_gate()` before any expensive computation or LLM call. Hash only content-bearing fields (never timestamps). If gate returns `"skipped"`, call `sys.exit(0)` immediately. Support `--force` flag to bypass.
+**SR-2** (`src/common/sr2_gate.py`): call `check_gate()` before any expensive
+computation or LLM call, and `commit_gate()` only *after* the guarded work
+succeeded (the check/commit split landed 2026-08-25 so a mid-run crash leaves
+the gate open instead of permanently suppressing retries). Hash only
+content-bearing fields (never timestamps). If the check says skip,
+`sys.exit(0)` immediately. Support `--force`. Skills with inherently
+time-bounded inputs declare an SR-2 exemption in their docstrings instead.
 
 ### Schema migrations
 
-`src/common/db.py` is the single schema authority. Schema is versioned additively (`SCHEMA`, `SCHEMA_V2` … `SCHEMA_V8`). Each version is applied at startup via `init_db_v{N}()`. Never drop or rename columns — only `ALTER TABLE ADD COLUMN`.
+The schema authority is versioned additively across **two** modules since
+2026-08-30: `src/common/db.py` (`SCHEMA`, `SCHEMA_V2`…`SCHEMA_V40`, plus
+`SCHEMA_V43`) and `src/common/db_swim.py` (`SCHEMA_SWIM_V41/V42/V44+` — the
+v41+ SWIM tables were deliberately split into their own module during the
+2026-08-30 SWIM audit; the numbering continues across both files). Check the
+current top with
+`grep -ohE 'SCHEMA(_SWIM)?_V[0-9]+' src/common/db.py src/common/db_swim.py | sort -u -V | tail -1`
+— the number moves fast, re-run rather than trusting any figure here.
+**Trap:** `init_db_all()` does *not* pick up db_swim's versions — any
+consumer of the v41+ tables must call the `init_db_swim_v4x()` functions
+explicitly (documented in db_swim's docstring). Never drop or rename columns
+— only `ALTER TABLE ADD COLUMN`.
 
 ---
 
-## Local LLM — Ollama
+## Local LLM — llama.cpp (Ollama retired 2026-08-27)
 
-**This platform is designed to run entirely on local hardware.** No external LLM API key is required. All inference runs on-device via [Ollama](https://ollama.com).
+**All inference is local.** No external LLM API key is required. Since the
+**2026-08-27 cutover**, inference runs as a raw host-level `llama-server`
+(llama.cpp) process, CPU-only, bound to the tailnet IP at `100.x.x.x:8093`.
 
-```
-dispatch containers
-        │
-        │  OLLAMA_BASE_URL=http://host.containers.internal:11434
-        ▼
-  Ollama daemon (host)  ◄──  llama3.2:3b (chat)  +  mistral-nemo (OSINT)
-        │
-        └─ GPU / CPU inference — no external API calls, no data leaves the machine
-```
+**2026-09-06 consolidation:** the original three separate tiers (hot/chat/
+report-1, each its own resident model copy) were merged into ONE unit,
+`corporatetraveldc-llama.service` — three resident copies of the same 2.18 GB
+model drove 4 GB into zram and dropped throughput to ~0.5 tok/s under
+concurrent load. Now: one model, one process, two request slots
+(`-np 2 --kv-unified -c 12288`), hard-capped at two CPU cores
+(`CPUQuota=200%`) — "hot briefs/alerts can only ever preempt another report,
+never add a third core or server," per the operator directive that drove the
+consolidation. Slot discipline (one long-runner at a time on slot 1; hot/chat
+fast-lane on slot 2) lives in `common/llama_pool.py` + `common/llm.py`.
 
-Two model slots are loaded simultaneously (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=24h`).
+**2026-09-21 model swap:** phi3-mini → **Qwen3-4B-Instruct-2507** (q4_0),
+after a live A/B/C bake-off against real production skill runs on this exact
+box — Qwen3-4B measured faster (5.1 tok/s generation vs phi3-mini's 3.6) despite
+being the larger model, and was the only candidate that reliably covered every
+named section in a multi-section synthesis task instead of silently dropping
+one. See `docs/MODEL_EVALUATION_2026-09-21.md` for the full writeup. phi3-mini
+and an evaluated-but-not-chosen Qwen2.5-3B are kept on disk as historical
+record, not loaded.
 
-### Supported models
+Per-skill behavior comes from **`src/common/personas.py`** — a registry of
+~23 personas (system preamble + task text + `num_ctx`/`num_predict`/sampling
+params), extracted verbatim from the old per-skill Ollama Modelfiles. Editing
+a persona takes effect on the next request: no rebuild, no restart, no smoke
+test. The `corporatetraveldc.*` Modelfiles at repo root are kept **only** as
+human-readable canonical source text that the signed-manifest integrity check
+still verifies; `build-models.sh` (reworked 2026-08-30) no longer builds
+anything — it diffs each Modelfile's SYSTEM block against `personas.py`.
 
-| Model | Tag | Disk | Min RAM | Best for | Config var |
-|---|---|---|---|---|---|
-| **Llama 3.2 3B** | `llama3.2:3b` | 2.0 GB | 4 GB | Chat — fast, default | `OLLAMA_CHAT_MODEL` |
-| **Mistral-Nemo 12B** | `mistral-nemo` | 7.1 GB | 12 GB | OSINT instruction-following | `OLLAMA_OSINT_MODEL` |
-| **Phi 3.5 Mini** | `phi3.5` | 2.2 GB | 4 GB | Ultralight chat — 8 GB Pi | `OLLAMA_CHAT_MODEL` |
-| **Llama 3.1 8B** | `llama3.1:8b` | 4.7 GB | 8 GB | Chat upgrade — x86_64 | `OLLAMA_CHAT_MODEL` |
-| **Gemma 2 9B** | `gemma2:9b` | 5.5 GB | 10 GB | Reasoning / deep analysis | `OLLAMA_OSINT_MODEL` |
-| **Qwen 2.5 7B** | `qwen2.5:7b` | 4.7 GB | 8 GB | Multilingual OSINT | `OLLAMA_OSINT_MODEL` |
+**Naming note — deliberate:** `OLLAMA_BASE_URL`, `ollama_model=`,
+`OllamaBusyError`, and "Ollama unavailable" log lines all survive verbatim so
+zero call sites changed at cutover, and again survived the 2026-09-21 model
+swap for the same reason. They now mean llama.cpp, whichever GGUF is
+currently loaded. Resource governance moved with the 2026-08-27 cutover: the
+old `ollama.service` + `20-resource-limits.conf` drop-in and the
+`ollama-governor` SIGSTOP/SIGCONT unit are gone; `corporatetraveldc-llama.service`
+carries its own `CPUWeight`/`MemoryMax` limits in its unit file, and a daily
+`corporatetraveldc-llama-restart.timer` (03:00 ET) cycles it for freshness.
 
-### LLM configuration
+### Per-skill personas (successor to the dedicated per-task models)
 
-No code changes are required to swap models — everything is driven by env vars:
+Each LLM-calling skill still requests a `corporatetraveldc-pi5-<task>:latest`
+model string, but since 2026-08-27 that name resolves to a **persona** in
+`src/common/personas.py` (`persona_key_for()`), not an Ollama model — the ~21
+per-skill Modelfiles were each really the same shared GGUF with a
+different SYSTEM block, so the SYSTEM blocks were extracted into the
+registry and one shared GGUF is served instead. Personas exist for:
+`ops-brief`, `ops-brief-trend`, `ep-advance`, `ep-advance-trend`,
+`ep-advance-venues`, `chat`, `osint-monitor`, `tfr-enrichment`,
+`route-impact`, `weekly-summary`, `transport-digest`,
+`disruption-weather-digest`, `dispatch-desk-memo`, `secondbrain-daily`,
+`secondbrain-weekly`, and the seven `aam-*`/`*-daily-watch` watches
+(re-derive from `personas.py` — the registry grows).
+
+**Guards that survived the cutover:** the deterministic-fallback contract
+(`generate()` returns `None` on any failure → the skill renders its own
+template), the response guard (`sanitize_llm_response` — repetition-loop /
+persona-echo / truncation trims, each validated against real 2026-08-17
+failure specimens), central prompt sanitization, thermal cool-launch and
+load pre-flight gates, and `corporatetraveldc-brief-fallback-monitor.timer`
+(hourly) alerting loudly if briefs degrade to deterministic fallback.
+**Retired with Ollama:** the candidate/smoke/promote model build, the
+gemma SWA denylist, `_abandon_ollama_generation()` and the model-swap
+overhead problem itself (models are now permanently resident per tier).
+
+Cloud fallback: **closed on this box — zero cloud calls.**
+`ANTHROPIC_FALLBACK_ENABLED` is **fail-closed by default since 2026-08-26**
+(module default `false`), *and* `/etc/corporatetraveldc/dispatch.env` sets it
+`false` explicitly. Brief skills additionally pass `allow_anthropic=False`
+as a second, narrower opt-out. With the local server unavailable, skills
+fall back to deterministic templates; `brief-fallback-monitor` (hourly)
+alerts when that happens. Design history (Ollama era, superseded):
+`docs/DEDICATED_MODELS_PLAN.md`.
+
+### Changing a persona
 
 ```bash
-# /etc/corporatetraveldc/dispatch.env
-OLLAMA_CHAT_MODEL=llama3.2:3b
-OLLAMA_OSINT_MODEL=mistral-nemo
-
-# Lightweight (8 GB RAM / Pi 5 8 GB)
-OLLAMA_CHAT_MODEL=phi3.5
-OLLAMA_OSINT_MODEL=phi3.5
-
-# Upgrade path (16+ GB / x86_64)
-OLLAMA_CHAT_MODEL=llama3.1:8b
-OLLAMA_OSINT_MODEL=qwen2.5:7b
+$EDITOR src/common/personas.py    # takes effect on the next request
+bash build-models.sh              # verify Modelfile↔personas.py sync (no build step exists anymore)
+scripts/sign-manifest.sh          # both files are manifest-covered
 ```
 
-**Custom operator context** — bake in your own system prompt via Modelfiles:
-
-```bash
-cp Modelfile.chat.template Modelfile.chat    # fill in operator context
-cp Modelfile.osint.template Modelfile.osint  # fill in operator context
-bash build-models.sh                         # creates corporatetraveldc-pi5-chat + corporatetraveldc-pi5-osint
-```
-
-Then set `OLLAMA_CHAT_MODEL=corporatetraveldc-pi5-chat` and `OLLAMA_OSINT_MODEL=corporatetraveldc-pi5-osint` in `dispatch.env`.
+(Prewarm timers, the candidate/smoke/promote pipeline, and per-skill model
+rebuilds are all Ollama-era history — models are permanently resident per
+tier now, and there is no per-skill model artifact to build.)
 
 ---
 
 ## FAA SWIM / NMS credentials
 
-When FAA NMS credentials are provisioned, add them to `/etc/corporatetraveldc/dispatch-secrets.env`. Six feeds activate automatically:
+All six feeds are provisioned and credentialed (all
+`SWIM_NMS_{HOST,USER,PASS,QUEUE}_<KEY>` sets present). Note that provisioned
+does not mean permanently running: `thermal-ingest-guard` sheds SWIM ingest
+containers under load — see "† SWIM feed liveness and thermal load-shedding"
+above before diagnosing a quiet feed as a credential problem. Reference for
+rotation/re-provisioning
+(`<KEY>` ∈ FDPS, STDDS, TFMS, AIM, TBFM, ITWS — note AIM credentials serve the
+`fns` feed/heartbeat):
 
-| Feed | Env vars | Description |
-|---|---|---|
-| FDPS | `SWIM_NMS_USER_FDPS` / `SWIM_NMS_PASS_FDPS` / `SWIM_NMS_QUEUE_FDPS` | Flight plan + track data |
-| STDDS | `SWIM_NMS_USER_STDDS` / `SWIM_NMS_PASS_STDDS` / `SWIM_NMS_QUEUE_STDDS` | Surface + terminal tracks, TFRs |
-| TFMS | `SWIM_NMS_USER_TFMS` / `SWIM_NMS_PASS_TFMS` / `SWIM_NMS_QUEUE_TFMS` | NAS programs (GDP, GS, AFP, AAR) |
-| AIM | `SWIM_NMS_USER_AIM` / `SWIM_NMS_PASS_AIM` / `SWIM_NMS_QUEUE_AIM` | Digital NOTAMs |
-| TBFM | `SWIM_NMS_USER_TBFM` / `SWIM_NMS_PASS_TBFM` / `SWIM_NMS_QUEUE_TBFM` | Arrival sequencing |
-| ITWS | `SWIM_NMS_USER_ITWS` / `SWIM_NMS_PASS_ITWS` / `SWIM_NMS_QUEUE_ITWS` | Terminal weather |
+```
+SWIM_NMS_USER_<KEY> / SWIM_NMS_PASS_<KEY> / SWIM_NMS_QUEUE_<KEY>
+SWIM_NMS_VPN_<KEY>  / SWIM_NMS_HOST_<KEY>   (fallback SWIM_NMS_HOST,
+                                             default tcps://ems1.swim.faa.gov:55443)
+```
 
-To request FAA SWIM credentials, see [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) — includes the email template and portal link.
-
-No code changes required after credential entry. Rebuild and restart:
+After credential entry, restart just the affected feed:
 
 ```bash
-bash build-images.sh
-systemctl --user restart corporatetraveldc-ingest
+scripts/ingest-feed-ctl.sh restart <feed>          # or:
+scripts/ingest-feed-ctl.sh restart all --order=lightest-first --stagger=15
 ```
+
+To request SWIM access for a new deployment see
+[docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ---
 
@@ -655,106 +831,77 @@ systemctl --user restart corporatetraveldc-ingest
 
 | Path | Purpose |
 |---|---|
-| `/opt/corporatetraveldc/src/` | All Python source |
-| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL) |
+| `/opt/corporatetraveldc/private/ctdi-dispatch-internal/` | This repo (`/opt/corporatetraveldc/ctdi-dispatch-internal` is a symlink to it) |
+| `src/` | All Python source |
+| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL), path set by `DISPATCH_DB`. Live since the 2026-09-20 cutover, everything runs on Postgres (`DISPATCH_DB_BACKEND=postgres`) — `REFERENCE_TABLES` in `src/common/db_backend.py` is now an empty frozenset, so this file holds nothing live at all. It survives as the `sqlite` rollback path's target and as an untouched backup — see `docs/POSTGRES_MIGRATION.md` |
+| `corporatetraveldc-pgsql` (Postgres, unix socket `/var/run/postgresql`) | Live database since the 2026-09-20 cutover — the 65-table write path, the 11 reference tables, the second-brain vault index, `dispatch-chat.db`'s `chat_messages`, and `demo.db`/`demo_access.db`'s `demo_snapshots`/`demo_profiles` — see `docs/POSTGRES_MIGRATION.md` |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret platform config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Credentials (mode 0600) |
 | `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 skill usage log |
 | `/var/lib/corporatetraveldc/skill-state/` | SR-2 hash gate state |
 | `/run/corporatetraveldc/triggers/` | Admin trigger files |
-| `/opt/corporatetraveldc/watchlists/` | Permanent watchlist YAML files |
-| `/var/lib/corporatetraveldc/user_rss_feeds.json` | Runner: user-defined Intel Feed subscriptions |
+| `/opt/corporatetraveldc/watchlists/` | Permanent watchlist **JSON** files |
+| `/var/lib/corporatetraveldc/user_rss_feeds.json` | Runner: user Intel Feed subscriptions |
+| `.config/containers/systemd/` (repo) → `~/.config/containers/systemd/` (live) | Quadlet unit files |
 
 ---
 
 ## CUI handling
 
-**CRITICAL**: This repository never contains, and must never be modified to contain, actual SHARES, HEARS, HEART, or any FOUO/CUI radio frequencies — in code, configs, exports, or documents, even password-protected. The infrastructure ships with empty placeholder files. The operator populates credentialed data from authorized sources on the deployment host. The audit log is append-only, 90-day retention, and never leaves the host.
+**CRITICAL**: This repository never contains, and must never be modified to
+contain, actual SHARES, HEARS, HEART, or any FOUO/CUI radio frequencies — in
+code, configs, exports, or documents, even password-protected. The
+infrastructure ships with empty placeholder files; the operator populates
+credentialed data from authorized sources on the deployment host. The audit
+log is append-only, 90-day retention, and never leaves the host.
 
 ---
 
 ## Reservation System Integration
 
-CTDI can automatically add flights and trains to the watchlist the moment a reservation is created in your livery or booking software — no manual entry required.
-
-### How it works
-
-Most reservation platforms (LimoAnywhere, Livery Coach, GroundWidgets, and others) support outbound webhooks triggered on new or updated bookings. A lightweight webhook receiver parses the reservation payload, extracts the flight number or train number, and calls CTDI's watchlist API. From that point CTDI tracks the trip automatically: OOOI phase state, delays, diversions, and ntfy push alerts.
-
-### Watchlist API endpoint
+CTDI can add flights/trains to the watchlist automatically when a reservation
+is created in livery/booking software, via the credential-gated inbound
+webhooks (`/webhooks/limoanywhere/reservations`, `/webhooks/ringcentral/events`,
+`/webhooks/3cx/events`) or by calling the watchlist API directly:
 
 ```
-POST /api/v1/watchlist
-Authorization: Bearer <tier1-token>
-Content-Type: application/json
-
-{
-  "type": "flight",
-  "identifier": "UAL2341",
-  "label": "Smith pickup — ORD",
-  "auto_remove_at": "2026-07-01T22:00:00Z"
-}
+POST /api/v1/watchlist/flights          (admin bearer token)
+{"identifier": "UAL2341", "origin": "KORD", "destination": "KDCA",
+ "auto_remove_at": "2026-07-01T22:00:00Z", "notes": "Smith pickup"}
 ```
 
-For Amtrak trips, use `"type": "train"` and the train number as `identifier` (e.g. `"79"`).
-
-`auto_remove_at` sets an automatic expiry so the watchlist stays clean. Set it to a few hours after scheduled arrival. Permanent entries can also be managed via YAML files in `/opt/corporatetraveldc/watchlists/` — picked up live by `WatchlistFileWatcher` without a restart.
-
-### Sample webhook receiver (Python)
-
-A minimal FastAPI receiver that bridges a generic JSON webhook to CTDI:
-
-```python
-from fastapi import FastAPI, Request
-import httpx, os
-
-app = FastAPI()
-CTDI_URL = os.environ["CTDI_URL"]          # e.g. http://100.x.x.x:8000
-CTDI_TOKEN = os.environ["CTDI_TOKEN"]      # tier1 bearer token
-
-@app.post("/webhook/reservation")
-async def reservation_hook(req: Request):
-    data = await req.json()
-
-    # Adapt field names to your platform's payload schema
-    flight   = data.get("flight_number") or data.get("flightNumber")
-    train    = data.get("train_number")  or data.get("trainNumber")
-    label    = data.get("client_name", "reservation")
-    expires  = data.get("dropoff_time") or data.get("arrivalTime")
-
-    entry_type = "flight" if flight else "train"
-    identifier = flight or train
-    if not identifier:
-        return {"status": "skipped", "reason": "no flight or train in payload"}
-
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            f"{CTDI_URL}/api/v1/watchlist",
-            headers={"Authorization": f"Bearer {CTDI_TOKEN}"},
-            json={"type": entry_type, "identifier": identifier,
-                  "label": label, "auto_remove_at": expires},
-            timeout=10,
-        )
-    return {"status": "ok", "watchlist": r.json()}
-```
-
-Run it alongside CTDI on the same Pi or on any reachable host. Add a Quadlet or systemd unit to keep it running.
-
-### Platform-specific notes
-
-| Platform | Webhook support | Notes |
-|---|---|---|
-| **LimoAnywhere** | ✅ Outbound webhooks | Configure under Settings → Integrations → Webhooks; fires on reservation create/update |
-| **Livery Coach** | ✅ Outbound webhooks | Available in Coach Pro tier; sends JSON payload on booking events |
-| **GroundWidgets** | ✅ Webhook / API callback | Supported on Business and Enterprise plans |
-| **Limo Anywhere (legacy)** | ⚠️ Polling fallback | No native webhook; poll the LimoAnywhere API on a cron schedule instead |
-| **Custom / in-house** | ✅ Direct API call | Call `POST /api/v1/watchlist` directly from your booking confirmation flow |
-
-For platforms without native webhook support, a cron-based poller that checks for new reservations every 5 minutes and syncs to the watchlist achieves the same result with slightly higher latency.
-
+For trains use `/api/v1/watchlist/trains` with the train number. Platforms
+without native webhooks can poll their reservations API on cron and sync the
+same way. Permanent entries: edit the JSON files in
+`/opt/corporatetraveldc/watchlists/` (hot-reloaded).
 
 ---
 
 ## License
 
-Proprietary. CS Executive Services, LLC. All rights reserved.
+**Business Source License 1.1** (source-available, not OSI-approved open
+source). Full text: [`LICENSE`](LICENSE). Summary, not a substitute for the
+actual terms:
+
+- Free for non-production use (evaluation, development, testing) always.
+- Free for production use as a personal self-hosted deployment, or as an
+  internal relay/middleware layer within an organization of any size,
+  **provided** that use never serves a fee-based product or service
+  rendered to a third-party client or customer (see the Additional Use
+  Grant in `LICENSE` for the exact boundary, including the white-label,
+  hosted-service, and platform-absorption carve-outs).
+- Any other production use -- reselling as a hosted/managed service,
+  white-labeling, embedding it as a component of another commercial
+  platform, or using it (even invisibly) in the course of any fee-based
+  service to a client -- requires a commercial license from [operator LLC abbreviation]utive
+  Services, LLC.
+- Each release converts automatically to GPL v3-or-later four years after
+  its first public distribution (per-version Change Date; see `LICENSE`),
+  so the platform becomes fully open source over time rather than staying
+  locked up indefinitely.
+
+> **Status: the Additional Use Grant language in `LICENSE` is a working
+> draft and is currently under legal review.** It reflects the intended
+> terms but has not yet been confirmed by counsel. Do not treat it as
+> final for a production licensing decision -- contact [operator LLC abbreviation]utive
+> Services, LLC directly to confirm current terms before relying on it.

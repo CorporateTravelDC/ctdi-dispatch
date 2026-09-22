@@ -4,11 +4,36 @@
 # via a user systemd timer every 2 minutes.
 #
 # Does NOT restart or touch any container. It only samples memory usage,
-# watches for sustained high-water-mark pressure and real OOM-kill events
-# (via `podman events --filter event=oom`), and pushes an ntfy alert to
-# ops-health when a container looks like it's routinely running out of
-# control -- so a human can decide whether a scheduled restart, a code fix,
-# or nothing at all is the right response.
+# watches for sustained high-water-mark pressure and real OOM-kill events,
+# and pushes an ntfy alert to ops-health when a container looks like it's
+# routinely running out of control -- so a human can decide whether a
+# scheduled restart, a code fix, or nothing at all is the right response.
+#
+# OOM detection (rewritten 2026-07-19): originally used
+# `podman events --filter event=oom`, which never fired even once in this
+# environment despite 86+ confirmed real kernel OOM kills for
+# corporatetraveldc-ingest -- podman's own internal "oom" event
+# classification does not reliably fire under rootless + cgroupv2 +
+# --cgroups=split here (a podman/conmon-level limitation, not a config
+# bug on our side). What IS reliably present: the ordinary "died" event
+# always carries ContainerExitCode, and 137 (SIGKILL) shows up there even
+# when "oom" never gets emitted. So OOM detection now cross-references
+# died-events with ContainerExitCode=137 against the kernel's own
+# authoritative oom-kill log line (`oom-kill:constraint=CONSTRAINT_MEMCG`,
+# via journalctl -k) for the same systemd unit in the same window -- the
+# exact manual verification method used all session to confirm real kills.
+# A 137 with no kernel corroboration is logged but NOT alerted on (could be
+# a manual kill/stop timeout), keeping false positives low.
+#
+# ntfy auth (fixed 2026-07-19): the self-hosted ntfy instance runs
+# auth-default-access=deny-all -- Tailscale/CF network proximity is never
+# treated as implicit trust at any layer, every publish needs its own
+# token. This script's ntfy_send() had no Authorization header, so every
+# alert it ever tried to send was silently 403'd (curl -f + `|| true`
+# swallowed the failure) since the day this script was written
+# (2026-07-11). Fixed by sending NTFY_TOKEN (from dispatch.env) as a
+# bearer token, same convention as the rest of the codebase
+# (common/ntfy_push.py, shared/watchlist.py, runner/main.py).
 #
 # Usage:
 #   container-mem-watch.sh            # normal run (called by the timer)
@@ -32,11 +57,30 @@ OOM_ALERT_COOLDOWN_SECS=900
 SAMPLE_KEEP=60          # ring buffer length per container (~2hr at 2min cadence)
 OOM_KEEP=20             # OOM event timestamps kept per container
 
+SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
+
 mkdir -p "${STATE_DIR}"
 
-[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}" 2>/dev/null || true
-NTFY_BASE="${NTFY_BASE_URL:-http://127.0.0.1:2586}"
-NTFY_OPS="${NTFY_OPS_TOPIC:-ops-health}"
+# NOTE: deliberately NOT `source`-ing dispatch.env -- it's a podman
+# --env-file (simple KEY=VALUE, not bash-parsed), and at least one value
+# in it is unquoted with a space (AMTRAK_CORE_ROUTES=Acela,Northeast
+# Regional), which a literal bash `source` word-splits and tries to run
+# "Regional" as a command. Pull out just the keys we need instead.
+read_env_var() {
+    local key="$1" file="$2"
+    [[ -f "${file}" ]] || return 0
+    grep -m1 "^${key}=" "${file}" 2>/dev/null | cut -d'=' -f2-
+}
+
+NTFY_BASE="$(read_env_var NTFY_BASE_URL "${ENV_FILE}")"
+NTFY_BASE="${NTFY_BASE:-http://127.0.0.1:2586}"
+NTFY_OPS="$(read_env_var NTFY_OPS_TOPIC "${ENV_FILE}")"
+NTFY_OPS="${NTFY_OPS:-ops-health}"
+# NTFY_TOKEN lives in dispatch-secrets.env, not dispatch.env -- confirmed
+# 2026-07-19 this is why it was never actually in scope for either watcher
+# script. ntfy runs auth-default-access=deny-all, so no token == silent 403.
+NTFY_TOKEN="$(read_env_var NTFY_TOKEN "${SECRETS_FILE}")"
+NTFY_TOKEN="${NTFY_TOKEN%%:*}"
 
 log() {
     local level="$1"; shift
@@ -48,12 +92,15 @@ log() {
 
 ntfy_send() {
     local title="$1" msg="$2" priority="${3:-3}"
+    local auth_args=()
+    [[ -n "${NTFY_TOKEN}" ]] && auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
     curl -sf --max-time 5 \
+        "${auth_args[@]}" \
         -H "Title: ${title}" \
         -H "Priority: ${priority}" \
         -H "Tags: floppy_disk" \
         -d "${msg}" \
-        "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 || true
+        "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 || log "warn" "ntfy_send failed (base=${NTFY_BASE} topic=${NTFY_OPS} token_set=$([[ -n \"${NTFY_TOKEN}\" ]] && echo yes || echo no))"
 }
 
 check_lock() {
@@ -109,7 +156,7 @@ log "info" "-------- mem-watch run start --------"
 
 now_ts=$(date +%s)
 
-# Prior run timestamp, for the OOM events --since window. Default to 5 min
+# Prior run timestamp, for the events --since window. Default to 5 min
 # lookback on first run so we don't miss anything between install and first fire.
 prior_ts=$(python3 - "${STATE_FILE}" <<'PYEOF'
 import json, sys
@@ -124,35 +171,47 @@ if [[ "${prior_ts}" -le 0 ]]; then
     prior_ts=$(( now_ts - 300 ))
 fi
 
-# ---------------------------------------------------------------------------
-# 1. Real OOM-kill events since the last run (authoritative -- not sampled)
-# ---------------------------------------------------------------------------
-oom_tmpf=$(mktemp "${STATE_DIR}/.oom.XXXXXX")
 since_iso=$(date -d "@${prior_ts}" --iso-8601=seconds)
 until_iso=$(date -d "@${now_ts}" --iso-8601=seconds)
-podman events --format json --filter event=oom \
-    --since "${since_iso}" --until "${until_iso}" --stream=false > "${oom_tmpf}" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 2. Current memory snapshot for every live container
+# 1. "died" events since the last run -- carries ContainerExitCode, which is
+#    what we actually have available (podman's own "oom" event type does
+#    not fire in this environment -- see header note).
+# ---------------------------------------------------------------------------
+died_tmpf=$(mktemp "${STATE_DIR}/.died.XXXXXX")
+podman events --format json --filter event=died \
+    --since "${since_iso}" --until "${until_iso}" --stream=false > "${died_tmpf}" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 2. Kernel's own authoritative oom-kill log lines for the same window --
+#    used to cross-confirm which died/137 events were genuinely OOM (vs.
+#    a manual stop/kill timeout also producing exit 137).
+# ---------------------------------------------------------------------------
+kernel_oom_tmpf=$(mktemp "${STATE_DIR}/.koom.XXXXXX")
+journalctl -k --since "${since_iso}" --until "${until_iso}" -o cat 2>/dev/null \
+    | grep "oom-kill:constraint=CONSTRAINT_MEMCG" > "${kernel_oom_tmpf}" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 3. Current memory snapshot for every live container
 # ---------------------------------------------------------------------------
 stats_tmpf=$(mktemp "${STATE_DIR}/.stats.XXXXXX")
 podman stats --no-stream --format '{{.Name}}|{{.MemPerc}}' > "${stats_tmpf}" 2>/dev/null || true
 
-trap 'rm -f "${LOCK_FILE}" "${oom_tmpf}" "${stats_tmpf}"' EXIT INT TERM
+trap 'rm -f "${LOCK_FILE}" "${died_tmpf}" "${kernel_oom_tmpf}" "${stats_tmpf}"' EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# 3. Update state, decide on alerts -- all logic in one python pass so the
+# 4. Update state, decide on alerts -- all logic in one python pass so the
 #    ring buffers / cooldowns stay consistent.
 # ---------------------------------------------------------------------------
 alert_output=$(python3 - "${STATE_FILE}" "${now_ts}" "${HIGH_PCT}" "${SUSTAINED_SECS}" \
     "${ALERT_COOLDOWN_SECS}" "${OOM_ALERT_COOLDOWN_SECS}" "${SAMPLE_KEEP}" "${OOM_KEEP}" \
-    "${oom_tmpf}" "${stats_tmpf}" \
+    "${died_tmpf}" "${kernel_oom_tmpf}" "${stats_tmpf}" \
     <<'PYEOF'
-import json, sys
+import json, re, sys
 
 (state_file, now_ts, high_pct, sustained_secs, alert_cd, oom_cd, sample_keep, oom_keep,
- oom_tmpf, stats_tmpf) = sys.argv[1:11]
+ died_tmpf, kernel_oom_tmpf, stats_tmpf) = sys.argv[1:12]
 now_ts = int(now_ts)
 high_pct = float(high_pct)
 sustained_secs = int(sustained_secs)
@@ -168,13 +227,27 @@ except Exception:
     state = {}
 containers = state.setdefault("containers", {})
 
-with open(oom_tmpf) as f:
-    oom_raw = f.read()
+with open(died_tmpf) as f:
+    died_raw = f.read()
+with open(kernel_oom_tmpf) as f:
+    kernel_raw = f.read()
 with open(stats_tmpf) as f:
     stats_raw = f.read()
 
-oom_by_container = {}
-for line in oom_raw.splitlines():
+# Which systemd units did the kernel actually OOM-kill in this window?
+# Lines look like:
+#   oom-kill:constraint=CONSTRAINT_MEMCG,...,oom_memcg=/user.slice/.../app.slice/<unit>.service/libpod-payload-...,task_memcg=.../<unit>.service/libpod-payload-...,task=...
+UNIT_RE = re.compile(r"app\.slice/([A-Za-z0-9_.@-]+\.service)/")
+kernel_confirmed_units = set()
+for line in kernel_raw.splitlines():
+    m = UNIT_RE.search(line)
+    if m:
+        kernel_confirmed_units.add(m.group(1))
+
+# died events with exit code 137, mapped to their systemd unit + container name
+oom_by_container = {}          # name -> [timestamps] (kernel-confirmed)
+unconfirmed_137 = []            # (name, unit, ts) -- logged only, not alerted
+for line in died_raw.splitlines():
     line = line.strip()
     if not line:
         continue
@@ -182,12 +255,26 @@ for line in oom_raw.splitlines():
         ev = json.loads(line)
     except Exception:
         continue
+    if str(ev.get("ContainerExitCode")) != "137":
+        continue
     name = ev.get("Name")
     ts = ev.get("time")
-    if name and ts:
+    unit = (ev.get("Attributes") or {}).get("PODMAN_SYSTEMD_UNIT")
+    if not name or not ts:
+        continue
+    if unit and unit in kernel_confirmed_units:
         oom_by_container.setdefault(name, []).append(int(ts))
+    else:
+        unconfirmed_137.append((name, unit, ts))
 
 alerts = []
+log_lines = []
+
+for name, unit, ts in unconfirmed_137:
+    log_lines.append(
+        f"{name}: died with exit 137 (unit={unit}) but no kernel oom-kill line found in this window -- "
+        f"not counted as OOM (could be a manual stop/kill timeout)"
+    )
 
 seen_names = set()
 for line in stats_raw.splitlines():
@@ -225,7 +312,7 @@ for line in stats_raw.splitlines():
                 )
                 c["last_sustained_alert_ts"] = now_ts
 
-    # OOM events for this container
+    # Kernel-confirmed OOM events for this container
     events = oom_by_container.get(name, [])
     if events:
         oom_list = c.setdefault("oom_events", [])
@@ -236,7 +323,7 @@ for line in stats_raw.splitlines():
         if now_ts - last_alert >= oom_cd:
             recent = [t for t in c["oom_events"] if now_ts - t < 86400]
             alerts.append(
-                f"{name}: OOM-killed at memory cap ({len(recent)}x in trailing 24h)"
+                f"{name}: OOM-killed at memory cap ({len(recent)}x in trailing 24h, kernel-confirmed)"
             )
             c["last_oom_alert_ts"] = now_ts
 
@@ -254,20 +341,29 @@ state["last_run_ts"] = now_ts
 with open(state_file, "w") as f:
     json.dump(state, f)
 
+for line in log_lines:
+    print("LOG:" + line)
 for a in alerts:
-    print(a)
+    print("ALERT:" + a)
 PYEOF
 )
 
 if [[ -n "${alert_output}" ]]; then
+    alerts_only=""
     while IFS= read -r line; do
         [[ -z "${line}" ]] && continue
-        log "warn" "ALERT: ${line}"
+        if [[ "${line}" == LOG:* ]]; then
+            log "info" "${line#LOG:}"
+        elif [[ "${line}" == ALERT:* ]]; then
+            log "warn" "ALERT: ${line#ALERT:}"
+            alerts_only+="${line#ALERT:}; "
+        fi
     done <<< "${alert_output}"
-    summary=$(echo "${alert_output}" | tr '\n' '; ')
-    ntfy_send "Container memory watch" "${summary}" 3
+    if [[ -n "${alerts_only}" ]]; then
+        ntfy_send "Container memory watch" "${alerts_only}" 3
+    fi
 else
-    log "info" "No containers over ${HIGH_PCT}% sustained, no new OOM events"
+    log "info" "No containers over ${HIGH_PCT}% sustained, no new kernel-confirmed OOM events"
 fi
 
 log "info" "-------- mem-watch run end ----------"

@@ -1,5 +1,32 @@
 # Scheduled Tasks → Skills
 
+_Verified 2026-08-11, re-verified against live state 2026-08-23: of the
+three skills below, only `flight-hifi-track` ships in this repo
+(`skills/flight-hifi-track/SKILL.md` — `ls skills/` returns exactly
+`corporatetraveldc-dispatch-ops` and `flight-hifi-track`);
+`overwater-adsb-handoff-track` and `nec-train-hifi-track` live on the
+Cowork/agent side and are invoked by trigger phrase only. The design
+rationale sections remain current._
+
+> **Endpoint re-verification, 2026-08-23.** The two dispatch endpoints the
+> archived task files below call are both still live, with one caveat
+> each:
+>
+> - `GET /api/v1/amtrak` (`src/web/main.py:766`) — **Tier 0**, no
+>   `Authorization` header needed, exactly as the task files use it.
+> - `POST /admin/push-test-alert` (`src/web/main.py:2201`) — still works,
+>   but it is explicitly a **legacy alias**; the canonical route is
+>   `POST /admin/push-alert` (same handler, stacked decorators). It
+>   requires **admin tier** (`Depends(require_admin("admin.alert.push"))`),
+>   not cert/T1 — a `cert`-tier token will 403. It also hard-rejects a
+>   `message` longer than 200 chars with a 400, which is why every task
+>   file below says to keep the message under 200. Prefer
+>   `/admin/push-alert` in anything newly written.
+>
+> One correction was made in the same pass: `nec-train-hifi-track.md`
+> cited a nonexistent `trains.faa.gov` as Amtrak's native API. See the
+> corrected note in that file.
+
 These tasks were originally Cowork scheduled tasks (2-min cron) and have been converted to
 on-demand **skills**. The scheduled tasks are now disabled; invoke the skills by trigger phrase.
 

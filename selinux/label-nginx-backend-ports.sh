@@ -33,6 +33,13 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh"; then
+    echo "[FAIL] Integrity check failed -- refusing to run label-nginx-backend-ports.sh" >&2
+    exit 5
+fi
+
 DRY_RUN=false
 while [[ $# -gt 0 ]]; do
     case "$1" in

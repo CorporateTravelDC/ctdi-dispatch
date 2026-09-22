@@ -1,0 +1,88 @@
+{
+  "kind": "corporatetraveldc-db-content-manifest",
+  "version": 1,
+  "computed_at": "2026-09-19T15:04:20+00:00",
+  "purpose": "Checkpoint 1b (pre-copy source): second-brain vault index + semantic layer + FTS5 content, before Postgres migration (same JOIN/concurrency reversal as reference tables, 2026-09-19).",
+  "source_sqlite_db": "/var/lib/corporatetraveldc/second_brain_index.db",
+  "sqlite_only": true,
+  "table_count": 15,
+  "all_match": null,
+  "mismatched_tables": null,
+  "tables": [
+    {
+      "table": "entities",
+      "sqlite_count": 51,
+      "sqlite_hash": "a6f26e461ab407719a71f0281a12eda183ebdac9b6d57874e28edc0131d2ecd8"
+    },
+    {
+      "table": "semantic_agents",
+      "sqlite_count": 18,
+      "sqlite_hash": "4375ff36214371a1abaea68e3f81c8bd16cd0d65f602dd1dda4ca2a10276d000"
+    },
+    {
+      "table": "semantic_concepts",
+      "sqlite_count": 99,
+      "sqlite_hash": "72aed332d60880ebcef81080381be24db9e706b2cbb2ff268b59d454990fbc67"
+    },
+    {
+      "table": "semantic_facets",
+      "sqlite_count": 6,
+      "sqlite_hash": "b58ba27c1d3767739f3c527c9a65718acdaee8a453598fe1cc77479bd0cb3319"
+    },
+    {
+      "table": "semantic_labels",
+      "sqlite_count": 565,
+      "sqlite_hash": "bcb3531e35cbc5a887bc78c1dddd1143e0ec18afcdbc6f5b70075fad63ea9bbd"
+    },
+    {
+      "table": "semantic_meta",
+      "sqlite_count": 20,
+      "sqlite_hash": "5c8d7d55433ef5558720ba9e2f3bc064bdb46b0b3d697574562aa6ec47325b88"
+    },
+    {
+      "table": "semantic_metrics",
+      "sqlite_count": 10,
+      "sqlite_hash": "4dc96a1b446cda88e46bfba2a6f2a520aa338532fb0d9dcbf70d9fdb1dd17d7a"
+    },
+    {
+      "table": "semantic_note_chronology",
+      "sqlite_count": 26171,
+      "sqlite_hash": "0597e8dce888cebf3bbaad0897b129d4ba1cceaac3e2616a98abd298404a824e"
+    },
+    {
+      "table": "semantic_note_concepts",
+      "sqlite_count": 93244,
+      "sqlite_hash": "bfce53fd505d3dd1ee4175b5ad6bba62ea66d2d09589add78d909a9b5de8af35"
+    },
+    {
+      "table": "semantic_note_derivations",
+      "sqlite_count": 47953,
+      "sqlite_hash": "7b7a2fb467ce2aaa56feec3233de649458d0b9faf1f6b357baff526db421edae"
+    },
+    {
+      "table": "semantic_relations",
+      "sqlite_count": 74,
+      "sqlite_hash": "df55998717e2f98edaf3cc15dd7da2bf9e62e02b7d244482a2e705cbd8acef38"
+    },
+    {
+      "table": "semantic_unmapped_tags",
+      "sqlite_count": 312,
+      "sqlite_hash": "f43cb411c7b3cd08bbe3f70cd8e0f9bb3c977230ee3feab7b2a35e8c74f12294"
+    },
+    {
+      "table": "vault_documents",
+      "sqlite_count": 12073,
+      "sqlite_hash": "8c478ec35eebc5866b11211b2c813ee6d14167adae1f59b06eac63729b038bee"
+    },
+    {
+      "table": "vault_links",
+      "sqlite_count": 59,
+      "sqlite_hash": "7cae1f6e085bac0da618a949d19dc80546eeffd1802019f7dd7ba188d4e6b67b"
+    },
+    {
+      "table": "vault_notes_fts",
+      "sqlite_count": 11831,
+      "sqlite_hash": "10a7db5bc357dd0b9c0b8cc23c3a5f8aa326182b4fb518ec2351385aec05bfb6"
+    }
+  ]
+}

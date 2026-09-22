@@ -20,9 +20,19 @@ Memory=1536m
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-amtrak-tracker:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
 
 # Shared DB — tracker writes amtrak_status and stamps push:amtrak heartbeat
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+
+# Postgres write path (2026-09-18): missed in the original 12-quadlet
+# socket-wiring pass earlier tonight (that pass covered web/poller/pusher/
+# runner/runner-demo/7 ingest -- amtrak-tracker was overlooked). Without
+# this, DISPATCH_PG_HOST=/var/run/postgresql doesn't exist inside the
+# container, so the access layer falls back to TCP 127.0.0.1:5432 -- the
+# container's OWN network namespace under pasta, not the host's, so that
+# always fails with connection refused. Confirmed live.
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 
 # Config (DISPATCH_DB, NTFY_URL, etc.) and secrets
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
@@ -36,6 +46,18 @@ Environment=HISTORY_HOURS=24
 AutoUpdate=local
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -50,4 +72,15 @@ RestartSec=30
 TimeoutStartSec=60
 
 [Install]
-WantedBy=default.target
+# 2026-09-06: no longer auto-started at login. WantedBy=default.target
+# pulled this unit -- with the seven SWIM ingest units, pgsql, the four
+# ADS-B feeders and amtrak-tracker, 13 long-running containers -- up
+# flat in the first seconds of the user session (Sep 5 boot journal:
+# all seven ingest units started at 17:49:07, a full minute BEFORE
+# corporatetraveldc-stack-boot-stagger.service began), so the staggered
+# boot never actually owned the boot. Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service (scripts/stack-boot-ctl.sh,
+# serialized + load-gated via scripts/lib/serial-bringup.sh), which lists
+# this unit in its ORDER.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

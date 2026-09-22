@@ -21,25 +21,41 @@ module corporatetraveldc-fail2ban-lockdown 1.0;
 #   - name_connect on http_port_t: blocks the ntfy incident notification
 #     (curl to 127.0.0.1:2586).
 #
+# Round 3 (2026-08-09, discovered incidentally while wiring the honeypot's
+# Cloudflare-edge ban action -- `ausearch -m avc -se fail2ban_t` surfaced
+# these as still-pending fail2ban_t denials from the SAME lockdown.sh/
+# restore-network.sh path, unrelated to the Cloudflare work itself):
+#   - getattr on systemd_systemctl_exec_t (file): blocks lockdown.sh from
+#     even stat-ing /usr/bin/systemctl before invoking it, short-circuiting
+#     `systemctl daemon-reload`/`restart` before the exec attempt.
+#   - write on systemd_unit_file_t (dir): blocks the sed -i temp-file+rename
+#     sequence used to edit ollama.service.d/10-binding.conf in place.
+#   - ioctl on systemd_unit_file_t (file): sed's own ioctl probe on the file
+#     it's about to rewrite (isatty/blocksize-style checks), denied even
+#     after the round-2 getattr/open/read grants above.
+# This is the "another round or two" the comment above predicted -- same
+# mechanism, no new script, no new action, just the actual sed -i sequence
+# finally surfacing the rest of what it touches.
+#
 # Scoped to exactly these grants for fail2ban_t -- not a broader domain
 # transition or an unconfined exec, matching the same
 # narrowest-scope-that-resolves-it principle as every other module in this
-# repo (see COMPLIANCE_SECURITY.md's "SELinux Grant Policy"). Expect this
-# module to need another round or two as sed -i's read/write/rename
-# sequence on the binding conf surfaces further denials past getattr.
+# repo (see COMPLIANCE_SECURITY.md's "SELinux Grant Policy").
 
 require {
 	type fail2ban_t;
 	type systemd_unit_file_t;
 	type user_home_dir_t;
 	type http_port_t;
-	class dir search;
-	class file { getattr open read };
+	type systemd_systemctl_exec_t;
+	class dir { search write };
+	class file { getattr open read ioctl };
 	class tcp_socket name_connect;
 }
 
 #============= fail2ban_t ==============
-allow fail2ban_t systemd_unit_file_t:dir search;
-allow fail2ban_t systemd_unit_file_t:file { getattr open read };
+allow fail2ban_t systemd_unit_file_t:dir { search write };
+allow fail2ban_t systemd_unit_file_t:file { getattr open read ioctl };
 allow fail2ban_t user_home_dir_t:dir search;
 allow fail2ban_t http_port_t:tcp_socket name_connect;
+allow fail2ban_t systemd_systemctl_exec_t:file getattr;

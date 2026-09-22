@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew the Tailscale-issued cert chrony's NTS server uses, redeploy if changed (idempotent, no-ops when nothing to renew)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/tailscale-cert-refresh-nts.sh

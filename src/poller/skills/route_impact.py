@@ -9,17 +9,15 @@ from common import db, ntfy_push as _ntfy
 from common.llm import generate as llm_generate
 from common.push_dedup import PushDedup, content_hash
 from common.sr1_log import log_usage
-from common.sr2_gate import hash_gate
+from common.sr2_gate import check_gate, commit_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "route-impact"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_ROUTE_IMPACT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-route-impact:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# Route prompt is ~300-400 tokens; mistral-nemo Pi 5 CPU ~120s sufficient
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 _route_dedup = PushDedup("route")
 
@@ -77,12 +75,31 @@ def _call_ollama_vip(inputs: dict) -> str | None:
     """Call LLM (Ollama-first, Anthropic fallback) for VIP route impact narrative.
     Returns narrative text or None (caller falls back to deterministic).
     """
+    # priority="hot" (2026-07-26): this is the VIP/Marine One route-impact
+    # narrative -- must never wait behind a report job (ep-brief/ops-brief/
+    # weekly-summary/osint-monitor) for the shared Ollama slot. See
+    # common/ollama_lock.py.
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=_vip_user_message(inputs),
         ollama_model=OLLAMA_MODEL,
         max_tokens=200,
         temperature=0.2,
+        priority="hot",
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 29 at
+        # sample): 928-tok prompt / 101.0s eval + gen at 0.87 tok/s
+        # -> 229.2s at the 200-tok cap; delta over the 48.4s
+        # spiked persona-only ref = 281.8s; x1.10 top-up to the 53s locked bound applied;
+        # +16s cold-load allowance (hot path skips _preload_model);
+        # (53 + 324.6) x 1.25 = 472s -> 480.
+        timeout=480,
+        # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
+        # priority="hot" only affects the Ollama-side pre-flight/retry
+        # gates, NOT whether generate() falls through to Anthropic on
+        # failure, so this needed closing explicitly too. See dispatch.env's
+        # ANTHROPIC_FALLBACK_ENABLED comment for the full rationale.
+        allow_anthropic=False,
     )
 
 
@@ -108,7 +125,7 @@ _fallback_narrative = _deterministic_summary
 
 def main(force: bool = False) -> None:
     inputs = build_inputs()
-    gate_result = hash_gate(SKILL_NAME, inputs, force=force)
+    gate_result, _gate_hash = check_gate(SKILL_NAME, inputs, force=force)
     if gate_result == "skipped":
         log.debug("%s: inputs unchanged — skipping", SKILL_NAME)
         sys.exit(0)
@@ -126,9 +143,22 @@ def main(force: bool = False) -> None:
                 status = "ok"
                 log.info("%s: VIP route narrative via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
             else:
-                narrative = _deterministic_summary(inputs)
-                status = "fallback"
-                log.warning("%s: Ollama unavailable for VIP route — using deterministic fallback", SKILL_NAME)
+                # 2026-08-06: narrow safety net around the fallback ITSELF --
+                # if _deterministic_summary() has a bug and throws, this
+                # still pushes a minimal notice instead of the whole run
+                # dying silently with no push at all. Same pattern applied
+                # identically across every skill with an Ollama fallback.
+                try:
+                    narrative = _deterministic_summary(inputs)
+                    status = "fallback"
+                    log.warning("%s: Ollama unavailable for VIP route — using deterministic fallback", SKILL_NAME)
+                except Exception as fallback_err:
+                    log.error("%s: deterministic fallback also failed — %s", SKILL_NAME, fallback_err)
+                    narrative = (
+                        f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                        f"deterministic fallback errored. See logs."
+                    )
+                    status = "fallback_error"
         else:
             # No VIP TFRs: deterministic is the correct call, not a degraded path.
             narrative = _deterministic_summary(inputs)
@@ -148,7 +178,21 @@ def main(force: bool = False) -> None:
             h = content_hash(
                 "|".join(t["id"] for t in sorted(inputs["tfrs"], key=lambda x: x["id"]) if t["vip"])
             )
-            if _route_dedup.should_push("route-impact", h, hot=True):
+            # 2026-08-16 drift audit: hot=True bypasses dedup entirely per
+            # PushDedup's contract, so should_push always returned True and
+            # the else-branch "suppressed (dedup, same VIP TFR set <1h)" was
+            # unreachable -- every skill run during an active VIP TFR fired
+            # a fresh priority-5 hot-alert. Singleton "route-impact" slot +
+            # VIP-set hash as content is the right shape; it just needs hot
+            # off so a changed VIP set still fires immediately while the
+            # same set is suppressed for the 1h window, exactly what the
+            # else-branch log line always claimed.
+            # 2026-09-03 (forward-only push_dedup redesign): PERIODIC api,
+            # deliberately -- the hourly re-page while the SAME VIP TFR
+            # set stays active is this block's documented 2026-08-16
+            # contract (still-active heartbeat for POTUS-grade airspace),
+            # matching pusher/main.py's push_vip_tfrs.
+            if _route_dedup.should_push_periodic("route-impact", h):
                 _ntfy.send("hot-alerts", narrative, title=title, priority=5,
                            tags="car,rotating_light")
                 _route_dedup.record("route-impact", h)
@@ -158,6 +202,12 @@ def main(force: bool = False) -> None:
             log.info("%s: no VIP TFRs — DB write only, no ntfy push", SKILL_NAME)
 
     finally:
+        # 2026-08-25 fix (Opus blind review C-7): only commit the gate
+        # hash once we know this run didn't crash -- see
+        # sr2_gate.commit_gate()'s docstring for why the write is
+        # deferred until after the guarded work actually completes.
+        if status != "error":
+            commit_gate(SKILL_NAME, _gate_hash)
         log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 

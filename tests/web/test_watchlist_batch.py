@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,35 +17,22 @@ from unittest.mock import patch, MagicMock
 
 
 def _setup_test_db(tmp_path: str) -> str:
-    """Create an in-memory-style test DB at tmp_path and initialise schema."""
+    """Create a test DB at tmp_path and initialise the FULL current schema.
+
+    2026-08-20: was a hand-written CREATE TABLE string for watchlist_entries
+    (and three other tables) that drifted out of sync with the real schema
+    over time -- missing hex_id, registration, subsection, show_national,
+    show_regional, days_active, sister_flight, and whatever else has been
+    added to watchlist_entries since this was first written. Same root
+    cause and same fix as tests/shared/test_watchlist.py's _IsolatedDB:
+    call common.db.init_db_all() (introspects every init_db_vN() and runs
+    the real, current, full chain) against this path instead of
+    hand-maintaining a second, independently-drifting copy of the schema.
+    """
     db_path = os.path.join(tmp_path, "test.db")
-    c = sqlite3.connect(db_path)
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS watchlist_entries (
-            id TEXT PRIMARY KEY, entry_type TEXT, tier TEXT, identifier TEXT,
-            origin TEXT, destination TEXT, route_name TEXT,
-            scheduled_departure TEXT, scheduled_arrival TEXT,
-            auto_remove_at TEXT, added_at TEXT NOT NULL, added_by TEXT NOT NULL,
-            notes TEXT, last_event_at TEXT, last_event_summary TEXT
-        );
-        CREATE TABLE IF NOT EXISTS watchlist_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id TEXT, entry_type TEXT,
-            identifier TEXT, event_type TEXT, event_summary TEXT,
-            event_detail TEXT, fired_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS auth_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
-            token_prefix TEXT NOT NULL, user_label TEXT NOT NULL,
-            tier TEXT NOT NULL, device_label TEXT, created_at REAL,
-            expires_at REAL, revoked_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, event_time REAL,
-            action TEXT, tier TEXT, token_prefix TEXT, remote_addr TEXT, detail TEXT
-        );
-    """)
-    c.commit()
-    c.close()
+    with patch("common.config.db_path", return_value=db_path):
+        import common.db as _db
+        _db.init_db_all()
     return db_path
 
 

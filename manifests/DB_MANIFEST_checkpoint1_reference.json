@@ -1,0 +1,68 @@
+{
+  "kind": "corporatetraveldc-db-content-manifest",
+  "version": 1,
+  "computed_at": "2026-09-19T15:03:48+00:00",
+  "purpose": "Checkpoint 1a (pre-copy source): the 11 SQLite-only reference tables, before their Postgres migration (docs/POSTGRES_MIGRATION.md sec2 JOIN-exception firing, 2026-09-19).",
+  "source_sqlite_db": "/var/lib/corporatetraveldc/corporatetraveldc.db",
+  "sqlite_only": true,
+  "table_count": 11,
+  "all_match": null,
+  "mismatched_tables": null,
+  "tables": [
+    {
+      "table": "cifp_fixes",
+      "sqlite_count": 4760,
+      "sqlite_hash": "41fd65ed77b7d16b4198e7230cb0ead6f58afa71f622dcceb1bcd10fc8d34e06"
+    },
+    {
+      "table": "cifp_holds",
+      "sqlite_count": 135,
+      "sqlite_hash": "937b14daf7388d3402c3cd83d27e32a4a8d8628bc73365db3f250429c18b4a0a"
+    },
+    {
+      "table": "cifp_meta",
+      "sqlite_count": 2,
+      "sqlite_hash": "619c72d881c947c0622b84e884234decca318f0164a2a14dda7f916ec276f670"
+    },
+    {
+      "table": "cifp_procedure_legs",
+      "sqlite_count": 5060,
+      "sqlite_hash": "ac4827bde1ef04cf1761deec7ee1dee01c3cb213992b1204898162626aa2fde6"
+    },
+    {
+      "table": "codeshare_map",
+      "sqlite_count": 7,
+      "sqlite_hash": "03b24afe60c9672f2d792455c2fef7808568ec373ff57dc6d4ccede10a71e398"
+    },
+    {
+      "table": "faa_aircraft_reference",
+      "sqlite_count": 94060,
+      "sqlite_hash": "d932083a6a8028891d49330d0118300371aac867ca3474bf0c1af871ae92155a"
+    },
+    {
+      "table": "faa_aircraft_registry",
+      "sqlite_count": 316732,
+      "sqlite_hash": "dfdc28e933cfce312caace4392dbe8b028028f9e4233c1faf9e2479b0eb61ebd"
+    },
+    {
+      "table": "faa_ladd_aircraft",
+      "sqlite_count": 70932,
+      "sqlite_hash": "e077081400c3f832f22730fc486e20528b8685c0d51d418edf62f4b0e0bd5b6e"
+    },
+    {
+      "table": "faa_registry_meta",
+      "sqlite_count": 1,
+      "sqlite_hash": "38e202a06793473ea55bccedf5a1904411d6c487900baf88f7b806619a34d748"
+    },
+    {
+      "table": "opensky_aircraft_registry",
+      "sqlite_count": 616676,
+      "sqlite_hash": "70177aee1ab2fc115c79c0571c54971a05913bc7961e3759df7d92d462eb32f1"
+    },
+    {
+      "table": "opensky_registry_meta",
+      "sqlite_count": 3,
+      "sqlite_hash": "6e46e272b0318d63f388d6faedc2ea7572d754585dc2fb9d93524705707f8a52"
+    }
+  ]
+}

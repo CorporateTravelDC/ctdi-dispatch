@@ -77,7 +77,20 @@ def test_haversine_symmetry():
 
 
 def test_smes_parser_basic():
-    """Basic SMES position report parse."""
+    """Basic SMES position report parse.
+
+    FIXED 2026-08-30 (SWIM audit): the fixture used the ORIGINAL guessed
+    schema (smes:positionReport root, aircraftIdentification/modeACode
+    children) that the 2026-07-20 parser rewrite established never
+    matched anything real -- parse_smes_message has required an asdexMsg
+    root since then, so this test had been failing (returning []) ever
+    since, unnoticed. Fixture rewritten to the real asdexMsg shape:
+    root/airport confirmed against real captures
+    (smes_debug/asdexMsg_*.xml); the flat positionReport child layout
+    follows the parser's own doc-derived path (see smes_parser.py's
+    schema comment -- adsbReport is the sample-confirmed variant, the
+    flat positionReport variant remains doc-derived), so this exercises
+    the code path as written."""
     from ingest.parsers.smes_parser import parse_smes_message
     xml = (FIXTURES / "smes_position.xml").read_bytes()
     tracks = parse_smes_message(xml)

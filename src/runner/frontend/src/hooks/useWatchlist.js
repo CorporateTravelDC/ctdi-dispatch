@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useMemo } from 'react'
+import { getSyncToken } from './useLayerConfig.js'
+import { useVisibilityAwareInterval } from './useVisibilityAwareInterval.js'
 
 const REFRESH_MS = 60_000
 
@@ -10,22 +12,24 @@ function parseHex(notes) {
 
 export function useWatchlist() {
   const [entries, setEntries] = useState([])
-  const timerRef = useRef(null)
 
   async function fetchWatchlist() {
     try {
-      const res = await fetch('/api/dispatch/api/v1/watchlist')
+      // Attach the stored admin token if the operator has set one (see
+      // SettingsPanel.jsx) -- the runner's proxy requires BOTH this token
+      // AND a tailnet-originating request before it will forward to the
+      // real watchlist; anything else gets a placeholder list back, never
+      // a real 403 and never a silently-empty widget.
+      const token = getSyncToken()
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await fetch('/api/dispatch/api/v1/watchlist', { headers })
       if (!res.ok) return
       const data = await res.json()
       setEntries(data.entries ?? [])
     } catch (_) {}
   }
 
-  useEffect(() => {
-    fetchWatchlist()
-    timerRef.current = setInterval(fetchWatchlist, REFRESH_MS)
-    return () => clearInterval(timerRef.current)
-  }, [])
+  useVisibilityAwareInterval(fetchWatchlist, REFRESH_MS)
 
   const { callsignSet, hexSet } = useMemo(() => {
     const cs = new Set()

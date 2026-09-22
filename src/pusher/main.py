@@ -22,7 +22,7 @@ import time
 
 import requests
 
-from common import config, db
+from common import config, db, db_backend
 from common import ntfy_push
 from common import pushover
 from common.acars import check_oooi_event as _acars_oooi, get_latest_phase as _acars_phase
@@ -34,9 +34,14 @@ log = logging.getLogger(__name__)
 PUSH_INTERVAL = 30  # Check every 30 seconds.
 
 
-def send_ntfy(topic: str, message: str, priority: int = 3,
-              title: str = "corporatetraveldc") -> bool:
-    """Send a push notification via ntfy. Delegates to common.ntfy_push."""
+def send_ntfy(topic: str, message: str, priority: int = 3, *, title: str) -> bool:
+    """Send a push notification via ntfy. Delegates to common.ntfy_push.
+
+    title required, no default (2026-08-11) -- matches common.ntfy_push.send's
+    own hardening; every real call site here already passed one explicitly,
+    this just closes off a future accidental omission. See that module's
+    docstring for why (title = email Subject:, the only client-side filter
+    ntfy supports)."""
     return ntfy_push.send(topic, message, title=title, priority=priority)
 
 
@@ -63,7 +68,6 @@ def hot_push(topic: str, message: str, title: str) -> bool:
 # Dedup instances -- one per logical alert channel
 _tfr_dedup   = PushDedup("tfr")
 _wx_dedup    = PushDedup("wx")
-_route_dedup = PushDedup("route")
 
 # Wind-change thresholds
 _WX_SPEED_THRESHOLD_KT  = 10   # alert on >= 10kt speed change
@@ -99,7 +103,24 @@ def push_vip_tfrs() -> int:
         key = t["tfr_id"]
         h = content_hash(message)
 
-        if not _tfr_dedup.should_push(key, h, hot=True):  # VIP = always hot
+        # 2026-08-16 drift audit: this passed hot=True ("VIP = always hot"),
+        # but PushDedup's contract says hot=True BYPASSES dedup entirely --
+        # should_push always returned True, so with PUSH_INTERVAL=30s an
+        # active VIP TFR re-fired 2x ntfy p5 + a Pushover Emergency (siren,
+        # auto-retrying) every 30 seconds for its whole active window. The
+        # `hot` flag exists for callers that conditionally skip dedup (e.g.
+        # wx >=30kt); "the pushes themselves are hot/priority-5" was never a
+        # reason to pass it. Docstring contract ("same TFR suppressed for 1
+        # hour unless content changed") is exactly plain should_push, so the
+        # per-TFR slot + enrichment-text content key now actually gate:
+        # first sighting fires immediately, changed enrichment fires
+        # immediately, otherwise one re-push per hour while active.
+        # 2026-09-03 (forward-only push_dedup redesign): stays on the
+        # explicit PERIODIC api -- the hourly re-push while a VIP/POTUS
+        # TFR is ACTIVE is the 2026-08-16 contract above, a deliberate
+        # still-active heartbeat for the highest-consequence airspace
+        # state on this platform, not rebroadcast spam.
+        if not _tfr_dedup.should_push_periodic(key, h):
             continue
 
         # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
@@ -148,12 +169,16 @@ def push_cps_update() -> None:
 # Sources (priority order):
 #   1. Local UltraFeeder tar1090  — ULTRAFEEDER_URL/data/aircraft.json
 #      Fast, local, zero rate-limit. Used when UltraFeeder container is up.
-#   2. airplanes.live API         — https://api.airplanes.live/v2/callsign/
-#      Free, no key, same JSON schema as adsb.lol. Used as fallback.
+#   2. FDPS SWIM cache (already ingested locally) — shared.watchlist._local_fdps_ac
+#      Covers aircraft out of local ADS-B range; still entirely local.
 #   3. ACARS/VDL2 WOW confirmation — acarshub messages DB (authoritative bypass)
 #      Weight-on-Wheels ON event from aircraft avionics overrides ADS-B guardrail.
+#
+# 2026-08-27 (operator directive, "everything is meant to be local",
+# reinforced after a live 429 from api.airplanes.live under load): dropped
+# the airplanes.live fallback (previously step 2) entirely -- no
+# third-party API is queried anywhere in this monitor now.
 # ---------------------------------------------------------------------------
-AIRPLANES_LIVE_URL = "https://api.airplanes.live/v2/callsign/{callsign}"
 FLIGHT_MONITOR_INTERVAL = 60  # seconds between checks per flight
 
 # How long a flight must be absent from ALL feeds before declaring "presumed landed".
@@ -187,12 +212,21 @@ _flight_state: dict = {}
 # wheels-on-ground directly), so a 1h re-arm is safe. ADS-B/absence-based
 # confirmation is corroborative/inferred, so it gets a longer 2h window to guard
 # against a restart re-chasing stale ground/low-alt readings before they age out.
+# 2026-09-03 (forward-only push_dedup redesign): these stay on the
+# explicit PERIODIC api at the call sites below -- the content key is the
+# constant "landed" (a landing has no varying content), keyed per
+# CALLSIGN, and callsigns recur daily (same flight number, next day's
+# leg). Forward-only semantics would fire one landing alert per callsign
+# per retention horizon (days) and silently swallow every subsequent
+# day's landing; the 1h/2h re-arm windows above ARE the episode design.
 _landing_dedup_acars = PushDedup("flight-landing-acars", dedup_secs=3600)   # 1h
 _landing_dedup_adsb  = PushDedup("flight-landing-adsb", dedup_secs=7200)    # 2h
 
 
 def _landing_dedup_for(result: str) -> PushDedup:
-    return _landing_dedup_acars if result == "landed_acars" else _landing_dedup_adsb
+    # landed_fids is poller.py's own corroborated (FIDS/FDPS/ACARS) phase --
+    # same authoritative tier as landed_acars, not an ADS-B guess.
+    return _landing_dedup_acars if result in ("landed_acars", "landed_fids") else _landing_dedup_adsb
 
 
 def _ultrafeeder_url() -> str:
@@ -202,8 +236,12 @@ def _ultrafeeder_url() -> str:
 
 def _fetch_aircraft_callsign(callsign: str) -> list:
     """
-    Return list of matching aircraft dicts. Tries UltraFeeder first,
-    then airplanes.live. Each dict has at least: alt_baro, gnd/ground.
+    Return list of matching aircraft dicts. Tries UltraFeeder first, then
+    already-ingested local FDPS SWIM data. Each dict has at least:
+    alt_baro, gnd/ground.
+
+    2026-08-27: no third-party API queried -- see this section's header
+    comment for the full rationale.
     """
     cs = callsign.strip().upper()
 
@@ -221,26 +259,44 @@ def _fetch_aircraft_callsign(callsign: str) -> list:
             if matched:
                 log.debug("%s: found via UltraFeeder (%d match)", cs, len(matched))
                 return matched
-            # UltraFeeder up but callsign not local — fall through to airplanes.live
+            # UltraFeeder up but callsign not local — fall through to FDPS
             log.debug("%s: UltraFeeder up but callsign not in feed", cs)
         except Exception as e:
             log.debug("UltraFeeder fetch failed: %s", e)
 
-    # 2 — airplanes.live
-    try:
-        r = requests.get(AIRPLANES_LIVE_URL.format(callsign=cs), timeout=8)
-        r.raise_for_status()
-        return r.json().get("ac", [])
-    except Exception as e:
-        log.debug("airplanes.live fetch failed for %s: %s", cs, e)
-        return []
+    # 2 — local FDPS SWIM cache (out-of-range aircraft, still local)
+    from shared.watchlist import _local_fdps_ac
+    ac = _local_fdps_ac(cs)
+    return [ac] if ac else []
 
 
-def _check_flight_landing(callsign: str) -> str | None:
+_OOOI_PHASE_STALE_SEC = 1800  # 30 min -- matches the same order-of-magnitude
+                              # freshness bar poller.py's own corroboration
+                              # checks use elsewhere; an old phase write is
+                              # not authoritative for "confirmed landed now"
+
+
+def _check_flight_landing(
+    callsign: str,
+    oooi_phase: str | None = None,
+    oooi_phase_updated_at: str | None = None,
+) -> str | None:
     """
     Returns "landed" if the aircraft is confirmed on the ground.
 
     Source priority:
+      0. poller.py's own oooi_phase (watchlist_entries.oooi_phase) — 2026-08-13.
+         poller.py already runs the full "ACARS/FDPS/FIDS/VDL IS the sole
+         authority" corroboration chain (2026-07-28 directive) for every
+         permanent/transient entry it sweeps -- FIDS's Landed/InGate status in
+         particular confirms ON/IN independent of ACARS. This function used to
+         re-derive everything from scratch using ONLY ACARS+ADS-B, meaning
+         pusher never saw FIDS-confirmed landings poller had already
+         established -- exactly the gap that let AS506's predecessor flight go
+         un-pushed with ACARS hardware offline. Only trusted if fresh
+         (_OOOI_PHASE_STALE_SEC); callers with no entry context (the
+         session-based path below) simply omit these params and this check
+         is skipped, unchanged from before.
       1. ACARS/VDL2 — avionics are authoritative; checked first for every call.
          - ACARS OFF  → aircraft is airborne; update state regardless of ADS-B.
          - ACARS ON/IN → aircraft is on ground; fire immediately regardless of
@@ -260,6 +316,26 @@ def _check_flight_landing(callsign: str) -> str | None:
 
     if state["notified"]:
         return None
+
+    # ── 0. poller.py's already-corroborated FIDS/FDPS/ACARS phase ───────────
+    if oooi_phase in ("on", "in") and oooi_phase_updated_at:
+        try:
+            from datetime import datetime, timezone
+            updated = datetime.fromisoformat(oooi_phase_updated_at.replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age_sec = (datetime.now(timezone.utc) - updated).total_seconds()
+            if age_sec <= _OOOI_PHASE_STALE_SEC:
+                log.info(
+                    "%s: poller-confirmed oooi_phase=%s (%.0fs old) -- landed, "
+                    "independent of ACARS/ADS-B state below",
+                    cs, oooi_phase, age_sec,
+                )
+                state["airborne"] = False
+                state["notified"] = True
+                return "landed_fids"
+        except Exception as e:
+            log.debug("%s: oooi_phase freshness check failed (non-fatal): %s", cs, e)
 
     # ── 1. ACARS is authoritative ────────────────────────────────────────────
     acars = _acars_phase(cs, not_before_epoch=state["last_seen"])
@@ -329,35 +405,40 @@ def _check_flight_landing(callsign: str) -> str | None:
         else:
             state["low_count"] = 0
 
-        if state["low_count"] < MIN_LOW_READINGS:
+        # 2026-07-28 operator directive: local DC-metro ADS-B receiver
+        # coverage is not reliable enough to independently confirm landed --
+        # low/ground readings are logged for visibility but no longer fire
+        # "landed_adsb" on their own. ACARS (checked earlier in this
+        # function) is the only source that can return a landed result here.
+        if state["low_count"] >= MIN_LOW_READINGS:
+            log.info(
+                "%s: %d consecutive low/ground ADS-B readings (alt=%s last_alt=%s) "
+                "-- ADS-B alone no longer confirms landed, awaiting ACARS",
+                cs, state["low_count"], alt_baro, last_alt,
+            )
+        else:
             log.debug("%s: low/ground reading %d/%d — waiting for confirmation",
                       cs, state["low_count"], MIN_LOW_READINGS)
-            return None
-
-        log.info("%s ADS-B landing confirmed — alt=%s last_alt=%s readings=%d",
-                 cs, alt_baro, last_alt, state["low_count"])
-        state["notified"] = True
-        return "landed_adsb"
+        return None
 
     else:
-        # Aircraft absent from all ADS-B feeds
+        # Aircraft absent from all ADS-B feeds. Absence is not confirmation
+        # of anything -- it's exactly the "ADS-B dark" condition that was
+        # producing landed pushes 15-20 min before actual arrival, most
+        # often attributable to the local receiver's limited DC-metro sky
+        # coverage rather than the aircraft actually being down. No longer
+        # fires "landed_adsb" from a timeout; ACARS is required.
         if not state["airborne"]:
             return None
         elapsed = time.time() - state["last_seen"]
         last_alt = state["last_alt_ft"]
 
-        if last_alt is not None and last_alt > HIGH_ALT_GATE_FT:
-            log.debug(
-                "%s: absent from feed %ds but last alt was %dft — coverage gap",
+        if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
+            log.info(
+                "%s absent from feed %ds (last alt=%s) -- ADS-B-dark alone no "
+                "longer confirms landed, awaiting ACARS",
                 cs, int(elapsed), last_alt,
             )
-            return None
-
-        if elapsed > GONE_FROM_FEED_TIMEOUT_SEC:
-            log.info("%s absent from feed %ds — presumed landed (last alt=%s)",
-                     cs, int(elapsed), last_alt)
-            state["notified"] = True
-            return "landed_adsb"
 
     return None
 
@@ -378,7 +459,8 @@ def push_flight_watchlist_landings() -> int:
         if not callsign:
             continue
         result = _check_flight_landing(callsign)
-        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
+        # PERIODIC api by design -- see the _landing_dedup_* comment block.
+        if result and _landing_dedup_for(result).should_push_periodic(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed.\nWatchlist monitoring complete."
             success = send_ntfy(
                 topic="flight-alerts",
@@ -404,8 +486,13 @@ def push_flight_watchlist_landings() -> int:
         callsign = entry.get("identifier", "").strip().upper()
         if not callsign:
             continue
-        result = _check_flight_landing(callsign)
-        if result and _landing_dedup_for(result).should_push(callsign, content_hash("landed")):
+        result = _check_flight_landing(
+            callsign,
+            oooi_phase=entry.get("oooi_phase"),
+            oooi_phase_updated_at=entry.get("oooi_phase_updated_at"),
+        )
+        # PERIODIC api by design -- see the _landing_dedup_* comment block.
+        if result and _landing_dedup_for(result).should_push_periodic(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed."
             success = send_ntfy(
                 topic="flight-alerts",
@@ -604,7 +691,19 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
 
-    db.init_db_v8()
+    # 2026-09-18: skip the SQLite bootstrap chain on Postgres -- the
+    # schema there is already fully built by the 48 files in
+    # common/pg_schema/, applied+tracked by scripts/pg_migrate.py. See
+    # ingest/main.py's matching guard for the full rationale (confirmed
+    # live: this exact chain crash-looped every core container after
+    # the 2026-09-18 cutover).
+    if db_backend.backend() != "postgres":
+        db.init_db_v8()
+        db.init_db_v9()
+        db.init_db_v16()
+        db.init_db_v18()
+        db.init_db_v19()
+        db.init_db_v20()
     log.info("corporatetraveldc pusher started")
 
     while not shutdown.is_set():
