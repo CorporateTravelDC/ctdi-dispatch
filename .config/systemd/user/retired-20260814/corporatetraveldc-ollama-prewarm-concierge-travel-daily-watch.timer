@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm ~3min before concierge-travel-daily-watch's 08:15 ET run
+Requires=corporatetraveldc-ollama-prewarm-concierge-travel-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 08:12:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

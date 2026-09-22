@@ -1,0 +1,14 @@
+# corporatetraveldc-weekly-external-image-update.timer
+# Sunday 04:15 ET -- clear of second-brain-weekly-dump (02:00), the daily
+# 03:00 ET llama-hot/chat preventive restart, and the other Sunday-18:xx
+# weekly jobs (second-brain-weekly, weekly-summary).
+[Unit]
+Description=Fire weekly-external-image-update.service every Sunday 04:15 ET
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00 America/New_York
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

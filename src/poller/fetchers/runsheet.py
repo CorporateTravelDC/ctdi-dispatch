@@ -96,15 +96,33 @@ def run() -> dict:
         terminated = db.get_terminated_watchlists(today)
 
         # Write/update the daily runsheet entry if trips changed
+        #
+        # BUG FIXED 2026-08-22: this used to compare `payload_hash`
+        # (sha256 of the RAW RUNSHEET FILE TEXT, from _load_scheduled_trips
+        # -- includes the "date" field, whitespace, key order, everything)
+        # against `existing_hash` (sha256 of the STORED `scheduled_trips`
+        # column, which is `json.dumps(trips)` -- just the trips list,
+        # re-serialized). Two different hash domains over two different
+        # payloads -- they could never match even when nothing had
+        # actually changed, so this "if changed" gate never actually
+        # gated anything: every 5-min cycle inserted a fresh row.
+        # Confirmed live: 7,270 rows in the runsheet table, ~288/day
+        # (every 5-min cycle, 24/7). Fixed by hashing `trips` the exact
+        # same way it gets stored (json.dumps(trips), no kwargs, matching
+        # db.upsert_runsheet exactly) on BOTH sides of the comparison.
+        # payload_hash itself is left untouched -- it's also used below
+        # for feed_state's payload_hash (a "did the raw file change"
+        # signal for a different purpose), not just this comparison.
         existing = db.get_runsheet(plan_date)
         existing_hash = ""
         if existing and existing.get("scheduled_trips"):
             existing_hash = hashlib.sha256(
                 existing["scheduled_trips"].encode()
             ).hexdigest()[:16]
+        trips_hash = hashlib.sha256(json.dumps(trips).encode()).hexdigest()[:16]
 
         if payload_hash not in ("no-file", "parse-error") and \
-                payload_hash != existing_hash:
+                trips_hash != existing_hash:
             db.upsert_runsheet(plan_date, trips, len(trips))
             log.info("Runsheet updated — date=%s trips=%d", plan_date, len(trips))
         else:

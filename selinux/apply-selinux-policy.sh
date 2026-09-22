@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # selinux/apply-selinux-policy.sh
-# CS Executive Services -- SELinux policy remediation + directory bootstrap
+# [operator LLC] -- SELinux policy remediation + directory bootstrap
 #
 # Run as root before starting any corporatetraveldc services.
 # Idempotent -- safe to re-run after package updates or Pi migration.
@@ -13,6 +13,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Signed-manifest integrity self-check (docs/COMPLIANCE_SECURITY.md "Signed
+# Manifest Integrity") -- this script runs as root and builds/loads SELinux
+# policy modules; worth the same "verify before doing anything" treatment as
+# the automated fail2ban/skill entrypoints, even though it's operator-run.
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh"; then
+    echo "[FAIL] Integrity check failed -- refusing to run apply-selinux-policy.sh" >&2
+    exit 5
+fi
+
 DRY_RUN=false
 RAW_IMAGE_DIR="${HOME}"
 
@@ -59,11 +70,12 @@ build_and_load_module() {
     run checkmodule -M -m -o "${work_dir}/${name}.mod" "${work_dir}/${name}.te"
     run semodule_package -o "${work_dir}/${name}.pp" -m "${work_dir}/${name}.mod"
 
-    if semodule -l 2>/dev/null | grep -q "^${name}$"; then
-        run semodule -u "${work_dir}/${name}.pp"
-    else
-        run semodule -i "${work_dir}/${name}.pp"
-    fi
+    # `semodule -u`/--upgrade is deprecated -- `-i`/--install now handles
+    # both fresh-install and update-in-place for an already-loaded module of
+    # the same name, so the old install-vs-upgrade branch here is no longer
+    # needed (confirmed 2026-08-09: -i cleanly updated an already-loaded
+    # module with no separate upgrade step).
+    run semodule -i "${work_dir}/${name}.pp"
     echo "[OK]  ${name}"
 }
 
@@ -85,7 +97,7 @@ label_container_path() {
 require_root
 check_deps
 
-echo "=== CS Executive Services -- SELinux Policy Apply ==="
+echo "=== [operator LLC] -- SELinux Policy Apply ==="
 echo "[INFO] Dry run: ${DRY_RUN}"
 echo ""
 
@@ -222,13 +234,14 @@ echo "--- Step 11: TE modules ---"
 build_and_load_module "corporatetraveldc-virtqemud"
 build_and_load_module "corporatetraveldc-logind-userns"
 build_and_load_module "corporatetraveldc-fail2ban-lockdown"
+build_and_load_module "corporatetraveldc-fail2ban-cf-egress"
 
 # ---------------------------------------------------------------------------
 # Step 12 -- Verify
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Step 12: Verify ---"
-for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown; do
+for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown corporatetraveldc-fail2ban-cf-egress; do
     semodule -l 2>/dev/null | grep -q "^${mod}$" \
         && echo "[OK]  module: ${mod}" \
         || echo "[FAIL] module: ${mod}" >&2

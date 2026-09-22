@@ -90,6 +90,17 @@ def distance_to_dca_nm(lat: float, lon: float) -> float:
     return _haversine_nm(lat, lon, _DCA_LAT, _DCA_LON)
 
 
+def distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between any two points, in nautical miles.
+
+    2026-09-02: public wrapper around _haversine_nm added so callers outside
+    this module (fdps_parser's meter-fix proximity alert) get one shared
+    distance primitive instead of a second private copy -- distance_to_dca_nm
+    is DCA-specific and doesn't cover the general two-point case.
+    """
+    return _haversine_nm(lat1, lon1, lat2, lon2)
+
+
 # ── Individual predicate functions ────────────────────────────────────────────
 
 def in_range(lat: float | None, lon: float | None) -> bool:

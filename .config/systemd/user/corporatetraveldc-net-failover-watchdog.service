@@ -1,0 +1,6 @@
+[Unit]
+Description=Probe both uplinks; fail the default route over to the backup when the primary is dead-but-carrier-up, and back again (2026-09-05)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/net-failover-watchdog.sh

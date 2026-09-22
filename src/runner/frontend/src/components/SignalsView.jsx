@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useGlobalLayerConfig } from '../App.jsx'
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
 
 // ═══════════════════════════════════════════════════════════════════
 //  AIRSPACE — TFR + NOTAM (merged from TfrView)
@@ -148,25 +149,54 @@ function GeneralPanel({ tfrs, loading, feedDegraded }) {
   )
 }
 
+// NOTAM API fields are notam_id / facility / classification / effective_start
+// / effective_end / text_body (see web/main.py get_notams) -- match/display
+// against those, not the n.text/n.icao/n.location/n.type fields this panel
+// was reading before (which don't exist in the payload, so NOTAM text and
+// location never actually rendered -- every row silently fell through to
+// the "[FDC]"/"[NOTAM-D]" placeholder).
 function notamMatches(n, q) {
   if (!q) return true
   const lq = q.toLowerCase()
-  return [n.notam_id, n.icao, n.location, n.text, n.classification, n.type]
+  return [n.notam_id, n.facility, n.text_body, n.classification]
     .some(v => v && String(v).toLowerCase().includes(lq))
 }
 
+const NOTAM_CLASS_COLORS = {
+  fdc:       '#ff6b35',
+  'notam-d': 'var(--muted)',
+}
+
 function NotamPanel({ notams, loading }) {
-  const [search, setSearch] = useState('')
+  const [search, setSearch]     = useState('')
+  const [expanded, setExpanded] = useState(() => new Set())
+
   const filtered = useMemo(() => {
     const all = notams || []
     return search ? all.filter(n => notamMatches(n, search)) : all
   }, [notams, search])
+
+  const toggleExpand = useCallback((id) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const fdcCount = useMemo(
+    () => (notams || []).filter(n => (n.classification || '').toUpperCase() === 'FDC').length,
+    [notams]
+  )
+
   return (
-    <div className="sig-panel">
+    <div className="sig-panel wx-panel">
       <div className="sig-panel-header">
         <span className="sig-label" style={{ color: 'var(--muted)' }}>NOTAM</span>
-        <span className="sig-count">{notams?.length ?? 0} active</span>
-        <input className="sig-search" type="search" placeholder="NOTAM ID, ICAO, location…"
+        <span className={`sig-count${fdcCount > 0 ? ' sig-count-hot' : ''}`}>
+          {notams?.length ?? 0} active{fdcCount > 0 ? ` · ${fdcCount} FDC` : ''}
+        </span>
+        <input className="sig-search" type="search" placeholder="NOTAM ID, facility, text…"
           value={search} onChange={e => setSearch(e.target.value)} aria-label="Search NOTAMs" />
       </div>
       <div className="sig-feed">
@@ -176,16 +206,31 @@ function NotamPanel({ notams, loading }) {
               FAA NOTAM API key required — set <code>FAA_NOTAM_API_KEY</code> in dispatch-secrets.env
             </div>
           ) : !filtered.length ? <div className="sig-empty">No NOTAMs matching "{search}"</div>
-          : filtered.map((n, i) => (
-            <div key={n.notam_id || i} className="sig-msg">
-              <span className="sig-msg-call" style={{ color: 'var(--text-2)' }}>{n.notam_id || '—'}</span>
-              {n.icao && <span className="sig-msg-flight">{n.icao}</span>}
-              <span className="sig-msg-text">
-                {n.text || n.raw_text || (n.classification && `[${n.classification}]`) || '—'}
-              </span>
-              {n.location && <span className="sig-msg-loc">{n.location}</span>}
-            </div>
-          ))
+          : filtered.map((n, i) => {
+            const id      = n.notam_id || i
+            const cls     = (n.classification || 'notam-d').toLowerCase()
+            const color   = NOTAM_CLASS_COLORS[cls] ?? NOTAM_CLASS_COLORS['notam-d']
+            const isOpen  = expanded.has(id)
+            const fullTxt = n.text_body || ''
+            const preview = fullTxt.length > 140 ? fullTxt.slice(0, 140) + '…' : fullTxt
+            return (
+              <div key={id} className="sig-msg wx-alert-msg notam-msg"
+                   onClick={() => toggleExpand(id)} role="button" tabIndex={0}
+                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(id) } }}>
+                <span className="sig-msg-call" style={{ color }}>{n.notam_id || '—'}</span>
+                <span className="sig-msg-flight" style={{ color: 'var(--text-2)' }}>
+                  {(n.classification || '—').toUpperCase()}
+                </span>
+                {n.facility && <span className="sig-msg-flight">{n.facility}</span>}
+                <span className="sig-msg-text">
+                  {fullTxt ? (isOpen ? fullTxt : preview) : '—'}
+                </span>
+                {n.effective_end
+                  ? <span className="sig-msg-time">exp {fmtUtc(n.effective_end)}</span>
+                  : <span className="sig-msg-time notam-perm">no expiry</span>}
+              </div>
+            )
+          })
         }
       </div>
     </div>
@@ -228,23 +273,22 @@ function MessageFeed({ sigType, color }) {
   const [sinceRef]          = useState({ value: 0 })
   const feedRef             = useRef(null)
 
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch(`${sigType.endpoint}?since=${sinceRef.value}`)
-        if (!r.ok) return
-        const json = await r.json()
-        setData(json)
-        if (json.messages?.length) {
-          const ids = json.messages.map(m => m.id || m.msg_id || 0).filter(Boolean)
-          if (ids.length) sinceRef.value = Math.max(...ids)
-        }
-      } catch (_) {}
-    }
-    poll()
-    const id = setInterval(poll, 15000)
-    return () => clearInterval(id)
-  }, [sigType.endpoint])
+  // Note: `sigType.endpoint` is effectively constant for this component's
+  // lifetime -- the caller renders MessageFeed with `key={st.key}`, so a
+  // different signal type is a fresh mount, not a prop change on this one.
+  const poll = async () => {
+    try {
+      const r = await fetch(`${sigType.endpoint}?since=${sinceRef.value}`)
+      if (!r.ok) return
+      const json = await r.json()
+      setData(json)
+      if (json.messages?.length) {
+        const ids = json.messages.map(m => m.id || m.msg_id || 0).filter(Boolean)
+        if (ids.length) sinceRef.value = Math.max(...ids)
+      }
+    } catch (_) {}
+  }
+  useVisibilityAwareInterval(poll, 15000)
 
   const filtered = useMemo(() => {
     const all = [...(data.messages || [])].reverse()
@@ -263,7 +307,11 @@ function MessageFeed({ sigType, color }) {
         <input className="sig-search" type="search" placeholder="search…"
           value={search} onChange={e => setSearch(e.target.value)} aria-label={`Search ${sigType.label} messages`} />
       </div>
-      {hwNotice && <div className="sig-hw-notice">⚠ No local {sigType.label} decoder — showing Jumpseat remote data</div>}
+      {hwNotice && (
+        <div className="sig-hw-notice">
+          ⚠ No local {sigType.label} decoder — showing {SOURCE_LABELS[data.source] || data.source} remote data
+        </div>
+      )}
       <div className="sig-feed" ref={feedRef}>
         {isPending ? (
           <div className="sig-pending">Hardware pending — {sigType.label} decoder not active</div>
@@ -296,18 +344,14 @@ function AisPanel() {
   const [data, setData]   = useState({ source: 'local', vessels: [], count: 0 })
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/ais/vessels')
-        if (!r.ok) return
-        setData(await r.json())
-      } catch (_) {}
-    }
-    poll()
-    const id = setInterval(poll, 30000)
-    return () => clearInterval(id)
-  }, [])
+  const poll = async () => {
+    try {
+      const r = await fetch('/api/ais/vessels')
+      if (!r.ok) return
+      setData(await r.json())
+    } catch (_) {}
+  }
+  useVisibilityAwareInterval(poll, 30000)
 
   const isPending = data.detail === 'hardware_pending' || (!data.vessels?.length && data.source === 'none')
   const filtered  = useMemo(() => {
@@ -394,18 +438,14 @@ function NwsAlertsPanel() {
   const [data, setData]     = useState(null)
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/dispatch/api/v1/alerts')
-        if (!r.ok) return
-        setData(await r.json())
-      } catch (_) {}
-    }
-    poll()
-    const id = setInterval(poll, 60000)
-    return () => clearInterval(id)
-  }, [])
+  const poll = async () => {
+    try {
+      const r = await fetch('/api/dispatch/api/v1/alerts')
+      if (!r.ok) return
+      setData(await r.json())
+    } catch (_) {}
+  }
+  useVisibilityAwareInterval(poll, 60000)
 
   const alerts   = data?.alerts ?? (Array.isArray(data) ? data : [])
   const filtered = useMemo(() => {
@@ -451,18 +491,14 @@ function WeatherPanel() {
   const [data, setData]   = useState(null)
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/dispatch/api/v1/weather')
-        if (!r.ok) return
-        setData(await r.json())
-      } catch (_) {}
-    }
-    poll()
-    const id = setInterval(poll, 60000)
-    return () => clearInterval(id)
-  }, [])
+  const poll = async () => {
+    try {
+      const r = await fetch('/api/dispatch/api/v1/weather')
+      if (!r.ok) return
+      setData(await r.json())
+    } catch (_) {}
+  }
+  useVisibilityAwareInterval(poll, 60000)
 
   const metars   = data?.metars || []
   const filtered = useMemo(() => {
@@ -548,11 +584,10 @@ export default function SignalsView() {
   }, [])
 
   useEffect(() => {
-    loadTfrs()
     loadNotams()
-    const id = setInterval(loadTfrs, TFR_POLL_MS)
-    return () => clearInterval(id)
-  }, [loadTfrs, loadNotams])
+  }, [loadNotams])
+
+  useVisibilityAwareInterval(loadTfrs, TFR_POLL_MS)
 
   // ── Visible panel counts ───────────────────────────────────────
   const sigCount = [

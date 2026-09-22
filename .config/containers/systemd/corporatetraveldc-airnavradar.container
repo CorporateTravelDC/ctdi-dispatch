@@ -12,16 +12,27 @@ PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/docker-airnavradar:latest
 ContainerName=corporatetraveldc-airnavradar
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/airnavradar-secrets.env
 Environment=BEASTHOST=host.containers.internal
 Environment=BEASTPORT=30005
-Environment=SHARING_KEY=e3b00e8697f7d4f28a53bb6ab32824c0
-Environment=LAT=38.87485
-Environment=LONG=-77.14410
-Environment=ALT=279
+# SHARING_KEY / LAT / LONG / ALT come from airnavradar-secrets.env
+# (EnvironmentFile= above), scoped to this container only since 2026-08-26
+# (Opus blind review C-4) -- never hardcoded here, see CLAUDE.md.
 AutoUpdate=registry
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -36,4 +47,15 @@ RestartSec=30
 TimeoutStartSec=60
 
 [Install]
-WantedBy=default.target
+# 2026-09-06: no longer auto-started at login. WantedBy=default.target
+# pulled this unit -- with the seven SWIM ingest units, pgsql, the four
+# ADS-B feeders and amtrak-tracker, 13 long-running containers -- up
+# flat in the first seconds of the user session (Sep 5 boot journal:
+# all seven ingest units started at 17:49:07, a full minute BEFORE
+# corporatetraveldc-stack-boot-stagger.service began), so the staggered
+# boot never actually owned the boot. Startup is now owned by
+# corporatetraveldc-stack-boot-stagger.service (scripts/stack-boot-ctl.sh,
+# serialized + load-gated via scripts/lib/serial-bringup.sh), which lists
+# this unit in its ORDER.
+# No WantedBy here on purpose -- do not re-add without re-introducing
+# the boot storm.

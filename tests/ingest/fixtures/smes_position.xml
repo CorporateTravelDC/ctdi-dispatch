@@ -1,16 +1,1 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<smes:positionReport xmlns:smes="urn:us:gov:dot:faa:atm:terminal:entities:v2-0:smes:base"
-                     airport="KDCA"
-                     trackNumber="4501"
-                     targetType="AIRCRAFT">
-  <smes:aircraftIdentification>AAL256</smes:aircraftIdentification>
-  <smes:modeACode>3456</smes:modeACode>
-  <smes:aircraftType>B738</smes:aircraftType>
-  <smes:latitude>38.8499</smes:latitude>
-  <smes:longitude>-77.0350</smes:longitude>
-  <smes:altitude>
-    <smes:value>0</smes:value>
-  </smes:altitude>
-  <smes:speed>15</smes:speed>
-  <smes:heading>120</smes:heading>
-</smes:positionReport>
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ns2:asdexMsg xmlns:ns2="urn:us:gov:dot:faa:atm:terminal:entities:v4-0:smes:surfacemovementevent"><airport>KDCA</airport><positionReport full="true"><track>4501</track><flightId><acAddress>A12345</acAddress><aircraftId>AAL256</aircraftId><mode3ACode>3456</mode3ACode></flightId><flightInfo><acType>B738</acType></flightInfo><position><latitude>38.8499</latitude><longitude>-77.0350</longitude><altitude>12</altitude></position><movement><heading>120</heading><speed>15</speed></movement><runway>01/19</runway></positionReport></ns2:asdexMsg>

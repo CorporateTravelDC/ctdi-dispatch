@@ -76,8 +76,10 @@ set_env "ACARSDRAMA_JUMPSEAT_TOKEN" "$(read_secret jumpseat token)"
 # -- airframes.io (secondary external fallback for VDL2/ACARS/HFDL)
 set_env "AIRFRAMES_TOKEN" "$(read_secret airframes)"
 
-# -- MarineTraffic API key (AIS fallback)
-set_env "MARINETRAFFIC_API_KEY" "$(read_secret marinetraffic)"
+# -- Kpler Maritime 2.0 GraphQL token (AIS fallback -- successor to the
+#    discontinued MarineTraffic REST Vessels API)
+# ~/.secrets/kpler.key  ->  KPLER_MARITIME_API_TOKEN
+set_env "KPLER_MARITIME_API_TOKEN" "$(read_secret kpler key)"
 
 
 # -- ntfy auth token
@@ -93,6 +95,10 @@ set_env "FLIGHTAWARE_FEEDER_KEY" "$(read_secret flightaware token)"
 # -- FlightAware AeroAPI key (REST API, watchlist enrichment, flight data)
 # ~/.secrets/flightaware.key  ->  FLIGHTAWARE_AEROAPI_KEY
 set_env "FLIGHTAWARE_AEROAPI_KEY" "$(read_secret flightaware key)"
+
+# -- Cowork<->Dispatch message board write key (X-Board-Key). Board-only scope,
+# rotatable. ~/.secrets/board.key  ->  BOARD_KEY  (added 2026-08-07)
+set_env "BOARD_KEY" "$(read_secret board key)"
 
 # -- AirNav RadarBox feeder sharing key
 # ~/.secrets/airnavradar.token  ->  AIRNAVRADAR_SHARING_KEY
@@ -111,6 +117,18 @@ set_env "AIS_AISHUB_ID"          "$(read_secret aishub)"
 set_env "AIS_MARINETRAFFIC_KEY"  "$(read_secret marinetraffic)"
 set_env "AIS_VESSELFI_KEY"       "$(read_secret vesselfi)"
 
+# -- Inbound webhook shared secrets (src/web/routes/webhooks.py). Each
+#    receiver 503s until its secret is set -- code ships ready, nothing
+#    else to wire up once these land. Value is whatever shared secret you
+#    configure as a custom outbound header on that platform's side; it is
+#    NOT the vendor's own signing key (see webhooks.py docstring for why).
+# ~/.secrets/limoanywhere_webhook.key  ->  LIMOANYWHERE_WEBHOOK_SECRET
+set_env "LIMOANYWHERE_WEBHOOK_SECRET" "$(read_secret limoanywhere_webhook key)"
+# ~/.secrets/ringcentral_webhook.key   ->  RINGCENTRAL_WEBHOOK_SECRET
+set_env "RINGCENTRAL_WEBHOOK_SECRET"  "$(read_secret ringcentral_webhook key)"
+# ~/.secrets/threecx_webhook.key       ->  THREECX_WEBHOOK_SECRET
+set_env "THREECX_WEBHOOK_SECRET"      "$(read_secret threecx_webhook key)"
+
 echo ""
 echo "=== Done ==="
 echo "Restart containers to pick up changes:"
@@ -118,7 +136,7 @@ echo "  systemctl --user restart corporatetraveldc-runner.service"
 echo "  systemctl --user restart corporatetraveldc-web.service"
 echo "  systemctl --user restart corporatetraveldc-web.service"
 echo "  systemctl --user restart corporatetraveldc-poller.service"
-echo "  systemctl --user restart corporatetraveldc-ingest.service"
+echo "  bash scripts/ingest-feed-ctl.sh restart all   # old monolith retired 2026-07-26, per-feed split"
 echo "  systemctl --user restart corporatetraveldc-fr24feed.service"
 echo "  systemctl --user restart corporatetraveldc-airnavradar.service"
 echo "  systemctl --user restart corporatetraveldc-planefinder.service"

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, createContext, useContext } from 'rea
 import MapView from './components/MapView.jsx'
 import TrainMapView from './components/TrainMapView.jsx'
 import AisMapView from './components/AisMapView.jsx'
+import UtmMapView from './components/UtmMapView.jsx'
 import StatusView from './components/StatusView.jsx'
 import BriefView from './components/BriefView.jsx'
 import AdminView from './components/AdminView.jsx'
@@ -13,7 +14,15 @@ import SettingsPanel from './components/SettingsPanel.jsx'
 import OverviewView from './components/OverviewView.jsx'
 import NtfyFeedView from './components/NtfyFeedView.jsx'
 import IntelView from './components/IntelView.jsx'
+import EventIntelView from './components/EventIntelView.jsx'
+import GraphView from './components/GraphView.jsx'
+import WeatherView from './components/WeatherView.jsx'
 import { useLayerConfig } from './hooks/useLayerConfig.js'
+import { useTailnet } from './hooks/useTailnet.js'
+import { useDemoStatus } from './hooks/useDemoStatus.js'
+import { useWakeLock } from './hooks/useWakeLock.js'
+import WakeLockIndicator from './components/WakeLockIndicator.jsx'
+import DemoLoginGate from './components/DemoLoginGate.jsx'
 
 /** Global layer config context — allows any child to read/update panel visibility */
 export const LayerConfigContext = createContext(null)
@@ -41,6 +50,9 @@ export default function App() {
   const [dispOpen, setDispOpen]       = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const layerCtx = useLayerConfig()
+  const tailnet = useTailnet()
+  const [demoStatus, recheckDemoStatus] = useDemoStatus()
+  const wakeLockStatus = useWakeLock()
 
   // ── Theme management ──────────────────────────────────────────────────────
   const [themeOverride, setThemeOverride] = useState(
@@ -93,6 +105,20 @@ export default function App() {
     })
   }, [])
 
+  // Demo-mode gate: nothing else renders until this resolves and, if
+  // gated, until login succeeds. demoStatus === null means the check is
+  // still in flight -- render nothing rather than flashing live content
+  // on a genuinely gated (public, unauthenticated) visit.
+  if (demoStatus === null) {
+    return <div className="demo-gate-loading" aria-hidden="true" />
+  }
+  if (demoStatus.demo_mode && !demoStatus.authenticated) {
+    return <DemoLoginGate onSuccess={() => recheckDemoStatus()} />
+  }
+  const demoBanner = (demoStatus.demo_mode && !demoStatus.trusted_origin)
+    ? `DEMO${demoStatus.label ? ': ' + demoStatus.label : ''}${demoStatus.speed ? ' · ' + demoStatus.speed + 'x' : ''}`
+    : null
+
   return (
     <LayerConfigContext.Provider value={layerCtx}>
       {/* Skip navigation — visible on keyboard focus only */}
@@ -103,6 +129,11 @@ export default function App() {
           <span className="topbar-brand" aria-label="Corporate Travel Dispatch Intelligence">
             CORPORATE TRAVEL DISPATCH INTELLIGENCE
           </span>
+          {demoBanner && (
+            <span className="demo-banner" title="This is a replayed archive, not live operational data">
+              {demoBanner}
+            </span>
+          )}
 
           <div className="topbar-nav" role="menubar">
             <NavLink to="/" end
@@ -117,9 +148,15 @@ export default function App() {
             <NavLink to="/ais"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">AIS</NavLink>
+            <NavLink to="/utm"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">UTM</NavLink>
             <NavLink to="/status"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">CPS</NavLink>
+            <NavLink to="/wx"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">WX</NavLink>
             <NavLink to="/signals"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">SIGNALS</NavLink>
@@ -132,6 +169,12 @@ export default function App() {
             <NavLink to="/intel"
               className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
               role="menuitem">INTEL</NavLink>
+            <NavLink to="/events"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">EVENTS</NavLink>
+            <NavLink to="/graph"
+              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+              role="menuitem">GRAPH</NavLink>
             <button
               className={`nav-link disp-topbar-btn${dispOpen ? ' active' : ''}`}
               onClick={() => setDispOpen(o => !o)}
@@ -139,9 +182,11 @@ export default function App() {
               aria-label="Dispatch query panel"
               role="menuitem"
             >DISP</button>
-            <NavLink to="/admin"
-              className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
-              role="menuitem">ADMIN</NavLink>
+            {tailnet === true && (
+              <NavLink to="/admin"
+                className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}
+                role="menuitem">ADMIN</NavLink>
+            )}
           </div>
 
           <div className="topbar-right">
@@ -157,6 +202,7 @@ export default function App() {
               ADS-B:{ADSB_LABELS[adsbMode]}
             </button>
             <CpsIndicator cps={liveState?.cps} />
+            <WakeLockIndicator status={wakeLockStatus} />
             <button
               className="theme-btn"
               onClick={cycleTheme}
@@ -177,7 +223,7 @@ export default function App() {
 
         {/* Settings panel — slide down from topbar */}
         {settingsOpen && (
-          <SettingsPanel onClose={() => setSettingsOpen(false)} />
+          <SettingsPanel onClose={() => setSettingsOpen(false)} tailnet={tailnet} />
         )}
 
         <main className="content" id="main-content" tabIndex="-1">
@@ -186,13 +232,17 @@ export default function App() {
             <Route path="/map" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
             <Route path="/trains" element={<TrainMapView />} />
             <Route path="/ais" element={<AisMapView />} />
+            <Route path="/utm" element={<UtmMapView />} />
             <Route path="/status" element={<StatusView liveState={liveState} />} />
+            <Route path="/wx" element={<WeatherView />} />
             <Route path="/tfr" element={<SignalsView />} />
             <Route path="/signals" element={<SignalsView />} />
             <Route path="/brief" element={<BriefView />} />
             <Route path="/feed" element={<NtfyFeedView />} />
             <Route path="/intel" element={<IntelView />} />
-            <Route path="/admin" element={<AdminView />} />
+            <Route path="/events" element={<EventIntelView />} />
+            <Route path="/graph" element={<GraphView />} />
+            <Route path="/admin" element={tailnet === true ? <AdminView /> : <OverviewView liveState={liveState} />} />
           </Routes>
         </main>
 
@@ -200,7 +250,7 @@ export default function App() {
 
         {/* Footer ticker */}
         <footer className="app-footer" role="contentinfo">
-          <span className="app-footer-copy">© {new Date().getFullYear()} CS Executive Services, LLC</span>
+          <span className="app-footer-copy">© {new Date().getFullYear()} [operator LLC], LLC</span>
           <span className="app-footer-sep">·</span>
           <a
             href="https://github.com/CorporateTravelDC/ctdi-dispatch"

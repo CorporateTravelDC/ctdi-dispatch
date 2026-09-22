@@ -1,0 +1,15 @@
+[Unit]
+Description=One-shot NMS v2.4.0 post-deploy check -- fires once ~30min after the FAA maint window (2026-08-08 0400-0600z / 0000-0200 EDT) closes
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=2026-08-08 02:30:00
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

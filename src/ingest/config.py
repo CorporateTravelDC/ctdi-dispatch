@@ -8,8 +8,11 @@ online one at a time as you repopulate credentials.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
+
+log = logging.getLogger("ingest.config")
 
 
 def _b(name: str, default: bool = False) -> bool:
@@ -26,40 +29,6 @@ def _i(name: str, default: int) -> int:
 def _list(name: str) -> list[str]:
     raw = os.getenv(name, "").strip()
     return [x.strip() for x in raw.split(",") if x.strip()]
-
-
-@dataclass(frozen=True)
-class SwimFeedConfig:
-    """Per-product SWIM/SCDS connection parameters."""
-    hosts: list[str]   # comma-separated in env; rotated on reconnect
-    port: int
-    username: str
-    password: str
-    tls: bool
-    topics: list[str]  # MQTT topic strings to subscribe (wildcards OK)
-
-
-def _swim_feed(prefix: str) -> "SwimFeedConfig":
-    return SwimFeedConfig(
-        hosts=_list(f"{prefix}_HOST"),
-        port=_i(f"{prefix}_PORT", 8883),
-        username=os.getenv(f"{prefix}_USERNAME", ""),
-        password=os.getenv(f"{prefix}_PASSWORD", ""),
-        tls=_b(f"{prefix}_TLS", True),
-        topics=_list(f"{prefix}_TOPIC"),
-    )
-
-
-@dataclass(frozen=True)
-class SwimConfig:
-    enabled: bool = field(default_factory=lambda: _b("SWIM_ENABLED", False))
-    # One SwimFeedConfig per SCDS product subscription.
-    stdds: SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_STDDS"))  # TFRs
-    sfdps: SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_SFDPS"))  # Flight data
-    fns:   SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_FNS"))    # NOTAMs
-    tbfm:  SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_TBFM"))  # Flow mgmt
-    tfms:  SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_TFMS"))  # NAS/GDPs
-    itws:  SwimFeedConfig = field(default_factory=lambda: _swim_feed("SWIM_ITWS"))  # Terminal wx
 
 
 @dataclass(frozen=True)
@@ -105,7 +74,6 @@ class AmtrakConfig:
 
 @dataclass(frozen=True)
 class Config:
-    swim: SwimConfig = field(default_factory=SwimConfig)
     nwws: NwwsConfig = field(default_factory=NwwsConfig)
     amtrak: AmtrakConfig = field(default_factory=AmtrakConfig)
     nms: "NmsConfig" = field(default_factory=lambda: NmsConfig())
@@ -115,7 +83,26 @@ class Config:
 
 
 def load() -> Config:
-    return Config()
+    cfg = Config()
+    _validate(cfg)
+    return cfg
+
+
+def _validate(cfg: Config) -> None:
+    """Startup config validation hook. Called by load() on every startup --
+    never bypass this.
+
+    History (2026-07-19): this used to guard against the legacy AMQP client
+    (swim.py / SwimConfig) and the current Solace/NMS client (swim_client.py
+    / NmsConfig) both being enabled simultaneously, which would have
+    double-connected overlapping nationwide feeds and roughly doubled ingest
+    bandwidth. The legacy AMQP path has since been removed entirely (see
+    tests/ingest/test_legacy_amqp_removed.py) -- there is nothing left to
+    double up against, so that specific check no longer applies. Left as a
+    hook for future cross-field config validation; keep using it rather than
+    reintroducing ad hoc checks scattered through main.py.
+    """
+    return
 
 
 # ── NMS / Solace PubSub+ config (replaces FNS/AMQP) ─────────────────────────

@@ -12,6 +12,15 @@ ExecStart=/usr/bin/cloudflared tunnel --protocol http2 --config /home/corporatet
 Restart=always
 RestartSec=15
 TimeoutStartSec=30
+# 2026-08-27 (operator directive): this unit had NO cgroup priority at
+# all before this -- default weight (100), same as an ordinary desktop
+# process, despite being the box's only public ingress path (every
+# CF-Access-gated hostname, the demo site, everything). Now matches the
+# must-never-die tier alongside ntfy.container (9000) and this box's
+# native pihole-FTL/unbound/tailscaled (10000 each, system.slice) --
+# must never lose to Ollama or an ordinary production container.
+Slice=production.slice
+CPUWeight=10000
 
 [Install]
 WantedBy=default.target

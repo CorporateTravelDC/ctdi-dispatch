@@ -7,6 +7,17 @@ converted_to_skill: flight-hifi-track
 
 FLIGHT HIGH-FIDELITY POSITION TRACKER
 
+[Re-verified 2026-08-23] Both external calls below still work as written:
+`GET https://api.airplanes.live/v2/hex/<hex>` and `/v2/callsign/<callsign>`
+each return 200 with the documented `{"ac":[...]}` shape (empty `ac` when the
+aircraft is not currently on feed — the "not found on feed" case, not an
+error). `/v2/reg/` is NOT used here and should not be substituted: it is the
+flaky endpoint the platform's own identity-resolution chain deliberately
+falls back to last. The `POST /admin/push-test-alert` call is still live but
+is a **legacy alias** for `/admin/push-alert` and requires an **admin**-tier
+token (a cert/T1 token 403s); it also 400s on a `message` over 200 chars —
+see the endpoint note in this directory's README.md.
+
 Use this task for:
 - International or overwater flights where continuous 2-min position telemetry is needed
 - ADS-C satellite-tracked flights inbound from oceanic airspace

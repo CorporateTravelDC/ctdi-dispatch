@@ -1,0 +1,38 @@
+# corporatetraveldc-client-demo@.container
+# Generic, reusable password-gated public preview container for a
+# prospective/current client's AI-rewritten static site -- generalized
+# 2026-09-03 from an earlier one-off client-preview container (built
+# 2026-08-18), which stays running exactly as it was and was NOT migrated
+# to this pattern (no need to disrupt a live client preview to adopt a
+# new convention).
+#
+# %i is the client slug (e.g. "acme-livery") and drives every per-client
+# path -- nothing else in this base file is client-specific. Real
+# instances are a symlink to this file (corporatetraveldc-client-demo@
+# <slug>.container -> this file) plus a required per-instance drop-in
+# supplying at least PublishPort= (ports collide across clients, so there
+# is deliberately no default port here -- see podman-systemd.unit(5)'s
+# "Template files" section for how instance + drop-in resolution works).
+# scripts/new-client-demo.sh creates both the symlink and the drop-in.
+#
+# Manage one instance: systemctl --user {start,stop,status,restart}
+# corporatetraveldc-client-demo@<slug>
+[Unit]
+Description=Client demo preview (%i) -- password-gated public preview
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:alpine
+ContainerName=corporatetraveldc-client-demo-%i
+Volume=/home/corporatetraveldc/demos/%i/site:/usr/share/nginx/html:ro,z
+Volume=/home/corporatetraveldc/demos/%i/nginx.conf:/etc/nginx/nginx.conf:ro,z
+Volume=/home/corporatetraveldc/demos/%i/auth/.htpasswd:/etc/nginx/.htpasswd:ro,z
+Memory=128m
+# PublishPort= intentionally absent -- every instance must supply its own
+# via corporatetraveldc-client-demo@<slug>.container.d/10-instance.conf.
+
+[Service]
+Slice=production.slice
+
+[Install]
+WantedBy=default.target

@@ -64,27 +64,56 @@ class _IsolatedDB:
     """
     Context manager that redirects common.db to a temporary in-memory SQLite DB.
     Ensures tests don't touch the real /var/lib/corporatetraveldc database.
+
+    2026-08-20: also redirects common.config.state_dir() to an isolated
+    temp directory. Found while chasing a *second*, previously-masked bug:
+    watchlist_event_hit()'s dedup (shared.watchlist._watchlist_dedup, a
+    module-level PushDedup singleton -- see common/push_dedup.py) persists
+    its state to a REAL FILE under state_dir()
+    (pusher-watchlist-event-dedup.json), deliberately, for cross-process
+    correctness in production (multiple ingest containers + poller share
+    it). Nothing isolated state_dir() before this, so every test run of
+    watchlist_event_hit() was reading/writing the ACTUAL production dedup
+    state file -- confirmed live: a real 14KB
+    /var/lib/corporatetraveldc/pusher-watchlist-event-dedup.json with a
+    same-day mtime. That let content from one test run suppress the exact
+    same test's push in a LATER run (the whole point of dedup, just aimed
+    at the wrong file), which is why test_watchlist_event_hit_writes_
+    history/_deduplication/_different_types_not_deduped failed
+    intermittently depending on what had run before them in the same
+    process -- invisible until the schema-staleness fix above let these
+    tests get far enough to reach the dedup check at all.
     """
     def __enter__(self):
         import common.db as _db
+        import common.config as _config
         self._orig_path = _db._db_path
+        self._orig_state_dir = _config.state_dir
 
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
         self._tmp_path = tmp.name
+        self._tmp_state_dir = tempfile.mkdtemp(prefix="ctdi-test-state-")
 
         _db._db_path = lambda: Path(self._tmp_path)
-        _db.init_db()
-        _db.init_db_v2()
-        _db.init_db_v3()
-        _db.init_db_v4()
-        _db.init_db_v5()
+        _config.state_dir = lambda: self._tmp_state_dir
+        # 2026-08-20: was a hand-listed init_db()..init_db_v5() chain that
+        # silently fell 29 schema versions behind (hex_id/registration,
+        # added v18, were among the casualties) -- init_db_all() introspects
+        # every init_db_vN() in common.db and runs the full current chain,
+        # so this can't go stale again the same way. See db.init_db_all()'s
+        # own docstring for the full rationale.
+        _db.init_db_all()
         return self
 
     def __exit__(self, *_):
         import common.db as _db
+        import common.config as _config
+        import shutil
         _db._db_path = self._orig_path
+        _config.state_dir = self._orig_state_dir
         Path(self._tmp_path).unlink(missing_ok=True)
+        shutil.rmtree(self._tmp_state_dir, ignore_errors=True)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -288,6 +317,137 @@ def test_watchlist_file_watcher_invalid_json_does_not_remove(tmp_path):
         assert len(db.get_watchlist_entries(entry_type="flight")) == 1
 
 
+# ── extend_auto_remove_for_delay (2026-08-23) ──────────────────────────────────
+# NOTE: anchored on _now_iso()/relative timedeltas, deliberately NOT hardcoded
+# absolute dates -- an earlier revision hardcoded "2026-08-23T..."/"2026-08-24T..."
+# strings, which worked at the time but silently became a time bomb: once real
+# wall-clock time crossed into 2026-08-24, get_watchlist_entries()'s own
+# `auto_remove_at > now` filter started excluding those fixture rows as
+# already-expired, and test_extend_auto_remove_for_delay_ontime_departure_no_extension
+# (whose value never got extended) was the first to actually fail. Found live,
+# not theoretically -- re-running the full suite after the chronology work
+# turned up a real regression here.
+
+def test_extend_auto_remove_for_delay_extends_by_real_delay():
+    """Scheduled dep now, scheduled arr +4.5h (auto_remove_at = arr+6h).
+    Actual OFF +2h late -> auto_remove_at extends by 2h -- 8h past the
+    *originally* scheduled arrival, matching the operator's own worked
+    example (14:00 dep / 18:30 arr / 16:00 actual OFF)."""
+    with _IsolatedDB():
+        from common import db
+        from shared.watchlist import extend_auto_remove_for_delay
+
+        dep = datetime.now(timezone.utc)
+        arr = dep + timedelta(hours=4, minutes=30)
+        base_expiry = arr + timedelta(hours=6)
+        sched_dep = dep.strftime("%Y-%m-%dT%H:%M:%SZ")
+        sched_arr = arr.strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = _make_transient_flight("DAL2")
+        entry["scheduled_departure"] = sched_dep
+        entry["scheduled_arrival"] = sched_arr
+        entry["auto_remove_at"] = base_expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.upsert_watchlist_entry(entry)
+
+        actual_off = (dep + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")  # 2h late
+        extend_auto_remove_for_delay(entry, actual_off, sched_dep, sched_arr)
+
+        row = db.get_watchlist_entries(entry_type="flight")[0]
+        expected = (base_expiry + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert row["auto_remove_at"] == expected
+        assert row["departure_delay_min"] == 120
+
+
+def test_extend_auto_remove_for_delay_ontime_departure_no_extension():
+    """An on-time (or early) departure must not extend the window, but
+    still gets marked processed (delay_min=0, not left NULL) so a resent
+    OOOI message is recognized as already-handled."""
+    with _IsolatedDB():
+        from common import db
+        from shared.watchlist import extend_auto_remove_for_delay
+
+        dep = datetime.now(timezone.utc)
+        arr = dep + timedelta(hours=4, minutes=30)
+        base_expiry = arr + timedelta(hours=6)
+        sched_dep = dep.strftime("%Y-%m-%dT%H:%M:%SZ")
+        sched_arr = arr.strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = _make_transient_flight("DAL3")
+        entry["scheduled_departure"] = sched_dep
+        entry["scheduled_arrival"] = sched_arr
+        entry["auto_remove_at"] = base_expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.upsert_watchlist_entry(entry)
+
+        actual_off = (dep - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")  # 5min early
+        extend_auto_remove_for_delay(entry, actual_off, sched_dep, sched_arr)
+
+        row = db.get_watchlist_entries(entry_type="flight")[0]
+        assert row["auto_remove_at"] == base_expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert row["departure_delay_min"] == 0
+
+
+def test_extend_auto_remove_for_delay_is_idempotent():
+    """A resent airlineOffTime (same or different value) on a later TFMS
+    message must not extend the window a second time."""
+    with _IsolatedDB():
+        from common import db
+        from shared.watchlist import extend_auto_remove_for_delay
+
+        dep = datetime.now(timezone.utc)
+        arr = dep + timedelta(hours=4, minutes=30)
+        base_expiry = arr + timedelta(hours=6)
+        sched_dep = dep.strftime("%Y-%m-%dT%H:%M:%SZ")
+        sched_arr = arr.strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = _make_transient_flight("DAL4")
+        entry["scheduled_departure"] = sched_dep
+        entry["scheduled_arrival"] = sched_arr
+        entry["auto_remove_at"] = base_expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.upsert_watchlist_entry(entry)
+
+        expected_extended = (base_expiry + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        off_2h_late = (dep + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        extend_auto_remove_for_delay(entry, off_2h_late, sched_dep, sched_arr)
+        first = db.get_watchlist_entries(entry_type="flight")[0]
+        assert first["auto_remove_at"] == expected_extended
+
+        # Re-fetch as the real caller would (fresh dict, departure_delay_min
+        # now 120 not None) and call again with a much larger claimed delay.
+        off_6h_late = (dep + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        extend_auto_remove_for_delay(first, off_6h_late, sched_dep, sched_arr)
+        second = db.get_watchlist_entries(entry_type="flight")[0]
+        assert second["auto_remove_at"] == expected_extended
+        assert second["departure_delay_min"] == 120
+
+
+def test_extend_auto_remove_for_delay_corrects_fallback_base():
+    """An entry added before scheduled_arrival was known (added_at+24h
+    fallback, see _default_auto_remove_at()) must have its base corrected
+    onto scheduled_arrival+6h once TFMS supplies originalArrival, THEN
+    have any real delay added on top -- not extend off the arbitrary
+    added-time fallback."""
+    with _IsolatedDB():
+        from common import db
+        from shared.watchlist import extend_auto_remove_for_delay
+
+        entry = _make_transient_flight("ASA2", expire_offset_min=24 * 60)
+        entry["scheduled_departure"] = None
+        entry["scheduled_arrival"] = None
+        db.upsert_watchlist_entry(entry)
+
+        dep = datetime.now(timezone.utc)
+        arr = dep + timedelta(hours=4, minutes=30)
+        sched_dep = dep.strftime("%Y-%m-%dT%H:%M:%SZ")
+        sched_arr = arr.strftime("%Y-%m-%dT%H:%M:%SZ")
+        actual_off = (dep + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")  # 1h late
+        extend_auto_remove_for_delay(entry, actual_off, sched_dep, sched_arr)
+
+        row = db.get_watchlist_entries(entry_type="flight")[0]
+        # base corrected to arr+6h, then +1h delay
+        expected = (arr + timedelta(hours=6) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert row["auto_remove_at"] == expected
+        assert row["departure_delay_min"] == 60
+        assert row["scheduled_departure"] == sched_dep
+        assert row["scheduled_arrival"] == sched_arr
+
+
 def test_sweep_does_not_remove_permanent_expired_by_time():
     """Permanent entries have auto_remove_at=NULL and must never be swept."""
     with _IsolatedDB():
@@ -303,6 +463,65 @@ def test_sweep_does_not_remove_permanent_expired_by_time():
         assert len(db.get_watchlist_entries()) == 1
 
 
+def test_resolve_flight_identity_callsign_shaped_hex_collision_uses_callsign():
+    """2026-08-27: "AA5265" (American 5265) lowercases to "aa5265", which is
+    ALSO a syntactically valid 6-char Mode-S hex address by pure coincidence
+    -- confirmed live, this hex-locked a real watchlist entry to whatever
+    unrelated airframe actually carries that Mode-S address instead of
+    resolving American 5265 itself. A flight identifier with the standard
+    callsign shape (2-3 leading letters, then digits) must resolve via the
+    callsign endpoint, never the bare-hex fast path, even when it happens
+    to also be valid hex."""
+    with _IsolatedDB():
+        from shared.watchlist import resolve_flight_identity
+
+        entry = _make_transient_flight(identifier="AA5265")
+        entry["hex_id"] = None
+
+        fake_ac = {"hex": "a12345", "r": "N123AA"}
+        with patch("shared.watchlist.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"ac": [fake_ac]}
+            mock_resp.raise_for_status.return_value = None
+            mock_get.return_value = mock_resp
+
+            resolve_flight_identity(entry, "AA5265", source="test")
+
+            called_url = mock_get.call_args[0][0]
+            assert "/v2/callsign/AA5265" in called_url, (
+                f"expected callsign lookup, got: {called_url}"
+            )
+            assert "/v2/hex/aa5265" not in called_url
+
+
+def test_resolve_flight_identity_genuine_hex_still_uses_hex_path():
+    """Sanity check for the same fix: a bare identifier that is hex-shaped
+    but does NOT match the callsign pattern (no 2-3 leading letters) must
+    still resolve via the hex fast path -- the fix narrows the collision
+    case only, it doesn't disable bare-hex identifiers entirely."""
+    with _IsolatedDB():
+        from shared.watchlist import resolve_flight_identity
+
+        entry = _make_transient_flight(identifier="A835F2")
+        entry["hex_id"] = None
+
+        fake_ac = {"hex": "a835f2", "r": "N999ZZ"}
+        with patch("shared.watchlist.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"ac": [fake_ac]}
+            mock_resp.raise_for_status.return_value = None
+            mock_get.return_value = mock_resp
+
+            resolve_flight_identity(entry, "A835F2", source="test")
+
+            called_url = mock_get.call_args[0][0]
+            assert "/v2/hex/a835f2" in called_url, (
+                f"expected hex lookup, got: {called_url}"
+            )
+
+
 if __name__ == "__main__":
     # Quick smoke-run without pytest.
     import traceback
@@ -313,6 +532,8 @@ if __name__ == "__main__":
         test_watchlist_event_hit_deduplication,
         test_watchlist_event_hit_different_types_not_deduped,
         test_sweep_does_not_remove_permanent_expired_by_time,
+        test_resolve_flight_identity_callsign_shaped_hex_collision_uses_callsign,
+        test_resolve_flight_identity_genuine_hex_still_uses_hex_path,
     ]
     for fn in tests:
         try:

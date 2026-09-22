@@ -3,11 +3,20 @@ web/routes/fids.py
 ------------------
 Airport FIDS routes -- gate, baggage carousel, and arrival status.
 
-GET /api/v1/fids/{airport}          -- snapshot (arrivals/departures counts)
-GET /api/v1/fids/{airport}/{flight} -- single flight lookup, e.g. AA1557
+GET /api/v1/fids/{airport}           -- snapshot (arrivals/departures counts)
+GET /api/v1/fids/{airport}/arrivals  -- layered SWIM+website arrivals lookup
+GET /api/v1/fids/{airport}/{flight}  -- single flight lookup, e.g. AA1557
 
-Both airports supported: DCA, IAD
+Snapshot + single-flight routes: DCA, IAD only (website scrape).
+Layered arrivals route: DCA, IAD, BWI (SWIM primary, website fallback
+for DCA/IAD -- see common/flight_resolver.py for why BWI is SWIM-only).
 Tier 0 -- no auth required (same as /api/v1/weather).
+
+NOTE ON ROUTE ORDER: /{airport}/arrivals must stay registered before
+/{airport}/{flight} below -- FastAPI/Starlette matches path routes in
+registration order, and "/DCA/arrivals" would otherwise be swallowed by
+the single-flight route (treating "arrivals" as a flight number) since
+both patterns match the same path shape.
 """
 
 from datetime import datetime
@@ -17,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from common.airport_fids import AIRPORTS, get_data, lookup_arrival
+from common.flight_resolver import resolve_arrivals, SUPPORTED_HUB_AIRPORTS
 
 router = APIRouter(prefix="/api/v1/fids", tags=["fids"])
 
@@ -47,6 +57,43 @@ def fids_snapshot(airport: str) -> JSONResponse:
         "departures_count": len(data.get("departures", [])),
         "ts":               datetime.utcnow().isoformat() + "Z",
     })
+
+
+@router.get("/{airport}/arrivals")
+def fids_arrivals(
+    airport: str,
+    carriers: Optional[str] = Query(
+        default=None,
+        description="Comma-separated IATA carrier codes, e.g. AA,UA (default: all carriers)",
+    ),
+    within_minutes: int = Query(
+        default=90,
+        ge=1,
+        le=720,
+        description="Forward-looking window in minutes",
+    ),
+) -> JSONResponse:
+    """
+    Layered arrivals lookup -- Tier 0.
+
+    Primary source: FAA SWIM (flight_events table, ingest-populated).
+    Fallback: MWAA airport-website FIDS scrape (DCA/IAD only -- BWI is
+    not MWAA-operated and has no equivalent free feed; see
+    common/flight_resolver.py for the reasoning and the AeroAPI option).
+
+    Response includes "source_used" (swim/website/none) and a "note"
+    explaining why, so callers can tell a genuinely-empty window apart
+    from a missing-source situation.
+    """
+    a = airport.upper()
+    if a not in SUPPORTED_HUB_AIRPORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"airport must be one of: {', '.join(SUPPORTED_HUB_AIRPORTS)}",
+        )
+    carrier_list = [c.strip() for c in carriers.split(",") if c.strip()] if carriers else None
+    result = resolve_arrivals(a, carrier_list, within_minutes)
+    return JSONResponse(result)
 
 
 @router.get("/{airport}/{flight}")

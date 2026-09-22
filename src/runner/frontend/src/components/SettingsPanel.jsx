@@ -14,7 +14,7 @@ const LAYER_LABELS = {
   metar: { label: 'METAR', color: '#87ceeb', desc: 'DC-area weather stations' },
 }
 
-export default function SettingsPanel({ onClose }) {
+export default function SettingsPanel({ onClose, tailnet }) {
   const { config, toggleLayer, setAllLayers } = useGlobalLayerConfig()
   const [syncToken, setSyncTokenLocal] = useState(localStorage.getItem('ctdc_admin_token') || '')
   const [syncStatus, setSyncStatus] = useState(hasSyncToken() ? 'active' : 'off')
@@ -92,7 +92,11 @@ export default function SettingsPanel({ onClose }) {
           </div>
         </section>
 
-        {/* Backend sync */}
+        {/* Backend sync -- admin-token entry point. Hidden entirely on Ops
+            (tailnet !== true) per operator direction 2026-07-21: Ops gets
+            zero admin capability AND zero UI hinting admin exists at all,
+            not just a disabled/broken control. */}
+        {tailnet === true && (
         <section className="settings-section" aria-labelledby="sync-heading">
           <h3 id="sync-heading" className="settings-section-title">
             CROSS-DEVICE SYNC
@@ -128,6 +132,7 @@ export default function SettingsPanel({ onClose }) {
             )}
           </div>
         </section>
+        )}
 
       </div>
     </div>

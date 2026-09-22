@@ -1,0 +1,11 @@
+[Unit]
+Description=Fire the NTS cert-refresh check daily at 02:15 ET (clear of 00:05 data-usage-snapshot, 00:25 transport-pattern-digest, 01:00 trains-yachts-daily-watch, 01:35 dns-restart; idempotent so daily is cheap even though the cert only actually renews every ~90 days)
+# Deliberately no self-referential Requires=/Wants= here -- see
+# docs/BOOT_STORM_TIMER_REQUIRES.md and the sibling restart timers' identical note.
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,5 @@
 """
-Demo archive recorder v2
+Demo archive recorder v3 -- Postgres-backed
 
 Polling interval : INTERVAL seconds (default 300 = 5 min)
 Compression      : zlib level 6 — ~95% savings on NOTAM JSON
@@ -17,235 +17,121 @@ Retention tiers (for marketing / QBR snapshots):
   36w = 252 days  — 9 months
   52w = 364 days  — annual (12 months)
 
-On first run after upgrade the migrate_legacy() function compresses all
-existing uncompressed rows in-place and vacuums the DB. This is a one-time
-cost (~60 s on a 2.8 GB legacy archive) and produces ~94% disk reduction.
+2026-09-20 Postgres cutover (operator directive -- see src/demo/db.py's
+module docstring for the full rationale): this used to open
+/var/lib/corporatetraveldc/demo.db directly via sqlite3. All storage now
+goes through src/demo/db.py (demo_snapshots, pg_schema/0057_demo.sql).
+Two things this drops rather than ports, both explained in db.py's own
+docstring: VACUUM (Postgres autovacuum replaces it) and migrate_legacy()
+(a one-time SQLite-only-format upgrade already a confirmed permanent
+no-op -- 0 of 67,331 rows had compressed=0 at cutover time).
 
-Demo site playback: check `compressed` column; if 1, zlib.decompress(payload).
+Demo site playback: check `compressed` column; if true, zlib.decompress(payload).
 """
 import hashlib
 import logging
 import os
-import sqlite3
 import time
 import zlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import requests
+
+from demo import db as demo_db
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger('demo.recorder')
 
-DB          = '/var/lib/corporatetraveldc/demo.db'
 API         = os.environ.get('DEMO_RECORDER_API_BASE', 'http://100.x.x.x:8000/api/v1')
 INTERVAL    = int(os.environ.get('DEMO_RECORDER_INTERVAL',    '300'))
 RETENTION   = int(os.environ.get('DEMO_RECORDER_RETENTION',   '364'))
 SEED_TARGET = int(os.environ.get('DEMO_RECORDER_SEED_TARGET', '14'))
+# 2026-08-14: cert-tier bearer token so this recorder can also reach
+# Tier-1-gated routes (knowledge-graph, osint/scopes) -- the original 9
+# endpoints below are all Tier-0 public, so this was never needed until the
+# graph/osint/board capture was added. Sent on every request (harmless for
+# the Tier-0 endpoints too, since a higher tier still satisfies a Tier-0
+# check). Minted via src/ctdc_token/cli.py, stored in
+# /etc/corporatetraveldc/dispatch-secrets.env as DEMO_RECORDER_API_TOKEN.
+API_TOKEN   = os.environ.get('DEMO_RECORDER_API_TOKEN', '')
 
-# Retention tiers used by seed_status() / demo readiness endpoint.
-# Keys are human labels; values are days.
-RETENTION_TIERS: dict[str, int] = {
-    "2w":  14,   # seed target — always-ready buffer
-    "8w":  56,   # bi-monthly
-    "12w": 84,   # quarterly (3 months)
-    "24w": 168,  # semi-annual (6 months)
-    "36w": 252,  # 9 months
-    "52w": 364,  # annual (12 months)
-}
+# Kept here for backward-compat imports (demo_api.py imports this name from
+# demo.recorder) -- source of truth is now demo.db.RETENTION_TIERS.
+RETENTION_TIERS = demo_db.RETENTION_TIERS
 
 ENDPOINTS = [
     'tfr', 'weather', 'alerts', 'cps', 'notams',
     'amtrak', 'opsplan', 'route', 'brief',
+    # 2026-08-14: knowledge-graph, OSINT feed, and board -- added so the
+    # demo can show these features live instead of them being permanently
+    # absent (they were never in this list). knowledge_graph_meta is
+    # summary-only (generated_at/node_count/edge_count) -- the live
+    # /knowledge-graph/html canvas render (actual node/edge labels) is
+    # deliberately NOT captured, since scrubbing an arbitrary rendered graph
+    # reliably is a much bigger, unreviewed problem than scrubbing prose/
+    # JSON text. osint/scopes (the config of what's being watched) is also
+    # deliberately excluded -- that's a monitoring-target list, not output,
+    # and is sensitive independent of any literal string it contains.
+    'knowledge_graph_meta', 'osint_feed', 'board', 'board_threads',
 ]
 
-_last_vacuum: float = 0.0  # epoch timestamp of last VACUUM
-
-
-# ── Schema ────────────────────────────────────────────────────────
-
-def init_db(conn: sqlite3.Connection) -> None:
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            endpoint     TEXT    NOT NULL,
-            captured_at  TEXT    NOT NULL,
-            payload      BLOB    NOT NULL,
-            payload_hash TEXT,
-            compressed   INTEGER NOT NULL DEFAULT 1
-        )''')
-    conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_ep_time ON snapshots(endpoint, captured_at)'
-    )
-    # Non-destructive upgrade: add columns if coming from v1 schema
-    for col, defn in [
-        ('payload_hash', 'TEXT'),
-        ('compressed',   'INTEGER NOT NULL DEFAULT 0'),
-    ]:
-        try:
-            conn.execute(f'ALTER TABLE snapshots ADD COLUMN {col} {defn}')
-            log.info('schema upgrade: added column %s', col)
-        except sqlite3.OperationalError:
-            pass  # column already present
-    conn.commit()
-
-
-# ── One-time legacy migration ─────────────────────────────────────
-
-def migrate_legacy(conn: sqlite3.Connection) -> None:
-    """
-    Compress all rows that were written uncompressed by v1.
-    Runs at startup and is a no-op once all rows are compressed.
-    On 2.8 GB of raw NOTAM text this typically takes ~60 seconds and
-    shrinks the DB by ~94%.
-    """
-    global _last_vacuum
-    n_total = conn.execute(
-        "SELECT COUNT(*) FROM snapshots WHERE compressed=0"
-    ).fetchone()[0]
-    if not n_total:
-        return
-
-    log.info('migrating %d legacy uncompressed rows — one-time cost, please wait…', n_total)
-    done = 0
-    rows = conn.execute(
-        "SELECT id, payload FROM snapshots WHERE compressed=0"
-    ).fetchall()
-    for row_id, payload in rows:
-        try:
-            text = payload if isinstance(payload, str) else payload.decode('utf-8', errors='replace')
-            h    = hashlib.sha256(text.encode()).hexdigest()
-            blob = zlib.compress(text.encode(), level=6)
-            conn.execute(
-                'UPDATE snapshots SET payload=?, payload_hash=?, compressed=1 WHERE id=?',
-                (blob, h, row_id)
-            )
-            done += 1
-            if done % 500 == 0:
-                conn.commit()
-                log.info('  migration progress: %d / %d', done, n_total)
-        except Exception as e:
-            log.warning('compress legacy row %d: %s', row_id, e)
-
-    conn.commit()
-    conn.execute('VACUUM')
-    _last_vacuum = time.time()
-    size_mb = os.path.getsize(DB) / 1e6
-    log.info('migration complete — %d rows compressed, vacuumed, DB now %.1f MB', done, size_mb)
-
-
-# ── Deduplication ─────────────────────────────────────────────────
-
-def last_hash(conn: sqlite3.Connection, ep: str) -> str | None:
-    """Return sha256 of the most recent stored payload for this endpoint."""
-    row = conn.execute(
-        "SELECT payload_hash FROM snapshots "
-        "WHERE endpoint=? AND payload_hash IS NOT NULL "
-        "ORDER BY captured_at DESC LIMIT 1",
-        (ep,)
-    ).fetchone()
-    return row[0] if row else None
+# Storage identifier -> live URL path, for entries above whose live route
+# has more than one path segment (the flat identifiers used as SQL
+# `endpoint` values can't contain slashes). Keep in sync with
+# demo_api.ENDPOINT_PATHS.
+ENDPOINT_PATHS: dict[str, str] = {
+    'knowledge_graph_meta': 'knowledge-graph/meta',
+    'osint_feed':           'osint/feed',
+    'board_threads':        'board/threads',
+}
 
 
 # ── Record cycle ──────────────────────────────────────────────────
 
-def record(conn: sqlite3.Connection) -> None:
+def record() -> None:
     ts = datetime.now(timezone.utc).isoformat()
+    headers = {'Authorization': f'Bearer {API_TOKEN}'} if API_TOKEN else {}
     for ep in ENDPOINTS:
+        path = ENDPOINT_PATHS.get(ep, ep)
         try:
-            r = requests.get(f'{API}/{ep}', timeout=15)
+            r = requests.get(f'{API}/{path}', headers=headers, timeout=15)
             if not r.ok:
                 continue
             text = r.text
             h    = hashlib.sha256(text.encode()).hexdigest()
-            if last_hash(conn, ep) == h:
+            if demo_db.last_hash(ep) == h:
                 log.debug('skip %s — content unchanged', ep)
                 continue
             blob = zlib.compress(text.encode(), level=6)
-            conn.execute(
-                'INSERT INTO snapshots(endpoint, captured_at, payload, payload_hash, compressed)'
-                ' VALUES (?, ?, ?, ?, 1)',
-                (ep, ts, blob, h)
-            )
+            demo_db.insert_snapshot(ep, ts, blob, h, compressed=True)
             log.info('recorded %-10s  raw=%5d KB  stored=%4d KB',
                      ep, len(text) // 1024, len(blob) // 1024)
         except Exception as e:
             log.warning('skip %s: %s', ep, e)
-    conn.commit()
 
 
-# ── Retention + VACUUM ────────────────────────────────────────────
+# ── Retention ──────────────────────────────────────────────────────
 
-def prune(conn: sqlite3.Connection) -> None:
-    global _last_vacuum
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION)).isoformat()
-    n = conn.execute(
-        'DELETE FROM snapshots WHERE captured_at < ?', (cutoff,)
-    ).rowcount
-    conn.commit()
+def prune() -> None:
+    n = demo_db.prune(RETENTION)
     if n:
         log.info('pruned %d snapshots older than %d days', n, RETENTION)
-
-    # Vacuum at most once per day — reclaims pages freed by DELETE
-    if time.time() - _last_vacuum > 86_400:
-        conn.execute('VACUUM')
-        _last_vacuum = time.time()
-        log.info('vacuumed db — %.1f MB', os.path.getsize(DB) / 1e6)
-
-
-# ── Seed status ───────────────────────────────────────────────────
-
-def seed_status(conn: sqlite3.Connection) -> dict:
-    """Return seed readiness dict (also used by /api/v1/demo/readiness)."""
-    days   = conn.execute(
-        "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots"
-    ).fetchone()[0]
-    total  = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-    oldest = (conn.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0] or '')[:10]
-    newest = (conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()[0] or '')[:10]
-
-    # Per-tier readiness: how many calendar days of data do we have vs. each target?
-    tiers: dict[str, dict] = {}
-    for label, target_days in RETENTION_TIERS.items():
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=target_days)).isoformat()
-        avail = conn.execute(
-            "SELECT COUNT(DISTINCT DATE(captured_at)) FROM snapshots WHERE captured_at >= ?",
-            (cutoff,)
-        ).fetchone()[0]
-        tiers[label] = {
-            "days_required":  target_days,
-            "days_available": avail,
-            "ready":          avail >= target_days,
-        }
-
-    return {
-        "seed_days":        days,
-        "seed_target":      SEED_TARGET,
-        "ready":            days >= SEED_TARGET,
-        "total_snapshots":  total,
-        "oldest":           oldest or None,
-        "newest":           newest or None,
-        "db_size_mb":       round(os.path.getsize(DB) / 1e6, 1),
-        "retention_days":   RETENTION,
-        "tiers":            tiers,
-    }
 
 
 # ── Main ──────────────────────────────────────────────────────────
 
 def main() -> None:
-    conn = sqlite3.connect(DB, check_same_thread=False)
-    init_db(conn)
-    migrate_legacy(conn)          # no-op after first run
-    st = seed_status(conn)
+    demo_db.ensure_schema()  # no-op on Postgres; kept for startup-shape parity
+    st = demo_db.seed_status(SEED_TARGET, RETENTION)
     log.info(
-        'recorder v2 ready — interval=%ds  retention=%dd  '
+        'recorder v3 ready — interval=%ds  retention=%dd  '
         'seed=%d/%d days  ready=%s  db=%.1f MB',
         INTERVAL, RETENTION,
         st['seed_days'], SEED_TARGET, st['ready'], st['db_size_mb']
     )
     while True:
-        record(conn)
-        prune(conn)
+        record()
+        prune()
         time.sleep(INTERVAL)
 
 

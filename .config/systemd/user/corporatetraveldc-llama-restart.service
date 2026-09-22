@@ -1,0 +1,6 @@
+[Unit]
+Description=Daily preventive restart of corporatetraveldc-llama.service (24h freshness cycle; skips if a run is in flight)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-llama-restart.sh

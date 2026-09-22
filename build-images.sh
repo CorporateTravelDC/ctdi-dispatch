@@ -25,6 +25,17 @@ log "Build context: ${SCRIPT_DIR}"
 log "Build date: ${BUILD_DATE}"
 log ""
 
+# 2026-09-01: maintenance window -- the llama unit runs at CPUWeight=9000
+# (2026-09-06: single corporatetraveldc-llama.service replaced llama-chat)
+# (see scripts/maintenance-window-on.sh for why), which starved this
+# build of CPU during real-world runs and surfaced as pip read-timeouts.
+# Engage suppression for the duration of this build; the trap guarantees
+# it's released on any exit path (success, die(), or Ctrl-C).
+if command -v systemctl &>/dev/null && systemctl --user is-active --quiet corporatetraveldc-llama.service 2>/dev/null; then
+    "${SCRIPT_DIR}/scripts/maintenance-window-on.sh"
+    trap '"${SCRIPT_DIR}/scripts/maintenance-window-off.sh"' EXIT
+fi
+
 for service in web poller pusher ingest amtrak-tracker; do
     cf="Containerfile.${service}"
     tag="localhost/corporatetraveldc-${service}:latest"
@@ -63,4 +74,4 @@ log "  2. systemctl --user start corporatetraveldc-poller"
 log "  3. systemctl --user start corporatetraveldc-web"
 log "  4. systemctl --user start corporatetraveldc-pusher"
 log "  5. curl http://localhost:8000/healthz"
-log "  6. csex-token create --user corey --tier admin --label admin-iphone"
+log "  6. PYTHONPATH=src python3 src/ctdc_token/cli.py create --user operator --tier admin --label admin-iphone"

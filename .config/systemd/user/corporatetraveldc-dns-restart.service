@@ -1,0 +1,6 @@
+[Unit]
+Description=Daily preventive restart of pihole-FTL.service + unbound.service (24h freshness cycle; sibling to corporatetraveldc-llama-restart)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-dns-restart.sh

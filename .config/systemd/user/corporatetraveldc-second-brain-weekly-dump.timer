@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly Second Brain consolidation dump, every Sunday early morning (ahead of Monday's docs-drift-weekly)
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

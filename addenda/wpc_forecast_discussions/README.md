@@ -1,5 +1,31 @@
 # Addendum: WPC National Forecast Discussions
 
+> **Status — re-verified live 2026-08-23:** structurally applied (schema,
+> parser, and endpoints are all present and running) but **no WPC data has
+> ever flowed**. Confirmed this pass, not assumed:
+>
+> ```
+> sqlite3 …/corporatetraveldc.db "SELECT COUNT(*) FROM wpc_discussions;"  → 0
+> curl -s http://127.0.0.1:8000/api/v1/wx/discussion
+>   → {"discussions":[],"available":false}
+> ```
+>
+> Root cause identified 2026-08-22: `parse_wpc_product()` was being called
+> with the AWIPS-id form of the product id (e.g. `PMDSPD`) against a
+> `_WPC_PRODUCTS` table keyed by the WMO bulletin header / `ttaaii` form
+> (e.g. `FXUS02`) — two non-overlapping id spaces, so every WPC product
+> silently missed the lookup. Fixed in `nwws.py:376`
+> (`parse_wpc_product(ttaaii or awips, body)`) and deployed with the
+> `ingest-core` rebuild at 00:03 on 2026-08-23.
+>
+> **The fix is deployed but still unproven.** Nothing has landed since,
+> and the NWWS-OI session itself is demonstrably healthy over the same
+> window (real `nwws:KPHI:FF.W:*` / `nwws:KAKQ:SPS:*` rows in `nws_alerts`
+> on 2026-08-23), so a second, separate reason for the silence — e.g. this
+> MUC not actually carrying KWNO traffic — is not yet ruled out. Treat this
+> pipeline as **unverified end-to-end** until a real row appears; do not
+> cite it as a working data source.
+
 ## What this addendum adds
 
 This addendum integrates Weather Prediction Center (WPC) national forecast
@@ -9,12 +35,20 @@ infrastructure are required beyond an active NWWS-OI XMPP connection.
 
 ### Products ingested
 
-| AWIPS ID | Product Name                        | Issuance cadence |
+| `ttaaii` (WMO header) | Product Name                | Issuance cadence |
 |----------|-------------------------------------|------------------|
 | FXUS02   | Short Range Forecast Discussion     | ~4x/day, 12-48hr |
 | FXUS06   | Medium Range Forecast Discussion    | 2x/day, D3-D7    |
 | FXUS07   | Extended Forecast Discussion        | 2x/day, D6-D10   |
 | FXUS05   | Short Range QPF Discussion          | 4x/day           |
+
+> These are **`ttaaii` / WMO bulletin-header** ids, not AWIPS ids — the two
+> are different identifier spaces (`FXUS02` vs. `PMDSPD`) and confusing
+> them is exactly what caused the bug in the status note above. The DB
+> column and the code both still *call* this field `awips_id`
+> (`_WPC_PRODUCTS`, `wpc_discussions.awips_id`, `?product=` /
+> `/{awips_id}`), which is a misnomer kept for compatibility — the value
+> it actually holds is the `ttaaii` form.
 
 All four products originate from `KWNO` (Weather Prediction Center,
 College Park MD). They arrive on the same NWWS-OI MUC as local WFO products
@@ -92,7 +126,7 @@ After applying, rebuild and restart:
 ```bash
 bash build-images.sh
 systemctl --user restart corporatetraveldc-web.service
-systemctl --user restart corporatetraveldc-ingest.service
+bash scripts/ingest-feed-ctl.sh restart all   # old monolith retired 2026-07-26, per-feed split
 ```
 
 The `wpc_discussions` table is created automatically on first web container

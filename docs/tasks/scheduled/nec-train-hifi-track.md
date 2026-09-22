@@ -10,11 +10,20 @@ Poll every 2 minutes. Fetch current status of all watched NEC trains from the di
 
 DESIGN NOTE — TRAIN NUMBER vs IDENTIFIER:
 Same principle as hex ID for aircraft: querying by train number rather than train name/route
-bypasses feed-level caching and aggregator filtering. Amtrak's native API (trains.faa.gov /
-GTFS-RT) uses train number as the primary key. When integrating with GTFS-RT or direct Amtrak
-feeds, always use the numeric train ID (e.g. 2155, 137) not the service name ("Acela") —
-service names are marketing labels and are not unique per departure. This mirrors the aircraft
-practice of using ICAO hex over callsign for cache/filter bypass.
+bypasses feed-level caching and aggregator filtering. Amtrak's real-time feeds use the train
+number as the primary key. When integrating with GTFS-RT or direct Amtrak feeds, always use
+the numeric train ID (e.g. 2155, 137) not the service name ("Acela") — service names are
+marketing labels and are not unique per departure. This mirrors the aircraft practice of
+using ICAO hex over callsign for cache/filter bypass.
+
+CORRECTED 2026-08-23 — this note used to cite "Amtrak's native API (trains.faa.gov /
+GTFS-RT)". There is no such host: `trains.faa.gov` does not exist, and the FAA does not
+operate Amtrak data feeds at all. The train-number-as-primary-key principle is unaffected
+and still correct; only the sourcing was wrong. What this platform actually reads is the
+unofficial `https://api.amtraker.com/v3/trains` (no credentials), consumed by
+`src/ingest/amtrak.py` — the single live train-data path. See docs/REGIONALIZATION.md
+("Rail feed equivalents") for regional alternatives, and note that `poller/fetchers/amtrak.py`
+is unscheduled dead code, so there is no automatic failover if that one loop stops.
 
 STEP 1 — Fetch Amtrak data:
 GET http://100.x.x.x:8000/api/v1/amtrak

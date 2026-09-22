@@ -1,0 +1,9 @@
+# The Executive Standard -- robots.txt
+# Same Content-Signal stance as the parent firm site (example.com):
+# fine to read for search/reference, not for AI training.
+
+User-agent: *
+Content-Signal: search=yes, ai-train=no, use=reference
+Allow: /
+
+Sitemap: https://executivestandard.example.com/sitemap.xml

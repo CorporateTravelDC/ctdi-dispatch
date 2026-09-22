@@ -1,0 +1,32 @@
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="corporatetraveldc-utm-watcher"
+LABEL org.opencontainers.image.description="UTM / drone Remote ID watcher — local OpenDroneID UDP feed + USS API stub"
+LABEL org.opencontainers.image.version="1.0"
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests==2.32.3
+
+COPY utm_watcher.py .
+
+# Drop privileges — same pattern as ais_watcher/acars_watcher
+RUN useradd -r -s /sbin/nologin watcher
+USER watcher
+
+# Required:
+#   DISPATCH_BASE_URL      http://100.x.x.x:8000
+#   DISPATCH_ADMIN_TOKEN   ctdc_...
+#
+# Optional:
+#   UTM_STATIC_IDS         comma-separated UAS IDs (serial/session) to pin
+#   UTM_UDP_PORT           default 5007 (local OpenDroneID decoder JSON)
+#   USS_API_BASE           EMPTY by default — no USS provider provisioned;
+#   USS_API_KEY            poller thread idles until both are set
+#   USS_POLL_INTERVAL      default 60
+#   WATCHLIST_REFRESH_INTERVAL  default 300
+#   NTFY_TOPIC             default flight-alerts
+#   UTM_ALERT_DEDUP_SECS   default 300
+#   LOG_LEVEL              default INFO
+
+CMD ["python", "-u", "utm_watcher.py"]

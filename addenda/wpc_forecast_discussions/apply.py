@@ -512,7 +512,7 @@ def main():
     print("  2. Run: bash build-images.sh")
     print("  3. Restart containers: systemctl --user restart")
     print("     corporatetraveldc-web.service")
-    print("     corporatetraveldc-ingest.service")
+    print("     bash scripts/ingest-feed-ctl.sh restart all  # old monolith retired 2026-07-26")
     print("=" * 60)
 
 

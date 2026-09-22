@@ -1,5 +1,7 @@
 # CTDI Regionalization Guide
 
+**Verified against current source 2026-08-11.**
+
 This document covers everything you need to deploy Corporate Travel Dispatch Intelligence outside Washington, DC. The core architecture is identical everywhere — only the geographic filters and data source credentials change.
 
 > **Key principle:** The feed credentials themselves don't change when you move regions. You're pointing the same credential infrastructure at different geographic filters. No code restructuring required.
@@ -29,15 +31,24 @@ Replace both with your region. See airport and weather office tables below.
 
 ```bash
 # WFO codes for the ingest container's NWWS-OI filter
-# DC reference: LWX (Sterling VA), AKQ (Wakefield VA), CTP (State College PA)
-NWWS_WFO_FILTER=LWX,AKQ,CTP
+# DC reference: LWX (Sterling VA), AKQ (Wakefield VA), CTP (State College PA),
+# PHI (Mount Holly NJ)
+NWWS_WFO_FILTER=LWX,AKQ,CTP,PHI
 ```
 
 Find your WFO codes at [weather.gov/srh/nwsoffices](https://www.weather.gov/srh/nwsoffices). Replace with the 3-letter codes for the offices covering your operating area. For non-US deployments, leave this blank and configure a regional weather API instead (see below).
 
-### `src/ingest/config.py` — DC static airspace
+> **Bare 3-letter codes are correct** (`LWX`, not `KLWX`) — but only since 2026-08-22. `ingest/nwws.py::_on_msg` compares this list against the NWWS-OI message's `cccc` attribute, which carries the **4-letter ICAO** form; before that date the comparison was made without normalizing, so a configured `NWWS_WFO_FILTER` silently dropped **every** matching product for the life of the feature. The K-stripping normalization is now applied in both the filtered and unfiltered branches. If you regionalize onto an older checkout, check that fix is present before trusting a configured filter — a silently-empty `nws_alerts` table with a healthy-looking XMPP connection is the symptom.
+>
+> Also note: `dispatch.env` / `dispatch-secrets.env` are read by systemd `EnvironmentFile=`, which does **not** strip shell quoting. Write `NWWS_WFO_FILTER=LWX,AKQ,CTP,PHI`, never `NWWS_WFO_FILTER="LWX,AKQ,CTP,PHI"` — the quote characters become literal bytes of the value.
 
-The static airspace definitions (P-56A/B, DC FRZ, DC SFRA) in `src/common/airspace_static.py` are DC-specific. Replace or remove these polygons for deployments where different restricted areas apply. Non-DC deployments will still receive TFR data for their region; only the static "always-on" areas need updating.
+### `src/geo/dc_airspace.py` — DC static airspace
+
+The static airspace definitions (P-56A, P-56B, DC FRZ, DC SFRA — per FAR
+91.161 and FAAO 7400.11) live in **`src/geo/dc_airspace.py`** and are served
+via `GET /api/v1/airspace`. Replace or remove these polygons for deployments
+where different restricted areas apply. Non-DC deployments still receive TFR
+data for their region; only the static "always-on" areas need updating.
 
 ---
 
@@ -238,9 +249,24 @@ Civil Aviation Administration of China AIS services are primarily accessible to 
 
 ---
 
+## Aircraft registry equivalents by region
+
+Separate from the live flight-plan/NOTAM feeds above, aircraft *ownership/registration* lookups (N-number <-> Mode S hex <-> registrant) are country-specific -- there's no single global registry.
+
+| Region | Service | Access |
+|---|---|---|
+| US | FAA Aircraft Registry (N-Number) | Free bulk download, daily refresh -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| UK | CAA G-INFO | Paid product (email/Excel delivery), monthly or quarterly -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| Global fallback | OpenSky Network Aircraft Database | Free bulk CSV, 127 countries, irregular updates -- see [DATA_SOURCES.md](DATA_SOURCES.md) |
+| Europe (other) | No single EU-wide registry -- each country's CAA maintains its own (DGAC in France, LBA in Germany, ENAC in Italy, etc.) | Integrate per-country following the FAA/UK CAA pattern if needed |
+
+The local registry lookup endpoint (`GET /api/v1/aircraft/<N-NUMBER-or-HEX>`) serves US N-number data plus the locally-imported OpenSky registry cross-check. A non-US deployment that needs fast local hex/registration lookups would need to import a regional registry (UK CAA G-INFO, etc.) into the same table structure — note the reference deployment resolves identity **local-only** as of 2026-08-27 (own ADS-B → ingested SWIM → locally-imported FAA/OpenSky registry tables) and no longer queries airplanes.live programmatically; a deployment choosing a live third-party lookup instead is departing from that rule deliberately.
+
+---
+
 ## Ops brief naming conventions
 
-The ops brief sections that use DC-specific names (`DC METRO`, `NORTHEAST`, `TRANSCON HUBS`) are labels in the Ollama system prompt inside `ops_brief.py`. They're cosmetic — rename them to match your operating context:
+The ops brief sections that use DC-specific names (`DC METRO`, `NORTHEAST`, `TRANSCON HUBS`) are labels in the ops-brief persona's system prompt — which, since the 2026-08-27 llama.cpp cutover, lives in **`src/common/personas.py`** (the `ops-brief` entry), not in a Modelfile or in `ops_brief.py` itself. They're cosmetic — rename them to match your operating context (edits take effect on the next request, no rebuild):
 
 **European example:**
 ```python
@@ -266,7 +292,7 @@ or significant weather active. Note JMA SIGMET issuances for typhoon/frontal act
 ...
 ```
 
-No code changes outside the prompt string. The Ollama model doesn't care what the sections are called — it follows the structure you define.
+No code changes outside the persona text (remember to re-sign the manifest — `personas.py` and the Modelfiles are integrity-covered). The local model doesn't care what the sections are called — it follows the structure you define.
 
 ---
 
@@ -283,7 +309,7 @@ The reference deployment monitors Amtrak via [amtraker.com](https://api.amtraker
 | France | SNCF | [https://numerique.sncf.com/startup/api](https://numerique.sncf.com/startup/api) |
 | Australia | Various state operators | State transit authority APIs vary |
 
-The amtrak fetcher in `src/poller/fetchers/amtrak.py` is straightforward to adapt — it makes a single REST call and parses train delay/status fields. Wire any JSON-returning transit API into the same slot.
+The sole live Amtrak path is the ingest-core push-primary loop in `src/ingest/amtrak.py` — it makes a single REST call per cycle and parses train delay/status fields; wire any JSON-returning transit API into that module's slot. (The poller-side fetcher file `src/poller/fetchers/amtrak.py` exists but is currently *unscheduled dead code* — it has no `FETCH_SCHEDULE` entry and is never invoked; the poller only runs a 300 s watchlist sweep against amtraker. Don't adapt the fetcher file expecting it to run.)
 
 ---
 

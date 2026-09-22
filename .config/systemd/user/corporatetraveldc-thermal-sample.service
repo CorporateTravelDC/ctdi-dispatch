@@ -1,0 +1,6 @@
+[Unit]
+Description=Sample CPU temp + ollama residency every 5min (2026-08-03 prewarm-fix live test)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/thermal-sample.sh

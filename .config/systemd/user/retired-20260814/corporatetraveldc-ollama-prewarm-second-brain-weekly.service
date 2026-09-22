@@ -1,0 +1,6 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-secondbrain-weekly:latest ~2-3min before second-brain-weekly (bounded keep_alive, not permanent)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-prewarm.sh corporatetraveldc-pi5-secondbrain-weekly:latest

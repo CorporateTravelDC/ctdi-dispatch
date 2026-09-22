@@ -1,0 +1,94 @@
+# demo-portal-nginx.conf.tmpl -- nginx config for ONE persistent demo
+# portal (personal or client). Rendered by scripts/demo-portal-init.sh
+# into /home/corporatetraveldc/demos/_portal/__PORTAL__/nginx.conf and
+# bind-mounted into corporatetraveldc-demo-portal-__PORTAL__.container.
+# Derived from client-demo-nginx.conf.tmpl (2026-09-06); the differences
+# are all about serving THROUGH a swappable symlink:
+#
+#   /demos                              = /home/corporatetraveldc/demos (ro)
+#   /demos/_portal/__PORTAL__/current   -> ../../<slug>   (swapped by
+#                                          scripts/demo-portal.sh, no
+#                                          container restart needed)
+#   /demos/_portal/__PORTAL__/placeholder/index.html  "nothing mounted"
+#
+# root and auth_basic_user_file both go through `current`, and nginx
+# resolves paths per request (open_file_cache is off by default, and the
+# -d/-f tests below stat() on every request), so an atomic symlink swap
+# on the host is picked up by the very next request. Closed by default:
+# the site behind `current` is served ONLY when both current/site/ and
+# current/auth/.htpasswd resolve; otherwise every request gets the
+# placeholder page with auth off (there is nothing to protect there).
+# auth_basic's realm is evaluated per request and the literal value
+# "off" disables the module (documented nginx behaviour), which is what
+# lets one server block switch between "gated site" and "open
+# placeholder" without a restart.
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /tmp/nginx-demo-portal-__PORTAL__.pid;
+
+events {
+    worker_connections 512;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    charset utf-8;
+    sendfile on;
+    access_log /dev/stdout;
+
+    # Never let a demo's dotfiles (or the symlink itself) be refused.
+    disable_symlinks off;
+
+    types {
+        application/geo+json                 geojson;
+        application/yaml                     yaml;
+        application/xml                      xml;
+        text/plain                           md;
+    }
+
+    server {
+        listen __PORT__;
+        server_name _;
+
+        # Per-request mount detection. Both tests follow symlinks
+        # (stat), so they see through `current` -> ../../<slug>.
+        set $portal_root  /demos/_portal/__PORTAL__/current/site;
+        set $portal_realm "__DISPLAY_NAME__ -- preview, not the live site";
+        set $portal_state mounted;
+        if (!-d /demos/_portal/__PORTAL__/current/site) {
+            set $portal_state unmounted;
+        }
+        if (!-f /demos/_portal/__PORTAL__/current/auth/.htpasswd) {
+            set $portal_state unmounted;
+        }
+        if ($portal_state = unmounted) {
+            set $portal_root  /demos/_portal/__PORTAL__/placeholder;
+            set $portal_realm off;
+            rewrite ^ /index.html break;
+        }
+
+        root $portal_root;
+        auth_basic $portal_realm;
+        auth_basic_user_file /demos/_portal/__PORTAL__/current/auth/.htpasswd;
+
+        # nginx doesn't hide dotfiles/dot-directories unless told to --
+        # explicit allow so /.well-known/ (agent-card.json, mcp.json,
+        # etc.) stays reachable regardless of any base-image default.
+        location ^~ /.well-known/ {
+            allow all;
+        }
+
+        location / {
+            try_files $uri $uri/ =404;
+        }
+
+        location = /robots.txt    { add_header Cache-Control "max-age=3600"; }
+        location = /llms.txt      { add_header Cache-Control "max-age=3600"; }
+        location = /llms-full.txt { add_header Cache-Control "max-age=3600"; }
+        location ~* \.html$       { add_header Cache-Control "max-age=3600"; }
+        location ~* \.(json|geojson|yaml|xml)$ { add_header Cache-Control "max-age=3600"; }
+        location ~* \.css$        { add_header Cache-Control "max-age=86400"; }
+        location ~* \.(webp|jpg|jpeg|png|svg|ico)$ { add_header Cache-Control "max-age=604800"; }
+    }
+}

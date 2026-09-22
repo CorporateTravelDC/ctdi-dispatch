@@ -1,0 +1,10 @@
+# corporatetraveldc-client-demo-webdev-expiry@.service
+# Generalized 2026-09-03 from an earlier one-off client-preview's expiry
+# service. One-shot: removes the time-limited "webdev" Basic Auth credential for
+# client demo %i (owner's credential is untouched, stays permanent).
+[Unit]
+Description=Client demo %i -- remove the time-limited webdev credential
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/client-demo-webdev-expire.sh %i

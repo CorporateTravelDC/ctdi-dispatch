@@ -1,0 +1,6 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-dispatch-desk:latest ~2-3min before dispatch-desk-memo (bounded keep_alive, not permanent)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-prewarm.sh corporatetraveldc-pi5-dispatch-desk:latest
