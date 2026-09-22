@@ -18,11 +18,14 @@ DNS_TARGET="dns-stack-ready.target"
 DNS_WAIT_MAX=60
 CONTAINER_WAIT=4
 
+# 2026-08-23: pre-split monolithic "corporatetraveldc-ingest" unit removed
+# -- retired since the 7-per-feed-Quadlet split; see CLAUDE.md's "Ingest
+# load-shedding". thermal-ingest-guard.py owns SWIM feed lifecycle, not
+# this script.
 CONTAINERS=(
     "corporatetraveldc-web"
     "corporatetraveldc-poller"
     "corporatetraveldc-pusher"
-    "corporatetraveldc-ingest"
 )
 
 SYSTEM_SERVICES=(

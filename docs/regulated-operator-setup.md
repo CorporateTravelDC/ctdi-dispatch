@@ -1,5 +1,7 @@
 # Addendum: Email, Phone Call & Regulated-Industry Operator Setup
 
+**Verified against the live system 2026-08-11.**
+
 This addendum covers enabling ntfy email and phone-call notifications on a self-hosted instance, and security guidance for operators working under regulated-industry requirements (aviation/transportation, public-safety/EMS, ARES/EMCOMM).
 
 ---
@@ -8,7 +10,22 @@ This addendum covers enabling ntfy email and phone-call notifications on a self-
 
 ntfy sends email by connecting to an SMTP relay. Two options are documented here.
 
-### Option A — ProtonMail Bridge (recommended for privacy-conscious operators)
+**What's actually deployed (verified 2026-08-23):** neither option below,
+exactly — the live `/etc/ntfy/server.yml` uses **direct Proton SMTP
+submission**, not the local Bridge relay:
+
+```yaml
+smtp-sender-addr: smtp.protonmail.ch:587
+smtp-sender-user: health-alerts@example.com
+smtp-sender-from: health-alerts@example.com
+```
+
+(Proton's SMTP submission service — SMTP AUTH on 587 with a per-address
+token, injected via `NTFY_SMTP_SENDER_PASS` as below.) The Bridge setup
+in Option A remains a valid alternative but is not what this instance
+runs.
+
+### Option A — ProtonMail Bridge (alternative; not the deployed path)
 
 ProtonMail Bridge runs as a local container providing an SMTP relay for your ProtonMail account. Messages go end-to-end encrypted from the Pi to ProtonMail servers.
 
@@ -59,6 +76,26 @@ smtp-sender-from: dispatch@your-domain.com
 
 ntfy supports phone call alerts via Twilio. When a subscriber has a verified phone number, ntfy places a call and reads the alert title aloud via TTS.
 
+> **Not enabled on this instance (verified 2026-08-23).** All four
+> `NTFY_TWILIO_*` keys exist in `dispatch-secrets.env` and
+> `/etc/ntfy/server.yml` has no Twilio block. This section is
+> setup guidance for enabling it, not a description of a running
+> capability — no priority-5 alert on this box places a phone call today
+> (three days of `journalctl --user -u ntfy` contain zero Twilio lines).
+>
+> **Correction 2026-08-23 — the four keys are not "empty", they are set to
+> the literal string `CHANGE_ME`.** That distinction matters and is worth
+> keeping straight before anyone "enables" this: an unset/empty var and a
+> var carrying a real nine-character value are not the same input to ntfy,
+> which reads all `NTFY_TWILIO_*` env vars automatically (see below) rather
+> than requiring a `server.yml` block to opt in. It happens to be benign
+> today — ntfy is not attempting Twilio calls — but do not reason about
+> this as "unconfigured because the value is blank." When enabling, replace
+> the placeholders outright; when *disabling*, delete the lines rather than
+> blanking them, and re-read the bare-values rule in CLAUDE.md
+> ("Operational conventions for agents") first — these files are consumed
+> via systemd `EnvironmentFile=`, which does not strip shell-style quoting.
+
 **Twilio setup:**
 
 1. Create an account at [console.twilio.com](https://console.twilio.com)
@@ -69,10 +106,10 @@ ntfy supports phone call alerts via Twilio. When a subscriber has a verified pho
 **`dispatch-secrets.env` additions:**
 
 ```env
-NTFY_TWILIO_ACCOUNT=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NTFY_TWILIO_AUTH_TOKEN=your-auth-token
+NTFY_TWILIO_ACCOUNT=YOUR_ACCOUNT_SID
+NTFY_TWILIO_AUTH_TOKEN=YOUR_AUTH_TOKEN
 NTFY_TWILIO_PHONE_NUMBER=+15551234567
-NTFY_TWILIO_VERIFY_SERVICE=VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NTFY_TWILIO_VERIFY_SERVICE=YOUR_VERIFY_SERVICE_SID
 ```
 
 No changes to `server.yml` needed — ntfy reads all `NTFY_TWILIO_*` env vars automatically.
@@ -91,8 +128,9 @@ No changes to `server.yml` needed — ntfy reads all `NTFY_TWILIO_*` env vars au
 |--------|----------|-------|
 | SMTP bridge password | `dispatch-secrets.env` | Never in server.yml or committed files |
 | Twilio credentials | `dispatch-secrets.env` | Injected at container start via EnvironmentFile |
-| ntfy access tokens | `dispatch-secrets.env` | Rotate via `csex-token rotate` |
-| GitHub PAT | `~/.secrets/github.token` | 30-day rotation; reminder sent via ntfy |
+| API bearer tokens | SHA-256 hashes in the dispatch DB | Managed via `ctdc-token` (`src/ctdc_token/cli.py`). There is no `rotate` subcommand — rotate by `ctdc-token revoke --prefix <ctdc_user_>` then `ctdc-token create` |
+| ntfy access token | `dispatch-secrets.env` (`NTFY_TOKEN`) | Rotate in the ntfy server config, then update the env file |
+| GitHub PAT | `~/.secrets/github_pat.token` | 30-day rotation; reminder sent via ntfy. (Corrected 2026-08-23 — an earlier revision named this `github.token`, which does not exist on disk.) |
 
 ### CUI / FOUO handling
 
@@ -102,14 +140,14 @@ If your jurisdiction requires CUI markings on operational documents, apply them 
 
 ### Audit log
 
-Append-only at `/var/lib/corporatetraveldc/audit.log`, 90-day retention, never leaves the Pi. For longer retention requirements, mount a tamper-evident external volume and update `AUDIT_LOG_PATH` in `dispatch.env`.
+The audit trail is the `audit_log` table in the platform database, never leaves the Pi. Which engine holds it depends on `DISPATCH_DB_BACKEND`: `sqlite` → `/var/lib/corporatetraveldc/corporatetraveldc.db`; `postgres` → the local Postgres instance (`audit_log` is one of the tables that moves — see `docs/POSTGRES_MIGRATION.md`). Retention is 90 days, enforced by the daily `audit_log_prune` poller skill (`db.prune_audit_log(days=90)`). There is no separate audit log file and no `AUDIT_LOG_PATH` variable — for longer retention requirements, adjust the prune skill's retention window and/or archive the table to a tamper-evident external volume.
 
 ### Network isolation
 
 - All services run rootless in Podman containers
 - External access only via Cloudflare Tunnel (no open ingress ports)
 - Tailscale provides identity-verified mesh access to admin endpoints
-- ProtonMail Bridge SMTP relay is Pi-local only — not reachable externally
+- ProtonMail Bridge SMTP relay (when used) binds the tailnet IP (`100.x.x.x:1025`) — tailnet-reachable, not public; note it is not loopback-only
 
 ### For ARES/CERT/EMS operators
 

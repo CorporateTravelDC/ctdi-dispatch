@@ -353,12 +353,27 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
             if x is None:
                 return
             awips = x.get("awipsid", "") or x.get("ttaaii", "")
+            ttaaii = x.get("ttaaii", "")
             wfo   = x.get("cccc", "")
             body  = (x.text or "").strip()
 
             # WPC national products (source KWNO) -- bypass local WFO filter
+            #
+            # BUG FIXED 2026-08-22: this used to pass `awips` (which
+            # prioritizes the `awipsid` attribute -- an AWIPS-internal
+            # product id, e.g. "PMDSPD") to parse_wpc_product(), but
+            # _WPC_PRODUCTS is keyed by WMO bulletin headers (FXUS02 etc.
+            # -- the `ttaaii` attribute), a different identifier system
+            # for the same product. Synthetic proof this was live-broken:
+            # parse_wpc_product("PMDSPD", ...) -> None,
+            # parse_wpc_product("FXUS02", ...) -> real dict. Confirmed
+            # live: wpc_discussions had zero rows ever despite NWWS-OI
+            # being connected. Pass ttaaii specifically -- the form
+            # _WPC_PRODUCTS actually expects -- falling back to `awips`
+            # only if ttaaii is genuinely absent, in case some WPC
+            # products only carry the AWIPS-id form.
             if wfo == "KWNO":
-                kw = parse_wpc_product(awips, body)
+                kw = parse_wpc_product(ttaaii or awips, body)
                 if kw:
                     try:
                         db.upsert_wpc_discussion(**kw)
@@ -372,8 +387,31 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
             # If cfg.wfo_filter is configured, use it exclusively.
             # Otherwise fall back to the shared CORE_WFOS gate (is_core_wfo
             # accepts both 3-letter LWX and 4-letter ICAO-style KLWX codes).
+            #
+            # BUG FIXED 2026-08-22: this branch used to compare `wfo`
+            # against cfg.wfo_filter RAW, with no normalization -- unlike
+            # is_core_wfo() (used only in the elif below, i.e. only when
+            # wfo_filter is unset), which strips a leading "K" from
+            # 4-letter ICAO-style codes before comparing. Root-caused
+            # live: real NWWS-OI traffic's `cccc` attribute carries the
+            # 4-letter ICAO form -- proven by this exact function's own
+            # WPC check a few lines up (`if wfo == "KWNO":`, not "WNO").
+            # NWWS_WFO_FILTER is configured here (LWX,AKQ,CTP,PHI -- all
+            # bare 3-letter), so `wfo not in cfg.wfo_filter` could never
+            # match a real KLWX/KAKQ/KCTP/KPHI value -- every real product
+            # for the actual coverage area was silently dropped for the
+            # entire life of this feature. Confirmed: nws_alerts had zero
+            # genuine writes in ~4.8 days despite push:nws's heartbeat
+            # being healthy and live traffic confirmed steadily arriving
+            # (~1 msg/3-4s) once diagnostic logging was added. Normalizing
+            # `wfo` the same way is_core_wfo does before the membership
+            # check, so a configured wfo_filter gets the identical
+            # K-stripping benefit the comment above always claimed it had.
+            w = (wfo or "").upper()
+            if len(w) == 4 and w.startswith("K"):
+                w = w[1:]
             if cfg.wfo_filter:
-                if wfo not in cfg.wfo_filter:
+                if w not in cfg.wfo_filter:
                     return
             elif not is_core_wfo(wfo):
                 log.debug("NWWS: dropping product from non-core WFO %s (%s)", wfo, awips)
@@ -389,11 +427,70 @@ async def run(cfg: NwwsConfig, stop: asyncio.Event, heartbeat: int) -> None:
         client = _Client()
         beat: asyncio.Task | None = None
         try:
+            # 2026-09-05: gate the FIRST heartbeat write on a real
+            # session_start, not merely on connect() having been called.
+            # Root-caused live: client.connect() only opens the TCP/TLS
+            # socket -- SASL auth happens afterward and can fail (e.g. a
+            # bad credential) while connect() itself never raises. _beat()
+            # used to write mark_push_healthy("nws") on its very first
+            # tick regardless, so a completely broken credential still
+            # stamped push:nws fresh every reconnect attempt (every 5-120s
+            # per the backoff below) -- confirmed live: NWWS-OI SASL auth
+            # failed continuously for ~1hr (bad NWWS_PASSWORD quoting, see
+            # dispatch-secrets.env.template) while push:nws read healthy
+            # the entire time, silently defeating the poller's REST
+            # fallback for "nws" (see ingest/failover.py / poller/main.py's
+            # push_feed="nws"). An asyncio.Event set only from the real
+            # session_start handler (see _Client._start above) closes that
+            # gap -- _beat() now waits for genuine auth+session success
+            # before ever marking healthy, and never marks healthy at all
+            # if auth fails and the connection dies first.
+            authenticated = asyncio.Event()
+            client.add_event_handler("session_start", lambda _e: authenticated.set())
             client.connect((cfg.server, cfg.port))
 
             async def _beat():
+                # 2026-08-31: mark_push_healthy() writes to the shared SQLite
+                # DB and can raise "database is locked" under write
+                # contention (confirmed live -- ingest.amtrak hit the same
+                # error same day). Uncaught, that silently kills this task
+                # forever (create_task'd, never awaited except in the
+                # disconnect-path finally below) while the XMPP session
+                # itself stays perfectly healthy -- push:nws then reads
+                # stale for hours with zero connection errors logged,
+                # self-healing only on the next real disconnect/reconnect
+                # or a container restart. Root-caused live: NWWS-OI logged
+                # zero errors for 3+ hours while push:nws sat stale.
+                await _wait_any(stop, authenticated)
+                if stop.is_set():
+                    return
                 while not stop.is_set():
-                    failover.mark_push_healthy("nws")
+                    # 2026-09-02 (operator directive): bounded retry-with-
+                    # backoff, same pattern as opensky_registry.py's bulk-
+                    # import fix for the identical "database is locked"
+                    # class of error -- a single failed write used to just
+                    # wait for the next full `heartbeat` tick (commonly
+                    # 30s), and 2-3 consecutive contention hits under real
+                    # load (confirmed live 2026-09-01/02, box under swap
+                    # pressure) was enough to push push:nws's age past the
+                    # guardrail's 90s FALLBACK_MAX_AGE and trip a false
+                    # "push is down" kickover even though NWWS-OI itself
+                    # was perfectly healthy the whole time. Retrying a
+                    # handful of times within the SAME tick (short, fixed
+                    # backoff -- this is a lightweight heartbeat write, not
+                    # a bulk job, so no need for the longer escalating
+                    # backoff opensky_registry.py uses) makes a single
+                    # contention event much less likely to ever surface as
+                    # staleness at all.
+                    for attempt in range(4):
+                        try:
+                            failover.mark_push_healthy("nws")
+                            break
+                        except Exception as e:
+                            if attempt == 3:
+                                log.warning("push:nws heartbeat write failed after 4 attempts (%s); retrying next tick", e)
+                            else:
+                                await asyncio.sleep(1.5)
                     await asyncio.sleep(heartbeat)
 
             beat = asyncio.create_task(_beat())

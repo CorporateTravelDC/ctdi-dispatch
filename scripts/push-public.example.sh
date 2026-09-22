@@ -57,7 +57,26 @@ echo "[push-public] Scrubbing sensitive identifiers..."
 scrubbed_tree=$(python3 "${repo_root}/scripts/scrub-public-tree.py" "${work_tree}")
 
 # ── Step 3: create the patched commit and push ──────────────────────────────
-new_commit=$(git commit-tree -S "${scrubbed_tree}" -p "${sha}" \
+# The new commit must NEVER parent on ${sha} (the raw private commit).
+# scrub-public-tree.py only sanitizes the TREE of the tip -- every ancestor
+# commit is still the real, unscrubbed object. Parenting on ${sha} would
+# push that entire raw ancestor chain to the public remote via `git push`
+# (it transfers whatever the tip doesn't already have there), silently
+# defeating the scrub for the repo's full history. Instead, parent on the
+# public mirror's OWN current tip -- if there is no public history yet
+# (first push, or after a reset), create a fresh orphan commit with no
+# parent at all. The public branch is then its own independent,
+# fully-scrubbed lineage that never shares an ancestor with the private repo.
+public_parent=$(git ls-remote "$remote_url" "refs/heads/${branch}" | cut -f1)
+
+if [ -n "$public_parent" ]; then
+    parent_args=(-p "$public_parent")
+else
+    echo "[push-public] No existing public/${branch} -- creating orphan root commit"
+    parent_args=()
+fi
+
+new_commit=$(git commit-tree -S "${scrubbed_tree}" "${parent_args[@]}" \
     -m "chore(public): sanitize for public mirror [auto by push-public.sh]")
 
 git push --force "$remote_url" "${new_commit}:refs/heads/${branch}"

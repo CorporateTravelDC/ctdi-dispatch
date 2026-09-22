@@ -1,7 +1,7 @@
 """
 ingest.main — async supervisor for the push-ingest service.
 
-Launches the enabled sources (SWIM, NWWS-OI, Amtrak), each in its own supervised
+Launches the enabled sources (SWIM NMS, NWWS-OI, Amtrak), each in its own supervised
 task that reconnects on failure, and shuts them down cleanly on SIGTERM/SIGINT
 (so `systemctl --user stop corporatetraveldc-ingest` is graceful).
 
@@ -11,12 +11,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import threading
 
-from common import db
-from ingest import amtrak, config, nwws, swim, swim_client
+from common import db, db_backend
+from ingest import amtrak, config, nwws, swim_client
 from ingest.local_airspace import LocalAirspaceMonitor
+
+# Added 2026-07-26 when ingest was split into per-SWIM-feed containers (see
+# systemd/quadlets/corporatetraveldc-ingest-*.container): local_airspace has
+# no per-source "enabled" field of its own -- it just always ran, which was
+# fine when there was exactly one ingest process. With seven containers now
+# sharing this same image (one core + six single-feed), only ONE of them
+# should actually run it. Defaults to True so the original single-container
+# deployment (and the new "ingest-core" container) keep working unchanged;
+# the six per-feed containers set this to false in their Quadlet units.
+def _local_airspace_enabled() -> bool:
+    return os.getenv("LOCAL_AIRSPACE_ENABLED", "true").strip().lower() not in ("0", "false", "no")
 
 log = logging.getLogger("ingest")
 
@@ -48,15 +60,79 @@ async def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Ensure the schema exists (idempotent CREATE TABLE IF NOT EXISTS). Safe to
-    # run alongside the poller — important here since the DB may be uninitialized.
-    db.init_db()
-    db.init_db_v2()
-    db.init_db_v3()
-    db.init_db_v4()
-    db.init_db_v5()
-    db.init_db_v6()
-    db.init_db_v7()
+    # 2026-09-18: skip the whole SQLite bootstrap chain on Postgres --
+    # the schema there is already fully built by the 48 files in
+    # common/pg_schema/, applied+tracked by scripts/pg_migrate.py. These
+    # init_db_vN()/init_db_swim_vNN() calls are real SQLite DDL (some
+    # with SQLite-only syntax translate_sql() doesn't cover), not a
+    # harmless idempotent no-op on this backend -- confirmed live: one
+    # left a Postgres transaction aborted and crash-looped every ingest
+    # container on startup after the 2026-09-18 cutover.
+    if db_backend.backend() != "postgres":
+        # Ensure the schema exists (idempotent CREATE TABLE IF NOT EXISTS). Safe to
+        # run alongside the poller — important here since the DB may be uninitialized.
+        db.init_db()
+        db.init_db_v2()
+        db.init_db_v3()
+        db.init_db_v4()
+        db.init_db_v5()
+        db.init_db_v6()
+        db.init_db_v7()
+        db.init_db_v13()
+        db.init_db_v14()
+        db.init_db_v15()
+        db.init_db_v18()
+        db.init_db_v19()
+        db.init_db_v20()
+        db.init_db_v28()
+        db.init_db_v29()
+        db.init_db_v30()
+        db.init_db_v34()
+        db.init_db_v36()
+        db.init_db_v37()
+        db.init_db_v40()  # 2026-08-30: oooi_source/TBFM columns -- ingest's own
+                          # tbfm/tfms/smes watchlist writes touch them, so this
+                          # container must not depend on web/poller having run
+                          # first on a fresh DB.
+        db.init_db_v44()  # 2026-09-04: stdds_rvr_history -- smes_parser's own
+                          # upsert_stdds_rvr() call (via db_swim) now writes
+                          # here on every real RVR change; must exist before
+                          # that first write on a fresh DB. (db.py's own
+                          # number line -- unrelated to db_swim's separate
+                          # v41-v46 counter below.)
+        db.init_db_v46()  # 2026-09-05: tbfm_sequences.eta_kind. THIS container
+                          # is the writer (tbfm_parser -> write_tbfm_sequences
+                          # -> upsert_tbfm_sequence), so the column must exist
+                          # before the first sequence write on a fresh DB.
+                          # ALTER TABLE with a duplicate-column guard;
+                          # idempotent.
+        # 2026-08-30 SWIM-audit tables (stdds_rvr / tdes_departure_events /
+        # tdls_messages / datis_snapshots / tfms_edct_slots /
+        # fdps_destination_changes + flight_events extras columns). Lives in
+        # its own module (NOT picked up by db.init_db_all()'s introspection) --
+        # see common/db_swim.py's docstring for why.
+        from common import db_swim
+        db_swim.init_db_swim_v41()
+        # 2026-08-30 afternoon pass: TFMS PARAM delay stats + REROUTE
+        # advisories + tdls_messages parsed PDC/DCL columns. Must run before
+        # the smes/tfms handlers that write them, for the same fresh-DB
+        # reason as the v40/v41 calls above.
+        db_swim.init_db_swim_v42()
+        # 2026-08-30 night pass: fdps_diversion_continuations (diversion ->
+        # follow-on C->B filing pairs, written inline by fdps_parser). Same
+        # fresh-DB reasoning as above. (v43 is db.py's uas_phase columns,
+        # web/poller-owned -- not needed here.)
+        db_swim.init_db_swim_v44()
+        # 2026-08-30 late pass: operator_class column on
+        # fdps_diversion_continuations (fractional/GA continuation pairs are
+        # stored-not-alerted -- see fdps_parser._operator_class).
+        db_swim.init_db_swim_v45()
+        # 2026-08-30 late-night pass: tfms_plan_removals (Detector C --
+        # plan-removal/cancellation classification, written inline by
+        # tfms_parser) + fdps_route_versions (Detector D groundwork --
+        # distinct route versions + genuine-reroute classification, written
+        # inline by fdps_parser). Same fresh-DB reasoning as above.
+        db_swim.init_db_swim_v46()
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
@@ -66,10 +142,9 @@ async def main() -> None:
     hb = cfg.heartbeat_interval
     tasks: list[asyncio.Task] = []
 
-    if cfg.swim.enabled:
-        tasks.append(asyncio.create_task(
-            _supervise("swim", lambda: swim.run(cfg.swim, stop, hb), stop)))
-        log.info("SWIM (legacy AMQP) source enabled")
+    # NOTE: the legacy AMQP SWIM client (ingest/swim.py, SwimConfig) was
+    # removed 2026-07-19 -- NMS/Solace (below) is the only SWIM transport now.
+    # See tests/ingest/test_legacy_amqp_removed.py.
     if cfg.nms.enabled:
         tasks.append(asyncio.create_task(
             _supervise("swim_nms", lambda: swim_client.run(cfg.nms, stop), stop)))
@@ -84,14 +159,18 @@ async def main() -> None:
         log.info("Amtrak source enabled")
 
     # Local airspace monitor runs in its own daemon thread, independent of SWIM.
-    # Skip the "no tasks" exit — local airspace may be the only active source.
-    local_monitor = LocalAirspaceMonitor()
-    threading.Thread(target=local_monitor.run_forever, daemon=True,
-                     name="local-airspace").start()
-    log.info("Local airspace monitor started")
+    # Gated per-container now that ingest can run as seven separate
+    # containers sharing this image -- see _local_airspace_enabled() above.
+    if _local_airspace_enabled():
+        local_monitor = LocalAirspaceMonitor()
+        threading.Thread(target=local_monitor.run_forever, daemon=True,
+                         name="local-airspace").start()
+        log.info("Local airspace monitor started")
+    else:
+        log.info("Local airspace monitor disabled for this container (LOCAL_AIRSPACE_ENABLED=false)")
 
     if not tasks:
-        log.warning("No SWIM/NWWS/Amtrak sources enabled — local airspace monitor only")
+        log.warning("No SWIM/NWWS/Amtrak sources enabled for this container")
         await stop.wait()
         log.info("corporatetraveldc ingest stopped")
         return

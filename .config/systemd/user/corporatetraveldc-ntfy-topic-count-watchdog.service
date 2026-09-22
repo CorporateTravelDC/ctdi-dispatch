@@ -1,0 +1,6 @@
+[Unit]
+Description=Warn on ntfy_topics_total approaching the soft 150-topic ceiling (2026-08-03)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ntfy-topic-count-watchdog.sh

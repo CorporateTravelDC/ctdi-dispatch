@@ -1,27 +1,31 @@
 #!/bin/bash
 # /opt/corporatetraveldc/scripts/lockdown.sh
-# Revert the host-reach opt-ins for Ollama, corporatetraveldc-pusher, and
+# Revert the host-reach opt-ins for corporatetraveldc-pusher and
 # corporatetraveldc-acarshub, without stopping any container or the
 # Cloudflare tunnel. Narrow, fast, reversible -- see restore-network.sh.
 #
 # Not a full stack panic button: containers keep running, they just lose the
-# ability to reach host-bound services (Ollama, ntfy, ultrafeeder) until
+# ability to reach host-bound services (ntfy, ultrafeeder) until
 # restore-network.sh runs. Meant to be triggered automatically by fail2ban
 # (see jail.d/nginx-limit-req-corporatetraveldc.conf's actionban) as well as
 # manually.
 #
-# Ollama is locked down at its OWN bind (revert to 127.0.0.1), not at
-# openwebui's quadlet: openwebui reaches Ollama by its literal Tailscale IP
-# (not host.containers.internal -- pasta's --map-gw can't reach a strictly
-# loopback-bound service, see install/ollama/install-ollama.sh), so cutting
-# it off at the source also drops the public ollama.example.com
-# endpoint at the same time -- a reasonable thing to shed under suspected
-# attack, not just openwebui's chat feature.
+# 2026-08-30: the Ollama bind-revert step this script used to carry was
+# removed -- ollama.service is retired (2026-08-27 llama.cpp cutover) and
+# the public ollama.* vhost it existed to cut is gone. See
+# restore-network.sh for the matching removal.
 #
 # Usage: sudo lockdown.sh [--dry-run] [--reason TEXT]
 # ASCII output only
 
 set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/lockdown.sh"; then
+    echo "lockdown: INTEGRITY CHECK FAILED -- refusing to run" >&2
+    exit 1
+fi
 
 CTDC_USER="corporatetraveldc"
 CTDC_UID=$(id -u "${CTDC_USER}" 2>/dev/null || echo "")
@@ -29,7 +33,6 @@ XDG_USER_DIR="/run/user/${CTDC_UID}"
 DBUS_ADDR="unix:path=${XDG_USER_DIR}/bus"
 QUADLET_DIR="/home/${CTDC_USER}/.config/containers/systemd"
 CONTAINERS_CONF="/home/${CTDC_USER}/.config/containers/containers.conf"
-OLLAMA_BINDING_CONF="/etc/systemd/system/ollama.service.d/10-binding.conf"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 STATE_FILE="/run/corporatetraveldc-lockdown-active"
 
@@ -116,18 +119,6 @@ if [[ -f "${STATE_FILE}" ]]; then
     exit 0
 fi
 
-# Step 1 -- revert Ollama's own bind to loopback-only. Cuts openwebui's
-# Tailscale-IP-addressed access AND nginx's public ollama.* vhost at once.
-say "Reverting Ollama's bind..."
-if [[ -f "${OLLAMA_BINDING_CONF}" ]] && grep -q '^Environment="OLLAMA_HOST=100\.94\.80\.100:11434"' "${OLLAMA_BINDING_CONF}"; then
-    say "  ollama: OLLAMA_HOST -> 127.0.0.1:11434"
-    run sed -i 's/^Environment="OLLAMA_HOST=100\.94\.80\.100:11434"/Environment="OLLAMA_HOST=127.0.0.1:11434"/' "${OLLAMA_BINDING_CONF}"
-    run systemctl daemon-reload
-    run systemctl restart ollama.service
-else
-    say "  [SKIP] ollama -- already loopback-only or binding conf not found"
-fi
-
 # Step 2 -- comment out Network=pasta:--map-gw on the pasta-mode containers
 # that reach a 0.0.0.0-bound host service via host.containers.internal.
 # Marker prefix lets restore-network.sh find and reverse exactly this line.
@@ -177,7 +168,7 @@ say "Restore with: sudo restore-network.sh"
 if (( ! DRY_RUN )); then
     ntfy_send "${NTFY_HOT}" \
         "Stack Lockdown Engaged" \
-        "Host-reach opt-ins reverted (ollama, pusher, acarshub). Reason: ${REASON}. Containers still running. Restore with restore-network.sh."
+        "Host-reach opt-ins reverted (pusher, acarshub). Reason: ${REASON}. Containers still running. Restore with restore-network.sh."
 fi
 
 say "Done."

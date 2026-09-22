@@ -9,17 +9,15 @@ from common import db
 from common.llm import generate as llm_generate
 from common.push_dedup import PushDedup, content_hash as _ch
 from common.sr1_log import log_usage
-from common.sr2_gate import hash_gate
+from common.sr2_gate import check_gate, commit_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "tfr-enrichment"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_TFR_ENRICHMENT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-tfr-enrichment:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# VIP-only focused prompt (~60-100 tokens); Pi 5 CPU ~40s sufficient — 180s gives ample headroom
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are a dispatch assistant for an executive chauffeur operation in the Washington DC
 metropolitan area. You have operational knowledge of DC-area airspace, VIP movement patterns,
@@ -49,7 +47,11 @@ def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -
     key = f"enrichment_{SKILL_NAME}"
     h = _ch(stable_key) if stable_key else _ch(text)
     hot = "vip=True" in stable_key or "vip=1" in stable_key
-    if not _tfr_skill_dedup.should_push(key, h, hot=hot):
+    # 2026-09-03 (forward-only push_dedup redesign): PERIODIC api,
+    # deliberately -- same still-active-TFR hourly re-push contract as
+    # pusher/main.py's push_vip_tfrs and route_impact's hot-alerts gate
+    # (all three share the "tfr"/"route" dedup design from 2026-08-16).
+    if not _tfr_skill_dedup.should_push_periodic(key, h, hot=hot):
         log.debug("%s: tfr-alert suppressed (dedup, same content <1h)", SKILL_NAME)
         return
     _ntfy.send("tfr-alert",  text, title=title, priority=priority, tags="rotating_light")
@@ -114,12 +116,30 @@ def _call_ollama_vip(inputs: dict) -> str | None:
     """Call LLM (Ollama-first, Anthropic fallback) for VIP TFR narrative.
     Returns narrative text or None (caller falls back to deterministic).
     """
+    # priority="hot" (2026-07-26): this is the VIP/POTUS TFR narrative --
+    # must never wait behind a report job (ep-brief/ops-brief/weekly-summary/
+    # osint-monitor) for the shared Ollama slot. See common/ollama_lock.py.
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=_vip_user_message(inputs),
         ollama_model=OLLAMA_MODEL,
         max_tokens=220,
         temperature=0.2,
+        priority="hot",
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 26 at
+        # sample): 1009-tok prompt / 103.5s eval + gen at 0.79 tok/s
+        # -> 266.2s at the 220-tok cap; delta over the 48.4s
+        # spiked persona-only ref = 321.4s; x1.10 top-up to the 53s locked bound applied;
+        # +16s cold-load allowance (hot path skips _preload_model);
+        # (53 + 368.0) x 1.25 = 526s -> 540.
+        timeout=540,
+        # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
+        # priority="hot" only affects the Ollama-side pre-flight/retry
+        # gates, NOT whether generate() falls through to Anthropic on
+        # failure, so this needed closing explicitly too. See dispatch.env's
+        # ANTHROPIC_FALLBACK_ENABLED comment for the full rationale.
+        allow_anthropic=False,
     )
 
 
@@ -147,7 +167,7 @@ _fallback_narrative = _deterministic_summary
 
 def main(force: bool = False) -> None:
     inputs = build_inputs()
-    gate_result = hash_gate(SKILL_NAME, inputs, force=force)
+    gate_result, _gate_hash = check_gate(SKILL_NAME, inputs, force=force)
     if gate_result == "skipped":
         log.debug("%s: inputs unchanged — skipping", SKILL_NAME)
         sys.exit(0)
@@ -166,9 +186,20 @@ def main(force: bool = False) -> None:
                 status = "ok"
                 log.info("%s: VIP narrative via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
             else:
-                narrative = _deterministic_summary(inputs)
-                status = "fallback"
-                log.warning("%s: Ollama unavailable for VIP TFR — using deterministic fallback", SKILL_NAME)
+                # 2026-08-06: narrow safety net around the fallback ITSELF --
+                # same pattern applied identically across every skill with
+                # an Ollama fallback. See route_impact.py for the full note.
+                try:
+                    narrative = _deterministic_summary(inputs)
+                    status = "fallback"
+                    log.warning("%s: Ollama unavailable for VIP TFR — using deterministic fallback", SKILL_NAME)
+                except Exception as fallback_err:
+                    log.error("%s: deterministic fallback also failed — %s", SKILL_NAME, fallback_err)
+                    narrative = (
+                        f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                        f"deterministic fallback errored. See logs."
+                    )
+                    status = "fallback_error"
         else:
             # No VIP TFRs: deterministic is the right call, not a degraded path.
             # No [FALLBACK] label — this is clean structured output.
@@ -199,6 +230,12 @@ def main(force: bool = False) -> None:
             log.info("%s: no VIP TFRs — DB write only, no ntfy push (%d active)", SKILL_NAME, len(all_ids))
 
     finally:
+        # 2026-08-25 fix (Opus blind review C-7): only commit the gate
+        # hash once we know this run didn't crash -- see
+        # sr2_gate.commit_gate()'s docstring for why the write is
+        # deferred until after the guarded work actually completes.
+        if status != "error":
+            commit_gate(SKILL_NAME, _gate_hash)
         log_usage(SKILL_NAME, MODEL, 0, 0, status, gate_result)
 
 

@@ -3,8 +3,12 @@ import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import AriaCompassRegion from './AriaCompassRegion.jsx'
 import AccessibleTable   from './AccessibleTable.jsx'
+import UpcomingFeatureWatermark from './UpcomingFeatureWatermark.jsx'
 import { useCompassSummary } from '../hooks/useCompassSummary.js'
 import { useWatchlist, FALLBACK_PLANE_SVG } from '../hooks/useWatchlist.js'
+import { useDemoStatus } from '../hooks/useDemoStatus.js'
+import { useReceiverLocation } from '../hooks/useReceiverLocation.js'
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
 
 const OSM_URL          = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const OSM_ATTR         = '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
@@ -74,6 +78,18 @@ export default function AisMapView() {
   const [vesselItems,  setVesselItems] = useState([])
 
   const { entries: watchEntries } = useWatchlist()
+  const [demoStatus] = useDemoStatus()
+  // Treat "not yet known" (null, still loading) the same as demo mode --
+  // withhold the live fetch/iframe until we positively know this ISN'T a
+  // demo instance, rather than defaulting open and risking one live call
+  // slipping out before the check resolves. trusted_origin mirrors
+  // App.jsx's own demoBanner logic: a Tailscale/trusted visitor to the
+  // demo-runner instance (i.e. the operator, checking the demo build itself)
+  // still gets the real live AIS picture like every other tab already
+  // gives them -- the placeholder is specifically for untrusted/public
+  // demo visitors, not for the operator poking at the demo instance.
+  const isDemo = demoStatus === null ||
+    (demoStatus.demo_mode === true && demoStatus.trusted_origin !== true)
 
   const mmsiSet = new Set()
   watchEntries.forEach(e => {
@@ -82,21 +98,28 @@ export default function AisMapView() {
     if (e.identifier && /^\d{9}$/.test(e.identifier)) mmsiSet.add(e.identifier)
   })
 
-  // Fetch MarineTraffic widget key from runner config endpoint
-  useEffect(() => {
-    fetch('/api/v1/frontend-config')
-      .then(r => r.ok ? r.json() : {})
-      .then(cfg => {
-        if (cfg.mt_widget_key) {
-          setMtEmbedUrl(MT_EMBED_BASE + '?widget_id=' + encodeURIComponent(cfg.mt_widget_key))
-        }
-      })
-      .catch(() => {})
-  }, [])
+  // NOTE: mt_widget_key currently holds a MarineTraffic developer API key,
+  // not a real embed widget ID (those are generated from MarineTraffic's own
+  // embed configurator page and are a different credential entirely). Appending
+  // an invalid widget_id had no visible effect -- MarineTraffic silently falls
+  // back to the generic public embed -- but there's no reason to keep sending
+  // a value we know is wrong. Serving the plain base URL is the confirmed-working
+  // stopgap until a real widget ID exists. See docs/DATA_SOURCES.md.
 
-  // Init Leaflet — single instance, tile layers toggled by mode
+  // Init Leaflet — single instance, tile layers toggled by mode.
+  // isDemo guard added 2026-08-02: the ref'd <div> below only renders in
+  // the live (non-demo) branch. This effect used to run unconditionally
+  // on every mount -- including the brief instant before useDemoStatus()
+  // resolves (isDemo defaults true while loading, on EVERY instance, demo
+  // or live) -- so L.map(mapRef.current, ...) ran against a null ref,
+  // Leaflet threw "Map container not found", and with no error boundary
+  // React unmounted the entire app to a blank screen with no way back
+  // except a hard reload. Confirmed as the actual cause of the black-screen
+  // report on both Tailscale and the public demo.
   useEffect(() => {
+    if (isDemo) return
     if (leafletRef.current) return
+    if (!mapRef.current) return
     const map = L.map(mapRef.current, {
       center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, zoomControl: true,
     })
@@ -108,7 +131,7 @@ export default function AisMapView() {
     vesselLayerRef.current  = L.layerGroup().addTo(map)
     trackedLayerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
-  }, [])
+  }, [isDemo])
 
   // Toggle interaction and tile visibility when mode changes
   useEffect(() => {
@@ -130,6 +153,7 @@ export default function AisMapView() {
   }, [mode])
 
   const refreshVessels = useCallback(async () => {
+    if (isDemo) return  // never fetch live vessel positions in demo mode
     if (!vesselLayerRef.current || !trackedLayerRef.current) return
     try {
       const r = await fetch('/api/ais/vessels')
@@ -186,11 +210,7 @@ export default function AisMapView() {
     } catch (_) { setLoadErr(true) }
   }, [mmsiSet.size])
 
-  useEffect(() => {
-    refreshVessels()
-    const id = setInterval(refreshVessels, VESSEL_POLL)
-    return () => clearInterval(id)
-  }, [refreshVessels])
+  useVisibilityAwareInterval(refreshVessels, VESSEL_POLL, !isDemo)  // no polling loop in demo mode either
 
   const handleIframeError = () => {
     setIframeError(true)
@@ -198,7 +218,8 @@ export default function AisMapView() {
   }
 
   const src = sourceLabel(dataSource)
-  const compassSummary = useCompassSummary(vesselItems, [])
+  const receiverLoc = useReceiverLocation()
+  const compassSummary = useCompassSummary(vesselItems, [], receiverLoc)
   const vesselTableRows = vesselItems.map(v => ({
     name: v.label, lat: v.lat?.toFixed(4), lon: v.lon?.toFixed(4), tracked: v.tracked ? '★' : '',
   }))
@@ -208,6 +229,16 @@ export default function AisMapView() {
       <div className="train-map-subnav">
         <span className="train-map-title">AIS</span>
 
+        <div className="ais-mode-toggle" role="group" aria-label="Map display mode">
+          <button className={`ais-mode-btn${mode === 'iframe' ? ' active' : ''}`}
+            onClick={() => setMode('iframe')}
+            disabled={iframeError} title={iframeError ? 'MarineTraffic blocked embed' : 'MarineTraffic embed + live vessel overlay'}>
+            🌐 LIVE</button>
+          <button className={`ais-mode-btn${mode === 'local' ? ' active' : ''}`}
+            onClick={() => setMode('local')} title="Full OSM + OpenSeaMap, native vessel plotting">
+            🗺 MAP</button>
+        </div>
+
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
           {TRACKER_LINKS.map(t => (
             <a key={t.label} href={t.url} target="_blank" rel="noopener noreferrer"
@@ -216,8 +247,17 @@ export default function AisMapView() {
         </span>
       </div>
 
-      {/* Map area: iframe bg + transparent Leaflet overlay (iframe mode)
-                   OR full tiled Leaflet (local mode)  */}
+      {isDemo ? (
+        <div className="globe-iframe-wrap ais-demo-placeholder-wrap">
+          <img
+            src="/ais-demo-placeholder.jpg"
+            alt="AIS / vessel tracking preview -- upcoming feature, shown for demonstration purposes only. Live vessel positions are not shown in demo mode."
+            className="ais-demo-placeholder-img"
+          />
+        </div>
+      ) : (
+      /* Map area: iframe bg + transparent Leaflet overlay (iframe mode)
+                   OR full tiled Leaflet (local mode)  */
       <div className="globe-iframe-wrap">
         <AriaCompassRegion summary={compassSummary} entityType="vessels" count={vesselCount}
           extra="Potomac · Chesapeake · Port of Baltimore." />
@@ -262,6 +302,18 @@ export default function AisMapView() {
           className={`ais-leaflet-layer${mode === 'iframe' ? ' ais-overlay-mode' : ' ais-local-mode'}`}
         />
 
+        {/* Our own /api/ais/vessels overlay has no source, AND nothing
+            real is otherwise on screen -- in iframe mode the MarineTraffic
+            embed itself may still be showing real third-party data even
+            when our overlay is empty, so only show this when that embed
+            also isn't up (local mode, or the iframe failed to load). */}
+        {dataSource === 'none' && (mode !== 'iframe' || iframeError) && (
+          <UpcomingFeatureWatermark
+            label="AIS / Vessel Tracking"
+            detail="No local AIS-catcher or AISHub source configured yet"
+          />
+        )}
+
         <div className="map-overlay-stats globe-stats">
           {vesselCount > 0
             ? <span className="stat source-badge" style={{ color: '#4a9eff' }}>{vesselCount} vessels</span>
@@ -276,6 +328,7 @@ export default function AisMapView() {
           <button className="intel-refresh-btn" onClick={refreshVessels} title="Refresh vessels">↻</button>
         </div>
       </div>
+      )}
     </div>
   )
 }

@@ -10,12 +10,32 @@ Memory=1536m
 # instead of swap-thrashing (zram) if a container leaks past Memory=.
 PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
-Exec=python3 poller/skills/ops_brief.py
+# 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
+# together either EVER"): flock on the box-wide unit lock wraps the whole
+# run, so a second report container blocks here -- inside its own
+# container, holding no model, no threads -- until the one ahead exits.
+# It waits; it is never refused and never kills the run ahead of it.
+# common/llama_pool.py takes a separate per-generation lock on top.
+Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ops_brief.py
 
 [Service]
+# 2026-08-06: dedicated slice, separate from app.slice (where the
+# interactive desktop session -- Brave/Claude Desktop -- lives). Lets
+# app.slice carry its own memory ceiling without also capping
+# production. See .config/systemd/user/production.slice and
+# .config/systemd/user/app.slice.d/50-desktop-memory-ceiling.conf.
+Slice=production.slice
+# MemoryLow (2026-08-06): protects roughly a third of this container's
+# own Memory= cap from kernel reclaim as long as memory is available
+# elsewhere on the box -- prioritizes production over an unconstrained
+# desktop session under real memory pressure, not just a cap after the
+# fact. Previously 0 (unset) everywhere, including ollama.service.
+MemoryLow=512M
 # Proportional CPU share, not a hard pin -- kernel scheduler enforces
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
@@ -26,4 +46,15 @@ CPUWeight=100
 # resource limits".
 CPUQuota=300%
 Type=oneshot
-TimeoutStartSec=950
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): reconciled with the
+# skill's spike-measured Python timeouts (forced TIER2+ contention, same
+# methodology as the Phase-3 53s baseline). Budget = 800s fixed
+# (container start + generate() preflight gates 240+180 + load-phase
+# allocation) + 1200s main call + 510s trend call (both max_retries=0)
+# = 2510s -> 2600. A governor-pause retry-wait can still exceed this;
+# systemd remains the deliberate backstop.
+# 2026-08-17 (fable sweep): 2600 -> 3600 in parity with the skill's main
+# call going 1200s -> 2000s (num_predict 500 -> 900 truncation fix -- see
+# ops_brief.py's OLLAMA_TIMEOUT comment for the derivation). Budget = 800s
+# fixed + 2000s main + 510s trend = 3310s -> 3600.
+TimeoutStartSec=3600

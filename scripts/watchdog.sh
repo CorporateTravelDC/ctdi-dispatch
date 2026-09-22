@@ -4,6 +4,30 @@
 # Runs as root via systemd timer every 90s
 # Monitors: thermals, throttle, system services, containers, API liveness, feed freshness
 # ASCII output only -- no Unicode symbols
+#
+# 2026-08-21: --allow-system-restart gate. restart_full_stack() touches
+# SYSTEM_SERVICES (pihole-FTL, cloudflared, tailscaled -- real root-level
+# host infrastructure, not the dispatch stack's own --user containers) via
+# raw root-scope `systemctl restart`. The timer-triggered automatic runs
+# must NEVER do that unattended -- operator directive, after the very
+# first automatic run took the whole stack down: cloudflared is actually a
+# --user unit (see user_ctl() below), so the OLD root-scope
+# `systemctl is-active cloudflared.service` check always reported it
+# falsely down, which alone was enough to trigger a full unattended
+# restart of pihole-FTL/unbound/cloudflared/tailscaled plus the dispatch
+# containers. Without this flag, a warranted full-stack restart is now
+# ALERT-ONLY -- it tells the operator exactly what to run, but never
+# executes it. Only an explicit, human-run
+# `sudo scripts/watchdog.sh --allow-system-restart` performs the actual
+# restart. Pure --user container restarts (restart_containers(), gated by
+# DO_RESTART_CONTAINERS, never touches SYSTEM_SERVICES) are unaffected by
+# this flag and remain safe to run unattended, same as
+# corporatetraveldc-ingest-restart.timer already does elsewhere in this
+# repo for a narrower case.
+ALLOW_SYSTEM_RESTART=0
+for arg in "$@"; do
+    [[ "${arg}" == "--allow-system-restart" ]] && ALLOW_SYSTEM_RESTART=1
+done
 
 set -uo pipefail
 
@@ -28,6 +52,16 @@ LOCK_FILE="/run/corporatetraveldc-watchdog.lock"
 COOLDOWN_FILE="/run/corporatetraveldc-watchdog-cooldown"
 QUADLET_DIR="/home/${CTDC_USER}/.config/containers/systemd"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
+
+# 2026-08-23: thermal-ingest-guard.py's own state file -- see
+# _guard_tier() below. Same path as that script's STATE_FILE constant.
+GUARD_STATE_FILE="/var/lib/corporatetraveldc/thermal_ingest_guard_state.json"
+# Units the guard's own LOCKDOWN sheds that this watchdog also manages.
+# Deliberately NOT "corporatetraveldc-web" -- the guard never sheds web
+# (it's the one designated LOCKDOWN survivor, see CLAUDE.md's "Ingest
+# load-shedding"), so a down web is never explained by a LOCKDOWN and
+# this watchdog must still act on it regardless of guard tier.
+GUARD_MANAGED_CONTAINERS=("corporatetraveldc-poller" "corporatetraveldc-pusher")
 
 # Thermal thresholds (millidegrees Celsius -- /sys/class/thermal/thermal_zone0/temp)
 TEMP_WARN_MC=75000    # 75 C -- log + ntfy warn
@@ -59,12 +93,34 @@ CURL_TIMEOUT=5
 # Restart cooldown -- prevents restart thrash (seconds)
 COOLDOWN_SEC=300
 
+# 2026-08-23: operator directive after this watchdog was caught fighting
+# thermal-ingest-guard.py's LOCKDOWN mechanism twice in one afternoon
+# (12:18 and 14:34) -- see CLAUDE.md's "FOURTH FINDING". A single bad
+# 90s cycle used to trigger an immediate stop-all/start-all across the
+# whole CONTAINERS array, which is both too twitchy (one 5s /healthz
+# timeout under load reads identically to a dead API) and too broad
+# (restarted web/poller/pusher together even when only poller/pusher
+# were actually down). Now requires FAIL_THRESHOLD consecutive failed
+# cycles for a given container/check before it counts, tracked
+# per-key in STREAK_FILE across runs (this script is a oneshot timer,
+# not a daemon -- state must persist on disk between invocations, same
+# reasoning as COOLDOWN_FILE above). At the 90s cadence this is a ~7.5
+# minute debounce.
+STREAK_FILE="/run/corporatetraveldc-watchdog-streaks"
+FAIL_THRESHOLD=5
+
 # Ordered container list -- start in this order, stop in reverse
+# 2026-08-23: the pre-split monolithic "corporatetraveldc-ingest" unit
+# (retired when ingest became 7 per-feed Quadlets -- see CLAUDE.md's
+# "Ingest load-shedding") had been sitting here dead since the split,
+# silently logging "[SKIP] (no .container file)" every cycle. Removed
+# rather than replaced with the real per-feed unit names on purpose --
+# thermal-ingest-guard.py is the sole owner of SWIM feed lifecycle
+# (shed/restore); this watchdog manages only the core process stack.
 CONTAINERS=(
     "corporatetraveldc-web"
     "corporatetraveldc-poller"
     "corporatetraveldc-pusher"
-    "corporatetraveldc-ingest"
 )
 
 # System services verified before starting containers
@@ -96,6 +152,11 @@ ISSUES=()
 DO_WARN_ONLY=0
 DO_RESTART_CONTAINERS=0
 DO_RESTART_STACK=0
+# 2026-08-23: only the containers that actually crossed FAIL_THRESHOLD
+# get touched by restart_containers() -- see the CONTAINERS/STREAK_FILE
+# comment above. Populated by check_containers()/check_api().
+FAILED_CONTAINERS=()
+declare -A STREAKS=()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -148,6 +209,32 @@ api_get() {
     curl -sf --max-time "${CURL_TIMEOUT}" "${API_BASE}${1}" 2>/dev/null
 }
 
+# Reads thermal-ingest-guard.py's own state file and echoes its "tier"
+# field (0 = normal, 1 = mild temp-only shed, 2 = LOCKDOWN). Echoes 0 --
+# fails OPEN, not closed -- if the file is missing, unreadable, or
+# unparseable, so a broken/stale state file can never permanently mask a
+# real container-down condition; it just means this specific guard-aware
+# suppression doesn't apply for that one cycle, same as if the guard had
+# never existed.
+_guard_tier() {
+    python3 -c "
+import json
+try:
+    with open('${GUARD_STATE_FILE}') as f:
+        print(int(json.load(f).get('tier', 0)))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0
+}
+
+_in_guard_managed() {
+    local needle="$1" x
+    for x in "${GUARD_MANAGED_CONTAINERS[@]}"; do
+        [[ "${x}" == "${needle}" ]] && return 0
+    done
+    return 1
+}
+
 check_lock() {
     if [[ -f "${LOCK_FILE}" ]]; then
         local pid
@@ -186,6 +273,54 @@ cooldown_remaining() {
     else
         echo "0"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Failure-streak tracking (persists across runs -- see STREAK_FILE above)
+# ---------------------------------------------------------------------------
+
+load_streaks() {
+    STREAKS=()
+    [[ -f "${STREAK_FILE}" ]] || return
+    local k v
+    while IFS='=' read -r k v; do
+        [[ -z "${k}" ]] && continue
+        STREAKS["${k}"]="${v}"
+    done < "${STREAK_FILE}"
+}
+
+save_streaks() {
+    local k tmpf
+    tmpf=$(mktemp "${STREAK_FILE}.XXXXXX")
+    for k in "${!STREAKS[@]}"; do
+        echo "${k}=${STREAKS[${k}]}" >> "${tmpf}"
+    done
+    mv -f "${tmpf}" "${STREAK_FILE}"
+}
+
+# Increments the named streak in place. Must be called directly, NOT via
+# $(bump_streak ...) -- command substitution forks a subshell, and the
+# associative-array mutation would be silently discarded when it exits,
+# leaving STREAKS permanently un-incremented (caught in testing before
+# this shipped). Read STREAKS[key] yourself after calling.
+bump_streak() {
+    local key="$1"
+    local cur="${STREAKS[${key}]:-0}"
+    (( cur += 1 ))
+    STREAKS["${key}"]="${cur}"
+}
+
+reset_streak() {
+    STREAKS["$1"]=0
+}
+
+# Adds a container to FAILED_CONTAINERS if not already present.
+add_failed_container() {
+    local svc="$1" x
+    for x in "${FAILED_CONTAINERS[@]:-}"; do
+        [[ "${x}" == "${svc}" ]] && return
+    done
+    FAILED_CONTAINERS+=("${svc}")
 }
 
 # ---------------------------------------------------------------------------
@@ -267,7 +402,22 @@ check_system_services() {
     local any_failed=0
 
     for svc in "${SYSTEM_SERVICES[@]}"; do
-        if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+        # 2026-08-21: cloudflared is a --user unit under CTDC_USER (see
+        # ~/.config/systemd/user/cloudflared.service), NOT a root/system
+        # service like pihole-FTL/tailscaled -- a plain root-scope
+        # `systemctl is-active cloudflared.service` can never see it and
+        # always reports it down, which alone was enough to trigger an
+        # unattended full-stack restart the very first time this timer
+        # fired (cloudflared was healthy the whole time). Route it through
+        # the same user_ctl() helper the container checks already use.
+        if [[ "${svc}" == "cloudflared" ]]; then
+            svc_active=0
+            user_ctl is-active --quiet "${svc}.service" && svc_active=1
+        else
+            svc_active=0
+            systemctl is-active --quiet "${svc}.service" 2>/dev/null && svc_active=1
+        fi
+        if (( svc_active )); then
             log "info" "  [OK] ${svc}"
         else
             log "err" "  [FAIL] ${svc} not active"
@@ -296,7 +446,13 @@ check_system_services() {
 
 check_containers() {
     log "info" "CHECK containers"
-    local any_failed=0
+
+    # 2026-08-23: read the guard's own state once per cycle, not once per
+    # container -- cheap, and keeps all containers checked this cycle
+    # consistent even if tier flips mid-cycle (it won't in practice, a
+    # single 2min-cadence write, but no reason to risk it).
+    local guard_tier
+    guard_tier=$(_guard_tier)
 
     for svc in "${CONTAINERS[@]}"; do
         if ! container_exists "${svc}"; then
@@ -304,16 +460,37 @@ check_containers() {
             continue
         fi
 
+        local key="container:${svc}"
         if container_active "${svc}"; then
             log "info" "  [OK] ${svc}"
+            reset_streak "${key}"
+        elif (( guard_tier > 0 )) && _in_guard_managed "${svc}"; then
+            # thermal-ingest-guard.py has this unit deliberately shed
+            # (LOCKDOWN or tier-1) -- this is NOT a crash. Reset rather
+            # than bump the streak: an in-progress LOCKDOWN can run
+            # longer than FAIL_THRESHOLD*90s, and letting the streak
+            # keep counting underneath the suppression would just fire
+            # the instant tier drops back to 0, defeating the point.
+            # Never suppressed for web -- see GUARD_MANAGED_CONTAINERS.
+            log "info" "  [OK] ${svc} down but guard tier=${guard_tier} (deliberate shed, not a fault)"
+            reset_streak "${key}"
         else
-            log "err" "  [FAIL] ${svc} not active"
-            ISSUES+=("container_down:${svc}")
-            any_failed=1
+            local streak
+            bump_streak "${key}"
+            streak="${STREAKS[${key}]}"
+            if (( streak >= FAIL_THRESHOLD )); then
+                log "err" "  [FAIL] ${svc} not active (streak ${streak}/${FAIL_THRESHOLD} -- restart warranted)"
+                ISSUES+=("container_down:${svc}:streak=${streak}")
+                add_failed_container "${svc}"
+            else
+                log "warn" "  [WARN] ${svc} not active (streak ${streak}/${FAIL_THRESHOLD} -- not yet acting)"
+                ISSUES+=("container_down_pending:${svc}:streak=${streak}")
+                DO_WARN_ONLY=1
+            fi
         fi
     done
 
-    (( any_failed )) && DO_RESTART_CONTAINERS=1 || true
+    (( ${#FAILED_CONTAINERS[@]} > 0 )) && DO_RESTART_CONTAINERS=1 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -327,11 +504,29 @@ check_api() {
     healthz=$(api_get "/healthz" || true)
 
     if [[ -z "${healthz}" ]]; then
-        log "err" "  [FAIL] /healthz unreachable -- API down or container not responding"
-        ISSUES+=("api_down")
-        DO_RESTART_CONTAINERS=1
+        local streak
+        bump_streak "api_down"
+        streak="${STREAKS[api_down]}"
+        if (( streak >= FAIL_THRESHOLD )); then
+            log "err" "  [FAIL] /healthz unreachable -- API down or container not responding (streak ${streak}/${FAIL_THRESHOLD} -- restart warranted)"
+            ISSUES+=("api_down:streak=${streak}")
+            # /healthz is served by web specifically -- only it gets
+            # restarted, not the whole CONTAINERS array. A single
+            # CURL_TIMEOUT=5 timeout under load is not, by itself,
+            # distinguishable from a truly dead process (this is exactly
+            # what caused the self-perpetuating 2026-08-22 restart loop --
+            # see CLAUDE.md); FAIL_THRESHOLD consecutive misses is the
+            # actual signal now.
+            add_failed_container "corporatetraveldc-web"
+            DO_RESTART_CONTAINERS=1
+        else
+            log "warn" "  [WARN] /healthz unreachable (streak ${streak}/${FAIL_THRESHOLD} -- not yet acting)"
+            ISSUES+=("api_down_pending:streak=${streak}")
+            DO_WARN_ONLY=1
+        fi
         return  # No point checking feeds
     fi
+    reset_streak "api_down"
     log "info" "  [OK] /healthz reachable"
 
     # Extract snapshot_age if present
@@ -461,7 +656,22 @@ PYEOF
         if [[ "${severity}" == "CRIT" ]]; then
             log "err" "  [STALE] ${fname}: ${age_m}min -- exceeds crit threshold"
             ISSUES+=("feed_stale_crit:${fname}:${age_m}min")
-            DO_RESTART_CONTAINERS=1
+            # 2026-08-21: feed staleness is an UPSTREAM data-source problem
+            # (SWIM ingest load-shedding, NWS/eurocontrol/jasdat outages,
+            # etc.) -- restarting web/poller/pusher doesn't restart the
+            # ingest containers or the upstream feed itself, so it can
+            # never fix this. Confirmed live: a container restart
+            # triggered by "nws: 1682min stale" completed cleanly and
+            # /healthz was STILL degraded on the exact same feeds
+            # immediately after. This used to set DO_RESTART_CONTAINERS=1,
+            # which -- combined with the 300s cooldown -- meant a single
+            # long-stale feed (nws had been stale for over a day) would
+            # bounce the whole dispatch stack roughly every 5 minutes,
+            # forever, accomplishing nothing but disruption. Alert-only
+            # now, same as the WARN tier below; see "Ingest load-shedding"
+            # and scripts/thermal-ingest-guard.py for the mechanisms that
+            # actually own feed recovery.
+            DO_WARN_ONLY=1
             had_stale=1
         else
             log "warn" "  [STALE] ${fname}: ${age_m}min -- approaching threshold"
@@ -479,13 +689,20 @@ PYEOF
 # ---------------------------------------------------------------------------
 
 restart_containers() {
-    log "info" "RESTART containers (ordered)"
+    # 2026-08-23: only touches FAILED_CONTAINERS (the members that actually
+    # crossed FAIL_THRESHOLD), not the full CONTAINERS array -- this used
+    # to be an unconditional stop-all/start-all, which is why a healthy
+    # `web` got bounced twice today (12:18, 14:34) purely because poller
+    # or pusher was down. Relative order within CONTAINERS is still
+    # respected (stop in reverse, start in forward order) for whichever
+    # subset actually needs it.
+    log "info" "RESTART containers (failed only: ${FAILED_CONTAINERS[*]})"
 
-    # Stop in reverse order
-    local i
+    local i svc
     for (( i=${#CONTAINERS[@]}-1; i>=0; i-- )); do
-        local svc="${CONTAINERS[$i]}"
+        svc="${CONTAINERS[$i]}"
         container_exists "${svc}" || continue
+        _in_failed_containers "${svc}" || continue
         log "info" "  Stopping ${svc}"
         user_ctl stop "${svc}.service" || true
         sleep 2
@@ -497,9 +714,9 @@ restart_containers() {
     # Confirm DNS target before bringing containers up
     _wait_dns_target
 
-    # Start in order
     for svc in "${CONTAINERS[@]}"; do
         container_exists "${svc}" || continue
+        _in_failed_containers "${svc}" || continue
         log "info" "  Starting ${svc}"
         if ! user_ctl start "${svc}.service"; then
             log "err" "  [FAIL] ${svc} failed to start"
@@ -507,7 +724,23 @@ restart_containers() {
         sleep "${CONTAINER_WAIT}"
     done
 
+    # Fresh streak count post-restart so a real re-crash still needs its
+    # own FAIL_THRESHOLD cycles before acting again, rather than
+    # inheriting the count that just triggered this restart.
+    for svc in "${FAILED_CONTAINERS[@]}"; do
+        reset_streak "container:${svc}"
+    done
+    reset_streak "api_down"
+
     log "info" "Container restart sequence complete"
+}
+
+_in_failed_containers() {
+    local needle="$1" x
+    for x in "${FAILED_CONTAINERS[@]:-}"; do
+        [[ "${x}" == "${needle}" ]] && return 0
+    done
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -549,7 +782,8 @@ restart_full_stack() {
     fi
 
     log "info" "  Restarting cloudflared"
-    systemctl restart cloudflared.service 2>/dev/null \
+    # --user unit, same reasoning as the check_system_services() fix above.
+    user_ctl restart cloudflared.service \
         || log "err" "  [FAIL] cloudflared restart"
     sleep 3
 
@@ -610,7 +844,16 @@ report() {
     log "warn" "Issues: ${count} -- ${summary}"
 
     if (( DO_RESTART_STACK )); then
-        if in_cooldown; then
+        if (( ! ALLOW_SYSTEM_RESTART )); then
+            # 2026-08-21: system-level restart (pihole-FTL/cloudflared/
+            # tailscaled) is never unattended -- see the file header. Alert
+            # loudly with the exact command to run; do NOT touch anything.
+            log "warn" "Full stack restart warranted but system-level restarts require a manual run -- alerting only"
+            ntfy_send "${NTFY_HOT}" \
+                "Watchdog -- System Restart Needed (manual run required)" \
+                "Issues: ${summary}. This needs a human: sudo ${0} --allow-system-restart" \
+                5
+        elif in_cooldown; then
             local rem
             rem=$(cooldown_remaining)
             log "warn" "Full stack restart warranted but in cooldown (${rem}s remaining) -- skipping"
@@ -621,7 +864,7 @@ report() {
         else
             ntfy_send "${NTFY_HOT}" \
                 "Watchdog -- Full Stack Restart" \
-                "Initiating full restart. Issues: ${summary}" \
+                "Initiating full restart (manual run, --allow-system-restart). Issues: ${summary}" \
                 4
             restart_full_stack
             ntfy_send "${NTFY_OPS}" \
@@ -667,6 +910,7 @@ report() {
 main() {
     mkdir -p "${LOG_DIR}"
     check_lock
+    load_streaks
 
     log "info" "-------- Watchdog run start --------"
 
@@ -676,6 +920,8 @@ main() {
     check_containers
     check_api
     report
+
+    save_streaks
 
     log "info" "-------- Watchdog run end ----------"
 }

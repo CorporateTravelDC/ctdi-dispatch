@@ -1,302 +1,210 @@
-# dispatch-runner — Design Document
-# Version: 2.0  Date: 2026-06-14
-#
-# -----------------------------------------------------------------------
+# dispatch-runner — Design & Reference
+
+**Rewritten 2026-08-11 against `src/runner/main.py` (2,876 lines as of
+2026-09-03), the live
+Quadlets, and nginx/cloudflared config.** Supersedes the v2.0 (2026-06-14)
+design doc, which predated the ops-hostname retirement, demo mode, the
+AIS/ACARS views, and roughly half the current API surface. (The frontend has
+also grown views this doc's table predates — UtmMapView, GraphView
+(knowledge graph), EventIntelView, and the DispatchDrawer chat — see
+`src/runner/frontend/src/App.jsx` for the live route set.)
 
 ## Overview
 
-dispatch-runner is the internal operational PWA for CS Executive Services
-dispatch operations. It runs as a fifth container alongside the four dispatch
-backend containers, proxying the dispatch web API and serving its own frontend
-and runner-specific API routes.
+dispatch-runner is the operator dashboard for [operator LLC] dispatch
+operations: a FastAPI backend (port 8001) serving a React/Vite SPA plus
+runner-specific API routes, proxying the dispatch web API.
 
-Accessible at: https://dispatch-runner.example.com (port 8001)
-Auth: Tailscale identity — 100.64.0.0/10 subnet enforced in FastAPI middleware
-on every non-healthz route. Cloudflare tunnel terminates at localhost:8001.
+**Two instances of the same image run simultaneously:**
 
----
+| Instance | Unit | Port | Exposure |
+|---|---|---|---|
+| Live ops dashboard | `corporatetraveldc-runner.service` | 8001 (127.0.0.1 + 100.x.x.x) | **Tailnet-only**: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 vhost → :8001). No public hostname. |
+| Public demo (playback) | `corporatetraveldc-runner-demo.service` | 8005→8001 | **Public hostname, LIVE since 2026-08-24 ~14:52**: `https://dispatch-runner.example.com` (CF tunnel → nginx → :8005) serves 200. The 2026-08-15→08-24 crash loop (`sqlite3.OperationalError` from the 08-14 F6 mount removal) was fixed by commit `0a7f643` — a dedicated `/var/lib/corporatetraveldc-demo` host dir is mounted at the container-internal state path, isolated from production (`NRestarts=0`, stable — re-verified 2026-09-03). **The open `DEMO_MODE` MEDIUM is closed**: the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET` explicitly, so the DEMO_MODE-dependent gates (password sessions via `src/demo/profiles.py`, signal sanitization, ntfy suppression) are **armed**. Reads the demo API (:8004) instead of live feeds |
+
+**Historical (accurate 2026-08-15 → 2026-08-24 morning, superseded by the
+fix above):** the crash-loop-era detection guidance — a climbing
+`NRestarts`, `curl 127.0.0.1:8005` connection-refused, and not trusting a
+single `podman ps` snapshot — remains good general technique for any
+`Restart=`-carrying unit, but no longer describes this one.
+
+**Mechanism note (verified 2026-08-20; updated 2026-08-24):**
+`_is_trusted()` is purely IP-based — it never checks `X-CTDI-Public`, and
+**no Cloudflare Access policy fronts
+`dispatch-runner.example.com`** — don't assume a defense there
+that doesn't exist. As of the two 2026-08-24 commits (`0a7f643`,
+`2bb7fbf`) several individual endpoints are now `_is_trusted`-gated at the
+app layer regardless of `DEMO_MODE`: `PUT /api/v1/config` (404 untrusted),
+`GET /api/v1/frontend-config` (untrusted callers get a placeholder
+coordinate + empty widget key), and `GET`/`DELETE /api/chat/history`
+(404 untrusted — previously readable *and destructively clearable* with
+no credential). `proxy_dispatch()`'s `DEMO_MODE`+session-cookie check
+remains the only *hostname-wide* gate — and it is **active** on the demo
+instance now that its Quadlet sets `DEMO_MODE=true` (updated 2026-09-03; the
+live runner instance still never sets it).
+
+**Retired:** `ops.example.com` (2026-08-02) — hard-404'd by
+hostname in `_RETIRED_HOSTNAMES` (`src/runner/main.py`), no nginx vhost, no
+tunnel ingress. Do not resurrect; the retirement was part of the XFF-spoofing
+fix.
 
 ## Stack
 
-| Layer       | Choice                                      | Reason                                               |
-|-------------|---------------------------------------------|------------------------------------------------------|
-| Frontend    | Vite + React                                | Lightweight SPA, static build output in final image  |
-| Maps        | Leaflet + OpenStreetMap (local) / airplanes.live iframe (globe) | OSM for overlay map; AL iframe for full globe |
-| Realtime    | FastAPI SSE                                 | Native to FastAPI, works through CF tunnel           |
-| Backend     | FastAPI (uvicorn), port 8001                | Consistent with dispatch web stack                   |
-| Auth        | Tailscale IP middleware                     | 100.64.0.0/10 check on every non-healthz route       |
-| RSS proxy   | httpx async, 15-min in-memory cache         | Server-side fetch avoids CORS; caches per feed URL   |
-| Container   | Multi-stage (Node builder + Python runtime) | No Node in final image                               |
+| Layer | Choice |
+|---|---|
+| Frontend | Vite + React SPA (multi-stage build: Node builder → Python runtime, no Node in final image) |
+| Maps | Leaflet + OSM dark basemap; airplanes.live iframe for globe mode |
+| Realtime | FastAPI SSE (`/api/stream`, 30 s) + ntfy stream proxy |
+| Backend | FastAPI/uvicorn, port 8001 |
+| Chat | Local llama.cpp chat tier since 2026-08-27 (via `OLLAMA_CHAT_MODEL`, default `corporatetraveldc-pi5-chat:latest` — a persona key in `src/common/personas.py`, not an Ollama model) |
+| Container | `Containerfile.runner`; Quadlet in `.config/containers/systemd/` |
 
----
+## Auth model
 
-## ADS-B Modes
+1. **Trusted-origin check** (`_is_trusted()`): client IP from
+   `CF-Connecting-IP` exclusively when present (never falls through to
+   loopback), else socket peer; trusted nets = Tailscale CGNAT
+   `100.64.0.0/10`, loopback, RFC1918. Untrusted requests get 404 (not 403)
+   on the admin proxy prefix (`/api/dispatch/admin`) and on any non-GET to
+   `/api/dispatch/api/v1/*`.
+2. **Demo gate** (demo instance only): `DEMO_MODE=true` + untrusted origin ⇒
+   requires the `ctdc_demo_session` cookie — an HMAC-SHA256 token keyed with
+   `DEMO_SESSION_SECRET`, minted by `POST /api/demo/login` (password proxied
+   to the demo backend; cookie `httponly`, `secure`, `samesite=lax`, default
+   8 h). The token never reaches JS. Signals are sanitized server-side
+   (`DEMO_SANITIZE_SALT`).
+3. **Tier-1 token injection**: for a small allowlist (`_TIER1_PATHS` — 5
+   paths since 2026-07-21, plus a second set,
+   `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY`, 4 paths injected only for
+   trusted-origin callers) the proxy injects the runner's `cert`-tier
+   service token (`RUNNER_ENRICHED_TOKEN`); a client-supplied
+   `Authorization` header always wins. The authoritative path lists
+   live in `docs/auth-token-proxy-pattern.md` §4 — cross-reference that
+   rather than this doc.
 
-Two modes, switchable via toolbar toggle, persisted in localStorage:
+   > ⚠️ **Corrected 2026-08-23 — this bullet used to end "Watchlist reads
+   > are deliberately NOT injected — dispatch-web gates them itself." That
+   > is the pre-2026-07-21 design and is false against the running code.**
+   > `api/v1/watchlist` and `api/v1/watchlist/history` are both **in**
+   > `_TIER1_PATHS` (`src/runner/main.py:1508-1509`), i.e. the token is
+   > injected **unconditionally**, on purpose: the in-code rationale at
+   > `main.py:1498-1507` records the operator direction that the public Ops
+   > view should see the REAL watchlist read-only, because "without it every
+   > GET from the public hostname 403s at dispatch-web before the runner's
+   > own logic matters." Confirmed by reading the frozenset and the
+   > injection branch (`_dispatch_proxy_headers`, `elif RUNNER_ENRICHED_TOKEN
+   > and path in _TIER1_PATHS`). What is actually gated is **mutation**, not
+   > reads — `tailscale_gate`'s `is_v1_mutation` check rejects any non-GET
+   > `/api/v1/*` from an untrusted origin before the proxy runs at all.
+   >
+   > **Live-code finding for the operator, not fixable from a docs pass:**
+   > `src/runner/main.py:1511-1513` still carries a stale `NOTE:` comment
+   > saying watchlist is "deliberately excluded from `_TIER1_PATHS`" and
+   > pointing at `_WATCHLIST_PATHS` / `_is_tailnet_request()` for "the
+   > actual gate" — three lines below the frozenset that includes it.
+   > Neither `_WATCHLIST_PATHS` nor `_is_tailnet_request` exists anywhere
+   > in the file (`grep -n _WATCHLIST_PATHS src/runner/main.py` → only that
+   > comment). This doc's old wording was almost certainly copied from that
+   > comment. The comment is what should be deleted; the code is correct.
 
-| Mode    | Source                                               | Use case                                        |
-|---------|------------------------------------------------------|-------------------------------------------------|
-| GLOBE   | globe.airplanes.live iframe + local feeder Leaflet overlay | Full DC area; local feeder marked in green |
-| LOCAL   | UltraFeeder /data/aircraft.json via Leaflet          | Low latency; only aircraft in antenna range     |
-| LIVE    | airplanes.live API v2 via Leaflet                    | Full DC area; fills antenna gaps                |
+## Backend API routes (verified 2026-08-11 — 31 method+path combos)
 
-**Globe mode** renders globe.airplanes.live in an iframe filling the lower
-container, with a search bar docked above it (flex column — both always
-visible simultaneously). A transparent Leaflet overlay sits on top of the
-iframe to mark local feeder aircraft with green neon markers. Users can
-search by callsign, N-number/registration, or ICAO hex; the iframe navigates
-to the matching aircraft directly.
-
-The search type detector: 6-char hex → ICAO hex query; alpha-prefix or N-
-prefix → registration query; 2–3 letter prefix + digits → ICAO callsign.
-
-Backend exposes both ADS-B modes as separate endpoints:
-  GET /api/adsb/local  — proxies UltraFeeder /data/aircraft.json
-  GET /api/adsb/live   — queries airplanes.live v2 (?lat=38.88&lon=-77.09&dist=250)
-
-Frontend polls the active source every 10 seconds.
-
----
-
-## Color Palette
-
-| Token              | Value     | Use                                           |
-|--------------------|-----------|-----------------------------------------------|
-| bg-primary         | #0a0e1a   | Map background, main canvas                   |
-| bg-panel           | #1a2744   | Sidebar and overlay panels                    |
-| bg-panel-border    | #2a3f6f   | Panel borders                                 |
-| accent-track       | #00d4ff   | Aircraft track lines, markers, podcast badge  |
-| accent-tfr         | #ff6b35   | TFR polygon fill and border                   |
-| accent-airspace    | #4a9eff   | Static airspace rings (FRZ, SFRA, P-56)       |
-| cps-go             | #39ff14   | CPS GREEN / GO; local feeder markers          |
-| cps-marginal       | #ffd700   | CPS YELLOW / MARGINAL                         |
-| cps-nogo           | #ff3131   | CPS RED / NO-GO; VIP TFRs                     |
-| text-primary       | #e8f0fe   | Primary UI text                               |
-| text-secondary     | #8899bb   | Labels, secondary info                        |
-
----
-
-## Backend API Routes
-
-| Method          | Path                        | Auth      | Description                                          |
-|-----------------|-----------------------------|-----------|------------------------------------------------------|
-| GET             | /healthz                    | none      | Service health                                       |
-| GET             | /api/adsb/local             | Tailscale | Proxy → UltraFeeder aircraft.json                    |
-| GET             | /api/adsb/live              | Tailscale | Proxy → airplanes.live v2 (250nm KDCA)               |
-| GET/POST        | /api/dispatch/{path}        | Tailscale | Transparent proxy → dispatch web at :8000            |
-| GET             | /api/stream                 | Tailscale | SSE stream: CPS + TFR count + feed health (30s)      |
-| GET             | /api/rss                    | Tailscale | Merged catalog + user feeds for ?category=           |
-| GET             | /api/rss/categories         | Tailscale | Available categories and catalog sources             |
-| GET             | /api/rss/custom             | Tailscale | Fetch and proxy arbitrary feed URL (CORS bypass)     |
-| GET             | /api/rss/user-feeds         | Tailscale | List user-defined feeds                              |
-| POST            | /api/rss/user-feeds         | Tailscale | Add user-defined feed (validated before saving)      |
-| DELETE          | /api/rss/user-feeds/{id}    | Tailscale | Remove user-defined feed by UUID                     |
-| GET             | /                           | Tailscale | React SPA (served from /app/static)                  |
-
----
+| Method | Path | Description |
+|---|---|---|
+| GET | `/healthz` | Service health |
+| GET | `/api/whoami` | Caller trust/identity info |
+| POST | `/api/demo/login` | Demo password → session cookie (404 unless `DEMO_MODE`) |
+| GET | `/api/demo/status` | `{demo_mode, authenticated, trusted_origin}` |
+| GET | `/api/demo/webhook-log` | Demo webhook activity log |
+| GET | `/api/adsb/local` | Proxy → UltraFeeder `aircraft.json` |
+| GET | `/api/adsb/live` | **Local-receiver-only since 2026-08-27** (used to proxy airplanes.live; removed under the "everything is meant to be local" directive after a live 429 — results bounded by the box's own receiver range) |
+| GET | `/api/vdl2/messages` | VDL2 decode feed (acarshub) |
+| GET | `/api/acars/messages` | ACARS feed |
+| GET | `/api/hfdl/messages` | HFDL feed (hardware pending) |
+| GET | `/api/ais/vessels` | AIS vessels (AIS-catcher/AISHub/Kpler sources) |
+| POST | `/api/ask` | Ollama chat (dispatch drawer) |
+| GET/DELETE | `/api/chat/history` | Chat history |
+| GET/POST/DELETE | `/api/dispatch/{path}` | Transparent proxy → dispatch web API |
+| GET | `/api/stream` | SSE: CPS + TFR count + feed health (30 s) |
+| GET | `/api/ntfy/stream` | ntfy topic stream proxy |
+| GET | `/api/v1/frontend-config` · `/api/v1/config` (GET/PUT) | Operator UI config |
+| GET | `/api/rss` | Merged catalog + user feeds (`?category=`, `?limit=` ≤500) |
+| GET/POST | `/api/rss/categories` | List / create categories |
+| GET | `/api/rss/custom` | Server-side fetch of arbitrary feed URL (CORS bypass) |
+| POST | `/api/rss/resolve-source` | Resolve a site/channel URL to its feed |
+| GET/POST | `/api/rss/user-feeds` | List / add user feeds (validated; 422 empty, 409 dup) |
+| DELETE | `/api/rss/user-feeds/{id}` | Remove user feed |
+| GET | `/{full_path}` | SPA catch-all (static build) |
 
 ## Intel Feed — RSS/Atom
 
-### Catalog categories
+Catalog lives in **`src/shared/rss_catalog.py`** (split out 2026-07-28,
+shared with the second-brain RSS poller): **11 built-in categories, 32
+feeds** — `corporate_intel`, `marketing_intel`, `travel_trends`, `dc_area`,
+`aviation`, `advanced_air_mobility`, `gig_economy`,
+`concierge_luxury_travel`, `trains_yachts`, `executive_protection`,
+`osint_cybersecurity_video` (the last via the local RSS-Bridge container at
+`100.x.x.x:3001`) — plus `__custom__` and user-created categories.
 
-Five built-in categories, three feeds each (15 total):
+User feeds persist at `/var/lib/corporatetraveldc/user_rss_feeds.json`;
+custom categories at `user_rss_categories.json`. Parsing handles RSS 2.0 +
+Atom; RFC 2822 dates normalized to ISO 8601; per-feed cap 100 items
+pre-merge; default `limit=200`, max 500; `<enclosure audio/video>` items get
+`audio_url` for the inline podcast player. 15-min in-memory cache,
+process-scoped.
 
-| Category          | Feeds                                              |
-|-------------------|----------------------------------------------------|
-| `corporate_intel` | Skift, Federal News Network, The Air Current       |
-| `marketing_intel` | Robb Report Travel, Forbes Travel Guide, Lodging Magazine |
-| `travel_trends`   | The Points Guy, Condé Nast Traveler, One Mile at a Time |
-| `dc_area`         | WTOP Traffic & Transit, Washingtonian, ARLnow      |
-| `aviation`        | AviationSource, AOPA News, Cranky Flier            |
+## Frontend views (`src/runner/frontend/src/App.jsx`)
 
-A sixth category (`__custom__`) holds only user-defined feeds.
+| Route | View |
+|---|---|
+| `/` | Overview — CPS, weather, TFR, feed-health cards |
+| `/map` | ADS-B map (globe.airplanes.live iframe embed / LOCAL UltraFeeder / LIVE — since 2026-08-27 also local-receiver-sourced, see `/api/adsb/live`) |
+| `/trains` | NEC train tracking with watchlist highlighting |
+| `/ais` | AIS maritime map |
+| `/status` | Feed freshness / error state |
+| `/wx` | Meteorology (radar, discussions) |
+| `/tfr`, `/signals` | TFRs, NWS alerts, signals |
+| `/brief` | Ops brief / weekly / EP tabs |
+| `/feed` | Live ntfy notification stream |
+| `/intel` | RSS/Atom intelligence feeds |
+| `/admin` | Admin panel — rendered only for tailnet-verified clients |
 
-### User-defined feeds
+CPS badge is in the global header, not a route. The app declares
+`apple-mobile-web-app-capable` (iOS Add-to-Home-Screen works); it does not
+ship a manifest.json + service worker, so it is not Chrome/Edge
+install-eligible — known gap.
 
-Users can subscribe to any RSS, Atom, podcast, or YouTube channel feed and
-assign it to any catalog tab or to Custom-only. Feeds are persisted at
-`/var/lib/corporatetraveldc/user_rss_feeds.json` (volume-mounted; survives
-image rebuilds). Each entry: `{id: UUID, name, url, category}`.
+## Key env vars (code defaults; live values from Quadlet/env files)
 
-On POST `/api/rss/user-feeds`, the server fetches the URL to validate it
-before saving (returns 422 if it fetches but parses to zero items; 409 if
-the URL is already registered).
+| Var | Code default | Live (runner) |
+|---|---|---|
+| `DISPATCH_BASE_URL` | `http://127.0.0.1:8000` | **`http://100.x.x.x:8000`** (demo instance: `http://100.x.x.x:8004`) |
+| `ULTRAFEEDER_URL` | `http://127.0.0.1:8080/data/aircraft.json` | `http://100.x.x.x:8080/data/aircraft.json` |
+| `NTFY_URL` | `http://host.containers.internal:2586` | (env file) |
+| `ACARSHUB_URL` | `http://127.0.0.1:9081` | |
+| `AIS_CATCHER_URL` | `http://127.0.0.1:8110` | (hardware pending) |
+| `OLLAMA_CHAT_MODEL` / `OLLAMA_OSINT_MODEL` | `corporatetraveldc-pi5-chat:latest` / `-osint:latest` | |
+| `DEMO_MODE` / `DEMO_SESSION_SECRET` / `DEMO_SANITIZE_SALT` | `false` / `""` / derived | demo instance only |
+| `RUNNER_ENRICHED_TOKEN` | `""` | cert-tier proxy token |
+| `SSE_INTERVAL_SEC` | 30 | 30 |
 
-When `/api/rss?category=X` is called, catalog feeds and user feeds assigned
-to that category are fetched in parallel, merged, sorted newest-first, and
-capped at `?limit=` (default 200, max 500).
+## Build / deploy
 
-### Parsing and sort
+```bash
+bash build-images.sh runner
+systemctl --user daemon-reload
+systemctl --user restart corporatetraveldc-runner corporatetraveldc-runner-demo
+```
 
-`_parse_rss()` handles both RSS 2.0 and Atom 1.0. RSS `pubDate` values
-(RFC 2822 format — "Fri, 12 Jun 2026 20:38:34 +0000") are normalized to
-ISO 8601 via `email.utils.parsedate_to_datetime` before storage. This
-ensures reverse string sort produces correct newest-first order regardless
-of source. Atom feeds already emit ISO 8601 and pass through unchanged.
+Quadlets: `.config/containers/systemd/corporatetraveldc-runner{,-demo}.container`
+(Memory 1536m / swap=memory, CPUWeight 100, CPUQuota 300%, production.slice,
+`After=corporatetraveldc-web.service`; startup owned by the stack-boot-stagger
+unit, so no `WantedBy=`).
 
-Each feed is sorted and capped at 100 items before merge. This prevents
-a podcast archive with thousands of episodes from swamping news items in
-a shared tab.
+## Deferred / future
 
-### Podcast/audio support
-
-Items with `<enclosure type="audio/*">` or `<enclosure type="video/*">`
-tags return an `audio_url` field. The frontend identifies these as podcast
-episodes with a ▶ badge and a "▶ Play" toggle button that reveals an HTML5
-`<audio controls preload="none">` element inline.
-
-### Cache
-
-15-minute in-memory cache keyed by `"{category_prefix}:{url}"`. Cache is
-process-scoped (restarts clear it). No persistent RSS cache on disk.
-
----
-
-## Frontend Views
-
-### Map (ADS-B) — default tab
-
-**Globe mode (default):**
-- Search bar docked above, always visible
-- airplanes.live iframe below, fills remaining height
-- Transparent Leaflet overlay on iframe: local feeder aircraft in green neon
-- Search navigates iframe to the matched aircraft (hex / reg / callsign)
-
-**Local / Live mode:**
-- Full Leaflet map with dark OSM basemap
-- Aircraft markers: heading-aware SVG icons (cyan for remote, green for local feeder)
-- TFR polygons: orange fill / red for VIP
-- Static airspace overlays: P-56A, P-56B, DC FRZ (5nm), DC SFRA (15nm)
-- Concentric range rings: 50/100/150/250nm centered on KDCA
-- ADS-B source toggle (LOCAL / LIVE) in search bar area
-
-### Status — Feed Health
-
-- Per-feed freshness bars with staleness countdown
-- CPS score card: full factors breakdown (ceiling/vis/wind/precip/airspace/GDP)
-- Snapshot age, audit count, active token count
-- Color-coded: green < 15 min, amber 15–45 min, red > 45 min
-
-### TFR — Active TFRs
-
-- Cards from /api/v1/tfr-enriched (AI-enriched narrative)
-- VIP TFRs flagged; effective window timeline per TFR
-
-### Brief — Daily Brief
-
-- Ops-brief narrative from /api/v1/brief
-- Timestamp, model used, CPS at time of generation
-
-### Intel — RSS/Atom intelligence feed
-
-- Tab bar: Corporate Intel | Marketing Intel | Client Travel Trends | DC Area | Aviation | Custom ⋯
-- Each tab fetches `/api/rss?category=<tab>` — catalog feeds merged with any
-  user-defined feeds assigned to that category
-- Items sorted newest-first (ISO 8601 normalized dates)
-- "Load more" pagination — 15 items per page
-- Podcast episodes: ▶ badge on title, inline HTML5 player on click
-- Custom tab: "My Feeds" manager (add / remove user-defined feeds with
-  category selector) + items from `__custom__` category
-- Custom tab badge shows count of registered user feeds
-
-### Signals — ntfy feed
-
-- Displays live ntfy topics for all dispatch channels
-- Shows message history, priority coloring
-
-### Admin — Trigger Panel
-
-- Manual feed refresh buttons
-- Force CPS recompute
-- Push test alert
-- VIP watchlist management
-- Requires admin bearer token (set once in UI, persisted in localStorage)
-
-### Chat — Dispatch Drawer
-
-- Streaming chat via corporatetraveldc-pi5-chat (mistral-nemo Modelfile wrapper)
-- Backed by /api/dispatch/api/v1/chat endpoint
-
----
-
-## SSE Event Schema
-
-Events pushed every 30 seconds or on meaningful state change:
-
-  data: {"type": "state", "cps": {...}, "feeds": {...}, "tfr_count": N, "vip_count": N}
-
-Aircraft position updates are polled by the frontend on a timer (every 10s),
-not pushed, to manage request rate independently of the SSE state stream.
-
----
-
-## Auth Model
-
-FastAPI middleware checks every request except /healthz:
-1. Extract client IP from X-Forwarded-For (set by CF tunnel)
-2. Verify IP is within 100.64.0.0/10 (Tailscale CGNAT range)
-3. Return 403 if not in range
-
-Admin routes (/api/dispatch/admin/*) additionally require:
-  Authorization: Bearer <csex_token>
-Token set once in the Admin view, sent by frontend on admin requests.
-
----
-
-## Key Paths
-
-| Path | Purpose |
-|------|---------|
-| `/opt/corporatetraveldc/src/runner/main.py` | FastAPI app: ADS-B proxy, RSS engine, dispatch proxy |
-| `/opt/corporatetraveldc/src/runner/frontend/src/` | React source (components, styles) |
-| `/opt/corporatetraveldc/Containerfile.runner` | Multi-stage build (Node → Python) |
-| `/var/lib/corporatetraveldc/user_rss_feeds.json` | User-defined feed registry (volume-mounted) |
-
----
-
-## PWA Manifest
-
-  name: "CS Executive Services Dispatch"
-  short_name: "Dispatch"
-  theme_color: "#0a0e1a"
-  background_color: "#0a0e1a"
-  display: "standalone"
-  orientation: "landscape-primary"
-
-Service worker: cache-first for static assets, network-first for API calls.
-
----
-
-## Build
-
-  # Rebuild runner only:
-  bash build-images.sh runner
-  systemctl --user restart corporatetraveldc-runner
-
-  # Full rebuild:
-  bash build-images.sh
-  systemctl --user daemon-reload
-  systemctl --user restart corporatetraveldc-runner
-
----
-
-## Deployment
-
-  Quadlet: ~/.config/containers/systemd/corporatetraveldc-runner.container
-  Port: 8001 (127.0.0.1 + Tailscale IP)
-  Volume: /var/lib/corporatetraveldc:/var/lib/corporatetraveldc:Z
-  Tunnel: dispatch-runner.example.com → localhost:8001
-  DISPATCH_BASE_URL: http://127.0.0.1:8000 (dispatch web API)
-
----
-
-## Deferred / Future
-
-- AIS vessel track overlay on ADS-B map (when AIS dongle active)
-- Amtrak position markers on map (NEC corridor)
-- HFDL message overlay when HFDL dongle active
-- dispatch-runner-demo: sanitized past-data replay, public-safe hostname
-- WebSocket upgrade from SSE when volume justifies it
-- EP topics in Signals view (ep, ep-advance, ep-briefs)
-- FAA NOTAM API v2 key (APIC4E endpoint)
-- Persistent RSS cache on disk (currently process-scoped memory only)
+- Full Chrome/Edge PWA installability (manifest + service worker)
+- HFDL message overlay when the HFDL dongle is acquired
+- AIS local receive (`ais`/`ais-watcher` Quadlets ship `.disabled`)
+- WebSocket upgrade from SSE if volume justifies it
+- Persistent RSS cache on disk (currently in-memory)

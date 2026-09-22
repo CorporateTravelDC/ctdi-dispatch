@@ -1,0 +1,11 @@
+[Unit]
+Description=Corporate Travel DC -- daily CLAUDE.md drift backstop (scripts/check-claude-md-drift.sh, full set, catches drift from outside a signing pass -- this is how mcpo got deployed and crash-looped unnoticed)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/claude-md-drift-daily.sh
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

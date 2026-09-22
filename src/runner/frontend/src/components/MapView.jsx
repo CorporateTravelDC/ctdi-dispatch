@@ -7,6 +7,9 @@ import { useCompassSummary } from '../hooks/useCompassSummary.js'
 import LayerSidebar from './LayerSidebar.jsx'
 import { useGlobalLayerConfig } from '../App.jsx'
 import { useWatchlist, airlineLogoUrl, FALLBACK_PLANE_SVG } from '../hooks/useWatchlist.js'
+import { useTailnet } from '../hooks/useTailnet.js'
+import { useReceiverLocation } from '../hooks/useReceiverLocation.js'
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
 
 // DC-area static airspace GeoJSON (approximate)
 const AIRSPACE = {
@@ -14,12 +17,11 @@ const AIRSPACE = {
   SFRA: { radius: 27780,  color: '#4a9eff', label: 'SFRA 15nm' },
 }
 
-const KDCA = [38.8521, -77.0377]
+// Fallback only, used before useReceiverLocation()'s fetch resolves — see
+// that hook for the real value (ULTRAFEEDER_LAT/LON).
+const DEFAULT_LOC = [38.8521, -77.0377]
 const RANGE_RINGS_NM = [50, 100, 150, 250]
 const NM_TO_M = 1852
-
-// Base globe URL — centred on KDCA, zoom 8, native controls visible
-const GLOBE_BASE = `https://globe.airplanes.live/?centerlat=${KDCA[0]}&centerlon=${KDCA[1]}&zoom=8&hideSidebar`
 
 // Detect search type from user input
 function detectSearchType(raw) {
@@ -31,9 +33,22 @@ function detectSearchType(raw) {
   return { type: 'flight', param: 'flight', value: q, label: 'CALLSIGN' }
 }
 
-function buildGlobeUrl(searchResult) {
-  if (!searchResult) return GLOBE_BASE
-  return `https://globe.airplanes.live/?${searchResult.param}=${encodeURIComponent(searchResult.value)}`
+// 2026-08-24: tar1090's "H"/home key and its per-aircraft distance-from-you
+// columns key off SiteLat/SiteLon, NOT centerlat/centerlon (which only move
+// the initial camera on load) -- this component was only ever setting the
+// latter, so the H button and distance columns fell back to whatever
+// tar1090's own geoFindMe() browser-geolocation had last cached in this
+// iframe origin's localStorage, which is how the operator ended up seeing
+// "New York" instead of the real feeder location. SiteClear=1 purges that
+// stale cached value on every load so our SiteLat/SiteLon always wins.
+// Root-caused via tar1090's script.js (wiedehopf/tar1090) — see CLAUDE.md.
+function buildGlobeUrl(searchResult, loc) {
+  const [lat, lon] = loc || DEFAULT_LOC
+  const site = `SiteLat=${lat}&SiteLon=${lon}&SiteClear=1`
+  if (!searchResult) {
+    return `https://globe.airplanes.live/?centerlat=${lat}&centerlon=${lon}&zoom=8&hideSidebar&${site}`
+  }
+  return `https://globe.airplanes.live/?${searchResult.param}=${encodeURIComponent(searchResult.value)}&${site}`
 }
 
 // ── Marker factories ───────────────────────────────────────────────────────
@@ -223,30 +238,39 @@ function GlobeMap({ liveState }) {
 
   const [searchInput, setSearchInput] = useState('')
   const [searchResult, setSearchResult] = useState(null)
-  const [iframeSrc, setIframeSrc]     = useState(GLOBE_BASE)
+  const receiverLoc = useReceiverLocation()
+  const [iframeSrc, setIframeSrc]     = useState(() => buildGlobeUrl(null, receiverLoc))
 
   const { entries: watchEntries, callsignSet, hexSet } = useWatchlist()
+  const tailnet = useTailnet()
+  const searchEnabled = tailnet === true
 
   const handleSearch = useCallback((e) => {
     e.preventDefault()
+    if (!searchEnabled) return
     const q = searchInput.trim()
-    if (!q) { setSearchResult(null); setIframeSrc(GLOBE_BASE); return }
-    const result = detectSearchType(q)
-    setSearchResult(result)
-    setIframeSrc(buildGlobeUrl(result))
-  }, [searchInput])
+    if (!q) { setSearchResult(null); return }
+    setSearchResult(detectSearchType(q))
+  }, [searchInput, searchEnabled])
 
   const handleClear = useCallback(() => {
     setSearchInput('')
     setSearchResult(null)
-    setIframeSrc(GLOBE_BASE)
   }, [])
+
+  // Regenerate the iframe src whenever the search target or the real
+  // receiver location changes -- buildGlobeUrl() embeds SiteLat/SiteLon
+  // into every URL (search or not), so a fresh receiverLoc must
+  // regenerate mid-search too, not just on the base view.
+  useEffect(() => {
+    setIframeSrc(buildGlobeUrl(searchResult, receiverLoc))
+  }, [searchResult, receiverLoc])
 
   // Init overlay Leaflet (transparent, pointer-events managed per-marker)
   useEffect(() => {
     if (leafletRef.current) return
     const map = L.map(overlayRef.current, {
-      center: KDCA,
+      center: receiverLoc,
       zoom: 8,
       zoomControl: false,
       attributionControl: false,
@@ -260,6 +284,12 @@ function GlobeMap({ liveState }) {
     localLayerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
   }, [])
+
+  // Re-center once the real receiver location resolves (the effect above
+  // only runs once on mount, before useReceiverLocation()'s fetch settles).
+  useEffect(() => {
+    if (leafletRef.current) leafletRef.current.setView(receiverLoc, leafletRef.current.getZoom())
+  }, [receiverLoc])
 
   // Only the operator's watchlist is drawn here — full traffic is already
   // visible in the embedded globe.airplanes.live iframe below, and local-feed
@@ -302,13 +332,9 @@ function GlobeMap({ liveState }) {
     } catch (_) {}
   }, [callsignSet, hexSet])
 
-  useEffect(() => {
-    refreshLocal()
-    const id = setInterval(refreshLocal, 10_000)
-    return () => clearInterval(id)
-  }, [refreshLocal])
+  useVisibilityAwareInterval(refreshLocal, 10_000)
 
-  const compassSummary = useCompassSummary(localItems, [])
+  const compassSummary = useCompassSummary(localItems, [], receiverLoc)
   const localTableRows = localItems.map(ac => ({ callsign: ac.label, lat: ac.lat?.toFixed(4), lon: ac.lon?.toFixed(4), tracked: ac.tracked ? 'Yes' : '' }))
 
   return (
@@ -332,11 +358,16 @@ function GlobeMap({ liveState }) {
         emptyMsg="No watchlisted aircraft currently airborne."
       />
       {/* ── Search bar overlay ─────────────────────────────────── */}
-      <form className="globe-search-bar" onSubmit={handleSearch} role="search">
+      <form
+        className={searchEnabled ? "globe-search-bar" : "globe-search-bar globe-search-disabled"}
+        onSubmit={handleSearch}
+        role="search"
+        aria-disabled={!searchEnabled}
+      >
         <input
           className="globe-search-input"
           type="search"
-          placeholder="Callsign, tail / reg, hex ID…"
+          placeholder={searchEnabled ? "Callsign, tail / reg, hex ID…" : "Search unavailable on public view"}
           value={searchInput}
           onChange={e => setSearchInput(e.target.value)}
           aria-label="Search aircraft by callsign, registration, or ICAO hex"
@@ -344,8 +375,10 @@ function GlobeMap({ liveState }) {
           autoCorrect="off"
           autoCapitalize="characters"
           spellCheck={false}
+          disabled={!searchEnabled}
+          readOnly={!searchEnabled}
         />
-        <button type="submit" className="globe-search-btn" aria-label="Search">⌕</button>
+        <button type="submit" className="globe-search-btn" aria-label="Search" disabled={!searchEnabled}>⌕</button>
         {searchResult && (
           <>
             <span className="globe-search-type-badge">
@@ -399,17 +432,21 @@ function TacticalMap({ liveState }) {
   const aircraftLayerRef = useRef(null)
   const trackedLayerRef  = useRef(null)
   const tfrLayerRef      = useRef(null)
-  const [acCount,  setAcCount]  = useState(0)
-  const [tfrCount, setTfrCount] = useState(0)
+  const airmetLayerRef   = useRef(null)
+  const groundMarkerRef  = useRef(null)
+  const [acCount,     setAcCount]     = useState(0)
+  const [tfrCount,    setTfrCount]    = useState(0)
+  const [airmetCount, setAirmetCount] = useState(0)
   const [error,    setError]    = useState(null)
   const [acItems,  setAcItems]  = useState([])
   const [tfrExtra, setTfrExtra] = useState([])
 
   const { entries: watchEntries, callsignSet, hexSet } = useWatchlist()
+  const receiverLoc = useReceiverLocation()
 
   useEffect(() => {
     if (leafletRef.current) return
-    const map = L.map(mapRef.current, { center: KDCA, zoom: 8, zoomControl: true })
+    const map = L.map(mapRef.current, { center: receiverLoc, zoom: 8, zoomControl: true })
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
@@ -418,26 +455,39 @@ function TacticalMap({ liveState }) {
 
     map._airspaceLayers = []
     Object.values(AIRSPACE).forEach(({ radius, color, label }) => {
-      const c = L.circle(KDCA, { radius, color, weight: 1, fill: false, dashArray: '4 6', opacity: 0.5 })
+      const c = L.circle(receiverLoc, { radius, color, weight: 1, fill: false, dashArray: '4 6', opacity: 0.5 })
         .addTo(map).bindTooltip(label, { permanent: false })
       map._airspaceLayers.push(c)
     })
 
     map._ringLayers = []
     RANGE_RINGS_NM.forEach(nm => {
-      const r = L.circle(KDCA, { radius: nm * NM_TO_M, color: '#2a3f6f', weight: 1, fill: false, dashArray: '2 8', opacity: 0.4 })
+      const r = L.circle(receiverLoc, { radius: nm * NM_TO_M, color: '#2a3f6f', weight: 1, fill: false, dashArray: '2 8', opacity: 0.4 })
         .addTo(map)
       map._ringLayers.push(r)
     })
 
-    L.circleMarker(KDCA, { radius: 5, color: '#ffd700', fill: true, fillOpacity: 1 })
-      .addTo(map).bindTooltip('KDCA', { permanent: true, className: 'airport-label' })
+    groundMarkerRef.current = L.circleMarker(receiverLoc, { radius: 5, color: '#ffd700', fill: true, fillOpacity: 1 })
+      .addTo(map).bindTooltip('RECEIVER', { permanent: true, className: 'airport-label' })
 
     aircraftLayerRef.current = L.layerGroup().addTo(map)
     trackedLayerRef.current  = L.layerGroup().addTo(map)   // tracked on top
     tfrLayerRef.current      = L.layerGroup().addTo(map)
+    airmetLayerRef.current   = L.layerGroup().addTo(map)
     leafletRef.current = map
   }, [])
+
+  // Re-center once the real receiver location resolves (the mount effect
+  // above only runs once, before useReceiverLocation()'s fetch settles) --
+  // reposition the airspace/range-ring circles and ground marker to match.
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    map.setView(receiverLoc, map.getZoom())
+    map._airspaceLayers?.forEach(c => c.setLatLng(receiverLoc))
+    map._ringLayers?.forEach(r => r.setLatLng(receiverLoc))
+    groundMarkerRef.current?.setLatLng(receiverLoc)
+  }, [receiverLoc])
 
   const refreshAircraft = useCallback(async () => {
     if (!aircraftLayerRef.current) return
@@ -515,17 +565,39 @@ function TacticalMap({ liveState }) {
     } catch (_) {}
   }, [])
 
-  useEffect(() => {
-    refreshAircraft()
-    const id = setInterval(refreshAircraft, 10_000)
-    return () => clearInterval(id)
-  }, [refreshAircraft])
+  const refreshAirmets = useCallback(async () => {
+    if (!airmetLayerRef.current) return
+    try {
+      const r = await fetch('/api/dispatch/api/v1/airmets')
+      if (!r.ok) return
+      const data = await r.json()
+      const airmets = data.airmets || []
+      airmetLayerRef.current.clearLayers()
+      airmets.forEach(a => {
+        if (!a.coords || a.coords.length < 3) return
+        const isSigmet = a.type === 'SIGMET'
+        L.polygon(a.coords, {
+          color: a.color || '#9ca3af',
+          weight: isSigmet ? 2 : 1,
+          fill: true,
+          fillOpacity: isSigmet ? 0.14 : 0.08,
+          dashArray: isSigmet ? null : '4 4',
+        })
+          .addTo(airmetLayerRef.current)
+          .bindTooltip(
+            `<b>${a.type}: ${a.hazard.replace(/_/g, ' ')}</b><br/>` +
+            `${a.altitude_low ?? 'SFC'}–${a.altitude_high ?? '?'}ft` +
+            (a.severity ? ` · sev ${a.severity}` : ''),
+            { className: 'tfr-tooltip' }
+          )
+      })
+      setAirmetCount(airmets.length)
+    } catch (_) {}
+  }, [])
 
-  useEffect(() => {
-    refreshTfrs()
-    const id = setInterval(refreshTfrs, 60_000)
-    return () => clearInterval(id)
-  }, [refreshTfrs])
+  useVisibilityAwareInterval(refreshAircraft, 10_000)
+  useVisibilityAwareInterval(refreshTfrs, 60_000)
+  useVisibilityAwareInterval(refreshAirmets, 300_000)  // matches the 5-min server-side cache TTL
 
   useEffect(() => {
     if (liveState?.tfr_count !== undefined) setTfrCount(liveState.tfr_count)
@@ -557,9 +629,14 @@ function TacticalMap({ liveState }) {
         ? map.addLayer(tfrLayerRef.current)
         : map.removeLayer(tfrLayerRef.current)
     }
-  }, [layers.airspace, layers.rings, layers.localFeed, layers.tfr])
+    if (airmetLayerRef.current) {
+      layers.airmet !== false
+        ? map.addLayer(airmetLayerRef.current)
+        : map.removeLayer(airmetLayerRef.current)
+    }
+  }, [layers.airspace, layers.rings, layers.localFeed, layers.tfr, layers.airmet])
 
-  const compassSummary = useCompassSummary(acItems, tfrExtra)
+  const compassSummary = useCompassSummary(acItems, tfrExtra, receiverLoc)
 
   const acTableRows = acItems.map(ac => ({
     callsign: ac.label,
@@ -599,6 +676,7 @@ function TacticalMap({ liveState }) {
             <span className="stat tracked-stat">★ {trackedCount} TRACKED</span>
           )}
           <span className="stat">{tfrCount} TFR{tfrCount !== 1 ? 's' : ''}</span>
+          <span className="stat">{airmetCount} AIRMET/SIGMET</span>
           {error && <span className="stat error">{error}</span>}
           <span className="stat source-badge">LIVE (airplanes.live)</span>
         </div>

@@ -12,14 +12,35 @@ FNS delivers AIXM 5.1 AIXMBasicMessage XML over Solace AMQP. Structure:
     message:hasMember
       aixm:AirportHeliport   ← airport reference, ignored
 
-Alert routing:
+Storage/alert routing:
   Permanent watch set : DC_STATIONS (KDCA, KIAD, KBWI, KFDK, KHEF, KJYO, KGAI)
   Transient watch set : K[A-Z]{3} codes in today's runsheet trip locations,
                         minus permanent set (non-DC origin/dest airports)
-  FDC NOTAMs          : always alert regardless of facility
-  Dedup               : 24h window keyed on notam_id (PushDedup "notam")
-  VIP NOTAMs          : FDC NOTAMs containing POTUS/AF1/Marine One keywords →
-                        hot-alerts priority=5; all others → nas-alerts priority=3
+  DC-region ARTCCs    : ZDC, ZNY, ZID, ZTL, ZOB -- any NOTAM (FDC or NOTAM-D)
+                        affecting one of these FIRs is always stored, not just
+                        alerted (see DC_REGION_ARTCCS)
+  FDC elsewhere       : stored nationwide only if it reads as a major
+                        event/closure/airshow/VIP TFR (CFR 91.137/141/143/145,
+                        99.7, or matching keywords -- see
+                        _is_national_significant). Routine FDC noise from
+                        outside the DC region is dropped at write time.
+  VIP (POTUS/VP/AF1/AF2/Marine One) : always stored + alerted, nationwide,
+                        regardless of facility.
+  Dedup               : forward-only, keyed on notam_id with a full
+                        content hash (classification + effective window +
+                        text) -- an unchanged NOTAM never re-alerts, an
+                        amendment under the same ID re-alerts immediately
+                        (2026-09-03 redesign; was a 24h re-fire window on
+                        a hash of just the ID)
+  Alert routing (refined 2026-08-03): VIP -> hot-alerts priority=5.
+                        Flight-restriction NOTAMs (TFRs, restricted/
+                        prohibited airspace) -> fdps-alerts/fdps-<zone>
+                        priority=4, fired on first occurrence (not
+                        escalation-gated -- a lone TFR is itself
+                        alert-worthy). Everything else in the watch set
+                        (IAP/ASDE-X/other NOTAM-D content) -> nas-alerts
+                        priority=3, plus aim_fns-alerts/aim_fns-<zone>
+                        (escalation-gated, see shared.sector_coalesce).
 
 NOTAM ID: "{location}/{year}/{number}" e.g. "PSG/2026/081"
 Effective timestamps: YYYYMMDDHHmm compact (12-digit UTC) e.g. "202606152335"
@@ -56,10 +77,106 @@ _PERMANENT_AIRPORTS: frozenset[str] = frozenset({
 })
 
 _ICAO_RE = re.compile(r"\b(K[A-Z]{3})\b")
-_DEDUP_TTL = 86400   # 24 hours — one push per NOTAM per day
+# 2026-09-03 (forward-only push_dedup redesign): dedup_secs no longer forces
+# a daily re-push -- under the old semantics every active NOTAM that kept
+# getting rebroadcast re-alerted once per 24h for its entire life (1,300+
+# live entries in pusher-notam-dedup.json, i.e. 1,300+ re-alerts per day at
+# steady state). Now an unchanged NOTAM alerts exactly once and only a
+# genuine amendment (see _fire_notam_alert's content hash) re-alerts.
+# dedup_secs=86400 is retained so the eviction/retention horizon stays at
+# the proven 10x = 10 days (any longer and the full-file rewrite per alert
+# regrows toward the 328KB problem the 2026-08-26 C-21 fix addressed; a
+# NOTAM rebroadcast unchanged past 10 days re-alerts once, which is still
+# 10x quieter than the old daily repeat).
+_DEDUP_TTL = 86400
 _NOTAM_DEDUP = PushDedup("notam", dedup_secs=_DEDUP_TTL)
 
-_VIP_KEYWORDS = frozenset({"POTUS", "PRESIDENT", "AIR FORCE ONE", "MARINE ONE", "AIR FORCE 1", "AF1"})
+_VIP_KEYWORDS = frozenset({
+    "POTUS", "PRESIDENT", "AIR FORCE ONE", "MARINE ONE", "AIR FORCE 1", "AF1",
+    "VPOTUS", "VICE PRESIDENT", "AIR FORCE TWO", "AF2",
+})
+
+# 2026-09-22 (operator): VENUS / CRANE / SAM added as VIP movement
+# identifiers. Deliberately NOT added to _VIP_KEYWORDS above, because that
+# set is matched with a bare `kw in upper` substring test and these three are
+# short enough for that to be actively wrong:
+#   SAM   -> would fire on SAMPLE, SAMOA, TRANSAM, SAMSON, any "...SAM..."
+#   CRANE -> would fire on CRANEBROOK and on literal crane (construction
+#            obstruction) NOTAMs, which are common and are NOT VIP movement
+#   VENUS -> safest of the three, kept here for consistency
+# Matching them on word boundaries instead keeps the true positives and drops
+# that entire false-positive class. Same failure mode as the 2026-09-21
+# aircraft-type extractor bug (MAX8 from "737 MAX 8", NEW269 from "New
+# 269-Foot"), where prefix-only validation let substrings through and 38,360
+# bad edges had to be purged. Add future SHORT identifiers here, not above;
+# multi-word phrases are safe in the substring set.
+# \d* so a numbered flight matches too: SAM41, MCM47, VENUS 2 all appear in
+# NOTAM/TFR text, and a bare \bSAM\b would miss SAM41 entirely (no word
+# boundary between M and 4).
+_VIP_CALLSIGN_RE = re.compile(r"\b(?:VENUS|SAM|MCM)\d*\b")
+
+# CRANE is split out because it collides with construction-obstruction NOTAMs,
+# which are common near DCA/IAD -- "TOWER CRANE ERECTED 250FT AGL", "CRANE OPR
+# WI 0.5NM OF RWY 19 THR", "MOBILE CRANE IN USE ADJ TWY B" all matched a plain
+# \bCRANE\b (verified 2026-09-22). Treating every one of those as VIP movement
+# would bury real VIP alerts in obstruction noise.
+#
+# The guard is deliberately NARROW -- it suppresses only the obstruction
+# phrasings, not the word itself. A missed VIP movement is far worse than a
+# spurious one, so anything ambiguous still fires.
+_CRANE_RE = re.compile(r"\bCRANE\d*\b")
+_CRANE_OBSTRUCTION_RE = re.compile(
+    r"(?:\b(?:TOWER|MOBILE|CONSTRUCTION|ERECTED|LUFFING|CRAWLER)\s+CRANE)"
+    r"|(?:\bCRANE\s+(?:OPR|OPERATING|ERECTED|IN\s+USE|WI\b|WORK))"
+)
+
+# ARTCCs covering the DC operating region -- any NOTAM tied to one of these
+# FIRs is a must-ingest regardless of classification (Washington, New York,
+# Indianapolis, Atlanta, Cleveland all border or overlap ZDC-relevant traffic).
+DC_REGION_ARTCCS: frozenset[str] = frozenset({"ZDC", "ZNY", "ZID", "ZTL", "ZOB"})
+
+# Nationwide FDC NOTAMs outside the DC region are only worth keeping if they
+# read as a genuinely major event -- airshows, VIP movement, disasters,
+# space launches, large-scale closures. Everything else nationwide is noise.
+# FAA TFR text conventionally cites the governing CFR section, which is the
+# most reliable signal; keywords are a fallback for text that doesn't.
+_NATIONAL_SIGNIFICANT_CFR_RE = re.compile(r"\b91\.(137|141|143|145)\b|\b99\.7\b")
+_NATIONAL_SIGNIFICANT_KEYWORDS = frozenset({
+    "AIR SHOW", "AIRSHOW", "AERIAL DEMONSTRATION", "SPORTING EVENT",
+    "STADIUM", "SPACE LAUNCH", "SPACEPORT", "DISASTER", "HAZARD AREA",
+    "RUNWAY CLOSED", "AIRPORT CLOSED", "CLOSED INDEFINITELY",
+})
+
+
+def _is_national_significant(notam_text: str) -> bool:
+    """True if a nationwide FDC NOTAM is a major event/closure/airshow/VIP TFR
+    worth keeping outside the DC region (see module docstring)."""
+    upper = (notam_text or "").upper()
+    if _NATIONAL_SIGNIFICANT_CFR_RE.search(upper):
+        return True
+    return any(kw in upper for kw in _NATIONAL_SIGNIFICANT_KEYWORDS)
+
+
+def _artcc_candidates(notam: dict) -> set[str]:
+    """Collect every ARTCC/FIR-shaped code available for a parsed NOTAM."""
+    cands: set[str] = set()
+    for key in ("fir", "location"):
+        v = (notam.get(key) or "").upper().strip()
+        if v:
+            cands.add(v)
+    fac = (notam.get("facility") or "").upper().strip()
+    if fac:
+        cands.add(fac)
+        # Some FNS extensions wrap ARTCC codes with a pseudo-ICAO K-prefix
+        # (e.g. "KZDC" for the ZDC FIR) -- strip it so it still matches.
+        if len(fac) == 4 and fac.startswith("K") and fac[1] == "Z":
+            cands.add(fac[1:])
+    return cands
+
+
+def _in_dc_region(notam: dict) -> bool:
+    """True if this NOTAM is tied to a DC-region ARTCC (must-ingest)."""
+    return bool(_artcc_candidates(notam) & DC_REGION_ARTCCS)
 
 
 def _get_facility_filter() -> frozenset[str]:
@@ -75,7 +192,44 @@ def _get_facility_filter() -> frozenset[str]:
 
 def _is_vip_notam(notam_text: str) -> bool:
     upper = (notam_text or "").upper()
-    return any(kw in upper for kw in _VIP_KEYWORDS)
+    if any(kw in upper for kw in _VIP_KEYWORDS):
+        return True
+    if _VIP_CALLSIGN_RE.search(upper):
+        return True
+    # CRANE only counts when it is not obviously a construction obstruction.
+    if _CRANE_RE.search(upper) and not _CRANE_OBSTRUCTION_RE.search(upper):
+        return True
+    return False
+
+
+# 2026-08-03 per operator: "make nas-alerts mostly iap and asde-x type
+# alerts and flight restrictions in fdps-{*} or hot-alerts respectively" --
+# flight-restriction NOTAMs (TFRs, restricted/prohibited airspace) are an
+# airspace/zone concern, the same shape as FDPS proximity tracking, so they
+# get diverted out of nas-alerts and into the fdps family instead. VIP
+# flight restrictions already land on hot-alerts via _is_vip_notam (POTUS/
+# AF1/Marine One TFR text always matches there first) -- this classifier
+# only needs to catch the non-VIP case. Reuses
+# _NATIONAL_SIGNIFICANT_CFR_RE since FAA TFR text conventionally cites the
+# authorizing regulation (91.137/141/143/145, 99.7) -- same proven signal
+# already used by _is_national_significant, not a new guess.
+_FLIGHT_RESTRICTION_KEYWORDS = frozenset({
+    "FLIGHT RESTRICTIONS", "FLT RESTRICTIONS", "FLIGHT RESTRICTED",
+    "TEMPORARY FLIGHT RESTRICTION", "TFR", "PROHIBITED AREA",
+    "RESTRICTED AREA", "NATIONAL DEFENSE AIRSPACE", "AIRSPACE RESTRICTED",
+})
+
+
+def _is_flight_restriction_notam(notam_text: str) -> bool:
+    """True if NOTAM text reads as a flight-restriction/TFR (airspace
+    closed or limited to specific traffic) rather than a facility/
+    procedure/equipment NOTAM (IAP unavailable, ASDE-X outage, runway/
+    taxiway closure, obstacle, etc -- the content nas-alerts is meant to
+    carry post-2026-08-03)."""
+    upper = (notam_text or "").upper()
+    if _NATIONAL_SIGNIFICANT_CFR_RE.search(upper):
+        return True
+    return any(kw in upper for kw in _FLIGHT_RESTRICTION_KEYWORDS)
 
 
 def _txt(elem: ET.Element | None, path: str) -> str | None:
@@ -85,6 +239,17 @@ def _txt(elem: ET.Element | None, path: str) -> str | None:
     if found is None:
         return None
     return (found.text or "").strip() or None
+
+
+def _normalize_notam_number(number: str) -> str:
+    """Strip leading zeros so the same NOTAM doesn't get two different IDs
+    depending on how the source feed padded the number this delivery
+    ("006" one time, "6" the next -- observed live for IIY/2026/006 vs
+    IIY/2026/6, identical text and effective window, stored/alerted twice)."""
+    number = (number or "").strip()
+    if number.isdigit():
+        return str(int(number))
+    return number
 
 
 def _parse_timestamp(ts: str | None) -> float | None:
@@ -138,13 +303,42 @@ def _get_transient_airports() -> frozenset[str]:
 def _fire_notam_alert(notam: dict) -> None:
     """Push ntfy alert for a NOTAM that matches the watch set.
 
-    Routing:
-      VIP NOTAMs (POTUS/AF1/Marine One keywords) → hot-alerts, priority=5
-      All other NOTAMs                           → nas-alerts, priority=3
+    Routing (refined 2026-08-03 per operator: "make nas-alerts mostly iap
+    and asde-x type alerts and flight restrictions in fdps-{*} or
+    hot-alerts respectively"):
+      VIP NOTAMs (POTUS/AF1/Marine One)       → hot-alerts, priority=5
+      Flight-restriction NOTAMs (non-VIP)     → fdps-alerts/fdps-<zone>,
+                                                 priority=4, fired on FIRST
+                                                 occurrence (escalating_only
+                                                 =False -- a lone TFR is
+                                                 itself alert-worthy, unlike
+                                                 tbfm/tfms/itws/aim_fns
+                                                 bursts which want to stay
+                                                 quiet until escalating)
+      Everything else (IAP/ASDE-X/other)      → nas-alerts, priority=3,
+                                                 plus aim_fns-alerts/
+                                                 aim_fns-<zone> (escalating-
+                                                 only, unchanged from the
+                                                 earlier 2026-08-03 rollout)
     dispatch-alerts is not used for NOTAMs.
     """
     notam_id = notam["notam_id"]
-    dedup_key = content_hash(notam_id)
+    # 2026-09-03: the content key is now a hash of the NOTAM's actual
+    # meaningful content, not of notam_id (which is already the slot key,
+    # so hashing it produced a constant -- fine while the 24h window did
+    # the re-firing, but under forward-only semantics a constant hash
+    # would have made a genuine AMENDMENT under the same NOTAM ID
+    # permanently invisible). classification + effective window + full
+    # text: any of those changing is a real amendment worth a fresh
+    # alert; a byte-identical rebroadcast stays suppressed. Migration
+    # note: existing on-disk entries store the old hash-of-ID value, so
+    # each already-alerted live NOTAM re-alerts ONCE when next
+    # rebroadcast (comparable to one day's worth of the old daily
+    # repeats), then goes quiet for good.
+    dedup_key = content_hash(
+        f"{notam.get('classification')}|{notam.get('effective_start')}|"
+        f"{notam.get('effective_end')}|{notam.get('text_body') or ''}"
+    )
     if not _NOTAM_DEDUP.should_push(notam_id, dedup_key):
         return
 
@@ -156,24 +350,71 @@ def _fire_notam_alert(notam: dict) -> None:
     title = f"{label} [{facility}] — {notam_id}"
     body = text_body[:400] if text_body else notam_id
 
-    if _is_vip_notam(text_body):
-        topic = "hot-alerts"
-        priority = 5
-    else:
-        topic = "nas-alerts"
-        priority = 3
+    is_vip = _is_vip_notam(text_body)
+    is_restriction = (not is_vip) and _is_flight_restriction_notam(text_body)
 
-    ok = ntfy_send(
-        topic=topic,
-        message=body,
-        title=title,
-        priority=priority,
-        tags="warning,airplane",
-    )
-    if ok:
+    fired = False
+    family_fired = False
+
+    if is_vip:
+        # VIP stays exclusive to hot-alerts -- same design as Marine One
+        # in fdps_parser.py, never folded into a family-alerts pattern.
+        fired = ntfy_send(
+            topic="hot-alerts",
+            message=body,
+            title=title,
+            priority=5,
+            tags="warning,airplane",
+        )
+    elif is_restriction:
+        # Airspace/zone concern -- route through the fdps family instead
+        # of nas-alerts. escalating_only=False: a standalone TFR is itself
+        # the alert, it must not wait for a burst pattern.
+        #
+        # 2026-08-03 (same day, follow-up): feed_name is "fdps_notam", NOT
+        # "fdps" -- family stays "fdps" (same fdps-alerts/fdps-<zone>
+        # topics, per the operator's original ask), but the feed_name used
+        # for escalation-counting must differ. Reason: record_event()'s
+        # window/prior counts are per-sector across ALL feeds sharing that
+        # feed_name unless isolate=True -- if this used feed_name="fdps"
+        # (same as fdps_parser.py's own proximity-tracking calls), a burst
+        # of TFR NOTAMs could make fdps_parser's real proximity alerts
+        # spuriously read "escalating" with no actual proximity trend, or
+        # vice versa. isolate=True keeps this feed_name's event count
+        # entirely independent of fdps_parser's -- no sympathetic trigger
+        # in either direction -- while both still land on the same
+        # fdps-alerts/fdps-<zone> topics for the operator.
+        try:
+            from shared.sector_coalesce import fire_family_alert
+            result = fire_family_alert(
+                "fdps", "fdps_notam", facility, title, body, body,
+                base_priority=4, escalating_only=False, isolate=True,
+            )
+            family_fired = bool(result.get("fired") or result.get("zone_fired"))
+        except Exception as e:
+            log.error("aim: fdps family-alert fire failed for %s: %s", notam_id, e)
+    else:
+        # IAP/ASDE-X/other NOTAM-D content -- the nas-alerts residual bucket.
+        fired = ntfy_send(
+            topic="nas-alerts",
+            message=body,
+            title=title,
+            priority=3,
+            tags="warning,airplane",
+        )
+        try:
+            from shared.sector_coalesce import fire_family_alert
+            result = fire_family_alert("aim_fns", "aim_fns", facility, title, body, body, base_priority=3)
+            family_fired = bool(result.get("fired") or result.get("zone_fired"))
+        except Exception as e:
+            log.error("aim: aim_fns family-alert fire failed for %s: %s", notam_id, e)
+
+    if fired or family_fired:
         _NOTAM_DEDUP.record(notam_id, dedup_key)
-        log.info("aim: notam alert fired: %s facility=%s topic=%s priority=%d",
-                 notam_id, facility, topic, priority)
+        log.info(
+            "aim: notam alert fired: %s facility=%s vip=%s restriction=%s legacy_fired=%s family_fired=%s",
+            notam_id, facility, is_vip, is_restriction, fired, family_fired,
+        )
 
 
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:
@@ -216,6 +457,7 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
             icao_loc  = _txt(ext, "fnse:icaoLocation") if ext is not None else None
             fns_class = _txt(ext, "fnse:classification") if ext is not None else "DOM"
 
+            number = _normalize_notam_number(number)
             notam_id = f"{location}/{year}/{number}" if (location and year and number) else None
             if not notam_id:
                 gml_id = event.get("{http://www.opengis.net/gml/3.2}id", "")
@@ -230,6 +472,8 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
             notams.append({
                 "notam_id":        notam_id,
                 "facility":        icao_loc or location or "",
+                "location":        location,
+                "fir":             fir,
                 "classification":  classification,
                 "effective_start": _parse_timestamp(eff_start),
                 "effective_end":   _parse_timestamp(eff_end),
@@ -255,6 +499,24 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
     return notams
 
 
+_LAST_CLEANUP = [0.0]
+_CLEANUP_INTERVAL_SECS = 600  # 10 minutes -- throttle so every message batch
+                               # doesn't trigger a DELETE scan
+
+
+def _maybe_cleanup_expired() -> None:
+    now = time.time()
+    if now - _LAST_CLEANUP[0] < _CLEANUP_INTERVAL_SECS:
+        return
+    _LAST_CLEANUP[0] = now
+    try:
+        removed = db.cleanup_expired_notams()
+        if removed:
+            log.info("aim: cleanup removed %d expired/stale NOTAM row(s)", removed)
+    except Exception as e:
+        log.warning("aim: cleanup_expired_notams failed: %s", e)
+
+
 def write_aim_notams(notams: list[dict]) -> int:
     """Upsert parsed NOTAMs into the notams table and fire alerts where applicable."""
     if not notams:
@@ -270,14 +532,25 @@ def write_aim_notams(notams: list[dict]) -> int:
         facility = n["facility"]
         is_fdc   = n["classification"] == "FDC"
         is_vip   = _is_vip_notam(n.get("text_body", ""))
+        # DC-region-ARTCC must-ingest applies to FDC only (the operator: "on the FDC
+        # thing... anything within ZDC/ZNY/ZID/ZTL/ZOB must ingest"). ZID/ZTL/
+        # ZOB/ZNY each cover a huge geographic area -- applying this to routine
+        # NOTAM-D too would mean every airport-level NOTAM anywhere in the
+        # Midwest/Northeast becomes a must-ingest+alert item, which is not
+        # what was asked and is confirmed noisy in practice.
+        in_dc_region = is_fdc and _in_dc_region(n)
 
-        # Geo filter on DB writes.
-        # Always store: VIP NOTAMs (POTUS/AF1/Marine One), FDC NOTAMs (national scope),
-        # and any NOTAM-D whose facility is in CORE_AIRPORTS or the configured watch set.
+        # Geo/significance filter on DB writes.
+        # Always store: VIP NOTAMs (POTUS/VP/AF1/AF2/Marine One, nationwide),
+        # any NOTAM (FDC or NOTAM-D) whose facility is in CORE_AIRPORTS or the
+        # configured watch set, and -- for FDC only -- entries tied to a
+        # DC-region ARTCC or that read as a major event/closure/airshow TFR
+        # nationwide.
         in_watch = facility in watch_set
         in_core  = is_core_airport(facility)
-        if not (is_vip or is_fdc or in_watch or in_core):
-            log.debug("aim: geo-filtered NOTAM %s facility=%s (not in core or watch set)",
+        is_national_sig = is_fdc and _is_national_significant(n.get("text_body", ""))
+        if not (is_vip or in_watch or in_core or in_dc_region or is_national_sig):
+            log.debug("aim: geo-filtered NOTAM %s facility=%s (not DC-region FDC, watch set, or nationally significant)",
                       n["notam_id"], facility)
             continue
 
@@ -293,8 +566,8 @@ def write_aim_notams(notams: list[dict]) -> int:
             )
             written += 1
 
-            # Alert routing: VIP always; others only when in watch set.
-            if is_vip or in_watch:
+            # Alert routing: VIP always; DC-region and watch-set NOTAMs too.
+            if is_vip or in_watch or in_dc_region:
                 _fire_notam_alert(n)
             elif is_fdc:
                 log.debug("aim: FDC NOTAM stored but not alerted (facility=%s not in watch set)", facility)
@@ -302,4 +575,5 @@ def write_aim_notams(notams: list[dict]) -> int:
         except Exception as e:
             log.error("aim: db write error for %s: %s", n.get("notam_id"), e)
 
+    _maybe_cleanup_expired()
     return written

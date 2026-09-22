@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
 
 // ── TFR type inference from NOTAM ID prefix ────────────────────────────────
 // Basic /api/v1/tfr has no classification field; derive from NOTAM series prefix.
@@ -333,11 +334,10 @@ export default function TfrView() {
   }, [])
 
   useEffect(() => {
-    loadTfrs()
     loadNotams()
-    const id = setInterval(loadTfrs, POLL_MS)
-    return () => clearInterval(id)
-  }, [loadTfrs, loadNotams])
+  }, [loadNotams])
+
+  useVisibilityAwareInterval(loadTfrs, POLL_MS)
 
   return (
     <div className="panel-view signals-view">

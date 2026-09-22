@@ -1,7 +1,7 @@
 """
 ep-advance — Executive Protection advance brief for DC UHNWI principals.
 
-Model: ollama/corporatetraveldc-pi5-osint (mistral-nemo)
+Model: ollama/corporatetraveldc-pi5-brief (mistral-nemo)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :30 ET (corporatetraveldc-ep-advance.timer) — offset from
   ops-brief's :00 so Ollama jobs never stack back-to-back
@@ -28,14 +28,35 @@ import argparse
 import json
 import logging
 import pathlib
-import sqlite3
+import re
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-import httpx
+# 2026-08-30 (night pass): route through common.llm.generate() like every
+# other brief skill (ops_brief.py et al.) instead of the two direct
+# ollama_post_with_retry() calls this skill carried since 2026-07-26.
+# The direct path skipped generate()'s preflight cool-launch/load gates
+# and _ollama()'s failure-attribution split (its generic `except` swallowed
+# httpx timeouts without feeding _record_load_fallback(), so EP-Advance's
+# contention timeouts were invisible to thermal-ingest-guard). The
+# operator's long-standing suspicion that the bypass is why EP-Advance/
+# EP-Advance-Trend fail reliably was root-caused tonight to something the
+# bypass merely HID better: llama-chat's own journal shows
+#   "request (5908 tokens) exceeds the available context size (4096)"
+# -> HTTP 400 on every main-brief call. Since the 2026-08-27 cutover ALL
+# report-tier traffic shares the chat port (-c 4096, see
+# corporatetraveldc-llama-chat.service and ollama_post_with_retry()'s own
+# comment), while this skill's persona declares num_ctx 6144 and its
+# prompt+persona measured 5908 tokens live. Routing through generate()
+# does NOT fix that -- it is a service-level sizing decision (raise chat's
+# -c, revive the 8192-ctx report ports, or shrink this prompt) that
+# belongs to the operator -- but it unifies the call path so the failure
+# is at least attributed/logged like every other skill's.
+from common.llm import generate as llm_generate
 import requests
 
 from common import config, db, ntfy_push as _ntfy
+from common.aam_watch import get_aam_watch_section
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
@@ -43,12 +64,59 @@ log = logging.getLogger(__name__)
 SKILL_NAME      = "ep-advance"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL    = (
-    os.getenv("OLLAMA_OSINT_MODEL")
+    os.getenv("OLLAMA_EP_ADVANCE_MODEL")
     or os.getenv("OLLAMA_MODEL")
-    or "mistral"
+    or "corporatetraveldc-pi5-ep-advance:latest"
+)
+OLLAMA_TREND_MODEL_EP = (
+    os.getenv("OLLAMA_EP_ADVANCE_TREND_MODEL")
+    or "corporatetraveldc-pi5-ep-advance-trend:latest"
 )
 MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-OLLAMA_TIMEOUT = 1200   # 20 min — Pi 5 needs headroom for large prompts
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
+# timeouts, one constant per call site. Fail-fast semantics unchanged
+# (max_retries=0 at both direct call sites -- see git history for the
+# 2026-08-06 incident writeup).
+# Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
+# methodology: guard timer paused, synthetic burn; spiked persona-only
+# refs bracketing these samples ran 53.0s-60.0s, i.e. at/above the
+# locked 53s worst-case bound, so no scale top-up applied):
+# main:  2572-tok prompt / 350.4s eval + gen at 0.53 tok/s -> 1420s
+#        at the 750-tok cap; delta over the 60.0s ref = 1710.5s;
+#        (53 + 1710.5) x 1.25 = 2204s -> 2220.
+# trend: 1165-tok prompt / 134.8s eval + gen at 0.88 tok/s -> 295s
+#        at the 260-tok cap; delta 376.3s; (53 + 376.3) x 1.25 = 537s -> 540.
+# 2026-08-17 (fable sweep): main-call cap raised 750 -> 1000 tokens
+# (num_predict in the options dict below AND PARAMETER num_predict in
+# corporatetraveldc.ep-advance, kept in parity). Verified truncation class,
+# same as ops-brief/weekly-summary: 4 of the 8 most recent Ollama-generated
+# ep-advance briefs in brief_archive (1588, 1591, 1594, 1598) end
+# mid-sentence or mid-word at the 750-token cap, against the task layer's
+# own 'under 750 words' (~1000 tokens) target.
+# Timeout re-derived with the same 2026-08-15 formula, scaled to 1000 tok:
+#   gen = 1000/0.53 = 1886.8s; delta = 350.4 + 1886.8 - 60.0 = 2177.2s;
+#   (53 + 2177.2) x 1.25 = 2787.7 -> 2800.
+# Unit TimeoutStartSec on corporatetraveldc-ep-advance.container raised
+# 3600 -> 4500 in the same change (800s fixed + 2800s main + 540s trend
+# = 4140s worst case). NOTE: 4500s > the hourly timer interval; systemd
+# skips a trigger while the unit is still activating, same as today.
+# 2026-08-31 (report-1 on-demand pass): 2800 -> 3600. The 2800 figure was
+# derived above for a 2572-token prompt on the old SERIALIZED Ollama slot
+# (sole occupancy once the call started). Today's real main prompt is
+# ~5850 tokens and, since the >4096-ctx cutover fix, runs on the
+# on-demand report-1 llama-server CONCURRENTLY with chat's daily-watch
+# traffic. Live-measured across four full runs on 2026-08-30/31 (q8_0 KV,
+# CPUWeight 2000): prompt eval 2.8-5.0 tok/s (~1200-2100s for the full
+# prompt), generation ~0.5-0.6 tok/s measured on secondbrain-weekly's
+# completed call (same server, same night). Full-call band ~2900-4000s;
+# 2800 lost the ENTIRE band -- every run timed out ~100-1200s short and
+# fell back. 3600 catches the quiet-hour band (~2900-3500s) while
+# keeping near-hourly cadence (heavier contended calls still fail-fast
+# to the deterministic brief, unchanged semantics, max_retries=0).
+# Paired: corporatetraveldc-ep-advance.container TimeoutStartSec
+# 4500 -> 5000 (800 fixed + 3600 main + 540 trend = 4940).
+OLLAMA_TIMEOUT          = 3600
+OLLAMA_TREND_TIMEOUT_EP = 540
 
 
 # ── Traditional EP threat site categories ─────────────────────────────────────
@@ -824,6 +892,25 @@ def _venue_summary() -> str:
     return "\n".join(lines)
 
 
+def _cached_venue_section() -> str:
+    """2026-08-31: read ep_advance_venues.py's last output (once-daily +
+    manual-trigger, see that skill and personas.py's 'ep-advance' comment
+    for why this is no longer generated inline every hour). Staleness is
+    informational only -- never blocks the hourly brief; a stale venue
+    section is still more useful than none, and the venue matrix itself
+    changes far less often than once a day anyway."""
+    path = pathlib.Path(config.state_dir()) / "ep-advance-venues.txt"
+    if not path.exists():
+        return (
+            "=== VENUE ADVISORY (DAILY) ===\n"
+            "Not yet generated -- run poller/skills/ep_advance_venues.py."
+        )
+    age_h = (_time.time() - path.stat().st_mtime) / 3600
+    stale_note = f" (stale — {age_h:.0f}h old)" if age_h > 30 else ""
+    body = path.read_text().strip()
+    return f"=== VENUE ADVISORY (DAILY{stale_note}) ===\n{body}"
+
+
 def _extended_venues_summary() -> str:
     """50-mile radius venue matrix for day trips and alternative staging."""
     lines = ["=== EXTENDED VENUE MATRIX — 50-MILE RADIUS ==="]
@@ -855,7 +942,7 @@ def _extended_venues_summary() -> str:
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are the advance intelligence officer for CS Executive Services, preparing a daily
+You are the advance intelligence officer for [operator LLC], preparing a daily
 EP-Advance brief for a multi-national UHNWI executive with a personal security detail
 on a 4-week Washington DC engagement (full metro including 50-mile radius).
 
@@ -920,26 +1007,59 @@ Keep total brief under 750 words. Threat posture first; bottom line last."""
 def _call_ollama(prompt: str) -> tuple[str, str] | None:
     if not OLLAMA_BASE_URL:
         return None
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": SYSTEM_PROMPT,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": 750, "temperature": 0.15},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        narrative = resp.json().get("response", "").strip()
-    except Exception as exc:
-        log.warning("ep-advance: Ollama failed — %s", exc)
-        return None
-
+    # 2026-08-30 (night pass): unified onto common.llm.generate() -- see
+    # the import comment at the top of this file for the full rationale
+    # and the confirmed 400/context-overflow root cause. Arguments mirror
+    # ops_brief.py's _call_ollama() exactly, keeping this skill's own
+    # measured values: system=None (the persona registry's baked-in
+    # ep-advance layer applies, same as the old omitted "system" key),
+    # num_predict 1000 -> max_tokens (2026-08-17: was 750, see
+    # OLLAMA_TIMEOUT comment above), temperature 0.15, this skill's own
+    # measured OLLAMA_TIMEOUT (2800s -- generate() exposes `timeout=`
+    # precisely for large-prompt callers like this one, so the old
+    # "own hardcoded timeout" reason for bypassing it no longer holds),
+    # priority="report" (generate()'s default -- full advance brief, not a
+    # hot alert), and allow_anthropic=False (same operator directive as
+    # ops_brief: this brief's EP/principal content never goes to a cloud
+    # API; belt-and-suspenders on top of the box-wide
+    # ANTHROPIC_FALLBACK_ENABLED=false gate).
+    # generate() handles busy/timeout/failure logging + load-fallback
+    # attribution and runs sanitize_llm_response() (with the
+    # done_reason=="length" truncation trim) internally, so the old
+    # explicit sanitize call and OllamaBusyError handling here are gone,
+    # not lost.
+    narrative = llm_generate(
+        system=None,
+        prompt=prompt,
+        ollama_model=OLLAMA_MODEL,
+        max_tokens=1000,
+        temperature=0.15,
+        timeout=OLLAMA_TIMEOUT,
+        allow_anthropic=False,
+    )
     if not narrative:
         return None
+
+    # 2026-08-17: content-sanity guard, defense in depth alongside the
+    # system-prompt fix. Live-confirmed failure mode: phi3:mini occasionally
+    # (1/40 in a sampled window) misreads the venue-matrix input as a
+    # request to "extract a coding task" from it and returns a paragraph of
+    # meta-commentary plus an actual Python code block instead of an EP
+    # brief -- garbage content that still passes the not-empty check above,
+    # so it shipped as a real ntfy push with zero real advance-brief data.
+    # A code fence or an import/def line is never legitimate in this
+    # skill's output; treat it as a failed generation and let the caller
+    # fall through to the deterministic fallback instead of pushing it.
+    if "```" in narrative or re.search(r"^\s*(import |def |class )\w", narrative, re.MULTILINE):
+        log.warning("ep-advance: Ollama returned code-shaped output instead of a brief -- discarding, falling back")
+        return None
+
+    # 2026-08-17 (fable sweep) persona-echo / repetition-loop guard: the
+    # explicit sanitize_llm_response() call that lived here (needed because
+    # the old direct call path bypassed generate()/_ollama()) is gone as of
+    # the 2026-08-30 generate() unification above -- _ollama() runs the
+    # same sanitizer, with the same done_reason=="length" truncation trim,
+    # on every response before this function ever sees it.
 
     # Extract BOTTOM LINE for concise push
     concise = narrative
@@ -992,7 +1112,12 @@ def _cps_history_12h() -> list[dict]:
     cutoff = _time.time() - 12 * 3600
     try:
         with db.conn() as c:
-            c.row_factory = sqlite3.Row
+            # 2026-09-20: db.conn() already sets the right row factory for
+            # whichever backend is active -- see ops_brief.py's
+            # _cps_history_6h() comment (same fix, same reason, found live
+            # via the identical "Row expected 2 arguments, got 1" TypeError
+            # in ops_brief's logs; fixed here proactively before this one
+            # hit it too).
             rows = c.execute(
                 "SELECT score, label, narrative, computed_at FROM cps_scores "
                 "WHERE computed_at >= ? ORDER BY computed_at ASC",
@@ -1006,10 +1131,12 @@ def _cps_history_12h() -> list[dict]:
 
 def _ep_brief_history_12h() -> list[dict]:
     """Return ep-advance brief archive entries from the last 12 hours, oldest first."""
-    cutoff = _time.time() - 12 * 3600
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ISO-8601 string -- matches
+    # brief_archive.generated_at's stored TEXT format so the WHERE
+    # clause actually compares correctly (was float vs TEXT before).
     try:
         with db.conn() as c:
-            c.row_factory = sqlite3.Row
+            # See _cps_history_12h() above -- same fix, same reason.
             rows = c.execute(
                 "SELECT id, generated_at, brief_type, content FROM brief_archive "
                 "WHERE generated_at >= ? AND brief_type='ep-advance' ORDER BY generated_at ASC",
@@ -1049,7 +1176,7 @@ def _trend_analysis_prompt_12h() -> str:
     if len(brief_hist) >= 2:
         lines.append(f"\nEP-advance brief archive (last 12h, {len(brief_hist)} briefs):")
         for b in brief_hist:
-            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
+            ts = datetime.fromisoformat(b["generated_at"].replace("Z", "+00:00")).strftime("%H:%MZ")
             snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
             lines.append(f"  {ts}: {snippet}…")
     elif len(brief_hist) == 1:
@@ -1061,7 +1188,7 @@ def _trend_analysis_prompt_12h() -> str:
 
 
 TREND_SYSTEM_PROMPT_EP = (
-    "You are the EP intelligence officer for CS Executive Services. "
+    "You are the EP intelligence officer for [operator LLC]. "
     "You have just received a 12-hour data trend package showing CPS scores and "
     "prior EP-advance brief snapshots for a DC-metro UHNWI protective operation. "
     "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
@@ -1076,26 +1203,30 @@ TREND_SYSTEM_PROMPT_EP = (
 
 
 def _generate_trend_narrative_ep(trend_prompt: str) -> str:
-    """Generate the 12h trend narrative via Ollama. Returns empty string on failure."""
+    """Generate the 12h trend narrative via Ollama. Returns empty string on failure.
+
+    2026-08-30 (night pass): unified onto common.llm.generate(), mirroring
+    ops_brief.py's _generate_trend_narrative() argument-for-argument (its
+    own trend values kept: num_predict 260 -> max_tokens, this call's
+    measured 540s timeout). See _call_ollama() above and the import
+    comment for the full rationale; the old direct path here also
+    silently swallowed its OllamaBusyError into a None return (missing
+    `return ""`, so it fell through to an implicit None -- str-typed
+    callers were saved only by `or ""` at one call site). generate()
+    handles the busy/failure logging and sanitize_llm_response() (with
+    truncation trim) internally.
+    """
     if not OLLAMA_BASE_URL:
         return ""
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={
-                "model":  OLLAMA_MODEL,
-                "system": TREND_SYSTEM_PROMPT_EP,
-                "prompt": trend_prompt,
-                "stream": False,
-                "options": {"num_predict": 260, "temperature": 0.15},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception as exc:
-        log.warning("ep-advance: trend narrative failed — %s", exc)
-        return ""
+    return llm_generate(
+        system=None,
+        prompt=trend_prompt,
+        ollama_model=OLLAMA_TREND_MODEL_EP,
+        max_tokens=260,
+        temperature=0.15,
+        timeout=OLLAMA_TREND_TIMEOUT_EP,
+        allow_anthropic=False,
+    ) or ""
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
@@ -1118,11 +1249,15 @@ def main(force: bool = False, run_trend: bool = False) -> None:
         nws      = _nws_section()
         route    = _route_section()
         cps      = _cps_section()
-        venues   = _venue_summary()
-        extended = _extended_venues_summary()
         threats  = _threat_sites_section()
         osint    = _osint_section()
 
+        # 2026-08-31 (operator directive): venues/extended dropped from this
+        # hourly prompt -- see personas.py's 'ep-advance' comment for the
+        # full root-cause. The venue matrix doesn't change hour-to-hour;
+        # ep_advance_venues.py regenerates it once daily (plus manual
+        # trigger) and this hourly run just splices in whatever it last
+        # wrote, below.
         prompt = "\n\n".join([
             f"=== EP-ADVANCE DATA PULL {now_utc} ===",
             f"TFR / SECURITY INDICATORS:\n{tfr}",
@@ -1132,8 +1267,6 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             f"ROUTE / GROUND IMPACT:\n{route}",
             osint,
             threats,
-            venues,
-            extended,
         ])
 
         result = _call_ollama(prompt)
@@ -1142,9 +1275,21 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             status = "ok"
             log.info("ep-advance: brief generated via Ollama/%s", OLLAMA_MODEL)
         else:
-            full_text, concise = _fallback_brief(tfr, weather, nws, route, osint)
-            status = "ok"
-            log.info("ep-advance: brief generated (deterministic fallback)")
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                full_text, concise = _fallback_brief(tfr, weather, nws, route, osint)
+                status = "ok"
+                log.info("ep-advance: brief generated (deterministic fallback)")
+            except Exception as fallback_err:
+                log.error("ep-advance: deterministic fallback also failed — %s", fallback_err)
+                full_text = (
+                    "[EP-ADVANCE] Generation failed -- both Ollama and the "
+                    "deterministic fallback errored. See logs."
+                )
+                concise = full_text
+                status = "fallback_error"
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "EP-ADVANCE+TREND" if is_12h_boundary else "EP-ADVANCE"
@@ -1168,6 +1313,16 @@ def main(force: bool = False, run_trend: bool = False) -> None:
                 f"=== TRADITIONAL BRIEF ===\n{full_text}"
             )
             log.info("ep-advance: trend section prepended")
+
+        full_text = full_text.rstrip() + "\n\n" + _cached_venue_section()
+
+        # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
+        # eVTOL/Part 108) watch section if a fresh one exists -- last-mile
+        # EP planning angle, same cached weekly source ops-brief uses. See
+        # common.aam_watch docstring.
+        aam_section = get_aam_watch_section("ep")
+        if aam_section:
+            full_text = full_text.rstrip() + "\n\n=== " + aam_section
 
         # Write to state dir
         state = pathlib.Path(config.state_dir())

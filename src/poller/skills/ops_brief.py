@@ -1,7 +1,7 @@
 """
 ops-brief — unified operational briefing, now running hourly.
 
-Model: ollama/mistral (corporatetraveldc-pi5-osint:latest, mistral-nemo 12B; Local LLM)
+Model: ollama/mistral (corporatetraveldc-pi5-brief:latest, mistral-nemo 12B; Local LLM)
 MCP: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 Schedule: every hour :00 ET (corporatetraveldc-ops-brief.timer)
   — standard brief every hour
@@ -24,6 +24,15 @@ Pushes to:
   dispatch-debriefs  — full narrative (priority 3) — click → /brief?tab=ops
   dispatch           — concise bottom line (priority 3)
 Both fire simultaneously.
+
+2026-09-02 context-budget fix: the main-call prompt had outgrown the chat
+tier's 4096-token window (persona + data pull + num_predict 900) and every
+hourly run from 2026-08-31 ~22:00 ET was silently falling back to the
+deterministic brief on llama-server's exceed_context_size_error 400. See
+OPS_BRIEF_DATA_TOKEN_BUDGET below for the arithmetic and the per-section
+caps that keep it inside the window. The live system prompts are
+common/personas.py's "ops-brief"/"ops-brief-trend" entries (the in-file
+copies that used to live here were dead code and are gone).
 """
 
 import os
@@ -31,27 +40,69 @@ import argparse
 import json
 import logging
 import pathlib
-import sqlite3
+import re
 import time as _time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 import requests
 
 from common import config, db, ntfy_push as _ntfy
-from common.llm import generate as llm_generate
+from common.aam_watch import get_aam_watch_summary
+from common.disruption_weather_watch import get_disruption_weather_capsule
+from common.llm import generate as llm_generate, trim_to_token_budget
 from common.sr1_log import log_usage
 
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "ops-brief"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "mistral")
+                     or "corporatetraveldc-pi5-ops-brief:latest")
+OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
+                      or "corporatetraveldc-pi5-ops-brief-trend:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-OLLAMA_TIMEOUT    = 900  # stopgap: Pi 5 CPU under load; systemd TimeoutStartSec=1000
+# Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
+# timeouts, one constant per call site. Fail-fast semantics unchanged
+# (allow_anthropic=False -- see the 2026-08-06 incident writeup in git
+# history; max_retries=0 was part of that same fix but the parameter was
+# removed from generate() 2026-08-30, see common/llm.py).
+# Measured 2026-08-15 under forced TIER2+ contention (Phase-3 spike
+# methodology: guard timer paused, synthetic burn, la 16-27 at sample;
+# spiked persona-only refs bracketing these samples: 43.6s / 53.1s):
+# main:  1164-tok prompt / 121.5s eval + gen at 0.68 tok/s -> 741s
+#        at the 500-tok cap; delta over the 48.4s ref = 813.7s, x1.10
+#        top-up to the locked 53s bound = 891.8s;
+#        (53 + 891.8) x 1.25 = 1181s -> 1200.
+# trend: 1133-tok prompt / 127.6s eval + gen at 0.82 tok/s -> 244s
+#        at the 200-tok cap; delta 323.1s -> 354.1s;
+#        (53 + 354.1) x 1.25 = 509s -> 510.
+# 2026-08-17 (fable-timing-artifact-sweep): main-call cap raised 500 -> 900
+# tokens (max_tokens below AND PARAMETER num_predict in
+# corporatetraveldc.ops-brief, kept in parity). Root cause, verified against
+# real archived output: every sampled brief in brief_archive (1577..1599)
+# ends mid-sentence at the 500-token cap -- e.g. 1599 stops at 'Closure SAN
+# at' -- because phi3:mini walks the data pull in input order and exhausts
+# the budget on CPS/TFR/METAR/NAS before ever reaching the NWS and Amtrak
+# blocks at the tail of the prompt. 500 tokens is ~375 words; the briefing
+# structure the skill asks for needs ~550 words (~730 tokens) minimum.
+# This is the operator-reported 'prose drops NWS/Amtrak' bug's largest
+# component (the other two: fetch timeouts with no DB fallback -- fixed in
+# _nws_alerts_from_db()/_amtrak_from_db() below -- and the Modelfile task
+# layer never enumerating NWS, which is a staged proposal, not applied).
+#
+# Timeout re-derived with the same Phase-3/4 formula as the 1200s value
+# above, scaled to the 900-tok cap:
+#   total = 121.5s eval + 900 tok / 0.68 tok/s = 1445s; delta over the
+#   48.4s ref = 1396.6s, x1.10 top-up = 1536.3s;
+#   (53 + 1536.3) x 1.25 = 1986.6 -> 2000.
+# systemd TimeoutStartSec on corporatetraveldc-ops-brief.container raised
+# 2600 -> 3600 in the same change (main 2000 + trend 510 + preflight gates
+# 240+180 + 2x load-phase 360 + fetches/overhead ~150 = ~3440 worst case).
+OLLAMA_TIMEOUT       = 2000
+OLLAMA_TREND_TIMEOUT = 510
 
 HUB_AIRPORTS = "KDCA,KIAD,KBWI,KJFK,KEWR,KLGA,KBOS,KPHL,KORD,KATL,KLAX,KSFO,KSEA,KDEN,KDFW"
 AVIATIONWX_METAR = f"https://aviationweather.gov/api/data/metar?ids={HUB_AIRPORTS}&format=raw&hours=1"
@@ -61,6 +112,14 @@ NWS_ALERTS_URL = (
     "?area=VA,MD,DC,NY,NJ,CT,MA,PA,DE,RI&status=actual&severity=Extreme,Severe,Moderate"
 )
 AMTRAKER_URL = "https://api.amtraker.com/v3/trains"
+
+# ATCSCC daily "Operations Plan" advisory — FAA's own forward-looking
+# forecast (planned/possible/probable GDPs, ground stops, airspace
+# constraints), distinct from currently-active NAS programs. Not a
+# documented/versioned API — legacy fly.faa.gov advisories database,
+# still live underneath the nasstatus.faa.gov SPA. Parsed defensively.
+ATCSCC_ADV_LIST_URL   = "https://www.fly.faa.gov/adv/adv_list"
+ATCSCC_ADV_DETAIL_URL = "https://www.fly.faa.gov/adv/adv_otherdis"
 
 NEC_ROUTES = [
     "Acela", "Northeast Regional", "Palmetto", "Carolinian",
@@ -96,54 +155,45 @@ AMTRAK_STATIONS: dict[str, str] = {
     "NFK": "Norfolk",
 }
 
-SYSTEM_PROMPT = """You are producing a 6-hour operational briefing for CS Executive Services,
-an executive chauffeur operation based in Arlington, VA (Washington DC metro).
-The operator is also a credentialed CERT/ARES/Skywarn volunteer (NoVA).
+# 2026-09-02: the SYSTEM_PROMPT constant that lived here was DEAD CODE and
+# has been removed -- _call_ollama() passes system=None, and the live system
+# prompt is common/personas.py's PERSONAS["ops-brief"] entry (preamble +
+# task layer), served per-request by common/llm.py since the 2026-08-27
+# llama.cpp cutover. Edit the persona registry (and its paired
+# corporatetraveldc.ops-brief Modelfile source text), NOT this file, to
+# change the prompt. The constant here had drifted from the promoted
+# 2026-08-19 task layer and was a trap for future prompt edits.
 
-Your audience is a professional — be dense, direct, and use aviation/dispatch shorthand
-where natural (VFR, IMC, GDP, G/S, kt, SM, CPS, etc.). No filler.
-
-Produce a structured plain-text briefing with these sections in order.
-Use ALL CAPS section labels — no markdown, no bullets, just clean readable paragraphs.
-
-LEAD: Single most operationally significant item right now (one sentence max).
-
-DC METRO: Current conditions at DCA/IAD/BWI — ceiling, vis, wind, precip.
-Note any delay programs, closure NOTAMs, or significant frontal activity.
-
-NORTHEAST: JFK/EWR/LGA/BOS/PHL conditions. Flag gusty winds, convection, or
-approaching systems. Note any NAS programs.
-
-TRANSCON HUBS: LAX/SFO/SEA/ORD/DFW/ATL/DEN — one line each unless a GDP
-or ground stop is active (expand those). Flag marine layer, convection, wind events.
-
-NAS PROGRAMS: All active ground stops, GDPs, and departure delay programs nationwide.
-Include avg/max delay times and trend. If none, state that explicitly.
-
-TFRs: VIP/POTUS TFRs active or expected. Include TFR ID if known. Note any
-impacts to DC-area airspace. If none active, state that.
-
-NWS ALERTS: Any active Severe or Extreme weather alerts for DC/Northeast.
-If none, one line stating that.
-
-AMTRAK NEC: Status of Northeast Corridor trains — Acela and NE Regional.
-Note any delays over 15 minutes. If feed unavailable, say so.
-CRITICAL: Amtrak station names (Washington Union Station, New York Penn Station,
-Boston South Station, etc.) are RAIL stations, NOT airports. NEVER list train
-delays under airport sections. Airport delays come ONLY from FAA NAS PROGRAMS.
-Train delays come ONLY from AMTRAK NEC. These are strictly separate modes.
-
-ROUTE IMPACT: Any ground transportation impacts — road closures, POTUS movement
-advisories, major events affecting DC metro routes. Omit if nothing notable.
-
-OPERATIONAL NOTES: Anything a professional DC-area executive chauffeur and
-CERT/ARES volunteer should know for this operational period — unusual airspace
-activity, security events, weather hazards relevant to ground ops, etc.
-Omit if nothing notable.
-
-BOTTOM LINE: 1-2 sentence operational summary. What matters most right now.
-
-Keep total brief under 550 words. Lead section first, bottom line last."""
+# Context budget (2026-09-02): the ops-brief persona routes to the chat
+# tier (num_ctx 4096 -- see personas.py and llama-chat.service's -c 4096).
+# Live persona (preamble+task) measures 902 real tokens (/tokenize against
+# the chat server); num_predict is 900. Root-caused tonight in llama-chat's
+# journal: the hourly main-call prompt had grown to 4300-5200 tokens total
+# and EVERY run from 2026-08-31 ~22:00 ET onward was rejected with
+# exceed_context_size_error (HTTP 400) and silently shipped the
+# deterministic fallback -- the exact bug class that hit ep-advance
+# 2026-08-30. Budget arithmetic, in REAL tokens:
+#   4096 ctx - 902 persona - 900 gen - ~120 instruction - overhead/margin
+#   => ~2000 real tokens for the trimmed data pull.
+#
+# UNIT WARNING: trim_to_token_budget() estimates at 4.0 chars/token, but
+# this skill's content is aviation-dense (raw METAR/NAS/ATCSCC groups like
+# "020654Z 07007KT 10SM SCT010") and measures ~1.9-2.1 chars/token against
+# the real phi3 tokenizer (validated live 2026-09-02 via /tokenize: 5780
+# chars -> 3024 tokens). So every heuristic budget in this file is set at
+# ~HALF the real-token target it is meant to enforce: 1000 heuristic
+# tokens = 4000 chars = ~2000 real tokens.
+#
+# 2026-09-21 model swap (phi3-mini -> Qwen3-4B): re-measured the same
+# way on the same aviation-dense sample -- Qwen3's tokenizer runs ~2.08
+# chars/token (vs phi3's ~1.84 on the identical string), i.e. slightly
+# MORE token-efficient on this content, not less. The existing ~2.0
+# chars/token assumption this file's budgets are built on is therefore
+# still a safe (mildly conservative, not dangerous) approximation under
+# the new model -- not re-tuned tighter here since "leaves a little
+# headroom on the table" is the safe direction to be wrong in, unlike
+# the reverse.
+OPS_BRIEF_DATA_TOKEN_BUDGET = 1000
 
 
 def _fetch(url: str, timeout: int = 10) -> str | None:
@@ -169,7 +219,25 @@ def _metar_section() -> str:
             + (f" ({m['precip_code']})" if m.get("precip_code") else "")
             for m in primary
         )
-    lines = [l.strip() for l in raw.splitlines() if l.strip().startswith(("METAR", "SPECI"))]
+    # 2026-09-02 (context-budget fix, see OPS_BRIEF_DATA_TOKEN_BUDGET):
+    # - RMK groups stripped -- remarks (sensor metadata, SLP, T-groups)
+    #   routinely double a METAR line's length and carry nothing the
+    #   brief's sections use.
+    # - Deduped to the newest obs per station -- the hours=1 API returns
+    #   every METAR+SPECI in the window, newest first, so busy weather
+    #   hours were feeding the model 2-3 near-identical lines per field.
+    lines = []
+    seen_stations: set[str] = set()
+    for l in raw.splitlines():
+        l = l.strip()
+        if not l.startswith(("METAR", "SPECI")):
+            continue
+        toks = l.split()
+        station = toks[1] if len(toks) > 1 else l
+        if station in seen_stations:
+            continue
+        seen_stations.add(station)
+        lines.append(l.split(" RMK ")[0])
     # Supplement missing primary DC airports from local DB
     # (aviationweather.gov occasionally drops KDCA/KIAD from the response)
     present = {l.split()[1] for l in lines if len(l.split()) > 1}
@@ -223,10 +291,256 @@ def _nas_section() -> str:
         return f"NAS XML parse error: {e}"
 
 
+
+def _find_todays_opsplan_advisory() -> tuple[str, str] | None:
+    """
+    Locate today's (UTC) ATCSCC OPERATIONS PLAN advisory in the legacy
+    fly.faa.gov advisories database. Returns (adv_date_MMDDYYYY, advn) or
+    None if not found / fetch failed. The list page is newest-first, so the
+    first DCC/OPERATIONS PLAN row is the latest (handles same-day reissues).
+    """
+    today = datetime.now(timezone.utc)
+    params = {
+        "whichAdvisories": "ATCSCC",
+        "advisoryCategory": "All",
+        "date": today.strftime("%Y-%m-%d"),
+        "airflow": "true", "ctop": "true", "gStop": "true",
+        "gDelay": "true", "route": "true", "other": "true",
+    }
+    try:
+        r = requests.get(ATCSCC_ADV_LIST_URL, params=params, timeout=12)
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.warning("ATCSCC adv list fetch failed: %s", e)
+        return None
+
+    for row in re.split(r"<tr[^>]*>", html, flags=re.IGNORECASE):
+        if "OPERATIONS PLAN" not in row.upper():
+            continue
+        link = re.search(r"adv_otherdis\?adv_date=(\d{8})&advn=(\d+)", row)
+        if not link:
+            continue
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.IGNORECASE | re.DOTALL)
+        cell_text = [re.sub(r"<[^<]+?>", "", c).strip() for c in cells]
+        # Column 2 (index 1) is CONTROL ELEMENT — the daily ops plan is issued by DCC.
+        if len(cell_text) >= 2 and cell_text[1].upper() == "DCC":
+            return link.group(1), link.group(2)
+    return None
+
+
+def _fetch_opsplan_text(adv_date: str, advn: str) -> str | None:
+    """Fetch and lightly clean the raw <PRE> advisory text for a given advisory."""
+    try:
+        r = requests.get(
+            ATCSCC_ADV_DETAIL_URL,
+            params={"adv_date": adv_date, "advn": advn},
+            timeout=12,
+        )
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.warning("ATCSCC adv detail fetch failed: %s", e)
+        return None
+    m = re.search(r"<PRE>(.*?)</PRE>", html, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    raw = m.group(1)
+    for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
+        raw = raw.replace(a, b)
+    return raw.strip()
+
+
+_OPSPLAN_HEADER_RE = re.compile(r"^([A-Z][A-Z0-9 /()_\-]{2,60}:)\s*$", re.MULTILINE)
+
+
+def _split_opsplan_sections(raw: str) -> dict[str, str]:
+    """Split the raw ATCSCC advisory text into {SECTION NAME: body} on ALL-CAPS
+    header lines (e.g. 'TERMINAL PLANNED:'). Free text before the first header
+    (the human-written forecast paragraph) is stored under '_intro'."""
+    headers = list(_OPSPLAN_HEADER_RE.finditer(raw))
+    if not headers:
+        return {"_intro": raw.strip()}
+    sections: dict[str, str] = {}
+    intro = raw[: headers[0].start()].strip()
+    if intro:
+        sections["_intro"] = intro
+    for i, h in enumerate(headers):
+        key = h.group(1).rstrip(":").strip()
+        start = h.end()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(raw)
+        sections[key] = raw[start:end].strip()
+    return sections
+
+
+def _fetch_atcscc_opsplan_sections() -> tuple[str, dict] | None:
+    """Fetch + split today's ATCSCC OPERATIONS PLAN advisory ONCE. Returns
+    (advn, sections) or None. Shared by the forecast formatter and the
+    webinar-defer check so a single ops-brief run only hits the legacy
+    fly.faa.gov advisories database twice total (list + detail), not four
+    times."""
+    found = _find_todays_opsplan_advisory()
+    if not found:
+        return None
+    adv_date, advn = found
+    raw = _fetch_opsplan_text(adv_date, advn)
+    if not raw:
+        return None
+    return advn, _split_opsplan_sections(raw)
+
+
+_WEBINAR_RE = re.compile(r"NEXT PLANNING WEBINAR:\s*(\d{3,4})Z?", re.IGNORECASE)
+
+
+def _next_webinar_utc(sections: dict, now: "datetime | None" = None) -> "datetime | None":
+    """Parse 'NEXT PLANNING WEBINAR: HHMMZ' out of the advisory (it lands as
+    trailing text in whichever section happens to be last -- currently VIP
+    MOVEMENT(S) -- since it has inline content and isn't its own header).
+    Resolves to the next UTC occurrence: today if still ahead, else assumed
+    to mean tomorrow (advisories are same-calendar-day documents)."""
+    now = now or datetime.now(timezone.utc)
+    text = " ".join(sections.values())
+    m = _WEBINAR_RE.search(text)
+    if not m:
+        return None
+    hhmm = m.group(1).zfill(4)
+    try:
+        hour, minute = int(hhmm[:2]), int(hhmm[2:])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+    except ValueError:
+        return None
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate < now - timedelta(hours=1):
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _defer_for_webinar(webinar_dt: datetime) -> None:
+    """Push a defer notice and skip generation this cycle.
+
+    --- FIXED 2026-07-20 ---
+    This used to try to schedule a one-shot systemd-run --user timer to
+    rerun ~10 minutes after the webinar. That never actually worked: this
+    code runs inside the corporatetraveldc-poller container (a plain Python
+    image, no systemd tooling at all), so subprocess.run(["systemd-run",
+    ...]) always failed with FileNotFoundError ([Errno 2] No such file or
+    directory: 'systemd-run'). Confirmed today via journalctl -- every
+    defer this session (11:00 and 13:00 ET) hit that error and silently
+    dropped the whole hour's brief instead of rerunning. The referenced
+    target unit (corporatetraveldc-ops-brief-deferred.service) doesn't
+    even exist on the host either, so this was never fully wired up.
+
+    Real fix: don't try to self-reschedule at all. ops-brief already runs
+    hourly via corporatetraveldc-ops-brief.timer. Webinars only trigger a
+    defer when they land within 30 min of a scheduled run, and observed
+    spacing between webinars is ~2 hours -- so the NEXT regular hourly run
+    (30-60 min later) is always well past the post-webinar update window
+    on its own. No special rerun is needed; just skip this cycle cleanly
+    and let the existing timer catch it next hour. Simpler and it can't
+    silently eat a cycle the way the broken subprocess call did.
+    """
+    now = datetime.now(timezone.utc)
+    next_hourly_utc = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+
+    msg = (
+        f"Ops brief deferred: ATCSCC planning webinar at {webinar_dt.strftime('%H:%MZ')} "
+        f"is within 30 min. Skipping this cycle so we don't publish on stale "
+        f"pre-webinar data -- next hourly run at {next_hourly_utc.strftime('%H:%MZ')} "
+        f"will pick up the post-webinar Operations Plan update."
+    )
+    log.info("%s", msg)
+    try:
+        # topic_brief override added 2026-08-02: dispatch-ops is now
+        # weekly-summary-only (see _send_ntfy_dual below) -- this and every
+        # other ops-brief-family push moves to "ops-brief", the topic name
+        # that was already documented everywhere but never actually used
+        # until now (see ntfy_topic_audit_20260802 memory for how that was
+        # found).
+        _ntfy.send_dual(msg, msg, title="OPS BRIEF DEFERRED", topic_brief="ops-brief")
+    except Exception as e:
+        log.warning("defer notice push failed: %s", e)
+
+
+def _atcscc_forecast_section(prefetched: "tuple[str, dict] | None" = None) -> str:
+    """
+    ATCSCC's own daily Operations Plan advisory — the FAA's forward-looking
+    forecast of planned/possible/probable ground stops, GDPs, and airspace
+    constraints for later today/overnight. Complements _nas_section(), which
+    only reflects programs that are CURRENTLY active.
+    pass prefetched=(advn, sections) from _fetch_atcscc_opsplan_sections()
+    to avoid a redundant fetch when the caller already pulled it (e.g. the
+    webinar-defer check in main()).
+    """
+    try:
+        data = prefetched if prefetched is not None else _fetch_atcscc_opsplan_sections()
+        if not data:
+            return "ATCSCC Operations Plan advisory not yet posted or unavailable for today."
+        advn, sections = data
+
+        # 2026-09-02: line caps tightened (10/14/14/4 -> 6/9/9/3) as part of
+        # the context-budget fix (OPS_BRIEF_DATA_TOKEN_BUDGET above) -- the
+        # full-width advisory blocks were the single largest contributor to
+        # the >4096-token overflow. The list is newest/most-significant-first
+        # in FAA's own advisory layout, so a tail cap loses the least.
+        def _clean(body: str, max_lines: int = 9) -> str:
+            lines = [
+                l.strip() for l in body.splitlines()
+                if l.strip() and not set(l.strip()) <= {"_"}
+            ]
+            return "\n".join(lines[:max_lines]) if lines else "None."
+
+        intro            = _clean(sections.get("_intro", ""), max_lines=6)
+        terminal_planned = _clean(sections.get("TERMINAL PLANNED", ""))
+        enroute_planned  = _clean(sections.get("EN ROUTE PLANNED", ""))
+        vip_raw = sections.get("VIP MOVEMENT(S)", "")
+        # VIP MOVEMENT(S) is the last labeled section in the advisory, so its
+        # body runs to end-of-text and picks up the trailing signature block
+        # (planning webinar time, sequence code, sender tag) -- trim those off.
+        vip_raw = vip_raw.split("NEXT PLANNING WEBINAR")[0]
+        vip              = _clean(vip_raw, max_lines=3)
+
+        parts = [f"ATCSCC ADVZY {advn} DCC OPERATIONS PLAN (advisory text, forward-looking):"]
+        if intro:
+            parts.append(f"SUMMARY: {intro}")
+        parts.append(f"TERMINAL PLANNED (later today/overnight):\n{terminal_planned}")
+        parts.append(f"EN ROUTE PLANNED (later today/overnight):\n{enroute_planned}")
+        if vip and vip != "None.":
+            parts.append(f"VIP MOVEMENT(S) NOTED IN OPS PLAN:\n{vip}")
+        return "\n\n".join(parts)
+    except Exception as e:
+        log.warning("ATCSCC forecast section failed: %s", e)
+        return f"ATCSCC Operations Plan forecast unavailable ({e})."
+
+
+def _nws_alerts_from_db() -> str | None:
+    """Local-DB fallback for _nws_alerts_section() -- same pattern
+    _metar_section() has had all along. 2026-08-17 (fable sweep): the live
+    api.weather.gov fetch hits its 10s read timeout with some regularity
+    (real logged instances 14:00 and 15:00 EDT today), and until now that
+    turned into a hard 'NWS alerts unavailable.' line even though the
+    platform's own NWS ingest keeps a fresh nws_alerts cache (5 active
+    alerts in it at the moment this was written). Data was present; the
+    brief dropped it."""
+    try:
+        alerts = db.get_active_nws_alerts()
+    except Exception as e:
+        log.warning("ops-brief: nws_alerts DB fallback failed: %s", e)
+        return None
+    if not alerts:
+        return None
+    return "\n".join(
+        f"[{a.get('severity','?')}] {a.get('event_type','?')} — "
+        f"{(a.get('area_desc') or '')[:60]} — "
+        f"{(a.get('headline') or '')[:80]} (local-db)"
+        for a in alerts[:6]
+    )
+
+
 def _nws_alerts_section() -> str:
     raw = _fetch(NWS_ALERTS_URL)
     if not raw:
-        return "NWS alerts unavailable."
+        return _nws_alerts_from_db() or "NWS alerts unavailable."
     try:
         data = json.loads(raw)
         features = data.get("features", [])
@@ -243,10 +557,31 @@ def _nws_alerts_section() -> str:
         return f"NWS alerts parse error: {e}"
 
 
+def _amtrak_from_db() -> str | None:
+    """Local-DB fallback for _amtrak_section() -- see _nws_alerts_from_db()
+    above for the rationale (same 2026-08-17 finding). amtrak_status is
+    refreshed continuously by the amtrak-tracker/ingest paths (rows minutes
+    apart in the live DB, carrying real NEC delays -- e.g. Acela +72min at
+    the time this was written), so a fetch timeout should degrade to the
+    cache, not to 'feed unavailable'. 30-min freshness cap so a genuinely
+    dead feed still reads as unavailable rather than serving stale delays."""
+    try:
+        row = db.get_latest_amtrak_status()
+    except Exception as e:
+        log.warning("ops-brief: amtrak DB fallback failed: %s", e)
+        return None
+    if not row or not row.get("delay_summary"):
+        return None
+    age_s = _time.time() - (row.get("fetched_at") or 0)
+    if age_s > 1800:
+        return None
+    return f"{row['delay_summary']} (local-db, {int(age_s/60)}min old)"
+
+
 def _amtrak_section() -> str:
     raw = _fetch(AMTRAKER_URL, timeout=12)
     if not raw:
-        return "Amtrak feed unavailable (timeout)."
+        return _amtrak_from_db() or "Amtrak feed unavailable (timeout)."
     try:
         data = json.loads(raw)
         nec = []
@@ -279,7 +614,10 @@ def _amtrak_section() -> str:
             f"Train {t.get('trainNum','?')} ({t.get('routeName','?')}) "
             f"{_stn(t.get('origCode','?'))} → {_stn(t.get('destCode','?'))} "
             f"{'+'if d>0 else ''}{d}min {t.get('trainState','?')} at {t.get('eventName','?')}"
-            for d, t in nec[:12]
+            # 2026-09-02: 12 -> 8 rows, sorted worst-delay-first above, so
+            # the cap sheds only the least-delayed trains (context-budget
+            # fix, see OPS_BRIEF_DATA_TOKEN_BUDGET).
+            for d, t in nec[:8]
         )
     except Exception as e:
         return f"Amtrak parse error: {e}"
@@ -312,12 +650,56 @@ def _route_section() -> str:
     return route["route_narrative"][:400]
 
 
+def _geometry_section() -> str:
+    """Geometric reasoning Phase 1 splice
+    (docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md §5/§6) -- same live-call
+    shape as _cps_section()/_route_section() above, not a cached-file read
+    like _cached_venue_section() in ep_advance_brief.py: query_all_angles()
+    is a cheap deterministic DB query over the semantic layer, not a
+    once-daily precompute worth caching.
+
+    ops-brief has no single fixed "entity of interest" the way a per-flight
+    tracking skill does, so most_recent_geometry_entity() picks a real,
+    defensible one: the most recently (real-timestamp) touched vault note
+    that already has at least one geometric edge. format_all_angles_block()
+    is the ONE canonical rendering (design doc §6: byte-identical across
+    every consumer) -- not reworded here, just spliced in verbatim like
+    every other section, then subject to the same trim_to_token_budget()
+    cap as the rest (safe: matches are already sorted strongest-first by
+    query_all_angles(), so a tail trim sheds the weakest pairs, same
+    "least important shed first" property every other section relies on).
+
+    Import is function-local + defensive: this section is informational
+    only, same posture as the venue/AAM sections -- a missing/failing
+    semantic layer must never block the core ops brief."""
+    try:
+        from second_brain.semantic import (
+            format_all_angles_block, most_recent_geometry_entity, query_all_angles,
+        )
+    except Exception:
+        return ""
+    try:
+        entity = most_recent_geometry_entity()
+        if not entity:
+            return ""
+        return format_all_angles_block(query_all_angles(entity))
+    except Exception:
+        return ""
+
+
 def _cps_history_6h() -> list[dict]:
     """Return CPS score entries from the last 6 hours, oldest first."""
     cutoff = _time.time() - 6 * 3600
     try:
         with db.conn() as c:
-            c.row_factory = sqlite3.Row
+            # 2026-09-20: db.conn() already sets the right row factory for
+            # whichever backend is active (dict rows on Postgres, sqlite3.Row
+            # on SQLite -- see its own docstring). This manual override was
+            # redundant on SQLite and actively broken on Postgres: psycopg
+            # calls its row factory with a different convention than
+            # sqlite3.Row's own (cursor, row) constructor expects, which is
+            # exactly the "Row expected 2 arguments, got 1" TypeError seen
+            # live -- confirmed in ops-brief's own logs.
             rows = c.execute(
                 "SELECT score, label, narrative, computed_at FROM cps_scores "
                 "WHERE computed_at >= ? ORDER BY computed_at ASC",
@@ -331,10 +713,12 @@ def _cps_history_6h() -> list[dict]:
 
 def _brief_history_6h() -> list[dict]:
     """Return ops brief archive entries from the last 6 hours, oldest first."""
-    cutoff = _time.time() - 6 * 3600
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ISO-8601 string -- matches
+    # brief_archive.generated_at's stored TEXT format so the WHERE
+    # clause actually compares correctly (was float vs TEXT before).
     try:
         with db.conn() as c:
-            c.row_factory = sqlite3.Row
+            # See _cps_history_6h()'s comment above -- same fix, same reason.
             rows = c.execute(
                 "SELECT id, generated_at, brief_type, content FROM brief_archive "
                 "WHERE generated_at >= ? AND brief_type='ops' ORDER BY generated_at ASC",
@@ -344,6 +728,33 @@ def _brief_history_6h() -> list[dict]:
     except Exception as e:
         log.warning("ops-brief: brief_history query failed: %s", e)
         return []
+
+
+def _brief_key_lines(content: str) -> str:
+    """Extract the LEAD and BOTTOM LINE lines from an archived brief.
+
+    2026-09-02: the trend pass used to feed the model the first 150 chars of
+    each archived brief -- which is the title header ("OPS BRIEF <ts>
+    (Ollama/...)") plus the first words of whatever followed, i.e. nearly
+    byte-identical hour to hour and carrying no delta signal at all. The
+    LEAD and BOTTOM LINE sections are the brief's actual hour-over-hour
+    signal (mirrors what ep-advance's richer 12h snippets achieve). Falls
+    back to the old snippet for briefs without those markers (e.g. the
+    deterministic fallback format).
+    """
+    lead, bottom = "", ""
+    for line in content.splitlines():
+        s = line.strip()
+        u = s.upper()
+        if not lead and u.startswith("LEAD:"):
+            lead = s[:140]
+        elif not bottom and u.startswith("BOTTOM LINE"):
+            bottom = s[:140]
+        if lead and bottom:
+            break
+    if lead or bottom:
+        return " | ".join(x for x in (lead, bottom) if x)
+    return (content or "").replace("\n", " ").strip()[:150] + "…"
 
 
 def _trend_analysis_prompt() -> str:
@@ -376,92 +787,110 @@ def _trend_analysis_prompt() -> str:
     else:
         lines.append("\nCPS history: No data in last 6h.")
 
-    # Brief archive snapshot comparison
+    # Brief archive snapshot comparison -- LEAD/BOTTOM LINE per hour, the
+    # real hour-over-hour signal (see _brief_key_lines above). Last 6 briefs
+    # at most so the trend prompt stays well inside the chat tier's window.
     if len(brief_hist) >= 2:
-        lines.append(f"\nBrief archive (last 6h, {len(brief_hist)} briefs):")
-        for b in brief_hist:
-            ts = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).strftime("%H:%MZ")
-            # Extract first 150 chars of content for trend context
-            snippet = (b.get("content") or "").replace("\n", " ").strip()[:150]
-            lines.append(f"  {ts}: {snippet}…")
+        recent = brief_hist[-6:]
+        lines.append(f"\nBrief archive (last 6h, showing {len(recent)} of {len(brief_hist)} briefs):")
+        for b in recent:
+            ts = datetime.fromisoformat(b["generated_at"].replace("Z", "+00:00")).strftime("%H:%MZ")
+            lines.append(f"  {ts}: {_brief_key_lines(b.get('content') or '')}")
     elif len(brief_hist) == 1:
         lines.append(f"\nBrief archive: 1 prior brief in 6h window.")
     else:
         lines.append("\nBrief archive: No prior briefs in 6h window (first run of interval).")
 
-    return "\n".join(lines)
+    # 2026-09-02: current-state anchor for the PREDICTIVE paragraph -- the
+    # persona asks for an outlook grounded in "active NAS programs ... and
+    # any known TFR/schedule changes", but this prompt previously carried
+    # only history, so the model had to infer the present from stale
+    # snippets. Both accessors are local-DB reads, no network.
+    lines.append("\nCURRENT STATE (anchor for the predictive outlook):")
+    lines.append(f"  {_cps_section()[:200]}")
+    lines.append(f"  {_tfr_section()[:200]}")
+
+    # Belt-and-suspenders: same chat-tier 4096 window as the main call
+    # (persona 764 real tokens + num_predict 200), so cap the package well
+    # under it. Cap is in the trimmer's 4-chars/token heuristic units
+    # (~half the real-token target, see OPS_BRIEF_DATA_TOKEN_BUDGET's UNIT
+    # WARNING): 600 heuristic = 2400 chars = ~1200 real tokens worst case.
+    # Rarely triggers -- 6 CPS rows + 6 key-line rows measured 784 real.
+    return trim_to_token_budget("\n".join(lines), 600)
 
 
-TREND_SYSTEM_PROMPT = (
-    "You are the dispatch intelligence officer for CS Executive Services. "
-    "You have just received a 6-hour data trend package showing CPS scores and brief snapshots. "
-    "Produce exactly two labeled paragraphs, in this order, each 2-3 dense sentences:\n\n"
-    "RETROSPECTIVE (LAST 6H): whether conditions improved, degraded, or stayed stable over "
-    "the past 6 hours, and the single most significant change, if any.\n\n"
-    "PREDICTIVE (NEXT 6H): the outlook for the next 6 hours based on current trajectory, "
-    "active NAS programs, weather systems in motion, and any known TFR/schedule changes.\n\n"
-    "Aviation/dispatch shorthand is expected. No filler. Use exactly those two labels, nothing else."
-)
+# 2026-09-02: the TREND_SYSTEM_PROMPT constant that lived here was dead
+# code (same story as SYSTEM_PROMPT above) -- the live trend system prompt
+# is common/personas.py's PERSONAS["ops-brief-trend"] entry, which had
+# already evolved past this copy (thin-window and uncertainty guards).
+# Edit the persona registry, not this file.
 
 
 def _generate_trend_narrative(trend_prompt: str) -> str:
-    """Generate trend analysis via LLM (Ollama-first, Anthropic fallback). Returns empty string on failure."""
+    """Generate trend analysis via local Ollama only. Returns empty string on failure.
+
+    2026-08-06: allow_anthropic=False (never call the cloud API for this
+    skill, operator directive) -- a slow call gets ONE attempt at the
+    tight OLLAMA_TIMEOUT above, then straight to the deterministic
+    fallback the caller already builds on empty string. (Originally also
+    max_retries=0 for the same reason; that parameter was removed from
+    generate() 2026-08-30 -- it had been silently unused by the current
+    llama-server-routing implementation anyway.)
+    """
     return llm_generate(
-        system=TREND_SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=trend_prompt,
-        ollama_model=OLLAMA_MODEL,
+        ollama_model=OLLAMA_TREND_MODEL,
         max_tokens=200,
         temperature=0.15,
+        timeout=OLLAMA_TREND_TIMEOUT,
+        allow_anthropic=False,
     ) or ""
 
 
 def _send_ntfy_dual(full_text: str, concise_text: str, title: str) -> None:
-    """Delegates to common.ntfy_push.send_dual — click URLs set per-topic."""
-    _ntfy.send_dual(full_text, concise_text, title=title)
+    """Delegates to common.ntfy_push.send_dual — click URLs set per-topic.
 
+    topic_brief="ops-brief" added 2026-08-02: send_dual()'s default
+    ("dispatch-ops") used to be shared, undocumented, with weekly_summary.py
+    -- nobody was actually subscribed to "ops-brief" (the topic every
+    click-map entry and docstring claimed was real) because nothing ever
+    published there. the operator's direction: dispatch-ops becomes
+    weekly-summary-only; ops-brief's concise push moves to match its own
+    documented name instead. topic_full stays on the shared default
+    ("dispatch-debriefs") -- that one's fine as a general full-narrative
+    bucket, only the concise/"brief" side had the collision.
 
-def _ollama_generate(model: str, system: str, prompt: str) -> str | None:
+    email=True 2026-09-02 (operator directive) -- was push-only before.
     """
-    Single Ollama /api/generate call. Returns response text or None on any error.
-    Raises httpx.HTTPStatusError so callers can inspect status codes.
-    """
-    resp = httpx.post(
-        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-        json={
-            "model":  model,
-            "system": system,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"num_predict": 500, "temperature": 0.2},
-        },
-        timeout=OLLAMA_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json().get("response", "").strip() or None
+    _ntfy.send_dual(full_text, concise_text, title=title, topic_brief="ops-brief", email=True)
 
 
 def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     """
-    Generate ops brief via LLM (Ollama-first, Anthropic fallback).
-    Returns (full_text, concise_text) or None if both backends fail.
+    Generate ops brief via local Ollama only (2026-08-06: no Anthropic
+    fallback, operator directive -- see llm_generate() call below).
+    Returns (full_text, concise_text) or None on any Ollama failure --
+    caller (main()) already builds a deterministic template on None.
     """
-    system = (
-        "You are the dispatch intelligence officer for a corporate executive chauffeur "
-        "operation based in the Washington DC metro area. "
-        "Generate a concise operational briefing from the raw data below. "
-        "Focus on what directly affects executive ground transport: airport delays, "
-        "TFRs that indicate VIP movements, adverse weather, Amtrak disruptions on the NEC. "
-        "Be factual. Use aviation/dispatch shorthand where appropriate. "
-        "End with a one-sentence BOTTOM LINE suitable for an ntfy push notification."
-    )
+    # System prompt now lives in the corporatetraveldc-pi5-brief
+    # Modelfile itself (2026-08-02) -- system=None below lets Ollama use
+    # that baked-in default instead of resending it every call.
+    system = None
 
     model_used = OLLAMA_MODEL
+    # 2026-08-06: allow_anthropic=False -- see _generate_trend_narrative
+    # above for the full explanation. Same fail-fast redesign, same root
+    # cause it fixes. (max_retries=0 removed 2026-08-30, see that function's
+    # own comment.)
     narrative = llm_generate(
         system=system,
         prompt=prompt_content,
         ollama_model=OLLAMA_MODEL,
-        max_tokens=500,
+        max_tokens=900,  # 2026-08-17: was 500 -- see OLLAMA_TIMEOUT comment above
         temperature=0.2,
+        timeout=OLLAMA_TIMEOUT,
+        allow_anthropic=False,
     )
 
     if not narrative:
@@ -484,7 +913,7 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     return full_text, concise[:200]
 
 
-def build_brief_content() -> tuple[str, str]:
+def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> tuple[str, str]:
     """
     Returns (prompt_content, raw_appendix).
     prompt_content — fed to Claude for narrative generation.
@@ -494,29 +923,95 @@ def build_brief_content() -> tuple[str, str]:
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     route = _route_section()
 
-    # Raw sections stored separately so they can be appended to final brief
-    raw_metar = _metar_section()
-    raw_nas   = _nas_section()
+    # Raw sections stored separately so they can be appended to final brief.
+    # 2026-09-02: per-section token caps (context-budget fix, see
+    # OPS_BRIEF_DATA_TOKEN_BUDGET above -- caps are in the trimmer's
+    # 4-chars/token heuristic units, i.e. ~HALF the real-token target,
+    # per the UNIT WARNING there). Caps are sized so the worst-case sum
+    # stays inside the data budget; each section's own formatter already
+    # orders content most-significant-first, so a tail trim sheds the
+    # least important lines.
+    raw_metar  = trim_to_token_budget(_metar_section(), 150)
+    raw_nas    = trim_to_token_budget(_nas_section(), 200)
+    raw_atcscc = trim_to_token_budget(_atcscc_forecast_section(prefetched_atcscc), 200)
 
     parts = [
         f"=== OPS BRIEF DATA PULL {now_utc} ===",
-        f"CPS:\n{_cps_section()}",
+        f"CPS:\n{trim_to_token_budget(_cps_section(), 50)}",
         f"TFRs:\n{_tfr_section()}",
         f"METARs (hub airports):\n{raw_metar}",
         f"FAA NAS PROGRAMS:\n{raw_nas}",
-        f"NWS ALERTS (DC/Northeast):\n{_nws_alerts_section()}",
-        f"AMTRAK NEC:\n{_amtrak_section()}",
+        f"ATCSCC OPERATIONS PLAN FORECAST:\n{raw_atcscc}",
+        f"NWS ALERTS (DC/Northeast):\n{trim_to_token_budget(_nws_alerts_section(), 100)}",
+        f"AMTRAK NEC:\n{trim_to_token_budget(_amtrak_section(), 90)}",
     ]
     if route:
         parts.append(f"ROUTE NARRATIVE (local DB):\n{route}")
 
-    prompt_content = "\n\n".join(parts)
+    # 2026-08-18: fed into the actual prompt (not string-appended after
+    # generation, see the old post-hoc AAM block this replaces) so the
+    # model can weave AAM/vertiport context into the narrative flow
+    # instead of it always reading as a bolted-on afterthought section --
+    # operator feedback. Condensed one-paragraph summary only (see
+    # get_aam_watch_summary docstring) -- the full weekly report is too
+    # long to add to an already token-constrained hourly prompt.
+    aam_summary = get_aam_watch_summary("ops")
+    if aam_summary:
+        parts.append(
+            "ADVANCED AIR MOBILITY (this week's framing):\n"
+            f"{trim_to_token_budget(aam_summary, 90)}"
+        )
+
+    # Geometric reasoning Phase 1 (docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md) --
+    # same append-only-if-present shape as the AAM block above. 90-token cap
+    # matches AAM's own enrichment-not-core budget; safe to trim since
+    # _geometry_section()'s pairs are already sorted strongest-match-first.
+    geometry_summary = _geometry_section()
+    if geometry_summary:
+        parts.append(trim_to_token_budget(geometry_summary, 90))
+
+    # 2026-08-16: real production output showed phi3:mini echoing this
+    # raw data pull back verbatim as its "narrative" (confirmed live --
+    # brief_archive content was byte-identical in structure to this
+    # prompt, truncated mid-sentence at the num_predict cap) rather than
+    # synthesizing it, which is why trains/weather (items 6-7 in `parts`)
+    # never appeared -- the echo ran out of token budget on aviation
+    # content (items 1-5) before ever reaching them. This wasn't a
+    # missing-instruction problem (Amtrak/NWS were always in both the
+    # data and the Modelfile's task instructions); it was the model
+    # never being given an unambiguous signal that generation, not
+    # repetition, was expected at this exact boundary. Explicit trailing
+    # trigger fixes the actual failure mode.
+    instruction = (
+        "---\n"
+        "Using ONLY the data above, write the operational briefing now, "
+        "in your own words, per your system instructions. Do NOT copy, "
+        "quote, or restate any of the raw data blocks above verbatim -- "
+        "synthesize them into new narrative prose covering every section "
+        "that has data, including Amtrak, NWS alerts, Advanced Air "
+        "Mobility (if present), and Geometry (if present) -- work AAM and "
+        "Geometry in as part of the same narrative flow, not separate "
+        "bolted-on sections at the end. Geometry entries are real-time "
+        "spatial/temporal co-occurrence only, never a causal claim -- "
+        "phrase them that way (e.g. 'near' or 'overlapping in time', not "
+        "'caused' or 'linked to')."
+    )
+
+    # 2026-09-02: final hard guard on the assembled data pull, then the
+    # synthesis instruction appended AFTER the trim so it can never be cut
+    # (the 2026-08-16 echo-instead-of-synthesize failure mode returns the
+    # moment that trailing trigger disappears). With the per-section caps
+    # above this trim rarely fires; when it does, the tail sections (ROUTE,
+    # AAM -- enrichment, not core) are shed first.
+    data_block = trim_to_token_budget("\n\n".join(parts), OPS_BRIEF_DATA_TOKEN_BUDGET)
+    prompt_content = data_block + "\n\n" + instruction
 
     # Raw appendix — appended verbatim to the bottom of every push
     raw_appendix = (
         f"\n\n--- RAW DATA ({now_utc}) ---\n"
         f"METARs:\n{raw_metar}\n\n"
-        f"NAS STATUS:\n{raw_nas}"
+        f"NAS STATUS:\n{raw_nas}\n\n"
+        f"ATCSCC OPS PLAN FORECAST:\n{raw_atcscc}"
     )
     return prompt_content, raw_appendix
 
@@ -530,17 +1025,19 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     """
     now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
     lines = content.splitlines()
-    nas_lines, metar_lines, nws_lines, tfr_lines, amtrak_lines = [], [], [], [], []
+    nas_lines, metar_lines, nws_lines, tfr_lines, amtrak_lines, atcscc_lines = [], [], [], [], [], []
     current = None
     for line in lines:
         u = line.upper()
         if "FAA NAS PROGRAMS" in u:       current = "nas"
+        elif "ATCSCC OPERATIONS PLAN FORECAST" in u: current = "atcscc"
         elif "METARS" in u:               current = "metar"
         elif "NWS ALERTS" in u:           current = "nws"
         elif "TFRS:" in u:                current = "tfr"
         elif "AMTRAK" in u:               current = "amtrak"
         elif line.startswith("==="):      current = None
         elif current == "nas"    and line.strip(): nas_lines.append(line.strip())
+        elif current == "atcscc" and line.strip(): atcscc_lines.append(line.strip())
         elif current == "metar"  and line.strip().startswith(("METAR","SPECI")): metar_lines.append(line.strip())
         elif current == "nws"    and line.strip(): nws_lines.append(line.strip())
         elif current == "tfr"    and line.strip(): tfr_lines.append(line.strip())
@@ -552,6 +1049,7 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     full  = f"[DATA BRIEF — DETERMINISTIC FALLBACK] {now_label}\n"
     full += "Ollama unavailable or not configured. Raw data push — no narrative.\n\n"
     full += "NAS PROGRAMS:\n" + ("\n".join(nas_lines[:12]) if nas_lines else "None active") + "\n\n"
+    full += "ATCSCC FORECAST (PLANNED):\n" + ("\n".join(atcscc_lines[:20]) if atcscc_lines else "Unavailable") + "\n\n"
     full += "DC/NORTHEAST METARs:\n" + ("\n".join(dc_ne) if dc_ne else "Unavailable") + "\n\n"
     full += "TRANSCON METARs:\n"  + ("\n".join(xcon)  if xcon  else "Unavailable") + "\n\n"
     full += "TFRs:\n"  + ("\n".join(tfr_lines[:3])    if tfr_lines    else "No VIP TFRs") + "\n\n"
@@ -565,7 +1063,7 @@ def _build_fallback_brief(content: str) -> tuple[str, str]:
     return full, concise
 
 
-def main(force: bool = False, run_trend: bool = False) -> None:
+def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = False) -> None:
     """
     run_trend: force a 6h trend analysis section regardless of current hour.
                Auto-true when the current ET hour is 0, 6, 12, or 18.
@@ -582,7 +1080,26 @@ def main(force: bool = False, run_trend: bool = False) -> None:
     is_6h_boundary = (now_local_hour % 6 == 0) or run_trend
 
     try:
-        content, raw_appendix = build_brief_content()
+        # Webinar-aware defer: if the ATCSCC planning webinar is under 30 min
+        # out, skip this cycle's brief, push a defer notice, and schedule a
+        # one-shot rerun 10 min after the webinar so we pick up the updated
+        # Operations Plan instead of stale pre-webinar data. Skipped on the
+        # deferred rerun itself so this can never chain indefinitely.
+        atcscc_prefetch = None
+        if not deferred_rerun:
+            atcscc_prefetch = _fetch_atcscc_opsplan_sections()
+            if atcscc_prefetch:
+                _, _sections = atcscc_prefetch
+                webinar_dt = _next_webinar_utc(_sections)
+                if webinar_dt:
+                    mins_until = (webinar_dt - datetime.now(timezone.utc)).total_seconds() / 60
+                    if 0 <= mins_until < 30:
+                        _defer_for_webinar(webinar_dt)
+                        status = "deferred"
+                        log_usage(SKILL_NAME, MODEL, 0, 0, status, "new")
+                        return
+
+        content, raw_appendix = build_brief_content(prefetched_atcscc=atcscc_prefetch)
 
         # Try Ollama first; fall back to deterministic if unavailable / not configured.
         ollama_result = _call_ollama(content)
@@ -591,12 +1108,61 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             status = "ok"
             log.info("%s: brief generated (Ollama/%s)", SKILL_NAME, OLLAMA_MODEL)
         else:
-            full_text, concise = _build_fallback_brief(content)
-            status = "ok"
-            log.info("%s: brief generated (deterministic)", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                full_text, concise = _build_fallback_brief(content)
+                status = "ok"
+                log.info("%s: brief generated (deterministic)", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: deterministic fallback also failed — %s", SKILL_NAME, fallback_err)
+                full_text = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                concise = full_text
+                status = "fallback_error"
 
-        # Append raw METAR + NAS appendix to the traditional brief body
-        full_text = full_text.rstrip() + raw_appendix
+        # 2026-08-18: raw METAR/NAS/ATCSCC appendix dropped from the pushed/
+        # archived brief per operator request -- was a debug/verification
+        # aid from when the narrative was unreliable (truncating before
+        # reaching Amtrak/NWS, etc); now that the prose itself is trusted,
+        # the raw dump is just noise at the bottom of every push.
+        # raw_appendix is still returned by build_brief_content() above
+        # (harmless, unused here) rather than changing that signature.
+        _ = raw_appendix
+
+        # 2026-08-18: AAM is no longer appended here as a separate section --
+        # it's now fed into build_brief_content()'s prompt above and woven
+        # into the actual narrative by the model itself. See
+        # get_aam_watch_summary()'s docstring for why.
+
+        # 2026-08-10 catch-up session: short truncated capsule of the daily
+        # disruption/weather digest (poller/skills/disruption_weather_digest.py,
+        # daily 04:35 ET) -- the "leadership standup"-style short version
+        # requested for the daily brief, distinct from that skill's full
+        # note in the second-brain vault. Same cached-read, no-extra-
+        # Ollama-call pattern as the AAM section above.
+        disruption_capsule = get_disruption_weather_capsule()
+        if disruption_capsule:
+            full_text = full_text.rstrip() + "\n\n=== DISRUPTION/WEATHER (30d) ===\n" + disruption_capsule
+
+        # 2026-09-21: geometric reasoning was fed into the LLM prompt (see
+        # _geometry_section() above) but confirmed live to be unreliably
+        # included in phi3-mini's synthesized narrative even with an
+        # explicit instruction naming it -- data present, model just
+        # doesn't always weave it in. Rather than keep tuning the prompt
+        # against a small model's inconsistency, guarantee visibility the
+        # same way disruption_capsule does: a deterministic, always-append
+        # section straight from the same query, independent of whether the
+        # narrative above happened to mention it. Deliberately NOT the old
+        # bundled "RAW DATA" appendix the operator had removed 2026-08-18
+        # as noise -- this is one small, clearly-labeled, already-sorted
+        # block, not a raw dump of everything.
+        geometry_capsule = _geometry_section()
+        if geometry_capsule:
+            full_text = full_text.rstrip() + "\n\n=== GEOMETRY ===\n" + geometry_capsule
 
         now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
         brief_label = "OPS BRIEF+TREND" if is_6h_boundary else "OPS BRIEF"
@@ -645,5 +1211,7 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--trend", action="store_true",
                         help="Force a 6h trend analysis section regardless of current hour")
+    parser.add_argument("--deferred-rerun", action="store_true",
+                        help="This run IS a webinar-deferred rerun -- skip the defer check itself")
     args = parser.parse_args()
-    main(force=args.force, run_trend=args.trend)
+    main(force=args.force, run_trend=args.trend, deferred_rerun=args.deferred_rerun)

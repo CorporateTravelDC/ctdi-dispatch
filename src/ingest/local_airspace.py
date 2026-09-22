@@ -44,8 +44,8 @@ log = logging.getLogger("ingest.local_airspace")
 _uf_base = os.environ.get("ULTRAFEEDER_URL", "").rstrip("/")
 ULTRAFEEDER_AIRCRAFT_URL = f"{_uf_base}/data/aircraft.json" if _uf_base else ""
 
-RECEIVER_LAT = float(os.environ.get("ULTRAFEEDER_LAT", "38.8816"))
-RECEIVER_LON = float(os.environ.get("ULTRAFEEDER_LON", "-77.0910"))
+RECEIVER_LAT = float(os.environ.get("ULTRAFEEDER_LAT", "39.0000"))
+RECEIVER_LON = float(os.environ.get("ULTRAFEEDER_LON", "-77.0000"))
 SCAN_RADIUS_NM = float(os.environ.get("ULTRAFEEDER_SCAN_RADIUS_NM", "80"))
 ALERT_RADIUS_NM = 30.0
 MARINE_ONE_ALERT_RADIUS_NM = 50.0
@@ -60,6 +60,10 @@ UF_POLL_INTERVAL = 15      # seconds between UltraFeeder polls
 ACARS_POLL_INTERVAL = 10   # seconds between ACARS queue drains
 HEARTBEAT_INTERVAL = 30    # seconds between heartbeat stamps
 ALERT_DEDUP_SECS = 300     # 5-minute dedup window for proximity alerts
+# connected-but-zero-messages-ever warning threshold, throttled at the same
+# interval -- see the 2026-08-22 acars_messages-zero-rows fix in
+# LocalAirspaceMonitor.run_forever()
+ACARS_IDLE_WARN_S = int(os.environ.get("ACARS_IDLE_WARN_S", "1800"))
 
 # ── VIP / Emergency constants (aligned with FDPS parser) ──────────────────────
 
@@ -360,6 +364,19 @@ class _AcarsReader(threading.Thread):
         self._queue = msg_queue
         self._stop = threading.Event()
         self._connected = threading.Event()
+        # 2026-08-22: acars_messages had zero rows ever despite a
+        # continuously-fresh heartbeat -- the heartbeat only ever checked
+        # is_connected() (socket liveness), never whether any line had
+        # actually been received or parsed successfully. Third instance
+        # of this exact "heartbeat proves the socket, not the data" trap
+        # found in this codebase the same night (see the NWWS/nws_alerts
+        # and NWWS/push:nws root-causes). These counters make real
+        # traffic volume and parse-failure rate visible via ordinary logs
+        # instead of needing another temporary-diagnostic-then-remove
+        # cycle to find out what's actually happening upstream.
+        self.lines_received = 0
+        self.parse_failures = 0
+        self.last_parse_failure_sample: bytes | None = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -388,11 +405,19 @@ class _AcarsReader(threading.Thread):
                             line = line.strip()
                             if not line:
                                 continue
+                            self.lines_received += 1
                             try:
                                 msg = json.loads(line)
                                 self._queue.put_nowait(msg)
-                            except (json.JSONDecodeError, queue.Full):
-                                pass
+                            except (json.JSONDecodeError, queue.Full) as e:
+                                self.parse_failures += 1
+                                self.last_parse_failure_sample = line[:200]
+                                if self.parse_failures <= 5 or self.parse_failures % 100 == 0:
+                                    log.warning(
+                                        "ACARS line dropped (%s) failures=%d received=%d sample=%r",
+                                        type(e).__name__, self.parse_failures,
+                                        self.lines_received, self.last_parse_failure_sample,
+                                    )
             except Exception as e:
                 log.warning("ACARS router connection error: %s — retrying in 15s", e)
             finally:
@@ -483,12 +508,23 @@ class LocalAirspaceMonitor:
         self._last_acars_drain = 0.0
         self._last_uf_hb = 0.0
         self._last_acars_hb = 0.0
+        # 2026-08-22 acars_messages-zero-rows fix: track the last time we
+        # actually drained a message (not just had a live socket) so we
+        # can warn when the connection is up but nothing has come through
+        # for a long stretch -- the exact condition that ran silently for
+        # weeks before this fix because the heartbeat only checked
+        # is_connected().
+        self._acars_started_at = 0.0
+        self._last_acars_data_at = 0.0
+        self._last_acars_idle_warn = 0.0
 
     def _start_acars_reader(self) -> None:
         if self._acars_reader is None or not self._acars_reader.is_alive():
             self._acars_reader = _AcarsReader(
                 ACARS_ROUTER_HOST, ACARS_ROUTER_PORT, self._acars_queue)
             self._acars_reader.start()
+            self._acars_started_at = time.time()
+            self._last_acars_data_at = 0.0
 
     def run_forever(self) -> None:
         """Main loop. Runs until the process exits."""
@@ -525,8 +561,20 @@ class LocalAirspaceMonitor:
                             drained += 1
                         except queue.Empty:
                             break
+                    if drained:
+                        self._last_acars_data_at = now
                     acars_up = (self._acars_reader is not None and
                                 self._acars_reader.is_connected())
+                    # 2026-08-22: heartbeat previously reflected only
+                    # is_connected() -- a live TCP socket with zero
+                    # messages ever parsed still stamped a fresh
+                    # heartbeat every cycle, which is exactly how
+                    # acars_messages sat at zero rows for weeks without
+                    # tripping any alert. Heartbeat still gates on
+                    # connection only (that's genuinely what it means:
+                    # "is the reader thread alive"), but idle-with-
+                    # connection now gets its own loud, throttled signal
+                    # instead of staying silent.
                     if acars_up and now - self._last_acars_hb >= HEARTBEAT_INTERVAL:
                         _stamp_heartbeat("acars")
                         self._last_acars_hb = now
@@ -535,6 +583,21 @@ class LocalAirspaceMonitor:
                         self._start_acars_reader()
                     if drained:
                         log.debug("ACARS: drained %d message(s)", drained)
+                    elif (acars_up and self._last_acars_data_at == 0.0 and
+                          self._acars_started_at and
+                          now - self._acars_started_at >= ACARS_IDLE_WARN_S and
+                          now - self._last_acars_idle_warn >= ACARS_IDLE_WARN_S):
+                        reader = self._acars_reader
+                        log.warning(
+                            "ACARS connected but zero messages parsed in %ds "
+                            "(lines_received=%d parse_failures=%d) — router may "
+                            "be silent or emitting a format this reader can't "
+                            "parse; connection alone is not proof of data flow",
+                            int(now - self._acars_started_at),
+                            reader.lines_received if reader else -1,
+                            reader.parse_failures if reader else -1,
+                        )
+                        self._last_acars_idle_warn = now
                 except Exception as e:
                     log.error("ACARS drain error: %s", e)
 

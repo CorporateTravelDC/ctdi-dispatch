@@ -24,6 +24,13 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // 2026-08-12: without this, Workbox's SPA navigateFallback catches
+        // EVERY document-mode navigation -- including the knowledge-graph
+        // iframe's GET to /api/v1/knowledge-graph/html -- and serves the
+        // cached index.html shell instead, which is why the graph tab
+        // rendered the whole app recursively nested inside itself instead
+        // of the actual graph viz.
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /^\/api\//,

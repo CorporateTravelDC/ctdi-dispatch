@@ -1,6 +1,6 @@
 # DCA / IAD FIDS Integration
 
-**Added:** 2026-06-24
+**Added:** 2026-06-24 · **Verified/updated:** 2026-08-23
 
 ## Discovery
 
@@ -51,10 +51,11 @@ carousel IDs 16-21 and single-letter values remap to carousel 15.
 
 ```
 src/common/airport_fids.py          -- shared fetch + cache + lookup logic
+src/common/flight_resolver.py       -- layered SWIM->website resolver (see /arrivals below)
 src/poller/fetchers/airport_fids.py -- run_for(airport) base
 src/poller/fetchers/dca_fids.py     -- thin wrapper: run() -> run_for("DCA")
 src/poller/fetchers/iad_fids.py     -- thin wrapper: run() -> run_for("IAD")
-src/web/routes/fids.py              -- FastAPI router
+src/web/routes/fids.py              -- FastAPI router (3 routes)
 ```
 
 ## REST endpoints
@@ -65,6 +66,37 @@ Feed health snapshot. Tier 0.
 ```json
 {"airport": "DCA", "arrivals_count": 885, "departures_count": 928, "ts": "..."}
 ```
+
+Live 2026-08-23 16:48Z: DCA 818/810, IAD 759/749.
+
+### `GET /api/v1/fids/{airport}/arrivals`
+
+Layered arrivals lookup. Tier 0. **Not documented in earlier revisions of
+this file — added here 2026-08-23 after finding it live in
+`src/web/routes/fids.py:62`.**
+
+Query params: `carriers` (comma-separated IATA codes, default all),
+`within_minutes` (1–720, default 90).
+
+Unlike the two endpoints above, this one is **not MWAA-FIDS-only**. It
+calls `common/flight_resolver.py::resolve_arrivals()`, which tries
+sources in order and reports which one answered:
+
+1. **FAA SWIM** (`flight_events`, ingest-populated) — works for all three
+   hubs.
+2. **MWAA website FIDS** (this document's scrape) — DCA/IAD only.
+3. Neither → `source_used: "none"` with an explanatory `note`.
+
+The response always carries `source_used` (`swim` / `website` / `none`)
+and a `note`, so a caller can distinguish a genuinely-empty window from a
+missing source. Verified live 2026-08-23:
+`GET /api/v1/fids/DCA/arrivals?carriers=AA&within_minutes=90` →
+`source_used: "website"` with real AA arrivals (3915 from ATL, 5332 from
+BHM, gates/terminals/baggage populated).
+
+Airport must be in `SUPPORTED_HUB_AIRPORTS`
+(`flight_resolver.py:73`, derived from `HUB_ICAO`) = **DCA, IAD, BWI** —
+anything else is a 400.
 
 ### `GET /api/v1/fids/{airport}/{flight}`
 Single-flight lookup. Tier 0.
@@ -101,12 +133,31 @@ manual FIDS verification.
 
 ## Poller schedule
 
-`dca_fids` and `iad_fids` are registered in `FETCH_SCHEDULE` at 60s interval.
-Feed health appears in `GET /api/v1/feeds` alongside other feeds.
-Stale threshold: 180s (3x poll interval).
+`dca_fids` and `iad_fids` are registered in `FETCH_SCHEDULE`
+(`src/poller/main.py`) at a **300 s** interval. Feed health appears in
+`GET /api/v1/feeds` alongside other feeds. Stale threshold: **600 s**
+(2× the poll interval, set 2026-08-10 in `src/web/main.py` — the previous
+180 s value was tighter than the real 300 s interval and guaranteed a false
+"stale" for the last ~2 minutes of every cycle).
 
 ## BWI
 
 BWI is operated by the Maryland Aviation Administration, not MWAA.
-Different backend (bwiairport.com -- discovery not yet done).
-Not wired in this integration.
+Different backend (bwiairport.com -- discovery not yet done), so **there
+is no MWAA-style FIDS scrape for BWI**: no `bwi_fids` fetcher and no
+`FETCH_SCHEDULE` entry. `GET /api/v1/fids/BWI` (snapshot) and
+`/api/v1/fids/BWI/{flight}` do not return empty data — they **reject with
+HTTP 400** `{"detail":"airport must be one of: DCA, IAD"}`, because both
+routes validate against the MWAA-only airport set rather than
+`SUPPORTED_HUB_AIRPORTS`. Verified live 2026-08-23 (`curl -w '%{http_code}'`
+against both paths).
+
+**But BWI is not entirely absent** — corrected 2026-08-23, an earlier
+revision's flat "not wired in this integration" was misleading. BWI *is*
+in `SUPPORTED_HUB_AIRPORTS`, so `GET /api/v1/fids/BWI/arrivals` is a
+valid, working call that answers from **FAA SWIM** instead. Verified
+live 2026-08-23: it returned `source_used: "swim"` with real
+`flight_events` rows (e.g. SWA1481 from KCHS). Note the shape difference
+between sources — SWIM rows carry a `flight_id` GUFI and ICAO origins
+(`KCHS`) but `gate`/`terminal`/`baggage_claim` are `null`, because those
+are website-FIDS-only fields.

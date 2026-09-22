@@ -1,7 +1,7 @@
 """
 weekly-summary — SR-1 compliant. SR-2 exempt (time-bounded weekly window).
 
-Model: corporatetraveldc-pi5-osint:latest (mistral-nemo 12B via Ollama); deterministic fallback.
+Model: corporatetraveldc-pi5-brief:latest (mistral-nemo 12B via Ollama); deterministic fallback.
 Schedule: Sunday 18:00 ET (corporatetraveldc-weekly-summary.timer)
 SR-1: log_usage() in finally block
 SR-2: Not applicable — summarizes the past week; inputs always new.
@@ -23,12 +23,10 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME = "weekly-summary"
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
+OLLAMA_MODEL      = (os.getenv("OLLAMA_WEEKLY_SUMMARY_MODEL")
                      or os.getenv("OLLAMA_MODEL")
-                     or "corporatetraveldc-pi5-osint:latest")
+                     or "corporatetraveldc-pi5-weekly-summary:latest")
 MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
-# Weekly content ~600-800 tokens; mistral-nemo Pi 5 CPU ~200s — 600s gives headroom
-OLLAMA_TIMEOUT    = 900  # stopgap
 
 SYSTEM_PROMPT = """You are producing a weekly operational summary for an executive chauffeur
 operation in the Washington DC metropolitan area.
@@ -39,9 +37,18 @@ Summarize the past week covering:
 3. **NAS delays** — airport delay programs and their operational impact
 4. **CPS trend** — how the Critical Predictability State trended this week
 5. **Operational notes** — patterns worth tracking going into next week
+6. **Disruption pattern (30-day rolling)** — facility/volume- vs.
+   weather-driven airports, highest-delay train routes; preserve the
+   flight side's real weather/facility split vs. the train side's
+   regional-proxy-only weather context, don't blur the two.
 
 Keep it under 500 words. Plain text for push notification.
-Be analytical — note patterns, not just events."""
+Be analytical — note patterns, not just events.
+
+NOTE: the real baked-in system prompt for this skill's Ollama model lives
+in corporatetraveldc.weekly-summary (repo root) -- this constant is
+vestigial documentation only (see _call_ollama's system=None), kept in
+sync with that Modelfile by hand."""
 
 
 def build_weekly_content() -> str:
@@ -93,6 +100,37 @@ def build_weekly_content() -> str:
         if latest_narrative:
             sections.append("Latest route narrative:\n" + latest_narrative[:300])
 
+    # Disruption / weather-vs-facility pattern -- 2026-08-09/10 catch-up
+    # session work, same 30-day analyze_*() functions the new
+    # disruption_weather_digest.py daily skill uses. Called directly here
+    # (matching this file's existing style of direct db queries) rather
+    # than reading that skill's vault output, so weekly-summary has no
+    # dependency on the daily digest having already run.
+    disruption = db.analyze_disruption_weather_split(days=30)
+    train_disruption = db.analyze_train_disruption_summary(days=30)
+    top_facilities = disruption["facility_breakdown"][:8]
+    if top_facilities:
+        sections.append(
+            "30-day disruption (flights, real FAA/SWIM weather-vs-facility split):\n"
+            + "\n".join(
+                f"- {x['facility']}: {x['total_programs']} programs, {x['pct_weather']}% weather-driven"
+                for x in top_facilities
+            )
+        )
+    top_trains = train_disruption["delay_summary"][:6]
+    if top_trains:
+        wx_ctx = train_disruption["regional_weather_context"]
+        sections.append(
+            "30-day train delay rate (regional weather proxy only, NOT a per-train "
+            f"cause attribution -- {wx_ctx['wx_flagged_days']}/{wx_ctx['window_days']} days "
+            "regionally weather-flagged near the NEC):\n"
+            + "\n".join(
+                f"- Train {x['train_number']} ({x['route_name']}): "
+                f"{x['pct_over_threshold']}% of {x['samples']} obs delayed, avg {x['avg_delay_minutes']}min"
+                for x in top_trains
+            )
+        )
+
     return "\n\n".join(sections)
 
 
@@ -101,11 +139,32 @@ def _call_ollama(content: str) -> str | None:
     Returns narrative text or None (caller falls back to deterministic).
     """
     return llm_generate(
-        system=SYSTEM_PROMPT,
+        system=None,  # dedicated Modelfile carries this now
         prompt=content,
         ollama_model=OLLAMA_MODEL,
-        max_tokens=400,
+        # 2026-08-17 (fable sweep): 400 -> 700 tokens. The task layer asks
+        # for 'under 500 words' (~665 tokens); at the 400-token cap the
+        # real 2026-08-16 18:00 ET run (brief_archive id 1589) was cut off
+        # mid-word ('- Train') before finishing its own section list --
+        # same truncation class verified on ops-brief. Modelfile
+        # num_predict raised in parity (corporatetraveldc.weekly-summary).
+        max_tokens=700,
         temperature=0.3,
+        # Measured 2026-08-15 under forced TIER2+ contention (Phase-3
+        # methodology: guard timer paused, synthetic burn, la 57 at
+        # sample): 1475-tok prompt / 186.2s eval + gen at 0.68 tok/s
+        # -> 584.3s at the 400-tok cap; delta over the 53.0s
+        # spiked persona-only ref = 717.6s; spike met/exceeded the locked 53s bound, no scaling;
+        # (53 + 717.6) x 1.25 = 963s -> 990.
+        # 2026-08-17: re-derived at the 700-tok cap, same formula:
+        # 186.2s eval + 700/0.68 = 1215.6s; delta over 53.0s ref = 1162.6s;
+        # (53 + 1162.6) x 1.25 = 1519.5 -> 1530. Unit TimeoutStartSec=2800
+        # still clears it (800s fixed + 1530s = 2330s worst case).
+        timeout=1530,
+        # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
+        # see dispatch.env's ANTHROPIC_FALLBACK_ENABLED comment for the full
+        # rationale.
+        allow_anthropic=False,
     )
 
 
@@ -122,9 +181,20 @@ def main(force: bool = False) -> None:
             status = "ok"
             log.info("%s: narrative generated via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
         else:
-            summary = raw_content
-            status = "fallback"
-            log.info("%s: Ollama unavailable — using deterministic content", SKILL_NAME)
+            # 2026-08-06: narrow safety net around the fallback ITSELF --
+            # same pattern applied identically across every skill with an
+            # Ollama fallback. See route_impact.py for the full note.
+            try:
+                summary = raw_content
+                status = "fallback"
+                log.info("%s: Ollama unavailable — using deterministic content", SKILL_NAME)
+            except Exception as fallback_err:
+                log.error("%s: fallback also failed — %s", SKILL_NAME, fallback_err)
+                summary = (
+                    f"[{SKILL_NAME.upper()}] Generation failed -- both Ollama and the "
+                    f"deterministic fallback errored. See logs."
+                )
+                status = "fallback_error"
 
         import pathlib
         p = pathlib.Path(config.state_dir()) / "weekly-summary.txt"
@@ -136,7 +206,8 @@ def main(force: bool = False) -> None:
 
         title = f"Weekly Ops Summary{' [FALLBACK]' if status == 'fallback' else ''}"
         # Use same topics as ops_brief so subscribers don't need a separate topic
-        _ntfy.send_dual(summary, summary[:280], title=title)
+        # email=True 2026-09-02 (operator directive) -- was push-only before.
+        _ntfy.send_dual(summary, summary[:280], title=title, email=True)
         log.info("%s: pushed to ops-brief", SKILL_NAME)
 
     finally:

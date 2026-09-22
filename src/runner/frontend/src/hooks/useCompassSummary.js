@@ -5,12 +5,15 @@
  */
 import { useMemo } from 'react'
 
-const CENTER_LAT = 38.8521  // KDCA
-const CENTER_LON = -77.0377
+// Fallback only, used when a caller doesn't supply a real `center` -- see
+// useReceiverLocation.js. Never hardcode a GPS literal as the *only* source
+// of truth again; CLAUDE.md's 2026-08-24 GPS-coordinate-confusion writeup
+// covers why.
+const DEFAULT_CENTER = [38.8521, -77.0377]
 
-function bearingTo(lat, lon) {
-  const dLon  = (lon - CENTER_LON) * Math.PI / 180
-  const lat1  = CENTER_LAT * Math.PI / 180
+function bearingTo(lat, lon, centerLat, centerLon) {
+  const dLon  = (lon - centerLon) * Math.PI / 180
+  const lat1  = centerLat * Math.PI / 180
   const lat2  = lat * Math.PI / 180
   const y = Math.sin(dLon) * Math.cos(lat2)
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon)
@@ -26,15 +29,18 @@ function toQuadrant(bearing) {
 /**
  * @param {Array<{lat, lon, label, tracked?}>} items  positioned entities
  * @param {string[]}                           extra  extra text fragments appended verbatim
+ * @param {[number, number]}                   center reference point for bearings; pass the
+ *                                                     real value from useReceiverLocation()
  * @returns {string}  ARIA-ready compass summary
  */
-export function useCompassSummary(items = [], extra = []) {
+export function useCompassSummary(items = [], extra = [], center = DEFAULT_CENTER) {
+  const [centerLat, centerLon] = center
   return useMemo(() => {
     if (!items.length && !extra.length) return 'No items in range.'
     const buckets = {}
     for (const item of items) {
       if (item.lat == null || item.lon == null) continue
-      const q = toQuadrant(bearingTo(item.lat, item.lon))
+      const q = toQuadrant(bearingTo(item.lat, item.lon, centerLat, centerLon))
       if (!buckets[q]) buckets[q] = []
       buckets[q].push(item)
     }
@@ -52,5 +58,5 @@ export function useCompassSummary(items = [], extra = []) {
     }
     const allParts = [...parts, ...extra]
     return allParts.length ? allParts.join(' · ') : 'No items in range.'
-  }, [items, extra])
+  }, [items, extra, centerLat, centerLon])
 }

@@ -7,6 +7,17 @@ converted_to_skill: overwater-adsb-handoff-track
 
 OVERWATER / INTERNATIONAL FLIGHT — ADS-C TO ADS-B HANDOFF TRACKER
 
+[Re-verified 2026-08-23] Both external calls below still work as written:
+`GET https://api.airplanes.live/v2/hex/<hex>` and `/v2/callsign/<callsign>`
+each return 200 with the documented `{"ac":[...]}` shape (empty `ac` when the
+aircraft is not currently on feed — that is the "landed or feed lost" case,
+not an error). Note `/v2/reg/` is NOT used here and should not be substituted:
+it is the flaky endpoint the platform's own identity-resolution chain
+deliberately falls back to last. The `POST /admin/push-test-alert` call is
+still live but is a **legacy alias** for `/admin/push-alert` and requires an
+**admin**-tier token (a cert/T1 token 403s) — see the endpoint note in this
+directory's README.md.
+
 Use this task for:
 - International or transatlantic flights transitioning from satellite ADS-C to ground ADS-B coverage
 - Any overwater flight where you need to know the moment it enters domestic ADS-B receiver range
