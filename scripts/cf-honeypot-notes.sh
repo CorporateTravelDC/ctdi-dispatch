@@ -23,7 +23,30 @@ set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
-if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh"; then
+# 2026-09-23 -- `>&2` is load-bearing, do not remove it.
+#
+# THIS SCRIPT'S STDOUT IS THE CLOUDFLARE POST BODY. cf-honeypot-ban.sh
+# captures it whole (`payload="$("${NOTES_SCRIPT}" "${ip}")"`), so anything
+# else written to stdout is prepended to the JSON and the request becomes
+# malformed.
+#
+# verify-manifest.sh prints its success line to stdout ("verify-manifest:
+# OK -- signature valid, all 1 file(s) under/matching (...) match."). Both
+# that message and this script arrived in the same commit, 31c9b87
+# (2026-08-09), so every automated ban since then has POSTed that text
+# followed by the JSON and Cloudflare has rejected it:
+#     http=400  code 10019  "firewallaccessrules.api.bad_json"
+#
+# Measured 2026-09-23: the zone held 7 edge rules, all created by hand
+# during build-day testing on 2026-08-09, while fail2ban held 163 live
+# bans. Not one automated ban had ever reached the edge -- ~6.5 weeks.
+# It went unnoticed because a SELinux denial (2026-09-20, gpg blocked for
+# fail2ban_t) later failed EARLIER in the same script, so the visible
+# symptom was the integrity gate and this never got far enough to log.
+#
+# Redirecting to stderr keeps the verification result in fail2ban's log
+# (where it is genuinely useful) and out of the payload.
+if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh" >&2; then
     echo "cf-honeypot-notes: INTEGRITY CHECK FAILED -- refusing to run" >&2
     exit 1
 fi

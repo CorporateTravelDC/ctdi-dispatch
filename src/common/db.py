@@ -2181,6 +2181,60 @@ def export_old_flight_events(cutoff_days: int = 30, limit: int = 1000) -> list[d
         return [dict(r) for r in rows]
 
 
+def export_old_surface_movement_events(cutoff_days: int = 30,
+                                       limit: int = 1000) -> list[dict]:
+    """Return up to `limit` surface_movement_events rows older than
+    cutoff_days, oldest first. Read-only. Pair with
+    delete_surface_movement_events_by_key() using this exact row set, only
+    after the export has been archived -- same contract as
+    export_old_flight_events / delete_flight_events_by_id.
+
+    2026-09-23. This table had NO retention path of any kind: it is absent
+    from retention_prune.py's _PRUNE_JOBS, flight_events_cleanup covers only
+    flight_events, and rows had been accumulating since 2026-08-03.
+
+    ARCHIVE RATHER THAN PRUNE, deliberately. surface_movement_events is the
+    ONLY correlation substrate for the SMES safety-bitmask decoding work
+    (bit-flip timelines correlated against runway assignments). A plain
+    DELETE would permanently destroy the dataset that analysis depends on --
+    so this mirrors flight_events_cleanup's archive-to-vault-then-delete
+    instead, and the history stays queryable off-box.
+
+    NOTE ON WHAT IS BEING AGED OUT: the primary key is (airport, track_id),
+    and track_id comes from the FAA ASDE-X 12-bit pool (1..4095) which the
+    sensor recycles. So a row is 'the last aircraft to occupy that track
+    slot', not an aircraft. Old rows here are already a thin survivorship
+    sample -- measured 2026-09-23, days older than ~4 retain only 10-15% of
+    their events because their slots were overwritten. Archiving preserves
+    what survived; it cannot recover what upsert already overwrote."""
+    cutoff = _iso_cutoff(cutoff_days)
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM surface_movement_events WHERE last_seen < ? "
+            "ORDER BY last_seen ASC LIMIT ?", (cutoff, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_surface_movement_events_by_key(keys: list[tuple[str, str]]) -> int:
+    """Delete specific surface_movement_events rows by (airport, track_id).
+
+    Takes the composite primary key because that is what identifies a row
+    here -- there is no single-column id. Callers pass the same set returned
+    by export_old_surface_movement_events(), never a freshly re-run query,
+    so there is no gap between what was archived and what is deleted."""
+    if not keys:
+        return 0
+    deleted = 0
+    with conn() as c:
+        for airport, track_id in keys:
+            cur = c.execute(
+                "DELETE FROM surface_movement_events WHERE airport=? AND track_id=?",
+                (airport, track_id))
+            deleted += cur.rowcount or 0
+    return deleted
+
+
 def delete_flight_events_by_id(flight_ids: list[str]) -> int:
     """Delete specific flight_events rows by flight_id (GUFI). Deletes
     exactly the row set passed in -- callers should pass the same list
@@ -5698,6 +5752,140 @@ ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_updated_at TEXT;
 # useful for filling in when nothing else has reported yet, but never
 # allowed to overwrite a real report from one of the others.
 _OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3, "acars": 4}
+
+# ── OOOI source AUTHORITY TIERS (0065, 2026-09-23) ───────────────────────────
+# Distinct from _OOOI_SOURCE_PRIORITY above, which only breaks same-phase ties.
+# This answers a different question: WHO IS ENTITLED to assert an assertive
+# phase at all. Operator directive, after two false landings in one evening
+# (UA1240 swept "landed" at FL370/504kts; UA2408 swept 3.5h before arrival):
+#
+#   SWIM -- FDPS and SWIM-borne FIDS -- is the ultimate validator.
+#   Local receivers may NEVER authoritatively claim off/on/in unless BOTH
+#   (a) SWIM is demonstrably down, measured from feed_state not assumed, and
+#   (b) that same local receiver already held a prior track on the entry.
+#   Whichever source took the initial lock keeps it: nothing below that tier
+#   may authorize off/on/in while the lock holder's feed is alive.
+#
+# Higher wins. Gaps left between tiers so a source can be inserted without
+# renumbering (which would silently re-rank existing locks).
+_OOOI_SOURCE_TIER = {
+    # Tier 40 -- SWIM. The validator of record.
+    "fdps": 40, "swim_fids": 40, "tbfm": 40, "tfms": 40, "smes": 40,
+    "itws": 40, "aim": 40,
+    # Tier 30 -- network aggregators. The standing OOOI rule admits these
+    # alongside SWIM (memory: OOOI SWIM authority). Off-box, multi-receiver.
+    "acars": 30, "adsb": 30,
+    # Tier 20 -- MWAA airport display. Not a sensor, not the aircraft's own
+    # report, and known wrong on exact timing (UAL2670 2026-07-27: "Landed"
+    # 15 min early). Usable, never decisive.
+    "fids": 20,
+    # Tier 10 -- LOCAL receivers. Single point of view, no redundancy, and
+    # explicitly excluded from OOOI confirmation by standing rule. Reaches
+    # authority ONLY via the (a)+(b) escape hatch above.
+    "local_adsb": 10, "local_acars": 10, "dump1090": 10, "acarshub": 10,
+    "dumpvdl2": 10,
+    # Tier 0 -- inference. A guess, not an observation. May never assert an
+    # assertive phase under any condition, including total SWIM outage.
+    # This is the writer that produced tonight's UA2408 failure.
+    "schedule": 0, "schedule_inference": 0,
+}
+
+# Phases that drive sweeps and notifications, and are therefore gated. out and
+# pre_departure stay ungated -- being wrong about them costs nothing, and
+# gating them would block the pre-track bookkeeping the gate itself relies on.
+_OOOI_ASSERTIVE_PHASES = frozenset({"off", "on", "in"})
+
+_OOOI_LOCAL_SOURCES = frozenset({"local_adsb", "local_acars", "dump1090",
+                                 "acarshub", "dumpvdl2"})
+
+# feed_state keys for the SWIM push feeds. "SWIM is down" means EVERY one of
+# these is stale -- one dead feed is not an outage, and push:fns in particular
+# runs stale for long stretches by design without implying SWIM is unavailable.
+_SWIM_FEED_KEYS = ("push:fdps", "push:tbfm", "push:tfms", "push:stdds", "push:itws")
+SWIM_STALE_SECONDS = 900  # 15 min; SWIM push feeds normally land every <60s
+
+
+def swim_is_live(stale_seconds: int = SWIM_STALE_SECONDS) -> bool:
+    """True if ANY SWIM push feed is fresh.
+
+    Deliberately ANY, not ALL: the bar for declaring SWIM dead -- and thereby
+    promoting a local receiver to authority -- must be high. A single surviving
+    SWIM feed means the network path works and local promotion is not
+    warranted.
+
+    Fails CLOSED: if feed_state cannot be read, returns True (SWIM assumed
+    alive), which keeps local receivers UNpromoted. An unreadable health table
+    must never be the thing that grants authority."""
+    import time as _t
+    try:
+        with conn() as c:
+            # Placeholders built by concatenation, NOT '%' formatting: the
+            # db_backend import-time guard rejects '%'-formatted SQL outright,
+            # since '%' is also the postgres shim's own placeholder syntax.
+            # _SWIM_FEED_KEYS is a module-level literal tuple, so the only
+            # thing interpolated here is a fixed run of '?' -- no caller input
+            # reaches the string.
+            placeholders = ",".join(["?"] * len(_SWIM_FEED_KEYS))
+            rows = c.execute(
+                "SELECT feed_name, fetched_at FROM feed_state WHERE feed_name IN ("
+                + placeholders + ")", _SWIM_FEED_KEYS
+            ).fetchall()
+        now = _t.time()
+        for r in rows:
+            ts = r["fetched_at"]
+            if ts is None:
+                continue
+            if (now - float(ts)) <= stale_seconds:
+                return True
+        return bool(not rows)  # no rows at all -> cannot judge -> assume alive
+    except Exception as e:
+        log.debug("swim_is_live: feed_state unreadable (%s) -- assuming SWIM alive", e)
+        return True
+
+
+def _oooi_authority_check(phase: str, source: str, lock: dict) -> tuple[bool, str]:
+    """Decide whether `source` may assert `phase`. Returns (allowed, note).
+
+    The note is persisted to oooi_authority_note on both accept and reject, so
+    a false positive is diagnosable afterwards instead of needing the aircraft
+    to still be airborne to catch it -- which is the only reason tonight's two
+    were caught at all."""
+    if phase not in _OOOI_ASSERTIVE_PHASES:
+        return True, f"ungated phase={phase} src={source}"
+
+    tier = _OOOI_SOURCE_TIER.get(source, 0)
+
+    # Inference may never assert. No outage, no lock state, nothing unlocks it.
+    if tier <= 0:
+        return False, f"DENY {source}: inference may never assert '{phase}'"
+
+    # Local receivers: both preconditions, or nothing.
+    if source in _OOOI_LOCAL_SOURCES:
+        if swim_is_live():
+            return False, f"DENY {source}: local receiver, SWIM still live"
+        if not lock.get("oooi_local_track_at"):
+            return False, (f"DENY {source}: SWIM down but no prior local track "
+                           f"on this entry")
+        if lock.get("oooi_local_track_source") != source:
+            return False, (f"DENY {source}: prior local track was "
+                           f"{lock.get('oooi_local_track_source')}, not this receiver")
+        return True, f"ALLOW {source}: SWIM down + prior local track (escape hatch)"
+
+    # Lock holder check. A source below the established lock tier cannot
+    # assert while the lock holder is still alive.
+    held_tier = lock.get("oooi_lock_tier")
+    held_src = lock.get("oooi_lock_source")
+    if held_tier is not None and tier < held_tier:
+        if held_tier >= 40 and swim_is_live():
+            return False, (f"DENY {source} (tier {tier}): lock held by {held_src} "
+                           f"(tier {held_tier}), SWIM live")
+        if held_tier < 40:
+            return False, (f"DENY {source} (tier {tier}): outranked by lock holder "
+                           f"{held_src} (tier {held_tier})")
+        return True, (f"ALLOW {source} (tier {tier}): lock holder {held_src} "
+                      f"unavailable (SWIM down)")
+
+    return True, f"ALLOW {source} (tier {tier}) phase={phase}"
 # 2026-08-31: "fids" added, ranked BELOW adsb (the previous floor) -- MWAA's
 # airport display, not a sensor or the aircraft's own report, and already
 # known unreliable on exact timing (2026-07-27 UAL2670 incident: FIDS said
@@ -5762,6 +5950,63 @@ def init_db_v40() -> None:
                     raise
 
 
+# Train phase ordering -- monotonic, same discipline as _OOOI_SOURCE_PRIORITY's
+# forward-only rule. See docs/TRAIN_PARITY_DESIGN_2026-09-23.md sec2.
+_TRAIN_PHASE_ORDER = {"scheduled": 0, "departed": 1, "approaching": 2, "arrived": 3}
+
+
+def update_train_phase(entry_id: str, phase: str, source: str,
+                       live_eta: str | None = None,
+                       arrival_delay_min: int | None = None) -> bool:
+    """Advance a train watchlist entry's phase, and refresh its live ETA.
+
+    MONOTONIC, mirroring OOOI: phase only moves forward through
+    scheduled -> departed -> approaching -> arrived. A poll that arrives
+    late and still reports 'Enroute' must not pull a train back out of
+    'arrived'. Returns True if the phase advanced, False if it was
+    regressive or unchanged.
+
+    The ETA and delay are refreshed REGARDLESS of whether the phase moved --
+    an arriving train's estimate keeps changing long after its phase stops
+    doing so, and that estimate is the operationally useful number. This is
+    the half that was entirely missing before 2026-09-23: scheduled_arrival
+    was written once at add time and the live estimate was read from the
+    feed, compared, and thrown away on every sweep.
+
+    scheduled_arrival is never touched here. Schedule and estimate are
+    different facts; overwriting one with the other destroys the ability to
+    state a delay at all."""
+    if phase not in _TRAIN_PHASE_ORDER:
+        return False
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with conn() as c:
+        row = c.execute(
+            "SELECT train_phase FROM watchlist_entries WHERE id=?", (entry_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        current = row["train_phase"]
+        advanced = (current is None
+                    or _TRAIN_PHASE_ORDER.get(phase, -1)
+                    > _TRAIN_PHASE_ORDER.get(current, -1))
+
+        if advanced:
+            c.execute(
+                "UPDATE watchlist_entries SET train_phase=?, train_phase_updated_at=?, "
+                "train_phase_source=?, live_eta=COALESCE(?, live_eta), "
+                "live_eta_updated_at=?, arrival_delay_min=COALESCE(?, arrival_delay_min) "
+                "WHERE id=?",
+                (phase, now, source, live_eta, now, arrival_delay_min, entry_id))
+        else:
+            # Phase unchanged or regressive -- still refresh the estimate.
+            c.execute(
+                "UPDATE watchlist_entries SET live_eta=COALESCE(?, live_eta), "
+                "live_eta_updated_at=?, arrival_delay_min=COALESCE(?, arrival_delay_min) "
+                "WHERE id=?",
+                (live_eta, now, arrival_delay_min, entry_id))
+        return advanced
+
+
 def update_watchlist_oooi_phase_authoritative(entry_id: str, phase: str, source: str,
                                               updated_at: str) -> bool:
     """Authority-gated variant of update_watchlist_oooi_phase() -- OOOI
@@ -5798,11 +6043,59 @@ def update_watchlist_oooi_phase_authoritative(entry_id: str, phase: str, source:
         if new_idx == cur_idx and current_source:
             if _OOOI_SOURCE_PRIORITY.get(source, 0) < _OOOI_SOURCE_PRIORITY.get(current_source, 0):
                 return False  # a lower-authority source can't "re-confirm" over a higher one
+
+        # ── 0065 authority lock (2026-09-23) ─────────────────────────────
+        # Applies to ASSERTIVE phases only. out/pre_departure are cheap to be
+        # wrong about; off/on/in drive sweeps and notifications, and both of
+        # tonight's false landings were an unentitled source asserting one.
+        lock_row = c.execute(
+            "SELECT oooi_lock_source, oooi_lock_tier, oooi_local_track_at,"
+            " oooi_local_track_source FROM watchlist_entries WHERE id=?",
+            (entry_id,),
+        ).fetchone()
+        lock = dict(lock_row) if lock_row else {}
+        ok, note = _oooi_authority_check(phase, source, lock)
+        if not ok:
+            c.execute("UPDATE watchlist_entries SET oooi_authority_note=? WHERE id=?",
+                      (note, entry_id))
+            log.info("oooi authority REJECTED %s=%s from %s -- %s",
+                     entry_id, phase, source, note)
+            return False
+
         c.execute(
-            "UPDATE watchlist_entries SET oooi_phase=?, oooi_phase_updated_at=?, oooi_source=? WHERE id=?",
-            (phase, updated_at, source, entry_id),
+            "UPDATE watchlist_entries SET oooi_phase=?, oooi_phase_updated_at=?, oooi_source=?,"
+            " oooi_authority_note=? WHERE id=?",
+            (phase, updated_at, source, note, entry_id),
         )
+        # Establish the lock on the first assertive write; a strictly HIGHER
+        # tier may take it over. A lower tier never can -- that is the point
+        # of recording it at all.
+        if phase in _OOOI_ASSERTIVE_PHASES:
+            new_tier = _OOOI_SOURCE_TIER.get(source, 0)
+            held = lock.get("oooi_lock_tier")
+            if held is None or new_tier > held:
+                c.execute(
+                    "UPDATE watchlist_entries SET oooi_lock_source=?, oooi_lock_tier=?,"
+                    " oooi_lock_at=? WHERE id=?", (source, new_tier, updated_at, entry_id))
         return True
+
+
+def record_oooi_local_track(entry_id: str, source: str, seen_at: str) -> None:
+    """Record that a LOCAL receiver held a real track on this entry.
+
+    Precondition (b) of the 2026-09-23 authority rule: a local receiver is
+    only promotable during a SWIM outage if it ALREADY had this aircraft.
+    Without this, "SWIM is down" alone would let a receiver that has never
+    seen the aircraft declare it landed -- the UA2408 failure with extra
+    steps. Call from the local ingest path on a CONFIRMED TRACK, never on a
+    phase assertion; they are different claims and conflating them reopens
+    the hole this closes."""
+    if source not in _OOOI_LOCAL_SOURCES:
+        return
+    with conn() as c:
+        c.execute(
+            "UPDATE watchlist_entries SET oooi_local_track_at=?, oooi_local_track_source=?"
+            " WHERE id=?", (seen_at, source, entry_id))
 
 
 def update_watchlist_tbfm_status(entry_id: str, status: str, updated_at: str) -> None:
@@ -6098,19 +6391,33 @@ def upsert_flight_ooooi(gufi: str, callsign: str | None = None,
                  airline_out_time, airline_off_time, airline_on_time, airline_in_time,
                  original_departure, original_arrival, flight_status, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+            -- 2026-09-22: every RHS column below is table-qualified. A bare
+            -- `callsign` in an ON CONFLICT DO UPDATE is ambiguous to Postgres
+            -- (target row vs EXCLUDED) and the whole statement fails at parse
+            -- time with: column reference "callsign" is ambiguous. Identical
+            -- bug class to the record_feed_bytes() fix in ecfb88a (2026-09-19).
+            --
+            -- This stayed invisible for weeks because its only caller,
+            -- tfms_parser._handle_flight_times(), sat below a watchlist
+            -- early-return, so the statement almost never executed. Removing
+            -- that gate on 2026-09-22 surfaced it instantly: 1,261 failures in
+            -- the first 7 minutes, every one logged and swallowed as non-fatal.
+            -- Two independent faults were hiding each other -- the gate meant
+            -- the Postgres bug never fired, and the swallowed error meant the
+            -- gate's effect looked like "the feed just has no data".
             ON CONFLICT(gufi) DO UPDATE SET
-                callsign           = COALESCE(excluded.callsign, callsign),
-                airline            = COALESCE(excluded.airline, airline),
-                flight_num         = COALESCE(excluded.flight_num, flight_num),
-                origin             = COALESCE(excluded.origin, origin),
-                destination        = COALESCE(excluded.destination, destination),
-                airline_out_time   = COALESCE(excluded.airline_out_time, airline_out_time),
-                airline_off_time   = COALESCE(excluded.airline_off_time, airline_off_time),
-                airline_on_time    = COALESCE(excluded.airline_on_time, airline_on_time),
-                airline_in_time    = COALESCE(excluded.airline_in_time, airline_in_time),
-                original_departure = COALESCE(excluded.original_departure, original_departure),
-                original_arrival   = COALESCE(excluded.original_arrival, original_arrival),
-                flight_status      = COALESCE(excluded.flight_status, flight_status),
+                callsign           = COALESCE(excluded.callsign, flight_ooooi_times.callsign),
+                airline            = COALESCE(excluded.airline, flight_ooooi_times.airline),
+                flight_num         = COALESCE(excluded.flight_num, flight_ooooi_times.flight_num),
+                origin             = COALESCE(excluded.origin, flight_ooooi_times.origin),
+                destination        = COALESCE(excluded.destination, flight_ooooi_times.destination),
+                airline_out_time   = COALESCE(excluded.airline_out_time, flight_ooooi_times.airline_out_time),
+                airline_off_time   = COALESCE(excluded.airline_off_time, flight_ooooi_times.airline_off_time),
+                airline_on_time    = COALESCE(excluded.airline_on_time, flight_ooooi_times.airline_on_time),
+                airline_in_time    = COALESCE(excluded.airline_in_time, flight_ooooi_times.airline_in_time),
+                original_departure = COALESCE(excluded.original_departure, flight_ooooi_times.original_departure),
+                original_arrival   = COALESCE(excluded.original_arrival, flight_ooooi_times.original_arrival),
+                flight_status      = COALESCE(excluded.flight_status, flight_ooooi_times.flight_status),
                 updated_at         = unixepoch()
         """, (gufi, callsign, airline, flight_num, origin, destination,
               airline_out_time, airline_off_time, airline_on_time, airline_in_time,
@@ -6337,14 +6644,49 @@ def upsert_surface_movement_event(track_id: str, airport: str, callsign: str | N
               departure_airport, destination_airport, last_seen))
 
 
+ONSURFACE_RECENCY_MIN = int(config.get("STDDS_ONSURFACE_RECENCY_MIN", "15") or 15)
+
+
 def count_onsurface(airport: str) -> int:
-    """Count distinct aircraft whose LATEST known surface-movement status
-    is 'onsurface' (taxiing, not yet on/off the runway) at this airport --
-    the "how many are in the taxi phase right now" gauge."""
+    """Count aircraft whose LATEST surface-movement status is 'onsurface'
+    (taxiing) at this airport AND that were seen within the last
+    ONSURFACE_RECENCY_MIN minutes -- the "how many are taxiing right now"
+    gauge.
+
+    2026-09-23 FIX -- the recency bound is the whole point of this function
+    and it was missing. The docstring above always described the right
+    intent; the SQL counted EVERY 'onsurface' row ever written.
+
+    Why that is catastrophically wrong here: surface_movement_events is keyed
+    PRIMARY KEY (airport, track_id), and track_id comes from the FAA ASDE-X
+    12-bit track-number pool (1..4095) which the sensor RECYCLES. So the
+    table is a saturated slot map -- one row per track slot, holding whichever
+    aircraft last occupied it -- not a list of aircraft. "Latest per track
+    slot" is not "latest in time", and there is no retention job for this
+    table (it is absent from retention_prune.py's _PRUNE_JOBS), so rows
+    accumulate for months.
+
+    Measured 2026-09-23, unbounded count vs the real 15-minute figure:
+        KJFK 1183 -> 12      KORD 1169 -> 12      KSEA 1137 -> 5
+    i.e. roughly 100x overstated. Operator-visible: smes_parser's
+    check_taxi_alerts renders this verbatim as "N aircraft currently taxiing",
+    and _MIN_ONSURFACE_FOR_ALERT (10) was therefore permanently satisfied at
+    every airport, so that alert family fired on dedup timing alone.
+
+    last_seen is TEXT ISO-8601, verified 2026-09-23 to be 100% canonical
+    fixed-width UTC ('____-__-__T__:__:__Z', zero rows non-conforming), which
+    is lexicographically ordered -- so a STRING comparison is correct and
+    index-eligible. Do not "fix" this by migrating the column to epoch; that
+    is a real migration risk for zero benefit. Note event_time carries
+    milliseconds and last_seen does not, so never compare those two columns
+    to each other."""
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           time.gmtime(time.time() - ONSURFACE_RECENCY_MIN * 60))
     with conn() as c:
         row = c.execute(
-            "SELECT count(*) AS n FROM surface_movement_events WHERE airport=? AND status='onsurface'",
-            (airport,)
+            "SELECT count(*) AS n FROM surface_movement_events "
+            "WHERE airport=? AND status='onsurface' AND last_seen > ?",
+            (airport, cutoff)
         ).fetchone()
         return row["n"] if row else 0
 

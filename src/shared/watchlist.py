@@ -760,7 +760,27 @@ def sweep_landed_flights() -> int:
         event_type = None
 
         if phase == "in":
-            reason = "landed (oooi_phase=in, ACARS/ADS-B confirmed)"
+            # 2026-09-23: this branch previously set the literal string
+            # "landed (oooi_phase=in, ACARS/ADS-B confirmed)" unconditionally,
+            # regardless of which source actually wrote the phase. It claimed a
+            # corroboration that had not happened, which is precisely why the
+            # two false landings that night read as high-confidence:
+            #   UA1240 -- swept while at FL370, 504kts, ADS-B age 0.0s, with
+            #             SWIM reporting ACTIVE and ON/IN still in the future
+            #   UA2408 -- swept 3.5 hours before scheduled arrival
+            # Name the real source, and do not sweep on an unentitled one.
+            src = entry.get("oooi_source") or "unknown"
+            tier = db._OOOI_SOURCE_TIER.get(src, 0)
+            if tier <= 0:
+                log.warning(
+                    "watchlist: REFUSING to sweep %s -- oooi_phase=in was set by "
+                    "'%s' (tier %d, not entitled to assert). Entry retained.",
+                    entry.get("identifier", entry_id), src, tier)
+                continue
+            reason = f"landed (oooi_phase=in, source={src} tier={tier})"
+            note = entry.get("oooi_authority_note")
+            if note:
+                reason += f" [{note}]"
             event_type = "auto_swept_landed"
         else:
             sched_arr = entry.get("scheduled_arrival")

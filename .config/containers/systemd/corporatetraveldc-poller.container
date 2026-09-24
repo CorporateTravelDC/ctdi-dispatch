@@ -30,6 +30,17 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 Volume=corporatetraveldc-triggers:/run/corporatetraveldc
 
 # Permanent watchlist files — poller's WatchlistFileWatcher hot-reloads these
+# 2026-09-23: found live, and it is the SAME failure shape as the trigger-queue
+# gap documented above -- this comment existed with no Volume= line under it, so
+# the poller looked at its own empty /opt/corporatetraveldc/watchlists and logged
+# "permanent_trains.json not found, skipping" on every start. Harmless so far
+# only because the four permanent_*.json files are seed data that web merges into
+# Postgres (_merge_permanent_file), and the poller reads the DB -- all 304
+# perm-train-* entries were present in watchlist_entries while this was broken.
+# The real exposure was silent: hand-editing any of these files would never have
+# reached the poller. Read-only because the poller only ever reads them; web is
+# the writer, and web has the matching gap (see its own .container).
+Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env

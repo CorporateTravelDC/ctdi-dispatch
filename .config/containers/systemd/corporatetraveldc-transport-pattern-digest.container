@@ -26,7 +26,27 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 # container, holding no model, no threads -- until the one ahead exits.
 # It waits; it is never refused and never kills the run ahead of it.
 # common/llama_pool.py takes a separate per-generation lock on top.
-Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/transport_pattern_digest.py
+#
+# 2026-09-22 -- BOUNDED WAIT. The lock discipline above is unchanged and
+# non-negotiable; what changed is what happens when the wait runs too long.
+#
+# Root-caused today: this unit's 2026-09-22 00:53 failure was Result=timeout
+# after 28min 12s wall against just 16.9s CPU -- a process asleep on flock,
+# not a hung skill. Bare `flock` waits forever, TimeoutStartSec=1600 (26m40s)
+# fires first, and systemd SIGKILLs it. That turns ordinary contention into a
+# unit FAILURE, which fires OnFailure= and -- as happened today -- makes
+# check-claude-md-drift.sh fail, which blocks manifest signing entirely.
+#
+# `-w 1200` (20min, comfortably inside the 1600s timeout) makes a busy box a
+# clean SKIP instead: flock exits 1 having never started the skill, and the
+# `||` branch converts that to exit 0 plus a log line. Nothing half-runs --
+# the skill either holds the lock for its entire run or is never invoked.
+#
+# Same posture as maintenance-window-guard.sh's ExecCondition= (skip cleanly,
+# never fail) and the same bounded wait local-llm-synthesize.sh already uses
+# (`flock -w 300`). A skipped digest costs one cycle; a failed unit costs a
+# page and a blocked signing gate.
+Exec=/bin/sh -c 'flock -w 1200 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/transport_pattern_digest.py; rc=$?; [ "$rc" -eq 1 ] && { echo "transport-pattern-digest: long-runner lock still held after 1200s -- skipping this cycle (not a failure)"; exit 0; }; exit "$rc"'
 
 [Service]
 # 2026-09-21 maintenance window (operator directive): long report-tier
