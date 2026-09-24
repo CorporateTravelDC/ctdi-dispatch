@@ -879,10 +879,11 @@ def write_safety_status(record: dict) -> str | None:
 # values) -- these are two raw bit positions reporting one underlying
 # physical signal (most likely paired/redundant hold-bar lamp hardware
 # at the same taxiway/runway intersection). Collapsing them loses no
-# real information and cuts DCA's 44 raw bits to 30 logical signals,
-# BWI's 37 to 20. KIAD shows almost no pairing (34 of 35 bits independent)
-# -- a genuinely different reporting granularity at that airport, not
-# noisier data; do not "fix" this by forcing KIAD bits into groups.
+# real information. SUPERSEDED COUNTS -- this comment originally said DCA's
+# 44 raw bits collapse to 30 logical signals and BWI's 37 to 20, and that
+# "KIAD shows almost no pairing (34 of 35 bits independent) ... do not 'fix'
+# this by forcing KIAD bits into groups". The 2026-09-23 empirical pass below
+# corrected all three: DCA 28, BWI 19, and KIAD has four real coupled groups.
 #
 # This does NOT decode what any bit/pair actually MEANS (which runway,
 # which taxiway) -- there is no FAA ICD for this feed and no reliable
@@ -892,13 +893,50 @@ def write_safety_status(record: dict) -> str | None:
 # accumulates, is the next real step toward semantic labels -- this map
 # only removes verified-redundant noise from what's already being
 # reported today.
+# 2026-09-23 CORRECTION, from an empirical pass over all 113,812 usable
+# transitions in stdds_safety_status_history (2026-08-03 -> 2026-09-23).
+# Groups were derived by IDENTICAL FLIP SIGNATURE (the exact set of
+# transition indices on which each bit flipped), not by matching flip
+# counts -- two bits can share a count by coincidence but cannot share a
+# signature.
+#
+# Every group previously listed was CONFIRMED. The corrections are additions
+# and one retracted claim:
+#
+#   KDCA (4, 42)   -- 16,861 flips, DCA's THIRD most active signal, and it
+#                     was being counted as two separate signals in
+#                     operator-facing alert text.
+#   KDCA (22, 43)  -- 264 flips.
+#   KIAD (2, 32)   -- 6,198 flips.
+#   KIAD (31, 33)  -- 5,988 flips.
+#   KIAD (30, 34)  -- 5,614 flips.
+#   KBWI bit 41    -- belongs to the existing 9-bit group (25..33).
+#
+# The comment above claiming "KIAD shows almost no pairing (34 of 35 bits
+# independent) ... do not 'fix' this by forcing KIAD bits into groups" is
+# CONTRADICTED by the data: KIAD has four coupled groups, three of them
+# high-frequency. That claim is retracted.
+#
+# Coupling is ALWAYS-EQUAL, verified: across every group at all three
+# airports the observed joint values are only (0,0) and (1,1) -- never
+# (0,1) or (1,0). That rules out a 2-bit state enum and supports the
+# existing reading of two bit positions carrying one signal.
+#
+# Corrected logical-signal counts: KDCA 28 (not 30), KIAD 31 (not 34),
+# KBWI 19.
+#
+# UNVERIFIED -- retained but flagged. These rest on only 2-4 simultaneous
+# transitions, which is co-occurrence, not demonstrated coupling:
+#   KBWI (25..33, 41)  2 flips
+#   KBWI (35, 36)      4 flips
+#   KIAD (20, 21)      4 flips
 _STDDS_SAFETY_BIT_PAIRS: dict[str, list[tuple[int, ...]]] = {
-    "KDCA": [(2, 3), (5, 6), (7, 8), (10, 11), (15, 16, 17), (20, 21),
-             (23, 24), (25, 26), (29, 30), (31, 32), (33, 34), (37, 38),
-             (39, 40)],
-    "KIAD": [(20, 21)],
+    "KDCA": [(2, 3), (4, 42), (5, 6), (7, 8), (10, 11), (15, 16, 17),
+             (20, 21), (22, 43), (23, 24), (25, 26), (29, 30), (31, 32),
+             (33, 34), (37, 38), (39, 40)],
+    "KIAD": [(2, 32), (20, 21), (30, 34), (31, 33)],
     "KBWI": [(4, 5), (6, 7), (10, 11), (14, 15), (16, 17), (19, 20),
-             (21, 22), (25, 26, 27, 28, 29, 30, 31, 32, 33), (35, 36),
+             (21, 22), (25, 26, 27, 28, 29, 30, 31, 32, 33, 41), (35, 36),
              (38, 39)],
 }
 

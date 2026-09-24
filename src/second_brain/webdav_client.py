@@ -59,7 +59,44 @@ def _require_nextcloud_user() -> str:
     return user
 
 
-WEBDAV_BASE = os.environ.get("NEXTCLOUD_WEBDAV_BASE", "http://127.0.0.1:8090/remote.php/dav/files")
+def _default_webdav_base() -> str:
+    """Pick a base URL that works for THIS process, host or container.
+
+    2026-09-22. The old unconditional default was
+    http://127.0.0.1:8090/... , which is correct on the host and silently
+    wrong inside a container, where 127.0.0.1 is the container's own
+    loopback. That cost knowledge-graph-compile every run for ~3 weeks
+    ("[Errno 111] Connection refused") and would have cost audit_log_archive
+    its first real run in November, because both were verified on the host
+    where the default happens to be right.
+
+    A single configured value cannot fix this -- measured 2026-09-22:
+      127.0.0.1:8090            host OK,  container unreachable
+      host.containers.internal  host n/a, container OK
+      cloud.example.com   401 from BOTH, even with a valid app
+                                password -- external WebDAV auth is refused,
+                                so the public URL is not a shared option.
+    Setting one global in dispatch.env therefore breaks whichever side it
+    was not written for, and dispatch.env is sourced by host processes too.
+
+    So the default is resolved per-process instead. An explicit
+    NEXTCLOUD_WEBDAV_BASE always wins, so the 21 Quadlets that already set
+    one are unaffected; this only replaces the fallback that was previously
+    wrong half the time.
+    """
+    env = os.environ.get("NEXTCLOUD_WEBDAV_BASE")
+    if env:
+        return env
+    # /run/.containerenv is podman's own marker; /.dockerenv covers the
+    # docker-compatible case. Checking the filesystem rather than trying to
+    # resolve a hostname keeps this free and side-effect-less at import time.
+    in_container = os.path.exists("/run/.containerenv") or os.path.exists("/.dockerenv")
+    if in_container:
+        return "http://host.containers.internal:80/remote.php/dav/files"
+    return "http://127.0.0.1:8090/remote.php/dav/files"
+
+
+WEBDAV_BASE = _default_webdav_base()
 NEXTCLOUD_USER = _require_nextcloud_user()
 _SECRETS_FILE = os.environ.get(
     "NEXTCLOUD_SECRETS_FILE",

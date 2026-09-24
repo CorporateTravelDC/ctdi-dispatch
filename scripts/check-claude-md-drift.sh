@@ -136,11 +136,47 @@ fi
 FAILED=$(systemctl --user list-units 'corporatetraveldc-*' --all --plain --no-legend \
              --state=failed,auto-restart --no-pager 2>/dev/null \
          | awk '{print $1}' | sed 's/\.service$//')
+# 2026-09-22: a unit whose ONLY failure is verified-exec refusing to run
+# against an unsigned tree is NOT documentation drift -- it is the expected,
+# designed behaviour during the window between editing a file under src/ and
+# re-signing the manifest. Counting it as drift created a genuine deadlock,
+# hit for real today:
+#
+#   edit src/ -> every timer that fires fails verify-manifest -> drift check
+#   sees failed units -> drift blocks sign-manifest.sh -> tree stays unsigned
+#   -> more timers fire and fail...
+#
+# `reset-failed` cannot win that race (three more units failed within 90s of
+# clearing the last batch), so the only escapes were SKIP_DRIFT_CHECK=1 --
+# bypassing a safety gate to fix a problem the gate itself caused -- or
+# stopping 36 timers by hand, which is what we did tonight.
+#
+# The narrow exemption below breaks the loop without weakening the check: a
+# unit is skipped ONLY if its recent log contains the integrity refusal AND
+# the tree currently fails verify-manifest. The moment the manifest is signed,
+# that second condition goes false and any still-failing unit is reported
+# normally -- so a real failure can never hide behind this, and the exemption
+# cannot persist past the signing window that justifies it.
+_tree_unsigned=0
+if ! "${REPO_DIR}/scripts/verify-manifest.sh" >/dev/null 2>&1; then
+    _tree_unsigned=1
+fi
+
 if [[ -n "${FAILED}" ]]; then
+    _integrity_skipped=0
     while IFS= read -r u; do
         [[ -z "${u}" ]] && continue
+        if [[ ${_tree_unsigned} -eq 1 ]] \
+           && journalctl --user -u "${u}.service" -n 40 --no-pager -q 2>/dev/null \
+              | grep -q "INTEGRITY CHECK FAILED"; then
+            _integrity_skipped=$((_integrity_skipped + 1))
+            continue
+        fi
         grep -qF "${u}" "${DOC}" || drift "unit ${u} is failed/crash-looping and is absent from ${DOC}'s Known bad section"
     done <<< "${FAILED}"
+    if [[ ${_integrity_skipped} -gt 0 ]]; then
+        warn "${_integrity_skipped} unit(s) failed only on the signed-manifest gate against an unsigned tree -- not counted as drift; they clear once scripts/sign-manifest.sh runs"
+    fi
 else
     ok "no failed or crash-looping units"
 fi

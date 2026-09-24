@@ -112,6 +112,21 @@ SKILL_SCHEDULE: list[dict] = [
     # docstring). Redesigned as a 30-day retention + Nextcloud archival job;
     # daily is plenty for a 30-day-out window.
     {"name": "flight-cleanup",  "script": "poller/skills/flight_events_cleanup.py", "interval": 86400},
+    # 2026-09-23: direct sibling of flight-cleanup above (operator directive:
+    # "mirror the flight events log behavior ... for the surface movement").
+    # surface_movement_events had NO retention path at all -- absent from
+    # retention_prune's _PRUNE_JOBS, accumulating since 2026-08-03.
+    #
+    # Archives rather than prunes, because this table is the only correlation
+    # substrate for the SMES bitmask decoding work; a plain DELETE would
+    # destroy that dataset permanently. See the skill's own header.
+    #
+    # maintenance_only, unlike flight-cleanup: the first run has ~12,350
+    # eligible rows to tar, upload and delete, and that is bulk WebDAV I/O on
+    # a box whose alert path shares two cores. Steady-state volume is small,
+    # but the backlog run should not land mid-afternoon.
+    {"name": "surface-cleanup", "script": "poller/skills/surface_events_cleanup.py",
+     "interval": 86400, "timeout": 900, "maintenance_only": True},
     # 2026-09-22: audit-log-prune REMOVED from this schedule and replaced by
     # audit-log-archive. The prune job deleted audit rows past 90 days with
     # nothing left behind; the operator retention decision is that audit rows
@@ -755,13 +770,41 @@ class WatchlistSweep:
 
             amtraker_url = _os.environ.get("AMTRAKER_API_URL",
                                             "https://api.amtraker.com/v3")
+            skipped_non_amtrak = 0
             for entry in entries:
                 ident = entry["identifier"]
+                # 2026-09-23 PROVIDER GUARD -- amtraker is an AMTRAK-ONLY
+                # feed, but this loop used to query it for EVERY train entry
+                # regardless of operator. MARC and VRE train numbers collide
+                # with Amtrak numbers, so a VRE entry asking for /trains/334
+                # got back a real AMTRAK train 334 and the sweep stamped that
+                # Amtrak data with the VRE entry's route name.
+                #
+                # Observed live 2026-09-23 17:24, immediately after the
+                # amtraker unwrap fix made this code path reachable at all:
+                #     "#334 VRE Manassas Line ->WAS en route (on time)"
+                # -- route name from the entry, everything else from a
+                # different railroad. Note the empty origin. train_events
+                # rows for MARC/VRE: 0.
+                #
+                # Fixing the unwrap turned "silently dead" into "confidently
+                # wrong" for the 104 MARC/VRE entries. Wrong operational data
+                # is worse than none, so an entry whose route is not an
+                # Amtrak route is SKIPPED here and produces nothing until its
+                # own provider adapter exists (docs/TRAIN_PARITY_DESIGN_2026-09-23.md).
+                if not _is_amtrak_route(entry.get("route_name")):
+                    skipped_non_amtrak += 1
+                    continue
                 try:
                     _check_train_amtraker(entry, ident, amtraker_url,
                                           watchlist_event_hit)
                 except Exception as e:
                     log.debug("train sweep %s: %s", ident, e)
+            if skipped_non_amtrak:
+                log.debug("train sweep: skipped %d non-Amtrak entr%s (no provider "
+                          "adapter yet -- would otherwise collide with Amtrak "
+                          "train numbers)", skipped_non_amtrak,
+                          "y" if skipped_non_amtrak == 1 else "ies")
 
             # Landed/dead auto-sweep, right after status-check freshens
             # last_event_summary for this tick's entries. See
@@ -1834,6 +1877,94 @@ def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
     )
 
 
+# Which route names belong to the Amtrak provider. Config-driven so an
+# outside operator can run this platform in a region with different services
+# without editing code -- same idiom as AMTRAK_CORE_ROUTES /
+# AMTRAK_REGIONAL_STATIONS already in dispatch.env. See
+# docs/TRAIN_PARITY_DESIGN_2026-09-23.md sec5 for the full provider scheme.
+#
+# Default deliberately lists the Amtrak services actually on this platform's
+# watchlist rather than "everything not MARC/VRE": an unmapped route must
+# produce NO data, never another provider's data.
+_AMTRAK_ROUTE_DEFAULT = (
+    "Acela,Northeast Regional,Crescent,Silver Meteor,Silver Star,Palmetto,"
+    "Vermonter,Floridian,Cardinal,Carolinian,Keystone,Empire Service,"
+    "Maple Leaf,Lake Shore Limited,Capitol Limited,Pennsylvanian,Adirondack,"
+    "Ethan Allen Express,Berkshire Flyer,Valley Flyer,Downeaster,Corridor"
+)
+
+
+def _amtrak_routes() -> set[str]:
+    import os as _os
+    raw = _os.environ.get("TRAIN_PROVIDER_ROUTES_AMTRAK") or _AMTRAK_ROUTE_DEFAULT
+    return {r.strip().casefold() for r in raw.split(",") if r.strip()}
+
+
+def _is_amtrak_route(route_name: str | None) -> bool:
+    """True when this route is served by the amtraker feed.
+
+    A missing/blank route_name returns True so a transient entry added
+    without one (e.g. by flight-hifi-track's train sibling, or a hand POST)
+    still gets swept -- the collision risk is specifically MARC/VRE entries
+    that DO carry a route_name naming another operator."""
+    if not route_name or not str(route_name).strip():
+        return True
+    return str(route_name).strip().casefold() in _amtrak_routes()
+
+
+# Train phase vocabulary, mirroring OOOI's four states. See
+# docs/TRAIN_PARITY_DESIGN_2026-09-23.md sec2 and pg_schema/0064.
+TRAIN_PHASES = ("scheduled", "departed", "approaching", "arrived")
+
+
+def _derive_train_phase(train: dict, stations: list, dest_stn: dict | None) -> str | None:
+    """Map a provider payload onto the four-state train phase.
+
+        scheduled   trainState == Predeparture              (pre-OUT)
+        departed    origin station status == Departed        (OUT/OFF)
+        approaching destination is first station not Departed (ON)
+        arrived     destination status == Station,
+                    or trainState == Completed               (IN)
+
+    Enum values measured 2026-09-23 across 195 live trains / 47 routes:
+    trainState is one of Active (173) / Predeparture (15) / Completed (7);
+    station status is Departed (1627) / Enroute (1772) / Station (63).
+
+    Returns None when the payload supports no confident call -- the caller
+    must not write a phase it cannot justify, since a wrong phase is worse
+    than an absent one for anything downstream that gates on it.
+
+    NOTE: this reads amtraker's vocabulary directly. Once the provider
+    abstraction lands (design sec5) this mapping moves INTO the provider
+    adapter -- MARC and VRE will not emit Enroute/Station/Departed, and
+    keeping the mapping here would mean every new provider edits the sweep."""
+    state = (train.get("trainState") or "").strip().lower()
+    if state == "predeparture":
+        return "scheduled"
+    if state == "completed":
+        return "arrived"
+
+    dest_status = ((dest_stn or {}).get("status") or "").strip().lower()
+    if dest_status == "station":
+        return "arrived"
+
+    if not stations:
+        return None
+
+    # First station not yet departed is where the train is headed next. If
+    # that IS the destination, it is on final approach to it.
+    next_stn = next((s for s in stations
+                     if (s.get("status") or "").strip().lower() != "departed"), None)
+    if next_stn is not None and dest_stn is not None \
+            and next_stn.get("code") == dest_stn.get("code"):
+        return "approaching"
+
+    origin_status = (stations[0].get("status") or "").strip().lower()
+    if origin_status == "departed":
+        return "departed"
+    return None
+
+
 def _check_train_amtraker(entry: dict, ident: str, base_url: str,
                           watchlist_event_hit) -> None:
     """Query amtraker API for current train status and fire delay/state alerts."""
@@ -1852,17 +1983,71 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
 
     if not trains:
         return
-    train = trains[0] if isinstance(trains, list) else trains
+
+    # 2026-09-23 FIX. amtraker v3 returns a DICT KEYED BY TRAIN NUMBER whose
+    # value is a list:  {"141": [ {...train...} ]}
+    #
+    # The previous line was:
+    #     train = trains[0] if isinstance(trains, list) else trains
+    # A dict is not a list, so `train` became the WRAPPER, not the train.
+    # Every field read after it -- trainState, stations, everything -- was
+    # therefore None, `state` was "", every classification below evaluated
+    # False, and the function returned having fired nothing. Silently, for
+    # every train, on every sweep, since this was written.
+    #
+    # Confirmed 2026-09-23: all 304 train watchlist entries had
+    # last_event_summary NULL -- the train alert path had never once fired,
+    # while the identical flight path worked. The sweep, the API and the
+    # entries were all fine; only this unwrap was wrong.
+    if isinstance(trains, dict):
+        bucket = trains.get(str(ident))
+        if bucket is None:                      # key mismatch (e.g. "141" vs 141)
+            bucket = next(iter(trains.values()), None)
+        train = bucket[0] if isinstance(bucket, list) and bucket else bucket
+    elif isinstance(trains, list):
+        train = trains[0]
+    else:
+        train = trains
+    if not isinstance(train, dict):
+        log.debug("amtraker %s: unexpected payload shape %s", ident, type(train).__name__)
+        return
 
     state = (train.get("trainState") or train.get("status") or "").lower()
     last_event = entry.get("last_event_summary") or ""
 
     # Derive current delay from amtraker velocity/status fields if available.
     # Amtraker v3 returns velocityMph, trainTimely, and per-station ETA objects.
-    sched_str = entry.get("scheduled_arrival")
-    pred_str = (train.get("estimatedArrival")
+    # 2026-09-23: amtraker v3 carries NO top-level estimatedArrival /
+    # predicted_arrival / arrivalTime -- all three reads below returned None
+    # on every call. The real times live per-station in `stations[]` as
+    # schArr (scheduled) and arr (current estimate/actual), which is also
+    # where the destination's own `status` ("Enroute"/"Station") lives.
+    #
+    # Reading them from the DESTINATION station means delay no longer depends
+    # on the entry carrying scheduled_arrival -- which none of the 304
+    # existing entries did, so delay_min was permanently None and the
+    # LATE/late branches below were unreachable even once the unwrap above
+    # was fixed. Entry scheduled_arrival is still preferred when present, so
+    # an operator-supplied schedule still wins over the feed's.
+    dest_code = (entry.get("destination") or "").strip().upper()
+    stations = train.get("stations") or []
+    dest_stn = None
+    for stn in stations:
+        if (stn.get("code") or "").strip().upper() == dest_code:
+            dest_stn = stn
+            break
+    if dest_stn is None and stations:
+        dest_stn = stations[-1]          # final stop is the destination
+
+    sched_str = entry.get("scheduled_arrival") or (dest_stn or {}).get("schArr")
+    pred_str = ((dest_stn or {}).get("arr")
+                or train.get("estimatedArrival")
                 or train.get("predicted_arrival")
                 or train.get("arrivalTime"))
+    # The destination station's own status is more specific than the
+    # train-level trainState ("Active" right up until it berths).
+    if dest_stn and (dest_stn.get("status") or "").strip():
+        state = f"{state} {dest_stn['status']}".strip().lower()
 
     delay_min = None
     if sched_str and pred_str:
@@ -1872,6 +2057,29 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
             delay_min = int((pred - sched).total_seconds() / 60)
         except ValueError:
             pass
+
+    # 2026-09-23 -- persist phase + live ETA (pg_schema/0064). Closes parity
+    # breaks 1 and 2 in docs/TRAIN_PARITY_DESIGN_2026-09-23.md: trains had no
+    # phase concept at all while flights carry OOOI, and scheduled_arrival was
+    # written once at add time and never refreshed while flights get continuous
+    # FIDS/FDPS/TBFM updates.
+    #
+    # This runs BEFORE the alert classification below and independently of it:
+    # a train that produces no alert this tick (unchanged summary, or a state
+    # the classifier ignores) must still have its phase and ETA kept current.
+    # Tying state persistence to alert emission is what left the flight OOOI
+    # table at 4 rows for three weeks -- same mistake, different table.
+    try:
+        _phase = _derive_train_phase(train, stations, dest_stn)
+        if _phase:
+            db.update_train_phase(
+                entry["id"], _phase,
+                source=(train.get("provider") or "amtrak"),
+                live_eta=pred_str,
+                arrival_delay_min=delay_min,
+            )
+    except Exception as e:                       # never block alerting on this
+        log.debug("train phase/eta persist %s: %s", ident, e)
 
     # Classify state: arrived / delayed / en-route / unknown.
     # "en-route" fires once when train first appears (previous last_event was empty

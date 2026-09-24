@@ -64,10 +64,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import bisect
 import re
+import time
 import sqlite3  # only for isinstance() in _create_schema()'s test-double branch -- see its docstring
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import psycopg
@@ -1021,6 +1023,524 @@ def assign_geometry(conn) -> int:
     return len(out)
 
 
+# Geometric reasoning Phase 2 (design doc §3, "provable tier"). Both numbers
+# are the design's own locked-in 2026-09-17 decision -- deliberately the SAME
+# values already governing every analyze_* function in common/db.py
+# (analyze_flight_number_patterns, analyze_train_patterns,
+# analyze_vessel_patterns all take min_samples=5; analyze_disruption_weather_split
+# takes days=30), not new constants invented for this layer.
+CAUSAL_WINDOW_DAYS = 30
+CAUSAL_MIN_SAMPLES = 5
+
+# Bounded per-entity-pair note-pair sample. Direction is a majority test and
+# evidence quotes at most 3, so retaining more buys nothing and was the main
+# term in the 2026-09-22 OOM (465M against a 384M ceiling).
+_PAIR_SAMPLE_CAP = 64
+
+_CAUSAL_EVIDENCE_RE = re.compile(
+    r"^self=(?P<self>[^;]+);target=(?P<target>[^;]+);n=(?P<n>\d+);"
+    r"expected=(?P<expected>[^;]+);lift=(?P<lift>[^;]+);"
+    r"lead_lag_min=(?P<lead_lag_min>[^;]*);direction=(?P<direction>[^;]+);"
+    r"event_lead_lag_min=(?P<event_lead_lag_min>[^;]*);"
+    r"event_direction=(?P<event_direction>[^;]+);event_n=(?P<event_n>\d+);"
+    r"window_days=(?P<window_days>\d+);samples=(?P<samples>.*)$"
+)
+
+
+def assign_causal_associations(conn, window_days: int = CAUSAL_WINDOW_DAYS,
+                               min_samples: int = CAUSAL_MIN_SAMPLES) -> int:
+    """Geometric reasoning Phase 2 -- the PROVABLE tier, aggregating Phase 1's
+    per-instance `proximate_to` edges into per-entity-pair statistical
+    associations (relation='statistically_associated', kind='causal').
+
+    Same one graph as derivations/chronology/geometry, per the 2026-08-24
+    precedent the operator set explicitly ("I don't want it as a second
+    mechanism... I want it baked into the causal chain"). `kind` is what keeps
+    the tiers honest, not a separate table or query surface.
+
+    WHAT IT COMPUTES, per design doc §3:
+      * N            -- how many DISTINCT note-pairs co-locate entity A with
+                        entity B. Phase 1 writes each pair twice (both
+                        directions, proximity being symmetric), so the pair is
+                        canonicalised before counting or N would double.
+      * Baseline     -- how often A and B each occur independently, as a share
+                        of in-window notes. `expected` is the co-occurrence
+                        count independence alone would predict
+                        (n_A * n_B / n_notes); `lift` is observed/expected.
+                        Lift near 1.0 means "these two show up together exactly
+                        as often as chance would put them together" -- which is
+                        the whole point of measuring a baseline at all, and the
+                        reason a raw co-occurrence count is NOT evidence.
+      * Direction    -- taken from the SAME note pairs' existing `preceded_by`
+                        chronological edges (kind='chronological'), never
+                        recomputed from timestamps here. If A's note reliably
+                        precedes B's, direction=a_leads_b and lead_lag_min is
+                        the median gap; if the order is inconsistent,
+                        direction=ambiguous and the interval is omitted rather
+                        than averaged into a meaningless number.
+      * Minimum-N    -- nothing below `min_samples` is written at all.
+
+    HONEST DEVIATION from the design doc's illustrative example, recorded
+    rather than quietly resolved: §3 says "per entity-type pair (e.g. 'NEC
+    Amtrak delay' x 'DCA arrival delay')". This platform has no delay-EVENT
+    taxonomy -- semantic_note_instance_refs stores concrete identifiers
+    (flight:DAL8, train:2157), and instance_type is only 'flight'|'train', so a
+    literal type-pair reading yields three useless buckets. Associating
+    identifier pairs is what the data actually supports, and it is strictly
+    more drillable: every edge names the two real entities and carries sample
+    note paths. If an event-class taxonomy is built later, this aggregates up
+    to it without re-deriving anything.
+
+    SHAPE OF THE ROW: `path` is the most recent in-window note evidencing the
+    association (real, drillable), `target` is the partner ENTITY string, not a
+    note. An entity target does not resolve to a vault note and is returned by
+    trace_causal_chain() as a terminal leaf -- the behaviour Phase 1 already
+    designed for, since most authored Provenance targets are free text too.
+    One row per ordered entity pair, not one per evidencing note-pair, so this
+    stays compact against Phase 1's ~900k edges.
+
+    NOT causation. The relation is 'statistically_associated' and every
+    consumer-facing string says associated. Two flights sharing an approach
+    corridor will co-occur constantly with high lift and mean nothing causal.
+    Lift and N are reported so a reader can judge; they are never asserted as
+    cause, per §6's framing rules.
+
+    READ lead_lag_min CAREFULLY -- it is the interval between the NOTES, not
+    between the real-world movements. Much of this vault is daily digests, so a
+    genuine daily service pattern shows up as lead_lag_min near 1440 (observed
+    live: 1435.3 between two NEC trains). That is the notes being a day apart,
+    not one train trailing another by a day. Treated as an event interval it
+    would be nonsense; treated as "these appear in consecutive daily notes,
+    consistently in this order" it is real and useful. A true
+    event-to-event interval needs per-event timestamps this layer does not
+    have, and is deliberately not faked here."""
+    conn.execute("DELETE FROM semantic_note_derivations WHERE kind='causal'")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+
+    # In-window notes, and how many distinct notes each entity appears in.
+    # instance_refs is the right source for the baseline (it is one row per
+    # note x entity), NOT the edge table, whose counts are already pair-shaped.
+    in_window: dict[str, set[str]] = {}
+    note_ts: dict[str, datetime] = {}
+    for r in conn.execute(
+            "SELECT path, instance_type, identifier, note_ts "
+            "FROM semantic_note_instance_refs").fetchall():
+        try:
+            ts = datetime.fromisoformat(r["note_ts"])
+        except (TypeError, ValueError):
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < cutoff:
+            continue
+        ent = f"{r['instance_type']}:{r['identifier']}"
+        in_window.setdefault(ent, set()).add(r["path"])
+        note_ts[r["path"]] = ts
+
+    n_notes = len({p for paths in in_window.values() for p in paths})
+    if n_notes < 2:
+        return 0
+
+    # Canonicalised co-occurrence counts, plus a BOUNDED sample of the
+    # note-pairs backing each one (direction + drill-down evidence).
+    #
+    # 2026-09-22 memory rewrite, after the first version was OOM-killed in
+    # production at 465M against this unit's 384M ceiling. The original held
+    # every note-pair for every entity-pair as a set of (path, target) string
+    # tuples -- up to ~900k long-string tuples -- and materialised all 902,518
+    # edge rows at once via fetchall(). It ran fine on the host, where no
+    # cgroup limit applies, which is exactly why it was not caught before
+    # deploying. Three changes, none of which alter a single output value:
+    #
+    #   1. N is COUNTED, not accumulated in a set. Phase 1 writes each
+    #      note-pair exactly twice per entity-pair (both directions, and its
+    #      PK includes the evidence string, so no third row can collide), so
+    #      the exact distinct count is rows/2 -- no set required to dedupe.
+    #   2. Only _PAIR_SAMPLE_CAP note-pairs are retained per entity-pair.
+    #      Direction is a majority test over pairs; a bounded sample answers it
+    #      identically once the sample exceeds the 5-sample floor by this much,
+    #      and the evidence field only ever quotes 3 of them anyway.
+    #   3. Rows are streamed with fetchmany() instead of fetchall(), so peak
+    #      memory no longer scales with the edge count at all.
+    pair_notes: dict[tuple[str, str], set[int]] = {}
+    npair_id: dict[tuple[str, str], int] = {}
+    npair_of: list[tuple[str, str]] = []
+    cur = conn.execute(
+        "SELECT path, target, evidence FROM semantic_note_derivations "
+        "WHERE kind='geometric'")
+    while True:
+        chunk = cur.fetchmany(20000)
+        if not chunk:
+            break
+        for r in chunk:
+            m = _GEOMETRY_EVIDENCE_RE.match(r["evidence"] or "")
+            if not m:
+                continue
+            a, b = m.group("self"), m.group("target")
+            if a == b:
+                continue
+            pa, pb = r["path"], r["target"]
+            if pa not in note_ts or pb not in note_ts:
+                continue  # outside the rolling window
+            npair = (pa, pb) if pa < pb else (pb, pa)
+            nid = npair_id.get(npair)
+            if nid is None:
+                nid = npair_id[npair] = len(npair_of)
+                npair_of.append(npair)
+            key = (a, b) if a < b else (b, a)
+            pair_notes.setdefault(key, set()).add(nid)
+
+    # Chronological order between note pairs, read from the edges Phase 1.5
+    # already wrote. Deliberately not recomputed from timestamps: preceded_by
+    # is the platform's own answer to "which came first", and a second,
+    # slightly-different answer computed here is exactly the "second mechanism"
+    # failure the 2026-08-24 correction was about.
+    precedes: set[tuple[str, str]] = set()
+    for r in conn.execute(
+            "SELECT path, target FROM semantic_note_derivations "
+            "WHERE kind='chronological' AND relation='preceded_by'").fetchall():
+        precedes.add((r["path"], r["target"]))
+
+    # Baseline is computed INSIDE the proximity graph, not over raw note
+    # counts, and the distinction is not academic. N counts note-PAIRS; a
+    # baseline built from note counts (n_a * n_b / n_notes) mixes units and
+    # inflates every lift -- measured on the live graph it produced lifts of
+    # 28-64x for ordinary daily Amtrak service, which would have made "measured
+    # against chance" worthless exactly where the design doc demands it be
+    # meaningful.
+    #
+    # The right null model is: of all note-pairs that passed Phase 1's
+    # proximity test at all, how often would A and B land together by chance,
+    # given how often each appears in that graph? Both terms are then in
+    # pair-units and lift is interpretable -- ~1.0 means "no more often than
+    # the proximity graph's own structure already predicts".
+    # Both baseline terms are counts of DISTINCT note-pairs, and they must be
+    # derived from the sets, never by summing per-entity-pair counts: one
+    # note-pair commonly backs several entity-pairs (a note naming six flights
+    # backs fifteen), so summing counts it repeatedly and inflates the two
+    # terms unequally. Measured 2026-09-22 when that shortcut was tried,
+    # median lift moved 1.09 -> 0.84 and the maximum blew out from 100 to
+    # 9,256 -- silently wrong, because every individual number still looked
+    # plausible.
+    total_pairs = len(npair_of)
+    ent_pairs: dict[str, set[int]] = {}
+    for (a, b), nids in pair_notes.items():
+        ent_pairs.setdefault(a, set()).update(nids)
+        ent_pairs.setdefault(b, set()).update(nids)
+
+    path_ents: dict[str, set[str]] = {}
+    for ent, paths in in_window.items():
+        for pth in paths:
+            path_ents.setdefault(pth, set()).add(ent)
+
+    event_times = _entity_event_times(conn, window_days)
+
+    out: list[tuple] = []
+    for (a, b), nids in pair_notes.items():
+        n = len(nids)
+        if n < min_samples:
+            continue
+        npairs = [npair_of[i] for i in nids]
+
+        p_a, p_b = len(ent_pairs.get(a, ())), len(ent_pairs.get(b, ()))
+        expected = (p_a * p_b) / total_pairs if total_pairs else 0.0
+        lift = (n / expected) if expected > 0 else float("inf")
+
+        # Direction + lead/lag, from preceded_by only.
+        a_first = b_first = 0
+        gaps: list[float] = []
+        for pa, pb in npairs:
+            a_note = pa if a in path_ents.get(pa, ()) else pb
+            b_note = pb if a_note == pa else pa
+            if (a_note, b_note) in precedes:
+                a_first += 1
+            elif (b_note, a_note) in precedes:
+                b_first += 1
+            else:
+                continue
+            gaps.append(abs((note_ts[b_note] - note_ts[a_note]).total_seconds()) / 60.0)
+
+        decided = a_first + b_first
+        if decided and max(a_first, b_first) / decided >= 0.8 and gaps:
+            direction = "a_leads_b" if a_first > b_first else "b_leads_a"
+            gaps.sort()
+            lead_lag = f"{gaps[len(gaps) // 2]:.1f}"
+        else:
+            # Inconsistent ordering, or no chronological edge joins these notes
+            # at all. Reporting an averaged interval here would invent a
+            # precision the data does not have.
+            direction, lead_lag = "ambiguous", ""
+
+        # Second, independent channel: the entities' REAL movements. The note
+        # channel above answers "in what order were these written about"; this
+        # answers "in what order did they actually move". They are reported
+        # side by side and never merged -- when they disagree that IS the
+        # finding (e.g. a diversion written up hours after it happened).
+        ev_dir, ev_lag, ev_n = _event_lead_lag(
+            event_times.get(a, []), event_times.get(b, []))
+
+        sample = ";".join(sorted(p for p, _ in sorted(npairs))[:3])
+        newest = max(npairs, key=lambda np: max(note_ts[np[0]], note_ts[np[1]]))
+        anchor = max(newest, key=lambda p: note_ts[p])
+
+        _flip = {"a_leads_b": "b_leads_a", "b_leads_a": "a_leads_b"}
+        for self_ent, other_ent, dirn, edirn in (
+                (a, b, direction, ev_dir),
+                (b, a, _flip.get(direction, "ambiguous"), _flip.get(ev_dir, "ambiguous"))):
+            ev = (f"self={self_ent};target={other_ent};n={n};"
+                  f"expected={expected:.2f};lift={lift:.2f};"
+                  f"lead_lag_min={lead_lag};direction={dirn};"
+                  f"event_lead_lag_min={ev_lag};event_direction={edirn};event_n={ev_n};"
+                  f"window_days={window_days};samples={sample}")
+            out.append((anchor, "statistically_associated", other_ent, ev, "causal"))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
+    return len(out)
+
+
+def _entities_of(in_window: dict[str, set[str]], path: str) -> set[str]:
+    """Which entities a given note references, inverted from the baseline map
+    already in memory -- avoids a second pass over instance_refs per pair."""
+    return {ent for ent, paths in in_window.items() if path in paths}
+
+
+# Real-world movement channel for Phase 2 (operator directive 2026-09-22:
+# lead/lag "should both be between real world movements as well as the notes").
+# ±6h is the pairing horizon for "these two movements are the same episode" --
+# wider and a morning departure starts matching an evening one purely because
+# both exist; narrower and a genuine multi-hour knock-on gets dropped.
+_EVENT_PAIR_HORIZON_MIN = 360
+
+
+def _parse_event_ts(val) -> float | None:
+    """Epoch seconds from the several shapes these tables actually store:
+    epoch floats (flight_events), ISO-with-Z (flight_ooooi_times), and
+    ISO-with-offset (train_events). Returns None rather than guessing."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val) or None
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _entity_event_times(conn, window_days: int) -> dict[str, list[tuple[float, str]]]:
+    """entity -> sorted [(epoch, event_kind)] of REAL movements, not notes.
+
+    This is the channel that makes lead/lag mean what an operator expects.
+    Sources, in order of how directly they describe a movement:
+
+      * flight_ooooi_times -- OUT/OFF/ON/IN, the actual phase movements. These
+        only became usable on 2026-09-22; before that the table held 4 rows
+        because of the watchlist gate + ON CONFLICT bugs fixed the same day.
+      * flight_events -- departure_time/arrival_time where the feed supplied
+        them (frequently NULL, so this supplements OOOI, never replaces it).
+      * fdps_diversion_continuations -- a diversion is exactly the kind of
+        disruptive event the operator named, and it is keyed by callsign.
+      * train_events -- estimated_time per station (the real movement),
+        falling back to scheduled_time when no estimate exists.
+
+    Entity strings match semantic_note_instance_refs: 'flight:DAL8',
+    'train:97'."""
+    cutoff = time.time() - window_days * 86400
+    out: dict[str, list[tuple[float, str]]] = {}
+
+    def add(ent: str, ts: float | None, kind: str) -> None:
+        if ts and ts >= cutoff:
+            out.setdefault(ent, []).append((ts, kind))
+
+    for r in conn.execute(
+            "SELECT airline, flight_num, airline_out_time, airline_off_time, "
+            "airline_on_time, airline_in_time FROM flight_ooooi_times "
+            "WHERE airline IS NOT NULL AND flight_num IS NOT NULL").fetchall():
+        ent = f"flight:{r['airline']}{r['flight_num']}"
+        for col, kind in (("airline_out_time", "out"), ("airline_off_time", "off"),
+                          ("airline_on_time", "on"), ("airline_in_time", "in")):
+            add(ent, _parse_event_ts(r[col]), kind)
+
+    for r in conn.execute(
+            "SELECT airline, flight_num, departure_time, arrival_time "
+            "FROM flight_events WHERE airline IS NOT NULL AND flight_num IS NOT NULL "
+            "AND (departure_time IS NOT NULL OR arrival_time IS NOT NULL)").fetchall():
+        ent = f"flight:{r['airline']}{r['flight_num']}"
+        add(ent, _parse_event_ts(r["departure_time"]), "dep")
+        add(ent, _parse_event_ts(r["arrival_time"]), "arr")
+
+    for r in conn.execute(
+            "SELECT callsign, diversion_detected_at FROM fdps_diversion_continuations "
+            "WHERE callsign IS NOT NULL").fetchall():
+        add(f"flight:{r['callsign']}", _parse_event_ts(r["diversion_detected_at"]), "diversion")
+
+    for r in conn.execute(
+            "SELECT train_number, scheduled_time, estimated_time FROM train_events "
+            "WHERE train_number IS NOT NULL").fetchall():
+        ts = _parse_event_ts(r["estimated_time"]) or _parse_event_ts(r["scheduled_time"])
+        add(f"train:{r['train_number']}", ts, "train_stop")
+
+    for ent in out:
+        out[ent].sort()
+    return out
+
+
+def _event_lead_lag(ev_a: list[tuple[float, str]],
+                    ev_b: list[tuple[float, str]]) -> tuple[str, str, int]:
+    """(direction, median_signed_minutes_as_str, n_matched) between two
+    entities' REAL movements.
+
+    For each movement of A, the temporally nearest movement of B within
+    ±_EVENT_PAIR_HORIZON_MIN is paired with it and the signed gap recorded.
+    Median, not mean -- one diversion or one held train should not drag the
+    interval. Direction is only claimed when at least 80% of matched pairs
+    agree on sign, the same consistency bar the note channel uses; otherwise
+    'ambiguous' with no interval, because an averaged interval over
+    inconsistent ordering is a fabricated number."""
+    if not ev_a or not ev_b:
+        return "ambiguous", "", 0
+    b_times = [t for t, _ in ev_b]
+    horizon = _EVENT_PAIR_HORIZON_MIN * 60
+    deltas: list[float] = []
+    for ta, _ in ev_a:
+        i = bisect.bisect_left(b_times, ta)
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(b_times):
+                d = b_times[j] - ta
+                if abs(d) <= horizon and (best is None or abs(d) < abs(best)):
+                    best = d
+        if best is not None:
+            deltas.append(best / 60.0)
+    if not deltas:
+        return "ambiguous", "", 0
+    a_first = sum(1 for d in deltas if d > 0)   # B happens after A -> A leads
+    b_first = sum(1 for d in deltas if d < 0)
+    decided = a_first + b_first
+    if not decided or max(a_first, b_first) / decided < 0.8:
+        return "ambiguous", "", len(deltas)
+    deltas.sort()
+    median = deltas[len(deltas) // 2]
+    return ("a_leads_b" if a_first > b_first else "b_leads_a",
+            f"{abs(median):.1f}", len(deltas))
+
+
+CLUSTER_MIN_SIZE = 3
+
+_CLUSTER_EVIDENCE_RE = re.compile(
+    r"^member=(?P<member>[^;]+);cluster=(?P<cluster>[^;]+);size=(?P<size>\d+);"
+    r"internal_edges=(?P<internal_edges>\d+);median_lift=(?P<median_lift>[^;]+);"
+    r"provable=(?P<provable>\d+);plausible=(?P<plausible>\d+);members=(?P<members>.*)$"
+)
+
+
+def assign_clusters(conn, min_size: int = CLUSTER_MIN_SIZE) -> int:
+    """Geometric reasoning Phase 3 (design doc §4) -- `member_of_cluster`.
+
+    Deterministic connected-components over the Phase 2 association graph.
+    Components rather than modularity: §4 offers either, and components have no
+    seed, no iteration count and no tunable resolution parameter. That matters
+    more than tighter communities would, because ontology.json's own governance
+    rule is "deterministic and reviewable, never LLM-in-the-loop" -- a
+    clustering whose output shifted between runs on identical data could not be
+    audited, and auditability is this layer's whole claim.
+
+    EDGE SET -- associations at or above chance only (lift >= 1.0).
+    §4 describes clusters as groups that "repeatedly show up interlinked". A
+    pair with lift < 1.0 co-occurs LESS than chance: real evidence, but
+    evidence of separation, and folding it in would assert belonging from data
+    saying the opposite. Measured live 2026-09-22: 1,044 of 1,466 association
+    edges sit at or below chance, so including them collapses nearly everything
+    into one meaningless mega-component. This threshold is an INTERPRETATION of
+    §4's wording, not a number the design doc states -- surfaced here as an
+    operator decision rather than buried in the code.
+
+    TIER PRESERVATION, per §4's explicit requirement that "each member edge
+    carries its own plausible/provable tier ... the tiering doesn't get lost at
+    the group level": every cluster records how many internal edges are
+    provable (lift >= 2.0 -- at least twice chance) versus plausible
+    (1.0 <= lift < 2.0), plus the cluster's median lift. A cluster of "3
+    plausible, 1 provable" reads as exactly that, never flattened to one
+    confidence number.
+
+    Cluster ids are content-derived (`cluster:<alphabetically-first member>`),
+    not sequential, so the same entity set yields the same id across runs and
+    two compiles can be diffed meaningfully."""
+    conn.execute("DELETE FROM semantic_note_derivations WHERE kind='cluster'")
+
+    adj: dict[str, set[str]] = {}
+    lifts: dict[tuple[str, str], float] = {}
+    anchors: dict[str, str] = {}
+    for r in conn.execute(
+            "SELECT path, evidence FROM semantic_note_derivations "
+            "WHERE kind='causal'").fetchall():
+        m = _CAUSAL_EVIDENCE_RE.match(r["evidence"] or "")
+        if not m:
+            continue
+        try:
+            lift = float(m.group("lift"))
+        except ValueError:
+            continue
+        if lift < 1.0:
+            continue
+        a, b = m.group("self"), m.group("target")
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+        lifts[(a, b) if a < b else (b, a)] = lift
+        anchors.setdefault(a, r["path"])
+
+    seen: set[str] = set()
+    out: list[tuple] = []
+    for start in sorted(adj):
+        if start in seen:
+            continue
+        stack, comp = [start], []
+        seen.add(start)
+        while stack:                      # iterative: a deep component must not
+            cur = stack.pop()             # blow the recursion limit
+            comp.append(cur)
+            for nxt in adj[cur]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        if len(comp) < min_size:
+            continue
+
+        comp.sort()
+        members = set(comp)
+        internal = sorted(lv for (x, y), lv in lifts.items()
+                          if x in members and y in members)
+        provable = sum(1 for lv in internal if lv >= 2.0)
+        plausible = len(internal) - provable
+        median_lift = internal[len(internal) // 2] if internal else 0.0
+        cluster_id = f"cluster:{comp[0]}"
+        member_str = ",".join(comp[:12]) + (",..." if len(comp) > 12 else "")
+
+        for ent in comp:
+            # `member=` is FIRST and is what makes this row unique. The table's
+            # PK is (path, relation, target, evidence); without the member in
+            # the evidence, every entity in a cluster shares the same target
+            # (the cluster id) and the same evidence, so members collapse to
+            # one row per distinct anchor path and INSERT OR IGNORE silently
+            # drops the rest. Observed 2026-09-22: 60 rows built, 6 stored,
+            # and the function still returned 60 because it counted attempted
+            # inserts. It also left the row unable to say WHICH entity it was
+            # a membership record for, which is the one thing it exists to say.
+            ev = (f"member={ent};cluster={cluster_id};size={len(comp)};"
+                  f"internal_edges={len(internal)};median_lift={median_lift:.2f};"
+                  f"provable={provable};plausible={plausible};members={member_str}")
+            out.append((anchors.get(ent, cluster_id), "member_of_cluster",
+                        cluster_id, ev, "cluster"))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
+    return len(out)
+
+
 _CHRONOLOGY_EVIDENCE_RE = re.compile(r"^concept=(?P<concept>.+);seq=(?P<seq>\d+);ts=(?P<ts>.*)$")
 
 
@@ -1317,6 +1837,12 @@ def compile_layer(db_path: str | None = None,
         result["derivations"] = assign_derivations(conn)
         result["chronology_edges"] = assign_chronology(conn)
         result["geometry_edges"] = assign_geometry(conn)
+        # Phase 2 runs AFTER assign_geometry in the same pass, by necessity:
+        # it aggregates the proximate_to edges that call just wrote. Running it
+        # against a stale graph would measure the previous compile's geometry.
+        result["causal_edges"] = assign_causal_associations(conn)
+        # Phase 3 consumes Phase 2's output, so it runs last in the chain.
+        result["cluster_edges"] = assign_clusters(conn)
 
         now = datetime.now(timezone.utc).isoformat()
         meta = {
