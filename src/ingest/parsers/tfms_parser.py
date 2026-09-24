@@ -792,8 +792,30 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
     entry = _match_watchlist_flight(callsign)
-    if entry is None:
-        return
+
+    # 2026-09-22: the `if entry is None: return` that used to sit HERE has
+    # moved below the flight_ooooi_times persist, and that move is the whole
+    # point of this change.
+    #
+    # The 2026-08-20 comment further down states the intent plainly -- persist
+    # OOOI durably "in addition to the transient watchlist alert", so that a
+    # historical on-time/delay rate can be computed per flight number. That
+    # never happened: the persist was written BELOW this early return, so only
+    # flights already on the watchlist were ever recorded. The watchlist holds
+    # 13 flight entries, nearly all permanent VIP/military tails, so in
+    # practice the table captured almost nothing.
+    #
+    # Measured 2026-09-22: flight_ooooi_times held 4 rows total, newest
+    # 2026-09-06, while the TFMS feed was delivering ~2,400 FlightModify
+    # messages every 3 hours, each carrying a complete
+    # flightTimeData[airlineOutTime, airlineOffTime, airlineOnTime,
+    # airlineInTime] block. Verified against captured sample_14.xml: gufi and
+    # all four times parse correctly; the handler simply returned before
+    # reaching the write. Nothing about the feed, the XML shape, the gufi, or
+    # the Postgres migration was at fault -- this early return was.
+    #
+    # Everything from the phase-update onward genuinely does need `entry` and
+    # stays gated; only the durable persist is now unconditional.
 
     # 2026-08-23: was `_find_child(a, t) or _find_child(b, t)` -- see
     # _first_present() docstring. Not confirmed to have manifested here
@@ -845,6 +867,15 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
             )
         except Exception as e:
             log.error("tfms: upsert_flight_ooooi failed for %s (%s): %s", callsign, gufi, e)
+
+    # Watchlist gate. Everything below this point dereferences `entry` --
+    # phase advancement, forced identity resolve at OUT, auto_remove_at
+    # extension at OFF, and the watchlist hit -- so it is genuinely
+    # watchlist-only work. The durable persist above is not, and deliberately
+    # runs for every flight the feed carries (see the note at the top of this
+    # function for why it used to be unreachable).
+    if entry is None:
+        return
 
     # 2026-08-28 (operator directive: "let's wire in those flight OOOOI
     # times from TFMS as well"): the real airline-reported OUT/OFF/ON/IN

@@ -2,8 +2,24 @@
 Description=Corporate Travel DC -- daily second-brain semantic layer recompile
 
 [Container]
-Memory=384m
-PodmanArgs=--memory-swap=384m
+# 2026-09-22: 384m -> 768m. This unit was OOM-killed (status 137, 465.1M
+# peak) on the first run that included geometric reasoning Phase 2, and 384m
+# was already marginal before that -- the pre-Phase-2 run peaked at 379.8M
+# against the same ceiling, i.e. it had been running with ~4M of headroom.
+#
+# The driver is psycopg buffering a whole result set client-side on execute():
+# Phase 1's graph is 902,518 rows, and no amount of fetchmany() streaming in
+# application code avoids that without a server-side (named) cursor. Phase 2
+# was additionally rewritten to intern note-pairs as ints rather than hold
+# (path, target) string tuples, which cut its own working set substantially,
+# but the result-set buffer remains the floor.
+#
+# 768m matches second-brain-daily and transport-pattern-digest, which do
+# comparable full-vault passes -- this unit was the outlier at 384m, not the
+# new ceiling. Box has 16GB with ~7GB available; production.slice's own cap is
+# 13.5GB, so this is well inside both.
+Memory=768m
+PodmanArgs=--memory-swap=768m
 Image=localhost/corporatetraveldc-poller:latest
 Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
@@ -17,8 +33,25 @@ Exec=scripts/verified-exec.sh python3 src/poller/skills/semantic_compile_daily.p
 Slice=production.slice
 MemoryLow=128M
 Type=oneshot
-# No Ollama call (pure SQLite recompute over the vault index -- see
-# compile.py's own docstring: "well under a second on the real
-# 5,700-document index"). Generous margin anyway, same philosophy as
-# entity_tracking_digest's TimeoutStartSec.
-TimeoutStartSec=300
+# SUPERSEDED reasoning, kept for the record: "No Ollama call (pure SQLite
+# recompute over the vault index -- see compile.py's own docstring: 'well
+# under a second on the real 5,700-document index'). Generous margin anyway."
+#
+# 2026-09-22: 300s has been too small for some time and the unit was failing
+# nightly with Result=timeout -- measured 6min 11s wall against 48s CPU, i.e.
+# overwhelmingly I/O-bound, not slow compute, so the "well under a second"
+# figure describes only the concept-assignment step and never covered the
+# whole compile. The vault is also far past 5,700 documents (13,466 files,
+# 2,489 curated markdown as of today).
+#
+# Raised to 1800s in the same change that added geometric reasoning Phase 2
+# (assign_causal_associations, ~38s measured) and Phase 3 (assign_clusters,
+# ~0.5s) to this compile -- those make an already-overrunning job slower, so
+# shipping them without this would have guaranteed the failure rather than
+# merely continuing it. 1800s matches knowledge-graph-compile's own ceiling
+# for the same reason: a full-vault pass over WebDAV is real network I/O.
+#
+# If this starts timing out again, investigate what it is BLOCKED on before
+# raising it further -- a 48s-CPU/371s-wall ratio means waiting, and a bigger
+# number only hides that.
+TimeoutStartSec=1800
