@@ -18,8 +18,15 @@ Description=Corporate Travel DC -- daily second-brain semantic layer recompile
 # comparable full-vault passes -- this unit was the outlier at 384m, not the
 # new ceiling. Box has 16GB with ~7GB available; production.slice's own cap is
 # 13.5GB, so this is well inside both.
-Memory=768m
-PodmanArgs=--memory-swap=768m
+# 2026-09-24: 768m -> 1024m. The compile OOM-killed four times on 2026-09-24
+# (09:11, 12:07, 16:59, 18:06), peak 841.2M against the 768m cap, leaving the
+# unit in failed state and the semantic layer uncompiled -- semantic_concept_edges
+# collapsed 1869 -> 74 and the exports froze at 2026-08-18. 1024m matches the
+# established cap for the other heavy second-brain jobs (second-brain-weekly,
+# aam-weekly-watch); this unit was simply the one that never got bumped. Host
+# had 7.7G available at the time of the change.
+Memory=1024m
+PodmanArgs=--memory-swap=1024m
 Image=localhost/corporatetraveldc-poller:latest
 Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z

@@ -103,3 +103,10 @@ dispatch-secrets.env
 # config/*-secrets.env.example templates.
 *-secrets.env
 **/*-secrets.env
+
+# SELinux policy build artifacts -- compiled from the .te at apply time.
+# 2026-09-24: these landed in the repo from an in-tree `checkmodule` build and
+# broke the signed manifest, because sign-manifest.sh hashes untracked-but-not-
+# ignored files. Only the .te is source; .mod/.pp are regenerated every apply.
+selinux/*.mod
+selinux/*.pp

@@ -1,0 +1,17 @@
+# Runs at :05, between the semantic compile (:02) and the knowledge-graph
+# build (:08), so the build draws the edge set retrofit just created.
+#
+# DELIBERATELY NOT ENABLED at creation (2026-09-24). retrofit_links WRITES to
+# vault notes, and the first run faces a 2355-note backlog. Run
+#   scripts/verified-exec.sh python3 -m second_brain.knowledge_graph.retrofit_links --dry-run
+# and read the planned edits before enabling. A bad first pass writes bad links
+# into thousands of notes, and the vault is the platform's authority of record.
+[Unit]
+Description=Corporate Travel DC -- second-brain link retrofit, 6h grid at :05
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:05:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
