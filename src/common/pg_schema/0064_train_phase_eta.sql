@@ -37,9 +37,22 @@ ALTER TABLE watchlist_entries
     ADD COLUMN IF NOT EXISTS train_phase_updated_at TEXT;
 
 -- Which provider adapter asserted the phase ('amtrak', 'marc', 'vre', ...).
--- Mirrors oooi_source so a later, lower-authority provider cannot silently
--- overwrite a higher-authority one -- see
--- db.update_watchlist_oooi_phase_authoritative and its _OOOI_SOURCE_PRIORITY.
+--
+-- CORRECTION 2026-09-24: an earlier version of this comment claimed this
+-- column "mirrors oooi_source so a later, lower-authority provider cannot
+-- silently overwrite a higher-authority one". That is NOT what shipped and
+-- was never true. db.update_train_phase() writes this column but never reads
+-- or compares it; its only guard is _TRAIN_PHASE_ORDER, i.e. monotonic
+-- forward movement. A lower-authority provider writing a forward phase is
+-- accepted unconditionally. The function's own docstring says "MONOTONIC"
+-- and is accurate -- this comment was the overclaim.
+--
+-- It is harmless TODAY because exactly one provider writes trains (amtrak,
+-- via _check_train_amtraker). It stops being harmless the moment a second
+-- provider lands: MARC and VRE train numbers COLLIDE with Amtrak's, which is
+-- the precise condition under which one provider silently overwriting
+-- another does real damage. Enforce authority here BEFORE the MARC/VRE
+-- fetchers ship -- see docs/TRAIN_PARITY_DESIGN_2026-09-23.md break 5.
 ALTER TABLE watchlist_entries
     ADD COLUMN IF NOT EXISTS train_phase_source TEXT;
 

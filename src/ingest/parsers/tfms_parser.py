@@ -886,9 +886,23 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     # status check reads. Prefer the LATEST phase present on this message
     # (in > on > off > out) so a message carrying multiple times at once
     # doesn't undercount. update_watchlist_oooi_phase_authoritative()
-    # rejects a regressive or lower-authority-tied update on its own --
-    # see common/db.py's _OOOI_SOURCE_PRIORITY -- so this is safe to call
-    # unconditionally whenever any OOOI time is present.
+    # rejects a regressive or under-authority update on its own, so this is
+    # safe to call unconditionally whenever any OOOI time is present.
+    #
+    # CORRECTION 2026-09-24: this comment used to cite _OOOI_SOURCE_PRIORITY
+    # as the thing doing the rejecting. Since migration 0065 that map only
+    # breaks same-phase ties; entitlement is decided by _OOOI_SOURCE_TIER via
+    # _oooi_authority_check(). tfms sits at tier 40 (SWIM), the top tier, so
+    # in practice it is rejected only for a regressive or same-phase-tied
+    # write -- not by the authority gate.
+    #
+    # KNOWN GAP, deliberately not papered over: the return value is now
+    # captured and logged, but a rejected write does NOT suppress the
+    # watchlist hit fired later in this function. That hit is a general TFMS
+    # event (schedule changes, TMI) and is not always about the phase, so
+    # blanket suppression would over-suppress real alerts. Correctly gating
+    # it needs the notification to know whether its own substance was the
+    # phase change. Tracked rather than guessed at.
     if ooooi:
         _tfms_phase, _tfms_time = None, None
         for _key, _phase in (("airlineInTime", "in"), ("airlineOnTime", "on"),
@@ -898,10 +912,16 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
                 break
         if _tfms_phase:
             try:
-                db.update_watchlist_oooi_phase_authoritative(
+                _accepted = db.update_watchlist_oooi_phase_authoritative(
                     entry["id"], _tfms_phase, source="tfms",
                     updated_at=_tfms_time or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 )
+                if not _accepted:
+                    log.info(
+                        "tfms: authoritative OOOI write REJECTED for %s (phase=%s) -- "
+                        "regressive, or outranked by the entry's lock holder. Any "
+                        "watchlist hit below still fires; see the KNOWN GAP note above.",
+                        callsign, _tfms_phase)
             except Exception as e:
                 log.debug("tfms: authoritative OOOI update failed for %s (non-fatal): %s", callsign, e)
 
