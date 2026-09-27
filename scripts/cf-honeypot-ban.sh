@@ -27,13 +27,35 @@
 # the looked-up rule's own configuration.value actually matches the target ip
 # before deleting anything.
 #
-# Secrets handling: cfzone/cftoken are read from environment (CFZONE/CFTOKEN),
-# set by the actionban/actionunban command line as `VAR=val script ...` --
-# NOT passed as script arguments, which would appear in `ps aux` output to
-# any local user who can see the process list. Env-var passing only exposes
-# them via /proc/<pid>/environ, readable only by root (fail2ban already runs
-# as root, same as jail.local itself) -- no wider exposure than what already
-# exists.
+# Secrets handling. 2026-09-24: REWRITTEN -- the previous design was wrong in a
+# way worth recording, because the reasoning was sound and the conclusion was
+# still unsafe.
+#
+# It read cfzone/cftoken from the environment (CFZONE/CFTOKEN), set by the
+# actionban/actionunban line as `VAR=val script ...` rather than as script
+# ARGUMENTS, on the grounds that arguments appear in `ps aux` to any local user
+# while environment variables only appear in /proc/<pid>/environ, which is
+# root-only. That is all true, and it is not the leak.
+#
+# The leak is that fail2ban EXPANDS and LOGS the action command string before
+# executing it. `CFTOKEN="<cftoken>"` becomes the literal token in
+# /var/log/fail2ban.log on every ban, every unban, and -- worst -- every error,
+# where it is repeated alongside the failure context. The token is in the
+# command line before it is ever an environment variable, so reasoning about
+# `ps` and /proc never reaches it. Operator observed it across multiple log
+# files 2026-09-23.
+#
+# NOW: the token is read from a FILE by this script. It never appears in the
+# action line, so there is nothing for fail2ban to expand or log. Pass the
+# PATH, not the secret:
+#   CFTOKEN_FILE=/etc/corporatetraveldc/cf-honeypot.token   (root:root 0600)
+#
+# CFTOKEN is still honoured as a deprecated fallback so a stale jail.local does
+# not break banning mid-deploy, but it warns to stderr every invocation. Remove
+# the fallback once jail.local is confirmed migrated.
+#
+# CFZONE stays in the environment: a zone ID is not a credential, and it is
+# already public in every API URL this script builds.
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +80,54 @@ ip="${2:?usage: cf-honeypot-ban.sh <ban|unban> <ip> [target]}"
 target="${3:-ip}"
 
 zone="${CFZONE:?CFZONE env var not set}"
-token="${CFTOKEN:?CFTOKEN env var not set}"
+
+# Token resolution: file first, deprecated env fallback second. See the
+# "Secrets handling" note at the top for why the env path is unsafe.
+# Lives in ~/.secrets with every other credential on this box -- one place, by
+# operator directive. That requires one SELinux exception, documented here
+# because it is non-obvious and will look like a mistake to a future reader:
+#
+# fail2ban runs CONFINED as fail2ban_t. It is the only confined consumer of
+# ~/.secrets on this box -- the poller, web, the containers and the operator's
+# own shell all run unconfined_service_t, which is why every other credential
+# here "just works" and this one does not. Verified 2026-09-24: sesearch finds
+# NO allow rule for fail2ban_t -> user_home_t, so an unlabelled token here is
+# denied and banning fails SILENTLY.
+#
+# Fix is to relabel the single file, not to move it:
+#   semanage fcontext -a -t etc_t '/home/corporatetraveldc/\.secrets/cf-honeypot\.token'
+#   restorecon -v /home/corporatetraveldc/.secrets/cf-honeypot.token
+# etc_t carries base_ro_file_type, which fail2ban_t reads via
+# `allow domain base_ro_file_type:file read`. The rule is persistent across
+# relabels; a plain chcon is NOT and will be reverted by the next restorecon.
+#
+# If banning ever stops working after a filesystem relabel, check this first:
+#   ausearch -m avc --start today | grep fail2ban
+CFTOKEN_FILE="${CFTOKEN_FILE:-$HOME/.secrets/cf-honeypot.token}"
+# fail2ban runs as root, so $HOME is /root when invoked by the service. Fall
+# back to the literal path rather than depending on the caller's environment.
+if [[ ! -r "${CFTOKEN_FILE}" && -r /home/corporatetraveldc/.secrets/cf-honeypot.token ]]; then
+    CFTOKEN_FILE=/home/corporatetraveldc/.secrets/cf-honeypot.token
+fi
+token=""
+if [[ -r "${CFTOKEN_FILE}" ]]; then
+    # Tolerate a trailing newline, surrounding whitespace, a leading
+    # `CFTOKEN=` and surrounding quotes, so the same file works whether it was
+    # written as a bare token or as an env-file line.
+    token="$(sed -E 's/^[[:space:]]*(CFTOKEN=)?//; s/^["'"'"']//; s/["'"'"'][[:space:]]*$//; s/[[:space:]]+$//' \
+             "${CFTOKEN_FILE}" | grep -m1 -E '.' || true)"
+fi
+if [[ -z "${token}" && -n "${CFTOKEN:-}" ]]; then
+    token="${CFTOKEN}"
+    echo "cf-honeypot-ban: WARNING -- token came from the CFTOKEN env var." >&2
+    echo "cf-honeypot-ban: that value is expanded into fail2ban's action log on" >&2
+    echo "cf-honeypot-ban: every invocation. Migrate jail.local to CFTOKEN_FILE." >&2
+fi
+if [[ -z "${token}" ]]; then
+    # Fail closed and say which path was tried -- never echo the value.
+    echo "cf-honeypot-ban: no token available (tried ${CFTOKEN_FILE}, then CFTOKEN env)" >&2
+    exit 1
+fi
 
 API_URL="https://api.cloudflare.com/client/v4/zones/${zone}/firewall/access_rules/rules"
 AUTH_HDR="Authorization: Bearer ${token}"

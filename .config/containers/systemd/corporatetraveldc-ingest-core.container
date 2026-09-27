@@ -30,6 +30,17 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 Environment=SWIM_NMS_ENABLED=false
 Environment=LOCAL_AIRSPACE_ENABLED=true
+# 2026-09-24: pinned false. AMTRAK_ENABLED defaults to True in
+# src/ingest/config.py, and this quadlet never set it -- so ingest-core ran its
+# own Amtrak loop alongside the dedicated amtrak-tracker container. BOTH call
+# db.insert_amtrak_status unconditionally with no push-health gate, so
+# amtrak_status was taking ~24 rows/hour from two interleaved 300s writers
+# where one produces 12. Measured 21:00-23:00Z: 24, 24, 23.
+# amtrak-tracker is the intended push-primary (its own image in
+# build-images.sh); it is healthy and stamping push:amtrak. If it dies, the
+# REST fallback in poller FETCH_SCHEDULE (push_max_age 660) takes over -- so
+# turning this off does not leave Amtrak uncovered.
+Environment=AMTRAK_ENABLED=false
 AutoUpdate=local
 
 [Service]
