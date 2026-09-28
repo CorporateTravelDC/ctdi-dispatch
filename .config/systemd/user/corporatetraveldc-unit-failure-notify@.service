@@ -1,0 +1,6 @@
+[Unit]
+Description=Corporate Travel DC -- ntfy alert for a failed weekly unit (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/unit-failure-notify.sh %i

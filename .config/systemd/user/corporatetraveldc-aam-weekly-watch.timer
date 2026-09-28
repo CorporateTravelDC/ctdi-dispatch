@@ -1,0 +1,16 @@
+[Unit]
+Description=Run AAM weekly watch Sunday night (Mon 02:00 ET) (overnight-only window; first of the Sunday overnight LLM trio: 02:00 -> desk memo 03:00 -> weekly summary 03:45)
+# 2026-09-06 OVERNIGHT-ONLY (operator directive): all long-running LLM
+# jobs run inside 20:00-05:30 ET, when measured load is 5-9 vs 19-24
+# mid-morning. Persistent=false: a missed slot is skipped rather
+# than fired at the next daytime boot -- one lost weekly is cheaper than
+# a daytime LOCKDOWN. Kick it by hand (systemctl --user start) if needed.
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# see docs/BOOT_STORM_TIMER_REQUIRES.md.
+
+[Timer]
+OnCalendar=Mon *-*-* 02:00:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

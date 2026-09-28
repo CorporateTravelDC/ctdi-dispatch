@@ -1,0 +1,400 @@
+{
+  "type": "FeatureCollection",
+  "_template_note": "PUBLIC TEMPLATE / SCHEMA SAMPLE ONLY. This is a coarse (3-decimal, ~100m) representative excerpt of the private data/dc-metro-aeroway.geojson, published to document the feature schema (aeroway/terminal/gate apron footprints for the DC-metro airports). The full high-precision dataset is NOT shipped to the public mirror; regenerate it from OpenStreetMap with data/dc-metro-aeroway.overpass.ql. Precision is deliberately reduced here.",
+  "_source": "OpenStreetMap via Overpass API (see dc-metro-aeroway.overpass.ql)",
+  "_sample_feature_count": 4,
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "aeroway": "gate",
+        "name": null,
+        "operator": null,
+        "ref": "B15",
+        "airport": "KDCA",
+        "osm_id": "node/929753769",
+        "source": "osm_overpass",
+        "verified": false
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.042,
+          38.852
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "aeroway": "terminal",
+        "name": "Terminal B at DCA",
+        "operator": null,
+        "ref": null,
+        "airport": "KDCA",
+        "osm_id": "node/3068522838",
+        "source": "osm_overpass",
+        "verified": false
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.043,
+          38.854
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "aeroway": "terminal",
+        "name": "Washington-Dulles International Airport, Main Terminal",
+        "operator": "Washington Metropolitan Airport Authority",
+        "ref": null,
+        "airport": "KIAD",
+        "osm_id": "way/22739577",
+        "source": "osm_overpass",
+        "verified": false
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.952
+            ],
+            [
+              -77.45,
+              38.952
+            ],
+            [
+              -77.449,
+              38.952
+            ],
+            [
+              -77.449,
+              38.952
+            ],
+            [
+              -77.448,
+              38.952
+            ],
+            [
+              -77.448,
+              38.952
+            ],
+            [
+              -77.446,
+              38.952
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.445,
+              38.953
+            ],
+            [
+              -77.445,
+              38.953
+            ],
+            [
+              -77.445,
+              38.953
+            ],
+            [
+              -77.445,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.446,
+              38.953
+            ],
+            [
+              -77.447,
+              38.953
+            ],
+            [
+              -77.447,
+              38.953
+            ],
+            [
+              -77.447,
+              38.953
+            ],
+            [
+              -77.448,
+              38.953
+            ],
+            [
+              -77.448,
+              38.953
+            ],
+            [
+              -77.448,
+              38.953
+            ],
+            [
+              -77.449,
+              38.953
+            ],
+            [
+              -77.449,
+              38.953
+            ],
+            [
+              -77.449,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ],
+            [
+              -77.45,
+              38.953
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "aeroway": "apron",
+        "name": null,
+        "operator": null,
+        "ref": null,
+        "airport": "KFDK",
+        "osm_id": "way/49090101",
+        "source": "osm_overpass",
+        "verified": false
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -77.379,
+              39.414
+            ],
+            [
+              -77.379,
+              39.413
+            ],
+            [
+              -77.38,
+              39.413
+            ],
+            [
+              -77.38,
+              39.413
+            ],
+            [
+              -77.381,
+              39.414
+            ],
+            [
+              -77.381,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.415
+            ],
+            [
+              -77.38,
+              39.416
+            ],
+            [
+              -77.38,
+              39.416
+            ],
+            [
+              -77.379,
+              39.417
+            ],
+            [
+              -77.38,
+              39.417
+            ],
+            [
+              -77.379,
+              39.417
+            ],
+            [
+              -77.379,
+              39.417
+            ],
+            [
+              -77.379,
+              39.418
+            ],
+            [
+              -77.38,
+              39.418
+            ],
+            [
+              -77.38,
+              39.418
+            ],
+            [
+              -77.38,
+              39.418
+            ],
+            [
+              -77.38,
+              39.417
+            ],
+            [
+              -77.38,
+              39.417
+            ],
+            [
+              -77.38,
+              39.418
+            ],
+            [
+              -77.379,
+              39.418
+            ],
+            [
+              -77.379,
+              39.418
+            ],
+            [
+              -77.379,
+              39.418
+            ],
+            [
+              -77.378,
+              39.418
+            ],
+            [
+              -77.378,
+              39.418
+            ],
+            [
+              -77.379,
+              39.417
+            ],
+            [
+              -77.379,
+              39.417
+            ],
+            [
+              -77.379,
+              39.416
+            ],
+            [
+              -77.379,
+              39.416
+            ],
+            [
+              -77.379,
+              39.416
+            ],
+            [
+              -77.379,
+              39.415
+            ],
+            [
+              -77.379,
+              39.414
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

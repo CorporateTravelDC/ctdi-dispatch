@@ -1,0 +1,102 @@
+SUSAD        HVQ   K6011740VDHW N38205883W081461169    N38205883W081461169W0030010992     NARCHARLESTON                    253962609
+SUSAP KIADK6EGIBBZ64BURTT 010BURTTK6EA0E       IF                                             18000                        200922607
+SUSAP KIADK6EGIBBZ64BURTT 020PHOOWK6EA0E       TF                                                                          200932607
+SUSAP KIADK6EGIBBZ64BURTT 030HESEEK6EA0E       TF                                 B FL300FL240     280                     200942607
+SUSAP KIADK6EGIBBZ64BURTT 040GYSLOK6EA0E       TF                                 B FL22017000                             200952607
+SUSAP KIADK6EGIBBZ64BURTT 050BBONEK6EA0E       TF                                 B FL19015000     280                     200962607
+SUSAP KIADK6EGIBBZ64BURTT 060KILMRK6EA0E       TF                                   11000          250                     200972607
+SUSAP KIADK6EGIBBZ64BURTT 070OTTTOK6EA0E       TF                                   09000                                  200982607
+SUSAP KIADK6EGIBBZ64BURTT 080MAAAYK6EA0E       TF                                   07000                                  200992607
+SUSAP KIADK6EGIBBZ64BURTT 090RYPINK6EA0E       TF                                   06000                                  201002607
+SUSAP KIADK6EGIBBZ64BURTT 100GIBBZK6EA0EE      TF                                   06000                                  201012607
+SUSAP KIADK6EGIBBZ64HVQ   010HVQ  K6D 0V       IF                                             18000                        201022607
+SUSAP KIADK6EGIBBZ64HVQ   020FIMPAK6EA0E       TF                                 + FL240                                  201032607
+SUSAP KIADK6EGIBBZ64HVQ   030WOJOWK6EA0E       TF                                                                          201042607
+SUSAP KIADK6EGIBBZ64HVQ   040BURTTK6EA0E       TF                                                                          201052607
+SUSAP KIADK6EGIBBZ64HVQ   050PHOOWK6EA0E       TF                                                                          201062607
+SUSAP KIADK6EGIBBZ64HVQ   060HESEEK6EA0E       TF                                 B FL300FL240     280                     201072607
+SUSAP KIADK6EGIBBZ64HVQ   070GYSLOK6EA0E       TF                                 B FL22017000                             201082607
+SUSAP KIADK6EGIBBZ64HVQ   080BBONEK6EA0E       TF                                 B FL19015000     280                     201092607
+SUSAP KIADK6EGIBBZ64HVQ   090KILMRK6EA0E       TF                                   11000          250                     201102607
+SUSAP KIADK6EGIBBZ64HVQ   100OTTTOK6EA0E       TF                                   09000                                  201112607
+SUSAP KIADK6EGIBBZ64HVQ   110MAAAYK6EA0E       TF                                   07000                                  201122607
+SUSAP KIADK6EGIBBZ64HVQ   120RYPINK6EA0E       TF                                   06000                                  201132607
+SUSAP KIADK6EGIBBZ64HVQ   130GIBBZK6EA0EE      TF                                   06000                                  201142607
+SUSAP KIADK6EGIBBZ64MGW   010MGW  K6D 0V       IF                                             18000                        201152607
+SUSAP KIADK6EGIBBZ64MGW   020BRNDNK6EA0E       TF                                 + FL240                                  201162607
+SUSAP KIADK6EGIBBZ64MGW   030HIROYK6EA0E       TF                                 B FL270FL240                             201172607
+SUSAP KIADK6EGIBBZ64MGW   040WTCHRK6EA0E       TF                                 B FL250FL210     280                     201182607
+SUSAP KIADK6EGIBBZ64MGW   050TABBEK6EA0E       TF                                 B FL23017000                             201192607
+SUSAP KIADK6EGIBBZ64MGW   060KIKKRK6EA0E       TF                                 B 1600014000     280                     201202607
+SUSAP KIADK6EGIBBZ64MGW   070IGGGYK6EA0E       TF                                 - 14000                                  201212607
+SUSAP KIADK6EGIBBZ64MGW   080MOSLEK6EA0E       TF                                   11000          250                     201222607
+SUSAP KIADK6EGIBBZ64MGW   090MONNKK6EA0E       TF                                 - 10000                                  201232607
+SUSAP KIADK6EGIBBZ64MGW   100BMICHK6EA0E       TF                                 + 09000                                  201242607
+SUSAP KIADK6EGIBBZ64MGW   110THZMNK6EA0E       TF                                   07000                                  201252607
+SUSAP KIADK6EGIBBZ64MGW   120GIBBZK6EA0EE      TF                                   06000                                  201262607
+SUSAP KIADK6EGIBBZ64SITTR 010SITTRK6EA0E       IF                                             18000                        201272607
+SUSAP KIADK6EGIBBZ64SITTR 020POMYKK6EA0E       TF                                 + FL240                                  201282607
+SUSAP KIADK6EGIBBZ64SITTR 030GBERGK6EA0E       TF                                                                          201292607
+SUSAP KIADK6EGIBBZ64SITTR 040HHARPK6EA0E       TF                                                                          201302607
+SUSAP KIADK6EGIBBZ64SITTR 050BURTTK6EA0E       TF                                                                          201312607
+SUSAP KIADK6EGIBBZ64SITTR 060PHOOWK6EA0E       TF                                                                          201322607
+SUSAP KIADK6EGIBBZ64SITTR 070HESEEK6EA0E       TF                                 B FL300FL240     280                     201332607
+SUSAP KIADK6EGIBBZ64SITTR 080GYSLOK6EA0E       TF                                 B FL22017000                             201342607
+SUSAP KIADK6EGIBBZ64SITTR 090BBONEK6EA0E       TF                                 B FL19015000     280                     201352607
+SUSAP KIADK6EGIBBZ64SITTR 100KILMRK6EA0E       TF                                   11000          250                     201362607
+SUSAP KIADK6EGIBBZ64SITTR 110OTTTOK6EA0E       TF                                   09000                                  201372607
+SUSAP KIADK6EGIBBZ64SITTR 120MAAAYK6EA0E       TF                                   07000                                  201382607
+SUSAP KIADK6EGIBBZ64SITTR 130RYPINK6EA0E       TF                                   06000                                  201392607
+SUSAP KIADK6EGIBBZ64SITTR 140GIBBZK6EA0EE      TF                                   06000                                  201402607
+SUSAP KIADK6EGIBBZ65      010GIBBZK6EA0E       IF                                   06000     18000                        201412607
+SUSAP KIADK6EGIBBZ65      020SUNYJK6EA0EE      TF                                                                          201422607
+SUSAP KIADK6EGIBBZ66RW01B 010SUNYJK6EA0E       IF                                             18000                        201432607
+SUSAP KIADK6EGIBBZ66RW01B 020SIYOBK6EA0EY      TF                                   06000          210                     201442607
+SUSAP KIADK6EGIBBZ66RW01B 030SIYOBK6EA0EE      FM ADW K6      285003331900    D                                            201452607
+SUSAP KIADK6EGIBBZ66RW19B 010SUNYJK6EA0E       IF                                             18000                        201462607
+SUSAP KIADK6EGIBBZ66RW19B 020TATAAK6EA0EY      TF                                   06000          210                     201472607
+SUSAP KIADK6EGIBBZ66RW19B 030TATAAK6EA0EE      FM ADW K6      300703540094    D                                            201482607
+SUSAP KIADK6EGIBBZ66RW30  010SUNYJK6EA0E       IF                                             18000                        201492607
+SUSAP KIADK6EGIBBZ66RW30  020SIYOBK6EA0EY      TF                                   06000          210                     201502607
+SUSAP KIADK6EGIBBZ66RW30  030SIYOBK6EA0EE      FM ADW K6      285003331900    D                                            201512607
+SUSAP KIADK6FH01LZ AHELMZ 010HELMZK6PC0E  A    IF                                 + 05000     18000                 A FS   204062504
+SUSAP KIADK6FH01LZ AHELMZ 020GRASKK6PC0E    010TF                                 + 05000                           A FS   204072504
+SUSAP KIADK6FH01LZ AHELMZ 030LAZERK6PC0E    010TF                                 + 04000                           A FS   204082504
+SUSAP KIADK6FH01LZ AHELMZ 040WIRLYK6PC0E    010TF                                 + 04000                           A FS   204092504
+SUSAP KIADK6FH01LZ AHELMZ 050WERTHK6PC0EE B 010TF                                 + 03000                           A FS   204102504
+SUSAP KIADK6FH01LZ AWABER 010WABERK6PC0E  A    IF                                 + 08000     18000                 A FS   204112405
+SUSAP KIADK6FH01LZ AWABER 020WESVAK6PC0E    010TF                                 + 07000                           A FS   204122405
+SUSAP KIADK6FH01LZ AWABER 030WOFULK6PC0E    010TF                                 + 06000                           A FS   204132405
+SUSAP KIADK6FH01LZ AWABER 040WISHYK6PC0E    010TF                                 + 05000                           A FS   204142405
+SUSAP KIADK6FH01LZ AWABER 050WIRLYK6PC0E    010TF                                 + 04000                           A FS   204152405
+SUSAP KIADK6FH01LZ AWABER 060WERTHK6PC0EE B 010TF                                 + 03000                           A FS   204162405
+SUSAP KIADK6FH01LZ AWIRLY 010WIRLYK6PC0E  A    IF                                 + 04000     18000                 A FS   204172405
+SUSAP KIADK6FH01LZ AWIRLY 020WERTHK6PC0EE B 010TF                                 + 03000                           A FS   204182405
+SUSAP KIADK6FH01LZ AWOFUL 010WOFULK6PC0E  A    IF                                 + 06000     18000                 A FS   204192405
+SUSAP KIADK6FH01LZ AWOFUL 020WISHYK6PC0E    010TF                                 + 05000                           A FS   204202405
+SUSAP KIADK6FH01LZ AWOFUL 030WIRLYK6PC0E    010TF                                 + 04000                           A FS   204212405
+SUSAP KIADK6FH01LZ AWOFUL 040WERTHK6PC0EE B 010TF                                 + 03000                           A FS   204222405
+SUSAP KIADK6FH01LZ H      010WERTHK6PC0E  I    IF                                 + 03000     18000                 A FS   204232405
+SUSAP KIADK6FH01LZ H      020FAXESK6PC1E  F 010TF                                 + 02000                 RW01L K6PGA FS   204242405
+SUSAP KIADK6FH01LZ H      020FAXESK6PC2W                                                A031A112                      FS   204252405
+SUSAP KIADK6FH01LZ H      030RW01LK6PG0GY M 031TF                                   00351             -300          A FS   204262405
+SUSAP KIADK6FH01LZ H      040         0  M     CA                     0106        + 00800                           A FS   204272405
+SUSAP KIADK6FH01LZ H      050NHLENK6PC0EY  L010DF                                 + 03000                           A FS   204282405
+SUSAP KIADK6FH01LZ H      060NHLENK6PC0EE  L   HM                     31860040    + 03000                           A FS   204292405
+SUSAEAENRT   FIMPA K60    W     N38185482W080460078                       W0085     NAR           FIMPA                    352082605
+SUSAEAENRT   WOJOW K60    W     N38181102W080273423                       W0086     NAR           WOJOW                    539672102
+SUSAEAENRT   BURTT K60    W     N38260229W079485275                       W0091     NAR           BURTT                    298482605
+SUSAEAENRT   PHOOW K60    W     N38281890W079373975                       W0092     NAR           PHOOW                    470212304
+SUSAEAENRT   HESEE K60    W     N38295675W079294295                       W0093     NAR           HESEE                    375082605
+SUSAEAENRT   GYSLO K60    W     N38351270W079030297                       W0095     NAR           GYSLO                    368112012
+SUSAEAENRT   BBONE K60    W     N38373012W078492581                       W0097     NAR           BBONE                    286722201
+SUSAEAENRT   KILMR K60    W     N38435173W078223512                       W0099     NAR           KILMR                    413992504
+SUSAEAENRT   OTTTO K60    W   H N38511581W078122001                       W0101     NAR           OTTTO                    464082012
+SUSAEAENRT   MAAAY K60    W     N38532579W078034291                       W0101     NAR           MAAAY                    435782504
+SUSAEAENRT   RYPIN K60    W     N38551980W077560682                       W0102     NAR           RYPIN                    488272012
+SUSAEAENRT   GIBBZ K60    W     N38575687W077453453                       W0103     NAR           GIBBZ                    361362502
+SUSAEAENRT   SUNYJ K60    W     N38570495W077372390                       W0104     NAR           SUNYJ                    503182502
+SUSAP KIADK6CWERTH K60    C     N38470487W077283752                       W0104     NAR           WERTH                    198562504
+SUSAP KIADK6CFAXES K60    C     N38513093W077283377                       W0105     NAR           FAXES                    197792405
+SUSAP KIADK6CNHLEN K60    C     N39134996W077544178                       W0103     NAR           NHLEN                    198212405
+SUSAP KIADK6GRW01L   0094000110 N38564188W077282932         +0058200296000055150IIOIU3                                     211412405
