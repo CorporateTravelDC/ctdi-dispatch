@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly FAA CIFP cycle check, Thursdays 08:00 ET (AIRAC cycles always take effect on a Thursday; the fetcher is idempotent so most weeks are a no-op, offset off freshness-audit's 06:00 slot)
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=Thu *-*-* 08:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

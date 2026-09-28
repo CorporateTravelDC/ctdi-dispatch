@@ -1,0 +1,39 @@
+# corporatetraveldc-retrofit-links.container
+# Second-brain link retrofit -- creates [[wikilinks]] between vault notes that
+# reference the same entities, so the knowledge graph has edges to draw.
+#
+# WHY THIS EXISTS (2026-09-24): retrofit_links.py shipped with no timer and had
+# never been scheduled. The knowledge-graph unit rebuilt the graph every 6h
+# without anything ever retrofitting links, so as the vault grew the graph
+# filled with disconnected dots. Measured 2026-09-24: 2355 of 2600 curated
+# notes isolated (91%), organic_links 95, retrofit_links frozen at 856 since
+# 2026-08-18 while the vault grew ~4.8x. That is the exact "disconnected dots"
+# condition the 2026-08-11 graph addendum was written to declare fixed.
+#
+# ORDERING: semantic compile runs at :02, this at :05, knowledge-graph build at
+# :08. Retrofit must precede the build or the build draws the old edge set.
+#
+# 768m rather than the graph build's 512m: on 2026-09-24 the semantic compile
+# OOM-killed four times at 768m against an 841M peak, and undersizing a
+# second-brain job is a failure mode this platform has now paid for twice.
+[Unit]
+Description=Corporate Travel DC -- second-brain link retrofit (vault [[wikilinks]])
+
+[Container]
+Memory=768m
+PodmanArgs=--memory-swap=768m
+Image=localhost/corporatetraveldc-poller:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 -m second_brain.knowledge_graph.retrofit_links
+
+[Service]
+Slice=production.slice
+MemoryLow=128M
+Type=oneshot
+TimeoutStartSec=1800

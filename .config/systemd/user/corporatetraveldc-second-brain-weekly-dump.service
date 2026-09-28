@@ -1,0 +1,32 @@
+[Unit]
+Description=Corporate Travel DC -- weekly Second Brain consolidation dump (Opus, Gate 2 of the documentation policy)
+# 2026-08-26: same headless-claude pattern as docs-drift-weekly, which has
+# a confirmed real failure mode (a scheduled fire landing during an
+# exhausted Claude usage window exits non-zero with no retry -- see
+# docs/LIVE_STATE_CHECK_2026-08-26.md finding 3). This unit is more
+# important to catch a silent failure on than most: a missed dump means
+# CLAUDE.md/memory never get consolidated that week. OnFailure pings ops
+# immediately instead of waiting for next Sunday.
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+# 2026-09-21 maintenance window (operator directive): long report-tier
+# jobs may only run 23:00-05:00 America/New_York, so they never contend
+# with the latency-sensitive flight/weather alert path. ExecCondition=
+# (NOT ExecStartPre=) so an out-of-window firing SKIPS cleanly instead of
+# marking the unit failed and paging via OnFailure=. Bounds are
+# configurable: CTDC_MAINTENANCE_WINDOW_START/_END in dispatch.env.
+# WARNING: this unit's OnCalendar= MUST stay inside the window or it will
+# silently never run again. Verify with:
+#   scripts/maintenance-window-guard.sh --check --at HH:MM
+ExecCondition=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/maintenance-window-guard.sh
+Type=oneshot
+# PATH needed for the same reason as corporatetraveldc-claude-md-drift-daily:
+# the systemd *user* manager's PATH doesn't include ~/.local/bin, where the
+# `claude` CLI lives.
+Environment=PATH=/home/corporatetraveldc/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/second-brain-weekly-dump.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

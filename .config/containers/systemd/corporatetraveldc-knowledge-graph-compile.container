@@ -1,0 +1,51 @@
+[Unit]
+Description=Corporate Travel DC -- second-brain knowledge-graph (graph.json/vault-graph.html) recompile
+
+[Container]
+Memory=512m
+PodmanArgs=--memory-swap=512m
+Image=localhost/corporatetraveldc-poller:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+# 2026-08-12: also write to the shared data volume (see build_graph.py's
+# own comment on the live-served copy) -- no special networking needed
+# for that part, just the default bridge is enough for local volume I/O.
+# 2026-09-03 (SUPERSEDED, kept for the record): pasta:--map-gw "was tried
+# during this unit's first wiring ... but turned out unnecessary -- default
+# networking + dispatch.env's normal public NEXTCLOUD_WEBDAV_BASE works fine
+# once that's fixed, same as this script's original by-hand usage."
+#
+# 2026-09-22: that reasoning rested on a variable that does not exist.
+# NEXTCLOUD_WEBDAV_BASE is set in NEITHER config/dispatch.env NOR the live
+# /etc/corporatetraveldc/dispatch.env, so second_brain/webdav_client.py fell
+# through to its module default, http://127.0.0.1:8090/... . On the HOST that
+# resolves to Nextcloud and works by hand -- which is exactly why "the
+# original by-hand usage" looked like proof. Inside a ROOTLESS PODMAN
+# container 127.0.0.1 is the CONTAINER's own loopback, so every run died with
+# "[Errno 111] Connection refused" to 127.0.0.1:8090. Confirmed failing
+# 2026-09-21 22:03 and again on a manual re-trigger 2026-09-22 07:39, while
+# Nextcloud answered 200 from the host throughout.
+#
+# The two lines below are the pattern all SEVEN other vault-touching units
+# already carry (second-brain daily/weekly/rss/index-scan/demo-archiver,
+# personal-notes-import, research-board-mirror) -- index-scan confirmed
+# `success`. This unit was the only one without it. Do not remove them again
+# without first setting NEXTCLOUD_WEBDAV_BASE to an address a container can
+# actually reach.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+Exec=scripts/verified-exec.sh python3 -m second_brain.knowledge_graph.build_graph
+
+[Service]
+Slice=production.slice
+MemoryLow=128M
+Type=oneshot
+# 2026-09-03: build_graph.py fetches every curated markdown note in the
+# vault over WebDAV (~9,600 docs at last count) before computing the graph
+# -- real network I/O, not the near-instant local SQLite recompute
+# semantic-compile-daily does. Generous timeout for that, same philosophy
+# as other full-vault-scan skills.
+TimeoutStartSec=1800

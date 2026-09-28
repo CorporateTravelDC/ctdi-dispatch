@@ -1,0 +1,10 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-weekly-summary 3min before weekly-summary (Sun 18:00)
+Requires=corporatetraveldc-ollama-prewarm-weekly-summary.service
+
+[Timer]
+OnCalendar=Sun *-*-* 17:57:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

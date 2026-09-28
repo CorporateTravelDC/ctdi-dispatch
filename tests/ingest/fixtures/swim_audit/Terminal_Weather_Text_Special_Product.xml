@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+    <itws_msg>
+        <packet_header>
+            <packet_header_msgno>25190821</packet_header_msgno>
+            <packet_header_product>300</packet_header_product>
+            <packet_header_packet_index>1</packet_header_packet_index>
+            <packet_header_packets_in_msg>1</packet_header_packets_in_msg>
+            <packet_header_packetsize>98</packet_header_packetsize>
+        </packet_header>
+        <product_header>
+            <product_header_msg_id>
+                <product_msg_id>9895</product_msg_id>
+                <product_msg_name>Terminal Weather Text Special Product</product_msg_name>
+            </product_header_msg_id>
+            <product_header_site_id>0</product_header_site_id>
+            <product_header_node>0</product_header_node>
+            <product_header_byte_count>86</product_header_byte_count>
+            <product_header_product_type>29</product_header_product_type>
+            <product_header_product_status>0</product_header_product_status>
+            <product_header_itws_sites>PCT</product_header_itws_sites>
+            <product_header_airports>DCA</product_header_airports>
+            <product_header_source_id>0000</product_header_source_id>
+            <product_header_source_type>7</product_header_source_type>
+            <product_header_acquisition_type>1</product_header_acquisition_type>
+            <product_header_latency_classification>35</product_header_latency_classification>
+            <product_header_latency_start_seconds gregorian="2026-08-28 21:54:00">1787954040</product_header_latency_start_seconds>
+            <product_header_latency_start_milliseconds>0</product_header_latency_start_milliseconds>
+            <product_header_generation_time_seconds gregorian="2026-08-28 21:54:00">1787954040</product_header_generation_time_seconds>
+            <product_header_generation_time_milliseconds>10</product_header_generation_time_milliseconds>
+            <product_header_expiration_time_seconds gregorian="2026-08-28 22:09:00">1787954940</product_header_expiration_time_seconds>
+            <product_header_expiration_time_milliseconds>0</product_header_expiration_time_milliseconds>
+            <product_header_received_time_seconds gregorian="2026-08-28 21:54:00">1787954040</product_header_received_time_seconds>
+            <product_header_received_time_microseconds>192652</product_header_received_time_microseconds>
+            <product_header_enqueue_time_seconds>1787954040</product_header_enqueue_time_seconds>
+            <product_header_enqueue_time_milliseconds>274</product_header_enqueue_time_milliseconds>
+            <product_header_archive_only>0</product_header_archive_only>
+            <product_header_displayable>0</product_header_displayable>
+        </product_header>
+        <twx_text_prod>
+            <twx_msg_type>2</twx_msg_type>
+            <twx_size>17</twx_size>
+            <twx_text>KDCA WSA CANC 21
+            </twx_text>
+        </twx_text_prod>
+    </itws_msg>

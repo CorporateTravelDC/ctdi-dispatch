@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-pin OLLAMA_OSINT_MODEL warm whenever ollama is running and the model isn't resident
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/ollama-keepwarm.sh

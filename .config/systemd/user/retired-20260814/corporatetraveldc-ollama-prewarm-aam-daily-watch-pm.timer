@@ -1,0 +1,13 @@
+[Unit]
+Description=Prewarm corporatetraveldc-pi5-aam-watch 3min before the 15:30 ET aam-daily-watch PM run (reuses the same prewarm service as the AM run)
+Requires=corporatetraveldc-ollama-prewarm-aam-daily-watch.service
+
+[Timer]
+OnCalendar=*-*-* 15:27:00 America/New_York
+Persistent=false
+# 2026-08-06: see corporatetraveldc-aam-daily-watch-pm.timer for why this
+# explicit Unit= is required (default same-name trigger target bug).
+Unit=corporatetraveldc-ollama-prewarm-aam-daily-watch.service
+
+[Install]
+WantedBy=timers.target
