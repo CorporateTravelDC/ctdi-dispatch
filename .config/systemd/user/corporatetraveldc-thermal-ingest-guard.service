@@ -1,0 +1,28 @@
+[Unit]
+Description=Corporate Travel DC -- thermal/CPU-load fallback guard for SWIM ingest containers
+After=corporatetraveldc-poller.service
+
+[Service]
+Type=oneshot
+# 2026-08-23: explicit, generous timeout -- LOCKDOWN (see thermal-ingest-guard.py's
+# module docstring) now sequentially stops/starts the whole stack, not just
+# 2-3 ingest feeds. Worst case: feed_ctl("all") budgets up to ~265s for 6
+# SWIM feeds, feed_ctl("core") up to ~60s, three --user unit stop/starts
+# (poller/pusher/runner) up to ~30s each, ollama.service up to ~30s --
+# roughly 445s for one direction (stop OR start; a single run only ever
+# does one). systemd's un-overridden default (~90s) would have killed
+# this mid-sequence, leaving the stack in a half-stopped/half-started
+# state. 600s is a deliberate margin above the ~445s worst case, same
+# generous-not-tight philosophy as this repo's other budget tunables
+# (see build-models.sh's SMOKE_BUDGET_S rationale).
+# 2026-09-06: the restore direction is now serialized + load-gated via
+# scripts/lib/serial-bringup.sh (one unit at a time, 60-180 s minimum
+# window each, held longer while load1 >= SERIAL_BRINGUP_LOAD_MAX, capped
+# at SERIAL_BRINGUP_MAX_WAIT_S=300 per hold). A typical 10-unit LOCKDOWN
+# restore is ~12-15 min; the guard's own budget for it is
+# 10 * 2 * 300 + 60 = 6060 s worst case. 600 s would have killed every
+# restore mid-sequence. The timer cannot re-fire while this runs (the
+# service is active), which is intended -- dormancy starts after the last
+# unit is up.
+TimeoutStartSec=6300
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/thermal-ingest-guard.py

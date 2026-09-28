@@ -1,0 +1,14 @@
+[Unit]
+Description=Run disruption-weather-digest daily at 04:35 ET -- offset from ops-brief (:00 hourly) and transport-pattern-digest (0/12:25) so Ollama jobs never stack
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*-*-* 04:35:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

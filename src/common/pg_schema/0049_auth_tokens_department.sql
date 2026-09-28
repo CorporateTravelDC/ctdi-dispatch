@@ -1,0 +1,21 @@
+-- Migration 0049: auth_tokens.department -- Phase 2 drift fix.
+--
+-- Found during Phase 2 (data-copy rehearsal, docs/POSTGRES_MIGRATION.md §5)
+-- pre-copy schema audit, 2026-09-18: SQLite's live auth_tokens has a
+-- `department` TEXT column (added by a bare `ALTER TABLE auth_tokens ADD
+-- COLUMN department TEXT` -- src/common/db.py's swallow-duplicate-column
+-- idempotent-ALTER pattern, so it never got its own SCHEMA_V* block and
+-- Phase 1's hand-translation of db.py's CREATE TABLE text for auth_tokens
+-- (0002_schema.sql) missed it entirely) that Phase 1's PG schema does not
+-- have. Live code actively reads/writes it: db.create_token(...,
+-- department=...) and db.set_token_department() (src/common/db.py:1266,
+-- 1275-1284) -- this is not dead schema, a real column of a state table
+-- that Phase 2's copy would otherwise silently drop.
+--
+-- Additive only, does not touch or re-run 0002 (already applied/tracked by
+-- its own checksum) -- same idempotent-ALTER shape as every ALTER TABLE in
+-- this codebase.
+-- Tables: auth_tokens (column addition only)
+-- Idempotent: ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+
+ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS department TEXT;

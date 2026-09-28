@@ -1,0 +1,14 @@
+[Unit]
+Description=Fire the daily DNS (pihole-FTL/unbound) preventive restart at 01:35 ET (operator-requested window 00:00-02:00, deliberately apart from the llama restart's 19:45 slot; clear of 00:05 data-usage-snapshot, 00:25 transport-pattern-digest, and 01:00 trains-yachts-daily-watch; sibling to corporatetraveldc-llama-restart.timer)
+# Deliberately no self-referential Requires=/Wants= here -- see
+# docs/BOOT_STORM_TIMER_REQUIRES.md and corporatetraveldc-llama-restart.timer's
+# identical note. The timer->service binding is implicit from the filename.
+
+[Timer]
+OnCalendar=*-*-* 01:35:00 America/New_York
+Persistent=true
+# Persistent=true: a missed fire (box down at 19:50) runs on next boot
+# instead of waiting a full day.
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,30 @@
+[Unit]
+Description=Fire the daily llama preventive restart at 19:45 ET (the idle gap before the overnight report grid opens at 20:20; scheduled-llama-restart.sh waits for idle and SKIPS rather than kill an in-flight run)
+# 2026-08-30: was Requires=, which pulls the service in the instant the
+# TIMER unit itself is activated (enabled/started), not just at each
+# scheduled fire -- confirmed live: enabling this timer triggered an
+# immediate unplanned restart of both tiers mid-session, with
+# aviation-daily-watch dying on "database is locked" in the resulting
+# I/O thrash. Wants= only expresses ordering/pulling at actual timer
+# elapse, matching every other timer on this box.
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+# 2026-09-06: moved 03:00 -> 19:45 ET. 03:00 collided with dispatch-desk-memo
+# (Mon 03:00) once the weeklies moved to Sunday night; 19:45 is empty on
+# every day of the overnight-only grid (last job ep-advance-venues 05:20,
+# first job executive-protection 20:20) and gives the whole batch a
+# fresh server. Persistent=true is safe here: a replayed fire still
+# waits for idle and skips if busy.
+OnCalendar=*-*-* 19:45:00 America/New_York
+Persistent=true
+# Persistent=true means a missed fire (box down at 03:00) runs on next
+# boot instead of waiting a full day -- keeps the real gap between
+# restarts inside the operator's <=24h cap even across a reboot.
+
+[Install]
+WantedBy=timers.target

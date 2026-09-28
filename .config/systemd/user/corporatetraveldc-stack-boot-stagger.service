@@ -1,0 +1,41 @@
+[Unit]
+Description=Corporate Travel DC -- serialized, load-gated startup for every long-running container (anti boot-storm)
+# 2026-07-28: built as the counterpart to corporatetraveldc-boot-stagger.service
+# (which already staggers the seven SWIM ingest units). Before this existed,
+# poller, web, pusher, ultrafeeder, the full ACARS stack, both Nextcloud units,
+# openwebui, protonbridge, ntfy, csexec-contact, and the demo/runner stack all
+# carried their own WantedBy=default.target and fired in parallel the instant
+# network-online.target was reached -- the same boot-storm pattern already
+# fixed on the ingest side. This unit owns their startup instead, via
+# scripts/stack-boot-ctl.sh, in a dependency-aware order.
+#
+# Runs BEFORE the ingest stagger (see After= in
+# corporatetraveldc-boot-stagger.service) so the two staggered sequences
+# don't overlap and compete for the same CPU/RAM/bandwidth headroom.
+#
+# 2026-09-06 (operator directive, work-order item 1): stack-boot-ctl.sh
+# now brings ALL long-running units up -- the seven SWIM ingest units
+# first, then the rest -- one at a time, load-gated, via
+# scripts/lib/serial-bringup.sh (the discipline serialized-rollout.sh
+# proved live: peak load 9.61 vs 40.28 flat). The fixed 15 s stagger is
+# gone; each unit gets a 30-180 s minimum window and the next one waits
+# until load1 < 12, capped at 300 s per hold. Typical full boot ~35-45
+# min; worst case = units * 2 * 300 s (TimeoutStartSec below covers 32).
+#
+# Correction to the 07-28 note above: the ingest side had NOT been fixed.
+# All seven ingest units, pgsql, the four ADS-B feeders and amtrak-tracker
+# still carried WantedBy=default.target and started flat at login a full
+# minute before this unit began (Sep 5 boot journal: ingest up 17:49:07,
+# this unit started 17:50:32). Removed 2026-09-06; those units are in
+# stack-boot-ctl.sh ORDER now, and tests/scripts/test_serial_bringup.py
+# fails if any ORDER unit regains a WantedBy of its own.
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=19500
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/stack-boot-ctl.sh start
+
+[Install]
+WantedBy=default.target
