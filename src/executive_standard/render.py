@@ -32,6 +32,7 @@ returned strings to disk.
 from __future__ import annotations
 
 import html as _html
+import os as _os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -360,7 +361,15 @@ def render_post(post: Post, archive_teaser: list[Post]) -> str:
 {_DOC_CLOSE}"""
 
 
-_SITE_URL = "https://executivestandard.example.com"
+# 2026-10-03: canonical host of the Pi-hosted site is now the members tier.
+# executivestandard.example.com is being handed to Substack as
+# its custom domain (DNS-only CNAME), after which the Pi no longer answers
+# it; everything this constant feeds (sitemap, llms.txt, Link headers, the
+# _md/ `source:` field the private feed's item links come from) must point
+# at the host that actually serves the pages. Env-overridable for a
+# rollback or a future rename.
+_SITE_URL = _os.environ.get("EXEC_STANDARD_SITE_URL",
+                            "https://members.executivestandard.example.com")
 
 
 def render_markdown(post: "Post") -> str:

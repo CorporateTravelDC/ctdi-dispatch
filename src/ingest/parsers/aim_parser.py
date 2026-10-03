@@ -92,9 +92,22 @@ _DEDUP_TTL = 86400
 _NOTAM_DEDUP = PushDedup("notam", dedup_secs=_DEDUP_TTL)
 
 _VIP_KEYWORDS = frozenset({
-    "POTUS", "PRESIDENT", "AIR FORCE ONE", "MARINE ONE", "AIR FORCE 1", "AF1",
-    "VPOTUS", "VICE PRESIDENT", "AIR FORCE TWO", "AF2",
+    "POTUS", "PRESIDENT", "AIR FORCE ONE", "MARINE ONE", "AIR FORCE 1",
+    "AIR FORCE 2", "VPOTUS", "VICE PRESIDENT", "AIR FORCE TWO",
 })
+# 2026-09-27: dropped the short substring tokens "AF1"/"AF2" -- they violated
+# this set's own rule (see the SAM/CRANE note below: short identifiers go in
+# the word-boundary regex, not this substring set). NOTAM free text is dense
+# with aviation-facility identifiers where AF1/AF2 are taxiway/stand/ramp names
+# ("TWY AF1 CLSD", "STANDS AF1 THRU AF2"), each of which was substring-matching
+# _is_vip_notam and routing to hot-alerts p5 -- a max-noise false VIP hit.
+# No true positive is lost: real VIP TFR NOTAMs cite CFR 91.137/141/143/145 or
+# 99.7 (caught by _is_national_significant / _is_flight_restriction_notam) and
+# use the spelled/numeral forms above; live AF1/AF2 CALLSIGNS are matched on the
+# parsed callsign field by fdps_parser.is_marine_one, not NOTAM free text.
+# Also added "AIR FORCE 2" -- the numeral form was missing while "AIR FORCE 1"
+# was present. A word-boundary regex would NOT have helped: taxiway "AF1" is
+# itself word-bounded, so removal is the correct minimal fix, not \bAF1\b.
 
 # 2026-09-22 (operator): VENUS / CRANE / SAM added as VIP movement
 # identifiers. Deliberately NOT added to _VIP_KEYWORDS above, because that

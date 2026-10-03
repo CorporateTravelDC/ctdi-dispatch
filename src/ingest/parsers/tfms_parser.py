@@ -885,9 +885,12 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     # this entry's own oooi_phase, which every notification and live
     # status check reads. Prefer the LATEST phase present on this message
     # (in > on > off > out) so a message carrying multiple times at once
-    # doesn't undercount. update_watchlist_oooi_phase_authoritative()
-    # rejects a regressive or under-authority update on its own, so this is
-    # safe to call unconditionally whenever any OOOI time is present.
+    # doesn't undercount -- but ONLY among milestones whose time has actually
+    # passed (see the 2026-09-27 fix below). update_watchlist_oooi_phase_
+    # authoritative() rejects a regressive or under-authority update, but it
+    # does NOT reject a future one, and tfms (tier 40) is never outranked --
+    # so asserting a future scheduled time here is NOT safe, which is exactly
+    # the premature-landing bug the fix below closes.
     #
     # CORRECTION 2026-09-24: this comment used to cite _OOOI_SOURCE_PRIORITY
     # as the thing doing the rejecting. Since migration 0065 that map only
@@ -904,11 +907,36 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     # it needs the notification to know whether its own substance was the
     # phase change. Tracked rather than guessed at.
     if ooooi:
+        # 2026-09-27 FIX -- do NOT assert a FUTURE milestone. TFMS carries the
+        # airline OUT/OFF/ON/IN times for all four milestones at once, as
+        # SCHEDULED/ESTIMATED values from before departure, so a pre-departure
+        # message routinely already contains a future airlineInTime. The old
+        # code took the first present key in [in,on,off,out] order and asserted
+        # it unconditionally, assuming presence == achieved and that the
+        # authority gate would catch anything wrong. It does not: tfms is tier
+        # 40 (SWIM, top tier), so _oooi_authority_check never rejects it, and the
+        # gate has no notion of a future timestamp. Confirmed live: UAL599 and
+        # UAL1791 were both swept as landed (oooi_phase=in, source=tfms) ~5 HOURS
+        # early off a future airlineInTime -- the actual premature-landing bug.
+        # A milestone is ACHIEVED only once its airline time has passed; pick the
+        # highest-order phase whose time is <= now. A future time is a schedule
+        # estimate and asserts nothing (schedule/estimate is persisted elsewhere;
+        # this only advances oooi_phase, which drives sweeps and notifications).
+        _now = datetime.now(timezone.utc)
         _tfms_phase, _tfms_time = None, None
         for _key, _phase in (("airlineInTime", "in"), ("airlineOnTime", "on"),
                              ("airlineOffTime", "off"), ("airlineOutTime", "out")):
-            if _key in ooooi:
-                _tfms_phase, _tfms_time = _phase, ooooi[_key]
+            _t = ooooi.get(_key)
+            if not _t:
+                continue
+            try:
+                _dt = datetime.fromisoformat(str(_t).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                continue
+            if _dt.tzinfo is None:
+                _dt = _dt.replace(tzinfo=timezone.utc)
+            if _dt <= _now:            # achieved event, not a future estimate
+                _tfms_phase, _tfms_time = _phase, _t
                 break
         if _tfms_phase:
             try:

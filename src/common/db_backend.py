@@ -545,6 +545,20 @@ def _get_pool():
         with _pool_lock:
             if _pool is None:
                 _pool = _build_pool()
+                # 2026-09-27: close the pool at interpreter exit. psycopg_pool's
+                # ConnectionPool runs background worker threads; if it is still
+                # open when the interpreter begins finalizing, its __del__ tries
+                # to join those threads and Python 3.14 raises
+                # PythonFinalizationError ("cannot join thread at interpreter
+                # shutdown"). Long-lived services shut down cleanly anyway, but
+                # bare-host CLIs (remember.py) and the pytest runner just fall
+                # off the end and hit finalization with the pool open -- the
+                # noisy traceback on every such exit. atexit runs BEFORE
+                # finalization, so closing here avoids the join-at-finalization
+                # path. close_pool() is idempotent and lock-guarded; registered
+                # once per process (this block is the lazy singleton init).
+                import atexit
+                atexit.register(close_pool)
     return _pool
 
 

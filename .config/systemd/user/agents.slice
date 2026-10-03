@@ -1,0 +1,44 @@
+[Unit]
+Description=CTDI Dispatch -- AI agent sessions (Claude Code, Codex, future agents), resource-isolated from production
+Documentation=man:systemd.slice(5) docs/AGENT_SEGMENTATION.md
+
+# Why this slice exists (2026-10-03, live case): agent sessions were running
+# either in app.slice (the remote-control unit) or, for SSH-launched ones, in
+# session-*.scope -- a SIBLING of the whole user@1000.service tree, so each
+# session competed at equal weight against ALL of production combined. An
+# agent diagnostic took load1 from ~20 to 40.09 and thermal-ingest-guard shed
+# every SWIM ingest container plus poller/pusher/runner. Nothing in the agent
+# tree was capped.
+#
+# Numbers (4-core Pi 5, 16206 MiB RAM):
+#   CPUWeight=25   production.slice and app.slice sit at the default 100, so
+#                  under full contention agents get 25/(100+100+25) ~ 11%;
+#                  idle box = free burst, same as everywhere else.
+#   CPUQuota=100%  hard cap of one core for ALL agents together. llama is hard-
+#                  capped at 200% (two cores); ingest+poller+web+pusher+postgres
+#                  need ~1 core busy. One core for agents leaves the fourth
+#                  as headroom for the guard's resume bar instead of the next
+#                  LOCKDOWN trip. Throttled tasks leave the run queue, so this
+#                  also stops agent bursts from inflating load1.
+#   MemoryHigh=3G  / MemoryMax=4G  one Claude Code session is ~0.5-1.1 GB RSS,
+#                  Codex daemons ~0.2 GB; three or four concurrent sessions
+#                  fit under High (throttle), the OOM-kill line is Max.
+#                  production.slice keeps MemoryLow=6G, so under pressure the
+#                  kernel reclaims from here first. 4G + production's 13.78G
+#                  Max exceeds RAM on purpose: these are ceilings, not
+#                  reservations; the protection is production's MemoryLow.
+#   TasksMax=1024  a runaway fork tree from a tool call stops here, not at
+#                  the user-wide limit.
+#
+# Membership: corporatetraveldc-claude-remote-control.service sets
+# Slice=agents.slice (live-only unit, see docs/AGENT_SEGMENTATION.md);
+# interactive sessions enter via scripts/agent-run.sh (systemd-run --scope).
+# Runtime-reversible: `systemctl --user set-property --runtime agents.slice
+# CPUQuota=200%` loosens it until the next daemon-reload/boot.
+
+[Slice]
+CPUWeight=25
+CPUQuota=100%
+MemoryHigh=3072M
+MemoryMax=4096M
+TasksMax=1024

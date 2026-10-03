@@ -1,47 +1,21 @@
 """
-common.llama_pool -- report-tier port claiming for the llama.cpp migration
-(Ollama -> raw llama-server, see personas.py).
+common.llama_pool -- slot discipline for the ONE llama.cpp server.
 
-Architecture (revised 2026-08-27 -- see below for why):
-  - Port 8093 "hot":    permanent, always resident, launched by its own
-                         systemd unit (corporatetraveldc-llama-hot.service).
-  - Port 8094 "chat":   permanent, always resident, same story
-                         (corporatetraveldc-llama-chat.service).
-  - REPORT_PORTS: a small FIXED set of permanent, always-resident ports
-    (corporatetraveldc-llama-report-N.service, N=1..len(REPORT_PORTS)),
-    claimed exclusively for one request via a per-port flock.
+Current architecture (2026-09-06, operator directive; Qwen3-4B-Instruct
+since 2026-09-21): corporatetraveldc-llama.service is the only model
+server -- one model resident 24/7, two slots (-np 2), hard-capped at two
+cores by CPUQuota=200%, port LLAMA_PORT (8093). HOT_PORT / CHAT_PORT /
+REPORT_PORTS are kept as names for importers but all resolve to that one
+port. This module's job is the slot rule described below, not port
+claiming.
 
-2026-08-30 amendment: report-1 (REPORT_PORTS[0], port 8095) is now
-ON-DEMAND, not permanently resident -- it was shelved 2026-08-27 after two
-near-OOM incidents running alongside hot+chat, which silently broke every
-persona with num_ctx > chat's -c 4096. The consumer skills' own quadlets
-now start/stop it at the HOST level (ExecStartPre / guarded ExecStopPost,
-scripts/llama-report-ondemand.sh) -- quadlet hooks run on the host, so the
-container/host privilege boundary documented below doesn't apply to them.
-common/llm.py's ollama_post_with_retry() routes to it by the calling
-persona's declared num_ctx; claim_port()'s flock path is currently unused
-(report-1 is single-slot, -np 1 -- llama-server queues concurrent
-requests itself).
-
-Originally designed as an ELASTIC pool (ports 8095-9005, spin up on demand,
-5-min idle self-timeout) -- abandoned same day, before ever shipping,
-because it doesn't fit this deployment's actual topology: every caller of
-this module runs inside a poller/skill podman CONTAINER, which cannot
-subprocess.Popen a new process onto the HOST (different PID namespace,
-different filesystem -- /usr/local/lib/ollama/llama-server doesn't even
-exist inside the container). Discovered live: the first real ops-brief
-test through the elastic version failed with FileNotFoundError trying to
-spawn llama-server from inside the poller container. Every llama-server
-process this module talks to is therefore host-managed by systemd, exactly
-like hot/chat -- this module's only job (when imported from inside a
-container) is claiming an already-running port over HTTP + a shared flock
-file under /var/lib/corporatetraveldc (bind-mounted into every container),
-never spawning anything itself.
-
-This still mirrors common/ollama_lock.py's flock-based, crash-safe design
-(a killed claimant's fd closes and the flock releases itself -- no
-stale-lock cleanup) rather than a central counter, which would desync if a
-claimant died mid-request.
+History, kept short: 2026-08-27 Ollama -> llama-server cutover with three
+tiers (hot :8093, chat :8094, report-N :8095+), an elastic report pool
+that was abandoned the same day (containers cannot spawn host
+processes), and report-1 made on-demand 2026-08-30 after near-OOM
+incidents. All of that was consolidated into the single unit on
+2026-09-06; nothing listens on 8094/8095 any more. (Docstring rewritten
+2026-10-03 -- it had still described the three-tier layout as current.)
 
 2026-09-06 (operator directive, supersedes everything above): ONE
 llama-server, ONE model resident 24/7, TWO slots (-np 2), hard-capped at

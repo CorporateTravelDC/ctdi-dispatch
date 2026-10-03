@@ -34,9 +34,22 @@ import hashlib
 import logging
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 import requests
+
+# 2026-09-27: FIDS date bug. lookup_arrival/lookup_departure default date_str
+# to the current date, then filter arrivals by publishedTime.startswith(date_str).
+# publishedTime is AIRPORT-LOCAL (ET) but the container clock is UTC, so a bare
+# datetime.now() rolls to the next day's date after ~20:00 ET (00:00Z). Live
+# confirmed on EDV5134/DAL5134 (2026-09-27 20:10 EDT): the lookup matched
+# TOMORROW's scheduled instance (2026-09-28 18:47) of the daily flight instead
+# of today's delayed one, which also masked the delay (estimated==scheduled on
+# the wrong instance). Compute the reference date in airport-local time. All
+# current airports (DCA/IAD/BWI) are Eastern; add an airport->tz map here if a
+# non-ET airport is ever onboarded.
+_AIRPORT_TZ = ZoneInfo("America/New_York")
 
 log = logging.getLogger(__name__)
 
@@ -235,7 +248,7 @@ def lookup_arrival(
         }
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(_AIRPORT_TZ).strftime("%Y-%m-%d")  # airport-local ET, not container-UTC
 
     airport = airport.upper()
     data = get_data(airport)
@@ -322,7 +335,7 @@ def lookup_departure(
         }
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(_AIRPORT_TZ).strftime("%Y-%m-%d")  # airport-local ET, not container-UTC
 
     airport = airport.upper()
     data = get_data(airport)

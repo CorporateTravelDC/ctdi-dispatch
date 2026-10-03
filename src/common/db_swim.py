@@ -489,6 +489,16 @@ CREATE INDEX IF NOT EXISTS idx_convective_sigmet_archive_window
 
 
 def _apply_schema(schema: str) -> None:
+    # 2026-10-03: no-op on Postgres, same as db._ensure_board. This DDL is
+    # SQLite dialect (INTEGER PRIMARY KEY AUTOINCREMENT) and is a hard
+    # syntax error there; the tables already exist via common/pg_schema/*.sql.
+    # Production never reached this on Postgres (ingest/main.py gates the
+    # whole bootstrap chain on backend() != "postgres" since 2026-09-18) --
+    # only tests that called init_db_swim_v4x() directly did, and only while
+    # the test suite was mistakenly pointed at the live database.
+    from common import db_backend
+    if db_backend.backend() == "postgres":
+        return
     with conn() as c:
         for stmt in schema.strip().split(";"):
             stmt = stmt.strip()

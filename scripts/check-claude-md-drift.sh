@@ -292,6 +292,43 @@ for rel in .config/systemd/user .config/containers/systemd; do
     done < <(find "${rel}" -maxdepth 1 -type f -print0)
 done
 
+# -- 12. tracked cloudflared/config.yml matches the live tunnel config
+# (2026-10-03). Same failure class as check 11, one file: the live
+# ~/.cloudflared/config.yml gained the members.executivestandard ingress
+# and the tracked mirror didn't follow for days, unnoticed, because nothing
+# compared them. Content disagreement only; a missing live file is a WARN.
+CF_TRACKED="cloudflared/config.yml"
+CF_LIVE="${HOME_DIR}/.cloudflared/config.yml"
+if [[ -f "${CF_TRACKED}" ]]; then
+    if [[ ! -f "${CF_LIVE}" ]]; then
+        warn "tracked ${CF_TRACKED} has no live copy at ${CF_LIVE}"
+    elif ! diff -q "${CF_TRACKED}" "${CF_LIVE}" >/dev/null 2>&1; then
+        drift "${CF_LIVE} does not match tracked ${CF_TRACKED} -- reconcile (the live file is what cloudflared actually runs)"
+    else
+        ok "${CF_LIVE} matches tracked ${CF_TRACKED}"
+    fi
+fi
+
+# -- 13. skills: repo skills/ vs what actually executes under
+# ~/.claude/skills (2026-10-03, backlog "twin gate" 2A). WARN-ONLY until the
+# sync direction is decided: the manifest covers repo skills/, but the copy
+# agents load is the live tree, which the manifest never sees. Reports the
+# size gap and any skill present live but absent from the repo, so the gap
+# is at least visible on every run instead of rediscovered monthly.
+SKILLS_LIVE="${HOME_DIR}/.claude/skills"
+if [[ -d "${SKILLS_LIVE}" ]]; then
+    live_n="$(find "${SKILLS_LIVE}" -type f 2>/dev/null | wc -l)"
+    repo_n="$(find skills -type f 2>/dev/null | wc -l)"
+    live_only="$(comm -23 \
+        <( { find "${SKILLS_LIVE}" "${SKILLS_LIVE}/synced" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | xargs -r -n1 basename | grep -vx synced; } | sort -u) \
+        <(find skills -mindepth 1 -maxdepth 1 -type d 2>/dev/null | xargs -r -n1 basename | sort -u) | tr '\n' ' ')"
+    if [[ "${live_n}" -ne "${repo_n}" || -n "${live_only}" ]]; then
+        warn "skills: ${live_n} file(s) execute from ${SKILLS_LIVE} but repo skills/ tracks ${repo_n} -- live-only skill dirs: ${live_only:-none}. Unsigned executing copies (backlog 2A, twin gate); not yet a hard failure."
+    else
+        ok "skills: repo skills/ and ${SKILLS_LIVE} agree (${repo_n} files)"
+    fi
+fi
+
 echo "--"
 if [[ ${DRIFT} -eq 1 ]]; then
     echo "[FAIL] drift found -- reconcile ${DOC} above, then re-run"

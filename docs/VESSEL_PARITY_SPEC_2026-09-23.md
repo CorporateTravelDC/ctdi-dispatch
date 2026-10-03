@@ -1,5 +1,20 @@
 # Vessel Parity Spec — 2026-09-23
 
+> **⚠ STATUS 2026-09-28: CODE PRESENT, NOT DEPLOYED.**
+> `src/ais_watcher/` and `src/utm_watcher/` exist and the spec below is built,
+> but **no AIS/vessel/UTM container is installed** — every related quadlet in
+> the repo is disabled: `systemd/corporatetraveldc-ais-watcher.container.disabled`,
+> `systemd/corporatetraveldc-ais.container.disabled`,
+> `systemd/corporatetraveldc-utm-watcher.container.disabled`, and
+> `systemd/quadlets/corporatetraveldc-ais-catcher.container.disabled`. No
+> matching container is running (`podman ps -a` shows none).
+>
+> **Gated differently.** VESSEL/AIS is HARDWARE/CONFIG-gated, not code: awaits an
+> AIS SDR dongle + VHF antenna, or just an AISHub `AIS_AISHUB_ID` (no hardware).
+> Code-complete, deployment-ready at ~$0 marginal. DRONE/UTM is the one genuinely
+> CAPABILITY-gated piece: its USS REST poller is a stub (code work, not hardware).
+> AIS is intended-not-live only because it is UNPOWERED, not because it is unbuilt.**
+
 Written under the standing rule that **aviation is the parity benchmark**
 (second brain `20260923T181652Z.md`): every capability below states one of
 *at parity*, *defined break in parity (with reason)*, or *stated target

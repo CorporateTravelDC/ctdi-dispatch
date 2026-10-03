@@ -25,7 +25,9 @@ Environment=DEVICE_SERIAL=hfdl0HF
 Environment=HFDL_FREQ=2941;4654;6532;8912;10027;11348;13272;17919;21934
 Environment=GAIN=40
 Environment=FEED_AIRFRAMES=true
-Environment=STATION=N0CALL-HFDL
+# 2026-10-03: CS-KDCA-{MODE} station naming convention (was the N0CALL
+# placeholder). Unit is disabled; takes effect only if enabled.
+Environment=STATION=CS-KDCA-HFDL
 
 # Forward decoded JSON to acars-watcher via UDP (HFDL carries ACARS-type messages)
 Environment=OUTPUT_UDP=corporatetraveldc-acars-watcher:5005
