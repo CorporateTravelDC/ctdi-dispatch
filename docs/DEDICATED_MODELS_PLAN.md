@@ -9,11 +9,14 @@ for a future executive-assistant back-office platform variant.
 > ## Status update — SUPERSEDED by the 2026-08-27 Ollama → llama.cpp cutover (noted 2026-09-03)
 >
 > **The per-task-Ollama-model architecture this document designed no longer
-> runs.** On 2026-08-27 Ollama was retired: inference is now host-level
-> `llama-server` (llama.cpp) systemd user units — permanent **hot** (:8093,
-> route-impact/tfr-enrichment) and **chat** (:8094) tiers plus an on-demand
-> **report-1** (:8095, `-c 8192`, started/stopped by the consuming skills'
-> quadlet hooks) — each serving one shared phi3-mini GGUF. The 21 per-skill
+> runs.** On 2026-08-27 Ollama was retired for llama.cpp. UPDATED 2026-09-24:
+> the three-tier layout described below was itself superseded on 2026-09-06 by
+> a SINGLE consolidated unit, `corporatetraveldc-llama.service`, serving one
+> model on `100.x.x.x:8093` (two slots, `CPUQuota=200%`, `CPUWeight=9000`,
+> `MemoryMax=8448M`). There are no `-hot`/`-chat`/`-report-1` units and nothing
+> listens on :8094/:8095. On 2026-09-21 the model was swapped phi3-mini ->
+> Qwen3-4B-Instruct-2507 (q4_0). A daily preventive restart fires at 19:45 ET.
+> Everything below about tiers and phi3-mini is retained for history only. The 21 per-skill
 > models were each really that same GGUF with a different SYSTEM block, so
 > the SYSTEM blocks were extracted verbatim into a **persona registry**,
 > `src/common/personas.py` (~23 entries; `persona_key_for()` maps the old

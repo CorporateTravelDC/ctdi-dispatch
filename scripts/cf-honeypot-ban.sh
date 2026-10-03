@@ -103,10 +103,14 @@ zone="${CFZONE:?CFZONE env var not set}"
 #
 # If banning ever stops working after a filesystem relabel, check this first:
 #   ausearch -m avc --start today | grep fail2ban
-CFTOKEN_FILE="${CFTOKEN_FILE:-$HOME/.secrets/cf-honeypot.token}"
-# fail2ban runs as root, so $HOME is /root when invoked by the service. Fall
-# back to the literal path rather than depending on the caller's environment.
-if [[ ! -r "${CFTOKEN_FILE}" && -r /home/corporatetraveldc/.secrets/cf-honeypot.token ]]; then
+# 2026-10-03: default is the root-owned /etc path (fail2ban runs as root; a
+# $HOME-based default resolved to /root/... there and never matched). The
+# action.d file passes this same path explicitly. The operator's own copy
+# under ~corporatetraveldc/.secrets is the fallback if /etc is missing OR
+# EMPTY -- the /etc file sat 0 bytes for nine days, which silently routed
+# every ban through the deprecated CFTOKEN env path and its WARNING.
+CFTOKEN_FILE="${CFTOKEN_FILE:-/etc/corporatetraveldc/cf-honeypot.token}"
+if [[ ! -s "${CFTOKEN_FILE}" && -s /home/corporatetraveldc/.secrets/cf-honeypot.token ]]; then
     CFTOKEN_FILE=/home/corporatetraveldc/.secrets/cf-honeypot.token
 fi
 token=""

@@ -192,18 +192,28 @@ because it is still the correct recipe if the token ever needs re-minting:
 - Grab the **Zone ID**: dashboard → `example.com` → Overview → Zone ID
 
 This token can *only* edit that one zone's firewall access rules — not DNS, not
-tunnels, not other zones. Put the secrets in `/etc/fail2ban/jail.local`
-(`[DEFAULT]`, **live-only, never the repo**):
+tunnels, not other zones.
+
+**Where the token lives (2026-10-03 — this changed, read it):** the token goes
+in a root-only FILE, never in `jail.local` and never on the action line:
+```
+/etc/corporatetraveldc/cf-honeypot.token    # root:root 0600, the bare token, nothing else
+```
+`cf-honeypot-ban.sh` reads it from there (`CFTOKEN_FILE`, passed as a *path* by
+the action). The earlier recipe — `cftoken = ...` in `jail.local`, expanded
+into the action as `CFTOKEN="<cftoken>"` — leaked the token into
+`/var/log/fail2ban.log` on every ban, unban and error, because fail2ban logs
+the fully-expanded action command string. Only the zone id stays in
+`jail.local` (`[DEFAULT]`, **live-only, never the repo**):
 ```
 [DEFAULT]
-cftoken = <the new token>
 cfzone  = <the zone id>
 ```
 Then add Cloudflare as a **second** banaction on the honeypot jail (keeps the
 local firewalld ban too) — in `jail.d/nginx-honeypot-corporatetraveldc.conf`:
 ```
 action = %(action_)s
-         cloudflare-token[cftoken="%(cftoken)s", cfzone="%(cfzone)s"]
+         cloudflare-token-corporatetraveldc[cfzone="%(cfzone)s"]
 ```
 Then verify a test ban shows under the zone's **Security → WAF → Tools → IP
 Access Rules** (and clears on `bantime` expiry).
@@ -263,14 +273,22 @@ sudo cp $R/fail2ban/jail.d/nginx-honeypot-corporatetraveldc.conf /etc/fail2ban/j
 sudo cp $R/fail2ban/action.d/cloudflare-token-corporatetraveldc.conf /etc/fail2ban/action.d/
 # scripts/cf-honeypot-notes.sh runs directly from the repo path -- no copy needed.
 
-# jail.local is live-only, never the repo (contains the real token):
+# The token is a root-only FILE (2026-10-03) -- never jail.local, never argv.
+# Populate it from the operator's copy without ever printing it:
+sudo sh -c 'cat /home/corporatetraveldc/.secrets/cf-honeypot.token > /etc/corporatetraveldc/cf-honeypot.token'
+sudo chmod 600 /etc/corporatetraveldc/cf-honeypot.token
+
+# jail.local is live-only, never the repo -- zone id ONLY now:
 sudo tee /etc/fail2ban/jail.local >/dev/null <<'EOF'
 [DEFAULT]
-cftoken = <the token from ~/.secrets/cloudflare.key>
 cfzone  = <zone ID for example.com, from the CF dashboard>
 EOF
 sudo chmod 600 /etc/fail2ban/jail.local   # live file is 0600 root:root -- match it
 sudo fail2ban-client reload
+
+# Verify the deprecated env path is no longer being used (count only -- the
+# log may still hold old plaintext lines from before this change):
+sudo grep -c "token came from the CFTOKEN env var" /var/log/fail2ban.log
 ```
 
 **Verify:** trigger a trap hit, then check the zone's **Security -> WAF -> Tools -> IP Access Rules** in the

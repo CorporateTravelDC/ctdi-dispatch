@@ -1,5 +1,5 @@
 [Unit]
-Description=Corporate Travel DC -- Uber driver-phone traffic watch (reconnect + CNAME-anomaly detection)
+Description=Corporate Travel DC -- driver-phone DNS anomaly watch (reconnect bursts + CNAME drift; renamed from "Uber traffic watch" 2026-10-03, source attribution not asserted)
 
 [Service]
 Type=oneshot

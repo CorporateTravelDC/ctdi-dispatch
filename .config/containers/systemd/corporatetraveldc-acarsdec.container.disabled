@@ -19,7 +19,11 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 
 Environment=RTL_SERIAL=ACARS0130
-Environment=FEED_ID=corporatetraveldc-arlington
+# 2026-10-03: must equal the station id airframes.io registered for ACARS
+# from this site (CS-KDCA-ACARS, from its auto-generate-station feature).
+# The image passes it as acarsdec -i. Unit is disabled -- shares the single
+# ACARS0130 dongle with dumpvdl2 -- so this only takes effect if re-enabled.
+Environment=FEED_ID=CS-KDCA-ACARS
 # Standard US ACARS VHF frequencies (MHz, space-separated)
 Environment=FREQUENCIES=129.125 130.025 130.425 130.450 131.125 131.550
 # Send to acarsrouter by container name on the shared acars-net network

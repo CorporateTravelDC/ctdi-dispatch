@@ -27,9 +27,12 @@ same tool produce a SQLite-only source snapshot of an arbitrary table set
 from an arbitrary SQLite file (e.g. the 11 reference tables + second-brain
 index tables, pre-copy, from corporatetraveldc.db / second_brain_index.db)
 -- the "checkpoint 1" origin-state artifact for the reference-table +
-second-brain Postgres migration (docs/POSTGRES_MIGRATION.md §2). Default
-behavior (no new flags) is unchanged: dual-hash PG_TABLES against both
-backends, exactly as before.
+second-brain Postgres migration (docs/POSTGRES_MIGRATION.md §2).
+
+Default behavior (2026-09-28) is PG-only: the pre-cutover SQLite DB was
+deleted after the Postgres cutover, so a run with no SQLite flag hashes
+Postgres alone. --sqlite-db / --sqlite-only re-enable the dual-hash and
+source-only modes for the rollback/archival case.
 """
 import argparse
 import hashlib
@@ -186,7 +189,12 @@ def main() -> int:
                      help="Override the manifest's purpose/description field.")
     args = ap.parse_args()
 
-    sconn = sqlite3.connect(args.sqlite_db or config.db_path())
+    # PG-only by default (2026-09-28): the pre-cutover SQLite DB was deleted
+    # after the Postgres cutover, so only open SQLite when a comparison is
+    # explicitly requested (--sqlite-db) or SQLite is the sole source
+    # (--sqlite-only). Default runs hash Postgres alone.
+    use_sqlite = bool(args.sqlite_db) or args.sqlite_only
+    sconn = sqlite3.connect(args.sqlite_db or config.db_path()) if use_sqlite else None
     pconn = None
     if not args.sqlite_only:
         pconn = psycopg.connect(db_backend._pg_conninfo(), autocommit=True)  # noqa: SLF001
@@ -207,11 +215,12 @@ def main() -> int:
     t0 = time.time()
     for i, table in enumerate(tables, 1):
         try:
-            s_n, s_hash = hash_sqlite_table(sconn, table)
-            if args.sqlite_only:
-                entries.append({"table": table, "sqlite_count": s_n, "sqlite_hash": s_hash})
-                print(f"[{i}/{len(tables)}] {table:45s} sqlite={s_n:>9}", file=sys.stderr)
-                continue
+            if use_sqlite:
+                s_n, s_hash = hash_sqlite_table(sconn, table)
+                if args.sqlite_only:
+                    entries.append({"table": table, "sqlite_count": s_n, "sqlite_hash": s_hash})
+                    print(f"[{i}/{len(tables)}] {table:45s} sqlite={s_n:>9}", file=sys.stderr)
+                    continue
             p_n, p_hash = hash_pg_table(pconn, table)
         except BoundsExceeded as e:
             print(f"\nXX ABORTED [{i}/{len(tables)}] {e}", file=sys.stderr)
@@ -219,34 +228,41 @@ def main() -> int:
                   "snapshot. Re-run once load is clear, or split --tables into "
                   "smaller batches for anything this large.", file=sys.stderr)
             return 2
-        match = (s_n == p_n) and (s_hash == p_hash)
-        entries.append({
-            "table": table,
-            "sqlite_count": s_n,
-            "sqlite_hash": s_hash,
-            "pg_count": p_n,
-            "pg_hash": p_hash,
-            "match": match,
-        })
-        flag = "OK" if match else "MISMATCH"
-        print(f"[{i}/{len(tables)}] {table:45s} sqlite={s_n:>9} pg={p_n:>9}  {flag}", file=sys.stderr)
-        if not match:
-            mismatches.append(table)
+        if use_sqlite:
+            match = (s_n == p_n) and (s_hash == p_hash)
+            entries.append({
+                "table": table,
+                "sqlite_count": s_n,
+                "sqlite_hash": s_hash,
+                "pg_count": p_n,
+                "pg_hash": p_hash,
+                "match": match,
+            })
+            flag = "OK" if match else "MISMATCH"
+            print(f"[{i}/{len(tables)}] {table:45s} sqlite={s_n:>9} pg={p_n:>9}  {flag}", file=sys.stderr)
+            if not match:
+                mismatches.append(table)
+        else:
+            entries.append({"table": table, "pg_count": p_n, "pg_hash": p_hash})
+            print(f"[{i}/{len(tables)}] {table:45s} pg={p_n:>9}", file=sys.stderr)
 
-    default_purpose = ("Pre-cutover checkpoint: SQLite/Postgres content parity, "
-                        "signed baseline for future incremental integrity audits.")
+    default_purpose = ("Postgres content manifest: signed baseline for "
+                        "incremental integrity audits.")
     if args.sqlite_only:
         default_purpose = "Source-only content snapshot (pre-copy checkpoint)."
+    elif use_sqlite:
+        default_purpose = ("SQLite/Postgres content parity, signed baseline "
+                            "for future incremental integrity audits.")
     manifest = {
         "kind": "corporatetraveldc-db-content-manifest",
         "version": 1,
         "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "purpose": args.purpose or default_purpose,
-        "source_sqlite_db": args.sqlite_db or config.db_path(),
+        "source_sqlite_db": (args.sqlite_db or config.db_path()) if use_sqlite else None,
         "sqlite_only": args.sqlite_only,
         "table_count": len(tables),
-        "all_match": (not mismatches) if not args.sqlite_only else None,
-        "mismatched_tables": mismatches if not args.sqlite_only else None,
+        "all_match": (not mismatches) if (use_sqlite and not args.sqlite_only) else None,
+        "mismatched_tables": mismatches if (use_sqlite and not args.sqlite_only) else None,
         "tables": entries,
     }
 
@@ -256,8 +272,11 @@ def main() -> int:
         f.write("\n")
 
     elapsed = time.time() - t0
-    print(f"\nWrote {args.out} -- {len(tables)} tables, "
-          f"{'ALL MATCH' if not mismatches else f'{len(mismatches)} MISMATCH(ES)'}, "
+    if use_sqlite:
+        summary = 'ALL MATCH' if not mismatches else f'{len(mismatches)} MISMATCH(ES)'
+    else:
+        summary = 'PG-only'
+    print(f"\nWrote {args.out} -- {len(tables)} tables, {summary}, "
           f"{elapsed:.1f}s", file=sys.stderr)
     return 1 if mismatches else 0
 

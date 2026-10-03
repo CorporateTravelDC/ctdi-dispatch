@@ -25,6 +25,35 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE_SCRIPT = os.path.join(SKILL_DIR, "scripts", "save_dispatch_state.py")
 
 
+def _context_tokens_from_transcript(path, tail_bytes=512 * 1024):
+    """Current context occupancy from the transcript's last assistant usage
+    block. Tail-only read; returns 0 on any problem (the hook then stays
+    silent, exactly as before -- never blocks a turn)."""
+    if not path or not os.path.isfile(path):
+        return 0
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read().decode("utf-8", errors="replace")
+        last = None
+        for line in chunk.splitlines():
+            if '"usage"' not in line:
+                continue
+            try:
+                usage = (json.loads(line).get("message") or {}).get("usage")
+            except Exception:
+                continue
+            if isinstance(usage, dict) and "input_tokens" in usage:
+                last = usage
+        if not last:
+            return 0
+        return int(last.get("input_tokens", 0)) + int(last.get("cache_read_input_tokens", 0)) \
+            + int(last.get("cache_creation_input_tokens", 0))
+    except Exception:
+        return 0
+
+
 def main():
     # Read hook payload from stdin
     try:
@@ -41,6 +70,16 @@ def main():
 
     if total == 0:
         total = payload.get("session_context_tokens", 0)
+
+    # 2026-10-03: Claude Code's Stop payload carries NO usage block -- only
+    # session_id / transcript_path / stop_hook_active -- so both reads above
+    # yield 0 and this hook exited silently on every turn since 2026-08-16
+    # (last snapshot). The live context size is in the transcript JSONL:
+    # the most recent assistant message's usage, input + cache_read +
+    # cache_creation (output tokens are not context). Read only the tail --
+    # a long session's transcript is 100 MB+ and this runs every turn.
+    if total == 0:
+        total = _context_tokens_from_transcript(payload.get("transcript_path"))
 
     if total == 0:
         sys.exit(0)

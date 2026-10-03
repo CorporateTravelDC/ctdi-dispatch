@@ -73,7 +73,14 @@ PublishPort=100.x.x.x:8081:80
 PublishPort=30005:30005
 PublishPort=127.0.0.1:30003:30003
 Environment=OPENSKY_USERNAME=corporatetraveldc
-Environment=MLAT_USER=corporatetraveldc
+# 2026-10-03 (operator directive): all feeder/station names follow
+# CS-KDCA-{MODE}, matching the ids airframes.io registered for VDL/ACARS.
+# This is the site name shown by every MLAT/ADS-B aggregator in
+# ULTRAFEEDER_CONFIG (adsb.lol, adsb.fi, airplanes.live, ...). Renaming
+# registers a NEW site there -- stats/history restart under the new name.
+# Was corporatetraveldc. OPENSKY_USERNAME below is a login, not a name:
+# leave it.
+Environment=MLAT_USER=CS-KDCA-ADSB
 AutoUpdate=registry
 
 [Service]

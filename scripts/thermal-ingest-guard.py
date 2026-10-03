@@ -51,8 +51,26 @@ now a single-stage INFORMATIONAL-vs-LOCKDOWN split, not a two-tier
 escalation. 15-40 is logged only, never sheds anything (this covers the
 entire normal-to-busy range this box actually operates in, including
 heavy multi-agent work). >=40 -- roughly 10x a healthy 4-core baseline,
-not a marginal reading -- jumps straight to LOCKDOWN. Resume requires
-load1 < 15 (not the old 6.0), held for the same dwell.
+not a marginal reading -- jumps straight to LOCKDOWN.
+
+**Resume bar re-measured 2026-10-03 (incident).** The 2026-08-23 resume
+bar of 15 was itself set against a baseline that had since moved: the
+thermal-sample CSV (5-min samples, 2026-09-21 -> 2026-10-03, every
+ingest container up and healthy throughout) gives load1 p50 13.3 /
+p75 16.6 / p90 18.8 / p95 20.4 / max 40.2 over 14 days, daytime p50 13.0,
+and only 61% of samples below 15 -- the longest contiguous run below 15
+on 2026-10-03 was 45 minutes. One sample >= 40 in 14 days (the trip).
+That trip at 15:42 shed all six SWIM feeds, ingest-core, poller, pusher
+and runner, load fell straight back into its normal 17-26 band, and the
+guard could not restore because 15 is INSIDE healthy operation, not
+above it. Resume is now relative to the trip: load1 <
+LOCKDOWN * THERMAL_GUARD_RESUME_FRACTION (default 0.5 -> 20, which is
+the healthy p95: 94% of all samples qualify), held for the dwell, unless
+THERMAL_GUARD_RESUME_LOAD is set explicitly. "Clearly bad" (dwell reset)
+stays resume + RESUME_LOAD_HYSTERESIS (23). SERIAL_BRINGUP_LOAD_MAX's
+default moved 12 -> 18 (healthy p90) for the same reason: at 12 the
+serialized restore sat at its 300 s per-unit cap for nearly every unit
+at ordinary daytime load.
 
 **LOCKDOWN, redefined 2026-08-23 (operator directive): "shed everything
 in the stack, DDoS-lockdown style -- only localhost (web) survives."**
@@ -143,7 +161,8 @@ if the var is absent or unparsable):
   THERMAL_GUARD_RESUME_TEMP_C=65.0
   THERMAL_GUARD_LOAD_INFO_MIN=15.0
   THERMAL_GUARD_LOAD_LOCKDOWN=40.0
-  THERMAL_GUARD_RESUME_LOAD=15.0
+  THERMAL_GUARD_RESUME_FRACTION=0.5     (resume bar = LOCKDOWN * this, 2026-10-03)
+  THERMAL_GUARD_RESUME_LOAD=<unset>     (explicit absolute bar; overrides the fraction)
   THERMAL_GUARD_RESUME_DWELL_S=300
   THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C=1.0
   THERMAL_GUARD_RESUME_LOAD_HYSTERESIS=3.0
@@ -183,7 +202,7 @@ external shell primitive (feed_ctl -> ingest-feed-ctl.sh, _user_unit_ctl
 feed CLI and this guard identically. The dormant window above counts
 from the moment the LAST unit is up, not from when the restore began.
 These knobs are read from dispatch.env and passed through to the library:
-  SERIAL_BRINGUP_LOAD_MAX=12
+  SERIAL_BRINGUP_LOAD_MAX=18            (was 12; healthy p90, 2026-10-03)
   SERIAL_BRINGUP_MIN_WINDOW_S=60
   SERIAL_BRINGUP_MAX_WAIT_S=300
 """
@@ -604,7 +623,13 @@ def main():
     resume_temp = _float(cfg.get("THERMAL_GUARD_RESUME_TEMP_C"), 65.0)
     load_info_min = _float(cfg.get("THERMAL_GUARD_LOAD_INFO_MIN"), 15.0)
     load_lockdown = _float(cfg.get("THERMAL_GUARD_LOAD_LOCKDOWN"), 40.0)
-    resume_load = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD"), 15.0)
+    # 2026-10-03: resume is RELATIVE to the trip by default -- half the
+    # LOCKDOWN bar (20 at the default 40) -- and only an explicit
+    # THERMAL_GUARD_RESUME_LOAD in dispatch.env overrides it. The old fixed
+    # 15 sat below the median of healthy operation (see the threshold
+    # rationale in the module docstring), so a trip could not self-clear.
+    resume_fraction = _float(cfg.get("THERMAL_GUARD_RESUME_FRACTION"), 0.5)
+    resume_load = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD"), load_lockdown * resume_fraction)
     resume_dwell = _float(cfg.get("THERMAL_GUARD_RESUME_DWELL_S"), 300)
     resume_temp_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C"), 1.0)
     resume_load_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD_HYSTERESIS"), 3.0)

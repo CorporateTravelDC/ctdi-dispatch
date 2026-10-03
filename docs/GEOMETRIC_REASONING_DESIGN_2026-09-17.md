@@ -287,3 +287,80 @@ inside an implementation pass.
 
 All six are now settled. Ready to move to Phase 0 implementation on
 confirmation.
+
+---
+
+## AS-BUILT (2026-09-28)
+
+**The body above is the 2026-09-17 design proposal ("proposal, not
+implemented").** It is now SHIPPED. All four phases are LIVE and running against
+Postgres — Phase 2/3 are **not deferred**. This section records the as-built
+implementation and supersedes the "Status: proposal, not implemented" line at
+the top and the "Phasing" section's forward-looking framing.
+
+### Shipped functions — `src/second_brain/semantic/compile.py`
+
+The code labels its own phases in the function docstrings. Mapping (validated):
+
+| phase | function | relation / kind | tier |
+|---|---|---|---|
+| Phase 0 | `assign_geometry()` (`compile.py:881`) | `proximate_to` / `geometric` | plausible (single-instance) |
+| Phase 1 | `query_all_angles()` (`compile.py:1593`) | composite retrieval (all kinds, one call) | — |
+| Phase 2 | `assign_causal_associations()` (`compile.py:1050`) | `statistically_associated` / `causal` | provable (longitudinal) |
+| Phase 3 | `assign_clusters()` (`compile.py:1441`) | `member_of_cluster` / `cluster` | 3+ mutually-linked entities |
+
+- **`query_all_angles(entity)`** (`compile.py:1593`) is the "multi-angular,
+  simultaneous" fix from §5 — every relational `kind` for one vault note path in
+  ONE read over the same `semantic_note_derivations` table. Read-only. Returns
+  `{entity, computed_at, derivation, chronological, geometric{threshold_km,
+  threshold_min, candidates_evaluated, matches}, causal, cluster}`.
+- **`assign_causal_associations()`** (`compile.py:1050`) — Phase 2 provable
+  tier, aggregating Phase 0's per-instance `proximate_to` edges into
+  per-entity-pair statistical associations. Honest labelling ("associated," not
+  "causes") per the design.
+- **`assign_clusters()`** (`compile.py:1441`) — Phase 3, deterministic
+  connected-components over associations at/above chance (**lift ≥ 1.0**;
+  measured live 2026-09-22, 1,044 of 1,466 association edges sat at/below chance,
+  so including them collapsed everything into one mega-component —
+  `compile.py:1452-1460`). Tier preservation per §4: each cluster records
+  provable (lift ≥ 2.0) vs plausible (1.0 ≤ lift < 2.0) internal-edge counts +
+  median lift.
+
+### Live edge counts (Postgres `semantic_note_derivations`, 2026-09-28)
+
+Queried live via the app data path:
+
+| relation | kind | rows |
+|---|---|---|
+| `proximate_to` | `geometric` | 954,148 |
+| `preceded_by` | `chronological` | 52,291 |
+| `statistically_associated` | `causal` | **1,380** |
+| `member_of_cluster` | `cluster` | **56** |
+| `leans_on` | `evidenced` | 49 |
+| `derives_from` | `evidenced` | 41 |
+| `reutilizes` | `evidenced` | 37 |
+
+The non-zero `causal` (1,380) and `cluster` (56) counts confirm Phase 2 and
+Phase 3 are populated and live, not merely present as code.
+
+### Provenance and site-of-origin
+
+Site-of-origin marking landed on the graph tables ahead of Phase 2/3 via
+migration `0061_site_origin.sql` (`site_origin TEXT NOT NULL DEFAULT 'local'` on
+`semantic_note_derivations` and `semantic_note_instance_refs`) — added
+deliberately *before* the phases so a derived edge's origin site never needs
+backfilling once multiple sites contribute. See
+`docs/INTEGRITY_AND_MAINTENANCE_2026-09-28.md`.
+
+### Deltas from the design doc worth noting
+
+- **Derivation `kind` is `evidenced`, not `derivation`.** The design body (and
+  §1's table) call the existing derivation edges `kind='derivation'`; the live
+  table stores `kind='evidenced'` for `leans_on`/`derives_from`/`reutilizes`
+  (confirmed in `query_all_angles`' docstring "evidenced/chronological/geometric"
+  and in the live counts above). The relation names are unchanged.
+- **Phase 0 vs Phase 1 numbering:** in the code, `assign_geometry` is labelled
+  **Phase 0** (proximate_to backfill) and `query_all_angles` **Phase 1**
+  (composite retrieval) — matching this doc's Phasing section, not §1's summary
+  table order.
+

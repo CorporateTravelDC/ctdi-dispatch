@@ -1713,92 +1713,47 @@ def _check_flight_fids(entry: dict, ident: str) -> None:
     # apart, each sitting between unrelated fdps_status fires. Now compares
     # against its own dedicated last_fids_status column (SCHEMA_V23), same
     # pattern as oooi_phase / last_fdps_status.
-    last_status = entry.get("last_fids_status") or ""
-    if summary.lower() == last_status.lower():
+    # FIDS is ENRICHMENT ONLY -- gate + baggage assignment. It is NOT an OOOI
+    # source and MUST NEVER assert an OOOI phase (out/off/on/in). Operator
+    # directive 2026-09-27: MWAA's airport display is neither SWIM nor a
+    # network aggregator (the only sources the standing OOOI-authority rule
+    # admits), and it is known wrong on landed timing -- UAL2670 2026-07-27 and
+    # UAL599 2026-09-27 both showed "Landed"/early arrival while still airborne.
+    #
+    # The phase-promotion blocks that used to live here (FIDS "Landed"->on and
+    # "InGate"->in, guarded only by an ACARS cross-check that no-ops when ACARS
+    # has no coverage) were the false-early-landing bug. Root cause: an
+    # ADS-B-only-tracked flight holds no OOOI authority lock -- the airborne
+    # "off" is written by the lock-less plain update_watchlist_oooi_phase(), and
+    # no authoritative caller ever asserts "off" -- so tier-20 FIDS sailed
+    # through _oooi_authority_check's unlocked fall-through and asserted a
+    # landing at cruise. Removed entirely. OOOI belongs to
+    # SWIM/TBFM/TFMS/SMES/FDPS + network ADS-B/ACARS; FIDS informs gate and
+    # baggage and nothing else. A hard backstop deny for source=="fids" also
+    # sits in db._oooi_authority_check so this path cannot be reintroduced.
+    #
+    # Dedup and fire on the gate/baggage enrichment only, never on the arrival
+    # status: a status-only flip (-> "Landed"/"InGate") must produce no FIDS
+    # push, because that would be FIDS speaking to OOOI. last_fids_status is a
+    # private cache for this function (verified no other reader) and now holds
+    # the enrichment key, not the status-bearing summary. The arrival status is
+    # still carried in the event detail/summary as display context on a
+    # gate/baggage-triggered push, but never triggers one on its own.
+    gate = result.get("gate")
+    baggage = result.get("baggage")
+    enrich_key = f"gate={gate or '?'} baggage={baggage or '?'}"
+    if enrich_key == (entry.get("last_fids_status") or ""):
         return
-
-    # 2026-07-27 follow-up fix #2: MWAA's own FIDS display reported "Landed"
-    # for UAL2670 at 17:27z, well before the aircraft was actually at the
-    # gate (ADS-B-confirmed oooi_in didn't fire until 17:42z) -- a real
-    # quirk in the airport display system, not a bug in our polling. FIDS
-    # is not authoritative for "landed"; ADS-B-driven OOOI is. Suppress a
-    # landed-type FIDS claim until OOOI's own phase independently agrees the
-    # aircraft is in ("in") -- still cache the status (so it doesn't
-    # re-evaluate as "changed" every tick and doesn't emit a duplicate once
-    # OOOI does catch up), just don't push it standalone.
-    status_lower = (result.get("status") or "").lower()
-
-    # 2026-09-01: found live -- every flight tracked overnight (UAL347,
-    # UAL2136, DAL2962) got swept as "landed" 0-1 SECONDS after FIDS first
-    # reported "Landed", via this block promoting straight to "in". That's
-    # wrong on two counts: (1) "Landed" means wheels-down, not at-gate --
-    # _fids_confirms_phase's own _FIDS_STATUS_TO_PHASE map already has this
-    # right ("landed": "on", "ingate": "in"), this block just didn't match
-    # it; (2) it meant oooi_phase="on" was NEVER recorded for any flight
-    # that reached "in" via this FIDS path instead of the ADS-B/ACARS event
-    # pipeline in _check_flight_airplanes_live -- confirmed live: zero
-    # oooi_* events fired for any of the three flights all night, yet all
-    # three got auto_swept_landed (which reads oooi_phase=="in"). UAL347's
-    # own FIDS history shows genuine InGate arriving 10+ minutes AFTER
-    # Landed -- real taxi time this block was skipping straight over.
-    # Now promotes to "on" here; a separate branch below promotes to "in"
-    # only once FIDS itself reports the aircraft actually at the gate.
-    if "land" in status_lower and entry.get("oooi_phase") not in ("on", "in"):
-        # 2026-07-28: was gated on oooi_phase == "in" (ADS-B/OOOI agreement)
-        # -- but ADS-B is no longer a trusted independent source for landed
-        # confirmation (local DC-metro receiver coverage gaps were firing
-        # false-early "landed" pushes 15-20 min before actual arrival), so
-        # requiring it to have already agreed would make FIDS landed claims
-        # almost never fire. ACARS is the check-and-balance now instead:
-        # trust FIDS unless ACARS actively says otherwise.
-        acars_check = None
-        try:
-            acars_check = _acars_phase(ident, registration=entry.get("registration"))
-        except Exception as e:
-            log.debug("fids landed ACARS cross-check %s: %s", ident, e)
-        if acars_check and acars_check[0] not in ("on", "in"):
-            db.update_watchlist_fids_status(entry["id"], summary, now_iso)
-            log.debug("fids %s: suppressing landed claim -- ACARS shows phase=%s instead",
-                      ident, acars_check[0])
-            return
-        log.info("fids %s: landed claim accepted (FIDS-confirmed, ACARS phase=%s)",
-                  ident, acars_check[0] if acars_check else "unavailable")
-
-        # 2026-08-31 (operator directive): an accepted FIDS landed claim
-        # used to fire the notification above and stop there -- oooi_phase
-        # itself was never promoted, so a flight with no ADS-B/FDPS ground
-        # contact and no ACARS coverage for its terminal phase (confirmed
-        # live on UAL347: local ADS-B never had contact, FDPS's own last
-        # position update predated touchdown, ACARS had nothing at all)
-        # sat at oooi_phase=None forever even though FIDS -- independently
-        # cross-checked against ACARS just above -- knew it had landed.
-        # "fids" ranked lowest in _OOOI_SOURCE_PRIORITY (below adsb): any
-        # higher-confidence source's own claim on the same phase always
-        # wins if one ever arrives; this only fills the gap when nothing
-        # else ever does. The ACARS check-and-balance above is what makes
-        # this safe to promote, not just log -- same acceptance test as
-        # the notification, this just also acts on it.
-        db.update_watchlist_oooi_phase_authoritative(entry["id"], "on", "fids", now_iso)
-
-    # 2026-09-01: companion to the "on" promotion above -- FIDS reporting
-    # the aircraft genuinely at the gate (not just landed) is the actual
-    # "in" signal. No ACARS cross-check gate here the way "landed" has one:
-    # an InGate status is ground-ops-confirmed docking, not a raw ADS-B/
-    # receiver artifact, so it doesn't carry the same false-early-report
-    # risk that motivated the ACARS check-and-balance above.
-    elif "ingate" in status_lower.replace(" ", "") and entry.get("oooi_phase") != "in":
-        log.info("fids %s: in-gate claim accepted (FIDS-confirmed)", ident)
-        db.update_watchlist_oooi_phase_authoritative(entry["id"], "in", "fids", now_iso)
 
     from shared.watchlist import watchlist_event_hit
     watchlist_event_hit(
         entry["id"], summary,
         {"watchlist_trigger": "fids_update", "identifier": ident,
-         "airport": airport, "gate": result.get("gate"),
-         "baggage": result.get("baggage"), "status": result.get("status")},
+         "airport": airport, "gate": gate, "baggage": baggage,
+         "status": result.get("status")},
         priority=3,
     )
-    db.update_watchlist_fids_status(entry["id"], summary, now_iso)
+    db.update_watchlist_fids_status(entry["id"], enrich_key, now_iso)
 
 
 def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:

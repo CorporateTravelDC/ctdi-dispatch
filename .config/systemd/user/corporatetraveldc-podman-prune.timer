@@ -1,0 +1,21 @@
+[Unit]
+Description=Daily check for dangling podman images at 07:15 ET (prunes only images older than 24h, if >=5GB reclaimable or 7 days since last; nice/ionice-idle; skips if a build or prune is already running)
+# Deliberately NO self-referential Requires=/Wants= -- that starts the service
+# the instant this TIMER starts (every boot), independent of OnCalendar.
+# See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service binding is
+# implicit from the filename.
+
+[Timer]
+# 07:15 ET: after the 07:00 daily-opsplan and 07:05 ops-brief, before the
+# 07:35 ep-advance. I/O work at ionice idle class, so an overlap with the
+# hourly LLM jobs costs them nothing; the slot is about keeping the
+# schedule legible, not contention. The weekly floor also lands here on
+# whichever day it comes due -- Sunday's 04:15 external-image update is
+# the one job that reliably creates dangling images, and this runs after it.
+OnCalendar=*-*-* 07:15:00 America/New_York
+# A missed fire (box down at 07:15) runs on next boot instead of waiting a
+# day -- the script's own trigger logic decides whether anything is pruned.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

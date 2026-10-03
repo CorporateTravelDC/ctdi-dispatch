@@ -290,7 +290,7 @@ def upsert_feed(feed_name: str, fetched_at: float, error: str | None,
                 ON CONFLICT(feed_name) DO UPDATE SET
                     fetched_at=excluded.fetched_at,
                     error=excluded.error,
-                    consecutive_failures=consecutive_failures+1,
+                    consecutive_failures=feed_state.consecutive_failures+1,  -- table-qualified: bare name is ambiguous vs excluded on Postgres (1,595 AmbiguousColumn crashes in 14d from amtrak-tracker before 2026-10-03)
                     payload_hash=excluded.payload_hash
             """, (feed_name, fetched_at, error, payload_hash))
         else:
@@ -5776,8 +5776,12 @@ _OOOI_SOURCE_TIER = {
     # alongside SWIM (memory: OOOI SWIM authority). Off-box, multi-receiver.
     "acars": 30, "adsb": 30,
     # Tier 20 -- MWAA airport display. Not a sensor, not the aircraft's own
-    # report, and known wrong on exact timing (UAL2670 2026-07-27: "Landed"
-    # 15 min early). Usable, never decisive.
+    # report, and known wrong on timing (UAL2670 2026-07-27: "Landed" 15 min
+    # early; UAL599 2026-09-27: early arrival while at cruise). As of the
+    # 2026-09-27 directive FIDS is ENRICHMENT ONLY (gate/baggage) and is
+    # hard-denied from asserting any OOOI phase in _oooi_authority_check above;
+    # this tier entry is retained only for same-phase tie-break bookkeeping and
+    # is never reached for an assertive phase.
     "fids": 20,
     # Tier 10 -- LOCAL receivers. Single point of view, no redundancy, and
     # explicitly excluded from OOOI confirmation by standing rule. Reaches
@@ -5852,6 +5856,14 @@ def _oooi_authority_check(phase: str, source: str, lock: dict) -> tuple[bool, st
     were caught at all."""
     if phase not in _OOOI_ASSERTIVE_PHASES:
         return True, f"ungated phase={phase} src={source}"
+
+    # FIDS is never an OOOI authority (operator directive 2026-09-27): it is a
+    # gate/baggage enrichment source only. Belt-and-suspenders -- the sole
+    # caller that ever passed source="fids" (poller._check_flight_fids) has had
+    # its phase-promotion removed; deny here too so no future caller can
+    # reintroduce the false-early-landing path an airport display created.
+    if source == "fids":
+        return False, f"DENY fids: enrichment-only, never OOOI-authoritative (phase={phase})"
 
     tier = _OOOI_SOURCE_TIER.get(source, 0)
 

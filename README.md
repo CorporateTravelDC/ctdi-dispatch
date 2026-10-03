@@ -1,13 +1,19 @@
 # Corporate Travel Dispatch Intelligence (CTDI)
 
-**Documentation snapshot: 2026-08-23; reconciled 2026-09-03** — factual claims
-below were verified against the running system and current source (previous
-full verification 2026-08-11, partial reconciliation 2026-08-19). The
-2026-09-03 pass reconciled this file against
+**Documentation snapshot: 2026-09-28** (previously 2026-08-23, reconciled
+2026-09-03) — factual claims below were verified against the running system
+and current source (previous full verification 2026-08-11, partial
+reconciliation 2026-08-19). The 2026-09-03 pass reconciled this file against
 `docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md` (a fresh code-verified audit):
 the Ollama → llama.cpp cutover (2026-08-27), the runner-demo restore +
 `DEMO_MODE=true`, the thermal-guard trigger demotion (2026-08-27), and the
-2026-09-03 forward-only push-dedup redesign.
+2026-09-03 forward-only push-dedup redesign. **The 2026-09-28 pass folds in
+the two big changes since:** the **Postgres cutover** — the live write path is
+now Postgres (`DISPATCH_DB_BACKEND=postgres`), cutover 2026-09-18 with the
+reference, chat and demo tables following 09-19/09-20 (see
+`docs/POSTGRES_MIGRATION.md`); SQLite is now the rollback-only backend — and
+the **local model swap** phi3-mini → Qwen3-4B-Instruct-2507 (2026-09-21,
+commit `fe43973`).
 
 Multi-region real-time travel intelligence platform. Monitors commercial
 aviation (FAA SWIM push feeds plus REST fallbacks), rail, weather, and airspace
@@ -70,15 +76,16 @@ Active keys ship their pubkeys in-repo, named by full fingerprint.
 
 ---
 
-## Status (2026-08-23)
+## Status (2026-09-28)
 
 | Component | State |
 |---|---|
+| Database backend | **Postgres — live since the 2026-09-18 cutover.** `DISPATCH_DB_BACKEND=postgres` is set in `/etc/corporatetraveldc/dispatch.env`; the write path, the 11 reference tables, the second-brain vault index, the runner's `chat_messages`, and the demo snapshot/profile tables all live in `corporatetraveldc-pgsql` (unix socket `/var/run/postgresql`). Schema is versioned as **65 additive migrations** in `src/common/pg_schema/` (`0001`–`0065`). **SQLite is now rollback-only** — `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset, so the old `corporatetraveldc.db` WAL file holds nothing live. See `docs/POSTGRES_MIGRATION.md`. |
 | Ops dashboard (runner app) | **Tailnet-only.** `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx → :8001). The former public `ops.example.com` hostname was **retired 2026-08-02** and is hard-404'd by hostname in `src/runner/main.py` (`_RETIRED_HOSTNAMES`). |
-| Public demo (runner, demo-playback) | **UP — restored 2026-08-24, and `DEMO_MODE=true` is now set explicitly** (verified live 2026-09-03: unit `active (running)`, `NRestarts=0`, `:8005 /healthz` → `ok`, and the `dispatch-runner.example.com` vhost serves 200). The 2026-08-15→24 crash loop (`sqlite3.OperationalError` from the 2026-08-14 F6 mount change) was fixed by mounting a dedicated `/var/lib/corporatetraveldc-demo` state dir (commit `0a7f643`), and the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET`, so the password gate (`demo.profiles` sessions), signal sanitization, and ntfy suppression are armed — closing the "explicit either way" operator directive of 2026-08-20. |
+| Public demo (runner, demo-playback) | **UP — restored 2026-08-24, and `DEMO_MODE=true` is now set explicitly** (verified live 2026-09-03: unit `active (running)`, `NRestarts=0`, `:8005 /healthz` → `ok`, and the `dispatch-runner.example.com` vhost serves 200). The 2026-08-15→24 crash loop (`sqlite3.OperationalError` from the 2026-08-14 F6 mount change) was fixed by mounting a dedicated `/var/lib/corporatetraveldc-demo` state dir (commit `0a7f643 [SHA unverified 2026-09-28; likely f63ee17]`), and the Quadlet now sets `Environment=DEMO_MODE=true` + `DEMO_SESSION_SECRET`, so the password gate (`demo.profiles` sessions), signal sanitization, and ntfy suppression are armed — closing the "explicit either way" operator directive of 2026-08-20. |
 | Web API (browser / programmatic) | `https://dispatch.example.com` (Cloudflare Access gated; nginx stamps `X-CTDI-Public: 1`, which pins the request to Tier 0 regardless of token) |
 | Tailscale direct API | `http://100.x.x.x:8000` |
-| Public MCP (OpenAPI bridge) | **Retired 2026-08-18.** `mcpo`/`mcpo-public` units are gone (`systemctl --user list-units 'corporatetraveldc-mcpo*' --all` → 0 units); ports 8082/8083 refuse connections; the server checkout was renamed to `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The `mcp.example.com` nginx vhost still exists and proxies to the now-gone `:8083`, so the hostname currently returns **502** — removing that vhost is still pending. Restoring the bridge would mean un-archiving the checkout, reinstating the `mcpo`/`mcpo-public` Quadlets, and re-pointing the vhost. |
+| Public MCP (OpenAPI bridge) | **Retired 2026-08-18.** `mcpo`/`mcpo-public` units are gone (`systemctl --user list-units 'corporatetraveldc-mcpo*' --all` → 0 units); ports 8082/8083 refuse connections; the server checkout was renamed to `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The `mcp.example.com` nginx vhost still exists and proxies to the now-gone `:8083`, but the cloudflared ingress for it is `http_status:404`, so the hostname returns **404 at the tunnel edge** (corrected 2026-10-03; it never reaches nginx) — removing the dead vhost is still pending. Restoring the bridge would mean un-archiving the checkout, reinstating the `mcpo`/`mcpo-public` Quadlets, and re-pointing the vhost. |
 | FAA SWIM NMS push feeds | ✅ All 6 provisioned and credentialed (FDPS/STDDS/TFMS/TBFM/ITWS/FNS) — provisioned 2026-07-20, split into per-feed containers 2026-07-26. **Not continuously running by design:** `scripts/thermal-ingest-guard.py` sheds SWIM ingest containers under CPU-load/thermal pressure (see "SWIM feed liveness and thermal load-shedding"). |
 | Local LLM (llama.cpp) | **Ollama retired 2026-08-27.** Inference is one host-level `llama-server` (llama.cpp) systemd user unit — `corporatetraveldc-llama.service` (:8093, consolidated from separate hot/chat/report-1 tiers 2026-09-06) — serving one shared GGUF (Qwen3-4B-Instruct-2507 as of 2026-09-21); per-skill personas live in `src/common/personas.py`, not in per-skill Ollama models (see Local LLM section) |
 | ADS-B receive (UltraFeeder) | ✅ **Restored 2026-08-11** — the ADS-B RTL-SDR dongle had stopped enumerating on USB (~2026-08-10, container crash-looping; `adsb-feed-silence-watchdog` detected and alerted correctly); hardware reseat brought it back midday 2026-08-11 (dongle enumerates, container up, live decode confirmed). All other SDR containers (ACARS/VDL2 chain, feeders) up throughout. |
@@ -87,10 +94,17 @@ Active keys ship their pubkeys in-repo, named by full fingerprint.
 
 ## Architecture
 
-web, poller, pusher, and all 7 ingest containers share one database. The
-backend is selected by `DISPATCH_DB_BACKEND` in
-`/etc/corporatetraveldc/dispatch.env` — `sqlite` (single WAL file, dev/
-rollback) or `postgres` (live since the 2026-09-20 cutover); see
+web, poller, pusher, and all 7 ingest containers share one database, and that
+database is **Postgres**. The live backend is `corporatetraveldc-pgsql`,
+reached over the unix socket `/var/run/postgresql` from inside the containers
+(not a TCP host — see `docs/POSTGRES_MIGRATION.md` §3.1). Cutover completed
+**2026-09-18** (the reference, chat and demo tables followed 09-19/09-20), and
+the schema is carried as **65 additive migrations** in `src/common/pg_schema/`
+(`0001`–`0065`). The backend is selected by `DISPATCH_DB_BACKEND` in
+`/etc/corporatetraveldc/dispatch.env`, which is set to `postgres`; the only
+other value, `sqlite` (a single WAL file), is now the **rollback-only** path —
+`REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset, so the
+old `corporatetraveldc.db` file holds nothing live. See
 `docs/POSTGRES_MIGRATION.md` for which tables live where and for the
 cutover/rollback procedure. The runner mostly stays off the shared DB — it
 owns the ops frontend and its own JSON state — with one exception: its
@@ -138,7 +152,7 @@ shared `db.conn()` write path as everything else, since 2026-09-20:
 ### Auxiliary containers (same host)
 
 SDR/RF: `ultrafeeder` (ADS-B + tar1090, port 8080 — restored 2026-08-11, see
-Status), `acarsrouter` (:9080), `acarshub` (:9081), `dumpvdl2`,
+Status), `acarsrouter` (:9080; station ids pass through untouched since 2026-10-03 — `CS-KDCA-VDL` from `dumpvdl2`, `CS-KDCA-ACARS` for the disabled `acarsdec`, `CS-KDCA-ADSB` as ultrafeeder's `MLAT_USER`; airframes.io registered those names), `acarshub` (:9081), `dumpvdl2`,
 `acars-watcher` (UDP 5005), plus aggregator feeders `piaware`, `fr24feed`
 (:8754), `planefinder` (:30053), `airnavradar`. Disabled pending hardware:
 `acarsdec`, `dumphfdl`, `ais`/`ais-catcher`, `ais-watcher` — these exist only
@@ -274,7 +288,7 @@ out and REST polling resumes automatically.
 | API | `https://dispatch.example.com` | CF Access gated; served as Tier 0 (nginx sets `X-CTDI-Public: 1`) |
 | API (tailnet) | `http://100.x.x.x:8000` | Full tier resolution via bearer token |
 | Public demo | `https://dispatch-runner.example.com` | Live (restored 2026-08-24); password-gated (`DEMO_MODE=true` set in the Quadlet — see Status) |
-| ~~Public MCP bridge~~ | ~~`https://mcp.example.com`~~ | **Retired 2026-08-18** — mcpo/mcpo-public units removed, ports 8082/8083 refuse connections, server checkout archived at `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The nginx vhost still exists and proxies to the dead `:8083`, so the hostname returns **502**; vhost removal is still pending. |
+| ~~Public MCP bridge~~ | ~~`https://mcp.example.com`~~ | **Retired 2026-08-18** — mcpo/mcpo-public units removed, ports 8082/8083 refuse connections, server checkout archived at `/home/corporatetraveldc/mcp/dispatch-mcp.archived-20260817`. The nginx vhost still exists and proxies to the dead `:8083`, but the tunnel ingress is `http_status:404`, so the hostname returns **404 at the edge** (corrected 2026-10-03); vhost removal is still pending. |
 
 ### Tier 0 — Anonymous (selection)
 
@@ -407,7 +421,7 @@ Admin  → bearer token tier=admin (all /admin/* endpoints except one
 ```
 
 **One `/admin/*` endpoint is unauthenticated by design.**
-`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2373`)
+`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2601`)
 carries no auth dependency — Cloudflare strips `Authorization` through the
 tunnel, so a token-gated resolve link would be untappable from a phone off
 the tailnet. Security rests on the UUID4 request id plus single-use
@@ -503,7 +517,7 @@ retention on <500 MB). The demo-playback stack:
   promotion.
 - `corporatetraveldc-runner-demo.service` — second runner instance, port 8005,
   `DISPATCH_BASE_URL=http://100.x.x.x:8004`. **Restored 2026-08-24**
-  (dedicated `/var/lib/corporatetraveldc-demo` state mount, commit `0a7f643`)
+  (dedicated `/var/lib/corporatetraveldc-demo` state mount, commit `0a7f643 [SHA unverified 2026-09-28; likely f63ee17]`)
   and the Quadlet now sets **`DEMO_MODE=true` + `DEMO_SESSION_SECRET`**, so
   the app-layer protections below are active.
 - Public hostname: **`https://dispatch-runner.example.com`** —
@@ -583,8 +597,12 @@ bash build-images.sh
 # SYSTEM block against src/common/personas.py)
 bash build-models.sh
 
-# Install the llama.cpp host units (hot/chat permanent, report-1 on-demand)
-cp .config/systemd/user/corporatetraveldc-llama-*.{service,timer} ~/.config/systemd/user/
+# Install the llama.cpp host unit (2026-09-06: the hot/chat/report-1 tiers
+# were consolidated into ONE unit, corporatetraveldc-llama.service, serving a
+# single Qwen3-4B-Instruct-2507 GGUF on :8093; the `-llama-*` glob does NOT
+# match it -- name each explicitly or the model server never installs).
+cp .config/systemd/user/corporatetraveldc-llama.service ~/.config/systemd/user/
+cp .config/systemd/user/corporatetraveldc-llama-restart.{service,timer} ~/.config/systemd/user/
 
 # Install Quadlets
 cp .config/containers/systemd/*.container ~/.config/containers/systemd/
@@ -833,8 +851,8 @@ To request SWIM access for a new deployment see
 |---|---|
 | `/opt/corporatetraveldc/private/ctdi-dispatch-internal/` | This repo (`/opt/corporatetraveldc/ctdi-dispatch-internal` is a symlink to it) |
 | `src/` | All Python source |
-| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL), path set by `DISPATCH_DB`. Live since the 2026-09-20 cutover, everything runs on Postgres (`DISPATCH_DB_BACKEND=postgres`) — `REFERENCE_TABLES` in `src/common/db_backend.py` is now an empty frozenset, so this file holds nothing live at all. It survives as the `sqlite` rollback path's target and as an untouched backup — see `docs/POSTGRES_MIGRATION.md` |
-| `corporatetraveldc-pgsql` (Postgres, unix socket `/var/run/postgresql`) | Live database since the 2026-09-20 cutover — the 65-table write path, the 11 reference tables, the second-brain vault index, `dispatch-chat.db`'s `chat_messages`, and `demo.db`/`demo_access.db`'s `demo_snapshots`/`demo_profiles` — see `docs/POSTGRES_MIGRATION.md` |
+| `/var/lib/corporatetraveldc/corporatetraveldc.db` | SQLite database (WAL), path set by `DISPATCH_DB`. Since the 2026-09-18 cutover everything runs on Postgres (`DISPATCH_DB_BACKEND=postgres`) — `REFERENCE_TABLES` in `src/common/db_backend.py` is now an empty frozenset. The physical file no longer exists — it was removed after the cutover and its space reclaimed (confirmed absent 2026-09-28; see `docs/CODEBASE_REFERENCE_2026-09-28.md` §2). `sqlite` remains only as the rollback *backend* selector; there is no untouched on-disk backup at this path — see `docs/POSTGRES_MIGRATION.md` |
+| `corporatetraveldc-pgsql` (Postgres, unix socket `/var/run/postgresql`) | Live database since the 2026-09-18 cutover (reference/chat/demo tables followed 09-19/09-20) — the write path (65 migrations, `src/common/pg_schema/`), the 11 reference tables, the second-brain vault index, `dispatch-chat.db`'s `chat_messages`, and `demo.db`/`demo_access.db`'s `demo_snapshots`/`demo_profiles` — see `docs/POSTGRES_MIGRATION.md` |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret platform config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Credentials (mode 0600) |
 | `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 skill usage log |
@@ -843,6 +861,11 @@ To request SWIM access for a new deployment see
 | `/opt/corporatetraveldc/watchlists/` | Permanent watchlist **JSON** files |
 | `/var/lib/corporatetraveldc/user_rss_feeds.json` | Runner: user Intel Feed subscriptions |
 | `.config/containers/systemd/` (repo) → `~/.config/containers/systemd/` (live) | Quadlet unit files |
+| `/opt/corporatetraveldc/private/executivestandard-website/articles/` | Canonical source of every Executive Standard article (one `<slug>.md` each; 2026-10-03). `executive_standard_sync.py` reads it; `gated: true` / "members only" in frontmatter = hashes-only on the public transparency sibling |
+| `scripts/cf-dns-record.sh` | Upsert/delete one Cloudflare DNS record with the local management token (same post-incident pattern as `cf-service-token-*.sh`; `--show`/`--dry-run` are read-only). First use 2026-10-03: pointed `executivestandard.example.com` at Substack |
+| `scripts/gui-window.sh` | On-demand headless maintenance desktop (`Xvfb` + `i3` + loopback `x11vnc`, reached via `ssh -L` over Tailscale), bounded by an auto-teardown timer; teardown sweeps for leftovers. For GUI-only jobs such as pairing an agent's desktop app |
+| `scripts/scheduled-podman-prune.sh` + `corporatetraveldc-podman-prune.timer` | Daily 07:15 ET dangling-image prune (never `-a`, never anything younger than 24 h). `build-images.sh` tags the outgoing image `:previous` before each rebuild — rollback is `podman tag <svc>:previous <svc>:latest` + restart |
+| `systemd/retired-20261003/`, `nginx/conf.d/retired-20261003/` | Dead config retired 2026-10-03: duplicate Quadlets that had drifted from `.config/containers/systemd/`, and the public `executivestandard` vhost (hostname handed to Substack) |
 
 ---
 

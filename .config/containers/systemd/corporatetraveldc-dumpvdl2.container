@@ -29,7 +29,12 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # secrets set for nothing it actually uses.
 Environment=TZ=America/New_York
 Environment=RTL_SERIAL=ACARS0130
-Environment=FEED_ID=corporatetraveldc-kdca-vdl2
+# 2026-10-03: must equal the station id airframes.io registered for this
+# feed (its auto-generate-station feature produced CS-KDCA-VDL; the old
+# corporatetraveldc-kdca-vdl2 exceeded its length limit). The image passes
+# this straight through as dumpvdl2 --station-id, and acarsrouter now
+# forwards it unchanged (its station-name override was removed the same day).
+Environment=FEED_ID=CS-KDCA-VDL
 Environment=FREQUENCIES=136.650;136.800;136.900;136.925;136.975
 Environment=GAIN=40
 Environment=ZMQ_MODE=server

@@ -87,6 +87,18 @@ def test_vip_notam_false_for_routine_text():
     assert aim_parser._is_vip_notam("RUNWAY 01/19 CLOSED") is False
 
 
+def test_vip_notam_false_for_af1_af2_facility_identifiers():
+    # 2026-09-27 regression: AF1/AF2 taxiway/stand/ramp identifiers must not
+    # bleed into VIP detection (was substring-matched, routed to hot-alerts p5).
+    assert aim_parser._is_vip_notam("!DCA 09/123 DCA TWY AF1 CLSD") is False
+    assert aim_parser._is_vip_notam("!IAD 09/145 IAD ACFT STANDS AF1 THRU AF2 CLSD") is False
+
+
+def test_vip_notam_true_for_air_force_2_numeral():
+    # numeral form must still flag (added alongside the AF1/AF2 removal)
+    assert aim_parser._is_vip_notam("AIR FORCE 2 ARRIVAL IAD") is True
+
+
 # ── write_aim_notams storage gate ───────────────────────────────────────────
 
 def _base_notam(**overrides):

@@ -100,9 +100,12 @@ ingress:
   - hostname: www.example.com
     service: http://127.0.0.1:80
 
-  # executivestandard -- self-hosted "The Executive Standard" blog mirror,
-  # see nginx/conf.d/executivestandard.example.com.conf
-  - hostname: executivestandard.example.com
+  # members.executivestandard -- the Pi-hosted full edition of The Executive
+  # Standard (DB-gated, see executivestandard-website repo). The former public
+  # hostname executivestandard.example.com is Substack's custom
+  # domain since 2026-10-03 (DNS-only CNAME) and no longer reaches this box;
+  # its ingress was removed the same day.
+  - hostname: members.executivestandard.example.com
     service: http://127.0.0.1:80
 
   # catch-all

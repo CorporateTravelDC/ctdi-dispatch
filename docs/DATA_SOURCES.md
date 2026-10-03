@@ -20,6 +20,21 @@ container; airplanes.live is no longer queried programmatically (2026-08-27
 local-only rule); LADD data now arrives via a manual weekly CUI-handled
 import (`docs/LADD_CUI_HANDLING.md`).
 
+**Re-verified 2026-09-28, post-Postgres-cutover.** The live write path is now
+**Postgres** (`DISPATCH_DB_BACKEND=postgres`, cutover 2026-09-18; see
+`docs/POSTGRES_MIGRATION.md`), so every "confirmed via direct SQL against the
+`notams`/`nws_alerts`/`vessel_events` table" check below now means a `psql`
+query against the `corporatetraveldc` database
+(`psql -h /var/run/postgresql -U dispatch -d corporatetraveldc`, or from the
+bare host `psql -h 127.0.0.1 -p 5432`), **not** a `sqlite3` open of
+`corporatetraveldc.db` — that file is now the rollback-only backend and holds
+nothing live. The feed *inventory* and `/api/v1/feeds` semantics are unchanged
+by the cutover; only the SQL client changed. Two source additions this pass:
+**GTFS-RT (MARC + VRE commuter rail)** — dependency staged and endpoints
+verified, fetchers not yet built (see the new US-Sources entry) — and a
+dedicated **AIS / Vessel Feeds** section covering the local AIS-catcher receive
+path, which is **code-present but not deployed**.
+
 This document covers two distinct categories of source, and the distinction
 matters — an earlier version of this line claimed the document "covers every
 integrated data source", which read as if everything catalogued below were
@@ -84,7 +99,7 @@ Resource caps are weighted by real observed volume the night this was built: FDP
 
 **Preventive OOM-leak restart watchdog (scripts/scheduled-ingest-restart.sh):** previously scoped to the single monolithic ingest service; updated the same day to check and restart each of the seven containers independently (own cooldown per-container), so one container's threshold-triggered restart never touches the other six.
 
-**Parser status confirmed live, all 7 feeds (2026-08-02):** FDPS, STDDS, TFMS, TBFM, ITWS, and AIM/NOTAM parsers are all fully deployed and writing real data -- confirmed today via direct SQL against the notams table (4,836 rows, 267 distinct facilities, `last_seen_at` from minutes prior) and via `corporatetraveldc-ingest-notam`'s own logs showing continuous `aim: wrote N NOTAM(s)` activity. None of the 7 feeds are in a "partial" state as of tonight. (Re-checked 2026-08-23: `notams` now holds 5,419 rows across 307 distinct facilities — still growing, so the AIM/FNS path is genuinely live. Re-derive rather than trusting either figure.)
+**Parser status confirmed live, all 7 feeds (2026-08-02):** FDPS, STDDS, TFMS, TBFM, ITWS, and AIM/NOTAM parsers are all fully deployed and writing real data -- confirmed today via direct SQL against the notams table (4,836 rows, 267 distinct facilities, `last_seen_at` from minutes prior) and via `corporatetraveldc-ingest-notam`'s own logs showing continuous `aim: wrote N NOTAM(s)` activity. None of the 7 feeds are in a "partial" state as of tonight. (Re-checked 2026-08-23: `notams` now holds 5,419 rows across 307 distinct facilities — still growing, so the AIM/FNS path is genuinely live. Re-derive rather than trusting either figure.) **Note (2026-09-28):** these row counts were `sqlite3` reads at the time; the `notams` table now lives in **Postgres** (2026-09-18 cutover), so re-derive with `psql -h /var/run/postgresql -U dispatch -d corporatetraveldc -c "SELECT count(*), count(DISTINCT facility) FROM notams;"` — the AIM/FNS write path is unchanged, only the store moved.
 
 **Credential status (verified 2026-08-19):** all six SWIM feeds are
 provisioned and credentialed --
@@ -518,6 +533,59 @@ push-primary implementation as authoritative on paper.
 
 ---
 
+### MARC & VRE commuter rail (GTFS-Realtime)
+
+**Last verified:** 2026-09-23 (endpoints), 2026-09-28 (integration status)
+
+> **Integration status: dependency staged, endpoints verified, fetchers NOT
+> yet built.** This entry sits between the two categories at the top of this
+> file. Unlike a pure "researched" source it already has a real code
+> dependency — `gtfs-realtime-bindings>=1.0.0` is in `requirements.txt`
+> (added 2026-09-23, commit `37b68d5`, "train parity: … GTFS-RT deps"), the
+> upstream endpoints are captured and verified reachable, and the design is
+> committed (`docs/TRAIN_PARITY_DESIGN_2026-09-23.md` §5). But there is **no
+> fetcher yet**: no `src/poller/fetchers/marc.py` / `vre.py`, no entry in
+> `FETCH_SCHEDULE`, and no `/api/v1/feeds` row. Parity is **TARGET**, not
+> at-parity — the provider abstraction (`TRAIN_PROVIDERS=amtrak,marc,vre`)
+> lands first, then these fetchers slot in. Do not present MARC/VRE as live.
+
+**Why it exists:** MARC (88 watchlist entries) and VRE (32) are ~39% of the
+train watchlist and today have **no data source**. `api.amtraker.com` is
+Amtrak-only, and MARC/VRE train numbers *collide* with Amtrak's, so querying
+amtraker for them returns a different railroad's train entirely — the provider
+guard in `src/poller/main.py` deliberately refuses that lookup, which is why
+MARC/VRE rows currently carry no live status.
+
+**What it provides:** Real-time trip updates and vehicle positions (delay,
+position, next-stop ETA) for the Maryland MARC and Virginia VRE commuter rail
+systems, decoded from GTFS-Realtime protobuf, plus the matching static GTFS
+schedules. This is the rail analogue of the SWIM push feeds for aviation.
+
+**Endpoints (open, UNAUTHENTICATED — verified reachable 2026-09-23, refresh
+~30 s):**
+```
+MARC static   https://feeds.mta.maryland.gov/gtfs/marc                       (~193 KB zip)
+MARC RT       https://mdotmta-gtfs-rt.s3.amazonaws.com/MARC+RT/              (GTFS-RT v2.0 protobuf, tu/vp)
+VRE  static   https://gtfs.vre.org/containercdngtfsupload/google_transit.zip
+VRE  RT       https://gtfs.vre.org/containercdngtfsupload/TripUpdateFeed
+              https://gtfs.vre.org/containercdngtfsupload/VehiclePositionFeed
+```
+
+**API type:** GTFS-Realtime (protocol-buffer over HTTP) for the live feeds;
+static GTFS (zip of CSVs) for the schedule/station reference. Decoded with the
+`gtfs-realtime-bindings` reference binding from MobilityData (it pulls
+`protobuf` transitively — the single requirements line covers both).
+
+**Access:** No credentials, no registration, no signup portal. Both operators
+publish openly. **No email required.**
+
+**Credentials location:** None needed. Provider *routing* config (once the
+fetchers land) lives in `dispatch.env` under the `TRAIN_PROVIDER_ROUTES_MARC`
+/ `TRAIN_PROVIDER_ROUTES_VRE` keys described in
+`docs/TRAIN_PARITY_DESIGN_2026-09-23.md`, not in `dispatch-secrets.env`.
+
+---
+
 ## Integrated feed cadence & live state
 
 Added 2026-08-19. Two authorities, and they are different files — this table
@@ -821,7 +889,73 @@ Follow the FAA/UK CAA pattern above: what it provides, API type (bulk file vs. p
 
 ---
 
-### Kpler Maritime 2.0 (vessel/AIS tracking)
+## AIS / Vessel Feeds
+
+Vessel (AIS) tracking feeds the runner's AIS map view (`/api/ais/vessels`) and
+the MMSI-based vessel watchlist. It is architected as a three-tier fallback
+chain, mirroring how ADS-B works for aircraft: **local receiver hardware
+(tier 1) → Kpler Maritime 2.0 GraphQL (tier 2) → AISHub free cooperative
+(tier 3)**. The two data-API tiers (Kpler, AISHub/MarineTraffic) are
+documented immediately below. This top note covers the tier-1 **local receive
+path**, which is the piece that was previously undocumented here.
+
+### Local AIS-catcher receive (tier 1) — code present, NOT deployed
+
+> **Deployment status: CODE-PRESENT-NOT-DEPLOYED.** The receive path exists in
+> the repo but is **not running** on this box and cannot run without hardware
+> that is not installed. Unlike the ADS-B/UltraFeeder chain (live), the
+> vessel-side SDR stack is staged only. Do not present local AIS as a live
+> source.
+
+**What it provides:** Direct over-the-air AIS decode (161.975 / 162.025 MHz)
+from a dedicated marine-band SDR dongle — real-time MMSI, position, course,
+speed and vessel type for any ship in antenna range, with no third-party API
+and no per-message cost. The local analogue of the box's own UltraFeeder for
+aircraft.
+
+**What exists in code:**
+- `src/ais_watcher/ais_watcher.py` (+ `src/ais_watcher/Containerfile`) — a
+  UDP-listener service that reads AIS-catcher's JSON output stream and fires an
+  ntfy push (via the dispatch admin API) on any watched-MMSI match. MMSI watch
+  set from `AIS_STATIC_MMSI`; UDP listener on `AIS_UDP_PORT` (default 5006).
+- Quadlet units, all shipped **disabled**: `corporatetraveldc-ais.container.disabled`
+  (the AIS-catcher decoder itself, `ghcr.io/sdr-enthusiasts/docker-ais-catcher`),
+  `corporatetraveldc-ais-watcher.container.disabled`, and
+  `systemd/quadlets/corporatetraveldc-ais-catcher.container.disabled`. Every
+  one is a `*.container.disabled` file — none is installed under
+  `~/.config/containers/systemd/`, so there is **no systemd unit at all** for
+  the local AIS path (the same convention as the other disabled-pending-hardware
+  SDR services; see `docs/SDR_SERVICES.md`).
+
+**Why it isn't live:** it needs a dedicated AIS dongle on the marine band (the
+container descriptions mark this "FUTURE: dedicated AIS dongle"). The single
+RTL-SDR currently in the box serves the ADS-B chain. Enabling local AIS means
+adding hardware, then `mv`-ing the `.container.disabled` files to `.container`
+and installing them — not a config flip.
+
+**API type / credentials:** None — it is a local UDP JSON stream from
+AIS-catcher, no API and no credentials. Config is env-only
+(`AIS_STATIC_MMSI`, `AIS_UDP_HOST`, `AIS_UDP_PORT`, `AIS_UDP_BUFSIZE`).
+
+### AISHub cooperative (tier 3)
+
+**What it provides:** Free cooperative AIS network data, used as the lowest
+fallback tier for the vessel watchlist. The `_check_vessel_aishub` sweep in
+`src/poller/main.py` polls it every 300 s for watchlisted MMSIs and writes to
+the `vessel_events` table (now a Postgres table post-cutover).
+
+**Access / credentials:** Requires an AISHub member id in `AIS_AISHUB_ID`.
+**Currently unconfigured on this box** — `AIS_AISHUB_ID` is not set, so the
+sweep is inert and `vessel_events` has zero rows (confirmed via the analyzer's
+own zero-row reason string in `src/common/db.py`). AISHub membership is
+cooperative: you contribute a receiver's data to gain query access.
+```bash
+AIS_AISHUB_ID=
+```
+
+---
+
+### Kpler Maritime 2.0 (vessel/AIS tracking, tier 2)
 
 **Last verified:** 2026-07
 

@@ -34,6 +34,12 @@ this volume). Schedule: not yet wired to a timer -- run manually
 (`python3 src/poller/skills/executive_standard_sync.py`) until the
 operator wants it recurring.
 
+2026-10-02: every run also regenerates the private Substack-drafts feed
+(see regenerate_private_feed() / scripts/generate-private-feed.py in the
+executivestandard-website repo) as its last step -- a new or edited post
+is live on the public mirror AND queued as a Substack draft from one
+invocation, not two.
+
 Site directory (2026-08-31): lives at /var/www/executivestandard.example.com,
 same as example.com itself -- NOT under /var/lib/corporatetraveldc.
 That tree already carries a container_file_t SELinux default (for the
@@ -45,7 +51,9 @@ container_file_t from the parent on creation, needing a manual
 stock httpd_sys_content_t default, so nothing here ever needs relabeling.
 """
 import logging
+import os
 import re
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -89,6 +97,20 @@ _SUBSCRIBE_WIDGET_RE = re.compile(
 FEED_URL = "https://corporatetraveldc.substack.com/feed"
 SITE_DIR = Path("/var/www/executivestandard.example.com")
 _NS = {"content": "http://purl.org/rss/1.0/modules/content/"}
+
+# 2026-10-02 (operator directive): regenerate the private-feed-to-Substack-
+# drafts import as the last step of every sync, so a new article is live on
+# the public mirror AND queued as a Substack draft from the same run,
+# instead of requiring a second manual invocation. Lives in a separate repo
+# (executivestandard-website) with its own config.json (gitignored,
+# SECRET_RSS_TOKEN) -- this is the sovereign-skill pattern (see
+# scripts/generate-private-feed.py's own docstring for what the secret
+# feed actually does: Substack's Private-Mode RSS importer polls it and
+# lands items as drafts, never auto-published).
+PRIVATE_FEED_SCRIPT = Path("/opt/corporatetraveldc/private/executivestandard-website/scripts/generate-private-feed.py")
+PRIVATE_FEED_CONFIG = Path("/opt/corporatetraveldc/private/executivestandard-website/config.json")
+PRIVATE_FEED_BASE = os.environ.get("EXEC_STANDARD_FEED_BASE",
+                                   "https://members.executivestandard.example.com")
 
 
 def _slug_from_link(link: str) -> str:
@@ -151,7 +173,18 @@ def _markdown_to_html(md: str) -> str:
     return "\n".join(out)
 
 
-ORIGINALS_DIR = Path("/var/lib/corporatetraveldc/executive-standard-originals")
+# 2026-10-03: the canonical article sources moved INTO the executivestandard-
+# website repo (articles/<slug>.md -- tracked, manifest-covered, GPG clear-
+# signable, and the thing the public transparency sibling publishes from).
+# Until then they were split three ways: 7 Pi-native files under /var/lib,
+# 3 at that repo's root, and ~18 that existed only as built _md/ output
+# because Substack's feed had gone invite-only (HTTP 400), which silently
+# shrank a full sync to 7 posts and dropped 21 articles from index.html.
+# The old /var/lib dir was renamed *.migrated-20261003, not deleted.
+ORIGINALS_DIR = Path(os.environ.get(
+    "EXEC_STANDARD_ARTICLES_DIR",
+    "/opt/corporatetraveldc/private/executivestandard-website/articles",
+))
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
@@ -316,15 +349,55 @@ def build_site(posts: list[Post], site_dir: Path) -> None:
     log.info("executive-standard-sync: wrote %d posts + index to %s", len(posts_by_date), site_dir)
 
 
+def regenerate_private_feed() -> None:
+    """Rebuild the secret-token RSS feed Substack's Private-Mode importer
+    polls for drafts, from the _md/ files build_site() just wrote. Best-
+    effort: a failure here shouldn't make the overall sync (which already
+    published the public mirror) look like it failed."""
+    if not PRIVATE_FEED_SCRIPT.is_file():
+        log.warning("executive-standard-sync: private-feed generator not found at %s -- skipping", PRIVATE_FEED_SCRIPT)
+        return
+    if not PRIVATE_FEED_CONFIG.is_file():
+        log.warning("executive-standard-sync: private-feed config not found at %s -- skipping", PRIVATE_FEED_CONFIG)
+        return
+    try:
+        result = subprocess.run(
+            ["python3", str(PRIVATE_FEED_SCRIPT),
+             "--config", str(PRIVATE_FEED_CONFIG),
+             "--md", str(SITE_DIR / "_md"),
+             "--html", str(SITE_DIR),
+             "--out", str(SITE_DIR),
+             # 2026-10-03: executivestandard.example.com is being
+             # handed to Substack as its custom domain (DNS-only CNAME), so
+             # the Pi stops answering that hostname. The feed is served from
+             # the members host instead (ungated at its secret path, via the
+             # root-only executivestandard-rss-location.conf include), and
+             # its self-link / item links must say so or Substack's importer
+             # ends up fetching from Substack.
+             "--base", PRIVATE_FEED_BASE],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            log.info("executive-standard-sync: private feed regenerated -- %s", result.stdout.strip())
+        else:
+            log.warning("executive-standard-sync: private-feed generation failed (rc=%d): %s",
+                        result.returncode, result.stderr.strip())
+    except Exception:
+        log.exception("executive-standard-sync: private-feed generation raised")
+
+
 def main() -> None:
     try:
         posts = fetch_feed_posts()
         log.info("executive-standard-sync: fetched %d posts from feed", len(posts))
-    except Exception:
+    except Exception as e:
         # A Pi-native publish (see load_pi_native_posts) shouldn't be
-        # blocked by a transient Substack outage -- log and carry on with
-        # whatever's Pi-native only this run rather than crash.
-        log.exception("executive-standard-sync: feed fetch failed, continuing with Pi-native posts only")
+        # blocked by a Substack failure -- carry on with the canonical
+        # articles/ tree. 2026-10-03: Substack set the publication
+        # invite-only (feed returns HTTP 400 "This publication is
+        # invite-only"), so this now fails on EVERY run and Substack is no
+        # longer a source of anything -- a one-line warning, not a traceback.
+        log.warning("executive-standard-sync: Substack feed unavailable (%s) -- using articles/ only", e)
         posts = []
 
     apply_full_text_overrides(posts)
@@ -338,6 +411,14 @@ def main() -> None:
     posts = list(by_slug.values())
 
     build_site(posts, SITE_DIR)
+    regenerate_private_feed()
+    # SITE_DIR's container_file_t SELinux drift (see module docstring) still
+    # needs a manual `sudo restorecon -R` after a sync that touches new
+    # filenames -- not auto-run here since it needs root this script doesn't
+    # have. Surfaced loudly rather than silently left for someone to discover
+    # as a 403 later.
+    log.warning("executive-standard-sync: if nginx 403s on anything just written, run: "
+                "sudo restorecon -R %s", SITE_DIR)
 
 
 if __name__ == "__main__":

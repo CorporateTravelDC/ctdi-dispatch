@@ -1611,10 +1611,13 @@ def query_all_angles(entity: str, db_path: str | None = None) -> dict:
     Returns {"entity", "computed_at", "derivation": [...], "chronological":
     [...], "geometric": {"threshold_km", "threshold_min",
     "candidates_evaluated", "matches": [...]}, "causal": [...], "cluster":
-    [...]}. `causal`/`cluster` are always empty today -- Phase 2/3
-    (assign_causal_associations()/assign_clusters()) don't exist yet, so
-    there is nothing to query; this function does not special-case that,
-    it just naturally finds no kind='causal'/'cluster' rows and returns [].
+    [...]}. `causal` (kind='causal', relation='statistically_associated') and
+    `cluster` (kind='cluster', relation='member_of_cluster') are populated by
+    Phase 2 assign_causal_associations() and Phase 3 assign_clusters(), both
+    live since the 2026-09-22 geometric Phase 2+3 build. This function returns
+    their edges from Postgres for the entity (verified 2026-09-27: 1,380 causal
+    + 56 cluster edges graph-wide). It returns whatever kind='causal'/'cluster'
+    rows exist for the entity, which may legitimately be [] for one with none.
     `derivation` covers kind='evidenced' (a real authored ## Provenance
     line) -- named to match this table's OWN relation-family term, not
     assign_derivations()'s function name, since 'derivation' the noun is
