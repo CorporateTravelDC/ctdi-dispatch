@@ -33,8 +33,59 @@ wants to verify real send()/DB-path behavior mocks it itself as before
 overrides these defaults for the scope of its own `with`/fixture, exactly
 as it did before this file existed; none of the existing test suite was
 ever relying on reaching real production infrastructure.
+
+2026-10-03 -- SECOND REAL INCIDENT, same class: everything above only
+isolated the SQLite path. The platform cut over to Postgres on
+2026-09-19 (DISPATCH_DB_BACKEND=postgres in dispatch.env, which
+common.config loads into os.environ at import), and
+common.db_backend._pg_host() falls back from the missing
+/var/run/postgresql socket to 127.0.0.1 TCP for bare-host processes --
+so a pytest run with dispatch.env sourced connected straight to the
+live corporatetraveldc database. Confirmed: psycopg UniqueViolation on
+trigger_log_pkey, 115 InFailedSqlTransaction cascades from a shared
+poisoned connection, and a test-shaped contaminant row (trigger_log
+id='t1', 2026-09-20) left behind by an earlier run. The "102 pre-existing
+test failures" number was produced the same way. Two layers below:
+(1) DISPATCH_DB_BACKEND is forced to sqlite before common.config can
+load the env file (it only sets keys not already present) and again
+per-test; (2) a TRIPWIRE replaces every Postgres entry point in
+db_backend so anything that still reaches for a pool fails the test
+loudly instead of touching production.
 """
+import os
+
+# Layer 1a: must run before ANY `import common.config` in the test process.
+# config._load_env_file() only populates keys that are not already set, so
+# claiming this one first means dispatch.env's "postgres" never lands.
+os.environ["DISPATCH_DB_BACKEND"] = "sqlite"
+
 import pytest
+
+
+class ProductionDatabaseTripwire(RuntimeError):
+    """Raised when test code reaches a Postgres entry point. Tests run on
+    an isolated SQLite file ONLY; see the 2026-10-03 note in the module
+    docstring. If a test genuinely needs Postgres semantics, give it a
+    throwaway database and monkeypatch these entry points itself."""
+
+
+@pytest.fixture(autouse=True)
+def _force_sqlite_backend_and_trip_on_postgres(monkeypatch):
+    """Layer 1b + layer 2: pin the backend to sqlite for every test and
+    make any Postgres pool/connection attempt fail loudly."""
+    monkeypatch.setenv("DISPATCH_DB_BACKEND", "sqlite")
+    import common.db_backend as db_backend
+
+    def _trip(*_a, **_k):
+        raise ProductionDatabaseTripwire(
+            "test reached a Postgres entry point in common.db_backend -- the "
+            "suite runs on isolated SQLite only (tests/conftest.py, 2026-10-03)")
+
+    monkeypatch.setattr(db_backend, "backend", lambda: "sqlite")
+    for name in ("_build_pool", "_get_pool", "pg_conn", "_pg_conninfo"):
+        if hasattr(db_backend, name):
+            monkeypatch.setattr(db_backend, name, _trip)
+    monkeypatch.setattr(db_backend, "_pool", None, raising=False)
 
 
 @pytest.fixture(autouse=True)

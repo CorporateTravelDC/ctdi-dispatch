@@ -62,7 +62,14 @@
 #
 # ASCII only (repo convention). Safe under set -u; no set -e assumed.
 
-SERIAL_BRINGUP_LOAD_MAX=${SERIAL_BRINGUP_LOAD_MAX:-12}
+# 2026-10-03: default 12 -> 18. Measured healthy operation (thermal-sample
+# CSV, 14 days, full stack up) has load1 p50 13.3 / p90 18.8, so a gate of
+# 12 made nearly every unit wait out its full SERIAL_BRINGUP_MAX_WAIT_S cap
+# at ordinary daytime load (today's guard restore: 10 units x 300 s). 18 is
+# the healthy p90: it still holds a bring-up during a genuine storm (the
+# 2026-09-06 restart storm peaked at 40) and lets it proceed at baseline.
+# dispatch.env overrides as before.
+SERIAL_BRINGUP_LOAD_MAX=${SERIAL_BRINGUP_LOAD_MAX:-18}
 SERIAL_BRINGUP_MIN_WINDOW_S=${SERIAL_BRINGUP_MIN_WINDOW_S:-60}
 SERIAL_BRINGUP_MAX_WAIT_S=${SERIAL_BRINGUP_MAX_WAIT_S:-300}
 SERIAL_BRINGUP_SAMPLE_S=${SERIAL_BRINGUP_SAMPLE_S:-10}

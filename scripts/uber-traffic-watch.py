@@ -99,6 +99,23 @@ PIHOLE_DB = "/etc/pihole/pihole-FTL.db"
 GRAVITY_DB = "/etc/pihole/gravity.db"
 STATE_FILE = "/var/lib/corporatetraveldc/uber_traffic_watch_state.json"
 LOG_PREFIX = "uber-traffic-watch:"
+# 2026-10-03: alerts were renamed from "Uber Traffic Watch" to neutral "DNS
+# anomaly" wording (operator directive, backlog since 2026-09-24): the
+# operator saw the alert name Uber while the app was verifiably off. The
+# detector is unchanged -- it watches the driver phone's DNS for marker
+# re-resolutions and novel domains -- only its CLAIM about the source is.
+_HOSTNAME_RE = __import__("re").compile(r"^(?=.{1,253}$)([a-z0-9_-]+\.)+[a-z]{2,}$")
+# A two-label token whose "TLD" is a common file extension is a filename the
+# phone resolved (today's '20261003t011042z.md' -- .md is Moldova's ccTLD, so
+# the hostname regex alone passes it). Three-plus labels are left alone.
+_FILE_EXT_TLDS = {"md", "txt", "json", "pdf", "html", "htm", "csv", "log", "py", "sh",
+                  "xml", "yml", "yaml", "png", "jpg", "jpeg", "gif", "svg", "zip", "gz", "tar"}
+
+def _looks_like_hostname(token: str) -> bool:
+    if not _HOSTNAME_RE.match(token):
+        return False
+    labels = token.split(".")
+    return not (len(labels) == 2 and labels[-1] in _FILE_EXT_TLDS)
 
 # Reconnect markers: real-time dispatch/connectivity domains, not static
 # assets -- these fire specifically when the app is actively trying to
@@ -135,7 +152,12 @@ TRACKED_ANOMALY_ENDPOINTS = {
     "fpfcpn2u.uber.com": {"discovered": "2026-08-12", "kind": "cname-drift"},
     "ak04a6qc.uber.com": {"discovered": "2026-08-12", "kind": "cname-drift"},
     "lens.usercontent.google.com": {"discovered": "2026-08-29", "kind": "novel-in-burst"},
-    "rr1---sn-p5qs7nzr.gvt1.com": {"discovered": "2026-08-29", "kind": "novel-in-burst"},
+    # rr1---sn-p5qs7nzr.gvt1.com removed 2026-09-28: it is a rotating Google
+    # download-CDN edge node, not a stable anomaly endpoint -- blocking one
+    # node of a rotating edge accomplishes nothing and re-fires the denylist-
+    # gap nag forever once removed from Pi-hole. gvt1 fan-out is now handled
+    # by shape-based detection (host/cluster ratio) in the generalized
+    # endpoint-anomaly detector, not by pinning individual edge hosts.
 }
 
 # Pi-hole FTL status code for "blocked by an exact denylist entry" (as
@@ -375,7 +397,7 @@ def main():
             cfg,
             f"Tracked anomaly endpoint(s) not yet on the Pi-hole denylist: {missing}. "
             f"This script cannot add them itself (needs root). Run:\n{cmd}",
-            "Uber Traffic Watch -- denylist gap", priority=5,
+            "DNS anomaly watch -- denylist gap", priority=5,
         )
 
     first_run = not seen_domains
@@ -451,6 +473,12 @@ def main():
     novel_elsewhere = []
 
     for ts, domain in hits:
+        # 2026-10-03: Pi-hole's query log carries whatever a client asked
+        # for, hostname or not -- a vault note filename ('20261003t011042z.md')
+        # was logged as a 'new domain' today. A hostname has a dot and a
+        # TLD of 2+ letters; anything else is skipped for novelty purposes.
+        if not _looks_like_hostname(domain):
+            continue
         is_new_domain = domain not in seen_domains
         in_burst = any(abs(ts - wts) <= burst_window_s for wts, _ in reconnect_windows)
 
@@ -489,10 +517,11 @@ def main():
         )
         ntfy_alert(
             cfg,
-            f"Uber reconnect with non-standard routing: {anomalies}. "
-            f"Doesn't match Uber's known frontends-cloud/cn-neg CNAME family."
+            f"DNS burst from the driver phone with non-standard routing: {anomalies}. "
+            f"Does not match the app vendor's known frontends-cloud/cn-neg CNAME family -- "
+            f"source attribution is NOT established (seen firing with the app verifiably off)."
             f"{pattern_note}",
-            "Uber Traffic Watch -- ANOMALY", priority=5,
+            "DNS anomaly -- non-standard routing in a burst", priority=5,
         )
     if novel_in_burst:
         print(f"{LOG_PREFIX} new domain(s) during reconnect burst: {novel_in_burst}")
@@ -508,9 +537,10 @@ def main():
         )
         ntfy_alert(
             cfg,
-            f"New domain(s) never seen before from the driver phone, during "
-            f"an Uber reconnect burst: {novel_in_burst}{pattern_note}",
-            "Uber Traffic Watch -- new domain in burst", priority=4,
+            f"Domain(s) never seen before from the driver phone, during a DNS "
+            f"reconnect burst (marker domains re-resolved after a gap; the app that caused "
+            f"the burst is not established): {novel_in_burst}{pattern_note}",
+            "DNS anomaly -- new domain in burst", priority=4,
         )
     if novel_elsewhere:
         print(f"{LOG_PREFIX} new domain(s) outside any burst (informational): {novel_elsewhere}")

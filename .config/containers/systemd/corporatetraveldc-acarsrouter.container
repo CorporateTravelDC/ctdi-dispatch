@@ -24,10 +24,22 @@ Environment=AR_SERVE_ZMQ_ACARS=45550
 Environment=AR_SERVE_ZMQ_VDLM2=45555
 # Outbound feeds: acarsdrama + airframes.io + local watcher
 # VDL2: acarsdrama, airframes.io, local acars-watcher
-Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5555;corporatetraveldc-acars-watcher:5005
+# 2026-10-03: airframes.io VDL2 port is contested between its published
+# feeding docs (5552, dumpvdl2 JSON) and its own station auto-generator
+# text (5555). TEMPORARY DIAGNOSTIC, operator-directed: send to BOTH for a
+# few hours and keep whichever one the CS-KDCA-VDL dashboard shows traffic
+# on. Remove the loser the same day -- if both accept, airframes is
+# double-counting us until then. (ACARS 5550 was never in question.)
+Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5552;feed.airframes.io:5555;corporatetraveldc-acars-watcher:5005
 # ACARS: acarsdrama, airframes.io (acarsdec re-enable pending)
 Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550;feed.airframes.io:5550
-Environment=AR_OVERRIDE_STATION_NAME=corporatetraveldc-kdca-vdl2
+# 2026-10-03: AR_OVERRIDE_STATION_NAME REMOVED. It rewrote the station name
+# on every forwarded message (both protocols) to one value, which is wrong
+# now that airframes.io registered distinct stations per protocol
+# (CS-KDCA-VDL for dumpvdl2, CS-KDCA-ACARS for acarsdec). Each decoder sets
+# its own id (dumpvdl2 --station-id / acarsdec -i, both from FEED_ID in
+# their Quadlets) and the router forwards it untouched. Do not re-add a
+# single override here.
 Network=acars-net.network
 PublishPort=9080:9080
 AutoUpdate=registry

@@ -1,0 +1,10 @@
+[Unit]
+Description=Reclaim dangling podman images older than 24h (prune when >=5GB reclaimable or weekly; dangling only, never -a; :previous tags and anything under 24h kept for rollback)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scheduled-podman-prune.sh
+# A large first prune can run well past an hour (57 GB took ~1h on
+# 2026-10-03). Incremental runs are minutes. Don't let the default
+# start-timeout kill a legitimate long prune mid-unlink.
+TimeoutStartSec=3h

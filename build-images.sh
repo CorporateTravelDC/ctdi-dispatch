@@ -36,11 +36,24 @@ if command -v systemctl &>/dev/null && systemctl --user is-active --quiet corpor
     trap '"${SCRIPT_DIR}/scripts/maintenance-window-off.sh"' EXIT
 fi
 
+# 2026-10-03 (operator directive): keep a ready-to-go rollback. Before each
+# build, re-point :previous at the outgoing :latest. A tagged image is never
+# dangling, so scheduled-podman-prune.sh can't reclaim it no matter how old;
+# the build before THAT one loses its tag here and becomes prunable once it
+# is >24h old. Rollback = `podman tag <svc>:previous <svc>:latest` + restart.
+keep_previous() {
+    local tag="$1"
+    podman image exists "${tag}" 2>/dev/null || return 0
+    podman tag "${tag}" "${tag%:latest}:previous" 2>/dev/null \
+        || log "  WARNING: could not tag ${tag} as :previous (rollback for this one is by image ID only)"
+}
+
 for service in web poller pusher ingest amtrak-tracker; do
     cf="Containerfile.${service}"
     tag="localhost/corporatetraveldc-${service}:latest"
     [[ -f "${cf}" ]] || die "${cf} not found"
 
+    keep_previous "${tag}"
     log "Building ${tag}..."
     podman build \
         -f "${cf}" \
@@ -54,6 +67,7 @@ done
 
 log "All five core images built successfully."
 # -- dispatch-runner (multi-stage: Node 20 frontend + Python 3.13 backend) ---
+keep_previous "localhost/corporatetraveldc-runner:latest"
 log "Building localhost/corporatetraveldc-runner:latest..."
 if podman build \
     -f Containerfile.runner \
@@ -66,6 +80,11 @@ else
 fi
 log ""
 log "All images built successfully (including runner)."
+log "Previous builds kept as :previous for rollback. To roll one back:"
+log "  podman tag localhost/corporatetraveldc-<svc>:previous localhost/corporatetraveldc-<svc>:latest"
+log "  systemctl --user restart corporatetraveldc-<svc>"
+log "(Dangling layers older than 24h are reclaimed daily by corporatetraveldc-podman-prune.timer;"
+log " :previous is tagged, so it is never dangling and never pruned.)"
 
 log ""
 log "Next steps:"

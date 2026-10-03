@@ -137,7 +137,31 @@ if [[ "${signing_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${signing_fpr}" != "$
 fi
 
 if [[ $# -eq 0 ]]; then
-    # Collective mode: every entry in the manifest.
+    # Collective mode: every entry in the manifest -- AND, 2026-10-03,
+    # COVERAGE. `sha256sum -c` can only notice a *modified* file it already
+    # knows about; a file present in the tree and absent from the manifest
+    # (committed after the last signing pass, or dropped in by an attacker)
+    # passed clean. Demonstrated live 2026-09-23 (an unsigned
+    # docs/legacy/legacy-sqlite-schema.sql reached the public mirror through
+    # push-public.sh, which trusts this exit code) and again three times on
+    # 2026-10-03. The enumeration and exclusions below MIRROR
+    # scripts/sign-manifest.sh exactly -- change both together. Scoped mode
+    # (targets given) is untouched: container ExecStartPre gates verify only
+    # what they bake in and must not fail on an unrelated new file.
+    # Only possible inside a git work tree; a bare tarball install has no
+    # enumeration to compare against and keeps the old hash-only check.
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        uncovered="$(LC_ALL=C comm -23 \
+            <(git ls-files --cached --others --exclude-standard -z \
+                | grep -zvE "^(MANIFEST\.sha256(\..*)?|docs/LIVE_STATE_CHECK_[0-9-]+\.md|docs/CLAUDE_MD_DRIFT_REPORT\.md)\$" \
+                | tr '\0' '\n' | LC_ALL=C sort -u) \
+            <(sed -E 's/^[0-9a-f]{64}  //' "${MANIFEST}" | LC_ALL=C sort -u))"
+        if [[ -n "${uncovered}" ]]; then
+            echo "verify-manifest: INTEGRITY FAILURE -- $(printf '%s\n' "${uncovered}" | wc -l) file(s) present in the tree but NOT covered by the signed manifest (re-run scripts/sign-manifest.sh, or remove them):" >&2
+            printf '%s\n' "${uncovered}" | sed 's/^/  /' >&2
+            exit 1
+        fi
+    fi
     if sha256sum -c "${MANIFEST}" --quiet; then
         echo "verify-manifest: OK -- signature valid, all $(wc -l < "${MANIFEST}") files match."
         exit 0
