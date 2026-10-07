@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
+
 ## Supported versions
 
 One continuously deployed reference system; no versioned release branches.
@@ -39,6 +41,12 @@ SSH keys are a separate system (see `docs/BOARD_SIGNING.md`): each team account
 has its own ed25519 board/kill-order signing key, and humans hold a separate,
 passphrase-protected approval key (`~/.ssh/<account>_approver_ed25519`).
 
+## Deployment model: why the controls are shaped this way
+
+This platform began as a **single-operator deployment** and was then made ready for **multiple human and agent user accounts**. Each account has its own Unix identity, signing keys, liveness switch and scoped grants, and only a human's passphrase-protected approval key can approve anything. Those controls hold against every principal that is not the operator's own account.
+
+An agent running **as the human operator's own account** is a designed fallback from the single-operator origin. It is an **exception**: its safety rests on the operator's operational hygiene with their own account and their own agentic use case. The recommended rollout is a **confined, organizationally managed agent account**, or the agent gateway. Agents in personal accounts are **not recommended, and are not allowed as an organizational policy in a larger deployment**. Details: `docs/AGENT_TRUST_MODEL.md` §0.
+
 ## Integrity guarantees (what is enforced, and where)
 
 - **Signed whole-tree manifest.** `scripts/sign-manifest.sh` hashes every
@@ -70,10 +78,13 @@ passphrase-protected approval key (`~/.ssh/<account>_approver_ed25519`).
   lookup. Admin tokens can be narrowed to named actions
   (`auth_tokens.allowed_actions`, migration 0070). Admin calls, allowed and
   denied, are written to `audit_log` by `require_admin(action)`; on Postgres
-  that table is hash-chained (migration 0062). The chain is computed by a
+  that table is hash-chained (migration 0062). ~~The chain is computed by a
   database trigger and is not verified by any code, and signed approvals,
   console sign-ins, agent-gateway and reader-access events are recorded in
-  their own ordinary tables, not in `audit_log` (`docs/AGENT_TRUST_MODEL.md` §11).
+  their own ordinary tables, not in `audit_log`.~~ Since 2026-10-07 the
+  governance events (approvals, console, agent gateway, reader access) are in
+  the chain too, and the integrity sweep re-verifies the whole chain every
+  15 minutes (`docs/AGENT_TRUST_MODEL.md` §11).
 - **Human-in-the-loop approvals** are an SSH signature from a human approval
   key over the exact request (`scripts/approve.sh`, `src/common/governance.py`);
   a phone tap or link can only deny. What this does and does not bind, where

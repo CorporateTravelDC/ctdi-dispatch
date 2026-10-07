@@ -16,13 +16,18 @@ can't be directly bypassed" (operator, 2026-10-04). An approval is an SSH
 signature (namespace ``corporatetraveldc-approval``) over the canonical text
 of ONE request:
 
-    corporatetraveldc-approval v1
+    corporatetraveldc-approval v2
     id: <request id>
     action: allow|deny
     kind: <sudo|council|council-close|...>
     requester: <account or ->
     expires_at: <unix seconds, integer>
     command-sha256: <sha256 hex of the exact command / council spec>
+    pattern-sha256: <sha256 hex of the command pattern>
+    reason-sha256: <sha256 hex of the reasoning shown to the approver>
+
+SUPERSEDED 2026-10-07: v1 had no pattern or reason lines, so the reason the
+approver read was not part of what they signed (docs/AGENT_TRUST_MODEL.md).
 
 It verifies only against an ACTIVE row in ``approval_signers`` whose account
 is also an ACTIVE ``kind=human`` board signer (so the liveness switch revokes
@@ -170,16 +175,29 @@ def command_sha256(command: str) -> str:
 
 def approval_canonical(row: dict, action: str) -> bytes:
     """The exact bytes a human signs. Built from the stored row; the client
-    (scripts/approve.sh) rebuilds it from the command it DISPLAYED."""
+    (scripts/approve.sh) rebuilds it from the request it DISPLAYED. v2
+    (2026-10-07) also binds the command pattern and the reasoning text."""
     return "\n".join([
-        "corporatetraveldc-approval v1",
+        "corporatetraveldc-approval v2",
         f"id: {row['id']}",
         f"action: {action}",
         f"kind: {row.get('kind') or 'sudo'}",
         f"requester: {row.get('requester') or '-'}",
         f"expires_at: {int(row['expires_at'])}",
         f"command-sha256: {command_sha256(row['command'])}",
+        f"pattern-sha256: {command_sha256(row.get('command_pattern') or '')}",
+        f"reason-sha256: {command_sha256(row.get('reasoning') or '')}",
     ]).encode("utf-8")
+
+
+# 2026-10-07: upper bound on how long any request can wait for a signature,
+# per kind. A caller may ask for less, never more -- a pending request must
+# not become latent authority (docs/AGENT_TRUST_MODEL.md, invariant 2).
+MAX_TTL_S = {
+    "sudo": 600, "console-login": 600, "connector-link": 900, "gateway-thaw": 3600,
+    "connector-hold": 24 * 3600, "council": COUNCIL_APPROVAL_TTL_S, "council-close": COUNCIL_APPROVAL_TTL_S,
+}
+DEFAULT_MAX_TTL_S = 600
 
 
 def create_approval(command_pattern: str, command: str, *, kind: str = "sudo", requester: str | None = None,
@@ -188,12 +206,28 @@ def create_approval(command_pattern: str, command: str, *, kind: str = "sudo", r
     the one-time tap keys; only the DENY key is still useful)."""
     if kind not in APPROVAL_KINDS:
         raise GovernanceError(400, f"kind must be one of {APPROVAL_KINDS}")
+    cap = MAX_TTL_S.get(kind, DEFAULT_MAX_TTL_S)
+    if not (0 < float(ttl_seconds) <= cap):
+        raise GovernanceError(400, f"ttl_seconds for kind {kind} must be in (0, {cap}]")
     _ensure_approvals()
     rid = str(uuid.uuid4())
     res = db.create_approval_request(rid, command_pattern, command, reasoning=reasoning, ttl_seconds=ttl_seconds)
     with db.conn() as c:
         c.execute("UPDATE approval_requests SET kind = ?, requester = ? WHERE id = ?", (kind, requester, rid))
+    audit("approval.requested", {"id": rid, "kind": kind, "requester": requester, "pattern": command_pattern,
+                                 "command_sha256": command_sha256(command), "ttl_s": float(ttl_seconds)})
     return res
+
+
+def audit(action: str, detail: dict) -> None:
+    """Governance events into the hash-chained audit_log (2026-10-07). Never
+    raises: an audit write failing must not change an authorization result,
+    and it is logged instead."""
+    try:
+        db.audit(action, "governance", None, None, detail)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception("audit write failed for %s", action)
 
 
 def approval_view(request_id: str) -> dict | None:
@@ -260,6 +294,8 @@ def resolve_signed(request_id: str, action: str, signer: str, signature_b64: str
         if (cur.rowcount or 0) != 1:
             raise GovernanceError(409, "request was resolved concurrently")
     row.update(status=status, resolved_at=now, resolved_by=signer)
+    audit("approval.resolved", {"id": request_id, "kind": row.get("kind") or "sudo", "status": status,
+                                "signer": signer, "via": "signature", "requester": row.get("requester")})
     _on_resolved(row)
     return approval_view(request_id)
 

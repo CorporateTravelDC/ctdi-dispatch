@@ -58,7 +58,22 @@ PATTERN="$1"
 REASON="$2"
 shift 3
 CMD=("$@")
+# 2026-10-07: a privileged (sudo) command is no longer run by this wrapper. It
+# is executed by the root-owned approved-exec.py, which re-verifies the human
+# signature against a root-owned pin, checks the root allowlist and runs the
+# SIGNED command at most once (docs/AGENT_TRUST_MODEL.md §9.1). The request
+# stores the command without sudo and with an absolute path, exactly as the
+# executor will run it.
+APPROVED_EXEC=/usr/local/libexec/ctdc/approved-exec.py
+PRIVILEGED=0
+if [[ "${CMD[0]}" == "sudo" ]]; then
+    PRIVILEGED=1
+    CMD=("${CMD[@]:1}")
+    while [[ "${CMD[0]:-}" == -* ]]; do CMD=("${CMD[@]:1}"); done
+    [[ "${CMD[0]:-}" == /* ]] || CMD[0]="$(command -v -- "${CMD[0]}")"
+fi
 CMD_STR="$(printf '%q ' "${CMD[@]}")"
+CMD_STR="${CMD_STR% }"
 
 if [[ -n "${APPROVAL_GATE_PRIORITY:-}" ]]; then
     GATE_PRIORITY="$APPROVAL_GATE_PRIORITY"
@@ -158,8 +173,13 @@ while (( ELAPSED < TTL_SECONDS + 10 )); do
         -H @<(auth_hdr "$ADMIN_TOKEN"))
     STATUS=$(json_field "$STATUS_RESP" status)
     if [[ "$STATUS" == "allowed" ]]; then
-        echo "[approval-gate] ALLOWED -- running: ${CMD_STR}"
-        "${CMD[@]}"
+        if (( PRIVILEGED )); then
+            echo "[approval-gate] ALLOWED -- root executor runs the signed command: ${CMD_STR}"
+            sudo -n "${APPROVED_EXEC}" "${REQUEST_ID}"
+        else
+            echo "[approval-gate] ALLOWED -- running: ${CMD_STR}"
+            "${CMD[@]}"
+        fi
         EXIT_CODE=$?
         COUNT_RESP=$(curl -s "${BASE_URL}/admin/approval-requests?command_pattern=${PATTERN}" \
             -H @<(auth_hdr "$ADMIN_TOKEN"))

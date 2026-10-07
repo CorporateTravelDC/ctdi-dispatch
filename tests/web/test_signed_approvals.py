@@ -325,3 +325,48 @@ def test_signed_resolution_is_single_use(team):
             _approve(team, rid, action)
         assert e.value.status == 409
     assert db.get_approval_request(rid)["status"] == "allowed"
+
+
+# -- hardening 2026-10-07 --------------------------------------------------------
+
+def test_ttl_is_capped_per_kind(team):
+    with pytest.raises(gov.GovernanceError) as e:
+        gov.create_approval("p", "echo hi", kind="sudo", requester="agent-a", ttl_seconds=601)
+    assert e.value.status == 400
+    with pytest.raises(gov.GovernanceError):
+        gov.create_approval("p", "echo hi", kind="sudo", requester="agent-a", ttl_seconds=0)
+    assert gov.create_approval("p", "echo hi", kind="sudo", requester="agent-a", ttl_seconds=600)["id"]
+
+
+def test_canonical_v2_binds_pattern_and_reason(team):
+    rid = gov.create_approval("dnf-remove", "sudo dnf remove foo", requester="agent-a", reasoning="clean up foo")["id"]
+    with db.conn() as c:
+        full = dict(c.execute("SELECT * FROM approval_requests WHERE id = ?", (rid,)).fetchone())
+    text = gov.approval_canonical(full, "allow").decode()
+    assert text.startswith("corporatetraveldc-approval v2\n")
+    sig = bs.sign_with_ssh_keygen(team["op-approver"][0], gov.approval_canonical(full, "allow"), gov.NAMESPACE_APPROVAL)
+    with db.conn() as c:                                   # the reason is changed after the human read it
+        c.execute("UPDATE approval_requests SET reasoning = ? WHERE id = ?", ("something else", rid))
+    with pytest.raises(gov.GovernanceError) as e:
+        gov.resolve_signed(rid, "allow", "op", sig)
+    assert e.value.status == 403
+
+
+def test_admin_route_binds_the_token_label_as_requester(team):
+    req = SimpleNamespace(state=SimpleNamespace(token_label="sudo-gate"))
+    body = web_main.ApprovalRequestCreate(command_pattern="p", command="echo hi")
+    r = asyncio.run(web_main.create_approval_request_route(body, req, tier=None))
+    rid = json.loads(r.body)["id"]
+    assert db.get_approval_request(rid)["requester"] == "token:sudo-gate"
+    long_body = web_main.ApprovalRequestCreate(command_pattern="p", command="echo hi", ttl_seconds=86400)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(web_main.create_approval_request_route(long_body, req, tier=None))
+    assert e.value.status_code == 400
+
+
+def test_governance_events_reach_the_audit_log(team):
+    rid = gov.create_approval("p", "echo hi", requester="agent-a")["id"]
+    _approve(team, rid)
+    with db.conn() as c:
+        acts = [r[0] for r in c.execute("SELECT action FROM audit_log WHERE detail LIKE ?", (f"%{rid}%",))]
+    assert "approval.requested" in acts and "approval.resolved" in acts

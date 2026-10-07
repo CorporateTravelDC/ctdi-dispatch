@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
+
 The Corporate Travel Dispatch Intelligence (CTDI) platform runs on the
 operator's own hardware (one Raspberry Pi 5, Fedora, rootless Podman). By
 default no operational data goes to a third-party cloud service and every
@@ -47,13 +49,17 @@ identity surfaces an assessor should know about: the **agent gateway**
 
 ---
 
+### Deployment model (2026-10-07)
+
+The platform began as a single-operator deployment and was made ready for multiple human and agent accounts: separate Unix identities, per-account signing keys, liveness switching, scoped grants, and approvals that only a human approval key can satisfy. An agent running **as the operator's own account** is a designed fallback and an **exception**. It rests on the operator's operational hygiene. For an organization, the recommended rollout is a confined, organizationally managed agent account (or the agent gateway), and personal-account agents are **not allowed** as policy. See `docs/AGENT_TRUST_MODEL.md` §0.
+
 ## 2. Data sovereignty & isolation
 
 | Data | Processing location | External egress | Storage |
 | :--- | :--- | :--- | :--- |
 | Operational feeds (weather, TFR, NOTAM, ATCSCC, Amtrak, ADS-B/ASDE-X, runsheet) | Rootless Podman containers | Read-only pulls from government/public sources | Local Postgres (primary since the 2026-09-20 cutover); SQLite remains for some paths and the demo |
 | LLM inference | One native llama.cpp server, user unit `corporatetraveldc-llama.service`, bound to the tailnet IP `100.x.x.x:8093` only (`ss -ltn`) | None | Ephemeral |
-| Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres (trigger-computed; no code verifies the chain; governance, console, gateway and reader events are outside it -- `docs/AGENT_TRUST_MODEL.md` §11); past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
+| Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres (trigger-computed; ~~no code verifies the chain; governance, console, gateway and reader events are outside it~~ verified every 15 min by the integrity sweep, governance events included since 2026-10-07 -- `docs/AGENT_TRUST_MODEL.md` §11); past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
 | Public demo | `corporatetraveldc-runner-demo` (:8005) + `demo-api`, reading a separate SQLite file | Public vhost `dispatch-runner.example.com` (200 on 2026-10-06); app-layer password gate active (`Environment=DEMO_MODE=true` in the quadlet, `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`) | `/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount |
 
 **Demo/production isolation.** The demo reads only
@@ -144,6 +150,7 @@ not checked against the remote.]
 | Board tokens | `board_refresh`, `board_mint_read_token`, `board_revoke_token`, `board_revoke_all_for_account` | `src/common/db.py` |
 | Guardrails | `SR1_ALLOWED`, `SR1_INTERCEPT`, `SR2_ROUTE`, `SR2_BLOCK` | `src/common/guardrails.py` |
 | Session grants / agent manifest signing | `session_grant_created`, `session_grant_revoked`, `agent_sign_manifest` | `src/common/db.py`, `scripts/sign-manifest.sh` |
+| Governance (since 2026-10-07) | `approval.requested`, `approval.resolved` (signature or deny link), `approval.expired`; `console.login`, `console.logout`, `console.action`; `agent.link.approved`, `agent.link.revoked`, `agent.connector.disabled/enabled`, `gateway.killed`, `gateway.reopened`; `reader.*` | `src/common/governance.py` (`audit`), `src/common/db.py` (`_audit_quiet`), `src/web/routes/console.py`, `src/common/agent_gateway.py`, `src/common/es_invites.py` -- written after the state change commits, never able to change an authorization result |
 
 The full admin action-name list: `admin.{healthz, feeds.list, audit.list,
 tokens.list, version, triggers.list, feed.refresh, cps.force_recompute,
@@ -161,8 +168,10 @@ feed.silence}`, `vault.remember`.
 
 ### What does not write `audit_log` (evidence lives elsewhere)
 
-The Wave 2 and 2026-10-05 governance surfaces keep their own evidence rows and
-are **not** in the hash chain:
+~~The Wave 2 and 2026-10-05 governance surfaces keep their own evidence rows and
+are **not** in the hash chain:~~ Since 2026-10-07 the governance **events** are
+in the chain (table above); the surfaces below still keep their own **state**
+rows, which are ordinary mutable tables, not chained:
 
 | Surface | Evidence | Table / file |
 |---|---|---|
@@ -193,9 +202,17 @@ are **not** in the hash chain:
   on 2026-10-06. Rows have existed only since 2026-08-16, so the horizon has
   not been reached and the signing path has not yet archived production rows
   [inferred from the dates; UNVERIFIED by query].
-- **No chain verifier exists in the repo** (no script or test reads
+- ~~**No chain verifier exists in the repo** (no script or test reads
   `row_hash` back). Until one exists the chain is evidence that can be
-  checked, not a check that runs.
+  checked, not a check that runs.~~ **Verified since 2026-10-07:**
+  `src/common/audit_chain.py` recomputes each chained row in SQL with the
+  trigger's exact expression and checks every link;
+  `scripts/scheduled-integrity-sweep.sh` runs it every 15 min, pushes p5 on a
+  mismatch or broken link, and journals the head hash (an anchor outside the
+  database). First run: 419 chained rows intact; 12,250 rows predate the
+  trigger. A writer able to recompute the whole chain is still caught only
+  against an external anchor (journaled heads now; signed checkpoints planned)
+  -- `docs/AGENT_TRUST_MODEL.md` §11.
 
 ### The access log
 

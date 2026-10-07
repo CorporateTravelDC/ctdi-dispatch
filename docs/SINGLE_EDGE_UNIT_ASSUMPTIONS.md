@@ -2,6 +2,8 @@
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
 
+> Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
+
 **Read this before changing, or carrying forward, any resource guardrail,
 timeout or scheduling weight in this stack.**
 

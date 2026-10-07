@@ -2778,15 +2778,21 @@ class ApprovalRequestCreate(BaseModel):
 @app.post("/admin/approval-requests", status_code=201)
 async def create_approval_request_route(
     body: ApprovalRequestCreate,
+    request: Request,
     tier: Tier = Depends(require_admin("admin.approval_request.create")),
 ) -> JSONResponse:
     from common import governance as _gov
-    # requester: whoever holds the admin token is an automation (the gate is
-    # run by agents/scripts), never the human who approves -- so the human
-    # approver is never refused as "the requester".
-    result = _gov.create_approval(body.command_pattern, body.command, kind="sudo",
-                                  requester="admin-token", reasoning=body.reasoning,
-                                  ttl_seconds=body.ttl_seconds)
+    # requester: the authenticated token's label (2026-10-07; was the literal
+    # "admin-token"). It is signed into the request, so the approver sees --
+    # and signs -- which automation asked. TTL is capped per kind by
+    # governance.create_approval (sudo: 600 s).
+    requester = "token:" + str(getattr(request.state, "token_label", None) or "unlabelled")[:120]
+    try:
+        result = _gov.create_approval(body.command_pattern, body.command, kind="sudo",
+                                      requester=requester, reasoning=body.reasoning,
+                                      ttl_seconds=body.ttl_seconds)
+    except _gov.GovernanceError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     return JSONResponse(result, status_code=201)
 
 

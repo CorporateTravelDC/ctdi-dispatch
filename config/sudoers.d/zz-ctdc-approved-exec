@@ -1,0 +1,19 @@
+# /etc/sudoers.d/zz-ctdc-approved-exec -- tracked copy: config/sudoers.d/zz-ctdc-approved-exec
+# 2026-10-07 (docs/AGENT_TRUST_MODEL.md §9.1, docs/SUDO_JUSTIFICATION_PROPOSAL.md).
+#
+# sudoers applies the LAST matching entry. This file sorts last, so for the
+# commands below it overrides the older NOPASSWD grants in other fragments
+# (left untouched) and requires the operator's password. The approval-gated
+# root commands are reachable without a password ONLY through the root-owned
+# executor, which re-verifies the human's approval signature against a
+# root-owned pin before it runs anything.
+# Remove this file to revert.
+
+corporatetraveldc ALL=(root) PASSWD: /usr/bin/dnf remove *, /usr/bin/dnf autoremove, \
+    /usr/bin/semanage port -a *, /usr/sbin/semanage port -a *, \
+    /usr/bin/systemctl start ollama.service, /usr/bin/systemctl stop ollama.service, \
+    /usr/bin/systemctl restart ollama.service, /usr/bin/systemctl kill --signal\=SIGKILL ollama.service, \
+    /usr/bin/systemctl start ollama-governor.service, /usr/bin/systemctl stop ollama-governor.service, \
+    /usr/bin/systemctl restart ollama-governor.service
+
+corporatetraveldc ALL=(root) NOPASSWD: /usr/local/libexec/ctdc/approved-exec.py

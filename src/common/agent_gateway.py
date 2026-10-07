@@ -113,6 +113,7 @@ def connector_set_disabled(slug: str, disabled: bool) -> int:
     if disabled:
         for r in _q("SELECT id FROM agent_connections WHERE slug = ? AND status != 'revoked'", (slug,)):
             revoke_connection(r["id"], "connector disabled by operator")
+    governance.audit("agent.connector.disabled" if disabled else "agent.connector.enabled", {"connector": slug})
     return _q("UPDATE agent_connectors SET disabled_at = ? WHERE slug = ?", (time.time() if disabled else None, slug))
 
 
@@ -147,6 +148,7 @@ def kill_all(actor: str, reason: str = "gateway kill-all") -> int:
     for r in rows:
         revoke_connection(r["id"], reason)
     _q("UPDATE agent_connectors SET disabled_at = ? WHERE disabled_at IS NULL", (time.time(),))
+    governance.audit("gateway.killed", {"actor": actor, "connections_revoked": len(rows), "reason": reason[:200]})
     _notify("agent gateway KILLED", f"{actor}: {len(rows)} connection(s) revoked, every connector disabled, gateway frozen.")
     return len(rows)
 
@@ -378,6 +380,8 @@ def exchange_code(code: str, client_id: str, redirect_uri: str, verifier: str, n
     cid = "cx_" + uuid.uuid4().hex[:16]
     _q("INSERT INTO agent_connections (id, slug, account, client_id, status, created_at, last_renewal_at) "
        "VALUES (?, ?, ?, ?, 'active', ?, ?)", (cid, p["slug"], con["account"], client_id, now, now))
+    governance.audit("agent.link.approved", {"connection": cid, "connector": p["slug"], "account": con["account"],
+                                             "client_id": client_id[:200], "approval_id": p["approval_id"]})
     return _issue(cid, now, now + REFRESH_IDLE_S)
 
 
@@ -390,6 +394,7 @@ def revoke_connection(conn_id: str, reason: str, now: float | None = None) -> No
     _q("UPDATE agent_connections SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ? AND status != 'revoked'",
        (now, reason, conn_id))
     _q("UPDATE oauth_tokens SET revoked_at = ? WHERE connection_id = ? AND revoked_at IS NULL", (now, conn_id))
+    governance.audit("agent.link.revoked", {"connection": conn_id, "reason": (reason or "")[:200]})
 
 
 def revoke_account(account: str, reason: str) -> int:
@@ -492,6 +497,7 @@ def on_approval_resolved(row: dict) -> None:
     if row.get("kind") == "gateway-thaw":
         if row.get("status") == "allowed":
             _set_frozen(False, row.get("resolved_by") or "operator")
+            governance.audit("gateway.reopened", {"approval_id": row.get("id"), "signer": row.get("resolved_by")})
             _notify("agent gateway thawed", f"{row.get('resolved_by')} re-opened the gateway; connectors stay "
                     "disabled until re-enabled, and each vendor must re-link.")
         return

@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
+
 This file began on 2026-07-27 as a *proposal* for two narrow passwordless
 grants behind a phone Allow/Deny tap. The proposal shipped, then the model
 changed twice (2026-08-15 priority promotion; 2026-10-04 signed approvals).
@@ -57,9 +59,31 @@ around them:
   `sudo -n dnf remove <anything>` without a signature. Only removing the
   NOPASSWD entry makes the gate mandatory.
 
-Recommendation for the operator: run `sudo -n -l`, remove the dead ollama
+~~Recommendation for the operator: run `sudo -n -l`, remove the dead ollama
 entries, and decide whether `dnf remove *` and `semanage port -a *` should
-stay passwordless.
+stay passwordless.~~
+
+**Done 2026-10-07 (applied by the deploy relay).** The passwordless rules for
+`dnf remove *`, `dnf autoremove`, `semanage port -a *` and every dead `ollama*`
+rule are removed and replaced by one rule:
+
+```
+<operator> ALL=(root) NOPASSWD: /usr/local/libexec/ctdc/approved-exec.py
+```
+
+`approved-exec.py` (root-owned, installed by `scripts/install-root-copies.sh`
+against the signed manifest) executes a `sudo` approval only after it has:
+
+- re-verified the human's SSH signature over the canonical v2 text against a
+  **root-owned** pin (`/etc/corporatetraveldc/approval-allowed-signers`);
+- checked that the signed command fullmatches the root allowlist entry for its
+  signed pattern (`dnf-remove`, `dnf-autoremove`, `semanage-port-add`);
+- checked the timing (signed before expiry; executed within 5 min of it);
+- recorded single use in a root-only ledger.
+
+A process running as the operator can no longer run those commands without a
+signature, and a forged database row does not help it. See
+`docs/AGENT_TRUST_MODEL.md` §9.1.
 
 ## The approval gate (`scripts/sudo-approval-gate.sh`)
 
@@ -69,7 +93,8 @@ sudo-approval-gate.sh <pattern> "<reason>" -- <command...>
 
 1. `POST /admin/approval-requests` (admin token, audited as
    `admin.approval_request.create`) creates a request with kind `sudo`,
-   requester `admin-token`, TTL 600 s. The response carries per-action
+   requester ~~`admin-token`~~ `token:<label of the authenticating token>`
+   (2026-10-07), TTL 600 s (the hard maximum for kind `sudo` since 2026-10-07). The response carries per-action
    resolve keys (migration 0068); the gate keeps only the deny key.
 2. ntfy push to the `approval-gate` topic with **one** action button, Deny
    (`GET https://dispatch.example.com/admin/approval-requests/<id>/resolve?action=deny&k=<deny key>`),
@@ -78,15 +103,22 @@ sudo-approval-gate.sh <pattern> "<reason>" -- <command...>
    canonical text, signs it with `~/.ssh/<account>_approver_ed25519`
    (namespace `corporatetraveldc-approval`) and posts it to
    `POST /api/v1/approvals/<id>/resolve` on `http://127.0.0.1:8000`.
-4. The gate polls; it runs the command only on `allowed`. Denied, expired or
-   unanswered = not run.
+4. The gate polls. ~~It runs the command only on `allowed`.~~ On `allowed`, a
+   `sudo` command is handed to the root executor
+   (`sudo -n /usr/local/libexec/ctdc/approved-exec.py <id>`), which re-verifies
+   it as above; a non-privileged command (the manifest signers' `/bin/true`
+   placeholder) runs in the gate. Denied, expired or unanswered = not run.
+   Patterns for privileged commands must be the allowlisted names, e.g.
+   `sudo-approval-gate.sh dnf-remove "<reason>" -- sudo dnf remove -y <pkg>`.
 
 What the server enforces (`src/common/governance.py::resolve_signed`, tests
 `tests/web/test_signed_approvals.py`, 21 tests):
 
-- the signature verifies over `corporatetraveldc-approval v1 / id / action /
-  kind / requester / expires_at / command-sha256`; change one byte of the
-  command and it no longer matches;
+- the signature verifies over ~~`corporatetraveldc-approval v1 / id / action /
+  kind / requester / expires_at / command-sha256`~~ `corporatetraveldc-approval
+  v2 / id / action / kind / requester / expires_at / command-sha256 /
+  pattern-sha256 / reason-sha256` (v2 since 2026-10-07); change one byte of
+  the command, the pattern or the reason and it no longer matches;
 - the signer has an **active** `approval_signers` row **and** an active
   `kind=human` board signer row (so the liveness switch revokes approval
   rights with everything else);
