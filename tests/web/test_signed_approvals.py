@@ -298,3 +298,30 @@ def test_signed_resolve_route(team):
     web_main._signed_resolve_hits.clear()
     resp = asyncio.run(web_main.approval_signed_resolve_route(r["id"], web_main.SignedResolveIn(action="allow", signer="op", signature=sig)))
     assert json.loads(resp.body)["status"] == "allowed"
+
+
+# -- trust-model invariants (docs/AGENT_TRUST_MODEL.md, 2026-10-07) -------------
+
+def test_expired_request_cannot_be_signed_and_reads_as_expired(team):
+    """NO RESPONSE IS NOT APPROVAL: past expires_at a valid human signature is
+    refused (409) and the request reads back as expired."""
+    res = gov.create_approval("p", "echo hi", requester="agent-a", ttl_seconds=600)
+    rid = res["id"]
+    with db.conn() as c:
+        c.execute("UPDATE approval_requests SET expires_at = ? WHERE id = ?", (time.time() - 1, rid))
+    with pytest.raises(gov.GovernanceError) as e:
+        _approve(team, rid)
+    assert e.value.status == 409
+    assert db.get_approval_request(rid)["status"] == "expired"
+
+
+def test_signed_resolution_is_single_use(team):
+    """A resolved request cannot be resolved again -- not by a second allow,
+    not by a later deny (the resolving UPDATE is conditional on 'pending')."""
+    rid = gov.create_approval("p", "echo hi", requester="agent-a")["id"]
+    assert _approve(team, rid)["status"] == "allowed"
+    for action in ("allow", "deny"):
+        with pytest.raises(gov.GovernanceError) as e:
+            _approve(team, rid, action)
+        assert e.value.status == 409
+    assert db.get_approval_request(rid)["status"] == "allowed"

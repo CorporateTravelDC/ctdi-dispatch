@@ -259,3 +259,39 @@ def test_consent_page_shows_loopback_callback_instead_of_navigating(env):
     assert r.status_code == 200
     assert "function loopback(u)" in r.text and "paste it at the prompt" in r.text
     assert "if(j.state==='redirect'){location.href=j.location;return}" in r.text      # https clients still redirect
+
+
+# -- trust-model invariants (docs/AGENT_TRUST_MODEL.md, 2026-10-07) -------------
+
+def test_one_connectors_token_is_refused_on_another_connector(env, tmp_path):
+    """AGENT A AUTHORITY != AGENT B AUTHORITY: a token minted for /mcp/cowork
+    is refused on /mcp/<other>, even though both are live and linked."""
+    _, pub = _key(tmp_path, "cc")
+    db.board_signer_upsert("ctdc-agent-anthropic-claude", pub, "cc@x", role="member", kind="agent")
+    gw.connector_add("claude-code", "ctdc-agent-anthropic-claude", "anthropic")
+    _, tok = _link(env)
+    assert _mcp(env, tok["access_token"], "ping").status_code == 200
+    r = _mcp(env, tok["access_token"], "ping", slug="claude-code")
+    assert r.status_code == 401 and r.json()["error"] == "invalid_token"
+
+
+def test_a_link_signed_after_kill_all_never_becomes_a_token(env):
+    """An outstanding connector-link approval survives a kill-all as a row, but
+    signing it afterwards yields no token: the gateway is frozen, and after a
+    signed thaw the connector is still disabled until re-enabled."""
+    c = env["client"]
+    cid = c.post("/oauth/register", json={"client_name": "Claude", "redirect_uris": [REDIRECT]}).json()["client_id"]
+    verifier, ch = _pkce()
+    r = gw.authorize_start("cowork", cid, REDIRECT, ch, "S256", "st8", "dispatch")
+    gw.kill_all("test")
+    _sign(env, r["approval_id"])
+    loc = gw.authorize_status(r["req_id"])["location"]
+    code = loc.split("code=")[1].split("&")[0]
+    with pytest.raises(gw.GatewayError) as e:
+        gw.exchange_code(code, cid, REDIRECT, verifier)
+    assert e.value.status == 503                                      # frozen
+    _sign(env, gw.request_thaw()["approval_id"])                     # signed re-open
+    assert not gw.frozen()
+    with pytest.raises(gw.GatewayError) as e:
+        gw.exchange_code(code, cid, REDIRECT, verifier)
+    assert e.value.error == "invalid_grant"                            # connector still disabled

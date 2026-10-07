@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
+
 > Showcase + screenshots: `docs/TEAM_SEGMENTATION_SHOWCASE.md` (the model in reusable prose, the 2026-10-04 go-live narrated with images under `docs/images/segmentation/`, and a phrasing bank).
 
 The file keeps the name `AGENT_SEGMENTATION.md` because other docs link to it. Since 2026-10-04 its scope covers **human teammates** and **agent runtimes** as two parallel groups. The second brain is the authority for the rules referenced here; this file is the engineering design and runbook. Tooling lives in `scripts/agent-segmentation/`.
