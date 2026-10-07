@@ -1,0 +1,7 @@
+# scripts/service-env/acars-watcher.allowlist -- SECRET names the acars-watcher image reads (2026-10-05).
+# Derived by scripts/service-env/scan.py (static import closure); re-check with scan.py --check.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/acars_watcher/acars_watcher.py:94
+AIRFRAMES_TOKEN  # src/acars_watcher/acars_watcher.py:47
+DISPATCH_ADMIN_TOKEN  # src/acars_watcher/acars_watcher.py:38
+JUMPSEAT_API_KEY  # src/acars_watcher/acars_watcher.py:95

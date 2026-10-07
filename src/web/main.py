@@ -61,6 +61,8 @@ from web.routes.fids import router as fids_router
 from web.routes.airspace import router as airspace_router
 from web.routes.data_usage import router as data_usage_router
 from web.routes.webhooks import router as webhooks_router
+from web.routes.agent_gateway import router as agent_gateway_router  # 2026-10-05: OAuth + MCP for cloud agents
+from web.routes.console import router as console_router  # 2026-10-05: operator phone console (tailnet only)
 from web.routes.sectors import router as sectors_router
 from web.routes.remember import router as remember_router
 from web.sse import live_events
@@ -105,6 +107,8 @@ app.include_router(data_usage_router)
 app.include_router(webhooks_router)
 app.include_router(sectors_router)
 app.include_router(remember_router)
+app.include_router(agent_gateway_router)
+app.include_router(console_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -235,6 +239,174 @@ def _require_board_key(request: Request, required_scope: str = db.BOARD_SCOPE_WR
     if not authorized:
         raise HTTPException(status_code=401, detail="missing or invalid X-Board-Key")
 
+
+# ── Identity-based board signing (2026-10-04) ──────────────────────────────
+# Second path, no shared secret: X-Board-Signer / X-Board-Timestamp /
+# X-Board-Signature (ssh-keygen -Y sign with the account's own ed25519 key,
+# verified against db.board_signers -- see common.board_sign and
+# docs/BOARD_SIGNING.md). Attribution = the account.
+#
+# Impact tiers (operator directive 2026-10-04, authorisation model -- "an
+# AND, not an OR"; "anything high sensitivity requires a time-based key ...
+# agentic key and/or agentic plus operator key"):
+#
+#   key     -- X-Board-Key only (today's behaviour; anything unlisted)
+#   normal  -- a valid X-Board-Key OR a valid signature from an ACTIVE signer
+#   high    -- a valid signature AND a MINTED time-based token whose lifetime
+#              is <= HIGH_TOKEN_MAX_TTL (default 24h). The master BOARD_KEY
+#              alone never satisfies "high": the point is a credential that
+#              dies on its own.
+#   signed  -- a valid signature, full stop (Wave 2: council requests and
+#              workspace contributions must be attributable to an account)
+#   cosign  -- a valid signature AND an X-Board-Cosigner / X-Board-Cosignature
+#              pair over the same canonical message from a DIFFERENT active
+#              signer whose role is 'admin' (the "agentic plus operator key"
+#              form). A presented-but-bad cosignature is 401 like any other.
+#
+# Every signed path re-reads board_signers.active on every request, so
+# `board-signer-ctl.sh deactivate` (or the liveness switch) kills an account
+# instantly, no restart. "either"/"both" (the 2026-10-04 morning names) are
+# accepted as aliases of normal/high.
+HIGH_TOKEN_MAX_TTL = int(os.getenv("BOARD_HIGH_TOKEN_MAX_TTL", str(24 * 3600)))
+BOARD_AUTH_POLICY = {
+    "POST /api/v1/board":                 "normal",  # write: Cowork (key) or a named account (signature)
+    "GET /api/v1/board":                  "normal",  # gated-thread reads (research etc.)
+    "GET /api/v1/vault/research":         "normal",  # read-only vault surface
+    "GET /api/v1/vault/research/list":    "normal",
+    # future privileged board actions (delete / pin / ack): "high" by default,
+    # "cosign" where an operator's hand is wanted on the action itself.
+    # Wave 2 (2026-10-04): attribution is the point, so these need the
+    # account's own signature -- a shared X-Board-Key alone never qualifies.
+    "GET /api/v1/approvals":              "normal",
+    "POST /api/v1/council":               "signed",
+    "POST /api/v1/council/close":         "signed",
+    "GET /api/v1/council":                "normal",
+    "POST /api/v1/workspace/contribute":  "signed",
+}
+_POLICY_ALIASES = {"either": "normal", "both": "high"}
+
+
+def _board_key_ok(request: Request, required_scope: str) -> bool:
+    presented = request.headers.get("X-Board-Key", "")
+    return bool(presented) and (
+        (bool(_BOARD_KEY) and _secrets.compare_digest(presented, _BOARD_KEY))
+        or db.board_token_valid(presented, required_scope)
+    )
+
+
+def _board_high_token_ok(request: Request, required_scope: str) -> bool:
+    """A MINTED, unexpired, scope-satisfying token with lifetime <= HIGH_TOKEN_MAX_TTL.
+    The master key is excluded on purpose (see the tier comment)."""
+    presented = request.headers.get("X-Board-Key", "")
+    if not presented or not db.board_token_valid(presented, required_scope):
+        return False
+    info = db.board_token_info(presented)
+    return bool(info) and 0 < (info.get("ttl_s") or 0) <= HIGH_TOKEN_MAX_TTL and not info.get("revoked_at")
+
+
+def _board_replay_cache():
+    from common import board_sign as _bsig
+    return _bsig.ReplayCache()
+
+
+_BOARD_REPLAY = _board_replay_cache()
+
+
+def _verify_signer_headers(request: Request, body: bytes, signer: str, sig: str, ts: str,
+                           what: str = "board signature") -> str:
+    """Shared verification for a signer or a cosigner triple. Returns the
+    account; raises 401 with a safe reason."""
+    from common import board_sign as _bsig
+    try:
+        ts_int = _bsig.check_timestamp(ts)
+        row = db.board_signer_get(signer)
+        if not row or not row.get("active"):
+            raise HTTPException(status_code=401, detail=f"unknown or inactive board signer ({what})")
+        msg = _bsig.canonical_message(request.method, request.url.path, ts_int, body,
+                                      request.url.query)
+        if not _bsig.verify(row["pubkey"], sig, msg, signer):
+            raise HTTPException(status_code=401, detail=f"{what} does not verify")
+        # U6: a valid signature is single-use inside the window (checked only
+        # AFTER it verifies, so garbage cannot fill the cache)
+        if not _BOARD_REPLAY.check_and_add(sig):
+            raise HTTPException(status_code=401, detail=f"{what} was already used (replay)")
+    except _bsig.BoardSignError as e:
+        raise HTTPException(status_code=401, detail=f"{what} rejected: {e}")
+    return signer
+
+
+def _board_signer_ok(request: Request, body: bytes) -> str | None:
+    """Return the signing account name when X-Board-Signer/Signature/Timestamp
+    verify against an ACTIVE registered key; None when the headers are
+    absent. Raises 401 with a safe reason when they are present but wrong --
+    a presented-but-bad signature is never silently downgraded to the key
+    path."""
+    signer = (request.headers.get("X-Board-Signer") or "").strip()
+    sig = request.headers.get("X-Board-Signature") or ""
+    ts = request.headers.get("X-Board-Timestamp") or ""
+    if not (signer or sig or ts):
+        return None
+    if not (signer and sig and ts):
+        raise HTTPException(status_code=401, detail="X-Board-Signer, X-Board-Timestamp and X-Board-Signature are all required")
+    _verify_signer_headers(request, body, signer, sig, ts, "board signature")
+    import logging as _logging
+    _logging.getLogger(__name__).info("board: signed by %s", signer)
+    return signer
+
+
+def _board_cosigner_ok(request: Request, body: bytes, signer: str | None) -> str | None:
+    """X-Board-Cosigner / X-Board-Cosignature over the SAME canonical message
+    (same X-Board-Timestamp) from an active signer with role 'admin', not the
+    signer itself. None when absent; 401 when present but wrong."""
+    co = (request.headers.get("X-Board-Cosigner") or "").strip()
+    cosig = request.headers.get("X-Board-Cosignature") or ""
+    ts = request.headers.get("X-Board-Timestamp") or ""
+    if not (co or cosig):
+        return None
+    if not (co and cosig and ts):
+        raise HTTPException(status_code=401, detail="X-Board-Cosigner, X-Board-Cosignature and X-Board-Timestamp are all required")
+    if signer and co == signer:
+        raise HTTPException(status_code=401, detail="cosigner must differ from the signer")
+    _verify_signer_headers(request, body, co, cosig, ts, "board cosignature")
+    row = db.board_signer_get(co) or {}
+    if row.get("role") != "admin":
+        raise HTTPException(status_code=401, detail="cosigner is not an admin")
+    import logging as _logging
+    _logging.getLogger(__name__).info("board: cosigned by %s", co)
+    return co
+
+
+async def _board_auth(request: Request, route: str, required_scope: str = db.BOARD_SCOPE_WRITE,
+                      body: bytes | None = None) -> str | None:
+    """Resolve the route's policy. Returns the signing account (attribution)
+    when the signature path was used, else None. 401 when the policy is not
+    satisfied."""
+    policy = BOARD_AUTH_POLICY.get(route, "key")
+    policy = _POLICY_ALIASES.get(policy, policy)
+    if body is None:
+        body = await request.body() if hasattr(request, "body") else b""
+    key_ok = _board_key_ok(request, required_scope)
+    signer = _board_signer_ok(request, body)            # 401s on a bad signature
+    cosigner = _board_cosigner_ok(request, body, signer)  # 401s on a bad cosignature
+    if policy == "key":
+        ok = key_ok
+        need = "X-Board-Key"
+    elif policy == "high":
+        ok = signer is not None and _board_high_token_ok(request, required_scope)
+        need = f"a valid board signature AND a minted time-based token (lifetime <= {HIGH_TOKEN_MAX_TTL}s; the master key does not qualify)"
+    elif policy == "cosign":
+        ok = signer is not None and cosigner is not None
+        need = "a valid board signature AND an admin cosignature over the same message"
+    elif policy == "signed":
+        ok = signer is not None
+        need = "a valid board signature from the acting account (X-Board-Key alone is not attributable)"
+    else:  # normal
+        ok = key_ok or signer is not None
+        need = "X-Board-Key or a valid board signature"
+    if not ok:
+        raise HTTPException(status_code=401, detail=f"missing or invalid credentials: {need} required")
+    return signer
+
 # 2026-08-16: Tier-0 vault research reads (see vault_research_read below) --
 # for agent tools that structurally cannot send an Authorization header or
 # carry credentials in a URL (Cowork's fetch tool; confirmed live the same
@@ -314,6 +486,19 @@ def _vault_research_path_allowed(path: str) -> bool:
     if path.startswith(_VAULT_RESEARCH_ROOT + "/"):
         return True
     return any(path.startswith(p) for p in _VAULT_RESEARCH_EXTRA_PREFIXES)
+
+
+def _vault_path_decoded(path: str) -> str:
+    """Fully percent-decoded, normalized form (same loop as _vault_path_is_safe)
+    -- what a path-prefix POLICY must compare against, since the WebDAV
+    client decodes again before the request reaches Nextcloud."""
+    decoded = path
+    for _ in range(5):
+        nxt = unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    return posixpath.normpath(decoded)
 
 
 def _vault_path_is_safe(path: str) -> bool:
@@ -449,7 +634,7 @@ async def board_get(
     known internal-infra/credential-mechanism references before serving."""
     if thread not in _BOARD_ANONYMOUS_THREADS and tier == Tier.T0:
         try:
-            _require_board_key(request, db.BOARD_SCOPE_READ)
+            await _board_auth(request, "GET /api/v1/board", db.BOARD_SCOPE_READ, body=b"")
         except HTTPException:
             raise HTTPException(
                 status_code=403,
@@ -545,9 +730,12 @@ async def board_post(msg: BoardMsgIn, request: Request) -> JSONResponse:
     """Post a board message. Authenticates via X-Board-Key (NOT Authorization --
     the CF tunnel strips Authorization). 401 on bad/missing key; 422 if the
     CUI/PII scrub gate blocks (do not retry same text); 201 on success."""
-    # Authorize via X-Board-Key: either the long-lived master BOARD_KEY OR a
-    # short-lived board-write token minted through /api/v1/board/enroll.
-    _require_board_key(request)
+    # Authorize via X-Board-Key (master BOARD_KEY or a minted token) OR, since
+    # 2026-10-04, a per-account SSH signature (BOARD_AUTH_POLICY "normal").
+    # A signed post is attributed to the signing ACCOUNT, overriding `from`.
+    signer = await _board_auth(request, "POST /api/v1/board", db.BOARD_SCOPE_WRITE)
+    if signer:
+        msg.from_ = signer
     now = time.monotonic()
     _board_post_hits[:] = [t for t in _board_post_hits if now - t < 60]
     if len(_board_post_hits) >= 30:
@@ -1726,9 +1914,13 @@ async def vault_research_read(request: Request, path: str = Query(...)) -> JSONR
     200 -> {path, content}; 400 -> invalid/out-of-scope path; 401 -> missing/
     invalid X-Board-Key; 404 -> not found; 422 -> blocked by CUI/PII scrub
     gate; 429 -> rate limited."""
-    _require_board_key(request, db.BOARD_SCOPE_READ)  # read-only surface: a board-read token suffices
+    _reader = await _board_auth(request, "GET /api/v1/vault/research", db.BOARD_SCOPE_READ, body=b"")  # read-only: board-read token or a registered signer
     if not _vault_path_is_safe(path):
         raise HTTPException(status_code=400, detail="invalid path")
+    from common import governance as _gov
+    _ok, _why = _gov.arena_read_allowed(_vault_path_decoded(path), _reader)
+    if not _ok:
+        raise HTTPException(status_code=403, detail=_why)
     if not _vault_research_path_allowed(path):
         raise HTTPException(
             status_code=400,
@@ -1773,9 +1965,13 @@ async def vault_research_list(request: Request, path: str = Query(default=_VAULT
 
     200 -> {path, files: [{path}, ...]}; 400 -> invalid/out-of-scope path;
     401 -> missing/invalid X-Board-Key; 429 -> rate limited."""
-    _require_board_key(request, db.BOARD_SCOPE_READ)  # read-only surface: a board-read token suffices
+    _reader = await _board_auth(request, "GET /api/v1/vault/research/list", db.BOARD_SCOPE_READ, body=b"")  # read-only: board-read token or a registered signer
     if not _vault_path_is_safe(path):
         raise HTTPException(status_code=400, detail="invalid path")
+    from common import governance as _gov
+    _ok, _why = _gov.arena_read_allowed(_vault_path_decoded(path), _reader)
+    if not _ok:
+        raise HTTPException(status_code=403, detail=_why)
     # A bare extra-prefix folder itself (e.g. "04-Syntheses", no trailing
     # slash) must be listable too, not just files/subpaths under it --
     # _vault_research_path_allowed requires the trailing "/" form.
@@ -2561,10 +2757,15 @@ async def clear_bandwidth_priority_route(
 # status. The resolve endpoint the phone actually taps is deliberately
 # Tier 0 (no bearer auth) -- Cloudflare strips Authorization headers on the
 # way through the tunnel, so a token-gated endpoint would never work from a
-# phone that isn't on the tailnet. Security here comes from the id itself:
-# a UUID4 is 122 bits of entropy, functionally a magic link, and the DB only
-# accepts one resolution per id (already-resolved or expired requests can't
-# be re-resolved -- see resolve_approval_request()'s WHERE clause).
+# phone that isn't on the tailnet. Security comes from a per-request,
+# per-action key (2026-10-04, adversarial duel X1): creation mints allow_key
+# and deny_key, returns them ONCE to the creator, which puts them only into
+# the operator's ntfy push (topic approval-gate) -- the link is ?action=&k=.
+# Only SHA-256 hashes are stored; GET/list never return a key or a hash. The
+# request id alone (which the gate prints and the admin token can read) no
+# longer resolves anything, and a deny link cannot be turned into an allow.
+# The DB still accepts one resolution per id and never resolves an expired
+# request (resolve_approval_request()'s WHERE clause).
 # ---------------------------------------------------------------------------
 
 class ApprovalRequestCreate(BaseModel):
@@ -2579,11 +2780,13 @@ async def create_approval_request_route(
     body: ApprovalRequestCreate,
     tier: Tier = Depends(require_admin("admin.approval_request.create")),
 ) -> JSONResponse:
-    request_id = str(uuid.uuid4())
-    result = db.create_approval_request(
-        request_id, body.command_pattern, body.command,
-        reasoning=body.reasoning, ttl_seconds=body.ttl_seconds,
-    )
+    from common import governance as _gov
+    # requester: whoever holds the admin token is an automation (the gate is
+    # run by agents/scripts), never the human who approves -- so the human
+    # approver is never refused as "the requester".
+    result = _gov.create_approval(body.command_pattern, body.command, kind="sudo",
+                                  requester="admin-token", reasoning=body.reasoning,
+                                  ttl_seconds=body.ttl_seconds)
     return JSONResponse(result, status_code=201)
 
 
@@ -2602,11 +2805,25 @@ async def get_approval_request_route(
 async def resolve_approval_request_route(
     request_id: str,
     action: str = Query(..., pattern="^(allow|deny)$"),
+    k: str = Query(default="", max_length=128),
 ) -> JSONResponse:
-    """Tier 0 -- deliberately no auth dependency. See module comment above."""
-    row = db.resolve_approval_request(request_id, action)
+    """Tier 0 (no bearer -- the CF tunnel strips Authorization) but keyed:
+    `k` must be the per-action key from the operator's push. A missing or
+    wrong key is 403 and changes nothing. See module comment above.
+    2026-10-04 (Wave 2): DENY only. action=allow is always 403 -- allowing
+    takes a human SSH signature over the exact request
+    (POST /api/v1/approvals/{id}/resolve, scripts/approve.sh)."""
+    try:
+        row = db.resolve_approval_request(request_id, action, k)
+    except db.ApprovalNeedsSignature as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except db.ApprovalKeyError:
+        raise HTTPException(status_code=403, detail="invalid approval link")
     if row is None:
         raise HTTPException(status_code=404, detail="approval request not found")
+    if row.get("status") == "denied" and (row.get("kind") or "sudo") != "sudo":
+        from common import governance as _gov
+        _gov._on_resolved(row)   # a denied convene request is marked denied
     return JSONResponse(row)
 
 
@@ -2628,6 +2845,165 @@ async def list_approval_requests_route(
         "allowed_count": count,
         "promotion_candidate": count > 2,
     })
+
+
+# ---------------------------------------------------------------------------
+# Signed approvals, council / arena, shared workspace (Wave 2, 2026-10-04)
+#
+# common.governance holds the logic; docs/AGENT_SEGMENTATION.md "Approvals,
+# council/arena and the shared workspace" the design. Summary:
+#   - approvals: a human's SSH signature (approval key, NOT a board key) over
+#     the canonical text of one request; the phone tap can only deny
+#   - council/arena: an agent REQUESTS (signed), nothing happens until a human
+#     approves; approval grants the participants task-scoped write and posts
+#     the convene to each on the board's `council` thread
+#   - workspace: everyone reads Series/ (research routes); writes are
+#     create-only, attributed, under contributions/<task>/<account>/, gated
+#     by workspace_grants. There is no overwrite, delete or publish route.
+# ---------------------------------------------------------------------------
+
+def _gov_http(e) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.get("/api/v1/approvals")
+async def approvals_pending_route(request: Request) -> JSONResponse:
+    await _board_auth(request, "GET /api/v1/approvals", db.BOARD_SCOPE_READ, body=b"")
+    from common import governance as _gov
+    return JSONResponse({"pending": _gov.approvals_pending()})
+
+
+@app.get("/api/v1/approvals/{request_id}")
+async def approval_view_route(request_id: str, request: Request) -> JSONResponse:
+    await _board_auth(request, "GET /api/v1/approvals", db.BOARD_SCOPE_READ, body=b"")
+    from common import governance as _gov
+    row = _gov.approval_view(request_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="approval request not found")
+    return JSONResponse(row)
+
+
+class SignedResolveIn(BaseModel):
+    action: str
+    signer: str
+    signature: str = Field(max_length=4096)
+
+
+_signed_resolve_hits: list = []
+
+
+@app.post("/api/v1/approvals/{request_id}/resolve")
+async def approval_signed_resolve_route(request_id: str, body: SignedResolveIn) -> JSONResponse:
+    """Tier 0 by design (the signature IS the credential; the CF tunnel strips
+    Authorization). Every failure is 403/404/409 and changes nothing."""
+    now = time.monotonic()
+    _signed_resolve_hits[:] = [t for t in _signed_resolve_hits if now - t < 60]
+    if len(_signed_resolve_hits) >= 20:
+        raise HTTPException(status_code=429, detail="signed-approval rate limit (20/min)")
+    _signed_resolve_hits.append(now)
+    from common import governance as _gov
+    try:
+        row = _gov.resolve_signed(request_id, body.action, body.signer.strip(), body.signature.strip())
+    except _gov.GovernanceError as e:
+        raise _gov_http(e)
+    import logging as _logging
+    _logging.getLogger(__name__).warning("approval %s %s by %s (signed)", request_id, row.get("status"), body.signer)
+    return JSONResponse(row)
+
+
+class CouncilIn(BaseModel):
+    mode: str
+    subject: str
+    brief: str = ""
+    participants: list
+    deadline_hours: float = 48.0
+
+
+@app.post("/api/v1/council", status_code=201)
+async def council_request_route(body: CouncilIn, request: Request) -> JSONResponse:
+    raw = await request.body()
+    signer = await _board_auth(request, "POST /api/v1/council", body=raw)
+    from common import governance as _gov
+    try:
+        out = _gov.council_create(signer, body.mode, body.subject, body.brief, body.participants,
+                                  body.deadline_hours)
+    except _gov.GovernanceError as e:
+        raise _gov_http(e)
+    try:
+        from common import ntfy_push
+        ntfy_push.send("approval-gate",
+                       f"{signer} requests a {body.mode} on {body.subject}.\n"
+                       f"Review + sign over SSH: scripts/approve.sh show {out['approval_id']}\n"
+                       f"No signature = nothing happens (expires in 24h).",
+                       title=f"Council request: {body.mode}", priority=3, tags="busts_in_silhouette")
+    except Exception:  # noqa: BLE001 -- the board post already carries it
+        pass
+    return JSONResponse(out, status_code=201)
+
+
+@app.get("/api/v1/council")
+async def council_list_route(request: Request, status: Optional[str] = Query(default=None)) -> JSONResponse:
+    await _board_auth(request, "GET /api/v1/council", db.BOARD_SCOPE_READ, body=b"")
+    from common import governance as _gov
+    return JSONResponse({"councils": _gov.council_list(status)})
+
+
+@app.get("/api/v1/council/{cid}")
+async def council_get_route(cid: str, request: Request) -> JSONResponse:
+    await _board_auth(request, "GET /api/v1/council", db.BOARD_SCOPE_READ, body=b"")
+    from common import governance as _gov
+    cs = _gov.council_get(cid)
+    if not cs:
+        raise HTTPException(status_code=404, detail="council not found")
+    return JSONResponse(cs)
+
+
+@app.post("/api/v1/council/{cid}/close", status_code=201)
+async def council_close_route(cid: str, request: Request) -> JSONResponse:
+    raw = await request.body()
+    signer = await _board_auth(request, "POST /api/v1/council/close", body=raw)
+    from common import governance as _gov
+    try:
+        return JSONResponse(_gov.council_request_close(cid, signer), status_code=201)
+    except _gov.GovernanceError as e:
+        raise _gov_http(e)
+
+
+class ContributionIn(BaseModel):
+    task: str = "general"
+    title: str = Field(default="", max_length=200)
+    content: str
+
+
+@app.post("/api/v1/workspace/contribute", status_code=201)
+async def workspace_contribute_route(body: ContributionIn, request: Request) -> JSONResponse:
+    """Create-only, attributed write into the shared ghostwriting workspace.
+    Path is chosen HERE (contributions/<task>/<account>/<UTC stamp>-<slug>.md),
+    never by the caller; WebDAV PUT carries If-None-Match: * so an existing
+    file can never be overwritten. Scrub-gated like every vault write. There is
+    no delete, overwrite or publish route -- agents draft, never publish."""
+    raw = await request.body()
+    signer = await _board_auth(request, "POST /api/v1/workspace/contribute", body=raw)
+    from common import governance as _gov
+    try:
+        _gov.check_contribution(signer, body.task, body.content)
+    except _gov.GovernanceError as e:
+        raise _gov_http(e)
+    try:
+        _scrub_gate("\n".join([body.title, body.content]), source="workspace-contribute")
+    except _ScrubGateBlocked as e:
+        raise HTTPException(status_code=422, detail=f"blocked by CUI/PII scrub gate: {e}")
+    path = _gov.contribution_path(signer, body.task, body.title or body.task)
+    doc = _gov.render_contribution(signer, body.task, body.title, body.content,
+                                   request.headers.get("X-Board-Signature", ""))
+    from second_brain import webdav_client
+    try:
+        webdav_client.put_create_only(f"{webdav_client.BUSINESS_ROOT}/{path}", doc)
+    except webdav_client.AlreadyExists:
+        raise HTTPException(status_code=409, detail="a contribution already exists at that path; retry in a second")
+    return JSONResponse({"path": path, "account": signer, "task": body.task,
+                         "content_sha256": _gov.hashlib.sha256(body.content.encode()).hexdigest()},
+                        status_code=201)
 
 
 # ---------------------------------------------------------------------------

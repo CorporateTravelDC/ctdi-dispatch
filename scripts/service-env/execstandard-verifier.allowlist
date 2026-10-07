@@ -1,0 +1,5 @@
+# scripts/service-env/execstandard-verifier.allowlist -- SECRET names the Executive Standard
+# gate verifier reads (executivestandard-website/verifier/verify.py:30-31). PILOT for duel M9.
+# DISPATCH_PG_DB comes from dispatch.env (non-secret, still mounted); VERIFY_PORT is set inline.
+# Format: NAME  # consumer
+DISPATCH_PG_PASSWORD  # verifier/verify.py:30 (psycopg conninfo)

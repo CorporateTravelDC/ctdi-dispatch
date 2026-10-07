@@ -1,0 +1,11 @@
+# /etc/systemd/system/corporatetraveldc-skill-grants.timer -- hourly, jittered;
+# a timed grant or clawback lands within the hour (run the service for "now").
+[Unit]
+Description=Hourly agent skill grants reconcile
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=15min
+Persistent=true
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

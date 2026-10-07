@@ -66,10 +66,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 # resolution (FDPS cross-check, airplanes.live) expects the ICAO form, and
 # the immutable rule from that skill applies here too: never the bare IATA
 # form, never a bare flight number.
-_IATA_TO_ICAO_CARRIER = {
-    "DL": "DAL", "UA": "UAL", "AA": "AAL", "BA": "BAW",
-    "KL": "KLM", "AF": "AFR", "LH": "DLH",
-}
+# 2026-10-03: table moved to common.airline_codes (single source).
+from common.airline_codes import IATA_TO_ICAO as _IATA_TO_ICAO_CARRIER  # noqa: E402
 _CALLSIGN_SHAPE_RE = re.compile(r"^([A-Za-z]{2,3})\s?(\d{1,4}[A-Za-z]?)$")
 
 

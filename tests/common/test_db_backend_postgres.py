@@ -70,14 +70,14 @@ def _postgres_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.postgres_scratch, pytest.mark.skipif(
     not _postgres_reachable(),
     reason=(
         f"corporatetraveldc-pgsql unreachable or scratch database "
         f"{SCRATCH_DB!r} does not exist -- see this module's docstring "
         f"to provision it"
     ),
-)
+)]
 
 
 @pytest.fixture(autouse=True)

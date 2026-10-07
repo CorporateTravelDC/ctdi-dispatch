@@ -2,6 +2,10 @@
 
 # Web framework
 fastapi>=0.111.0
+# 2026-10-05: FastAPI form parsing (OAuth /oauth/token, the /console forms). Absent from the
+# image -> every token exchange 500'd; the host had it, so tests passed. Guarded by
+# tests/web/test_requirements_form_parsing.py.
+python-multipart>=0.0.9
 uvicorn[standard]>=0.29.0
 pydantic>=2.7.0
 sse-starlette>=1.6.5
@@ -77,3 +81,6 @@ html2text>=2024.2.26
 # Only the poller's train fetchers will import it. ~2 MB; accepted rather
 # than restructuring the Containerfile layout for a single dependency.
 gtfs-realtime-bindings>=1.0.0
+# 2026-10-04: ed25519 verification for identity-based board signing (common.board_sign);
+# the web image had neither cryptography nor ssh-keygen. aarch64 manylinux wheel available.
+cryptography>=42.0

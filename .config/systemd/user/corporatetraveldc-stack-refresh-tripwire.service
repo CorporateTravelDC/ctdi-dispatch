@@ -1,0 +1,15 @@
+# corporatetraveldc-stack-refresh-tripwire.service
+# Mid-week tripwire (operator directive 2026-10-04): pull/build into check
+# tags, diff against what is running; silent when nothing changed, otherwise
+# gate + smoke and apply through the serialized rollout, or hold + ntfy.
+[Unit]
+Description=Mid-week stack tripwire: detect upstream/local image drift and apply if it passes the gates
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/stack-refresh.sh --tripwire
+# 2026-10-04 duel H1: a full restart-everything rollout took ~99 min, so the
+# old 90-min timeout killed runs mid-rollout. The script enforces its own
+# 4h deadline (STACK_REFRESH_MAX_S) and holds what it has not reached.
+TimeoutStartSec=infinity

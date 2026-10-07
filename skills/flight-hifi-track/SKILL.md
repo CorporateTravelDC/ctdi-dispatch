@@ -262,7 +262,7 @@ Schedule (FIDS):  sched <HH:MM> / est <HH:MM> ET -- gate <GATE>, terminal <T>, b
 Baggage ETA:      Carousel <N> [FIDS] | est ~<HH:MM> local | not yet applicable -- <reason>
 ```
 
-Label every timestamp explicitly as ET or UTC — never a bare/unlabeled time (operator standing rule, 2026-08-27).
+Every time given is either UTC AND Eastern together (e.g. `13:50Z / 09:50 ET`) or explicitly UTC-only (`13:50Z`) -- never Eastern alone, never bare (operator standing rule, 2026-10-06; supersedes 2026-08-27). Containers AND the host run in UTC: never print `time.localtime()`/`date` output with an ET label -- convert with America/New_York explicitly.
 
 ---
 

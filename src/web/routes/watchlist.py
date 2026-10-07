@@ -184,6 +184,17 @@ async def add_flight_watchlist(
     # carriers when the direct lookup misses -- this is what actually
     # caught ASH4044/ASH4056 for UAL4044/UAL4056 during manual checking.
     fdps_plan = db.get_flight_plan_by_callsign(ident)
+    # 2026-10-05: a marketed number (AC8825 / UA8366) resolves through
+    # codeshare_map to its operating flight (JZA825) before the blind
+    # flight-number fallback below, which can never match an offset number.
+    operating_callsign = None
+    if not fdps_plan:
+        try:
+            operating_callsign = db.resolve_operating_callsign(ident)
+            if operating_callsign:
+                fdps_plan = db.get_flight_plan_by_callsign(operating_callsign)
+        except Exception:
+            operating_callsign = None
     if not fdps_plan:
         fallback_origin = (body.origin or "").strip().upper() or None
         fdps_plan = db.get_flight_plan_by_flight_num(ident, origin=fallback_origin)
@@ -250,6 +261,14 @@ async def add_flight_watchlist(
     fdps_status_value = (fdps_plan or {}).get("status")
     db.update_watchlist_fdps_confirmation(entry_id, fdps_status_value, now)
 
+    # 2026-10-05: a watch added mid-flight learns the departure it missed from
+    # TFMS (departure side only; see shared.watchlist.seed_departure_phase_from_tfms).
+    try:
+        from shared.watchlist import seed_departure_phase_from_tfms
+        seeded_phase = seed_departure_phase_from_tfms(entry)
+    except Exception:
+        seeded_phase = None
+
     origin = entry["origin"] or ""
     dest = entry["destination"] or ""
     route = f"{origin}→{dest}" if origin or dest else ""
@@ -285,6 +304,8 @@ async def add_flight_watchlist(
 
     response = dict(entry)
     response["fdps_confirmed"] = fdps_confirmed
+    response["oooi_phase_seeded"] = seeded_phase
+    response["operating_callsign"] = operating_callsign
     if fdps_plan:
         response["fdps_detail"] = {
             "aircraft_type": fdps_plan.get("aircraft_type"),

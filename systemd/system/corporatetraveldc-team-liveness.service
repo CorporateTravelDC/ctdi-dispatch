@@ -1,0 +1,16 @@
+# /etc/systemd/system/corporatetraveldc-team-liveness.service -- SYSTEM unit
+# (needs root: usermod/chage/loginctl). Install (operator):
+#   sudo cp systemd/system/corporatetraveldc-team-liveness.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now corporatetraveldc-team-liveness.timer
+[Unit]
+Description=Team liveness dead-man switch: stale agent logins / dead human logins become inert
+Documentation=file:///opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/AGENT_SEGMENTATION.md
+[Service]
+# 2026-10-04 (duel C1): root runs the INSTALLED copy (root:root, /usr/local/libexec/ctdc),
+# never the operator-writable checkout. After each sign: sudo scripts/install-root-copies.sh
+# && sudo systemctl daemon-reload.
+Type=oneshot
+Nice=10
+ExecStart=/usr/local/libexec/ctdc/team-liveness.sh --execute --i-am-the-operator
+# exit 1 = at least one account was made inert this run (not a failure)
+SuccessExitStatus=1

@@ -39,7 +39,7 @@ if [[ $DAYS_LEFT -le $WARN_DAYS ]]; then
     [[ $DAYS_LEFT -le 1 ]] && PRIO=5
 
     curl -s -X POST "${NTFY_URL}/${NTFY_TOPIC}" \
-        -H "Authorization: Bearer ${NTFY_TOKEN}" \
+        -H @<(printf 'Authorization: Bearer %s\n' "${NTFY_TOKEN}") \
         -H "Title: GitHub PAT Expiring Soon" \
         -H "Priority: ${PRIO}" \
         -H "Tags: warning,key" \

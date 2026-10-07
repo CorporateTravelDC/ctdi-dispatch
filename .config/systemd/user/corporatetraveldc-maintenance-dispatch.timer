@@ -1,0 +1,12 @@
+# corporatetraveldc-maintenance-dispatch.timer -- every 20 min at a random
+# offset; the dispatcher exits in milliseconds unless a rolling window is open
+# and an enrolled job is pending.
+[Unit]
+Description=Maintenance queue dispatcher (every ~20 min; window-aware)
+[Timer]
+OnCalendar=*-*-* *:00,20,40:00 America/New_York
+RandomizedDelaySec=15min
+FixedRandomDelay=false
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

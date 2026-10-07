@@ -19,12 +19,57 @@
 # changed OR RESTART_EXTERNALS=1 (default: 1 -- "every container").
 set -u
 RESTART_EXTERNALS=${RESTART_EXTERNALS:-1}
+# 2026-10-04 (stack-refresh standing practice): comma-separated units to
+# skip entirely this run, e.g. SKIP_UNITS=nextcloud-app when the wrapper
+# detected a Nextcloud MAJOR-version jump upstream (09-03 incident).
+SKIP_UNITS=${SKIP_UNITS:-}
+# 2026-10-04 duel H2: when stack-refresh.sh hands off it has ALREADY pulled,
+# built, gated and promoted the images. FROM_REFRESH=1 = restart only: no
+# build, no pull, no tag -- so the deployed image IS the gated image and the
+# :previous rollback tag stack-refresh set is not overwritten.
+FROM_REFRESH=${FROM_REFRESH:-0}
+# Postgres rows (corporatetraveldc-pgsql, nextcloud-db) change only through
+# scripts/safe-pg-image-update.sh's canary path; they are skipped entirely
+# unless the operator says the canary has been done (duel H2: today's manual
+# rollouts pulled postgres:16-alpine at 14:29/14:31 and restarted both DBs).
+PG_CANARY_DONE=${PG_CANARY_DONE:-0}
+# Wall-clock deadline (epoch) from stack-refresh: rows not reached by then are
+# HELD FOR REVIEW, NO RESTART and written to ROLLOUT_HELD_FILE ("unit reason").
+ROLLOUT_DEADLINE=${ROLLOUT_DEADLINE:-0}
+ROLLOUT_HELD_FILE=${ROLLOUT_HELD_FILE:-}
+BUILT_IDS=/var/lib/corporatetraveldc/reports/stack-refresh-built-ids.json
+# 2026-10-04 09:35 ET: this script rebuilds local images FROM THE WORKING TREE
+# with no gate of its own. A sanity run overlapped two agents editing src/ and
+# only timing kept a half-edited db.py out of the ingest image. Refuse a dirty
+# tree unless the operator says so (ALLOW_DIRTY=1) -- images must come from a
+# signed tree (see feedback: sign before build).
+if [[ "${ALLOW_DIRTY:-0}" != 1 ]] && [[ -n "$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." status --porcelain 2>/dev/null)" ]]; then
+  echo "serialized-rollout: working tree is DIRTY -- refusing to build images from unsigned files (ALLOW_DIRTY=1 to override)" >&2
+  exit 3
+fi
 REPO=/opt/corporatetraveldc/private/ctdi-dispatch-internal
 WEBSITE=/opt/corporatetraveldc/private/csexecutiveservices-website
 D=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 load() { cut -d' ' -f1 /proc/loadavg; }
 guard() { journalctl --user -u corporatetraveldc-thermal-ingest-guard -n 8 --no-pager -o cat 2>/dev/null | grep -oE 'load1=[0-9.]+ tier=[0-9]' | tail -1; }
 digest() { podman image inspect --format '{{.Digest}}' "$1" 2>/dev/null; }
+imgid_full() { podman image inspect --format '{{.Id}}' "$1" 2>/dev/null; }
+held() {  # held <unit> <reason>
+  echo "################ $1  HELD FOR REVIEW, NO RESTART ($2) ################"; echo
+  [[ -n "$ROLLOUT_HELD_FILE" ]] && printf '%s %s\n' "$1" "$2" >>"$ROLLOUT_HELD_FILE"
+}
+past_deadline() { (( ROLLOUT_DEADLINE > 0 && $(date +%s) >= ROLLOUT_DEADLINE )); }
+record_built() {  # record_built <image> <full-id> -- run-manifest the stack-refresh audit trusts
+  mkdir -p "$(dirname "$BUILT_IDS")"
+  python3 - "$BUILT_IDS" "$1" "$2" <<'PYEOF'
+import json, sys, time
+path, image, iid = sys.argv[1:4]
+try: d = json.load(open(path))
+except Exception: d = []
+d.append({"id": iid, "image": image, "ts": int(time.time()), "by": "serialized-rollout"})
+json.dump(d[-200:], open(path, "w"), indent=1)
+PYEOF
+}
 SUMMARY=()
 
 # unit | kind | image | build-dir | containerfile | window-seconds
@@ -40,6 +85,9 @@ ROLLOUT=(
   "corporatetraveldc-ingest-core|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|90"
   # --- app tier
   "corporatetraveldc-poller|local|localhost/corporatetraveldc-poller:latest|$REPO|Containerfile.poller|180"
+  # 2026-10-04: runs the poller image but was never in this list -- the first
+  # stack-refresh audit caught it two poller rebuilds stale.
+  "corporatetraveldc-execstandard-verifier|local|localhost/corporatetraveldc-poller:latest|/opt/corporatetraveldc/private/ctdi-dispatch-internal|Containerfile.poller|60"
   "corporatetraveldc-pusher|local|localhost/corporatetraveldc-pusher:latest|$REPO|Containerfile.pusher|60"
   "corporatetraveldc-web|local|localhost/corporatetraveldc-web:latest|$REPO|Containerfile.web|90"
   "corporatetraveldc-runner|local|localhost/corporatetraveldc-runner:latest|$REPO|Containerfile.runner|90"
@@ -65,15 +113,26 @@ ROLLOUT=(
   "corporatetraveldc-dumpvdl2|ext|ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest|||60"
   "corporatetraveldc-acarsrouter|ext|ghcr.io/sdr-enthusiasts/acars_router:latest|||60"
   "corporatetraveldc-acarshub|ext|ghcr.io/sdr-enthusiasts/docker-acarshub:latest|||90"
+  # 2026-10-04: the two password-gated static demo sites (tracked this morning; the
+  # first restart-everything run left them behind because they were not listed)
+  "corporatetraveldc-ccw-demo|ext|docker.io/library/nginx:alpine|||30"
+  "corporatetraveldc-ccw-preview1|ext|docker.io/library/nginx:alpine|||30"
 )
 
 built_dirs=""   # build each local image once (7 ingest instances share one)
 for row in "${ROLLOUT[@]}"; do
   IFS='|' read -r unit kind image bdir cfile win <<<"$row"
+  if [[ ",$SKIP_UNITS," == *",$unit,"* ]]; then echo "################ $unit  HELD FOR REVIEW, NO RESTART (SKIP_UNITS) ################"; echo; continue; fi
+  if [[ $image == docker.io/library/postgres:* && $PG_CANARY_DONE != 1 ]]; then
+    echo "################ $unit  SKIPPED: postgres changes only via safe-pg-image-update.sh (PG_CANARY_DONE=1 to include) ################"; echo; continue
+  fi
+  if past_deadline; then held "$unit" "deadline"; continue; fi
   echo "################ $unit  ($kind: $image) ################"
   base=$(load); echo "$(date +%T)  baseline load $base  ($(guard))"
   changed=yes
-  if [[ $kind == local ]]; then
+  if [[ $FROM_REFRESH == 1 ]]; then
+    echo "$(date +%T)  FROM_REFRESH: restart only (image already pulled/built, gated and promoted by stack-refresh)"
+  elif [[ $kind == local ]]; then
     key="$bdir/$cfile"
     if [[ " $built_dirs " == *" $key "* ]]; then
       echo "$(date +%T)  image already rebuilt this run"
@@ -81,22 +140,51 @@ for row in "${ROLLOUT[@]}"; do
       echo "$(date +%T)  NO BUILD CONTEXT at $bdir/$cfile -- restart only"
     else
       echo "$(date +%T)  build $image from $bdir/$cfile"
-      if ( cd "$bdir" && podman build -f "$cfile" -t "$image" --label build-date=$D . >/dev/null 2>&1 ); then
+      # 2026-10-03 operator rule: keep a ready-to-go rollback for 24h
+      # (scheduled-podman-prune honours the window). duel H2: :previous is
+      # re-pointed only on a REAL change, at the OLD image id, after the build.
+      old_id=$(imgid_full "$image")
+      if ( cd "$bdir" && podman build -f "$cfile" -t "$image" --label build-date=$D --label "service=$(basename "${image%:*}" | sed 's/^corporatetraveldc-//')" . >/dev/null 2>&1 ); then
+        new_id=$(imgid_full "$image")
+        if [[ -n "$old_id" && "$old_id" != "$new_id" ]]; then podman tag "$old_id" "${image%:*}:previous" 2>/dev/null || true; fi
+        record_built "$image" "$new_id"
         built_dirs="$built_dirs $key"; echo "$(date +%T)  build ok, load $(load)"
       else
         echo "$(date +%T)  BUILD FAILED for $image -- stopping here"; exit 1
       fi
     fi
   else
-    before=$(digest "$image")
+    before=$(digest "$image"); before_id=$(imgid_full "$image")
     echo "$(date +%T)  pull $image (update check)"
     podman pull -q "$image" >/dev/null 2>&1 || echo "$(date +%T)  pull FAILED (offline/registry?) -- keeping local image"
     after=$(digest "$image")
-    if [[ $before == "$after" ]]; then changed=no; echo "$(date +%T)  image unchanged ($after)"; else echo "$(date +%T)  IMAGE UPDATED: ${before:7:12} -> ${after:7:12}"; fi
+    if [[ $before == "$after" ]]; then changed=no; echo "$(date +%T)  image unchanged ($after)"
+    else
+      echo "$(date +%T)  IMAGE UPDATED: ${before:7:12} -> ${after:7:12}"
+      # duel H2: :previous only on a real change, pointed at the OLD image id
+      [[ -n "$before_id" ]] && podman tag "$before_id" "${image%:*}:previous" 2>/dev/null || true
+    fi
+    # 2026-10-04: a container still running an OLDER image than the tag (a
+    # previous pull that never got its restart) counts as changed too.
+    running_id=$(podman inspect "$unit" --format '{{.Image}}' 2>/dev/null | cut -c1-12); [[ -z "$running_id" ]] && running_id=$(podman inspect "systemd-$unit" --format '{{.Image}}' 2>/dev/null | cut -c1-12)
+    tag_id=$(podman image inspect "$image" --format '{{.Id}}' 2>/dev/null | cut -c1-12)
+    if [[ $changed == no && -n "$running_id" && -n "$tag_id" && "$running_id" != "$tag_id" ]]; then changed=yes; echo "$(date +%T)  running ${running_id} != tag ${tag_id} -- restart pending from an earlier pull"; fi
     if [[ $changed == no && $RESTART_EXTERNALS != 1 ]]; then echo "$(date +%T)  skip restart (unchanged)"; echo; continue; fi
   fi
-  # never start the next unit on top of a spike we are still riding
-  while awk "BEGIN{exit !($(load) >= 15)}"; do echo "$(date +%T)  load $(load) >= 15, holding before restart"; sleep 30; done
+  # never start the next unit on top of a spike we are still riding (but the
+  # deadline wins: a unit not started by then is held, not started late)
+  hit_deadline=0
+  while awk "BEGIN{exit !($(load) >= 15)}"; do
+    if past_deadline; then hit_deadline=1; break; fi
+    echo "$(date +%T)  load $(load) >= 15, holding before restart"; sleep 30
+  done
+  if (( hit_deadline )); then held "$unit" "deadline-while-holding-for-load"; continue; fi
+  # 2026-10-06: never restart a unit onto an image that does not exist -- a
+  # restart cannot be undone and the unit comes back failed (the 18:47Z outage).
+  if ! podman image exists "$image"; then
+    echo "$(date +%T)  IMAGE MISSING ($image) -- NOT restarting $unit, stopping the rollout"
+    held "$unit" "image-missing"; exit 1
+  fi
   echo "$(date +%T)  restart $unit.service"
   t0=$(date +%s)
   systemctl --user restart "$unit.service"
@@ -128,10 +216,14 @@ curl -s -o /dev/null -w 'anon research %{http_code}\n' 'http://127.0.0.1:8000/ap
 # sensitive than the ollama.service/dnf grants this gate already covers,
 # so it goes through the same request-and-approve flow rather than a
 # static passwordless sudoers line -- see scripts/sudo-approval-gate.sh.
-BOARD_KEY_VAL=$(scripts/sudo-approval-gate.sh "read-board-key" \
-    "serialized-rollout.sh final health check -- verify keyed board API auth" \
-    -- sudo grep -m1 '^BOARD_KEY=' /etc/corporatetraveldc/dispatch-secrets.env \
-    | tail -1 | cut -d= -f2- || true)
-curl -s -o /dev/null -w 'keyed research %{http_code}\n' -H "X-Board-Key: ${BOARD_KEY_VAL}" 'http://127.0.0.1:8000/api/v1/board?thread=research'
+# FROM_REFRESH (unattended stack-refresh) never raises an approval request
+if [[ $FROM_REFRESH == 1 ]]; then echo "$(date +%T)  final load $(load)  ($(guard))"; exit 0; fi
+# 2026-10-05: no approval at all -- this script runs as the operator, who OWNS
+# dispatch-secrets.env (0600), so `sudo` was never needed; the gate turned a
+# health check into a 10-minute phone prompt that expires whenever the
+# operator is mobile (07:35 today: expired, keyed check read 403). Read it
+# directly, never echo it, hand it to curl on a private fd.
+BOARD_KEY_VAL=$(grep -m1 '^BOARD_KEY=' /etc/corporatetraveldc/dispatch-secrets.env 2>/dev/null | cut -d= -f2- || true)
+curl -s -o /dev/null -w 'keyed research %{http_code}\n' -H @<(printf 'X-Board-Key: %s\n' "${BOARD_KEY_VAL}") 'http://127.0.0.1:8000/api/v1/board?thread=research'
 journalctl --user -u corporatetraveldc-thermal-ingest-guard --since "@$(( $(date +%s) - 3600 ))" --no-pager -o cat | grep -E 'DORMANT|LOCKDOWN|shed:|SHED' | tail -3
 echo "$(date +%T)  final load $(load)  ($(guard))"

@@ -75,12 +75,9 @@ SUPPORTED_HUB_AIRPORTS = tuple(HUB_ICAO.keys())
 # feeders commonly seen at DCA/IAD/BWI. Extend as needed -- if a carrier
 # isn't in this dict, the raw code is tried as-is against the ICAO prefix
 # (works for a few 3-letter carrier codes but will usually just not match).
-IATA_TO_ICAO_CARRIER = {
-    "AA": "AAL", "UA": "UAL", "DL": "DAL", "WN": "SWA", "AS": "ASA",
-    "B6": "JBU", "NK": "NKS", "F9": "FFT", "G4": "AAY", "HA": "HAL",
-    "OO": "SKW", "MQ": "ENY", "9E": "EDV", "YX": "RPA", "OH": "JIA",
-    "YV": "ASH", "QX": "QXE", "C5": "UCA",
-}
+# 2026-10-03: table moved to common.airline_codes (single source; three
+# divergent copies existed). Name kept for callers.
+from common.airline_codes import IATA_TO_ICAO as IATA_TO_ICAO_CARRIER  # noqa: E402
 
 # SWIM flight_events.status values considered still-inbound (schema
 # comment says "active", "landed", "cancelled", etc. -- exact vocabulary

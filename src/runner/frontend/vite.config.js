@@ -30,7 +30,11 @@ export default defineConfig({
         // cached index.html shell instead, which is why the graph tab
         // rendered the whole app recursively nested inside itself instead
         // of the actual graph viz.
-        navigateFallbackDenylist: [/^\/api\//],
+        // 2026-10-05: /console is the web app's operator console on the same
+        // tailnet origin (nginx routes it to :8000). The fallback served this
+        // dashboard's cached shell for it instead, so the console never loaded
+        // in any browser that had opened the dashboard.
+        navigateFallbackDenylist: [/^\/api\//, /^\/console/],
         runtimeCaching: [
           {
             urlPattern: /^\/api\//,

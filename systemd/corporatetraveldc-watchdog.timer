@@ -1,6 +1,5 @@
 [Unit]
 Description=Run corporatetraveldc-watchdog every 90s (thermal/throttle/services/containers/API/feed-freshness)
-Requires=corporatetraveldc-watchdog.service
 
 [Timer]
 OnBootSec=90s

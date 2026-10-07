@@ -1,0 +1,10 @@
+[Unit]
+Description=Corporate Travel DC -- scheduling stall monitor (watchdog tuning diagnostic, week of 2026-10-04)
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc/stall-monitor.py
+Restart=always
+RestartSec=5
+Nice=0
+[Install]
+WantedBy=multi-user.target

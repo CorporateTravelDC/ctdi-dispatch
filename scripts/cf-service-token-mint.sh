@@ -101,7 +101,7 @@ echo "[cf-service-token-mint] Looking up existing service token named '${TOKEN_N
 # live the same day: same token, v6 fails, v4 succeeds. If you remove -4,
 # every call here starts failing as an auth error with no auth problem.
 LIST_RESP="$(curl -s -4 -m 20 -X GET "${API_BASE}" \
-    -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
     -H "Content-Type: application/json")"
 
 if [[ "$(echo "${LIST_RESP}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("success"))')" != "True" ]]; then
@@ -122,13 +122,13 @@ for t in data.get('result', []):
 if [[ -n "${EXISTING_ID}" ]]; then
     echo "[cf-service-token-mint] Found existing token (id=${EXISTING_ID}) -- rotating secret..."
     RESP="$(curl -s -4 -m 20 -X POST "${API_BASE}/${EXISTING_ID}/rotate" \
-        -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+        -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
         -H "Content-Type: application/json")"
     ACTION="rotated"
 else
     echo "[cf-service-token-mint] No existing token named '${TOKEN_NAME}' -- minting new..."
     RESP="$(curl -s -4 -m 20 -X POST "${API_BASE}" \
-        -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+        -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
         -H "Content-Type: application/json" \
         -d "{\"name\": \"${TOKEN_NAME}\"}")"
     ACTION="minted"

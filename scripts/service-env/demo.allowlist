@@ -1,0 +1,18 @@
+# scripts/service-env/demo.allowlist -- SECRET names the demo image reads (2026-10-05).
+# Derived by scripts/service-env/scan.py (static import closure); re-check with scan.py --check.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/common/acars.py:56
+AIRFRAMES_TOKEN  # src/common/acars.py:67
+DEMO_ADMIN_TOKEN  # src/demo/demo_api.py:86
+DEMO_RECORDER_API_TOKEN  # src/demo/recorder.py:56
+DEMO_SESSION_SECRET  # src/demo/profiles.py:50
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:477
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NEXTCLOUD_APP_PASSWORD  # src/second_brain/index_db.py:151
+NTFY_TOKEN  # src/shared/watchlist.py:37
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:30
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
+PUSHOVER_TOKEN  # src/common/pushover.py:28
+PUSHOVER_USER_KEY  # src/common/pushover.py:29

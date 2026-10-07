@@ -141,19 +141,30 @@ def run_enrichment() -> dict:
     return {"candidates": len(rows), "updated": updated}
 
 
-def main() -> None:
+def main() -> int:
+    """Returns the process exit status. 2026-10-04: this used to swallow
+    every exception into a one-line log and exit 0 -- the unit never
+    failed, so the 'NoneType' object has no attribute 'rowcount' crash
+    (psycopg3 executemany() returning None through db_backend's shim)
+    ran 200+ times across every 5-minute firing since the Postgres cutover
+    without anyone noticing. The poller skills' convention is exit-0-and-
+    log; this one deliberately breaks it: a failed enrichment pass now
+    exits 1 so systemd marks the unit failed (drift check, --failed count,
+    OnFailure= -> unit-failure-notify all see it). The traceback is logged
+    in full so the next failure is diagnosable from the journal alone."""
     status = "ok"
     try:
         result = run_enrichment()
         log.info("%s: %d candidate(s), %d row(s) updated",
                   SKILL_NAME, result["candidates"], result["updated"])
     except Exception as e:
-        log.error("%s: enrichment pass failed: %s", SKILL_NAME, e)
+        log.exception("%s: enrichment pass failed: %s", SKILL_NAME, e)
         status = "error"
     finally:
         log_usage(SKILL_NAME, "deterministic", 0, 0, status, "new")
+    return 0 if status == "ok" else 1
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    main()
+    raise SystemExit(main())

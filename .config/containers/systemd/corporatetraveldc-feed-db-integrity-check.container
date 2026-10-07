@@ -9,7 +9,9 @@ Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 Exec=scripts/verified-exec.sh python3 src/poller/skills/feed_db_integrity_check.py
 
 [Service]

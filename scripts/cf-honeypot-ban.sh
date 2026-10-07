@@ -69,8 +69,15 @@ NOTES_SCRIPT="${SELF_DIR}/cf-honeypot-notes.sh"
 # for the honest limitation); fail2ban's action.d config chains an
 # independent verify-manifest.sh call before ever invoking this script, as
 # defense in depth against exactly that.
-if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-ban.sh" \
-   || ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh"; then
+# 2026-10-04: root runs the INSTALLED copy (/usr/local/libexec/ctdc, via
+# install-root-copies.sh + fail2ban action.d); there the self-check is the
+# root-owned install record, never the operator-writable checkout.
+if [[ -f "${SELF_DIR}/.ctdc-installed" ]]; then
+    selfcheck() { "${SELF_DIR}/installed-check.sh" "$@"; }
+else
+    selfcheck() { local t; for t in "$@"; do "${REPO_ROOT}/scripts/verify-manifest.sh" "$t" || return 1; done; }
+fi
+if ! selfcheck "scripts/cf-honeypot-ban.sh" "scripts/cf-honeypot-notes.sh"; then
     echo "cf-honeypot-ban: INTEGRITY CHECK FAILED -- refusing to run" >&2
     exit 1
 fi
@@ -158,7 +165,7 @@ case "${mode}" in
     payload="$("${NOTES_SCRIPT}" "${ip}")"
     resp_body="$(mktemp)"
     http_code=$(curl -s -o "${resp_body}" -w '%{http_code}' -X POST "${API_URL}" \
-                    -H "${AUTH_HDR}" -H "Content-Type: application/json" \
+                    -H @<(printf '%s\n' "${AUTH_HDR}") -H "Content-Type: application/json" \
                     --data-binary "${payload}")
     if ! cf_call_ok "BAN" "${http_code}" "${resp_body}"; then
         rm -f "${resp_body}"
@@ -172,7 +179,7 @@ case "${mode}" in
     # -G: --data-urlencode below becomes URL query params (a GET's actual
     # filter), NOT a request body, which Cloudflare would silently ignore.
     http_code=$(curl -s -G -o "${list_body}" -w '%{http_code}' -X GET "${API_URL}" \
-                    -H "${AUTH_HDR}" -H "Content-Type: application/json" \
+                    -H @<(printf '%s\n' "${AUTH_HDR}") -H "Content-Type: application/json" \
                     --data-urlencode "mode=block" \
                     --data-urlencode "configuration.target=${target}" \
                     --data-urlencode "configuration.value=${ip}")
@@ -196,7 +203,7 @@ case "${mode}" in
     fi
     del_body="$(mktemp)"
     http_code=$(curl -s -o "${del_body}" -w '%{http_code}' -X DELETE "${API_URL}/${rule_id}" \
-                    -H "${AUTH_HDR}" -H "Content-Type: application/json" \
+                    -H @<(printf '%s\n' "${AUTH_HDR}") -H "Content-Type: application/json" \
                     --data '{"cascade":"none"}')
     if ! cf_call_ok "UNBAN DELETE" "${http_code}" "${del_body}"; then
         rm -f "${del_body}"

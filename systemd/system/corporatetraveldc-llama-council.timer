@@ -1,0 +1,11 @@
+# Hourly at a fixed odd minute, clear of the :00/:15/:30 report grid.
+[Unit]
+Description=llama council/arena participant, hourly
+
+[Timer]
+OnCalendar=*-*-* *:41:00
+RandomizedDelaySec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

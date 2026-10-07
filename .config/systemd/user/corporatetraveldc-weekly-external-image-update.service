@@ -12,4 +12,8 @@ OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/weekly-external-image-update.sh
+# 2026-10-04 standing practice: the weekly run is now the FULL stack refresh
+# (pull every external, rebuild every local from signed HEAD, in-image gate,
+# serialized restart) -- scripts/stack-refresh.sh --weekly. The old
+# auto-update-only script stays for manual use.
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/stack-refresh.sh --weekly

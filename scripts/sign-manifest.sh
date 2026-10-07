@@ -220,6 +220,10 @@ if gpg --local-user "${ACTIVE_KEY}" --detach-sign --armor --yes \
        -o "${TMP_SIGNATURE}" "${TMP_MANIFEST}"; then
     mv "${TMP_MANIFEST}" "${MANIFEST}"
     mv "${TMP_SIGNATURE}" "${SIGNATURE}"
+    # 2026-10-05: mktemp creates 0600, so every sign left the pair unreadable
+    # to the ctdc-dev group -- ctdc-agent-llama's verify-manifest ExecStartPre
+    # then failed "Permission denied". Both files are public by design.
+    chmod 0644 "${MANIFEST}" "${SIGNATURE}"
 else
     rm -f "${TMP_SIGNATURE}" "${TMP_MANIFEST}"
     echo "[sign-manifest] FAILED -- gpg did not produce a signature (see error above)." >&2

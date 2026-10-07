@@ -1,60 +1,82 @@
-# Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled)
+# Second-Brain Knowledge Graph — Automation (status + the unbuilt trend pass)
 
-Drafted 2026-08-11 alongside the initial wikilink retrofit + knowledge-graph
-build (`src/second_brain/knowledge_graph/`). **This is a prompt for operator
-review — no timer, service, or schedule has been installed.** When approved,
-it should be wired the same way `scripts/weekly-doc-drift-check.sh` runs its
-prompt: `claude --model fable -p "<prompt>" --permission-mode acceptEdits`
-with an allowed-tools list, output appended to a dated log under
-`/var/lib/corporatetraveldc/`, never committing.
+Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
-> **Still unscheduled — re-verified against live state 2026-08-23.** Three
-> independent checks, all negative, so the DRAFT status above is current
-> and not merely unrevised: `systemctl --user list-unit-files | grep -i graph`
-> returns no `corporatetraveldc-*` unit; `scripts/weekly-graph-refresh.sh`
-> (the sibling script suggested at the bottom of this file) does not exist;
-> and no `docs/SECOND_BRAIN_GRAPH_TRENDS_*.md` has ever been written. The
-> invocation shape quoted above does still match the real
-> `scripts/weekly-doc-drift-check.sh:30-31`
-> (`claude --model fable -p … --permission-mode acceptEdits --allowedTools "Bash,Read,Write,Edit,Glob,Grep"`),
-> so wiring this the same way remains accurate advice.
+Drafted 2026-08-11 as a prompt for a weekly `claude -p` run that would retrofit links, rebuild the graph and write a trend report. That design was overtaken: the two deterministic steps got their own units, and the "LLM agent with tools on a timer" pattern it copied was abandoned for this repo. What remains unbuilt is the **trend report**. This file now records what runs, what was dropped and why, and the trend spec in a form that fits the current pattern.
 
-## Cadence recommendation
+## What runs today
 
-**Weekly, time-based — not commit-triggered.** Rationale:
+| Step | Unit (user, `corporatetraveldc-…`) | Tracked schedule | Live state 2026-10-06 |
+|---|---|---|---|
+| Link retrofit (`python3 -m second_brain.knowledge_graph.retrofit_links`: `03-Entities/` hubs + marked `<!-- auto-wikilinks -->` footers; idempotent; never touches `00-Inbox/rss/`, `notepad/processed/`, `.internal-backups/`) | `retrofit-links` (container + timer) | 00/06/12/18:05 ET | timer **disabled**; no recorded run |
+| Graph build (`python3 -m second_brain.knowledge_graph.build_graph`, read-only; writes `graph.json` + `vault-graph.html`, live copy in `/var/lib/corporatetraveldc/knowledge_graph/`) | `knowledge-graph-compile` (container + timer + `.path`) | 00/06/12/18:08 ET, plus whenever a note lands in `01-Sources/manual/` | timer **disabled**; `.path` active; last build 2026-10-06 10:58Z |
+| Index refresh (`index_db --scan`) | `second-brain-index-scan` | 04:00 ET (08:00Z) | ran 08:00Z but PROPFIND returned 401 (see `docs/SECOND_BRAIN_STATUS.md` §5) |
+| Trend report | none | — | **not built** |
 
-- The graph's inputs are *vault* writes (daily digests, notepad drops,
-  manual captures), which happen on their own timers and ad hoc, completely
-  decoupled from git commits in this repo — a post-commit hook would fire at
-  the wrong moments and miss the right ones.
-- The retrofit and builder are idempotent and incremental by design (the
-  `<!-- auto-wikilinks` marker means already-processed notes are skipped),
-  so a weekly pass touches only the ~dozens of new notes, not the whole
-  curated corpus. (**Corrected 2026-08-23:** this line originally said
-  "not all ~250". The corpus has grown a long way past that and the
-  argument is stronger, not weaker, for it — the last real build
-  (`src/second_brain/knowledge_graph/graph.json`, `generated_at`
-  `2026-08-18T20:19:10Z`) reports `curated_notes: 545`, and the live index
-  held **875** non-RSS notes as of the 2026-08-23 read cited below. The
-  vault index moved to Postgres in the 2026-09-19/20 cutover
-  (`src/common/pg_schema/0055_second_brain_index.sql`, table
-  `vault_notes_fulltext`), so the original re-derive command
-  (`sqlite3 /var/lib/corporatetraveldc/second_brain_index.db "SELECT COUNT(*)
-  FROM vault_notes_fts WHERE path NOT LIKE '%/00-Inbox/rss/%';"`, read
-  2026-08-23) no longer reaches live data — use `psql -h
-  /var/run/postgresql -U dispatch -d corporatetraveldc -c "SELECT COUNT(*)
-  FROM vault_notes_fulltext WHERE path NOT LIKE '%/00-Inbox/rss/%';"`
-  instead. Re-derive rather than quoting a number here either way.)
-- Weekly matches the vault's existing synthesis rhythm (`second_brain_weekly`
-  Sunday 18:15 ET, 06-AI-Memory synthesis Sunday). Suggested slot: **Sunday
-  19:00 ET** — after both weekly syntheses have landed, so the graph pass
-  sees the week's full output and its trend report can reference them.
-  Daily would add noise, not signal: single-day link deltas are mostly
-  auto-generated digests pointing at the same hubs.
+Last build (10:58Z): 2,959 curated notes, 3,058 nodes, 11,425 edges, 120 organic / 837 retrofit links, 35 unresolved links, 60 isolated notes. The repo copy `src/second_brain/knowledge_graph/graph.json` is the 2026-08-18 build (545 curated notes) and is not refreshed by the units; read the live copy.
 
-## The prompt
+## What was dropped, and why
 
-```
+- **`claude --model … -p` on a timer.** The sibling it was modelled on, `scripts/weekly-doc-drift-check.sh`, was rewritten on 2026-09-21 after its cloud-CLI run failed six consecutive times across three failure modes (subscription disabled, expired OAuth token, out of credits) and sat silently dead for about two weeks. The current pattern is: facts gathered deterministically, narrative written by the local model (`scripts/local-llm-synthesize.sh`, llama.cpp), so detection never depends on a model being reachable.
+- **Agent-with-tools writing to the repo and vault.** Since the 2026-10-04 segmentation no team account can write the checkout or hold vault admin credentials; an unattended agent editing `lexicon.py` or running the retrofit is no longer a sanctioned shape. The retrofit is deterministic code in its own container.
+- **The prompt's environment instructions** (source env files, set `NEXTCLOUD_ADMIN_USER`, reach `127.0.0.1:8090`) conflict with standing rules (never source env files; containers reach Nextcloud via `host.containers.internal:80`).
+
+## Trend report: the remaining design (not built)
+
+Shape: a deterministic script diffs the newest live `graph.json` against dated snapshots, emits structured facts, and hands them to `local-llm-synthesize.sh` for prose; the report lands as a vault note (or `docs/`, uncommitted) and the raw facts land even if the model is down.
+
+1. **Snapshot** the live `graph.json` to a dated copy under `/var/lib/corporatetraveldc/graph-snapshots/` before each weekly diff (directory does not exist yet; never pruned).
+2. **Facts**, each with note/hub names and numbers, "no change" allowed:
+   - RISING: hubs whose degree grew notably; one burst vs. sustained multi-week growth.
+   - GONE QUIET: previously well-connected hubs with zero new links for 2+ weeks.
+   - NEW CLUSTERS: groups of notes that now interlink and did not before, especially across folders.
+   - ORGANIC VS RETROFIT: the ratio, and whether new notes carried organic `[[wikilinks]]`; if organic stays near zero, name the writer that would give the most leverage.
+   - ISOLATED: count and trend; up to 5 isolated notes that plainly discuss a hub topic (lexicon gaps).
+   - HEALTH: unresolved link count, parse errors.
+3. **Lexicon gaps** are reported, not auto-applied: adding to `lexicon.py` is an operator-signed code change.
+
+Cadence when built: weekly, time-based, after the Monday weeklies have landed (the second-brain weekly synthesis runs Mon 04:30 ET); graph inputs are vault writes, not commits, so a commit hook would fire at the wrong times. Every timer added for it must carry an explicit `America/New_York` (the host clock is UTC since 2026-10-06).
+
+Open for the operator: whether the disabled `retrofit-links` and `knowledge-graph-compile` timers are disabled deliberately (the tracked files say they should run every 6 h).
+
+---
+
+---
+
+## Superseded (kept for the record)
+
+Text removed or replaced by the 2026-10-06 verification pass against the live system, kept in its original wording for the chronological record. It is **not** current. The evidence for each correction is in `docs/docs-refresh-2026-10-06/CHANGES-agents.md`.
+
+
+### (top of document)
+
+**~~Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled)~~** *(former heading)*
+
+
+### Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled)
+
+~~Drafted 2026-08-11 alongside the initial wikilink retrofit + knowledge-graph build (`src/second_brain/knowledge_graph/`). **This is a prompt for operator review — no timer, service, or schedule has been installed.** When approved, it should be wired the same way `scripts/weekly-doc-drift-check.sh` runs its prompt: `claude --model fable -p "<prompt>" --permission-mode acceptEdits` with an allowed-tools list, output appended to a dated log under `/var/lib/corporatetraveldc/`, never committing.~~
+
+> ~~**Still unscheduled — re-verified against live state 2026-08-23.** Three independent checks, all negative, so the DRAFT status above is current and not merely unrevised: `systemctl --user list-unit-files | grep -i graph` returns no `corporatetraveldc-*` unit; `scripts/weekly-graph-refresh.sh` (the sibling script suggested at the bottom of this file) does not exist; and no `docs/SECOND_BRAIN_GRAPH_TRENDS_*.md` has ever been written. The invocation shape quoted above does still match the real `scripts/weekly-doc-drift-check.sh:30-31` (`claude --model fable -p … --permission-mode acceptEdits --allowedTools "Bash,Read,Write,Edit,Glob,Grep"`), so wiring this the same way remains accurate advice.~~
+
+**~~Cadence recommendation~~** *(former heading)*
+
+
+### Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled) › Cadence recommendation
+
+~~**Weekly, time-based — not commit-triggered.** Rationale:~~
+
+- ~~The graph's inputs are *vault* writes (daily digests, notepad drops, manual captures), which happen on their own timers and ad hoc, completely decoupled from git commits in this repo — a post-commit hook would fire at the wrong moments and miss the right ones.~~
+- ~~The retrofit and builder are idempotent and incremental by design (the `<!-- auto-wikilinks` marker means already-processed notes are skipped), so a weekly pass touches only the ~dozens of new notes, not the whole curated corpus. (**Corrected 2026-08-23:** this line originally said "not all ~250". The corpus has grown a long way past that and the argument is stronger, not weaker, for it — the last real build (`src/second_brain/knowledge_graph/graph.json`, `generated_at` `2026-08-18T20:19:10Z`) reports `curated_notes: 545`, and the live index held **875** non-RSS notes as of the 2026-08-23 read cited below. The vault index moved to Postgres in the 2026-09-19/20 cutover (`src/common/pg_schema/0055_second_brain_index.sql`, table `vault_notes_fulltext`), so the original re-derive command (`sqlite3 /var/lib/corporatetraveldc/second_brain_index.db "SELECT COUNT(*) FROM vault_notes_fts WHERE path NOT LIKE '%/00-Inbox/rss/%';"`, read 2026-08-23) no longer reaches live data — use `psql -h /var/run/postgresql -U dispatch -d corporatetraveldc -c "SELECT COUNT(*) FROM vault_notes_fulltext WHERE path NOT LIKE '%/00-Inbox/rss/%';"` instead. Re-derive rather than quoting a number here either way.)~~
+- ~~Weekly matches the vault's existing synthesis rhythm (`second_brain_weekly` Sunday 18:15 ET, 06-AI-Memory synthesis Sunday). Suggested slot: **Sunday 19:00 ET** — after both weekly syntheses have landed, so the graph pass sees the week's full output and its trend report can reference them. Daily would add noise, not signal: single-day link deltas are mostly auto-generated digests pointing at the same hubs.~~
+
+**~~The prompt~~** *(former heading)*
+
+
+### Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled) › The prompt
+
+*Superseded block:*
+```text superseded
 Weekly second-brain knowledge-graph refresh + trend pass for the
 CorporateTravelDC dispatch platform (repo:
 /opt/corporatetraveldc/private/ctdi-dispatch-internal, vault: Nextcloud
@@ -145,18 +167,11 @@ rewrite existing vault content. Never print credentials. If the vault is
 unreachable, write the trends file saying so and exit — do not retry-loop.
 ```
 
-## Wiring notes (for when it's approved)
+**~~Wiring notes (for when it's approved)~~** *(former heading)*
 
-- Sibling script suggestion: `scripts/weekly-graph-refresh.sh`, same shape
-  as `scripts/weekly-doc-drift-check.sh` (nohup, dated log under
-  `/var/lib/corporatetraveldc/graph-refresh/`, `--allowedTools
-  "Bash,Read,Write,Edit,Glob,Grep"`), plus a user-scope systemd timer
-  (`Sun 19:00 America/New_York`) following the existing
-  `corporatetraveldc-docs-drift-weekly.timer` pattern.
-- The prompt deliberately makes step 2's dry-run a gate: an LLM reviewing a
-  deterministic script's plan before executing it is the same
-  belt-and-suspenders shape as the docs-drift check re-verifying rather
-  than re-doing.
-- Trends output goes to `docs/` (uncommitted) like
-  `docs/LIVE_STATE_CHECK_*.md` does, so review happens in the same place
-  the operator already looks.
+
+### Second-Brain Knowledge Graph — Automation Prompt (DRAFT, not scheduled) › Wiring notes (for when it's approved)
+
+- ~~Sibling script suggestion: `scripts/weekly-graph-refresh.sh`, same shape as `scripts/weekly-doc-drift-check.sh` (nohup, dated log under `/var/lib/corporatetraveldc/graph-refresh/`, `--allowedTools "Bash,Read,Write,Edit,Glob,Grep"`), plus a user-scope systemd timer (`Sun 19:00 America/New_York`) following the existing `corporatetraveldc-docs-drift-weekly.timer` pattern.~~
+- ~~The prompt deliberately makes step 2's dry-run a gate: an LLM reviewing a deterministic script's plan before executing it is the same belt-and-suspenders shape as the docs-drift check re-verifying rather than re-doing.~~
+- ~~Trends output goes to `docs/` (uncommitted) like `docs/LIVE_STATE_CHECK_*.md` does, so review happens in the same place the operator already looks.~~

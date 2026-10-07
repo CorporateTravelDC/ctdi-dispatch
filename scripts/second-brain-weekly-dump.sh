@@ -29,6 +29,11 @@
 # alert fires instead so this needs a human look, same as
 # claude-md-drift-daily.sh's failure-notification pattern.
 set -uo pipefail
+# 2026-10-05 (argv-token sweep): a bearer token never goes on a command line --
+# /proc/<pid>/cmdline is world-readable here (no hidepid), i.e. readable by
+# every team account. authhdr NAME TOKEN puts the header on a private fd and
+# sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
+authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${REPO_DIR}"
@@ -58,7 +63,7 @@ NTFY_TOKEN="${NTFY_TOKEN%%:*}"
 ntfy_send() {
     local title="$1" msg="$2" priority="${3:-3}"
     local auth_args=()
-    [[ -n "${NTFY_TOKEN}" ]] && auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+    [[ -n "${NTFY_TOKEN}" ]] && authhdr auth_args "${NTFY_TOKEN}"
     curl -sf --max-time 5 \
         "${auth_args[@]}" \
         -H "Title: ${title}" \

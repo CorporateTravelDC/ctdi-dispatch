@@ -42,7 +42,9 @@ Environment=ULTRAFEEDER_URL=http://100.x.x.x:8080/data/aircraft.json
 Environment=ACARSHUB_URL=http://100.x.x.x:8092
 Environment=SSE_INTERVAL_SEC=30
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the runner image reads
+# (scripts/service-env/runner.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/runner.env
 AutoUpdate=local
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql

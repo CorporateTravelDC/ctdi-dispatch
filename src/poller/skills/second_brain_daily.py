@@ -36,13 +36,35 @@ queries against this vault, and merging them would bury both. No new
 second_brain_weekly.py changes needed: it re-reads the past 7 days of
 THIS skill's own output rather than querying the DB itself, so whatever
 lands in the daily note here is already inherited by the weekly compile.
+
+2026-10-04 -- target date is resolved ONCE at startup from the scheduled
+firing, not read from the wall clock at execution (see resolve_target_date):
+  * The poller image runs in UTC (no TZ anywhere in its env), so
+    date.today() was the UTC date. The 23:45 ET anchor firing
+    (OnCalendar=*-*-* 23:45:00 America/New_York) runs at 03:45 UTC and had
+    been writing the NEXT day's 01-Sources/daily/<date>.md every night since
+    the skill shipped; the 21:45 ET 2h-sibling (01:45 UTC) did the same.
+    The 2026-10-02 lock-queue hang (97b9075) merely made the miss bigger.
+  * Rule, in America/New_York: a run whose local time is 00:00-04:59
+    belongs to the PREVIOUS local day (it is the 23:45 anchor arriving late
+    behind the shared long-runner lock, or an overnight 2h sibling
+    refreshing that same day-file). 05:00-23:59 -> that local day. The
+    operational day boundary is 05:00 ET, the end of the 23:00-05:00
+    maintenance window.
+  * The digest DB window is calendar-aligned to the same target date
+    (local midnight -> now) instead of a rolling time.time()-86400, so
+    "Date being summarized" and the rows summarised agree.
+  * Override for backfills / tests: --date YYYY-MM-DD or
+    SECOND_BRAIN_DAILY_DATE=YYYY-MM-DD.
 """
 import logging
-import time
+import os
+import sys
 from collections import Counter
 from datetime import date, datetime, timezone
 
 from common import db
+from common import optime
 from common import ntfy_push
 from common.llm import generate as llm_generate
 from common.sr1_log import log_usage
@@ -54,6 +76,40 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME = "second-brain-daily"
 OLLAMA_MODEL = "corporatetraveldc-pi5-secondbrain-daily:latest"  # dedicated Phase-4 model, persona + skill layer in its Modelfile SYSTEM
+
+# 2026-10-04 (#9): the timezone and rollover now come from common.optime
+# (DISPATCH_LOCAL_TZ / DISPATCH_DAY_ROLLOVER, defaults America/New_York /
+# 05:00); these names are kept for existing callers and tests.
+LOCAL_TZ = optime.local_tz()
+DAY_ROLLOVER_HOUR = optime.rollover().hour
+
+
+def resolve_target_date(now_utc: datetime | None = None,
+                        override: str | None = None) -> date:
+    """The operational day this run writes (see common.optime). Called
+    exactly once per run."""
+    return optime.resolve_target_date(now_utc, override)
+
+
+def window_start_ts(target: date) -> float:
+    """Epoch seconds of local midnight at the start of `target`."""
+    return optime.op_day_window(target)[0]
+
+
+def window_end_ts(target: date) -> float:
+    """Epoch seconds of local midnight at the END of `target` (exclusive).
+    2026-10-04 (duel L2): a --date backfill run days later used to digest
+    everything from that midnight to now and label it as the one day."""
+    return optime.op_day_window(target)[1]
+
+
+def _override_from_argv_env(argv: list[str]) -> str | None:
+    for i, a in enumerate(argv):
+        if a == "--date" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--date="):
+            return a.split("=", 1)[1]
+    return os.environ.get("SECOND_BRAIN_DAILY_DATE") or None
 
 # Same scope_type groupings as osint_monitor.py -- kept as a separate copy
 # rather than importing that module's private frozensets, matching this
@@ -88,7 +144,7 @@ Critical rules:
 - Be factual, not promotional."""
 
 
-def _osint_sections(cutoff_ts: float) -> tuple[list[str], int]:
+def _osint_sections(cutoff_ts: float, end_ts: float | None = None) -> tuple[list[str], int]:
     """Cross-domain OSINT rollup for the vault, grouped by scope_type so an
     EP/security item, a named-event item (COS26 and the DC-area conference
     sweep), and a marketing/brand item each land in their own labeled
@@ -104,7 +160,8 @@ def _osint_sections(cutoff_ts: float) -> tuple[list[str], int]:
         log.debug("%s: osint feed read failed (non-fatal): %s", SKILL_NAME, exc)
         return [], 0
 
-    recent = [i for i in items if i.get("ingested_at", 0) >= cutoff_ts]
+    recent = [i for i in items if i.get("ingested_at", 0) >= cutoff_ts
+              and (end_ts is None or i.get("ingested_at", 0) < end_ts)]
     if not recent:
         return [], 0
 
@@ -135,17 +192,22 @@ def _osint_sections(cutoff_ts: float) -> tuple[list[str], int]:
     return out, len(recent)
 
 
-def build_daily_content() -> tuple[str, dict]:
-    day_ago = time.time() - 86400
+def build_daily_content(target: date | None = None) -> tuple[str, dict]:
+    target = target or resolve_target_date()
+    # 2026-10-04: calendar-aligned to the target day (local midnight ->
+    # now), was a rolling time.time()-86400 that disagreed with the date
+    # in the heading. Variable name kept for the call sites below.
+    day_ago = window_start_ts(target)
+    day_end = window_end_ts(target)
     with db.conn() as c:
         cps_rows = c.execute(
             "SELECT score, label, computed_at FROM cps_scores "
-            "WHERE computed_at >= ? ORDER BY computed_at DESC",
-            (day_ago,),
+            "WHERE computed_at >= ? AND computed_at < ? ORDER BY computed_at DESC",
+            (day_ago, day_end),
         ).fetchall()
         tfr_rows = c.execute(
-            "SELECT tfr_id, is_vip FROM tfrs WHERE inserted_at >= ?",
-            (day_ago,),
+            "SELECT tfr_id, is_vip FROM tfrs WHERE inserted_at >= ? AND inserted_at < ?",
+            (day_ago, day_end),
         ).fetchall()
 
     cps_counts = Counter(r["score"] for r in cps_rows)
@@ -169,7 +231,7 @@ def build_daily_content() -> tuple[str, dict]:
     }
 
     sections = [
-        f"Date being summarized: {date.today().isoformat()}",
+        f"Date being summarized: {target.isoformat()}",
         f"CPS readings today: {len(cps_rows)} ({dict(cps_counts)})",
         f"TFRs seen today: {len(tfr_rows)} total, {len(vip_tfrs)} VIP/POTUS",
         f"Active NOTAMs: {len(notams)}",
@@ -191,7 +253,7 @@ def build_daily_content() -> tuple[str, dict]:
     # common.export_analysis's docstring for the full policy. Best-effort,
     # never fatal if the vault read fails or nothing exists today.
     try:
-        today_str = date.today().isoformat()
+        today_str = target.isoformat()
         export_note = webdav_client.get(
             f"{webdav_client.BUSINESS_ROOT}/04-Syntheses/daily/export-analysis-linkedin-{today_str}.md"
         )
@@ -204,21 +266,25 @@ def build_daily_content() -> tuple[str, dict]:
     # 2026-08-12: cross-domain OSINT rollup -- see _osint_sections() and
     # module docstring for why this is grouped by scope_type rather than
     # one flat list.
-    osint_sections, osint_count = _osint_sections(day_ago)
+    osint_sections, osint_count = _osint_sections(day_ago, day_end)
     sections.extend(osint_sections)
     stats["osint_items_today"] = osint_count
 
     return "\n\n".join(sections), stats
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     gate_result = "new"
     status = "error"
-    today = date.today().isoformat()
+    argv = sys.argv[1:] if argv is None else argv
+    target = resolve_target_date(override=_override_from_argv_env(argv))
+    today = target.isoformat()
     rel_path = None
+    log.info("%s: target date %s (local now %s)", SKILL_NAME, today,
+             datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M %Z"))
 
     try:
-        raw_content, stats = build_daily_content()
+        raw_content, stats = build_daily_content(target)
 
         # CUI/PII scrub gate -- non-negotiable, see second_brain.scrub_gate
         raw_content = gate(raw_content, source=SKILL_NAME)

@@ -1,0 +1,13 @@
+# corporatetraveldc-team-liveness-orders.path -- react to a new kill order
+# within minutes instead of waiting for the hourly timer. kill-order.sh
+# touches <orders>/.new after writing an order (orders live in subdirs, and
+# PathChanged= watches the root only), which fires the liveness service.
+# Install: cp to /etc/systemd/system/, systemctl daemon-reload,
+# systemctl enable --now corporatetraveldc-team-liveness-orders.path
+[Unit]
+Description=Run the team-liveness switch when a kill order is filed
+[Path]
+PathChanged=/var/lib/corporatetraveldc/team-liveness/orders
+Unit=corporatetraveldc-team-liveness.service
+[Install]
+WantedBy=multi-user.target

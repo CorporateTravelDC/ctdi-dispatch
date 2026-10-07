@@ -22,6 +22,16 @@ ContainerName=corporatetraveldc-dumpvdl2
 # /dev/rtl_sdr_acars) already existed and was simply never wired in.
 AddDevice=/dev/rtl_sdr_acars:/dev/rtl_sdr_acars
 Volume=/dev/bus/usb:/dev/bus/usb:ro
+# 2026-10-03: the image has no env for an extra --output, so its launch
+# script is overlaid with a tracked copy (containers/dumpvdl2/launch.sh)
+# that can add a direct airframes.io output. Tested 2026-10-03 22:00 ET:
+# the station page says TCP 5555, but dumpvdl2 has no TCP transport
+# ("Output type 'tcp' is unknown") and the direct UDP 5555 output was never
+# credited by airframes in a 10-min window, while acars_router -> TCP 5553
+# with AR_ADD_PROXY_ID=false was. Direct output left OFF; airframes is fed
+# by the router. Flip to true only for a re-test.
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/containers/dumpvdl2/launch.sh:/etc/s6-overlay/scripts/dumpvdl2:ro,Z
+Environment=AIRFRAMES_DIRECT=false
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-08-26 (Opus blind review C-4): dispatch-secrets.env intentionally
 # NOT loaded here -- third-party code parsing untrusted RF input, never

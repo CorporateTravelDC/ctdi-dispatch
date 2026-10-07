@@ -95,7 +95,7 @@ RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
 # corporatetraveldc-pi5-chat is a Modelfile wrapper on phi3:mini (Phase 4
 # rebuild 2026-08-15, persona + chat layer baked into its SYSTEM).
 # llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
-OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",   "")              # e.g. http://host.containers.internal:11434
+LLAMA_BASE_URL     = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; the llama.cpp server, e.g. http://100.x.x.x:8093
 OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
 OLLAMA_CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",  "corporatetraveldc-pi5-chat:latest")  # dispatch drawer

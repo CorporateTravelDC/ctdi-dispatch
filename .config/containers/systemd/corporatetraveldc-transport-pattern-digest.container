@@ -19,7 +19,9 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
 # together either EVER"): flock on the box-wide unit lock wraps the whole
 # run, so a second report container blocks here -- inside its own
@@ -58,7 +60,11 @@ Exec=/bin/sh -c 'flock -w 1200 /var/lib/corporatetraveldc/llama-pool/long-runner
 # WARNING: this unit's OnCalendar= MUST stay inside the window or it will
 # silently never run again. Verify with:
 #   scripts/maintenance-window-guard.sh --check --at HH:MM
-ExecCondition=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/maintenance-window-guard.sh
+# 2026-10-04: enrolled in the rolling-window queue (scripts/lib/maintenance-queue.txt).
+# Started by scripts/maintenance-dispatch.sh inside a quiet window drawn daily from the
+# 30-day load profile; the fixed timer is retired. --rolling keeps a safety net: if the
+# dispatcher ever starts this outside today's windows, the unit skips cleanly.
+ExecCondition=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/maintenance-window-guard.sh --rolling
 # 2026-08-06: dedicated slice, separate from app.slice (where the
 # interactive desktop session -- Brave/Claude Desktop -- lives). Lets
 # app.slice carry its own memory ceiling without also capping
@@ -83,4 +89,10 @@ Type=oneshot
 # margin, this one didn't. +200s (~14%) added; a governor-pause
 # retry-wait can still exceed this, systemd remains the deliberate
 # backstop either way.
-TimeoutStartSec=1600
+# 2026-10-06: 1600 predates the 2026-10-04 `flock -w 1200` -- the lock wait
+# was never added on top, and the mining phase no longer fits the 800s
+# fixed figure (8 min on 10-06 01:28Z, 15 min on 10-06 15:42Z under load
+# ~11). The 15:42Z run was killed at 28m14s mid-LLM-call. Budget now:
+# 1200 lock wait + 1000 mining + 420 preflight gates + 600 digest call
+# + ~80 cushion = 3300s.
+TimeoutStartSec=3300

@@ -478,21 +478,18 @@ def test_resolve_flight_identity_callsign_shaped_hex_collision_uses_callsign():
         entry = _make_transient_flight(identifier="AA5265")
         entry["hex_id"] = None
 
+        # 2026-08-29 (d5c4df0): third-party position lookups were removed;
+        # identity now resolves from the local receiver / FDPS via
+        # _local_ac_by_hex / _local_ac_by_callsign. The collision guard is
+        # the same: a callsign-shaped identifier must never take the
+        # bare-hex path.
         fake_ac = {"hex": "02736f", "r": "Q07ZI"}
-        with patch("shared.watchlist.requests.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"ac": [fake_ac]}
-            mock_resp.raise_for_status.return_value = None
-            mock_get.return_value = mock_resp
-
+        with patch("shared.watchlist._local_ac_by_hex") as by_hex, \
+             patch("shared.watchlist._local_ac_by_callsign", return_value=fake_ac) as by_cs, \
+             patch("shared.watchlist._local_fdps_ac", return_value=None):
             resolve_flight_identity(entry, "AA5265", source="test")
-
-            called_url = mock_get.call_args[0][0]
-            assert "/v2/callsign/AA5265" in called_url, (
-                f"expected callsign lookup, got: {called_url}"
-            )
-            assert "/v2/hex/aa5265" not in called_url
+            assert by_cs.called, "expected callsign lookup"
+            assert not by_hex.called, "callsign-shaped identifier took the bare-hex path"
 
 
 def test_resolve_flight_identity_genuine_hex_still_uses_hex_path():
@@ -507,19 +504,12 @@ def test_resolve_flight_identity_genuine_hex_still_uses_hex_path():
         entry["hex_id"] = None
 
         fake_ac = {"hex": "a835f2", "r": "Q1T45"}
-        with patch("shared.watchlist.requests.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"ac": [fake_ac]}
-            mock_resp.raise_for_status.return_value = None
-            mock_get.return_value = mock_resp
-
+        with patch("shared.watchlist._local_ac_by_hex", return_value=fake_ac) as by_hex, \
+             patch("shared.watchlist._local_ac_by_callsign") as by_cs:
             resolve_flight_identity(entry, "A835F2", source="test")
-
-            called_url = mock_get.call_args[0][0]
-            assert "/v2/hex/a835f2" in called_url, (
-                f"expected hex lookup, got: {called_url}"
-            )
+            assert by_hex.called, "expected hex lookup"
+            by_hex.assert_called_with("a835f2")
+            assert not by_cs.called
 
 
 if __name__ == "__main__":

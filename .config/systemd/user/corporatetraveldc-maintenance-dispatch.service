@@ -1,0 +1,7 @@
+# corporatetraveldc-maintenance-dispatch.service -- see scripts/maintenance-dispatch.sh
+[Unit]
+Description=Rolling-window dispatcher for the long-runner queue
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/maintenance-dispatch.sh

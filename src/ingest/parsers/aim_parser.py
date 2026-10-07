@@ -110,6 +110,7 @@ _VIP_KEYWORDS = frozenset({
 # itself word-bounded, so removal is the correct minimal fix, not \bAF1\b.
 
 # 2026-09-22 (operator): VENUS / CRANE / SAM added as VIP movement
+# (CRANE narrowed to the callsign form only on 2026-10-05 -- see below)
 # identifiers. Deliberately NOT added to _VIP_KEYWORDS above, because that
 # set is matched with a bare `kw in upper` substring test and these three are
 # short enough for that to be actively wrong:
@@ -128,20 +129,23 @@ _VIP_KEYWORDS = frozenset({
 # boundary between M and 4).
 _VIP_CALLSIGN_RE = re.compile(r"\b(?:VENUS|SAM|MCM)\d*\b")
 
-# CRANE is split out because it collides with construction-obstruction NOTAMs,
-# which are common near DCA/IAD -- "TOWER CRANE ERECTED 250FT AGL", "CRANE OPR
-# WI 0.5NM OF RWY 19 THR", "MOBILE CRANE IN USE ADJ TWY B" all matched a plain
-# \bCRANE\b (verified 2026-09-22). Treating every one of those as VIP movement
-# would bury real VIP alerts in obstruction noise.
-#
-# The guard is deliberately NARROW -- it suppresses only the obstruction
-# phrasings, not the word itself. A missed VIP movement is far worse than a
-# spurious one, so anything ambiguous still fires.
-_CRANE_RE = re.compile(r"\bCRANE\d*\b")
-_CRANE_OBSTRUCTION_RE = re.compile(
-    r"(?:\b(?:TOWER|MOBILE|CONSTRUCTION|ERECTED|LUFFING|CRAWLER)\s+CRANE)"
-    r"|(?:\bCRANE\s+(?:OPR|OPERATING|ERECTED|IN\s+USE|WI\b|WORK))"
+# CRANE (2026-10-05, operator: "it should only be for call signs"). CRANE is a
+# CALLSIGN family -- CRANE01 / CRANE 05 / CRANE 50, the non-VIP callsigns of the
+# Air Force One / Air Force Two training aircraft -- and nothing else. The
+# 09-22 rule matched the WORD and only suppressed a few obstruction phrasings,
+# so every "TEMPORARY CRANE 474 MSL", "TEMP CRANE 2.2NM FROM DER", "BELOTTI
+# CRANE 20 TONS" (1,401 crane NOTAMs in the table on 10-05, 218 of them with a
+# number after the word) still landed on hot-alerts as VIP movement.
+# Now: CRANE + exactly two digits (optionally one space), word-bounded, and the
+# number must not be a measurement (MSL/AGL/FT/FEET/NM/M/TON(S)/decimal), nor
+# the word an obstruction (TEMP/TEMPORARY/TOWER/MOBILE/... CRANE). Bare CRANE
+# never matches.
+_CRANE_CALLSIGN_RE = re.compile(
+    r"(?<!TEMPORARY )(?<!TEMP )(?<!TOWER )(?<!MOBILE )(?<!CONSTRUCTION )(?<!CRAWLER )(?<!LUFFING )"
+    r"\bCRANE ?\d{2}\b"
+    r"(?!\s*(?:\.\d|MSL\b|AGL\b|FT\b|FEET\b|NM\b|M\b|TONS?\b|T\b|'|%))"
 )
+
 
 # ARTCCs covering the DC operating region -- any NOTAM tied to one of these
 # FIRs is a must-ingest regardless of classification (Washington, New York,
@@ -203,14 +207,77 @@ def _get_facility_filter() -> frozenset[str]:
     return _PERMANENT_AIRPORTS | extra
 
 
+# ── TFR authority priority (2026-10-05, operator) ─────────────────────────────
+# "Place all of them in the sweep": every TFR citing one of the FAA's
+# special-use flight-restriction authorities is ALERTED, nationwide, at:
+#   14 CFR 91.141 (presidential / VIP movement)              -> 5 everywhere
+#   14 CFR 91.143 (space operations)                         -> 5 everywhere
+#   14 CFR 99.7 / 49 USC 40103(b)(3) (National Defense
+#     Airspace, special security instructions)               -> 5 everywhere
+#   14 CFR 91.137 (disaster / hazard / relief, e.g. a hurricane
+#     response TFR)                                          -> HOME 5, MONITOR 4, else 3
+#   14 CFR 91.145 (aerial demonstrations / major sporting
+#     events)                                                -> HOME 5, MONITOR 4, else 3
+# HOME = the operator's air traffic control zone(s), NOTAM_HOME_ARTCCS;
+# MONITOR = other centers whose hubs matter, NOTAM_MONITOR_ARTCCS -- the
+# Amtrak core-vs-watched pattern. Both are per-deployment settings in
+# dispatch.env with NO built-in default (unset = no such zone). Matched against the NOTAM's FIR/location/facility like _in_dc_region.
+# A NOTAM citing several authorities takes the highest priority.
+_TFR_AUTHORITY_RES = (
+    ("91.137", re.compile(r"\b91\.137\b")),
+    ("91.141", re.compile(r"\b91\.141\b")),
+    ("91.143", re.compile(r"\b91\.143\b")),
+    ("91.145", re.compile(r"\b91\.145\b")),
+    ("99.7", re.compile(r"\b99\.7\b|\b40103\s*\(\s*B\s*\)")),
+)
+_ZONED_AUTHORITIES = frozenset({"91.137", "91.145"})   # priority by zone: home 5 / monitor 4 / else 3
+
+
+def tfr_authorities(notam_text: str) -> set[str]:
+    upper = (notam_text or "").upper()
+    return {name for name, rx in _TFR_AUTHORITY_RES if rx.search(upper)}
+
+
+def _home_artccs() -> frozenset[str]:
+    return frozenset(a.upper() for a in ingest_config.NotamConfig().home_artccs)
+
+
+def _monitor_artccs() -> frozenset[str]:
+    return frozenset(a.upper() for a in ingest_config.NotamConfig().monitor_artccs)
+
+
+def in_home_zone(notam: dict) -> bool:
+    return bool(_artcc_candidates(notam) & _home_artccs())
+
+
+def notam_zone(notam: dict) -> str:
+    """'home' | 'monitor' | 'other' (home wins when a NOTAM names both)."""
+    cands = _artcc_candidates(notam)
+    if cands & _home_artccs():
+        return "home"
+    if cands & _monitor_artccs():
+        return "monitor"
+    return "other"
+
+
+def tfr_priority(notam: dict) -> int | None:
+    """ntfy priority for a TFR by its citing authority (table above), or None
+    when the NOTAM cites none of them."""
+    auths = tfr_authorities(notam.get("text_body", ""))
+    if not auths:
+        return None
+    zoned = {"home": 5, "monitor": 4, "other": 3}[notam_zone(notam)]
+    return max(zoned if a in _ZONED_AUTHORITIES else 5 for a in auths)
+
+
 def _is_vip_notam(notam_text: str) -> bool:
     upper = (notam_text or "").upper()
     if any(kw in upper for kw in _VIP_KEYWORDS):
         return True
     if _VIP_CALLSIGN_RE.search(upper):
         return True
-    # CRANE only counts when it is not obviously a construction obstruction.
-    if _CRANE_RE.search(upper) and not _CRANE_OBSTRUCTION_RE.search(upper):
+    # CRANE counts only as a callsign (CRANE01 / CRANE 05), never the word.
+    if _CRANE_CALLSIGN_RE.search(upper):
         return True
     return False
 
@@ -321,7 +388,9 @@ def _fire_notam_alert(notam: dict) -> None:
     hot-alerts respectively"):
       VIP NOTAMs (POTUS/AF1/Marine One)       → hot-alerts, priority=5
       Flight-restriction NOTAMs (non-VIP)     → fdps-alerts/fdps-<zone>,
-                                                 priority=4, fired on FIRST
+                                                 priority=4 -- or tfr_priority()
+                                                 by citing authority (2026-10-05),
+                                                 fired on FIRST
                                                  occurrence (escalating_only
                                                  =False -- a lone TFR is
                                                  itself alert-worthy, unlike
@@ -364,7 +433,8 @@ def _fire_notam_alert(notam: dict) -> None:
     body = text_body[:400] if text_body else notam_id
 
     is_vip = _is_vip_notam(text_body)
-    is_restriction = (not is_vip) and _is_flight_restriction_notam(text_body)
+    tfr_pri = None if is_vip else tfr_priority(notam)
+    is_restriction = (not is_vip) and (tfr_pri is not None or _is_flight_restriction_notam(text_body))
 
     fired = False
     family_fired = False
@@ -401,7 +471,7 @@ def _fire_notam_alert(notam: dict) -> None:
             from shared.sector_coalesce import fire_family_alert
             result = fire_family_alert(
                 "fdps", "fdps_notam", facility, title, body, body,
-                base_priority=4, escalating_only=False, isolate=True,
+                base_priority=tfr_pri or 4, escalating_only=False, isolate=True,
             )
             family_fired = bool(result.get("fired") or result.get("zone_fired"))
         except Exception as e:
@@ -425,8 +495,8 @@ def _fire_notam_alert(notam: dict) -> None:
     if fired or family_fired:
         _NOTAM_DEDUP.record(notam_id, dedup_key)
         log.info(
-            "aim: notam alert fired: %s facility=%s vip=%s restriction=%s legacy_fired=%s family_fired=%s",
-            notam_id, facility, is_vip, is_restriction, fired, family_fired,
+            "aim: notam alert fired: %s facility=%s vip=%s restriction=%s tfr_priority=%s legacy_fired=%s family_fired=%s",
+            notam_id, facility, is_vip, is_restriction, tfr_pri, fired, family_fired,
         )
 
 
@@ -579,8 +649,10 @@ def write_aim_notams(notams: list[dict]) -> int:
             )
             written += 1
 
-            # Alert routing: VIP always; DC-region and watch-set NOTAMs too.
-            if is_vip or in_watch or in_dc_region:
+            # Alert routing: VIP always; DC-region and watch-set NOTAMs too;
+            # and (2026-10-05) every FDC TFR citing a 91.137/141/143/145 or
+            # 99.7 / 40103(b) authority, nationwide, at tfr_priority().
+            if is_vip or in_watch or in_dc_region or (is_fdc and tfr_priority(n) is not None):
                 _fire_notam_alert(n)
             elif is_fdc:
                 log.debug("aim: FDC NOTAM stored but not alerted (facility=%s not in watch set)", facility)

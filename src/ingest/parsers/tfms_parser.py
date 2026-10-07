@@ -940,8 +940,10 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
                 break
         if _tfms_phase:
             try:
+                # 2026-10-05: airline-posted times carry their own source so SWIM
+                # surface observation always beats them (db._oooi_authority_check).
                 _accepted = db.update_watchlist_oooi_phase_authoritative(
-                    entry["id"], _tfms_phase, source="tfms",
+                    entry["id"], _tfms_phase, source="tfms_airline",
                     updated_at=_tfms_time or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 )
                 if not _accepted:

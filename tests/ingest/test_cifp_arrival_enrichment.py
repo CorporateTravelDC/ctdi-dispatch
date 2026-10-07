@@ -295,6 +295,13 @@ def test_tbfm_watchlist_status_includes_runway_eta_estimate(cifp_db, monkeypatch
         "flight_id": "UAL123", "meter_fix": "SWANN", "eta": "2026-09-05T18:00:00Z",
         "apt": "IAD", "facility": "ZDC", "sequence_num": 3, "assigned_speed": 250,
     }]
+    # f91a442 (2026-09-06): the estimate is computed by
+    # cifp_lookup.runway_eta_epoch(flight_id) from the stored tbfm_sequences
+    # row (freshest-first, arc-aware), not from the in-memory sequence --
+    # the same row the parser upserts before calling this. Seed it as the
+    # sibling tests above do.
+    db.upsert_tbfm_sequence("SWANN", "ZDC", "UAL123", "2026-09-05T18:00:00Z", 3, 250,
+                            eta_kind="mfx")
     _check_tbfm_watchlist_hits(sequences)
 
     assert "status" in captured

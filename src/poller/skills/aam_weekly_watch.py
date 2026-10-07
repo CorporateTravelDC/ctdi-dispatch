@@ -44,6 +44,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 from common import config
+from common import optime
 from common import ntfy_push
 from common.llm import generate as llm_generate
 from common.rss_retrieval import retrieve, format_citations
@@ -240,7 +241,9 @@ def _split_framings(raw: str) -> tuple[str, str]:
 
 def main() -> None:
     status = "error"
-    today = date.today()
+    # 2026-10-05 (#9 follow-up): the OPERATIONAL day (America/New_York, 05:00
+    # rollover), not the container's UTC calendar date
+    today = optime.op_today()
     rel_path = None
 
     try:

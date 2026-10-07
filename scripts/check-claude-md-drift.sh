@@ -181,6 +181,22 @@ else
     ok "no failed or crash-looping units"
 fi
 
+# -- 5b. failed SYSTEM units -------------------------------------------------
+# 2026-10-04: nginx, fail2ban and the legacy verifier.service sat failed for
+# ~1.5h after the 19:53 hard reset and nobody saw it -- this check only looked
+# at the operator's user units. Every failed system unit (any name: nginx,
+# fail2ban and sshd matter as much as ours) must be in the Known bad section.
+SYS_FAILED=$(systemctl list-units --all --plain --no-legend --state=failed,auto-restart --no-pager 2>/dev/null \
+             | awk '{print $1}' | sed 's/\.service$//')
+if [[ -n "${SYS_FAILED}" ]]; then
+    while IFS= read -r u; do
+        [[ -z "${u}" ]] && continue
+        grep -qF "${u}" "${DOC}" || drift "SYSTEM unit ${u} is failed/crash-looping and is absent from ${DOC}'s Known bad section"
+    done <<< "${SYS_FAILED}"
+else
+    ok "no failed or crash-looping system units"
+fi
+
 # -- 6. Known bad staleness -------------------------------------------------
 KB_DATE=$(grep -oE '## Known bad \(as of ([0-9]{4}-[0-9]{2}-[0-9]{2})\)' "${DOC}" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')
 if [[ -n "${KB_DATE}" ]]; then
@@ -309,24 +325,31 @@ if [[ -f "${CF_TRACKED}" ]]; then
     fi
 fi
 
-# -- 13. skills: repo skills/ vs what actually executes under
-# ~/.claude/skills (2026-10-03, backlog "twin gate" 2A). WARN-ONLY until the
-# sync direction is decided: the manifest covers repo skills/, but the copy
-# agents load is the live tree, which the manifest never sees. Reports the
-# size gap and any skill present live but absent from the repo, so the gap
-# is at least visible on every run instead of rediscovered monthly.
+# -- 13. skills twin gate (backlog 2A). 2026-10-03: was WARN-only while the
+# sync direction was undecided. Decided tonight: the repo is canonical and
+# scripts/skills-sync.sh is the gate. A TRACKED skill whose live copy under
+# ~/.claude/skills differs is now DRIFT (signed artifact != executing
+# artifact -- the live flight-hifi-track was found still carrying the
+# pre-2026-08-31 banned-API procedure this way). A project-authored live
+# dir that is not tracked anywhere stays a WARN. Vendor/bundled dirs are
+# ignored via scripts/lib/skills-vendor-ignore.txt (shared with the sync
+# script -- one list).
 SKILLS_LIVE="${HOME_DIR}/.claude/skills"
-if [[ -d "${SKILLS_LIVE}" ]]; then
-    live_n="$(find "${SKILLS_LIVE}" -type f 2>/dev/null | wc -l)"
-    repo_n="$(find skills -type f 2>/dev/null | wc -l)"
-    live_only="$(comm -23 \
-        <( { find "${SKILLS_LIVE}" "${SKILLS_LIVE}/synced" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | xargs -r -n1 basename | grep -vx synced; } | sort -u) \
-        <(find skills -mindepth 1 -maxdepth 1 -type d 2>/dev/null | xargs -r -n1 basename | sort -u) | tr '\n' ' ')"
-    if [[ "${live_n}" -ne "${repo_n}" || -n "${live_only}" ]]; then
-        warn "skills: ${live_n} file(s) execute from ${SKILLS_LIVE} but repo skills/ tracks ${repo_n} -- live-only skill dirs: ${live_only:-none}. Unsigned executing copies (backlog 2A, twin gate); not yet a hard failure."
+SKILLS_SYNC="scripts/skills-sync.sh"
+if [[ -d "${SKILLS_LIVE}" && -x "${SKILLS_SYNC}" ]]; then
+    skills_out="$(SKILLS_LIVE_ROOT="${SKILLS_LIVE}" "${SKILLS_SYNC}" check 2>&1)"; skills_rc=$?
+    skills_summary="$(printf '%s\n' "${skills_out}" | grep -m1 '^skills-sync check:')"
+    if [[ ${skills_rc} -ne 0 ]]; then
+        drift "skills: tracked skill(s) differ from the executing copies under ${SKILLS_LIVE} -- ${skills_summary#skills-sync check: }. Run: ${SKILLS_SYNC} check (then apply --i-am-the-operator once the repo copy is signed)"
+        printf '%s\n' "${skills_out}" | grep -E '^\[(DIVERGENT|MISSING-LIVE)\]|^    ' | sed 's/^/        /'
+    elif printf '%s\n' "${skills_out}" | grep -q '^\[WARN\]'; then
+        warn "skills: ${skills_summary#skills-sync check: } -- untracked project skill dir(s) execute live:"
+        printf '%s\n' "${skills_out}" | grep '^\[WARN\]' | sed 's/^\[WARN\]  */        /'
     else
-        ok "skills: repo skills/ and ${SKILLS_LIVE} agree (${repo_n} files)"
+        ok "skills: ${skills_summary#skills-sync check: }"
     fi
+elif [[ -d "${SKILLS_LIVE}" ]]; then
+    warn "skills: ${SKILLS_SYNC} missing or not executable -- twin gate not checked"
 fi
 
 echo "--"

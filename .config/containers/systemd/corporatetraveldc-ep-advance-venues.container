@@ -17,16 +17,29 @@ Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
 # together either EVER"): flock on the box-wide unit lock wraps the whole
 # run, so a second report container blocks here -- inside its own
 # container, holding no model, no threads -- until the one ahead exits.
 # It waits; it is never refused and never kills the run ahead of it.
 # common/llama_pool.py takes a separate per-generation lock on top.
-Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ep_advance_venues.py
+# 2026-10-04 (97b9075 pattern, see second-brain-daily.container): bounded lock wait.
+#   -w 3600  max seconds to queue for the shared long-runner lock (was unbounded --
+#            the queue wait ate the run budget and systemd killed the flock);
+#   -E 75    give-up exits EX_TEMPFAIL = clean skip (SuccessExitStatus=75 below);
+#   --verbose  logs the real lock wait on every run.
+# TimeoutStartSec below = 3600 (queue wait) + 5200 (run budget, unchanged) + 100.
+Exec=/usr/bin/flock --verbose -w 3600 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ep_advance_venues.py
 
 [Service]
+# 2026-10-04: enrolled in the rolling-window queue (scripts/lib/maintenance-queue.txt).
+# Started by scripts/maintenance-dispatch.sh inside a quiet window drawn daily from the
+# 30-day load profile; the fixed timer is retired. --rolling keeps a safety net: if the
+# dispatcher ever starts this outside today's windows, the unit skips cleanly.
+ExecCondition=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/maintenance-window-guard.sh --rolling
 Slice=production.slice
 MemoryLow=512M
 CPUWeight=100
@@ -42,4 +55,9 @@ Type=oneshot
 # call (OLLAMA_TIMEOUT, ep_advance_venues.py -- padded above the ~3600s
 # measured for this same prompt-size class, since this runs once daily
 # and a longer worst-case wait costs nothing here) = 5000s worst case.
-TimeoutStartSec=5200
+# 2026-10-04: was the run-only budget (5200); the lock queue wait (flock -w 3600
+# in Exec=) now sits in front of it, so the start budget is the sum.
+TimeoutStartSec=8900
+# Exit 75 (EX_TEMPFAIL) = flock gave up waiting for the long-runner lock
+# (see Exec=). A clean, logged skip -- not a failure, not a page.
+SuccessExitStatus=75

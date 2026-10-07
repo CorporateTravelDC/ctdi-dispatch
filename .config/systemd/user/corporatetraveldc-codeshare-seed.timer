@@ -1,0 +1,11 @@
+# corporatetraveldc-codeshare-seed.timer -- daily 04:40 ET, before the morning
+# bank, so the day's watchlist adds resolve marketed numbers to operating ones.
+[Unit]
+Description=Daily DC-metro codeshare map refresh
+[Timer]
+OnCalendar=*-*-* 04:40:00 America/New_York
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

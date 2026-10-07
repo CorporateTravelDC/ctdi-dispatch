@@ -1087,7 +1087,11 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     event_map = {
         ("pre_departure", "out"): (f"{ident} OUT — gate departure / pushback", 4),
         ("out",           "off"): (f"{ident} OFF — wheels up", 5),
-        ("pre_departure", "off"): (f"{ident} OFF — airborne", 5),
+        # 2026-10-05 (JZA825): a first airborne sighting with no departure
+        # observed is NOT a takeoff -- it fired "OFF -- airborne" 8 nm from
+        # DCA, 70 min after the real off. Labelled for what it is; the
+        # airline-reported OFF (TFMS) is appended below when known.
+        ("pre_departure", "off"): (f"{ident} first seen airborne (takeoff not observed)", 4),
         ("off",           "on"):  (f"{ident} ON — wheels down / landed", 5),
         ("out",           "on"):  (f"{ident} ON — wheels down / landed", 5),
         ("pre_departure", "on"):  (f"{ident} ON — landed (departure not tracked)", 5),
@@ -1120,6 +1124,14 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
         confirm_src = None
         if acars:
             confirm_src = "acars"
+        elif current_phase in ("on", "in"):
+            # 2026-10-05 operator directive: ADS-B shall NEVER authoritatively
+            # say ON/IN -- and FIDS is never OOOI-authoritative (2026-09-27),
+            # so an ADS-B-derived landing "confirmed via FIDS" is two
+            # non-authorities agreeing. ON/IN come from ACARS (above), SMES
+            # and TFMS (their own parsers) only.
+            log.debug("%s: ADS-B suggests %s; ON/IN only from ACARS/SMES/TFMS -- not firing", ident, current_phase)
+            return True
         else:
             try:
                 if _fids_confirms_phase(entry, ident, current_phase):
@@ -1142,6 +1154,14 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
             return True
 
         summary, priority = event_map[event_key]
+        if event_key == ("pre_departure", "off"):
+            try:
+                from shared.watchlist import tfms_departure_state, _et
+                _st = tfms_departure_state(ident, entry.get("origin"), entry.get("destination"))
+                if _st and _st[0] == "off":
+                    summary = f"{summary}; OFF {_et(_st[1])} per airline (TFMS)"
+            except Exception as e:
+                log.debug("%s: TFMS off-time lookup failed: %s", ident, e)
         # 2026-07-28: credit the actual source that determined this phase
         # transition instead of a bare generic string. `acars` (set above,
         # unconditionally, before the phase-derivation branch) is truthy
@@ -1410,12 +1430,9 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             acars_confirms = bool(acars_check and acars_check[0] in ("on", "in"))
             acars_contradicts = bool(acars_check and acars_check[0] not in ("on", "in"))
 
+            # 2026-10-05: FIDS may not confirm IN (FIDS is never OOOI-authoritative,
+            # 2026-09-27); this inferred IN now needs the aircraft's own ACARS.
             fids_confirms = False
-            if not acars_confirms:
-                try:
-                    fids_confirms = _fids_shows_landed(entry, ident)
-                except Exception as e:
-                    log.debug("schedule infer FIDS check %s: %s", ident, e)
 
             if acars_contradicts:
                 log.info(
@@ -1447,29 +1464,68 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             )
             log.info("flight schedule infer: %s IN (%s)", ident, reason)
 
-    # Departure inference: past sched_dep+90min with no OFF seen yet
+    # Departure check: past sched_dep+90min with no OFF seen yet.
+    # 2026-10-06 (operator: "inference may never assert"): this used to push
+    # "OFF -- departed (schedule inferred)" and write oooi_phase=off through the
+    # unguarded writer -- asserting a takeoff nobody observed, and handing the
+    # entry to the ADS-B-dark arrival inference above. Now it ASKS the real
+    # sources and only an observation (or the airline's own reported time,
+    # subject to SWIM-beats-airline) may move the phase, through the authority
+    # gate; otherwise one honest "departure overdue, not observed" push and
+    # the phase stays where it is.
     if last_phase == "pre_departure":
         sched_dep = entry.get("scheduled_departure")
         if sched_dep:
             try:
                 dep_dt = datetime.fromisoformat(sched_dep.replace("Z", "+00:00"))
                 if now > dep_dt + timedelta(minutes=90):
-                    acars_ctx = _acars_reason_context(ident, entry.get("registration"))
-                    summary = f"{ident} OFF — departed (schedule inferred, ADS-B not seen)\n{acars_ctx}"
-                    watchlist_event_hit(
-                        entry["id"], summary,
-                        {"watchlist_trigger": "oooi_off_inferred",
-                         "identifier": ident, "scheduled_departure": sched_dep,
-                         "note": "No ADS-B contact — departure inferred from schedule",
-                         "acars_context": acars_ctx},
-                        priority=4,
-                    )
-                    db.update_watchlist_oooi_phase(
-                        entry["id"], "off", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    )
-                    log.info("flight schedule infer: %s OFF (past dep+90m)", ident)
+                    _departure_overdue_check(entry, ident, sched_dep, now)
             except Exception as e:
                 log.debug("schedule infer dep %s: %s", ident, e)
+
+
+def _departure_overdue_check(entry: dict, ident: str, sched_dep: str, now) -> str:
+    """Returns the source that confirmed OFF ('acars'|'fdps'|'tfms_airline') or
+    'overdue' when nothing did. Never asserts a phase from the schedule."""
+    from shared.watchlist import watchlist_event_hit, tfms_departure_state, _et
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    acars_ctx = _acars_reason_context(ident, entry.get("registration"))
+    src, label, when = None, "", stamp
+    try:
+        a = _acars_phase(ident, registration=entry.get("registration"))
+        if a and a[0] in ("off", "on", "in"):
+            src, label = "acars", f"confirmed via ACARS ({a[1].get('label') or a[1].get('_source') or 'ACARS'})"
+    except Exception as e:
+        log.debug("%s: overdue ACARS check failed: %s", ident, e)
+    if not src:
+        try:
+            if _fdps_confirms_off(ident, entry.get("hex_id")):
+                src, label = "fdps", "confirmed via FDPS (flight plan active)"
+        except Exception as e:
+            log.debug("%s: overdue FDPS check failed: %s", ident, e)
+    if not src:
+        try:
+            st = tfms_departure_state(ident, entry.get("origin"), entry.get("destination"))
+            if st and st[0] == "off":
+                src, label, when = "tfms_airline", f"OFF {_et(st[1])} per airline (TFMS)", st[1]
+        except Exception as e:
+            log.debug("%s: overdue TFMS check failed: %s", ident, e)
+    if src and db.update_watchlist_oooi_phase_authoritative(entry["id"], "off", source=src, updated_at=when):
+        watchlist_event_hit(entry["id"], f"{ident} OFF -- {label}; not seen by ADS-B\n{acars_ctx}",
+                            {"watchlist_trigger": "oooi_off", "identifier": ident, "phase": "off", "source": src,
+                             "scheduled_departure": sched_dep, "acars_context": acars_ctx},
+                            priority=4)
+        log.info("flight departure check: %s OFF via %s (past dep+90m)", ident, src)
+        return src
+    watchlist_event_hit(entry["id"],
+                        f"{ident} departure overdue -- not observed 90+ min after scheduled departure "
+                        f"({_et(sched_dep)}); no OFF asserted\n{acars_ctx}",
+                        {"watchlist_trigger": "departure_overdue", "identifier": ident,
+                         "scheduled_departure": sched_dep, "acars_context": acars_ctx},
+                        priority=4)
+    log.info("flight departure check: %s overdue, nothing confirms OFF -- phase left at pre_departure", ident)
+    return "overdue"
+
 
 def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
     """Check FAA FDPS (SWIM/SFDPS FIXM feed, see ingest/parsers/fdps_parser.py)
@@ -1534,13 +1590,11 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
             m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
             if m:
                 marketing_carrier, marketing_num = m.group(1).upper(), m.group(2)
-                mappings = db.get_codeshare_mapping_by_marketing(marketing_carrier, marketing_num)
-                if mappings:
-                    top = mappings[0]
-                    op_carrier = top.get("operating_carrier")
-                    op_num = top.get("operating_flight_num") or marketing_num
-                    if op_carrier:
-                        plan = db.get_flight_plan_by_callsign(f"{op_carrier}{op_num}")
+                # 2026-10-05: resolve_operating_callsign normalises IATA (AC) to
+                # ICAO (ACA) -- codeshare_map stores ICAO, so AC8825 used to miss.
+                op_callsign = db.resolve_operating_callsign(ident)
+                if op_callsign:
+                    plan = db.get_flight_plan_by_callsign(op_callsign)
                 if not plan:
                     fallback_plan = db.get_flight_plan_by_flight_num(
                         marketing_num, origin=entry.get("origin"))
@@ -1645,13 +1699,9 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
 # DCA/IAD plus common internationals already known to flight-hifi-track.
 # A carrier missing from this map just means _check_flight_fids no-ops for
 # it (same as a genuine FIDS miss), not an error.
-_ICAO_TO_IATA_CARRIER = {
-    "AAL": "AA", "UAL": "UA", "DAL": "DL", "SWA": "WN", "JBU": "B6",
-    "ASA": "AS", "NKS": "NK", "FFT": "F9", "RPA": "YX", "ENY": "MQ",
-    "ASH": "YX", "SKW": "OO", "EDV": "9E", "BAW": "BA", "KLM": "KL",
-    "AFR": "AF", "DLH": "LH", "ACA": "AC", "VIR": "VS", "QTR": "QR",
-    "UAE": "EK", "ETD": "EY",
-}
+# 2026-10-03: table moved to common.airline_codes (single source). The old
+# private copy here mapped ASH -> YX (wrong: ASH is Mesa = YV).
+from common.airline_codes import ICAO_TO_IATA as _ICAO_TO_IATA_CARRIER  # noqa: E402
 
 
 def _check_flight_fids(entry: dict, ident: str) -> None:

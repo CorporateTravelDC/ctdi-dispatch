@@ -37,9 +37,9 @@
 //   8000  dispatch (still token-gated at the app layer)
 //   8001  runner (still token-gated at the app layer)
 //   8080  ultrafeeder (ADS-B feed)
+//   SUPERSEDED 2026-10-06: 11434 ollama (grant removed; Ollama retired 2026-08-27)
 //   9080  acarsrouter (no nginx vhost in front of it -- tailnet is the
 //          only auth-adjacent boundary it has at all right now)
-//   11434 ollama
 //
 // Deliberately NOT granted -- loopback-only today, no tailnet exposure
 // to restrict or preserve: 631 (cups), 5335 (unbound), 8002 (www
@@ -86,7 +86,7 @@
 				"tcp:8001",   // runner -- direct tailnet access, still token-gated
 				"tcp:8080",   // ultrafeeder (ADS-B feed)
 				"tcp:9080",   // acarsrouter
-				"tcp:11434",  // ollama -- OLLAMA_BASE_URL points here from other devices
+				// SUPERSEDED 2026-10-06: "tcp:11434",  // ollama -- OLLAMA_BASE_URL points here from other devices
 			],
 		},
 	],

@@ -29,14 +29,33 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
 # together either EVER"): flock on the box-wide unit lock wraps the whole
 # run, so a second report container blocks here -- inside its own
 # container, holding no model, no threads -- until the one ahead exits.
 # It waits; it is never refused and never kills the run ahead of it.
 # common/llama_pool.py takes a separate per-generation lock on top.
-Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/second_brain_daily.py
+#
+# 2026-10-03 ROOT CAUSE of the 23:45 -> 00:29:51 timeout kill (8s CPU over
+# 44m53s wall, zero skill log lines): the wait above was UNBOUNDED and
+# TimeoutStartSec counted it as run time. That night five long-runners
+# queued on this one lock between 23:00 and 00:48 (concierge-travel held
+# it 23:00-00:13, then ep-advance, ops-brief, transport-pattern -- each
+# ~1h at load 19), so this unit never got the lock inside its 2600s
+# budget and systemd SIGKILLed a process that had done nothing. Fix:
+#   -w 3600  bound the queue wait to 1h, then give up instead of being
+#            killed mid-queue;
+#   -E 75    give-up exits EX_TEMPFAIL, declared a clean skip below
+#            (SuccessExitStatus=75) -- the 2h sibling run retries, and
+#            the journal carries flock's own "timeout while waiting to
+#            get lock" line instead of a 'timeout' failure + page;
+#   --verbose  logs how long the lock wait actually took on every run,
+#            so queue depth is visible in the journal from now on.
+# TimeoutStartSec below = 3600 (max queue wait) + 2600 (run budget) + 100.
+Exec=/usr/bin/flock --verbose -w 3600 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/second_brain_daily.py
 
 [Service]
 # 2026-09-21 maintenance window (operator directive): long report-tier
@@ -69,5 +88,14 @@ Type=oneshot
 # allocation)
 # + 2 attempts x 870s call (default max_retries=1) = 2540s -> 2600. A governor-pause retry-wait can still exceed this;
 # systemd remains the deliberate backstop.
-TimeoutStartSec=2600
+# 2026-10-03: 2600 was the RUN budget only; the lock queue wait (flock -w
+# 3600 in Exec=) now sits in front of it, so the start budget is the sum.
+# The 01:45 retry that night finished in 43m15s against a 43m20s budget
+# -- the run budget itself is marginal at load 19, kept as-is here (the
+# Phase-4 measured figure) but the queue wait is no longer eating it.
+# Still < the timer's 120min OnUnitActiveSec, so firings cannot overlap.
+TimeoutStartSec=6300
+# Exit 75 (EX_TEMPFAIL) = flock gave up waiting for the long-runner lock
+# (see Exec=). A clean, logged skip -- not a failure, not a page.
+SuccessExitStatus=75
 

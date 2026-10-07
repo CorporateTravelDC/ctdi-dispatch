@@ -191,6 +191,15 @@ def _redact_audit_detail(detail):
     return {k: _redact_audit_value(k, v) for k, v in detail.items()}
 
 
+def action_allowed(allowed_actions: str | None, action: str) -> bool:
+    """None/empty = unrestricted (every token minted before 0070); otherwise
+    `action` must match one of the comma-separated fnmatch patterns."""
+    if not allowed_actions:
+        return True
+    import fnmatch
+    return any(fnmatch.fnmatchcase(action, p.strip()) for p in allowed_actions.split(",") if p.strip())
+
+
 def require_admin(action: str):
     """Dependency factory: requires Admin tier AND writes an audit row.
 
@@ -235,10 +244,21 @@ def require_admin(action: str):
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ) -> Tier:
         token_prefix = None
+        record = None
         if credentials and credentials.credentials:
             record = db.lookup_token(_hash_token(credentials.credentials))
             if record:
                 token_prefix = record["token_prefix"]
+
+        # 2026-10-05 (pg_schema/0070): a token may be scoped to an explicit
+        # list of action names; anything outside it is denied and audited
+        # exactly like a tier miss.
+        if tier == Tier.ADMIN and record and not action_allowed(record.get("allowed_actions"), action):
+            db.audit(action, tier.value, token_prefix,
+                     request.client.host if request.client else None,
+                     {"result": "denied", "reason": "action outside token scope"})
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"token is not scoped for {action}")
 
         if tier != Tier.ADMIN:
             db.audit(

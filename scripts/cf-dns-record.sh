@@ -65,9 +65,10 @@ mask() { sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
 # cf METHOD PATH [JSON-BODY] -> prints response body; exit code = curl's.
 cf() {
     local method="$1" path="$2" body="${3:-}"
-    local args=(-s -4 -m 20 -X "${method}" "${API}${path}" -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+    local args=(-s -4 -m 20 -X "${method}" "${API}${path}" -H "Content-Type: application/json")
     [[ -n "${body}" ]] && args+=(--data "${body}")
-    curl "${args[@]}"
+    # 2026-10-05: the token rides a private fd, never argv (/proc cmdline is world-readable)
+    curl "${args[@]}" -H @<(printf 'Authorization: Bearer %s\n' "${TOKEN}")
 }
 # errs JSON -> one line of code/message pairs from errors[] (never the token)
 # No escaped quotes inside inline python -- bash single-quoting turns \" into
@@ -113,12 +114,12 @@ fi
 
 BODY="$(python3 -c "import json;print(json.dumps({'type':'${TYPE}','name':'${NAME}','content':'${CONTENT}','proxied':'${PROXIED}'=='true','ttl':int('${TTL}')}))")"
 if [[ -n "${REC_ID}" ]]; then
-    echo "cf-dns-record: will UPDATE ${REC_ID} (${CUR_TYPE}) -> ${TYPE} ${CONTENT} proxied=${PROXIED} ttl=${TTL}"
+    echo "cf-dns-record: will UPDATE ${REC_ID} (${CUR_TYPE}) -> ${TYPE} ${CONTENT} proxied=${PROXIED} ttl=${TTL}" | mask   # 2026-10-05: the plan line printed the tunnel id unmasked
     (( DRY )) && { echo "[DRY-RUN] no change made"; exit 0; }
     R="$(cf PUT "/zones/${ZONE_ID}/dns_records/${REC_ID}" "${BODY}")" || { echo "cf-dns-record: update failed (curl exit $?)" >&2; exit 6; }
     VERB="UPDATE"
 else
-    echo "cf-dns-record: will CREATE ${TYPE} ${NAME} -> ${CONTENT} proxied=${PROXIED} ttl=${TTL}"
+    echo "cf-dns-record: will CREATE ${TYPE} ${NAME} -> ${CONTENT} proxied=${PROXIED} ttl=${TTL}" | mask   # 2026-10-05: the plan line printed the tunnel id unmasked
     (( DRY )) && { echo "[DRY-RUN] no change made"; exit 0; }
     R="$(cf POST "/zones/${ZONE_ID}/dns_records" "${BODY}")" || { echo "cf-dns-record: create failed (curl exit $?)" >&2; exit 6; }
     VERB="CREATE"

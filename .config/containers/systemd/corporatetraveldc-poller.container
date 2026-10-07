@@ -43,7 +43,9 @@ Volume=corporatetraveldc-triggers:/run/corporatetraveldc
 Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:ro,z
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 AutoUpdate=local
 
 [Service]

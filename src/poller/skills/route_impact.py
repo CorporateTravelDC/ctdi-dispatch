@@ -13,11 +13,11 @@ from common.sr2_gate import check_gate, commit_gate
 
 log = logging.getLogger(__name__)
 SKILL_NAME = "route-impact"
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL   = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 OLLAMA_MODEL      = (os.getenv("OLLAMA_ROUTE_IMPACT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "corporatetraveldc-pi5-route-impact:latest")
-MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL             = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 
 _route_dedup = PushDedup("route")
 

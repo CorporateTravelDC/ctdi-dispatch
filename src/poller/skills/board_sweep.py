@@ -36,7 +36,6 @@ import logging
 import os
 import re
 import time
-import uuid
 
 import requests
 
@@ -56,7 +55,7 @@ _PRESENCE_STATE_FILE = os.path.join(_STATE_DIR, "board-presence-reminder-state.j
 # "token-gate" (added 2026-09-05 -- previously unswept entirely, which is
 # why a real Cowork dry-run request sat unseen for two days).
 _TOKEN_GATE_THREAD = "token-gate"
-_THREADS = ("coord", "research", _TOKEN_GATE_THREAD)
+_THREADS = ("coord", "research", _TOKEN_GATE_THREAD, "council")   # council: Wave 2 convene requests + missed deadlines
 _SELF = "dispatch"
 
 # How far ahead of a parsed deadline to fire the proactive Allow/Deny push
@@ -129,11 +128,13 @@ def _save_json_state(path: str, data: dict) -> None:
 
 
 def _ntfy_gate_push(topic: str, title: str, message: str, priority: int,
-                    allow_url: str, deny_url: str) -> None:
-    """Allow/Deny action-button push -- common.ntfy_push.send() has no
+                    deny_url: str) -> None:
+    """Deny-only action-button push -- common.ntfy_push.send() has no
     support for ntfy's JSON actions field, only plain-text pushes, so this
     posts the JSON payload directly (same shape as
-    scripts/sudo-approval-gate.sh's own ntfy call)."""
+    scripts/sudo-approval-gate.sh's own ntfy call).
+    2026-10-04 (Wave 2): no Allow button anywhere -- allowing takes a human
+    SSH signature over the exact request (scripts/approve.sh allow <id>)."""
     ntfy_token = config.ntfy_token().split(":")[0]
     payload = {
         "topic": topic,
@@ -141,7 +142,6 @@ def _ntfy_gate_push(topic: str, title: str, message: str, priority: int,
         "message": message,
         "priority": priority,
         "actions": [
-            {"action": "http", "label": "Allow", "url": allow_url, "method": "GET", "clear": True},
             {"action": "http", "label": "Deny", "url": deny_url, "method": "GET", "clear": True},
         ],
     }
@@ -215,18 +215,22 @@ def _handle_token_gate(new_msgs: list) -> None:
             continue
         if now < entry["fire_at"]:
             continue
-        request_id = str(uuid.uuid4())
         ttl = max(60.0, entry["deadline_for_ttl"] - _GATE_DEADLINE_BUFFER_S - now)
-        db.create_approval_request(
-            request_id, "cowork-board-token-gate",
+        from common import governance
+        created = governance.create_approval(
+            "cowork-board-token-gate",
             f"Post GATE: APPROVED/DENIED reply to Cowork board message {mid} "
             f"({entry.get('subject')})",
+            kind="sudo", requester=f"board:{entry.get('from') or 'cowork'}",
             reasoning=f"Cowork token-gate request from {entry.get('from')}: {entry.get('subject')}",
             ttl_seconds=ttl,
         )
+        request_id = created["id"]
         entry["approval_request_id"] = request_id
-        allow_url = f"{_RESOLVE_HOST}/admin/approval-requests/{request_id}/resolve?action=allow"
-        deny_url = f"{_RESOLVE_HOST}/admin/approval-requests/{request_id}/resolve?action=deny"
+        # 2026-10-04 (duel X1): the deny key goes ONLY into the push URL --
+        # never into state, logs, or the board.
+        deny_url = (f"{_RESOLVE_HOST}/admin/approval-requests/{request_id}/resolve"
+                    f"?action=deny&k={created['deny_key']}")
         deadline_str = (
             time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(entry["deadline"]))
             if entry["deadline"] else "unknown"
@@ -235,10 +239,11 @@ def _handle_token_gate(new_msgs: list) -> None:
             "approval-gate",
             f"Cowork board gate: {entry.get('subject')}",
             f"From Cowork: {entry.get('subject')}\ndeadline: {deadline_str}\n"
-            f"valid to tap until {_GATE_DEADLINE_BUFFER_S // 60} min before deadline. "
-            f"No tap = denied at expiry.",
+            f"approve over SSH: scripts/approve.sh allow {request_id}\n"
+            f"valid until {_GATE_DEADLINE_BUFFER_S // 60} min before deadline. "
+            f"No signature = denied at expiry.",
             4,
-            allow_url, deny_url,
+            deny_url,
         )
         changed = True
         log.info("%s: fired proactive token-gate approval %s for message %s",
@@ -336,6 +341,37 @@ def _append_inbox(msgs: list) -> None:
             f.write(json.dumps(m) + "\n")
 
 
+def _report_council_misses() -> None:
+    """Council/arena (Wave 2, 2026-10-04): a REQUIRED participant with no
+    contribution by the deadline is reported to the operator once -- never a
+    kill (non-response is not an attack). See common.governance.council_missed."""
+    from common import governance
+    from second_brain import webdav_client
+    root = f"{webdav_client.BUSINESS_ROOT}/"
+    for miss in governance.council_missed(lambda p: webdav_client.list_files(root + p)):
+        if not miss["missing"]:
+            continue
+        body = (f"{miss['mode']} {miss['id']} on {miss['subject']} passed its deadline; "
+                f"required participant(s) with no contribution: {', '.join(miss['missing'])}")
+        db.board_insert(from_side="council", to_side=_SELF, thread="council",
+                        subject=f"[{miss['mode']}] missed deadline: {miss['subject']}", body=body)
+        ntfy_push.send("ops-health", body, title=f"Council deadline missed ({len(miss['missing'])})",
+                       priority=3, tags="hourglass")
+
+
+def _gateway_sweep() -> None:
+    """Agent gateway (2026-10-05): mark quiet cloud-agent sessions dormant and
+    expired holds released, and tell the operator. Never revokes -- vendor
+    silence is not our decision (common.agent_gateway.sweep)."""
+    from common import agent_gateway
+    for ch in agent_gateway.sweep():
+        body = (f"{ch['account']} ({ch['slug']}) session is now DORMANT ({ch['why']}). The account stays live. "
+                f"If this is a vendor lapse, hold the link open: scripts/agent-gateway.sh hold {ch['slug']} --days 30")
+        db.board_insert(from_side="agent-gateway", to_side=_SELF, thread="coord",
+                        subject=f"{ch['account']} session dormant", body=body)
+        ntfy_push.send("ops-health", body, title=f"Agent session dormant: {ch['account']}", priority=3, tags="zzz")
+
+
 def run_sweep() -> dict:
     """Poll each thread since its stored cursor; return new to:dispatch messages
     and advance cursors past everything seen (so already-swept coord chatter
@@ -394,6 +430,16 @@ def main() -> None:
             _check_presence_reminder()
         except Exception as e:
             log.error("%s: presence-reminder check failed: %s", SKILL_NAME, e)
+
+        try:
+            _report_council_misses()
+        except Exception as e:
+            log.error("%s: council deadline check failed: %s", SKILL_NAME, e)
+
+        try:
+            _gateway_sweep()
+        except Exception as e:
+            log.error("%s: agent-gateway sweep failed: %s", SKILL_NAME, e)
             status = "error"
     except Exception as e:
         log.error("%s: sweep failed: %s", SKILL_NAME, e)

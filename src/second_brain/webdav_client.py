@@ -173,6 +173,31 @@ def put(rel_path: str, content: str | bytes, content_type: str = "text/markdown"
     return r.status_code
 
 
+class AlreadyExists(Exception):
+    """put_create_only: the target already exists (HTTP 412)."""
+
+
+def put_create_only(rel_path: str, content: str | bytes, content_type: str = "text/markdown") -> int:
+    """Create a file, never overwrite one (2026-10-04, shared workspace):
+    If-None-Match: * makes the server refuse with 412 when the path exists,
+    atomically on its side -- no check-then-write race."""
+    rel_path = rel_path.strip("/")
+    if "/" in rel_path:
+        mkdirs(rel_path.rsplit("/", 1)[0])
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    url = f"{_base_url()}/{rel_path}"
+    r = requests.request(
+        "PUT", url, auth=_auth(), data=content,
+        headers={"Host": HOST_HEADER, "Content-Type": content_type, "If-None-Match": "*"},
+        timeout=30,
+    )
+    if r.status_code == 412:
+        raise AlreadyExists(rel_path)
+    r.raise_for_status()
+    return r.status_code
+
+
 def get(rel_path: str) -> bytes | None:
     """Fetch a file's content. Returns None if not found (404)."""
     url = f"{_base_url()}/{rel_path.strip('/')}"
@@ -196,15 +221,22 @@ def delete(rel_path: str) -> int:
 
 def list_files(rel_path: str = "") -> list[dict]:
     """List files (not folders) directly under rel_path (depth 1, non-recursive)."""
-    url = f"{_base_url()}/{rel_path.strip('/')}".rstrip("/")
+    # 2026-10-06: collections end in '/' and redirects are never followed --
+    # the cloud. vhost 301s a slashless collection to another host, requests
+    # drops Authorization on that hop and the result is a misleading 401
+    # (root cause of the silent second-brain-index-scan failure; index_db.py).
+    url = f"{_base_url()}/{rel_path.strip('/')}".rstrip("/") + "/"
     body = ('<?xml version="1.0" encoding="utf-8"?>'
             '<d:propfind xmlns:d="DAV:"><d:prop><d:getcontentlength/>'
             '<d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>')
     r = requests.request(
         "PROPFIND", url, auth=_auth(), data=body,
         headers={"Host": HOST_HEADER, "Content-Type": "application/xml", "Depth": "1"},
-        timeout=15,
+        timeout=15, allow_redirects=False,
     )
+    if 300 <= r.status_code < 400:
+        raise requests.exceptions.HTTPError(
+            f"{r.status_code} redirect to {r.headers.get('Location')!r} for {url}", response=r)
     r.raise_for_status()
     root = ET.fromstring(r.content)
     marker = f"/remote.php/dav/files/{NEXTCLOUD_USER}/"

@@ -46,7 +46,14 @@ REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
 #
 # Redirecting to stderr keeps the verification result in fail2ban's log
 # (where it is genuinely useful) and out of the payload.
-if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh" >&2; then
+# 2026-10-04: the INSTALLED copy (/usr/local/libexec/ctdc) checks the root-owned
+# install record instead -- no gpg, no checkout, under fail2ban_t.
+if [[ -f "${SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/.ctdc-installed" ]]; then
+    _ck=("$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/installed-check.sh" "scripts/cf-honeypot-notes.sh")
+else
+    _ck=("${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/cf-honeypot-notes.sh")
+fi
+if ! "${_ck[@]}" >&2; then
     echo "cf-honeypot-notes: INTEGRITY CHECK FAILED -- refusing to run" >&2
     exit 1
 fi

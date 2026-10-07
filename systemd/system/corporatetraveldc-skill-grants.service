@@ -1,0 +1,12 @@
+# /etc/systemd/system/corporatetraveldc-skill-grants.service -- SYSTEM unit (root:
+# writes root-owned skill copies into agent homes). Installed by
+# scripts/install-root-copies.sh; runs the INSTALLED copy, never the checkout.
+[Unit]
+Description=Agent skill grants: materialize granted skills, claw back revoked ones
+Documentation=file:///opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/AGENT_SEGMENTATION.md
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/local/libexec/ctdc/skill-grants.sh apply --execute
+# exit 1 = findings (tamper / unsanctioned / withheld) were reported, not a failure
+SuccessExitStatus=1

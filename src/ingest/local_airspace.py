@@ -20,6 +20,7 @@ alerting only; it does not manage session lifecycle.
 """
 from __future__ import annotations
 
+import re
 import json
 import logging
 import math
@@ -52,6 +53,15 @@ MARINE_ONE_ALERT_RADIUS_NM = 50.0
 
 ACARS_ROUTER_HOST = os.environ.get("ACARS_ROUTER_HOST", "host.containers.internal")
 ACARS_ROUTER_PORT = int(os.environ.get("ACARS_ROUTER_PORT", "9080"))
+# 2026-10-03: acars_router serves the plain-ACARS stream on 9080
+# (AR_SERVE_TCP_ACARS) and the VDL2 stream on a separate port
+# (AR_SERVE_TCP_VDLM2). This stack has no VHF ACARS decoder at all --
+# every message is VDL2 from dumpvdl2 -- so reading only 9080 meant
+# acars_messages never held a real row and the ACARS watchlist path was
+# dead from the day it shipped (the 2026-08-22 idle warning had been
+# firing every 30 min about exactly this; nobody was reading it). Both
+# ports are read into the same queue; 0 disables the VDL2 reader.
+VDLM2_ROUTER_PORT = int(os.environ.get("VDLM2_ROUTER_PORT", "15555"))
 
 HEARTBEAT_DIR = Path(os.environ.get("DISPATCH_STATE_DIR",
                                      "/var/lib/corporatetraveldc")) / "feed_state"
@@ -72,6 +82,9 @@ MARINE_ONE_CALLSIGNS = frozenset({
     "VENUS", "MUSEL", "AZAZ01", "AZAZ09",
 })
 MARINE_ONE_SQUAWKS = frozenset({"7700", "5000", "5001"})
+# 2026-10-05: CRANE + two digits (AF1/AF2 training aircraft), same rule as
+# fdps_parser.VIP_CALLSIGN_PATTERNS.
+_CRANE_CALLSIGN_RE = re.compile(r"^CRANE\d{2}$")
 EMERGENCY_SQUAWKS = frozenset({"7700", "7500", "7600"})
 
 # ── ACARS OOOI label table ─────────────────────────────────────────────────────
@@ -248,6 +261,7 @@ def _poll_ultrafeeder() -> bool:
 
         # Marine One detection
         is_marine_one = (cs_upper in MARINE_ONE_CALLSIGNS or
+                         bool(_CRANE_CALLSIGN_RE.match(cs_upper)) or
                          squawk in MARINE_ONE_SQUAWKS)
         if is_marine_one and distance_nm <= MARINE_ONE_ALERT_RADIUS_NM:
             dedup_key = f"marine_one:{icao_hex}"
@@ -426,8 +440,61 @@ class _AcarsReader(threading.Thread):
                 self._stop.wait(15)
 
 
+def _normalize_acars(msg: dict) -> Optional[dict]:
+    """Flatten a dumpvdl2 VDL2 frame into the acarsdec-style dict the rest
+    of this module expects. acarsdec/plain-ACARS lines pass through
+    unchanged. Returns None for VDL2 frames that carry no ACARS payload
+    (AVLC supervisory/XID frames -- the majority of what dumpvdl2 emits).
+
+    dumpvdl2 shape (captured live 2026-10-03 from acars_router :15555):
+      {"vdl2": {"freq": 136975000, "station": "CS-KDCA-VDL",
+                "t": {"sec": ..., "usec": ...},
+                "avlc": {"src": {"addr": "DC5068", "type": "Aircraft", ...},
+                         "acars": {"reg": ".Q0LYY", "flight": "WN4060",
+                                   "label": "H1", "blk_id": "2", "ack": "!",
+                                   "mode": "2", "msg_text": "..."}}}}
+    reg carries a leading "." pad; freq is Hz, not MHz.
+    """
+    if not isinstance(msg, dict):
+        return None
+    if "vdl2" not in msg:
+        return msg                      # acarsdec / plain-ACARS line
+    v = msg.get("vdl2")
+    if not isinstance(v, dict):
+        return None
+    avlc = v.get("avlc") or {}
+    ac = avlc.get("acars")
+    if not isinstance(ac, dict):
+        return None
+    src = avlc.get("src") or {}
+    reg = (ac.get("reg") or "").strip().lstrip(".") or None
+    freq = v.get("freq")
+    try:
+        freq_mhz = float(freq) / 1e6 if freq is not None else None
+    except (TypeError, ValueError):
+        freq_mhz = None
+    out = {
+        "tail": reg,
+        "flight": (ac.get("flight") or "").strip() or None,
+        "label": ac.get("label"),
+        "freq": freq_mhz,
+        "icao": (src.get("addr") or "") if src.get("type") in (None, "Aircraft") else "",
+        "text": ac.get("msg_text"),
+        "block_id": ac.get("blk_id"),
+        "ack": ac.get("ack"),
+        "mode": ac.get("mode"),
+        "station": v.get("station"),
+        "source": "vdlm2",
+        "_raw": msg,  # original frame kept for the raw column
+    }
+    return out
+
+
 def _process_acars_message(msg: dict) -> None:
     """Parse one ACARS message dict and write to DB; fire watchlist alert if matched."""
+    msg = _normalize_acars(msg)
+    if msg is None:
+        return
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tail = (msg.get("tail") or msg.get("tail_number") or
@@ -440,7 +507,7 @@ def _process_acars_message(msg: dict) -> None:
     block_id = str(msg.get("block_id", "") or "").strip() or None
     ack = str(msg.get("ack", "") or "").strip() or None
     mode = str(msg.get("mode", "") or "").strip() or None
-    raw = json.dumps(msg)
+    raw = json.dumps(msg.get("_raw", msg))
 
     freq_mhz: Optional[float] = None
     if freq is not None:
@@ -455,13 +522,20 @@ def _process_acars_message(msg: dict) -> None:
     watchlist_hit = 0
     watchlist_entry_id = None
     try:
+        # 2026-10-03: ACARS/VDL2 `flight` is IATA-style (WN4060) while
+        # watchlist identifiers are ICAO (SWA4060); exact-match never fired
+        # on a real message. Compare both sides in ICAO form (unknown
+        # carriers normalise to None and cannot false-match), and also match
+        # the ACARS tail against the entry's registration column, not only
+        # its identifier.
+        from common.airline_codes import same_flight
         entries = get_active_entries(entry_type="flight")
+        tail_upper = (tail or "").upper().replace("-", "")
         for entry in entries:
-            ident = entry["identifier"].upper()
-            flight_upper = (flight or "").upper()
-            tail_upper = (tail or "").upper()
-            if (flight_upper and flight_upper == ident) or \
-               (tail_upper and tail_upper == ident):
+            ident = (entry.get("identifier") or "").upper()
+            reg = (entry.get("registration") or "").upper().replace("-", "")
+            if (flight and same_flight(flight, ident)) or \
+               (tail_upper and tail_upper in (ident.replace("-", ""), reg)):
                 watchlist_hit = 1
                 watchlist_entry_id = entry["id"]
                 if msg_type:
@@ -503,7 +577,8 @@ class LocalAirspaceMonitor:
 
     def __init__(self) -> None:
         self._acars_queue: queue.Queue = queue.Queue(maxsize=500)
-        self._acars_reader: Optional[_AcarsReader] = None
+        self._acars_reader: Optional[_AcarsReader] = None   # plain ACARS (:9080)
+        self._vdlm2_reader: Optional[_AcarsReader] = None   # VDL2 (:15555)
         self._last_uf_poll = 0.0
         self._last_acars_drain = 0.0
         self._last_uf_hb = 0.0
@@ -519,19 +594,32 @@ class LocalAirspaceMonitor:
         self._last_acars_idle_warn = 0.0
 
     def _start_acars_reader(self) -> None:
+        started = False
         if self._acars_reader is None or not self._acars_reader.is_alive():
             self._acars_reader = _AcarsReader(
                 ACARS_ROUTER_HOST, ACARS_ROUTER_PORT, self._acars_queue)
             self._acars_reader.start()
+            started = True
+        if VDLM2_ROUTER_PORT and (self._vdlm2_reader is None or
+                                  not self._vdlm2_reader.is_alive()):
+            self._vdlm2_reader = _AcarsReader(
+                ACARS_ROUTER_HOST, VDLM2_ROUTER_PORT, self._acars_queue)
+            self._vdlm2_reader.start()
+            started = True
+        if started:
             self._acars_started_at = time.time()
             self._last_acars_data_at = 0.0
+
+    def _readers(self) -> list:
+        return [r for r in (self._acars_reader, self._vdlm2_reader) if r is not None]
 
     def run_forever(self) -> None:
         """Main loop. Runs until the process exits."""
         self._start_acars_reader()
-        log.info("LocalAirspaceMonitor started (UF=%s, ACARS=%s:%d)",
+        log.info("LocalAirspaceMonitor started (UF=%s, ACARS=%s:%d, VDLM2=%s)",
                  ULTRAFEEDER_AIRCRAFT_URL or "disabled",
-                 ACARS_ROUTER_HOST, ACARS_ROUTER_PORT)
+                 ACARS_ROUTER_HOST, ACARS_ROUTER_PORT,
+                 f"{ACARS_ROUTER_HOST}:{VDLM2_ROUTER_PORT}" if VDLM2_ROUTER_PORT else "disabled")
 
         while True:
             now = time.time()
@@ -563,8 +651,9 @@ class LocalAirspaceMonitor:
                             break
                     if drained:
                         self._last_acars_data_at = now
-                    acars_up = (self._acars_reader is not None and
-                                self._acars_reader.is_connected())
+                    # "up" = at least one router stream connected; the
+                    # idle warning below counts lines across both.
+                    acars_up = any(r.is_connected() for r in self._readers())
                     # 2026-08-22: heartbeat previously reflected only
                     # is_connected() -- a live TCP socket with zero
                     # messages ever parsed still stamped a fresh
@@ -587,15 +676,15 @@ class LocalAirspaceMonitor:
                           self._acars_started_at and
                           now - self._acars_started_at >= ACARS_IDLE_WARN_S and
                           now - self._last_acars_idle_warn >= ACARS_IDLE_WARN_S):
-                        reader = self._acars_reader
+                        readers = self._readers()
                         log.warning(
                             "ACARS connected but zero messages parsed in %ds "
                             "(lines_received=%d parse_failures=%d) — router may "
                             "be silent or emitting a format this reader can't "
                             "parse; connection alone is not proof of data flow",
                             int(now - self._acars_started_at),
-                            reader.lines_received if reader else -1,
-                            reader.parse_failures if reader else -1,
+                            sum(r.lines_received for r in readers) if readers else -1,
+                            sum(r.parse_failures for r in readers) if readers else -1,
                         )
                         self._last_acars_idle_warn = now
                 except Exception as e:

@@ -1,0 +1,31 @@
+# skills/skill-capabilities.txt -- what each grantable skill NEEDS beyond its text.
+# Rendered into every agent's pamphlet ("needs" column) by scripts/lib/skill_grants.py.
+# A skill is instructions; the hard boundary is what it needs. When a need is not
+# held by agent accounts, the skill degrades to read-only / draft-only for them.
+# Format: <skill> <free text, one line>
+corporatetraveldc-dispatch-ops   dispatch API reads (signed GET via board-sign.sh); admin actions need DISPATCH_ADMIN_TOKEN = operator-only
+flight-hifi-track                dispatch API reads; its ntfy pushes need NTFY_TOKEN = operator-only, so agents report instead of pushing
+hub-arrivals-lookup              dispatch API reads
+linkedin-export-analyzer         an export the operator hands you; output goes to the operator, never the vault directly
+morning                          dispatch API reads; scheduling a recurring task = operator-only
+nec-train-hifi-track             dispatch API reads; ntfy pushes operator-only (see flight-hifi-track)
+overwater-adsb-handoff-track     dispatch API reads; ntfy pushes operator-only
+second-brain-remember            vault WRITE -> agents use the workspace contribution route (coming); until then hand the note to the operator
+dispatch-context-guardian        public dispatch API reads; gated sections are skipped without the admin token (by design)
+personal-export-analysis         vault reads via the research route; raw WebDAV/Nextcloud admin = operator-only
+built-in-browser                 a browser surface on the client; none on this box
+chrome-browser                   a browser surface on the client; none on this box
+computer-use                     a display/desktop on the client; none on this box
+google-workspace                 a Google OAuth grant on the client; none for agent accounts
+deep-research                    web access from the client
+docx                             local file I/O only
+pdf                              local file I/O only
+pptx                             local file I/O only
+xlsx                             local file I/O only
+doc-coauthoring                  local file I/O only
+docs                             a docs connector on the client
+import-memory                    writes Claude memory for the CURRENT account only
+internal-comms                   drafts only -- agents never publish
+mcp-builder                      local file I/O; registering an MCP server = operator-only
+skill-creator                    drafts a skill in your home; it becomes grantable only after the operator tracks + signs it
+web-artifacts-builder            local file I/O only

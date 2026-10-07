@@ -1,12 +1,12 @@
 # ~/.config/containers/systemd/openwebui.container
 #
-# OpenWebUI -- browser-based Ollama chat UI
+# OpenWebUI -- browser chat UI for the local llama.cpp model server
 #
 # Access:
 #   Tailscale: http://100.x.x.x:3000
 #   CF tunnel: https://openwebui.example.com
 #
-# Ollama backend: http://100.x.x.x:11434 -- this host's own Tailscale
+# Model backend (history: was Ollama :11434; now llama.cpp :8093, see Environment below) -- this host's own Tailscale
 # IP, not host.containers.internal. Ollama binds that IP specifically, not
 # 127.0.0.1 (see install/ollama/install-ollama.sh) -- pasta's --map-gw
 # cannot reach a strictly loopback-bound service at all (kernel-level
@@ -17,8 +17,8 @@
 # corporatetraveldc-runner.container reaches its own dependencies.
 
 [Unit]
-Description=OpenWebUI -- Ollama browser interface
-After=ollama.service network-online.target
+Description=OpenWebUI -- browser chat UI for the local llama.cpp server
+After=network-online.target
 Wants=network-online.target
 
 [Container]
@@ -31,7 +31,17 @@ ContainerName=openwebui
 AutoUpdate=registry
 PublishPort=3000:8080
 Volume=/var/lib/openwebui:/app/backend/data:Z
-Environment=OLLAMA_BASE_URL=http://100.x.x.x:11434
+# 2026-10-05: Ollama (:11434) has not existed since the 2026-08-27 llama.cpp
+# cutover, so this UI had no model behind it. It now talks to the ONE model
+# server, llama.cpp's OpenAI-compatible API (LLAMA_BASE_URL + /v1). A chat
+# here takes one of the server's two slots like any "chat" persona; the API
+# key is a placeholder (llama.cpp runs without one on the tailnet address).
+# Open WebUI persists connection settings in its DB after first start: if the
+# UI still lists the Ollama connection, set it once in Admin > Settings >
+# Connections (OpenAI API: http://100.x.x.x:8093/v1; Ollama API: off).
+Environment=ENABLE_OLLAMA_API=false
+Environment=OPENAI_API_BASE_URL=http://100.x.x.x:8093/v1
+Environment=OPENAI_API_KEY=none
 NoNewPrivileges=true
 
 [Service]

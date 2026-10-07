@@ -1,13 +1,26 @@
 # Client demo preview pattern
 
+Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
+
 Generic, reusable pattern for a password-gated public preview of a
 prospective/current client's AI-rewritten static site. Generalized
 2026-09-03 from an earlier one-off client-preview instance built
-2026-08-18 — that instance stayed running exactly as it was and was
-**not** migrated to this pattern; there was no need to disrupt a live
-client preview to adopt a new convention. It's documented here as the
-origin, not as an example instantiation. See that instance's own
-still-live unit file for which client and hostname it actually is.
+2026-08-18 — that instance was **not** migrated to this pattern. It and a
+second one-off (v1 of the same site, built 2026-09-06) both run today as
+their own Quadlets, `corporatetraveldc-ccw-demo.container` (:8085) and
+`corporatetraveldc-ccw-preview1.container` (:8086), both now tracked in
+`.config/containers/systemd/`. Their shared webdev-credential expiry timer
+(`corporatetraveldc-ccw-demo-webdev-expiry.timer`, live-only, untracked)
+fired 2026-08-25 04:10Z.
+
+**Current state of this pattern:** the template and expiry units are
+installed, but **no instance of it exists** — no
+`corporatetraveldc-client-demo@<slug>` container or timer is installed. A
+fixed-hostname successor, the "demo portals"
+(`corporatetraveldc-demo-portal-{client,personal}.container`, ports 8088 and
+8087, swapped with `scripts/demo-portal.sh`), is tracked since 2026-09-18 but
+not installed, has no tunnel ingress, and its header points at a
+`docs/DEMO_PORTALS.md` that does not exist.
 
 ## The pieces
 
@@ -74,3 +87,16 @@ Validated 2026-09-03 by scaffolding and dry-run-resolving a disposable
 `zzz-validation-test` instance (confirmed the symlink + drop-in resolve
 correctly via `podman quadlet -dryrun -user`, `PublishPort` came through
 from the instance drop-in) — never started, fully removed afterward.
+
+---
+
+---
+
+## Superseded (kept for the record)
+
+Text removed or replaced by the 2026-10-06 verification pass against the live system, kept in its original wording for the chronological record. It is **not** current. The evidence for each correction is in `docs/docs-refresh-2026-10-06/CHANGES-core.md`.
+
+
+### Client demo preview pattern
+
+~~Generic, reusable pattern for a password-gated public preview of a prospective/current client's AI-rewritten static site. Generalized 2026-09-03 from an earlier one-off client-preview instance built 2026-08-18 — that instance stayed running exactly as it was and was **not** migrated to this pattern; there was no need to disrupt a live client preview to adopt a new convention. It's documented here as the origin, not as an example instantiation. See that instance's own still-live unit file for which client and hostname it actually is.~~

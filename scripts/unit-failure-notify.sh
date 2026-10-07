@@ -15,6 +15,11 @@
 # Wired via OnFailure=corporatetraveldc-unit-failure-notify@%n.service on
 # the units it protects.
 set -uo pipefail
+# 2026-10-05 (argv-token sweep): a bearer token never goes on a command line --
+# /proc/<pid>/cmdline is world-readable here (no hidepid), i.e. readable by
+# every team account. authhdr NAME TOKEN puts the header on a private fd and
+# sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
+authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
 UNIT="${1:-unknown-unit}"
 
@@ -35,7 +40,7 @@ NTFY_TOKEN="$(read_env_var NTFY_TOKEN "${SECRETS_FILE}")"
 NTFY_TOKEN="${NTFY_TOKEN%%:*}"
 
 auth_args=()
-[[ -n "${NTFY_TOKEN}" ]] && auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+[[ -n "${NTFY_TOKEN}" ]] && authhdr auth_args "${NTFY_TOKEN}"
 
 curl -sf --max-time 5 \
     "${auth_args[@]}" \

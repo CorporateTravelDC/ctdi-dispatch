@@ -65,26 +65,66 @@ MANIFEST="MANIFEST.sha256"
 SIGNATURE="MANIFEST.sha256.asc"
 PUBKEY="security/trusted-signing-key.pub.asc"
 SIGNING_ENV="security/signing.env"
+# 2026-10-04 (duel C2): a ROOT-OWNED pin outside the operator-writable tree
+# takes precedence over security/signing.env. Create it once (runbook):
+#   sudo install -m 0644 -o root -g root /dev/null /etc/corporatetraveldc/signing-pin
+#   grep -E '^(SIGNING_KEY_FINGERPRINT|AGENT_SIGNING_KEY_FINGERPRINT)=' security/signing.env | sudo tee /etc/corporatetraveldc/signing-pin
+# VERIFY_MANIFEST_PIN overrides the path (tests only).
+SIGNING_PIN="${VERIFY_MANIFEST_PIN:-/etc/corporatetraveldc/signing-pin}"
+
+# 2026-10-03: --unsigned-dry-run. ONLY for scripts/push-public.sh --dry-run,
+# which builds the scrubbed public tree and its manifest but deliberately
+# stops before the operator's GPG pass -- so there is no signature yet to
+# verify, and this flag checks hashes + coverage only. It prints a loud
+# banner, is never used by any production gate (ExecStartPre, sweeps,
+# verified-exec.sh all call this script with no flag), and must stay that
+# way: an unsigned manifest proves nothing about who produced it.
+UNSIGNED_DRY_RUN=0
+if [[ "${1:-}" == "--unsigned-dry-run" ]]; then
+    UNSIGNED_DRY_RUN=1
+    shift
+    echo "verify-manifest: ##### UNSIGNED DRY RUN -- signature and key pin NOT checked; hashes + coverage only (push-public --dry-run use only) #####" >&2
+fi
 
 for f in "${MANIFEST}" "${SIGNATURE}" "${PUBKEY}" "${SIGNING_ENV}"; do
+    if [[ "${UNSIGNED_DRY_RUN}" -eq 1 && "${f}" != "${MANIFEST}" ]]; then
+        continue
+    fi
     if [[ ! -f "${f}" ]]; then
         echo "verify-manifest: missing ${f} -- cannot verify, refusing to trust anything" >&2
         exit 2
     fi
 done
 
-# shellcheck source=/dev/null
-source "${SIGNING_ENV}"
-: "${SIGNING_KEY_FINGERPRINT:?SIGNING_KEY_FINGERPRINT not set in ${SIGNING_ENV}}"
-: "${AGENT_SIGNING_KEY_FINGERPRINT:?AGENT_SIGNING_KEY_FINGERPRINT not set in ${SIGNING_ENV}}"
-
 GNUPGHOME_TMP="$(mktemp -d)"
 SCOPED_TMP=""
 # Single trap for both temp paths -- a second `trap ... EXIT` later would
 # silently replace this one instead of adding to it (traps don't stack).
-trap 'rm -rf "${GNUPGHOME_TMP}"; [[ -n "${SCOPED_TMP}" ]] && rm -f "${SCOPED_TMP}"' EXIT
+# 2026-10-05: stop the gpg-agent/scdaemon this keyring spawned before removing
+# it -- they outlived every run ("left-over process ... in control group").
+trap 'GNUPGHOME="${GNUPGHOME_TMP}" gpgconf --kill all >/dev/null 2>&1; rm -rf "${GNUPGHOME_TMP}"; [[ -n "${SCOPED_TMP}" ]] && rm -f "${SCOPED_TMP}"' EXIT
 chmod 700 "${GNUPGHOME_TMP}"
 export GNUPGHOME="${GNUPGHOME_TMP}"
+
+if [[ "${UNSIGNED_DRY_RUN}" -eq 0 ]]; then
+# 2026-10-04 (duel C2): never `source` the pin file -- it used to be code
+# executed by whoever verifies (operator sweep, container entrypoints, root).
+# Read the two keys literally; a root-owned /etc pin wins over the tree copy.
+pin_src="${SIGNING_ENV}"
+if [[ -f "${SIGNING_PIN}" ]]; then
+    pin_owner="$(stat -c %u "${SIGNING_PIN}" 2>/dev/null || echo x)"
+    if [[ "${pin_owner}" == 0 || -n "${VERIFY_MANIFEST_PIN:-}" ]]; then pin_src="${SIGNING_PIN}"
+    else echo "verify-manifest: ${SIGNING_PIN} is not root-owned -- ignoring it" >&2; fi
+fi
+pin_get() {   # literal KEY=value read; strips one pair of surrounding quotes, nothing else
+    local v; v="$(grep -m1 -E "^$1=" "${pin_src}" 2>/dev/null | cut -d= -f2-)"
+    v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+    printf '%s' "${v}" | tr -cd 'A-Fa-f0-9'
+}
+SIGNING_KEY_FINGERPRINT="$(pin_get SIGNING_KEY_FINGERPRINT)"
+AGENT_SIGNING_KEY_FINGERPRINT="$(pin_get AGENT_SIGNING_KEY_FINGERPRINT)"
+: "${SIGNING_KEY_FINGERPRINT:?SIGNING_KEY_FINGERPRINT not set in ${pin_src}}"
+: "${AGENT_SIGNING_KEY_FINGERPRINT:?AGENT_SIGNING_KEY_FINGERPRINT not set in ${pin_src}}"
 
 gpg --quiet --import "${PUBKEY}" >/dev/null 2>&1
 
@@ -135,6 +175,7 @@ if [[ "${signing_fpr}" != "${SIGNING_KEY_FINGERPRINT}" && "${signing_fpr}" != "$
     echo "verify-manifest: SIGNING KEY NOT PINNED -- ${SIGNATURE} verifies against a key in ${PUBKEY} (signing fingerprint ${signing_fpr}, primary key fingerprint ${primary_fpr}), but neither matches SIGNING_KEY_FINGERPRINT nor AGENT_SIGNING_KEY_FINGERPRINT in ${SIGNING_ENV}. Refusing to trust a key that isn't the operator's own pinned fingerprint -- an attacker who can write tracked files could otherwise replace ${PUBKEY} with their own key and re-sign cleanly." >&2
     exit 1
 fi
+fi  # UNSIGNED_DRY_RUN guard (signature + key pin block above)
 
 if [[ $# -eq 0 ]]; then
     # Collective mode: every entry in the manifest -- AND, 2026-10-03,
@@ -163,7 +204,11 @@ if [[ $# -eq 0 ]]; then
         fi
     fi
     if sha256sum -c "${MANIFEST}" --quiet; then
-        echo "verify-manifest: OK -- signature valid, all $(wc -l < "${MANIFEST}") files match."
+        if [[ "${UNSIGNED_DRY_RUN}" -eq 1 ]]; then
+            echo "verify-manifest: OK (UNSIGNED DRY RUN -- hashes + coverage only, signature NOT checked) -- all $(wc -l < "${MANIFEST}") files match."
+        else
+            echo "verify-manifest: OK -- signature valid, all $(wc -l < "${MANIFEST}") files match."
+        fi
         exit 0
     else
         echo "verify-manifest: INTEGRITY FAILURE -- one or more files do not match the signed manifest (see above)." >&2

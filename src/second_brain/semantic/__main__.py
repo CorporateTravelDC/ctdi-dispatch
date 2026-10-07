@@ -297,7 +297,10 @@ def cmd_ask(args) -> int:
     slot-locked inference path would contend with real ops briefs for the one
     model slot on the box.
     """
-    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    # 2026-10-05: the one model server is llama.cpp (OpenAI-compatible API) at
+    # LLAMA_BASE_URL; Ollama's /api/generate on :11434 has not existed since the
+    # 2026-08-27 cutover, so this command could not have worked since then.
+    base = (os.environ.get("LLAMA_BASE_URL") or "http://100.x.x.x:8093").rstrip("/")
     model = args.model or os.environ.get("OLLAMA_CHAT_MODEL",
                                          "corporatetraveldc-pi5-chat")
     m = load()
@@ -310,23 +313,24 @@ def cmd_ask(args) -> int:
         f"Question: {args.ask}\n"
     )
     body = json.dumps({
-        "model": model, "prompt": prompt, "stream": False,
-        "options": {"temperature": 0.1, "num_predict": args.num_predict},
+        "model": model, "stream": False, "temperature": 0.1,
+        "max_tokens": args.num_predict,
+        "messages": [{"role": "user", "content": prompt}],
     }).encode()
-    req = urllib.request.Request(f"{base}/api/generate", data=body,
+    req = urllib.request.Request(f"{base}/v1/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=args.timeout) as r:
             data = json.loads(r.read())
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        print(f"ollama unreachable at {base}: {e}", file=sys.stderr)
+        text = (data["choices"][0]["message"]["content"] or "")
+    except (urllib.error.URLError, TimeoutError, OSError, KeyError, ValueError) as e:
+        print(f"llama server unreachable at {base}: {e}", file=sys.stderr)
         return 2
     if args.json:
-        _emit({"model": model, "pack_chars": len(pack),
-               "response": data.get("response", "")}, True)
+        _emit({"model": model, "pack_chars": len(pack), "response": text}, True)
         return 0
     print(f"[model={model}  context_pack={len(pack)} chars]\n")
-    print(data.get("response", "").strip())
+    print(text.strip())
     return 0
 
 

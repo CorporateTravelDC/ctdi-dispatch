@@ -1,0 +1,16 @@
+# scripts/lib/maintenance-queue.txt -- long-runner units dispatched by
+# scripts/maintenance-dispatch.sh into the rolling quiet windows, ONE per
+# line, priority order (first line starts first each operational day).
+# Enrolled 2026-10-04: the 20:20->05:20 cluster that stacked on one lock.
+# Their fixed timers are retired (.config/systemd/user/retired-rolling-queue-
+# 20261004/). NOT enrolled: second-brain-daily (23:45 day-file anchor), the
+# hourly briefs, and the Monday weeklies (wall-clock semantics).
+corporatetraveldc-executive-protection-daily-watch
+corporatetraveldc-aam-daily-watch
+corporatetraveldc-aviation-daily-watch
+corporatetraveldc-concierge-travel-daily-watch
+corporatetraveldc-gig-economy-daily-watch
+corporatetraveldc-trains-yachts-daily-watch
+corporatetraveldc-disruption-weather-digest
+corporatetraveldc-transport-pattern-digest
+corporatetraveldc-ep-advance-venues

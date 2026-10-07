@@ -1,6 +1,8 @@
 # Reservation/Call Webhook Integration Spec
 
-**Version:** 1.0 **Date:** 2026-09-21
+**Version:** 1.1 **Date:** 2026-10-06 (1.0: 2026-09-21)
+
+Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
 **Applies to:** inbound reservation and call-event webhooks → automatic
 flight/train watchlist tracking.
 
@@ -47,7 +49,7 @@ properties — the specific product doesn't matter, the properties do:
   authentication happens at the application layer instead (next bullet).
   Keeping this scoped to an exact path, not a whole hostname, is the same
   principle CTDI already applies elsewhere in this repo for its other
-  narrow public-facing exceptions (see `docs/SECURITY.md`).
+  narrow public-facing exceptions (see `docs/COMPLIANCE_SECURITY.md`).
 - **Your gateway must not strip the credential you're using.** This is the
   part that's easy to get wrong and hard to notice until a real delivery
   fails silently. Some gateways (including Cloudflare Access in front of a
@@ -62,12 +64,11 @@ properties — the specific product doesn't matter, the properties do:
     constant-time comparison (`hmac.compare_digest`, matching the same
     timing-side-channel discipline this repo's header-based check already
     uses — see `secrets.compare_digest` in `src/web/routes/webhooks.py`).
-  - **A path-embedded, single-use token** — this repo has a real, live
-    precedent for exactly this shape elsewhere (a narrowly-scoped access
-    exception for one specific URL pattern, using a random token as part of
-    the path itself rather than a header, specifically because the
-    reference deployment's own gateway strips headers on that route). The
-    same idea generalizes: `POST /webhooks/limoanywhere/<random-token>/reservations`
+  - **A URL-embedded token** — this repo has a live precedent: the
+    approval-resolve link (`GET /admin/approval-requests/{id}/resolve?action=deny&k=<key>`)
+    carries a per-action key in the URL rather than a header, because the
+    reference deployment's gateway strips `Authorization` on that route
+    (since 2026-10-04 that link can only deny). The same idea generalizes: `POST /webhooks/limoanywhere/<random-token>/reservations`
     instead of a header, if your reservation platform's webhook config
     supports a custom URL but not a custom header.
 - **Fail closed.** A missing or invalid credential must reject the request
@@ -85,12 +86,12 @@ dispatch stack, with Cloudflare Access gating everything on the tunnel's
 hostname behind an identity check. That's the right posture for the admin
 surface, but it also blocks a third-party webhook sender, which can't
 complete an interactive login. The fix is a **narrowly-scoped Access
-bypass application**, exact-path-matched to `/webhooks/*` only — everything
-else on that hostname stays gated exactly as before. This is the same
-shape of fix this deployment already uses for a different narrow exception
-elsewhere in its admin surface (a single-use, URL-embedded token instead of
-a header, for the same "Cloudflare strips Authorization in transit" reason
-called out in section 2).
+bypass application**, path-matched to `/webhooks/*` only — everything else
+on that hostname stays gated. Live check 2026-10-06: a `GET` to
+`https://dispatch.example.com/webhooks/3cx/events` returns the
+app's own `405` (it reached the receiver) while `/` returns Access's `302`,
+so the bypass is in place on the reference deployment. [UNVERIFIED: the
+Access application's exact path pattern is dashboard state, not checked.]
 
 If you're running Cloudflare yourself: create a Cloudflare Access
 application scoped to `your-hostname.example.com/webhooks/*` with a "bypass"
@@ -131,8 +132,7 @@ a small relay you control on their side) push over the VPN tunnel directly
 to the receiver's internal address. If your vendor only supports polling,
 not push, a cron job hitting their reservation API every few minutes and
 diffing against what's already tracked achieves the same result with
-higher latency — see the existing "Platform-specific notes" table above in
-this repo's main README for vendors that fall into this category.
+higher latency.
 
 ---
 
@@ -158,9 +158,13 @@ auto-tracking.
 ```json
 {"status": "accepted", "event": "<event type>", "auto_tracked": "flight AAL2773"}
 ```
-`auto_tracked` is only present when a flight or train identifier was
-successfully extracted and added to the watchlist; its absence is normal,
-not an error.
+`auto_tracked` is present when a flight or train identifier was **extracted**
+and a watchlist add was **attempted**. The add is best-effort: it posts to
+`http://127.0.0.1:8000/api/v1/watchlist/{flights|trains}` with the web
+service's `DISPATCH_ADMIN_TOKEN`, and a failed add (missing token, API error)
+is only logged — the response still carries `auto_tracked`. Its absence means
+nothing was extracted. Every LimoAnywhere event also pushes to the ntfy
+`reservations` topic (priority 3).
 
 ### `POST /webhooks/ringcentral/events`
 
@@ -173,7 +177,8 @@ carries no event payload and authorizes nothing on its own).
 read for logging; no extraction happens (call events don't carry trip
 data).
 
-**Response**: `200` with `{"status": "accepted", "event": "<event type>"}`.
+**Response**: `200` with `{"status": "accepted", "event": "<event type>"}`;
+the event is pushed to the ntfy `calls` topic (priority 3).
 
 ### `POST /webhooks/3cx/events`
 
@@ -225,13 +230,10 @@ pass-through for trains) unchanged.
 
 ## 7. Downstream watchlist API contract
 
-**Note on this repo's own docs**: the main `README.md`'s "Reservation
-System Integration" section documents a single bundled
-`POST /api/v1/watchlist` endpoint with a `{"type": "flight"|"train", ...}`
-body. The endpoints actually implemented today are **two separate routes**,
-documented below — treat this section, not that one, as current; the
-README predates the split. (Flagged here rather than silently reconciled —
-worth a follow-up pass to align them.)
+The README's "Reservation system integration" section now documents the
+same per-type routes as below. Do not confuse them with
+`POST /api/v1/watchlist` (no suffix), which still exists but is a Tier-1
+**watchlist session** endpoint, not an entry add.
 
 ### `POST /api/v1/watchlist/flights`
 
@@ -253,10 +255,12 @@ for the token-tier model).
   "registration": null
 }
 ```
-Only `identifier` is required. `identifier` must be the real ICAO callsign
-(section 6) — the platform's own flight-plan cross-check (FAA FDPS) uses it
-as the lookup key and will silently fail to resolve on an IATA-form or bare
-flight number. `hex_id`/`registration` are optional; omit them at
+Only `identifier` is required. Send the ICAO callsign (section 6) — the
+platform's flight-plan cross-check (FAA FDPS) uses it as the lookup key. Since
+2026-10-05 a marketed codeshare number that has no FDPS plan of its own is
+resolved through the platform's codeshare map to the operating flight
+(`db.resolve_operating_callsign`) before a flight-number fallback; a bare
+flight number or an unmapped IATA form can still fail to resolve. `hex_id`/`registration` are optional; omit them at
 reservation-add-time (the platform resolves and locks the aircraft identity
 once the flight is actually airborne and confirmed) rather than guessing.
 `auto_remove_at` defaults to 6 hours past scheduled arrival if omitted, or
@@ -271,7 +275,11 @@ for this route, when available).
 
 Same shape, minus the aviation-specific fields (`hex_id`, `registration`,
 `fdps_confirmed`). `identifier` is the bare train number. `auto_remove_at`
-defaults to 3 hours past scheduled arrival.
+defaults to 3 hours past scheduled arrival (24 hours from add-time if no
+arrival is given). Response `201` with the created entry.
+
+`POST /api/v1/watchlist/{flights,trains}/batch` and
+`POST /api/v1/watchlist/permanent/batch` (admin) add several entries at once.
 
 ---
 
@@ -302,5 +310,67 @@ defaults to 3 hours past scheduled arrival.
 
 *See also:* [docs/auth-token-proxy-pattern.md](auth-token-proxy-pattern.md)
 — the token-tier model referenced in section 7.
-*See also:* the main `README.md`'s "Reservation System Integration"
-section — being reconciled with this spec, see the note in section 7.
+*See also:* the main `README.md`'s "Reservation system integration" section.
+
+---
+
+---
+
+## Superseded (kept for the record)
+
+Text removed or replaced by the 2026-10-06 verification pass against the live system, kept in its original wording for the chronological record. It is **not** current. The evidence for each correction is in `docs/docs-refresh-2026-10-06/CHANGES-core.md`.
+
+
+### Reservation/Call Webhook Integration Spec
+
+~~**Version:** 1.0 **Date:** 2026-09-21 **Applies to:** inbound reservation and call-event webhooks → automatic flight/train watchlist tracking.~~
+
+
+### Reservation/Call Webhook Integration Spec › 2. Networking layer requirements (vendor-neutral)
+
+- ~~**TLS termination** somewhere between the public internet and the receiver. Reservation platforms deliver over HTTPS; nothing here works over plain HTTP.~~
+- ~~**Reachability scoped to `/webhooks/*` only, not your whole deployment.** CTDI's admin surface, watchlist reads, and everything else should stay behind whatever access control you already run (VPN, IP allowlist, an identity-aware proxy). Only the three webhook paths need to accept unauthenticated-at-the-network-layer traffic from your vendor's servers — authentication happens at the application layer instead (next bullet). Keeping this scoped to an exact path, not a whole hostname, is the same principle CTDI already applies elsewhere in this repo for its other narrow public-facing exceptions (see `docs/SECURITY.md`).~~
+- ~~**Your gateway must not strip the credential you're using.** This is the part that's easy to get wrong and hard to notice until a real delivery fails silently. Some gateways (including Cloudflare Access in front of a Tunnel, in the reference deployment's own experience) strip inbound `Authorization` headers before they reach the origin. If your auth mechanism lives in a header, **verify live** that your specific gateway passes it through — don't assume. If it doesn't, use one of:~~
+  - ~~**A body-embedded HMAC-SHA256 signature** instead of a header: the sender computes `HMAC-SHA256(shared_secret, raw_request_body)`, includes it as a field in the JSON payload itself (headers get stripped, bodies generally don't), and the receiver recomputes and compares it with a constant-time comparison (`hmac.compare_digest`, matching the same timing-side-channel discipline this repo's header-based check already uses — see `secrets.compare_digest` in `src/web/routes/webhooks.py`).~~
+  - ~~**A path-embedded, single-use token** — this repo has a real, live precedent for exactly this shape elsewhere (a narrowly-scoped access exception for one specific URL pattern, using a random token as part of the path itself rather than a header, specifically because the reference deployment's own gateway strips headers on that route). The same idea generalizes: `POST /webhooks/limoanywhere/<random-token>/reservations` instead of a header, if your reservation platform's webhook config supports a custom URL but not a custom header.~~
+- ~~**Fail closed.** A missing or invalid credential must reject the request (401/403), never silently accept it. The reference implementation in this repo returns 503 if no secret is configured at all (so it's obviously inert, not silently open) and 401 on a wrong/missing secret — never a bare 200 for unauthenticated traffic.~~
+
+
+### Reservation/Call Webhook Integration Spec › 3. Reference implementation — Cloudflare
+
+~~The reference deployment runs Cloudflare Tunnel in front of the whole dispatch stack, with Cloudflare Access gating everything on the tunnel's hostname behind an identity check. That's the right posture for the admin surface, but it also blocks a third-party webhook sender, which can't complete an interactive login. The fix is a **narrowly-scoped Access bypass application**, exact-path-matched to `/webhooks/*` only — everything else on that hostname stays gated exactly as before. This is the same shape of fix this deployment already uses for a different narrow exception elsewhere in its admin surface (a single-use, URL-embedded token instead of a header, for the same "Cloudflare strips Authorization in transit" reason called out in section 2).~~
+
+
+### Reservation/Call Webhook Integration Spec › 4. Alternative implementations
+
+~~**VPN-only / no public exposure**: if your reservation platform supports delivering webhooks over a site-to-site VPN or you'd rather not expose anything publicly, skip the gateway layer entirely and have your vendor (or a small relay you control on their side) push over the VPN tunnel directly to the receiver's internal address. If your vendor only supports polling, not push, a cron job hitting their reservation API every few minutes and diffing against what's already tracked achieves the same result with higher latency — see the existing "Platform-specific notes" table above in this repo's main README for vendors that fall into this category.~~
+
+
+### Reservation/Call Webhook Integration Spec › 5. Webhook payload contract › `POST /webhooks/limoanywhere/reservations`
+
+~~`auto_tracked` is only present when a flight or train identifier was successfully extracted and added to the watchlist; its absence is normal, not an error.~~
+
+
+### Reservation/Call Webhook Integration Spec › 5. Webhook payload contract › `POST /webhooks/ringcentral/events`
+
+~~**Response**: `200` with `{"status": "accepted", "event": "<event type>"}`.~~
+
+
+### Reservation/Call Webhook Integration Spec › 7. Downstream watchlist API contract
+
+~~**Note on this repo's own docs**: the main `README.md`'s "Reservation System Integration" section documents a single bundled `POST /api/v1/watchlist` endpoint with a `{"type": "flight"|"train", ...}` body. The endpoints actually implemented today are **two separate routes**, documented below — treat this section, not that one, as current; the README predates the split. (Flagged here rather than silently reconciled — worth a follow-up pass to align them.)~~
+
+
+### Reservation/Call Webhook Integration Spec › 7. Downstream watchlist API contract › `POST /api/v1/watchlist/flights`
+
+~~Only `identifier` is required. `identifier` must be the real ICAO callsign (section 6) — the platform's own flight-plan cross-check (FAA FDPS) uses it as the lookup key and will silently fail to resolve on an IATA-form or bare flight number. `hex_id`/`registration` are optional; omit them at reservation-add-time (the platform resolves and locks the aircraft identity once the flight is actually airborne and confirmed) rather than guessing. `auto_remove_at` defaults to 6 hours past scheduled arrival if omitted, or 24 hours from add-time if no arrival estimate exists yet.~~
+
+
+### Reservation/Call Webhook Integration Spec › 7. Downstream watchlist API contract › `POST /api/v1/watchlist/trains`
+
+~~Same shape, minus the aviation-specific fields (`hex_id`, `registration`, `fdps_confirmed`). `identifier` is the bare train number. `auto_remove_at` defaults to 3 hours past scheduled arrival.~~
+
+
+### Reservation/Call Webhook Integration Spec › 8. Security posture
+
+~~*See also:* [docs/auth-token-proxy-pattern.md](auth-token-proxy-pattern.md) — the token-tier model referenced in section 7. *See also:* the main `README.md`'s "Reservation System Integration" section — being reconciled with this spec, see the note in section 7.~~

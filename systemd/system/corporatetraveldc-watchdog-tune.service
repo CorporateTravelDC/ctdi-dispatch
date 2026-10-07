@@ -1,0 +1,5 @@
+[Unit]
+Description=Corporate Travel DC -- set RuntimeWatchdogSec to 120% of the week's worst stall (one-shot)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/ctdc/watchdog-tune.sh

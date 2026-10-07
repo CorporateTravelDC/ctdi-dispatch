@@ -24,7 +24,9 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-08-14: added so this recorder can read DEMO_RECORDER_API_TOKEN
 # (needed for the new Tier-1-gated knowledge-graph/osint captures) --
 # matches the runner/web containers' existing two-EnvironmentFile pattern.
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the demo image reads
+# (scripts/service-env/demo.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/demo.env
 AutoUpdate=local
 
 [Service]

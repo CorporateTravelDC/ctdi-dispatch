@@ -90,8 +90,23 @@ REFERENCE_TABLES: frozenset[str] = frozenset()
 PG_TABLES: frozenset[str] = frozenset({
     "acars_messages", "amtrak_status", "approval_requests", "atcscc_opsplan",
     "audit_log", "auth_tokens", "bandwidth_priority_state",
+    # 2026-10-03: added by migrations 0056-0063 after this set was last
+    # synced (tests/scripts/test_pg_migrate.py's table-set assertion is the
+    # drift detector that caught it -- 8 tables).
+    "chat_messages", "demo_profiles", "demo_snapshots", "audit_checkpoints",
+    "audit_archive_stubs", "aircraft_type_designators", "station_coordinates",
+    "faa_ladd_removals",
+    # 2026-10-04: Wave 2 (pg_schema/0069) -- signed approvals, council, workspace
+    "approval_signers", "council_sessions", "workspace_grants",
+    # 2026-10-05: agent gateway (pg_schema/0071)
+    "agent_connectors", "oauth_clients", "oauth_pending", "agent_connections", "oauth_tokens",
+    # 2026-10-05: Executive Standard invites + promo codes (pg_schema/0072)
+    "es_grants", "es_promos", "es_exchanges", "es_sessions", "es_invite_settings", "es_invite_events",
+    "exec_standard_sources",
+    # 2026-10-05: gateway kill switch + operator console (pg_schema/0073)
+    "agent_gateway_settings", "console_sessions",
     "board_enroll_nonces", "board_messages", "board_presence",
-    "board_refresh_grace", "board_tokens", "brief_archive",
+    "board_refresh_grace", "board_signers", "board_tokens", "brief_archive",
     "cifp_fixes", "cifp_holds", "cifp_meta", "cifp_procedure_legs",
     "codeshare_map",
     "convective_sigmet_archive", "cps_scores", "datis_snapshots",
@@ -588,7 +603,11 @@ class _TranslatingCursor:
         return self._raw.execute(translate_sql(sql), params, **kw)
 
     def executemany(self, sql, params_seq, **kw):
-        return self._raw.executemany(translate_sql(sql), params_seq, **kw)
+        # Cursor-level twin of _TranslatingConnection.executemany (2026-10-04):
+        # psycopg3 returns None here; sqlite3 returns the cursor. Return self
+        # so `cur.executemany(...).rowcount` works on both backends.
+        self._raw.executemany(translate_sql(sql), params_seq, **kw)
+        return self
 
     def __getattr__(self, name):
         return getattr(self._raw, name)
@@ -631,8 +650,21 @@ class _TranslatingConnection:
         run against Postgres. Fixed by opening a cursor explicitly --
         inherits this connection's row_factory (dict_row) by default, so
         callers see no behavior change."""
-        with self._raw.cursor() as cur:
-            return cur.executemany(translate_sql(sql), params_seq, **kw)
+        # 2026-10-04: psycopg3's Cursor.executemany() returns None (unlike
+        # Cursor.execute(), which returns the cursor), so this shim returned
+        # None where sqlite3.Connection.executemany() returns the cursor.
+        # db.enrich_flight_arrival_times() reads `.rowcount` off the result
+        # and died with "'NoneType' object has no attribute 'rowcount'" on
+        # every 5-minute tbfm-arrival-enrichment run since the Postgres
+        # cutover (first journal occurrence 2026-10-03 05:15; 200+ runs,
+        # exit 0, never a failed unit). Return the cursor for sqlite parity.
+        # Not a context manager here: closing the cursor would reset
+        # rowcount on some drivers; the connection owns its lifetime.
+        # returning=True makes psycopg accumulate rowcount across the whole
+        # batch (default is the last statement's count only).
+        cur = self._raw.cursor()
+        cur.executemany(translate_sql(sql), params_seq, returning=True, **kw)
+        return cur
 
     def executescript(self, sql, *a, **kw):
         """No-op on Postgres. 2026-09-18: every common.db.init_db[_vN]()
@@ -707,7 +739,7 @@ def _guard_cross_engine(sql: str) -> None:
     live in the same SQLite file (nothing has moved yet -- this is Phase
     1, purely additive), so a query joining across both would silently
     "work" against stale/soon-to-be-removed data instead of failing loud.
-    This is a textual guard (whole-word match against the known 65-table
+    This is a textual guard (whole-word match against the
     PG_TABLES set), deliberately over the actual SQL text rather than a
     query plan -- cheap, and every current ref-table call site is a
     simple single-table statement so false positives are not expected in

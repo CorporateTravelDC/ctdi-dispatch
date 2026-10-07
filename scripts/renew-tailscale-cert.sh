@@ -38,7 +38,12 @@ for arg in "$@"; do
     esac
 done
 
-[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}" 2>/dev/null || true
+# 2026-10-04 (duel): never `source` an env file as root -- values are
+# deliberately unquoted and the shell would execute fragments of them
+# (2026-10-03 credential-fragment leak). Read only the keys used here.
+env_get() { [[ -r "${ENV_FILE}" ]] || return 0; grep -m1 "^$1=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2-; }
+NTFY_BASE_URL="$(env_get NTFY_BASE_URL)"
+NTFY_OPS_TOPIC="$(env_get NTFY_OPS_TOPIC)"
 NTFY_BASE="${NTFY_BASE_URL:-http://127.0.0.1:2586}"
 NTFY_OPS="${NTFY_OPS_TOPIC:-ops-health}"
 
@@ -95,6 +100,16 @@ else
     # access) but SSL_DIR is root-only -- stage in a location that user can
     # write, then have root move+chown into place. Keeps /etc/nginx/ssl
     # root-only rather than loosening it for this one write.
+    # 2026-10-06: the Persistent catch-up fires at boot, seconds after
+    # tailscaled starts -- before it has a netmap ("500 Internal Server Error:
+    # no netmap available", 10-06 10:18Z). After=tailscaled only orders the
+    # start, not readiness. Wait up to 5 min for BackendState Running.
+    for _ in $(seq 1 30); do
+        sudo -u "${CTDC_USER}" tailscale status --json 2>/dev/null \
+            | grep -q '"BackendState": *"Running"' && break
+        sleep 10
+    done
+
     STAGING_DIR=$(sudo -u "${CTDC_USER}" mktemp -d /tmp/corporatetraveldc-tailscale-cert-XXXXXX)
     trap 'rm -rf "${STAGING_DIR}"' RETURN
 
@@ -129,11 +144,21 @@ AFTER_HASH=""
 
 if [[ "${BEFORE_HASH}" == "${AFTER_HASH}" && -n "${BEFORE_HASH}" ]]; then
     say "  [OK] cert unchanged (still valid beyond ${MIN_VALIDITY}) -- no reload needed"
+    # but never leave nginx down: a failed nginx is restarted if its config tests clean
+    if ! systemctl is-active --quiet nginx; then
+        say "  nginx is not active -- testing config and starting it"
+        if run nginx -t; then run systemctl restart nginx; say "  [OK] nginx started"
+        else say "  [FAIL] nginx -t failed; nginx left down"
+             ntfy_send "${NTFY_OPS}" "Tailscale Cert Renewal -- nginx down" "nginx was not active and nginx -t failed; left down."; fi
+    fi
 else
     say "  cert issued/renewed"
     say "Testing nginx config and reloading..."
     if run nginx -t; then
-        run systemctl reload nginx
+        # reload-or-restart, not reload: a reload is a no-op on a FAILED nginx
+        # (2026-10-04 19:54 boot: nginx started inside the write->restorecon
+        # window, failed on the label, and the old 'reload' left it down)
+        run systemctl reload-or-restart nginx
         say "  [OK] nginx reloaded"
         if (( ! DRY_RUN )); then
             ntfy_send "${NTFY_OPS}" "Tailscale Cert Renewed" \

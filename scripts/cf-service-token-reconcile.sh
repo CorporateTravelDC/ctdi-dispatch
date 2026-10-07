@@ -53,7 +53,7 @@ echo "[reconcile] Fetching live service tokens..."
 # every call here starts failing as an auth error with no auth problem.
 LIST_RESP="$(curl -s -4 -m 20 -X GET \
     "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/access/service_tokens" \
-    -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
     -H "Content-Type: application/json")"
 
 if [[ "$(echo "${LIST_RESP}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("success"))')" != "True" ]]; then

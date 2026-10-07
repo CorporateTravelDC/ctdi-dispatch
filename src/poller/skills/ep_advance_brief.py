@@ -62,7 +62,7 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME      = "ep-advance"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 OLLAMA_MODEL    = (
     os.getenv("OLLAMA_EP_ADVANCE_MODEL")
     or os.getenv("OLLAMA_MODEL")
@@ -72,7 +72,7 @@ OLLAMA_TREND_MODEL_EP = (
     os.getenv("OLLAMA_EP_ADVANCE_TREND_MODEL")
     or "corporatetraveldc-pi5-ep-advance-trend:latest"
 )
-MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL        = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 # Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
 # timeouts, one constant per call site. Fail-fast semantics unchanged
 # (max_retries=0 at both direct call sites -- see git history for the
@@ -1005,7 +1005,7 @@ Keep total brief under 750 words. Threat posture first; bottom line last."""
 # ── Ollama generation ─────────────────────────────────────────────────────────
 
 def _call_ollama(prompt: str) -> tuple[str, str] | None:
-    if not OLLAMA_BASE_URL:
+    if not LLAMA_BASE_URL:
         return None
     # 2026-08-30 (night pass): unified onto common.llm.generate() -- see
     # the import comment at the top of this file for the full rationale
@@ -1216,7 +1216,7 @@ def _generate_trend_narrative_ep(trend_prompt: str) -> str:
     handles the busy/failure logging and sanitize_llm_response() (with
     truncation trim) internally.
     """
-    if not OLLAMA_BASE_URL:
+    if not LLAMA_BASE_URL:
         return ""
     return llm_generate(
         system=None,

@@ -4,6 +4,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# 2026-10-04 (duel C1): root runs the INSTALLED copy (root:root, /usr/local/libexec/ctdc),
+# never the operator-writable checkout. After each sign: sudo scripts/install-root-copies.sh
+# && sudo systemctl daemon-reload.
 Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/watchdog.sh
+ExecStart=/usr/local/libexec/ctdc/watchdog.sh
 User=root

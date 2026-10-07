@@ -42,11 +42,16 @@ class TestPushDedupContract:
         assert d.should_push("slot", "h2") is True
 
     def test_window_elapse_breaks_through(self, tmp_path):
+        # 6c2ec70 (2026-09-03): should_push() is forward-only -- an unchanged
+        # hash stays suppressed regardless of elapsed time (UAL1369 re-page
+        # incident). The time-windowed contract lives in should_push_periodic().
         d = _dedup(tmp_path, secs=1)
         d.record("slot", "h1")
         assert d.should_push("slot", "h1") is False
+        assert d.should_push_periodic("slot", "h1") is False
         time.sleep(1.05)
-        assert d.should_push("slot", "h1") is True
+        assert d.should_push("slot", "h1") is False, "forward-only: no re-fire on the clock"
+        assert d.should_push_periodic("slot", "h1") is True
 
     def test_distinct_slots_do_not_cross_contaminate(self, tmp_path):
         # The shape of the tfms/fdps shared-slot bug: distinct entities

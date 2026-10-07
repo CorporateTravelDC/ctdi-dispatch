@@ -1,0 +1,17 @@
+# scripts/service-env/pusher.allowlist -- SECRET names the pusher image reads (2026-10-04, duel M9).
+# Derived by a static import-closure scan of the pusher entrypoint (getenv / environ / config.get);
+# review before switching the quadlet. dispatch.env (non-secret) stays mounted separately.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/common/acars.py:56
+AIRFRAMES_TOKEN  # src/common/acars.py:67
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:475
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NTFY_TOKEN  # src/common/config.py:55
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:15
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:6
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:5
+PUSHOVER_TOKEN  # src/common/pushover.py:13
+PUSHOVER_USER_KEY  # src/common/pushover.py:14
+# 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+NEXTCLOUD_APP_PASSWORD  # src/second_brain/index_db.py:151

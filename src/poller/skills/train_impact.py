@@ -27,12 +27,12 @@ from common.sr2_gate import check_gate, commit_gate
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "train-impact"
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL   = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OSINT_MODEL")
                      or os.getenv("OLLAMA_CHAT_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "corporatetraveldc-pi5-brief:latest")
-MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL             = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 
 # DC-area Amtrak stations served by exec chauffeur operation.
 DC_STATIONS = ["US_WAS", "US_BWI", "US_ABE"]  # WAS=Union, BWI Rail, Alexandria

@@ -28,10 +28,13 @@ def age_str(saved_at: str) -> str:
 def fmt_cps(cps: dict) -> str:
     if not cps:
         return "unavailable"
+    # API shape (2026-10-03): {score, label, factors{...}, narrative, computed_at}
     score = cps.get("score", "?")
-    state = cps.get("state", "?")
-    go = cps.get("go_no_go", "?")
-    return f"{go.upper()} (score={score}, state={state})"
+    label = cps.get("label", cps.get("state", "?"))
+    out = f"{label} (score={score})"
+    if cps.get("narrative"):
+        out += f"\n  {str(cps['narrative'])[:160]}"
+    return out
 
 
 def fmt_feeds(feeds: dict) -> str:
@@ -40,11 +43,29 @@ def fmt_feeds(feeds: dict) -> str:
     lines = []
     feed_list = feeds.get("feeds", feeds)
     if isinstance(feed_list, list):
+        # REST pull feeds (nws, amtrak, notam, tfr, nas) are failover
+        # fallbacks for a push:<name> twin -- idle-by-design while the push
+        # path is fresh (ingest/failover.py). /healthz already excludes
+        # them from "stale"; show them as idle rather than failed.
+        fresh_push = set()
         for f in feed_list:
-            name = f.get("name", "?")
-            ok = "✓" if f.get("healthy", f.get("ok", False)) else "✗"
-            age = f.get("age_seconds", "?")
-            lines.append(f"  {ok} {name} (age={age}s)")
+            n = f.get("feed_name", "")
+            a, t = f.get("age_seconds"), f.get("stale_threshold_seconds")
+            if n.startswith("push:") and a is not None and t is not None and a <= t:
+                fresh_push.add(n[5:])
+        for f in feed_list:
+            # API shape (2026-10-03): feed_name / age_seconds /
+            # stale_threshold_seconds / error / consecutive_failures
+            name = f.get("feed_name", f.get("name", "?"))
+            age = f.get("age_seconds")
+            thr = f.get("stale_threshold_seconds")
+            err = f.get("error") or f.get("pull_error")
+            fresh = (age is not None and thr is not None and age <= thr)
+            ok = "✓" if (fresh and not err) else "✗"
+            tail = f" err={str(err)[:40]}" if err else ""
+            if ok == "✗" and not err and name in fresh_push:
+                ok, tail = "○", " (REST fallback idle; push covers)"
+            lines.append(f"  {ok} {name} (age={age}s/{thr}s){tail}")
     elif isinstance(feed_list, dict):
         for name, info in feed_list.items():
             ok = "✓" if (info or {}).get("healthy", False) else "✗"
@@ -60,9 +81,15 @@ def fmt_tfr(tfr) -> str:
         return "none active"
     out = []
     for t in tfrs[:10]:  # cap at 10
-        notam = t.get("notam_id", t.get("id", "?"))
-        ftype = t.get("type", "?")
-        out.append(f"  • {notam} [{ftype}]")
+        notam = t.get("tfr_id", t.get("notam_id", t.get("id", "?")))
+        ftype = "VIP" if t.get("is_vip") else t.get("type", "")
+        end = str(t.get("effective_end") or "")[:16]
+        line = f"  • {notam}"
+        if ftype:
+            line += f" [{ftype}]"
+        if end:
+            line += f" ends {end}"
+        out.append(line)
     if len(tfrs) > 10:
         out.append(f"  ... and {len(tfrs) - 10} more")
     return "\n".join(out)
@@ -76,9 +103,10 @@ def fmt_alerts(alerts) -> str:
         return "none"
     out = []
     for a in items[:5]:
-        event = a.get("event", a.get("type", "?"))
-        area = a.get("areaDesc", a.get("area", "?"))
-        out.append(f"  • {event} — {area}")
+        event = a.get("event_type", a.get("event", a.get("type", "?")))
+        area = a.get("area_desc", a.get("areaDesc", a.get("area", "?")))
+        sev = a.get("severity")
+        out.append(f"  • {event}{' ('+sev+')' if sev else ''} — {str(area)[:70]}")
     if len(items) > 5:
         out.append(f"  ... and {len(items) - 5} more")
     return "\n".join(out)
@@ -91,14 +119,20 @@ def fmt_weather(wx) -> str:
     if isinstance(stations, list) and stations:
         lines = []
         for s in stations[:6]:
-            icao = s.get("station_id", s.get("icao", "?"))
-            raw = s.get("raw_text", s.get("metar", ""))[:80]
-            lines.append(f"  {icao}: {raw}")
+            icao = s.get("station", s.get("station_id", s.get("icao", "?")))
+            raw = s.get("raw_text", s.get("metar"))
+            if raw:
+                lines.append(f"  {icao}: {raw[:80]}")
+            else:
+                lines.append(f"  {icao}: ceil {s.get('ceiling_ft','?')}ft  vis {s.get('visibility_sm','?')}sm"
+                             f"  wind {s.get('wind_kt','?')}kt  precip {s.get('precip_code') or '-'}")
         return "\n".join(lines)
     return str(wx)[:200]
 
 
 def fmt_runsheet(rs) -> str:
+    if rs is None:
+        return "not captured (Tier-1 /api/v1/runsheet 403 -- no DISPATCH_ADMIN_TOKEN in hook env)"
     if not rs:
         return "no active trips"
     trips = rs if isinstance(rs, list) else rs.get("trips", rs.get("entries", []))
@@ -116,8 +150,15 @@ def fmt_amtrak(am) -> str:
     if not am:
         return "unavailable"
     if isinstance(am, dict):
-        status = am.get("status", am.get("board_status", "?"))
-        return str(status)[:120]
+        summ = am.get("summary") or am.get("status") or am.get("board_status") or "?"
+        trains = am.get("trains") or []
+        late = [t for t in trains if (t.get("delay_minutes") or 0) >= 15]
+        out = f"{str(summ)[:120]}"
+        if trains:
+            out += f"\n  {len(trains)} trains tracked, {len(late)} delayed >=15m"
+            for t in late[:5]:
+                out += f"\n  • {t.get('train_num','?')} {t.get('route','')} +{t.get('delay_minutes')}m {t.get('status','')}"
+        return out
     return str(am)[:120]
 
 
@@ -144,7 +185,8 @@ def main():
 
     print("─── SERVICE HEALTH ───────────────────────────────────────")
     health = state.get("health") or {}
-    print(f"  Status : {health.get('status', 'unknown')}")
+    print(f"  Status : {health.get('status', 'unknown')}"
+          + (f"  ({health.get('reason')})" if health.get("reason") else ""))
     snap_age = health.get("snapshot_age_seconds", health.get("age", "?"))
     print(f"  Snap   : {snap_age}s old")
 
@@ -186,27 +228,20 @@ def main():
     _check_ssh_key(state.get("ssh_pubkey"))
 
 
+def _signing_key_paths() -> tuple[str, str]:
+    """The account's OWN signing key, ~/.ssh/<account>_ed25519 (team
+    segmentation 2026-10-04: one key per account, comment account@host).
+    The shared cowork_ed25519 is retired as an identity and is never used."""
+    import getpass
+    key = os.path.expanduser(f"~/.ssh/{getpass.getuser()}_ed25519")
+    return key, key + ".pub"
+
+
 def _check_ssh_key(saved_pubkey: str | None) -> None:
-    """Ensure ~/.ssh/id_ed25519 exists; generate if missing. Always print pubkey."""
-    import subprocess
-
-    ssh_key   = os.path.expanduser("~/.ssh/cowork_ed25519")
-    ssh_pub   = os.path.expanduser("~/.ssh/cowork_ed25519.pub")
-    ssh_dir   = os.path.expanduser("~/.ssh")
-
-    key_existed = os.path.exists(ssh_key)
-    regenerated = False
-
-    if not key_existed:
-        os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
-        result = subprocess.run(
-            ["ssh-keygen", "-t", "ed25519", "-C", "claude-cowork-dispatch",
-             "-f", ssh_key, "-N", ""],
-            capture_output=True, text=True
-        )
-        regenerated = result.returncode == 0
-
-    # Read current pubkey
+    """Report the account's signing key. Never generates one and never
+    suggests editing authorized_keys: keys are provisioned by the operator
+    (plan.sh) and a self-authorized key would defeat attribution."""
+    ssh_key, ssh_pub = _signing_key_paths()
     current_pubkey = None
     if os.path.exists(ssh_pub):
         try:
@@ -216,24 +251,17 @@ def _check_ssh_key(saved_pubkey: str | None) -> None:
             pass
 
     print()
-    print("─── SSH KEY (claude-cowork-dispatch) ────────────────────")
-    if regenerated:
-        print("  STATUS : REGENERATED (was missing after compact)")
-        print("  ACTION : Add this public key to Pi authorized_keys:")
-        print()
-        print(f"  echo \"{current_pubkey}\" >> ~/.ssh/authorized_keys")
-    elif saved_pubkey and current_pubkey and saved_pubkey != current_pubkey:
-        print("  STATUS : KEY CHANGED since last save")
-        print("  ACTION : Re-add public key to Pi authorized_keys:")
-        print()
-        print(f"  echo \"{current_pubkey}\" >> ~/.ssh/authorized_keys")
+    print(f"─── SIGNING KEY ({os.path.basename(ssh_key)}) ─────────────────")
+    if not os.path.exists(ssh_key) or not current_pubkey:
+        print("  STATUS : MISSING -- do not generate one; tell the operator")
+        print("           (plan.sh provisions it and registers the signer)")
+    elif saved_pubkey and saved_pubkey != current_pubkey:
+        print("  STATUS : CHANGED since the pre-compact snapshot -- stop and")
+        print("           tell the operator (board-signer-ctl.sh show <account>)")
     else:
-        print("  STATUS : OK (key matches pre-compact snapshot)")
-
+        print("  STATUS : OK (matches pre-compact snapshot)")
     if current_pubkey:
-        print()
-        print("  Public key:")
-        print(f"  {current_pubkey}")
+        print(f"  Public : {current_pubkey}")
     print("─" * 65)
 
 
