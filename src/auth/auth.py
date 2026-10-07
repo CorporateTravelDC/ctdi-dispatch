@@ -271,6 +271,9 @@ def require_admin(action: str):
                 detail="Admin tier required",
             )
 
+        # 2026-10-07: the authenticated token's label, so a route can bind
+        # the real requesting identity (e.g. into a signed approval request).
+        request.state.token_label = (record or {}).get("user_label") or (token_prefix and f"token:{token_prefix}")
         detail = None
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
             try:

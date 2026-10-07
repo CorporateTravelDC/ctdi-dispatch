@@ -42,7 +42,8 @@ CHECK=0; [[ "${1:-}" == --check ]] && CHECK=1
 
 SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-cert.sh scripts/stall-monitor.py scripts/watchdog-tune.sh scripts/skill-grants.sh scripts/lib/skill_grants.py
          scripts/tailscale-cert-refresh-nts.sh
-         scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh)
+         scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh
+         scripts/approved-exec.py scripts/approved-exec.conf)   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
@@ -100,7 +101,7 @@ install -d -m 0755 -o root -g root "${DEST}" "${DEST}/lib" "${DEST}/lib/common"
 rec=$(mktemp); trap 'rm -f "$rec"' EXIT
 for f in "${SCRIPTS[@]}" "${PYLIB[@]}"; do
   want=$(manifest_hash "$f"); [[ -n "$want" ]] || { echo "install-root-copies: ${f} is not in the manifest -- refusing" >&2; exit 4; }
-  d=$(dest_of "$f"); mode=0644; [[ "$f" == scripts/* ]] && mode=0755
+  d=$(dest_of "$f"); mode=0644; [[ "$f" == scripts/*.sh || "$f" == scripts/*.py ]] && mode=0755
   install -m "$mode" -o root -g root "${REPO}/${f}" "${d}.new"
   have=$(sha256sum "${d}.new" | cut -d' ' -f1)
   [[ "$have" == "$want" ]] || { rm -f "${d}.new"; echo "install-root-copies: ${f} changed between verify and copy -- refusing" >&2; exit 5; }

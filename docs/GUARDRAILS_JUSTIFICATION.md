@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
+
 This platform runs network, memory, CPU and thermal guardrails that trade
 throughput for not taking the box down. This document exists so a "can we
 remove this cap" conversation starts from this deployment's own measurements.

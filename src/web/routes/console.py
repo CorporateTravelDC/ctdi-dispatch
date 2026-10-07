@@ -578,12 +578,18 @@ async def console(request: Request):
         row = governance.approval_view(aid)
         ok = (row and row.get("kind") == "console-login" and
               json.loads(row["command"]).get("nonce_sha256") == _h(nonce))
-        if ok and row["status"] == "allowed" and _signer_live(row.get("resolved_by") or ""):
+        now = time.time()
+        # 2026-10-07: redemption is bounded on the SERVER -- an allowed login
+        # must be redeemed within LOGIN_TTL_S of the request's own expiry, not
+        # merely while the browser still holds the pending cookie.
+        in_window = bool(row) and now <= float(row.get("expires_at") or 0) + LOGIN_TTL_S
+        if ok and row["status"] == "allowed" and in_window and _signer_live(row.get("resolved_by") or ""):
             secret = secrets.token_urlsafe(32)
-            now = time.time()
             try:
                 _q("INSERT INTO console_sessions (id_hash, signer, approval_id, created_at, expires_at) "
                    "VALUES (?, ?, ?, ?, ?)", (_h(secret), row["resolved_by"], aid, now, now + SESSION_TTL_S))
+                governance.audit("console.login", {"approval_id": aid, "signer": row["resolved_by"],
+                                                   "session_expires_at": now + SESSION_TTL_S})
             except Exception:                              # this approval already minted its one session
                 resp = _signin_page()
                 resp.delete_cookie(PENDING, path="/")
@@ -629,6 +635,7 @@ async def console_logout(request: Request):
     s, _ = await _csrf_session(request)
     if s:
         _q("UPDATE console_sessions SET revoked_at = ? WHERE id_hash = ?", (time.time(), s["id_hash"]))
+        governance.audit("console.logout", {"approval_id": s["approval_id"], "signer": s["signer"]})
     resp = RedirectResponse("/console", status_code=303)
     resp.delete_cookie(COOKIE, path="/")
     return resp
@@ -645,6 +652,11 @@ async def console_act(request: Request):
                      "<a class='btn full' href='/console'>Open console</a></section>", 403)
     actor = f"{s['signer']}@console"
     a, ref = str(f.get("action") or ""), str(f.get("ref") or "")
+    # 2026-10-07: every console action is an audit event (the action name and
+    # its target reference only -- never invite links, codes or emails' secrets).
+    governance.audit("console.action", {"action": a[:40], "ref": ("email-sha256:" + _h(ref.lower())[:16]) if "@" in ref
+                                        else ref[:80], "signer": s["signer"],
+                                        "confirmed": f.get("confirm") == "yes"})
     killing = a in ("es-kill-all", "gw-kill-all")
     if killing and f.get("confirm") != "yes":
         return _result("Not done", "<p>Tick “I mean it” to confirm.</p>")

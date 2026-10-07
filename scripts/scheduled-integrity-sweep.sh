@@ -93,7 +93,24 @@ env_quoting_rc=$?
 timer_requires_output="$("${REPO_DIR}/scripts/check-timer-requires.sh" 2>&1)"
 timer_requires_rc=$?
 
-if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 ]]; then
+# 2026-10-07: the audit_log hash chain is re-verified on every sweep
+# (src/common/audit_chain.py) -- before this nothing ever checked it. The head
+# hash is logged each run, so the journal keeps an anchor outside the
+# database. A web container that is down is "unavailable" (warning), not a
+# chain failure; a recompute mismatch or broken link IS a failure.
+chain_rc=0
+chain_output="$(podman exec systemd-corporatetraveldc-web python3 -m common.audit_chain 2>&1)"
+chain_exec_rc=$?
+if [[ ${chain_exec_rc} -eq 1 ]] && grep -q '"intact": false' <<<"${chain_output}"; then
+    chain_rc=1
+    log "error" "SWEEP FAILED -- audit_log hash chain does not verify: $(tr -d '\n' <<<"${chain_output}")"
+elif [[ ${chain_exec_rc} -ne 0 ]]; then
+    log "warn" "audit chain check unavailable (web container): $(tail -1 <<<"${chain_output}")"
+else
+    log "info" "audit chain intact; head $(grep -o '"head_hash": "[0-9a-f]*"' <<<"${chain_output}")"
+fi
+
+if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 ]]; then
     log "info" "sweep OK: ${output}"
     printf '{"status":"ok","last_run_epoch":%s,"last_run_iso":"%s"}\n' \
         "${now_epoch}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${STATE_FILE}"
@@ -117,6 +134,11 @@ else
     if [[ ${rc} -ne 0 ]]; then
         ntfy_send "INTEGRITY SWEEP FAILED" \
             "$(basename "${REPO_DIR}"): signed-manifest verification failed -- possible tampering or corruption. Check ${LOG_FILE}." \
+            5
+    fi
+    if [[ ${chain_rc} -ne 0 ]]; then
+        ntfy_send "AUDIT CHAIN BROKEN" \
+            "$(basename "${REPO_DIR}"): audit_log hash chain failed verification -- rows edited, removed or reordered. Check ${LOG_FILE}." \
             5
     fi
     if [[ ${env_quoting_rc} -ne 0 ]]; then

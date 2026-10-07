@@ -17,8 +17,10 @@
 # passphrase is the human step an agent cannot perform.
 # The canonical text is rebuilt HERE from the command this script displays
 # (sha256 computed locally), so what you read is what you sign:
-#   corporatetraveldc-approval v1 / id / action / kind / requester /
-#   expires_at / command-sha256         (common/governance.py approval_canonical)
+#   corporatetraveldc-approval v2 / id / action / kind / requester /
+#   expires_at / command-sha256 / pattern-sha256 / reason-sha256
+#                                       (common/governance.py approval_canonical)
+# SUPERSEDED 2026-10-07: v1 (no pattern/reason lines -- the reason you read was not signed)
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE="${BOARD_API_BASE:-http://127.0.0.1:8000}"
@@ -55,11 +57,14 @@ elif mode == "status":
     print(r["status"])
 elif mode == "canonical":
     action = sys.argv[2]
+    h = lambda v: hashlib.sha256((v or "").encode()).hexdigest()
     sys.stdout.write("\n".join([
-        "corporatetraveldc-approval v1", f"id: {r['id']}", f"action: {action}",
+        "corporatetraveldc-approval v2", f"id: {r['id']}", f"action: {action}",
         f"kind: {r.get('kind') or 'sudo'}", f"requester: {r.get('requester') or '-'}",
         f"expires_at: {int(r['expires_at'])}",
-        "command-sha256: " + hashlib.sha256((r.get("command") or "").encode()).hexdigest()]))
+        "command-sha256: " + h(r.get("command")),
+        "pattern-sha256: " + h(r.get("command_pattern")),
+        "reason-sha256: " + h(r.get("reasoning"))]))
 elif mode == "list":
     for p in r.get("pending", []):
         left = int(p["expires_at"] - time.time())

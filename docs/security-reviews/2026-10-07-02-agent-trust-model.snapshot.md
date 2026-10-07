@@ -1,3 +1,9 @@
+# Snapshot: agent trust model, review 02 (after the hardening pass)
+
+> **Frozen record. Not current once a later review exists.** This is `docs/AGENT_TRUST_MODEL.md` exactly as it stood at the end of review 02 on 2026-10-07 (the hardening commit). The current canonical document is `docs/AGENT_TRUST_MODEL.md`. Chain index: `README.md` in this directory.
+
+---
+
 # Agent and operator trust model
 
 Verified against the code at HEAD and the running system on 2026-10-07 12:00Z–13:30Z / 08:00–09:30 ET; hardening pass applied the same day (status changes are marked inline, the earlier status struck through).

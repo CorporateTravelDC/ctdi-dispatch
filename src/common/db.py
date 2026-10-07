@@ -4526,13 +4526,29 @@ def get_approval_request(request_id: str) -> dict | None:
             return None
         d = dict(row)
         if d["status"] == "pending" and time.time() >= d["expires_at"]:
-            c.execute(
-                "UPDATE approval_requests SET status='expired', resolved_at=? WHERE id=?",
+            cur = c.execute(
+                "UPDATE approval_requests SET status='expired', resolved_at=? WHERE id=? AND status='pending'",
                 (time.time(), request_id),
             )
+            expired_now = (cur.rowcount or 0) == 1
             d["status"] = "expired"
             d["resolved_at"] = time.time()
-        return _approval_public(d)
+        else:
+            expired_now = False
+    if expired_now:
+        _audit_quiet("approval.expired", {"id": request_id, "kind": d.get("kind") or "sudo"})
+    return _approval_public(d)
+
+
+def _audit_quiet(action: str, detail: dict) -> None:
+    """2026-10-07: governance audit write AFTER the state change has committed,
+    in its own connection, never raising -- an audit failure must not change an
+    authorization result (and on Postgres a failed statement would abort the
+    caller's transaction)."""
+    try:
+        audit(action, "governance", None, None, detail)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("audit write failed for %s", action)
 
 
 class ApprovalKeyError(Exception):
@@ -4570,16 +4586,19 @@ def resolve_approval_request(request_id: str, action: str, key: str = "") -> dic
         stored = dict(row).get(col)
         if not stored or not key or not hmac.compare_digest(stored, _approval_key_hash(key)):
             raise ApprovalKeyError("invalid approval link")
-        c.execute(
+        cur = c.execute(
             """UPDATE approval_requests
                SET status=?, resolved_at=?
                WHERE id=? AND status='pending' AND expires_at > ?""",
             (new_status, now, request_id, now),
         )
+        resolved_now = (cur.rowcount or 0) == 1
         row = c.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
         ).fetchone()
-        return _approval_public(dict(row)) if row else None
+    if resolved_now:
+        _audit_quiet("approval.resolved", {"id": request_id, "status": new_status, "via": "deny-link"})
+    return _approval_public(dict(row)) if row else None
 
 
 def count_recent_approvals(command_pattern: str, since_epoch: float) -> int:

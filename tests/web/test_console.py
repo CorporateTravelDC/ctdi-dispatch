@@ -191,3 +191,16 @@ def test_dashboard_service_worker_never_swallows_the_console():
     cfg = (Path(__file__).resolve().parents[2] / "src" / "runner" / "frontend" / "vite.config.js").read_text()
     deny = cfg.split("navigateFallbackDenylist:", 1)[1].split("]", 1)[0]
     assert "\\/console" in deny and "\\/api\\/" in deny
+
+
+def test_an_allowed_login_cannot_be_redeemed_long_after_expiry(env):
+    """2026-10-07: redemption is bounded on the server (request expiry +
+    LOGIN_TTL_S), not only by the browser's cookie lifetime."""
+    c = _client()
+    aid = _aid(c.post("/console/login").text)
+    _sign(env, aid)
+    with db.conn() as k:
+        k.execute("UPDATE approval_requests SET expires_at = ? WHERE id = ?", (time.time() - console.LOGIN_TTL_S - 5, aid))
+    assert "Sign out" not in c.get("/console").text
+    with db.conn() as k:
+        assert k.execute("SELECT count(*) FROM console_sessions").fetchone()[0] == 0

@@ -100,9 +100,17 @@ def _q(sql: str, args: tuple = (), one: bool = False):
         return cur.rowcount
 
 
+# 2026-10-07: the reader plane's global switches and revocations also go to the
+# hash-chained audit_log (target ids only; no emails or codes).
+_AUDITED = {"freeze", "thaw", "kill-all", "revoke", "revoke-promo", "sign-out", "invite", "invite-batch", "reissue", "promo"}
+
+
 def _event(actor: str | None, action: str, target: str = "", detail: str = "") -> None:
     _q("INSERT INTO es_invite_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
        (time.time(), actor, action, target, detail[:500]))
+    if action in _AUDITED:
+        from common import governance
+        governance.audit(f"reader.{action}", {"actor": actor, "target": target})
 
 
 def events(limit: int = 50) -> list[dict]:
