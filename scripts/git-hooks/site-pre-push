@@ -1,0 +1,26 @@
+#!/bin/bash
+# .git/hooks/pre-push for the website repos -- installed by
+# <platform repo>/scripts/install-git-hooks.sh (source of truth: the platform
+# repo's scripts/git-hooks/site-pre-push). 2026-10-07: dependency audit before
+# any push (docs/security-reviews/2026-10-07-03-post-deploy-and-dependencies.md).
+# Blocks on npm high/critical or a fixable Python advisory; an audit that cannot
+# run warns and lets the push through. Operator override:
+# DEPENDENCY_AUDIT_OVERRIDE=1 git push (logged to the journal).
+DEP_AUDIT="/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/dependency-audit.py"
+TOP="$(git rev-parse --show-toplevel)"
+[[ -x "$DEP_AUDIT" ]] || { echo "[pre-push] WARNING: $DEP_AUDIT not found -- dependency audit skipped"; exit 0; }
+"$DEP_AUDIT" --repo "$TOP"
+rc=$?
+if [[ $rc -eq 1 ]]; then
+    if [[ "${DEPENDENCY_AUDIT_OVERRIDE:-0}" == "1" ]]; then
+        logger -t dependency-audit "pre-push OVERRIDDEN by $(id -un) in $TOP" || true
+        echo "[pre-push] dependency audit FAILED -- overridden (DEPENDENCY_AUDIT_OVERRIDE=1, logged)"
+        exit 0
+    fi
+    echo "[FAIL] pre-push: vulnerable dependencies (above) -- push rejected."
+    echo "       Fix them, or as the operator: DEPENDENCY_AUDIT_OVERRIDE=1 git push"
+    exit 1
+elif [[ $rc -eq 3 ]]; then
+    echo "[pre-push] WARNING: dependency audit could not run (offline?) -- push allowed; the daily audit will report"
+fi
+exit 0

@@ -5,7 +5,9 @@ LABEL org.opencontainers.image.description="AIS vessel watcher — local AIS-cat
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir requests==2.32.3
+# requests 2.32.3 -> 2.34.2 and urllib3 pinned 2026-10-07 (5 advisories; same fix as acars-watcher).
+# Not deployed is not a reason to keep a known-vulnerable pin (operator rule 2026-10-07).
+RUN pip install --no-cache-dir requests==2.34.2 urllib3==2.8.0
 
 COPY ais_watcher.py .
 

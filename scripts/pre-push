@@ -224,6 +224,28 @@ if [[ "$FAIL" -eq 1 ]]; then
     exit 1
 fi
 
+# 2026-10-07: dependency audit before any push (scripts/dependency-audit.py).
+# Blocks on npm high/critical or a fixable Python advisory; an audit that cannot
+# run (offline, tool missing) warns and lets the push through. Operator-only
+# override: DEPENDENCY_AUDIT_OVERRIDE=1 git push ... (logged to the journal).
+DEP_AUDIT="$(git rev-parse --show-toplevel)/scripts/dependency-audit.py"
+if [[ -x "$DEP_AUDIT" ]]; then
+    "$DEP_AUDIT" --repo "$(git rev-parse --show-toplevel)"
+    dep_rc=$?
+    if [[ $dep_rc -eq 1 ]]; then
+        if [[ "${DEPENDENCY_AUDIT_OVERRIDE:-0}" == "1" ]]; then
+            logger -t dependency-audit "pre-push OVERRIDDEN by $(id -un) in $(git rev-parse --show-toplevel)" || true
+            echo "[pre-push] dependency audit FAILED -- overridden (DEPENDENCY_AUDIT_OVERRIDE=1, logged)"
+        else
+            echo "[FAIL] pre-push: vulnerable dependencies (above) -- push rejected."
+            echo "       Fix them, or as the operator: DEPENDENCY_AUDIT_OVERRIDE=1 git push"
+            exit 1
+        fi
+    elif [[ $dep_rc -eq 3 ]]; then
+        echo "[pre-push] WARNING: dependency audit could not run (offline?) -- push allowed; the daily audit will report"
+    fi
+fi
+
 if [[ "$PUSHING_MAIN" == "true" ]]; then
     echo "[pre-push] Pushing main -- remember to run scripts/push-and-sync.sh"
     echo "           (or scripts/push-public.sh directly) to update the public"

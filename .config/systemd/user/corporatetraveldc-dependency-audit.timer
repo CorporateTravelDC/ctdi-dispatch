@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily dependency vulnerability audit at 09:20 UTC (05:20 EDT / 04:20 EST)
+
+[Timer]
+OnCalendar=*-*-* 09:20:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
