@@ -26,8 +26,10 @@ def _dedup(tmp_path, name="t", secs=3600):
 
 def test_stale_keys_are_evicted_on_write(tmp_path):
     d = _dedup(tmp_path, secs=3600)
-    # Simulate a long-stale entry already on disk (older than 10x dedup_secs).
-    stale_ts = time.time() - (3600 * 10) - 1
+    # 6c2ec70 (2026-09-03): eviction horizon is retention_secs =
+    # max(dedup_secs * 10, 7 days), no longer a bare 10x window. Stale means
+    # older than the retention floor.
+    stale_ts = time.time() - d.retention_secs - 1
     d._path().write_text(json.dumps({"stale-key": {"ts": stale_ts, "hash": "old"}}))
 
     d.record("fresh-key", "new-hash")

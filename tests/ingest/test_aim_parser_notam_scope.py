@@ -142,7 +142,9 @@ def test_dc_region_fdc_notam_stored_even_outside_watch_set():
     p["_fire_notam_alert"].assert_called_once()
 
 
-def test_nationwide_fdc_airshow_stored_but_not_alerted():
+def test_nationwide_fdc_airshow_stored_and_alerted_in_the_sweep():
+    """2026-10-05 (operator): every authority-cited TFR is in the alert sweep;
+    a 91.145 airshow outside the home zone alerts at priority 3 (tfr_priority)."""
     with _patched() as p:
         p["_get_transient_airports"].return_value = frozenset()
         p["_get_facility_filter"].return_value = frozenset({"KDCA", "KIAD", "KBWI"})
@@ -152,7 +154,8 @@ def test_nationwide_fdc_airshow_stored_but_not_alerted():
         written = aim_parser.write_aim_notams([n])
     assert written == 1
     p["db"].upsert_notam.assert_called_once()
-    p["_fire_notam_alert"].assert_not_called()
+    p["_fire_notam_alert"].assert_called_once()
+    assert aim_parser.tfr_priority(n) == 3
 
 
 def test_nationwide_fdc_routine_dropped():
@@ -252,3 +255,112 @@ def test_fdc_in_dc_region_artcc_still_stored():
         written = aim_parser.write_aim_notams([n])
     assert written == 1
     p["db"].upsert_notam.assert_called_once()
+
+
+# ── CRANE: callsign only (2026-10-05) ─────────────────────────────────────────
+
+def test_crane_callsigns_are_vip():
+    for t in ("CRANE01 ARR KADW 1500Z", "CRANE 05 DEP KIAD", "MOVEMENT OF CRANE50 AND CRANE 01",
+              "TFR FOR CRANE 50 OPS"):
+        assert aim_parser._is_vip_notam(t) is True, t
+
+
+def test_crane_obstructions_and_bare_word_are_not_vip():
+    for t in ("TEMPORARY CRANE 474 MSL 734FT SW OF RWY 34L",
+              "TEMP CRANE 331 MSL, 3646FT SE OF RWY 24L",
+              "TEMPORARY CRANE 2.2NM FROM DER, ON CENTERLINE, 300FT AGL",
+              "TEMPORARY CRANES, UP TO 846 MSL, 1808FT SE OF RWY 10R",
+              "BELOTTI CRANE 20 TONS UNSERVICEABLE",
+              "NR 1 BELOTTI CRANE 36 TONS REF MILAIP",
+              "CRANE MARKED, LGTD, 472413N0083627E, 95.0M",
+              "TOWER CRANE ERECTED 250FT AGL", "MOBILE CRANE IN USE ADJ TWY B",
+              "CRANE 15FT AGL WI 0.5NM", "CRANE 50 MSL", "CRANE OPR WI 0.5NM OF RWY 19 THR",
+              "CRANEBROOK", "CRANE"):
+        assert aim_parser._is_vip_notam(t) is False, t
+
+
+# ── TFR authority priority (2026-10-05) ───────────────────────────────────────
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _zones(monkeypatch):
+    """Zones are per-deployment (no built-in default); tests pin a DC-style one."""
+    monkeypatch.setenv("NOTAM_HOME_ARTCCS", "ZDC")
+    monkeypatch.delenv("NOTAM_MONITOR_ARTCCS", raising=False)
+
+def _n(fir, text):
+    return {"fir": fir, "text_body": text}
+
+
+def test_tfr_priority_everywhere_five():
+    for t in ("PURSUANT TO 14 CFR SECTION 91.141", "PURSUANT TO 14 CFR SECTION 91.143",
+              "SPECIAL SECURITY INSTRUCTIONS 14 CFR 99.7",
+              "PURSUANT TO 49 USC 40103(B)(3) ... NATIONAL DEFENSE AIRSPACE"):
+        assert aim_parser.tfr_priority(_n("ZFW", t)) == 5, t
+        assert aim_parser.tfr_priority(_n("ZDC", t)) == 5, t
+
+
+def test_tfr_priority_137_and_145_depend_on_the_home_zone():
+    assert aim_parser.tfr_priority(_n("ZDC", "HURRICANE RELIEF 14 CFR SECTION 91.137(A)(2)")) == 5
+    assert aim_parser.tfr_priority(_n("ZFW", "WILDFIRE 14 CFR SECTION 91.137(A)(2)")) == 3
+    assert aim_parser.tfr_priority(_n("ZDC", "AIRSHOW 14 CFR SECTION 91.145")) == 5
+    assert aim_parser.tfr_priority(_n("ZFW", "MIDLAND AIRSHOW 14 CFR SECTION 91.145")) == 3
+    assert aim_parser.tfr_priority({"facility": "KZDC", "text_body": "14 CFR 91.137"}) == 5   # K-prefixed ARTCC
+
+
+def test_tfr_priority_takes_the_highest_authority_and_ignores_others():
+    assert aim_parser.tfr_priority(_n("ZFW", "91.145 AND 91.141")) == 5
+    assert aim_parser.tfr_priority(_n("ZFW", "RWY 17 CLSD")) is None
+    assert aim_parser.tfr_priority(_n("ZFW", "MIN ALT 991.1375")) is None
+
+
+def test_home_zone_is_configurable(monkeypatch):
+    monkeypatch.setenv("NOTAM_HOME_ARTCCS", "ZLA, ZOA")
+    assert aim_parser.tfr_priority(_n("ZLA", "14 CFR 91.145")) == 5
+    assert aim_parser.tfr_priority(_n("ZDC", "14 CFR 91.145")) == 3
+
+
+def test_monitor_zones_sit_between_home_and_elsewhere(monkeypatch):
+    monkeypatch.setenv("NOTAM_HOME_ARTCCS", "ZDC")
+    monkeypatch.setenv("NOTAM_MONITOR_ARTCCS", "ZNY,ZTL,ZLA,ZOB")
+    for fir, want in (("ZDC", 5), ("ZNY", 4), ("ZLA", 4), ("ZOB", 4), ("ZTL", 4), ("ZFW", 3)):
+        assert aim_parser.tfr_priority(_n(fir, "14 CFR 91.137")) == want, fir
+        assert aim_parser.tfr_priority(_n(fir, "14 CFR 91.145")) == want, fir
+        assert aim_parser.tfr_priority(_n(fir, "14 CFR 91.141")) == 5, fir
+
+
+def test_no_monitor_zones_by_default(monkeypatch):
+    monkeypatch.delenv("NOTAM_MONITOR_ARTCCS", raising=False)
+    assert aim_parser.tfr_priority(_n("ZNY", "14 CFR 91.145")) == 3
+
+
+def test_zones_have_no_built_in_default(monkeypatch):
+    monkeypatch.delenv("NOTAM_HOME_ARTCCS", raising=False)
+    monkeypatch.delenv("NOTAM_MONITOR_ARTCCS", raising=False)
+    assert aim_parser.tfr_priority(_n("ZDC", "14 CFR 91.145")) == 3
+    assert aim_parser.tfr_priority(_n("ZDC", "14 CFR 91.141")) == 5
+
+
+def test_public_edition_ships_the_zones_empty():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    ex = (root / "config/dispatch.env.example").read_text()
+    assert "\nNOTAM_HOME_ARTCCS=\n" in ex and "\nNOTAM_MONITOR_ARTCCS=\n" in ex
+    scrub = (root / "scripts/scrub-public-tree.py").read_text()
+    local = (root / "config/dispatch.env").read_text()
+    for line in ("NOTAM_HOME_ARTCCS=ZDC", "NOTAM_MONITOR_ARTCCS=ZNY,ZID,ZOB,ZLA,ZTL"):
+        assert line + "\n" in local
+        assert f'b"{line}\\n"' in scrub
+
+
+# ── CRANE callsigns in live tracking (2026-10-05) ─────────────────────────────
+
+def test_fdps_tracks_crane_callsigns_only():
+    from ingest.parsers import fdps_parser as f
+    for cs in ("CRANE01", "crane05", "CRANE50"):
+        assert f.is_vip_callsign(cs) and f.is_marine_one(cs, None), cs
+    for cs in ("CRANE", "CRANE1", "CRANE123", "CRANES", "XCRANE01", "AAL123"):
+        assert not f.is_vip_callsign(cs), cs
+    assert f.is_vip_callsign("SAM") and f.is_marine_one(None, "7700")

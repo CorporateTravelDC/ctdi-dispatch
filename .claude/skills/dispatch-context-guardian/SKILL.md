@@ -1,6 +1,6 @@
 ---
 name: dispatch-context-guardian
-description: This skill should be used when setting up or troubleshooting automatic context-window management for a Claude Code session working against a dispatch platform deployment -- it explains the Stop-hook that saves platform state before a 900k-token compact and restores situational awareness after.
+description: This skill should be used when setting up or troubleshooting automatic context-window management for a Claude Code session working against a dispatch platform deployment -- it explains the Stop-hook that keeps platform state saved ahead of Claude Code's own 900k auto-compact and restores situational awareness after.
 version: 1.0.0
 ---
 
@@ -23,11 +23,14 @@ real tool calls and real time before Claude is useful again.
 sums `inputTokens + cacheReadInputTokens + outputTokens`, and:
 
 - Below 800,000 tokens: does nothing, exits 0.
-- At/above 800,000 (`WARN_LIMIT`): saves a dispatch-state snapshot, prints a
-  warning, exits 0 (does not block the turn from ending).
-- At/above 900,000 (`HARD_LIMIT`): saves a snapshot, prints instructions to
-  run `/compact`, and exits 1 -- which blocks the Stop and surfaces the
-  message, so the operator sees it before continuing.
+- At/above 800,000 (`WARN_LIMIT`): saves a dispatch-state snapshot every
+  turn and shows a one-line `systemMessage` saying whether Claude Code will
+  compact by itself (always exits 0, never blocks a turn).
+
+The hook does NOT compact -- no hook can run `/compact`. Claude Code's own
+auto-compact does, at the auto-compact window. On a 1M-window model the
+default window is ~967k, so set it to 900k in user settings (see Install);
+the hook's message flags a missing window or disabled auto-compact.
 
 `scripts/save_dispatch_state.py` polls the dispatch platform's Tier-0 GET
 endpoints (`/healthz`, `/api/v1/feeds`, `/api/v1/tfr`, `/api/v1/weather`,
@@ -40,11 +43,14 @@ can detect and flag a key change/regeneration across a compact.
 
 `scripts/restore_dispatch_state.py` reads that snapshot and prints a
 formatted situational brief -- service health, feed status, CPS, active
-TFRs, NWS alerts, weather, Amtrak, runsheet, and the SSH-key check. Run it
-manually after a `/compact` (the hard-limit message tells you the exact
-command).
+TFRs, NWS alerts, weather, Amtrak, runsheet, and the SSH-key check. A
+`SessionStart` hook with matcher `compact|resume` runs it automatically
+after every compaction.
 
 ## Install
+
+Set the auto-compact window in `~/.claude/settings.json` (top level):
+`"autoCompactWindow": 900000`.
 
 Hooks are not auto-registered by dropping a skill into `.claude/skills/` --
 add this explicitly to `hooks.Stop` in `settings.json` (user-scope

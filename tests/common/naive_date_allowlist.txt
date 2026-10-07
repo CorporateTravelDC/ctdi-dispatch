@@ -1,0 +1,5 @@
+# tests/common/naive_date_allowlist.txt -- legitimate naive date/time calls under
+# src/poller/skills and src/ingest. Format: <path>:<needle>  # reason
+# Keep short. Day-keyed uses must be migrated to common.optime, not listed here.
+src/poller/skills/second_brain_daily.py:date.today() was the UTC date  # docstring text, not a call
+src/ingest/parsers/itws_parser.py:datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")  # explicit UTC ISO string with Z; fallback when the message carries no time

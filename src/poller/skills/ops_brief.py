@@ -57,13 +57,13 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "ops-brief"
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL   = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 OLLAMA_MODEL      = (os.getenv("OLLAMA_OPS_BRIEF_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "corporatetraveldc-pi5-ops-brief:latest")
 OLLAMA_TREND_MODEL = (os.getenv("OLLAMA_OPS_BRIEF_TREND_MODEL")
                       or "corporatetraveldc-pi5-ops-brief-trend:latest")
-MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL             = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 # Phase 4 2026-08-15 (plan joyful-mapping-crown): per-call measured
 # timeouts, one constant per call site. Fail-fast semantics unchanged
 # (allow_anthropic=False -- see the 2026-08-06 incident writeup in git

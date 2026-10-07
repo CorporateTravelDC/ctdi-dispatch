@@ -1,0 +1,16 @@
+# corporatetraveldc-stack-refresh-tripwire.timer
+# Hourly at a random minute. Carries NO schedule of its own: the service exits
+# 0 in milliseconds unless scripts/lib/tripwire_draw.py says the drawn instant
+# has arrived (next_run in [last+36h, last+7d], snapped onto a quiet window
+# from the rolling 30-day load profile, one never-used window per month).
+# Operator directive 2026-10-04: unclockable, like an armored-car route.
+[Unit]
+Description=Hourly tripwire check; the script owns the (random, quiet-window-aware) schedule
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=50min
+FixedRandomDelay=false
+Persistent=false
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

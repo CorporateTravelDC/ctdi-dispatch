@@ -47,6 +47,7 @@ import pathlib
 from datetime import date, datetime, timezone
 
 from common import config
+from common import optime
 from common import entity_tracking
 from common import ntfy_push
 from common.llm import generate as llm_generate
@@ -147,7 +148,9 @@ def _generate_framing(flavor: str, base_prompt: str, headline_block: str) -> tup
 def main() -> None:
     status = "error"
     rel_path = None
-    today = date.today()
+    # 2026-10-05 (#9 follow-up): the OPERATIONAL day (America/New_York, 05:00
+    # rollover), not the container's UTC calendar date
+    today = optime.op_today()
 
     try:
         items = _fetch_week_items(lookback_days=LOOKBACK_DAYS, category=RSS_CATEGORY)

@@ -360,20 +360,40 @@ def _propfind(url: str, auth: tuple[str, str], depth: str = "1") -> ET.Element:
             "Host": "cloud.example.com",
         },
         timeout=15,
+        # 2026-10-06: never follow a redirect. A redirect to another host makes
+        # requests drop the Authorization header, so the follow-up is an
+        # anonymous request that 401s -- exactly how this scan failed silently
+        # from ~2026-08-09 (see _walk_webdav). A 3xx here is a bug to surface.
+        allow_redirects=False,
     )
+    if 300 <= resp.status_code < 400:
+        raise requests.exceptions.HTTPError(
+            f"{resp.status_code} redirect to {resp.headers.get('Location')!r} for {url} "
+            "(collection URLs must end in '/')", response=resp)
     resp.raise_for_status()
     return ET.fromstring(resp.content)
 
 
-def _walk_webdav(base_url: str, auth: tuple[str, str], rel_path: str = "") -> list[dict]:
+def _walk_webdav(base_url: str, auth: tuple[str, str], rel_path: str = "",
+                 errors: list[str] | None = None) -> list[dict]:
     """Recursively enumerate files under rel_path via WebDAV PROPFIND.
-    Returns a flat list of {path, size, mtime, etag} for files (not directories)."""
+    Returns a flat list of {path, size, mtime, etag} for files (not directories).
+    Every PROPFIND failure is appended to `errors` so the caller can fail loudly."""
     results: list[dict] = []
-    url = f"{base_url}/{rel_path}".rstrip("/")
+    # 2026-10-06 ROOT CAUSE of the silent index-scan failure: this used to
+    # .rstrip("/") the collection URL. Since 2026-08-09 (40506cf) the cloud.
+    # vhost only proxies `/remote.php/dav/files/<user>/<vault>/` WITH the slash,
+    # so nginx 301'd the slashless URL to http://cloud..., which 301'd to
+    # https; requests followed both and dropped the Authorization header on
+    # the host change, Nextcloud answered 401, and the scan reported 0 files
+    # with exit 0 for ~2 months. Collections are always requested with '/'.
+    url = f"{base_url}/{rel_path}".rstrip("/") + "/"
     try:
         root = _propfind(url, auth)
     except requests.exceptions.RequestException as exc:
         print(f"  ! propfind failed for {rel_path or '/'}: {exc}", file=sys.stderr)
+        if errors is not None:
+            errors.append(f"{rel_path or '/'}: {exc}")
         return results
 
     for resp in root.findall(f"{_DAV_NS}response"):
@@ -398,7 +418,7 @@ def _walk_webdav(base_url: str, auth: tuple[str, str], rel_path: str = "") -> li
         is_dir = resourcetype is not None and resourcetype.find(f"{_DAV_NS}collection") is not None
 
         if is_dir:
-            results.extend(_walk_webdav(base_url, auth, item_path.rstrip("/")))
+            results.extend(_walk_webdav(base_url, auth, item_path.rstrip("/"), errors))
         else:
             size_el = prop.find(f"{_DAV_NS}getcontentlength")
             mtime_el = prop.find(f"{_DAV_NS}getlastmodified")
@@ -438,7 +458,8 @@ def scan_vault(conn) -> dict:
 
     auth = (NEXTCLOUD_USER, password)
     base_url = f"{WEBDAV_BASE}/{NEXTCLOUD_USER}"
-    files = _walk_webdav(base_url, auth, rel_path=BUSINESS_ROOT)
+    errors: list[str] = []
+    files = _walk_webdav(base_url, auth, rel_path=BUSINESS_ROOT, errors=errors)
 
     now = datetime.now(timezone.utc).isoformat()
     new_count = 0
@@ -468,6 +489,7 @@ def scan_vault(conn) -> dict:
         "new": new_count,
         "updated": updated_count,
         "unchanged": len(files) - new_count - updated_count,
+        "errors": len(errors),
     }
 
 
@@ -500,6 +522,10 @@ def main() -> None:
         if args.scan:
             result = scan_vault(conn)
             print(f"scan complete: {result}")
+            # 2026-10-06: a scan that could not read the vault is a FAILED run
+            # (the unit has OnFailure alerting), never a quiet "0 files" success.
+            if result.get("error") or result.get("errors"):
+                sys.exit(1)
         if args.search:
             for r in search_notes(conn, args.search, raw=args.raw):
                 print(f"{r['path']}\n  {r['title']}\n  {r['snippet']}\n")

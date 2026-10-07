@@ -1,0 +1,27 @@
+# corporatetraveldc-llama-council.service -- the local llama model as a
+# council/arena participant, running as the SERVICE account ctdc-agent-llama
+# (scripts/llama-council-responder.py; docs/AGENT_SEGMENTATION.md "Approvals,
+# council/arena and the shared workspace"). Unprivileged: it reads the
+# convene and contributes signed with its own key; no vault/admin/ntfy creds.
+# Installed by scripts/install-root-copies.sh; enable only after
+# plan.sh --add-service ctdc-agent-llama and its signer registration.
+[Unit]
+Description=llama council/arena participant (ctdc-agent-llama, draft-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ctdc-agent-llama
+Group=ctdc-agent-llama
+WorkingDirectory=/home/ctdc-agent-llama
+ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/verify-manifest.sh scripts/llama-council-responder.py src/common/board_sign.py
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/llama-council-responder.py
+TimeoutStartSec=20min
+Nice=10
+CPUWeight=25
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/opt/corporatetraveldc

@@ -93,7 +93,7 @@ cmd_test() {
     fi
 
     log "new version string: $(podman run --rm "${IMAGE}" postgres --version)"
-    log "live version string: $(podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" postgres --version)"
+    log "live version string: $(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" postgres --version)"
 
     log "cleaning up any stale canary from a previous run..."
     cleanup_canary
@@ -126,14 +126,14 @@ cmd_test() {
     log "waiting for canary to accept connections..."
     ready=0
     for _ in $(seq 1 30); do
-        if podman exec -e PGPASSWORD="${canary_pw}" "${CANARY_CONTAINER}" pg_isready -U "${PG_USER}" -d "${PG_DB}" >/dev/null 2>&1; then
+        if PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" pg_isready -U "${PG_USER}" -d "${PG_DB}" >/dev/null 2>&1; then
             ready=1
             break
         fi
         sleep 2
     done
     [[ "${ready}" -eq 1 ]] || { podman logs "${CANARY_CONTAINER}" 2>&1 | tail -30; die "canary never became ready"; }
-    log "canary ready: $(podman exec -e PGPASSWORD="${canary_pw}" "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc 'SELECT version();')"
+    log "canary ready: $(PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc 'SELECT version();')"
 
     log "dumping live schema (read-only against ${LIVE_CONTAINER})..."
     # --no-owner --no-acl: 2026-09-19, found live on the nextcloud-db
@@ -145,12 +145,12 @@ cmd_test() {
     # POSTGRES_USER, which is what matters for that question. Real
     # disaster-recovery fidelity is the separate full pg_dump backup, not
     # this script.
-    podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" pg_dump --schema-only --no-owner --no-acl -U "${PG_USER}" -d "${PG_DB}" \
+    PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" pg_dump --schema-only --no-owner --no-acl -U "${PG_USER}" -d "${PG_DB}" \
         > /tmp/pg-canary-schema.sql || die "schema dump failed"
     log "schema dump: $(wc -l < /tmp/pg-canary-schema.sql) lines"
 
     log "applying schema to canary..."
-    podman exec -i -e PGPASSWORD="${canary_pw}" "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 \
+    PGPASSWORD="${canary_pw}" podman exec -i -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 \
         < /tmp/pg-canary-schema.sql > /tmp/pg-canary-schema-apply.log 2>&1
     schema_rc=$?
     if [[ ${schema_rc} -ne 0 ]]; then
@@ -169,9 +169,9 @@ cmd_test() {
     # migration script's _fk_ordered() already solves; same fix here rather
     # than a special case, since a future FK add should be handled
     # automatically, not require remembering to update this script too.
-    tables_raw=$(podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+    tables_raw=$(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
         "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-    fk_edges=$(podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+    fk_edges=$(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
         "SELECT tc.table_name || ' ' || ccu.table_name
          FROM information_schema.table_constraints tc
          JOIN information_schema.constraint_column_usage ccu
@@ -200,13 +200,13 @@ print(' '.join(order))
     mismatch=0
     err_log_dir="$(mktemp -d)"
     for t in ${tables}; do
-        live_count=$(podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+        live_count=$(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
             "SELECT count(*) FROM (SELECT 1 FROM ${t} LIMIT ${SAMPLE_LIMIT}) s")
-        podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
+        PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
             "\copy (SELECT * FROM ${t} LIMIT ${SAMPLE_LIMIT}) TO STDOUT" 2>"${err_log_dir}/${t}.err" \
-            | podman exec -i -e PGPASSWORD="${canary_pw}" "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
+            | PGPASSWORD="${canary_pw}" podman exec -i -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
             "\copy ${t} FROM STDIN" >/dev/null 2>>"${err_log_dir}/${t}.err"
-        canary_count=$(podman exec -e PGPASSWORD="${canary_pw}" "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+        canary_count=$(PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
             "SELECT count(*) FROM ${t}")
         if [[ "${live_count}" != "${canary_count}" ]]; then
             log "  MISMATCH ${t}: sampled ${live_count} from live, canary has ${canary_count} -- see ${err_log_dir}/${t}.err"
@@ -259,8 +259,8 @@ cmd_apply() {
     log "data volume is untouched -- same Postgres major version, in-place restart only."
     systemctl --user restart "${LIVE_SERVICE}" || die "restart failed"
     for _ in $(seq 1 30); do
-        if podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" pg_isready -U "${PG_USER}" -d "${PG_DB}" >/dev/null 2>&1; then
-            log "live container back up and accepting connections: $(podman exec -e PGPASSWORD="${LIVE_PW}" "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc 'SELECT version();')"
+        if PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" pg_isready -U "${PG_USER}" -d "${PG_DB}" >/dev/null 2>&1; then
+            log "live container back up and accepting connections: $(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc 'SELECT version();')"
             exit 0
         fi
         sleep 2

@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME  = "osint-monitor"
 
-OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL  = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 # 2026-08-16: dedicated per-skill model from the Phase 4 rebuild, same
 # model entity_tracking.py's repinned EXTRACTION_MODEL points at (both
 # share this Modelfile). The old fallback chain's final default,
@@ -46,7 +46,7 @@ OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL     = (os.getenv("OLLAMA_OSINT_NARRATOR_MODEL")
                     or os.getenv("OLLAMA_MODEL")
                     or "corporatetraveldc-pi5-osint-monitor:latest")
-MODEL            = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL            = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 FETCH_TIMEOUT    = 20           # seconds per RSS fetch
 MAX_ITEMS_SCOPE  = 20           # cap per scope per run to limit CPU
 MAX_AGE_DAYS     = 30           # prune items older than this
@@ -529,7 +529,7 @@ def main(force: bool = False) -> None:
     total_new      = 0
     total_pushed   = 0
     total_scored   = 0
-    model_used     = OLLAMA_MODEL if OLLAMA_BASE_URL else MODEL
+    model_used     = OLLAMA_MODEL if LLAMA_BASE_URL else MODEL
 
     try:
         # Prune stale items first (house-keeping, non-fatal)
@@ -590,7 +590,7 @@ def main(force: bool = False) -> None:
                     matched = [t for t in terms
                                if t.lower() in (title + " " + item.get("summary", "")).lower()]
                     narrative: Optional[str] = None
-                    if score >= LABEL_THRESHOLDS["HIGH"] and OLLAMA_BASE_URL:
+                    if score >= LABEL_THRESHOLDS["HIGH"] and LLAMA_BASE_URL:
                         narrative = _generate_narrative(item, scope_label, matched, scope_type,
                                                          event_name, audience, genre)
                     if not narrative:

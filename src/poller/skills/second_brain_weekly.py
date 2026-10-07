@@ -40,6 +40,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 from common.llm import generate as llm_generate, trim_to_token_budget
+from common import optime
 from common.ntfy_push import send_run_status
 from common.sr1_log import log_usage
 from second_brain import webdav_client
@@ -114,7 +115,9 @@ def _file_date(path: str) -> str:
 def main() -> None:
     gate_result = "new"
     status = "error"
-    today = date.today()
+    # 2026-10-05 (#9 follow-up): the OPERATIONAL day (America/New_York, 05:00
+    # rollover), not the container's UTC calendar date
+    today = optime.op_today()
     rel_path = None
 
     try:

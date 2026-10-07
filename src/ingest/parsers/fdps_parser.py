@@ -198,6 +198,17 @@ MARINE_ONE_CALLSIGNS = frozenset({
     "VENUS", "MUSEL", "AZAZ01", "AZAZ09",
 })
 MARINE_ONE_SQUAWKS = frozenset({"7700", "5000", "5001"})
+# 2026-10-05 (operator): CRANE01 / CRANE05 / CRANE50 -- the Air Force One /
+# Air Force Two training aircraft's callsigns -- tracked like the VIP set.
+# Pattern, not a list: CRANE + exactly two digits, nothing else.
+VIP_CALLSIGN_PATTERNS = (re.compile(r"^CRANE\d{2}$"),)
+
+
+def is_vip_callsign(callsign: str | None) -> bool:
+    cs = (callsign or "").upper().strip()
+    return cs in MARINE_ONE_CALLSIGNS or any(p.match(cs) for p in VIP_CALLSIGN_PATTERNS)
+
+
 DC_LAT, DC_LON = 38.8522, -77.0376
 MARINE_ONE_RADIUS_NM = 50.0
 
@@ -218,7 +229,7 @@ MARINE_ONE_RADIUS_NM = 50.0
 def is_marine_one(callsign: str | None, squawk: str | None) -> bool:
     cs = (callsign or "").upper().strip()
     sq = (squawk or "").strip()
-    return cs in MARINE_ONE_CALLSIGNS or sq in MARINE_ONE_SQUAWKS
+    return is_vip_callsign(cs) or sq in MARINE_ONE_SQUAWKS
 
 
 # ── XML helpers ───────────────────────────────────────────────────────────────
@@ -931,7 +942,7 @@ def _in_dc_area(parsed: dict) -> bool:
     """
     # VIP/POTUS always passes regardless of position or airports.
     cs = (parsed.get("callsign") or "").upper()
-    if cs in MARINE_ONE_CALLSIGNS:
+    if is_vip_callsign(cs):
         return True
 
     # Check position + origin together, then destination separately.

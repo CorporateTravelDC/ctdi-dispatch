@@ -21,7 +21,9 @@ Network=acars-net.network
 # Shared environment (non-secret)
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # Secrets (DISPATCH_ADMIN_TOKEN, AIRFRAMES_TOKEN when available)
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the acars-watcher image reads
+# (scripts/service-env/acars-watcher.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/acars-watcher.env
 
 # Watcher-specific config — override in dispatch.env if needed
 Environment=DISPATCH_BASE_URL=http://100.x.x.x:8000

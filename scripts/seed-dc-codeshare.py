@@ -52,6 +52,24 @@ EXCLUSIVE_REGIONAL_MARKETING = {
     "JZA": "ACA",   # Jazz Aviation -- Air Canada Express only
 }
 
+# 2026-10-05 (JZA825 / AC8825 / UA8366): marketing number == operating number
+# is a US-regional rule, NOT universal. Air Canada Express by Jazz markets
+# AC(8000 + n) for operating JZA n -- verified live against all 26 AC 8xxx
+# flights on the DCA/IAD boards (each with a live FDPS JZA leg on the same
+# route). The old equality assumption wrote ACA825 -> JZA825, which no
+# marketed number ever matches.
+MARKETING_NUM_OFFSET = {
+    "JZA": 8000,
+}
+
+
+def marketing_number(op_carrier: str, op_num: str) -> str:
+    off = MARKETING_NUM_OFFSET.get(op_carrier)
+    if off and op_num.isdigit() and int(op_num) < 1000:
+        return str(int(op_num) + off)
+    return op_num
+
+
 # Contract regionals that fly for MULTIPLE mainlines -- ambiguous from callsign
 # alone. Not auto-seeded; counted/reported for a later route- or AeroAPI-based
 # disambiguation pass.
@@ -96,7 +114,7 @@ def main() -> int:
         try:
             db.upsert_codeshare_mapping(
                 marketing_carrier=marketing_carrier,
-                marketing_flight_num=op_num,          # == operating num for regional codeshares
+                marketing_flight_num=marketing_number(op_carrier, op_num),
                 operating_carrier=op_carrier,
                 operating_flight_num=op_num,
                 origin=r["origin"],
@@ -107,14 +125,66 @@ def main() -> int:
         except Exception as e:
             print(f"  upsert failed {marketing_carrier}{op_num}->{op_carrier}{op_num}: {e}", file=sys.stderr)
 
+    # Rows the old equality rule wrote for offset carriers (e.g. ACA825 -> JZA825) are wrong; remove them.
+    removed = 0
+    with db.conn() as c:
+        for op_c in MARKETING_NUM_OFFSET:
+            cur = c.execute("DELETE FROM codeshare_map WHERE source = 'dc_metro_seed' AND operating_carrier = ? "
+                            "AND marketing_flight_num = operating_flight_num", (op_c,))
+            removed += cur.rowcount or 0
+    fids_added = seed_from_fids_codeshares()
+
     print(f"DC-metro codeshare seed: {seeded} mappings upserted from {considered} exclusive-regional legs "
-          f"(lookback {LOOKBACK_SECONDS//3600}h, {len(rows)} distinct DC-metro legs scanned).")
+          f"(lookback {LOOKBACK_SECONDS//3600}h, {len(rows)} distinct DC-metro legs scanned); "
+          f"{removed} wrong-numbered row(s) removed; {fids_added} codeshare(s) from the DCA/IAD boards.")
     if ambiguous:
         total_amb = sum(ambiguous.values())
         print(f"Ambiguous contract regionals NOT auto-seeded ({total_amb} legs) -- need route/AeroAPI disambiguation:")
         for k, n in sorted(ambiguous.items(), key=lambda x: -x[1]):
             print(f"  {k} ({AMBIGUOUS_REGIONALS[k]}): {n} legs")
     return 0
+
+
+def seed_from_fids_codeshares() -> int:
+    """2026-10-05: the DCA/IAD boards list each flight's codeshares (AC8825 ->
+    [UA8366]). Map every listed codeshare to the SAME operating flight as the
+    board's primary number -- but only when that primary already resolves to an
+    operating flight through codeshare_map. Enrichment only (FIDS never asserts
+    OOOI); nothing is guessed."""
+    from common.airline_codes import IATA_TO_ICAO
+    try:
+        from common.airport_fids import get_data
+    except Exception as e:
+        print(f"  FIDS codeshare pass skipped: {e}", file=sys.stderr)
+        return 0
+    added = 0
+    for ap in ("DCA", "IAD"):
+        data = get_data(ap) or {}
+        for side in ("arrivals", "departures"):
+            for f in data.get(side, []):
+                prim = IATA_TO_ICAO.get((f.get("IATA") or "").upper())
+                num = str(f.get("flightnumber") or "").strip()
+                shares = f.get("codeshare") or []
+                if not (prim and num and shares):
+                    continue
+                ops = db.get_codeshare_mapping_by_marketing(prim, num)
+                if not ops:
+                    continue
+                op = ops[0]
+                for cs in shares:
+                    mk = IATA_TO_ICAO.get((cs.get("IATA") or "").upper())
+                    mk_num = str(cs.get("flightnumber") or "").strip()
+                    if not (mk and mk_num) or mk == op["operating_carrier"]:
+                        continue
+                    try:
+                        db.upsert_codeshare_mapping(
+                            marketing_carrier=mk, marketing_flight_num=mk_num,
+                            operating_carrier=op["operating_carrier"], operating_flight_num=op["operating_flight_num"],
+                            origin=op.get("origin"), destination=op.get("destination"), source="fids_codeshare")
+                        added += 1
+                    except Exception as e:
+                        print(f"  upsert failed {mk}{mk_num}: {e}", file=sys.stderr)
+    return added
 
 
 if __name__ == "__main__":

@@ -51,7 +51,9 @@ Volume=corporatetraveldc-triggers:/run/corporatetraveldc
 Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:z
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the web image reads
+# (scripts/service-env/web.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/web.env
 AutoUpdate=local
 
 [Service]

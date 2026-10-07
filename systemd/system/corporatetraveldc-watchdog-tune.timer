@@ -1,0 +1,7 @@
+[Unit]
+Description=Fire watchdog-tune once, Sun 2026-10-11 20:00 ET
+[Timer]
+OnCalendar=2026-10-11 20:00:00 America/New_York
+Persistent=true
+[Install]
+WantedBy=timers.target

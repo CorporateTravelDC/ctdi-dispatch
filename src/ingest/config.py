@@ -53,6 +53,19 @@ class NotamConfig:
     # Empty = DC permanent set only (no extra facilities).
     # Example: NOTAM_FACILITY_FILTER=ZDC,KADW,KBWI for transcon/military additions.
     facility_filter: list[str] = field(default_factory=lambda: _list("NOTAM_FACILITY_FILTER"))
+    # 2026-10-05 (operator): the operator's HOME air traffic control zone(s),
+    # as ARTCC/FIR codes. 14 CFR 91.137 (disaster/hazard) and 91.145
+    # (airshow/sporting event) TFRs are priority 5 only inside it; every other
+    # TFR authority is priority 5 everywhere (ingest/parsers/aim_parser.py
+    # tfr_priority). Fully parameterized -- NO built-in default: an unset
+    # value means no home zone (those TFRs then rank as monitor or other).
+    # Each deployment sets its own in dispatch.env, e.g. NOTAM_HOME_ARTCCS=ZLA.
+    home_artccs: list[str] = field(default_factory=lambda: _list("NOTAM_HOME_ARTCCS"))
+    # MONITOR zones: other centers whose big hubs matter to this operator
+    # (same idea as Amtrak's core vs. watched routes). 91.137 / 91.145 TFRs
+    # there are priority 4 (home 5, anywhere else 3). Empty by default;
+    # set per deployment, e.g. NOTAM_MONITOR_ARTCCS=ZNY,ZTL,ZLA,ZOB.
+    monitor_artccs: list[str] = field(default_factory=lambda: _list("NOTAM_MONITOR_ARTCCS"))
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,34 @@
+# corporatetraveldc-ccw-demo.container
+# Password-gated public preview -- [chauffeur partner] AI-rewritten
+# static site (Fable/Cowork rewrite, 2026-08-18), exposed via Cloudflare
+# Tunnel at ccw-preview.example.com (route added 2026-08-18,
+# 127.0.0.1:8085 -> this container). Two HTTP Basic Auth credentials --
+# owner (permanent) and webdev (auto-expires 7 days after creation, see
+# corporatetraveldc-ccw-demo-webdev-expiry.timer). Several facts in the
+# content are explicitly unverified pending CCW confirmation (see
+# NOTES-FOR-COREY.md shipped alongside the site) -- this is a preview for
+# visual/content review, not a production deploy.
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-ccw-demo
+
+[Unit]
+Description=[chauffeur partner] -- password-gated public preview
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:alpine
+ContainerName=corporatetraveldc-ccw-demo
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide/site:/usr/share/nginx/html:ro,z
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide/nginx.conf:/etc/nginx/nginx.conf:ro,z
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide/auth/.htpasswd:/etc/nginx/.htpasswd:ro,z
+# 127.0.0.1 -- what the Cloudflare Tunnel route actually reaches.
+# 100.x.x.x (tailnet) kept too, for direct internal checks without
+# going out over the public hostname.
+PublishPort=127.0.0.1:8085:8085
+PublishPort=100.x.x.x:8085:8085
+Memory=128m
+
+[Service]
+Slice=production.slice
+
+[Install]
+WantedBy=default.target

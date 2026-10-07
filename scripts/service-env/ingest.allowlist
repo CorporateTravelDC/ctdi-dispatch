@@ -1,0 +1,45 @@
+# scripts/service-env/ingest.allowlist -- SECRET names the ingest image reads (2026-10-04, duel M9).
+# Derived by a static import-closure scan of the ingest entrypoint (getenv / environ / config.get);
+# review before switching the quadlet. dispatch.env (non-secret) stays mounted separately.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/common/acars.py:56
+AIRFRAMES_TOKEN  # src/common/acars.py:67
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:475
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NTFY_TOKEN  # src/ingest/local_airspace.py:120
+NWWS_JID  # src/ingest/config.py:39
+NWWS_PASSWORD  # src/ingest/config.py:40
+SWIM_NMS_HOST_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+ULTRAFEEDER_LAT  # src/ingest/local_airspace.py:47
+ULTRAFEEDER_LON  # src/ingest/local_airspace.py:48
+# 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+NEXTCLOUD_APP_PASSWORD  # src/second_brain/index_db.py:151
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:30
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
+PUSHOVER_TOKEN  # src/common/pushover.py:28
+PUSHOVER_USER_KEY  # src/common/pushover.py:29

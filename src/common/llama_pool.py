@@ -50,8 +50,16 @@ import time
 
 log = logging.getLogger(__name__)
 
-HOST = os.getenv("LLAMA_POOL_HOST", "100.x.x.x")
-LLAMA_PORT = int(os.getenv("LLAMA_PORT", "8093"))
+# 2026-10-05: LLAMA_BASE_URL (dispatch.env) is the one address of the server;
+# LLAMA_POOL_HOST / LLAMA_PORT still override it individually.
+def _from_base_url() -> tuple[str, int]:
+    from urllib.parse import urlparse
+    u = urlparse(os.getenv("LLAMA_BASE_URL", "") or "")
+    return (u.hostname or "100.x.x.x", u.port or 8093)
+
+
+HOST = os.getenv("LLAMA_POOL_HOST") or _from_base_url()[0]
+LLAMA_PORT = int(os.getenv("LLAMA_PORT") or _from_base_url()[1])
 # Legacy names kept so runner/main.py's Dispatch Drawer streaming and any
 # other importer keep working unchanged -- they are all the same server now.
 HOT_PORT = LLAMA_PORT

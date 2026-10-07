@@ -1,0 +1,12 @@
+# corporatetraveldc-quiet-window-report.service
+# Rolling 30-day weekday x hour load profile -> /var/lib/corporatetraveldc/
+# reports/quiet-windows.{md,json}; the tripwire draws its next instant from
+# the json. Sundays also write the markdown to the second-brain vault (the
+# env loader supplies NEXTCLOUD_* verbatim; never shell-source the env files).
+[Unit]
+Description=Quiet-window load profile (30d rolling) for randomized maintenance candidates
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=/bin/sh -c 'if [ "$(date +%%u)" = 7 ]; then exec /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/with-dispatch-env.sh python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/quiet-window-report.py --vault; else exec python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/quiet-window-report.py; fi'

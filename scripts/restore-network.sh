@@ -13,7 +13,15 @@ set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
-if ! "${REPO_ROOT}/scripts/verify-manifest.sh" "scripts/restore-network.sh"; then
+# 2026-10-04: root runs the INSTALLED copy (/usr/local/libexec/ctdc, via
+# install-root-copies.sh + fail2ban action.d); there the self-check is the
+# root-owned install record, never the operator-writable checkout.
+if [[ -f "${SELF_DIR}/.ctdc-installed" ]]; then
+    selfcheck() { "${SELF_DIR}/installed-check.sh" "$@"; }
+else
+    selfcheck() { local t; for t in "$@"; do "${REPO_ROOT}/scripts/verify-manifest.sh" "$t" || return 1; done; }
+fi
+if ! selfcheck "scripts/restore-network.sh"; then
     echo "restore-network: INTEGRITY CHECK FAILED -- refusing to run" >&2
     exit 1
 fi
@@ -49,7 +57,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}" 2>/dev/null || true
+# 2026-10-04: runs as root (fail2ban) -- READ the two names it needs, never
+# source the operator-writable env file as root (duel C1 follow-up).
+env_get() { [[ -f "${ENV_FILE}" ]] && grep -m1 "^$1=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"\r' || true; }
+NTFY_BASE_URL="$(env_get NTFY_BASE_URL)"
+NTFY_OPS_TOPIC="$(env_get NTFY_OPS_TOPIC)"
 NTFY_BASE="${NTFY_BASE_URL:-http://127.0.0.1:2586}"
 NTFY_OPS="${NTFY_OPS_TOPIC:-ops-health}"
 

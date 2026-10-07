@@ -2,12 +2,14 @@
 
 *(Living document)*
 
+Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET (integration references only; the acknowledgements themselves are not checkable claims).
+
 Everyone who's helped build and keep this platform flying — `ctdi-dispatch` exists because of code, review, debugging, advisory insight, and hard-won antenna advice from the people and communities below.
 
 ## Contributors
 
 **Georou**
-Core submodule providing the hardened SELinux baseline for DNS filtering and blocking.
+Upstream SELinux policy module for Pi-hole, the hardened baseline for DNS filtering and blocking. It is cloned and installed by the companion Pi-hole/Unbound SELinux repository's install script, not vendored as a git submodule.
 [github.com/georou/pihole-selinux](https://github.com/georou/pihole-selinux) · [tellmeaboot.com](https://tellmeaboot.com)
 
 **Thomas Eibner**
@@ -48,3 +50,16 @@ Thanks to the Airplanes.live community as a whole.
 Programs whose public data this platform depends on.
 
 `ADX` · `SWIM` · `LADD` · `NSSR` · `NASR`
+
+---
+
+---
+
+## Superseded (kept for the record)
+
+Text removed or replaced by the 2026-10-06 verification pass against the live system, kept in its original wording for the chronological record. It is **not** current. The evidence for each correction is in `docs/docs-refresh-2026-10-06/CHANGES-agents.md`.
+
+
+### Contributors' Log › Contributors
+
+~~**Georou** Core submodule providing the hardened SELinux baseline for DNS filtering and blocking. [github.com/georou/pihole-selinux](https://github.com/georou/pihole-selinux) · [tellmeaboot.com](https://tellmeaboot.com)~~

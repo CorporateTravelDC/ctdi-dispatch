@@ -69,12 +69,63 @@ class ProductionDatabaseTripwire(RuntimeError):
     throwaway database and monkeypatch these entry points itself."""
 
 
+# The ONE database name Postgres-integration tests may touch. Both modules
+# that carry the marker below already hard-assert on it themselves
+# (tests/common/test_db_backend_postgres.py::_require_scratch_db,
+# tests/scripts/test_pg_migrate.py); this is the global backstop.
+POSTGRES_SCRATCH_DB = "corporatetraveldc_pgphase1_test"
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "postgres_scratch: Postgres integration test; runs ONLY against the "
+        f"out-of-band scratch database {POSTGRES_SCRATCH_DB!r} (never the live "
+        "db) and only when that database is reachable -- otherwise skipped.")
+
+
 @pytest.fixture(autouse=True)
-def _force_sqlite_backend_and_trip_on_postgres(monkeypatch):
+def _force_sqlite_backend_and_trip_on_postgres(monkeypatch, request):
     """Layer 1b + layer 2: pin the backend to sqlite for every test and
-    make any Postgres pool/connection attempt fail loudly."""
-    monkeypatch.setenv("DISPATCH_DB_BACKEND", "sqlite")
+    make any Postgres pool/connection attempt fail loudly.
+
+    2026-10-03: tests marked `postgres_scratch` are the deliberate
+    exception -- they exist to exercise the Postgres backend and the
+    migration runner, and they already pin DISPATCH_PG_DB to the scratch
+    database. For those the tripwire is replaced by a conninfo guard that
+    refuses any database name other than the scratch one, so "real
+    Postgres, never production" holds for them too."""
     import common.db_backend as db_backend
+
+    if request.node.get_closest_marker("postgres_scratch"):
+        # Resolve the scratch db directly (config.get reads the environment
+        # first), so a fixture that templates its conninfo from
+        # _pg_conninfo() gets the scratch name without string surgery.
+        monkeypatch.setenv("DISPATCH_PG_DB", POSTGRES_SCRATCH_DB)
+        real_conninfo = db_backend._pg_conninfo
+
+        def _guarded_conninfo():
+            ci = real_conninfo()
+            if f"dbname={POSTGRES_SCRATCH_DB}" not in ci:
+                raise ProductionDatabaseTripwire(
+                    "postgres_scratch test resolved a database other than "
+                    f"{POSTGRES_SCRATCH_DB!r} -- refusing (tests/conftest.py)")
+            return ci
+
+        monkeypatch.setattr(db_backend, "_pg_conninfo", _guarded_conninfo)
+        monkeypatch.setattr(db_backend, "_pool", None, raising=False)
+        yield
+        # Never leave a scratch pool behind for the next (sqlite) test.
+        try:
+            pool = getattr(db_backend, "_pool", None)
+            if pool is not None:
+                pool.close()
+        except Exception:
+            pass
+        monkeypatch.setattr(db_backend, "_pool", None, raising=False)
+        return
+
+    monkeypatch.setenv("DISPATCH_DB_BACKEND", "sqlite")
 
     def _trip(*_a, **_k):
         raise ProductionDatabaseTripwire(
@@ -86,6 +137,7 @@ def _force_sqlite_backend_and_trip_on_postgres(monkeypatch):
         if hasattr(db_backend, name):
             monkeypatch.setattr(db_backend, name, _trip)
     monkeypatch.setattr(db_backend, "_pool", None, raising=False)
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -112,10 +164,25 @@ def _block_real_ntfy_sends(monkeypatch):
 def _isolate_default_db_path(monkeypatch, tmp_path):
     """Every test gets an isolated DB file by default. db._db_path() never
     resolves to the real corporatetraveldc.db unless a test explicitly
-    re-monkeypatches it -- no test in this suite should ever need to."""
+    re-monkeypatches it -- no test in this suite should ever need to.
+
+    2026-10-03: common.db caches ONE sqlite connection per thread
+    (db._local.conn, see _open_connection/close_thread_connection). It is
+    opened against whatever _db_path() returned the FIRST time this thread
+    touched the DB and never re-resolved, so swapping _db_path per test
+    (this fixture, and the many tests that swap it themselves) left every
+    later test reading/writing the previous test's file: counts
+    accumulated ("assert 8 == 1"), freshly-initialised tables were "no
+    such table" because the DDL ran on the new file while queries went to
+    the old one. 40+ of the "pre-existing failures" were this. Dropping
+    the cached connection before and after each test makes _db_path()
+    authoritative again."""
     import common.db as db
+    db.close_thread_connection()
     fallback_db = tmp_path / "conftest-default.db"
     monkeypatch.setattr(db, "_db_path", lambda: fallback_db)
+    yield
+    db.close_thread_connection()
 
 
 @pytest.fixture(autouse=True)

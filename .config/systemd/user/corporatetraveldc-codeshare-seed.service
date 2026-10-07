@@ -1,0 +1,15 @@
+# corporatetraveldc-codeshare-seed.service -- refresh codeshare_map from the
+# last 48 h of DC-metro flight plans (exclusive regionals; Jazz AC(8000+n) =
+# JZA n) plus the codeshares listed on the DCA/IAD boards (UA8366 -> JZA825).
+# scripts/seed-dc-codeshare.py's docstring always said a daily timer runs it;
+# none existed until 2026-10-06 -- it had run exactly once (09-28). The env
+# loader supplies DISPATCH_PG_* verbatim; never shell-source the env files.
+[Unit]
+Description=Daily DC-metro codeshare map refresh (regional + board codeshares)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=19
+TimeoutStartSec=600
+Environment=PYTHONPATH=/opt/corporatetraveldc/private/ctdi-dispatch-internal/src
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/with-dispatch-env.sh python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/seed-dc-codeshare.py

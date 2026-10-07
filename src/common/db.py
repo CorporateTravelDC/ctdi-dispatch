@@ -3,8 +3,11 @@ Database layer — SQLite, single file, append-friendly.
 Schema is authoritative here. Migrations are additive (ALTER TABLE only).
 """
 
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 import sqlite3
 import threading
 import time
@@ -461,6 +464,84 @@ def board_insert(from_side: str, to_side: str, thread: str, subject: str,
         return {"id": mid, "ts": ts, "seq": cur.fetchone()["seq"]}
 
 
+def board_signer_get(account: str) -> dict | None:
+    """Registered signer row for `account`, or None. Used by the X-Board-Signer
+    path in web.main (see common.board_sign)."""
+    if not account:
+        return None
+    with conn() as c:
+        _ensure_board_auth(c)
+        r = c.execute("SELECT account, pubkey, key_comment, active, registered_at, deactivated_at, note, "
+                      "role, kind FROM board_signers WHERE account = ?", (account,)).fetchone()
+    if not r:
+        return None
+    return {"account": r["account"], "pubkey": r["pubkey"], "key_comment": r["key_comment"],
+            "active": bool(r["active"]), "registered_at": r["registered_at"],
+            "deactivated_at": r["deactivated_at"], "note": r["note"],
+            "role": r["role"] or "member", "kind": r["kind"] or "agent"}
+
+
+BOARD_ROLES = ("admin", "member", "service")
+BOARD_KINDS = ("human", "agent", "service")
+
+
+def board_signer_upsert(account: str, pubkey: str, key_comment: str | None = None,
+                        note: str | None = None, role: str | None = None,
+                        kind: str | None = None) -> None:
+    """Register (or re-key) an account's signing public key; (re)activates it.
+    role/kind (2026-10-04, migration 0067): given -> set; omitted on a re-key
+    -> preserved; omitted on first registration -> member / agent."""
+    if role is not None and role not in BOARD_ROLES:
+        raise ValueError(f"role must be one of {BOARD_ROLES}")
+    if kind is not None and kind not in BOARD_KINDS:
+        raise ValueError(f"kind must be one of {BOARD_KINDS}")
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        if c.execute("SELECT 1 FROM board_signers WHERE account = ?", (account,)).fetchone():
+            c.execute("UPDATE board_signers SET pubkey = ?, key_comment = ?, active = ?, "
+                      "deactivated_at = NULL, note = COALESCE(?, note), "
+                      "role = COALESCE(?, role), kind = COALESCE(?, kind) WHERE account = ?",
+                      (pubkey, key_comment, True, note, role, kind, account))
+        else:
+            c.execute("INSERT INTO board_signers (account, pubkey, key_comment, active, registered_at, note, role, kind) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      (account, pubkey, key_comment, True, now, note, role or "member", kind or "agent"))
+
+
+def board_signer_set_role(account: str, role: str | None = None, kind: str | None = None) -> bool:
+    """Change an account's role and/or kind (operator-only; the liveness
+    switch and kill-order quorum read these)."""
+    if role is not None and role not in BOARD_ROLES:
+        raise ValueError(f"role must be one of {BOARD_ROLES}")
+    if kind is not None and kind not in BOARD_KINDS:
+        raise ValueError(f"kind must be one of {BOARD_KINDS}")
+    with conn() as c:
+        _ensure_board_auth(c)
+        cur = c.execute("UPDATE board_signers SET role = COALESCE(?, role), kind = COALESCE(?, kind) "
+                        "WHERE account = ?", (role, kind, account))
+        return (cur.rowcount or 0) > 0
+
+
+def board_signer_set_active(account: str, active: bool, note: str | None = None) -> bool:
+    """Revoke (active=False) or restore an account's signer. Returns True if a row changed."""
+    with conn() as c:
+        _ensure_board_auth(c)
+        cur = c.execute("UPDATE board_signers SET active = ?, deactivated_at = ?, note = COALESCE(?, note) "
+                        "WHERE account = ?", (active, None if active else time.time(), note, account))
+        return (cur.rowcount or 0) > 0
+
+
+def board_signer_list() -> list[dict]:
+    with conn() as c:
+        _ensure_board_auth(c)
+        rows = c.execute("SELECT account, key_comment, active, registered_at, deactivated_at, role, kind "
+                         "FROM board_signers ORDER BY account").fetchall()
+    return [{"account": r["account"], "key_comment": r["key_comment"], "active": bool(r["active"]),
+             "registered_at": r["registered_at"], "deactivated_at": r["deactivated_at"],
+             "role": r["role"] or "member", "kind": r["kind"] or "agent"} for r in rows]
+
+
 def board_query(thread: str = "coord", since: str | None = None, limit: int = 50) -> tuple[list, str]:
     """Return (messages, cursor). Messages are seq-ordered ascending, only those
     newer than `since` (a numeric seq cursor, or an ISO ts). cursor is the max
@@ -545,9 +626,34 @@ def _ensure_board_auth(c) -> None:
             expires_at  REAL,
             scope       TEXT,
             label       TEXT,
-            via_nonce   TEXT
+            via_nonce   TEXT,
+            revoked_at  REAL
         )"""
     )
+    # 2026-10-04: identity-based board signing registry (docs/BOARD_SIGNING.md).
+    # Postgres: pg_schema/0066_board_signers.sql; this is the sqlite twin.
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS board_signers (
+            account        TEXT PRIMARY KEY,
+            pubkey         TEXT NOT NULL,
+            key_comment    TEXT,
+            active         INTEGER NOT NULL DEFAULT 1,
+            registered_at  REAL,
+            deactivated_at REAL,
+            note           TEXT,
+            role           TEXT NOT NULL DEFAULT 'member',
+            kind           TEXT NOT NULL DEFAULT 'agent'
+        )"""
+    )
+    # 2026-10-04 (0067): columns added after the tables first shipped -- a
+    # sqlite file created by the earlier twin lacks them. Mirror ADD COLUMN
+    # IF NOT EXISTS the only way sqlite allows: inspect, then add.
+    for tbl, col, ddl in (("board_signers", "role", "TEXT NOT NULL DEFAULT 'member'"),
+                          ("board_signers", "kind", "TEXT NOT NULL DEFAULT 'agent'"),
+                          ("board_tokens", "revoked_at", "REAL")):
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
+        if col not in have:
+            c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {ddl}")
     # Single-row table -- one current weekly presence attestation, replaced
     # outright by the next one (not an append log; the append-only audit
     # trail for rotation activity is audit_log via the "board_refresh" action,
@@ -684,6 +790,61 @@ def board_token_valid(presented: str, required_scope: str = BOARD_SCOPE_WRITE) -
     return required_scope in _BOARD_SCOPE_SATISFIES.get(row["scope"] or "", set())
 
 
+def board_token_info(presented: str) -> dict | None:
+    """Metadata of a minted token (never the secret): created_at, expires_at,
+    scope, label, ttl_s. None for unknown. The "high" board tier
+    (web.main BOARD_AUTH_POLICY) requires a MINTED token whose lifetime
+    (expires_at - created_at) is <= HIGH_TOKEN_MAX_TTL -- the master
+    BOARD_KEY never qualifies, by design: a time-based key is the point."""
+    if not presented:
+        return None
+    with conn() as c:
+        _ensure_board_auth(c)
+        r = c.execute("SELECT created_at, expires_at, scope, label, revoked_at FROM board_tokens WHERE token_hash=?",
+                      (_board_sha(presented),)).fetchone()
+    if not r:
+        return None
+    ttl = (r["expires_at"] or 0) - (r["created_at"] or 0)
+    return {"created_at": r["created_at"], "expires_at": r["expires_at"], "scope": r["scope"],
+            "label": r["label"], "revoked_at": r["revoked_at"], "ttl_s": ttl}
+
+
+def board_tokens_revoked_since(account: str, since: float) -> int:
+    """How many of `account`'s tokens (board tokens labelled with the account
+    + API auth_tokens whose user_label is the account) were REVOKED after
+    `since`. The liveness switch treats > 0 within its lookback as a kill
+    signal: someone pulled this account's credential on purpose."""
+    with conn() as c:
+        _ensure_board_auth(c)
+        n = c.execute("SELECT COUNT(*) AS n FROM board_tokens WHERE label=? AND revoked_at IS NOT NULL AND revoked_at > ?",
+                      (account, since)).fetchone()["n"]
+        try:
+            n += c.execute("SELECT COUNT(*) AS n FROM auth_tokens WHERE user_label=? AND revoked_at IS NOT NULL AND revoked_at > ?",
+                           (account, since)).fetchone()["n"]
+        except Exception:
+            pass   # auth_tokens absent on a bare sqlite dev db
+    return int(n or 0)
+
+
+def board_revoke_all_for_account(account: str) -> dict:
+    """Kill every credential the account holds: board tokens labelled with it
+    and API auth_tokens whose user_label is it. Called by the liveness switch
+    on inert; tokens are never restored on reactivate -- the operator mints
+    new ones."""
+    now = time.time()
+    with conn() as c:
+        _ensure_board_auth(c)
+        b = c.execute("UPDATE board_tokens SET expires_at=?, revoked_at=? WHERE label=? AND expires_at > ?",
+                      (now, now, account, now)).rowcount or 0
+        try:
+            a = c.execute("UPDATE auth_tokens SET revoked_at=? WHERE user_label=? AND revoked_at IS NULL",
+                          (now, account)).rowcount or 0
+        except Exception:
+            a = 0
+    audit("board_revoke_all_for_account", "board", account, None, {"board_tokens": b, "auth_tokens": a})
+    return {"board_tokens": int(b), "auth_tokens": int(a)}
+
+
 def board_mint_read_token(ttl_s: int = _BOARD_READ_TOKEN_TTL_S, label: str | None = None) -> dict:
     """Mint a READ-ONLY board token directly (no nonce handshake) -- for a
     consumer that cold-boots with no state and therefore cannot enroll or
@@ -744,15 +905,17 @@ def board_revoke_token(*, label: str | None = None, hash_prefix: str | None = No
     now = time.time()
     with conn() as c:
         _ensure_board_auth(c)
+        # 0067: stamp revoked_at so the liveness switch can tell a revocation
+        # from natural expiry (a revocation within the lookback is a kill signal).
         if label:
             cur = c.execute(
-                "UPDATE board_tokens SET expires_at=? WHERE label=? AND expires_at > ?",
-                (now, label, now),
+                "UPDATE board_tokens SET expires_at=?, revoked_at=? WHERE label=? AND expires_at > ?",
+                (now, now, label, now),
             )
         else:
             cur = c.execute(
-                "UPDATE board_tokens SET expires_at=? WHERE token_hash LIKE ? AND expires_at > ?",
-                (now, hash_prefix + "%", now),
+                "UPDATE board_tokens SET expires_at=?, revoked_at=? WHERE token_hash LIKE ? AND expires_at > ?",
+                (now, now, hash_prefix + "%", now),
             )
         n = cur.rowcount
     audit("board_revoke_token", "board", label or hash_prefix, None, {"revoked": n})
@@ -4283,7 +4446,9 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     status           TEXT NOT NULL DEFAULT 'pending',
     created_at       REAL NOT NULL,
     resolved_at      REAL,
-    expires_at       REAL NOT NULL
+    expires_at       REAL NOT NULL,
+    allow_key_hash   TEXT,
+    deny_key_hash    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approval_requests_pattern
     ON approval_requests(command_pattern, status, created_at);
@@ -4298,20 +4463,55 @@ def init_db_v21() -> None:
             stmt = stmt.strip()
             if stmt:
                 c.execute(stmt)
+        # sqlite catch-up for DBs created before the resolve keys (Postgres
+        # gets them from pg_schema/0068_approval_resolve_keys.sql).
+        from common import db_backend
+        if db_backend.backend() != "postgres":
+            have = {r[1] for r in c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+            for col in ("allow_key_hash", "deny_key_hash"):
+                if col not in have:
+                    c.execute(f"ALTER TABLE approval_requests ADD COLUMN {col} TEXT")
+            # 2026-10-04 Wave 2 (pg_schema/0069): signed approvals
+            for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'sudo'"), ("requester", "TEXT"),
+                             ("resolved_by", "TEXT"), ("resolution_sig", "TEXT")):
+                if col not in have:
+                    c.execute(f"ALTER TABLE approval_requests ADD COLUMN {col} {ddl}")
+
+
+# 2026-10-04 (adversarial duel, X1): resolution needs a per-action key that
+# only the creator ever sees (it goes into the operator's ntfy push and
+# nowhere else). Only SHA-256 hashes are stored; no read path returns them.
+_APPROVAL_PRIVATE_COLS = ("allow_key_hash", "deny_key_hash")
+
+
+def _approval_public(d: dict) -> dict:
+    return {k: v for k, v in d.items() if k not in _APPROVAL_PRIVATE_COLS}
+
+
+def _approval_key_hash(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 def create_approval_request(request_id: str, command_pattern: str, command: str,
                              reasoning: str = "", ttl_seconds: float = 600.0) -> dict:
+    """Create a pending request. Returns allow_key / deny_key exactly once --
+    the caller must put them only into the operator's push and never log
+    them. Only their hashes are stored."""
     now = time.time()
     expires_at = now + ttl_seconds
+    allow_key = secrets.token_urlsafe(32)
+    deny_key = secrets.token_urlsafe(32)
     with conn() as c:
         c.execute(
             """INSERT INTO approval_requests
-                   (id, command_pattern, command, reasoning, status, created_at, expires_at)
-               VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
-            (request_id, command_pattern, command, reasoning, now, expires_at),
+                   (id, command_pattern, command, reasoning, status, created_at, expires_at,
+                    allow_key_hash, deny_key_hash)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+            (request_id, command_pattern, command, reasoning, now, expires_at,
+             _approval_key_hash(allow_key), _approval_key_hash(deny_key)),
         )
-    return {"id": request_id, "status": "pending", "expires_at": expires_at}
+    return {"id": request_id, "status": "pending", "expires_at": expires_at,
+            "allow_key": allow_key, "deny_key": deny_key}
 
 
 def get_approval_request(request_id: str) -> dict | None:
@@ -4332,34 +4532,54 @@ def get_approval_request(request_id: str) -> dict | None:
             )
             d["status"] = "expired"
             d["resolved_at"] = time.time()
-        return d
+        return _approval_public(d)
 
 
-def resolve_approval_request(request_id: str, action: str) -> dict | None:
-    """action must be 'allow' or 'deny'. Only resolves a request still in
-    'pending' state -- a request already allowed/denied/expired can't be
-    flipped again (no double-tap races, no resolving a stale/expired link)."""
+class ApprovalKeyError(Exception):
+    """The resolve key is missing, wrong, or for the other action."""
+
+
+class ApprovalNeedsSignature(Exception):
+    """2026-10-04 (Wave 2): a tap/link can only DENY. Allow needs a human's
+    SSH signature over the exact request -- common.governance.resolve_signed,
+    client scripts/approve.sh."""
+
+
+def resolve_approval_request(request_id: str, action: str, key: str = "") -> dict | None:
+    """action must be 'allow' or 'deny' and key must be the matching per-action
+    key minted at creation (constant-time compare against its stored hash).
+    Raises ApprovalKeyError on a missing/wrong key -- including every request
+    created before the keys existed -- WITHOUT changing state. Only resolves a
+    request still 'pending' and unexpired; already-resolved/expired rows are
+    returned unchanged (no double-tap races, no stale links)."""
     if action not in ("allow", "deny"):
         raise ValueError(f"invalid action: {action!r} (must be allow/deny)")
     new_status = "allowed" if action == "allow" else "denied"
+    col = "allow_key_hash" if action == "allow" else "deny_key_hash"
     now = time.time()
     with conn() as c:
-        cur = c.execute(
+        row = c.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if action == "allow":
+            # 2026-10-04 (Wave 2): no key, link or tap ever allows -- only a
+            # human signature (governance.resolve_signed). A deny link stays.
+            raise ApprovalNeedsSignature("allow requires a human-signed approval (scripts/approve.sh allow <id>)")
+        stored = dict(row).get(col)
+        if not stored or not key or not hmac.compare_digest(stored, _approval_key_hash(key)):
+            raise ApprovalKeyError("invalid approval link")
+        c.execute(
             """UPDATE approval_requests
                SET status=?, resolved_at=?
                WHERE id=? AND status='pending' AND expires_at > ?""",
             (new_status, now, request_id, now),
         )
-        if cur.rowcount == 0:
-            # either not found, already resolved, or expired-on-arrival
-            row = c.execute(
-                "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
-            ).fetchone()
-            return dict(row) if row else None
         row = c.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (request_id,)
         ).fetchone()
-        return dict(row)
+        return _approval_public(dict(row)) if row else None
 
 
 def count_recent_approvals(command_pattern: str, since_epoch: float) -> int:
@@ -4885,6 +5105,26 @@ def get_codeshare_mapping_by_marketing(marketing_carrier: str, marketing_flight_
         """
         rows = c.execute(q, ((marketing_carrier or "").upper(), marketing_flight_num)).fetchall()
         return [dict(r) for r in rows]
+
+
+def resolve_operating_callsign(ident: str) -> str | None:
+    """Marketed flight (AC8825, ACA8825, UA8366, UAL8366) -> confirmed
+    operating callsign (JZA825) via codeshare_map, or None. Normalises 2-letter
+    IATA carrier codes to ICAO first -- codeshare_map stores ICAO, and an IATA
+    identifier used to miss it outright (2026-10-05, AC8825)."""
+    import re
+    m = re.match(r"^([A-Za-z0-9]{2,3}?)(\d+[A-Za-z]?)$", (ident or "").strip().upper())
+    if not m:
+        return None
+    carrier, num = m.group(1), m.group(2)
+    if len(carrier) == 2:
+        from common.airline_codes import IATA_TO_ICAO
+        carrier = IATA_TO_ICAO.get(carrier, carrier)
+    rows = get_codeshare_mapping_by_marketing(carrier, num)
+    if not rows or not rows[0].get("operating_carrier"):
+        return None
+    op = f"{rows[0]['operating_carrier']}{rows[0].get('operating_flight_num') or num}"
+    return op if op != f"{carrier}{num}" else None
 
 
 def get_codeshare_mapping_by_operating(operating_carrier: str, operating_flight_num: str,
@@ -5751,7 +5991,7 @@ ALTER TABLE watchlist_entries ADD COLUMN last_tbfm_updated_at TEXT;
 # future signal from it legitimately does. ADS-B/inferred is last --
 # useful for filling in when nothing else has reported yet, but never
 # allowed to overwrite a real report from one of the others.
-_OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3, "acars": 4}
+_OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms_airline": 2, "tfms": 2, "smes": 3, "acars": 4}
 
 # ── OOOI source AUTHORITY TIERS (0065, 2026-09-23) ───────────────────────────
 # Distinct from _OOOI_SOURCE_PRIORITY above, which only breaks same-phase ties.
@@ -5771,6 +6011,11 @@ _OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms": 2, "smes": 3,
 _OOOI_SOURCE_TIER = {
     # Tier 40 -- SWIM. The validator of record.
     "fdps": 40, "swim_fids": 40, "tbfm": 40, "tfms": 40, "smes": 40,
+    # 2026-10-05: TFMS-carried AIRLINE-POSTED OOOI times, split from "tfms".
+    # Same tier (so the lock rules are unchanged) but never allowed to assert
+    # a milestone a SWIM surface observation covers -- see the rule in
+    # _oooi_authority_check.
+    "tfms_airline": 40,
     "itws": 40, "aim": 40,
     # Tier 30 -- network aggregators. The standing OOOI rule admits these
     # alongside SWIM (memory: OOOI SWIM authority). Off-box, multi-receiver.
@@ -5865,6 +6110,25 @@ def _oooi_authority_check(phase: str, source: str, lock: dict) -> tuple[bool, st
     if source == "fids":
         return False, f"DENY fids: enrichment-only, never OOOI-authoritative (phase={phase})"
 
+    # ADS-B is never the authority for ON or IN (operator directive
+    # 2026-10-05, JZA825: the aircraft was still at 8,650 ft when the airline
+    # reported ON; landing is called by ACARS, the surface feed (SMES) or
+    # TFMS, never by a transponder track). Aggregator and local receivers alike.
+    if phase in ("on", "in") and source in _OOOI_ADSB_SOURCES:
+        return False, f"DENY {source}: ADS-B may never assert '{phase}'"
+
+    # SWIM always beats airline-posted times for live watches (operator
+    # directive 2026-10-05, JZA825: airline posted ON 01:34Z / IN 01:40Z with
+    # the aircraft still at 8,650 ft; SMES saw it on the runway 01:45Z).
+    # Where the SWIM surface feed observes a milestone -- departures from and
+    # arrivals at an SMES airport -- the airline's own times never assert it;
+    # elsewhere there is no SWIM observation to defer to and they still count.
+    if source == "tfms_airline":
+        apt = lock.get("origin") if phase in ("out", "off") else lock.get("destination")
+        if _smes_covers(apt):
+            return False, (f"DENY tfms_airline: '{phase}' at {apt} is observed by SWIM surface "
+                           f"(SMES); airline-posted times never beat it")
+
     tier = _OOOI_SOURCE_TIER.get(source, 0)
 
     # Inference may never assert. No outage, no lock state, nothing unlocks it.
@@ -5926,6 +6190,13 @@ def _oooi_authority_check(phase: str, source: str, lock: dict) -> tuple[bool, st
 # to observe OUT/OFF/ON/IN minutes before TFMS's airline report catches
 # up).
 _OOOI_PHASE_ORDER = ["pre_departure", "out", "off", "on", "in"]
+_OOOI_ADSB_SOURCES = frozenset({"adsb", "local_adsb", "dump1090"})
+_SMES_AIRPORTS = frozenset({"KDCA", "KIAD", "KBWI"})     # mirrors ingest/parsers/smes_parser.SMES_AIRPORTS
+
+
+def _smes_covers(airport: str | None) -> bool:
+    a = (airport or "").strip().upper()
+    return bool(a) and (a in _SMES_AIRPORTS or ("K" + a) in _SMES_AIRPORTS)
 
 
 def init_db_v40() -> None:
@@ -6062,7 +6333,7 @@ def update_watchlist_oooi_phase_authoritative(entry_id: str, phase: str, source:
         # tonight's false landings were an unentitled source asserting one.
         lock_row = c.execute(
             "SELECT oooi_lock_source, oooi_lock_tier, oooi_local_track_at,"
-            " oooi_local_track_source FROM watchlist_entries WHERE id=?",
+            " oooi_local_track_source, origin, destination FROM watchlist_entries WHERE id=?",
             (entry_id,),
         ).fetchone()
         lock = dict(lock_row) if lock_row else {}
@@ -6434,6 +6705,23 @@ def upsert_flight_ooooi(gufi: str, callsign: str | None = None,
         """, (gufi, callsign, airline, flight_num, origin, destination,
               airline_out_time, airline_off_time, airline_on_time, airline_in_time,
               original_departure, original_arrival, flight_status))
+
+
+def get_recent_flight_ooooi(callsign: str, max_age_hours: float = 18.0) -> dict | None:
+    """Latest TFMS airline OOOI row for an operating callsign (e.g. JZA825)
+    updated within max_age_hours, or None. Uses idx_flight_ooooi_times_num.
+    2026-10-05: lets a watch added mid-flight learn the airline-reported
+    OUT/OFF it missed (shared.watchlist.seed_departure_phase_from_tfms)."""
+    import re
+    m = re.match(r"^([A-Za-z]+)(\d+[A-Za-z]?)$", (callsign or "").strip())
+    if not m:
+        return None
+    with conn() as c:
+        r = c.execute(
+            "SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? AND updated_at > ? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (m.group(1).upper(), m.group(2), time.time() - max_age_hours * 3600)).fetchone()
+    return dict(r) if r else None
 
 
 def list_flight_numbers_with_ooooi_data(days: int = 14) -> list[tuple[str, str]]:

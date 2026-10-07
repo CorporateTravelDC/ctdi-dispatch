@@ -29,14 +29,22 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 Network=pasta:--map-gw
 Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
 # together either EVER"): flock on the box-wide unit lock wraps the whole
 # run, so a second report container blocks here -- inside its own
 # container, holding no model, no threads -- until the one ahead exits.
 # It waits; it is never refused and never kills the run ahead of it.
 # common/llama_pool.py takes a separate per-generation lock on top.
-Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/second_brain_weekly.py
+# 2026-10-04 (97b9075 pattern, see second-brain-daily.container): bounded lock wait.
+#   -w 3600  max seconds to queue for the shared long-runner lock (was unbounded --
+#            the queue wait ate the run budget and systemd killed the flock);
+#   -E 75    give-up exits EX_TEMPFAIL = clean skip (SuccessExitStatus=75 below);
+#   --verbose  logs the real lock wait on every run.
+# TimeoutStartSec below = 3600 (queue wait) + 5500 (run budget, unchanged) + 100.
+Exec=/usr/bin/flock --verbose -w 3600 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/second_brain_weekly.py
 
 [Service]
 # 2026-09-21 maintenance window (operator directive): long report-tier
@@ -83,5 +91,10 @@ Type=oneshot
 # allocation)
 # + 2 attempts x 2340s call (default max_retries=1) = 5480s -> 5500. A governor-pause retry-wait can still exceed this;
 # systemd remains the deliberate backstop.
-TimeoutStartSec=5500
+# 2026-10-04: was the run-only budget (5500); the lock queue wait (flock -w 3600
+# in Exec=) now sits in front of it, so the start budget is the sum.
+TimeoutStartSec=9200
+# Exit 75 (EX_TEMPFAIL) = flock gave up waiting for the long-runner lock
+# (see Exec=). A clean, logged skip -- not a failure, not a page.
+SuccessExitStatus=75
 

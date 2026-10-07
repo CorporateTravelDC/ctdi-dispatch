@@ -1,0 +1,26 @@
+# scripts/service-env/web.allowlist -- SECRET names the web image reads (2026-10-04, duel M9).
+# Derived by a static import-closure scan of the web entrypoint (getenv / environ / config.get);
+# review before switching the quadlet. dispatch.env (non-secret) stays mounted separately.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/common/acars.py:56
+AIRFRAMES_TOKEN  # src/common/acars.py:67
+BOARD_KEY  # src/web/main.py:215
+DISPATCH_ADMIN_TOKEN  # src/web/routes/webhooks.py:138
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:475
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:102
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NEXTCLOUD_APP_PASSWORD  # (static scan: import closure)
+NTFY_TOKEN  # src/common/config.py:55
+ULTRAFEEDER_LAT  # src/web/main.py:2132
+ULTRAFEEDER_LON  # src/web/main.py:2135
+# 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
+DEMO_ADMIN_TOKEN  # src/demo/demo_api.py:86
+DEMO_RECORDER_API_TOKEN  # src/demo/recorder.py:56
+DEMO_SESSION_SECRET  # src/demo/profiles.py:50
+NWWS_JID  # src/ingest/config.py:39
+NWWS_PASSWORD  # src/ingest/config.py:40
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:30
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
+PUSHOVER_TOKEN  # src/common/pushover.py:28
+PUSHOVER_USER_KEY  # src/common/pushover.py:29

@@ -1,0 +1,42 @@
+# corporatetraveldc-ccw-preview1.container
+# Password-gated public preview -- [chauffeur partner] static site
+# **v1** (photo-led refresh of the 2026-08-18 v0 rewrite, built
+# 2026-09-06). Same IA, copy and AI-native surfaces as v0, now with the
+# company's own photography from corporatecarworldwide.com, one new
+# stylesheet, logo lockups, responsive images. v0 keeps running on 8085
+# as ccw-preview; this unit serves v1 on 8086 as ccw-preview1.
+#
+# Reuses v0's HTTP Basic Auth file (mounted read-only, not copied) so the
+# same owner/webdev credentials work; note the webdev credential expires on
+# v0's schedule (corporatetraveldc-ccw-demo-webdev-expiry.timer).
+#
+# Operator must add a Cloudflare Tunnel public-hostname route:
+#   ccw-preview1.example.com  ->  http://127.0.0.1:8086
+# (same pattern as ccw-preview -> 127.0.0.1:8085).
+#
+# Source tree: /home/corporatetraveldc/demos/corporate-car-worldwide-v1/
+# (README.md there has install + check steps; build.py regenerates site/).
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-ccw-preview1
+
+[Unit]
+Description=[chauffeur partner] -- v1 password-gated public preview
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:alpine
+ContainerName=corporatetraveldc-ccw-preview1
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide-v1/site:/usr/share/nginx/html:ro,z
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide-v1/nginx.conf:/etc/nginx/nginx.conf:ro,z
+Volume=/home/corporatetraveldc/demos/corporate-car-worldwide/auth/.htpasswd:/etc/nginx/.htpasswd:ro,z
+# 127.0.0.1 -- what the Cloudflare Tunnel route reaches.
+# 100.x.x.x (tailnet) kept too, for direct internal checks without
+# going out over the public hostname.
+PublishPort=127.0.0.1:8086:8086
+PublishPort=100.x.x.x:8086:8086
+Memory=128m
+
+[Service]
+Slice=production.slice
+
+[Install]
+WantedBy=default.target

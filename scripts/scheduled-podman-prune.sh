@@ -47,6 +47,11 @@
 # ASCII output only -- no Unicode symbols (repo convention).
 
 set -uo pipefail
+# 2026-10-05 (argv-token sweep): a bearer token never goes on a command line --
+# /proc/<pid>/cmdline is world-readable here (no hidepid), i.e. readable by
+# every team account. authhdr NAME TOKEN puts the header on a private fd and
+# sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
+authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
 STATE_DIR="/var/lib/corporatetraveldc/scheduled-podman-prune"
 LOG_FILE="${STATE_DIR}/prune.log"
@@ -90,7 +95,7 @@ log() {
 ntfy_send() {
     local title="$1" msg="$2" priority="${3:-2}"
     local auth_args=()
-    [[ -n "${NTFY_TOKEN}" ]] && auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+    [[ -n "${NTFY_TOKEN}" ]] && authhdr auth_args "${NTFY_TOKEN}"
     curl -sf --max-time 5 "${auth_args[@]}" \
         -H "Title: ${title}" -H "Priority: ${priority}" -H "Tags: broom" \
         -d "${msg}" "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 \
@@ -165,6 +170,11 @@ busy_reason() {
     # happens to contain it (bit this script's smoke test twice).
     if pgrep -f "^podman build" >/dev/null 2>&1; then echo "podman build in progress"; return 0; fi
     if pgrep -f "^podman (image|system) prune" >/dev/null 2>&1; then echo "another prune in progress"; return 0; fi
+    # 2026-10-05: the 07:15 run fired in the middle of a serialized rollout
+    # and died on "image is in use by a container" (a container started on an
+    # image the prune had already listed as dangling). A rollout or stack
+    # refresh creates and retires images continuously -- wait it out.
+    if pgrep -f "(serialized-rollout|stack-refresh)\.sh" >/dev/null 2>&1; then echo "rollout / stack refresh in progress"; return 0; fi
     return 1
 }
 
@@ -222,7 +232,21 @@ if [[ "${MODE}" == "dry-run" ]]; then
 fi
 
 start=$(date +%s)
-if nice -n 19 ionice -c3 podman image prune -f --filter "until=${MIN_AGE}" >>"${LOG_FILE}" 2>&1; then
+# 2026-10-05: "image is in use by a container" is a race (a container started
+# between podman's listing and its removal), not damage -- the rest of the
+# prune already happened. Retry up to twice after a pause; anything else fails
+# at once.
+prune_once() { nice -n 19 ionice -c3 podman image prune -f --filter "until=${MIN_AGE}" >>"${LOG_FILE}" 2>&1; }
+prune_with_retry() {
+    local n
+    for n in 1 2 3; do
+        prune_once && return 0
+        tail -n 3 "${LOG_FILE}" | grep -q "image is in use by a container" || return 1
+        (( n < 3 )) && { log "info" "prune hit an in-use image (race), retry ${n}/2 in 60s"; sleep 60; }
+    done
+    return 1
+}
+if prune_with_retry; then
     after=$(dangling_bytes)
     freed=$(( recl - after )); (( freed < 0 )) && freed=0
     took=$(( $(date +%s) - start ))

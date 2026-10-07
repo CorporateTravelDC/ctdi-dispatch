@@ -49,6 +49,7 @@ import zlib
 from datetime import date, datetime, timedelta, timezone
 
 from common import config
+from common import optime
 from common.sr1_log import log_usage
 from demo import db as demo_db
 from second_brain import webdav_client
@@ -117,7 +118,9 @@ def _render_endpoint_section(endpoint: str, rows: list[tuple[str, bytes, int]]) 
 
 def main() -> None:
     status = "error"
-    today = date.today()
+    # 2026-10-05 (#9 follow-up): the OPERATIONAL day (America/New_York, 05:00
+    # rollover), not the container's UTC calendar date
+    today = optime.op_today()
 
     try:
         by_endpoint = _fetch_window()

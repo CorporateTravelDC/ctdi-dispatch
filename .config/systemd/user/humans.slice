@@ -1,0 +1,41 @@
+[Unit]
+Description=CTDI Dispatch -- human teammate sessions (ctdc-ops accounts), resource-isolated from production and from agents
+Documentation=man:systemd.slice(5) docs/AGENT_SEGMENTATION.md
+
+# Why (2026-10-04, team segmentation): human teammates get their own accounts
+# (group ctdc-ops) running in parallel with the agent accounts (ctdc-agents).
+# Each account's user manager installs THIS slice and its interactive work
+# (shells, editors, podman builds, test runs) lands in it, so a teammate's
+# `pytest` or image build competes with production on the same terms the
+# agents do -- never as an uncapped sibling of the whole production tree
+# (that was the 2026-10-03 load-40 LOCKDOWN case, see agents.slice).
+#
+# Numbers (4-core Pi 5, 16206 MiB RAM; production.slice MemoryLow=6G,
+# Max 13.78G; agents.slice CPUWeight=25 / CPUQuota=100% / 3G-4G):
+#   CPUWeight=50    humans above agents (2:1) -- a person waiting on a shell
+#                   outranks a background agent, but both stay below
+#                   production's default 100.
+#   CPUQuota=150%   1.5 cores for ALL human sessions together. Interactive
+#                   work is bursty; an image build or test run gets real
+#                   throughput without owning the fourth core that keeps
+#                   load1 under thermal-ingest-guard's bars. (agents: 100%.)
+#   MemoryHigh=2560M / MemoryMax=3584M  a shell + editor is tens of MB; a
+#                   podman build or a pytest run is 1-2 GB. Two concurrent
+#                   human sessions doing heavy work fit under High. Ceilings,
+#                   not reservations; production's MemoryLow=6G is the real
+#                   protection, and 3.5G + agents' 4G + production's 13.78G
+#                   over-commits RAM on purpose (same reasoning as agents.slice).
+#   TasksMax=2048   generous for build trees, still a hard stop for a runaway.
+#
+# Membership: installed into each ctdc-ops user manager by
+# scripts/agent-segmentation/plan.sh --add-human; the login shell is placed
+# with `systemd-run --user --scope --slice=humans.slice` (see the per-account
+# profile snippet the plan prints). Runtime-reversible per manager:
+# `systemctl --user set-property --runtime humans.slice CPUQuota=300%`.
+
+[Slice]
+CPUWeight=50
+CPUQuota=150%
+MemoryHigh=2560M
+MemoryMax=3584M
+TasksMax=2048

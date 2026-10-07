@@ -42,6 +42,7 @@ import argparse
 import json
 import sys
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/opt/corporatetraveldc/private/ctdi-dispatch-internal/src")
 
@@ -51,7 +52,8 @@ FORWARD_LOOKING_STATUSES = {"Scheduled", "InAir", "Delayed"}
 
 
 def lookup(airports, carriers, within_minutes, direction):
-    now = datetime.now()
+    # FIDS times are naive Eastern wall-clock; never read the host clock's zone.
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     cutoff = now + timedelta(minutes=within_minutes)
     carriers = {c.upper() for c in carriers} if carriers else None
 

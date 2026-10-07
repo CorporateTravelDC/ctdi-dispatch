@@ -138,7 +138,13 @@ CONTAINER_WAIT=4    # seconds between container starts
 # Load platform env (non-secret)
 # ---------------------------------------------------------------------------
 
-[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}" 2>/dev/null || true
+# 2026-10-04 (duel): never `source` an env file as root -- values are
+# deliberately unquoted and the shell would execute fragments of them
+# (2026-10-03 credential-fragment leak). Read only the keys used here.
+env_get() { [[ -r "${ENV_FILE}" ]] || return 0; grep -m1 "^$1=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2-; }
+NTFY_BASE_URL="$(env_get NTFY_BASE_URL)"
+NTFY_OPS_TOPIC="$(env_get NTFY_OPS_TOPIC)"
+NTFY_HOT_TOPIC="$(env_get NTFY_HOT_TOPIC)"
 
 NTFY_BASE="${NTFY_BASE_URL:-http://127.0.0.1:2586}"
 NTFY_OPS="${NTFY_OPS_TOPIC:-ops-health}"

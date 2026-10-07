@@ -1,0 +1,14 @@
+# corporatetraveldc-nts-cert-refresh.service -- renew + deploy the Tailscale
+# cert chrony's NTS server uses. ROOT, installed copy (install-root-copies.sh
+# rewrites ExecStart to /usr/local/libexec/ctdc). Replaces the operator user
+# unit of the same name, whose deploy step needed an interactive sudo.
+[Unit]
+Description=Renew the Tailscale-issued cert chrony's NTS server uses, redeploy if changed (root, installed copy)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/tailscale-cert-refresh-nts.sh
+TimeoutStartSec=5min
+PrivateTmp=yes

@@ -1,0 +1,23 @@
+# scripts/service-env/runner.allowlist -- SECRET names the runner image reads (2026-10-04, duel M9).
+# Derived by a static import-closure scan of the runner entrypoint (getenv / environ / config.get);
+# review before switching the quadlet. dispatch.env (non-secret) stays mounted separately.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/runner/main.py:62
+AIRFRAMES_TOKEN  # src/runner/main.py:71
+AIS_AISHUB_ID  # src/runner/main.py:78
+AIS_MARINETRAFFIC_KEY  # src/runner/main.py:77
+DEMO_SESSION_SECRET  # src/runner/main.py:45
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:475
+NTFY_TOKEN  # src/runner/main.py:52
+RUNNER_ENRICHED_TOKEN  # src/runner/main.py:88
+ULTRAFEEDER_LAT  # src/runner/main.py:11
+ULTRAFEEDER_LON  # src/runner/main.py:11
+# 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NEXTCLOUD_APP_PASSWORD  # src/second_brain/index_db.py:151
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:30
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
+PUSHOVER_TOKEN  # src/common/pushover.py:28
+PUSHOVER_USER_KEY  # src/common/pushover.py:29

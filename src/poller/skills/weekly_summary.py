@@ -22,11 +22,11 @@ from common.sr1_log import log_usage
 log = logging.getLogger(__name__)
 
 SKILL_NAME = "weekly-summary"
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "")
+LLAMA_BASE_URL   = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; OLLAMA_ = deprecated alias
 OLLAMA_MODEL      = (os.getenv("OLLAMA_WEEKLY_SUMMARY_MODEL")
                      or os.getenv("OLLAMA_MODEL")
                      or "corporatetraveldc-pi5-weekly-summary:latest")
-MODEL             = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL             = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 
 SYSTEM_PROMPT = """You are producing a weekly operational summary for an executive chauffeur
 operation in the Washington DC metropolitan area.

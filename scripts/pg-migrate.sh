@@ -9,13 +9,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for f in /etc/corporatetraveldc/dispatch.env /etc/corporatetraveldc/dispatch-secrets.env; do
-    if [ -r "$f" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source <(grep -v '^\s*#' "$f" | grep '=')
-        set +a
-    fi
-done
-
-exec python3 "$REPO_ROOT/scripts/pg_migrate.py" "$@"
+# 2026-10-03: was `set -a; source <(grep ... "$f")`. Shell-sourcing these
+# files is unsafe: values are deliberately unquoted (podman --env-file
+# semantics, see scripts/check-env-quoting.sh) and bash word-splits /
+# interprets metacharacters in them, so a value like `KEY=ab;cd` runs `cd`
+# as a command and prints a fragment of the secret to stderr. Load them
+# verbatim through the shared loader instead; it also sets PYTHONPATH=src.
+exec "$REPO_ROOT/scripts/with-dispatch-env.sh" python3 "$REPO_ROOT/scripts/pg_migrate.py" "$@"

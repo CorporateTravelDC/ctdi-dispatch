@@ -21,6 +21,14 @@ now; briefly, earlier the same day, they were db_backend.ref_conn() as an
 urgent fix for a real production flood (ERROR: relation "cifp_fixes" does
 not exist -- these tables didn't exist in Postgres yet at that point).
 Both fixes were correct for the schema that existed when each landed.
+
+2026-10-03: the 5 sites use db.conn() -- which yields the identical
+db_backend.pg_conn() whenever DISPATCH_DB_BACKEND=postgres (common/db.py
+conn()), so production behaviour is unchanged -- instead of calling
+pg_conn() directly. Hard-wiring the backend here bypassed the test
+suite's SQLite isolation: 12 CIFP tests that seed a real-fixture SQLite
+DB via `cifp_db` could only "pass" by reaching production Postgres, which
+tests/conftest.py's tripwire now (correctly) forbids.
 """
 from __future__ import annotations
 
@@ -66,7 +74,7 @@ def estimate_runway_eta(meter_fix_lat: float, meter_fix_lon: float,
 
     Returns None (never a guess) if `dest_airport` has no charted runway
     thresholds in cifp_fixes, or if `meter_fix_eta_iso` doesn't parse."""
-    with db_backend.pg_conn() as c:
+    with db.conn() as c:
         rows = c.execute(
             "SELECT lat, lon FROM cifp_fixes WHERE type='RUNWAY_THRESHOLD' AND parent_airport=?",
             (dest_airport.strip().upper(),),
@@ -98,7 +106,7 @@ def resolve_fix(ident: str, icao_region: str | None = None) -> dict | None:
     ident = (ident or "").strip().upper()
     if not ident:
         return None
-    with db_backend.pg_conn() as c:
+    with db.conn() as c:
         if icao_region:
             row = c.execute(
                 "SELECT * FROM cifp_fixes WHERE ident=? AND icao_region=?",
@@ -117,7 +125,7 @@ def get_procedure_transitions(airport: str, proc_type: str, procedure: str
                                ) -> dict[str, list[dict]]:
     """Every leg of one procedure, grouped by transition ident (or
     '(common)' for the shared body), each transition's legs in seq order."""
-    with db_backend.pg_conn() as c:
+    with db.conn() as c:
         rows = c.execute(
             """SELECT * FROM cifp_procedure_legs
                WHERE airport=? AND proc_type=? AND procedure=?
@@ -144,7 +152,7 @@ def get_holds(airport: str | None = None, fix: str | None = None) -> list[dict]:
     if fix:
         sql += " AND fix=?"
         params.append(fix.upper())
-    with db_backend.pg_conn() as c:
+    with db.conn() as c:
         rows = c.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
@@ -282,7 +290,7 @@ def load_fix_coords() -> dict:
     several ICAO regions is skipped, same never-guess rule resolve_fix()
     uses). One query; for batch callers that would otherwise do thousands."""
     out, dupes = {}, set()
-    with db_backend.pg_conn() as c:
+    with db.conn() as c:
         for row in c.execute("SELECT ident, lat, lon FROM cifp_fixes"):
             ident = row["ident"]
             if ident in out:

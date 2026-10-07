@@ -20,17 +20,45 @@ Environment=AR_LISTEN_UDP_ACARS=5550
 Environment=AR_RECV_ZMQ_VDLM2=corporatetraveldc-dumpvdl2:45555
 # Serve local
 Environment=AR_SERVE_TCP_ACARS=9080
+# 2026-10-03: VDL2 TCP serve was configured (image default 15555) but never
+# published to the host, so ingest-core's local_airspace reader only ever
+# saw :9080 -- the plain-ACARS stream, which has no decoder behind it in
+# this stack. acars_messages held zero real rows since the feature shipped.
+Environment=AR_SERVE_TCP_VDLM2=15555
 Environment=AR_SERVE_ZMQ_ACARS=45550
 Environment=AR_SERVE_ZMQ_VDLM2=45555
 # Outbound feeds: acarsdrama + airframes.io + local watcher
 # VDL2: acarsdrama, airframes.io, local acars-watcher
-# 2026-10-03: airframes.io VDL2 port is contested between its published
-# feeding docs (5552, dumpvdl2 JSON) and its own station auto-generator
-# text (5555). TEMPORARY DIAGNOSTIC, operator-directed: send to BOTH for a
-# few hours and keep whichever one the CS-KDCA-VDL dashboard shows traffic
-# on. Remove the loser the same day -- if both accept, airframes is
-# double-counting us until then. (ACARS 5550 was never in question.)
-Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;feed.airframes.io:5552;feed.airframes.io:5555;corporatetraveldc-acars-watcher:5005
+# 2026-10-03: airframes.io VDL2 is fed over TCP 5553 (AR_SEND_TCP_VDLM2
+# below), per airframes' own feeding page -- NOT UDP. The 5552/5555 UDP
+# diagnostic run earlier today ended with neither port ever attributed
+# (both the new id and the old corporatetraveldc-kdca-vdl2 sat in
+# pending-reception since June); UDP here also fragments (frames ~1.5 KB).
+# acarsdrama stays on UDP 5555 (confirmed solid under CS-KDCA-VDL).
+Environment=AR_SEND_UDP_VDLM2=feedthe.acarsdrama.com:5555;corporatetraveldc-acars-watcher:5005
+# 2026-10-03 21:40 ET: airframes shows pending-reception under BOTH the new
+# id (CS-KDCA-VDL) and the old one (corporatetraveldc-kdca-vdl2, pending since
+# 2026-06-15) -- nothing from this box has been attributed there since the
+# acarsdec era ended 2026-03-24, while acarsdrama receives the same router
+# output fine. VDL2 frames here run to ~1.5 KB, over the 1500 MTU, so UDP
+# fragments on the way out; acars_router's own README feeds airframes VDL2
+# over TCP 5553, which cannot fragment and logs connect/disconnect.
+# VERDICT 2026-10-03 21:45 ET (operator confirmed from airframes' site: TCP,
+# not UDP): the 5552/5555 UDP diagnostic targets are removed; 5553 TCP
+# connected on first try ("StubbornIo: Initial connection succeeded").
+# 2026-10-03 21:50 ET: tried 5552/5555 over TCP too (airframes' dashboard
+# says TCP 5555) -- both ECONNREFUSED from here; only 5553 (VDL2) and 5556
+# (HFDL) accept TCP. 5553 is connected and acked (ss -tni: bytes grow).
+# 2026-10-03 22:05 ET VERDICT: airframes credited CS-KDCA-VDL for the first
+# time ever (status active, 01:53Z) during the window where this router fed
+# TCP 5553 with AR_ADD_PROXY_ID=false. Months of UDP 5552/5555 (proxied)
+# and a direct dumpvdl2 UDP 5555 test were never attributed. The blocker
+# was the proxied/proxied_by tag, not the id or the egress. TCP 5553 is the
+# only airframes port accepting TCP from here (5550/5552/5555 refuse).
+Environment=AR_SEND_TCP_VDLM2=feed.airframes.io:5553
+# 2026-10-03 21:55 ET diagnostic: station still pending with 5553 delivering;
+# test whether airframes' TCP ingest rejects the proxied/proxied_by fields.
+Environment=AR_ADD_PROXY_ID=false
 # ACARS: acarsdrama, airframes.io (acarsdec re-enable pending)
 Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550;feed.airframes.io:5550
 # 2026-10-03: AR_OVERRIDE_STATION_NAME REMOVED. It rewrote the station name
@@ -42,6 +70,7 @@ Environment=AR_SEND_UDP_ACARS=feedthe.acarsdrama.com:5550;feed.airframes.io:5550
 # single override here.
 Network=acars-net.network
 PublishPort=9080:9080
+PublishPort=15555:15555
 AutoUpdate=registry
 
 [Service]

@@ -14,14 +14,22 @@ Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
+# (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
 # together either EVER"): flock on the box-wide unit lock wraps the whole
 # run, so a second report container blocks here -- inside its own
 # container, holding no model, no threads -- until the one ahead exits.
 # It waits; it is never refused and never kills the run ahead of it.
 # common/llama_pool.py takes a separate per-generation lock on top.
-Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ops_brief.py
+# 2026-10-04 (97b9075 pattern, see second-brain-daily.container): bounded lock wait.
+#   -w 600  max seconds to queue for the shared long-runner lock (was unbounded --
+#            the queue wait ate the run budget and systemd killed the flock);
+#   -E 75    give-up exits EX_TEMPFAIL = clean skip (SuccessExitStatus=75 below);
+#   --verbose  logs the real lock wait on every run.
+# TimeoutStartSec below = 600 (queue wait) + 3600 (run budget, unchanged) + 100.
+Exec=/usr/bin/flock --verbose -w 600 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ops_brief.py
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the
@@ -57,4 +65,12 @@ Type=oneshot
 # call going 1200s -> 2000s (num_predict 500 -> 900 truncation fix -- see
 # ops_brief.py's OLLAMA_TIMEOUT comment for the derivation). Budget = 800s
 # fixed + 2000s main + 510s trend = 3310s -> 3600.
-TimeoutStartSec=3600
+# 2026-10-04: hourly timer: TimeoutStartSec exceeds the 3600s cadence, as the old run-only budget
+# already did/nearly did -- systemd simply skips a firing while the unit is active,
+# it never double-runs; the short -w keeps a busy hour a fast clean skip instead.
+# was the run-only budget (3600); the lock queue wait (flock -w 600
+# in Exec=) now sits in front of it, so the start budget is the sum.
+TimeoutStartSec=4300
+# Exit 75 (EX_TEMPFAIL) = flock gave up waiting for the long-runner lock
+# (see Exec=). A clean, logged skip -- not a failure, not a page.
+SuccessExitStatus=75

@@ -1,0 +1,10 @@
+# corporatetraveldc-quiet-window-report.timer -- daily 05:30 ET (end of the
+# maintenance window, after the weekly refresh on Sundays).
+[Unit]
+Description=Daily quiet-window load profile refresh
+[Timer]
+OnCalendar=*-*-* 05:30:00 America/New_York
+Persistent=true
+AccuracySec=5min
+[Install]
+WantedBy=timers.target

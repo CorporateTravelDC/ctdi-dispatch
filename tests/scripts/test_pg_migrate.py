@@ -45,10 +45,10 @@ def _postgres_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.postgres_scratch, pytest.mark.skipif(
     not _postgres_reachable(),
     reason=f"corporatetraveldc-pgsql unreachable or scratch database {SCRATCH_DB!r} does not exist",
-)
+)]
 
 
 @pytest.fixture
@@ -79,12 +79,12 @@ def _run(*args) -> subprocess.CompletedProcess:
 def test_migrations_apply_cleanly_to_an_empty_schema(scratch_schema):
     result = _run("--schema", scratch_schema)
     assert result.returncode == 0, result.stderr
-    # 2026-09-19: real count from an empty schema is 55 (0001-0055) -- the
-    # literal "48" this assertion previously checked was already stale
-    # before tonight (0049-0051 existed live, unreflected here); 0052-0055
-    # are the 11 reference tables + the second-brain vault index
-    # (docs/POSTGRES_MIGRATION.md sec2's JOIN exception).
-    assert "Applied 55 migration(s)" in result.stdout, result.stdout
+    # 2026-10-03: derive the count from src/common/pg_schema/*.sql -- the
+    # literal here went stale twice (48 -> 55 -> 65). The migration runner
+    # applies every *.sql in that directory to an empty schema, so the
+    # expected count is simply how many files exist.
+    expected = len(list((REPO_ROOT / "src" / "common" / "pg_schema").glob("*.sql")))
+    assert f"Applied {expected} migration(s)" in result.stdout, result.stdout
 
 
 def test_migrations_are_idempotent_on_second_run(scratch_schema):
@@ -123,6 +123,7 @@ _SECOND_BRAIN_TABLES = frozenset({
     "semantic_concepts", "semantic_labels", "semantic_relations",
     "semantic_agents", "semantic_metrics", "semantic_note_concepts",
     "semantic_unmapped_tags", "semantic_note_derivations",
+    "semantic_note_instance_refs",  # 0059 (2026-09-20, geometric Phase 0)
 })
 
 

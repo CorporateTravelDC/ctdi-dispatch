@@ -36,7 +36,9 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 
 # Config (DISPATCH_DB, NTFY_URL, etc.) and secrets
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
-EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the amtrak-tracker image reads
+# (scripts/service-env/amtrak-tracker.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/amtrak-tracker.env
 
 # Tracker-specific overrides (can be set in dispatch.env instead)
 Environment=FILTER_STATION=WAS

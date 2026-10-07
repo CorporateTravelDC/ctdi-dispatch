@@ -1,0 +1,10 @@
+# /etc/systemd/system/corporatetraveldc-team-liveness.timer -- hourly, jittered.
+[Unit]
+Description=Hourly team liveness check
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=20min
+Persistent=true
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

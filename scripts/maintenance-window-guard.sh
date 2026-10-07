@@ -45,9 +45,16 @@ _env_tz="${CTDC_MAINTENANCE_WINDOW_TZ:-}"
 # Sourced here rather than relying on the unit's EnvironmentFile=: for Quadlet
 # .container units, EnvironmentFile= is handed to the CONTAINER, while
 # ExecCondition= runs on the HOST and would never see it.
+# 2026-10-04: was `set -a; source "${CONFIG_FILE}"`. The env files are
+# deliberately unquoted (podman --env-file semantics) and bash word-splits
+# values with spaces (AMTRAK_CORE_ROUTES) -- every guarded unit was logging
+# "command not found" from this line; for the secrets file the same pattern
+# leaked a credential fragment. Read the three keys literally instead.
+_cfg() { grep -m1 "^$1=" "${CONFIG_FILE}" 2>/dev/null | cut -d= -f2-; }
 if [[ -r "${CONFIG_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    set -a; source "${CONFIG_FILE}" 2>/dev/null || true; set +a
+    CTDC_MAINTENANCE_WINDOW_START="$(_cfg CTDC_MAINTENANCE_WINDOW_START)"
+    CTDC_MAINTENANCE_WINDOW_END="$(_cfg CTDC_MAINTENANCE_WINDOW_END)"
+    CTDC_MAINTENANCE_WINDOW_TZ="$(_cfg CTDC_MAINTENANCE_WINDOW_TZ)"
 fi
 
 [[ -n "${_env_start}" ]] && CTDC_MAINTENANCE_WINDOW_START="${_env_start}"
@@ -62,14 +69,30 @@ WINDOW_TZ="${CTDC_MAINTENANCE_WINDOW_TZ:-America/New_York}"
 
 CHECK_MODE=0
 AT_OVERRIDE=""
+WEEKDAY_OVERRIDE=""
+ROLLING=0
+# --rolling (2026-10-04, operator directive "make the maintenance window a
+# rolling time ... three or four candidates throughout the day that are
+# operationally aware"): instead of the fixed START-END, the guard is open
+# inside any of today's windows drawn by scripts/quiet-window-report.py from
+# the rolling 30-day load profile (/var/lib/corporatetraveldc/reports/
+# quiet-windows.json, "today_windows"). Falls back to the fixed window when
+# the profile is missing or older than 36h, so nothing can be stranded. Only
+# queue-dispatched units use --rolling (scripts/maintenance-dispatch.sh);
+# timer-driven units keep the fixed window -- see the FOOTGUN above.
+QUIET_JSON="${CTDC_QUIET_WINDOWS_JSON:-/var/lib/corporatetraveldc/reports/quiet-windows.json}"
 while (( $# )); do
     case "$1" in
+        --rolling) ROLLING=1 ;;
         --check|--dry-run) CHECK_MODE=1 ;;
         # --at HH:MM evaluates the window against a hypothetical clock instead
         # of the real one. Exists so the FOOTGUN above is checkable before
         # wiring a unit: `--check --at 04:30` answers "would a 04:30 job run?"
         # without waiting until 04:30. Dry-run only.
         --at) shift; AT_OVERRIDE="${1:-}"; CHECK_MODE=1 ;;
+        # --weekday Mon..Sun pairs with --at for testing the rolling lookup at
+        # any day/time without waiting for it. Dry-run only.
+        --weekday) shift; WEEKDAY_OVERRIDE="${1:-}"; CHECK_MODE=1 ;;
         *) echo "maintenance-window-guard: unknown argument '$1'" >&2; exit 2 ;;
     esac
     shift
@@ -105,7 +128,54 @@ now_min="$(to_minutes "${now_hhmm}")" || exit 2
 
 inside=1
 wrap="no"
-if (( start_min == end_min )); then
+rolling_note=""
+# 2026-10-04 (duel M1): look the windows up by the CURRENT local weekday at
+# check time from maintenance_candidates -- NOT today_windows, which the
+# report only rewrites at 05:30, so before then the guard applied yesterday's
+# list and every window starting before 05:30 (Monday 03:00, the quietest
+# slot in the profile) could never open. A window that wraps past midnight
+# belongs to the weekday it STARTED on: at 00:30 Tuesday, Monday's 23:00+2h
+# window is open; Tuesday's own 23:00 window is not. The candidates are a
+# per-weekday weekly profile, so a profile up to 8 days old is still valid.
+if (( ROLLING )) && [[ -r "${QUIET_JSON}" ]] && (( $(date +%s) - $(stat -c %Y "${QUIET_JSON}") < 8*86400 )); then
+    _wd="${WEEKDAY_OVERRIDE:-$(TZ="${WINDOW_TZ}" date +%a)}"
+    _res="$(python3 - "${QUIET_JSON}" "${_wd}" "${now_min}" <<'PYEOF'
+import json, sys
+path, wd, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+try:
+    cands = json.load(open(path)).get("maintenance_candidates") or {}
+except Exception:
+    cands = {}
+if wd not in days or not cands:
+    print("none"); sys.exit(0)
+prev = days[(days.index(wd) - 1) % 7]
+inside, notes = 1, []
+for w in cands.get(wd, []):                       # today's windows, same-day part
+    s = int(w["start_hour"]) * 60; e = s + int(w.get("width_h", 2)) * 60
+    notes.append(f"{s//60:02d}:{s%60:02d}+{(e-s)//60}h")
+    if s <= now < min(e, 1440): inside = 0
+for w in cands.get(prev, []):                     # yesterday's windows spilling past midnight
+    s = int(w["start_hour"]) * 60; e = s + int(w.get("width_h", 2)) * 60
+    if e > 1440:
+        notes.append(f"({prev} {s//60:02d}:{s%60:02d} spill to {(e-1440)//60:02d}:{(e-1440)%60:02d})")
+        if now < e - 1440: inside = 0
+print(f"{inside} {wd} " + " ".join(notes))
+PYEOF
+)"
+    if [[ "${_res}" != none && -n "${_res}" ]]; then
+        inside="${_res%% *}"; _rest="${_res#* }"
+        wrap="rolling (weekday ${_rest%% *} from ${QUIET_JSON##*/})"
+        (( CHECK_MODE )) && printf 'rolling     : %s\n' "${_rest#* }"
+    else
+        ROLLING=0; wrap="rolling requested but no maintenance_candidates -> fixed fallback"
+    fi
+elif (( ROLLING )); then
+    ROLLING=0; wrap="rolling requested but profile missing/stale -> fixed fallback"
+fi
+if (( ROLLING )); then
+    :   # decided above
+elif (( start_min == end_min )); then
     # Degenerate: start == end. Treated as "always open" so a misconfiguration
     # can never silently disable every governed job.
     inside=0

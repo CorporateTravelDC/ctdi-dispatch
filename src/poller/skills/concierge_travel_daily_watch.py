@@ -44,6 +44,7 @@ import logging
 import pathlib
 from datetime import date, datetime, timezone
 
+from common import optime
 from common import config
 from common import entity_tracking
 from common import ntfy_push
@@ -138,7 +139,8 @@ def _generate_framing(flavor: str, base_prompt: str, headline_block: str) -> tup
 def main() -> None:
     status = "error"
     rel_path = None
-    today = date.today()
+    # 2026-10-04 (#9): operational day in local time (was the UTC date)
+    today = optime.op_today()
 
     try:
         items = _fetch_week_items(lookback_days=LOOKBACK_DAYS, category=RSS_CATEGORY)

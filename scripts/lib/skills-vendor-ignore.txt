@@ -1,0 +1,38 @@
+# scripts/lib/skills-vendor-ignore.txt -- single source of truth for which
+# directories under ~/.claude/skills are NOT this project's to sign.
+# Read by scripts/skills-sync.sh and scripts/check-claude-md-drift.sh.
+#
+# One directory name per line; blank lines and '#' comments ignored. A line
+# ending in '*' is a prefix match (used for Claude Code's sync buckets whose
+# names are UUID pairs).
+#
+# Why these are ignored (2026-10-03, backlog 2A "twin gate"): Claude Code
+# installs its own bundled skills (docx/pptx/xlsx/pdf, the browser and
+# computer-use shims, deep-research, doc-coauthoring, docs, mcp-builder,
+# skill-creator, web-artifacts-builder, google-workspace, import-memory,
+# internal-comms) into the same user-level directory as the operator's own
+# skills. They carry upstream licenses, change on Claude Code upgrades, and
+# were never authored here -- classified by reading each SKILL.md header,
+# not by name. Signing them would make every Claude Code update a manifest
+# failure. .trash is Claude Code's own deleted-skill holding area; synced is
+# its cloud-sync bucket root.
+built-in-browser
+chrome-browser
+computer-use
+deep-research
+doc-coauthoring
+docs
+docx
+google-workspace
+import-memory
+internal-comms
+mcp-builder
+pdf
+pptx
+skill-creator
+web-artifacts-builder
+xlsx
+.trash
+synced
+# Claude Code sync buckets (uuid_uuid directories), wherever they appear
+*_*-*-*-*-*

@@ -2,7 +2,7 @@
 common.llm — Shared LLM inference with Ollama-first / Anthropic fallback.
 
 Priority:
-  1. Ollama  (OLLAMA_BASE_URL set and reachable)
+  1. llama.cpp (LLAMA_BASE_URL set; the one server, common/llama_pool.py)
   2. Anthropic API  (ANTHROPIC_API_KEY set, AND both gates below open)
   3. None  (caller uses its own deterministic fallback)
 
@@ -358,7 +358,11 @@ def sanitize_llm_response(text: str | None, source: str = "llm",
     return cleaned or None
 
 
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
+# 2026-10-05: LLAMA_BASE_URL is the name (the one llama.cpp server,
+# common/llama_pool.py); OLLAMA_BASE_URL is read as a deprecated alias and
+# OLLAMA_BASE_URL below stays importable for callers not yet renamed.
+LLAMA_BASE_URL    = (os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")).rstrip("/")
+OLLAMA_BASE_URL   = LLAMA_BASE_URL
 OLLAMA_TIMEOUT    = int(os.getenv("OLLAMA_TIMEOUT", "900"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
@@ -507,7 +511,7 @@ def preflight_cool_launch_if_needed(priority: str) -> None:
     """Called at the top of generate() for non-"hot" priority calls, before
     any Ollama readiness/generation work. Logs and blocks (bounded) if the
     box is running warm; no-ops immediately otherwise."""
-    if priority == "hot" or not OLLAMA_PREFLIGHT_COOL_ENABLED or not OLLAMA_BASE_URL:
+    if priority == "hot" or not OLLAMA_PREFLIGHT_COOL_ENABLED or not LLAMA_BASE_URL:
         return
     temp = _read_cpu_temp_c()
     if temp is None or temp <= OLLAMA_PREFLIGHT_COOL_TARGET_C:
@@ -590,7 +594,7 @@ def preflight_load_gate_if_needed(priority: str) -> None:
     """Called in generate() right after the cool-launch gate, for non-"hot"
     calls. Holds (bounded) if 1-min load is above target so inference doesn't
     fire into contention and eat the timeout; no-ops immediately otherwise."""
-    if priority == "hot" or not OLLAMA_PREFLIGHT_LOAD_ENABLED or not OLLAMA_BASE_URL:
+    if priority == "hot" or not OLLAMA_PREFLIGHT_LOAD_ENABLED or not LLAMA_BASE_URL:
         return
     load = _read_loadavg1()
     if load is None or load <= OLLAMA_PREFLIGHT_LOAD_TARGET:
@@ -917,7 +921,7 @@ def generate(
         anthropic_blocked_reason = None
 
     effective_timeout = OLLAMA_TIMEOUT if timeout is None else timeout
-    if OLLAMA_BASE_URL:
+    if LLAMA_BASE_URL:
         # Ollama-priority ingest backpressure removed 2026-08-27 -- see the
         # module-level comment above _ollama_ready() for why. No engage/
         # release wrapping here anymore.

@@ -45,7 +45,11 @@ for hw in /sys/class/hwmon/hwmon*; do
   fi
 done
 
-ts=$(date '+%Y-%m-%d %H:%M:%S')
+# 2026-10-06: explicit UTC with a Z suffix. This used to stamp host-local
+# wall-clock; the host moved to UTC at 2026-10-06 17:18:25Z and
+# quiet-window-report.py read every naive row as America/New_York, so the
+# rolling maintenance windows drifted 4 h. Naive rows remain legacy history.
+ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo "0")
 temp_c=$(awk "BEGIN{printf \"%.1f\", ${temp_raw}/1000}")
 # 2026-09-21: repointed from Ollama to llama.cpp. Ollama was retired

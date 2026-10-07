@@ -1,25 +1,27 @@
 #!/bin/bash
 # scripts/tailscale-cert-refresh-nts.sh
 # Renews the Tailscale-issued cert chrony's NTS server uses (short-lived,
-# ~90 days) and reloads chronyd. `tailscale cert` itself needs no
-# elevated privileges; placing the renewed cert/key into /etc/pki/tls
-# does, so this script re-execs itself under sudo for that part only.
+# ~90 days) and deploys it to /etc/pki/tls + restarts chronyd when it changed.
 #
-# Idempotent: `tailscale cert` no-ops (fast, no reissue) if the current
-# cert still has significant lifetime left, so safe to run on any cadence.
+# 2026-10-05: runs as ROOT from the installed copy
+# (corporatetraveldc-nts-cert-refresh.{service,timer}, system units, via
+# install-root-copies.sh). It used to be an operator USER unit that called
+# `sudo` for the deploy -- which needs a password, so the first real renewal
+# (2026-10-05 02:15) fetched the new cert and then failed: "sudo: a terminal
+# is required". Root runs `tailscale cert` itself (root may always talk to
+# tailscaled), sources nothing, and logs to the journal only (nothing written
+# under /var/lib/corporatetraveldc, the container mount -- 2026-10-04 lesson).
+#
+# Idempotent: `tailscale cert` no-ops if the current cert still has
+# significant lifetime left, so safe to run on any cadence.
 set -euo pipefail
+(( EUID == 0 )) || { echo "tailscale-cert-refresh-nts: run as root (system unit)" >&2; exit 77; }
 
 HOSTNAME="corporatetraveldc-dispatch.tailxxxxxxx.ts.net"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
-STATE_DIR="/var/lib/corporatetraveldc/tailscale-cert-refresh-nts"
-LOG_FILE="${STATE_DIR}/refresh.log"
-mkdir -p "${STATE_DIR}" 2>/dev/null || true
-
-log() {
-    local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[${ts}] $*" | tee -a "${LOG_FILE}" 2>/dev/null
-}
+chmod 0700 "${WORKDIR}"
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 cd "${WORKDIR}"
 log "requesting/renewing cert for ${HOSTNAME}"
@@ -36,10 +38,10 @@ if [[ -f "${CERT_DST}" ]] && cmp -s "${WORKDIR}/${HOSTNAME}.crt" "${CERT_DST}"; 
     exit 0
 fi
 
-log "cert changed -- deploying (requires sudo)"
-sudo install -o root -g root -m 0644 "${WORKDIR}/${HOSTNAME}.crt" "${CERT_DST}"
+log "cert changed -- deploying"
+install -o root -g root -m 0644 "${WORKDIR}/${HOSTNAME}.crt" "${CERT_DST}"
 # root:chrony 0640 -- see setup-nts-server.sh's matching comment, 2026-09-18.
-sudo install -o root -g chrony -m 0640 "${WORKDIR}/${HOSTNAME}.key" "${KEY_DST}"
-sudo restorecon "${CERT_DST}" "${KEY_DST}"
-sudo systemctl restart chronyd
+install -o root -g chrony -m 0640 "${WORKDIR}/${HOSTNAME}.key" "${KEY_DST}"
+restorecon "${CERT_DST}" "${KEY_DST}"
+systemctl restart chronyd
 log "deployed and chronyd restarted"

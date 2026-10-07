@@ -117,7 +117,8 @@ def main():
         print("ok" if data is not None else "failed")
 
     # Snapshot SSH public key so restore can detect key changes after compact
-    ssh_pub = os.path.expanduser("~/.ssh/cowork_ed25519.pub")
+    import getpass  # the account's own signing key (cowork_ed25519 is retired)
+    ssh_pub = os.path.expanduser(f"~/.ssh/{getpass.getuser()}_ed25519.pub")
     if os.path.exists(ssh_pub):
         try:
             with open(ssh_pub) as f:

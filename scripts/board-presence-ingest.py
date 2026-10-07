@@ -24,7 +24,10 @@ def main() -> None:
     ap.add_argument("--valid-until", type=float, required=True)
     ap.add_argument("--key-fingerprint", required=True)
     ap.add_argument("--nonce-ttl-min", type=int, default=10)
-    ap.add_argument("--label", default="cowork-board-presence")
+    # 2026-10-05: tokens carry Cowork's ACCOUNT name, so the liveness switch's
+    # revoke-tokens (board_tokens.label = account) kills them with the account
+    # and the board attributes them to it (was "cowork-board-presence").
+    ap.add_argument("--label", default="ctdc-agent-anthropic-cowork")
     args = ap.parse_args()
 
     with open(args.attestation_file) as f:

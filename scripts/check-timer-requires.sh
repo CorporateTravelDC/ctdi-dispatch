@@ -53,15 +53,22 @@ check_timer() {
     fi
 }
 
-for f in .config/systemd/user/*.timer; do
+# 2026-10-06 (operator: "all timers regardless of level are captured"): this
+# used to scan only USER timers, so the two ROOT timers (watchdog,
+# tailscale-cert-renew) carried the banned line, tracked and live, unseen.
+# Now: every tracked *.timer anywhere in the repo (retired-* dirs excluded),
+# every live user timer, and every live system timer under /etc/systemd/system
+# (world-readable; no sudo needed).
+while IFS= read -r f; do
     check_timer "${f}"
-done
+done < <(git ls-files '*.timer' | grep -v '/retired')
 
-if [[ -d "${HOME}/.config/systemd/user" ]]; then
-    for f in "${HOME}"/.config/systemd/user/*.timer; do
+for dir in "${HOME}/.config/systemd/user" /etc/systemd/system; do
+    [[ -d "${dir}" ]] || continue
+    for f in "${dir}"/*.timer; do
         check_timer "${f}"
     done
-fi
+done
 
 if [[ "${FAIL}" -eq 1 ]]; then
     echo ""

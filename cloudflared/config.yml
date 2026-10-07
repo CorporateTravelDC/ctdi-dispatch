@@ -42,13 +42,15 @@ ingress:
   - hostname: dispatch-runner.example.com
     service: http://127.0.0.1:80
 
-  # openwebui — Open WebUI (Ollama chat frontend) — CF Access gated
+  # openwebui — Open WebUI (chat frontend on the llama.cpp API) — CF Access gated
   - hostname: openwebui.example.com
     service: http://127.0.0.1:80
 
-  # ollama — raw Ollama API — CF Access gated
-  - hostname: ollama.example.com
-    service: http://127.0.0.1:80
+  # SUPERSEDED 2026-10-06: ingress removed (Ollama retired 2026-08-27; no vhost served it):
+  #   # ollama — raw Ollama API — CF Access gated
+  #   - hostname: ollama.example.com
+  #     service: http://127.0.0.1:80
+  # SUPERSEDED 2026-10-06: openwebui comment read "Open WebUI (Ollama chat frontend)"
 
   # adsb/acars removed 2026-08-27 (Opus blind review C-2): both were public,
   # unauthenticated tunnel routes exposing the receiver's live position, GPS
@@ -81,6 +83,16 @@ ingress:
   - hostname: ntfy.example.com
     service: http://127.0.0.1:80
 
+  # agents -- OAuth + remote-MCP gateway for cloud agents (2026-10-05,
+  # src/web/routes/agent_gateway.py). NO Cloudflare Access application may
+  # cover this hostname: OAuth/MCP clients (Claude connectors from Anthropic's
+  # servers, ChatGPT from OpenAI's) send `Authorization: Bearer`, which the
+  # Access-gated dispatch hostname does not deliver. Auth is the gateway's own
+  # (signed consent + liveness-bound tokens); nginx only exposes /oauth,
+  # /mcp and the two .well-known documents on it.
+  - hostname: agents.example.com
+    service: http://127.0.0.1:80
+
   # pihole — CF Access gated (Tailscale + auth required)
   - hostname: pihole.example.com
     service: http://127.0.0.1:80
@@ -106,6 +118,13 @@ ingress:
   # domain since 2026-10-03 (DNS-only CNAME) and no longer reaches this box;
   # its ingress was removed the same day.
   - hostname: members.executivestandard.example.com
+    service: http://127.0.0.1:80
+
+  # invite.executivestandard -- the PUBLIC invite host for the members edition
+  # (2026-10-05; common/es_invites.py via the loopback verifier). Personal
+  # invite links + promo codes -> single-use hand-off to members. NO Cloudflare
+  # Access application may cover it (readers have no Access identity).
+  - hostname: invite.executivestandard.example.com
     service: http://127.0.0.1:80
 
   # catch-all

@@ -1,0 +1,57 @@
+# scripts/service-env/poller.allowlist -- SECRET names the poller image reads (2026-10-04, duel M9).
+# Derived by a static import-closure scan of the poller entrypoint (getenv / environ / config.get);
+# review before switching the quadlet. dispatch.env (non-secret) stays mounted separately.
+# Format: NAME  # consumer
+ACARSDRAMA_JUMPSEAT_TOKEN  # src/common/acars.py:56
+AIRFRAMES_TOKEN  # src/common/acars.py:67
+AIS_AISHUB_ID  # src/poller/skills/disruption_weather_digest.py:28
+DISPATCH_PG_PASSWORD  # src/common/db_backend.py:475
+JUMPSEAT_API_KEY  # src/common/acars.py:57
+NEXTCLOUD_APP_PASSWORD  # src/second_brain/knowledge_graph/build_graph.py:51
+NMS_API_CLIENT_ID  # src/poller/fetchers/notam.py:42
+NMS_API_CLIENT_SECRET  # src/poller/fetchers/notam.py:78
+NTFY_TOKEN  # src/common/config.py:55
+NWWS_JID  # (static scan: import closure)
+NWWS_PASSWORD  # (static scan: import closure)
+PERSONAL_NOTES_SRC_APP_PASSWORD  # src/poller/skills/second_brain_personal_notes_import.py:26
+PUSHOVER_CALLBACK_NUMBER  # src/common/pushover.py:15
+PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:6
+PUSHOVER_RETRY_SEC  # src/common/pushover.py:5
+PUSHOVER_TOKEN  # src/common/pushover.py:13
+PUSHOVER_USER_KEY  # src/common/pushover.py:14
+SWIM_NMS_HOST_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_HOST_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_AIM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_FDPS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_ITWS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+# 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
+DEMO_ADMIN_TOKEN  # src/demo/demo_api.py:86
+DEMO_RECORDER_API_TOKEN  # src/demo/recorder.py:56
+DEMO_SESSION_SECRET  # src/demo/profiles.py:50
+EUROCONTROL_NM_B2B_CERT_PATH  # src/poller/fetchers/eurocontrol.py:42
+EUROCONTROL_NM_B2B_PASS  # src/poller/fetchers/eurocontrol.py:38
+EUROCONTROL_NM_B2B_USER  # src/poller/fetchers/eurocontrol.py:34
+FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+JASDAT_PASS  # src/poller/fetchers/jasdat.py:35
+JASDAT_USER  # src/poller/fetchers/jasdat.py:31
+ULTRAFEEDER_LAT  # src/ingest/local_airspace.py:47
+ULTRAFEEDER_LON  # src/ingest/local_airspace.py:48

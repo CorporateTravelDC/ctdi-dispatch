@@ -50,6 +50,25 @@ The venv already has the toolkit's dependencies (`mcp`, `httpx`,
 set -- that's only required by `config.get_state_dir()`, which the
 functions used here never call.
 
+## Step 0 -- longitudinal store + vault conventions (2026-10-04)
+
+Raw and normalised exports are kept for longitudinal analysis at
+`/var/lib/corporatetraveldc/personal-exports/<platform>/history/<export-date>/`
+(operator-only 0700; `current/` is a symlink to the newest). They NEVER go to
+the vault -- Uber trip data carries pickup/drop-off addresses. After
+normalising in the scratchpad, copy the raw archive + normalised CSV there
+and repoint `current/`. Longitudinal runs read every `history/` directory.
+
+Vault gets syntheses only, same shape for each platform:
+`04-Syntheses/personal-uber-exports/CURRENT.md` (stable address Cowork reads)
++ `history/<export-date>.md`; `04-Syntheses/personal-voice-profile/CURRENT.md`
++ `history/<ts>.md`. Pointers in `01-Sources/personal-notes/Series/`
+(`UBER-EXPORTS-POINTER.md`, `VOICE-PROFILE-POINTER.md`). Every run writes BOTH
+the dated history file and CURRENT.md (frontmatter `mirror_of:` +
+`mirror_updated:`). A longitudinal section in CURRENT.md compares against
+the previous history entries (trips/week, spend, hours, zones -- whatever
+`gig_analysis` exposes), so the record grows with each export.
+
 ## Step 1 -- extract source files to the scratchpad only
 
 Never extract into this repo or into any vault path. Use the session
@@ -168,7 +187,15 @@ board.**
    pattern -- its own clearly-named subfolder, deliberately NOT
    `04-Syntheses/daily/` or `weekly/`, since `second_brain_weekly.py`'s
    scan is hardcoded to only those two paths and a standing reference
-   doc shouldn't get swept into a weekly digest). Either way, run the
+   doc shouldn't get swept into a weekly digest). **Voice profile, two
+   writes (2026-10-04):** the dated note `04-Syntheses/personal-voice-
+   profile/<ts>.md` AND an identical copy at the STABLE address
+   `04-Syntheses/personal-voice-profile/CURRENT.md` (add `mirror_of:` and
+   `mirror_updated:` to its frontmatter). Cowork's ghost-write / research
+   runs read CURRENT.md through `GET /api/v1/vault/research?path=...`
+   (pointer: `01-Sources/personal-notes/Series/VOICE-PROFILE-POINTER.md`,
+   which the research list shows by default) -- never make them hunt for
+   a timestamp. Either way, run the
    note through `second_brain.scrub_gate.gate()` first (Tier-0-adjacent
    surface, same as every vault write), via
    `second_brain.remember_text()`'s `dest_subdir` parameter (added

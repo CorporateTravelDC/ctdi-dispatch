@@ -26,7 +26,7 @@ from common import config, ntfy_push as _ntfy
 from common.sr1_log import log_usage
 
 from poller.skills.ep_advance_brief import (
-    OLLAMA_BASE_URL,
+    LLAMA_BASE_URL,
     _tfr_section,
     _weather_section,
     _nws_section,
@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 SKILL_NAME   = "ep-advance-venues"
 OLLAMA_MODEL = "corporatetraveldc-pi5-ep-advance-venues:latest"
-MODEL        = OLLAMA_MODEL if OLLAMA_BASE_URL else "deterministic"
+MODEL        = OLLAMA_MODEL if LLAMA_BASE_URL else "deterministic"
 # Generous on purpose -- this runs once daily (plus manual trigger), never
 # blocks the hourly brief, so a long worst-case wait costs nothing. Same
 # prompt-size class as the old combined hourly call (~5850 tok), which was
@@ -52,7 +52,7 @@ OLLAMA_TIMEOUT = 4200
 
 
 def _call_ollama(prompt: str) -> str | None:
-    if not OLLAMA_BASE_URL:
+    if not LLAMA_BASE_URL:
         return None
     # 2026-09-04: dropped top_p= (never a real generate() parameter) and
     # max_retries= (removed from generate() 2026-08-30 -- see that

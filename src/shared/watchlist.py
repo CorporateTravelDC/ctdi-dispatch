@@ -1234,3 +1234,80 @@ class WatchlistFileWatcher:
         if new_ids:
             log.info("watchlist: loaded %d permanent %s entries from %s",
                      len(new_ids), entry_type, filename)
+
+
+# ── 2026-10-05: a watch added MID-FLIGHT learns the departure it missed ────────
+# Operator incident (JZA825 / AC8825, YUL-DCA): the watch was added ~30 min
+# after takeoff. TFMS's OFF message had already come and gone, so the entry sat
+# at pre_departure until ADS-B first saw it airborne on approach -- and that
+# sighting was pushed as "OFF -- airborne" 70 minutes late, 8 nm from DCA.
+# Operator-approved fix "with tfms": at add time, seed the DEPARTURE side only
+# (out / off) from TFMS's achieved airline-reported times. Never on / in: the
+# same flight's airline-reported ON (01:34Z) and IN (01:40Z) were early -- ADS-B
+# still showed 8,650 ft at 01:34Z and the surface feed saw it on the runway at
+# 01:45Z -- so arrival-side airline times are not treated as observed fact here.
+
+def _et(ts: str) -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+    except Exception:
+        return str(ts)
+
+
+def _same_airport(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return True                      # unknown on either side: do not block
+    a, b = a.strip().upper(), b.strip().upper()
+    return a == b or a[-3:] == b[-3:]    # KDCA == DCA, CYUL == YUL
+
+
+def tfms_departure_state(ident: str, origin: str | None = None, destination: str | None = None,
+                         now: datetime | None = None) -> tuple[str, str] | None:
+    """('off'|'out', airline time) from TFMS for this operating callsign when
+    that milestone has already passed, else None. Departure side only."""
+    now = now or datetime.now(timezone.utc)
+    row = db.get_recent_flight_ooooi(ident)
+    if not row or not _same_airport(row.get("origin"), origin) or not _same_airport(row.get("destination"), destination):
+        return None
+    for key, phase in (("airline_off_time", "off"), ("airline_out_time", "out")):
+        t = row.get(key)
+        if not t:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt <= now:
+            return phase, str(t)
+    return None
+
+
+def seed_departure_phase_from_tfms(entry: dict, now: datetime | None = None) -> str | None:
+    """Called right after a flight watch is added. If TFMS says the flight has
+    already left the gate / taken off, advance the entry to that phase (source
+    tfms, authority-gated) and push it once, labelled as airline-reported.
+    Returns the seeded phase or None."""
+    ident = entry.get("identifier") or ""
+    st = tfms_departure_state(ident, entry.get("origin"), entry.get("destination"), now)
+    if not st:
+        return None
+    phase, t = st
+    try:
+        if not db.update_watchlist_oooi_phase_authoritative(entry["id"], phase, source="tfms_airline", updated_at=t):
+            return None
+    except Exception as e:
+        log.debug("seed_departure_phase_from_tfms: %s failed: %s", ident, e)
+        return None
+    what = "already airborne -- OFF" if phase == "off" else "already left the gate -- OUT"
+    watchlist_event_hit(entry["id"],
+                        f"{ident} {what} {_et(t)} per airline (TFMS); watch added after departure",
+                        {"watchlist_trigger": "oooi_seeded_at_add", "identifier": ident, "phase": phase,
+                         "airline_time": t, "source": "tfms_airline"},
+                        priority=4)
+    return phase

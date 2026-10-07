@@ -139,7 +139,7 @@ echo "[breakglass] Looking up '${COMPROMISED_NAME}' to revoke..."
 # live the same day: same token, v6 fails, v4 succeeds. If you remove -4,
 # every call here starts failing as an auth error with no auth problem.
 LIST_RESP="$(curl -s -4 -m 20 -X GET "${API_BASE}" \
-    -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
     -H "Content-Type: application/json")"
 COMPROMISED_ID="$(echo "${LIST_RESP}" | python3 -c "
 import json, sys
@@ -153,7 +153,7 @@ for t in data.get('result', []):
 if [[ -n "${COMPROMISED_ID}" ]]; then
     echo "[breakglass] Found '${COMPROMISED_NAME}' (id=${COMPROMISED_ID}) -- revoking now..."
     DEL_RESP="$(curl -s -4 -m 20 -X DELETE "${API_BASE}/${COMPROMISED_ID}" \
-        -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+        -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
         -H "Content-Type: application/json")"
     DEL_SUCCESS="$(echo "${DEL_RESP}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("success"))' 2>/dev/null || echo "False")"
     if [[ "${DEL_SUCCESS}" == "True" ]]; then
@@ -170,7 +170,7 @@ fi
 # ── 2. Mint the operator-authorized replacement ─────────────────────────────
 echo "[breakglass] Minting replacement token '${NEW_NAME}'..."
 CREATE_RESP="$(curl -s -4 -m 20 -X POST "${API_BASE}" \
-    -H "Authorization: Bearer ${CF_MANAGEMENT_API_TOKEN}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${CF_MANAGEMENT_API_TOKEN}") \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"${NEW_NAME}\"}")"
 
