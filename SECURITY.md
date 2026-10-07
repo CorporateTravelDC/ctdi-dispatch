@@ -108,6 +108,15 @@ approve gated actions (separate passphrase-protected key) and run sudo
 without the operator's password. The agent accounts are separate uids with
 read-only repo access (see `docs/AGENT_SEGMENTATION.md`).
 
+- **Dependency vulnerabilities** (since 2026-10-07): every push of the platform
+  and website repos runs `scripts/dependency-audit.py` first. It blocks on npm
+  high/critical or a fixable Python advisory, with an operator override that is
+  journaled. A daily run also audits what is installed in every running image.
+  GitHub Dependabot alerts are on for every repository as a second layer. Dormant
+  image tags, rollback targets and worktrees are audited like running code:
+  disabled or not deployed is never a reason to keep a known-vulnerable pin
+  (`docs/security-reviews/2026-10-07-04-dependency-scanning.md`).
+
 ## CUI handling
 
 This repository must never contain SHARES/HEARS/HEART or other FOUO/CUI radio

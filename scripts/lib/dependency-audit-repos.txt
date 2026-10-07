@@ -1,0 +1,6 @@
+# scripts/lib/dependency-audit-repos.txt -- repos the daily dependency audit covers (2026-10-07).
+# One absolute path per line. Public mirrors are generated from these, so they are not listed.
+/opt/corporatetraveldc/private/ctdi-dispatch-internal
+/opt/corporatetraveldc/private/csexecutiveservices-website
+/opt/corporatetraveldc/private/executivestandard-website
+/opt/corporatetraveldc/public/agentic-management-tooling-mcp

@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily dependency vulnerability audit -- every repo in scripts/lib/dependency-audit-repos.txt and every running first-party image (scripts/dependency-audit.py --all; ntfy on findings)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/dependency-audit.py --all
+# exit 1 (vulnerable packages) and 3 (could not run) are findings, reported by
+# the script's own ntfy push; they are not a crashed unit.
+SuccessExitStatus=1 3
+Nice=15
+TimeoutStartSec=45min
