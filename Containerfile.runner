@@ -3,7 +3,11 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /build
 COPY src/runner/frontend/package*.json ./
-RUN npm install
+# 2026-10-07: npm ci installs EXACTLY the lockfile and fails if package.json and
+# the lockfile disagree. SUPERSEDED: `RUN npm install`, which could re-resolve
+# versions at build time, so a fixed lockfile (e.g. a Dependabot fix) was not
+# guaranteed to be what shipped.
+RUN npm ci --no-audit --no-fund
 COPY src/runner/frontend/ .
 RUN npm run build
 

@@ -30,6 +30,7 @@ This directory holds the **interstitial records**: one record per review pass, a
 | 2026-10-06 | Documentation verified against code and live state | `docs/FINDINGS_2026-10-06.md`, `docs/docs-refresh-2026-10-06/CHANGES-security.md` (and the other domain ledgers) | about 520 corrected claims; S1–S3 findings |
 | 2026-10-07 | **01 — Agent trust-model documentation pass** | `2026-10-07-01-trust-model-pass.md`; snapshot `2026-10-07-01-agent-trust-model.snapshot.md` | the human → approval → delegated-authority chain, documented for a hostile reviewer; gaps named, with nothing overstated |
 | 2026-10-07 | **02 — Hardening pass** | `2026-10-07-02-hardening.md`; snapshot `2026-10-07-02-agent-trust-model.snapshot.md` | root executor for signed sudo approvals, TTL caps, canonical v2, requester binding, console redemption bound, governance events in the verified audit chain; deployment-model exception documented |
+| 2026-10-07 | **03 — Post-deploy verification and dependency pass** | `2026-10-07-03-post-deploy-and-dependencies.md` | hardening confirmed live (the gated sudo command now needs a password; audit chain intact); 24 dependency advisories fixed (5 Dependabot + 19 found by auditing the running images); `npm ci` for the frontend build |
 
 External review input between passes (2026-10-07):
 
