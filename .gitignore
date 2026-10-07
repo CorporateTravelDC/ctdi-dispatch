@@ -10,7 +10,14 @@ __pycache__/
 *.egg-info/
 .eggs/
 dist/
+# Python packaging output (setup.py/pyproject builds) anywhere in the tree.
 build/
+# 2026-10-07 (security review 05): the build-integrity policy, the tools lock and
+# the build tooling live in build/ and scripts/build/ and MUST be tracked and
+# covered by the signed manifest. The blanket rule above hid them from git and
+# from sign-manifest.sh (it uses --exclude-standard).
+!/build/
+!/scripts/build/
 
 # Frontend build output and dependencies — generated during container build
 src/runner/frontend/node_modules/

@@ -116,6 +116,13 @@ read-only repo access (see `docs/AGENT_SEGMENTATION.md`).
   image tags, rollback targets and worktrees are audited like running code:
   disabled or not deployed is never a reason to keep a known-vulnerable pin
   (`docs/security-reviews/2026-10-07-04-dependency-scanning.md`).
+- **Build integrity** (since 2026-10-07): every image this repository builds
+  installs Python packages only from hash-verified locks, builds from base
+  images pinned by multi-platform digest, takes OS packages from a dated
+  Debian snapshot, and gets an SBOM and a provenance receipt bound to the
+  signed commit; deploys and the 15-minute sweep check running images against
+  those receipts. Bit-for-bit reproducibility is not claimed. Details, levels
+  and limits: `docs/REPRODUCIBLE_BUILDS.md`.
 
 ## CUI handling
 

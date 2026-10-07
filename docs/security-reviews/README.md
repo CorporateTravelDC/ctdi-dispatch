@@ -7,7 +7,8 @@ The **canonical** security documents describe the platform as it is now:
 - `docs/COMPLIANCE_SECURITY.md`;
 - `docs/SUDO_JUSTIFICATION_PROPOSAL.md`;
 - `docs/GUARDRAILS_JUSTIFICATION.md`;
-- `docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md`.
+- `docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md`;
+- `docs/REPRODUCIBLE_BUILDS.md` (since 2026-10-07).
 
 Where a statement in them changed, the earlier wording is kept struck through beside the current value, with the date it changed. Larger replaced passages move to a `## Superseded (kept for the record)` section at the end of the document.
 
@@ -32,9 +33,10 @@ This directory holds the **interstitial records**: one record per review pass, a
 | 2026-10-07 | **02 — Hardening pass** | `2026-10-07-02-hardening.md`; snapshot `2026-10-07-02-agent-trust-model.snapshot.md` | root executor for signed sudo approvals, TTL caps, canonical v2, requester binding, console redemption bound, governance events in the verified audit chain; deployment-model exception documented |
 | 2026-10-07 | **03 — Post-deploy verification and dependency pass** | `2026-10-07-03-post-deploy-and-dependencies.md` | hardening confirmed live (the gated sudo command now needs a password; audit chain intact); 24 dependency advisories fixed (5 Dependabot + 19 found by auditing the running images); `npm ci` for the frontend build |
 | 2026-10-07 | **04 — Dependency scanning on every repository** | `2026-10-07-04-dependency-scanning.md` | pre-push and daily local audit (repos and worktrees, running and dormant images), Dependabot alerts on all 12 repos as a second layer; rule: dormant or undeployed code is not exempt |
+| 2026-10-07 | **05 — Build inputs, provenance and reproducibility** | `2026-10-07-05-reproducible-builds.md`; canonical `docs/REPRODUCIBLE_BUILDS.md` | hash-locked Python (universal locks), digest-pinned multi-arch base images, Debian snapshot for OS packages, SBOM from the built image, provenance receipts bound to the signed commit, deploy gate + sweep verification; Levels 1–2 reached, Level 3 for images rebuilt after deploy, Level 4 not claimed |
 
 External review input between passes (2026-10-07):
 
 - An external reviewer's reading of the public repository prompted pass 01.
 - Its reading of pass 01's document recommended keeping this breadcrumb trail.
-- It also flagged the missing deterministic, version-pinned builds, which is now at the top of the backlog.
+- It also flagged the missing deterministic, version-pinned builds, <del>which is now at the top of the backlog</del> addressed by pass 05 (2026-10-07), from the reviewer's reproducible-builds brief.

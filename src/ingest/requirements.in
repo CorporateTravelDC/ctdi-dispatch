@@ -1,0 +1,13 @@
+# src/ingest/requirements.in -- HUMAN-MAINTAINED dependency INTENT (2026-10-07, security review 05).
+# Edit THIS file to add, remove or re-range a dependency. Then regenerate the
+# lock with scripts/build/lock-python.py and review the diff. Builds never read
+# this file: they install only the hash-locked src/ingest/requirements.txt.
+# (Before 2026-10-07 this content was src/ingest/requirements.txt itself, installed as ranges.)
+
+# Ingest-container-specific dependencies.
+# SUPERSEDED 2026-10-07: "installed in addition to /app/requirements.txt" -- the
+# ingest image now installs ONE lock resolved from the shared intent plus this
+# file, so the two can never resolve inconsistently.
+-r ../../requirements.in
+# Solace PubSub+ native Python client — NMS/SCDS SWIM broker connectivity
+solace-pubsubplus>=1.7.0

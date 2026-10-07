@@ -1,0 +1,6 @@
+# build/tools/requirements.in -- maintenance tooling for the operator's host
+# (2026-10-07, security review 05). Installed into a private venv by
+# scripts/build/lock-python.py --setup and scripts/dependency-audit.py --setup,
+# from the hash-locked build/tools/requirements.txt. Never installed into an image.
+uv>=0.12        # lock generation: uv pip compile --universal --generate-hashes
+pip-audit>=2.10 # known-vulnerability audit (scripts/dependency-audit.py)

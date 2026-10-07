@@ -148,6 +148,10 @@ for row in "${ROLLOUT[@]}"; do
         new_id=$(imgid_full "$image")
         if [[ -n "$old_id" && "$old_id" != "$new_id" ]]; then podman tag "$old_id" "${image%:*}:previous" 2>/dev/null || true; fi
         record_built "$image" "$new_id"
+        # 2026-10-07 (review 05): SBOM + provenance receipt for what was just built.
+        if ! "$REPO/scripts/build/provenance.py" record --image "$image" --name "$image" --containerfile "$bdir/$cfile" --context "$bdir"; then
+          echo "$(date +%T)  PROVENANCE RECORD FAILED for $image -- stopping here"; exit 1
+        fi
         built_dirs="$built_dirs $key"; echo "$(date +%T)  build ok, load $(load)"
       else
         echo "$(date +%T)  BUILD FAILED for $image -- stopping here"; exit 1
@@ -170,6 +174,13 @@ for row in "${ROLLOUT[@]}"; do
     tag_id=$(podman image inspect "$image" --format '{{.Id}}' 2>/dev/null | cut -c1-12)
     if [[ $changed == no && -n "$running_id" && -n "$tag_id" && "$running_id" != "$tag_id" ]]; then changed=yes; echo "$(date +%T)  running ${running_id} != tag ${tag_id} -- restart pending from an earlier pull"; fi
     if [[ $changed == no && $RESTART_EXTERNALS != 1 ]]; then echo "$(date +%T)  skip restart (unchanged)"; echo; continue; fi
+  fi
+  # 2026-10-07 (review 05) deploy binding: the image this unit is about to start must be
+  # the one provenance was recorded for. FAILED (the tag now points at an image with no
+  # receipt although the name has receipts) holds the unit; a name never recorded
+  # (pre-provenance) is reported UNVERIFIED and proceeds.
+  if [[ $kind == local ]] && ! "$REPO/scripts/build/provenance.py" check-deploy --image "$image"; then
+    held "$unit" "provenance-mismatch"; continue
   fi
   # never start the next unit on top of a spike we are still riding (but the
   # deadline wins: a unit not started by then is held, not started late)

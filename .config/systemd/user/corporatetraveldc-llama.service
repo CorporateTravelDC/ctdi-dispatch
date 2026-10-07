@@ -38,7 +38,12 @@ After=network-online.target
 [Service]
 # Pre-warm the page cache so the load is one sequential read, not a
 # fault storm during the first request (carried over from llama-hot).
-ExecStartPre=/usr/bin/dd if=/var/lib/corporatetraveldc/models/qwen3-4b-instruct-2507-q4_0.gguf of=/dev/null bs=4M status=none
+# 2026-10-07 (security review 05): the warm read now also VERIFIES -- the
+# model, llama-server and every library in its directory must match the
+# signed digests in config/llama/artifacts.sha256, or the server does not
+# start. Same single sequential read of the model as before.
+# SUPERSEDED 2026-10-07: ExecStartPre=/usr/bin/dd if=/var/lib/corporatetraveldc/models/qwen3-4b-instruct-2507-q4_0.gguf of=/dev/null bs=4M status=none
+ExecStartPre=/usr/bin/sha256sum --strict --quiet --check /opt/corporatetraveldc/private/ctdi-dispatch-internal/config/llama/artifacts.sha256
 # -np 2 --kv-unified -c 12288: two sequences sharing ONE 12288-token KV
 #   pool, so the largest report persona (8192, dispatch-desk-memo /
 #   ep-advance-venues) and a 4096-token hot request fit side by side.

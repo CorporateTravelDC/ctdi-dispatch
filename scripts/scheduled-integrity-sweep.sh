@@ -110,7 +110,26 @@ else
     log "info" "audit chain intact; head $(grep -o '"head_hash": "[0-9a-f]*"' <<<"${chain_output}")"
 fi
 
-if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 ]]; then
+# 2026-10-07 (security review 05, docs/REPRODUCIBLE_BUILDS.md): build integrity.
+# (a) the static build policy over the signed tree (locks current and hashed,
+# base images by digest, apt from the snapshot, no unverified downloads);
+# (b) provenance of every RUNNING locally built image: receipt for its image id,
+# SBOM digest, signed source commit + manifest. FAILED fails the sweep;
+# UNVERIFIED (an image built before provenance existed) is logged, never hidden.
+build_rc=0
+build_policy_output="$("${REPO_DIR}/scripts/build/build-policy.py" --quiet 2>&1)" || build_rc=1
+prov_output="$("${REPO_DIR}/scripts/build/provenance.py" verify --running 2>&1)" || build_rc=1
+log "info" "build provenance (running local images): $(grep -c '^VERIFIED' <<<"${prov_output}") verified, $(grep -c '^UNVERIFIED' <<<"${prov_output}") unverified, $(grep -c '^FAILED' <<<"${prov_output}") failed"
+if [[ ${build_rc} -ne 0 ]]; then
+    log "error" "SWEEP FAILED -- build policy / provenance:"
+    log "error" "$(grep -v '^ *VERIFIED\|^ *UNVERIFIED\|^ *NOT APPLICABLE' <<<"${build_policy_output}
+${prov_output}" | head -40)"
+    ntfy_send "BUILD PROVENANCE FAILED" \
+        "$(basename "${REPO_DIR}"): a running image does not match its recorded provenance, or the signed tree breaks the build policy. Check ${LOG_FILE}." \
+        5
+fi
+
+if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 ]]; then
     log "info" "sweep OK: ${output}"
     printf '{"status":"ok","last_run_epoch":%s,"last_run_iso":"%s"}\n' \
         "${now_epoch}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${STATE_FILE}"

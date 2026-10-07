@@ -1,6 +1,9 @@
 # dispatch-runner -- multi-stage build
 # Stage 1: Node 20 Alpine -- builds React/Vite frontend
-FROM node:20-alpine AS frontend-builder
+# Base image: the tag is for humans, the digest is the identity (multi-platform
+# index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
+# SUPERSEDED 2026-10-07: FROM node:20-alpine AS frontend-builder (a tag can move under us; review 05).
+FROM docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
 WORKDIR /build
 COPY src/runner/frontend/package*.json ./
 # 2026-10-07: npm ci installs EXACTLY the lockfile and fails if package.json and
@@ -12,14 +15,21 @@ COPY src/runner/frontend/ .
 RUN npm run build
 
 # Stage 2: Python 3.13 slim -- FastAPI runtime
-FROM python:3.13-slim
+# Base image: the tag is for humans, the digest is the identity (multi-platform
+# index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
+# SUPERSEDED 2026-10-07: FROM python:3.13-slim (a tag can move under us; review 05).
+FROM docker.io/library/python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
 LABEL org.opencontainers.image.title="corporatetraveldc-runner"
 LABEL org.opencontainers.image.description="Corporate Travel DC Dispatch -- runner PWA"
 LABEL service="runner"
 
 WORKDIR /app
 COPY src/runner/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Python: install ONLY the hash-locked src/runner/requirements.txt (scripts/build/lock-python.py);
+# a file whose hash is not in the lock fails the build. pip itself is the
+# base image's own (no self-upgrade).
+# SUPERSEDED 2026-10-07: pip install -r requirements.txt (>= ranges)
+RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r requirements.txt
 
 COPY src/runner/main.py .
 COPY src/shared/ ./shared/

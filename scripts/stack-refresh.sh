@@ -382,6 +382,12 @@ for image in "${LOCAL_IMAGES[@]}"; do
       log error "in-image integrity gate FAILED for ${svc} -- holding"; hold_image "$image" "gate-failed"; podman rmi -f "$check" >/dev/null 2>&1; continue
     fi
   fi
+  # 2026-10-07 (review 05): SBOM + provenance receipt for the gated image, keyed by its
+  # content-addressed id and bound to the signed source commit. No receipt = no deploy:
+  # the image is held exactly like a failed build (docs/REPRODUCIBLE_BUILDS.md).
+  if ! "${REPO_ROOT}/scripts/build/provenance.py" record --image "$check" --name "$image" --containerfile "${bdir}/${cfile}" --context "$bdir" >/dev/null 2>&1; then
+    log error "provenance record FAILED for ${svc} -- holding"; hold_image "$image" "provenance-failed"; podman rmi -f "$check" >/dev/null 2>&1; continue
+  fi
   record_built "$image" "$(podman image inspect --format '{{.Id}}' "$check" 2>/dev/null)" "$svc"
   if [[ "$(imgid "$check")" != "$(imgid "$image")" ]]; then CHANGED_LOCAL+=("${svc} $(imgid "$image")->$(imgid "$check")"); fi
 done
@@ -460,6 +466,10 @@ done < <(rollout_units)
 held_pairs=$(for u in "${!HELD_UNIT[@]}"; do printf '%s=%s;' "$u" "${HELD_UNIT[$u]}"; done)
 DEBT=$(debt_update "$held_pairs" "${RESTARTED_OK[*]}")
 FAILED=$(systemctl --user --failed --no-legend | wc -l)
+# 2026-10-07 (review 05): record what each running THIRD-PARTY image contains (SBOM keyed
+# by image id) after the pulls. Informational: externals float on tags by design, so this
+# records identity and contents; it is not a gate and never fails the run.
+"${REPO_ROOT}/scripts/build/provenance.py" record-external --running >/dev/null 2>&1 || log warn "external SBOM snapshot incomplete"
 HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8000/healthz)
 HELD_TXT=$(for u in "${!HELD_UNIT[@]}"; do printf '%s(%s) ' "$u" "${HELD_UNIT[$u]}"; done)
 SUMMARY="head ${HEAD_SHORT}; ext changed ${#CHANGED_EXT[@]}; local changed ${#CHANGED_LOCAL[@]}; restarted ${#RESTARTED_OK[@]}; held ${#HELD_UNIT[@]}${HELD_TXT:+ (${HELD_TXT% })}; pg canary-only ${#PG_EXEMPT[@]}; left behind ${#LEFT_BEHIND[@]}${LEFT_BEHIND:+ (${LEFT_BEHIND[*]})}; rollout rc ${rrc}; failed units ${FAILED}; healthz ${HEALTH}; ${DEBT}; log ${LOG##*/}"

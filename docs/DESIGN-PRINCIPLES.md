@@ -35,9 +35,14 @@ zero cloud LLM calls.
 
 Rules for contributors:
 
-- **Never** add a cloud LLM SDK import or `requirements.txt` entry without an
+- **Never** add a cloud LLM SDK import or a dependency-intent entry
+  (`requirements.in` or any other `*.in`) without an operator-controlled
+  opt-in gate. (The `anthropic` package is in `requirements.in` today, behind
+  the two gates above.) <del>**Never** add a cloud LLM SDK import or `requirements.txt` entry without an
   operator-controlled opt-in gate. (The `anthropic` package is in
-  `requirements.txt` today, behind the two gates above.)
+  `requirements.txt` today, behind the two gates above.)</del> SUPERSEDED 2026-10-07:
+  `requirements.txt` is now the generated hash lock; intent lives in
+  `requirements.in` (docs/REPRODUCIBLE_BUILDS.md).
 - **Never** send inference to a remote endpoint by default. Inference targets
   `LLAMA_BASE_URL` (renamed from `OLLAMA_BASE_URL` on 2026-10-05; the old name
   is read only as a fallback). In `generate()` an unset `LLAMA_BASE_URL` skips
@@ -107,7 +112,7 @@ the deployed device only.
 
 - [ ] Works with no cloud credentials present
 - [ ] Any inference goes through `common.llm` / `common.llama_pool` to `LLAMA_BASE_URL`; any cloud path is gated by explicit operator config
-- [ ] No new cloud LLM SDK in `requirements.txt` without that gate
+- [ ] No new cloud LLM SDK in `requirements.in` (or its generated lock) without that gate <del>No new cloud LLM SDK in `requirements.txt` without that gate</del> (SUPERSEDED 2026-10-07: intent moved to `requirements.in`)
 - [ ] New external feed: documented in README, graceful fallback, optional credentials
 - [ ] New secret: added to `dispatch-secrets.env.template` **and** to the allowlist of only the service(s) that need it under `scripts/service-env/`
 - [ ] CUI rules satisfied (`SECURITY.md`)

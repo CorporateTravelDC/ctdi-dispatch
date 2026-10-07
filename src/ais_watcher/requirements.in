@@ -1,0 +1,6 @@
+# src/ais_watcher/requirements.in -- HUMAN-MAINTAINED dependency INTENT
+# (2026-10-07, security review 05). Lock: requirements.txt next to this file,
+# via scripts/build/lock-python.py. Moved out of the Containerfile, where the
+# exact versions were pinned inline without hashes.
+requests>=2.34.2
+urllib3>=2.8.0

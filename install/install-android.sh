@@ -1,4 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/bash
+# RETIRED 2026-10-07 (security review 05): proof-of-concept installer from the Ollama era.
+# NOT a supported build path -- it pipes downloads into a shell and installs unpinned
+# packages. Kept for history only; listed as an exception in build/policy.toml.
+# Supported builds: the Containerfiles + hash-locked requirements (docs/REPRODUCIBLE_BUILDS.md).
 # install-android.sh — corporatetraveldc-dispatch installer for Android ARM64
 # Requires: Termux (https://termux.dev) — install from F-Droid, not the Play Store
 #

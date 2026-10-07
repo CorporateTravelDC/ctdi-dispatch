@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Base image: the tag is for humans, the digest is the identity (multi-platform
+# index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
+# SUPERSEDED 2026-10-07: FROM python:3.12-slim (a tag can move under us; review 05).
+FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
 LABEL org.opencontainers.image.title="corporatetraveldc-acars-watcher"
 LABEL org.opencontainers.image.description="ACARS/VDL watcher — triple source: local UDP, airframes.io, ACARS Drama Jumpseat"
@@ -9,7 +12,12 @@ WORKDIR /app
 # 2026-10-07: requests 2.32.3 / urllib3 2.7.0 carried 5 advisories (local
 # pip-audit of the running image; Dependabot is not enabled on the private
 # repo). Both pinned explicitly. SUPERSEDED: requests==2.32.3 (urllib3 unpinned).
-RUN pip install --no-cache-dir requests==2.34.2 urllib3==2.8.0
+COPY requirements.txt .
+# Python: install ONLY the hash-locked requirements.txt (scripts/build/lock-python.py);
+# a file whose hash is not in the lock fails the build. pip itself is the
+# base image's own (no self-upgrade).
+# SUPERSEDED 2026-10-07: pip install requests==2.34.2 urllib3==2.8.0 (exact but unhashed; transitive deps unpinned)
+RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r requirements.txt
 
 COPY acars_watcher.py .
 
