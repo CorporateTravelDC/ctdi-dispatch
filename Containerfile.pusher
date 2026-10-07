@@ -1,4 +1,7 @@
-FROM python:3.13-slim
+# Base image: the tag is for humans, the digest is the identity (multi-platform
+# index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
+# SUPERSEDED 2026-10-07: FROM python:3.13-slim (a tag can move under us; review 05).
+FROM docker.io/library/python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
 
 LABEL org.opencontainers.image.title="corporatetraveldc-pusher" \
       org.opencontainers.image.description="Corporate Travel DC Dispatch — ntfy alert pusher"
@@ -13,12 +16,21 @@ ENV PIP_DEFAULT_TIMEOUT=180 \
     PIP_RETRIES=10
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+# Python: install ONLY the hash-locked requirements.txt (scripts/build/lock-python.py);
+# a file whose hash is not in the lock fails the build. pip itself is the
+# base image's own (no self-upgrade).
+# SUPERSEDED 2026-10-07: pip install --upgrade pip && pip install -r requirements.txt (>= ranges)
+RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r requirements.txt
 
 # gnupg: needed at runtime by scripts/verify-manifest.sh (signed-manifest
 # integrity check, see docs/COMPLIANCE_SECURITY.md "Signed Manifest Integrity").
-RUN apt-get update -qq \
+# OS packages from a dated Debian archive snapshot, not the live mirror:
+# the same APT_SNAPSHOT always yields the same package versions. Refresh it
+# deliberately with scripts/build/pin-base-images.py (security updates).
+# SUPERSEDED 2026-10-07: apt-get update against the live mirror (floating).
+ARG APT_SNAPSHOT=20261007T000000Z
+RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
+ && apt-get update -qq \
  && apt-get install -y --no-install-recommends gnupg \
  && rm -rf /var/lib/apt/lists/*
 

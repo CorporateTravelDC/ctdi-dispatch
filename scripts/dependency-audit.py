@@ -53,7 +53,8 @@ VENV = Path(os.environ.get("DEPENDENCY_AUDIT_VENV", Path.home() / ".local/share/
 PIP_AUDIT = VENV / "bin" / "pip-audit"
 CACHE = Path.home() / ".cache" / "ctdc-dependency-audit"
 STATE = Path(os.environ.get("DEPENDENCY_AUDIT_STATE", Path.home() / ".cache/ctdc-dependency-audit/last-run.json"))
-SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", "__pycache__", "dist", "build", ".wrangler"}
+# "build" is NOT skipped since 2026-10-07: build/tools/requirements.txt (review 05) lives there.
+SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", "__pycache__", "dist", ".wrangler"}
 FIRST_PARTY_PREFIXES = ("corporatetraveldc-", "systemd-corporatetraveldc-", "csexec-", "systemd-amtrak-tracker")
 BLOCKING_NPM = ("high", "critical")
 
@@ -102,7 +103,9 @@ def pip_audit(req: Path, no_deps: bool = False) -> dict:
 def audit_repo(repo: Path) -> list[dict]:
     res = []
     for m in manifests(repo):
-        r = npm_audit(m) if m.name == "package-lock.json" else pip_audit(m)
+        # A hash-locked file (review 05) is a complete exact set: audit the pins as written
+        # instead of re-resolving them on this host's Python (which may differ from the image's).
+        r = npm_audit(m) if m.name == "package-lock.json" else pip_audit(m, no_deps="--hash=" in m.read_text())
         res.append({"target": str(m.relative_to(repo)), "repo": repo.name, **r})
     return res
 
@@ -202,7 +205,10 @@ def ntfy(title: str, body: str, priority: int) -> None:
 def setup() -> int:
     VENV.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
-    subprocess.run([str(VENV / "bin" / "pip"), "install", "-q", "--upgrade", "pip-audit"], check=True)
+    # 2026-10-07 (review 05): from the hash-locked tools lock, not "--upgrade pip-audit".
+    # SUPERSEDED 2026-10-07: pip install -q --upgrade pip-audit
+    subprocess.run([str(VENV / "bin" / "pip"), "install", "-q", "--require-hashes", "--no-deps", "--only-binary=:all:",
+                    "-r", str(HERE.parent / "build" / "tools" / "requirements.txt")], check=True)
     print(f"pip-audit installed in {VENV}")
     return 0
 

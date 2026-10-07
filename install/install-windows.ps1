@@ -1,3 +1,7 @@
+# RETIRED 2026-10-07 (security review 05): proof-of-concept installer from the Ollama era.
+# NOT a supported build path -- it pipes downloads into a shell and installs unpinned
+# packages. Kept for history only; listed as an exception in build/policy.toml.
+# Supported builds: the Containerfiles + hash-locked requirements (docs/REPRODUCIBLE_BUILDS.md).
 # install-windows.ps1 — corporatetraveldc-dispatch installer for Windows x64
 # Requires: PowerShell 5.1+, Windows 10 2004+ or Windows 11 (for WSL2)
 # Run as Administrator in PowerShell:

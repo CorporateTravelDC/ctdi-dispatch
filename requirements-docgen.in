@@ -1,0 +1,7 @@
+# requirements-docgen.in -- HUMAN-MAINTAINED dependency INTENT for the docgen
+# image (2026-10-07, security review 05). Lock: requirements-docgen.txt via
+# scripts/build/lock-python.py. Moved out of Containerfile.docgen, where these
+# ranges were installed inline.
+requests>=2.32.0
+python-docx>=1.1.0
+python-pptx>=0.6.23

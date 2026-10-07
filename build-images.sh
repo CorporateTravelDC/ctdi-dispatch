@@ -61,6 +61,9 @@ for service in web poller pusher ingest amtrak-tracker; do
         --label "build-date=${BUILD_DATE}" \
         --label "service=${service}" \
         .
+    # 2026-10-07 (review 05): SBOM + provenance receipt (docs/REPRODUCIBLE_BUILDS.md)
+    "${SCRIPT_DIR}/scripts/build/provenance.py" record --image "${tag}" --containerfile "${cf}" --context "${SCRIPT_DIR}" \
+        || die "provenance record failed for ${tag}"
     log "  ${tag}: OK"
     log ""
 done

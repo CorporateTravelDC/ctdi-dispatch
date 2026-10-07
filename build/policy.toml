@@ -1,0 +1,119 @@
+# build/policy.toml -- PRODUCT build policy (2026-10-07, security review 05).
+#
+# What this file is: the platform's rules for how runtime images are built,
+# and the map of which human-maintained dependency input produces which
+# machine-generated lock, consumed by which Containerfile. It carries NO
+# deployment identity: no host names, users, image-name prefixes, paths
+# outside the repository or registry credentials. A deployment supplies
+# those through its own profile (environment variables documented in
+# docs/REPRODUCIBLE_BUILDS.md, "Deployment profile").
+#
+# Enforced by scripts/build/build-policy.py (static checks, run by the
+# verifier and the tests) and scripts/build/lock-python.py (lock generation
+# and freshness). Changing this file changes the policy: it is covered by
+# the signed manifest like any other tracked file.
+
+schema = 1
+
+[base_images]
+# Every FROM must name a fully qualified registry path (no short-name
+# resolution through the host's registries.conf) AND an immutable digest.
+# The digest must be a multi-platform index so arm64 and amd64 hosts both
+# build from the same reviewed identity.
+require_fully_qualified = true
+require_digest = true
+require_multi_platform_index = true
+
+[os_packages]
+# Debian-based images install OS packages only from a dated snapshot of the
+# Debian archive (apt's APT::Snapshot), set by ARG APT_SNAPSHOT. Every
+# Containerfile that runs apt-get must declare it, and all must agree.
+apt_snapshot_arg = "APT_SNAPSHOT"
+require_single_snapshot = true
+
+[python]
+# Locks are generated, never edited by hand:
+#   uv pip compile --universal --generate-hashes --no-build
+# --universal resolves for every platform at once (environment markers),
+# so one lock serves aarch64 and x86_64. --no-build forbids versions that
+# would need a source build (a source build fetches build tools unhashed).
+# Builds install ONLY from a lock, with exactly these flags:
+install_flags = ["--no-cache-dir", "--require-hashes", "--no-deps", "--only-binary=:all:"]
+
+[[python.lock]]
+input = "requirements.in"
+lock = "requirements.txt"
+python = "3.13"
+consumers = ["Containerfile.web", "Containerfile.poller", "Containerfile.pusher",
+             "Containerfile.demo", "Containerfile.amtrak-tracker"]
+
+[[python.lock]]
+input = "src/ingest/requirements.in"
+lock = "src/ingest/requirements.txt"
+python = "3.13"
+consumers = ["Containerfile.ingest"]
+
+[[python.lock]]
+input = "src/runner/requirements.in"
+lock = "src/runner/requirements.txt"
+python = "3.13"
+consumers = ["Containerfile.runner"]
+
+[[python.lock]]
+input = "requirements-docgen.in"
+lock = "requirements-docgen.txt"
+python = "3.13"
+consumers = ["Containerfile.docgen"]
+
+[[python.lock]]
+input = "src/acars_watcher/requirements.in"
+lock = "src/acars_watcher/requirements.txt"
+python = "3.12"
+consumers = ["src/acars_watcher/Containerfile"]
+
+[[python.lock]]
+input = "src/ais_watcher/requirements.in"
+lock = "src/ais_watcher/requirements.txt"
+python = "3.12"
+consumers = ["src/ais_watcher/Containerfile"]
+
+[[python.lock]]
+input = "src/utm_watcher/requirements.in"
+lock = "src/utm_watcher/requirements.txt"
+python = "3.12"
+consumers = ["src/utm_watcher/Containerfile"]
+
+[[python.lock]]
+# Maintenance tooling for the operator's host (lock generation, audits).
+# Not installed into any image.
+input = "build/tools/requirements.in"
+lock = "build/tools/requirements.txt"
+python = "3.14"
+consumers = []
+
+[node]
+# Frontend builds use `npm ci` against a committed package-lock.json, in a
+# builder stage that does not reach the runtime image.
+lockfiles = ["src/runner/frontend/package-lock.json"]
+
+[downloads]
+# Files that may contain a network download in a build path. Any curl/wget
+# or `pip install` found in a Containerfile or install script outside the
+# canonical paths above is a policy failure unless listed in an exception.
+scan = ["Containerfile*", "src/*/Containerfile", "install/*.sh", "install/*.ps1",
+        "build-images.sh", "setup.sh"]
+
+[[exception]]
+path = "install/install.sh"
+since = "2026-10-07"
+reason = "Retired proof-of-concept installer (Ollama era, old repository name). Not a supported build path; kept for history. Superseded by the Containerfiles + locks."
+
+[[exception]]
+path = "install/install-android.sh"
+since = "2026-10-07"
+reason = "Retired proof-of-concept installer (Termux). Not a supported build path; kept for history."
+
+[[exception]]
+path = "install/install-windows.ps1"
+since = "2026-10-07"
+reason = "Retired proof-of-concept installer (Windows/WSL, downloads the Ollama installer). Not a supported build path; kept for history."

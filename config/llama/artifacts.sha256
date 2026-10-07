@@ -1,0 +1,29 @@
+# config/llama/artifacts.sha256 -- digests of the llama.cpp inference artifacts
+# (2026-10-07, security review 05; docs/REPRODUCIBLE_BUILDS.md "External artifacts").
+# Checked by corporatetraveldc-llama.service ExecStartPre (sha256sum --strict --check):
+# a changed binary, library or model refuses to start. Paths are this
+# deployment's install locations. ORIGIN of these files is NOT recorded
+# (installed 2026-08-13 / model 2026-09-21 without a provenance note): these
+# digests prove "unchanged since 2026-10-07", not "matches upstream".
+# Update procedure: replace the artifact deliberately, re-run
+#   sha256sum <files> > config/llama/artifacts.sha256 (keep this header), review, sign.
+0699b70382088a19b1f575fadf4b50935b934982b7c1a63c038ed1cfbedd5e07  /usr/local/lib/ollama/libggml-base.so.0.19.0
+298a03f2fe97864769830921f3c5a9fb78d1685175569b50afc99beb3e857ae6  /usr/local/lib/ollama/libggml-cpu-armv8.0_1.so
+e085be2641dc3c76cf0768868140d6587f3b43e8466e3b8bb77da15c7e16bfa8  /usr/local/lib/ollama/libggml-cpu-armv8.2_1.so
+bc6842c3d4d81e7050d456a86dd84666b4c9f9e00faec4236d9206a842dba760  /usr/local/lib/ollama/libggml-cpu-armv8.2_2.so
+d3171d529893a64469dbe7968f1627b96dc5e0f5ebba1238f10a1058be1d1bf4  /usr/local/lib/ollama/libggml-cpu-armv8.2_3.so
+920c12fd7e212ef9c5fe5c37a78086a00a5119067cb05afc4402d372eeac2dcf  /usr/local/lib/ollama/libggml-cpu-armv8.6_1.so
+9adac8e147f4de8612cfe43f0889d5d99ecdcb4ea98fb308e64d9eda384e7c69  /usr/local/lib/ollama/libggml-cpu-armv8.6_2.so
+e71f2e7d8e53c883d18267443eeb5d83e052235bd7b84cb0916ba5e6c575bd63  /usr/local/lib/ollama/libggml-cpu-armv9.2_1.so
+98690ce3884850c29db95cec6eadef742a1932f404a0bb19111fdb53cc6acf2f  /usr/local/lib/ollama/libggml-cpu-armv9.2_2.so
+712fa491afd88753305eed4e2afd4054bc046ed726306f4faa049ca836125128  /usr/local/lib/ollama/libggml.so.0.19.0
+a49a47f9d00c76f412ce92dd2ebed63422bb655a62dd9cebd766c71668b721cc  /usr/local/lib/ollama/libgomp.so.1.0.0
+a022d27ca81bd547cb186dd676f147cd72f61d53b0e01c77d136b953947a2c3e  /usr/local/lib/ollama/libllama-common.so.0.0.1
+dc2395f12e501bb7f1ed183d1186e469a78ffaa7ab92ba41436b827e66b5eb8b  /usr/local/lib/ollama/libllama-quantize-impl.so
+91a839226931f3d8489bbfc1c93ff3a48eaae64dafc5c8e7b6e65ff3a411f592  /usr/local/lib/ollama/libllama-server-impl.so
+97b6c81a56b4c90ade5d303e9a814f5c924e196fd4e5b4daf09e00f7e5d89a6a  /usr/local/lib/ollama/libllama.so.0.0.1
+c15d5e67afa02d021b7a9a35239b13bf77be0950d7010f0f73203de694506a64  /usr/local/lib/ollama/libmtmd.so.0.0.1
+e72f4eb0b96691939dffe113df0c7016dfb560de28500171bf1bbfdc7ab0c819  /usr/local/lib/ollama/libomp.so
+613be255b4ce9e05a3c27d42f100a867a2a26059994c2681ffa294347bb243d2  /usr/local/lib/ollama/llama-quantize
+f6e05586c5e7dd2110b2d8efadf23ff3b081dcdd53be67cfd32884af7b476163  /usr/local/lib/ollama/llama-server
+e0ba675d86ab277c61701c6793659b2ae801d95e3be791464c321e6fbf613be2  /var/lib/corporatetraveldc/models/qwen3-4b-instruct-2507-q4_0.gguf
