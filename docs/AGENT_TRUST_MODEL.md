@@ -316,7 +316,7 @@ Across a kill-all:
 
 ## 9. Bypasses, exceptions and gaps
 
-### 9.1 Passwordless sudo made the sudo gate advisory for its own patterns — ~~NOT ENFORCED~~ **ENFORCED once the 2026-10-07 sudoers change is applied**
+### 9.1 Passwordless sudo made the sudo gate advisory for its own patterns — ~~NOT ENFORCED~~ ~~ENFORCED once the 2026-10-07 sudoers change is applied~~ **ENFORCED (verified live 2026-10-07, review 03)**
 
 `sudo -n -l` for the operator account lists `NOPASSWD` rules including `/usr/bin/dnf remove *` and `/usr/bin/semanage port -a *`, the two patterns `scripts/sudo-approval-gate.sh` exists to gate. Any process running as the operator can run them directly, with no approval. There are also stale `NOPASSWD` rules for services that no longer exist (`ollama.service`, `ollama-governor.service`).
 
@@ -336,7 +336,7 @@ Across a kill-all:
 4. records the id in a root-only ledger with `O_EXCL` (each approval runs **at most once**);
 5. runs the command as root **without a shell**, logging to the journal and the ledger.
 
-This holds **even against processes running as the operator account**. Tests: `tests/scripts/test_approved_exec.py` (canonical lockstep with the server, forged-row rejection, allowlist shapes, timing, single use, root-ownership of trust files). The general `(ALL) ALL` rule still requires the operator's password and is unaffected. **Until the sudoers change in the deploy relay is applied, the earlier status stands.**
+This holds **even against processes running as the operator account**. Tests: `tests/scripts/test_approved_exec.py` (canonical lockstep with the server, forged-row rejection, allowlist shapes, timing, single use, root-ownership of trust files). The general `(ALL) ALL` rule still requires the operator's password and is unaffected. ~~Until the sudoers change in the deploy relay is applied, the earlier status stands.~~ Applied and verified live: a gated command without approval asks for a password (review 03).
 
 ### 9.2 The admin approval route accepted any TTL — ~~PARTIAL~~ **FIXED 2026-10-07**
 
@@ -453,7 +453,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | Agent after kill-all; a link signed after kill-all | refused | `test_kill_all_freezes_everything_and_thaw_needs_a_signature`, `test_a_link_signed_after_kill_all_never_becomes_a_token` |
 | Re-open the gateway without a signature | impossible | thaw is applied only by the `gateway-thaw` approval hook |
 | Console via the public tunnel / LAN | 404 / firewall-blocked | proxy and firewall inspection, safe GETs (§5.1) |
-| Direct invocation bypassing the sudo gate | ~~possible for NOPASSWD patterns~~ **refused once the sudoers change is applied**: the only passwordless rule is the root executor, which re-verifies the signature | `sudo -n -l` after the deploy relay; `tests/scripts/test_approved_exec.py` |
+| Direct invocation bypassing the sudo gate | ~~possible for NOPASSWD patterns~~ **refused (verified live, review 03)**: the only passwordless rule is the root executor, which re-verifies the signature | `sudo -n -l` after the deploy relay; `tests/scripts/test_approved_exec.py` |
 | Agent GPG key used without a grant | **possible for operator-account processes** — the designed exception (§0); not possible for managed agent accounts | key protection and script inspection (§10) |
 | Forged approval row (database write) used to run a root command | refused: the signature must verify against the root-owned pin | `test_a_valid_signature_verifies_and_a_forged_row_does_not` |
 | Approval executed twice; late execution | refused: root ledger with `O_EXCL`; 5-minute window | `test_each_approval_executes_at_most_once`, `test_row_state_and_timing` |

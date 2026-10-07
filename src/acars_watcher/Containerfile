@@ -6,7 +6,10 @@ LABEL org.opencontainers.image.version="3.0"
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir requests==2.32.3
+# 2026-10-07: requests 2.32.3 / urllib3 2.7.0 carried 5 advisories (local
+# pip-audit of the running image; Dependabot is not enabled on the private
+# repo). Both pinned explicitly. SUPERSEDED: requests==2.32.3 (urllib3 unpinned).
+RUN pip install --no-cache-dir requests==2.34.2 urllib3==2.8.0
 
 COPY acars_watcher.py .
 
