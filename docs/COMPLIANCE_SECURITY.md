@@ -53,7 +53,7 @@ identity surfaces an assessor should know about: the **agent gateway**
 | :--- | :--- | :--- | :--- |
 | Operational feeds (weather, TFR, NOTAM, ATCSCC, Amtrak, ADS-B/ASDE-X, runsheet) | Rootless Podman containers | Read-only pulls from government/public sources | Local Postgres (primary since the 2026-09-20 cutover); SQLite remains for some paths and the demo |
 | LLM inference | One native llama.cpp server, user unit `corporatetraveldc-llama.service`, bound to the tailnet IP `100.x.x.x:8093` only (`ss -ltn`) | None | Ephemeral |
-| Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres; past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
+| Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres (trigger-computed; no code verifies the chain; governance, console, gateway and reader events are outside it -- `docs/AGENT_TRUST_MODEL.md` §11); past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
 | Public demo | `corporatetraveldc-runner-demo` (:8005) + `demo-api`, reading a separate SQLite file | Public vhost `dispatch-runner.example.com` (200 on 2026-10-06); app-layer password gate active (`Environment=DEMO_MODE=true` in the quadlet, `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`) | `/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount |
 
 **Demo/production isolation.** The demo reads only

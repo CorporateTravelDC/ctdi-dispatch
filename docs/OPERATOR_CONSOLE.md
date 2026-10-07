@@ -1,6 +1,8 @@
 # Operator console, Executive Standard invites, gateway kill switch
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+
+> Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
 Shipped 2026-10-05.
 
 ## The phone console
@@ -16,7 +18,11 @@ the LAN-reachable port-80 server block for the tailnet name only redirects
 to https. The public vhost has `location ^~ /console { return 404; }`; in
 practice Cloudflare Access answers first (302 to its login, observed
 2026-10-06). The app itself returns 404 to any `Host` not in `CONSOLE_HOSTS`
-(default: the tailnet name).
+(default: the tailnet name). Processes on the host itself (loopback, the
+host's own addresses, and so also the team agent accounts) can reach the sign-in
+page too; reaching it grants nothing without the operator's approval-key
+signature (`docs/AGENT_TRUST_MODEL.md` §5.1). The `Host` check is defence in
+depth, not a network control: the header is client-chosen.
 
 **Sign-in is the approval key, not a password.**
 

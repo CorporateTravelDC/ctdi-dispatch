@@ -70,10 +70,15 @@ passphrase-protected approval key (`~/.ssh/<account>_approver_ed25519`).
   lookup. Admin tokens can be narrowed to named actions
   (`auth_tokens.allowed_actions`, migration 0070). Admin calls, allowed and
   denied, are written to `audit_log` by `require_admin(action)`; on Postgres
-  that table is hash-chained (migration 0062).
+  that table is hash-chained (migration 0062). The chain is computed by a
+  database trigger and is not verified by any code, and signed approvals,
+  console sign-ins, agent-gateway and reader-access events are recorded in
+  their own ordinary tables, not in `audit_log` (`docs/AGENT_TRUST_MODEL.md` §11).
 - **Human-in-the-loop approvals** are an SSH signature from a human approval
   key over the exact request (`scripts/approve.sh`, `src/common/governance.py`);
-  a phone tap or link can only deny.
+  a phone tap or link can only deny. What this does and does not bind, where
+  it holds and where it is policy only (processes running as the operator
+  account; passwordless sudo rules): `docs/AGENT_TRUST_MODEL.md`.
 - **Secrets.** The master secret file is
   `/etc/corporatetraveldc/dispatch-secrets.env` (0600, operator-owned). No
   container reads it any more: since 2026-10-05 every first-party container

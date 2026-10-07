@@ -2,6 +2,8 @@
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
+> Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
+
 The message board (`/api/v1/board`), the gated vault-research reads, and the
 Wave 2 governance routes (approvals, council, workspace) accept two kinds of
 credential. Which one a route needs is set per route in
