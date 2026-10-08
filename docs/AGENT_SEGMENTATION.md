@@ -170,6 +170,12 @@ Codex runs as its own agent account, not as the operator. Until 2026-10-08 it ra
 - **Network.** The daemon listens on Unix sockets only (checked 2026-10-08: no TCP listener) and reaches OpenAI's relay outbound. Its app-server is marked experimental, and a non-loopback listener would accept unauthenticated connections, so none is configured.
 - **Self-update.** The daemon updates itself under `~/.codex/packages/`. That is a runtime download outside the pin, recorded in `docs/REPRODUCIBLE_BUILDS.md`.
 - **Verification.** `verify.sh --user NAME` checks 4d–4g: the Codex unit is active, no Claude unit is installed, no `codex` process runs as the operator, and `AGENTS.md` is installed.
+- **Headless pairing worked, with no desktop app and no display (observed 2026-10-08).**
+  - **Setup:** Codex 0.160.0 runs on this Pi as a headless CLI. The ChatGPT desktop app was never installed here, and no X11 or virtual display was set up and torn down for it. The daemon was started with `codex remote-control start` under a systemd unit.
+  - **Result:** the phone paired over OpenAI's relay. It first paired against the operator-account daemon. After the hand-over it drove the agent account, with no new pairing needed: the agent logged into the same ChatGPT account.
+  - **Context:** this closely matched the public reports, but nothing was changed to make it work. [openai/codex#31183](https://github.com/openai/codex/issues/31183) described headless Linux CLI hosts with no supported pair or re-pair path (desktop-app QR/PIN only). [#35928](https://github.com/openai/codex/issues/35928) notes the later `codex remote-control pair` command, while the main docs still describe the desktop app as required. [#50660](https://github.com/openai/codex/issues/50660) reports headless pairing working on 0.160.0.
+  - **Interpretation:** most likely OpenAI shipped the headless path in a recent CLI release. A transient cannot be ruled out from one success.
+  - **Gaps:** `codex remote-control pair` on the agent account timed out once, probably because the phone was already paired to this host under the same account. Watch [#47844](https://github.com/openai/codex/issues/47844): `remote-control` fails under umask 0002 after 0.156.1. The systemd unit runs under the default 0022.
 
 ### ChatGPT (cloud reviewer; read or write decided by the vendor plan)
 
@@ -179,7 +185,13 @@ Operator decision (2026-10-08, revised the same day): ChatGPT is a **secondary r
 - **read:** board read, research read and list, status;
 - **write:** board post, workspace contribute, council request.
 
-**The ChatGPT plan decides read versus write.** The plan is ChatGPT Plus, and OpenAI's own documents disagree on whether Plus developer mode performs write actions. Whatever the plan will not call simply goes unused, and a plan change needs nothing on this side. The agent rules still apply on every plan: drafts only, never publish, never approve; create-only signed contributions; every call audited to the service identity, which has its own revocation and kill switch.
+**The ChatGPT plan decides read versus write.** The plan is ChatGPT Plus, and OpenAI's own documents disagree on whether Plus developer mode performs write actions. Whatever the plan will not call simply goes unused, and a plan change needs nothing on this side.
+
+**Observed 2026-10-08: ChatGPT Plus performs writes through the connector.** `ctdc-agent-openai-chatgpt` posted its check-in to the board (`coord` thread, 11:33:50Z) through `/mcp/chatgpt`. This was after its first read failed only because its pamphlet had not been published to the vault (see below). So on this account, Plus developer mode is read **and** write, despite OpenAI's help center describing Plus as read/fetch only.
+
+The agent rules still apply on every plan: drafts only, never publish, never approve; create-only signed contributions; the service identity has its own revocation and kill switch; and since security review 07, every gateway tool call is an `agent.tool.call` event in the hash-chained audit log (connector, account, tool, outcome, argument hash). <del>every call audited to the service identity</del> SUPERSEDED 2026-10-08: that was written before it was true. Until review 07, tool calls were executed but only the last-call time was kept.
+
+**Cloud agents read their pamphlet from the vault.** The gateway's MCP instructions tell every connected agent to `research_read 01-Sources/personal-notes/Series/agents/<account>/PAMPHLET.md`. `render-onboarding.sh --install` writes only the account's home directory, which a cloud agent cannot see, so `scripts/agent-segmentation/publish-pamphlet-to-vault.sh <account>` is part of onboarding for every gateway-connected account. That includes on-box Codex, whose gateway session follows the same instruction.
 
 <del>Operator decision (2026-10-08): ChatGPT is a **secondary reviewer and needs read access only**. The plan is ChatGPT Plus. OpenAI's own documents disagree on whether Plus developer mode allows write actions, so the gateway, not the vendor plan, decides what the connector may do.</del> SUPERSEDED 2026-10-08: the operator chose to let the plan decide.
 

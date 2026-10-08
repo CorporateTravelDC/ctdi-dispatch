@@ -405,6 +405,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | Console sign-in, sign-out | ~~no~~ **yes** — `console.login`, `console.logout` | `console_sessions` |
 | Console actions | ~~no~~ **yes** — `console.action` (action, target reference — reader emails as a hash, never links or codes; whether the "I mean it" box was ticked) | the target tables |
 | Agent link established / revoked | ~~no~~ **yes** — `agent.link.approved`, `agent.link.revoked` | `agent_connections` |
+| Agent gateway tool call (board, research, workspace, council, status) | ~~no — only the connection's last-call time~~ **yes** (since 2026-10-08, review 07) — `agent.tool.call`: connector, account, tool, outcome, sha256 of the arguments (never their content) | `agent_connections.last_call_at` |
 | Connector disabled / enabled | ~~no~~ **yes** — `agent.connector.disabled` / `.enabled` | `agent_connectors.disabled_at` |
 | Gateway killed / reopened | ~~no~~ **yes** — `gateway.killed`, `gateway.reopened` | `agent_gateway_settings`, ntfy push |
 | Reader invites, revokes, sign-outs, promos, freeze, resume, kill-all | ~~no~~ **yes** — `reader.*` (actor, target id) | `es_invite_events` |

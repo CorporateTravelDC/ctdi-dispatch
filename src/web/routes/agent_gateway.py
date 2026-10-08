@@ -308,14 +308,27 @@ async def mcp_post(slug: str, request: Request):
         return JSONResponse(_rpc_result(mid, {"tools": TOOLS}))
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
+        # 2026-10-08 (security review 07): every tool call goes into the hash-chained
+        # audit log -- connector, account, tool, outcome and a sha256 of the arguments
+        # (never their content: arguments carry draft text). Before this only the
+        # last-call time was kept, so an agent's board posts had no audit record.
+        def _audit_call(outcome: str) -> None:
+            import hashlib
+            digest = hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()
+            governance.audit("agent.tool.call", {"connector": slug, "account": cx.get("account"),
+                                                 "tool": str(name)[:64], "outcome": outcome, "args_sha256": digest})
         try:
             out = _call(name, args, cx)
+            _audit_call("ok")
             return JSONResponse(_rpc_result(mid, _text(out)))
         except KeyError:
+            _audit_call("unknown-tool")
             return JSONResponse(_rpc_error(mid, -32602, f"unknown tool {name}"))
         except (ValueError, governance.GovernanceError) as e:
+            _audit_call("refused")
             detail = getattr(e, "detail", str(e))
             return JSONResponse(_rpc_result(mid, {**_text(f"refused: {detail}"), "isError": True}))
         except Exception as e:  # noqa: BLE001 -- e.g. the scrub gate, WebDAV
+            _audit_call("failed")
             return JSONResponse(_rpc_result(mid, {**_text(f"failed: {type(e).__name__}: {str(e)[:200]}"), "isError": True}))
     return JSONResponse(_rpc_error(mid, -32601, f"method not found: {method}"))
