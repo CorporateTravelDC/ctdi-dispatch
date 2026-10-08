@@ -1,0 +1,9 @@
+# config/codex/artifacts.sha256 -- the Codex CLI binary installed into codex-mode
+# agent accounts (2026-10-08). Source: the operator's standalone install
+# (Codex's own installer), version 0.160.0, aarch64-unknown-linux-musl. The
+# activation relay copies it into ~<agent>/.local/bin/codex only if it matches;
+# no download happens on that path. Upstream origin: OpenAI's Codex installer
+# (not separately verified against a published checksum). Once running, the
+# Codex daemon updates itself under ~/.codex/packages/ -- a runtime download
+# outside this pin (docs/REPRODUCIBLE_BUILDS.md "Runtime downloads").
+50b06603bdcdac39b714f5c3e68583c002b8ad8779ebfdaaf4932ff016b379c0  codex-0.160.0-aarch64-unknown-linux-musl

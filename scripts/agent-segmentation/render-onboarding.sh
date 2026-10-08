@@ -72,7 +72,12 @@ if [[ "$MODE" == --install ]]; then
   (( EUID == 0 )) || { echo "--install needs root (sudo)" >&2; exit 77; }
   tmp=$(mktemp); render >"$tmp"
   install -m 0444 -o root -g "$NAME" "$tmp" "$HOME_DIR/CLAUDE.md"   # root-owned, read-only: the account cannot rewrite its own pamphlet
-  rm -f "$tmp"; echo "installed $HOME_DIR/CLAUDE.md ($(wc -l <"$HOME_DIR/CLAUDE.md") lines, root:$NAME 0444)"
+  # 2026-10-08: Codex reads AGENTS.md (its working directory, and ~/.codex/AGENTS.md
+  # globally), not CLAUDE.md -- the same pamphlet goes under both names so a
+  # codex-mode agent reads the same rules.
+  install -m 0444 -o root -g "$NAME" "$tmp" "$HOME_DIR/AGENTS.md"
+  [[ -d "$HOME_DIR/.codex" ]] && install -m 0444 -o root -g "$NAME" "$tmp" "$HOME_DIR/.codex/AGENTS.md"
+  rm -f "$tmp"; echo "installed $HOME_DIR/CLAUDE.md + AGENTS.md$([[ -d "$HOME_DIR/.codex" ]] && echo ' + .codex/AGENTS.md') ($(wc -l <"$HOME_DIR/CLAUDE.md") lines, root:$NAME 0444)"
 else
   render
 fi

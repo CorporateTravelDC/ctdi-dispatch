@@ -1,0 +1,27 @@
+# corporatetraveldc-codex-remote-control.service -- TEMPLATE (2026-10-08).
+# Installed by scripts/agent-segmentation/plan.sh into a codex-mode agent's OWN
+# user manager (~<account>/.config/systemd/user/), never the operator's. It
+# runs `codex remote-control` as that account, so phone pairing (ChatGPT app,
+# Remote tab) drives the agent's identity, slice and limits -- not the
+# operator's. Replaces running Codex in a screen session under the operator
+# account (the operator-as-agent exception, docs/AGENT_TRUST_MODEL.md section 0).
+#
+# The daemon listens on Unix sockets only and reaches OpenAI's relay outbound;
+# no TCP listener. It updates itself under ~/.codex/packages/ (a runtime
+# download; docs/REPRODUCIBLE_BUILDS.md "Runtime downloads"). Liveness:
+# team-liveness.sh login mode `codex` (this unit active, or a codex process).
+[Unit]
+Description=Codex remote control (app-server daemon) for this agent account
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Slice=agents.slice
+Environment=CODEX_HOME=%h/.codex
+ExecStart=%h/.local/bin/codex remote-control start
+ExecStop=%h/.local/bin/codex remote-control stop
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

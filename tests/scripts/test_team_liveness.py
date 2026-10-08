@@ -89,6 +89,18 @@ class FakeRoot:
             "accessToken": "FAKE", "expiresAt": expires_at_s * 1000,
             "refreshToken": "FAKE", "refreshTokenExpiresAt": refresh_expires_s * 1000}}))
 
+    def codex(self, name, last_refresh_s, refresh_token=True, session="active"):
+        """Fake ~/.codex/auth.json (timestamp + presence of a refresh token only) and daemon state."""
+        import datetime
+        d = self.root / "home" / name / ".codex"; d.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.fromtimestamp(last_refresh_s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.123456789Z")
+        (d / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+            "tokens": {"id_token": "FAKE", "access_token": "FAKE", "refresh_token": "FAKE" if refresh_token else "",
+                       "account_id": "00000000-0000-0000-0000-000000000001"}, "last_refresh": ts}))
+        if session:
+            u = self.root / "codex-unit"; u.mkdir(exist_ok=True); (u / name).write_text(session + "\n")
+        return self
+
     def keys(self, name, comments):
         d = self.root / "home" / name / ".ssh"; d.mkdir(parents=True, exist_ok=True)
         (d / "authorized_keys").write_text("".join(f"{FAKE_KEY} {c}\n" for c in comments))
@@ -193,6 +205,34 @@ class Verdicts(unittest.TestCase):
         env = dict(os.environ, LIVENESS_FAKE_ROOT=str(self.fr.root), LIVENESS_SSH_MAX_IDLE=str(DAY))
         p = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 1); self.assertIn("no login for 2.0d (> 1.0d)", p.stdout + p.stderr)
+
+    # -- codex-mode agents (2026-10-08) ----------------------------------
+    def test_codex_agent_live(self):
+        self.fr.account("codexbot", "ctdc-agents", mode="codex").codex("codexbot", NOW - 5 * DAY)
+        rc, out = self.fr.run(); self.assertEqual(rc, 0); self.assertIn("codexbot (ctdc-agents): live", out)
+        self.assertIn("kind=agent/codex", out); self.assertIn("session=active", out)
+        self.assertNotIn("credentials", out)            # never judged by Claude credentials
+
+    def test_codex_login_stale_after_14_days(self):
+        self.fr.account("codexbot", "ctdc-agents", mode="codex").codex("codexbot", NOW - 15 * DAY)
+        rc, out = self.fr.run(); self.assertEqual(rc, 1); self.assertIn("Codex login last refreshed 15.0d ago", out)
+
+    def test_codex_without_refresh_token_is_stale(self):
+        self.fr.account("codexbot", "ctdc-agents", mode="codex").codex("codexbot", NOW - DAY, refresh_token=False)
+        rc, out = self.fr.run(); self.assertEqual(rc, 1); self.assertIn("no usable Codex login", out)
+
+    def test_codex_fresh_login_but_no_daemon_is_stale(self):
+        self.fr.account("codexbot", "ctdc-agents", mode="codex").codex("codexbot", NOW - DAY, session=None)
+        rc, out = self.fr.run(); self.assertEqual(rc, 1); self.assertIn("neither its remote-control unit nor a codex process", out)
+
+    def test_codex_new_account_without_login_gets_grace(self):
+        self.fr.account("codexbot", "ctdc-agents", mode="codex"); self.fr.created("codexbot", NOW - DAY)
+        rc, out = self.fr.run(); self.assertEqual(rc, 0); self.assertIn("codex login --device-auth", out)
+
+    def test_codex_agent_with_claude_creds_only_is_stale(self):
+        # the failure the codex mode exists to prevent, mirrored: Claude creds do not keep a codex agent alive
+        self.fr.account("codexbot", "ctdc-agents", mode="codex").creds("codexbot", NOW + 3600, NOW + 300 * DAY)
+        rc, out = self.fr.run(); self.assertEqual(rc, 1); self.assertIn("no usable Codex login", out)
 
     def test_service_live_without_any_login(self):
         self.fr.account("llama", "ctdc-agents", shell="/usr/sbin/nologin", role="service", mode="none")

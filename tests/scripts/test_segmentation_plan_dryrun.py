@@ -136,6 +136,32 @@ class PlanDryRun(unittest.TestCase):
             else:
                 self.assertNotIn("PRELOADED", s[3]); self.assertNotIn("chage -E 0", out); self.assertNotIn("deactivate", out)
 
+    def test_activate_switching_to_codex_mode(self):
+        """2026-10-08: --activate NAME --login-mode codex flips the registry, installs the
+        Codex CLI from a digest-verified local copy (never a download) and its own
+        remote-control unit, and removes any Claude remote-control unit."""
+        rc, out, err = run(PLAN, "--dry-run", "--activate", "ctdc-agent-codex", "--login-mode", "codex")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("'ctdc-agent-codex' 'agent' 'codex' '0' >> /etc/ctdc-accounts.conf", out)
+        self.assertIn("sha256sum --check --strict --quiet", out)
+        # the whole package, verified per file -- the binary alone does not run (2026-10-08)
+        self.assertIn("package-0.160.0-aarch64-unknown-linux-musl.sha256 | sha256sum --check --strict --quiet", out)
+        self.assertIn("cp -a --no-preserve=ownership", out)
+        self.assertIn("/home/ctdc-agent-codex/.codex/packages/standalone/current/bin/codex /home/ctdc-agent-codex/.local/bin/codex", out)
+        self.assertIn("corporatetraveldc-codex-remote-control.service", out)
+        self.assertIn("rm -f /home/ctdc-agent-codex/.config/systemd/user/corporatetraveldc-claude-remote-control.service", out)
+        self.assertIn("codex login --device-auth", out)
+        import re
+        for banned in (r"\bcurl\b", r"\bwget\b", r"\|\s*(ba)?sh\b", r"\bnpm install\b"):
+            self.assertIsNone(re.search(banned, out), banned)   # no download on the activation path
+        # the sha256 the plan checks is the pinned one
+        pinned = [l.split()[0] for l in (REPO / "config/codex/artifacts.sha256").read_text().splitlines() if l and not l.startswith("#")]
+        self.assertTrue(pinned and pinned[0] in out)
+
+    def test_login_mode_ssh_is_refused_at_activation(self):
+        rc, out, err = run(PLAN, "--dry-run", "--activate", "ctdc-agent-codex", "--login-mode", "ssh")
+        self.assertNotEqual(rc, 0); self.assertIn("not supported", err)
+
     def test_activate(self):
         rc, out, err = run(PLAN, "--dry-run", "--activate", "ctdc-agent-codex")
         self.assertEqual(rc, 0, err)

@@ -105,6 +105,15 @@ check_account() {
         [[ "$st" == active ]] && pass "4b ${RC_UNIT} active in ${U}'s manager" || fail "4b ${RC_UNIT} in ${U}'s manager: '${st}'"
         pgrep -u "${OPERATOR_USER}" -f 'claude --remote-control' >/dev/null && fail "4c a remote-control process still runs as ${OPERATOR_USER}" || pass "4c no remote-control process as ${OPERATOR_USER}"
     fi
+    # 2026-10-08: a codex-mode agent owns ITS Codex daemon; none may run as the operator
+    if [[ "$kind" == agent && "$rmode" == codex ]]; then
+        local cu="corporatetraveldc-codex-remote-control.service" cst
+        cst="$(sudo runuser -u "${U}" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "${U}")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "${U}")/bus" systemctl --user is-active "${cu}" 2>/dev/null || true)"
+        [[ "$cst" == active ]] && pass "4d ${cu} active in ${U}'s manager" || fail "4d ${cu} in ${U}'s manager: '${cst}'"
+        sudo test -f "/home/${U}/.config/systemd/user/${RC_UNIT}" && fail "4e a Claude remote-control unit is installed on codex account ${U}" || pass "4e no Claude remote-control unit on ${U}"
+        pgrep -u "${OPERATOR_USER}" -x codex >/dev/null && fail "4f a codex process still runs as ${OPERATOR_USER} (operator-as-agent exception still in use)" || pass "4f no codex process as ${OPERATOR_USER}"
+        sudo test -f "/home/${U}/AGENTS.md" && pass "4g pamphlet installed as AGENTS.md for ${U}" || fail "4g no AGENTS.md pamphlet for ${U} (render-onboarding.sh ${U} --install)"
+    fi
     fi
     # 5 attribution
     local ak="/home/${U}/.ssh/authorized_keys" nkeys comment

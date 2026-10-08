@@ -134,6 +134,7 @@ The registry line is `name kind login_mode preloaded`. Group membership decides 
 | kind / login mode | Shell, slice, units | Login factor | Created by |
 |---|---|---|---|
 | `agent` / `claude` | bash; `agents.slice`; own remote-control unit, installed **disabled** (enable after the one-time `sudo -u NAME -i claude` login and the workspace-trust accept) | `~/.claude/.credentials.json`: refresh token unexpired AND access token refreshed within 7 d; once the account has a remote-control unit, the unit must be active or a `claude` process must run as the account | `--add-agent NAME` |
+| `agent` / `codex` (2026-10-08) | bash; `agents.slice`; Codex CLI copied from a pinned digest; own `corporatetraveldc-codex-remote-control.service`; no Claude unit | `~/.codex/auth.json` holds a refresh token AND `last_refresh` within 14 d AND the Codex unit active or a `codex` process running as the account | `--add-agent NAME --login-mode codex`, or `--activate NAME --login-mode codex` |
 | `agent` / `ssh` | bash; `agents.slice`; no Claude CLI; one inbound key (the client's) | last SSH login within 7 d (`LIVENESS_SSH_MAX_IDLE`); PAM state file -> `lastlog2` -> sshd journal | `--add-agent NAME --login-mode ssh --ssh-pubkey-file F` |
 | `service` / `none` | `/usr/sbin/nologin`; no linger, no user manager, no inbound key | none | `--add-service NAME` or `--convert-to-service NAME` |
 | `human` / `ssh` | bash; `humans.slice`; their key | real shell, exactly one key commented `NAME@`, not locked/expired, SSH login within 14 d | `--add-human NAME --ssh-pubkey-file F` |
@@ -143,6 +144,44 @@ The registry line is `name kind login_mode preloaded`. Group membership decides 
 `--convert-to-service NAME` (2026-10-05, used for Cowork): stops the account, sets the nologin shell, removes `authorized_keys`, registry `service none 0`; the signing key and signer stay.
 
 `--rename-account FROM TO` (2026-10-05): stops the account, renames passwd/group/home (uid unchanged), key filenames and comments, git author, Claude CLI per-path state and absolute symlinks into the old home, registry line, skill grants, sudoers, liveness state files and the remote-control label, then starts `user@UID` explicitly. The board side is a separate operator step: `scripts/board-signer-ctl.sh rename FROM TO` (signer, token labels, workspace grants).
+
+### Codex agents (login mode `codex`, 2026-10-08)
+
+Codex runs as its own agent account, not as the operator. Until 2026-10-08 it ran in a `screen` session and two `codex app-server` daemons under the operator account: the operator-as-agent exception (`docs/AGENT_TRUST_MODEL.md` §0).
+
+- **Liveness** (`team-liveness.sh`, mode `codex`). The account is live while all of these hold:
+  - `~/.codex/auth.json` holds a refresh token;
+  - its `last_refresh` is within `LIVENESS_CODEX_MAX_STALE` (14 d; Codex refreshes about every 8 days);
+  - the account's `corporatetraveldc-codex-remote-control.service` is active, or a `codex` process runs as it.
+
+  Only the timestamp and the presence of a refresh token are read, never a token value. Claude credentials do not keep a codex-mode account alive, and the reverse also holds.
+- **Install, with no download.** `plan.sh --activate NAME --login-mode codex` (or `--add-agent NAME --login-mode codex`):
+  - copies the Codex CLI from the operator's standalone install, verified against `config/codex/artifacts.sha256`; it never runs the vendor's `curl | sh` installer;
+  - installs the remote-control unit from `scripts/agent-segmentation/units/`, disabled;
+  - removes any Claude remote-control unit;
+  - sets the registry line to `agent codex`.
+- **Login and pairing,** in the same sitting as activation:
+  - `sudo -u NAME -i codex login --device-auth`, approved on a phone or laptop;
+  - then enable the unit;
+  - then `sudo -u NAME -i codex remote-control pair` and enter the code under "Pair manually" in the ChatGPT app's Remote tab.
+
+  The ChatGPT account the CLI logs into is the vendor link. The Unix account is the on-box identity, slice and limits.
+- **Pamphlet.** `render-onboarding.sh NAME --install` writes the same root-owned pamphlet as `CLAUDE.md`, `AGENTS.md` and `~/.codex/AGENTS.md`. Codex reads `AGENTS.md`.
+- **Network.** The daemon listens on Unix sockets only (checked 2026-10-08: no TCP listener) and reaches OpenAI's relay outbound. Its app-server is marked experimental, and a non-loopback listener would accept unauthenticated connections, so none is configured.
+- **Self-update.** The daemon updates itself under `~/.codex/packages/`. That is a runtime download outside the pin, recorded in `docs/REPRODUCIBLE_BUILDS.md`.
+- **Verification.** `verify.sh --user NAME` checks 4d–4g: the Codex unit is active, no Claude unit is installed, no `codex` process runs as the operator, and `AGENTS.md` is installed.
+
+### ChatGPT (cloud reviewer; read or write decided by the vendor plan)
+
+ChatGPT gets a **service** identity, the same as Cowork: `plan.sh --add-service ctdc-agent-openai-chatgpt`, a signer with kind `service`, and a gateway connector `agent-gateway.sh add-connector chatgpt ctdc-agent-openai-chatgpt openai`. It is linked from ChatGPT's developer mode, with the approval signed from a laptop.
+
+Operator decision (2026-10-08, revised the same day): ChatGPT is a **secondary reviewer**. Its connector gets the **same tool set as Cowork**:
+- **read:** board read, research read and list, status;
+- **write:** board post, workspace contribute, council request.
+
+**The ChatGPT plan decides read versus write.** The plan is ChatGPT Plus, and OpenAI's own documents disagree on whether Plus developer mode performs write actions. Whatever the plan will not call simply goes unused, and a plan change needs nothing on this side. The agent rules still apply on every plan: drafts only, never publish, never approve; create-only signed contributions; every call audited to the service identity, which has its own revocation and kill switch.
+
+<del>Operator decision (2026-10-08): ChatGPT is a **secondary reviewer and needs read access only**. The plan is ChatGPT Plus. OpenAI's own documents disagree on whether Plus developer mode allows write actions, so the gateway, not the vendor plan, decides what the connector may do.</del> SUPERSEDED 2026-10-08: the operator chose to let the plan decide.
 
 ### Adding accounts (current commands)
 
