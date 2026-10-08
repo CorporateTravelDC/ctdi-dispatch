@@ -1,0 +1,7 @@
+[Unit]
+Description=Airline time-fidelity research collector (read-only; docs/research/AIRLINE_TIME_FIDELITY_SPEC.md)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/research/airline-time-fidelity-collect.sh
