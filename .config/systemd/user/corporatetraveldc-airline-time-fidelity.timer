@@ -1,0 +1,10 @@
+[Unit]
+Description=Airline time-fidelity research collector every 6 hours (8-hour lookback; surface data rolls off)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:20:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
