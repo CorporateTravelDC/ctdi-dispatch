@@ -107,6 +107,7 @@ Refreshing is a deliberate event: `scripts/build/pin-base-images.py --refresh [n
 |---|---|---|---|---|---|
 | `llama-server` + 18 libraries (`/usr/local/lib/ollama/`) | llama.cpp, installed with the former Ollama bundle on 2026-08-13 | `version: 1 (0b1bad14f)`, Clang 21.1.8, aarch64 | yes, `config/llama/artifacts.sha256` | the llama unit's `ExecStartPre`, every start: a mismatch means no start | replace deliberately, regenerate the digest file, review, sign |
 | `qwen3-4b-instruct-2507-q4_0.gguf` | **origin not recorded** (installed 2026-09-21) | Qwen3-4B-Instruct-2507, q4_0 | yes, same file | same | same |
+| Codex CLI (codex-mode agent accounts) | OpenAI's Codex standalone installer, via the operator's install | 0.160.0, aarch64-unknown-linux-musl | yes, `config/codex/artifacts.sha256` | `plan.sh` checks it before copying into the account; no download on that path | install the new version as the operator, review, update the digest file, sign, re-run the activation step |
 | `phi3-mini-q4_0.gguf` | not recorded | — | no: no unit loads it | — | candidate for removal |
 | Debian packages | snapshot.debian.org | snapshot `20261007T000000Z` | via apt's signed Release files | at build | `--apt-snapshot` |
 | PyPI files | pypi.org | per lock | sha256 per file in the lock | at build (pip) | `lock-python.py` |
@@ -128,6 +129,7 @@ First-party code (`src/`, `scripts/`) installs nothing and executes nothing it d
 | Open WebUI tools/functions (can pip-install at runtime inside its container) | SECURITY EXCEPTION, third-party container |
 | Nextcloud app store updates | SECURITY EXCEPTION, third-party container |
 | Claude Code CLI self-update (operator and agent accounts) | OPERATOR-MANAGED; host tooling, not a runtime image |
+| Codex daemon self-update under `~/.codex/packages/` (codex-mode agent accounts) | SECURITY EXCEPTION, host tooling: the CLI installed into the account is pinned (`config/codex/artifacts.sha256`), but the running daemon downloads its own updates. Observed 2026-10-08: CLI 0.160.0, daemon 0.161.0 |
 
 ## SBOM
 

@@ -17,6 +17,12 @@
 #              the future AND expiresAt (the ~24h access token) is not older
 #              than LIVENESS_AGENT_MAX_STALE (7d). Only the two expiry fields
 #              are read -- never a token value.
+#       AGENT/codex   ~/.codex/auth.json holds a refresh token AND its last_refresh is
+#              not older than LIVENESS_CODEX_MAX_STALE (14d; Codex refreshes about
+#              every 8 days) AND the Codex daemon runs as the account (its
+#              remote-control unit active, or a codex process). Only the
+#              timestamp and the presence of a refresh token are read -- never a
+#              token value. (2026-10-08)
 #       AGENT/ssh     no Claude creds (a client such as the Cowork desktop app
 #              SSHes in): same shell/key/lock checks as a human, last SSH login
 #              within LIVENESS_SSH_MAX_IDLE (7d).
@@ -84,6 +90,7 @@ fi
 AGENT_MAX_STALE="${LIVENESS_AGENT_MAX_STALE:-$((7*86400))}"
 HUMAN_MAX_IDLE="${LIVENESS_HUMAN_MAX_IDLE:-$((14*86400))}"
 SSH_MAX_IDLE="${LIVENESS_SSH_MAX_IDLE:-$((7*86400))}"
+CODEX_MAX_STALE="${LIVENESS_CODEX_MAX_STALE:-$((14*86400))}"
 NEW_GRACE="${LIVENESS_NEW_ACCOUNT_GRACE:-$((3*86400))}"
 REVOKE_LOOKBACK="${LIVENESS_REVOCATION_LOOKBACK:-86400}"
 ORDER_MAX_AGE="${LIVENESS_ORDER_MAX_AGE:-$((7*86400))}"
@@ -207,6 +214,32 @@ except Exception:
     sys.exit(1)
 PYEOF
 }
+codex_last_refresh() {  # prints last_refresh in epoch seconds; fails without a usable login
+  local f="$(home_of "$1")/.codex/auth.json"; [[ -r "$f" ]] || return 1
+  python3 - "$f" <<'PYEOF'
+import datetime, json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    if not (d.get("tokens") or {}).get("refresh_token"):
+        sys.exit(1)                                   # API-key mode or logged out: no refreshing login
+    s = re.sub(r"(\.\d{6})\d+", r"\1", str(d["last_refresh"])).replace("Z", "+00:00")
+    print(int(datetime.datetime.fromisoformat(s).timestamp()))
+except Exception:
+    sys.exit(1)
+PYEOF
+}
+codex_corroboration() {  # active | inactive | unknown  (same evidence rules as claude_corroboration)
+  local name="$1"
+  if [[ -n "$FAKE" ]]; then
+    [[ -f "${FAKE}/codex-unit/${name}" ]] && cat "${FAKE}/codex-unit/${name}" || echo inactive; return
+  fi
+  if (( EUID == 0 )); then
+    local st; st=$(runuser -u "$name" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$name")" systemctl --user is-active "$CODEX_RC_UNIT" 2>/dev/null)
+    [[ "$st" == active ]] && { echo active; return; }
+  fi
+  pgrep -u "$name" -x codex >/dev/null 2>&1 && { echo active; return; }
+  (( EUID == 0 )) && echo inactive || echo unknown
+}
 # signer registry: "active|inactive|none role kind" or "unavailable" (infra
 # failure -- never a reason to kill)
 signer_state() {
@@ -229,6 +262,7 @@ revoked_since() {   # count of the account's tokens revoked after $2
 }
 days() { awk -v s="$1" 'BEGIN{printf "%.1fd", s/86400}'; }
 RC_UNIT="corporatetraveldc-claude-remote-control.service"
+CODEX_RC_UNIT="corporatetraveldc-codex-remote-control.service"
 # 2026-10-04 (duel M9/U5): the credentials file is owned and writable by the
 # agent itself, so it cannot be the only proof of login. Once the account HAS
 # a remote-control unit, that unit must be active (or a claude process must be
@@ -263,6 +297,21 @@ evaluate() {
   # (a) LOGIN -- by login mode
   if [[ "$kind" == service || "$lmode" == none ]]; then
     DETAIL="${DETAIL} login=n/a(service)"
+  elif [[ "$group" == ctdc-agents && "$lmode" == codex ]]; then
+    local lr
+    if ! lr=$(codex_last_refresh "$name"); then
+      local why="never"; (( EUID != 0 )) && [[ -z "${FAKE:-}" ]] && why="unreadable-unprivileged (run with sudo for the real verdict)"
+      if (( cr > 0 && now - cr <= NEW_GRACE )); then DETAIL="${DETAIL} login=${why} (new agent, grace $(days $((NEW_GRACE-(now-cr)))) left -- run: sudo -u ${name} -i codex login --device-auth)"
+      else VERDICT=stale; REASON="no usable Codex login (~/.codex/auth.json missing, unreadable, or without a refresh token)"; DETAIL="refresh=n/a"; return; fi
+    else
+      if (( now - lr > CODEX_MAX_STALE )); then VERDICT=stale; REASON="Codex login last refreshed $(days $((now-lr))) ago (> $(days $CODEX_MAX_STALE))"; DETAIL="refresh=$(days $((now-lr)))"; return; fi
+      DETAIL="${DETAIL} refresh=$(days $(( now-lr < 0 ? 0 : now-lr )))"
+      case "$(codex_corroboration "$name")" in
+        active)   DETAIL="${DETAIL} session=active" ;;
+        unknown)  DETAIL="${DETAIL} session=?(unprivileged)" ;;
+        inactive) VERDICT=stale; REASON="Codex login looks fresh but neither its remote-control unit nor a codex process runs as ${name} (the login file is self-attested)"; DETAIL="${DETAIL} session=INACTIVE"; return ;;
+      esac
+    fi
   elif [[ "$group" == ctdc-agents && "$lmode" == claude ]]; then
     local ce
     if ! ce=$(cred_expiry "$name"); then
@@ -363,6 +412,7 @@ reactivate() {
   case "${lm:-}" in
     none)   echo "next: service identity -- live again as soon as its signer is active (done above)" ;;
     claude) echo "next: the agent must log in again:  sudo -u ${name} -i claude   (then /exit)" ;;
+    codex)  echo "next: the agent must log in again:  sudo -u ${name} -i codex login --device-auth   then: runuser -u ${name} -- env XDG_RUNTIME_DIR=/run/user/\$(id -u ${name}) systemctl --user restart ${CODEX_RC_UNIT}" ;;
     *)      echo "next: ${name} must SSH in with their single registered key within $(days $NEW_GRACE)" ;;
   esac
 }

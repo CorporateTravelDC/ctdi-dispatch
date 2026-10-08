@@ -1,0 +1,50 @@
+# config/codex/package-0.160.0-aarch64-unknown-linux-musl.sha256 -- every regular
+# file of the Codex standalone package (2026-10-08). plan.sh copies the whole
+# release directory into a codex-mode agent account only after
+# `sha256sum --check --strict` of this list passes inside the source directory.
+# The binary alone is not enough: it refuses to run without its package
+# ("this CLI has no complete local package"). Paths are relative to the release dir.
+50b06603bdcdac39b714f5c3e68583c002b8ad8779ebfdaaf4932ff016b379c0  ./bin/codex
+7e0004bd8b37936753981729365c448bdc67f0173d9bc6453e40e3ad28774b6c  ./bin/codex-code-mode-host
+f1ce2ea0cc378677228cdf5555aa951902fb1c3ea966c0a85ccdaf1e1486ec3f  ./codex-package.json
+e36d0eb52e70696bdf1781392722e05a21bb91d3b7b762ef5ec20e5df2ec687b  ./codex-path/rg
+c6949b5053988498976467bd9972c5d3695ecaac64a5f2de09af20f579fb7e31  ./codex-resources/bwrap
+670bc2e37b1de24cc5156269c30379b6a365bc4b080b5396bed0b7fe132dde9f  ./codex-resources/voice/bin/codex-voice-host
+0ff1194de704cfe133cbdbf23e7828ef872745ef33e9a4a0cc6a35f7c2a27cc4  ./codex-resources/voice/lib/gstreamer-1.0/libgstapp.so
+18722e2660f402e8302bdc036346f186e0a4fe875eb15f01515dfdea2e42e72e  ./codex-resources/voice/lib/gstreamer-1.0/libgstaudioconvert.so
+6371d7d2eace254827f6613d3033e52d3636405d348322c7bd9ace8b4adcf5d4  ./codex-resources/voice/lib/gstreamer-1.0/libgstaudioresample.so
+35fb61ee11a694acc9be2acdd1a85373a0507c61c33cc99613f763487cafc0d6  ./codex-resources/voice/lib/gstreamer-1.0/libgstcoreelements.so
+1c7877aa89bcb8b521bf88dc35a257dc2126503b6e4da6fad379d8d8be23a198  ./codex-resources/voice/lib/gstreamer-1.0/libgstopus.so
+95b53e10dc7e8150e073ea397b5b1ab1e1df54e4250993d1257bb40a916d9603  ./codex-resources/voice/lib/gstreamer-1.0/libgstrtpmanager.so
+c1741739be5f8a9c2ded527db37f9d0acd86657dd39ad56ca52e81f9de62399f  ./codex-resources/voice/lib/gstreamer-1.0/libgstrtp.so
+51cb79b1866970f577b87dca19bf8e77bb28d3dd3bed27b7ace57780cb86ef49  ./codex-resources/voice/lib/libffi.so.8
+6cf2c8bdf97315c4e321a42a6ac78d5e1806787f3cf95eb20d38cb8de9a119d7  ./codex-resources/voice/lib/libgio-2.0.so.0
+9d3eaaa330943d2d524eeda55095b23dd30af214ec2847f6fafbacbddb39cf5a  ./codex-resources/voice/lib/libglib-2.0.so.0
+0221c50088bc23b4a7579da0d31fe5552fa5102bf6f1efe86bd25b75b7798f43  ./codex-resources/voice/lib/libgmodule-2.0.so.0
+92a0dc1a488a81434e67f33dce3fa0d86adc9d2c4703417c4b6197cbf40731bb  ./codex-resources/voice/lib/libgobject-2.0.so.0
+284d47fbd255156155ef0236cc9756af636ce510a6ed8ce61e13473dac7423ef  ./codex-resources/voice/lib/libgstallocators-1.0.so.0
+f62dd2466c741a17753454ba9a4ef37444292d1dbb196ddf6685201aeb7a3e55  ./codex-resources/voice/lib/libgstapp-1.0.so.0
+bfcc89186cf90dd095d27978aa7cd3ff912e3002bb5d6ac008781a1a29f0a25a  ./codex-resources/voice/lib/libgstaudio-1.0.so.0
+0e4491ba0bdc1dbad4e44e4e2192f1278e12e20fb2a6d93497b6af21ec11a8a0  ./codex-resources/voice/lib/libgstbase-1.0.so.0
+423a79e2f06c0c4d6797122834d04f328ef0ce73b26fa820b88e74dc9e82e2a3  ./codex-resources/voice/lib/libgstnet-1.0.so.0
+409cf4d15a08c59519aa9c9ea69dec0cf1191bdae4e0ecbaa8faae14b2d5bc3e  ./codex-resources/voice/lib/libgstpbutils-1.0.so.0
+dd7830570bcd335bd18ec69b8c99cd2716c3e341edbcb3696d2ef9d2e5c8f75c  ./codex-resources/voice/lib/libgstreamer-1.0.so.0
+80276c95100bb873715026f63c18621ec97beb5312e8076490c489096c029b3f  ./codex-resources/voice/lib/libgstrtp-1.0.so.0
+e833e734e04ae0c7a90251582eea782fd304b299f11f16444ede45e319d9233f  ./codex-resources/voice/lib/libgsttag-1.0.so.0
+5336abeb757573a9f0577142dc4e81c60e6a725d57fb172ea52cbe105f63bbe2  ./codex-resources/voice/lib/libgstvideo-1.0.so.0
+b5c96edabcd6f9a9e444c325b0fd191ad480555cea7cc799970507303d413fa6  ./codex-resources/voice/lib/libintl.so.8
+c697ed46d0d161b5636ec0953524159b20931a4bfe1c4ba0e2854a742cbc6a82  ./codex-resources/voice/lib/libopus.so.0
+ed12ebb1003748d284f98c4f90f060a80e25f085b0251c8d8ebcc7fa8ba58f35  ./codex-resources/voice/lib/libpcre2-8.so.0
+284a7e1475cccabdda7fb91d9917a95a1abfbe73688033acc7ac27241d97ceca  ./codex-resources/voice/lib/libz.so.1
+ad2eec519ebd4b5df86ea84dff24ae3bfa2edea846a703b58902dd221ae375db  ./codex-resources/voice/licenses/LGPL-2.1.txt
+17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c  ./codex-resources/voice/licenses/libffi.txt
+01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551  ./codex-resources/voice/licenses/Opus.txt
+197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811  ./codex-resources/voice/licenses/PCRE2.md
+d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5  ./codex-resources/voice/licenses/proxy-libintl.txt
+5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb  ./codex-resources/voice/licenses/sljit.txt
+e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2  ./codex-resources/voice/licenses/zlib.txt
+49229b4906e74a29707293e6ad98f873c52c919002cee4e42a9c0b558c55c4c0  ./codex-resources/voice/manifest.json
+40097a1799441051aa0b6645cdc819cceb19be73cdd265eb602aa2b15e0b1f48  ./codex-resources/voice/NOTICE.md
+2165ef3d5f57e794655b64e8f4c3c6348571aa482eed560ecbd5caf7cde3645f  ./codex-resources/voice/runtime.json
+e2f6b124f6277e7c3c4f5c7cc8830c66190f671ad65e972bb2cc9507dbfcb937  ./codex-resources/voice/sources.json
+7feeacd883e1dc749847936948c378653c80a69ec4a9542f0f126b411882c179  ./codex-resources/zsh/bin/zsh

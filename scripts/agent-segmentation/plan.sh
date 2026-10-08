@@ -21,6 +21,8 @@
 # kind and a LOGIN MODE the liveness switch reads from the registry
 # /etc/ctdc-accounts.conf (root 0644, "name kind login_mode preloaded"):
 #   agent  login_mode claude  -- Claude CLI credentials (refresh within 7d)
+#   agent  login_mode codex   -- Codex CLI login (~/.codex/auth.json refreshed within 14d)
+#                                AND its codex remote-control unit running (2026-10-08)
 #   agent  login_mode ssh     -- no Claude creds; a client (Cowork desktop) SSHes
 #                                in; alive while last SSH login <= 7d
 #   service login_mode none   -- never logs in; nologin shell; alive = signer
@@ -60,6 +62,9 @@ OPS_ETC="/etc/ctdc-ops";     OPS_SECRETS="${OPS_ETC}/ops-secrets.env"
 OPERATOR_HOME="$(getent passwd "${OPERATOR_USER}" | cut -d: -f6)"
 COWORK_PUB="${OPERATOR_HOME}/.ssh/cowork_ed25519.pub"
 RC_UNIT="corporatetraveldc-claude-remote-control.service"
+CODEX_RC_UNIT="corporatetraveldc-codex-remote-control.service"
+CODEX_UNIT_SRC="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/scripts/agent-segmentation/units/${CODEX_RC_UNIT}"
+CODEX_ARTIFACTS="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/config/codex/artifacts.sha256"
 REGISTRY="/etc/ctdc-accounts.conf"   # name kind login_mode preloaded(0|1); NOT under /etc/ctdc-agent (0750 root:ctdc-agents -- the operator and ctdc-ops could not read it there)
 AGENTS_SLICE_SRC="${REPO_ROOT}/.config/systemd/user/agents.slice"
 HUMANS_SLICE_SRC="${REPO_ROOT}/.config/systemd/user/humans.slice"
@@ -109,8 +114,10 @@ for n in "$ADD_AGENT" "$ADD_HUMAN" "$ADD_SERVICE" "$ACTIVATE" "$REHOME_FROM" "$R
     [[ -z "$n" || "$n" =~ ^[a-z_][a-z0-9_-]{1,31}$ ]] || { echo "refusing: bad account name '$n'" >&2; exit 2; }
     [[ "$n" == "$OPERATOR_USER" || "$n" == root ]] && { echo "refusing: '$n' is not a team account" >&2; exit 2; }
 done
-case "$LOGIN_MODE" in ""|claude|ssh) ;; *) echo "refusing: --login-mode must be claude or ssh" >&2; exit 2 ;; esac
-[[ -n "$LOGIN_MODE" && -z "$ADD_AGENT" ]] && { echo "refusing: --login-mode applies to --add-agent only" >&2; exit 2; }
+case "$LOGIN_MODE" in ""|claude|ssh|codex) ;; *) echo "refusing: --login-mode must be claude, codex or ssh" >&2; exit 2 ;; esac
+# 2026-10-08: --login-mode also applies to --activate (switch a preloaded agent's mode, e.g. claude -> codex)
+[[ -n "$LOGIN_MODE" && -z "$ADD_AGENT$ACTIVATE" ]] && { echo "refusing: --login-mode applies to --add-agent or --activate only" >&2; exit 2; }
+[[ "$LOGIN_MODE" == ssh && -n "$ACTIVATE" ]] && { echo "refusing: switching to ssh mode at activation is not supported (needs an inbound key: use --add-agent)" >&2; exit 2; }
 [[ -n "$ADD_AGENT" && -z "$LOGIN_MODE" ]] && LOGIN_MODE=claude
 [[ "$LOGIN_MODE" == ssh && -z "$SSH_PUBKEY_FILE" && -n "$ADD_AGENT" ]] && { echo "refusing: --login-mode ssh needs --ssh-pubkey-file (the client's public key, e.g. ~/.ssh/cowork_ed25519.pub)" >&2; exit 2; }
 (( PRELOAD )) && [[ -z "$ADD_AGENT$ADD_SERVICE" ]] && { echo "refusing: --preload applies to --add-agent / --add-service" >&2; exit 2; }
@@ -219,7 +226,9 @@ if [[ -n "$ADD_AGENT" ]]; then
     run "${REPO_ROOT}/scripts/skill-grants.sh grant ${U} '*'"
     run "${REPO_ROOT}/scripts/skill-grants.sh apply --execute"
     note "2026-10-04: skills are GRANTED, not copied by the account -- every tracked + pinned vendor skill by default (grant ${U} *); claw back with: sudo scripts/skill-grants.sh deny ${U} <skill> [--task ID] [--until ISO+offset]. apply also merges the context-guardian hooks into ${H}/.claude/settings.json (as ${U}). The hourly corporatetraveldc-skill-grants.timer keeps it reconciled."
-    if [[ "$LOGIN_MODE" == claude ]]; then
+    if [[ "$LOGIN_MODE" == codex ]]; then
+        note "login-mode codex: no Claude CLI; the Codex CLI and its remote-control unit are installed below (codex_setup)"
+    elif [[ "$LOGIN_MODE" == claude ]]; then
         note "PREREQ: install the claude CLI for ${U} (${H}/.local/bin/claude, same method as the operator), then one-time auth AND the workspace-trust prompt for ${H}: sudo -u ${U} -i claude (accept 'Yes, I trust this folder', /exit) -- a headless unit parks on that dialog otherwise (2026-10-04 16:25)"
         note "Codex: not part of the first migration (operator 2026-10-03); later = install its CLI for ${U} + remote-access flag, no re-migration"
     else
@@ -285,6 +294,8 @@ if [[ -n "$ADD_AGENT" ]]; then
 
         step "rotate every key an agent could read before the split" "'Rotation'"
         note "operator action, names only: DISPATCH_ADMIN_TOKEN, NTFY_TOKEN, NEXTCLOUD_APP_PASSWORD, BOARD_KEY (NWWS already decided 10-03); then re-run the shared secrets step"
+    elif [[ "$LOGIN_MODE" == codex ]]; then
+        codex_setup "${U}" "${H}"
     elif [[ "$LOGIN_MODE" == ssh ]]; then
         step "additional agent ${U} (login-mode ssh): slice + env only -- no remote-control unit, the client connects over SSH" "'Account kinds'"
         run "runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/$(id -u ${U} 2>/dev/null || echo UID) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ${U} 2>/dev/null || echo UID)/bus systemctl --user daemon-reload || true"
@@ -336,6 +347,40 @@ if [[ -n "$ADD_SERVICE" ]]; then
     fi
 fi
 
+# 2026-10-08: Codex for a codex-mode agent -- the CLI is COPIED from the operator's
+# verified standalone install (digest pinned in config/codex/artifacts.sha256),
+# never fetched with the vendor's curl|sh installer; then its own remote-control
+# unit (installed disabled until the account has logged in).
+codex_setup() {   # <user> <home>
+    local U="$1" H="$2" ver line src sum
+    line=$(grep -v '^#' "$CODEX_ARTIFACTS" | grep -m1 'codex-' || true)
+    sum=${line%% *}; ver=$(echo "$line" | awk '{print $2}' | sed -E 's/^codex-([^-]+)-(.*)$/\1-\2/')
+    src="${OPERATOR_HOME}/.codex/packages/standalone/releases/${ver}/bin/codex"
+    # 2026-10-08: the WHOLE standalone package, not the binary alone -- the binary
+    # refuses to run without it ("this CLI has no complete local package"; the first
+    # activation failed that way). Checked file by file against the signed manifest.
+    # SUPERSEDED 2026-10-08: install -m 0755 <binary> ~/.local/bin/codex
+    local rel="${OPERATOR_HOME}/.codex/packages/standalone/releases/${ver}" pk="${H}/.codex/packages/standalone"
+    local man; man="$(dirname "$CODEX_ARTIFACTS")/package-${ver}.sha256"
+    step "Codex CLI for ${U}: verified copy of the ${ver} standalone package (no download)" "'Account kinds' (codex)"
+    run "echo '${sum}  ${src}' | sha256sum --check --strict --quiet"
+    run "(cd ${rel} && grep -v '^#' ${man} | sha256sum --check --strict --quiet)"
+    run "install -d -m 0700 -o ${U} -g ${U} ${H}/.local/bin ${H}/.codex ${H}/.codex/packages ${pk} ${pk}/releases ${H}/.config/systemd/user"
+    run "cp -a --no-preserve=ownership ${rel} ${pk}/releases/ && chown -R ${U}:${U} ${H}/.codex/packages"
+    run "diff -r ${rel} ${pk}/releases/${ver}"
+    run "ln -sfn ${pk}/releases/${ver} ${pk}/current && ln -sfn ${pk}/current/bin/codex ${H}/.local/bin/codex && chown -h ${U}:${U} ${pk}/current ${H}/.local/bin/codex"
+    step "Codex remote-control unit for ${U} (installed DISABLED until it has logged in)" "'Account kinds' (codex)"
+    run "install -m 0644 -o ${U} -g ${U} ${CODEX_UNIT_SRC} ${H}/.config/systemd/user/${CODEX_RC_UNIT}"
+    # unconditional (idempotent): the operator cannot see into the account's home in a
+    # dry run, and a dry run must show every step the execute run takes
+    run "runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/$(id -u ${U} 2>/dev/null || echo UID) systemctl --user disable --now ${RC_UNIT} 2>/dev/null || true"
+    run "rm -f ${H}/.config/systemd/user/${RC_UNIT} && rm -rf ${H}/.config/systemd/user/${RC_UNIT}.d"
+    note "no Claude remote-control unit on a codex account: this account runs Codex, not Claude"
+    run "runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/$(id -u ${U} 2>/dev/null || echo UID) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ${U} 2>/dev/null || echo UID)/bus systemctl --user daemon-reload || true"
+    note "then, in the SAME sitting (liveness checks hourly): sudo -u ${U} -i codex login --device-auth   (approve the code on your phone or laptop)"
+    note "then: runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/\$(id -u ${U}) systemctl --user enable --now ${CODEX_RC_UNIT}   and pair: sudo -u ${U} -i codex remote-control pair"
+}
+
 # ------------------------------------------------------------------ activate --
 if [[ -n "$ACTIVATE" ]]; then
     U="$ACTIVATE"; H="/home/${U}"
@@ -347,11 +392,14 @@ if [[ -n "$ACTIVATE" ]]; then
     run "chage -E -1 ${U}"
     run "usermod -U ${U} 2>/dev/null || usermod -p '*' ${U}"
     if [[ "${rkind:-agent}" != service ]]; then run "loginctl enable-linger ${U}"; fi
+    if [[ -n "$LOGIN_MODE" ]]; then note "login mode ${rmode:-claude} -> ${LOGIN_MODE} (registry)"; rmode="$LOGIN_MODE"; fi
     registry_set "${U}" "${rkind:-agent}" "${rmode:-claude}" 0
+    [[ "$rmode" == codex ]] && codex_setup "${U}" "${H}"
     note "then: ${REPO_ROOT}/scripts/board-signer-ctl.sh activate ${U} activated"
     case "${rmode:-claude}" in
         claude) note "then the normal first-contact steps: install the CLI for ${U}, sudo -u ${U} -i claude (auth + trust), enable its remote-control unit: runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/\$(id -u ${U} 2>/dev/null || echo UID) systemctl --user enable --now ${RC_UNIT}" ;;
         ssh)    note "then the client SSHes in as ${U}; its last login is its liveness" ;;
+        codex)  note "codex: CLI + unit installed above; log in and enable in the same sitting (notes above)" ;;
         *)      note "service: nothing else -- it is live as soon as its signer is active" ;;
     esac
 fi
