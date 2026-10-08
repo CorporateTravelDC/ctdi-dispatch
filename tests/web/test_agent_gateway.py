@@ -295,3 +295,22 @@ def test_a_link_signed_after_kill_all_never_becomes_a_token(env):
     with pytest.raises(gw.GatewayError) as e:
         gw.exchange_code(code, cid, REDIRECT, verifier)
     assert e.value.error == "invalid_grant"                            # connector still disabled
+
+
+def test_every_tool_call_is_in_the_audit_chain_without_its_content(env):
+    """2026-10-08 (security review 07): tools/call was executed but never audited --
+    only the last-call time was kept. Now each call leaves an agent.tool.call event
+    naming connector, account, tool and outcome, with a hash of the arguments only."""
+    _, tok = _link(env)
+    secret_draft = "draft body that must not be copied into the audit log"
+    _mcp(env, tok["access_token"], "tools/call", {"name": "board_post", "arguments": {
+        "to": "dispatch", "thread": "coord", "subject": "audit", "body": secret_draft}})
+    _mcp(env, tok["access_token"], "tools/call", {"name": "no_such_tool", "arguments": {}})
+    with db.conn() as c:
+        rows = [(r[0], r[1]) for r in c.execute("SELECT action, detail FROM audit_log WHERE action = ?", ("agent.tool.call",))]
+    details = [json.loads(d) if isinstance(d, str) else d for _, d in rows]
+    ok = [d for d in details if d.get("tool") == "board_post"]
+    assert ok and ok[-1]["outcome"] == "ok" and ok[-1]["connector"] == "cowork"
+    assert ok[-1]["account"] == "ctdc-agent-anthropic-cowork" and len(ok[-1]["args_sha256"]) == 64
+    assert any(d.get("tool") == "no_such_tool" and d["outcome"] == "unknown-tool" for d in details)
+    assert all(secret_draft not in json.dumps(d) for d in details)

@@ -342,6 +342,10 @@ if [[ -n "$ADD_SERVICE" ]]; then
     if (( PRELOAD )); then note "register the SIGNING key INACTIVE: (as the operator, NOT under sudo -- board-signer-ctl talks to the operator's rootless podman) T=\$(mktemp); sudo cat ${H}/.ssh/${U}_ed25519.pub > \$T; ${REPO_ROOT}/scripts/board-signer-ctl.sh register ${U} \$T --kind service --role service && ${REPO_ROOT}/scripts/board-signer-ctl.sh deactivate ${U} preloaded; rm -f \$T"
     else note "register the SIGNING key: (as the operator, NOT under sudo -- board-signer-ctl talks to the operator's rootless podman) T=\$(mktemp); sudo cat ${H}/.ssh/${U}_ed25519.pub > \$T; ${REPO_ROOT}/scripts/board-signer-ctl.sh register ${U} \$T --kind service --role service; rm -f \$T"; fi
     note "liveness for a service = signer key active AND no token revocation (24h) AND no kill order -- there is no login factor to go stale"
+    # 2026-10-08: a cloud agent reads its pamphlet from the VAULT (the gateway's MCP
+    # instructions point there); the home-directory copy is invisible to it. The
+    # ChatGPT onboarding missed this step and its first read was a 404.
+    note "cloud agent: publish its pamphlet where the gateway sends it (as the operator): ${REPO_ROOT}/scripts/agent-segmentation/publish-pamphlet-to-vault.sh ${U}"
     if [[ "$U" == ctdc-agent-llama ]]; then
         note "llama as a council/arena participant (Wave 2): after the signer is registered, sudo systemctl enable --now corporatetraveldc-llama-council.timer (unit installed by install-root-copies.sh; runs scripts/llama-council-responder.py AS ${U}, draft-only)"
     fi

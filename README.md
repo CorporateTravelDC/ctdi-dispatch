@@ -1,6 +1,6 @@
 # Corporate Travel Dispatch Intelligence (CTDI)
 
-Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
+Re-verified against code (the tree committed with this text, on top of `92231b1`) and live state on 2026-10-08 12:15Z / 08:15 ET. Previous full verification: HEAD `2c3f81b`, 2026-10-06 18:25Z.
 
 Multi-region real-time travel intelligence platform. Monitors commercial
 aviation (six FAA SWIM push feeds plus REST fallbacks), rail, weather and
@@ -15,18 +15,18 @@ Counts at the verification time above (re-run the commands; they move):
 
 | Measure | Value | Command |
 |---|---|---|
-| Containers running | 35 | `podman ps --format '{{.Names}}' \| wc -l` |
+| Containers running | 35 long-running (36 at measurement: one oneshot skill mid-run) | `podman ps --format '{{.Names}}' \| wc -l` |
 | `.container` Quadlets tracked in this repo | 76 (38 long-running, 38 `Type=oneshot` skills/jobs) | `ls .config/containers/systemd/*.container \| wc -l` |
-| Long-running Quadlets not running | 3: the `corporatetraveldc-client-demo@.container` template and the two `corporatetraveldc-demo-portal-{client,personal}` Quadlets (tracked, never installed live) | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
-| Active user timers | 63 (59 `corporatetraveldc-*`) | `systemctl --user list-timers --all` |
+| Long-running Quadlets not installed live | 2: `corporatetraveldc-demo-portal-{client,personal}` (tracked, never installed). The `corporatetraveldc-client-demo@.container` template is now installed but has no instance | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
+| Active user timers | 64 (59 `corporatetraveldc-*`) | `systemctl --user list-timers --all` |
 | Root (system) timers for this stack | 7 (watchdog 90 s, team-liveness, skill-grants, llama-council, NTS cert refresh, Tailscale cert renew, watchdog-tune one-shot) | `systemctl list-timers --all` |
-| Failed user or system units | 0 | `systemctl --user --failed; systemctl --failed` |
+| Failed user or system units | 1: `corporatetraveldc-integrity-sweep` (user), failing on the unsigned staged files of this batch; clears at the next sign | `systemctl --user --failed; systemctl --failed` |
 | Feeds reported by `/api/v1/feeds` | 20 (12 REST + 8 `push:*` heartbeats) | `curl -s http://127.0.0.1:8000/api/v1/feeds` |
 | Web API routes | 126 (82 in `src/web/main.py`, 44 in `src/web/routes/*.py`) | AST count of route decorators |
 | Postgres migrations | 73 (`src/common/pg_schema/0001`–`0073`) | `ls src/common/pg_schema/*.sql \| wc -l` |
 
 `GET /healthz` at the verification time returned
-`{"status":"ok","snapshot_age_seconds":6,"audit_count_24h":9,"token_count_active":6,"cps":{"score":"GREEN","label":"GO"}}`.
+`{"status":"ok","reason":null,"snapshot_age_seconds":1,"audit_count_24h":24,"token_count_active":6,"cps":{"score":"GREEN","label":"GO"}}`.
 It does not list feeds; `/api/v1/feeds` does.
 
 Container counts move in both directions by design: Quadlet-managed
@@ -66,20 +66,22 @@ ship under `security/`. `SECURITY.md` at the repo root is the authority.
 
 ## Status
 
-| Component | State (2026-10-06 18:25Z) |
+| Component | State (2026-10-06 18:25Z unless a row says otherwise) |
 |---|---|
 | Database | **Postgres** (`corporatetraveldc-pgsql`, `postgres:16-alpine`), `DISPATCH_DB_BACKEND=postgres` in `/etc/corporatetraveldc/dispatch.env`. Containers reach it over the unix socket in the shared `corporatetraveldc-pgsql-sock` volume mounted at `/var/run/postgresql`; the host reaches it on `127.0.0.1:5432`. Cutover 2026-09-18 (reference/chat/demo tables 09-19/09-20). 73 additive migrations in `src/common/pg_schema/`. `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset; `sqlite` survives only as a rollback backend selector. See `docs/POSTGRES_MIGRATION.md`. |
 | Ops dashboard (runner) | Tailnet-only: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). `ops.example.com` was retired 2026-08-02 and is hard-404'd by `_RETIRED_HOSTNAMES` in `src/runner/main.py`. |
 | Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. **The data it replays is stale:** demo-api serves `/var/lib/corporatetraveldc-demo-source/demo-source.db`, last written 2026-08-14 14:21Z; the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never fired. |
 | Web API | Public: `https://dispatch.example.com` (Cloudflare Access; nginx stamps `X-CTDI-Public: 1`, which pins every request to Tier 0 regardless of token). Path-scoped Access bypasses reach the app without login for at least `/robots.txt`, `/api/v1/board` and `/webhooks/*` (probed: 200, 200, 405-for-GET). Tailnet: `http://100.x.x.x:8000`. |
-| Agent gateway (OAuth 2.1 + remote MCP) | Live at `https://agents.example.com` since 2026-10-05: `/.well-known/oauth-authorization-server` 200, other paths 404. Per-agent connector slugs at `/mcp/{slug}`; consent is the operator's SSH-signed approval. Global kill: `scripts/agent-gateway.sh kill-all`. Code `src/web/routes/agent_gateway.py`, migrations 0071/0073. See `docs/AGENT_SEGMENTATION.md`. |
+| Agent gateway (OAuth 2.1 + remote MCP) | Live at `https://agents.example.com` since 2026-10-05: `/.well-known/oauth-authorization-server` 200, other paths 404. Per-agent connector slugs at `/mcp/{slug}`: `chatgpt`, `claude-code`, `codex`, `cowork` (all active 2026-10-08; `POST /mcp/codex` without a token returns 401). Consent is the operator's SSH-signed approval. Every tool call is recorded in the audit chain as `agent.tool.call` (connector, account, tool, outcome, SHA-256 of the arguments, never their content; since 2026-10-08). Global kill: `scripts/agent-gateway.sh kill-all`. Code `src/web/routes/agent_gateway.py`, migrations 0071/0073. See `docs/AGENT_SEGMENTATION.md`. |
 | Old MCP bridge (mcpo) | Retired 2026-08-18; nothing listens on 8082/8083. `mcp.example.com` returns 404 at the tunnel edge (ingress `http_status:404`). The nginx vhost `mcp.example.com.conf` is still present in the repo and live (local request returns 502). |
 | Operator console | `/console` on the tailnet name only (nginx tailnet vhost → web :8000); the public dispatch vhost 404s it. Sign-in is an SSH-signed approval (kind `console-login`). See `docs/OPERATOR_CONSOLE.md`. |
 | Executive Standard members edition | `members.executivestandard.example.com` (gated by `auth_request` → `corporatetraveldc-execstandard-verifier` on 127.0.0.1:8787) and `invite.executivestandard.example.com` (invite host; returns 200). Logic in `src/common/es_invites.py`, migration 0072. Their nginx vhosts live in the `executivestandard-website` repo. |
 | FAA SWIM push feeds | All six (FDPS, STDDS, TFMS, TBFM, ITWS, AIM/FNS) connected: every `push:*` heartbeat was 15–29 s old at verification. Load-shed by `scripts/thermal-ingest-guard.py` under pressure (see below), so "connected" is not "always running". |
 | Local LLM | One user unit, `corporatetraveldc-llama.service`: `llama-server` bound to `100.x.x.x:8093`, model `qwen3-4b-instruct-2507-q4_0.gguf`, `-np 2 --kv-unified -c 12288`, `-t 2 -tb 2`, `CPUQuota=200%`. Ollama is gone (nothing on :11434). |
 | ADS-B / ACARS / VDL2 receive | Up: ultrafeeder, acarsrouter, acarshub, dumpvdl2, acars-watcher and four aggregator feeders all running. |
-| Signed-manifest integrity sweep | Passing: the 18:20Z run reported "signature valid, all 1246 files match". The 17:35Z and 18:05Z runs failed on an unsigned working-tree edit to `scripts/stack-refresh.sh`, cleared by signed commit 2c3f81b at 18:10Z. |
+| Signed-manifest integrity sweep | 2026-10-08 12:10Z: **failing** on one unsigned staged file (this batch); clears at the next sign. The sweep now also checks build provenance of running local images: 2 verified, 16 unverified (built one commit before HEAD), 0 failed. Unverified clears when the images are rebuilt from signed HEAD. |
+| Team accounts (`/etc/ctdc-accounts.conf`) | 2026-10-08: agents `ctdc-agent-anthropic-claude` (login mode claude) and `ctdc-agent-openai-codex` (codex); services `ctdc-agent-anthropic-cowork`, `ctdc-agent-openai-chatgpt`, `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded). Liveness is an AND of login, signer key, no token revocation and no kill order (`scripts/team-liveness.sh`). See `docs/AGENT_SEGMENTATION.md`, `docs/AGENT_TRUST_MODEL.md`. |
+| Build integrity | Every local image: hash-locked Python (`requirements*.in` → `requirements*.txt`), base images by digest, apt from a dated snapshot, `--platform` pinned to the host, SBOM + provenance receipt per build. Levels 1–3 of `docs/REPRODUCIBLE_BUILDS.md`; bit-for-bit (Level 4) not claimed. |
 
 ---
 
@@ -230,12 +232,13 @@ timeout, never for a connection error.
 
 ### Route inventory
 
-126 route decorators: 82 in `src/web/main.py` (61 GET, 16 POST, 4 DELETE,
+126 route decorators (re-counted 2026-10-08): 82 in `src/web/main.py` (61 GET, 16 POST, 4 DELETE,
 1 PATCH) plus `routes/agent_gateway.py` 10, `watchlist.py` 10, `sectors.py` 8,
 `console.py` 6, `fids.py` 3, `webhooks.py` 3, `airspace.py` 2,
 `data_usage.py` 1, `remember.py` 1. Gating by dependency: 15 `require_tier`
-(14 Tier 1, 1 Tier 2), 38 `require_admin(<action>)` (37 handlers;
-`/admin/push-alert` and `/admin/push-test-alert` share one); the rest are anonymous
+(14 Tier 1, 1 Tier 2), 37 `require_admin(<action>)`
+dependencies on 37 handlers (`/admin/push-alert` and its alias
+`/admin/push-test-alert` share one handler); the rest are anonymous
 at the dependency layer, and several of those carry their own credential
 check in the handler (board key/signature, signed approvals, OAuth bearer,
 console session, webhook secret).
@@ -546,6 +549,12 @@ systemctl --user restart <units>    # or scripts/serialized-rollout.sh
 
 Never edit tracked files while a build, rollout or stack refresh is running.
 
+Every `podman build` passes `--platform linux/<host arch>` and is followed by
+`scripts/build/provenance.py record`, which refuses an image built for another
+architecture. `scripts/build/build-policy.py` enforces both statically. Python
+dependencies change only by editing a `*.in` intent file and re-locking with
+`scripts/build/lock-python.py`. Detail and limits: `docs/REPRODUCIBLE_BUILDS.md`.
+
 Image updates: `scripts/stack-refresh.sh --weekly` (timer
 `corporatetraveldc-weekly-external-image-update.timer`, Sun 04:15 ET / 08:15Z) pulls
 every external image, rebuilds every local image from signed HEAD, gates each
@@ -587,8 +596,8 @@ PYTHONPATH=src python3 src/ctdc_token/cli.py list
 # Postgres from the host
 psql -h 127.0.0.1 -p 5432 -U dispatch corporatetraveldc
 
-# Tests (877 `def test_` functions under tests/ at HEAD; parametrised cases add more)
-python -m pytest tests/ -x --tb=short
+# Tests (973 `def test_` functions under tests/ on 2026-10-08; parametrised cases add more)
+PYTHONPATH=src python -m pytest tests/ -x --tb=short
 ```
 
 ### Skill runtime rules
@@ -753,6 +762,11 @@ screenshots and review records.
   the LADD list, in fixtures, comments, tests and a skill doc, several of
   them looking like placeholders. It also found a LADD-listed aircraft in the
   published permanent watchlist. Details: `docs/security-reviews/2026-10-08-06-build-arch-and-ladd.md`.
+  Later the same day (review 07) a history scan found more: real hex codes
+  in five tests and fixtures, two foreign registrations in tests, and the
+  same identifiers in the git history of the public mirror and of two other
+  public repositories. All were replaced and the public histories rewritten
+  (`docs/security-reviews/2026-10-08-07-agents-and-adversarial-receipt.md`).
 
 ---
 
@@ -796,6 +810,23 @@ Additional Use Grant: [`LICENSE`](LICENSE). Summary, not a substitute:
 ---
 
 ## Superseded (kept for the record)
+
+### Replaced by the 2026-10-08 re-verification
+
+~~Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.~~
+
+| ~~Measure~~ | ~~Value (2026-10-06)~~ |
+|---|---|
+| ~~Long-running Quadlets not running~~ | ~~3: the `corporatetraveldc-client-demo@.container` template and the two `corporatetraveldc-demo-portal-{client,personal}` Quadlets (tracked, never installed live)~~ |
+| ~~Active user timers~~ | ~~63 (59 `corporatetraveldc-*`)~~ |
+| ~~Failed user or system units~~ | ~~0~~ |
+| ~~Signed-manifest integrity sweep~~ | ~~Passing: the 18:20Z run reported "signature valid, all 1246 files match". The 17:35Z and 18:05Z runs failed on an unsigned working-tree edit to `scripts/stack-refresh.sh`, cleared by signed commit 2c3f81b at 18:10Z.~~ |
+
+~~38 `require_admin(<action>)` (37 handlers; `/admin/push-alert` and `/admin/push-test-alert` share one)~~ (the source has 37 `require_admin(...)` dependencies)
+
+~~# Tests (877 `def test_` functions under tests/ at HEAD; parametrised cases add more)~~
+
+### Replaced by the 2026-10-06 verification
 
 Text removed or replaced by the 2026-10-06 verification pass against the live system, kept in its original wording for the chronological record. It is **not** current. The evidence for each correction is in `docs/docs-refresh-2026-10-06/CHANGES-core.md`.
 
