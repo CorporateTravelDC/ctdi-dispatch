@@ -36,6 +36,8 @@ One fallback from the single-operator origin is kept **by design**: an agent ope
 
 **Recommended rollout for anything beyond a single operator:** run every agent in a **confined, organizationally managed agent account** (`<prefix>-agent-<vendor>-<product>`: no sudo, no operator keyrings, no database credentials, its own signing key, liveness-switched) or through the agent gateway. **Agents running in a personal account are not recommended, and in a larger deployment they are not allowed as an organizational policy.** The operator-as-agent fallback exists for the single-operator case only.
 
+**Platform default (operator decision, 2026-10-08; settled, not reopened by reviews).** The operator runs **one remote-control session as themselves, with owner access, serving both Claude and ChatGPT**. Everything beyond that session is **delegated** to confined agent accounts and gateway connectors as above. A separate Claude Code session for Claude may run alongside it. Reviews record this session as the default, not as a finding. <del>It is an **exception**, not part of the model</del> (superseded 2026-10-08 by this paragraph for the owner session; the hygiene points above still apply to it).
+
 ## 1. The one fact that frames everything: the Unix account is the root of trust
 
 Mechanical human authority holds against **every principal that is not running as the operator's Unix account**:

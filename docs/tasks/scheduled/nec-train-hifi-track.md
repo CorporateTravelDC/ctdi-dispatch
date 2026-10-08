@@ -42,7 +42,7 @@ STEP 2 — Build summary:
 
 STEP 3 — Always fire ntfy alert:
 POST http://100.x.x.x:8000/admin/push-test-alert
-Authorization: Bearer ***REMOVED***
+Authorization: Bearer <DISPATCH_ADMIN_TOKEN from /etc/corporatetraveldc/svc env, never written here>
 Content-Type: application/json
 Body: {"message": "NEC HIFI: [N] trains tracked, [D] delayed. Worst: [train#] +[min]min. [on-time count] on time."}
 

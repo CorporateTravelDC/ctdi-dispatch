@@ -54,7 +54,7 @@ STEP 2 — Determine signal type:
 STEP 3 — Decision:
 IF type is "adsb_icao" AND seen < 30 AND rssi is present (ground receiver confirmed):
   POST http://100.x.x.x:8000/admin/push-test-alert
-  Authorization: Bearer ***REMOVED***
+  Authorization: Bearer <DISPATCH_ADMIN_TOKEN from /etc/corporatetraveldc/svc env, never written here>
   Content-Type: application/json
   Body: {"message": "<TARGET_LABEL> ADS-B acquired (ground): [lat]N [lon]W [alt_baro]ft [gs]kts RSSI:[rssi]dBm"}
   Report: "ADS-B GROUND ACQUIRED — alert fired."

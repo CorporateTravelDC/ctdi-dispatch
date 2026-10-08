@@ -51,7 +51,7 @@ Extract: lat, lon, alt_baro, alt_geom, gs, track, true_heading, rssi, seen, type
 
 STEP 2 — Always fire position alert regardless of signal type or altitude:
 POST http://100.x.x.x:8000/admin/push-test-alert
-Authorization: Bearer ***REMOVED***
+Authorization: Bearer <DISPATCH_ADMIN_TOKEN from /etc/corporatetraveldc/svc env, never written here>
 Content-Type: application/json
 Body: {"message": "<TARGET_LABEL> HIFI: [lat]N [lon]W [alt_baro]ft [gs]kts hdg[track] type:[type] seen:[seen]s"}
 
