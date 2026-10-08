@@ -1419,7 +1419,9 @@ _TDLS_AIRWAY_RE = re.compile(r"^[QJVT]\d+[A-Z]?$")
 _TDLS_PATTERNS = {
     # "003 CPDLC DCL DISPATCH MSG" / hypothetical "PDC" bodies
     "response_type": re.compile(r"\bPILOT RESPONSE\s*-\s*([A-Z]+)\b"),
-    "registration": re.compile(r"/AN\s+(N[A-Z0-9]{2,6})\b"),
+    # 2026-10-08: N or the synthetic Q registry (README "Synthetic aircraft identifiers").
+    # SUPERSEDED 2026-10-08: re.compile(r"/AN\s+(N[A-Z0-9]{2,6})\b")
+    "registration": re.compile(r"/AN\s+((?:N|Q)[A-Z0-9]{2,6})\b"),
     "cleared_to": re.compile(r"\bCLEARED TO\s+(K[A-Z]{3})\s+AIRPORT\b"),
     "expected_runway": re.compile(r"\bEXPECT RWY\s+(\d{1,2}[LRC]?)\b"),
     # anchored to the "TYPE/suffix Phhmm" shape ("B738/L P1725") so a bare

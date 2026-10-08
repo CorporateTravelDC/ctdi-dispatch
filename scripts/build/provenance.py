@@ -195,10 +195,26 @@ def name_key(name: str) -> str:
 
 # ------------------------------------------------------------------- record
 
+def host_arch() -> str:
+    """The architecture images must be built for on this host, in OCI terms.
+    Deployment profile: BUILD_EXPECTED_ARCH overrides (e.g. a cross-build host)."""
+    import platform
+    m = platform.machine().lower()
+    return os.environ.get("BUILD_EXPECTED_ARCH") or {"aarch64": "arm64", "x86_64": "amd64"}.get(m, m)
+
+
 def record(ref: str, name: str | None, containerfile: Path, context: Path) -> int:
     info = inspect_image(ref)
     if not info:
         print(f"provenance: image {ref} not found", file=sys.stderr)
+        return 1
+    # 2026-10-08 (security review 06): a cached foreign-architecture base image
+    # (left by an amd64 portability test) made four production builds amd64; they
+    # ran under emulation and could not load their Postgres driver. An image for
+    # the wrong architecture is never recorded, so it is held like a failed build.
+    if info.get("Architecture") != host_arch():
+        print(f"provenance: {ref} is {info.get('Architecture')}, this host builds {host_arch()} -- refusing "
+              f"(a cached foreign-architecture base image?)", file=sys.stderr)
         return 1
     try:
         sbom = make_sbom(ref, info)

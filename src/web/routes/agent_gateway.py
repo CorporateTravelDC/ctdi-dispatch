@@ -97,7 +97,7 @@ _PAGE = """<!doctype html><meta name=viewport content="width=device-width"><titl
 // 2026-10-05: a loopback callback (Claude Code CLI, RFC 8252) lives on the machine running the CLI -- often
 // not this one (claude mcp login --no-browser over SSH). Navigating there just shows "can't be reached", so
 // show the address to paste instead. https callbacks (claude.ai, ChatGPT) still redirect as before.
-function loopback(u){{return /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/)/.test(u)}}
+function loopback(u){{return /^http:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\])(:|\\/)/.test(u)}}
 async function poll(){{const r=await fetch('/oauth/authorize/status?req={req}');const j=await r.json();
 if(j.state==='redirect'&&loopback(j.location)){{document.getElementById('s').textContent='Signed. Code ready below (valid 10 minutes).';
 document.getElementById('u').textContent=j.location;document.getElementById('cb').hidden=false;

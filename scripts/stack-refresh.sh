@@ -369,11 +369,15 @@ for img in "${EXTERNALS[@]}"; do
 done
 
 # -- locals: build into a CHECK tag, gate, record the id, compare with running
+# 2026-10-08 (review 06): always build for the host's own platform. A digest-pinned
+# FROM resolves to whatever architecture is cached locally; an amd64 copy left by a
+# portability test produced amd64 production images once.
+BUILD_PLATFORM="linux/$(podman info --format '{{.Host.Arch}}')"
 for image in "${LOCAL_IMAGES[@]}"; do
   svc=$(svc_of "$image"); check=$(check_of "$image"); bdir="${LIMG_DIR[$image]}"; cfile="${LIMG_CF[$image]}"
   if (( DRY )); then log info "would build ${svc} from ${bdir}/${cfile} (running ${image} = $(imgid "$image"))"; continue; fi
   if [[ ! -f "${bdir}/${cfile}" ]]; then log warn "no build context ${bdir}/${cfile} for ${image} -- not rebuilt (restart only)"; continue; fi
-  if ! ( cd "$bdir" && nice -n 10 podman build -q -f "$cfile" -t "$check" --label "build-date=$(date -u +%Y%m%dT%H%M%SZ)" --label "service=${svc}" --label "stack-refresh=${MODE}" . >/dev/null 2>&1 ); then
+  if ! ( cd "$bdir" && nice -n 10 podman build -q --platform "$BUILD_PLATFORM" -f "$cfile" -t "$check" --label "build-date=$(date -u +%Y%m%dT%H%M%SZ)" --label "service=${svc}" --label "stack-refresh=${MODE}" . >/dev/null 2>&1 ); then
     log error "build FAILED for ${svc}"; hold_image "$image" "build-failed"; continue
   fi
   if ! podman run --rm --entrypoint sh "$check" -c 'cd /app && [ -x scripts/verified-exec.sh ] && scripts/verified-exec.sh true' >/dev/null 2>&1; then

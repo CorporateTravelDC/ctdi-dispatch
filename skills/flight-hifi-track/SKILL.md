@@ -218,7 +218,7 @@ Content-Type: application/json
   "message": "<CALLSIGN> [<HEX>] <REG> -- <LAT_ROUNDED>N <LON_ROUNDED>W <ALT_BARO>ft <GS>kts <FLIGHT_PHASE> | OOOI: watching"
 }
 ```
-Format: `DAL950 [658a1f] Q7YAH -- 33.6N 84.6W 6825ft 254kts CLIMB | OOOI: watching`. If the flight hasn't departed yet, skip the position fields entirely rather than padding — `<CALLSIGN> [<HEX>] <REG> -- not yet airborne. sched <HH:MM> EDT <DEST>. OOOI: watching` fits the cap and doesn't fabricate telemetry that doesn't exist yet.
+Format: `DAL950 [6fb69f] Q1XPP -- 33.6N 84.6W 6825ft 254kts CLIMB | OOOI: watching`. If the flight hasn't departed yet, skip the position fields entirely rather than padding — `<CALLSIGN> [<HEX>] <REG> -- not yet airborne. sched <HH:MM> EDT <DEST>. OOOI: watching` fits the cap and doesn't fabricate telemetry that doesn't exist yet.
 
 Phase from baro_rate/altitude: `baro_rate > +200` and `alt < 18000` → CLIMB; `baro_rate < -200` → DESCENT; `alt_baro < 1000` → GROUND; else CRUISE.
 

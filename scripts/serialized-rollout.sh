@@ -50,6 +50,8 @@ fi
 REPO=/opt/corporatetraveldc/private/ctdi-dispatch-internal
 WEBSITE=/opt/corporatetraveldc/private/csexecutiveservices-website
 D=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# 2026-10-08 (review 06): build for the host's own platform (see stack-refresh.sh).
+BUILD_PLATFORM="linux/$(podman info --format '{{.Host.Arch}}')"
 load() { cut -d' ' -f1 /proc/loadavg; }
 guard() { journalctl --user -u corporatetraveldc-thermal-ingest-guard -n 8 --no-pager -o cat 2>/dev/null | grep -oE 'load1=[0-9.]+ tier=[0-9]' | tail -1; }
 digest() { podman image inspect --format '{{.Digest}}' "$1" 2>/dev/null; }
@@ -144,7 +146,7 @@ for row in "${ROLLOUT[@]}"; do
       # (scheduled-podman-prune honours the window). duel H2: :previous is
       # re-pointed only on a REAL change, at the OLD image id, after the build.
       old_id=$(imgid_full "$image")
-      if ( cd "$bdir" && podman build -f "$cfile" -t "$image" --label build-date=$D --label "service=$(basename "${image%:*}" | sed 's/^corporatetraveldc-//')" . >/dev/null 2>&1 ); then
+      if ( cd "$bdir" && podman build --platform "$BUILD_PLATFORM" -f "$cfile" -t "$image" --label build-date=$D --label "service=$(basename "${image%:*}" | sed 's/^corporatetraveldc-//')" . >/dev/null 2>&1 ); then
         new_id=$(imgid_full "$image")
         if [[ -n "$old_id" && "$old_id" != "$new_id" ]]; then podman tag "$old_id" "${image%:*}:previous" 2>/dev/null || true; fi
         record_built "$image" "$new_id"

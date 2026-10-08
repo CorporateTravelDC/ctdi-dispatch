@@ -17,6 +17,7 @@ Generation is a deliberate maintenance step, never part of a build:
   lock-python.py --upgrade                  move everything forward (review the diff!)
   lock-python.py --seed-constraints F       first generation: prefer the versions in F (e.g. a running image's pip freeze)
   lock-python.py --check                    OFFLINE: every lock present, hashed, and generated from the current .in
+  lock-python.py --root DIR ...              operate on another repository that has its own build/policy.toml
 
 Resolution uses `uv pip compile --universal`: one lock valid on every
 platform (environment markers), so aarch64 and x86_64 hosts install the same
@@ -128,7 +129,11 @@ def main(argv=None) -> int:
     ap.add_argument("--upgrade", action="store_true")
     ap.add_argument("--upgrade-package", action="append", default=[])
     ap.add_argument("--seed-constraints", type=Path)
+    ap.add_argument("--root", type=Path, help="repository root (default: the one containing this script)")
     a = ap.parse_args(argv)
+    global ROOT
+    if a.root:
+        ROOT = buildlib.repo_root(a.root.resolve() / "build" / "policy.toml")
     policy = buildlib.load_policy(ROOT)
     if a.setup:
         return setup()

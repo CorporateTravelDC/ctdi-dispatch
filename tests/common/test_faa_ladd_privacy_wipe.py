@@ -23,7 +23,7 @@ def test_faa_upsert_ladd_refuses_to_wipe_on_empty_input():
         db._db_path = lambda: Path(tmp.name)
         db.init_db_all()
 
-        stored = db.faa_upsert_ladd(["Q43CH", "Q8M5S", "Q49AD"])
+        stored = db.faa_upsert_ladd(["Q43CH", "Q8M5S", "Q5T5C"])
         assert stored == 3
         assert db.faa_ladd_count() == 3
 

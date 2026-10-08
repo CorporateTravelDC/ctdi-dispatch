@@ -1,6 +1,6 @@
 # Build integrity: locked inputs, provenance and their limits
 
-> **Canonical document.** Current state of how runtime images are built, what is pinned, what is recorded, and what is **not** established. Changes after this point keep the old wording struck through with the date, per the repository convention. The pass that produced this document, with its evidence, is the frozen record `docs/security-reviews/2026-10-07-05-reproducible-builds.md`.
+> **Canonical document.** Current state of how runtime images are built (updated 2026-10-08 after review 06), what is pinned, what is recorded, and what is **not** established. Changes after this point keep the old wording struck through with the date, per the repository convention. The pass that produced this document, with its evidence, is the frozen record `docs/security-reviews/2026-10-07-05-reproducible-builds.md`.
 
 This document avoids "reproducible build" as a blanket claim. It uses four assurance levels:
 
@@ -38,11 +38,12 @@ Out of scope: an attacker with the operator's Unix account. That account can reb
 | Lock is current with its intent | **ENFORCED** at sign and sweep | `# input-digest:` in each lock vs the `.in` closure; `build-policy.py` locks check; the integrity sweep | tests 01, 01b |
 | Node dependency lock | **ENFORCED** | `npm ci` against the committed `package-lock.json` in a builder stage; the runtime image carries only the built static files | test 05 (real `npm ci` refuses a desynced pair) |
 | Base-image identity | **ENFORCED** | fully qualified `FROM name:tag@sha256:<index>`; `build-policy.py` base-images check; `pin-base-images.py --verify-remote` | tests 03, 04, 04b, 04c; three indexes verified to carry arm64 and amd64 |
+| Build architecture | **ENFORCED** (since 2026-10-08) | every `podman build` in the build scripts passes `--platform linux/<host arch>`; `provenance.py record` refuses an image whose architecture is not the host's, so it is held like a failed build; `build-policy.py` build-commands check | `Review06Incident` tests. Added after the 2026-10-08 incident: a digest names an index, and podman resolves it to whatever member is cached locally, so a cached amd64 copy produced amd64 production images (review 06) |
 | OS-package reconstruction | **PARTIAL** | `APT::Snapshot` set from `ARG APT_SNAPSHOT` before `apt-get update`; `build-policy.py` os-packages check | test 07c/07d; trial builds installed gnupg 2.4.7-21+deb13u1 from `snapshot.debian.org/…/20261007T000000Z`. Partial because the snapshot service is external and not mirrored here |
 | External binary / model verification | **PARTIAL** | `corporatetraveldc-llama.service` `ExecStartPre=sha256sum --strict --check config/llama/artifacts.sha256` (binary, its 18 libraries, the model) | test `test_llama_artifacts_are_checked_before_start`; digests match today. Partial: the files' upstream origin was never recorded, so the digests prove "unchanged since 2026-10-07", not "matches the vendor" |
 | Runtime executable downloads | **NONE FOUND in first-party code**; third-party exceptions listed | inventory below; `build-policy.py` downloads check for build paths | repository search, review 05 |
 | SBOM | **ENFORCED for locally built images** (generated from the built image) | `provenance.py record` in stack-refresh, serialized-rollout and build-images.sh; failure holds the image | trial: 168 components for web, re-derived identical; test 08 |
-| Image provenance receipt | **ENFORCED for locally built images built after this change** | same call sites | tests 09, 09b, 12, `SourceBinding` |
+| Image provenance receipt | **ENFORCED for locally built images built after this change** | same call sites. `build-images.sh` recorded no receipt for its runner build until 2026-10-08; every build command must now be followed by a record (`build-policy.py`) | tests 09, 09b, 12, `SourceBinding`, `Review06Incident` |
 | Deployment artifact binding | **ENFORCED for restarts done by serialized-rollout** (prevention). **DETECTED within 15 minutes** for every other start: timer jobs, crash restarts and manual restarts start from the tag without a gate | `provenance.py check-deploy` before each rollout restart; `provenance.py verify --running` in the integrity sweep checks every running container's actual image id **and** the current image behind every local tag, exited timer jobs included | tests 09, `FinalPassF1`; a name never recorded is UNVERIFIED (pre-provenance), not VERIFIED |
 | Bit-for-bit rebuild | **NOT CLAIMED** | none | experiment below |
 | Third-party image pinning | **NOT ENFORCED** (tags, auto-updated weekly) | stack-refresh's audit compares running ids with what it pulled; `provenance.py record-external` records an SBOM per pulled image | see "Third-party images" |
@@ -263,6 +264,7 @@ Security fixes are not delayed by locking: a lock refresh is one command plus re
 - **Locks:** universal; all verified fetchable and hash-matching on both architectures.
 - **Base pins:** multi-platform indexes carrying both architectures, verified against the registry.
 - **Build on amd64:** under emulation, the web image built, passed `pip check`, and installed exactly the same 59 Python package versions as the arm64 build.
+- **Cross-architecture builds share the local image store.** The amd64 test left the amd64 member of the base index cached, and the next production builds on this arm64 host resolved the same digest to it: four images came out amd64 and could not load their database driver (2026-10-08, review 06). Builds now pin `--platform` and the receipt step refuses a foreign architecture. Run cross-architecture tests on another host, or remove the foreign base images afterwards.
 - **amd64 runtime:** **not demonstrated.** This host's 16 KiB-page kernel cannot run some x86 native libraries under emulation (psycopg's bundled libraries fail to map). It needs a real x86_64 host.
 - **Not covered:** other architectures in the indexes (386, arm v7, ppc64le, riscv64, s390x) were not tested.
 
@@ -318,6 +320,7 @@ None of the new tooling names an organization, user, host, network or architectu
 | `BUILD_PROVENANCE_DIR` | `~/.local/state/build-provenance` | receipts and SBOMs |
 | `BUILD_TOOLS_VENV` | `~/.local/share/build-tools/venv` | uv for lock generation |
 | `BUILD_PROJECT` | repository directory name | project field in receipts |
+| `BUILD_EXPECTED_ARCH` | the host's architecture | the architecture receipts accept (a cross-build host sets it) |
 
 Image names come from the deployment's own rollout lists, and the llama artifact paths are this deployment's (`config/llama/artifacts.sha256`).
 
@@ -328,5 +331,5 @@ Image names come from the deployment's own rollout lists, and the llama artifact
 - **Model and binary origin was never recorded.** Integrity from today on is enforced; authenticity is not.
 - **Images already running were built before this change.** They report UNVERIFIED until stack-refresh or the rollout rebuilds them.
 - **Third-party images:** see above.
-- The **[operator LLC abbreviation]utive contact API** image (website repository) still uses `python:3.12-slim` by tag and exact pins without hashes. It gets a receipt, because its build goes through stack-refresh, but its Containerfile is not under this policy yet.
+- <del>The **[operator LLC abbreviation]utive contact API** image (website repository) still uses `python:3.12-slim` by tag and exact pins without hashes. It gets a receipt, because its build goes through stack-refresh, but its Containerfile is not under this policy yet.</del> SUPERSEDED 2026-10-08: the contact API image is now under the same policy (its own `build/policy.toml`, a hashed lock, base by digest, apt snapshot), checked with `build-policy.py --root <website repo>`.
 - The **Executive Standard verifier** runs code bind-mounted from the website repository, outside this repository's manifest (open finding S1, `docs/FINDINGS_2026-10-06.md`).
