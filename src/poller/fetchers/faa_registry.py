@@ -332,31 +332,39 @@ def fetch_faa_registry() -> dict:
         log.warning("FAA ACFTREF import failed (non-fatal): %s", e)
 
     # ── LADD list ─────────────────────────────────────────────────────────
+    # RETIRED 2026-10-08 (security review 06): the public LADD download is no
+    # longer called. The FAA discontinued that endpoint; the list now arrives
+    # only as CUI filter files imported by scripts/import-ladd-filter.py, which
+    # also re-applies the recorded removals. Calling db.faa_upsert_ladd() here
+    # (a FULL replace) would have wiped the CUI-sourced list and skipped every
+    # removal the day the endpoint answered with anything parseable.
+    # The retired code is kept below as comments for the record.
     ladd_count = 0
-    try:
-        ladd_zf  = _download_zip(_FAA_LADD_URL)
-        n_numbers = _parse_ladd(ladd_zf)
-        if not n_numbers:
-            # 2026-08-25 (Opus blind review C-31/C-14): an empty parse used
-            # to flow straight into db.faa_upsert_ladd([]), which wiped the
-            # entire privacy opt-out list to zero with nothing louder than
-            # an info-level "0 entries stored" line -- confirmed live, the
-            # table had been sitting empty. db.faa_upsert_ladd() now
-            # refuses an empty replacement on its own (defense in depth),
-            # but the real signal belongs here at ERROR, not swallowed into
-            # the same "non-fatal" bucket as an ordinary download hiccup --
-            # a persistently empty LADD source is a privacy-protection
-            # outage, not routine noise.
-            log.error(
-                "FAA LADD: parse produced zero entries -- privacy opt-out "
-                "list NOT updated (existing entries preserved). See the "
-                "_FAA_LADD_URL redirect note at the top of this file: the "
-                "FAA appears to have discontinued this endpoint."
-            )
-        ladd_count = db.faa_upsert_ladd(n_numbers)
-        log.info("FAA LADD: %d entries stored", ladd_count)
-    except Exception as e:
-        log.warning("FAA LADD import failed (non-fatal): %s", e)
+    # SUPERSEDED 2026-10-08: ladd_count = 0
+    # SUPERSEDED 2026-10-08: try:
+    # SUPERSEDED 2026-10-08:     ladd_zf  = _download_zip(_FAA_LADD_URL)
+    # SUPERSEDED 2026-10-08:     n_numbers = _parse_ladd(ladd_zf)
+    # SUPERSEDED 2026-10-08:     if not n_numbers:
+    # SUPERSEDED 2026-10-08:         # 2026-08-25 (Opus blind review C-31/C-14): an empty parse used
+    # SUPERSEDED 2026-10-08:         # to flow straight into db.faa_upsert_ladd([]), which wiped the
+    # SUPERSEDED 2026-10-08:         # entire privacy opt-out list to zero with nothing louder than
+    # SUPERSEDED 2026-10-08:         # an info-level "0 entries stored" line -- confirmed live, the
+    # SUPERSEDED 2026-10-08:         # table had been sitting empty. db.faa_upsert_ladd() now
+    # SUPERSEDED 2026-10-08:         # refuses an empty replacement on its own (defense in depth),
+    # SUPERSEDED 2026-10-08:         # but the real signal belongs here at ERROR, not swallowed into
+    # SUPERSEDED 2026-10-08:         # the same "non-fatal" bucket as an ordinary download hiccup --
+    # SUPERSEDED 2026-10-08:         # a persistently empty LADD source is a privacy-protection
+    # SUPERSEDED 2026-10-08:         # outage, not routine noise.
+    # SUPERSEDED 2026-10-08:         log.error(
+    # SUPERSEDED 2026-10-08:             "FAA LADD: parse produced zero entries -- privacy opt-out "
+    # SUPERSEDED 2026-10-08:             "list NOT updated (existing entries preserved). See the "
+    # SUPERSEDED 2026-10-08:             "_FAA_LADD_URL redirect note at the top of this file: the "
+    # SUPERSEDED 2026-10-08:             "FAA appears to have discontinued this endpoint."
+    # SUPERSEDED 2026-10-08:         )
+    # SUPERSEDED 2026-10-08:     ladd_count = db.faa_upsert_ladd(n_numbers)
+    # SUPERSEDED 2026-10-08:     log.info("FAA LADD: %d entries stored", ladd_count)
+    # SUPERSEDED 2026-10-08: except Exception as e:
+    # SUPERSEDED 2026-10-08:     log.warning("FAA LADD import failed (non-fatal): %s", e)
 
     # ── Sweep removed/deregistered aircraft ─────────────────────────────────
     # Added 2026-07-21. CORRECTED 2026-08-26 (Opus blind review C-7): this

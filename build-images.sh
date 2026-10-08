@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DATE="$(date -u +%Y%m%dT%H%M%SZ)"
+# 2026-10-08 (review 06): build for the host's own platform (see scripts/stack-refresh.sh).
+BUILD_PLATFORM="linux/$(podman info --format '{{.Host.Arch}}')"
 
 log()  { echo "[build-images] $*"; }
 die()  { echo "[build-images] ERROR: $*" >&2; exit 1; }
@@ -56,6 +58,7 @@ for service in web poller pusher ingest amtrak-tracker; do
     keep_previous "${tag}"
     log "Building ${tag}..."
     podman build \
+        --platform "${BUILD_PLATFORM}" \
         -f "${cf}" \
         -t "${tag}" \
         --label "build-date=${BUILD_DATE}" \
@@ -73,9 +76,17 @@ log "All five core images built successfully."
 keep_previous "localhost/corporatetraveldc-runner:latest"
 log "Building localhost/corporatetraveldc-runner:latest..."
 if podman build \
+    --platform "${BUILD_PLATFORM}" \
     -f Containerfile.runner \
     -t localhost/corporatetraveldc-runner:latest \
+    --label "build-date=${BUILD_DATE}" \
+    --label "service=runner" \
     .; then
+    # 2026-10-08 (review 06): this block had no provenance record, so the runner
+    # tag pointed at an unrecorded image and the sweep (correctly) FAILED it.
+    "${SCRIPT_DIR}/scripts/build/provenance.py" record --image localhost/corporatetraveldc-runner:latest \
+        --containerfile Containerfile.runner --context "${SCRIPT_DIR}" \
+        || die "provenance record failed for localhost/corporatetraveldc-runner:latest"
     log "  localhost/corporatetraveldc-runner:latest: OK"
 else
     log "  localhost/corporatetraveldc-runner:latest: FAILED"

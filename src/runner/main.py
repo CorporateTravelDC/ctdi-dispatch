@@ -2185,13 +2185,13 @@ async def sse_stream(request: Request):
 _DEMO_SYNTHETIC_ALERTS = [
     {"topic": "tfr-alert",         "title": "Sample TFR",       "message": "Example: temporary flight restriction posted near KDCA -- sample data for demonstration, not a real advisory."},
     {"topic": "wx-alerts",         "title": "Sample WX",        "message": "Example: METAR at KIAD shifting toward MVFR, ceiling trending down -- sample data for demonstration."},
-    {"topic": "flight-alerts",     "title": "Q59W5 [82ff31]",  "message": "Q59W5 [82ff31] DEM4821 -- sample position 38.9N 77.0W FL280 CRUISE | OOOI: watching (demo data)"},
+    {"topic": "flight-alerts",     "title": "Q92PX [82ff31]",  "message": "Q92PX [82ff31] DEM4821 -- sample position 38.9N 77.0W FL280 CRUISE | OOOI: watching (demo data)"},
     {"topic": "flight-alerts",     "title": "Q1ZT7 -- BAGGAGE","message": "Q1ZT7 XYZ1190: sample bags ~14:35 (approach, +20min) -- KDCA (demo data)"},
     {"topic": "cps",               "title": "Sample CPS",       "message": "Example: Critical Predictability State GO -- ceiling/vis/wind/precip/airspace/GDP nominal (sample data)."},
     {"topic": "hot-alerts",        "title": "Sample Hot Alert", "message": "Example: elevated ground-route impact flagged for a DC-metro corridor -- sample data for demonstration."},
     {"topic": "train-alerts",      "title": "Sample Rail",      "message": "Example: Acela 2151 running +8min into WAS -- sample data for demonstration."},
     {"topic": "dispatch",          "title": "Sample Health",    "message": "Example: all feeds nominal, watchdog last run clean -- sample data for demonstration."},
-    {"topic": "dispatch-debriefs", "title": "Sample Debrief",   "message": "DEM4821 Q59W5 82ff31 | 38.900N 77.000W 28000ft 410kts CRUISE | sq:2200 (demo data)"},
+    {"topic": "dispatch-debriefs", "title": "Sample Debrief",   "message": "DEM4821 Q92PX 82ff31 | 38.900N 77.000W 28000ft 410kts CRUISE | sq:2200 (demo data)"},
     {"topic": "ops-brief",         "title": "Sample Brief",     "message": "OPS BRIEF (sample) -- conditions nominal across tracked feeds. This is illustrative demo content, not a real operational brief."},
 ]
 

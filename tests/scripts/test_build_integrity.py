@@ -470,3 +470,30 @@ class FinalPassF1(unittest.TestCase):
             rc = self.p.verify([], running=True, deep=False, as_json=False)
         self.assertEqual(rc, 0)
         self.assertTrue(any("next start" in str(c.args[0]) for c in pr.call_args_list))
+
+
+class Review06Incident(unittest.TestCase):
+    """2026-10-08: a cached amd64 base image made four production builds amd64,
+    and one build path recorded no provenance (security review 06)."""
+
+    def test_a_foreign_architecture_image_is_never_recorded(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = load("provenance")
+            p.STORE = Path(td)
+            p.inspect_image = lambda ref: {"Id": "6" * 64, "Architecture": "amd64"}
+            p.make_sbom = lambda ref, info: (_ for _ in ()).throw(AssertionError("must refuse before the SBOM"))
+            with mock.patch.dict("os.environ", {"BUILD_EXPECTED_ARCH": "arm64"}), mock.patch("sys.stderr"):
+                self.assertEqual(p.record("localhost/app:latest", None, REPO / "Containerfile.web", REPO), 1)
+            self.assertFalse(any(Path(td).iterdir()))
+
+    def test_every_build_command_pins_the_platform_and_records_provenance(self):
+        bp = load("build-policy")
+        rows = bp.check_build_commands(REPO, {})
+        self.assertFalse([d for s, d in rows if s == "FAILED"], rows)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "scripts").mkdir()
+            (root / "build-images.sh").write_text("podman build -f Containerfile.x -t localhost/x:latest .\n")
+            details = " ".join(d for s, d in bp.check_build_commands(root, {}) if s == "FAILED")
+            self.assertIn("without --platform", details)
+            self.assertIn("not followed by a provenance record", details)

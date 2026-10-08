@@ -15,12 +15,21 @@ list. All are marked CUI SP-PRVCY.
 - **Never commit these files, or any value from them, to any repo.** They
   must never reach a public mirror. `scripts/scrub-public-tree.py` treats
   them like any other real identifier.
-- **Import, then delete the source files.**
-  `PYTHONPATH=src python3 scripts/import-ladd-filter.py <faa_source> <industry> [--remove <remove_file> ...]`
-  (a single filter file also works). This is a **full replace** of
-  `faa_ladd_aircraft` through `db.faa_upsert_ladd()`, which refuses to wipe
-  the table on an empty or failed parse. The database is the system of
-  record, not the intake files.
+- **Import, verify, then shred the source files** (operator rule, 2026-10-08).
+  1. `PYTHONPATH=src python3 scripts/import-ladd-filter.py <industry> [--remove <remove_file> ...]`
+     (the FAA source filter may be given too; the Industry file is a strict superset).
+     This is a **full replace** of `faa_ladd_aircraft` through `db.faa_upsert_ladd()`, which
+     refuses to wipe the table on an empty or failed parse. The host has no database
+     credentials in its shell, so the import runs inside a running container that has
+     them: copy the files to its `/tmp`, run the script on stdin, delete the copies.
+  2. **Random tail inquiry check:** sample random entries, US registrations included,
+     plus recorded removals, and query them through the real consumer path
+     (`db.faa_is_ladd()` / the registry lookups), not just a row count. Every sampled
+     entry must report LADD; every removal must not. Report counts only, never identifiers.
+  3. Only then `shred -u` the source files. The database is the system of record, not
+     the intake files.
+
+  <del>**Import, then delete the source files.** `PYTHONPATH=src python3 scripts/import-ladd-filter.py <faa_source> <industry> [--remove <remove_file> ...]` (a single filter file also works). This is a **full replace** of `faa_ladd_aircraft` through `db.faa_upsert_ladd()`, which refuses to wipe the table on an empty or failed parse. The database is the system of record, not the intake files.</del> SUPERSEDED 2026-10-08: the procedure did not verify the import through the lookup, and the source files were never deleted (12 had accumulated since 2026-08-25; shredded 2026-10-08).
 - **Removals persist.** Every `--remove` entry is recorded in
   `faa_ladd_removals` (migration `0063_ladd_removals.sql`: identifier,
   `removed_at`, source file basename, note) and re-applied after every
@@ -31,8 +40,23 @@ list. All are marked CUI SP-PRVCY.
 - **Not only N-numbers.** The data mixes US N-numbers, foreign registration
   marks and flight-ID/callsign strings. `faa_ladd_aircraft.n_number` is a
   flat membership column for all three.
+- **Lookup forms (fixed 2026-10-08).** Entries are stored exactly as the FAA
+  files list them, so US registrations carry the leading N (`N01AB`, illustrative), while
+  the FAA registry uses `01AB`. `db.faa_is_ladd()` now matches the
+  identifier as given plus the other registration form
+  (`db.ladd_lookup_keys()`); an N followed by a letter is a flight ID and is
+  never stripped. Before the fix the lookup stripped the N from every input
+  and **matched none of the ~24,000 US registrations** (0 of 200 sampled), so
+  Tier 1+ registry lookups reported `ladd: false` for them. Tier 0 always
+  receives `false` by design and the demo scrub matches raw tokens, so neither
+  was affected. Evidence: `docs/security-reviews/2026-10-08-06-build-arch-and-ladd.md`.
+- **One source only (2026-10-08).** The poller's registry fetcher no longer
+  calls the FAA's discontinued public LADD download. It used to full-replace
+  the table whenever that endpoint answered with anything parseable, which
+  would have wiped the CUI-sourced list and skipped the recorded removals.
+  The CUI import above is now the only writer.
 
-Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.
+Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
 
 ## Where LADD status is and is not exposed
 

@@ -715,6 +715,45 @@ placeholder files; the operator populates them on the deployment host. The
 audit log never leaves the host unredacted; rows are archived and signed by
 `audit-log-archive` (daily, maintenance window) rather than deleted.
 
+## Synthetic aircraft identifiers
+
+Documentation uses reserved values instead of real ones: IP addresses from
+RFC 5737 (`192.0.2.0/24` and its siblings), domains under RFC 2606 / RFC 6761
+(`example.com`). This repository does the same for aircraft. **Any
+illustrative, general aviation, or otherwise privacy-respected or
+privacy-withheld tail number is replaced by a registration in the synthetic
+`Q` registry**: `Q`, then a digit, then digits and/or letters (for example
+`Q7K2M`). No state registers aircraft under `Q`, so a `Q` registration
+can never identify a real aircraft. These values are purely for
+instructional and evidentiary purposes: tests, fixtures, examples,
+screenshots and review records.
+
+- **The default everywhere.** Tests, fixtures (including captured FAA and
+  ADS-B messages adapted as fixtures), code comments, documentation and demo
+  samples use `Q` registrations. A real aircraft's ICAO hex code is replaced
+  too, by a random value that the FAA and OpenSky registry tables show as
+  unassigned when it was generated.
+- **US N-number formatting.** Where the N-number format itself is the
+  subject (for example the leading-`N` handling), an impossible form is used:
+  no US registration begins `N0`, so `N01AB` illustrates the format without
+  naming an aircraft.
+- **Parsers accept the synthetic registry.** The FDPS GA-tail classifier,
+  the TDLS registration extractor and the runner map's search recognise `Q`
+  registrations alongside `N` ones, so synthetic fixtures exercise the same
+  code paths as real general-aviation traffic. Live traffic never carries a
+  `Q` registration.
+- **Enforced.** `tests/scripts/test_synthetic_identifiers.py` fails on any
+  US-registration-shaped identifier in tracked text. The public-mirror leak
+  gate (`scripts/scrub-public-tree.py`) refuses to publish one, and reports
+  only a count, never the value, since it may be on the FAA LADD privacy list.
+  Operational files that must name real aircraft (the live permanent
+  watchlist) stay private; the public mirror carries a synthetic
+  `.example.json` instead.
+- **Why.** On 2026-10-08 a sweep found 46 real registrations, 9 of them on
+  the LADD list, in fixtures, comments, tests and a skill doc, several of
+  them looking like placeholders. It also found a LADD-listed aircraft in the
+  published permanent watchlist. Details: `docs/security-reviews/2026-10-08-06-build-arch-and-ladd.md`.
+
 ---
 
 ## Reservation system integration

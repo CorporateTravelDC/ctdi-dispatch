@@ -1010,7 +1010,11 @@ _FRACTIONAL_CHARTER_PREFIXES = frozenset({
 # with 0) + up to 4 more alphanumerics. Deliberately loose on the
 # trailing-letters detail (real N-numbers end in 0-2 letters) -- a false
 # "ga_tail" here only downgrades an alert to storage, never loses the row.
-_TAIL_NUMBER_RE = re.compile(r"^N[1-9][0-9A-Z]{0,4}$")
+# 2026-10-08: also accepts the synthetic Q registry (README "Synthetic aircraft identifiers"):
+# no state registers aircraft under Q, so it never matches live traffic and lets
+# fixtures stand in for real GA / privacy-listed tails.
+# SUPERSEDED 2026-10-08: re.compile(r"^N[1-9][0-9A-Z]{0,4}$")
+_TAIL_NUMBER_RE = re.compile(r"^(?:N[1-9][0-9A-Z]{0,4}|Q[0-9][0-9A-Z]{1,4})$")
 
 
 def _operator_class(callsign: str | None) -> str:

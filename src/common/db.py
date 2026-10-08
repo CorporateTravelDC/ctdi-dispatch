@@ -3793,12 +3793,38 @@ def faa_lookup_by_hex(hex_code: str) -> dict | None:
     return d
 
 
+def ladd_lookup_keys(identifier: str) -> list[str]:
+    """Every stored form an identifier can take in faa_ladd_aircraft.
+
+    2026-10-08: the CUI filter files list US registrations WITH the leading N
+    ("N01AB") and the import stores them as given, while the FAA registry
+    stores them WITHOUT it ("01AB"). The old lookup stripped the N and matched
+    nothing: 0 of 200 sampled US entries were found (security review 06).
+    A callsign-shaped entry that merely starts with N ("NQQ000") is never
+    stripped -- only an N followed by a digit is a US registration."""
+    raw = (identifier or "").strip().upper()
+    if not raw:
+        return []
+    keys = [raw]
+    if len(raw) > 1 and raw[0] == "N" and raw[1].isdigit():
+        keys.append(raw[1:])                       # N01AB -> 01AB (older rows)
+    elif raw[0].isdigit():
+        keys.append("N" + raw)                     # registry form 01AB -> N01AB
+    return keys
+
+
 def faa_is_ladd(n_number: str) -> bool:
-    """Return True if N-number is on the LADD privacy list."""
-    key = n_number.upper().lstrip("N") if n_number.upper().startswith("N") else n_number.upper()
+    """Return True if the identifier (registration in either form, or a
+    flight-ID string) is on the LADD privacy list.
+    SUPERSEDED 2026-10-08: key = n_number.upper().lstrip("N") ... WHERE n_number=key
+    (stripped the N from every input, so US registrations never matched)."""
+    keys = ladd_lookup_keys(n_number)
+    if not keys:
+        return False
     with conn() as c:
         row = c.execute(
-            "SELECT 1 FROM faa_ladd_aircraft WHERE n_number=?", (key,)
+            "SELECT 1 FROM faa_ladd_aircraft WHERE n_number IN (" + ",".join("?" * len(keys)) + ")",
+            tuple(keys),
         ).fetchone()
     return row is not None
 
@@ -4327,7 +4353,7 @@ def opensky_lookup_by_registration(registration: str) -> dict | None:
 
     2026-09-01: found live while cross-counting unique tails between the
     two registries -- faa_aircraft_registry stores N-numbers bare (no
-    leading N: "474EA", not "N01AB"), and faa_lookup_by_n_number() already
+    leading N: "01AB", not "N01AB" -- illustrative, no US registration begins N0), and faa_lookup_by_n_number() already
     tolerates either form on input. This function never had the mirror
     fix: OpenSky's own registration column IS N-prefixed for US tails
     ("N01AB"), but this only ever tried the value as literally given.
@@ -4808,10 +4834,21 @@ def get_flight_plan_by_callsign(callsign: str, destination_hint: str | None = No
     carry an aircraft assignment yet (e.g. still "proposed" upstream of
     equipment assignment) -- a normal state, not a parse failure."""
     import re
-    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", callsign.strip())
-    if not m:
+    cs = callsign.strip().upper()
+    m = re.match(r"^([A-Z]{2,3})(\d+[A-Z]?)$", cs)
+    if m:
+        airline, flight_num = m.group(1), m.group(2)
+    elif len(cs) > 3 and cs.isalnum():
+        # 2026-10-08: a GA registration flying as its own callsign. The
+        # FDPS parser stores EVERY callsign split by position -- airline =
+        # cs[:3], flight_num = cs[3:] (ingest/parsers/fdps_parser.py) -- so
+        # a registration callsign lives under its first three characters / the rest.
+        # The airline-shaped regex above never
+        # matched it, and watch adds reported FDPS:N for every GA tail.
+        # SUPERSEDED 2026-10-08: `if not m: return None`
+        airline, flight_num = cs[:3], cs[3:]
+    else:
         return None
-    airline, flight_num = m.group(1).upper(), m.group(2)
 
     with conn() as c:
         row = None

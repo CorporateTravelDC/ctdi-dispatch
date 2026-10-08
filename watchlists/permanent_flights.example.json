@@ -1,0 +1,29 @@
+{
+  "_comment": "SYNTHETIC EXAMPLE of watchlists/permanent_flights.json (the live file is private). Aircraft use the synthetic Q registry and airline flights a reserved-looking ZZZ code -- see README 'Synthetic aircraft identifiers'. No entry identifies a real flight or aircraft.",
+  "watchlist": [
+    {
+      "id": "pf-example-ga-1",
+      "identifier": "Q7K2M",
+      "origin": "KTEB",
+      "destination": "KIAD",
+      "route_name": "Example GA arrival (synthetic tail)",
+      "notes": "GA aircraft watched by registration; real entries of this kind are privacy-sensitive",
+      "added": "2026-10-08",
+      "added_by": "example",
+      "days_active": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "sister_flight": null
+    },
+    {
+      "id": "pf-example-airline-1",
+      "identifier": "ZZZ1234",
+      "origin": "KBOS",
+      "destination": "KDCA",
+      "route_name": "Example scheduled airline flight",
+      "notes": "airline flight watched by ICAO callsign",
+      "added": "2026-10-08",
+      "added_by": "example",
+      "days_active": ["mon", "tue", "wed", "thu", "fri"],
+      "sister_flight": null
+    }
+  ]
+}

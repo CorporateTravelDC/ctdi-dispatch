@@ -28,7 +28,8 @@ function detectSearchType(raw) {
   const q = raw.trim().toUpperCase()
   if (!q) return null
   if (/^[0-9A-F]{6}$/.test(q))      return { type: 'icao',   param: 'icao',   value: q.toLowerCase(), label: 'HEX'      }
-  if (/^[A-Z]-?[0-9]/.test(q) || /^N[0-9]/.test(q)) return { type: 'reg', param: 'reg', value: q, label: 'REG' }
+  // 2026-10-08: N or the synthetic Q registry (README "Synthetic aircraft identifiers"). SUPERSEDED: /^N[0-9]/
+  if (/^[A-Z]-?[0-9]/.test(q) || /^[NQ][0-9]/.test(q)) return { type: 'reg', param: 'reg', value: q, label: 'REG' }
   if (/^[A-Z]{2,3}[0-9]/.test(q))  return { type: 'flight', param: 'flight', value: q, label: 'CALLSIGN' }
   return { type: 'flight', param: 'flight', value: q, label: 'CALLSIGN' }
 }

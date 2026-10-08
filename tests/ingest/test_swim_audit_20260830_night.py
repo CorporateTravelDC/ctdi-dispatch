@@ -119,7 +119,7 @@ def test_continuation_pair_matched_by_registration():
         with patch("shared.sector_coalesce.fire_family_alert",
                    side_effect=lambda *a, **k: fired.append(a)):
             parsed = {"origin": "KRIC", "destination": "KDCA",
-                      "registration": "N-123AA"}   # dash-insensitive
+                      "registration": "Q-07ZI"}   # dash-insensitive
             fdps_parser._check_diversion_continuation(parsed, "GUFI-CONT2", "AAL9861")
         rows = _rows("SELECT * FROM fdps_diversion_continuations")
         assert len(rows) == 1

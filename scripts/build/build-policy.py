@@ -219,10 +219,21 @@ def check_build_commands(root: Path, policy: dict) -> list[tuple[str, str]]:
         p = root / s
         if not p.is_file():
             continue
-        bad = [i for i, l in enumerate(p.read_text().splitlines(), 1)
+        text = p.read_text()
+        lines = text.splitlines()
+        bad = [i for i, l in enumerate(lines, 1)
                if "podman build" in l and not l.lstrip().startswith("#") and "--build-arg" in l]
         out.append((F, f"{s}: --build-arg on lines {bad} can override pinned build inputs") if bad
                    else (V, f"{s}: no build-arg overrides"))
+        # 2026-10-08 (review 06): each build pins the host platform and is followed by a
+        # provenance record (one build in build-images.sh had neither).
+        starts = [i for i, l in enumerate(lines) if "podman build" in l and not l.lstrip().startswith("#")]
+        for i in starts:
+            stmt = " ".join(lines[i:i + 8])
+            if "--platform" not in stmt:
+                out.append((F, f"{s}:{i + 1} podman build without --platform (a cached foreign-architecture base would be used)"))
+            if "provenance.py" not in " ".join(lines[i:i + 16]):
+                out.append((F, f"{s}:{i + 1} podman build not followed by a provenance record"))
     return out or [(NA, "no build scripts")]
 
 
