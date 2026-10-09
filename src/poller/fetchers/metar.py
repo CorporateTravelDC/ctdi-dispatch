@@ -21,9 +21,17 @@ ADDS_URL = (
     "?ids={stations}&format=raw&taf=false&hours=1"
 )
 
-# DC-area stations for CPS scoring.
-# DCA, IAD, BWI are primary; KFDK, KHEF, KJYO are secondary.
-DC_STATIONS = ["KDCA", "KIAD", "KBWI", "KFDK", "KHEF", "KJYO", "KGAI"]
+# Stations for CPS scoring.
+# 2026-10-09: read from the deployment profile (common.deployment_profile, airports
+# with role "metar"); the bundled reference profile reproduces the original list, which
+# stays below as the last-resort default. The name DC_STATIONS is kept for importers.
+# SUPERSEDED: DC_STATIONS = ["KDCA", "KIAD", "KBWI", "KFDK", "KHEF", "KJYO", "KGAI"] (hardcoded)
+_REFERENCE_STATIONS = ["KDCA", "KIAD", "KBWI", "KFDK", "KHEF", "KJYO", "KGAI"]
+try:
+    from common import deployment_profile as _profile
+    DC_STATIONS = list(_profile.airports("metar")) or list(_REFERENCE_STATIONS)
+except Exception:  # noqa: BLE001 -- a broken profile must not stop weather; the loader's own tests catch it
+    DC_STATIONS = list(_REFERENCE_STATIONS)
 
 FETCH_TIMEOUT = 10
 
@@ -51,7 +59,12 @@ def parse_metar(raw: str) -> MetarRecord:
             visibility_sm=None, wind_kt=None, precip_code=None, obs_time=None
         )
 
-    station = parts[0] if parts[0].startswith("K") else "UNKN"
+    # 2026-10-09: any 4-character ICAO station, not only K-prefixed US ones (a
+    # non-US deployment's stations parsed as "UNKN" -- review cross-check, Codex
+    # test_23). A leading METAR/SPECI report-type token is skipped.
+    # SUPERSEDED: station = parts[0] if parts[0].startswith("K") else "UNKN"
+    head = parts[1:] if parts[0] in ("METAR", "SPECI") and len(parts) > 1 else parts
+    station = head[0] if re.fullmatch(r"[A-Z][A-Z0-9]{3}", head[0]) else "UNKN"
     ceiling_ft: int | None = None
     visibility_sm: float | None = None
     wind_kt: int | None = None
