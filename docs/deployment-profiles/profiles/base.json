@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "deployment": {
+    "id": "CHANGE_ME",
+    "display_name": "CHANGE_ME",
+    "profile": "CHANGE_ME",
+    "environment": "staging",
+    "timezone": "UTC",
+    "locale": "en-US",
+    "jurisdiction": "CHANGE_ME",
+    "data_residency": "local",
+    "offline_mode": "degraded",
+    "retention_days": 90
+  },
+  "organization": {
+    "legal_name": "CHANGE_ME",
+    "industry": "CHANGE_ME",
+    "operator_roles": [
+      "owner"
+    ],
+    "regulated": false,
+    "compliance_frameworks": []
+  },
+  "geography": {
+    "country_codes": [],
+    "regions": [],
+    "service_areas": [],
+    "home_base": {
+      "latitude": null,
+      "longitude": null,
+      "radius_km": null
+    },
+    "airports": [],
+    "rail_stations": [],
+    "weather": {
+      "provider": "none",
+      "nws_areas": [],
+      "nws_wfos": []
+    },
+    "airspace": {
+      "static_layers": [],
+      "tfr_enabled": false
+    },
+    "distance_unit": "km",
+    "currency": "USD"
+  },
+  "sources": {
+    "enabled": [],
+    "disabled": [],
+    "credentials_ref": {},
+    "source_regions": {}
+  },
+  "modules": {
+    "enabled": [
+      "dashboard",
+      "tasks",
+      "notifications",
+      "audit",
+      "local_knowledge"
+    ],
+    "disabled": []
+  },
+  "workflows": {
+    "objects": [],
+    "state_machine": [],
+    "triggers": [],
+    "approvals": [],
+    "notifications": {
+      "channels": [
+        "in_app"
+      ],
+      "quiet_hours": {
+        "start": "22:00",
+        "end": "07:00"
+      },
+      "materiality_rules": []
+    }
+  },
+  "security": {
+    "network_exposure": "private_overlay",
+    "default_deny": true,
+    "human_signed_actions": [
+      "publish",
+      "deploy",
+      "export_sensitive",
+      "change_permissions"
+    ],
+    "agent_scopes": {},
+    "secrets_backend": "host_protected",
+    "pii_classes": [],
+    "audit": {
+      "hash_chain": true,
+      "independent_checkpoint": "required_for_high_assurance"
+    },
+    "backup": {
+      "encrypted": true,
+      "restore_test_required": true
+    }
+  },
+  "build": {
+    "target_platforms": [
+      "linux/amd64"
+    ],
+    "signed_source_required": true,
+    "receipt_required": true,
+    "sbom_required": true,
+    "runtime_image_identity_check": true
+  },
+  "integrations": {
+    "optional": [],
+    "forbidden": []
+  },
+  "deployment_gate": {
+    "requires_operator_review": true,
+    "requires_schema_validation": true,
+    "requires_source_entitlements": true,
+    "requires_test_replay": true,
+    "requires_privacy_review": true
+  }
+}

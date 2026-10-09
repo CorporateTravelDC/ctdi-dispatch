@@ -348,6 +348,27 @@ def _local_fdps_ac(callsign: str) -> dict | None:
     }
 
 
+def _remote_ac_by_hex(hex_code: str) -> dict | None:
+    """2026-10-08: airplanes.live FALLBACK (common.airplanes_live) -- only ever
+    called after the local sources above returned nothing. Off unless
+    AIRPLANES_LIVE_FALLBACK=1; LADD-listed identifiers are never sent."""
+    try:
+        from common import airplanes_live
+        return airplanes_live.by_hex(hex_code)
+    except Exception as e:  # noqa: BLE001
+        log.debug("airplanes.live hex fallback unavailable: %s", e)
+        return None
+
+
+def _remote_ac_by_callsign(callsign: str) -> dict | None:
+    try:
+        from common import airplanes_live
+        return airplanes_live.by_callsign(callsign)
+    except Exception as e:  # noqa: BLE001
+        log.debug("airplanes.live callsign fallback unavailable: %s", e)
+        return None
+
+
 def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> dict | None:
     """Resolve hex_id/registration for a flight watchlist entry from LOCAL
     sources only (this box's own ADS-B receiver, then already-ingested FDPS
@@ -378,6 +399,13 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
     _extract_aircraft_hex_registration/_extract_aircraft_position
     docstrings) -- a flight genuinely out of range of both sources returns
     None here, same as airplanes.live returning no contact used to.
+
+    2026-10-08: SUPERSEDES "local only" above for the fallback case. After every
+    local source has no contact, airplanes.live is asked (common.airplanes_live:
+    operator-whitelisted feeder, AIRPLANES_LIVE_FALLBACK=1, LADD identifiers never
+    sent). Local always answers first; a remote contact is ADS-B, so it carries
+    no OOOI authority (the sweep's confirmation gate is unchanged). The returned
+    dict then has "_source": "airplanes_live".
 
     `source` is a free-text tag recorded in the fired notification's detail
     (e.g. "tfms_out" vs "sweep") -- purely informational, does not change
@@ -430,7 +458,7 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
     _looks_like_callsign = bool(_re.fullmatch(r'[A-Za-z]{2,3}\d{1,4}[A-Za-z]?', ident))
     ident_clean = ident.upper().replace(" ", "")
     if _re.fullmatch(r'[0-9a-f]{6}', ident.lower()) and not _looks_like_callsign:
-        ac = _local_ac_by_hex(ident.lower())
+        ac = _local_ac_by_hex(ident.lower()) or _remote_ac_by_hex(ident.lower())
         resolved_via_hex = True
     elif expected_hex:
         # 2026-08-28 (operator directive, guardrail against a confirmed
@@ -464,7 +492,8 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
                 # else: leave resolved_via_hex False -- downstream
                 # identity-mismatch check handles a genuine disagreement.
         else:
-            ac = _local_ac_by_hex(expected_hex)
+            # local receiver first; airplanes.live only when it has no contact
+            ac = _local_ac_by_hex(expected_hex) or _remote_ac_by_hex(expected_hex)
             resolved_via_hex = True
     else:
         # Bootstrap phase only -- no confirmed hex exists yet, callsign is
@@ -484,6 +513,13 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             # Local ADS-B has nothing (likely out of receiver range) --
             # fall back to already-ingested FDPS SWIM data, still local.
             ac = _local_fdps_ac(ident_clean)
+            if ac:
+                callsign_live_confirmed = True
+        if not ac:
+            # 2026-10-08: every local source is dark -- airplanes.live fallback
+            # (live ADS-B under this callsign; position/identity only, no OOOI
+            # authority -- the sweep's confirmation gate still applies).
+            ac = _remote_ac_by_callsign(ident_clean)
             if ac:
                 callsign_live_confirmed = True
     ac_list = [ac] if ac else []
@@ -508,7 +544,7 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             db.set_watchlist_identity(entry["id"], hex_id=hex_id, registration=reg or None)
             log.info("%s: hex-locked to %s (%s) on first live contact (source=%s)",
                      ident, hex_id, reg or "no reg", source)
-            tracking_url = f"https://globe.airplanes.live/?icao={hex_id}"
+            tracking_url = f"https://globe.airplanes.live/?icao={hex_id}"   # hex only, never a flight number
             reg_str = f" ({reg})" if reg else ""
             watchlist_event_hit(
                 entry["id"],
@@ -519,6 +555,7 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
                     "registration": reg or None,
                     "tracking_url": tracking_url,
                     "source": source,
+                    "lookup": ac.get("_source") or "local",
                 },
                 priority=3,
             )
