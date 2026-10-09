@@ -131,7 +131,7 @@
   },
   "build": {
     "target_platforms": [
-      "linux/amd64"
+      "host"
     ],
     "signed_source_required": true,
     "receipt_required": true,

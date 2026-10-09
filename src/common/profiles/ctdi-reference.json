@@ -1,0 +1,319 @@
+{
+  "schema_version": "1.0",
+  "deployment": {
+    "id": "ctdi-reference",
+    "display_name": "CTDI reference deployment (Washington, DC)",
+    "profile": "chauffeur-regulated",
+    "environment": "production",
+    "timezone": "America/New_York",
+    "day_rollover": "05:00",
+    "locale": "en-US",
+    "jurisdiction": "US",
+    "data_residency": "local",
+    "offline_mode": "degraded",
+    "retention_days": 90
+  },
+  "organization": {
+    "legal_name": "Reference operator",
+    "industry": "executive_ground_transport",
+    "operator_roles": [
+      "owner"
+    ],
+    "regulated": true,
+    "compliance_frameworks": []
+  },
+  "geography": {
+    "country_codes": [
+      "US"
+    ],
+    "regions": [
+      "US-DC",
+      "US-VA",
+      "US-MD"
+    ],
+    "service_areas": [],
+    "home_base": {
+      "latitude": null,
+      "longitude": null,
+      "radius_km": null,
+      "coordinates_env": {
+        "latitude": "ULTRAFEEDER_LAT",
+        "longitude": "ULTRAFEEDER_LON"
+      }
+    },
+    "airports": [
+      {
+        "icao": "KDCA",
+        "name": "Ronald Reagan Washington National",
+        "roles": [
+          "surface_tracking",
+          "metar",
+          "core",
+          "fids",
+          "cps"
+        ],
+        "latitude": 38.852,
+        "longitude": -77.038,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KIAD",
+        "name": "Washington Dulles International",
+        "roles": [
+          "surface_tracking",
+          "metar",
+          "core",
+          "fids",
+          "cps"
+        ],
+        "latitude": 38.945,
+        "longitude": -77.456,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KBWI",
+        "name": "Baltimore/Washington International",
+        "roles": [
+          "surface_tracking",
+          "metar",
+          "core",
+          "cps"
+        ],
+        "latitude": 39.175,
+        "longitude": -76.668,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KFDK",
+        "name": "Frederick Municipal",
+        "roles": [
+          "metar",
+          "cps"
+        ],
+        "latitude": 39.418,
+        "longitude": -77.374,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KHEF",
+        "name": "Manassas Regional",
+        "roles": [
+          "metar",
+          "cps"
+        ],
+        "latitude": 38.721,
+        "longitude": -77.515,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KJYO",
+        "name": "Leesburg Executive",
+        "roles": [
+          "metar",
+          "cps"
+        ],
+        "latitude": 39.078,
+        "longitude": -77.558,
+        "tz": "America/New_York"
+      },
+      {
+        "icao": "KGAI",
+        "name": "Montgomery County Airpark",
+        "roles": [
+          "metar",
+          "cps"
+        ],
+        "latitude": 39.168,
+        "longitude": -77.166,
+        "tz": "America/New_York"
+      }
+    ],
+    "rail_stations": [
+      "WAS",
+      "BAL",
+      "WIL",
+      "PHL",
+      "TRE",
+      "NYP",
+      "NHV",
+      "NLC",
+      "BOS"
+    ],
+    "weather": {
+      "provider": "nws",
+      "nws_areas": [],
+      "nws_wfos": [
+        "LWX",
+        "AKQ",
+        "CTP",
+        "PHI"
+      ]
+    },
+    "airspace": {
+      "static_layers": [
+        "P-56A",
+        "P-56B",
+        "DC-FRZ",
+        "DC-SFRA"
+      ],
+      "tfr_enabled": true,
+      "notam_zones": {
+        "home": [],
+        "monitor": []
+      }
+    },
+    "atc_facilities": [
+      "ZDC",
+      "PCT"
+    ],
+    "geofence_radius_nm": 250,
+    "distance_unit": "mi",
+    "currency": "USD"
+  },
+  "sources": {
+    "enabled": [
+      "swim_fdps",
+      "swim_stdds",
+      "swim_tfms",
+      "swim_tbfm",
+      "swim_itws",
+      "swim_aim_fns",
+      "nwws_oi",
+      "nws_api",
+      "aviationweather_metar",
+      "faa_tfr",
+      "faa_nas_status",
+      "amtrak",
+      "local_adsb",
+      "local_acars_vdl2",
+      "faa_registry"
+    ],
+    "disabled": [
+      "eurocontrol_b2b",
+      "jasdat"
+    ],
+    "credentials_ref": {
+      "swim_fdps": "SWIM_NMS_PASS_FDPS",
+      "swim_stdds": "SWIM_NMS_PASS_STDDS",
+      "swim_tfms": "SWIM_NMS_PASS_TFMS",
+      "swim_tbfm": "SWIM_NMS_PASS_TBFM",
+      "swim_itws": "SWIM_NMS_PASS_ITWS",
+      "swim_aim_fns": "SWIM_NMS_PASS_AIM",
+      "nwws_oi": "NWWS_PASSWORD"
+    },
+    "source_regions": {
+      "amtrak": [
+        "NEC"
+      ]
+    }
+  },
+  "modules": {
+    "enabled": [
+      "dashboard",
+      "tasks",
+      "notifications",
+      "audit",
+      "local_knowledge",
+      "dispatch",
+      "aviation_watch",
+      "rail_watch",
+      "weather_watch",
+      "runsheets",
+      "client_communications"
+    ],
+    "disabled": []
+  },
+  "workflows": {
+    "objects": [
+      "reservation",
+      "passenger",
+      "vehicle",
+      "driver",
+      "flight_instance",
+      "watchlist_session"
+    ],
+    "state_machine": [
+      "booked",
+      "assigned",
+      "driver_enroute",
+      "on_location",
+      "passenger_onboard",
+      "completed",
+      "closed"
+    ],
+    "triggers": [],
+    "approvals": [
+      "sudo",
+      "council",
+      "council-close",
+      "connector-link",
+      "connector-hold",
+      "gateway-thaw",
+      "console-login"
+    ],
+    "notifications": {
+      "channels": [
+        "ntfy"
+      ],
+      "quiet_hours": {
+        "start": "23:00",
+        "end": "05:00"
+      },
+      "materiality_rules": []
+    }
+  },
+  "security": {
+    "network_exposure": "private_overlay",
+    "default_deny": true,
+    "human_signed_actions": [
+      "sudo",
+      "council",
+      "council-close",
+      "connector-link",
+      "connector-hold",
+      "gateway-thaw",
+      "console-login"
+    ],
+    "agent_scopes": {},
+    "secrets_backend": "host_protected",
+    "pii_classes": [
+      "passenger_identity",
+      "travel_itinerary",
+      "location_history"
+    ],
+    "audit": {
+      "hash_chain": true,
+      "independent_checkpoint": "required_for_high_assurance"
+    },
+    "backup": {
+      "encrypted": true,
+      "restore_test_required": true
+    }
+  },
+  "build": {
+    "target_platforms": [
+      "host"
+    ],
+    "signed_source_required": true,
+    "receipt_required": true,
+    "sbom_required": true,
+    "runtime_image_identity_check": true
+  },
+  "integrations": {
+    "optional": [
+      "mwaa_fids",
+      "airplanes_live_fallback",
+      "limoanywhere",
+      "ringcentral",
+      "3cx"
+    ],
+    "forbidden": []
+  },
+  "deployment_gate": {
+    "requires_operator_review": true,
+    "requires_schema_validation": true,
+    "requires_source_entitlements": true,
+    "requires_test_replay": true,
+    "requires_privacy_review": true
+  }
+}
