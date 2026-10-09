@@ -1,0 +1,601 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CTDI profile design contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "deployment",
+    "organization",
+    "geography",
+    "sources",
+    "modules",
+    "workflows",
+    "security",
+    "build",
+    "integrations",
+    "deployment_gate"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "deployment": {
+      "type": "object",
+      "required": [
+        "id",
+        "display_name",
+        "profile",
+        "environment",
+        "timezone",
+        "locale",
+        "jurisdiction",
+        "data_residency",
+        "offline_mode",
+        "retention_days"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "jurisdiction": {
+          "type": "string"
+        },
+        "data_residency": {
+          "type": "string"
+        },
+        "offline_mode": {
+          "type": "string"
+        },
+        "retention_days": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "organization": {
+      "type": "object",
+      "required": [
+        "legal_name",
+        "industry",
+        "operator_roles",
+        "regulated",
+        "compliance_frameworks"
+      ],
+      "properties": {
+        "legal_name": {
+          "type": "string"
+        },
+        "industry": {
+          "type": "string"
+        },
+        "operator_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "regulated": {
+          "type": "boolean"
+        },
+        "compliance_frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "geography": {
+      "type": "object",
+      "required": [
+        "country_codes",
+        "regions",
+        "service_areas",
+        "home_base",
+        "airports",
+        "rail_stations",
+        "weather",
+        "airspace",
+        "distance_unit",
+        "currency"
+      ],
+      "properties": {
+        "country_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "service_areas": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "home_base": {
+          "type": "object",
+          "required": [
+            "latitude",
+            "longitude",
+            "radius_km"
+          ],
+          "properties": {
+            "latitude": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "longitude": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "radius_km": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "airports": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "rail_stations": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "weather": {
+          "type": "object",
+          "required": [
+            "provider",
+            "nws_areas",
+            "nws_wfos"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "nws_areas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nws_wfos": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "airspace": {
+          "type": "object",
+          "required": [
+            "static_layers",
+            "tfr_enabled"
+          ],
+          "properties": {
+            "static_layers": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "tfr_enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "distance_unit": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sources": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "disabled",
+        "credentials_ref",
+        "source_regions"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "credentials_ref": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        },
+        "source_regions": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "modules": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "disabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflows": {
+      "type": "object",
+      "required": [
+        "objects",
+        "state_machine",
+        "triggers",
+        "approvals",
+        "notifications"
+      ],
+      "properties": {
+        "objects": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "state_machine": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "notifications": {
+          "type": "object",
+          "required": [
+            "channels",
+            "quiet_hours",
+            "materiality_rules"
+          ],
+          "properties": {
+            "channels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "quiet_hours": {
+              "type": "object",
+              "required": [
+                "start",
+                "end"
+              ],
+              "properties": {
+                "start": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "materiality_rules": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "security": {
+      "type": "object",
+      "required": [
+        "network_exposure",
+        "default_deny",
+        "human_signed_actions",
+        "agent_scopes",
+        "secrets_backend",
+        "pii_classes",
+        "audit",
+        "backup"
+      ],
+      "properties": {
+        "network_exposure": {
+          "type": "string"
+        },
+        "default_deny": {
+          "type": "boolean"
+        },
+        "human_signed_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "agent_scopes": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        },
+        "secrets_backend": {
+          "type": "string"
+        },
+        "pii_classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audit": {
+          "type": "object",
+          "required": [
+            "hash_chain",
+            "independent_checkpoint"
+          ],
+          "properties": {
+            "hash_chain": {
+              "type": "boolean"
+            },
+            "independent_checkpoint": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "backup": {
+          "type": "object",
+          "required": [
+            "encrypted",
+            "restore_test_required"
+          ],
+          "properties": {
+            "encrypted": {
+              "type": "boolean"
+            },
+            "restore_test_required": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "target_platforms",
+        "signed_source_required",
+        "receipt_required",
+        "sbom_required",
+        "runtime_image_identity_check"
+      ],
+      "properties": {
+        "target_platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "signed_source_required": {
+          "type": "boolean"
+        },
+        "receipt_required": {
+          "type": "boolean"
+        },
+        "sbom_required": {
+          "type": "boolean"
+        },
+        "runtime_image_identity_check": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "integrations": {
+      "type": "object",
+      "required": [
+        "optional",
+        "forbidden"
+      ],
+      "properties": {
+        "optional": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "forbidden": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "deployment_gate": {
+      "type": "object",
+      "required": [
+        "requires_operator_review",
+        "requires_schema_validation",
+        "requires_source_entitlements",
+        "requires_test_replay",
+        "requires_privacy_review"
+      ],
+      "properties": {
+        "requires_operator_review": {
+          "type": "boolean"
+        },
+        "requires_schema_validation": {
+          "type": "boolean"
+        },
+        "requires_source_entitlements": {
+          "type": "boolean"
+        },
+        "requires_test_replay": {
+          "type": "boolean"
+        },
+        "requires_privacy_review": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

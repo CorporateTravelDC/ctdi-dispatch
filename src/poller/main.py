@@ -905,7 +905,9 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
     session already updated), this queries LOCAL sources only as of
     2026-08-27: this box's own ADS-B receiver, then already-ingested FDPS
     SWIM data (see shared.watchlist.resolve_flight_identity, which this
-    delegates to). No third-party API is queried.
+    delegates to). <del>No third-party API is queried.</del> Since 2026-10-08
+    airplanes.live is queried as a FALLBACK only, after every local source is
+    dark (common.airplanes_live; position/identity, never OOOI authority).
     Returns True if data found (even if no new event fired), False if no data.
     Derives OOOI phase from position/altitude/speed.
     Also captures ICAO hex ID and updates watchlist notes.
