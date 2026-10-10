@@ -387,6 +387,17 @@ def fetch_faa_registry() -> dict:
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     db.faa_registry_meta_set("last_full_import", timestamp)
 
+    # 2026-10-09: hash-chained record of the exact download (common/import_ledger.py).
+    # Non-fatal: the import itself has already succeeded.
+    try:
+        from common import import_ledger
+        import_ledger.stamp("faa-registry",
+                            [import_ledger.bytes_meta("ReleasableAircraft.zip", zf.fp.getvalue())],
+                            {"registry_upserted": total_upserted, "acftref": acftref_count,
+                             "removed": removed_count})
+    except Exception as e:
+        log.warning("FAA registry: import ledger stamp failed (non-fatal): %s", e)
+
     stats = {
         "ok": True,
         "registry_upserted": total_upserted,

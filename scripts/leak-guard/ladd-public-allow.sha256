@@ -1,0 +1,24 @@
+# LADD public tripwire allowlist (scripts/leak-guard/ladd_public_check.py).
+# One line per token the OPERATOR confirmed is a coincidence (an ordinary word/code that is also a LADD entry):
+#   <sha256 of the token>  <reason, no identifier>
+# Hashes only, never the token itself.
+00db3021acd9481dfe4aa5399eb759164c4d4c4d1aca865c7b4946b214aa7dc6  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+13024046cbcaedb79964646e8ca639152d795bb515300d5d86bdec34bde26037  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+14f71d4345d3fd146d90834b5219a6632c8f10daacf0523c5a599caf2bd837f0  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+2a5f06422d35ac8977cbf311a3178de243428e2c1ca836ed16477cac024360ec  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+2c38f1abe77915e081369f74bae8d5512709df190c3df534aab865ce6f0b80f0  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+373a33d6e4428a7d241123995967da7383d46457d03b4df65371d503d6ae67a6  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+409094b3d54cb72a294a77f2eb528fbab341a2a7bcd695ebc869831775269f85  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+49ce78175d5089948cc29ceacff1272a1f897f45d3b0bb2610d23e0a93d476b5  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+64d3c197549674828177ea12ebd1c2cf5e6a1aee82a881fe694481550030b709  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+739ed22e8127139a7fc2879f2518517fa135ccfa457b7c8eccd8a7a3c8d5d888  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+826ecb4d01b2cdf13e4c8214d6b93069b16565545700f99a4250fe7599959439  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+b79f477f6d435116155b1121455748240bb5e7c81f7043519980df21a8167ca1  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+b8fd32c1a9cf1e9e642d82a6168539f9d70b637113c0a26150385001eb6aaddb  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+d4dafe22025952b90183734cce3fbd77144e4464400ecbd61a8ed3d69b7d84cb  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+d9340b2d74c4d6abe35dd055d759d1a7ee20506673c566eb1ece9d075528de49  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+eaa42a15398bf8229183b8609c4b977a367be6681be9e8945332b2db15687294  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+ee7558d910c3955603da09e9a47eed0abd22b552e517569618d5e75257279970  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+f031b70a2653be44af3a20aa33ad0f35d8a256046c108cfcaa3480988b4b383b  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+fc7415d97fd69a7a0caa847ab587672bb120fafb44557d7b46b251560832d0f0  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)
+ffd2415f6d26165dae71a7a85c57b13a68f0f6090709d2599e5b0405f268962b  operator-confirmed coincidence 2026-10-09 (old/demo script or ordinary token)

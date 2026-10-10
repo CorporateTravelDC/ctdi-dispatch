@@ -105,6 +105,8 @@ PG_TABLES: frozenset[str] = frozenset({
     "exec_standard_sources",
     # 2026-10-05: gateway kill switch + operator console (pg_schema/0073)
     "agent_gateway_settings", "console_sessions",
+    # 2026-10-09: reference-data import ledger (pg_schema/0074)
+    "reference_import_ledger",
     "board_enroll_nonces", "board_messages", "board_presence",
     "board_refresh_grace", "board_signers", "board_tokens", "brief_archive",
     "cifp_fixes", "cifp_holds", "cifp_meta", "cifp_procedure_legs",
