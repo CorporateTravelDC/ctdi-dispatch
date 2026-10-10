@@ -58,6 +58,8 @@ list. All are marked CUI SP-PRVCY.
 
 Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
 
+**Import ledger (2026-10-09).** Every import now appends a hash-chained entry to `reference_import_ledger` (migration 0074, `src/common/import_ledger.py`). The entry records each source file's basename, size and SHA-256 with its role (filter or remove), plus the resulting counts. Hashes and counts only, never an identifier. Take the hash before the source files are shredded; the importer does this itself. The 2026-10-06 load predates the ledger. The operator re-supplied both 10-06 files on 2026-10-09, and `import-ladd-filter.py --stamp-only` recorded their hashes after confirming they match the loaded table exactly (+0 / -0). The tables were not changed, and the files were shredded afterwards. `--stamp-only` is the general way to record the source of any earlier load. Each backup's `#` stamp records the ledger head (docs/BACKUP.md).
+
 ## Where LADD status is and is not exposed
 
 - `GET /api/v1/aircraft/{identifier}` — the real `ladd` flag is returned to
@@ -96,7 +98,7 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 - ~~**Never commit these files to the repo, in any form** — not the raw files, not embedded literal values in a script or fixture. They must never reach the public GitHub mirror. `scrub-public-tree.py` treats this the same as any other real, non-synthetic identifier.~~
 - ~~**Import, then remove the source files.** Run `PYTHONPATH=src python3 scripts/import-ladd-filter.py <faa_source> <industry>` (see that script's docstring). This replaces `faa_ladd_aircraft` in the live DB — the only place this data should persist. Delete the raw txt files afterward; the DB table is the system of record, not the intake files.~~
 - ~~**Weekly refresh**: the FAA publishes new files on this cadence (operator confirmed 2026-08-31: next drop ~12:00 ET the following day). Re-run the import script each week; it's a full replace, not an incremental merge (`db.faa_upsert_ladd()` — fail-safe: refuses to wipe the list on an empty/failed parse, see that function's docstring).~~
-- ~~**Not exclusively N-numbers.** The current dataset mixes US N-numbers, foreign registration marks, and flight-ID/callsign strings (confirmed live 2026-08-25/31 — e.g. "AIR1", "BMW41", "DCM2000" alongside N-number-shaped and foreign-prefixed entries). `faa_ladd_aircraft` is a flat membership table across all three; see `scripts/import-ladd-filter.py`'s docstring and `src/demo/scrub_rules.py`'s LADD check for the two different consumers (resolved-N-number lookup vs. raw broadcast-ident scan).~~
+- ~~**Not exclusively N-numbers.** The current dataset mixes US N-numbers, foreign registration marks, and flight-ID/callsign strings (confirmed live 2026-08-25/31 — short operator-style callsign strings; examples withheld, the entries are CUI alongside N-number-shaped and foreign-prefixed entries). `faa_ladd_aircraft` is a flat membership table across all three; see `scripts/import-ladd-filter.py`'s docstring and `src/demo/scrub_rules.py`'s LADD check for the two different consumers (resolved-N-number lookup vs. raw broadcast-ident scan).~~
 
 **~~Where LADD status is (and isn't) exposed~~** *(former heading)*
 

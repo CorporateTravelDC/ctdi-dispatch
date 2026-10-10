@@ -16,7 +16,7 @@ exclusively N-numbers -- the real, current LADD dataset mixes US
 N-numbers, foreign registration marks (A6-, A7-, C6-, CF-, D2-, etc.
 prefixes), and flight-ID/callsign strings assigned to operations that
 don't broadcast a tail-derived ident (confirmed live in the 2026-08-25
-files: entries like "AIR1", "BMW41", "DCM2000"). faa_ladd_aircraft's
+files: short operator-style callsign strings; examples withheld because the entries are CUI). faa_ladd_aircraft's
 `n_number` column is a same-shape membership check regardless of which
 of those three kinds a given value is -- see db.faa_is_ladd()'s callers
 for the two consumers: the per-tail registry-lookup badge (checks a
@@ -32,6 +32,11 @@ Usage:
         <faa_source_filter.txt> <industry_filter.txt>
 
     (a single file also works, e.g. for weeks the operator only has one)
+
+    --stamp-only  hash the files and compare them with what is loaded, write a
+                  ledger entry, change NOTHING in the tables. Used to record the
+                  source of a load that predates the ledger (re-supply the same
+                  files; "identical to loaded: yes" proves they are the ones).
 """
 from __future__ import annotations
 
@@ -101,9 +106,13 @@ def main() -> None:
     args = sys.argv[1:]
     remove_paths: list[Path] = []
     filter_args: list[str] = []
+    stamp_only = False
     i = 0
     while i < len(args):
-        if args[i] == "--remove":
+        if args[i] == "--stamp-only":
+            stamp_only = True
+            i += 1
+        elif args[i] == "--remove":
             if i + 1 >= len(args):
                 print("XX --remove needs a file argument", file=sys.stderr)
                 sys.exit(2)
@@ -132,6 +141,31 @@ def main() -> None:
         print(f"[import-ladd-filter] union across {len(paths)} file(s): "
               f"{len(combined)} unique identifiers")
 
+    # 2026-10-09: compare what these files would load with what IS loaded
+    # (removals applied to both sides). Counts only -- never an identifier.
+    with db.conn() as c:
+        loaded = {r["n_number"] for r in c.execute("SELECT n_number FROM faa_ladd_aircraft").fetchall()}
+        removed = {r["n_number"] for r in c.execute("SELECT n_number FROM faa_ladd_removals").fetchall()}
+    for rp in remove_paths:
+        removed |= _load_idents(rp)
+    effective = combined - removed
+    diff = {"would_add": len(effective - loaded), "would_drop": len(loaded - effective)}
+    identical = bool(combined) and diff["would_add"] == 0 and diff["would_drop"] == 0
+    print(f"[import-ladd-filter] vs loaded table: +{diff['would_add']} / -{diff['would_drop']} "
+          f"-- identical to loaded: {'yes' if identical else 'no'}")
+
+    if stamp_only:
+        from common import import_ledger
+        sources = ([{**import_ledger.file_meta(p), "role": "filter"} for p in paths]
+                   + [{**import_ledger.file_meta(p), "role": "remove"} for p in remove_paths])
+        entry = import_ledger.stamp("ladd-import", sources, {
+            "faa_ladd_aircraft": before, "filter_union": len(combined), **diff,
+            "identical_to_loaded": identical},
+            note="stamp-only: tables unchanged; records the source of the existing load")
+        print(f"[import-ladd-filter] STAMP ONLY (tables unchanged): ledger seq {entry['seq']} "
+              f"{entry['entry_hash'][:16]} ({len(sources)} source file(s) hashed)")
+        return
+
     after = db.faa_upsert_ladd(sorted(combined)) if combined else before
 
     with db.conn() as c:
@@ -147,6 +181,21 @@ def main() -> None:
             "SELECT count(*) AS n FROM faa_ladd_aircraft").fetchone()["n"]
 
     print(f"[import-ladd-filter] faa_ladd_aircraft: {before} -> {after} entries")
+
+    # 2026-10-09: provable record of WHICH files produced this state (basename,
+    # size, SHA-256) and the resulting counts -- hashes and counts only, no
+    # identifiers (common/import_ledger.py, pg_schema/0074).
+    from common import import_ledger
+    sources = ([{**import_ledger.file_meta(p), "role": "filter"} for p in paths]
+               + [{**import_ledger.file_meta(p), "role": "remove"} for p in remove_paths])
+    with db.conn() as c:
+        removals_total = c.execute(
+            "SELECT count(*) AS n FROM faa_ladd_removals").fetchone()["n"]
+    entry = import_ledger.stamp("ladd-import", sources, {
+        "faa_ladd_aircraft_before": before, "faa_ladd_aircraft_after": after,
+        "filter_union": len(combined), "faa_ladd_removals": removals_total, **diff})
+    print(f"[import-ladd-filter] ledger: seq {entry['seq']} {entry['entry_hash'][:16]} "
+          f"({len(sources)} source file(s) hashed)")
     if after == before and before != 0:
         print("[import-ladd-filter] WARNING: count unchanged -- verify this "
               "week's files actually differ from last week's, or that this "

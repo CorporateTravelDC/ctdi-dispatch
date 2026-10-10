@@ -246,6 +246,18 @@ if [[ -x "$DEP_AUDIT" ]]; then
     fi
 fi
 
+# ── Transcript leak guard (2026-10-09, operator rule) ───────────────────────────
+# A secret that leaked into an on-box transcript or tool output is redacted ON the
+# box before any push leaves it. Names and counts only, never values.
+_repo_root="$(git rev-parse --show-toplevel)"
+if [[ -f "${_repo_root}/scripts/leak-guard/transcript_leak_scan.py" ]]; then
+    if ! python3 "${_repo_root}/scripts/leak-guard/transcript_leak_scan.py" scan; then
+        echo "[FAIL] pre-push: transcript leak on this box -- run"
+        echo "       scripts/leak-guard/transcript_leak_scan.py redact   then push again"
+        exit 1
+    fi
+fi
+
 if [[ "$PUSHING_MAIN" == "true" ]]; then
     echo "[pre-push] Pushing main -- remember to run scripts/push-and-sync.sh"
     echo "           (or scripts/push-public.sh directly) to update the public"
