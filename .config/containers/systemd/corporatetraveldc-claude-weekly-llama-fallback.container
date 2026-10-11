@@ -1,0 +1,35 @@
+[Unit]
+Description=Corporate Travel DC -- overnight Llama backstop for the Claude-CLI weekly jobs (docs-drift-weekly, second-brain-weekly-dump)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Container]
+Memory=1024m
+PodmanArgs=--memory-swap=1024m
+Image=localhost/corporatetraveldc-poller:latest
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=/home/corporatetraveldc/.claude/projects/-opt-corporatetraveldc-private-ctdi-dispatch-internal/memory:/home/corporatetraveldc/.claude/projects/-opt-corporatetraveldc-private-ctdi-dispatch-internal/memory:ro,z
+# Same pattern as corporatetraveldc-second-brain-daily.container: pasta with
+# --map-gw restores host.containers.internal so this container can reach
+# both the nginx-fronted Nextcloud WebDAV vhost (for the second-brain-
+# weekly-dump fallback's remember_text call) and the host-managed
+# llama-server (for both fallback paths' generate() calls) -- no change to
+# either service's publish scope.
+Network=pasta:--map-gw
+Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-10-10: scoped secrets (svc/<service>.env, 2026-10-05 convention) instead of the whole secrets file
+EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
+# 2026-09-06 LONG-RUNNER LOCK (operator directive: "No 2 long runners can run
+# together either EVER") -- same flock every other report-tier container
+# wraps its Exec in.
+Exec=/usr/bin/flock /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/claude_weekly_llama_fallback.py
+
+[Service]
+Slice=production.slice
+MemoryLow=256M
+Type=oneshot
+# Cheap no-op most firings (both markers absent -- checked before any load
+# wait or generate() call). Worst case both jobs pending simultaneously:
+# 2x load-gate wait (<=1200s each) + docs-drift generate() (<=1200s) +
+# second-brain-dump generate() (<=1800s) = 5400s -> 5600 with headroom.
+TimeoutStartSec=5600

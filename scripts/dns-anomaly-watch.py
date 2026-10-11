@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-uber-traffic-watch.py -- watches Pi-hole's live query log for the driver
+dns-anomaly-watch.py (renamed from uber-traffic-watch.py 2026-10-10) -- watches Pi-hole's live query log for the driver
 phone (client 100.x.x.x) for Uber app reconnect events, and flags any
 traffic riding alongside a reconnect that doesn't match Uber's own
 established first-party CNAME infrastructure.
@@ -97,8 +97,10 @@ DISPATCH_ENV = "/etc/corporatetraveldc/dispatch.env"
 SECRETS_ENV = "/etc/corporatetraveldc/dispatch-secrets.env"
 PIHOLE_DB = "/etc/pihole/pihole-FTL.db"
 GRAVITY_DB = "/etc/pihole/gravity.db"
-STATE_FILE = "/var/lib/corporatetraveldc/uber_traffic_watch_state.json"
-LOG_PREFIX = "uber-traffic-watch:"
+STATE_FILE = "/var/lib/corporatetraveldc/dns_anomaly_watch_state.json"
+# 2026-10-10: renamed from uber-traffic-watch; the old state file is migrated on first run.
+OLD_STATE_FILE = "/var/lib/corporatetraveldc/uber_traffic_watch_state.json"
+LOG_PREFIX = "dns-anomaly-watch:"
 # 2026-10-03: alerts were renamed from "Uber Traffic Watch" to neutral "DNS
 # anomaly" wording (operator directive, backlog since 2026-09-24): the
 # operator saw the alert name Uber while the app was verifiably off. The
@@ -204,6 +206,9 @@ def _float(v, default):
 
 
 def load_state():
+    import os, shutil
+    if not os.path.exists(STATE_FILE) and os.path.exists(OLD_STATE_FILE):
+        shutil.copy2(OLD_STATE_FILE, STATE_FILE)   # one-time migration from the pre-rename state file
     try:
         with open(STATE_FILE) as f:
             state = json.load(f)
@@ -248,12 +253,18 @@ def query_pihole(sql, db=PIHOLE_DB):
 
 
 def cname_chain(domain):
-    """Live CNAME + first A record for a domain. Returns (cname_or_None, ip_or_None)."""
-    cname = subprocess.run(["dig", "+short", domain, "CNAME"], capture_output=True, text=True, timeout=10).stdout.strip()
-    a = subprocess.run(["dig", "+short", domain, "A"], capture_output=True, text=True, timeout=10).stdout.strip()
-    cname_target = cname.splitlines()[0].rstrip(".") if cname else None
-    first_ip = a.splitlines()[0] if a else None
-    return cname_target, first_ip
+    """Full live CNAME chain + first A record. Returns (chain_list, ip_or_None).
+    2026-10-10: follows EVERY hop -- the old single-hop check flagged
+    tb-static -> tb-static-migration -> frontends-cloud (Uber's own family) as
+    anomalous because it stopped at the first unfamiliar name."""
+    out = subprocess.run(["dig", "+short", domain, "A"], capture_output=True, text=True, timeout=10).stdout.split()
+    chain = [x.rstrip(".") for x in out if x.endswith(".")]
+    ips = [x for x in out if not x.endswith(".")]
+    return chain, (ips[0] if ips else None)
+
+
+def render_chain(domain, chain, ip):
+    return " -> ".join([domain] + chain) + (f" ({ip})" if ip else "")
 
 
 def classify_uber_domain(domain):
@@ -262,12 +273,12 @@ def classify_uber_domain(domain):
         return "known-blocked"
     if domain in KNOWN_SAFE_DIRECT:
         return "known-safe-direct"
-    cname_target, ip = cname_chain(domain)
-    if cname_target in KNOWN_GOOD_CNAME_TARGETS:
+    chain, ip = cname_chain(domain)
+    if any(hop in KNOWN_GOOD_CNAME_TARGETS for hop in chain):
         return "known-good"
     if ip == "0.0.0.0":
         return "known-blocked"  # denylisted by something else already
-    return f"ANOMALOUS (cname={cname_target!r}, ip={ip!r})"
+    return f"ANOMALOUS: {render_chain(domain, chain, ip)}"
 
 
 def check_denylist_gaps():
@@ -362,7 +373,7 @@ def ntfy_alert(cfg, message, title, priority=4):
     req.add_header("Content-Type", "text/plain; charset=utf-8")
     req.add_header("X-Priority", str(priority))
     req.add_header("X-Title", title)
-    req.add_header("X-Tags", "taxi,mag")
+    req.add_header("X-Tags", "mag")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
@@ -504,6 +515,7 @@ def main():
         print(f"{LOG_PREFIX} {len(reconnect_windows)} reconnect event(s) this pass")
 
     if anomalies:
+        anomalies = list({d: (d, v) for d, v in anomalies}.values())   # one entry per domain
         print(f"{LOG_PREFIX} ANOMALY: {anomalies}")
         for domain, _ in anomalies:
             pattern = track_discovery_pattern(
@@ -517,10 +529,12 @@ def main():
         )
         ntfy_alert(
             cfg,
-            f"DNS burst from the driver phone with non-standard routing: {anomalies}. "
-            f"Does not match the app vendor's known frontends-cloud/cn-neg CNAME family -- "
-            f"source attribution is NOT established (seen firing with the app verifiably off)."
-            f"{pattern_note}",
+            f"DNS burst from the {cfg.get('DNS_WATCH_DEVICE_LABEL', 'monitored device')} with non-standard routing:\n"
+            + "\n".join(f"- {v}" for v in dict.fromkeys(v for _, v in anomalies)) +
+            f"\nNo hop in the chain matches {cfg.get('DNS_WATCH_FAMILY_LABEL', 'the watched vendor')}'s known routing family. "
+            f"Source attribution is NOT established (DNS cannot name the app)."
+            + (f" Note: {cfg['DNS_WATCH_FAMILY_NOTE']}." if cfg.get("DNS_WATCH_FAMILY_NOTE") else "")
+            + f"{pattern_note}",
             "DNS anomaly -- non-standard routing in a burst", priority=5,
         )
     if novel_in_burst:

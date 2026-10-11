@@ -351,3 +351,22 @@ def test_replay_cache_expiry_and_cap():
     for i in range(5):
         c.check_and_add(f"x{i}", now=2000)
     assert len(c._seen) == 3
+
+
+def test_signed_write_is_audited_with_hashes_only(keypair):
+    # 2026-10-10: signed writes (workspace contributions, council requests,
+    # board posts) were the one write path with no audit row.
+    import hashlib
+    import json
+    priv, pub = keypair
+    db.init_db()
+    db.board_signer_upsert("alice", pub, "alice@laptop")
+    with patch.object(web_main.db, "board_token_valid", return_value=False):
+        req = _req(body=BODY, **_signed_headers(priv, "POST", "/api/v1/board", BODY))
+        assert _auth(req) == "alice"
+    rows = [r for r in db.get_audit_log(limit=20) if r["action"] == "board.signed.request"]
+    assert rows, "signed write produced no audit row"
+    d = rows[0]["detail"] if isinstance(rows[0]["detail"], dict) else json.loads(rows[0]["detail"])
+    assert d["signer"] == "alice" and d["route"] == "POST /api/v1/board"
+    assert d["body_sha256"] == hashlib.sha256(BODY).hexdigest()
+    assert BODY.decode(errors="ignore") not in json.dumps(d)          # hashes only, never the body

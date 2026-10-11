@@ -14,7 +14,6 @@ NTFY_TOKEN  # src/common/config.py:55
 ULTRAFEEDER_LAT  # src/web/main.py:2132
 ULTRAFEEDER_LON  # src/web/main.py:2135
 # 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
-DEMO_ADMIN_TOKEN  # src/demo/demo_api.py:86
 DEMO_RECORDER_API_TOKEN  # src/demo/recorder.py:56
 DEMO_SESSION_SECRET  # src/demo/profiles.py:50
 NWWS_JID  # src/ingest/config.py:39

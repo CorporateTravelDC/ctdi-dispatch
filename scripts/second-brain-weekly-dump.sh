@@ -150,7 +150,25 @@ if [[ ${RC} -ne 0 ]] || echo "${OUTPUT}" | grep -qi "could not be confirmed\|fai
     ntfy_send "Second-brain weekly dump needs attention" \
         "Automated Gate-2 dump did not confirm success -- CLAUDE.md/memory NOT wiped. See ${LOG}" \
         4
+    # 2026-09-17: arm the overnight-Llama-fallback marker -- see
+    # common/claude_weekly_fallback.py and
+    # corporatetraveldc-claude-weekly-llama-fallback.timer/.service. The
+    # fallback runner only ever WRITES a best-effort consolidation note via
+    # Llama; it never performs this script's destructive CLAUDE.md/memory
+    # reset -- that stays gated on a confirmed real Claude/Opus run, same
+    # safety posture as this script's own step 3/4 split above.
+    PYTHONPATH="${REPO_DIR}/src" python3 -c "
+from common.claude_weekly_fallback import mark_failure
+mark_failure('second-brain-weekly-dump', 'claude --model opus rc=${RC} or unconfirmed, see ${LOG}')
+" 2>/dev/null || true
     exit 1
 fi
+
+# Confirmed success -- clear any previously-owed fallback (the common case:
+# nothing pending most weeks).
+PYTHONPATH="${REPO_DIR}/src" python3 -c "
+from common.claude_weekly_fallback import clear_marker
+clear_marker('second-brain-weekly-dump')
+" 2>/dev/null || true
 
 exit 0

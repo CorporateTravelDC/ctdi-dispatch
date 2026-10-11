@@ -80,9 +80,13 @@ DEMO_ANCHOR_OVERRIDE = os.environ.get("DEMO_ANCHOR_OVERRIDE", "").strip()
 
 # Admin gate for profile management (create/list/revoke passwords). A single
 # shared secret, not the main app's multi-tier token DB -- see profiles.py's
-# module docstring for why this stays decoupled from common.db. Reuses the
-# same admin token value operationally, but demo_api.py never queries the
-# live token store to check it.
+# module docstring for why this stays decoupled from common.db. demo_api.py
+# never queries the live token store to check it.
+# 2026-10-10: <del>Reuses the same admin token value operationally</del> -- retired.
+# The value had been the live admin bearer, distributed under this name to web,
+# poller and the demo recorder (none use it) and missing from demo-api (the only
+# reader, so admin answered 503). demo-api now has its own dedicated random
+# value in /etc/corporatetraveldc/demo-secrets.env and nothing else carries it.
 DEMO_ADMIN_TOKEN = os.environ.get("DEMO_ADMIN_TOKEN")
 
 

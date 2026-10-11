@@ -44,7 +44,6 @@ SWIM_NMS_USER_STDDS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
 SWIM_NMS_USER_TBFM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
 SWIM_NMS_USER_TFMS  # src/ingest/config.py:_nms_feed (f-string per VPN key)
 # 2026-10-05: added by scan.py --check (import closure reaches these; union, never narrower than the scan)
-DEMO_ADMIN_TOKEN  # src/demo/demo_api.py:86
 DEMO_RECORDER_API_TOKEN  # src/demo/recorder.py:56
 DEMO_SESSION_SECRET  # src/demo/profiles.py:50
 EUROCONTROL_NM_B2B_CERT_PATH  # src/poller/fetchers/eurocontrol.py:42

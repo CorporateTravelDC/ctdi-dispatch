@@ -1,5 +1,5 @@
 [Unit]
-Description=Run uber-traffic-watch every 2 minutes
+Description=Run the DNS anomaly watch every 2 minutes
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/

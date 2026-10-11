@@ -1,0 +1,17 @@
+{
+  "id": "emcomm-cert-hazard-operations",
+  "version": "0.1.0",
+  "state": "mapped",
+  "source": "ChatGPT board brd-16924fa4307d (proposal), mapped per EMCOMM-HAZARD-COMPOSITION-SPEC.md",
+  "core": {"path": "../../../src/common/profiles/ctdi-reference.json", "sha256": "c21d6fff858b366ce07ba4d05b2e282f4ffc5611c027dd91b886573f302517fc"},
+  "overlays": [
+    {"id": "weather-alerting", "enabled": false, "feeds": ["nwws-oi (live)"], "settings": {}},
+    {"id": "aviation-terminal-context", "enabled": false, "feeds": ["itws via SWIM (live)"], "note": "context only, never a public warning", "settings": {}},
+    {"id": "tropical-cyclone", "enabled": false, "status": "proposed: NHC adapter not built", "settings": {}},
+    {"id": "earthquake-impact", "enabled": false, "status": "proposed: USGS adapter not built", "settings": {}},
+    {"id": "emcomm-cert", "enabled": false, "status": "proposed: roles undefined (operator)", "settings": {}}
+  ],
+  "audience_policy": {"default": "internal_operations", "permitted_groups": []},
+  "escalation": {"thresholds": "UNSET_VERIFY_WITH_OPERATOR", "outward_delivery": "disabled", "radio_tx": "disabled"},
+  "explicit": {}
+}

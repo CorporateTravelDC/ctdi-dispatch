@@ -1,0 +1,6 @@
+[Unit]
+Description=Corporate Travel DC -- DNS anomaly watch (reconnect bursts, full-chain CNAME drift, novelty; renamed from uber-traffic-watch 2026-10-10; source attribution not asserted)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/dns-anomaly-watch.py

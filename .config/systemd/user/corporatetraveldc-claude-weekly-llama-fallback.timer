@@ -1,0 +1,23 @@
+[Unit]
+Description=Every-6h check for an owed Llama fallback (docs-drift-weekly / second-brain-weekly-dump)
+
+[Timer]
+# 2026-09-17 operator directive: overnight, load-based backstop for the two
+# Claude-CLI weekly jobs, worst-case 6-12h delay. A fixed single nightly
+# time can't guarantee that bound on its own -- second-brain-weekly-dump
+# fires Sun 02:00 and docs-drift-weekly fires Mon 09:00, so a single
+# once-nightly window could be up to ~24h away from a Monday-morning
+# failure. Firing this check every 6h instead decouples "how often do we
+# look for a pending failure" (this timer) from "when do we actually spend
+# CPU generating" (gated inside the service by common.llm.generate()'s
+# existing load preflight, see claude_weekly_llama_fallback.py) -- a
+# daytime firing under real load mostly no-ops and waits for a
+# later/quieter firing, so the fallback naturally converges on genuinely
+# low-load (typically overnight) hours without hand-picking a fixed clock
+# window that could miss a busy night or needlessly delay a quiet one.
+# Each firing costs ~nothing when no marker is pending (the common case).
+OnCalendar=*-*-* 00,06,12,18:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

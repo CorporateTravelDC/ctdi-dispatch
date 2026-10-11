@@ -405,6 +405,16 @@ async def _board_auth(request: Request, route: str, required_scope: str = db.BOA
         need = "X-Board-Key or a valid board signature"
     if not ok:
         raise HTTPException(status_code=401, detail=f"missing or invalid credentials: {need} required")
+    # 2026-10-10: every authorised SIGNED request (board posts, council requests,
+    # workspace contributions, approvals...) gets a hash-chained audit row, like
+    # gateway tool calls already do. Hashes only: never the body or the signature.
+    if signer is not None and getattr(request, "method", "GET") != "GET":
+        import hashlib as _hl
+        from common import governance as _gov
+        _gov.audit("board.signed.request", {
+            "route": route, "signer": signer, "cosigner": cosigner, "policy": policy,
+            "body_sha256": _hl.sha256(body or b"").hexdigest(),
+            "signature_sha256": _hl.sha256(request.headers.get("X-Board-Signature", "").encode()).hexdigest()})
     return signer
 
 # 2026-08-16: Tier-0 vault research reads (see vault_research_read below) --
