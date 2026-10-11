@@ -42,11 +42,61 @@ req_py() { REQ_JSON="$1" python3 - "${@:2}" <<'PYEOF'
 import hashlib, json, os, sys, time
 r = json.loads(os.environ["REQ_JSON"])
 mode = sys.argv[1]
+def _when(ts):
+    # UTC + ET together (operator rule 2026-10-06); the host runs in UTC.
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    u = datetime.fromtimestamp(ts, timezone.utc)
+    return f"{u:%Y-%m-%d %H:%MZ} / {u.astimezone(ZoneInfo('America/New_York')):%H:%M ET}"
+
+
+def explain(r):
+    """2026-10-11 (operator): every approval states WHAT it is, WHY it exists,
+    and what APPROVE / DENY each do -- like the ntfy notices -- so nobody signs
+    an opaque id. Display only: the signed canonical text is unchanged."""
+    kind = r.get("kind") or "sudo"
+    try:
+        c = json.loads(r.get("command") or "")
+    except ValueError:
+        c = {}
+    c = c if isinstance(c, dict) else {}
+    left = max(0, int(r["expires_at"] - time.time()))
+    ua = (c.get("ua") or "")
+    dev = ("Linux x86_64 (laptop/desktop)" if "X11; Linux x86_64" in ua else "Android" if "Android" in ua
+           else "iPhone/iPad" if ("iPhone" in ua or "iPad" in ua) else "Windows" if "Windows" in ua
+           else "macOS" if "Mac OS X" in ua else (ua[:60] or "unknown"))
+    what = {
+        "console-login": (f"An operator CONSOLE sign-in from a browser on {dev}.",
+                          "Approve ONLY if you just started a console sign-in from that device; otherwise DENY (someone else is trying to open the console).",
+                          "APPROVE: that browser session gets the operator console. DENY: the sign-in fails; nothing else changes."),
+        "connector-link": ("An agent connector (OAuth client) asking to be linked to an agent account.",
+                           "Approve only if you are linking that connector right now.",
+                           "APPROVE: the connector can act as that agent, within its scopes. DENY: no link."),
+        "connector-hold": ("A request to hold (freeze) an agent connector.", "Containment step.",
+                           "APPROVE: the connector stops working until thawed. DENY: it stays active."),
+        "gateway-thaw": ("A request to thaw the agent gateway kill switch.", "Recovery after a freeze; only if the cause is resolved.",
+                         "APPROVE: agents can call tools again. DENY: the gateway stays frozen."),
+        "council": (f"A {(c.get('mode') or 'council')} convene on {c.get('subject')!r}, participants "
+                    f"{', '.join(p.get('account', '?') for p in (c.get('participants') or []))}.",
+                    "Agents debate and draft only; nothing is published.",
+                    "APPROVE: the council goes active until its deadline. DENY: nothing happens."),
+        "council-close": ("A request to CLOSE a council.", "Ends contributions.",
+                          "APPROVE: the council closes and further contributions are refused. DENY: it stays open."),
+        "sudo": ("A privileged (sudo) command on the host.", "Read the exact command below before signing.",
+                 "APPROVE: that exact command may run once. DENY: it does not run."),
+    }.get(kind, (f"An approval of kind {kind!r}.", "No plain-language template for this kind yet: read the request below.", ""))
+    print("--- what this is ---\n" + what[0] + "\n--- why / when to approve ---\n" + what[1]
+          + ("\n--- effect ---\n" + what[2] if what[2] else "")
+          + f"\n--- requested {_when(r['created_at']) if r.get('created_at') else '?'}; expires {_when(r['expires_at'])} ({left // 60}m {left % 60}s left)")
+
+
 if mode == "show":
     print(f"id:         {r['id']}\nkind:       {r.get('kind') or 'sudo'}\nstatus:     {r['status']}\n"
           f"requester:  {r.get('requester') or '-'}\npattern:    {r.get('command_pattern')}\n"
-          f"expires:    {time.strftime('%Y-%m-%d %H:%M:%S %Z', time.localtime(r['expires_at']))}\n"
-          f"reasoning:  {r.get('reasoning') or ''}\n--- exact command / request (what you sign) ---")
+          f"expires:    {_when(r['expires_at'])}\n"
+          f"reasoning:  {r.get('reasoning') or ''}")
+    explain(r)
+    print("--- exact command / request (what you sign) ---")
     cmd = r.get("command") or ""
     try:
         print(json.dumps(json.loads(cmd), indent=2, sort_keys=True))
