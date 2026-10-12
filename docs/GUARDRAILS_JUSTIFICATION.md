@@ -175,6 +175,27 @@ request (id, action, kind, requester, expiry, sha256 of the command) --
 Deny button; `GET .../resolve?action=allow` is always 403. TTL 600 s; expiry
 is a denial. Details: `docs/SUDO_JUSTIFICATION_PROPOSAL.md`.
 
+**Expiry by kind (2026-10-11).** Expiry follows what each request unlocks
+(`APPROVAL_TTL_POLICY` in `governance.py`). Sudo and console sign-in: 10 min.
+Connector link: 15 min. Connector hold and gateway thaw: 30 min (previously
+24 h and 1 h). Council convene: 10% of the council's own deadline, 30 min to
+4 h. Council close: 25% of the remaining time, 15 min to 2 h. Environment
+overrides are clamped to each kind's bounds. A requester can withdraw its own
+pending request (audited); it still cannot allow or deny it. A council whose
+approval expires, is withdrawn or is denied follows it, instead of staying
+`requested` (the 2026-10-10 stray self-request).
+
+**Audit and notify can be copied to others: a built-in tripwire (design note,
+2026-10-12).** Every request, re-tap, resolution, expiry and withdrawal is an
+audit row, and every request is a push. Both streams can be copied to an
+administrator, a SOC or an IT manager without granting anyone signing power.
+Thresholds on the copied stream turn it into a silent IDS/IPS-style tripwire:
+many unanswered or expired authorization requests in a window, repeated
+re-taps, sign-in requests from an unfamiliar device, or bursts of one kind.
+An IPS-style response (for example, a gateway kill-all) remains a signed human
+action. Copying adds observers; it never reduces or rewrites the record. Not
+wired yet; recorded so a deployment can turn it on.
+
 History: on 2026-07-27 the first real request through the original tap-based
 gate (an `ollama.service` restart) received no tap, expired after 600 s, and
 the service was not restarted -- fail-closed as designed. `ollama.service`

@@ -325,6 +325,8 @@ def _signin_page(pending: dict | None = None) -> HTMLResponse:
                 + _approve_box(pending["id"], "Signing in") +
                 "<p class='lede'>Then come back here and reload. This request expires in 10 minutes and only "
                 "this browser can use it.</p><a class='btn full' href='/console'>I signed it -- reload</a>"
+                "<form method='post' action='/console/login/cancel'><button class='full secondary' type='submit'>"
+                "Cancel this request</button></form>"
                 "</section></div>")
         return _page("Waiting for your signature", body)
     return _page("Sign in", "<div class='center'><section class='panel card-narrow' aria-labelledby='t'>"
@@ -606,17 +608,93 @@ async def console(request: Request):
     return resp
 
 
+def _pending_for_browser(request: Request) -> tuple[dict | None, str]:
+    """This browser's own still-pending console-login request (pending cookie whose
+    nonce matches), else (None, "")."""
+    pend = request.cookies.get(PENDING) or ""
+    if "." not in pend:
+        return None, ""
+    aid, nonce = pend.split(".", 1)
+    row = governance.approval_view(aid)                 # applies expiry-on-read
+    try:
+        ok = (row and row.get("kind") == "console-login" and row.get("status") == "pending"
+              and json.loads(row["command"]).get("nonce_sha256") == _h(nonce))
+    except (ValueError, TypeError):
+        ok = False
+    return (row, nonce) if ok else (None, "")
+
+
+def _device(ua: str) -> str:
+    return ("Android" if "Android" in ua else "iPhone/iPad" if ("iPhone" in ua or "iPad" in ua)
+            else "Linux x86_64" if "X11; Linux x86_64" in ua else "Windows" if "Windows" in ua
+            else "macOS" if "Mac OS X" in ua else (ua[:40] or "unknown browser"))
+
+
+def _push_login(row: dict, retap: int, ua: str) -> None:
+    """2026-10-12 (operator): every console sign-in request -- and every re-tap that
+    reuses one -- reaches the phone, so a sign-in you did not start is seen when it
+    happens, not when you next open the pending list. Best effort: the audit row is
+    the record; a failed push never blocks a sign-in."""
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        from common import ntfy_push
+        exp = datetime.fromtimestamp(float(row["expires_at"]), timezone.utc)
+        when = f"{exp:%H:%MZ} / {exp.astimezone(ZoneInfo('America/New_York')):%H:%M ET}"
+        ntfy_push.send(
+            "approval-gate",
+            f"WHAT: operator console sign-in from a browser on {_device(ua)}"
+            + (f" (re-tap #{retap} of the same request)" if retap else "") + ".\n"
+            f"WHY: someone pressed Sign in on the console (tailnet only).\n"
+            f"APPROVE: that browser gets an 8h console session. DENY / ignore: nothing happens.\n"
+            f"If this was not you, do NOT sign. Requester: console. Expires {when}.\n"
+            f"Sign over SSH: scripts/approve.sh show {row['id']}",
+            title="Console sign-in request" + (" (re-tap)" if retap else ""),
+            priority=4, tags="key")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/console/login")
 async def console_login(request: Request):
     if not _host_ok(request):
         return Response(status_code=404)
+    ua = (request.headers.get("user-agent") or "")[:80]
+    row, _ = _pending_for_browser(request)
+    if row:
+        # 2026-10-12: a re-tap while this browser's request is still pending reuses it
+        # (one signable request per browser) but is still its own audit event + push.
+        with db.conn() as c:
+            n = c.execute("SELECT count(*) FROM audit_log WHERE action = 'console.login.retap' AND detail LIKE ?",
+                          (f"%{row['id']}%",)).fetchone()[0]
+        governance.audit("console.login.retap", {"approval_id": row["id"], "retap": int(n) + 1, "ua": ua})
+        _push_login(row, int(n) + 1, ua)
+        return RedirectResponse("/console", status_code=303)
     nonce = secrets.token_urlsafe(24)
     spec = json.dumps({"type": "console-login", "nonce_sha256": _h(nonce), "ts": int(time.time()),
-                       "ua": (request.headers.get("user-agent") or "")[:80]}, sort_keys=True, separators=(",", ":"))
+                       "ua": ua}, sort_keys=True, separators=(",", ":"))
     appr = governance.create_approval("console-login", spec, kind="console-login", requester="console",
                                       reasoning="operator console sign-in", ttl_seconds=LOGIN_TTL_S)
+    _push_login(governance.approval_view(appr["id"]) or {"id": appr["id"], "expires_at": time.time() + LOGIN_TTL_S}, 0, ua)
     resp = RedirectResponse("/console", status_code=303)
     _cookie(resp, PENDING, f"{appr['id']}.{nonce}", LOGIN_TTL_S)
+    return resp
+
+
+@router.post("/console/login/cancel")
+async def console_login_cancel(request: Request):
+    """2026-10-12: withdraw THIS browser's pending sign-in request (audited
+    approval.withdrawn). The strict, httponly pending cookie is the credential."""
+    if not _host_ok(request):
+        return Response(status_code=404)
+    row, _ = _pending_for_browser(request)
+    if row:
+        try:
+            governance.withdraw_approval(row["id"], "console")
+        except governance.GovernanceError:
+            pass
+    resp = RedirectResponse("/console", status_code=303)
+    resp.delete_cookie(PENDING, path="/")
     return resp
 
 

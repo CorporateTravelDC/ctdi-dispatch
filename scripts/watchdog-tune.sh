@@ -30,6 +30,8 @@ install -m 0644 -o root -g root "$tmp" "$CONF"; rm -f "$tmp" "$STALE_CONF"
 systemctl daemon-reexec
 systemctl show -p RuntimeWatchdogUSec
 TOKEN=$(grep -m1 '^NTFY_TOKEN=' /etc/corporatetraveldc/dispatch-secrets.env 2>/dev/null | cut -d= -f2- || true)
-BASE=$(grep -m1 '^NTFY_BASE_URL=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2-); BASE=${BASE:-http://127.0.0.1:2586}
-TOPIC=$(grep -m1 '^NTFY_OPS_TOPIC=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2-); TOPIC=${TOPIC:-ops-health}
+# 2026-10-12: || true -- a key absent from dispatch.env made grep exit 1, and under
+# pipefail that killed the run AFTER the tune (unit failed 2026-10-12 00:00Z).
+BASE=$(grep -m1 '^NTFY_BASE_URL=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2- || true); BASE=${BASE:-http://127.0.0.1:2586}
+TOPIC=$(grep -m1 '^NTFY_OPS_TOPIC=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2- || true); TOPIC=${TOPIC:-ops-health}
 printf '%s' "$MSG" | curl -sf --max-time 5 -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H "Title: watchdog tuned" --data-binary @- "${BASE}/${TOPIC}" >/dev/null || true

@@ -35,6 +35,17 @@ depth, not a network control: the header is client-chosen.
    only. Nothing depends on a background tab polling (mobile browsers pause
    them).
 
+**Every sign-in request is pushed and audited (2026-10-12).** Each new
+request sends an `approval-gate` push (what / why / approve and deny effect /
+requesting device / expiry in UTC+ET). Tapping **Sign in** again while this
+browser's request is still pending **reuses** that request -- one signable
+request per browser -- but every re-tap is still its own audit row
+(`console.login.retap`, with the request id and a running count) and its own
+push. Fewer signable requests, not fewer records. **Cancel this request** on
+the waiting page withdraws it (`approval.withdrawn`). Before 2026-10-12 the
+console created a fresh request per tap and sent no push, so requests were
+only noticed in the pending list.
+
 One approval mints at most one session. Session: 8 h (`SESSION_TTL_S`),
 cookie `__Host-ctdc_console`, Secure, HttpOnly, SameSite=Strict; every POST
 carries a CSRF token derived from the session secret and compared with
@@ -51,6 +62,18 @@ the gateway after a kill-all (`gateway-thaw`) and holding an agent link open
 commands; signing only happens over SSH.
 
 Tests: `tests/web/test_console.py` (11).
+
+**Audit and notify fan-out (design note, 2026-10-12; not configured).** The
+audit path (hash-chained `audit_log`) and the notify path (`approval-gate`)
+are separate on purpose, and either can be copied to more people than the
+operator: an administrator, a SOC analyst, an IT manager. Recipients get the
+same request text; only approval-key holders can sign. A copied audit stream
+works as a silent, built-in intrusion-detection tripwire: alert on a high
+count of unanswered or expired sign-in and authorization requests in a
+window, re-taps on one request, requests from a device type never seen
+before, or withdrawals that were not yours. Fan-out adds observers and never
+removes a record; nothing here is wired yet. See
+`docs/GUARDRAILS_JUSTIFICATION.md` §5.
 
 ## Executive Standard reader access
 

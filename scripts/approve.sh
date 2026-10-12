@@ -10,6 +10,8 @@
 #   approve.sh message <id> allow|deny    print the canonical text only (off-box signing:
 #                                         ssh-keygen -Y sign -f KEY -n corporatetraveldc-approval < msg > msg.sig)
 #   approve.sh submit  <id> allow|deny <msg.sig>   submit an off-box signature
+#   approve.sh withdraw <id>              REQUESTER only: withdraw your own pending request
+#                                         (signed with your board key; no approval key needed)
 #
 # Approval key: $APPROVE_KEY, default ~/.ssh/<you>_approver_ed25519 --
 # passphrase-protected (scripts/approver-ctl.sh refuses to register one that
@@ -27,7 +29,7 @@ BASE="${BOARD_API_BASE:-http://127.0.0.1:8000}"
 NS=corporatetraveldc-approval
 ME="$(id -un)"
 KEY="${APPROVE_KEY:-$HOME/.ssh/${ME}_approver_ed25519}"
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
 
 signed_get() {   # PATH -> body on stdout; non-200 is fatal
   local out code
@@ -103,6 +105,8 @@ if mode == "show":
     except ValueError:
         print(cmd)
     print("--- sha256: " + hashlib.sha256(cmd.encode()).hexdigest())
+    if r.get("status") in ("withdrawn", "expired", "denied", "allowed"):
+        print(f"--- this request is {r['status'].upper()}: nothing left to sign")
 elif mode == "status":
     print(r["status"])
 elif mode == "canonical":
@@ -147,6 +151,12 @@ case "$CMD" in
   submit)
     ACT="${3:-}"; SIGF="${4:-}"; [[ -n "$ID" && "$ACT" =~ ^(allow|deny)$ && -r "$SIGF" ]] || usage
     submit "$ID" "$ACT" "$SIGF" ;;
+  withdraw)
+    [[ -n "$ID" ]] || usage
+    req_py "$(signed_get "/api/v1/approvals/${ID}")" show
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT; printf '{}' > "$tmp/body.json"
+    out="$("${REPO_ROOT}/scripts/board-sign.sh" POST "/api/v1/approvals/${ID}/withdraw" "$tmp/body.json" --send)"
+    printf '%s\n' "$out" ;;
   allow|deny)
     [[ -n "$ID" ]] || usage
     [[ -f "$KEY" ]] || { echo "approve: no approval key at ${KEY} (APPROVE_KEY=...; register one with scripts/approver-ctl.sh)" >&2; exit 66; }

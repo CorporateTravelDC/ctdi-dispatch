@@ -11,6 +11,7 @@
 | Nextcloud files | the `nextcloud-html` volume, read through `podman unshare` | |
 | Platform state | `/var/lib/corporatetraveldc` | `models/` excluded (pinned by digest, re-pullable) |
 | Configuration | `/etc/corporatetraveldc` | already secret-bearing; the archive is encrypted |
+| Traffic history | `/var/lib/vnstat` | vnStat database (unlimited daily retention since 2026-10-11) |
 | Private ledger | a copy of `ledger.jsonl` inside every archive | |
 
 Repositories are excluded (they live on GitHub, signed).

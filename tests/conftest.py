@@ -198,3 +198,58 @@ def _isolate_state_dir(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir(exist_ok=True)
     monkeypatch.setattr(config, "state_dir", lambda: str(state_dir))
+
+
+# -- 2026-10-12: host-load stamps (operator: "if we infer it's load-related, track it") --
+# Session start/end, every failed, timed-out or slow (>60 s) test gets a load
+# stamp in ~/.local/state/ctdc-tests/load-stamps.jsonl (scripts/lib/load_stamp.py;
+# `python3 scripts/lib/load_stamp.py summary` reads it). The ledger path is fixed at
+# session start, so a test that monkeypatches HOME cannot redirect it. Never fails a run.
+import importlib.util as _ilu  # noqa: E402
+import time as _time  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_LS = None
+try:
+    _spec = _ilu.spec_from_file_location(
+        "ctdc_load_stamp", _Path(__file__).resolve().parent.parent / "scripts/lib/load_stamp.py")
+    _LS = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_LS)
+except Exception:
+    _LS = None
+_LS_STATE = {"path": None, "t0": 0.0, "failed": 0, "timeouts": 0, "slow": 0}
+
+
+def pytest_sessionstart(session):
+    if _LS is None:
+        return
+    _LS_STATE["path"] = _LS.ledger_path()
+    _LS_STATE["t0"] = _time.time()
+    _LS.stamp("session-start", path=_LS_STATE["path"],
+              args=" ".join(str(a) for a in session.config.args)[:300])
+
+
+def pytest_runtest_logreport(report):
+    if _LS is None or _LS_STATE["path"] is None:
+        return
+    if report.failed:
+        text = str(report.longrepr or "")
+        last = text.strip().splitlines()[-1] if text.strip() else ""
+        timeout = "TimeoutExpired" in text or "Timeout" in last
+        event = "test-timeout" if timeout else "test-failed"
+        _LS_STATE["timeouts" if timeout else "failed"] += 1
+    elif report.when == "call" and report.duration >= _LS.SLOW_TEST_S:
+        event = "test-slow"
+        _LS_STATE["slow"] += 1
+    else:
+        return
+    _LS.stamp(event, path=_LS_STATE["path"], test=report.nodeid, phase=report.when,
+              duration_s=round(report.duration, 2))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _LS is None or _LS_STATE["path"] is None:
+        return
+    _LS.stamp("session-end", path=_LS_STATE["path"], exitstatus=int(exitstatus),
+              wall_s=round(_time.time() - _LS_STATE["t0"], 1), failed=_LS_STATE["failed"],
+              timeouts=_LS_STATE["timeouts"], slow=_LS_STATE["slow"])

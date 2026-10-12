@@ -280,6 +280,7 @@ BOARD_AUTH_POLICY = {
     "GET /api/v1/approvals":              "normal",
     "POST /api/v1/council":               "signed",
     "POST /api/v1/council/close":         "signed",
+    "POST /api/v1/approvals/withdraw":    "signed",  # 2026-10-11: requester withdraws its own pending request
     "GET /api/v1/council":                "normal",
     "POST /api/v1/workspace/contribute":  "signed",
 }
@@ -2927,12 +2928,36 @@ async def approval_signed_resolve_route(request_id: str, body: SignedResolveIn) 
     return JSONResponse(row)
 
 
+@app.post("/api/v1/approvals/{request_id}/withdraw")
+async def approval_withdraw_route(request_id: str, request: Request) -> JSONResponse:
+    """2026-10-11: the signed REQUESTER withdraws its own pending request
+    (power-reducing, audited). Anyone else gets 403; a non-pending one 409."""
+    raw = await request.body()
+    signer = await _board_auth(request, "POST /api/v1/approvals/withdraw", body=raw)
+    from common import governance as _gov
+    try:
+        return JSONResponse(_gov.withdraw_approval(request_id, signer))
+    except _gov.GovernanceError as e:
+        raise _gov_http(e)
+
+
 class CouncilIn(BaseModel):
     mode: str
     subject: str
     brief: str = ""
     participants: list
     deadline_hours: float = 48.0
+
+
+def _gov_when(ts) -> str:
+    """UTC + ET (operator rule 2026-10-06) for push text; '?' if unknown."""
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        u = datetime.fromtimestamp(float(ts), timezone.utc)
+        return f"{u:%Y-%m-%d %H:%MZ} / {u.astimezone(ZoneInfo('America/New_York')):%H:%M ET}"
+    except (TypeError, ValueError):
+        return "per policy (see approve.sh show)"
 
 
 @app.post("/api/v1/council", status_code=201)
@@ -2950,7 +2975,7 @@ async def council_request_route(body: CouncilIn, request: Request) -> JSONRespon
         ntfy_push.send("approval-gate",
                        f"{signer} requests a {body.mode} on {body.subject}.\n"
                        f"Review + sign over SSH: scripts/approve.sh show {out['approval_id']}\n"
-                       f"No signature = nothing happens (expires in 24h).",
+                       f"No signature = nothing happens (expires {_gov_when(out.get('approval_expires_at'))}).",
                        title=f"Council request: {body.mode}", priority=3, tags="busts_in_silhouette")
     except Exception:  # noqa: BLE001 -- the board post already carries it
         pass

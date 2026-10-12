@@ -164,7 +164,7 @@ def request_thaw(requester: str = "operator-cli") -> dict:
     spec = json.dumps({"type": "gateway-thaw", "ts": int(time.time())}, sort_keys=True, separators=(",", ":"))
     appr = governance.create_approval("gateway-thaw", spec, kind="gateway-thaw", requester=requester,
                                       reasoning="re-open the agent gateway after a kill-all / freeze",
-                                      ttl_seconds=3600)
+                                      ttl_seconds=governance.approval_ttl("gateway-thaw"))
     return {"approval_id": appr["id"]}
 
 
@@ -482,7 +482,7 @@ def request_hold(slug: str, days: float, requester: str = "operator-cli") -> dic
                        "account": cx["account"], "hold_until": until}, sort_keys=True, separators=(",", ":"))
     appr = governance.create_approval(f"connector-hold-{slug}", spec, kind="connector-hold", requester=requester,
                                       reasoning=f"keep {cx['account']}'s link open through a vendor outage",
-                                      ttl_seconds=24 * 3600)
+                                      ttl_seconds=governance.approval_ttl("connector-hold"))
     return {"approval_id": appr["id"], "connection": cx["id"], "hold_until": until}
 
 

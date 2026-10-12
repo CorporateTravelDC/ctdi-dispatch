@@ -204,3 +204,57 @@ def test_an_allowed_login_cannot_be_redeemed_long_after_expiry(env):
     assert "Sign out" not in c.get("/console").text
     with db.conn() as k:
         assert k.execute("SELECT count(*) FROM console_sessions").fetchone()[0] == 0
+
+
+# -- 2026-10-12: push on every request + re-tap, re-tap reuses the request but is audited, cancel --
+
+def _pushes(monkeypatch):
+    from common import ntfy_push
+    sent = []
+    monkeypatch.setattr(ntfy_push, "send", lambda topic, msg, **kw: sent.append((topic, msg, kw)))
+    return sent
+
+
+def test_retap_reuses_the_request_but_keeps_every_record_and_push(env, monkeypatch):
+    sent = _pushes(monkeypatch)
+    c = _client()
+    a1 = _aid(c.post("/console/login").text)
+    a2 = _aid(c.post("/console/login").text)
+    a3 = _aid(c.post("/console/login").text)
+    assert a1 == a2 == a3                                         # one signable request per browser
+    with db.conn() as k:
+        assert k.execute("SELECT count(*) FROM approval_requests WHERE kind='console-login'").fetchone()[0] == 1
+        retaps = [r[0] for r in k.execute("SELECT detail FROM audit_log WHERE action='console.login.retap' "
+                                          "AND detail LIKE ?", (f"%{a1}%",))]
+    assert len(retaps) == 2 and '"retap": 2' in retaps[-1]
+    assert len(sent) == 3 and all(t == "approval-gate" for t, _, _ in sent)
+    msg = sent[0][1]
+    for part in ("WHAT:", "WHY:", "APPROVE:", "DENY", "Requester: console", "Z / ", " ET", a1):
+        assert part in msg
+    assert "re-tap #2" in sent[2][1]
+
+
+def test_another_browser_gets_its_own_request(env, monkeypatch):
+    _pushes(monkeypatch)
+    assert _aid(_client().post("/console/login").text) != _aid(_client().post("/console/login").text)
+
+
+def test_cancel_withdraws_only_this_browsers_request(env, monkeypatch):
+    _pushes(monkeypatch)
+    c = _client()
+    page = c.post("/console/login").text
+    assert "Cancel this request" in page
+    aid = _aid(page)
+    r = c.post("/console/login/cancel")
+    assert r.status_code == 200 and "Operator console" in r.text   # back to the sign-in page
+    assert db.get_approval_request(aid)["status"] == "withdrawn"
+    with db.conn() as k:
+        assert k.execute("SELECT count(*) FROM audit_log WHERE action='approval.withdrawn' AND detail LIKE ?",
+                         (f"%{aid}%",)).fetchone()[0] == 1
+    assert _aid(c.post("/console/login").text) != aid             # next tap is a fresh request
+
+
+def test_a_push_failure_never_blocks_sign_in(env, monkeypatch):
+    from common import ntfy_push
+    monkeypatch.setattr(ntfy_push, "send", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ntfy down")))
+    _signed_in(env)

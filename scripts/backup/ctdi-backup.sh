@@ -97,7 +97,8 @@ dumps_meta=$(python3 "$LEDGER_PY" file "$stage/dispatch.pgdump" "$stage/nextclou
 cp "${BACKUP_LEDGER:-$STATE/ledger.jsonl}" "$stage/ledger.jsonl"
 
 nc_vol=$(podman volume inspect nextcloud-html --format '{{.Mountpoint}}')
-paths=("$stage" "$nc_vol" /var/lib/corporatetraveldc /etc/corporatetraveldc)
+# 2026-10-11: + /var/lib/vnstat (traffic history; unlimited daily retention since 2026-10-11; db is 0644, dir 0755)
+paths=("$stage" "$nc_vol" /var/lib/corporatetraveldc /etc/corporatetraveldc /var/lib/vnstat)
 # 2026-10-11: root-only files the operator account cannot read (re-issuable credentials held for
 # root services) are excluded rather than letting Borg warn on them every night.
 excludes=(--exclude /var/lib/corporatetraveldc/models --exclude 'sh:**/__pycache__' --exclude 'sh:**/*.tmp'

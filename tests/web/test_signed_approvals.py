@@ -370,3 +370,71 @@ def test_governance_events_reach_the_audit_log(team):
     with db.conn() as c:
         acts = [r[0] for r in c.execute("SELECT action FROM audit_log WHERE detail LIKE ?", (f"%{rid}%",))]
     assert "approval.requested" in acts and "approval.resolved" in acts
+
+
+# -- 2026-10-11: content-derived expiry, requester withdraw, council follows its approval --
+
+def _ttl(rid):
+    with db.conn() as c:
+        r = c.execute("SELECT created_at, expires_at FROM approval_requests WHERE id = ?", (rid,)).fetchone()
+    return r["expires_at"] - r["created_at"]
+
+
+def test_ttl_policy_per_kind_and_clamped(monkeypatch):
+    assert gov.approval_ttl("sudo") == 600
+    assert gov.approval_ttl("connector-hold") == 1800          # was 24 h
+    assert gov.approval_ttl("gateway-thaw") == 1800
+    assert gov.approval_ttl("council", deadline_hours=48) == 4 * 3600    # 10% of 48 h, at the cap
+    assert gov.approval_ttl("council", deadline_hours=6) == 0.6 * 3600   # 36 min
+    assert gov.approval_ttl("council", deadline_hours=1) == 1800         # floor
+    assert gov.approval_ttl("council-close", remaining_s=4 * 3600) == 3600
+    assert gov.approval_ttl("council-close", remaining_s=60) == 900      # floor
+    assert gov.approval_ttl("council-close", remaining_s=-5) == 900
+    monkeypatch.setenv("APPROVAL_TTL_CONNECTOR_HOLD_S", "999999")
+    assert gov.approval_ttl("connector-hold") == 3600                    # env can't exceed the kind's max
+    monkeypatch.setenv("APPROVAL_TTL_CONNECTOR_HOLD_S", "1")
+    assert gov.approval_ttl("connector-hold") == 300
+    assert all(v[1] <= v[0] <= v[2] for v in gov.APPROVAL_TTL_POLICY.values())
+    assert max(gov.MAX_TTL_S.values()) <= 4 * 3600                       # nothing waits 24 h any more
+
+
+def test_council_approval_expiry_follows_its_deadline(team):
+    cs = _convene()                                    # 24 h deadline
+    assert abs(_ttl(cs["approval_id"]) - 2.4 * 3600) < 2
+
+
+def test_requester_withdraws_and_council_follows(team):
+    cs = _convene()
+    with pytest.raises(gov.GovernanceError) as e:      # not the requester
+        gov.withdraw_approval(cs["approval_id"], "agent-b")
+    assert e.value.status == 403
+    assert gov.withdraw_approval(cs["approval_id"], "agent-a")["status"] == "withdrawn"
+    assert db.get_approval_request(cs["approval_id"])["status"] == "withdrawn"
+    assert gov.council_get(cs["id"])["status"] == "withdrawn"
+    with pytest.raises(gov.GovernanceError) as e:      # nothing left to withdraw or sign
+        gov.withdraw_approval(cs["approval_id"], "agent-a")
+    assert e.value.status == 409
+    with pytest.raises(gov.GovernanceError):
+        _approve(team, cs["approval_id"])
+    with db.conn() as c:
+        acts = [r[0] for r in c.execute("SELECT action FROM audit_log WHERE detail LIKE ?", (f"%{cs['approval_id']}%",))]
+    assert "approval.withdrawn" in acts
+
+
+def test_expired_council_approval_no_longer_orphans_the_council(team):
+    """c90f70d9768: its approval expired but the council sat in 'requested'."""
+    cs = _convene()
+    with db.conn() as c:
+        c.execute("UPDATE approval_requests SET expires_at = ? WHERE id = ?", (time.time() - 1, cs["approval_id"]))
+    assert gov.council_get(cs["id"])["status"] == "expired"
+    assert cs["id"] in {x["id"] for x in gov.council_list("expired")}
+
+
+def test_denied_council_follows(team):
+    cs = _convene()
+    _approve(team, cs["approval_id"], action="deny")
+    assert gov.council_get(cs["id"])["status"] == "denied"
+
+
+def test_withdraw_route_is_signed_policy():
+    assert web_main.BOARD_AUTH_POLICY["POST /api/v1/approvals/withdraw"] == "signed"

@@ -193,11 +193,39 @@ def approval_canonical(row: dict, action: str) -> bytes:
 # 2026-10-07: upper bound on how long any request can wait for a signature,
 # per kind. A caller may ask for less, never more -- a pending request must
 # not become latent authority (docs/AGENT_TRUST_MODEL.md, invariant 2).
-MAX_TTL_S = {
-    "sudo": 600, "console-login": 600, "connector-link": 900, "gateway-thaw": 3600,
-    "connector-hold": 24 * 3600, "council": COUNCIL_APPROVAL_TTL_S, "council-close": COUNCIL_APPROVAL_TTL_S,
+# 2026-10-11 (operator): expiry is POLICY + CONTENT, not one flat number. Per kind:
+# (default, min, max) seconds. APPROVAL_TTL_<KIND>_S in the environment overrides the
+# default but is clamped to [min, max], so configuration can never make a request
+# wait longer than its kind allows. Councils derive theirs from their own deadline:
+# an approval window longer than the work it unlocks makes no sense.
+APPROVAL_TTL_POLICY = {
+    "sudo": (600, 60, 600), "console-login": (600, 60, 600), "connector-link": (900, 300, 900),
+    "connector-hold": (1800, 300, 3600), "gateway-thaw": (1800, 300, 3600),
+    "council": (14400, 1800, 14400), "council-close": (3600, 900, 7200),
 }
+COUNCIL_TTL_FRACTION = 0.10         # of the council's deadline
+COUNCIL_CLOSE_TTL_FRACTION = 0.25   # of the council's remaining time
+MAX_TTL_S = {k: v[2] for k, v in APPROVAL_TTL_POLICY.items()}
 DEFAULT_MAX_TTL_S = 600
+
+
+def approval_ttl(kind: str, *, deadline_hours: float | None = None, remaining_s: float | None = None) -> float:
+    """Seconds a request of `kind` may wait for a signature (see APPROVAL_TTL_POLICY)."""
+    default, lo, hi = APPROVAL_TTL_POLICY.get(kind, (DEFAULT_MAX_TTL_S, 60, DEFAULT_MAX_TTL_S))
+    import os
+    env = os.environ.get(f"APPROVAL_TTL_{kind.upper().replace('-', '_')}_S")
+    if env:
+        try:
+            base = float(env)
+        except ValueError:
+            base = default
+    elif kind == "council" and deadline_hours:
+        base = float(deadline_hours) * 3600 * COUNCIL_TTL_FRACTION
+    elif kind == "council-close" and remaining_s is not None:
+        base = max(0.0, float(remaining_s)) * COUNCIL_CLOSE_TTL_FRACTION
+    else:
+        base = default
+    return float(min(hi, max(lo, base)))
 
 
 def create_approval(command_pattern: str, command: str, *, kind: str = "sudo", requester: str | None = None,
@@ -340,7 +368,7 @@ def council_create(requester: str, mode: str, subject: str, brief: str, particip
     cid = "c" + uuid.uuid4().hex[:10]
     spec = _council_spec(mode, subject, brief or "", parts, deadline, requester)
     appr = create_approval(f"council-{mode}", spec, kind="council", requester=requester,
-                           reasoning=f"{mode} on {subject}", ttl_seconds=COUNCIL_APPROVAL_TTL_S)
+                           reasoning=f"{mode} on {subject}", ttl_seconds=approval_ttl("council", deadline_hours=deadline_hours))
     with db.conn() as c:
         ensure(c)
         c.execute("INSERT INTO council_sessions (id, mode, subject, brief, participants, requester, status, "
@@ -352,10 +380,12 @@ def council_create(requester: str, mode: str, subject: str, brief: str, particip
                     f"Nothing happens until a human signs it: scripts/approve.sh show {appr['id']} "
                     f"then scripts/approve.sh allow {appr['id']}.")
     return {"id": cid, "status": "requested", "approval_id": appr["id"], "deadline": deadline,
+            "approval_expires_at": appr.get("expires_at"),
             "mode": mode, "participants": parts}
 
 
 def council_get(cid: str) -> dict | None:
+    _reconcile_councils(cid)
     with db.conn() as c:
         ensure(c)
         r = c.execute("SELECT * FROM council_sessions WHERE id = ?", (cid,)).fetchone()
@@ -369,6 +399,7 @@ def council_get(cid: str) -> dict | None:
 
 
 def council_list(status: str | None = None, limit: int = 50) -> list[dict]:
+    _reconcile_councils()
     with db.conn() as c:
         ensure(c)
         if status:
@@ -396,7 +427,8 @@ def council_request_close(cid: str, requester: str) -> dict:
     spec = json.dumps({"type": "council-close", "id": cid, "mode": cs["mode"], "subject": cs["subject"],
                        "requester": requester}, sort_keys=True, separators=(",", ":"))
     appr = create_approval(f"council-close-{cs['mode']}", spec, kind="council-close", requester=requester,
-                           reasoning=f"close {cs['mode']} {cid}", ttl_seconds=COUNCIL_APPROVAL_TTL_S)
+                           reasoning=f"close {cs['mode']} {cid}",
+                           ttl_seconds=approval_ttl("council-close", remaining_s=(cs.get("deadline") or 0) - time.time()))
     with db.conn() as c:
         c.execute("UPDATE council_sessions SET close_approval_id = ? WHERE id = ?", (appr["id"], cid))
     return {"id": cid, "close_approval_id": appr["id"]}
@@ -573,3 +605,48 @@ def arena_read_allowed(path: str, signer: str | None) -> tuple[bool, str]:
     if signer and owner == signer:
         return True, ""
     return False, "arena is blind until a human closes it: only your own contributions are readable"
+
+
+def withdraw_approval(request_id: str, requester: str) -> dict:
+    """2026-10-11: the REQUESTER withdraws its own pending request. Power-reducing only
+    (pending -> withdrawn), so it needs no approver signature; it is audited. A
+    principal still cannot approve or deny its own request (resolve_approval)."""
+    row = db.get_approval_request(request_id)        # applies expiry-on-read first
+    if row is None:
+        raise GovernanceError(404, "approval request not found")
+    if row.get("status") != "pending":
+        raise GovernanceError(409, f"request is {row.get('status')}, not pending")
+    if not requester or row.get("requester") != requester:
+        raise GovernanceError(403, "only the requester can withdraw a request")
+    with db.conn() as c:
+        cur = c.execute("UPDATE approval_requests SET status='withdrawn', resolved_at=? WHERE id=? AND status='pending'",
+                        (time.time(), request_id))
+        if (cur.rowcount or 0) != 1:
+            raise GovernanceError(409, "request was resolved concurrently")
+    audit("approval.withdrawn", {"id": request_id, "kind": row.get("kind"), "requester": requester})
+    _reconcile_councils()
+    return {"id": request_id, "status": "withdrawn"}
+
+
+def _reconcile_councils(cid: str | None = None) -> int:
+    """2026-10-11: a council still 'requested' whose approval has expired, been withdrawn
+    or been denied follows it (expired / withdrawn / denied) instead of lingering forever
+    (c90f70d9768 sat in 'requested' after its approval expired). Returns rows changed."""
+    changed = 0
+    with db.conn() as c:
+        ensure(c)
+        if cid:
+            rows = c.execute("SELECT id, approval_id FROM council_sessions WHERE status = 'requested' AND id = ?",
+                             (cid,)).fetchall()
+        else:
+            rows = c.execute("SELECT id, approval_id FROM council_sessions WHERE status = 'requested'").fetchall()
+    for r in rows:
+        ap = db.get_approval_request(r["approval_id"]) if r["approval_id"] else None
+        st = (ap or {}).get("status")
+        if st in ("expired", "withdrawn", "denied"):
+            with db.conn() as c:
+                cur = c.execute("UPDATE council_sessions SET status = ? WHERE id = ? AND status = 'requested'", (st, r["id"]))
+            if (cur.rowcount or 0) == 1:
+                changed += 1
+                audit("council.status", {"id": r["id"], "status": st, "because": f"approval {st}"})
+    return changed
