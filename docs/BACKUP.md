@@ -88,8 +88,20 @@ Default behaviour for **every** `ctdc-agent-*` account (`CTDC_SNAPSHOT_EXCLUDE` 
 
 | Unit | When | What |
 |---|---|---|
-| `corporatetraveldc-agent-home-snapshot.timer` (system, root) | daily 03:20 UTC | `agent-home-snapshot.sh` (installed root copy): tars each agent home into `/var/lib/corporatetraveldc/agent-snapshots/<account>/` (operator-owned, 0600, SHA-256 beside it, last 7 kept). **Credentials are excluded** (SSH private keys, auth and token files, keyrings): a restored agent re-enrolls. |
+| `corporatetraveldc-agent-home-snapshot.timer` (system, root) | daily 03:20 UTC | `agent-home-snapshot.sh` (installed root copy): tars each agent home into `/var/lib/corporatetraveldc/agent-snapshots/<account>/` (operator-owned, 0600, SHA-256 beside it, last 7 kept). ~~**Credentials are excluded** (SSH private keys, auth and token files, keyrings): a restored agent re-enrolls.~~ **Superseded 2026-10-12:** the name excludes missed a Claude Code session key and a browser profile (see below). Now: wider excludes plus a tripwire that deletes any archive still holding a credential-shaped name and fails the unit. A restored agent re-enrolls. |
 | `corporatetraveldc-agent-timecard.timer` (user) | daily 03:50 UTC | `agent_timecard.py`: the agent analogue of a daily run sheet or call-center performance sheet. For the previous UTC day it records shift (first and last activity), work (tool calls, board posts, contributions, signed requests), exceptions (refused or failed calls) and custody (that day's snapshot hash, the covering backup archive). JSON goes to `/var/lib/corporatetraveldc/agent-timecards/`, the readable card to vault `04-Syntheses/agent-timecards/`, and the card's SHA-256 to the private ledger. |
 
 The freshness check also pages when any agent snapshot is more than 36 h old.
+
+**2026-10-12 incident (docs-parity audit, verified on the box).** The 2026-10-11 and 10-12 snapshots captured a
+Claude Code session key (`.claude/sessions/*.key`) in the Claude agent's home and a Brave browser profile
+(`Local State` holds the cookie encryption key) in the Codex agent's home. Both rode, Borg-encrypted, in the
+three archives made before the fix; none had left the box (no off-box target was configured yet). Fix:
+`.claude/sessions`, `*.key`, `*.pem`, `*.p12`/`*.pfx`, browser profile directories (Brave, Chrome, Chromium,
+Firefox), `Cookies`, `Login Data`, `Web Data` and `Local State` are excluded, and `agent-home-snapshot.sh` lists
+every archive it writes and refuses (deletes it, exits 1) on any credential-shaped name, so a new kind of
+credential file fails loudly instead of being backed up. The existing snapshots were deleted and regenerated,
+the three archives were rewritten without them (`borg recreate`, then `borg compact`), and the ledger records it.
+`CTDC_SNAPSHOT_EXCLUDE` is now settable through `/etc/corporatetraveldc/agent-snapshot.env` (the unit's
+`EnvironmentFile`). Tests: `tests/scripts/test_agent_home_snapshot.py`.
 

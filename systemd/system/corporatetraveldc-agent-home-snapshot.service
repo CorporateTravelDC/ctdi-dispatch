@@ -4,4 +4,5 @@ Description=Corporate Travel DC -- root snapshot of agent homes (credentials exc
 Type=oneshot
 Nice=10
 IOSchedulingClass=idle
+EnvironmentFile=-/etc/corporatetraveldc/agent-snapshot.env
 ExecStart=/usr/local/libexec/ctdc/agent-home-snapshot.sh

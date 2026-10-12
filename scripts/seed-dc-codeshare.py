@@ -161,7 +161,15 @@ def seed_from_fids_codeshares() -> int:
     for ap in ("DCA", "IAD"):
         data = get_data(ap) or {}
         for side in ("arrivals", "departures"):
-            for f in data.get(side, []):
+            rows = data.get(side) or []
+            # 2026-10-12: IAD departures arrived as a dict keyed by flight (not a list),
+            # so iteration yielded strings and the 08:44Z run crashed. Accept both
+            # shapes and skip anything that is not a flight record.
+            if isinstance(rows, dict):
+                rows = list(rows.values())
+            for f in rows:
+                if not isinstance(f, dict):
+                    continue
                 prim = IATA_TO_ICAO.get((f.get("IATA") or "").upper())
                 num = str(f.get("flightnumber") or "").strip()
                 shares = f.get("codeshare") or []
@@ -172,6 +180,8 @@ def seed_from_fids_codeshares() -> int:
                     continue
                 op = ops[0]
                 for cs in shares:
+                    if not isinstance(cs, dict):
+                        continue
                     mk = IATA_TO_ICAO.get((cs.get("IATA") or "").upper())
                     mk_num = str(cs.get("flightnumber") or "").strip()
                     if not (mk and mk_num) or mk == op["operating_carrier"]:
