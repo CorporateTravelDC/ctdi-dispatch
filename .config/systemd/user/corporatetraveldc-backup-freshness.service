@@ -1,0 +1,6 @@
+[Unit]
+Description=Corporate Travel DC -- page if backups, off-box sync or restore tests are stale (scripts/backup/backup_freshness.py)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/backup/backup_freshness.py

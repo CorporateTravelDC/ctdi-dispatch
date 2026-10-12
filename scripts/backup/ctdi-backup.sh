@@ -65,7 +65,9 @@ exec 9>"${STATE}/.lock"; flock -n 9 || die "another backup is running"
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 stage=$(mktemp -d "${STATE}/stage.${ts}.XXXX"); chmod 700 "$stage"
-cleanup() { find "$stage" -type f -exec shred -fu {} + 2>/dev/null; rm -rf "$stage"; }
+# 2026-10-11: plain removal. shred cannot overwrite in place on btrfs (copy-on-write), so it only cost
+# ~15 min per run on ~7 GB of dumps; the stage dir is 0700 and its contents are in the encrypted archive.
+cleanup() { rm -rf "$stage"; }
 trap cleanup EXIT
 
 pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell)
@@ -96,7 +98,10 @@ cp "${BACKUP_LEDGER:-$STATE/ledger.jsonl}" "$stage/ledger.jsonl"
 
 nc_vol=$(podman volume inspect nextcloud-html --format '{{.Mountpoint}}')
 paths=("$stage" "$nc_vol" /var/lib/corporatetraveldc /etc/corporatetraveldc)
-excludes=(--exclude /var/lib/corporatetraveldc/models --exclude 'sh:**/__pycache__' --exclude 'sh:**/*.tmp')
+# 2026-10-11: root-only files the operator account cannot read (re-issuable credentials held for
+# root services) are excluded rather than letting Borg warn on them every night.
+excludes=(--exclude /var/lib/corporatetraveldc/models --exclude 'sh:**/__pycache__' --exclude 'sh:**/*.tmp'
+          --exclude /etc/corporatetraveldc/cf-honeypot.token)
 
 if [[ "$DRY" == 1 ]]; then log "dry run: would archive ${paths[*]} to $BACKUP_REPO and sync to '${BACKUP_TARGET:-<local only>}'"; exit 0; fi
 
@@ -109,11 +114,20 @@ fi
 archive="ctdi-${ts}"
 log "borg create ::${archive}"
 # podman unshare: the Nextcloud volume belongs to the container's mapped uids
+# Borg exit codes: 0 ok, 1 WARNING (archive written; e.g. an unreadable file), >=2 error.
+# 2026-10-11: a warning no longer aborts the whole backup -- it is logged and recorded in the ledger.
+set +e
 stats=$(podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" \
-  borg create --compression zstd,6 --one-file-system --json "${excludes[@]}" "::${archive}" "${paths[@]}")
-arch_id=$(echo "$stats" | python3 - <<'PY'
-import json, sys
-d = json.load(sys.stdin); a = d.get("archive", {})
+  borg create --compression zstd,6 --one-file-system --json "${excludes[@]}" "::${archive}" "${paths[@]}" 2>"$stage/borg-create.err")
+brc=$?
+set -e
+borg_warn=0
+if (( brc == 1 )); then borg_warn=1; log "borg create finished with WARNINGS (archive written): $(tr '\n' ' ' < "$stage/borg-create.err" | head -c 400)"
+elif (( brc >= 2 )); then cat "$stage/borg-create.err" >&2; die "borg create failed (rc=$brc)"; fi
+arch_id=$(BORG_STATS="$stats" python3 - <<'PY'
+# 2026-10-11: stats come via the environment -- the heredoc IS stdin here, so a pipe was silently replaced.
+import json, os
+d = json.loads(os.environ.get("BORG_STATS") or "{}"); a = d.get("archive", {})
 print(json.dumps({"id": a.get("id"), "name": a.get("name"), "original_size": a.get("stats", {}).get("original_size"),
                   "compressed_size": a.get("stats", {}).get("compressed_size"),
                   "deduplicated_size": a.get("stats", {}).get("deduplicated_size"), "nfiles": a.get("stats", {}).get("nfiles")}))
@@ -122,7 +136,7 @@ PY
 podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" \
   borg prune --keep-daily "$KEEP_D" --keep-weekly "$KEEP_W" --keep-monthly "$KEEP_M" --glob-archives 'ctdi-*'
 podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" borg compact
-python3 "$LEDGER_PY" append backup --json "{\"archive\": ${arch_id}, \"dumps\": ${dumps_meta}, \"include_cui\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"repo\": \"local\"}" >/dev/null
+python3 "$LEDGER_PY" append backup --json "{\"archive\": ${arch_id}, \"dumps\": ${dumps_meta}, \"include_cui\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"borg_warnings\": $( (( borg_warn )) && echo true || echo false ), \"repo\": \"local\"}" >/dev/null
 log "archive ${archive} done"
 
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then

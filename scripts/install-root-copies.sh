@@ -43,7 +43,8 @@ CHECK=0; [[ "${1:-}" == --check ]] && CHECK=1
 SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-cert.sh scripts/stall-monitor.py scripts/watchdog-tune.sh scripts/skill-grants.sh scripts/lib/skill_grants.py
          scripts/tailscale-cert-refresh-nts.sh
          scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh
-         scripts/approved-exec.py scripts/approved-exec.conf)   # 2026-10-07: root executor for signed sudo approvals
+         scripts/approved-exec.py scripts/approved-exec.conf
+         scripts/backup/agent-home-snapshot.sh)   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
@@ -67,6 +68,8 @@ UNITS=(
   "systemd/system/corporatetraveldc-llama-council.timer"
   "systemd/system/corporatetraveldc-nts-cert-refresh.service"
   "systemd/system/corporatetraveldc-nts-cert-refresh.timer"
+  "systemd/system/corporatetraveldc-agent-home-snapshot.service"
+  "systemd/system/corporatetraveldc-agent-home-snapshot.timer"
 )
 
 manifest_hash() { awk -v p="$1" '$2==p || $2=="*"p {print $1; exit}' "${REPO}/MANIFEST.sha256"; }

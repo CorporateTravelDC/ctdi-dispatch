@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily agent time cards at 03:50 UTC (after the 03:20 snapshot and 03:40 backup)
+[Timer]
+OnCalendar=*-*-* 03:50:00
+Persistent=true
+[Install]
+WantedBy=timers.target

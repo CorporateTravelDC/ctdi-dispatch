@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily encrypted backup (03:40 UTC, after the 03:00 audit archival)
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+RandomizedDelaySec=10m
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Corporate Travel DC -- root snapshot of agent homes (credentials excluded) for the nightly backup
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/local/libexec/ctdc/agent-home-snapshot.sh

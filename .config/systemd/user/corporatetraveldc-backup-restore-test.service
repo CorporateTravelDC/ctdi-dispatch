@@ -1,0 +1,7 @@
+[Unit]
+Description=Corporate Travel DC -- prove the newest backup restores (hashes vs ledger, pg_restore --list, LADD # stamp)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/bin/bash /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/backup/backup-restore-test.sh

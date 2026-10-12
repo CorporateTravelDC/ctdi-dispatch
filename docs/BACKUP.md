@@ -70,3 +70,25 @@ The first full archive is about 10–14 GB before deduplication and compression:
 - platform state: 5.2 GB once models are excluded.
 
 Daily increments are expected to be small, mostly the dispatch dump. This fits easily in the 2 TB Proton allotment.
+
+## Schedule, restore test and freshness (2026-10-11)
+
+| Unit | When | What |
+|---|---|---|
+| `corporatetraveldc-backup.timer` | daily 03:40 UTC (±10 min) | `ctdi-backup.sh`: dumps, LADD `#` stamp, Borg archive, prune and compact, sync to `BACKUP_TARGET` |
+| `corporatetraveldc-backup-restore-test.timer` | Sundays 05:30 UTC | `backup-restore-test.sh`: extracts the newest archive's dumps, matches their SHA-256 against the ledger, runs `pg_restore --list` on each (read-only, inside the Postgres container), checks the local LADD dump against its `#` stamp, writes a `restore-test` ledger entry. Nothing is restored into a live database. |
+| `corporatetraveldc-backup-freshness.timer` | every 6 h | `backup_freshness.py` fails and pages when the last backup is older than 36 h, the last successful off-box sync is older than 36 h (when a target is set), the restore test is older than 8 days or failed, or the ledger chain breaks. |
+
+All three page through `corporatetraveldc-unit-failure-notify@` on failure.
+
+## Agents: daily root snapshot + time cards (2026-10-11)
+
+Default behaviour for **every** `ctdc-agent-*` account (`CTDC_SNAPSHOT_EXCLUDE` removes names):
+
+| Unit | When | What |
+|---|---|---|
+| `corporatetraveldc-agent-home-snapshot.timer` (system, root) | daily 03:20 UTC | `agent-home-snapshot.sh` (installed root copy): tars each agent home into `/var/lib/corporatetraveldc/agent-snapshots/<account>/` (operator-owned, 0600, SHA-256 beside it, last 7 kept). **Credentials are excluded** (SSH private keys, auth and token files, keyrings): a restored agent re-enrolls. |
+| `corporatetraveldc-agent-timecard.timer` (user) | daily 03:50 UTC | `agent_timecard.py`: the agent analogue of a daily run sheet or call-center performance sheet. For the previous UTC day it records shift (first and last activity), work (tool calls, board posts, contributions, signed requests), exceptions (refused or failed calls) and custody (that day's snapshot hash, the covering backup archive). JSON goes to `/var/lib/corporatetraveldc/agent-timecards/`, the readable card to vault `04-Syntheses/agent-timecards/`, and the card's SHA-256 to the private ledger. |
+
+The freshness check also pages when any agent snapshot is more than 36 h old.
+

@@ -1,0 +1,7 @@
+[Unit]
+Description=Agent home snapshot daily at 03:20 UTC (before the 03:40 backup)
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+[Install]
+WantedBy=timers.target

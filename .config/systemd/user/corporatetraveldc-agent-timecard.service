@@ -1,0 +1,7 @@
+[Unit]
+Description=Corporate Travel DC -- daily agent time cards (shift, work, exceptions, custody) from the audit log
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/with-dispatch-env.sh /usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/agent_timecard.py
