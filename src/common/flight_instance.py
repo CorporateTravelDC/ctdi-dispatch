@@ -1,0 +1,899 @@
+"""
+common/flight_instance.py
+-------------------------
+Flight-INSTANCE resolver (2026-10-13; operator requests 2026-10-11/12).
+
+A flight NUMBER is not a flight. Three confirmed ways the number alone
+points at the wrong airplane:
+  - shuttles: one number flies several times a day;
+  - both directions: AA1893 runs DCA->FLL in the morning and FLL->DCA in
+    the afternoon, so a morning watch matched by callsign alone was
+    advanced by the afternoon leg's messages;
+  - regional operators: UAL4520 flew as GJS4520, and RPA4520 flew the same
+    night on a different route -- codeshare_map can hold both, and only
+    the route says which one a watch means.
+
+So the key here is the INSTANCE: operating carrier + flight number +
+origin + destination + scheduled date (UTC date of the scheduled
+departure). Marketing numbers translate to operating ones through
+codeshare_map (route-filtered -- its rows carry origin/destination), and
+the hex/registration ride along where the FAA flight plan has them.
+
+What lives here (all of it read-only against the DB; nothing in this
+module writes a watch, a phase, or a push):
+  - FlightInstanceKey / FlightInstance + resolve()       -- candidates from
+    flight_ooooi_times (TFMS: scheduled + airline OOOI times) and
+    flight_events (FDPS: hex/registration, runway ETA, status);
+  - same_instance()                                       -- strict equality;
+  - match_watch_entry()                                   -- the shared watch
+    matcher the TFMS/TBFM parsers use (identifier OR codeshare operating
+    callsign OR hex, AND the message's airports agree with the watch);
+  - pair_events()                                         -- time-fidelity
+    pairing inside one instance only;
+  - decide_tail_change()                                  -- the tail-change
+    guard (pure);
+  - assess_inbound()                                      -- "where's my
+    inbound" (pure).
+See docs/FLIGHT_INSTANCE_RESOLVER.md for the rules and the wiring points.
+
+OOOI authority is untouched by design: nothing here asserts a phase. The
+inbound tracker READS the airline/SWIM times it is given; any caller that
+wants to write a phase still goes through
+db.update_watchlist_oooi_phase_authoritative.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
+from typing import Iterable, Optional
+
+from common.airline_codes import IATA_TO_ICAO, split_callsign
+
+log = logging.getLogger(__name__)
+
+
+# ── Airports ─────────────────────────────────────────────────────────────────
+
+def norm_airport(code: str | None) -> str | None:
+    """FAA 3-letter / ICAO K-prefixed 4-letter spellings of the same US field
+    compare equal (KDCA == DCA). Same rule as fdps_parser._norm_airport and
+    tfms_parser._norm_airport_code. Anything else passes through upper-cased."""
+    if not code:
+        return None
+    c = code.strip().upper()
+    if len(c) == 4 and c.startswith("K") and c[1:].isalpha():
+        return c[1:]
+    return c or None
+
+
+def airports_agree(a: str | None, b: str | None) -> Optional[bool]:
+    """True / False / None (= cannot tell). None when either side is missing,
+    or when the two are in different code systems we cannot bridge without a
+    table (EGLL vs LHR). A 4-letter code ending in the 3-letter one (CYYC /
+    YYC, PHNL / HNL) counts as agreement. Callers reject only on False --
+    "unknown" must never turn into a mismatch."""
+    na, nb = norm_airport(a), norm_airport(b)
+    if not na or not nb:
+        return None
+    if na == nb:
+        return True
+    if len(na) == len(nb):
+        return False
+    short, long_ = (na, nb) if len(na) < len(nb) else (nb, na)
+    if len(short) == 3 and len(long_) == 4 and long_.endswith(short):
+        return True
+    return None
+
+
+# ── Times ────────────────────────────────────────────────────────────────────
+
+def to_epoch(value) -> float | None:
+    """Epoch seconds from an epoch number, a datetime, ISO-8601 ('Z' or
+    offset), or the TFMS compact YYYYMMDDHHMM[SS] form. None if unparseable."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    s = str(value).strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        pass
+    for fmt in ("%Y%m%d%H%M%S", "%Y%m%d%H%M"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return None
+
+
+def utc_date(value) -> str | None:
+    """'YYYY-MM-DD' (UTC) of a scheduled departure, or a bare date string /
+    date passed straight through. None if unknown."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        return value.strip()
+    ep = to_epoch(value)
+    if ep is None:
+        return None
+    return datetime.fromtimestamp(ep, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _fmt_utc(ep: float | None) -> str:
+    if ep is None:
+        return "?"
+    return datetime.fromtimestamp(ep, tz=timezone.utc).strftime("%H:%MZ")
+
+
+# ── Identifiers ──────────────────────────────────────────────────────────────
+
+def parse_flight_ident(identifier: str | None) -> tuple[str, str] | None:
+    """('GJS', '4520') from GJS4520 / G74520 / 'UA 4520' (IATA carriers go to
+    ICAO through common.airline_codes). None for tails, blanks, and 2-char
+    carriers we do not know -- never a guess."""
+    parts = split_callsign(identifier)
+    if not parts:
+        return None
+    prefix, num = parts
+    if len(prefix) == 3 and prefix.isalpha():
+        return prefix, num
+    icao = IATA_TO_ICAO.get(prefix)
+    return (icao, num) if icao else None
+
+
+def operating_identities(identifier: str | None, origin: str | None = None,
+                         destination: str | None = None) -> list[tuple[str, str]]:
+    """The identifier itself (ICAO form) plus every confirmed codeshare_map
+    operating flight for it whose stored route does not contradict the given
+    origin/destination. UAL4520 with a GJS4520 DCA-ORD row and an RPA4520
+    EWR-DCA row resolves to GJS4520 only when the watch says DCA-ORD.
+    DB errors (no codeshare_map table in a partial test DB) degrade to the
+    identifier alone."""
+    parsed = parse_flight_ident(identifier)
+    if not parsed:
+        return []
+    out: list[tuple[str, str]] = [parsed]
+    carrier, num = parsed
+    try:
+        from common import db
+        rows = db.get_codeshare_mapping_by_marketing(carrier, num)
+    except Exception as e:
+        log.debug("flight_instance: codeshare lookup %s%s failed (non-fatal): %s", carrier, num, e)
+        rows = []
+    for r in rows:
+        op_c = (r.get("operating_carrier") or "").upper()
+        if not op_c:
+            continue
+        if airports_agree(r.get("origin"), origin) is False:
+            continue
+        if airports_agree(r.get("destination"), destination) is False:
+            continue
+        op_n = (r.get("operating_flight_num") or num).lstrip("0") or "0"
+        if (op_c, op_n) not in out:
+            out.append((op_c, op_n))
+    return out
+
+
+# ── Instance key + instance ──────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class FlightInstanceKey:
+    """Operating carrier + number + origin + destination + scheduled UTC date.
+    Airports are stored normalized (norm_airport); any component may be None
+    when the source did not say, and same_instance() treats None as
+    "cannot prove", never as a wildcard."""
+    carrier: str
+    flight_num: str
+    origin: str | None
+    destination: str | None
+    sched_date: str | None
+
+    @property
+    def callsign(self) -> str:
+        return f"{self.carrier}{self.flight_num}"
+
+    @classmethod
+    def make(cls, identifier: str | None, origin: str | None = None,
+             destination: str | None = None, sched=None) -> "FlightInstanceKey | None":
+        parsed = parse_flight_ident(identifier)
+        if not parsed:
+            return None
+        return cls(parsed[0], parsed[1], norm_airport(origin), norm_airport(destination),
+                   utc_date(sched))
+
+    def __str__(self) -> str:
+        return (f"{self.callsign} {self.origin or '?'}-{self.destination or '?'} "
+                f"{self.sched_date or '?'}")
+
+
+@dataclass
+class FlightInstance:
+    """One leg. Times are epoch seconds (None = unknown). `act_*` come from
+    TFMS airline-posted OOOI times or the caller; this module only reads
+    them."""
+    key: FlightInstanceKey
+    hex: str | None = None
+    registration: str | None = None
+    sched_dep: float | None = None
+    sched_arr: float | None = None
+    est_dep: float | None = None
+    est_arr: float | None = None
+    act_dep: float | None = None
+    act_arr: float | None = None
+    status: str | None = None
+    gufi: str | None = None
+    sources: tuple = ()
+    marketing: str | None = None
+    updated_at: float | None = None
+
+    @property
+    def best_dep(self) -> float | None:
+        return self.act_dep or self.est_dep or self.sched_dep
+
+    @property
+    def best_arr(self) -> float | None:
+        return self.act_arr or self.est_arr or self.sched_arr
+
+    @property
+    def cancelled(self) -> bool:
+        return (self.status or "").lower() in ("cancelled", "canceled")
+
+    @property
+    def diverted(self) -> bool:
+        return "divert" in (self.status or "").lower()
+
+
+def _key_of(x) -> FlightInstanceKey | None:
+    if isinstance(x, FlightInstance):
+        return x.key
+    if isinstance(x, FlightInstanceKey):
+        return x
+    return None
+
+
+def same_instance(a, b) -> bool:
+    """Strict: same operating carrier + number, both airports positively
+    agree, and both scheduled dates known and equal. Accepts FlightInstance
+    or FlightInstanceKey. Unknown components never prove sameness."""
+    ka, kb = _key_of(a), _key_of(b)
+    if ka is None or kb is None:
+        return False
+    if (ka.carrier, ka.flight_num) != (kb.carrier, kb.flight_num):
+        return False
+    if airports_agree(ka.origin, kb.origin) is not True:
+        return False
+    if airports_agree(ka.destination, kb.destination) is not True:
+        return False
+    return bool(ka.sched_date and kb.sched_date and ka.sched_date == kb.sched_date)
+
+
+def instance_from_tfms_row(row: dict, marketing: str | None = None) -> FlightInstance | None:
+    """flight_ooooi_times row -> instance. original_departure is TFMS's
+    scheduled departure, so this source carries the date the key needs."""
+    ident = row.get("callsign") or f"{row.get('airline') or ''}{row.get('flight_num') or ''}"
+    sched_dep = to_epoch(row.get("original_departure"))
+    key = FlightInstanceKey.make(ident, row.get("origin"), row.get("destination"), sched_dep)
+    if key is None:
+        return None
+    return FlightInstance(
+        key=key, sched_dep=sched_dep, sched_arr=to_epoch(row.get("original_arrival")),
+        act_dep=to_epoch(row.get("airline_off_time")) or to_epoch(row.get("airline_out_time")),
+        act_arr=to_epoch(row.get("airline_on_time")) or to_epoch(row.get("airline_in_time")),
+        status=row.get("flight_status"), gufi=row.get("gufi"), sources=("tfms",),
+        marketing=marketing, updated_at=to_epoch(row.get("updated_at")))
+
+
+def instance_from_flight_event(row: dict, marketing: str | None = None) -> FlightInstance | None:
+    """flight_events (FDPS) row -> instance, with hex/registration parsed from
+    this row's OWN <flight> element (raw_json is a batch; see
+    db._find_flight_element). The FDPS writer stores departure_time as NULL
+    today, so FDPS-only instances usually carry no scheduled date."""
+    from common import db
+    airline = (row.get("airline") or "").upper()
+    num = row.get("flight_num") or ""
+    key = FlightInstanceKey.make(f"{airline}{num}", row.get("origin"), row.get("destination"),
+                                 row.get("departure_time"))
+    if key is None:
+        return None
+    hex_id = reg = None
+    try:
+        flight = db._find_flight_element(row.get("raw_json"), f"{airline}{num}")
+        hex_id, reg = db._extract_aircraft_hex_registration(flight)
+    except Exception as e:
+        log.debug("flight_instance: hex parse failed for %s: %s", row.get("flight_id"), e)
+    return FlightInstance(
+        key=key, hex=(hex_id or "").lower() or None, registration=reg,
+        sched_dep=to_epoch(row.get("departure_time")), est_arr=to_epoch(row.get("arrival_time")),
+        status=row.get("status"), gufi=row.get("flight_id"), sources=("fdps",),
+        marketing=marketing, updated_at=to_epoch(row.get("updated_at")))
+
+
+def _merge(into: FlightInstance, other: FlightInstance) -> None:
+    """Fill gaps in `into` from `other` (same GUFI). Never overwrites."""
+    for name in ("hex", "registration", "sched_dep", "sched_arr", "est_dep", "est_arr",
+                 "act_dep", "act_arr", "status"):
+        if getattr(into, name) is None and getattr(other, name) is not None:
+            setattr(into, name, getattr(other, name))
+    into.sources = tuple(dict.fromkeys(into.sources + other.sources))
+
+
+def _rows(sql: str, params: tuple) -> list[dict]:
+    from common import db
+    try:
+        with db.conn() as c:
+            return [dict(r) for r in c.execute(sql, params).fetchall()]
+    except Exception as e:
+        log.debug("flight_instance: query failed (non-fatal): %s", e)
+        return []
+
+
+def resolve(identifier: str, origin: str | None = None, destination: str | None = None,
+            sched_date=None, *, hex_id: str | None = None,
+            limit_per_source: int = 50) -> list[FlightInstance]:
+    """Candidate instances for (identifier, route, date), across the
+    identifier itself and its route-filtered codeshare operating flights.
+    Rows whose route or date positively contradict the request are dropped;
+    rows that merely do not say are kept (so the caller can see an FDPS plan
+    with no date). Same-GUFI TFMS + FDPS rows merge into one instance.
+    Sorted by scheduled departure (unknown last)."""
+    want_date = utc_date(sched_date)
+    want_hex = (hex_id or "").lower().strip() or None
+    marketing = None
+    parsed = parse_flight_ident(identifier)
+    if parsed:
+        marketing = f"{parsed[0]}{parsed[1]}"
+    by_gufi: dict[str, FlightInstance] = {}
+    loose: list[FlightInstance] = []
+
+    for carrier, num in operating_identities(identifier, origin, destination):
+        mk = marketing if f"{carrier}{num}" != marketing else None
+        found: list[FlightInstance] = []
+        for row in _rows("SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? "
+                         "ORDER BY updated_at DESC LIMIT ?", (carrier, num, limit_per_source)):
+            inst = instance_from_tfms_row(row, mk)
+            if inst:
+                found.append(inst)
+        for row in _rows("SELECT * FROM flight_events WHERE airline = ? AND flight_num = ? "
+                         "ORDER BY updated_at DESC LIMIT ?", (carrier, num, limit_per_source)):
+            inst = instance_from_flight_event(row, mk)
+            if inst:
+                found.append(inst)
+        # merge same-GUFI rows FIRST, so an undated FDPS row inherits its
+        # TFMS twin's date before the date filter sees it
+        for inst in found:
+            if inst.gufi and inst.gufi in by_gufi:
+                _merge(by_gufi[inst.gufi], inst)
+            elif inst.gufi:
+                by_gufi[inst.gufi] = inst
+            else:
+                loose.append(inst)
+
+    out = []
+    for inst in list(by_gufi.values()) + loose:
+        if inst.key.sched_date is None and inst.sched_dep is not None:
+            inst.key = FlightInstanceKey(inst.key.carrier, inst.key.flight_num, inst.key.origin,
+                                         inst.key.destination, utc_date(inst.sched_dep))
+        if airports_agree(inst.key.origin, origin) is False:
+            continue
+        if airports_agree(inst.key.destination, destination) is False:
+            continue
+        if want_date and inst.key.sched_date and inst.key.sched_date != want_date:
+            continue
+        if want_hex and inst.hex and inst.hex != want_hex:
+            continue
+        out.append(inst)
+    out.sort(key=lambda i: (i.sched_dep is None, i.sched_dep or 0))
+    return out
+
+
+def instances_for_hex(hex_id: str, window_h: float = 30.0) -> list[FlightInstance]:
+    """Every FDPS-filed instance (flight_events, updated within window_h)
+    whose OWN <flight> element carries this hex. The LIKE is only a
+    prefilter -- raw_json batches bundle unrelated flights, so each hit is
+    re-parsed and kept only if its own aircraft address matches. Used by the
+    tail-change guard; called on a tail-change event, not per tick."""
+    hx = (hex_id or "").strip().upper()
+    if not re.fullmatch(r"[0-9A-F]{6}", hx):
+        return []
+    cutoff = time.time() - window_h * 3600.0
+    out = []
+    for row in _rows("SELECT * FROM flight_events WHERE updated_at > ? AND raw_json LIKE ?",
+                     (cutoff, f"%{hx}%")):
+        inst = instance_from_flight_event(row)
+        if inst and inst.hex == hx.lower():
+            out.append(inst)
+    return out
+
+
+def previous_leg(candidates: Iterable[FlightInstance], watched: FlightInstance,
+                 exclude_gufi: str | None = None) -> FlightInstance | None:
+    """The candidate tail's leg INTO the watched origin before the watched
+    departure: latest-arriving instance whose destination agrees with the
+    watched origin (a diverted inbound therefore is not found here -- that
+    is the guard's job to report). Candidates with no arrival time are
+    considered only if nothing timed qualifies."""
+    w_dep = watched.best_dep
+    timed, untimed = [], []
+    for inst in candidates:
+        if exclude_gufi and inst.gufi == exclude_gufi:
+            continue
+        if same_instance(inst, watched):
+            continue
+        if airports_agree(inst.key.destination, watched.key.origin) is not True:
+            continue
+        arr = inst.best_arr
+        if arr is None:
+            untimed.append(inst)
+        elif w_dep is None or arr <= w_dep + 6 * 3600:
+            timed.append(inst)
+    if timed:
+        return max(timed, key=lambda i: i.best_arr)
+    return untimed[0] if untimed else None
+
+
+# ── Registry helpers (read-only) ─────────────────────────────────────────────
+
+def registration_for_hex(hex_id: str | None) -> str | None:
+    """Tail for a Mode-S hex from the local FAA registry (N-number), then
+    OpenSky. None if neither knows it or the lookup errors."""
+    if not hex_id:
+        return None
+    from common import db
+    try:
+        faa = db.faa_lookup_by_hex(hex_id)
+        if faa and faa.get("n_number"):
+            n = faa["n_number"].upper()
+            return n if n.startswith("N") else f"N{n}"
+    except Exception as e:
+        log.debug("flight_instance: FAA hex lookup failed: %s", e)
+    try:
+        osky = db.opensky_lookup_by_hex(hex_id)
+        if osky and osky.get("registration"):
+            return osky["registration"].upper()
+    except Exception as e:
+        log.debug("flight_instance: OpenSky hex lookup failed: %s", e)
+    return None
+
+
+def hex_for_registration(registration: str | None) -> str | None:
+    """Mode-S hex for a tail (FAA authoritative for N-numbers, OpenSky
+    fallback) -- same order add_flight_watchlist already uses."""
+    if not registration:
+        return None
+    from common import db
+    try:
+        faa = db.faa_lookup_by_n_number(registration)
+        if faa and faa.get("mode_s_hex"):
+            return faa["mode_s_hex"].lower()
+    except Exception as e:
+        log.debug("flight_instance: FAA reg lookup failed: %s", e)
+    try:
+        osky = db.opensky_lookup_by_registration(registration)
+        if osky and osky.get("icao24"):
+            return osky["icao24"].lower()
+    except Exception as e:
+        log.debug("flight_instance: OpenSky reg lookup failed: %s", e)
+    return None
+
+
+# ── Watch matcher (TFMS / TBFM) ──────────────────────────────────────────────
+
+# A watch's scheduled departure and a message's scheduled departure (TFMS
+# igtd) further apart than this are different legs of a reused number.
+WATCH_SCHED_TOLERANCE_H = 3.0
+
+_ALIAS_TTL_S = 300.0
+_alias_cache: dict[tuple, tuple[float, frozenset]] = {}
+
+
+def clear_alias_cache() -> None:
+    _alias_cache.clear()
+
+
+def watch_operating_aliases(entry: dict) -> frozenset:
+    """ICAO callsigns a watch answers to: its own identifier plus its
+    route-filtered codeshare operating flights. Cached per (identifier,
+    route) for five minutes so the national TFMS stream costs a dict probe,
+    not a codeshare query per message."""
+    ident = (entry.get("identifier") or "").upper().strip()
+    ck = (ident, norm_airport(entry.get("origin")), norm_airport(entry.get("destination")))
+    now = time.monotonic()
+    hit = _alias_cache.get(ck)
+    if hit and hit[0] > now:
+        return hit[1]
+    aliases = frozenset(f"{c}{n}" for c, n in
+                        operating_identities(ident, entry.get("origin"), entry.get("destination")))
+    _alias_cache[ck] = (now + _ALIAS_TTL_S, aliases)
+    return aliases
+
+
+def _identity_matches(entry: dict, ident_upper: str | None, ident_icao: str | None,
+                      hex_id: str | None) -> str | None:
+    """How a watch entry answers to this message, or None."""
+    e_ident = (entry.get("identifier") or "").upper().strip()
+    if ident_upper and e_ident == ident_upper:
+        return "identifier"
+    if hex_id and (entry.get("hex_id") or "").lower().strip() == hex_id:
+        return "hex"
+    if ident_icao and ident_icao in watch_operating_aliases(entry):
+        own = parse_flight_ident(e_ident)
+        return "identifier" if own and f"{own[0]}{own[1]}" == ident_icao else "codeshare"
+    return None
+
+
+def leg_rejection(entry: dict, origin: str | None, destination: str | None,
+                  sched_dep=None, tolerance_h: float = WATCH_SCHED_TOLERANCE_H) -> str | None:
+    """Why a message for the right NUMBER is the wrong LEG for this watch,
+    or None if nothing contradicts it.
+      - cross-direction / other route: an airport positively disagrees;
+      - other time of day: both scheduled departures known, > tolerance apart.
+    One narrow exception: origin agrees and the scheduled departures
+    positively agree, but the destination differs -- that is this leg
+    diverting (FDPS/TFMS amend the destination), not another leg, and
+    dropping it would lose the arrival at the alternate."""
+    o_ok = airports_agree(entry.get("origin"), origin)
+    d_ok = airports_agree(entry.get("destination"), destination)
+    w_ep, m_ep = to_epoch(entry.get("scheduled_departure")), to_epoch(sched_dep)
+    sched_same = None
+    if w_ep is not None and m_ep is not None:
+        sched_same = abs(w_ep - m_ep) <= tolerance_h * 3600.0
+    if o_ok is False:
+        if airports_agree(entry.get("origin"), destination) and \
+                airports_agree(entry.get("destination"), origin):
+            return "cross_direction"
+        return "origin_mismatch"
+    if sched_same is False:
+        return "other_time_of_day"
+    if d_ok is False:
+        if o_ok is True and sched_same is True:
+            return None  # same leg, amended destination (diversion)
+        return "destination_mismatch"
+    return None
+
+
+def match_watch_entry(entries: Iterable[dict], identifier: str | None, *,
+                      origin: str | None = None, destination: str | None = None,
+                      hex_id: str | None = None, sched_dep=None,
+                      tolerance_h: float = WATCH_SCHED_TOLERANCE_H) -> dict | None:
+    """First flight watch that (a) answers to this identifier -- exactly, by
+    ICAO normalization, through a route-filtered codeshare_map operating
+    callsign, or by hex -- AND (b) is not contradicted by the message's
+    departure/arrival airports or scheduled departure (leg_rejection). A
+    same-number shuttle's other leg fails (b) and never advances the watch."""
+    ident_upper = (identifier or "").upper().strip() or None
+    hx = (hex_id or "").lower().strip() or None
+    if not ident_upper and not hx:
+        return None
+    parsed = parse_flight_ident(ident_upper)
+    ident_icao = f"{parsed[0]}{parsed[1]}" if parsed else None
+    for entry in entries:
+        how = _identity_matches(entry, ident_upper, ident_icao, hx)
+        if not how:
+            continue
+        why = leg_rejection(entry, origin, destination, sched_dep, tolerance_h)
+        if why:
+            log.debug("watch %s: %s matched by %s but rejected (%s; msg %s-%s sched %s)",
+                      entry.get("id"), ident_upper or hx, how, why, origin, destination, sched_dep)
+            continue
+        return entry
+    return None
+
+
+# ── Time-fidelity pairing ────────────────────────────────────────────────────
+
+def event_key(event: dict) -> FlightInstanceKey | None:
+    """Instance key of a time-fidelity event dict: identifier|callsign,
+    origin, destination, sched_dep|scheduled_departure."""
+    return FlightInstanceKey.make(
+        event.get("identifier") or event.get("callsign"),
+        event.get("origin"), event.get("destination"),
+        event.get("sched_dep") if event.get("sched_dep") is not None
+        else event.get("scheduled_departure"))
+
+
+def pair_rejection(a: dict, b: dict, sched_tolerance_min: float = 90.0) -> str | None:
+    """None if a and b are the same instance (and, when both carry a phase,
+    the same phase); else the reason: no_key, different_flight,
+    cross_direction, different_route, no_sched, different_date,
+    other_time_of_day, different_phase."""
+    ka, kb = event_key(a), event_key(b)
+    if ka is None or kb is None:
+        return "no_key"
+    if (ka.carrier, ka.flight_num) != (kb.carrier, kb.flight_num):
+        return "different_flight"
+    if airports_agree(ka.origin, kb.origin) is not True or \
+            airports_agree(ka.destination, kb.destination) is not True:
+        if airports_agree(ka.origin, kb.destination) and airports_agree(ka.destination, kb.origin):
+            return "cross_direction"
+        return "different_route"
+    if not ka.sched_date or not kb.sched_date:
+        return "no_sched"
+    if ka.sched_date != kb.sched_date:
+        return "different_date"
+    ea = to_epoch(a.get("sched_dep") if a.get("sched_dep") is not None else a.get("scheduled_departure"))
+    eb = to_epoch(b.get("sched_dep") if b.get("sched_dep") is not None else b.get("scheduled_departure"))
+    if ea is not None and eb is not None and abs(ea - eb) > sched_tolerance_min * 60.0:
+        return "other_time_of_day"
+    pa, pb = (a.get("phase") or "").lower(), (b.get("phase") or "").lower()
+    if pa and pb and pa != pb:
+        return "different_phase"
+    return None
+
+
+_REJECT_RANK = ("different_phase", "other_time_of_day", "different_date", "cross_direction",
+                "no_sched", "different_route", "different_flight", "no_key")
+
+
+@dataclass
+class PairingResult:
+    pairs: list = field(default_factory=list)       # [(a, b)]
+    rejected: list = field(default_factory=list)    # [(a, nearest_b_or_None, reason)]
+    unpaired_b: list = field(default_factory=list)
+
+
+def pair_events(reference: Iterable[dict], candidates: Iterable[dict], *,
+                sched_tolerance_min: float = 90.0) -> PairingResult:
+    """Pair each reference event with at most one candidate of the SAME
+    instance (pair_rejection is None), nearest scheduled departure first;
+    each candidate is used once. An unpaired reference event records the
+    most informative reason it found (a same-number other-time-of-day leg
+    outranks an unrelated flight)."""
+    cands = list(candidates)
+    used: set[int] = set()
+    res = PairingResult()
+    for a in reference:
+        best_i, best_gap = None, None
+        nearest, nearest_reason = None, None
+        ea = to_epoch(a.get("sched_dep") if a.get("sched_dep") is not None else a.get("scheduled_departure"))
+        for i, b in enumerate(cands):
+            if i in used:
+                continue
+            why = pair_rejection(a, b, sched_tolerance_min)
+            if why is None:
+                eb = to_epoch(b.get("sched_dep") if b.get("sched_dep") is not None
+                              else b.get("scheduled_departure"))
+                gap = abs(ea - eb) if ea is not None and eb is not None else float("inf")
+                if best_gap is None or gap < best_gap:
+                    best_i, best_gap = i, gap
+            elif nearest_reason is None or _REJECT_RANK.index(why) < _REJECT_RANK.index(nearest_reason):
+                nearest, nearest_reason = b, why
+        if best_i is not None:
+            used.add(best_i)
+            res.pairs.append((a, cands[best_i]))
+        else:
+            res.rejected.append((a, nearest, nearest_reason or "no_candidates"))
+    res.unpaired_b = [b for i, b in enumerate(cands) if i not in used]
+    return res
+
+
+# ── Turn times ───────────────────────────────────────────────────────────────
+
+# Minimum scheduled turn by airframe class, minutes. Env override per class:
+# CTDC_MIN_TURN_MIN_NARROWBODY / _REGIONAL / _WIDEBODY (clamped 10-240).
+DEFAULT_MIN_TURN_MIN = {"narrowbody": 35, "regional": 30, "widebody": 75}
+
+
+def min_turn_minutes(aircraft_class: str = "narrowbody") -> int:
+    cls = (aircraft_class or "narrowbody").lower()
+    base = DEFAULT_MIN_TURN_MIN.get(cls, DEFAULT_MIN_TURN_MIN["narrowbody"])
+    raw = os.environ.get(f"CTDC_MIN_TURN_MIN_{cls.upper()}")
+    if raw:
+        try:
+            return max(10, min(240, int(raw)))
+        except ValueError:
+            pass
+    return base
+
+
+# ── Tail-change guard ────────────────────────────────────────────────────────
+
+# Sources allowed to repoint a watch's hex on their own. "fids_destination"
+# = the DESTINATION airport's FIDS tail for this leg; "fdps" = the FAA flight
+# plan (aircraftDescription / ADS-B address on the plan). Anything else
+# (airplanes.live, OpenSky, AeroAPI, any tracker) can corroborate but never
+# repoints alone.
+AUTHORITATIVE_TAIL_SOURCES = frozenset({"fids_destination", "fdps"})
+
+_ACTIVE_STATUSES = frozenset({"active", "airborne", "enroute", "en route", "departed"})
+
+
+@dataclass(frozen=True)
+class TailChangeDecision:
+    accepted: bool
+    changed: bool
+    reason: str
+    candidate_hex: str | None = None
+    candidate_registration: str | None = None
+    prior_hex: str | None = None
+
+    def note(self, ident: str) -> str:
+        tail = self.candidate_registration or self.candidate_hex or "?"
+        if self.accepted:
+            return f"{ident}: tail change accepted {self.prior_hex or '?'} -> {tail} ({self.reason})"
+        return f"{ident}: tail change NOT accepted ({tail}): {self.reason}"
+
+
+def _overlaps(inst: FlightInstance, watched: FlightInstance, turn_s: float) -> Optional[bool]:
+    """Would flying `inst` stop the tail flying `watched`? None if `inst`
+    carries no times at all."""
+    i0, i1 = inst.best_dep, inst.best_arr
+    if i0 is None and i1 is None:
+        return None
+    i0 = i0 if i0 is not None else i1
+    i1 = i1 if i1 is not None else i0
+    w0 = watched.best_dep
+    w1 = watched.best_arr
+    if w0 is None:
+        return None
+    w1 = w1 if w1 is not None else w0 + 3600.0
+    return i0 < w1 and i1 > w0 - turn_s
+
+
+def decide_tail_change(*, watched: FlightInstance, candidate_hex: str | None,
+                       candidate_registration: str | None = None,
+                       prior_hex: str | None = None, sources: Iterable[str] = (),
+                       candidate_instances: Iterable[FlightInstance] = (),
+                       previous: FlightInstance | None = None,
+                       on_ground_at_origin: bool = False,
+                       exclude_gufi: str | None = None,
+                       min_turn_min: int | None = None,
+                       late_tolerance_min: float = 0.0) -> TailChangeDecision:
+    """Pure decision: may this watch repoint from prior_hex to candidate_hex?
+    Accept only when ALL hold:
+      (a) at least one source is authoritative (AUTHORITATIVE_TAIL_SOURCES);
+      (b) the candidate tail is not filed on a different instance that
+          overlaps the watched leg (the watched instance itself, its
+          previous leg, cancelled legs and untimed non-active filings do
+          not count);
+      (c) its previous leg ends at the watched origin, not cancelled, and
+          arrives at least min_turn before the watched departure (latest
+          known estimate, else schedule; + late_tolerance_min) -- or the
+          caller has positive evidence the tail is already on the ground at
+          the origin. An unknown previous leg is a rejection: the rule is
+          "show it gets there", not "assume it does"."""
+    cand = (candidate_hex or "").lower().strip() or None
+    prior = (prior_hex or "").lower().strip() or None
+    srcs = tuple(sorted({(s or "").lower().strip() for s in sources if s}))
+
+    def _no(reason: str, changed: bool = True) -> TailChangeDecision:
+        return TailChangeDecision(False, changed, reason, cand, candidate_registration, prior)
+
+    if not cand:
+        return _no("no candidate hex", changed=False)
+    if prior and cand == prior:
+        return _no("same hex as the watch already has", changed=False)
+
+    auth = [s for s in srcs if s in AUTHORITATIVE_TAIL_SOURCES]
+    if not auth:
+        return _no(f"source not authoritative ({', '.join(srcs) or 'none'}); needs the "
+                   f"destination FIDS tail or the FAA flight plan, never a tracker alone")
+
+    turn = min_turn_min if min_turn_min is not None else min_turn_minutes()
+    turn_s = turn * 60.0
+    for inst in candidate_instances:
+        if exclude_gufi and inst.gufi == exclude_gufi:
+            continue
+        if same_instance(inst, watched):
+            continue
+        if previous is not None and (inst is previous or same_instance(inst, previous)
+                                     or (inst.gufi and inst.gufi == previous.gufi)):
+            continue
+        if inst.cancelled:
+            continue
+        ov = _overlaps(inst, watched, turn_s)
+        if ov is None:
+            ov = (inst.status or "").lower() in _ACTIVE_STATUSES
+        if ov:
+            return _no(f"tail is filed on another instance {inst.key} "
+                       f"({inst.status or 'status ?'}, dep {_fmt_utc(inst.best_dep)})")
+
+    origin = watched.key.origin or "?"
+    if on_ground_at_origin:
+        why_c = f"tail on the ground at {origin}"
+    else:
+        if previous is None:
+            return _no(f"previous leg of the tail unknown; cannot show it reaches {origin} in time")
+        if previous.cancelled:
+            return _no(f"previous leg {previous.key} is cancelled")
+        if airports_agree(previous.key.destination, watched.key.origin) is not True:
+            return _no(f"previous leg {previous.key} ends at {previous.key.destination or '?'}, "
+                       f"not {origin}")
+        arr = previous.best_arr
+        w_dep = watched.est_dep or watched.sched_dep or watched.best_dep
+        if arr is None:
+            return _no(f"previous leg {previous.key} has no arrival time")
+        if w_dep is None:
+            return _no("watched leg has no departure time to measure the turn against")
+        slack_min = (w_dep + late_tolerance_min * 60.0 - (arr + turn_s)) / 60.0
+        if slack_min < 0:
+            return _no(f"previous leg {previous.key} arrives {origin} {_fmt_utc(arr)}, "
+                       f"{-slack_min:.0f} min short of a {turn}-min turn before "
+                       f"{_fmt_utc(w_dep)}")
+        why_c = (f"previous leg {previous.key} arrives {origin} {_fmt_utc(arr)}, "
+                 f"{slack_min:.0f} min spare over a {turn}-min turn")
+
+    return TailChangeDecision(True, True,
+                              f"authoritative {'+'.join(auth)}; not filed on another instance; {why_c}",
+                              cand, candidate_registration, prior)
+
+
+# ── Inbound-aircraft tracker ("where's my inbound") ──────────────────────────
+
+@dataclass(frozen=True)
+class InboundAssessment:
+    status: str                      # on_time | late_beyond_turn | at_origin | diverted | cancelled | unknown
+    flags: tuple
+    inbound: str | None              # str(inbound key)
+    inbound_eta: float | None        # epoch, arrival at the watched origin
+    min_turn_min: int
+    ready_at: float | None           # inbound_eta + min turn
+    scheduled_departure: float | None
+    propagated_departure: float | None
+    slack_min: float | None          # minutes spare (negative = late)
+    summary: str
+
+
+def assess_inbound(watched: FlightInstance, inbound: FlightInstance | None, *,
+                   min_turn_min: int | None = None, aircraft_class: str = "narrowbody",
+                   now: float | None = None) -> InboundAssessment:
+    """Pure. Given the watched leg and the assigned tail's current instance
+    (from resolve()/instances_for_hex()), estimate when the airplane can push
+    for the watched leg. ETA preference: actual arrival > estimated > scheduled.
+    Propagated departure = max(watched departure estimate-or-schedule, ETA +
+    min turn). Flags: inbound_late_beyond_turn_buffer, inbound_diverted,
+    inbound_cancelled, inbound_unknown, inbound_eta_unknown. Never asserts an
+    OOOI phase for either leg."""
+    turn = min_turn_min if min_turn_min is not None else min_turn_minutes(aircraft_class)
+    turn_s = turn * 60.0
+    w_sched = watched.sched_dep
+    w_dep = watched.est_dep or watched.sched_dep
+    ident = watched.key.callsign
+    origin = watched.key.origin or "?"
+
+    def _mk(status, flags, eta=None, ready=None, prop=None, slack=None, summary=""):
+        return InboundAssessment(status, tuple(flags), str(inbound.key) if inbound else None,
+                                 eta, turn, ready, w_sched, prop, slack, summary)
+
+    if inbound is None:
+        return _mk("unknown", ["inbound_unknown"], prop=w_dep,
+                   summary=f"{ident}: inbound aircraft unknown")
+    if inbound.cancelled:
+        return _mk("cancelled", ["inbound_cancelled"], prop=None,
+                   summary=f"{ident}: inbound {inbound.key} CANCELLED -- aircraft for "
+                           f"the {origin} departure must come from elsewhere")
+    if inbound.diverted or airports_agree(inbound.key.destination, watched.key.origin) is False:
+        return _mk("diverted", ["inbound_diverted"], prop=None,
+                   summary=f"{ident}: inbound {inbound.key} is not arriving {origin} "
+                           f"({inbound.status or 'route'}); departure estimate unknown")
+
+    eta = inbound.act_arr or inbound.est_arr or inbound.sched_arr
+    if eta is None:
+        return _mk("unknown", ["inbound_eta_unknown"], prop=w_dep,
+                   summary=f"{ident}: inbound {inbound.key} has no arrival time yet")
+    ready = eta + turn_s
+    prop = max(w_dep, ready) if w_dep is not None else ready
+    slack = (w_dep - ready) / 60.0 if w_dep is not None else None
+    flags = []
+    status = "at_origin" if inbound.act_arr is not None else "on_time"
+    if slack is not None and slack < 0:
+        flags.append("inbound_late_beyond_turn_buffer")
+        status = "late_beyond_turn"
+    late_txt = f"; departs ~{_fmt_utc(prop)} ({-slack:.0f} min late)" if slack is not None and slack < 0 else ""
+    summary = (f"{ident}: inbound {inbound.key} {'arrived' if inbound.act_arr else 'ETA'} "
+               f"{origin} {_fmt_utc(eta)}, ready {_fmt_utc(ready)} ({turn}-min turn) vs "
+               f"sched {_fmt_utc(w_sched)}{late_txt}")
+    return _mk(status, flags, eta=eta, ready=ready, prop=prop, slack=slack, summary=summary)

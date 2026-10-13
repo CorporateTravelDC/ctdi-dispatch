@@ -188,6 +188,14 @@ _ARTCC_NTFY_TOPIC: dict[str, str] = {
 }
 
 
+def _norm_facility(code: str) -> str:
+    """Upper-case and strip; a K-prefixed ARTCC code (KZDC, KZNY ... as the AIM/FNS
+    FDC-NOTAM path sends it) becomes the bare center code. 2026-10-13: KZDC resolved to
+    OTHER, so ZDC restriction NOTAMs reached fdps-alerts but never fdps-zdc."""
+    c = code.strip().upper()
+    return c[1:] if len(c) == 4 and c.startswith("KZ") else c
+
+
 def sector_ntfy_topic(facility_or_center: str | None, family: str = "tbfm") -> str | None:
     """
     Map a facility/ARTCC/airport code to its dedicated per-sector ntfy
@@ -203,7 +211,7 @@ def sector_ntfy_topic(facility_or_center: str | None, family: str = "tbfm") -> s
     """
     if not facility_or_center:
         return None
-    code = _FACILITY_TO_ARTCC.get(facility_or_center.strip().upper())
+    code = _FACILITY_TO_ARTCC.get(_norm_facility(facility_or_center))
     if not code:
         return None
     return f"{family}-{code}"
@@ -519,7 +527,7 @@ def resolve_sector(facility_or_center: str | None) -> str:
     unnamed, so nothing silently disappears from the aggregate counts."""
     if not facility_or_center:
         return "OTHER"
-    return _FACILITY_TO_SECTOR.get(facility_or_center.strip().upper(), "OTHER")
+    return _FACILITY_TO_SECTOR.get(_norm_facility(facility_or_center), "OTHER")
 
 
 def is_tracked_facility(facility_or_center: str | None) -> bool:
@@ -534,7 +542,7 @@ def is_tracked_facility(facility_or_center: str | None) -> bool:
     the "8 sectors" design was supposedly already in place for it)."""
     if not facility_or_center:
         return False
-    return facility_or_center.strip().upper() in _FACILITY_TO_ARTCC
+    return _norm_facility(facility_or_center) in _FACILITY_TO_ARTCC
 
 
 def set_sector_silence(sector: str, silenced: bool) -> None:

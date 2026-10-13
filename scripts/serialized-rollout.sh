@@ -57,6 +57,8 @@ D=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # 2026-10-08 (review 06): build for the host's own platform (see stack-refresh.sh).
 BUILD_PLATFORM="linux/$(podman info --format '{{.Host.Arch}}')"
 load() { cut -d' ' -f1 /proc/loadavg; }
+source "$(dirname "${BASH_SOURCE[0]}")/lib/load_gate.sh"
+load_gate_init
 guard() { journalctl --user -u corporatetraveldc-thermal-ingest-guard -n 8 --no-pager -o cat 2>/dev/null | grep -oE 'load1=[0-9.]+ tier=[0-9]' | tail -1; }
 digest() { podman image inspect --format '{{.Digest}}' "$1" 2>/dev/null; }
 imgid_full() { podman image inspect --format '{{.Id}}' "$1" 2>/dev/null; }
@@ -190,12 +192,10 @@ for row in "${ROLLOUT[@]}"; do
   fi
   # never start the next unit on top of a spike we are still riding (but the
   # deadline wins: a unit not started by then is held, not started late)
-  hit_deadline=0
-  while awk "BEGIN{exit !($(load) >= 15)}"; do
-    if past_deadline; then hit_deadline=1; break; fi
-    echo "$(date +%T)  load $(load) >= 15, holding before restart"; sleep 30
-  done
-  if (( hit_deadline )); then held "$unit" "deadline-while-holding-for-load"; continue; fi
+  # 2026-10-13: relative to the start load and bounded (scripts/lib/load_gate.sh); was a fixed
+  # `load >= 15` loop with no limit that held an unchanged image 45 min at resting load.
+  gate_rc=0; load_gate_wait || gate_rc=$?
+  if (( gate_rc == 2 )); then held "$unit" "deadline-while-holding-for-load"; continue; fi
   # 2026-10-06: never restart a unit onto an image that does not exist -- a
   # restart cannot be undone and the unit comes back failed (the 18:47Z outage).
   if ! podman image exists "$image"; then

@@ -175,7 +175,17 @@ def redact(roots: list[Path], secrets: dict[str, list[bytes]], include_live: boo
             os.chown(tmp, st.st_uid, st.st_gid)
         os.replace(tmp, p)
         done += 1
-    after = {p: h for p, h in scan(roots, secrets).items() if p not in skipped}
+    # 2026-10-13: a file that leaked DURING this run (after the first scan passed it) was neither
+    # redacted nor skipped, so the rescan failed the unit on a live session (16:04Z run, 4.5 min under
+    # load). The rescan applies the same live rule: such a file joins the skipped list for a later run.
+    after = {}
+    for p, h in scan(roots, secrets).items():
+        if p in skipped:
+            continue
+        if not include_live and time.time() - p.stat().st_mtime < LIVE_MINUTES * 60:
+            skipped.append(p)
+            continue
+        after[p] = h
     for p in skipped:
         print(f"  SKIPPED (written in the last {LIVE_MINUTES} min, a live session?): {p}")
     if after:

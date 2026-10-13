@@ -277,7 +277,7 @@ def test_write_flight_event_arrival_time_none_for_non_dc_destination(cifp_db):
 def test_tbfm_watchlist_status_includes_runway_eta_estimate(cifp_db, monkeypatch):
     captured = {}
 
-    def fake_match(flight_id):
+    def fake_match(flight_id, **_leg):
         return {"id": "watch-entry-1"}
 
     def fake_update_status(entry_id, status, now_iso):
@@ -311,7 +311,7 @@ def test_tbfm_watchlist_status_includes_runway_eta_estimate(cifp_db, monkeypatch
 def test_tbfm_watchlist_status_omits_estimate_for_unresolved_fix(cifp_db, monkeypatch):
     captured = {}
     monkeypatch.setattr("ingest.parsers.tbfm_parser._match_watchlist_flight",
-                        lambda fid: {"id": "watch-entry-2"})
+                        lambda fid, **_leg: {"id": "watch-entry-2"})
     monkeypatch.setattr(db, "update_watchlist_tbfm_status",
                         lambda *a, **k: captured.update(status=a[1]))
     import shared.watchlist as wl

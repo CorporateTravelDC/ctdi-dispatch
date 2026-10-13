@@ -75,6 +75,30 @@ def test_a_live_session_file_is_left_and_reported(monkeypatch, tmp_path, capsys)
     assert (root / "live.jsonl").read_text() == "[REDACTED:FAKE_PASSWORD]"
 
 
+def test_a_file_that_leaks_during_the_run_is_left_as_live_not_failed(monkeypatch, tmp_path, capsys):
+    m = load(monkeypatch, tmp_path)
+    root = tmp_path / "proj"
+    root.mkdir()
+    late = root / "late.jsonl"
+    late.write_text("clean so far")
+    _old(late)
+    real_scan, calls = m.scan, []
+
+    def scan(roots, secrets):                                          # the leak lands between the two scans
+        calls.append(1)
+        if len(calls) == 2:
+            late.write_text(FAKE)
+        return real_scan(roots, secrets)
+    monkeypatch.setattr(m, "scan", scan)
+    assert m.main(["redact", "--root", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "STILL PRESENT" not in out and "SKIPPED" in out and "1 live file(s) left" in out
+    _old(late)                                                         # the session ends: the next run redacts it
+    monkeypatch.setattr(m, "scan", real_scan)
+    assert m.main(["redact", "--root", str(root)]) == 0
+    assert late.read_text() == "[REDACTED:FAKE_PASSWORD]"
+
+
 def test_placeholders_are_not_flagged(monkeypatch, tmp_path):
     m = load(monkeypatch, tmp_path)
     assert m.find(b"ctdc_admin_" + b"0" * 32 + b" ctdc_x_" + b"X" * 32, m.load_secret_values()) == {}

@@ -58,7 +58,7 @@ def test_snapshot_agents_default_to_every_agent_account(monkeypatch):
     m = load(monkeypatch)
     monkeypatch.delenv("CTDC_SNAPSHOT_AGENTS", raising=False)
     monkeypatch.setenv("CTDC_SNAPSHOT_EXCLUDE", "ctdc-agent-llama")
-    fake = [NS(pw_name=n) for n in ("root", "ctdc-agent-openai-codex", "ctdc-agent-anthropic-claude", "ctdc-agent-llama", "corporatetraveldc")]
+    fake = [NS(pw_name=n) for n in ("root", "ctdc-agent-openai-codex", "ctdc-agent-anthropic-claude", "ctdc-agent-llama", "corporatetraveldc")]  # ggignore: pw_name is the passwd USERNAME field; these are account names
     monkeypatch.setattr(pwd, "getpwall", lambda: fake)
     assert m._snapshot_agents() == ["ctdc-agent-anthropic-claude", "ctdc-agent-openai-codex"]
     monkeypatch.setenv("CTDC_SNAPSHOT_AGENTS", "ctdc-agent-x")

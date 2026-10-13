@@ -504,11 +504,18 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
             log.error("tbfm: tbfm-alert fire failed for %s: %s", fix, e)
 
 
-def _match_watchlist_flight(identifier: str | None) -> dict | None:
-    """Find an active flight watchlist entry matching this identifier
-    (callsign), case-insensitive. Same matching convention as
-    tfms_parser.py's own copy (kept file-local rather than shared -- each
-    ingest parser already does this, see that copy's docstring)."""
+def _match_watchlist_flight(identifier: str | None, origin: str | None = None,
+                            destination: str | None = None) -> dict | None:
+    """Find the active flight watchlist entry this sequence is about.
+
+    2026-10-13 (flight-instance resolver): was an exact callsign compare, so
+    a reused number's other leg advanced the watch. Now the same shared
+    matcher as tfms_parser (common.flight_instance.match_watch_entry):
+    identifier OR codeshare operating callsign, AND TBFM's own leg evidence
+    -- <air dap> (departure) and apt (the metered arrival airport) -- must
+    not contradict the watch's origin/destination. TBFM carries no
+    scheduled time, so a same-direction same-day repeat of a number is not
+    separable here (see docs/FLIGHT_INSTANCE_RESOLVER.md)."""
     if not identifier:
         return None
     try:
@@ -517,11 +524,8 @@ def _match_watchlist_flight(identifier: str | None) -> dict | None:
     except Exception as e:
         log.error("tbfm: watchlist lookup failed: %s", e)
         return None
-    ident_upper = identifier.upper().strip()
-    for entry in entries:
-        if entry["identifier"].upper() == ident_upper:
-            return entry
-    return None
+    from common.flight_instance import match_watch_entry
+    return match_watch_entry(entries, identifier, origin=origin, destination=destination)
 
 
 _TBFM_WATCHLIST_DEDUP = PushDedup("tbfm_watchlist", dedup_secs=1800)
@@ -554,7 +558,8 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
     from datetime import datetime, timezone
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for s in sequences:
-        entry = _match_watchlist_flight(s.get("flight_id"))
+        entry = _match_watchlist_flight(s.get("flight_id"), origin=s.get("dap"),
+                                        destination=s.get("apt"))
         if entry is None:
             continue
         fix = s.get("meter_fix") or "?"

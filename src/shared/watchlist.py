@@ -1077,6 +1077,7 @@ def _fire_ntfy_dual(domain_topic: str, title: str, detail_body: str,
         last_exc: Exception | None = None
         last_body: str | None = None
         backoff = _NTFY_RETRY_BACKOFF_SECS
+        auth_retried = False
         for attempt in range(1, _NTFY_RETRY_ATTEMPTS + 1):
             try:
                 resp = requests.post(url, data=body.encode("utf-8"),
@@ -1090,16 +1091,21 @@ def _fire_ntfy_dual(domain_topic: str, title: str, detail_body: str,
                 return
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code if e.response is not None else None
+                # 2026-10-13 ntfy audit: these were NOT false negatives -- 3 of 3 checked
+                # against ntfy's cache were never stored. One delayed retry with the body
+                # logged, then report the drop (same contract as common.ntfy_push since 08-25).
+                if status in (401, 403) and not auth_retried and attempt < _NTFY_RETRY_ATTEMPTS:
+                    auth_retried = True
+                    log.warning("ntfy %s on topic=%s body=%s -- one retry in 2s", status, topic,
+                                (getattr(e.response, "text", "") or "")[:200])
+                    time.sleep(2.0)
+                    continue
                 if status in (401, 403):
-                    # Documented false-negative pattern -- don't resend, mark
-                    # as probable-delivery and stop instead of risking a
-                    # confirmed duplicate for a message that likely already went out.
                     if _ntfy_ambiguous_dedup.should_push_periodic(idem_key, idem_key):
                         _ntfy_ambiguous_dedup.record(idem_key, idem_key)
-                        log.warning(
-                            "ntfy %s on topic=%s -- known false-negative pattern "
-                            "(publish counter climbs healthily through these), "
-                            "treating as delivered, NOT resending: %s",
+                        log.error(
+                            "ntfy %s on topic=%s after one retry -- NOT delivered "
+                            "(not resending further): %s",
                             status, topic, e,
                         )
                     else:

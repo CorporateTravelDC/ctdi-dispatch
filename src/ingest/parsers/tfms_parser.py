@@ -123,6 +123,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -332,11 +333,42 @@ def _qualified_aircraft_id(fltd_msg: ET.Element) -> tuple[str | None, str | None
     return callsign, gufi, origin, destination
 
 
-def _match_watchlist_flight(identifier: str | None) -> dict | None:
-    """Find an active flight watchlist entry matching this identifier
-    (callsign), case-insensitive. Same matching convention as
-    fdps_parser.py's check_fdps_watchlist."""
-    if not identifier:
+def _leg_context(fltd_message: ET.Element, origin: str | None = None,
+                 destination: str | None = None) -> dict:
+    """The leg a fltdMessage is about, for _match_watchlist_flight: the
+    depArpt/arrArpt attributes (qualifiedAircraftId's departurePoint/
+    arrivalPoint as fallback) and igtd, the leg's scheduled gate departure."""
+    return {
+        "origin": fltd_message.get("depArpt") or origin,
+        "destination": fltd_message.get("arrArpt") or destination,
+        "sched_dep": _qid_igtd(fltd_message),
+    }
+
+
+def _route_endpoints(route: str | None) -> tuple[str | None, str | None]:
+    """First/last airport of an ERAM route string (KMCO.JEEMY4.PAINN..KJFK),
+    only when both ends are airport-shaped (4 letters); else (None, None)."""
+    toks = [t for t in re.split(r"\.+", (route or "").strip().upper()) if t]
+    if len(toks) >= 2 and all(re.fullmatch(r"[A-Z]{4}", t) for t in (toks[0], toks[-1])):
+        return toks[0], toks[-1]
+    return None, None
+
+
+def _match_watchlist_flight(identifier: str | None, origin: str | None = None,
+                            destination: str | None = None, sched_dep: str | None = None,
+                            hex_id: str | None = None) -> dict | None:
+    """Find the active flight watchlist entry this message is about.
+
+    2026-10-13 (flight-instance resolver, docs/FLIGHT_INSTANCE_RESOLVER.md):
+    was an exact callsign compare, so every message for a reused NUMBER hit
+    the watch -- AA1893's FLL->DCA afternoon leg advanced a DCA->FLL morning
+    watch, and a regional's own callsign (GJS4520) never matched a watch
+    filed under the brand number (UAL4520). Now common.flight_instance.
+    match_watch_entry: identifier (exact or ICAO-normalized) OR a
+    route-filtered codeshare_map operating callsign OR hex, AND the
+    message's depArpt/arrArpt + igtd must not contradict the watch's
+    origin/destination/scheduled departure when both sides know them."""
+    if not identifier and not hex_id:
         return None
     try:
         from shared.watchlist import get_active_entries
@@ -344,11 +376,9 @@ def _match_watchlist_flight(identifier: str | None) -> dict | None:
     except Exception as e:
         log.error("tfms: watchlist lookup failed: %s", e)
         return None
-    ident_upper = identifier.upper().strip()
-    for entry in entries:
-        if entry["identifier"].upper() == ident_upper:
-            return entry
-    return None
+    from common.flight_instance import match_watch_entry
+    return match_watch_entry(entries, identifier, origin=origin, destination=destination,
+                             sched_dep=sched_dep, hex_id=hex_id)
 
 
 def _fire_tfms_watchlist_hit(entry: dict, summary: str, detail: dict, priority: int = 3) -> None:
@@ -742,7 +772,14 @@ def _handle_tmi_flight_list(fi_message: ET.Element) -> list[dict]:
     callsign = _text(_find_child(flight_elem, "aircraftId")) if flight_elem is not None else None
     gufi = _text(_find_child(flight_elem, "gufi")) if flight_elem is not None else None
 
-    entry = _match_watchlist_flight(callsign)
+    # 2026-10-13: leg evidence for the instance-aware matcher (same
+    # departurePoint/arrivalPoint/igtd shape as qualifiedAircraftId).
+    leg = {}
+    if flight_elem is not None:
+        leg = {"origin": _text(_find_path(flight_elem, "departurePoint", "airport")),
+               "destination": _text(_find_path(flight_elem, "arrivalPoint", "airport")),
+               "sched_dep": _text(_find_child(flight_elem, "igtd"))}
+    entry = _match_watchlist_flight(callsign, **leg)
     if entry is None:
         return []
 
@@ -791,7 +828,7 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     watchlist_history against tfms_tmi hits from the same flight.
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
 
     # 2026-09-22: the `if entry is None: return` that used to sit HERE has
     # moved below the flight_ooooi_times persist, and that move is the whole
@@ -1018,7 +1055,7 @@ def _handle_departure_information(fltd_message: ET.Element) -> None:
           > ncsmFlightTimeData > etd[etdType="ACTUAL", timeValue], eta[...]
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
     body = _find_child(fltd_message, "departureInformation")
@@ -1043,7 +1080,7 @@ def _handle_arrival_information(fltd_message: ET.Element) -> None:
           > ncsmFlightTimeData > etd[...], eta[etaType="ACTUAL", timeValue]
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
     body = _find_child(fltd_message, "arrivalInformation")
@@ -1078,7 +1115,7 @@ def _handle_track_information(fltd_message: ET.Element) -> None:
     data too, not continuous position spam.
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 
@@ -1155,7 +1192,7 @@ def _handle_flight_plan_amendment(fltd_message: ET.Element) -> None:
     immediately regardless of the 30-min window).
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
     body = _find_child(fltd_message, "flightPlanAmendmentInformation")
@@ -1259,7 +1296,7 @@ def _handle_flight_route(fltd_message: ET.Element) -> None:
     timeline, but the summary stays readable).
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 
@@ -2056,12 +2093,16 @@ def _handle_tmi_update(fi_message: ET.Element) -> list[dict]:
         return []
 
     callsign = _fcm_text(rr, "acid")
-    entry = _match_watchlist_flight(callsign)
+    status_block = _find_child(rr, "flightAmendmentStatus")
+    # 2026-10-13: the amended route's end airports are this message's only
+    # leg evidence (no depArpt/arrArpt on an fiMessage) -- see _match_watchlist_flight.
+    rr_origin, rr_dest = _route_endpoints(
+        _fcm_text(status_block, "routeAmendment") if status_block is not None else None)
+    entry = _match_watchlist_flight(callsign, origin=rr_origin, destination=rr_dest)
     if entry is None:
         return []
 
     gufi = _fcm_text(rr, "gufi")
-    status_block = _find_child(rr, "flightAmendmentStatus")
     tmi_id = _fcm_text(status_block, "tmiId") if status_block is not None else None
     amendment_status = _fcm_text(status_block, "amendmentStatus") if status_block is not None else None
     route_amendment = _fcm_text(status_block, "routeAmendment") if status_block is not None else None
@@ -2827,7 +2868,7 @@ def _handle_flight_plan_cancellation(fltd_message: ET.Element) -> None:
             log.error("tfms: plan-removal store failed for %s (non-fatal): %s",
                       acid, e)
 
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 
@@ -3013,7 +3054,7 @@ def _handle_flight_create(fltd_message: ET.Element) -> None:
     not urgent -- lower priority than the other watchlist hits.
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 
@@ -3058,7 +3099,7 @@ def _handle_flight_schedule_activate(fltd_message: ET.Element) -> None:
     a recurring flight now has a real ETD, informational priority.
     """
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 
@@ -3113,7 +3154,7 @@ def _handle_oceanic_report(fltd_message: ET.Element) -> None:
         return
 
     callsign, gufi, origin, destination = _qualified_aircraft_id(fltd_message)
-    entry = _match_watchlist_flight(callsign)
+    entry = _match_watchlist_flight(callsign, **_leg_context(fltd_message, origin, destination))
     if entry is None:
         return
 

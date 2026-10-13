@@ -12,6 +12,10 @@ Enforcement points:
 - `scripts/leak-guard/transcript_leak_scan.py`:
   - `scan` blocks on a closed file and only warns on a live one;
   - `redact` replaces each hit atomically and prints a proof line, `PROOF: <n> file(s) redacted; rescan hits = 0`.
+  - a file that leaks **during** a `redact` run (after the first pass checked it) is treated by the final
+    rescan like any live file: named, skipped and left for a later run, not a unit failure (2026-10-13: the
+    hourly root run took 4.5 min under load and a process listing printed a feeder identifier into the live
+    session meanwhile; the unit failed on its rescan. Test: `test_a_file_that_leaks_during_the_run_is_left_as_live_not_failed`).
 - `scripts/pre-push` refuses any push while a closed transcript carries a leak.
 - `scripts/push-public.sh` runs the same check (exit 6). It also runs the LADD tripwire on the final public tree (exit 7).
 

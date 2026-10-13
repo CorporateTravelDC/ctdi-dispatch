@@ -129,6 +129,10 @@ its profile held no sign-in.
   (a global flag, harmless for other targets). The seed finished with it at 2.5 MB/s.
 - **Known rclone bug:** listing the Drive **root** fails (`iso8601: Cannot parse ""`, an item with an empty
   timestamp). Nothing in the backup lists the root; checks use `proton:ctdi-backup`.
+- **Hidden upload placeholders** (2026-10-13): after an interrupted upload Proton can keep an invisible
+  placeholder that blocks a file's name even with the draft flag. Workaround used once: move the folder aside
+  server-side (`moveto data/0 data/0.stale-<date>`), recreate it, move the good files back server-side. The
+  aside folder `data/0.stale-20261013` was gone by 2026-10-13 ~17:30Z; remote and local `data/0` matched (53/53).
 - **Seed:** the first 19 GB went up on 2026-10-12 through the measured ramp (`scripts/backup/uplink_ramp.py`,
   ledger `~/.local/state/ctdc-backup/uplink-ramp.jsonl`): 1 MB/s ok (feeds worst 34 s), 2 MB/s ok (2.31 delivered,
   35 s), 4 MB/s link-bound (2.22 delivered, 31 s); the finish ran at about 3.2 MB/s with the feeds under 30 s.
@@ -145,6 +149,11 @@ its profile held no sign-in.
 - **One heavy job at a time** (`scripts/lib/heavy_lock.sh`): the nightly backup, the weekly restore test, the
   full-load rollout and the stack refresh take one shared turn; the second waits (up to 2 h) and logs whom it waits
   on. Root cause: the 2026-10-12 03:40Z backup started six minutes into a relay's full load (load 20.5 on 4 cores).
+- **The rollout's hold-before-restart gate** (`scripts/lib/load_gate.sh`, 2026-10-13): it holds while
+  `load1 >= max(LOAD_GATE=15, LOAD_GATE_REL=1.25 x the load when the rollout started)`, for at most
+  `LOAD_HOLD_MAX=900` s, then proceeds only below `LOAD_CEIL=30` (a real overload keeps holding; a stack-refresh
+  deadline still wins). It was a fixed `load1 >= 15` with no limit: on 2026-10-13 the box's resting load (17-20)
+  held an unchanged acarshub image 45 min. Tests: `tests/scripts/test_load_gate.py`.
 - The nightly sync also waits for a running seed upload (`corporatetraveldc-proton-seed`), up to 90 min.
 - `--dry-run` now exits before any dump, ledger write or LADD rotation (it used to run both dumps and append a
   cui-stamp; the 2026-10-12 22:22Z cui-stamp in the ledger is that dry run, not a backup).

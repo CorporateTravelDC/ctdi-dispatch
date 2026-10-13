@@ -131,6 +131,11 @@ class FlightWatchlistRequest(BaseModel):
     # operator noticed transient flight-alerts were mostly missing.
     hex_id: Optional[str] = None
     registration: Optional[str] = None
+    # 2026-10-13: FIDS (GET /api/v1/fids/...) and flight-hifi-track call the
+    # airframe "tail"; a body carrying {"tail": ...} was silently dropped by
+    # pydantic (extra keys are ignored) and stored registration=None. Accepted
+    # as an alias of `registration` (registration wins if both are given).
+    tail: Optional[str] = None
 
 
 @router.post("/flights", status_code=201)
@@ -154,7 +159,7 @@ async def add_flight_watchlist(
     # doesn't sit un-trackable on airplanes.live just because nobody
     # remembered to look it up by hand.
     resolved_hex_id = (body.hex_id or "").strip() or None
-    resolved_registration = (body.registration or "").strip() or None
+    resolved_registration = (body.registration or body.tail or "").strip().upper() or None
     if resolved_registration and not resolved_hex_id:
         try:
             faa_rec = db.faa_lookup_by_n_number(resolved_registration)
@@ -200,6 +205,39 @@ async def add_flight_watchlist(
         fdps_plan = db.get_flight_plan_by_flight_num(ident, origin=fallback_origin)
     fdps_origin = (fdps_plan or {}).get("origin")
     fdps_dest = (fdps_plan or {}).get("destination")
+
+    # 2026-10-13 (wl-flight-ual4520-20261011 stored registration=None): the
+    # only path that ever set registration was the caller's own body field,
+    # so three common adds lost it --
+    #   1. a hex-only add (the caller had the ADS-B hex, not the tail): the
+    #      tail was never reverse-resolved from the registries;
+    #   2. a body using "tail" (FIDS's name for it): dropped by pydantic;
+    #   3. no identity at all, while the FAA flight plan found above (the
+    #      operating GJS4520 plan, via codeshare_map) carried both the hex
+    #      and the registration -- discarded.
+    # (2) is the `tail` alias above. Here: fill from the FAA plan when the
+    # caller supplied nothing and the plan is THIS leg (its origin does not
+    # contradict the caller's; only the direct/codeshare lookups carry
+    # hex/registration -- the blind flight-number fallback never does), then
+    # reverse-resolve a missing tail from the hex. A caller-supplied value
+    # is never overwritten.
+    fdps_identity = False
+    if fdps_plan and not resolved_hex_id and not resolved_registration:
+        from common.flight_instance import airports_agree
+        if airports_agree(body.origin, fdps_origin) is not False and \
+                (fdps_plan.get("hex") or fdps_plan.get("registration")):
+            resolved_hex_id = (fdps_plan.get("hex") or "").lower() or None
+            resolved_registration = (fdps_plan.get("registration") or "").upper() or None
+            fdps_identity = True
+    if resolved_hex_id and not resolved_registration:
+        if fdps_plan and (fdps_plan.get("hex") or "").lower() == resolved_hex_id.lower():
+            resolved_registration = (fdps_plan.get("registration") or "").upper() or None
+        if not resolved_registration:
+            from common.flight_instance import registration_for_hex
+            resolved_registration = registration_for_hex(resolved_hex_id)
+    if resolved_registration and not resolved_hex_id and fdps_plan and \
+            (fdps_plan.get("registration") or "").upper() == resolved_registration:
+        resolved_hex_id = (fdps_plan.get("hex") or "").lower() or None
     # "Confirmed" means FAA's own feed shows this exact flight as actively
     # filed/moving right now -- "proposed" (not yet filed), "cancelled",
     # "dropped", or no record at all are all fdps_confirmed=False, just
@@ -253,6 +291,10 @@ async def add_flight_watchlist(
         "last_event_summary": None,
     }
     db.upsert_watchlist_entry(entry)
+    if fdps_identity:
+        # provenance: this identity came from the FAA flight plan, not the caller
+        db.set_watchlist_identity(entry_id, hex_id=resolved_hex_id,
+                                  registration=resolved_registration, source="fdps")
 
     # Persist the FDPS read at add-time (previously response-only, see
     # docstring on update_watchlist_fdps_confirmation for why this matters --
@@ -578,6 +620,7 @@ class FlightBatchItem(BaseModel):
     added_by: str = "api"
     hex_id: Optional[str] = None  # see FlightWatchlistRequest, 2026-07-22
     registration: Optional[str] = None
+    tail: Optional[str] = None  # alias of registration, see FlightWatchlistRequest 2026-10-13
 
 
 class FlightBatchRequest(BaseModel):
@@ -601,6 +644,13 @@ async def add_flight_watchlist_batch(
             errors.append("empty identifier skipped")
             continue
         entry_id = _make_id("flight", ident)
+        # 2026-10-13: same registration=None gap as the single add -- accept
+        # `tail`, reverse-resolve a hex-only add from the local registries.
+        item_hex = (item.hex_id or "").strip() or None
+        item_reg = (item.registration or item.tail or "").strip().upper() or None
+        if item_hex and not item_reg:
+            from common.flight_instance import registration_for_hex
+            item_reg = registration_for_hex(item_hex)
         entry = {
             "id": entry_id,
             "entry_type": "flight",
@@ -616,8 +666,8 @@ async def add_flight_watchlist_batch(
             "added_at": now,
             "added_by": item.added_by,
             "notes": item.notes,
-            "hex_id": (item.hex_id or "").strip() or None,
-            "registration": (item.registration or "").strip() or None,
+            "hex_id": item_hex,
+            "registration": item_reg,
             "last_event_at": None,
             "last_event_summary": None,
         }

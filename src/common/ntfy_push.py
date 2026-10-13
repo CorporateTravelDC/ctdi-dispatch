@@ -42,6 +42,13 @@ _RETRY_BACKOFF_SECS = 0.5  # doubles each retry: 0.5s, 1s
 # redesign): pure TTL guard, key == content hash, checked via
 # should_push_periodic() so the exact TTL behavior is preserved.
 _AMBIGUOUS_STATUS_TTL_SECS = 90
+# 2026-10-13 ntfy audit: intermittent 401/403s on a valid token were checked against ntfy's cache
+# (3 of 3 never stored), so they are dropped messages, not "probably delivered". One delayed
+# retry, then a failure.
+_AUTH_RETRY_DELAY_SECS = 2.0
+# ntfy rejects a body over server.yml's message-size-limit (65536) as an attachment (400 40014);
+# two ~46k-character ops briefs were lost that way on 2026-10-13. Cap below it.
+_MAX_BODY_BYTES = 60000
 _ambiguous_dedup = PushDedup("ntfy-ambiguous-status",
                              dedup_secs=_AMBIGUOUS_STATUS_TTL_SECS,
                              retention_secs=_AMBIGUOUS_STATUS_TTL_SECS * 10)
@@ -168,8 +175,15 @@ def send(
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
+    raw = message.encode("utf-8")
+    if len(raw) > _MAX_BODY_BYTES:
+        note = f"\n\n[truncated: {len(raw)} bytes; ntfy limit 65536]"
+        message = raw[:_MAX_BODY_BYTES - len(note.encode())].decode("utf-8", errors="ignore") + note
+        log.warning("ntfy body for topic=%s was %d bytes; truncated to fit", topic, len(raw))
+
     def _attempt(base_url: str) -> bool:
         attempt_url = f"{base_url}/{topic}"
+        auth_retried = False
         idem_key = content_hash(f"{topic}|{title}|{message}|{priority}")
         backoff = _RETRY_BACKOFF_SECS
         last_exc: Exception | None = None
@@ -189,6 +203,13 @@ def send(
                 return None  # signal: try fallback -- not worth retrying the same unreachable host
             except requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
+                if status in (401, 403) and not auth_retried and attempt < _RETRY_ATTEMPTS:
+                    auth_retried = True
+                    log.warning("ntfy %s: url=%s topic=%s body=%s -- one retry in %.0fs",
+                                status, attempt_url, topic,
+                                getattr(exc.response, "text", "")[:200], _AUTH_RETRY_DELAY_SECS)
+                    time.sleep(_AUTH_RETRY_DELAY_SECS)
+                    continue
                 if status in (401, 403):
                     # 2026-08-25 correction (Opus blind review C-6): this
                     # branch used to `return True` on 401/403, on the theory

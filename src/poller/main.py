@@ -1486,6 +1486,48 @@ def _departure_overdue_check(entry: dict, ident: str, sched_dep: str, now) -> st
     return "overdue"
 
 
+from common.push_dedup import PushDedup, content_hash  # noqa: E402
+
+# One "tail change NOT accepted" note per (watch, candidate hex) -- the FDPS
+# check runs every tick and the rejected plan keeps saying the same thing.
+_TAIL_GUARD_DEDUP = PushDedup("fdps_tail_guard")
+
+
+def _fdps_tail_change_decision(entry: dict, plan: dict, new_hex: str,
+                               new_reg: str | None, prior_hex: str | None):
+    """Build the inputs for flight_instance.decide_tail_change from this
+    watch + its FDPS plan and return the decision. The watched leg is keyed
+    on the plan's OPERATING callsign with the watch's route/schedule; the
+    candidate tail's other filings come from flight_events (DC-area FDPS
+    only, so a watch whose origin is outside that coverage usually has no
+    visible previous leg -> rejected, by rule (c)). Any error -> rejection,
+    never a silent repoint."""
+    from common import flight_instance as fi
+    try:
+        watched_key = fi.FlightInstanceKey.make(
+            f"{plan.get('airline') or ''}{plan.get('flight_num') or ''}",
+            entry.get("origin") or plan.get("origin"),
+            entry.get("destination") or plan.get("destination"),
+            entry.get("scheduled_departure") or plan.get("departure_time"))
+        if watched_key is None:
+            return fi.TailChangeDecision(False, True, "watched leg has no usable instance key",
+                                         new_hex, new_reg, prior_hex)
+        watched = fi.FlightInstance(
+            key=watched_key, gufi=plan.get("flight_id"), status=plan.get("status"),
+            sched_dep=fi.to_epoch(entry.get("scheduled_departure")) or fi.to_epoch(plan.get("departure_time")),
+            sched_arr=fi.to_epoch(entry.get("scheduled_arrival")),
+            est_arr=fi.to_epoch(plan.get("arrival_time")))
+        candidates = fi.instances_for_hex(new_hex)
+        prev = fi.previous_leg(candidates, watched, exclude_gufi=plan.get("flight_id"))
+        return fi.decide_tail_change(
+            watched=watched, candidate_hex=new_hex, candidate_registration=new_reg,
+            prior_hex=prior_hex, sources=("fdps",), candidate_instances=candidates,
+            previous=prev, exclude_gufi=plan.get("flight_id"))
+    except Exception as e:
+        log.warning("fdps tail guard %s: %s -- change not accepted", entry.get("id"), e)
+        return fi.TailChangeDecision(False, True, f"guard error: {e}", new_hex, new_reg, prior_hex)
+
+
 def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
     """Check FAA FDPS (SWIM/SFDPS FIXM feed, see ingest/parsers/fdps_parser.py)
     for a confirmed flight plan matching this callsign. Fires on a
@@ -1551,9 +1593,17 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
                 marketing_carrier, marketing_num = m.group(1).upper(), m.group(2)
                 # 2026-10-05: resolve_operating_callsign normalises IATA (AC) to
                 # ICAO (ACA) -- codeshare_map stores ICAO, so AC8825 used to miss.
-                op_callsign = db.resolve_operating_callsign(ident)
-                if op_callsign:
-                    plan = db.get_flight_plan_by_callsign(op_callsign)
+                # 2026-10-13: route-filtered -- codeshare_map can hold both
+                # GJS4520 and RPA4520 for UAL4520 (different routes, same
+                # night); resolve_operating_callsign took the top-confidence
+                # row regardless of route. operating_identities() keeps only
+                # rows whose stored route does not contradict this watch.
+                from common.flight_instance import operating_identities
+                for op_c, op_n in operating_identities(ident, entry.get("origin"),
+                                                       entry.get("destination"))[1:]:
+                    plan = db.get_flight_plan_by_callsign(f"{op_c}{op_n}")
+                    if plan:
+                        break
                 if not plan:
                     fallback_plan = db.get_flight_plan_by_flight_num(
                         marketing_num, origin=entry.get("origin"))
@@ -1574,6 +1624,18 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
                                 log.debug("codeshare_map upsert %s: %s", ident, e)
                         plan = fallback_plan
         if not plan:
+            return
+        # 2026-10-13 (flight-instance resolver): a plan whose ORIGIN
+        # contradicts the watch is another leg of a reused number (the
+        # shuttle's return leg, a regional flying the brand number on
+        # another route) -- never this watch's tail, status or diversion.
+        # Destination is deliberately not gated: an FDPS destination change
+        # on the right leg IS the diversion signal below.
+        from common.flight_instance import airports_agree
+        if airports_agree(entry.get("origin"), plan.get("origin")) is False:
+            log.debug("fdps cache %s: plan %s is %s-%s, watch is %s-%s -- other leg, ignored",
+                      ident, plan.get("flight_id"), plan.get("origin"), plan.get("destination"),
+                      entry.get("origin"), entry.get("destination"))
             return
         status = (plan.get("status") or "").lower()
         dest = plan.get("destination")
@@ -1606,19 +1668,47 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
         new_reg = plan.get("registration")
         prior_hex = entry.get("hex_id")
         if new_hex and prior_hex and new_hex.upper() != prior_hex.upper():
-            watchlist_event_hit(
-                entry["id"],
-                f"{ident} FDPS: TAIL CHANGE {prior_hex}/{entry.get('registration') or '?'} "
-                f"→ {new_hex}/{new_reg or '?'}",
-                {"watchlist_trigger": "fdps_tail_change", "identifier": ident,
-                 "prior_hex": prior_hex, "new_hex": new_hex,
-                 "prior_registration": entry.get("registration"),
-                 "new_registration": new_reg},
-                priority=4,
-            )
-            db.update_watchlist_hex_registration(entry["id"], new_hex, new_reg)
-            db.update_watchlist_fdps_status(entry["id"], status, now_iso)
-            return
+            # 2026-10-13: tail-change guard (common.flight_instance.
+            # decide_tail_change). The FAA plan is an authoritative source,
+            # but a repoint now also needs the new tail to be free (not filed
+            # on another overlapping leg) and its previous leg to reach this
+            # watch's origin with a full turn to spare. Rejected -> the watch
+            # keeps its hex and gets ONE "tail change NOT accepted" note per
+            # candidate hex; the rest of this check (diversion/status) runs on.
+            decision = _fdps_tail_change_decision(entry, plan, new_hex, new_reg, prior_hex)
+            if decision.accepted:
+                if not new_reg:
+                    # hex-only FDPS shape (ADSB_02M_52B): look the tail up
+                    # rather than writing registration=None over the old one
+                    from common.flight_instance import registration_for_hex
+                    new_reg = registration_for_hex(new_hex)
+                watchlist_event_hit(
+                    entry["id"],
+                    f"{ident} FDPS: TAIL CHANGE {prior_hex}/{entry.get('registration') or '?'} "
+                    f"→ {new_hex}/{new_reg or '?'} ({decision.reason})",
+                    {"watchlist_trigger": "fdps_tail_change", "identifier": ident,
+                     "prior_hex": prior_hex, "new_hex": new_hex,
+                     "prior_registration": entry.get("registration"),
+                     "new_registration": new_reg, "reason": decision.reason},
+                    priority=4,
+                )
+                db.update_watchlist_hex_registration(entry["id"], new_hex, new_reg)
+                db.update_watchlist_fdps_status(entry["id"], status, now_iso)
+                return
+            if decision.changed:
+                slot = f"{entry['id']}:tail"
+                ck = content_hash(f"tailguard:{entry['id']}:{new_hex.lower()}")
+                if _TAIL_GUARD_DEDUP.should_push(slot, ck):
+                    watchlist_event_hit(
+                        entry["id"],
+                        f"{ident} FDPS: tail change NOT accepted "
+                        f"({prior_hex} → {new_hex}/{new_reg or '?'}): {decision.reason}",
+                        {"watchlist_trigger": "fdps_tail_change_rejected", "identifier": ident,
+                         "prior_hex": prior_hex, "candidate_hex": new_hex,
+                         "candidate_registration": new_reg, "reason": decision.reason},
+                        priority=3,
+                    )
+                    _TAIL_GUARD_DEDUP.record(slot, ck)
 
         prior_dest = entry.get("destination")
         if dest and prior_dest and dest.upper() != prior_dest.upper():
