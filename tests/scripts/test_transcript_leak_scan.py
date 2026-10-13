@@ -90,3 +90,19 @@ def test_scan_blocks_closed_files_and_only_warns_on_a_live_one(monkeypatch, tmp_
     old.write_text(FAKE)
     _old(old)
     assert m.main(["scan", "--root", str(root)]) == 1
+
+
+# -- 2026-10-12: --agents covers every agent account (Claude Code + Codex) and the operator's own sessions --
+
+def test_agent_roots_cover_claude_codex_and_operator(monkeypatch):
+    import importlib.util, pwd
+    from types import SimpleNamespace as NS
+    spec = importlib.util.spec_from_file_location("tls_agents", Path(__file__).resolve().parents[2] / "scripts/leak-guard/transcript_leak_scan.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    users = [NS(pw_name="root", pw_dir="/root", pw_uid=0), NS(pw_name="ctdc-agent-openai-codex", pw_dir="/home/ctdc-agent-openai-codex", pw_uid=1005),
+             NS(pw_name="corporatetraveldc", pw_dir="/home/corporatetraveldc", pw_uid=1000), NS(pw_name="nobody", pw_dir="/", pw_uid=65534)]
+    monkeypatch.setattr(pwd, "getpwall", lambda: users)
+    roots = {str(r) for r in m.agent_roots()}
+    assert "/home/ctdc-agent-openai-codex/.codex/sessions" in roots and "/home/ctdc-agent-openai-codex/.claude/projects" in roots
+    assert "/tmp/claude-1005" in roots and "/home/corporatetraveldc/.claude/projects" in roots
+    assert not any(r.startswith("/root") or r == "/" for r in roots)

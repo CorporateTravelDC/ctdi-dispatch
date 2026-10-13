@@ -1,7 +1,9 @@
-# CLAUDE.md drift report
+# CLAUDE.md drift report -- moved
 
-Generated 2026-10-10 09:15:00 UTC by corporatetraveldc-claude-md-drift-daily.
-Edit list from scripts/check-claude-md-drift.sh -- one line per finding, file:line where the
-checker has it. Not prose; don't add narrative here.
+Since 2026-10-12 the daily drift backstop (`scripts/claude-md-drift-daily.sh`) writes its report to
+`/var/lib/corporatetraveldc/reports/docs/CLAUDE_MD_DRIFT_REPORT.md` on the box, not into the repo
+(override: `CTDC_REPORTS_DIR`). The weekly and post-commit live-state checks write
+`LIVE_STATE_CHECK_<date>.md` to the same directory. Writing into the tracked tree made every relay
+set these files aside, and one relay failed its clean-tree check on them.
 
-No drift found.
+Earlier dated `docs/LIVE_STATE_CHECK_*.md` records stay in the repo as history.

@@ -100,6 +100,7 @@ Each line: behaviour → source. Replay these as parity tests.
 **Persistence**
 - [ ] After every exchange, user turn + assistant turn are inserted into `chat_messages(role, content, ts)` (`:2017`); history is the last 40 rows chronological (`:2007`); `GET /api/chat/history?limit=80` returns `{"messages":[{role,content}], "count"}`; `DELETE` clears all (`:2031`).
 - [ ] Both history endpoints 404 (not 403) unless `_is_trusted(request)` — IP-based: CF-Connecting-IP if present, else peer/X-Forwarded-For against `_TRUSTED_NETS` (`:188-260`).
+  - 2026-10-13: when testing this, send the public `Host` too (`Host: dispatch-runner.example.com`); `CF-Connecting-IP` alone is ignored on other hosts since the 2026-08-25 C-2 fix (see auth-token-proxy-pattern.md step 3).
 - [ ] `/api/ask` itself is **not** trust-gated and not in the `tailscale_gate` prefixes (`:382`); on prod it is reachable only because the runner is tailnet/loopback-bound. On the demo instance it is behind `DEMO_MODE`'s cookie gate in `proxy_dispatch` for data, but the ask path itself is open.
 
 **Refusals / safety**

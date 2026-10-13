@@ -74,6 +74,20 @@ unlimited** — it carried 701 GB in a month under a misconfigured failover
 with no issues, so data volume is not a constraint. The real cost of
 sitting on cellular is throttling, which is why fail-back exists.
 
+## Status update 2026-10-13 -- still down, by decision; weekly reminder
+
+- The backup link (enu1, a Verizon-backed phone hotspot) has had no internet since 2026-10-06 over a
+  pricing issue. The operator plans a prepaid SIM before winter. Until then failover has nothing to fail
+  over to.
+- `corporatetraveldc-uplink-reminder.timer` (user, daily 14:07 UTC) runs `scripts/uplink_reminder.py`: an
+  IPv4 HTTPS probe bound to enu1 (link state alone reads "connected" with no service). While the link has
+  no internet it pushes a reminder on Mondays; after 3 consecutive good daily checks it pushes once
+  ("back and stable") and goes quiet; if the link drops again the weekly reminders restart. State:
+  `~/.local/state/ctdc-uplink/state.json`. Tests: `tests/scripts/test_uplink_reminder.py`.
+- When the new SIM is in: validate failover end to end (pull the primary, confirm SWIM and the tunnel move
+  over and back), keep IPv6 off on that link (the 2026-09-02 hotspot IPv6 throttle), keep bulk traffic
+  (the nightly off-box sync, image pulls) off it by default, and add it to vnStat tracking.
+
 ## What metrics alone can and cannot do
 
 Metric selection fails over **only when the losing interface's route

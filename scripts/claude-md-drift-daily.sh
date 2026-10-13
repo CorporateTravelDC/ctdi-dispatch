@@ -25,7 +25,10 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${REPO_DIR}"
 
 CHECKER="scripts/check-claude-md-drift.sh"
-REPORT="docs/CLAUDE_MD_DRIFT_REPORT.md"
+# 2026-10-12: reports live OUTSIDE the repo -- a timer writing into the tracked tree made every relay
+# move files aside and failed one at its clean-tree check. Committed records stay where they are.
+REPORTS_DIR="${CTDC_REPORTS_DIR:-/var/lib/corporatetraveldc/reports/docs}"; mkdir -p "${REPORTS_DIR}"
+REPORT="${REPORTS_DIR}/CLAUDE_MD_DRIFT_REPORT.md"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 

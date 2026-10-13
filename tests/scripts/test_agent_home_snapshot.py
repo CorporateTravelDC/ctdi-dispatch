@@ -94,3 +94,16 @@ def test_tripwire_fires_when_an_exclude_is_missing(tmp_path, monkeypatch):
     r = subprocess.run(["bash", str(copy)], env=env, capture_output=True, text=True)
     assert r.returncode == 1 and "REFUSED ctdc-agent-test" in r.stderr
     assert list((tmp_path / "out" / "ctdc-agent-test").glob("*.tar.zst")) == []
+
+
+def test_a_file_changing_during_the_archive_is_a_warning_not_a_failure(tmp_path):
+    """2026-10-13 03:20Z: tar exit 1 ('file changed as we read it', a live Codex session) killed the whole run."""
+    import shutil as _sh
+    home = _home(tmp_path)
+    bindir = tmp_path / "bin"; bindir.mkdir()
+    real_tar = _sh.which("tar")
+    (bindir / "tar").write_text(f'#!/bin/sh\n"{real_tar}" "$@"\necho "tar: ./.codex: file changed as we read it" >&2\nexit 1\n')
+    (bindir / "tar").chmod(0o755)
+    r = _run(tmp_path, home, {"PATH": f"{bindir}:{os.environ['PATH']}"})
+    assert r.returncode == 0, r.stderr
+    assert "tripwire clean" in r.stdout and len(list((tmp_path / "out" / "ctdc-agent-test").glob("*.tar.zst"))) == 1

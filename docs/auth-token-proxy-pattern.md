@@ -169,8 +169,19 @@ cover this token (it handles `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`,
    including one arriving off-tailnet if the runner were ever exposed? If
    not, use `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY`. When in doubt, use it: the
    failure mode is your own browser seeing a 403, not strangers seeing data.
-3. Test from an untrusted origin (or with `CF-Connecting-IP` set to a public
-   address): operator-only paths must 403.
+3. ~~Test from an untrusted origin (or with `CF-Connecting-IP` set to a public
+   address): operator-only paths must 403.~~
+   **Superseded 2026-10-13:** since the 2026-08-25 C-2 fix, `CF-Connecting-IP` is honored ONLY when the
+   request's `Host` is a Cloudflare-fronted public hostname (`_CLOUDFLARE_FRONTED_HOSTNAMES` in
+   `src/runner/main.py`). A probe from the box without that Host is a trusted loopback request and gets
+   through -- correctly. Test as a public visitor with BOTH headers:
+
+   ```
+   curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: dispatch-runner.example.com' \
+        -H 'CF-Connecting-IP: 203.0.113.9' http://127.0.0.1:8005/api/v1/config      # demo runner: want 401
+   ```
+   (203.0.113.9 is a reserved documentation address.) Use GETs for reads; for write routes expect 403 and
+   never send a body that a trusted request would act on.
 4. The frontend calls `/api/dispatch/api/v1/<endpoint>` with no token.
 
 ## Why not make these Tier 0?

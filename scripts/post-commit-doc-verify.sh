@@ -107,7 +107,8 @@ invent a cause for a failure that is not stated in the facts."
 
     NARRATIVE="$(./scripts/local-llm-synthesize.sh "${SYSTEM_PROMPT}" 500 <"${FACTS_FILE}")"
 
-    REPORT="docs/LIVE_STATE_CHECK_${DATE_TAG}.md"
+    REPORTS_DIR="${CTDC_REPORTS_DIR:-/var/lib/corporatetraveldc/reports/docs}"; mkdir -p "${REPORTS_DIR}"   # 2026-10-12: outside the repo
+    REPORT="${REPORTS_DIR}/LIVE_STATE_CHECK_${DATE_TAG}.md"
     {
         echo
         echo "## Post-commit check — $(date '+%H:%M %Z') (${REASON})"

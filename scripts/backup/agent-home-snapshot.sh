@@ -48,7 +48,15 @@ for a in "${AGENTS[@]}"; do
   home="${HOME_OF[$a]:-}"; [[ -n "$home" && -d "$home" ]] || { echo "skip $a: no home"; continue; }
   d="$OUT/$a"; install -d -m 0700 -o "$OWNER" -g "$OWNER" "$d"
   f="$d/$a-$ts.tar.zst"
-  tar -C "$home" --numeric-owner -cf - "${EXCLUDES[@]}" . | zstd -q -6 -o "$f"
+  # 2026-10-12: a live agent session changes files while they are read; tar exits 1 for that ("file changed
+  # as we read it" -- a warning, the archive is still written). Only tar >= 2 is fatal, and one agent's
+  # failure no longer stops the others (the 10-13 03:20Z run died on the Codex home and skipped the rest).
+  set +e
+  tar -C "$home" --numeric-owner --warning=no-file-changed --warning=no-file-ignored -cf - "${EXCLUDES[@]}" . | zstd -q -6 -o "$f"
+  st=("${PIPESTATUS[@]}"); set -e
+  if (( st[0] > 1 || st[1] != 0 )); then
+    rm -f "$f"; echo "FAILED $a: tar rc=${st[0]} zstd rc=${st[1]}; no snapshot kept" >&2; rc=1; continue
+  fi
   hits=$(zstd -dc "$f" | tar -tf - | grep -E "$FORBIDDEN" | wc -l || true)
   if (( hits > 0 )); then
     rm -f "$f"; echo "REFUSED $a: $hits credential-shaped name(s) got past the excludes; snapshot deleted, nothing kept" >&2

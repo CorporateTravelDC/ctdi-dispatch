@@ -12,6 +12,9 @@ ENV_FILE=/etc/corporatetraveldc/dispatch.env
 read_env() { [[ -f "$ENV_FILE" ]] && grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- || true; }
 STATE="$HOME/.local/state/ctdc-backup"
 REPO="${BACKUP_REPO:-$(read_env BACKUP_REPO)}"; REPO="${REPO:-$STATE/borg}"
+# 2026-10-12: one heavy job at a time (see scripts/lib/heavy_lock.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/heavy_lock.sh"
+heavy_lock_acquire "restore test" 7200 || { echo "restore test: heavy-work turn still taken after 2 h" >&2; exit 1; }
 PASSFILE="${BACKUP_PASSPHRASE_FILE:-$(read_env BACKUP_PASSPHRASE_FILE)}"; PASSFILE="${PASSFILE:-/etc/corporatetraveldc/backup/borg-passphrase}"
 export BORG_PASSCOMMAND="cat $PASSFILE" BORG_REPO="$REPO"
 log() { printf '[%s] [restore-test] %s\n' "$(date -u +%FT%TZ)" "$*"; }

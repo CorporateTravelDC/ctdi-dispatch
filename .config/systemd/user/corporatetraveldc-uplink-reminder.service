@@ -1,0 +1,5 @@
+[Unit]
+Description=Corporate Travel DC -- failover uplink check; weekly nudge while it is down, one nudge when it is back and stable
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/uplink_reminder.py --iface enu1 --weekday 0 --stable-days 3

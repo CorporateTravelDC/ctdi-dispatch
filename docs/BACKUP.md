@@ -105,3 +105,47 @@ the three archives were rewritten without them (`borg recreate`, then `borg comp
 `CTDC_SNAPSHOT_EXCLUDE` is now settable through `/etc/corporatetraveldc/agent-snapshot.env` (the unit's
 `EnvironmentFile`). Tests: `tests/scripts/test_agent_home_snapshot.py`.
 
+No rotation was needed (operator, 2026-10-12): the Claude session key belonged to a remote-control session the
+operator had already restarted when agents moved to the gateway, and the Codex account has never used Brave, so
+its profile held no sign-in.
+
+
+
+## Off-box target: Proton Drive (live 2026-10-12)
+
+- `BACKUP_TARGET=proton:ctdi-backup`. Proton only ever receives Borg-encrypted chunks; LADD table data stays on
+  the box (`BACKUP_INCLUDE_CUI=0`).
+- **Login:** one 6-digit code at setup; rclone saved a Proton **session** in `~/.config/rclone/rclone.conf` (0600)
+  and runs on the session alone: the account **password is not stored** and **no OTP seed is stored**. When Proton
+  ends the session (password change, "sign out everywhere"), the nightly sync fails and the freshness check pages;
+  one fresh code restores it.
+- **rclone is pinned:** `/usr/local/bin/rclone` v1.75.2 (root-owned; the official arm64 build, its `SHA256SUMS`
+  verified against the rclone release key `FBF7 37EC E9F8 AB18 604B D2AC 9393 5E02 FF3B 54FA` and the zip hash
+  pinned). Fedora's package (1.74.3) is left installed; `/usr/local/bin` comes first in every PATH here. Why:
+  rclone < 1.75.0 cannot read some Proton accounts' keys (`gopenpgp: user ID signature with wrong type`,
+  rclone issue #9434). Retire the pinned copy when Fedora ships 1.75 or later.
+- **Interrupted uploads leave Proton "drafts"** that block the next sync of that file ("a draft exist", 5 files
+  on the 2026-10-12 seed after the ramp's phase changes). Every sync passes `--protondrive-replace-existing-draft`
+  (a global flag, harmless for other targets). The seed finished with it at 2.5 MB/s.
+- **Known rclone bug:** listing the Drive **root** fails (`iso8601: Cannot parse ""`, an item with an empty
+  timestamp). Nothing in the backup lists the root; checks use `proton:ctdi-backup`.
+- **Seed:** the first 19 GB went up on 2026-10-12 through the measured ramp (`scripts/backup/uplink_ramp.py`,
+  ledger `~/.local/state/ctdc-backup/uplink-ramp.jsonl`): 1 MB/s ok (feeds worst 34 s), 2 MB/s ok (2.31 delivered,
+  35 s), 4 MB/s link-bound (2.22 delivered, 31 s); the finish ran at about 3.2 MB/s with the feeds under 30 s.
+
+## Sync caps, turn-taking, dry run (2026-10-12)
+
+| Setting (`dispatch.env`) | Default | Meaning |
+|---|---|---|
+| `BACKUP_BWLIMIT_SOFT_MB` | 2.5 | rclone's own `--bwlimit` (it overshoots by about 10%) |
+| `BACKUP_BWLIMIT_HARD_MB` | 3 | `rate_guard.py`: total upload on the interface, 30 s average. Over it, rclone's limit is lowered live (80%, then 50% of soft) over a private rc socket; still over after that, the sync is stopped and fails loudly. Restored to soft when calm. |
+| `BACKUP_IFACE` | wld0 | interface the hard cap watches |
+
+- Each sync's ledger entry carries the guard's summary (highest 30 s average, actions).
+- **One heavy job at a time** (`scripts/lib/heavy_lock.sh`): the nightly backup, the weekly restore test, the
+  full-load rollout and the stack refresh take one shared turn; the second waits (up to 2 h) and logs whom it waits
+  on. Root cause: the 2026-10-12 03:40Z backup started six minutes into a relay's full load (load 20.5 on 4 cores).
+- The nightly sync also waits for a running seed upload (`corporatetraveldc-proton-seed`), up to 90 min.
+- `--dry-run` now exits before any dump, ledger write or LADD rotation (it used to run both dumps and append a
+  cui-stamp; the 2026-10-12 22:22Z cui-stamp in the ledger is that dry run, not a backup).
+- The dumps read `</dev/null`: `podman exec -i` used to read the caller's stdin and swallowed the rest of a relay.

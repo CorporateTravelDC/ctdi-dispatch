@@ -44,7 +44,8 @@ SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-ce
          scripts/tailscale-cert-refresh-nts.sh
          scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh
          scripts/approved-exec.py scripts/approved-exec.conf
-         scripts/backup/agent-home-snapshot.sh)   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
+         scripts/backup/agent-home-snapshot.sh
+         scripts/leak-guard/transcript_leak_scan.py)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
@@ -70,6 +71,8 @@ UNITS=(
   "systemd/system/corporatetraveldc-nts-cert-refresh.timer"
   "systemd/system/corporatetraveldc-agent-home-snapshot.service"
   "systemd/system/corporatetraveldc-agent-home-snapshot.timer"
+  "systemd/system/corporatetraveldc-agent-leak-scan.service"
+  "systemd/system/corporatetraveldc-agent-leak-scan.timer"
 )
 
 manifest_hash() { awk -v p="$1" '$2==p || $2=="*"p {print $1; exit}' "${REPO}/MANIFEST.sha256"; }

@@ -312,3 +312,23 @@ systemctl --user restart corporatetraveldc-runner corporatetraveldc-runner-demo
 - ~~AIS local receive (`ais`/`ais-watcher` Quadlets ship `.disabled`)~~
 - ~~WebSocket upgrade from SSE if volume justifies it~~
 - ~~Persistent RSS cache on disk (currently in-memory)~~
+
+
+## Demo gate (2026-10-12) and how to test it from the box
+
+In demo mode (`DEMO_MODE=true`, the runner-demo instance on port 8005 behind the public
+`dispatch-runner.example.com`), one middleware (`demo_gate`, `src/runner/main.py`) fronts every
+route for untrusted visitors: the page, assets, `/healthz`, `/api/whoami`, `/api/demo/status` and
+`POST /api/demo/login` are open; every other `/api/*` read needs the demo session (401 without it); writes
+and `/api/ask` are refused (403) even with a session. Tailnet/LAN requests are untouched.
+
+Trust is decided by `_is_trusted()`: `CF-Connecting-IP` counts only when `Host` is a Cloudflare-fronted
+public hostname. So a test from the box must send both headers or it is (correctly) a trusted request:
+
+```
+H='Host: dispatch-runner.example.com'; V='CF-Connecting-IP: 203.0.113.9'
+curl -s -o /dev/null -w '%{http_code}\n' -H "$H" -H "$V" http://127.0.0.1:8005/api/v1/config        # 401
+curl -s -o /dev/null -w '%{http_code}\n' -H "$H" -H "$V" http://127.0.0.1:8005/api/rss/user-feeds   # 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "$H" -H "$V" http://127.0.0.1:8005/api/ask       # 403 (no body needed)
+```
+Verified 2026-10-13 after `127a2f76`: 401 / 401 / 403. Tests: `tests/runner/test_demo_gate.py`.

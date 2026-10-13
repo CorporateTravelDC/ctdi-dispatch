@@ -126,7 +126,10 @@ def run_docs_drift_fallback() -> None:
     if output is None:
         return  # marker stays 'pending' -- next 6h firing retries
 
-    out_path = REPO_DIR / "docs" / f"LIVE_STATE_CHECK_{date_tag}_LLAMA_FALLBACK.md"
+    # 2026-10-12: outside the repo (the timer used to write into the tracked tree)
+    reports = Path(os.environ.get("CTDC_REPORTS_DIR", "/var/lib/corporatetraveldc/reports/docs"))
+    reports.mkdir(parents=True, exist_ok=True)
+    out_path = reports / f"LIVE_STATE_CHECK_{date_tag}_LLAMA_FALLBACK.md"
     out_path.write_text(
         f"# LIVE_STATE_CHECK (Llama fallback) -- {date_tag}\n\n"
         f"Claude-CLI docs-drift-weekly failed; this is a degraded, non-tool-using "

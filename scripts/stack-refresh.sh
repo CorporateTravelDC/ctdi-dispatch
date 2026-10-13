@@ -70,6 +70,10 @@
 # Secrets: NTFY_TOKEN is read in-script via read_env_var and never echoed.
 # Never shell-source the env files (values are deliberately unquoted).
 set -uo pipefail
+# 2026-10-12: stack refresh builds + rolls out: take the heavy-work turn for the whole run; the
+# serialized-rollout it hands off to runs inside this turn (CTDC_HEAVY_LOCK_HELD) instead of re-taking it.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/heavy_lock.sh"
+heavy_lock_acquire "stack refresh" 7200 || { echo "stack refresh: heavy-work turn still taken after 2 h -- not starting" >&2; exit 1; }
 # 2026-10-05 (argv-token sweep): a bearer token never goes on a command line --
 # /proc/<pid>/cmdline is world-readable here (no hidepid), i.e. readable by
 # every team account. authhdr NAME TOKEN puts the header on a private fd and

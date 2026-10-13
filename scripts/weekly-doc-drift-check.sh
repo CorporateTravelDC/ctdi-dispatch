@@ -33,7 +33,10 @@ cd "${REPO_DIR}" || exit 1
 DATE_TAG="$(date +%Y-%m-%d)"
 LOG_DIR="/var/lib/corporatetraveldc/docs-drift-check"
 LOG="${LOG_DIR}/ctdi-dispatch-internal-${DATE_TAG}.log"
-REPORT="docs/LIVE_STATE_CHECK_${DATE_TAG}.md"
+# 2026-10-12: reports live OUTSIDE the repo -- a timer writing into the tracked tree made every relay
+# move files aside and failed one at its clean-tree check. Committed records stay where they are.
+REPORTS_DIR="${CTDC_REPORTS_DIR:-/var/lib/corporatetraveldc/reports/docs}"; mkdir -p "${REPORTS_DIR}"
+REPORT="${REPORTS_DIR}/LIVE_STATE_CHECK_${DATE_TAG}.md"
 mkdir -p "${LOG_DIR}"
 
 exec >>"${LOG}" 2>&1
@@ -61,8 +64,12 @@ trap 'rm -f "${FACTS_FILE}"' EXIT
 
     echo
     echo "## Commits since the previous LIVE_STATE_CHECK"
-    PREV="$(git log -1 --format=%H -- 'docs/LIVE_STATE_CHECK_*.md' 2>/dev/null)"
-    if [[ -n "${PREV}" ]]; then
+    # previous report = newest earlier LIVE_STATE_CHECK in the reports dir (or, before 2026-10-12, in git)
+    PREV_FILE="$(ls -1t "${REPORTS_DIR}"/LIVE_STATE_CHECK_*.md 2>/dev/null | grep -v "_${DATE_TAG}" | head -1)"
+    PREV=""
+    if [[ -n "${PREV_FILE}" ]]; then
+        git log --oneline --since="@$(stat -c %Y "${PREV_FILE}")" 2>/dev/null | head -40 || true
+    elif PREV="$(git log -1 --format=%H -- 'docs/LIVE_STATE_CHECK_*.md' 2>/dev/null)" && [[ -n "${PREV}" ]]; then
         git log --oneline "${PREV}..HEAD" 2>/dev/null | head -40 || true
     else
         git log --oneline -20 2>/dev/null || true

@@ -28,6 +28,10 @@ SKIP_UNITS=${SKIP_UNITS:-}
 # build, no pull, no tag -- so the deployed image IS the gated image and the
 # :previous rollback tag stack-refresh set is not overwritten.
 FROM_REFRESH=${FROM_REFRESH:-0}
+# 2026-10-12: one heavy job at a time -- a rollout waits for a running backup / restore test (and
+# vice versa) instead of stacking load on it; inside stack-refresh's turn it does not re-take it.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/heavy_lock.sh"
+heavy_lock_acquire "full-load rollout" 7200 || { echo "rollout: heavy-work turn still taken after 2 h -- not starting" >&2; exit 1; }
 # Postgres rows (corporatetraveldc-pgsql, nextcloud-db) change only through
 # scripts/safe-pg-image-update.sh's canary path; they are skipped entirely
 # unless the operator says the canary has been done (duel H2: today's manual

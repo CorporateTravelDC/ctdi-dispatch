@@ -398,6 +398,38 @@ async def tailscale_gate(request: Request, call_next):
     return await call_next(request)
 
 
+# 2026-10-12 (docs-parity audit, verified live): only proxy_dispatch() enforced the demo password.
+# An untrusted visitor on the public demo hostname could read /api/v1/config and the RSS feed lists
+# and reach the write routes (config PUT, feed and chat-history writes) and /api/ask (the box's LLM,
+# with operator context in its prompt). ONE gate now covers every route in demo mode:
+#   no login needed: non-/api paths (the page, assets), /healthz, /api/whoami, /api/demo/status,
+#                    POST /api/demo/login
+#   demo session needed: every other /api/* read
+#   refused even with a session: writes (POST/PUT/PATCH/DELETE) and /api/ask -- the demo is view-only
+# Trusted (tailnet/LAN) requests are untouched.
+_DEMO_OPEN_PATHS = {"/healthz", "/api/whoami", "/api/demo/status"}
+_DEMO_NEVER = {"/api/ask"}
+
+
+@app.middleware("http")
+async def demo_gate(request: Request, call_next):
+    if not DEMO_MODE or _is_trusted(request):
+        return await call_next(request)
+    path = _normalized_path(request.url.path)
+    method = request.method.upper()
+    if path == "/api/demo/login" and method == "POST":
+        return await call_next(request)
+    if not (path.startswith("/api/") or path == "/healthz"):
+        return await call_next(request)
+    if path in _DEMO_NEVER or method not in ("GET", "HEAD", "OPTIONS"):
+        return JSONResponse(status_code=403, content={"detail": "Not available in the demo"})
+    if path in _DEMO_OPEN_PATHS:
+        return await call_next(request)
+    if not _verify_demo_session(request.cookies.get(DEMO_SESSION_COOKIE)):
+        return JSONResponse(status_code=401, content={"detail": "Demo login required"})
+    return await call_next(request)
+
+
 @app.get("/api/whoami")
 async def whoami(request: Request):
     """

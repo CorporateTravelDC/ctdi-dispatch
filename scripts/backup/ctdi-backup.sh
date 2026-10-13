@@ -47,6 +47,9 @@ RCLONE_CONFIG="$(setting BACKUP_RCLONE_CONFIG "${HOME}/.config/rclone/rclone.con
 INCLUDE_CUI="$(setting BACKUP_INCLUDE_CUI 0)"
 KEEP_D="$(setting BACKUP_KEEP_DAILY 30)"; KEEP_W="$(setting BACKUP_KEEP_WEEKLY 12)"; KEEP_M="$(setting BACKUP_KEEP_MONTHLY 12)"
 CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
+# 2026-10-12 (operator): off-box sync caps from the measured uplink ramp -- soft 2.5 MB/s (rclone's own
+# limit), hard 3 MB/s (rate_guard.py lowers rclone live, then stops it, if total upload stays above it).
+BW_SOFT="$(setting BACKUP_BWLIMIT_SOFT_MB 2.5)"; BW_HARD="$(setting BACKUP_BWLIMIT_HARD_MB 3)"; BW_IFACE="$(setting BACKUP_IFACE wld0)"
 DISPATCH_PG=corporatetraveldc-pgsql
 NEXTCLOUD_PG=nextcloud-db
 LADD_TABLES=(faa_ladd_aircraft faa_ladd_removals)   # CUI: identifiers of LADD-listed aircraft
@@ -63,6 +66,16 @@ export BORG_PASSCOMMAND="cat ${PASSFILE}" BORG_REPO="$BACKUP_REPO" BORG_RELOCATE
 mkdir -p -m 0700 "$STATE" "$STATE/cui-local"
 exec 9>"${STATE}/.lock"; flock -n 9 || die "another backup is running"
 
+# 2026-10-12: a dry run exits HERE -- before any dump, ledger write or CUI rotation. It used to run both
+# Postgres dumps (~35 min) and append a cui-stamp before exiting.
+if [[ "$DRY" == 1 ]]; then
+  log "dry run: would dump dispatch + Nextcloud Postgres, archive to $BACKUP_REPO, sync to '${BACKUP_TARGET:-<local only>}' (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
+  exit 0
+fi
+# 2026-10-12: one heavy job at a time (backup, restore test, rollout, stack refresh) -- wait our turn.
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/heavy_lock.sh"
+heavy_lock_acquire "nightly backup" 7200 || die "heavy-work turn still taken after 2 h (holder: $(heavy_lock_holder)); backup skipped"
+
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 stage=$(mktemp -d "${STATE}/stage.${ts}.XXXX"); chmod 700 "$stage"
 # 2026-10-11: plain removal. shred cannot overwrite in place on btrfs (copy-on-write), so it only cost
@@ -72,7 +85,7 @@ trap cleanup EXIT
 
 pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell)
   local c="$1" out="$2" extra="${3:-}"
-  podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z 6 ${extra}" > "$out"
+  podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z 6 ${extra}" > "$out" </dev/null
 }
 
 log "dump: dispatch Postgres (LADD data $( [[ "$INCLUDE_CUI" == 1 ]] && echo included || echo 'excluded -> local-only'))"
@@ -86,10 +99,10 @@ cui_file="$STATE/cui-local/ladd-${ts}.pgdump"
 pg_dump_in "$DISPATCH_PG" "$cui_file" "--data-only $(printf -- '--table=%s ' "${LADD_TABLES[@]}")"
 chmod 600 "$cui_file"
 count_sql=$(printf "SELECT json_build_object(%s)" "$(printf "'%s', (SELECT count(*) FROM %s)," $(for t in "${LADD_TABLES[@]}"; do echo "$t $t"; done) | sed 's/,$//')")
-ladd_rows=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"${count_sql}\"")
+ladd_rows=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"${count_sql}\"" </dev/null)
 cui_meta=$(python3 "$LEDGER_PY" file "$cui_file")
 # head of the in-database reference-import ledger (pg_schema/0074): pins WHICH LADD/registry source files are loaded
-import_head=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"SELECT json_build_object('seq', seq, 'entry_hash', entry_hash) FROM reference_import_ledger ORDER BY seq DESC LIMIT 1\"" 2>/dev/null || true)
+import_head=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"SELECT json_build_object('seq', seq, 'entry_hash', entry_hash) FROM reference_import_ledger ORDER BY seq DESC LIMIT 1\"" </dev/null 2>/dev/null || true)
 python3 "$LEDGER_PY" append cui-stamp --json "{\"stamp\": \"#\", \"rows\": ${ladd_rows:-null}, \"off_box\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"local_dump\": ${cui_meta}, \"import_ledger_head\": ${import_head:-null}}" >/dev/null
 ls -1t "$STATE/cui-local"/ladd-*.pgdump 2>/dev/null | tail -n +$((CUI_KEEP + 1)) | while read -r old; do shred -fu "$old"; done
 
@@ -104,7 +117,6 @@ paths=("$stage" "$nc_vol" /var/lib/corporatetraveldc /etc/corporatetraveldc /var
 excludes=(--exclude /var/lib/corporatetraveldc/models --exclude 'sh:**/__pycache__' --exclude 'sh:**/*.tmp'
           --exclude /etc/corporatetraveldc/cf-honeypot.token)
 
-if [[ "$DRY" == 1 ]]; then log "dry run: would archive ${paths[*]} to $BACKUP_REPO and sync to '${BACKUP_TARGET:-<local only>}'"; exit 0; fi
 
 if [[ ! -d "$BACKUP_REPO" ]]; then
   log "initialising Borg repository (repokey, AES-256 + HMAC-SHA256) at $BACKUP_REPO"
@@ -142,9 +154,21 @@ log "archive ${archive} done"
 
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   command -v rclone >/dev/null || die "rclone is not installed (dnf install rclone)"
-  log "sync repository -> ${BACKUP_TARGET}"
-  if podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0; then
-    python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": true}" >/dev/null
+  # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
+  for _ in $(seq 1 90); do systemctl --user is-active -q corporatetraveldc-proton-seed.service || break; log "seed upload still running; waiting"; sleep 60; done
+  systemctl --user is-active -q corporatetraveldc-proton-seed.service && die "seed upload still running after 90 min; sync skipped"
+  log "sync repository -> ${BACKUP_TARGET} (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
+  rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
+  soft_k=$(python3 -c "print(int(float('${BW_SOFT}')*1000000/1024))")k
+  podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
+    --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
+    --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
+  rpid=$!
+  guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" </dev/null || true)
+  set +e; wait "$rpid"; src=$?; set -e; rm -rf "$rcdir"
+  log "rate guard: ${guard_json:-<no summary>}"
+  if (( src == 0 )); then
+    python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": true, \"rate_guard\": ${guard_json:-null}}" >/dev/null
   else
     python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": false}" >/dev/null
     die "sync to ${BACKUP_TARGET} failed (the local archive is complete)"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Corporate Travel DC -- redact then scan every agent account's transcripts for live secret values (names and counts only)
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+# Closed files are redacted in place (owner and mode kept); files written in the last 15 min are a
+# live session and are left for the next run. The scan then fails the unit if any closed file still
+# carries a value, so a leak that cannot be redacted shows up as a failed unit.
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc/transcript_leak_scan.py redact --agents
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc/transcript_leak_scan.py scan --agents

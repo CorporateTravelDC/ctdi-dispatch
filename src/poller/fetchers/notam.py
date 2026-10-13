@@ -133,11 +133,18 @@ def run() -> dict:
     feed_name = "notam"
     fetched_at = time.time()
 
-    token = _get_bearer_token()
-    if not token:
-        log.info("NOTAM: NMS_API_CLIENT_ID/SECRET not configured — marking awaiting_credentials")
+    # 2026-10-12: "no credentials" and "credentials rejected / auth call failed" are
+    # different states. Both used to be recorded as awaiting_credentials, so one
+    # transient auth failure sat in feed status for 44 h looking like missing keys.
+    if not (_client_id() and _client_secret()):
+        log.info("NOTAM: NMS_API_CLIENT_ID/SECRET not configured -- marking awaiting_credentials")
         db.upsert_feed_skip(feed_name, fetched_at, "awaiting_credentials")
         return {"skipped": True, "reason": "awaiting_credentials"}
+    token = _get_bearer_token()
+    if not token:
+        log.warning("NOTAM: NMS-API auth failed with credentials configured -- marking auth_failed")
+        db.upsert_feed(feed_name, fetched_at, error="auth_failed")   # a real failure: counts toward consecutive_failures
+        return {"skipped": True, "reason": "auth_failed"}
 
     since_iso = _last_fetch_since_iso(feed_name)
 

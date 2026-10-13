@@ -1135,12 +1135,10 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
             log.debug("%s: ADS-B suggests %s; ON/IN only from ACARS/SMES/TFMS -- not firing", ident, current_phase)
             return True
         else:
-            try:
-                if _fids_confirms_phase(entry, ident, current_phase):
-                    confirm_src = "fids"
-            except Exception as e:
-                log.debug("%s: FIDS phase confirmation check failed: %s", ident, e)
-            if not confirm_src and current_phase == "off":
+            # 2026-10-12 (docs-parity audit): FIDS used to confirm OUT/OFF here and the phase was then
+            # persisted -- FIDS asserting OOOI by proxy, against the 2026-09-27 rule (FIDS is gate +
+            # baggage enrichment only). OFF now needs ACARS (above) or FDPS (below); nothing else.
+            if current_phase == "off":
                 try:
                     if _fdps_confirms_off(ident, hex_id):
                         confirm_src = "fdps"
@@ -1274,48 +1272,8 @@ _FIDS_STATUS_TO_PHASE = {
 }
 
 
-def _fids_confirms_phase(entry: dict, ident: str, target_phase: str) -> bool:
-    """
-    True if DCA/IAD FIDS currently reports this flight at the given target
-    OOOI phase. Checks the arrival-side FIDS record if the flight's
-    destination is DCA/IAD (arrival records carry full-lifecycle status --
-    OutGate/InAir/Landed/InGate all appear on the SAME arrival record as
-    the flight progresses), or the departure-side record via
-    lookup_departure() if the origin is DCA/IAD. Returns False (not
-    "unknown") for any flight not routed through DCA/IAD, any status that
-    doesn't map to target_phase, or on any lookup failure -- callers treat
-    False as "no FIDS corroboration available," never as a negative signal.
-    """
-    import re
-    dest = (entry.get("destination") or "").upper()
-    origin = (entry.get("origin") or "").upper()
-    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
-    if not m:
-        return False
-    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
-    if not iata_carrier:
-        return False
-    flight_num = m.group(2)
-
-    result = None
-    try:
-        from common.airport_fids import lookup_arrival, lookup_departure
-        if dest in ("KDCA", "DCA"):
-            result = lookup_arrival("DCA", iata_carrier, flight_num)
-        elif dest in ("KIAD", "IAD"):
-            result = lookup_arrival("IAD", iata_carrier, flight_num)
-        elif origin in ("KDCA", "DCA"):
-            result = lookup_departure("DCA", iata_carrier, flight_num)
-        elif origin in ("KIAD", "IAD"):
-            result = lookup_departure("IAD", iata_carrier, flight_num)
-    except Exception as e:
-        log.debug("%s: FIDS phase confirmation lookup failed: %s", ident, e)
-        return False
-    if not result:
-        return False
-    status = (result.get("status") or "").strip().lower()
-    return _FIDS_STATUS_TO_PHASE.get(status) == target_phase
-
+# 2026-10-12: the FIDS phase-confirmation helper was removed -- FIDS never confirms an OOOI phase (2026-09-27 rule);
+# its last caller (the ADS-B sweep's OUT/OFF confirmation) was taken out the same day.
 
 def _fdps_confirms_off(ident: str, hex_id: str | None) -> bool:
     """
@@ -1433,8 +1391,7 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
             acars_contradicts = bool(acars_check and acars_check[0] not in ("on", "in"))
 
             # 2026-10-05: FIDS may not confirm IN (FIDS is never OOOI-authoritative,
-            # 2026-09-27); this inferred IN now needs the aircraft's own ACARS.
-            fids_confirms = False
+            # 2026-09-27); this inferred IN needs the aircraft's own ACARS.
 
             if acars_contradicts:
                 log.info(
@@ -1443,7 +1400,7 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                 )
                 return
 
-            if not (acars_confirms or fids_confirms):
+            if not acars_confirms:
                 log.debug(
                     "%s: schedule window for IN reached (%s) but neither ACARS nor "
                     "FIDS confirms yet -- holding, ADS-B-dark alone is not sufficient",
@@ -1451,7 +1408,7 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                 )
                 return
 
-            confirm_src = "ACARS" if acars_confirms else "FIDS"
+            confirm_src = "ACARS"   # the only source that can reach here (FIDS never confirms IN; 2026-10-05)
             acars_ctx = _acars_reason_context(ident, entry.get("registration"))
             summary = f"{ident} IN — at gate ({confirm_src}-confirmed, ADS-B dark)\n{acars_ctx}"
             watchlist_event_hit(

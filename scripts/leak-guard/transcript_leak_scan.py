@@ -17,8 +17,9 @@ What it looks for
     "Authorization: Bearer <token>" / "X-Board-Key: <token>" header values.
 
 Default roots: ~/.claude/projects and /tmp/claude-<uid> (session transcripts and
-tool outputs). Agent accounts' homes are only readable by root; the root-owned
-installed copy scans them (scripts/install-root-copies.sh).
+tool outputs). Agent accounts' homes are only readable by root: --agents scans every
+ctdc-agent-* account's Claude Code and Codex transcripts, run hourly as root from the
+installed copy (corporatetraveldc-agent-leak-scan.timer; scripts/install-root-copies.sh).
 
 Output names the file, the secret's NAME and a count -- never a value.
 
@@ -84,6 +85,21 @@ def load_secret_values(path: Path = SECRETS_ENV) -> dict[str, list[bytes]]:
 
 def default_roots() -> list[Path]:
     return [Path.home() / ".claude" / "projects", Path(f"/tmp/claude-{os.getuid()}")]
+
+
+def agent_roots() -> list[Path]:
+    """2026-10-12 (docs-parity audit): the docstring said a root-owned copy scanned the agent accounts'
+    homes; nothing did. Every ctdc-agent-* account: Claude Code projects + /tmp/claude-<uid>, and the
+    Codex CLI's session logs (~/.codex/sessions, ~/.codex/history.jsonl). Only root can read them."""
+    import pwd
+    roots = []
+    operator = os.environ.get("CTDC_OPERATOR_ACCOUNT", "corporatetraveldc")   # the operator's own sessions too:
+    for u in pwd.getpwall():                                                  # a transcript that leaked while live
+        if u.pw_name.startswith("ctdc-agent-") or u.pw_name == operator:      # is redacted once it closes
+            h = Path(u.pw_dir)
+            roots += [h / ".claude" / "projects", Path(f"/tmp/claude-{u.pw_uid}"),
+                      h / ".codex" / "sessions", h / ".codex" / "history.jsonl"]
+    return roots
 
 
 def iter_files(roots: list[Path]):
@@ -155,6 +171,8 @@ def redact(roots: list[Path], secrets: dict[str, list[bytes]], include_live: boo
         with os.fdopen(fd, "wb") as fh:
             fh.write(new)
         os.chmod(tmp, st.st_mode & 0o7777)
+        if os.geteuid() == 0:                 # root redacting an agent's file: keep the agent as its owner
+            os.chown(tmp, st.st_uid, st.st_gid)
         os.replace(tmp, p)
         done += 1
     after = {p: h for p, h in scan(roots, secrets).items() if p not in skipped}
@@ -172,9 +190,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=("scan", "redact"))
     ap.add_argument("--root", action="append", type=Path, default=[])
+    ap.add_argument("--agents", action="store_true", help="scan every ctdc-agent-* account (root only)")
     ap.add_argument("--include-live", action="store_true")
     a = ap.parse_args(argv)
-    roots = a.root or default_roots()
+    roots = a.root or (agent_roots() if a.agents else default_roots())
     secrets = load_secret_values()
     if not secrets:
         print("transcript-leak-scan: WARNING no live secret values loaded (secrets file unreadable); token shapes only")

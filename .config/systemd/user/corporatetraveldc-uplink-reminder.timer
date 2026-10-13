@@ -1,0 +1,7 @@
+[Unit]
+Description=Failover uplink check, daily 14:07 UTC (nudges Mondays while down)
+[Timer]
+OnCalendar=*-*-* 14:07:00
+Persistent=true
+[Install]
+WantedBy=timers.target
