@@ -31,7 +31,6 @@ authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}
 
 ENV_FILE=/etc/corporatetraveldc/dispatch.env
 SECRETS_FILE=/etc/corporatetraveldc/dispatch-secrets.env
-THRESHOLD="${BRIEF_FALLBACK_ALERT_THRESHOLD:-3}"   # trailing consecutive fallbacks -> alert
 WINDOW="${BRIEF_FALLBACK_WINDOW:-6}"               # rolling window size (runs)
 UNITS=(corporatetraveldc-ops-brief corporatetraveldc-ep-advance)
 
@@ -67,22 +66,40 @@ outcomes_for() {
     | tail -n "$WINDOW"
 }
 
-overall_bad=0; summary=""
+# 2026-10-14 (operator): alert when a brief FALLS BACK on its latest run, with a short narrative
+# like the ops/EP trend briefs: which briefs fell back, and whether the trend is improving or
+# worsening (fallbacks in the newer half of the window vs the older half). The old rule (>= half
+# the window) kept paging for hours after the model had recovered.
+trend_of() {  # $@ = outcomes oldest..newest -> "improving|worsening|steady (X of last N vs Y of prior M)"
+  local -a w=("$@"); local n=${#w[@]} h=$(( ${#w[@]} / 2 )) old=0 new=0 i
+  for ((i=0; i<h; i++)); do [ "${w[$i]}" = "FALLBACK" ] && old=$((old+1)); done
+  for ((i=h; i<n; i++)); do [ "${w[$i]}" = "FALLBACK" ] && new=$((new+1)); done
+  local dir=steady
+  [ "$new" -lt "$old" ] && dir=improving
+  [ "$new" -gt "$old" ] && dir=worsening
+  echo "${dir} (${new} of last $((n-h)) vs ${old} of prior ${h})"
+}
+overall_bad=0; summary=""; fell=(); lines=""
 for unit in "${UNITS[@]}"; do
   mapfile -t o < <(outcomes_for "$unit")
   n=${#o[@]}
+  short="${unit#corporatetraveldc-}"
   if [ "$n" -eq 0 ]; then summary+="${unit}: no completed runs in window; "; continue; fi
-  consec=0
-  for ((i=n-1; i>=0; i--)); do [ "${o[$i]}" = "FALLBACK" ] && consec=$((consec+1)) || break; done
   fb=0; for x in "${o[@]}"; do [ "$x" = "FALLBACK" ] && fb=$((fb+1)); done
-  summary+="${unit}: last ${n}=[${o[*]}] consec_fb=${consec} fb=${fb}/${n}; "
-  if [ "$consec" -ge "$THRESHOLD" ] || { [ "$n" -ge "$WINDOW" ] && [ "$fb" -ge $(((WINDOW + 1) / 2)) ]; }; then
-    overall_bad=1
-    ntfy_alert "⛔ BRIEF LLM DOWN: ${unit}" \
-"${unit} briefs are falling back to DETERMINISTIC — LLM generation is failing. Last ${n} runs: ${o[*]}. Consecutive fallbacks: ${consec} (threshold ${THRESHOLD}). Root cause varies -- check journalctl --user -u ${unit} around the failure time for the actual reason (repetition-loop/persona-leak guard discard, real Ollama timeout, connectivity, etc.) before assuming a specific cause."
+  tr="$(trend_of "${o[@]}")"
+  summary+="${unit}: last ${n}=[${o[*]}] fb=${fb}/${n} trend=${tr}; "
+  if [ "${o[$((n-1))]}" = "FALLBACK" ]; then
+    fell+=("$short")
+    lines+="${short}: fell back on its latest run; ${fb} of last ${n} fell back; trend ${tr}."$'\n'
+  else
+    lines+="${short}: latest run used the model; ${fb} of last ${n} fell back; trend ${tr}."$'\n'
   fi
 done
+if [ "${#fell[@]}" -gt 0 ]; then
+  overall_bad=1
+  ntfy_alert "Brief fallback: ${fell[*]}" "${lines%$'\n'}"
+fi
 
 echo "brief-fallback-monitor: ${summary}"
-if [ "$overall_bad" = "1" ]; then echo "brief-fallback-monitor: MAX-PRIORITY ALERT sent to ntfy/${ALERT_TOPIC}"; else echo "brief-fallback-monitor: healthy — no alert"; fi
+if [ "$overall_bad" = "1" ]; then echo "brief-fallback-monitor: ALERT sent to ntfy/${ALERT_TOPIC}: ${fell[*]}"; else echo "brief-fallback-monitor: no brief fell back on its latest run -- no alert"; fi
 exit 0
