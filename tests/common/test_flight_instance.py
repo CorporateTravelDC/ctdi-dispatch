@@ -226,7 +226,7 @@ WATCHED = _inst("GJS4520", "DCA", "ORD", "2026-10-11T22:00:00Z", "2026-10-12T00:
 def test_guard_accepts_authoritative_free_tail_with_a_timely_inbound():
     prev = _inst("GJS4511", "ORD", "DCA", "2026-10-11T18:30:00Z", "2026-10-11T20:40:00Z")
     d = fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", candidate_registration="N001TS",
-                              prior_hex="000001", sources=["fdps"],
+                              prior_hex="000001", sources=["fids_destination"],
                               candidate_instances=[prev, WATCHED], previous=prev, min_turn_min=35)
     assert d.accepted and d.changed
     assert "45 min spare over a 35-min turn" in d.reason
@@ -259,8 +259,10 @@ def test_guard_rejects_a_tail_filed_on_another_overlapping_instance():
 
 
 def test_guard_previous_leg_rules():
+    # the previous-leg rule (c) applies to a FIDS-only change; a SWIM source showing the
+    # tail on this flight does not need it (2026-10-13, see test_swim_shows_the_flight_*)
     common = dict(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
-                  sources=["fdps"], min_turn_min=35)
+                  sources=["fids_destination"], min_turn_min=35)
     late = _inst("GJS4511", "ORD", "DCA", "2026-10-11T19:30:00Z", "2026-10-11T21:40:00Z")
     d = fi.decide_tail_change(previous=late, **common)
     assert not d.accepted and "15 min short of a 35-min turn" in d.reason
@@ -278,6 +280,20 @@ def test_guard_previous_leg_rules():
     same = fi.decide_tail_change(watched=WATCHED, candidate_hex="000001", prior_hex="000001",
                                  sources=["fdps"])
     assert not same.accepted and not same.changed
+
+
+@pytest.mark.parametrize("src", ["fdps", "tbfm", "tfms"])
+def test_swim_shows_the_flight_is_enough_without_a_previous_leg(src):
+    d = fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
+                              sources=[src], previous=None, min_turn_min=35)
+    assert d.accepted and f"{src.upper()} shows this tail on this flight" in d.reason
+
+
+def test_swim_source_is_still_rejected_when_the_tail_is_flying_another_overlapping_leg():
+    other = _inst("ZZZ9999", "BOS", "MIA", "2026-10-11T21:00:00Z", "2026-10-12T00:30:00Z", status="active")
+    d = fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
+                              sources=["fdps"], candidate_instances=[other], min_turn_min=35)
+    assert not d.accepted and "filed on another instance" in d.reason
 
 
 def test_previous_leg_picks_the_latest_arrival_into_the_origin():

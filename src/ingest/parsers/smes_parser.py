@@ -502,9 +502,25 @@ def _stdds_sector_for(airport: str | None) -> str | None:
     nationwide-unscoped a real problem earlier this same session."""
     if not airport:
         return None
+    # 2026-10-13 (operator): every tracked airport alerts on its ZONE topic (stdds-zdc,
+    # stdds-zny, ...); airports in the priority zones also get their own airport topic
+    # (_stdds_airport_topics). DCA/IAD/BWI used to resolve to their airport code instead
+    # of zdc, so stdds-zdc never fired.
     if airport in _STDDS_REGIONAL_AIRPORTS:
-        return airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
+        return "zdc"
     return _STDDS_ZONE_AIRPORTS.get(airport)
+
+
+# 2026-10-13 (operator): per-airport STDDS topics only inside the priority centers --
+# Washington, New York, Atlanta, and Cleveland (transcon). Other zones: zone topic only.
+_STDDS_AIRPORT_TOPIC_ZONES = frozenset({"zdc", "zny", "zatl", "zob"})
+
+
+def _stdds_airport_topics(airport: str | None, zone: str | None) -> tuple[str, ...]:
+    if not airport or zone not in _STDDS_AIRPORT_TOPIC_ZONES:
+        return ()
+    code = airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
+    return (f"stdds-{code.lower()}",)
 
 
 # -- DC vs. nationwide alert tiering, added 2026-08-05 -----------------------
@@ -607,6 +623,7 @@ def check_surface_alerts(tracks: list[dict]) -> None:
             result = fire_family_alert(
                 "stdds", "stdds_surface", airport, title, detail, dispatch,
                 base_priority=_stdds_priority(airport, 2), sector_override=sector,
+                extra_topics=_stdds_airport_topics(airport, sector),
             )
             _STDDS_SURFACE_DEDUP.record(airport, dedup_key)
             log.info(
@@ -1031,7 +1048,7 @@ def check_incursion_alert(record: dict, previous_bitmask: str | None) -> None:
         result = fire_family_alert(
             "stdds", "stdds_safety", airport, title, detail, dispatch,
             base_priority=_stdds_priority(airport, 3), escalating_only=False,
-            sector_override=sector,
+            sector_override=sector, extra_topics=_stdds_airport_topics(airport, sector),
         )
         log.info(
             "stdds: fire_family_alert for %s safety-logic change (aggregate_fired=%s, zone_fired=%s)",
@@ -1275,7 +1292,9 @@ def check_taxi_alerts(record: dict) -> None:
 
     from shared.sector_coalesce import fire_family_alert
 
-    sector = airport[1:] if airport.startswith("K") and len(airport) == 4 else airport
+    # 2026-10-13: this line used to overwrite `sector` with the bare airport code, so taxi
+    # alerts went to undocumented per-airport topics (stdds-lax, stdds-sea, ...) and the
+    # zone topics never fired. Zone topic + priority-zone airport topic, like the others.
     title = f"STDDS Taxi -- {airport} ground movement"
     detail = f"{airport}: {onsurface_count} aircraft currently taxiing (status=onsurface)"
     dispatch = f"{airport}: {onsurface_count} taxiing"
@@ -1283,6 +1302,7 @@ def check_taxi_alerts(record: dict) -> None:
         result = fire_family_alert(
             "stdds", "stdds_taxi", airport, title, detail, dispatch,
             base_priority=_stdds_priority(airport, 2), sector_override=sector,
+            extra_topics=_stdds_airport_topics(airport, sector),
         )
         _STDDS_TAXI_DEDUP.record(airport, dedup_key)
         log.info(

@@ -87,6 +87,19 @@ MARINE_ONE_SQUAWKS = frozenset({"7700", "5000", "5001"})
 _CRANE_CALLSIGN_RE = re.compile(r"^CRANE\d{2}$")
 EMERGENCY_SQUAWKS = frozenset({"7700", "7500", "7600"})
 
+
+def _vip_local_kind(cs_upper: str, squawk: str | None) -> str:
+    """Label for a local VIP sighting, from what matched (2026-10-13)."""
+    if cs_upper in ("MARINE1", "MARINE2"):
+        return "Marine One" if cs_upper == "MARINE1" else "Marine Two"
+    if _CRANE_CALLSIGN_RE.match(cs_upper):
+        return "CRANE (AF1/AF2 training callsign)"
+    if cs_upper in MARINE_ONE_CALLSIGNS:
+        return f"VIP callsign {cs_upper}"
+    if squawk in MARINE_ONE_SQUAWKS:
+        return f"VIP squawk {squawk}"
+    return "VIP"
+
 # ── ACARS OOOI label table ─────────────────────────────────────────────────────
 
 _ACARS_LABEL_OOOI: dict[str, str] = {
@@ -264,12 +277,15 @@ def _poll_ultrafeeder() -> bool:
                          bool(_CRANE_CALLSIGN_RE.match(cs_upper)) or
                          squawk in MARINE_ONE_SQUAWKS)
         if is_marine_one and distance_nm <= MARINE_ONE_ALERT_RADIUS_NM:
+            # 2026-10-13 (operator): CRANE is a flight identifier (the AF1/AF2 training
+            # callsign family), not Marine One -- name what actually matched.
+            vip_kind = _vip_local_kind(cs_upper, squawk)
             dedup_key = f"marine_one:{icao_hex}"
             if not _local_dedup_check(dedup_key, ALERT_DEDUP_SECS):
                 alt_str = f"{altitude_ft:,}ft" if altitude_ft is not None else "alt unknown"
                 body = (f"{cs_upper or icao_hex} {distance_nm:.1f}nm | {alt_str}\n"
                         f"ICAO: {icao_hex} | squawk: {squawk or '—'}")
-                _fire_ntfy("dispatch", f"Marine One local: {cs_upper or icao_hex}",
+                _fire_ntfy("dispatch", f"{vip_kind} local: {cs_upper or icao_hex}",
                            body, priority=5)
                 try:
                     db.insert_local_airspace_alert(
@@ -285,13 +301,13 @@ def _poll_ultrafeeder() -> bool:
                     )
                     # Also write to hot_alerts for the pusher's awareness
                     db.insert_route_narrative(
-                        f"Marine One LOCAL: {cs_upper or icao_hex} "
+                        f"{vip_kind} LOCAL: {cs_upper or icao_hex} "
                         f"{distance_nm:.1f}nm | {alt_str}",
                         [], [cs_upper or icao_hex],
                     )
                 except Exception as e:
                     log.debug("marine_one_local DB write: %s", e)
-                log.info("Marine One LOCAL: %s %.1fnm alt=%s", cs_upper, distance_nm, altitude_ft)
+                log.info("%s LOCAL: %s %.1fnm alt=%s", vip_kind, cs_upper, distance_nm, altitude_ft)
 
         # Emergency squawk detection (within scan radius)
         if squawk in EMERGENCY_SQUAWKS and distance_nm <= SCAN_RADIUS_NM:

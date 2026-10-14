@@ -184,3 +184,12 @@ follow INSTANCE-v1 instead:
 
 The collector also needs `track_id`, `departure_airport` and `destination_airport` stored per surface event and
 a time-bounded, instance-keyed TBFM lookup.
+
+## Decided 2026-10-13 (operator)
+
+- **Tail changes are strict, based on SWIM.** A change is accepted when FDPS, TBFM or TFMS shows the
+  candidate tail on the watched flight (`SWIM_TAIL_SOURCES`), provided the tail is not filed on another
+  overlapping flight (rule b). The previous-leg rule (c) is not required for SWIM evidence; it still
+  applies to a FIDS-only change. There is no "unverified inbound" acceptance. Today only the FDPS path
+  passes a tail; TBFM/TFMS count as soon as a caller supplies one.
+

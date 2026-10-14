@@ -2019,6 +2019,37 @@ def _derive_train_phase(train: dict, stations: list, dest_stn: dict | None) -> s
     return None
 
 
+def _train_last_event_for_run(entry: dict, train: dict, now: float | None = None) -> str:
+    """The watch's last event, but only if it belongs to THIS run of the train.
+
+    2026-10-13 (operator: no train pushes for hours; 2155 silent all evening):
+    last_event_summary was compared across days. "#2155 LATE 31min" from 10-05
+    made every later run count as already running, so its en-route push never
+    fired again, and "#2154 arrived" matched the same text from 09-28 so arrivals
+    were suppressed. An event recorded before this run's scheduled origin
+    departure (amtraker v3 origSchDep) belongs to an earlier run. Without
+    origSchDep, an event older than 16 h is treated as an earlier run's."""
+    last = entry.get("last_event_summary") or ""
+    at = _iso_epoch(entry.get("last_event_at"))
+    if not last or at is None:
+        return last
+    run_start = _iso_epoch(train.get("origSchDep"))
+    if run_start is not None:
+        return last if at >= run_start - 3600 else ""
+    now = time.time() if now is None else now
+    return last if now - at < 16 * 3600 else ""
+
+
+def _iso_epoch(v) -> float | None:
+    from datetime import datetime
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def _check_train_amtraker(entry: dict, ident: str, base_url: str,
                           watchlist_event_hit) -> None:
     """Query amtraker API for current train status and fire delay/state alerts."""
@@ -2067,7 +2098,7 @@ def _check_train_amtraker(entry: dict, ident: str, base_url: str,
         return
 
     state = (train.get("trainState") or train.get("status") or "").lower()
-    last_event = entry.get("last_event_summary") or ""
+    last_event = _train_last_event_for_run(entry, train)
 
     # Derive current delay from amtraker velocity/status fields if available.
     # Amtraker v3 returns velocityMph, trainTimely, and per-station ETA objects.

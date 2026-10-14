@@ -117,7 +117,29 @@ tolerates it; neither replaces fixing the bug.
 
 ---
 
-## 4. Thermal + load guard -- `scripts/thermal-ingest-guard.py`
+## 4. Load guard -- `scripts/thermal-ingest-guard.py`
+
+User timer `corporatetraveldc-thermal-ingest-guard.timer`, every 2 minutes. **Load only since
+2026-10-13 (operator directive).** Temperature never sheds; it can only hold a resume.
+
+| Step | Condition | Effect |
+|---|---|---|
+| LOCKDOWN | load1 >= 40.0 (`THERMAL_GUARD_LOAD_LOCKDOWN`) | all six SWIM feeds, `ingest-core`, `poller`, `pusher`, `runner` stopped; only `web` stays up |
+| Informational | load1 15-40; CPU above 75 C; any LLM-contention fallback count | nothing (logged) |
+| Resume | after 300 s (`THERMAL_GUARD_RESUME_DWELL_S`) with load1 <= 30 (`THERMAL_GUARD_HOLD_LOAD`), unless the CPU is above 75 C (`THERMAL_GUARD_HOLD_TEMP_C`) | serialized, load-gated restore of the shed set, verified per unit (failure -> p5 "RESTORE FAILED") |
+
+- **No lower temperature gate.** The old `temp < 65 C` resume bar is retired: with the stack shed this
+  box idles at 65.0-65.6 C, so the 2026-10-13 22:05Z trip (load 41.1, during a relay at the top of the
+  hour) could not self-clear with load at 4 and the operator restored by hand at ~22:40Z.
+- **Hysteresis only above 75 C:** once the CPU has gone above 75 C the temperature hold clears below 74 C
+  (`THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C`, 1.0) and the dwell restarts. Load resets the dwell only when
+  clearly past 30 + 3 (`THERMAL_GUARD_RESUME_LOAD_HYSTERESIS`).
+- The 74 C tier-1 and 79 C LOCKDOWN temperature trips are retired; `THERMAL_GUARD_TIER1_TEMP_C`,
+  `TIER2_TEMP_C` and `RESUME_TEMP_C` in `dispatch.env` are ignored.
+- The full-load rollout's own hold-before-restart gate (`scripts/lib/load_gate.sh`, floor 15) is separate.
+- Tests: `tests/scripts/test_load_guard_design.py`.
+
+History (kept for the record):
 
 User timer `corporatetraveldc-thermal-ingest-guard.timer`, every 2 minutes.
 Live `dispatch.env` sets `ENABLED`, `TIER1_TEMP_C`, `TIER2_TEMP_C`,

@@ -41,7 +41,13 @@ VIP_PATTERNS = [
 ]
 
 
-def is_vip(text: str) -> bool:
+def is_vip(text: str, tfr_type: str | None = None) -> bool:
+    """2026-10-13 (ntfy audit): the FAA feed marks VIP TFRs with type "VIP" and a
+    plain place/date description ("Anchorage, AK, Tuesday, October 13, ..."), so the
+    text patterns alone never matched one: all 69 rows were is_vip=0, including 9 active
+    VIP TFRs, and tfr-alert never fired. The FAA's own type field decides first."""
+    if (tfr_type or "").strip().upper() == "VIP":
+        return True
     return any(p.search(text) for p in VIP_PATTERNS)
 
 
@@ -85,7 +91,7 @@ def fetch() -> list[TFRRecord]:
             tfr_id=tfr_id,
             raw_text=vip_text,
             raw_json=json.dumps(item),
-            vip=is_vip(vip_text),
+            vip=is_vip(vip_text, tfr_type),
             effective_start=None,
             effective_end=None,
         ))

@@ -14,6 +14,19 @@ systemd/corporatetraveldc-thermal-ingest-guard.{service,timer}. No root
 needed: /sys/class/thermal/thermal_zone0/temp is world-readable and
 ingest containers are user-level Quadlets.
 
+**CURRENT DESIGN, 2026-10-13 (operator directive): a LOAD guard.**
+  - Shed: only load1 >= THERMAL_GUARD_LOAD_LOCKDOWN (40) -> LOCKDOWN (whole stack except web).
+    Temperature never sheds anything (the 74C tier-1 and 79C LOCKDOWN trips are retired).
+  - Resume, after THERMAL_GUARD_RESUME_DWELL_S (300 s): held only while load1 >
+    THERMAL_GUARD_HOLD_LOAD (30) or the CPU is above THERMAL_GUARD_HOLD_TEMP_C (75C).
+    No lower temperature gate: the old "temp < 65C" resume bar is retired (this box idles
+    at 65.0-65.6C with the stack shed, so the 2026-10-13 22:05Z load trip at 41.1 could not
+    self-clear with load at 4). Hysteresis applies ONLY after the CPU has gone above 75C:
+    the temperature hold then clears below 75 - THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C (1.0).
+  - THERMAL_GUARD_TIER1_TEMP_C / TIER2_TEMP_C / RESUME_TEMP_C in dispatch.env are now ignored.
+  - The rollout's own hold-before-restart gate (scripts/lib/load_gate.sh, floor 15) is separate.
+The history below explains how the earlier thermal tiers came and went.
+
 Added 2026-07-26 after a same-day incident: reseating the Pi into an
 Argon ONE case ran hotter than the prior 40+ hours despite argononed's
 fan confirmed pinned at its rated max RPM (5000) via a manually-pushed
@@ -631,6 +644,9 @@ def main():
     resume_fraction = _float(cfg.get("THERMAL_GUARD_RESUME_FRACTION"), 0.5)
     resume_load = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD"), load_lockdown * resume_fraction)
     resume_dwell = _float(cfg.get("THERMAL_GUARD_RESUME_DWELL_S"), 300)
+    # 2026-10-13: the only resume holds (see the module docstring's CURRENT DESIGN).
+    hold_load = _float(cfg.get("THERMAL_GUARD_HOLD_LOAD"), 30.0)
+    hold_temp = _float(cfg.get("THERMAL_GUARD_HOLD_TEMP_C"), 75.0)
     resume_temp_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C"), 1.0)
     resume_load_hysteresis = _float(cfg.get("THERMAL_GUARD_RESUME_LOAD_HYSTERESIS"), 3.0)
     fallback_trigger_count = int(_float(cfg.get("THERMAL_GUARD_FALLBACK_TRIGGER_COUNT"), 2))
@@ -696,8 +712,10 @@ def main():
     # mode this reversal exists to close. fallback_count is still computed
     # and logged every cycle for visibility -- see the print() below --
     # it just no longer shreds the ingest stack or blocks recovery.
-    temp2_trip = temp >= tier2_temp
-    temp1_trip = temp >= tier1_temp
+    # 2026-10-13 (operator directive): temperature never sheds. It only holds a resume
+    # while the CPU is above hold_temp (see the resume branch below).
+    temp2_trip = False
+    temp1_trip = False
     load_lockdown_trip = load1 is not None and load1 >= load_lockdown
 
     # Informational-only bands -- log for visibility, never shed anything.
@@ -706,9 +724,9 @@ def main():
     # history), so an alert on every 2-minute cycle spent in them would
     # just be noise, unlike the real trip/restore events below.
     if tier == 0:
-        if temp_info_c <= temp < tier1_temp:
-            print(f"{LOG_PREFIX} INFO: temp {temp:.1f}C in watch band "
-                  f"[{temp_info_c:.0f}-{tier1_temp:.0f}C) -- approaching real trigger, no action")
+        if temp >= hold_temp:
+            print(f"{LOG_PREFIX} INFO: temp {temp:.1f}C above {hold_temp:.0f}C -- logged only "
+                  f"(temperature never sheds; it holds a LOCKDOWN resume)")
         if load1 is not None and load_info_min <= load1 < load_lockdown:
             print(f"{LOG_PREFIX} INFO: load1 {load_str} in watch band "
                   f"[{load_info_min:.0f}-{load_lockdown:.0f}) -- normal-to-busy range, no action")
@@ -742,7 +760,8 @@ def main():
             cfg,
             f"LOCKDOWN: {reason} (fan {fan_str}) -- stopped the entire stack except web "
             f"(all 6 SWIM feeds, ingest-core, poller, pusher, runner). "
-            f"Held until load < {resume_load:.0f} and temp < {resume_temp:.0f}C.",
+            f"Resumes after {resume_dwell:.0f}s with load1 <= {hold_load:.0f} "
+            f"(held while the CPU is above {hold_temp:.0f}C).",
             f"{guard_label} -- LOCKDOWN shed", priority=5,
         )
         print(f"{LOG_PREFIX} tripped LOCKDOWN ({reason}) fan={fan_str}")
@@ -776,8 +795,15 @@ def main():
         # fallback_count re-arming indefinitely, holding the whole ingest
         # stack down for hours after temp/load had already recovered.
         # fallback_count no longer blocks recovery, only load and temp do.
-        temp_ok = temp < resume_temp
-        load_ok = load1 is None or load1 < resume_load
+        # 2026-10-13 (operator directive): no lower temperature gate. The temperature hold
+        # engages only above hold_temp and, once engaged, clears below hold_temp minus the
+        # hysteresis; load holds above hold_load.
+        if temp > hold_temp:
+            state["temp_hold"] = True
+        elif state.get("temp_hold") and temp < hold_temp - resume_temp_hysteresis:
+            state["temp_hold"] = False
+        temp_ok = not state.get("temp_hold")
+        load_ok = load1 is None or load1 <= hold_load
         if temp_ok and load_ok:
             below_since = state.get("below_resume_since") or now
             state["below_resume_since"] = below_since
@@ -830,8 +856,8 @@ def main():
                     # existed.
                     ntfy_alert(
                         cfg,
-                        f"{temp:.1f}C / load {load_str} held below {resume_temp}C / "
-                        f"{resume_load:.0f} for {resume_dwell:.0f}s -- restored {restored_desc} "
+                        f"{temp:.1f}C / load {load_str} held at load1 <= {hold_load:.0f} "
+                        f"(CPU not above {hold_temp:.0f}C) for {resume_dwell:.0f}s -- restored {restored_desc} "
                         f"(verified active).",
                         f"{guard_label} -- restored", priority=3,
                     )
@@ -868,11 +894,15 @@ def main():
             # doesn't reset) instead of zeroing it -- only a reading
             # clearly past resume_temp/resume_load (+ hysteresis margin)
             # counts as a genuine reheat/reload and resets progress.
-            temp_clearly_bad = temp >= resume_temp + resume_temp_hysteresis
-            load_clearly_bad = load1 is not None and load1 >= resume_load + resume_load_hysteresis
+            # 2026-10-13: a temperature hold (CPU went above hold_temp) resets the dwell;
+            # load resets it only when clearly past hold_load + its hysteresis.
+            temp_clearly_bad = bool(state.get("temp_hold"))
+            load_clearly_bad = load1 is not None and load1 >= hold_load + resume_load_hysteresis
             if temp_clearly_bad or load_clearly_bad:
                 state["below_resume_since"] = None
-                save_state(state)
+            save_state(state)
+        else:
+            save_state(state)
 
 
 if __name__ == "__main__":

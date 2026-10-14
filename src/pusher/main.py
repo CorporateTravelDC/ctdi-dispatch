@@ -82,6 +82,25 @@ _METAR_MAX_FAILURES     = 3     # suppress after 3 consecutive fetch failures
 _NWS_MAX_AGE_SEC        = 1800  # 30 min -- NWS alert poll cadence is slower
 
 
+_DC_AREA_TFR_FACILITIES = frozenset({"ZDC", "KZDC", "PCT"})
+
+
+def _tfr_fields(t: dict) -> dict:
+    try:
+        return json.loads(t.get("raw_json") or "{}") or {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _tfr_is_dc_area(t: dict) -> bool:
+    return (_tfr_fields(t).get("facility") or "").strip().upper() in _DC_AREA_TFR_FACILITIES
+
+
+def _tfr_where(t: dict) -> str:
+    d = _tfr_fields(t)
+    return " ".join(x for x in ((d.get("state") or "").strip(), (d.get("facility") or "").strip()) if x)
+
+
 def push_vip_tfrs() -> int:
     """
     Check for VIP TFRs not yet notified. Fire ntfy priority 5 for each.
@@ -120,12 +139,22 @@ def push_vip_tfrs() -> int:
         # TFR is ACTIVE is the 2026-08-16 contract above, a deliberate
         # still-active heartbeat for the highest-consequence airspace
         # state on this platform, not rebroadcast spam.
-        if not _tfr_dedup.should_push_periodic(key, h):
-            continue
-
-        # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
-        success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
-        hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
+        # 2026-10-13 (operator): VIP TFRs are NATIONWIDE on tfr-alert. The DC area (ZDC)
+        # keeps the hot path above (p5 + Pushover Emergency + the hourly still-active
+        # heartbeat); elsewhere one p4 tfr-alert per new or changed TFR -- nine active VIP
+        # TFRs nationwide would otherwise be nine sirens an hour.
+        if _tfr_is_dc_area(t):
+            if not _tfr_dedup.should_push_periodic(key, h):
+                continue
+            # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
+            success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
+            hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
+        else:
+            if not _tfr_dedup.should_push(key, h):
+                continue
+            where = _tfr_where(t)
+            success = send_ntfy("tfr-alert", message, priority=4,
+                                title=f"VIP TFR{' ' + where if where else ''}: {t['tfr_id']}")
         if success:
             db.mark_tfr_notified(t["tfr_id"])
             _tfr_dedup.record(key, h)

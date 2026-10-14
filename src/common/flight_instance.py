@@ -706,7 +706,13 @@ def min_turn_minutes(aircraft_class: str = "narrowbody") -> int:
 # plan (aircraftDescription / ADS-B address on the plan). Anything else
 # (airplanes.live, OpenSky, AeroAPI, any tracker) can corroborate but never
 # repoints alone.
-AUTHORITATIVE_TAIL_SOURCES = frozenset({"fids_destination", "fdps"})
+AUTHORITATIVE_TAIL_SOURCES = frozenset({"fids_destination", "fdps", "tbfm", "tfms"})
+# 2026-10-13 (operator: "strict, based off an FDPS, TBFM or TFMS that shows that flight"):
+# a SWIM source showing the candidate tail ON THE WATCHED FLIGHT is itself the proof, so rule
+# (c) (show the previous leg reaches the origin) is not required for these -- FDPS coverage
+# here is DC-area only and an inbound's previous leg is usually not on file. Rule (b) still
+# applies. A FIDS-only change still needs (c). There is no "unverified inbound" acceptance.
+SWIM_TAIL_SOURCES = frozenset({"fdps", "tbfm", "tfms"})
 
 _ACTIVE_STATUSES = frozenset({"active", "airborne", "enroute", "en route", "departed"})
 
@@ -779,8 +785,8 @@ def decide_tail_change(*, watched: FlightInstance, candidate_hex: str | None,
 
     auth = [s for s in srcs if s in AUTHORITATIVE_TAIL_SOURCES]
     if not auth:
-        return _no(f"source not authoritative ({', '.join(srcs) or 'none'}); needs the "
-                   f"destination FIDS tail or the FAA flight plan, never a tracker alone")
+        return _no(f"source not authoritative ({', '.join(srcs) or 'none'}); needs FDPS, TBFM "
+                   f"or TFMS showing this flight, or the destination FIDS tail -- never a tracker alone")
 
     turn = min_turn_min if min_turn_min is not None else min_turn_minutes()
     turn_s = turn * 60.0
@@ -802,7 +808,10 @@ def decide_tail_change(*, watched: FlightInstance, candidate_hex: str | None,
                        f"({inst.status or 'status ?'}, dep {_fmt_utc(inst.best_dep)})")
 
     origin = watched.key.origin or "?"
-    if on_ground_at_origin:
+    swim = [s for s in auth if s in SWIM_TAIL_SOURCES]
+    if swim:
+        why_c = f"{'+'.join(swim).upper()} shows this tail on this flight"
+    elif on_ground_at_origin:
         why_c = f"tail on the ground at {origin}"
     else:
         if previous is None:

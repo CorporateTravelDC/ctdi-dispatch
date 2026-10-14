@@ -720,6 +720,7 @@ def fire_family_alert(
     isolate: bool = False,
     zone_split: bool = True,
     sector_override: str | None = None,
+    extra_topics: tuple[str, ...] = (),
 ) -> dict:
     """
     Convenience wrapper standardizing the "{family}-alerts / {family}-<zone>"
@@ -836,6 +837,24 @@ def fire_family_alert(
         except Exception as e:
             log.error("sector_coalesce: zone fire failed for topic=%s feed=%s: %s",
                       zone_topic, feed_name, e)
+
+    # 2026-10-13: extra_topics -- e.g. STDDS per-airport topics in the priority zones, fired
+    # alongside the zone topic under the same throttle/sanitize rules. A single push each
+    # (not dual): the zone fire above already sent the concise copy to "dispatch".
+    classification["extra_fired"] = []
+    for extra in extra_topics if zone_split else ():
+        if not extra or extra == zone_topic or not _throttle_allows(extra):
+            continue
+        x_title, x_detail = display_title, detail
+        if is_topic_sanitize(extra):
+            x_title, x_detail = _sanitize_text(x_title), _sanitize_text(x_detail)
+        try:
+            from common import ntfy_push
+            if ntfy_push.send(extra, x_detail, title=x_title, priority=priority):
+                classification["extra_fired"].append(extra)
+            _record_fire(extra)
+        except Exception as e:
+            log.error("sector_coalesce: extra fire failed for topic=%s feed=%s: %s", extra, feed_name, e)
 
     return classification
 

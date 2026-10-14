@@ -126,7 +126,9 @@ class TestPushVipTfrs:
             return first, second, third, hp
 
     def test_vip_tfr_second_cycle_suppressed(self, tmp_path):
-        tfrs = [{"tfr_id": "6/1234", "is_vip": 1, "enriched_text": "POTUS TFR"}]
+        # a DC-area VIP TFR: the hot path (2026-10-13: VIP TFRs elsewhere take one p4 instead)
+        tfrs = [{"tfr_id": "6/1234", "is_vip": 1, "enriched_text": "POTUS TFR",
+                 "raw_json": '{"facility": "ZDC", "state": "DC", "type": "VIP"}'}]
         first, second, third, hp = self._run(tmp_path, tfrs)
         assert first == 1, "first sighting must push"
         assert second == 0, "unchanged VIP TFR 30s later must be suppressed"

@@ -56,10 +56,13 @@ def test_rejected_change_keeps_the_hex_and_notes_once(poller):
     pm, hits = poller
     dep = time.time() + 3 * 3600
     entry = _watch(dep)
-    # FAA plan for the watched leg now names 000002, but nothing shows how
-    # that tail reaches DCA (no previous leg on file) -> rule (c) rejects
+    # FAA plan for the watched leg now names 000002, but 000002 is also filed on another
+    # leg that overlaps it -> rule (b) rejects (2026-10-13: FDPS showing this flight is
+    # enough on its own otherwise; there is no "unverified inbound" acceptance)
     db.upsert_flight_event("G-W", "ZZZ", "4520", "KDCA", "KORD", None, None, None, "active",
                            None, None, None, None, _raw("ZZZ4520", "000002", "N001TS"))
+    db.upsert_flight_event("G-O", "ZZZ", "4999", "KBOS", "KMIA", None, dep - 1800, dep + 3 * 3600, "active",
+                           None, None, None, None, _raw("ZZZ4999", "000002", "N001TS"))
     pm._check_flight_fdps_cache(entry, "ZZZ4520")
     pm._check_flight_fdps_cache(entry, "ZZZ4520")
 
@@ -67,7 +70,7 @@ def test_rejected_change_keeps_the_hex_and_notes_once(poller):
     assert stored["hex_id"] == "000001" and stored["registration"] == "N000TS"
     notes = [s for s, d in hits if d.get("watchlist_trigger") == "fdps_tail_change_rejected"]
     assert len(notes) == 1
-    assert "tail change NOT accepted" in notes[0] and "previous leg of the tail unknown" in notes[0]
+    assert "tail change NOT accepted" in notes[0] and "filed on another instance" in notes[0]
 
 
 def test_accepted_change_repoints_with_reason_and_resolves_tail(poller):
@@ -80,16 +83,14 @@ def test_accepted_change_repoints_with_reason_and_resolves_tail(poller):
     # hex-only plan shape for the watched leg ...
     db.upsert_flight_event("G-W", "ZZZ", "4520", "KDCA", "KORD", None, None, None, "active",
                            None, None, None, None, _raw("ZZZ4520", "000002"))
-    # ... and the new tail's inbound into DCA, 75 min before departure
-    db.upsert_flight_event("G-IN", "ZZZ", "4511", "KORD", "KDCA", None, None, dep - 75 * 60, "active",
-                           None, None, None, None, _raw("ZZZ4511", "000002"))
+    # (no previous leg on file: FDPS showing the tail on this flight is the proof, 2026-10-13)
     pm._check_flight_fdps_cache(entry, "ZZZ4520")
 
     stored = next(x for x in db.get_watchlist_entries(entry_type="flight") if x["id"] == entry["id"])
     assert stored["hex_id"] == "000002"
     assert stored["registration"] == "N001TS"      # looked up, not overwritten with None
     change = [(s, d) for s, d in hits if d.get("watchlist_trigger") == "fdps_tail_change"]
-    assert len(change) == 1 and "previous leg ZZZ4511 ORD-DCA" in change[0][1]["reason"]
+    assert len(change) == 1 and "FDPS shows this tail on this flight" in change[0][1]["reason"]
 
 
 def test_plan_for_another_leg_is_ignored(poller):
