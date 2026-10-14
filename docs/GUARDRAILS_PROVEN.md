@@ -142,3 +142,13 @@ failed units: 0
 ```
 
 That is 9 local images, each checked running and as tagged: image id, SBOM digest, commit signature, signed manifest, build inputs, base-image digests, current source.
+
+## Updates without downtime or drift: serialized in-place rollout, guard worktree, frozen main (2026-10-14)
+
+Ledger-backed write-up in the vault: `01-Sources/personal-research/guardrail-proofs/2026-10-14-serialized-in-place-rollout.md`.
+
+- **Serialized in-place rollout** (`scripts/serialized-rollout.sh`, the default full load). Each image is built from the signed tree (or pulled) while the old container keeps serving; `provenance.py check-deploy` must pass; a missing image is never restarted onto; the unit restarts only when load allows (`scripts/lib/load_gate.sh`), and is watched before the next one. One heavy job at a time (`scripts/lib/heavy_lock.sh`). Measured on the 2026-10-14 01:54Z full load: 33 units restarted one at a time, each gap 11-26 s (median 16, 10 s sampling), the rest of the stack up throughout.
+- **Guard worktree.** All edits are staged and tested in a sibling worktree (`ctdi-dispatch-internal-guard`); main stays at its last signed commit, so the rollout (refuses a dirty tree), the stack refresh, the integrity sweep, the drift gate, `push-public.sh` and anything restarted midstream always start from a clean, verified tree. A relay moves the change in one step: `git add -A` and `git diff --cached --binary` in the guard, `git apply --index` in main (`git add -N -A` + `git diff` would drop deletions). A relay that dies midstream leaves main unchanged or exactly staged; the resume relay checks it byte for byte against the guard before signing.
+- **Frozen main while a relay runs.** No tracked edit lands until the relay is confirmed, so the commit that is signed is the commit that is built and pushed. Every full load rebuilds every local image from that commit and pulls every external one, so each relay is also a whole-platform check: no silent rebuild creep, no debt picked up later, one answer to "what is running". 2026-10-14 01:54Z: all eight platform images recorded `source db9cda7 clean`.
+- **Public tree is self-verifying.** Every public push ends with `[push-public]   public tree is self-verifying: clone it and run scripts/verify-manifest.sh`; any outsider can confirm every published file against the signed manifest.
+- **Reproducibility position:** reproducible inputs + verified provenance (`docs/REPRODUCIBLE_BUILDS.md` levels 1-3), bit-for-bit not claimed. The unit of release is the signed commit; tags, if used, name a commit that has already been fully loaded and verified.

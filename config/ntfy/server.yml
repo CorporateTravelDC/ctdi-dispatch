@@ -3,6 +3,7 @@
 base-url: https://ntfy.CHANGE_ME.com
 listen-http: :2586
 cache-file: /var/lib/ntfy/cache.db
+cache-duration: "72h"   # 2026-10-14 (operator): default 12h -- a phone offline overnight missed messages, and 30-day audits were impossible
 auth-file: /var/lib/ntfy/auth.db
 auth-default-access: deny-all
 behind-proxy: true

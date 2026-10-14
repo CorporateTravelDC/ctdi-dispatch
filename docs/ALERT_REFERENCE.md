@@ -63,7 +63,7 @@ for time-based uses (TTL guards, episode gates, still-active heartbeats).
 | `reservations` | `web/routes/webhooks.py` LimoAnywhere (`:220`) | 3 |
 | `calls` | `web/routes/webhooks.py` RingCentral and 3CX | 3 |
 | `approval-gate` | `sudo-approval-gate.sh` (p4; p5 if the command contains `kill`/`ollama-governor` or `APPROVAL_GATE_DR=1`; `APPROVAL_GATE_PRIORITY` overrides); also `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh`, `cowork-coord-24h-check.sh` | 4–5 |
-| `dispatch-alerts` | `check-pat-expiry.sh` only (token from `~/.secrets/ntfy.token`) | 4–5 |
+| ~~`dispatch-alerts`~~ | ~~`check-pat-expiry.sh` only (token from `~/.secrets/ntfy.token`)~~ | ~~4–5~~ | RETIRED 2026-10-14 with the script (`docs/RETIRED.md`) |
 
 `ep-briefs` is reserved; nothing publishes to it.
 
@@ -229,7 +229,7 @@ copies in `/usr/local/libexec/ctdc/`.
 | `brief-fallback-monitor.sh` | `max`, topic `BRIEF_FALLBACK_TOPIC` | |
 | `governor-watch.py` | p3, p5 on FIX FAILED | |
 | `dns-anomaly-watch.py` | p4, p5 on anomaly / denylist gap | |
-| `check-pat-expiry.sh` | `dispatch-alerts` p4/p5 | |
+| ~~`check-pat-expiry.sh`~~ | ~~`dispatch-alerts` p4/p5~~ | RETIRED 2026-10-14 (`scripts/retired-20261014/`) |
 | `sudo-approval-gate.sh` | `approval-gate` | **Deny-only** push (one `Deny` action button); allowing requires `scripts/approve.sh allow <id>` (SSH signature); `db.resolve_approval_request` refuses an unsigned allow |
 | `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** |
 | Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (`hot-alerts` + `ops-health`), `stack-refresh.sh`, `maintenance-dispatch.sh`, `swim-session-health-watch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`OnFailure=` handler on 7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |

@@ -158,15 +158,22 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   for _ in $(seq 1 90); do systemctl --user is-active -q corporatetraveldc-proton-seed.service || break; log "seed upload still running; waiting"; sleep 60; done
   systemctl --user is-active -q corporatetraveldc-proton-seed.service && die "seed upload still running after 90 min; sync skipped"
   log "sync repository -> ${BACKUP_TARGET} (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
-  rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
   soft_k=$(python3 -c "print(int(float('${BW_SOFT}')*1000000/1024))")k
-  podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
-    --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
-    --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
-  rpid=$!
-  guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" </dev/null || true)
-  set +e; wait "$rpid"; src=$?; set -e; rm -rf "$rcdir"
-  log "rate guard: ${guard_json:-<no summary>}"
+  # 2026-10-14: a sync the rate guard stops for a STALL (no bytes moved for 20 min) is retried
+  # once from scratch -- that also covers Proton's transient "Upload file empty" (2003).
+  for attempt in 1 2; do
+    rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
+    podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
+      --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
+      --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
+    rpid=$!
+    set +e
+    guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" </dev/null); grc=$?
+    wait "$rpid"; src=$?; set -e; rm -rf "$rcdir"
+    log "rate guard (attempt ${attempt}): ${guard_json:-<no summary>}"
+    if (( src == 0 )) || (( grc != 4 )) || (( attempt == 2 )); then break; fi
+    log "sync stalled; retrying once"
+  done
   if (( src == 0 )); then
     python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": true, \"rate_guard\": ${guard_json:-null}}" >/dev/null
   else

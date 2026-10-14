@@ -88,7 +88,7 @@ the lines rather than blanking them. Calls fire only at priority 5.
 | ntfy SMTP password, Twilio credentials | `/etc/corporatetraveldc/ntfy-secrets.env` (0600) | injected only into the ntfy container |
 | Platform secrets (admin token, board key, ntfy publish token, Nextcloud app password, feed credentials) | master: `/etc/corporatetraveldc/dispatch-secrets.env` (0600); per service: `/etc/corporatetraveldc/svc/<svc>.env` (root:corporatetraveldc 0640) | each first-party container gets only the names in `scripts/service-env/<svc>.allowlist`; `scripts/rotate-credential.sh` rotates `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD` without printing values |
 | API bearer tokens | SHA-256 hashes in `auth_tokens` | `ctdc-token` (`src/ctdc_token/cli.py`): `create` (default expiry 365 days), `list`, `revoke --prefix`; no `rotate` subcommand. Admin tokens can be scoped to named actions (`scripts/mint-agent-api-token.sh`) |
-| GitHub PAT | `~/.secrets/github_pat.token` (0600) | no rotation reminder timer exists in the repo [the previous "30-day reminder via ntfy" could not be found] |
+| ~~GitHub PAT~~ | ~~`~/.secrets/github_pat.token` (0600)~~ | RETIRED 2026-10-14: nothing used it (git over SSH keys, `gh` on its own login token); expired 2026-09-13; the file is kept empty (value shredded) as a placeholder; see `docs/RETIRED.md` |
 
 Naming and SELinux labelling of host-side secrets:
 `docs/SECRETS_NAMING_AND_ISOLATION.md`.

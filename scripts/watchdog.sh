@@ -180,14 +180,40 @@ log() {
     logger -t "ctdc-watchdog" -p "daemon.${level,,}" "${msg}" 2>/dev/null || true
 }
 
+# 2026-10-14: root scripts publish with the publish-only `root-alerts` token
+# (ops-health + hot-alerts only), read from a root-only file -- never sourced, never on
+# argv (the header goes through a private fd). Before this every send got 403, hidden by
+# `|| true` (5 p5 "System Restart Needed" pages lost in 30 days). A failed send is logged.
+NTFY_ROOT_TOKEN_FILE="${NTFY_ROOT_TOKEN_FILE:-/etc/corporatetraveldc/ntfy-root.token}"
 ntfy_send() {
-    local topic="$1" title="$2" msg="$3" priority="${4:-3}"
-    curl -sf --max-time 5 \
+    local topic="$1" title="$2" msg="$3" priority="${4:-3}" tok="" code fd="" auth=()
+    [[ -r "${NTFY_ROOT_TOKEN_FILE}" ]] && tok="$(head -c 200 "${NTFY_ROOT_TOKEN_FILE}" | tr -d '[:space:]')"
+    if [[ -n "${tok}" ]]; then exec {fd}<<<"Authorization: Bearer ${tok}"; auth=(-H "@/dev/fd/${fd}"); fi
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "${auth[@]}" \
         -H "Title: ${title}" \
         -H "Priority: ${priority}" \
         -H "Tags: gear" \
         -d "${msg}" \
-        "${NTFY_BASE}/${topic}" >/dev/null 2>&1 || true
+        "${NTFY_BASE}/${topic}" 2>/dev/null) || code="000"
+    [[ -n "${fd}" ]] && exec {fd}<&-
+    [[ "${code}" == 2* ]] || log "err" "ntfy send to ${topic} failed (HTTP ${code}): ${title}"
+}
+
+# 2026-10-14: a REPEATING watchdog alert (warning, restart suppressed, system restart
+# needed) is sent once per distinct problem, not every 90 s run. The key is the alert
+# title plus the issue names with ages/counts stripped -- never a timestamp or an age
+# (they change every run). Cleared when the stack is healthy, so the next problem alerts.
+ALERT_STATE_FILE="${ALERT_STATE_FILE:-/run/corporatetraveldc-watchdog-lastalert}"
+issue_key() { printf '%s\n' "${ISSUES[@]}" | sed -E 's/:[0-9]+(min|s)?$//' | sort -u | tr '\n' ','; }
+ntfy_once() {  # ntfy_once <topic> <title> <msg> <priority>
+    local key; key="$2|$(issue_key)"
+    if [[ -f "${ALERT_STATE_FILE}" && "$(cat "${ALERT_STATE_FILE}" 2>/dev/null)" == "${key}" ]]; then
+        log "info" "alert unchanged since last send -- not re-sending: $2"
+        return 0
+    fi
+    ntfy_send "$@"
+    printf '%s' "${key}" > "${ALERT_STATE_FILE}" 2>/dev/null || true
 }
 
 user_ctl() {
@@ -433,7 +459,18 @@ check_system_services() {
     done
 
     # DNS readiness target
-    if systemctl is-active --quiet "${DNS_TARGET}" 2>/dev/null; then
+    # 2026-10-14: dns-stack-ready.target does not exist on this box, so this warned on
+    # every run for nothing. Use the target if it exists; otherwise the real test: does the
+    # local resolver answer?
+    if ! systemctl cat "${DNS_TARGET}" >/dev/null 2>&1; then
+        if [[ -n "$(dig +short +time=2 +tries=1 example.com @127.0.0.1 2>/dev/null | head -1)" ]]; then
+            log "info" "  [OK] local resolver answers (${DNS_TARGET} not defined here)"
+        else
+            log "warn" "  [WARN] local resolver at 127.0.0.1 did not answer"
+            ISSUES+=("dns_resolver_no_answer")
+            DO_WARN_ONLY=1
+        fi
+    elif systemctl is-active --quiet "${DNS_TARGET}" 2>/dev/null; then
         log "info" "  [OK] ${DNS_TARGET}"
     else
         log "warn" "  [WARN] ${DNS_TARGET} not active"
@@ -615,11 +652,38 @@ if isinstance(feeds, dict):
 if not isinstance(feeds, list):
     sys.exit(0)
 
+# 2026-10-14: a REST fallback feed is stale BY DESIGN while its push feed is current
+# (the poller skips the REST pull; scripts/failover-kickover-guardrail.py owns that
+# backstop). Only flag the REST feed when its push feed is stale too.
+PUSH_COVERS = {"nws": ("push:nws", 300), "notam": ("push:fns", 300), "amtrak": ("push:amtrak", 660)}
+
+def _age(feed):
+    ts = (feed.get("last_updated") or feed.get("fetched_at") or feed.get("updated_at") or feed.get("timestamp"))
+    if ts is None:
+        return None
+    try:
+        if isinstance(ts, (int, float)):
+            return now - float(ts)
+        import datetime
+        return now - datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+push_age = {}
+for feed in feeds:
+    if isinstance(feed, dict):
+        n = (feed.get("name") or feed.get("feed_name") or feed.get("id") or "").lower()
+        if n.startswith("push:"):
+            push_age[n] = _age(feed)
+
 for feed in feeds:
     if not isinstance(feed, dict):
         continue
 
     name = (feed.get("name") or feed.get("feed_name") or feed.get("id") or "unknown").lower()
+    cover = PUSH_COVERS.get(name)
+    if cover and push_age.get(cover[0]) is not None and push_age[cover[0]] <= cover[1]:
+        continue
     last_ts = (feed.get("last_updated") or feed.get("fetched_at")
                or feed.get("updated_at") or feed.get("timestamp"))
 
@@ -842,6 +906,7 @@ report() {
 
     if (( count == 0 )); then
         log "info" "All checks passed -- stack healthy"
+        rm -f "${ALERT_STATE_FILE}" 2>/dev/null || true
         return
     fi
 
@@ -855,7 +920,7 @@ report() {
             # tailscaled) is never unattended -- see the file header. Alert
             # loudly with the exact command to run; do NOT touch anything.
             log "warn" "Full stack restart warranted but system-level restarts require a manual run -- alerting only"
-            ntfy_send "${NTFY_HOT}" \
+            ntfy_once "${NTFY_HOT}" \
                 "Watchdog -- System Restart Needed (manual run required)" \
                 "Issues: ${summary}. This needs a human: sudo ${0} --allow-system-restart" \
                 5
@@ -863,7 +928,7 @@ report() {
             local rem
             rem=$(cooldown_remaining)
             log "warn" "Full stack restart warranted but in cooldown (${rem}s remaining) -- skipping"
-            ntfy_send "${NTFY_OPS}" \
+            ntfy_once "${NTFY_OPS}" \
                 "Watchdog -- Restart Suppressed" \
                 "Stack restart warranted but in ${rem}s cooldown. Issues: ${summary}" \
                 3
@@ -884,7 +949,7 @@ report() {
             local rem
             rem=$(cooldown_remaining)
             log "warn" "Container restart warranted but in cooldown (${rem}s remaining)"
-            ntfy_send "${NTFY_OPS}" \
+            ntfy_once "${NTFY_OPS}" \
                 "Watchdog -- Restart Suppressed" \
                 "Container restart in ${rem}s cooldown. Issues: ${summary}" \
                 2
@@ -902,7 +967,7 @@ report() {
         fi
 
     elif (( DO_WARN_ONLY )); then
-        ntfy_send "${NTFY_OPS}" \
+        ntfy_once "${NTFY_OPS}" \
             "Watchdog -- Warning" \
             "Non-critical issues detected: ${summary}" \
             2

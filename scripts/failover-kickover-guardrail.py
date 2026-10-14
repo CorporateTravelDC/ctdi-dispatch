@@ -131,6 +131,31 @@ def shed_reason(guard_state: dict, now: float, restore_grace_s: float) -> str | 
     return None
 
 
+TRIGGER_VOLUME = "corporatetraveldc-triggers"
+
+
+def host_trigger_dir() -> Path:
+    """The trigger directory THE POLLER reads, as seen from the host.
+
+    2026-10-14: this script runs on the host, where config.trigger_dir() is
+    /run/corporatetraveldc/triggers -- a host directory the poller container never
+    sees. The poller reads the podman volume `corporatetraveldc-triggers` mounted at
+    /run/corporatetraveldc. Since the 2026-09-18 cutover every forced refresh_feed
+    from here landed in the wrong directory (64 unread files, 236 rows left
+    in_flight), so the failover backstop never fired. Resolution order: an explicit
+    DISPATCH_TRIGGER_DIR_HOST, then the volume's host mountpoint + /triggers."""
+    explicit = os.environ.get("DISPATCH_TRIGGER_DIR_HOST")
+    if explicit:
+        return Path(explicit)
+    import subprocess
+    r = subprocess.run(["podman", "volume", "inspect", TRIGGER_VOLUME, "--format", "{{.Mountpoint}}"],
+                       capture_output=True, text=True, timeout=30)
+    mount = r.stdout.strip()
+    if r.returncode != 0 or not mount:
+        raise RuntimeError(f"cannot resolve the poller's trigger volume {TRIGGER_VOLUME}: {r.stderr.strip()[:200]}")
+    return Path(mount) / Path(config.trigger_dir()).name
+
+
 def log(msg: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {LOG_PREFIX} {msg}", flush=True)
@@ -191,7 +216,7 @@ def check_one(poller_feed: str, push_feed: str, interval: int,
         return True
 
     trigger_id = str(uuid.uuid4())
-    trigger_dir = Path(config.trigger_dir())
+    trigger_dir = host_trigger_dir()
     trigger_dir.mkdir(parents=True, exist_ok=True)
     payload = {"id": trigger_id, "type": "refresh_feed",
                "payload": {"feed_name": poller_feed}}

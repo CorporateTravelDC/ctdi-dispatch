@@ -66,7 +66,7 @@ nothing yet.
 | `nwws-oi.token` | NWS | NWWS-OI ingest | `ctdc_secret_nws_ingest_t` | `user_home_t` | pending |
 | `ntfy-fcm.token` | ntfy | push delivery (FCM) | `ctdc_secret_ntfy_fcm_t` | `user_home_t` | pending |
 | `remote-admin-agentic.token` | CTDI | skills -- dispatch admin API | `ctdc_secret_ctdi_skills_t` | `user_home_t` | pending |
-| `github_pat.token` | GitHub | git push / `gh` | `ctdc_secret_gh_push_t` | `user_home_t` | pending |
+| ~~`github_pat.token`~~ | ~~GitHub~~ | ~~git push / `gh`~~ | ~~`ctdc_secret_gh_push_t`~~ | ~~`user_home_t`~~ | RETIRED 2026-10-14: unused (git pushes over SSH; `gh` uses its own OAuth login), expired 2026-09-13; deleted on GitHub; local file kept empty (value shredded) as a placeholder |
 | `board.key` | CTDI | `scripts/populate-secrets.sh` (board master key source) | `ctdc_secret_ctdi_board_t` | `user_home_t` | pending |
 | `protonmailbridge_smtp_ntfy_dispatch.token` | ProtonMail Bridge | ntfy -> SMTP, dispatch topics | `ctdc_secret_pmb_ntfy_dispatch_t` | `user_home_t` | pending |
 | `protonmailbridge_smtp_ntfy_health.token` | ProtonMail Bridge | ntfy -> SMTP, health topics | `ctdc_secret_pmb_ntfy_health_t` | `user_home_t` | pending |

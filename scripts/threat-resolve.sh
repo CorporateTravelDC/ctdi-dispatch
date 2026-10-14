@@ -48,11 +48,17 @@ run() {
 
 ntfy_send() {
     local topic="$1" title="$2" msg="$3"
-    curl -sf --max-time 5 \
+    # 2026-10-14: publish-only root-alerts token from a root-only file, header via a private fd
+    # (never on argv). Without it every send got 403, hidden by `|| true`.
+    local _tok="" _fd="" _auth=() _tf="${NTFY_ROOT_TOKEN_FILE:-/etc/corporatetraveldc/ntfy-root.token}"
+    [[ -r "${_tf}" ]] && _tok="$(head -c 200 "${_tf}" | tr -d '[:space:]')"
+    if [[ -n "${_tok}" ]]; then exec {_fd}<<<"Authorization: Bearer ${_tok}"; _auth=(-H "@/dev/fd/${_fd}"); fi
+    curl -sf --max-time 5 "${_auth[@]}" \
         -H "Title: ${title}" \
         -H "Priority: 3" \
         -d "${msg}" \
         "${NTFY_BASE}/${topic}" >/dev/null 2>&1 || true
+    [[ -n "${_fd}" ]] && exec {_fd}<&-; return 0
 }
 
 if [[ $EUID -ne 0 ]]; then

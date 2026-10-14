@@ -88,3 +88,37 @@ def test_dry_run_does_no_work_and_leaves_stdin_alone(tmp_path):
     assert not calls.exists()                                  # no podman/borg/rclone call at all
     assert not (tmp_path / "ledger.jsonl").exists()            # no ledger write
     assert not list((tmp_path / ".local/state/ctdc-backup").glob("stage.*"))
+
+
+def test_a_stalled_sync_is_stopped_and_reported_as_a_stall():
+    # 2026-10-14: four uploads sat at 6% with no bytes moving for ~2 h, holding the heavy-job turn
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("rg2", Path(__file__).resolve().parents[2] / "scripts/backup/rate_guard.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    t = [0.0]
+    stopped = []
+    res = m.guard(1, "sock", "lo", 2.5, 3.0, interval=60, window=3,
+                  counter=lambda: 0, setter=lambda mb: True, stopper=lambda: stopped.append(1),
+                  sleeper=lambda s: t.__setitem__(0, t[0] + s), is_alive=lambda: not stopped,
+                  progress=lambda: 240_000_000, stall_s=1200, clock=lambda: t[0])
+    assert stopped and res["stall"] and res["actions"][-1]["reason"] == "stall"
+
+
+def test_moving_bytes_is_not_a_stall():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("rg3", Path(__file__).resolve().parents[2] / "scripts/backup/rate_guard.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    t = [0.0]; n = [0]
+    def alive():
+        n[0] += 1
+        return n[0] < 60                                   # 60 min of samples, then rclone exits
+    b = [0]
+    def prog():
+        b[0] += 1_000_000
+        return b[0]
+    res = m.guard(1, "sock", "lo", 2.5, 3.0, interval=60, window=3, counter=lambda: 0,
+                  setter=lambda mb: True, stopper=lambda: None, sleeper=lambda s: t.__setitem__(0, t[0] + s),
+                  is_alive=alive, progress=prog, stall_s=1200, clock=lambda: t[0])
+    assert not res.get("stall") and not res["stopped"]

@@ -146,6 +146,7 @@ its profile held no sign-in.
 | `BACKUP_IFACE` | wld0 | interface the hard cap watches |
 
 - Each sync's ledger entry carries the guard's summary (highest 30 s average, actions).
+- **Stall stop and one retry (2026-10-14).** If rclone's own transferred-bytes counter has not grown for 20 minutes (`rate_guard.py --stall-min`), the guard asks rclone to quit and reports `stall: true` (exit 4); the backup retries the sync once from scratch, which also covers Proton's transient "Upload file empty" (2003). On 2026-10-14 a hung sync (four uploads at 6%, no bytes moving) held the heavy-job turn from 04:40Z until it was stopped by hand at ~06:40Z.
 - **One heavy job at a time** (`scripts/lib/heavy_lock.sh`): the nightly backup, the weekly restore test, the
   full-load rollout and the stack refresh take one shared turn; the second waits (up to 2 h) and logs whom it waits
   on. Root cause: the 2026-10-12 03:40Z backup started six minutes into a relay's full load (load 20.5 on 4 cores).

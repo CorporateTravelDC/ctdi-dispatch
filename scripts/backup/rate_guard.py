@@ -13,7 +13,13 @@ Operator: "2.5 MB/s soft with a 3 MB/s hard cap" (the 2026-10-12 uplink ramp mea
 
   rate_guard.py --pid PID --rc-sock PATH --iface wld0 --soft-mb 2.5 --hard-mb 3
 Prints one JSON summary line at the end (max window average, actions); exit 0 normally,
-3 when it had to stop rclone. Never needs a secret.
+3 when it had to stop rclone for bandwidth, 4 when it stopped a STALLED rclone.
+
+Stall (2026-10-14): the 10-14 03:47Z sync hung for ~2 h with four uploads at 6% and no bytes
+moving (rclone's own idle timeout never fired on the Proton backend), holding the heavy-job
+turn all night. If rclone's own transferred-bytes counter (rc core/stats, not the interface,
+which carries other traffic) has not grown for --stall-min minutes, the guard asks rclone to
+quit and reports stall=true; ctdi-backup.sh then retries the sync once. Never needs a secret.
 """
 from __future__ import annotations
 
@@ -50,8 +56,17 @@ def set_rate(sock: str, mb_s: float, rclone: str = "rclone") -> bool:
     return r.returncode == 0
 
 
+def rclone_bytes(sock: str, rclone: str = "rclone") -> int | None:
+    try:
+        r = subprocess.run([rclone, "rc", "--unix-socket", sock, "core/stats"], capture_output=True, text=True, timeout=20)
+        return int(json.loads(r.stdout).get("bytes", 0)) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
 def guard(pid: int, sock: str, iface: str, soft: float, hard: float, interval: float = 10, window: int = 3,
-          counter=None, setter=None, stopper=None, sleeper=time.sleep, is_alive=None) -> dict:
+          counter=None, setter=None, stopper=None, sleeper=time.sleep, is_alive=None,
+          progress=None, stall_s: float = 1200, clock=time.monotonic) -> dict:
     counter = counter or (lambda: tx_bytes(iface))
     setter = setter or (lambda mb: set_rate(sock, mb))
     def _stop():
@@ -62,6 +77,8 @@ def guard(pid: int, sock: str, iface: str, soft: float, hard: float, interval: f
             os.kill(pid, signal.SIGTERM)
     stopper = stopper or _stop
     is_alive = is_alive or (lambda: alive(pid))
+    progress = progress or (lambda: rclone_bytes(sock))
+    last_bytes, last_move = None, clock()
     steps = [soft, round(soft * 0.8, 3), round(soft * 0.5, 3)]
     level, rates, actions, max_avg, calm = 0, [], [], 0.0, 0
     last = counter()
@@ -70,6 +87,15 @@ def guard(pid: int, sock: str, iface: str, soft: float, hard: float, interval: f
         now = counter()
         rates.append((now - last) / interval / 1_000_000)
         last = now
+        b = progress()
+        if b is not None:
+            if last_bytes is None or b > last_bytes:
+                last_bytes, last_move = b, clock()
+            elif clock() - last_move >= stall_s:
+                stopper()
+                actions.append({"action": "stopped", "reason": "stall", "bytes": b,
+                                "stalled_min": round((clock() - last_move) / 60, 1)})
+                return {"max_window_mb_s": round(max_avg, 3), "actions": actions, "stopped": True, "stall": True}
         if len(rates) < window:
             continue
         avg = sum(rates[-window:]) / window
@@ -106,10 +132,11 @@ def main(argv=None) -> int:
     ap.add_argument("--hard-mb", type=float, default=3.0)
     ap.add_argument("--interval", type=float, default=10)
     ap.add_argument("--window", type=int, default=3)
+    ap.add_argument("--stall-min", type=float, default=20)
     a = ap.parse_args(argv)
-    res = guard(a.pid, a.rc_sock, a.iface, a.soft_mb, a.hard_mb, a.interval, a.window)
+    res = guard(a.pid, a.rc_sock, a.iface, a.soft_mb, a.hard_mb, a.interval, a.window, stall_s=a.stall_min * 60)
     print(json.dumps({"soft_mb_s": a.soft_mb, "hard_mb_s": a.hard_mb, **res}, sort_keys=True), flush=True)
-    return 3 if res["stopped"] else 0
+    return 4 if res.get("stall") else (3 if res["stopped"] else 0)
 
 
 if __name__ == "__main__":
