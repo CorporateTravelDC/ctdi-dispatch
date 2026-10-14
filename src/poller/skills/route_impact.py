@@ -2,6 +2,7 @@
 route-impact — SR-1 + SR-2 compliant.
 Fallback: structured raw TFR/NAS impact text written to hot_alerts if Ollama unavailable.
 """
+import json
 import os
 import argparse, logging, sys, time
 import httpx
@@ -37,11 +38,40 @@ Given active TFRs and NAS programs, produce a concise ground-route impact assess
 Maximum 250 words. Direct and operational. No preamble."""
 
 
+
+def _tfr_text(t: dict) -> dict:
+    try:
+        d = json.loads(t.get("raw_json") or "{}") or {}
+    except (TypeError, ValueError):
+        d = {}
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    def fmt(e):
+        if not e:
+            return "?"
+        u = datetime.fromtimestamp(float(e), timezone.utc)
+        return f"{u:%Y-%m-%d %H:%M}Z / {u.astimezone(ZoneInfo('America/New_York')):%H:%M} ET"
+    return {"text": " ".join(str(d.get("description") or "").split()),
+            "window": f"{fmt(t.get('effective_start'))} to {fmt(t.get('effective_end'))}"}
+
+
+def _dc_vip(t: dict) -> bool:
+    """2026-10-14 (operator): the route narrative is for DC-area VIP TFRs only."""
+    try:
+        fac = (json.loads(t.get("raw_json") or "{}").get("facility") or "").strip().upper()
+    except (TypeError, ValueError, AttributeError):
+        fac = ""
+    return bool(t.get("is_vip")) and fac in ("ZDC", "KZDC", "PCT")
+
 def build_inputs() -> dict:
     tfrs = db.get_active_tfrs()
     nas = db.get_active_nas_programs()
     return {
-        "tfrs": sorted([{"id": t["tfr_id"], "vip": t["is_vip"]} for t in tfrs], key=lambda x: x["id"]),
+        # 2026-10-14 (operator): a DC-area VIP TFR carries its own FAA text and window, so the
+        # route narrative is about where it actually is -- the prompt used to get IDs only.
+        "tfrs": sorted([{"id": t["tfr_id"], "vip": _dc_vip(t), **(_tfr_text(t) if _dc_vip(t) else {})}
+                        for t in tfrs], key=lambda x: x["id"]),
         "nas": sorted([{"id": p["program_id"], "type": p["type"], "facility": p["facility"]} for p in nas], key=lambda x: x["id"]),
     }
 
@@ -65,7 +95,8 @@ def _vip_user_message(inputs: dict) -> str:
     nas_lines = [f"  {p['type']} at {p['facility']}" for p in inputs["nas"]] or ["  None active"]
     return (
         f"VIP/POTUS TFRs active ({len(vip)}):\n" +
-        "\n".join([f"  VIP TFR: {t['id']}" for t in vip] or ["  None"]) + "\n\n"
+        "\n".join([f"  VIP TFR {t['id']}: {t.get('text') or 'no FAA text'} ({t.get('window') or 'window unknown'})"
+                   for t in vip] or ["  None"]) + "\n\n"
         f"Other active TFRs: {len(inputs['tfrs']) - len(vip)} (non-VIP, not listed)\n\n"
         "NAS delay programs:\n" + "\n".join(nas_lines)
     )
@@ -169,31 +200,18 @@ def main(force: bool = False) -> None:
         log.info("%s: %s — %d VIP TFRs", SKILL_NAME, status, len(vip_ids))
 
         if narrative and vip_ids:
-            # VIP path only — same reasoning as tfr_enrichment: routine non-VIP TFR cycling
-            # changes all TFR IDs every cycle, defeating dedup. Non-VIP route state is in DB.
+            # The route hot-alert (restored 2026-10-14, operator: "I want the hot alert when
+            # there's a TFR that affects the route"). DC-area VIP TFRs only.
             title = f"Route Impact — VIP ACTIVE"
             if status == "fallback":
                 title += " [FALLBACK]"
-            # Stable key: VIP TFR IDs only
-            h = content_hash(
-                "|".join(t["id"] for t in sorted(inputs["tfrs"], key=lambda x: x["id"]) if t["vip"])
-            )
-            # 2026-08-16 drift audit: hot=True bypasses dedup entirely per
-            # PushDedup's contract, so should_push always returned True and
-            # the else-branch "suppressed (dedup, same VIP TFR set <1h)" was
-            # unreachable -- every skill run during an active VIP TFR fired
-            # a fresh priority-5 hot-alert. Singleton "route-impact" slot +
-            # VIP-set hash as content is the right shape; it just needs hot
-            # off so a changed VIP set still fires immediately while the
-            # same set is suppressed for the 1h window, exactly what the
-            # else-branch log line always claimed.
-            # 2026-09-03 (forward-only push_dedup redesign): PERIODIC api,
-            # deliberately -- the hourly re-page while the SAME VIP TFR
-            # set stays active is this block's documented 2026-08-16
-            # contract (still-active heartbeat for POTUS-grade airspace),
-            # matching pusher/main.py's push_vip_tfrs.
-            if _route_dedup.should_push_periodic("route-impact", h):
-                _ntfy.send("hot-alerts", narrative, title=title, priority=5,
+            # Stable key: the DC VIP TFRs' own ids + FAA text -- never the narrative or a stamp
+            h = content_hash("|".join(f"{t['id']}:{t.get('text', '')}"
+                                      for t in sorted(inputs["tfrs"], key=lambda x: x["id"]) if t["vip"]))
+            # 2026-10-14 (operator): one alert per VIP set, with the times -- no hourly re-page.
+            windows = "; ".join(f"{t['id']} {t.get('window', '?')}" for t in inputs["tfrs"] if t["vip"])
+            if _route_dedup.should_push("route-impact", h):
+                _ntfy.send("hot-alerts", f"{windows}\n\n{narrative}", title=title, priority=5,
                            tags="car,rotating_light")
                 _route_dedup.record("route-impact", h)
             else:

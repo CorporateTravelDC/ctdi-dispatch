@@ -121,8 +121,10 @@ class TestPushVipTfrs:
             pm._tfr_dedup._path = lambda: tmp_path / "pusher-tfr-dedup.json"  # type: ignore
             first = pm.push_vip_tfrs()
             second = pm.push_vip_tfrs()  # same cycle content -- must dedup now
-            tfrs[0]["enriched_text"] = "changed narrative"
-            third = pm.push_vip_tfrs()  # changed content -- fires again
+            tfrs[0]["enriched_text"] = "[02:23Z] changed narrative"
+            assert pm.push_vip_tfrs() == 0   # 2026-10-14: a new enrichment stamp is not a change
+            tfrs[0]["raw_json"] = '{"facility": "ZDC", "description": "changed", "mod_abs_time": "2"}'
+            third = pm.push_vip_tfrs()  # the TFR itself changed -- fires again
             return first, second, third, hp
 
     def test_vip_tfr_second_cycle_suppressed(self, tmp_path):
@@ -132,7 +134,7 @@ class TestPushVipTfrs:
         first, second, third, hp = self._run(tmp_path, tfrs)
         assert first == 1, "first sighting must push"
         assert second == 0, "unchanged VIP TFR 30s later must be suppressed"
-        assert third == 1, "changed enrichment must break through"
+        assert third == 1, "a changed TFR must break through"
         # 2 hot_push calls per fired cycle (tfr-alert + hot-alerts)
         assert hp.call_count == 4
 

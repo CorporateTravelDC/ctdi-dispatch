@@ -82,30 +82,64 @@ _METAR_MAX_FAILURES     = 3     # suppress after 3 consecutive fetch failures
 _NWS_MAX_AGE_SEC        = 1800  # 30 min -- NWS alert poll cadence is slower
 
 
-_DC_AREA_TFR_FACILITIES = frozenset({"ZDC", "KZDC", "PCT"})
+def _tfr_window(t: dict) -> str:
+    """'Active 14:00Z / 10:00 ET Mon 10-14 to 16:00Z / 12:00 ET Mon 10-14' (UTC + ET)."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    def fmt(e):
+        if not e:
+            return "?"
+        u = datetime.fromtimestamp(float(e), timezone.utc)
+        et = u.astimezone(ZoneInfo("America/New_York"))
+        return f"{u:%H:%M}Z / {et:%H:%M} ET {et:%a %m-%d}"
+    return f"Active {fmt(t.get('effective_start'))} to {fmt(t.get('effective_end'))}"
 
 
-def _tfr_fields(t: dict) -> dict:
+def _vip_tfr_alert(t: dict) -> tuple[str, str, str]:
+    """(dedup key, content hash, message) for one VIP TFR: its own FAA text and window.
+    The hash is the TFR's own text + FAA mod time only -- never a narrative or a stamp."""
     try:
-        return json.loads(t.get("raw_json") or "{}") or {}
+        d = json.loads(t.get("raw_json") or "{}") or {}
     except (TypeError, ValueError):
-        return {}
+        d = {}
+    vip_text = " ".join(str(d.get("description") or "").split()) or "VIP/POTUS TFR active."
+    message = f"VIP TFR {t['tfr_id']}: {vip_text}\n{_tfr_window(t)}"[:1000]
+    h = content_hash(f"{t['tfr_id']}|{vip_text}|{d.get('mod_abs_time') or d.get('mod_date') or ''}")
+    return t["tfr_id"], h, message
 
 
-def _tfr_is_dc_area(t: dict) -> bool:
-    return (_tfr_fields(t).get("facility") or "").strip().upper() in _DC_AREA_TFR_FACILITIES
+VIP_CUTOVER_MARKER = "pusher-vip-cutover-2026-10-14"
 
 
-def _tfr_where(t: dict) -> str:
-    d = _tfr_fields(t)
-    return " ".join(x for x in ((d.get("state") or "").strip(), (d.get("facility") or "").strip()) if x)
+def vip_cutover_baseline() -> int:
+    """2026-10-14 (operator: "kill the current VIP first ... clean cutover"): on the first
+    start of this pusher, record every VIP TFR active at that moment as already alerted
+    under the new scheme, WITHOUT pushing, then write a one-time marker. Only VIP TFRs
+    that appear (or that the FAA changes) after the cutover alert. Runs once, ever."""
+    marker = pathlib.Path(config.state_dir()) / VIP_CUTOVER_MARKER
+    if marker.exists():
+        return 0
+    n = 0
+    for t in db.get_active_tfrs():
+        if t["is_vip"]:
+            key, h, _ = _vip_tfr_alert(t)
+            _tfr_dedup.record(key, h)
+            n += 1
+    marker.write_text(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} silenced {n} active VIP TFR(s)\n")
+    log.info("VIP cutover: %d active VIP TFR(s) recorded as already alerted (no push)", n)
+    return n
 
 
 def push_vip_tfrs() -> int:
     """
-    Check for VIP TFRs not yet notified. Fire ntfy priority 5 for each.
-    Dedup: same TFR suppressed for 1 hour unless content changed.
+    Check for VIP TFRs not yet notified. Fire ntfy priority 5 for each, once,
+    with its active window; again only if the FAA changes the TFR.
     Returns count pushed.
+
+    2026-10-14 (operator): the push is the VIP TFR's own text, nothing else (the
+    DC ground-route narrative is route_impact's own hot alert). The dedup content
+    is the TFR's own text only -- the enrichment narrative starts with a fresh [HH:MMZ] stamp every run,
+    so hashing it re-fired every VIP TFR on every enrichment run (10-13/14).
     """
     tfrs = db.get_active_tfrs()
     pushed = 0
@@ -114,47 +148,16 @@ def push_vip_tfrs() -> int:
         if not t["is_vip"]:
             continue
 
-        narrative = t["enriched_text"] or (
-            f"VIP/POTUS TFR active: {t['tfr_id']}. "
-            "Check dispatch for routing impact."
-        )
-        message = narrative[:1000]
-        key = t["tfr_id"]
-        h = content_hash(message)
+        key, h, message = _vip_tfr_alert(t)
 
-        # 2026-08-16 drift audit: this passed hot=True ("VIP = always hot"),
-        # but PushDedup's contract says hot=True BYPASSES dedup entirely --
-        # should_push always returned True, so with PUSH_INTERVAL=30s an
-        # active VIP TFR re-fired 2x ntfy p5 + a Pushover Emergency (siren,
-        # auto-retrying) every 30 seconds for its whole active window. The
-        # `hot` flag exists for callers that conditionally skip dedup (e.g.
-        # wx >=30kt); "the pushes themselves are hot/priority-5" was never a
-        # reason to pass it. Docstring contract ("same TFR suppressed for 1
-        # hour unless content changed") is exactly plain should_push, so the
-        # per-TFR slot + enrichment-text content key now actually gate:
-        # first sighting fires immediately, changed enrichment fires
-        # immediately, otherwise one re-push per hour while active.
-        # 2026-09-03 (forward-only push_dedup redesign): stays on the
-        # explicit PERIODIC api -- the hourly re-push while a VIP/POTUS
-        # TFR is ACTIVE is the 2026-08-16 contract above, a deliberate
-        # still-active heartbeat for the highest-consequence airspace
-        # state on this platform, not rebroadcast spam.
-        # 2026-10-13 (operator): VIP TFRs are NATIONWIDE on tfr-alert. The DC area (ZDC)
-        # keeps the hot path above (p5 + Pushover Emergency + the hourly still-active
-        # heartbeat); elsewhere one p4 tfr-alert per new or changed TFR -- nine active VIP
-        # TFRs nationwide would otherwise be nine sirens an hour.
-        if _tfr_is_dc_area(t):
-            if not _tfr_dedup.should_push_periodic(key, h):
-                continue
-            # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
-            success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
-            hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
-        else:
-            if not _tfr_dedup.should_push(key, h):
-                continue
-            where = _tfr_where(t)
-            success = send_ntfy("tfr-alert", message, priority=4,
-                                title=f"VIP TFR{' ' + where if where else ''}: {t['tfr_id']}")
+        # 2026-10-14 (operator): one alert with the times -- first sighting or a changed
+        # TFR only, no hourly re-fire while active (was should_push_periodic).
+        if not _tfr_dedup.should_push(key, h):
+            continue
+
+        # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
+        success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
+        hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
         if success:
             db.mark_tfr_notified(t["tfr_id"])
             _tfr_dedup.record(key, h)
@@ -734,6 +737,10 @@ async def main() -> None:
         db.init_db_v19()
         db.init_db_v20()
     log.info("corporatetraveldc pusher started")
+    try:
+        vip_cutover_baseline()
+    except Exception as e:
+        log.error("VIP cutover baseline failed: %s", e)
 
     while not shutdown.is_set():
         try:

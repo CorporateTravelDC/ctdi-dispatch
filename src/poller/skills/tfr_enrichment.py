@@ -2,6 +2,7 @@
 tfr-enrichment — SR-1 + SR-2 compliant.
 Fallback: structured raw TFR/METAR summary pushed to ntfy if Ollama unavailable.
 """
+import json
 import os
 import argparse, logging, sys, time
 import httpx
@@ -59,13 +60,18 @@ def _push_ntfy(text: str, title: str, priority: int = 3, stable_key: str = "") -
     _tfr_skill_dedup.record(key, h)
 
 
+
 def build_inputs() -> dict:
     tfrs = db.get_active_tfrs()
     metars = db.get_metar_snapshot()
     nas = db.get_active_nas_programs()
     return {
         "tfr_ids": sorted([
-            {"id": t["tfr_id"], "vip": t["is_vip"],
+            {"id": t["tfr_id"],
+             # 2026-10-14 (operator): the VIP narrative is route_impact's (DC-area VIP TFRs,
+             # with the TFR's own text); this skill writes its summary only -- no VIP model
+             # call, no VIP alert of its own.
+             "vip": False,
              "start": t["effective_start"], "end": t["effective_end"]}
             for t in tfrs
         ], key=lambda x: x["id"]),
