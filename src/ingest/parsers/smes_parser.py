@@ -1153,10 +1153,15 @@ def write_surface_movement_event(record: dict) -> bool:
             destination_airport=record.get("destination_airport"),
             last_seen=record["last_seen"],
         )
-        return True
     except Exception as e:
         log.error("stdds: DB write error for surface movement event %s: %s", record.get("track_id"), e)
         return False
+    # append-only research log (DCA/IAD/BWI); never blocks the slot-table write above
+    try:
+        db.append_surface_event_log(record)
+    except Exception as e:
+        log.warning("stdds: surface event log write failed for %s: %s", record.get("track_id"), e)
+    return True
 
 
 # 2026-08-30 (operator directive, following up on the surface-events-are-
@@ -1177,12 +1182,26 @@ _SMES_OOOI_MAP: dict[tuple[str, str], str] = {
 }
 
 
-def _match_watchlist_flight(identifier: str | None) -> dict | None:
-    """Find an active flight watchlist entry matching this identifier
-    (callsign), case-insensitive. Same matching convention as
-    tbfm_parser.py's/tfms_parser.py's own copies (kept file-local rather
-    than shared -- each ingest parser already does this)."""
-    if not identifier:
+def _departure_side_record(rec: dict) -> dict:
+    """TDES clearances and TDLS datalink messages happen at the ORIGIN before pushback:
+    present them to the instance matcher as a departure-side event at that airport.
+    2026-10-15 (docs-parity swarm): 1491bf5a changed _match_watchlist_flight to take a
+    record, and these two callers still passed the bare callsign, so every TDES/TDLS
+    watch hit raised "'str' object has no attribute 'get'" from the full load on."""
+    return {"callsign": rec.get("callsign"), "airport": rec.get("airport"), "event": "spotout",
+            "event_time": rec.get("event_time") or rec.get("message_time") or rec.get("last_seen"),
+            "departure_airport": rec.get("airport"), "destination_airport": rec.get("destination_airport")}
+
+
+def _match_watchlist_flight(record: dict) -> dict | None:
+    """The active flight watch this surface event belongs to, or None.
+    2026-10-14 (flight-instance resolver): no longer callsign-only. SMES sees
+    one airport per message -- for a shuttle or an out-and-back that is both
+    legs' endpoint -- so the event's side (departure events at the watch's
+    origin, arrival events at its destination), its time against the watch's
+    scheduled departure, and the message's own route when it carries one
+    decide (common.flight_instance.match_watch_surface_event)."""
+    if not record.get("callsign"):
         return None
     try:
         from shared.watchlist import get_active_entries
@@ -1190,11 +1209,11 @@ def _match_watchlist_flight(identifier: str | None) -> dict | None:
     except Exception as e:
         log.error("stdds: watchlist lookup failed: %s", e)
         return None
-    ident_upper = identifier.upper().strip()
-    for entry in entries:
-        if entry["identifier"].upper() == ident_upper:
-            return entry
-    return None
+    from common.flight_instance import match_watch_surface_event
+    return match_watch_surface_event(
+        entries, record.get("callsign"), airport=record.get("airport"), event=record.get("event"),
+        event_time=record.get("event_time"), dep_airport=record.get("departure_airport"),
+        dest_airport=record.get("destination_airport"))
 
 
 _SMES_OOOI_DEDUP = PushDedup("smes_oooi", dedup_secs=1800)
@@ -1228,7 +1247,7 @@ def check_smes_watchlist_oooi(record: dict) -> None:
     if phase is None:
         return
 
-    entry = _match_watchlist_flight(record.get("callsign"))
+    entry = _match_watchlist_flight(record)
     if entry is None:
         return
 
@@ -1687,7 +1706,7 @@ def handle_tdes_apds_record(rec: dict) -> bool:
         return written > 0
 
     if kind == "tdes_departure":
-        entry = _match_watchlist_flight(rec.get("callsign"))
+        entry = _match_watchlist_flight(_departure_side_record(rec))
         dc_relevant = (rec["airport"] in SMES_AIRPORTS
                        or rec.get("destination_airport") in SMES_AIRPORTS)
         if entry is None and not dc_relevant:
@@ -1739,7 +1758,7 @@ def handle_tdes_apds_record(rec: dict) -> bool:
         return stored
 
     if kind == "tdls":
-        entry = _match_watchlist_flight(rec.get("callsign"))
+        entry = _match_watchlist_flight(_departure_side_record(rec))
         dc_relevant = (rec["airport"] in SMES_AIRPORTS
                        or rec.get("destination_airport") in SMES_AIRPORTS)
         if entry is None and not dc_relevant:

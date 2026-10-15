@@ -1,6 +1,6 @@
 # Causal reasoning + auto-selfheal roadmap
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:45Z / 2026-10-14 21:45 ET.)
 
 Operator directive (2026-08-23): the second-brain ontology/semantic layer
 should serve both the knowledge base (research, OSINT, entity tracking,
@@ -43,7 +43,40 @@ Personal-export sources (LinkedIn, Uber/Lyft) join the same graph
 automatically once real tagged notes exist; no source-specific linking
 code was built.
 
-## Phase 2 — NOT STARTED. Register operational components as entities.
+Live 2026-10-14 22:13Z compile (added 2026-10-15): 130 authored edges
+(`leans_on` 50, `derives_from` 42, `reutilizes` 38) and 60,783
+`preceded_by` edges.
+
+## Geometric reasoning tiers — SHIPPED 2026-09-22/28; causal tier empty live (added 2026-10-15)
+
+A separate numbering, not this roadmap's Phases 2 and 3: the geometric
+design (`docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md`, AS-BUILT section)
+added three more relations to the same `semantic_note_derivations` table,
+all computed in `compile_layer()`:
+
+- `proximate_to` / `kind='geometric'` (`assign_geometry()`): flights and
+  trains named in notes, paired by place and time. 1,212,120 edges live.
+- `statistically_associated` / `kind='causal'`
+  (`assign_causal_associations()`): entity pairs that co-occur above
+  chance over a 30-day window, with lift and N; labelled "associated",
+  never "causes". **0 edges in every compile seen 2026-10-14/15**
+  (1,166 on 2026-10-06).
+- `member_of_cluster` / `kind='cluster'` (`assign_clusters()`): groups
+  of 3+ entities linked at lift >= 1.0. **0 live**, because it consumes
+  the causal tier.
+
+Why the causal tier is empty (code finding, not fixed here): the function
+reads `semantic_note_instance_refs.note_ts` with
+`datetime.fromisoformat()` (`compile.py:1130`), and every stored value
+(2,959 rows) is an RFC 1123 WebDAV mtime such as
+`Wed, 30 Sep 2026 08:56:58 GMT`, which that parser rejects, so no row
+enters the window. The rest of the module parses the same strings with
+`email.utils.parsedate_to_datetime()` (`_resolve_note_ts()`). Parsed as dates,
+the newest instance ref is 2026-10-13 22:13Z and 784 of the 2,959 rows
+are inside the 30-day window, so the parse is the only blocker. Until fixed, `--trace` returns derivation, chronological and
+geometric edges only.
+
+## Phase 2 — NOT STARTED (still true 2026-10-15). Register operational components as entities.
 
 `second_brain.knowledge_graph.lexicon.LEXICON` already has a `system`
 subtype with 27 platform components (SWIM, FDPS, TFMS, STDDS, ITWS, TBFM,
@@ -57,7 +90,7 @@ is the prerequisite for Phase 3. (`ollama.service`, named in the original
 plan, was retired at the 2026-08-27 llama.cpp cutover and no longer
 applies.)
 
-## Phase 3 — END GOAL, NOT STARTED. Auto-selfheal consulting the graph.
+## Phase 3 — END GOAL, NOT STARTED (still true 2026-10-15). Auto-selfheal consulting the graph.
 
 Ambition: `scripts/thermal-ingest-guard.py` and `scripts/watchdog.sh`
 (installed and run as `/usr/local/libexec/ctdc/watchdog.sh`), or a shared

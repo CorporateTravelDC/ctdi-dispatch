@@ -19,13 +19,22 @@ real tool calls and real time before Claude is useful again.
 
 ## How it works
 
-`scripts/context_hook.py` reads the hook payload Claude Code passes on stdin,
-sums `inputTokens + cacheReadInputTokens + outputTokens`, and:
+~~`scripts/context_hook.py` reads the hook payload Claude Code passes on stdin,
+sums `inputTokens + cacheReadInputTokens + outputTokens`, and:~~
+(corrected 2026-10-15: the Stop payload carries no usage block, only
+`session_id` / `transcript_path` / `stop_hook_active`, so that sum was always
+0 and the hook stayed silent from 2026-08-16 until the 2026-10-03 fix. It now
+reads the tail (last 4 MB) of the session transcript at `transcript_path` and
+takes the most recent assistant message's usage: input + cache-read +
+cache-creation tokens; output tokens are not context,
+`scripts/context_hook.py:43-100`. Then:)
 
 - Below 800,000 tokens: does nothing, exits 0.
 - At/above 800,000 (`WARN_LIMIT`): saves a dispatch-state snapshot every
   turn and shows a one-line `systemMessage` saying whether Claude Code will
   compact by itself (always exits 0, never blocks a turn).
+- Every decision is logged to `~/.config/Claude/dispatch_context_guardian.log`
+  (rotated to `.log.1` past 200 KB) (added 2026-10-15).
 
 The hook does NOT compact -- no hook can run `/compact`. Claude Code's own
 auto-compact does, at the auto-compact window. On a 1M-window model the
@@ -35,17 +44,20 @@ the hook's message flags a missing window or disabled auto-compact.
 `scripts/save_dispatch_state.py` polls the dispatch platform's Tier-0 GET
 endpoints (`/healthz`, `/api/v1/feeds`, `/api/v1/tfr`, `/api/v1/weather`,
 `/api/v1/alerts`, `/api/v1/cps`, `/api/v1/amtrak`) plus the Tier-1
-`/api/v1/runsheet` (requires `DISPATCH_ADMIN_TOKEN` in the environment, warns
+`/api/v1/runsheet` (requires `DISPATCH_ADMIN_TOKEN` in the environment, or any cert-tier token, since the route is Tier 1, warns
 and skips if absent rather than failing the whole snapshot), and writes the
 result to `~/.config/Claude/dispatch_state_snapshot.json`. It also snapshots
-the `~/.ssh/cowork_ed25519.pub` public key if present, so the restore step
+the ~~`~/.ssh/cowork_ed25519.pub`~~ `~/.ssh/<login user>_ed25519.pub` (corrected 2026-10-15, `save_dispatch_state.py:121`) public key if present, so the restore step
 can detect and flag a key change/regeneration across a compact.
 
 `scripts/restore_dispatch_state.py` reads that snapshot and prints a
 formatted situational brief -- service health, feed status, CPS, active
 TFRs, NWS alerts, weather, Amtrak, runsheet, and the SSH-key check. A
 `SessionStart` hook with matcher `compact|resume` runs it automatically
-after every compaction.
+after every compaction. (2026-10-15, this box: both hooks are registered in
+user-scope `~/.claude/settings.json`, pointing at the private checkout's copy
+of these scripts, and `autoCompactWindow` is 900000. The last snapshot was
+written 2026-10-14 22:42Z.)
 
 ## Install
 
@@ -96,7 +108,7 @@ default is a tailnet address.
 > `http://100.x.x.x:8000`
 > (`scripts/save_dispatch_state.py:34`), and the public mirror does not
 > rewrite it to any `ops.example.com` placeholder --
-> `scripts/scrub-public-tree.py:140` substitutes the literal
+> ~~`scripts/scrub-public-tree.py:140`~~ `scripts/scrub-public-tree.py:279` (line corrected 2026-10-15) substitutes the literal
 > `100.x.x.x` to `100.x.x.x`, so the public copy reads
 > `http://100.x.x.x:8000`. Separately, `ops.example.com` was
 > **retired 2026-08-02** and is hard-404'd by hostname in
@@ -104,7 +116,16 @@ default is a tailnet address.
 > would be pointing at a dead name regardless of scrubbing. Nothing needs
 > configuring on this box; the default already resolves correctly here.
 
-## Known limitations (not yet fixed)
+## Known limitations (~~not yet fixed~~ formatters fixed, corrected 2026-10-15)
+
+> **Corrected 2026-10-15:** the formatter mismatches below have been fixed in
+> `scripts/restore_dispatch_state.py`: `fmt_cps` reads `score`/`label`,
+> `fmt_feeds` reads `feed_name` and derives health from `age_seconds` vs
+> `stale_threshold_seconds` plus `error`, `fmt_tfr` reads `tfr_id`/`is_vip`,
+> `fmt_weather` reads `station` and falls back to the parsed `ceiling_ft`,
+> `visibility_sm`, `wind_kt` and `precip_code` when there is no raw METAR
+> text, and `fmt_amtrak` reads `summary` and `trains`. The table is kept as
+> the record of what was wrong.
 
 - `restore_dispatch_state.py`'s display formatters assume field names that
   don't match this platform's actual `/api/v1/*` JSON response shapes -- the

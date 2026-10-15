@@ -52,8 +52,11 @@ def _tfr_text(t: dict) -> dict:
             return "?"
         u = datetime.fromtimestamp(float(e), timezone.utc)
         return f"{u:%Y-%m-%d %H:%M}Z / {u.astimezone(ZoneInfo('America/New_York')):%H:%M} ET"
-    return {"text": " ".join(str(d.get("description") or "").split()),
-            "window": f"{fmt(t.get('effective_start'))} to {fmt(t.get('effective_end'))}"}
+    window = f"{fmt(t.get('effective_start'))} to {fmt(t.get('effective_end'))}"
+    areas = d.get("area_windows_utc") or []      # 2026-10-14: per-area windows from the FAA detail record
+    if len(areas) > 1:
+        window += "; area windows " + ", ".join(f"{fmt(a)} to {fmt(b)}" for a, b in areas)
+    return {"text": " ".join(str(d.get("description") or "").split()), "window": window}
 
 
 def _dc_vip(t: dict) -> bool:

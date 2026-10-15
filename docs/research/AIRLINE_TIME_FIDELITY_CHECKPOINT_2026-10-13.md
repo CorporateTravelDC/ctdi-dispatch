@@ -120,3 +120,11 @@ United's reported taxi-out at BWI is 11–13 min for 80% of flights (10th–90th
 3. Find out why Delta's ON = filed share changed on 2026-09-29.
 4. Taxi analysis by hour (spec question 4) once ramp-exit samples allow it.
 5. Next checkpoint after two more weeks of collection.
+
+**Status 2026-10-14.** Steps 1 and 2 are done.
+- The collector pairs surface events by INSTANCE-v1 (`common.flight_instance.v1_pair_instance`, shared with the code resolver) and records `track_id` and the route for every event.
+- An append-only `surface_event_log` (DCA/IAD/BWI, `pg_schema/0075`, 120-day retention) keeps the ramp exits the slot table overwrites.
+- The TBFM lookup is bounded to the instance's arrival window.
+- Rows carry `pairing_rule` and per-kind rejection reasons. The rollup counts `instance_v1_flights`, so the windows show how much of the data uses the new rule.
+
+Step 3 (Delta ON = filed, 2026-09-29) and step 4 (taxi by hour) wait for the next checkpoint (~2026-10-27).

@@ -1,0 +1,8 @@
+[Unit]
+Description=External dead-man switch: ping healthchecks.io (success when local /healthz is ok, /fail otherwise)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/healthcheck-ping.sh
+TimeoutStartSec=90
+Nice=5

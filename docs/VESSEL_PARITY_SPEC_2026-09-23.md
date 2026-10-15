@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** The 2026-09-28 status below still holds: the four AIS/UTM Quadlets are still `.disabled`, none is installed or running, and `vessel_events` and vessel watchlist rows are both 0.
+
 # Vessel Parity Spec — 2026-09-23
 
 > **⚠ STATUS 2026-09-28: CODE PRESENT, NOT DEPLOYED.**

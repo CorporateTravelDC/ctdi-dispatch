@@ -2,6 +2,12 @@
 
 _v1.3.0 — Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET._
 
+_Corrections in place 2026-10-15 01:00Z / 2026-10-14 21:00 ET (main `1491bf5a` plus the
+batch staged for the next relay). This is not a new version; v1.4.0 is still to be cut. Three
+v1.3.0 statements had stopped being true (flight lookup, load protection, VIP airspace
+alerts). They are struck through below with the correction beside them, and "Since v1.3.0"
+lists what changed._
+
 Replaces the v1.2.0 text (2026-08-02, reverified 2026-08-11), whose demo and
 "nothing left to switch on" claims had stopped being true. Every factual
 statement below was checked against the running platform; statements that
@@ -16,9 +22,14 @@ changes that affects a traveler.
 
 It reads the same federal data streams air traffic and airline operations
 use (the FAA's SWIM network) and runs on private, dedicated hardware owned
-by [operator LLC]. Flight positions and identities are resolved from
+by [operator LLC]. ~~Flight positions and identities are resolved from
 the platform's own radio receiver and its own copy of FAA data, not from
-consumer flight apps.
+consumer flight apps.~~ (corrected 2026-10-15: flight positions and identities
+are resolved first from the platform's own radio receiver and its own copy of
+FAA data. Since 2026-10-09 01:06Z (2026-10-08 21:06 ET), when none of those
+has the aircraft, the platform may ask one outside flight-tracking community
+service (airplanes.live) for position and identity only. It never asks about aircraft on the FAA's privacy list, and
+that answer never decides a takeoff or landing time.)
 
 ---
 
@@ -39,6 +50,23 @@ consumer flight apps.
   platform no longer reports a landing or gate arrival from radio position
   alone, and FAA surface data at DCA, Dulles and BWI outranks
   airline-posted times.
+
+### Since v1.3.0 (added 2026-10-15, not yet a release)
+
+- **Encrypted off-site backups.** The platform is backed up every night,
+  encrypted before it leaves the box, to an off-site store (live since
+  2026-10-12). A weekly restore test (first run 2026-10-18 05:30Z) will restore a backup to prove it can be read. Privacy-listed aircraft data
+  stays on the box.
+- **The right flight, not just the right number.** A watched flight is now
+  matched by its specific trip (date, origin and destination), not only by
+  its flight number. Today's leg is no longer confused with another leg that
+  uses the same number.
+- **One alert per presidential/VIP airspace restriction.** Each VIP
+  restriction alerts once, with the FAA's own text and its active window in
+  UTC and Eastern time, and again only if the FAA changes it.
+- **Tail numbers come only from FAA data.** The tail number on a flight
+  is taken only from FAA SWIM data, never from airport arrival boards. The
+  boards supply gate and baggage information.
 
 ---
 
@@ -71,17 +99,23 @@ last 30 seconds):
 
 **Airspace restrictions (TFRs)** are polled from the FAA every five minutes;
 restrictions tied to presidential or VIP movement are flagged at the
-highest priority. (87 TFRs were active nationwide at verification.)
+highest priority. (87 TFRs were active nationwide at verification; 73 on
+2026-10-15.) (Added 2026-10-15: since 2026-10-14 each VIP restriction
+alerts once, with the FAA's own text and active window, and again only if
+the FAA changes it. A VIP restriction in the DC area also produces one
+ground-route impact alert for drivers.)
 
 [UNVERIFIED: the earlier claims that this data is "20–40 minutes ahead of
 anything a consumer app sees" and that ground-stop alerts fire "within
 seconds of the FAA order" have not been measured; no latency benchmark
 exists in the repository. They describe design intent, not a measured result.]
 
-The platform protects itself under heavy load: when the hardware runs hot
-or overloaded it pauses some data streams and restarts them automatically
-once conditions recover. During those pauses the affected streams are not
-monitored.
+The platform protects itself under heavy load: ~~when the hardware runs hot
+or overloaded it pauses some data streams~~ (corrected 2026-10-15: since
+2026-10-13 only processing overload pauses data streams; temperature alone
+no longer pauses anything, it only delays the restart while the processor
+is very hot) and restarts them automatically once conditions recover.
+During those pauses the affected streams are not monitored.
 
 ### Rail — Amtrak
 
@@ -119,6 +153,12 @@ scheduled arrival.
 ---
 
 ## Current status (2026-10-06)
+
+> **Update 2026-10-15:** still true as written. The six FAA streams, the NWS
+> feed, Amtrak, METAR, TFR, NAS status and the arrival boards were all fresh at
+> 00:55Z. The public demo still replays data recorded before 2026-08-14, and
+> its refresh job is still off. Also live now: encrypted off-site backups
+> (since 2026-10-12).
 
 - **Live:** all six FAA SWIM streams, the NWS push feed, Amtrak, METAR,
   TFR, NAS status and airport arrival boards; the coordinator dashboard

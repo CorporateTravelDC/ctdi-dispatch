@@ -2894,7 +2894,7 @@ def upsert_flight_event(flight_id: str, airline: str | None,
                 origin=excluded.origin,
                 destination=excluded.destination,
                 aircraft_type=excluded.aircraft_type,
-                departure_time=excluded.departure_time,
+                departure_time=COALESCE(flight_events.departure_time, excluded.departure_time),
                 arrival_time=excluded.arrival_time,
                 status=excluded.status,
                 position_lat=excluded.position_lat,
@@ -6998,6 +6998,64 @@ def upsert_surface_movement_event(track_id: str, airport: str, callsign: str | N
         """, (track_id, airport, callsign, event, status, runway,
               latitude, longitude, altitude_ft, event_time,
               departure_airport, destination_airport, last_seen))
+
+
+# ── Append-only surface event log (2026-10-14, pg_schema/0075) ──────────────
+# surface_movement_events keeps only a track's LATEST event, so a ramp exit is
+# overwritten by the takeoff. The time-fidelity research needs both. DC
+# airports and OOOI-relevant events only; one row per distinct event.
+SURFACE_EVENT_LOG_AIRPORTS = frozenset({"KDCA", "KIAD", "KBWI"})
+SURFACE_EVENT_LOG_EVENTS = frozenset({"spotout", "runwayin", "runwayout", "off", "on", "spotin"})
+_SURFACE_EVENT_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS surface_event_log (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    airport              TEXT NOT NULL,
+    track_id             TEXT NOT NULL,
+    callsign             TEXT,
+    event                TEXT NOT NULL,
+    status               TEXT,
+    runway               TEXT,
+    event_time           TEXT NOT NULL,
+    departure_airport    TEXT,
+    destination_airport  TEXT,
+    logged_at            TEXT NOT NULL,
+    UNIQUE (airport, track_id, event, event_time)
+)"""
+_surface_event_log_ready = False
+
+
+def append_surface_event_log(record: dict) -> bool:
+    """Log one SMES event if it is in scope (DC airport, OOOI-relevant event,
+    has an event time). Duplicates are ignored. Returns True if in scope.
+    On Postgres the table comes from pg_schema/0075; SQLite creates it here."""
+    global _surface_event_log_ready
+    from common import db_backend
+    airport, event, et = record.get("airport"), (record.get("event") or "").lower(), record.get("event_time")
+    if airport not in SURFACE_EVENT_LOG_AIRPORTS or event not in SURFACE_EVENT_LOG_EVENTS or not et:
+        return False
+    with conn() as c:
+        if not _surface_event_log_ready and db_backend.backend() != "postgres":
+            c.execute(_SURFACE_EVENT_LOG_DDL)
+        _surface_event_log_ready = True
+        c.execute("""
+            INSERT INTO surface_event_log
+                (airport, track_id, callsign, event, status, runway, event_time,
+                 departure_airport, destination_airport, logged_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (airport, track_id, event, event_time) DO NOTHING
+        """, (airport, record["track_id"], record.get("callsign"), event, record.get("status"),
+              record.get("runway"), et, record.get("departure_airport"),
+              record.get("destination_airport"), record.get("last_seen") or _iso_cutoff(0)))
+    return True
+
+
+def prune_surface_event_log(days: int = 120) -> int:
+    """surface_event_log.logged_at is TEXT ISO."""
+    from common import db_backend
+    with conn() as c:
+        if db_backend.backend() != "postgres":
+            c.execute(_SURFACE_EVENT_LOG_DDL)
+        return c.execute("DELETE FROM surface_event_log WHERE logged_at < ?", (_iso_cutoff(days),)).rowcount
 
 
 ONSURFACE_RECENCY_MIN = int(config.get("STDDS_ONSURFACE_RECENCY_MIN", "15") or 15)

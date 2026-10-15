@@ -18,7 +18,9 @@ import json
 import logging
 import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import requests
 
@@ -28,6 +30,17 @@ log = logging.getLogger(__name__)
 
 TFR_URL = "https://tfr.faa.gov/tfrapi/getTfrList"
 FETCH_TIMEOUT = 15  # seconds
+
+# 2026-10-14 (operator: VIP pushes showed "Active ? to ?"): the list feed carries no
+# times -- a VIP entry's description is dates only ("Monroe, MI, Thursday, October 15,
+# 2026 through ... Local") -- so effective_start/end were always NULL. The per-NOTAM
+# detail record has them: Not/dateEffective + Not/dateExpire (the overall window) and
+# TFRAreaGroup/aseTFRArea/ScheduleGroup (each area's window), all in UTC (confirmed:
+# the FAA's own text for 6/9607 reads "1715 UTC (1315 EDT)" for dateEffective
+# 2026-10-15T17:15:00). Fetched for VIP TFRs only, once per (NOTAM, FAA mod time).
+TFR_DETAIL_URL = "https://tfr.faa.gov/download/detail_{}.xml"
+DETAIL_TIMEOUT = 10  # seconds
+_detail_cache: dict[str, tuple[str, tuple]] = {}   # notam_id -> (mod_abs_time, parsed window)
 
 # ── VIP pattern matching ───────────────────────────────────────────────────────
 VIP_PATTERNS = [
@@ -61,6 +74,56 @@ class TFRRecord:
     effective_end: float | None
 
 
+def _utc_epoch(text: str | None) -> float | None:
+    """'2026-10-15T17:15:00' (FAA detail, UTC, no zone suffix) -> epoch seconds."""
+    if not text or not text.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def parse_detail_window(xml_text: str) -> tuple[float | None, float | None, list[list[float]]]:
+    """(start, end, area windows) from a TFR detail XML (XNOTAM-Update). The overall
+    window is Not/dateEffective..Not/dateExpire; area windows come from each
+    ScheduleGroup (deduplicated, sorted). Missing pieces come back None / []."""
+    root = ET.fromstring(xml_text.lstrip("\ufeff").encode("utf-8"))
+    nots = root.findall(".//Not")
+    if not nots:
+        return None, None, []
+    n = nots[0]
+    start = _utc_epoch(n.findtext("dateEffective"))
+    end = _utc_epoch(n.findtext("dateExpire"))
+    windows = set()
+    for sg in n.iter("ScheduleGroup"):
+        s, e = _utc_epoch(sg.findtext("dateEffective")), _utc_epoch(sg.findtext("dateExpire"))
+        if s is not None and e is not None:
+            windows.add((s, e))
+    return start, end, [list(w) for w in sorted(windows)]
+
+
+def fetch_detail_window(notam_id: str, mod: str) -> tuple[float | None, float | None, list[list[float]]]:
+    """Window for one TFR, from cache when the FAA mod time is unchanged. A fetch or
+    parse failure returns (None, None, []) and is not cached, so the next poll retries."""
+    hit = _detail_cache.get(notam_id)
+    if hit and hit[0] == mod:
+        return hit[1]
+    try:
+        resp = requests.get(TFR_DETAIL_URL.format(notam_id.replace("/", "_")), timeout=DETAIL_TIMEOUT,
+                            headers={"User-Agent": "corporatetraveldc/1.0", "Accept": "application/xml"})
+        resp.raise_for_status()
+        window = parse_detail_window(resp.content.decode("utf-8-sig", "replace"))
+    except Exception as e:
+        log.warning("TFR detail %s: window unavailable (%s)", notam_id, e)
+        return None, None, []
+    _detail_cache[notam_id] = (mod, window)
+    return window
+
+
 def fetch() -> list[TFRRecord]:
     """
     Fetch and parse the FAA TFR JSON list. Returns a list of TFRRecord.
@@ -86,14 +149,22 @@ def fetch() -> list[TFRRecord]:
         description = item.get("description", "")
         tfr_type = item.get("type", "")
         vip_text = f"{tfr_type} {description}"
+        vip = is_vip(vip_text, tfr_type)
+
+        start = end = None
+        if vip and item.get("notam_id"):
+            start, end, windows = fetch_detail_window(
+                str(item["notam_id"]), str(item.get("mod_abs_time") or item.get("mod_date") or ""))
+            if windows:
+                item = {**item, "area_windows_utc": windows}
 
         records.append(TFRRecord(
             tfr_id=tfr_id,
             raw_text=vip_text,
             raw_json=json.dumps(item),
-            vip=is_vip(vip_text, tfr_type),
-            effective_start=None,
-            effective_end=None,
+            vip=vip,
+            effective_start=start,
+            effective_end=end,
         ))
 
     return records

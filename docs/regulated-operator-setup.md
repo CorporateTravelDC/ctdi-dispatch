@@ -1,6 +1,8 @@
 # Addendum: Email, Phone Call & Regulated-Industry Operator Setup
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (ntfy image, credential locations by name and
+mode only, firewalld zones); rows for the demo, root-alert and backup credentials are added below.
 
 Covers ntfy email and phone-call notifications on a self-hosted instance, and
 security guidance for operators under regulated-industry requirements
@@ -88,6 +90,9 @@ the lines rather than blanking them. Calls fire only at priority 5.
 | ntfy SMTP password, Twilio credentials | `/etc/corporatetraveldc/ntfy-secrets.env` (0600) | injected only into the ntfy container |
 | Platform secrets (admin token, board key, ntfy publish token, Nextcloud app password, feed credentials) | master: `/etc/corporatetraveldc/dispatch-secrets.env` (0600); per service: `/etc/corporatetraveldc/svc/<svc>.env` (root:corporatetraveldc 0640) | each first-party container gets only the names in `scripts/service-env/<svc>.allowlist`; `scripts/rotate-credential.sh` rotates `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD` without printing values |
 | API bearer tokens | SHA-256 hashes in `auth_tokens` | `ctdc-token` (`src/ctdc_token/cli.py`): `create` (default expiry 365 days), `list`, `revoke --prefix`; no `rotate` subcommand. Admin tokens can be scoped to named actions (`scripts/mint-agent-api-token.sh`) |
+| Demo API admin token (`DEMO_ADMIN_TOKEN`, added 2026-10-15) | `/etc/corporatetraveldc/demo-secrets.env`, read only by the `corporatetraveldc-demo-api` container (its own `EnvironmentFile=`; not in any `scripts/service-env/*.allowlist`) | separate from `DISPATCH_ADMIN_TOKEN`; gates the demo profile admin routes in `src/demo/demo_api.py`. `rotate-credential.sh` does not cover it |
+| Root alert token (added 2026-10-15) | `/etc/corporatetraveldc/ntfy-root.token` (root:root 0600) | a publish-only ntfy token for the `root-alerts` user, used since 2026-10-14 by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert) through a private fd, never argv. Before that every root send was refused (403) and hidden by `\|\| true` |
+| Backup passphrase and off-box login (added 2026-10-15) | Borg passphrase file `BACKUP_PASSPHRASE_FILE` (default `/etc/corporatetraveldc/backup/borg-passphrase`, operator-only 0600/0400); rclone's Proton session in `~/.config/rclone/rclone.conf` (0600) | read by Borg through `BORG_PASSCOMMAND`, no agent or cache. The rclone file holds a Proton session (access/refresh tokens) and the salted key passphrase that unlocks the account's keys, not the account password or an OTP seed. Treat it as a full account credential. Keep an offline copy of the passphrase and of `borg key export`; see `docs/BACKUP.md` |
 | ~~GitHub PAT~~ | ~~`~/.secrets/github_pat.token` (0600)~~ | RETIRED 2026-10-14: nothing used it (git over SSH keys, `gh` on its own login token); expired 2026-09-13; the file is kept empty (value shredded) as a placeholder; see `docs/RETIRED.md` |
 
 Naming and SELinux labelling of host-side secrets:
@@ -122,7 +127,9 @@ stub (`poller/skills/audit_log_archive.py`), never deleted bare; the old
   Cloudflare Access.
 - On the LAN interfaces firewalld (zone `FedoraWorkstation`) opens ssh, mdns,
   samba-client, dhcpv6-client and 80/tcp; port 443 and the service ports are
-  not open there.
+  not open there. (Re-checked 2026-10-15: the zone holds `enu1`, `enu1c2` and
+  `wld0`; its only port is 80/tcp. The `enu1` backup uplink has had no internet
+  since 2026-10-06, see `docs/NETWORK_FAILOVER.md`.)
 - `tailscale0` is a trusted zone; admin surfaces (runner `:8001`, console,
   llama `:8093`, Bridge `:1025`) bind the tailnet IP or loopback.
 

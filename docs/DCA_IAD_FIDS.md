@@ -1,14 +1,26 @@
 # DCA / IAD FIDS Integration
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live system at 2026-10-15 00:56Z /
+2026-10-14 20:56 ET.)
 
 ## Role
 
 MWAA's public flight-information JSON for Reagan National (DCA) and Dulles
-(IAD). **Enrichment only** — gate, terminal, baggage claim, tail. Since the
+(IAD). **Enrichment only** — gate, terminal, baggage claim~~, tail~~. Since the
 2026-09-27 operator directive FIDS may never assert an OOOI phase:
 `common/db.py::_oooi_authority_check` denies source `fids` for `off`/`on`/`in`,
 and the poller's `_check_flight_fids()` no longer promotes phases.
+
+(corrected 2026-10-15) Since the 2026-10-14 operator decision, FIDS is not a
+tail or identity source either. Tails come from SWIM only: FDPS, the TDES
+clearance linked to the FDPS plan, TBFM and TFMS. Two guardrail tests pin
+this: `tests/poller/test_fids_not_a_tail_source.py` and
+`tests/common/test_flight_instance.py::test_fids_is_not_a_tail_source`. The
+`tail` value MWAA puts on its board is still parsed and passed through
+unchanged in the single-flight response below. Nothing uses it to identify
+an aircraft or to detect a tail change.
 
 ## Source
 
@@ -30,7 +42,7 @@ Fields used: `IATA`, `flightnumber`, `status` (Scheduled, InAir, InGate,
 Landed, OutGate, Delayed, Cancelled, Departed, In Customs), `gate` /
 `mod_gate` (override wins), `arr_terminal`, `baggage`/`claim`/`claim1-3`,
 `publishedTime`, `actualtime`, `mwaaTime` (override wins),
-`aircraftInfo.tail_number`, `arrivalInfo[0].remaining_time`.
+`aircraftInfo.tail_number` (display only, see Role), `arrivalInfo[0].remaining_time`.
 
 IAD carousel remap: MWAA's template maps carousels 16–21 and single-letter
 values to 15; `airport_fids._iad_remap()` replicates it.
@@ -44,10 +56,12 @@ src/poller/fetchers/airport_fids.py run_for(airport)
 src/poller/fetchers/dca_fids.py     run() -> run_for("DCA")
 src/poller/fetchers/iad_fids.py     run() -> run_for("IAD")
 src/web/routes/fids.py              3 routes, prefix /api/v1/fids
+scripts/hub_arrivals_lookup.py      operator CLI: DCA/IAD arrivals by carrier and window (hub-arrivals-lookup skill)
 ```
 
 `dca_fids` and `iad_fids` are in `FETCH_SCHEDULE` at 300 s; stale threshold
 600 s. Live 18:05Z: ages 223 s / 200 s, pull path verified (HTTP 200).
+(2026-10-15 00:51Z: 224 s each, `pull_state: verified`.)
 
 ## REST endpoints (all Tier 0)
 
@@ -55,7 +69,7 @@ src/web/routes/fids.py              3 routes, prefix /api/v1/fids
 
 DCA and IAD only (other values → 400). Live 18:08Z:
 `{"airport":"DCA","arrivals_count":875,"departures_count":867,...}`,
-IAD 679 / 678.
+IAD 679 / 678. (2026-10-15 00:56Z: DCA 886 / 996, IAD 708 / 808.)
 
 ### `GET /api/v1/fids/{airport}/arrivals` — layered arrivals
 
@@ -66,11 +80,15 @@ default 90). `resolve_arrivals()` tries, in order, and reports
 
 1. `swim` — `flight_events` (all three hubs);
 2. `website` — MWAA FIDS (DCA/IAD);
-3. `aeroapi` — FlightAware AeroAPI (dormant without a key);
+3. `aeroapi` — FlightAware AeroAPI (~~dormant without a key~~ corrected
+   2026-10-15: `FLIGHTAWARE_API_KEY` is on seven service allowlists, `web`
+   included, so this step makes metered calls if the key has a value
+   `[UNVERIFIED: secrets not read]`; see `DATA_SOURCES.md` §3);
 4. `none` — with an explanatory `note`.
 
 Live 18:08Z: `DCA/arrivals?within_minutes=60` and `BWI/arrivals?within_minutes=60`
-both answered `source_used: "swim"`. SWIM rows carry a GUFI `flight_id` and
+both answered `source_used: "swim"` (again on 2026-10-15 00:56Z: DCA 23 and
+BWI 13 results). SWIM rows carry a GUFI `flight_id` and
 ICAO origin but `gate`/`terminal`/`baggage_claim` are `null` (website-only
 fields).
 
@@ -85,7 +103,7 @@ when the flight is not on the board.
 
 BWI (Maryland Aviation Administration) has no website-FIDS scraper.
 `/api/v1/fids/BWI` and `/api/v1/fids/BWI/{flight}` return HTTP 400
-`airport must be one of: DCA, IAD` (verified 18:08Z). `/api/v1/fids/BWI/arrivals`
+`airport must be one of: DCA, IAD` (verified 18:08Z; HTTP 400 again 2026-10-15). `/api/v1/fids/BWI/arrivals`
 works and answers from SWIM.
 
 ---
@@ -225,14 +243,14 @@ GET /api/v1/fids/DCA/AA1557?date=2026-06-24
   "scheduled":     "2026-06-24 19:14:00",
   "estimated":     "2026-06-24 19:09:00",
   "remaining":     "00:38:46",
-  "tail":          "Q7FJP",
+  "tail":          "Q7***",
   "dep_airport":   "BOS",
   "dep_gate":      "B15",
   "dep_terminal":  "B"
 }
 ```
 
-~~Confirmed live against AA1557 BOS->DCA (2026-06-24): baggage=11, gate=D38, terminal=2, tail=Q7FJP -- matched ADS-B and manual FIDS verification.~~
+~~Confirmed live against AA1557 BOS->DCA (2026-06-24): baggage=11, gate=D38, terminal=2, tail=Q7*** -- matched ADS-B and manual FIDS verification.~~
 
 **~~Poller schedule~~** *(former heading)*
 

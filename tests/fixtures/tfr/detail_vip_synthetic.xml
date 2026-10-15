@@ -1,0 +1,15 @@
+﻿<XNOTAM-Update version="0.1" origin="" created="2026-10-14T16:11:25">
+  <Group><Add><Not>
+    <NotUid><txtNameAcctFac>FDC</txtNameAcctFac><dateIndexYear>2026</dateIndexYear><noSeqNo>9999</noSeqNo></NotUid>
+    <dateEffective>2026-10-15T17:15:00</dateEffective>
+    <dateExpire>2026-10-16T00:15:00</dateExpire>
+    <codeTimeZone>EDT</codeTimeZone>
+    <TfrNot><TFRAreaGroup>
+      <aseTFRArea><ScheduleGroup><dateEffective>2026-10-15T17:15:00</dateEffective><dateExpire>2026-10-15T19:30:00</dateExpire></ScheduleGroup></aseTFRArea>
+    </TFRAreaGroup><TFRAreaGroup>
+      <aseTFRArea><ScheduleGroup><dateEffective>2026-10-15T21:15:00</dateEffective><dateExpire>2026-10-16T00:15:00</dateExpire></ScheduleGroup></aseTFRArea>
+    </TFRAreaGroup><TFRAreaGroup>
+      <aseTFRArea><ScheduleGroup><dateEffective>2026-10-15T17:15:00</dateEffective><dateExpire>2026-10-15T19:30:00</dateExpire></ScheduleGroup></aseTFRArea>
+    </TFRAreaGroup></TfrNot>
+  </Not></Add></Group>
+</XNOTAM-Update>

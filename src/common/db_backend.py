@@ -107,6 +107,8 @@ PG_TABLES: frozenset[str] = frozenset({
     "agent_gateway_settings", "console_sessions",
     # 2026-10-09: reference-data import ledger (pg_schema/0074)
     "reference_import_ledger",
+    # 2026-10-14: append-only surface event log (pg_schema/0075)
+    "surface_event_log",
     "board_enroll_nonces", "board_messages", "board_presence",
     "board_refresh_grace", "board_signers", "board_tokens", "brief_archive",
     "cifp_fixes", "cifp_holds", "cifp_meta", "cifp_procedure_legs",

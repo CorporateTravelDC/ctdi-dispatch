@@ -10,9 +10,18 @@ self-learning layer (RAG + fine-tune over the codebase, the second-brain
 vault and the topical/vocabulary stores; training on a rented GPU swarm,
 serving on the Pi). Every claim below carries a `file:line` so the rebuild
 can diff against the original. Lines refer to commit `97b9075`; they are
-still valid at HEAD 2c3f81b for `src/runner/main.py` (the only change since is
+~~still valid at HEAD 2c3f81b for `src/runner/main.py`~~ (corrected 2026-10-15: see Line shift below) (the only change since is
 the one-line `LLAMA_BASE_URL` rename at line 98, which does not shift lines).
 Where a reference names a decorator line, the `def` is the next line.
+
+**Line shift (2026-10-15).** The references hold only up to
+`127a2f76` (2026-10-13), which added the demo gate (`_DEMO_NEVER` and the
+`demo_gate` middleware, `main.py:411-431`). At 1491bf5a every `src/runner/main.py`
+reference in this document at line 414 or later is **+32**: `/api/ask` 1668,
+history 1813/1822, `_build_context_rich` 1345, `_local_answer` 1448, `_TOPIC_RX`
+1333, `_llm_stream` 1569, `_context_to_str` 1378, `AskRequest` 1324, `has_llm`
+1690, history helpers 2039-2063. References below 414 (`:98-101`, `:188`, `:382`)
+are unchanged. The behaviour described is unchanged except where marked.
 
 Nothing in this document is a secret or PII; env vars are named, never
 valued. Known defects in the current panel are marked **DO NOT REPLICATE**.
@@ -34,7 +43,7 @@ valued. Known defects in the current panel are marked **DO NOT REPLICATE**.
 | Pool facts | `src/common/llama_pool.py:53-67` | `HOST` = `LLAMA_POOL_HOST`, else the host of `LLAMA_BASE_URL`, else the Tailscale address; `LLAMA_PORT` likewise, default 8093; HOT/CHAT/REPORT all resolve to it (changed 2026-10-05) |
 | Persona table | `src/common/personas.py:87` (`PERSONAS`), `build_system_prompt()` :924, `persona_key_for()` :943 | 22 personas; `chat` tier=chat temp 0.3 top_p (see table) num_predict 350 |
 | Model serving | `~/.config/systemd/user/corporatetraveldc-llama.service` (tracked copy in `.config/systemd/user/`) | `llama-server -m qwen3-4b-instruct-2507-q4_0.gguf --host <tailscale> --port 8093 -np 2 --kv-unified -c 12288 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 2 --cache-ram 0 --no-webui`, `Slice=production.slice`, `CPUQuota=200%`, `MemoryMax=8448M` |
-| Persistence | `chat_messages` table — `src/common/pg_schema/0056_dispatch_chat.sql`; helpers `main.py:2007-2031` | Postgres via `common.db.conn()`; **0 rows as of 2026-10-04** [UNVERIFIED 2026-10-06: table not re-queried] |
+| Persistence | `chat_messages` table — `src/common/pg_schema/0056_dispatch_chat.sql`; helpers `main.py:2007-2031` | Postgres via `common.db.conn()`; **0 rows as of 2026-10-04** ~~[UNVERIFIED 2026-10-06: table not re-queried]~~ (re-queried 2026-10-15 01:40Z: still 0 rows) |
 | Front proxy | `nginx/conf.d/tailscale-dispatch-runner.conf` | `limit_req zone=corporatetraveldc_lr burst=20 nodelay` (zone `10r/s`, `nginx/conf.d/00-rate-limit-corporatetraveldc.conf:34`), `proxy_read_timeout 120s` |
 | Audit trail | none on `/api/ask` | `audit_log` is written by admin/approval paths only; chat writes `chat_messages` only |
 
@@ -85,7 +94,7 @@ Each line: behaviour → source. Replay these as parity tests.
 - [ ] `NWS ALERTS (N): headline; headline; headline`
 - [ ] `AMTRAK/WAS: <summary>`
 - [ ] `NOTAMS: N active`
-- **DO NOT REPLICATE** — live shape mismatch (verified 2026-10-04 against the API): weather reads `.stations` (API: `metars[]` with `station/ceiling_ft/visibility_sm/wind_kt`, no raw text), tfr/alerts/notam are read as lists (API: `{tfrs[]}`, `{alerts[]}`, `{notams[]}`), so **the model receives only CPS/FEEDS/AMTRAK and is told "TFRS: none active" while 87 are active** (re-checked 2026-10-06: `_context_to_str` at `main.py:1346` is unchanged; `/api/v1/tfr` returned 87 entries; `/api/v1/brief` is `text/plain`). The local resolver (`:1416`) has the identical mismatch for the weather/tfr/notam/alerts topics, so those topics fall through to the LLM. The same bug class was fixed in `restore_dispatch_state.py` on 2026-10-03. The rebuild must consume the shapes in section 3.
+- **DO NOT REPLICATE** — live shape mismatch (verified 2026-10-04 against the API): weather reads `.stations` (API: `metars[]` with `station/ceiling_ft/visibility_sm/wind_kt`, no raw text), tfr/alerts/notam are read as lists (API: `{tfrs[]}`, `{alerts[]}`, `{notams[]}`), so **the model receives only CPS/FEEDS/AMTRAK and is told "TFRS: none active" while 87 are active** (re-checked 2026-10-06: `_context_to_str` at `main.py:1346` is unchanged; `/api/v1/tfr` returned 87 entries; `/api/v1/brief` is `text/plain`. Re-checked 2026-10-15: still unchanged at `main.py:1378`, still reads `weather.stations` and treats `tfr` as a list; `/api/v1/tfr` returned 73). The local resolver (`:1416`) has the identical mismatch for the weather/tfr/notam/alerts topics, so those topics fall through to the LLM. The same bug class was fixed in `restore_dispatch_state.py` on 2026-10-03. The rebuild must consume the shapes in section 3.
 
 **Streaming / output**
 - [ ] Response is `text/event-stream`, headers `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`, `X-Dispatch-Model: <effective model>` (`:1762-1770`).
@@ -101,7 +110,7 @@ Each line: behaviour → source. Replay these as parity tests.
 - [ ] After every exchange, user turn + assistant turn are inserted into `chat_messages(role, content, ts)` (`:2017`); history is the last 40 rows chronological (`:2007`); `GET /api/chat/history?limit=80` returns `{"messages":[{role,content}], "count"}`; `DELETE` clears all (`:2031`).
 - [ ] Both history endpoints 404 (not 403) unless `_is_trusted(request)` — IP-based: CF-Connecting-IP if present, else peer/X-Forwarded-For against `_TRUSTED_NETS` (`:188-260`).
   - 2026-10-13: when testing this, send the public `Host` too (`Host: dispatch-runner.example.com`); `CF-Connecting-IP` alone is ignored on other hosts since the 2026-08-25 C-2 fix (see auth-token-proxy-pattern.md step 3).
-- [ ] `/api/ask` itself is **not** trust-gated and not in the `tailscale_gate` prefixes (`:382`); on prod it is reachable only because the runner is tailnet/loopback-bound. On the demo instance it is behind `DEMO_MODE`'s cookie gate in `proxy_dispatch` for data, but the ask path itself is open.
+- [ ] `/api/ask` itself is **not** trust-gated and not in the `tailscale_gate` prefixes (`:382`); on prod it is reachable only because the runner is tailnet/loopback-bound. ~~On the demo instance it is behind `DEMO_MODE`'s cookie gate in `proxy_dispatch` for data, but the ask path itself is open.~~ (corrected 2026-10-15: since `127a2f76`, 2026-10-13, the demo instance refuses `/api/ask` with 403 for every untrusted caller, session or not: `_DEMO_NEVER = {"/api/ask"}`, `main.py:411`, enforced by `demo_gate`, `:415`; tests `tests/runner/test_demo_gate.py`. Trusted callers are unaffected.)
 
 **Refusals / safety**
 - [ ] No content filter, no refusal logic, no tool sandbox — the model is instructed not to speculate beyond the injected data. Model override accepts any string; an unknown model name maps to no persona → `no_llm` → local answer (`:1562`).
@@ -155,7 +164,7 @@ Headers: `X-Dispatch-Model`.
 
 - **Model**: `qwen3-4b-instruct-2507-q4_0.gguf` (local file, `/var/lib/corporatetraveldc/models/`, 4.3 GB dir incl. the retired `phi3-mini-q4_0.gguf`). The chat default name `corporatetraveldc-pi5-chat:latest` (`main.py:101`, env `OLLAMA_CHAT_MODEL`) is now only a **persona key** (`persona_key_for` strips `corporatetraveldc-pi5-` → `chat`); every persona runs on the one qwen3 instance.
 - **Serving**: llama-server, one process, 2 slots sharing a unified **12,288-token** KV (`-np 2 --kv-unified -c 12288`), q8_0 KV cache, flash-attn on, **2 threads** (`-t 2 -tb 2`, hard-capped so ingest keeps the other cores), bound to the Tailscale address :8093, `production.slice`.
-- **Load gate** (`src/common/llm.py:599-623`): pre-flight wait while 1-min load is above target, bounded (`max_wait_s` + deadline), logs and proceeds or gives up; used by the batch skills. The panel's `/api/ask` path does **not** use the load gate — it goes straight to the slot with the 110 s read timeout.
+- **Load gate** (~~`src/common/llm.py:599-623`~~ `src/common/llm.py:565-623` at 1491bf5a: `wait_for_low_load` + `preflight_load_gate_if_needed`, skipped for `hot` priority): pre-flight wait while 1-min load is above target, bounded (`max_wait_s` + deadline), logs and proceeds or gives up; used by the batch skills. The panel's `/api/ask` path does **not** use the load gate — it goes straight to the slot with the 110 s read timeout.
 - **Prompt budget**: system prompt ≈ 300 tokens static + context block (today ≈ 100–200 tokens because of the shape bug; with weather/TFR/alerts correctly injected expect 400–800) + up to 40 history turns (unbounded by tokens — **DO NOT REPLICATE**: 40 turns of long answers can exceed the slot; cap by tokens) + 350 max output.
 - **Throughput reference**: ~14 tok/s prompt eval, documented 2026-08-15 (`main.py:1574`).
 - **Already local**: everything in the request path. **Not local**: nothing. The rebuild's "remove external agent logic" target is therefore the *development* side (agents editing the code), not the runtime — and the dead cloud config vars.
@@ -204,7 +213,7 @@ There are no real transcripts (0 rows). Synthesise goldens from the contract:
 1. **Persona ownership**: should the panel use the shared `chat` persona text (`personas.py`) plus state injection, or keep its own inline prompt? Today it is the inline one; the persona file is the better single source for fine-tuning tone.
 2. **Identity strings in the prompt** (operator name, callsigns, affiliations, location) — keep in the system prompt (model sees them every turn) or move to a local config the rebuilt backend reads? They are in `main.py` today.
 3. **History policy**: 40 turns forever vs. token-capped window vs. per-session; and whether `chat_messages` should be per-user once the ctdc-agent split lands.
-4. **Trust gating of `/api/ask`**: currently open on the runner; gate it like history (404 when untrusted) or keep open on the tailnet-only instance?
+4. **Trust gating of `/api/ask`**: currently open on the runner; gate it like history (404 when untrusted) or keep open on the tailnet-only instance? (2026-10-15: decided for the demo instance only, refused to untrusted callers since 2026-10-13; the prod instance question stays open.)
 5. **Fine-tune vs RAG-only first**: the 794 MB semantic layer + 13.6 k vault docs make RAG viable immediately on the Pi (needs an embedding model and an index store — none exists today); fine-tuning needs the GPU rental and the scrub pipeline. Recommended order: fix the context-shape bug (gives parity today) → RAG over vault+docs → synthesise goldens → fine-tune on personas + synthesised Q/A.
 6. **Which model to fine-tune**: qwen3-4b (current) on a 2-thread, 12 k-context budget, or a smaller model with a bigger context for RAG? The box's constraint is the 2 cores reserved for llama, not RAM.
 7. **Knowledge graph**: enable `knowledge-graph-compile.timer` as a RAG source (adds load in the maintenance window) or treat the semantic tables as sufficient.

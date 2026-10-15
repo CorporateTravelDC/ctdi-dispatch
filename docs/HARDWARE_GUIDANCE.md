@@ -1,4 +1,6 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box: the USB map and container set still match;
+the guard description, uplink status, CPU governor and SDR hardware are updated below.
 
 # Hardware Guidance — corporatetraveldc dispatch platform
 
@@ -63,11 +65,18 @@ with all seven ingest containers and the llama service running.
 
 (Note: that seven-container figure is the *un-shed design load*.
 `thermal-ingest-guard` sheds containers under pressure, so the observed
-steady state is often lighter than the design load. **Corrected
+steady state is often lighter than the design load. ~~**Corrected
 2026-08-23, still current:** the guard is a single-stage model (refined
 2026-08-27): a mild trip at 74°C sheds only `tfms`/`stdds`, and a LOCKDOWN
 (79°C, or 1-min load ≥ 40) sheds the *entire* stack except `web` — all six
-SWIM feeds, `ingest-core` included, plus poller, pusher and runner. See
+SWIM feeds, `ingest-core` included, plus poller, pusher and runner.~~
+(corrected 2026-10-15: since 2026-10-13 the guard is a **load** guard only.
+Temperature never sheds anything; the 74 °C and 79 °C trips are retired. A
+LOCKDOWN happens only at 1-min load ≥ 40 and sheds the entire stack except
+`web`: all six SWIM feeds, `ingest-core`, poller, pusher and runner. After a
+300 s dwell, resume is held only while load1 > 30 or the CPU is above 75 °C;
+the old 65 °C resume bar is retired, because this box idles at about 65 °C with
+the stack shed. Source: `scripts/thermal-ingest-guard.py` docstring.) See
 `docs/INFRA_MAP.md` §4.1 and CLAUDE.md "Ingest load-shedding".)
 
 **What worked better, and what didn't improve (same night, same Pi, same
@@ -91,6 +100,18 @@ meaningfully below the mid-70s average under full sustained load. Open-frame
 the current working direction on the strength of the recovery-time data;
 this isn't a solved problem.
 
+## CPU frequency governor (documented 2026-10-15)
+
+The governor is `schedutil` (live check). Two things hold it there:
+`cpupower.service` sets it at boot (`/etc/cpupower-service.conf`), and
+`corporatetraveldc-governor-watch.timer` (user, every 6 h,
+`scripts/governor-watch.py`) puts it back if it drifts, using a pinned
+passwordless `cpupower frequency-set -g schedutil` sudo entry and waiting
+for any running inference to finish first. tuned is running, but the active
+profile is the stock `throughput-performance`. The tracked
+`config/tuned/throughput-performance-schedutil` profile is **not** active.
+Install it or retire it.
+
 ## Board
 
 - Raspberry Pi 5 Model B Rev 1.1, 4 cores (`arm_cortex_a76`, BogoMIPS 108
@@ -107,6 +128,11 @@ for the per-container memory caps that assume this). An 8 GB Pi 5 is
 workable only with a reduced model selection and likely a reduced
 ingest-container footprint. [UNVERIFIED: no live 8GB Pi 5 to test against;
 this remains guidance, not measured.]
+
+**Memory envelope for the stack (documented 2026-10-15):** the production containers run in
+`production.slice` with `MemoryLow=6144M`, `MemoryHigh=13400M`, `MemoryMax=13780M` (tracked
+`.config/systemd/user/production.slice`, matching the live values). That is the single-box carve-out
+`docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md` lists.
 
 Live snapshot 2026-10-06 18:04 UTC: 8.2Gi used, 8.2Gi buff/cache, 312Mi
 free, 7.6Gi "available"; swap in use: zram0 (8 GiB compressed RAM swap,
@@ -142,6 +168,22 @@ mapping (`ACARS0130` = VDL-M, `ADSB1090` = ADS-B) is the stable contract,
 not the port or symlink target. Re-derive from sysfs rather than trusting
 this table.
 
+## SDR / RF hardware (documented 2026-10-15)
+
+- **Receivers in service:** two RTL-SDR dongles (Realtek `0bda:2838`), told apart only by their programmed
+  serials: `ADSB1090` for ADS-B (ultrafeeder/readsb, 1090 MHz) and `ACARS0130` for VDL-M/ACARS (dumpvdl2).
+  `/etc/udev/rules.d/99-rtlsdr-adsb.rules` maps the serials to `/dev/rtl_sdr_adsb` and `/dev/rtl_sdr_acars`.
+  A third rule, for an HF dongle (`HFDL0008`), is commented out (no HFDL receiver installed).
+- **Antennas and feed line:** indoor/modest antennas with short cable runs, no roof runs or tuned antennas
+  (the "reference actual buildout" row in `docs/COST_STRUCTURE.md`). [UNVERIFIED: exact antenna models, any
+  LNA or filter, and cable lengths are not recorded in this repo.]
+- **Dongle-loss history:** on 2026-08-11 the dongles were lost in a suspected heat casualty and replaced. On
+  2026-08-14 `ADSB1090` dropped off the USB bus about 7 minutes after ultrafeeder came back up, and readsb
+  restart-looped against the missing device. Since then `corporatetraveldc-sdr-crashloop-guard.timer`
+  (user, every 5 min, `scripts/sdr-crashloop-guard.sh`) stops an SDR unit when its serial disappears from
+  the bus or its restart count jumps. The operator restarts it by hand once the hardware is confirmed good.
+- **Disabled:** `corporatetraveldc-acarsdec.container.disabled` is tracked but not installed.
+
 ## Network
 
 Wired or a strong Wi-Fi link is required, not optional — this platform's
@@ -150,8 +192,14 @@ unscoped SWIM ingest alone can sustain multi-GiB/hour bandwidth (see
 as ingest timeouts and RSS/API fetch failures that look like application
 bugs but are actually link-layer congestion. See `docs/NETWORK_FAILOVER.md`
 for the current primary/backup uplink topology and the active
-failover watchdog — as of 2026-10-06 this box runs on two independent
-uplinks (Wi-Fi primary, cellular-over-USB backup), not a single link.
+failover watchdog — ~~as of 2026-10-06 this box runs on two independent
+uplinks (Wi-Fi primary, cellular-over-USB backup), not a single link.~~
+(corrected 2026-10-15: the cellular backup uplink, `enu1`, has had no
+internet since 2026-10-06 over a pricing issue. It still shows carrier and a
+DHCP lease, but the watchdog probes fail. In practice the box runs on **one**
+working uplink, Wi-Fi, until the operator's planned prepaid SIM is in; a
+primary failure today means no failover. The USB map above still lists the
+hotspot device because it is still plugged in.)
 
 ---
 

@@ -1,4 +1,6 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (`findmnt`: still no NFS, CIFS/SMB or rclone
+mount; `/` is btrfs on `nvme0n1p2`, 83% used).
 
 # Network-attached storage — constraints for a future operator
 
@@ -55,8 +57,8 @@ waiver from whoever owns that decision.
    disk, formats it, points `PGDATA` at it. Postgres never knows the
    bytes are network-backed. Requires no application changes — same
    unix-socket connection path this platform already uses, confirmed live
-   in `docs/POSTGRES_MIGRATION.md` §3.1 ("Connection path — unix socket,
-   not TCP") and `src/common/db_backend.py` (app containers reach Postgres
+   in `docs/POSTGRES_MIGRATION.md` §3.1 (~~"Connection path — unix socket,
+   not TCP"~~ now titled "Unix socket, not TCP"; corrected 2026-10-15) and `src/common/db_backend.py` (app containers reach Postgres
    over a unix-socket volume mount).
 
 2. **A Postgres instance running natively on (or attached directly to)
@@ -74,7 +76,7 @@ Options 1-3 all stay inside the platform's existing guardrails: local
 fsync semantics preserved, unix-socket-first connection pattern preserved
 where the DB and app share a host, wire-protocol access where they don't.
 None of them require touching `translate_sql()` (confirmed present,
-`src/common/db_backend.py:344`), `db_backend.py`'s connection pooling, or
+~~`src/common/db_backend.py:344`~~ `src/common/db_backend.py:348`, corrected 2026-10-15), `db_backend.py`'s connection pooling, or
 any application code — purely a storage/ops decision, orthogonal to the
 SQLite→Postgres work.
 
@@ -83,6 +85,13 @@ backups. WAL archives, `pg_dump`/`pg_basebackup` output, the signed
 manifest snapshots — none of that is actively written to by a live
 database process, so the durability concerns above don't apply. A Z-drive
 or NFS mount is a reasonable backup target.
+
+This is no longer only hypothetical (2026-10-15). The platform's own backups
+(`docs/BACKUP.md`) write a Borg repository on local disk and then copy it with
+rclone to one parameterized target. An SMB share or "Z: drive" is one of the
+listed targets (`smb` backend or a CIFS mount path), alongside Proton Drive,
+which is the live target here. Only Borg-encrypted chunks reach the target; the
+live `PGDATA` never does.
 
 ## 3. Throughput vs. latency — the actual risk on Ethernet Direct / USB-C
 

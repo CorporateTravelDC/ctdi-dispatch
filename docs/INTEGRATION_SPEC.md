@@ -261,8 +261,29 @@ platform's flight-plan cross-check (FAA FDPS) uses it as the lookup key. Since
 resolved through the platform's codeshare map to the operating flight
 (`db.resolve_operating_callsign`) before a flight-number fallback; a bare
 flight number or an unmapped IATA form can still fail to resolve. `hex_id`/`registration` are optional; omit them at
-reservation-add-time (the platform resolves and locks the aircraft identity
-once the flight is actually airborne and confirmed) rather than guessing.
+reservation-add-time ~~(the platform resolves and locks the aircraft identity
+once the flight is actually airborne and confirmed)~~ rather than guessing.
+(Corrected 2026-10-15: since 2026-10-13, when the caller supplies neither, the
+add takes the hex and tail from the FAA flight plan found for this flight if
+that plan's origin does not contradict the request, recorded as
+`hex_source="fdps"`; a hex without a tail is reverse-resolved from the
+registries. Later tail changes are accepted only from FAA SWIM sources (FDPS,
+the TDES departure clearance's plan, TBFM, TFMS), never from airport FIDS. A
+value the caller supplies is never overwritten. `tail` is accepted as an alias
+of `registration`, on the single and batch adds; `registration` wins if both
+are sent. Source: `src/web/routes/watchlist.py` `add_flight_watchlist`,
+`docs/FLIGHT_INSTANCE_RESOLVER.md`.)
+
+**Send `origin`, `destination` and `scheduled_departure` when you have them**
+(2026-10-15). With a flight-number identifier and both airports, the watch
+follows that one leg: messages for the same number on another leg (the return
+of an out-and-back, a second daily rotation) are ignored. With only an origin,
+or a tail as the identifier, the watch follows every leg the number or
+aircraft flies (next platform update). `scheduled_departure` is what tells two same-direction
+rotations apart and lets the inbound-aircraft check run (once the watch has
+an aircraft hex); without it the platform
+tries to derive today's departure from FAA data (next platform update) and
+skips those checks if the answer is not unique.
 `auto_remove_at` defaults to 6 hours past scheduled arrival if omitted, or
 24 hours from add-time if no arrival estimate exists yet.
 

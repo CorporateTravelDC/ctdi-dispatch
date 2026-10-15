@@ -1,0 +1,8 @@
+[Unit]
+Description=Keep at least 10% of /tmp free (reclaim this user's stale test DBs, pytest dirs and 24h-old mktemp entries; alert once if still under)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/tmp-headroom-guard.sh
+TimeoutStartSec=10min
+Nice=10

@@ -45,6 +45,12 @@ import time
 from pathlib import Path
 
 SECRETS_ENV = Path(os.environ.get("LEAK_GUARD_SECRETS_ENV", "/etc/corporatetraveldc/dispatch-secrets.env"))
+# 2026-10-15: single-value secret files outside the env file (one value per file,
+# named by the file). The healthchecks.io ping URL lives here: anyone holding it can
+# fake "alive". Its last path segment (the check id) is matched on its own too, so a
+# copy without the scheme is caught. Colon-separated override for tests.
+EXTRA_FILES = [Path(p).expanduser() for p in os.environ.get(
+    "LEAK_GUARD_EXTRA_FILES", "~/.secrets/healthchecks_ping.url").split(":") if p]
 MIN_LEN = 12
 LIVE_MINUTES = 15
 TEXT_SUFFIXES = {".jsonl", ".json", ".txt", ".log", ".output", ".md", ".out", ""}
@@ -66,7 +72,7 @@ def load_secret_values(path: Path = SECRETS_ENV) -> dict[str, list[bytes]]:
     try:
         raw = path.read_bytes()
     except OSError:
-        return out
+        raw = b""                      # still load the single-value files below
     for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith(b"#") or b"=" not in line:
@@ -80,6 +86,18 @@ def load_secret_values(path: Path = SECRETS_ENV) -> dict[str, list[bytes]]:
         if esc != v:
             forms.append(esc)
         out[k.decode("utf-8", "replace")] = forms
+    for f in EXTRA_FILES:
+        try:
+            v = f.read_bytes().strip()
+        except OSError:
+            continue
+        if len(v) < MIN_LEN or b"\n" in v:
+            continue
+        forms = [v]
+        tail = v.rstrip(b"/").rsplit(b"/", 1)[-1]
+        if tail != v and len(tail) >= MIN_LEN:
+            forms.append(tail)
+        out[f"file:{f.name}"] = forms
     return out
 
 

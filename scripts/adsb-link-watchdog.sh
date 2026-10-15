@@ -59,7 +59,7 @@ LOOKBACK="-10 minutes"
 declare -A TARGETS=(
     ["flightaware"]="piaware.flightaware.com"
     ["flightradar24"]="data-out.flightradar24.com"
-    ["adsbhub"]="data.adsbhub.org"
+    # ["adsbhub"] removed 2026-10-15 (operator dropped the ADSBHub feed)
     ["airplaneslive"]="feed.airplanes.live"
 )
 

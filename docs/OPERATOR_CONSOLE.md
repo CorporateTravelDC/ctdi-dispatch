@@ -1,6 +1,8 @@
 # Operator console, Executive Standard invites, gateway kill switch
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+Re-checked against code at main 1491bf5a on 2026-10-15 (the 2026-10-12 sign-in changes are included below); the
+reach and host observations are still the 2026-10-06 ones, except the firewalld zone re-check noted in "Reach".
 
 > Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
 Shipped 2026-10-05.
@@ -15,7 +17,8 @@ Shipped 2026-10-05.
 is closed on the LAN interfaces (firewalld zone `FedoraWorkstation` on `enu1`,
 `wld0` opens 80/tcp but not 443; `tailscale0` is in the `trusted` zone), and
 the LAN-reachable port-80 server block for the tailnet name only redirects
-to https. The public vhost has `location ^~ /console { return 404; }`; in
+to https. (Re-checked 2026-10-15: zone `FedoraWorkstation` holds `enu1`, `enu1c2` and `wld0` and lists
+port 80/tcp; `tailscale0` is still `trusted`.) The public vhost has `location ^~ /console { return 404; }`; in
 practice Cloudflare Access answers first (302 to its login, observed
 2026-10-06). The app itself returns 404 to any `Host` not in `CONSOLE_HOSTS`
 (default: the tailnet name). Processes on the host itself (loopback, the
@@ -54,14 +57,23 @@ migration 0073). On every request the console re-checks that the signer is an
 active `kind=human` board signer **and** an active approval signer, so an
 account the liveness switch makes inert loses the console at once.
 
-**What it does.** The same actions as `scripts/es-invite.sh` and
-`scripts/agent-gateway.sh`, except two that stay signature-gated: re-opening
+**Routes** (`src/web/routes/console.py`): `GET /console`, `POST /console/login`,
+`POST /console/login/cancel`, `POST /console/logout`, `POST /console/act` (every action),
+`GET /console/manifest.webmanifest` and `GET /console/icons/{name}`. Sign-in request window:
+`LOGIN_TTL_S` = 600 s.
+
+**What it does.** ~~The same actions as `scripts/es-invite.sh` and
+`scripts/agent-gateway.sh`, except two that stay signature-gated~~ (corrected 2026-10-15:
+most of the actions of `scripts/es-invite.sh` and `scripts/agent-gateway.sh`. Not on the
+console: `es-invite.sh retire-legacy` and `agent-gateway.sh add-connector`, and a batch
+invite always uses the default 3 devices per reader (the single invite form has a device
+picker). Two more stay signature-gated): re-opening
 the gateway after a kill-all (`gateway-thaw`) and holding an agent link open
 (`connector-hold`). For those the console creates the request and shows the
 `approve.sh` command. Pending approvals (up to 20) are listed with their
 commands; signing only happens over SSH.
 
-Tests: `tests/web/test_console.py` (11).
+Tests: `tests/web/test_console.py` (~~11~~ 16 test functions on 2026-10-15).
 
 **Audit and notify fan-out (design note, 2026-10-12; not configured).** The
 audit path (hash-chained `audit_log`) and the notify path (`approval-gate`)
@@ -128,7 +140,7 @@ reader access.
 Installable apps: members as "Exec Standard"; console as "Dispatch Ops" (no
 service worker -- nothing cached on the phone).
 
-Tests: `tests/web/test_es_invites.py` (15).
+Tests: `tests/web/test_es_invites.py` (15 test functions, unchanged on 2026-10-15).
 
 ## Agent gateway kill switch
 
@@ -146,7 +158,11 @@ re-link each vendor with a fresh signed `connector-link`. `disable SLUG` /
 `enable SLUG` act on one connector; `revoke ACCOUNT|SLUG` ends connections.
 Design and per-account authority (signer active, operator dead-man 14 days,
 vendor dormancy 7 days, holds <= 90 days): `docs/AGENT_SEGMENTATION.md`
-"Agent gateway". Tests: `tests/web/test_agent_gateway.py` (15).
+"Agent gateway". Dormancy is applied by the `board-sweep` poller skill
+(`src/poller/skills/board_sweep.py`), which marks quiet sessions dormant after
+`DORMANT_AFTER_S` (7 days, `src/common/agent_gateway.py`) and pushes an ops-health
+notice; the account itself stays live. Tests: `tests/web/test_agent_gateway.py`
+(~~15~~ 18 test functions on 2026-10-15).
 
 ---
 

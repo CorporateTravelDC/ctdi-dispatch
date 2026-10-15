@@ -1,6 +1,19 @@
 # CIFP data — fixes, procedures, holds
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live system at 2026-10-15 ~01:05Z /
+2026-10-14 21:05 ET.)
+
+> **Status (2026-10-15): the loaded data is one cycle behind.** The database
+> still holds cycle `260903` (`cifp_meta.last_full_import` 2026-09-05 17:27Z).
+> The pull downloaded `CIFP_261001.zip` on 2026-10-04 and the pull state names
+> it, but every parse run since has ended `error` in
+> `/var/lib/corporatetraveldc/api-usage.csv` (2026-10-04, 10-06 and 10-08), while
+> the systemd unit reports `Result=success` (`main()` never exits non-zero).
+> The cause was not visible within the 24 h journal window allowed for this
+> check. Until it is fixed, fix coordinates and procedures are from the
+> September cycle.
 
 FAA CIFP (Coded Instrument Flight Procedures, ARINC 424-18) supplies
 authoritative fix coordinates and published procedure/hold detail for the
@@ -15,20 +28,24 @@ Washington/Baltimore terminal area. Built 2026-09-05.
    and downloads it only if the cycle changed; keeps only the current cycle
    in `/var/lib/corporatetraveldc/faa-cifp/`. On disk 18:12Z:
    `CIFP_261001.zip` (written 2026-10-04 23:55Z). Last timer run 2026-10-01
-   12:00Z; next 2026-10-08 12:00Z.
+   12:00Z; next 2026-10-08 12:00Z. (2026-10-15: same file on disk; the timer
+   last ran 2026-10-08 12:00Z and next runs 2026-10-15 12:00Z.)
 2. **`src/poller/skills/faa_cifp_parse.py`** — container
    `corporatetraveldc-faa-cifp-parse`, timer Thu 08:20 America/New_York (12:20Z while EDT).
    Extracts `FAACIFP18` in memory and loads the tables below; skips if the
    cycle already matches. `db.cifp_replace_all()` refuses to replace the
    tables with a parse that produced zero fixes or zero legs (the prior
-   cycle stays).
+   cycle stays). The unit exits 0 whatever the outcome; the result is
+   recorded as `success`/`error` in `/var/lib/corporatetraveldc/api-usage.csv`.
 3. **`src/common/cifp_lookup.py`** — the read API. `resolve_fix()`,
    `get_procedure_transitions()`, `get_holds()`, `expand_arrival_route()`,
    `estimate_runway_eta()`, `runway_eta_epoch()`, `select_arrival_epoch()`,
    `load_fix_coords()`. Connections go through `db.conn()` (Postgres in
    production).
 
-Both pull and parse report failures to `ops-health`.
+Both pull and parse report failures to `ops-health`. (corrected 2026-10-15:
+the parse pushes only when it raises an exception. A refused or unsuccessful
+result is logged as `error` with no push, and the unit still exits 0.)
 
 ## Storage
 
@@ -57,7 +74,9 @@ out-of-box transition fixes such as HVQ resolve).
 
 Column offsets were verified by byte inspection of the real cycle-2609 file
 (2026-09-05): 5,060 primary legs, 135 hold legs, 242 procedures at that
-cycle. `[UNVERIFIED: current-cycle row counts — database not queried]`.
+cycle. ~~`[UNVERIFIED: current-cycle row counts — database not queried]`~~
+(2026-10-15 query: still cycle 260903: 4,760 fixes, 5,060 legs, 135 hold
+legs, 242 procedures, across 19 airports that have procedure legs.)
 
 ## Consumers
 
@@ -67,6 +86,8 @@ cycle. `[UNVERIFIED: current-cycle row counts — database not queried]`.
   `poller/skills/tbfm_arrival_enrichment.py` (batch, writes
   `flight_events.arrival_time`). It distinguishes TBFM meter-fix ETAs from
   runway ETAs and adds the fix-to-runway leg only for the former.
+  `tbfm-arrival-enrichment` runs every 15 min
+  (`corporatetraveldc-tbfm-arrival-enrichment.timer`, active 2026-10-15).
 - **`expand_arrival_route()`** is tested but **not** wired into FDPS route
   parsing (`fdps_parser._parse_nas_route()` still tokenizes routes as
   strings without coordinates).

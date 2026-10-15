@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** Sections 1-3 and 5 still hold (seeder daily on `corporatetraveldc-codeshare-seed.timer`; FBO/ramp predictor not built). (1) Section 4 step 2 is replaced: route-filtered `operating_identities` since 2026-10-13 (TFMS, TBFM, poller) and 2026-10-14 (FDPS, SMES). (2) The decay sweep in section 2 is wired: `poller/skills/transport_pattern_digest.py` runs it (since 2026-07-28), dispatched by the maintenance queue (`scripts/lib/maintenance-queue.txt`), not by its own timer; no run in the 24 h before 2026-10-15 02:10Z. Line numbers are stale; current behaviour: [FLIGHT_INSTANCE_RESOLVER.md](FLIGHT_INSTANCE_RESOLVER.md).
+
 # Codeshare Resolution + FBO / Private-Jet Lane
 
 **Written 2026-09-28.** Code-validated against the live repo. Documents two

@@ -1,6 +1,6 @@
 # AGENTS.md — current-task scratchpad only
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET. Codex paragraph re-checked 2026-10-15 00:58Z (main `1491bf5a` + staged batch); the weekly dump script still does not touch this file.
 
 This file and Codex's own persistent memory are write-only logging destinations. They are never read back to debug, research, or inform any decision — the second brain is the only source consulted for that. Content here is cleared on operator request or a short cap, not accumulated.
 
@@ -8,7 +8,7 @@ This file and Codex's own persistent memory are write-only logging destinations.
 
 Last cleared: 2026-09-27 06:01Z (the vault dump then was `corporatetraveldc/01-Sources/manual/20260927T060139Z.md`). The weekly Gate-2 dump (`scripts/second-brain-weekly-dump.sh`) handles `CLAUDE.md` and Claude's memory only; it does not touch this file, so this header is updated by hand.
 
-Codex on this box today: the CLI is installed under the operator account (`~/.local/bin/codex`, state in `~/.codex`, last written 2026-10-04) and no Codex process is running. Its own team account, `ctdc-agent-openai-codex`, exists but is **preloaded** (expired, signer inactive) until the operator runs `plan.sh --activate`. See `docs/AGENT_SEGMENTATION.md`.
+~~Codex on this box today: the CLI is installed under the operator account (`~/.local/bin/codex`, state in `~/.codex`, last written 2026-10-04) and no Codex process is running. Its own team account, `ctdc-agent-openai-codex`, exists but is **preloaded** (expired, signer inactive) until the operator runs `plan.sh --activate`.~~ (corrected 2026-10-15: Codex is active. The CLI is still at `~/.local/bin/codex` (state dir `~/.codex`, last modified 2026-10-08), and Codex processes were running at 2026-10-15 00:58Z. The team account `ctdc-agent-openai-codex` is registered in `/etc/ctdc-accounts.conf` as kind `agent`, login mode `codex`, not `preloaded`. Its `codex` agent-gateway connector slug was active at the 2026-10-08 check in `README.md` Status.) See `docs/AGENT_SEGMENTATION.md`.
 
 ## Current task
 

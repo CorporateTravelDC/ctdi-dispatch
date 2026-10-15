@@ -1,11 +1,15 @@
 # GPS coordinate configuration — self-hosting guidance
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live quadlets on 2026-10-15 ~01:05Z /
+2026-10-14 21:05 ET. The live `dispatch.env` was not re-read.)
 
 ## The short version
 
 If you run the platform against a real ADS-B receiver (UltraFeeder/readsb),
-set the receiver's real coordinates before going live, in two places:
+set the receiver's real coordinates before going live, ~~in two places~~ in three places (corrected 2026-10-15:
+the acarshub quadlet, item 3):
 
 1. **Application layer** — `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON`. Keep the
    value in `/etc/corporatetraveldc/dispatch-secrets.env`; it reaches the
@@ -20,6 +24,23 @@ set the receiver's real coordinates before going live, in two places:
    `/etc/corporatetraveldc/ultrafeeder-secrets.env` (0600, template
    `config/ultrafeeder-secrets.env.example`), loaded only by
    `.config/containers/systemd/corporatetraveldc-ultrafeeder.container`.
+3. **acarshub map** (added 2026-10-15; never listed before) —
+   `.config/containers/systemd/corporatetraveldc-acarshub.container:48-49`
+   sets `ADSB_LAT` / `ADSB_LON` as literal values in the tracked quadlet, for
+   acarshub's own ADS-B map. This is a third place the receiver position
+   lives. It does not follow the secrets-file rule above and has to be kept in
+   step by hand.
+
+**Deployment profile (2026-10-09).** `common.deployment_profile.receiver_position()`
+returns the receiver position from the environment variables the profile names
+(`geography.home_base.coordinates_env`; the bundled reference profile names
+`ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON`). If those are unset it uses coordinates
+in the profile, and otherwise returns `None`, leaving the caller to treat a
+missing position as a configuration error. A profile never holds the
+coordinates of a real deployment. On 2026-10-15 nothing calls
+`receiver_position()` yet: the three modules above still read the variables
+directly, with placeholder defaults. Making them consumers is a planned
+follow-up.
 
 `config/dispatch.env.example` also carries `ULTRAFEEDER_LAT` /
 `ULTRAFEEDER_LON` placeholders; the live `dispatch.env` does not set them
@@ -37,8 +58,13 @@ defaults in the three modules above, but:
 - feeder registrations carry the wrong location (ultrafeeder's
   `ULTRAFEEDER_CONFIG` feeds FlightAware, FR24, ADSBHub, airplanes.live and
   OpenSky MLAT; PlaneFinder and AirNav Radar run as their own containers).
+  (2026-10-15: airplanes.live also receives MLAT, on `feed.airplanes.live:31090`.
+  The full list of outbound feeds is in `docs/SDR_SERVICES.md`.)
 
 ## Why two settings
+
+(2026-10-15) acarshub (item 3 above) is a third copy of the receiver
+position, kept by hand in its quadlet; it must agree with the other two.
 
 `ULTRAFEEDER_*` drives the application (distances, alerts, the runner UI).
 `READSB_*` / `TAR1090_*` drive the receiver (readsb MLAT, tar1090's

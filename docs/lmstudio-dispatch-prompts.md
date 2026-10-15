@@ -1,6 +1,7 @@
 # [RETIRED] LM Studio — Dispatch AI Prompts for Raspberry Pi 5
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+Re-checked 2026-10-15 ~01:45Z against main 1491bf5a plus the staged next-relay batch and the live box: every statement below still holds (`ss -ltn` shows nothing on `:1234`; `grep -rn LOCAL_AI_ src/ scripts/` has no hits; `cps_recompute.py` imports unchanged; 22 personas).
 
 **Status: abandoned plan. Nothing in this file describes the running system, and nothing from its earlier versions should be copied into a config.**
 
@@ -11,7 +12,7 @@ Written 2026-06-05 from a read of `src/poller/skills/`, it planned replacing per
 ## What happened instead
 
 - LM Studio was never installed; nothing listens on `:1234` (`ss -ltn`, 2026-10-06), and no code reads any `LOCAL_AI_*` variable (`grep -rn LOCAL_AI_ src/ scripts/`: no hits).
-- The migration off Anthropic did happen, by another route: Ollama with one dedicated model per task (2026-08), then llama.cpp (cutover 2026-08-27), consolidated on 2026-09-06 into one server, `corporatetraveldc-llama.service` on `100.x.x.x:8093`, serving Qwen3-4B-Instruct-2507 q4_0 since 2026-09-21. Per-skill prompts live as personas in `src/common/personas.py`. Cloud fallback is off (`ANTHROPIC_FALLBACK_ENABLED=false`).
+- The migration off Anthropic did happen, by another route: Ollama with one dedicated model per task (2026-08), then llama.cpp (cutover 2026-08-27), consolidated on 2026-09-06 into one server, `corporatetraveldc-llama.service` on `100.x.x.x:8093`, serving Qwen3-4B-Instruct-2507 q4_0 since 2026-09-21. Per-skill prompts live as personas in `src/common/personas.py`. Cloud fallback is off (`ANTHROPIC_FALLBACK_ENABLED=false`). (Scope, added 2026-10-15: that is the skill inference path; separately, the weekly second-brain dump calls Claude Opus through the Claude CLI, see `docs/DEDICATED_MODELS_PLAN.md` §1.)
 - The JSON-schema prompt this file gave for CPS was never needed: `src/poller/skills/cps_recompute.py` makes no LLM call; CPS is deterministic Python against Part 135.609 thresholds (imports: `argparse`, `logging`, `sys`, `datetime`, `common.db`, `common.sr1_log`, `common.sr2_gate`).
 - No record in the repo shows the 7B recommendation being tried here; the platform settled on a ~2.4 GB 4B model hard-capped at two cores and `MemoryMax=8448M`.
 

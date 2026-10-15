@@ -16,6 +16,12 @@ Enforcement points:
     rescan like any live file: named, skipped and left for a later run, not a unit failure (2026-10-13: the
     hourly root run took 4.5 min under load and a process listing printed a feeder identifier into the live
     session meanwhile; the unit failed on its rescan. Test: `test_a_file_that_leaks_during_the_run_is_left_as_live_not_failed`).
+- what is scanned (added 2026-10-15): the default roots are the operator account's own `~/.claude/projects`
+  and `/tmp/claude-<uid>` (`transcript_leak_scan.py:87`); that is what `pre-push` and `push-public.sh` check.
+  The agent accounts' Claude Code transcripts, `/tmp/claude-<uid>` and Codex session logs
+  (`~/.codex/sessions`, `~/.codex/history.jsonl`) are readable only by root and are covered by the hourly
+  root run (`corporatetraveldc-agent-leak-scan.timer`, `scan --agents` / `redact --agents` from the installed
+  copy in `/usr/local/libexec/ctdc/`), not at push time.
 - `scripts/pre-push` refuses any push while a closed transcript carries a leak.
 - `scripts/push-public.sh` runs the same check (exit 6). It also runs the LADD tripwire on the final public tree (exit 7).
 
@@ -23,7 +29,7 @@ Enforcement points:
 
 ![redaction proof](images/guardrails/01-redaction-proof.png)
 
-**1. Redaction.** The first full run against every transcript and tool output on the box redacted 41 closed files and the rescan found 0 hits. It skipped one file: the running session's own transcript. A file that's still being written can't be rewritten safely, so the scanner left it, named it, and listed what it carries.
+**1. Redaction.** The first full run against ~~every transcript and tool output on the box~~ (corrected 2026-10-15: the operator account's Claude transcripts and tool outputs; agent accounts and Codex logs were added later through the hourly root run, see above) redacted 41 closed files and the rescan found 0 hits. It skipped one file: the running session's own transcript. A file that's still being written can't be rewritten safely, so the scanner left it, named it, and listed what it carries.
 
 ![push blocked](images/guardrails/02-push-blocked-on-transcript-leak.png)
 
@@ -53,22 +59,22 @@ Each stage is a separate script that can stop the pass on its own. The scrollbac
 
 | Stage | Gate | Blocks on | Source |
 |---|---|---|---|
-| `git commit` | pre-commit hook | credential shapes in added lines (GitHub/Anthropic/vendor tokens, bare `Bearer`, 64-hex, long env values); quoted values in env files; self-referential systemd timer dependencies | `scripts/pre-commit` |
+| `git commit` | pre-commit hook | credential shapes in added lines (GitHub/Anthropic/vendor tokens, bare `Bearer`, ~~64-hex~~, long env values: `NAME=` followed by 28+ token characters); quoted values in env files; self-referential systemd timer dependencies. (Corrected 2026-10-15: the 64-hex pattern appears only in the hook's header comment, `scripts/pre-commit:14`; the enforced `PATTERNS` array, lines 44-51, has no hex rule.) | `scripts/pre-commit` |
 | `git commit` | signed commits | any unsigned commit (`commit.gpgsign=true`) | git config |
-| `git commit` | post-commit | nothing (background documentation drift check after a major commit) | `scripts/post-commit-doc-verify.sh` |
-| sign | CLAUDE.md drift gate | CLAUDE.md, hooks, units or skills disagreeing with live state | `scripts/sign-manifest.sh` → `check-claude-md-drift.sh` |
+| `git commit` | post-commit | nothing (background documentation drift check after a major commit). Until the next relay the installed `.git/hooks/post-commit` copy resolved its repo root to `.git/` and every `./scripts/...` call failed; the staged fix takes the root from `git rev-parse --show-toplevel` (next relay); the relay must re-copy the hook (`cp scripts/post-commit-doc-verify.sh .git/hooks/post-commit && chmod +x`); drift check 10 flags the mismatch until it does | `scripts/post-commit-doc-verify.sh` |
+| sign | CLAUDE.md drift gate | CLAUDE.md, hooks, units or skills disagreeing with live state (exit 3). Bypass: `SKIP_DRIFT_CHECK=1` (prints a banner). **Fails open (open defect, 2026-10-15):** if `check-claude-md-drift.sh` is missing or not executable, signing prints a warning and continues (`sign-manifest.sh:74-77`). The same checker also runs daily (`corporatetraveldc-claude-md-drift-daily.timer`, 05:15 America/New_York: 09:15Z under EDT, 10:15Z under EST) and a weekly doc drift check runs Mondays 09:00Z (`corporatetraveldc-docs-drift-weekly.timer`); both timers enabled and active on 2026-10-15 | `scripts/sign-manifest.sh` → `check-claude-md-drift.sh` |
 | sign | signed manifest | nothing to sign until the gate passes; then every tracked file is hashed and GPG-signed | `scripts/sign-manifest.sh` |
 | `git push` | public-remote block | a direct `git push public` (publishing only goes through push-public) | `scripts/pre-push` |
 | `git push` | credential scan | the same patterns over every commit being pushed | `scripts/pre-push` |
-| `git push` | dependency audit | npm high/critical, or a fixable Python advisory, in any of 9 targets | `scripts/pre-push` → `dependency-audit.py` |
-| `git push` | transcript leak guard | a live secret value or token shape in any closed agent transcript or tool output on the box | `scripts/pre-push` → `transcript_leak_scan.py` |
+| `git push` | dependency audit | npm high/critical, or a fixable Python advisory, in any of 9 targets. Deliberate allowance: an audit that cannot run (rc 3, offline or tool missing) warns and lets the push through; the daily `--all` run reports it. Operator override `DEPENDENCY_AUDIT_OVERRIDE=1` (journaled). Skipped silently if the script is not executable (`pre-push:232`). Third-party images, OS packages and the recorded SBOMs are **not** scanned for vulnerabilities (no scanner on the host; open gap R04-GAP) | `scripts/pre-push` → `dependency-audit.py` |
+| `git push` | transcript leak guard | a live secret value or token shape in any closed ~~agent transcript or tool output on the box~~ (corrected 2026-10-15: operator-account Claude transcript or tool output; agent accounts are covered by the hourly root run, not at push). **Fails open (open defect):** skipped silently if `transcript_leak_scan.py` is absent (`pre-push:253`) | `scripts/pre-push` → `transcript_leak_scan.py` |
 | publish | transcript leak guard | the same check, before anything is built (exit 6) | `scripts/push-public.sh` |
 | publish | scrub | private dirs dropped, sensitive values substituted, unreviewed binaries dropped | `scripts/scrub-public-tree.py` |
 | publish | leak gate | any secret value left in the final tree (injected manifests included) | `scrub-public-tree.py --verify-only` |
 | publish | LADD tripwire | any LADD (CUI) identifier in the final tree, reporting locations only (exit 7) | `scripts/leak-guard/ladd_public_check.py` |
 | publish | self-verification | the public tree failing its own `verify-manifest.sh` in a fresh extraction | `scripts/push-public.sh` |
-| deploy | provenance binding | an image whose tag has no build receipt for the signed commit | `serialized-rollout.sh` → `provenance.py check-deploy` |
-| deploy | clean-tree rule | building from a dirty or unsigned tree | `scripts/serialized-rollout.sh` |
+| deploy | provenance binding | ~~an image whose tag has no build receipt for the signed commit~~ (corrected 2026-10-15, `provenance.py:420-427`: blocks only on an image id that differs from its receipt, an SBOM file that differs from the receipt's digest, an image not found, or a name previously recorded under another id now running with no receipt. An image with no receipt and no recorded name is UNVERIFIED and passes (rc 0). `check-deploy` does not consult the source commit or its signature. Open defects: a **missing** SBOM file passes (D-01); a tag re-pointed at another service's recorded image passes, because `deploy_name` is never compared (R09-5). The 15-min sweep's `verify --running` fails on any FAILED row, so D-01 is caught there) | `serialized-rollout.sh` → `provenance.py check-deploy` |
+| deploy | clean-tree rule | building from a dirty ~~or unsigned~~ tree (corrected 2026-10-15: the check is `git status --porcelain` non-empty, `serialized-rollout.sh:50`; it does not check signatures. Override `ALLOW_DIRTY=1`. **Fails open (open defect):** a `git status` error, for example a `safe.directory` refusal, prints nothing and reads as clean) | `scripts/serialized-rollout.sh` |
 
 ### pre-commit: a credential refused (synthetic token, throwaway repo)
 
@@ -143,6 +149,8 @@ failed units: 0
 
 That is 9 local images, each checked running and as tagged: image id, SBOM digest, commit signature, signed manifest, build inputs, base-image digests, current source.
 
+Limits of those checks (added 2026-10-15; review 09 findings, all open): "commit signature" accepts git status `U` as well as `G`, so a commit signed by any key in the operator's keyring passes with no fingerprint pin (R09-6, `provenance.py:337-339`); "base-image digests" only tests that each recorded entry has a non-empty digest, it is not re-derived from the commit's `FROM` lines, and the receipt's architecture is not re-checked (R09-7); a receipt whose `source_commit` is null or unknown gives UNVERIFIED, never FAILED, and one malformed receipt aborts the whole run (R09-8). Live 2026-10-15 01:05Z sweep: `18 verified, 0 unverified, 0 failed`; manifest signature valid, 1442 files.
+
 ## Updates without downtime or drift: serialized in-place rollout, guard worktree, frozen main (2026-10-14)
 
 Ledger-backed write-up in the vault: `01-Sources/personal-research/guardrail-proofs/2026-10-14-serialized-in-place-rollout.md`.
@@ -152,3 +160,7 @@ Ledger-backed write-up in the vault: `01-Sources/personal-research/guardrail-pro
 - **Frozen main while a relay runs.** No tracked edit lands until the relay is confirmed, so the commit that is signed is the commit that is built and pushed. Every full load rebuilds every local image from that commit and pulls every external one, so each relay is also a whole-platform check: no silent rebuild creep, no debt picked up later, one answer to "what is running". 2026-10-14 01:54Z: all eight platform images recorded `source db9cda7 clean`.
 - **Public tree is self-verifying.** Every public push ends with `[push-public]   public tree is self-verifying: clone it and run scripts/verify-manifest.sh`; any outsider can confirm every published file against the signed manifest.
 - **Reproducibility position:** reproducible inputs + verified provenance (`docs/REPRODUCIBLE_BUILDS.md` levels 1-3), bit-for-bit not claimed. The unit of release is the signed commit; tags, if used, name a commit that has already been fully loaded and verified.
+
+## /tmp headroom guard (2026-10-14)
+
+Live 2026-10-14. `scripts/tmp-headroom-guard.sh` on `corporatetraveldc-tmp-headroom-guard.timer` (every 5 min) keeps at least 10% of the 8 GB `/tmp` tmpfs free, reclaiming only this user's stale leaked test DBs (> 30 min), old pytest dirs (all but newest 3, > 6 h) and 24 h-old `mktemp` entries, with one ops-health alert if still under. Cause: 6,005 leaked test DBs filled `/tmp` on 2026-10-14 ~23:15Z and broke GPG verification in the integrity sweep. Details: `docs/GUARDRAILS_JUSTIFICATION.md` section 6. Vault proof entry: owed.

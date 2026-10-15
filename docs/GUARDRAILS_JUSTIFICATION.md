@@ -1,6 +1,6 @@
 # Resource Guardrails -- What's In Place and Why
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: sections 2-5 and the new section 6 re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:15Z / 2026-10-14 21:15 ET. Section 1's `vnstat` figures were not re-read in this pass and still date from 2026-10-06.)
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -42,7 +42,7 @@ The per-container CPU/memory caps below do not limit bandwidth.
 
 ## 2. Memory -- per-container `Memory=` caps
 
-73 of 74 live `.container` quadlets set `Memory=`; the core services pair it
+~~73 of 74~~ (corrected 2026-10-15: 76 of 77, `ls ~/.config/containers/systemd/*.container`) live `.container` quadlets set `Memory=`; the core services pair it
 with `PodmanArgs=--memory-swap=<same>` (no swap beyond the RAM cap) and a
 `MemoryLow=` floor. The one quadlet with no `Memory=` is
 `corporatetraveldc-execstandard-verifier`.
@@ -57,6 +57,7 @@ with `PodmanArgs=--memory-swap=<same>` (no swap beyond the RAM cap) and a
 | demo-api | 512m | 170M |
 | nextcloud-app | 2048m | 682M |
 | nextcloud-db | 768m | 256M |
+| demo-portal-client, demo-portal-personal (added 2026-10-15 pass) | 128m | none |
 
 **Why:** the Pi has 15 GiB RAM and swaps to zram (8G) plus an 8G NVMe
 overflow file. An uncapped leaking container can push the whole stack into
@@ -84,7 +85,8 @@ cap deliberately and document why; do not uncap.
 | nextcloud-app | 150 | 300% |
 
 The previous revision listed tbfm 80%, tfms 90%, stdds 120%; those are no
-longer the live values. `CPUQuota=` is absent from 36 quadlets, mostly
+longer the live values. `CPUQuota=` is absent from ~~36 quadlets~~ (corrected 2026-10-15: 39 live
+quadlets, the execstandard verifier and the two demo portals included), mostly
 timer-driven skill oneshots, and from the execstandard verifier.
 
 web/poller/pusher moved to 9000 on 2026-09-04 after all three were SIGKILLed
@@ -178,12 +180,19 @@ load-driven, not temperature-driven.
 
 Separate host watchdog: `corporatetraveldc-watchdog.timer` (system, every
 90 s) runs the root-owned installed copy `/usr/local/libexec/ctdc/watchdog.sh`.
-The hardware watchdog timeout is under a one-week diagnostic: `RuntimeWatchdogSec`
+~~The hardware watchdog timeout is under a one-week diagnostic: `RuntimeWatchdogSec`
 raised to 180 s by `config/systemd/system.conf.d/zz-ctdc-watchdog.conf`,
 `corporatetraveldc-stall-monitor` recording scheduling stalls, and
 `corporatetraveldc-watchdog-tune.timer` firing once at 2026-10-12 00:00Z
 (2026-10-11 20:00 ET) to set the timeout to 1.2 x the worst stall (floor 30 s,
-cap 180 s).
+cap 180 s).~~ (corrected 2026-10-15: the diagnostic is over. `corporatetraveldc-watchdog-tune.service`
+ran once at 2026-10-12 00:00Z with Result=success and wrote `RuntimeWatchdogSec=30` (the 30 s floor) into
+the live `/etc/systemd/system.conf.d/zz-ctdc-watchdog.conf`; `systemctl show -p RuntimeWatchdogUSec` =
+30s. **Open drift:** the tracked copy `config/systemd/system.conf.d/zz-ctdc-watchdog.conf` still says
+`RuntimeWatchdogSec=180` (`scripts/watchdog-tune.sh` rewrites only the live file), so reinstalling the
+tracked file would silently restore 180 s, and `check-claude-md-drift.sh` does not compare this file.
+`corporatetraveldc-stall-monitor` is still active and enabled after the diagnostic window; whether it stays
+is an open operator decision.)
 
 ---
 
@@ -225,10 +234,39 @@ no longer exists.
 
 ---
 
+## 6. /tmp headroom guard -- `scripts/tmp-headroom-guard.sh` (live 2026-10-14)
+
+User timer `corporatetraveldc-tmp-headroom-guard.timer`: `OnBootSec=2min`, then every 5 minutes. Keeps at
+least 10% of `/tmp` free (`TMP_MIN_FREE_PCT`, default 10). `/tmp` is an 8 GB tmpfs.
+
+| Step (each only while free < floor) | What it reclaims, owned by this user only |
+|---|---|
+| 1 | leaked test databases `/tmp/tmpXXXXXXXX.db{,-wal,-shm}` older than 30 min |
+| 2 | pytest base dirs `/tmp/pytest-of-$USER/pytest-N`, all but the newest 3, older than 6 h |
+| 3 | stale `mktemp` entries `/tmp/tmp.XXXXXXXXXX` older than 24 h |
+
+Never touched: other users' files, sockets, `/tmp/claude-*` (live session scratch), anything newer than its
+age floor. If free space is still under the floor afterwards it sends one ops-health alert per distinct
+problem (the key is the list of top consumers, never sizes or times), cleared when healthy. `--dry-run`
+and `--status` change nothing.
+
+**Why:** on 2026-10-14 ~23:15Z `/tmp` reached 100%: 6,005 SQLite test databases (6.4 GB) leaked by about
+20 tests since 10-06. GPG could not verify signatures, the integrity sweep's build-provenance check failed,
+tests failed with "database or disk is full", and the shell could not write. Tests now keep every tempfile
+and `TMPDIR` inside pytest's `tmp_path`.
+
+**Limit (open, design note):** a tmpfs lives in RAM or swap, so a 10% floor still lets `/tmp` hold about
+7.2 GB before anything is reclaimed. The fixed `size=` cap (8 GB) and 16 GB of swap bound it; an absolute
+byte trigger, or always reclaiming confirmed-stale test DBs, would bound it lower. Not decided.
+
+Live 2026-10-15 ~01:10Z: timer enabled and active, last run Result=success.
+
+---
+
 ## Bottom line
 
 Every guardrail here -- memory caps, CPU quotas, the inference unit's limits,
-the thermal/load guard -- is backed by an incident or a sustained-load
+the thermal/load guard, the /tmp headroom guard -- is backed by an incident or a sustained-load
 measurement on this hardware. Network scoping is the one that is still only a
 plan. To remove or loosen any of them, show a comparable sustained-load
 measurement that says it is no longer needed.

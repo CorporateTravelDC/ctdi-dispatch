@@ -6,11 +6,30 @@ TFMS message types as unimplemented stubs (all live since 2026-07-20), and
 referenced a unified `corporatetraveldc-ingest` systemd unit that was split into
 seven per-feed containers on 2026-07-26 and no longer exists.
 
+> **Status (2026-10-15):** re-checked against main `1491bf5a`, the batch staged
+> for the next relay and the live system. Corrections are inline and dated.
+> The 2026-08-30/31 "staged only, NOT deployed" passes below are **all
+> deployed**: the code is at HEAD, the tables exist and fill in Postgres
+> (2026-10-15: `convective_sigmet_archive` 7,511 rows, `tfms_plan_removals`
+> 325,640, `fdps_diversion_continuations` 177, `stdds_rvr` 17), and
+> `docs/ALERT_REFERENCE.md` lists their alerts as live.
+
 The ingest layer connects to push data feeds (FAA SWIM via NMS/Solace,
-NWWS-OI XMPP, Amtrak) and writes events into the shared SQLite database.
-The poller's REST fallback activates automatically whenever a push feed stops
+NWWS-OI XMPP, ~~Amtrak~~) and writes events into the shared ~~SQLite~~
+Postgres database (corrected 2026-10-15: since the 2026-09-18 cutover;
+`ingest/main.py` skips the SQLite `init_db_*` chain when
+`db_backend.backend() == "postgres"`, and the schema comes from
+`src/common/pg_schema/`. Amtrak is no longer written here; see the module
+table).
+~~The poller's REST fallback activates automatically whenever a push feed stops
 stamping heartbeats — for the SWIM feeds and `nws`/`notam`. **Amtrak is the
-exception: it has no wired fallback** (see the module table below).
+exception: it has no wired fallback** (see the module table below).~~
+(corrected 2026-10-15: the poller has a REST twin for only three push feeds,
+`nws`, `notam` (push feed `fns`) and `amtrak` (`REST_FALLBACKS` in
+`src/ingest/failover.py`). The amtrak twin was wired 2026-09-06, with
+`push_max_age` 660 s. FDPS, STDDS, TFMS, TBFM and ITWS have no REST twin, by
+operator decision (`docs/REST_FALLBACK_AUDIT_2026-09-06.md`); when their
+push stops they go stale.)
 
 ## Container topology — 7 per-feed containers (since 2026-07-26)
 
@@ -22,7 +41,7 @@ environment variables. Quadlet files live in `.config/containers/systemd/`
 
 | Unit | Covers | Key env |
 |---|---|---|
-| `corporatetraveldc-ingest-core` | NWWS-OI + Amtrak + local airspace, **zero SWIM feeds** | `SWIM_NMS_ENABLED=false`, `LOCAL_AIRSPACE_ENABLED=true` |
+| `corporatetraveldc-ingest-core` | NWWS-OI + ~~Amtrak +~~ local airspace, **zero SWIM feeds** (corrected 2026-10-15: `AMTRAK_ENABLED=false` since 2026-09-24; the quadlet's `Description=` still says "Amtrak") | `SWIM_NMS_ENABLED=false`, `LOCAL_AIRSPACE_ENABLED=true`, `AMTRAK_ENABLED=false` |
 | `corporatetraveldc-ingest-fdps` | SWIM FDPS only | `SWIM_NMS_SKIP_FEEDS=stdds,tfms,fns,tbfm,itws` |
 | `corporatetraveldc-ingest-stdds` | SWIM STDDS only | skip-all-but-stdds |
 | `corporatetraveldc-ingest-tfms` | SWIM TFMS only | skip-all-but-tfms |
@@ -37,27 +56,43 @@ were running when this was written on 2026-08-11.
 > ⚠️ **Do not read that as "all 7 should be running right now."**
 > `scripts/thermal-ingest-guard.py` (timer, every 2 min) deliberately
 > **stops** SWIM ingest containers — and, under LOCKDOWN, most of the rest
-> of the stack — under load or thermal pressure. **Thresholds were
-> redesigned 2026-08-23** (temperature and load are no longer symmetric,
-> because every real trip on record has been load-driven, never
-> temperature-driven). Current defaults in `main()`, all overridable from
-> `dispatch.env`. **Corrected 2026-08-23: seven of them *are* set there** —
-> `dispatch.env:278-284` carries `THERMAL_GUARD_{ENABLED,TIER1_TEMP_C,
-> TIER2_TEMP_C,RESUME_TEMP_C,RESUME_DWELL_S,TIER1_FEEDS,TIER2_FEEDS}`, all
-> agreeing with the script defaults. What is genuinely unset is the
-> *load/fallback* family added in the redesign (`LOAD_INFO_MIN`,
-> `LOAD_LOCKDOWN`, `RESUME_LOAD`, `TEMP_INFO_C`, `FALLBACK_TRIGGER_COUNT`,
-> `FALLBACK_WINDOW_S`), which therefore runs on script-only defaults — the
-> intended `_cfg()` pattern, not a misconfiguration. Re-derive both sides
-> with `grep -n 'THERMAL_GUARD_' scripts/thermal-ingest-guard.py` and
-> `grep -n '^THERMAL_GUARD_' /etc/corporatetraveldc/dispatch.env`:
+> of the stack — under load ~~or thermal~~ pressure.
 >
-> | Trip | Condition | What's shed |
+> **Corrected 2026-10-15: everything from "Thresholds were redesigned" to
+> the end of this box is out of date** and kept only as the record. Since
+> 2026-10-13 the guard is a **load guard only**: LOCKDOWN (all six SWIM
+> feeds, `ingest-core`, `poller`, `pusher`, `runner`; only `web` survives)
+> trips at `load1 >= 40`. Temperature never sheds; the 74/79 °C trips and
+> the 65 °C resume bar are retired. A restore waits a 300 s dwell and is
+> held only while `load1 > 30` or the CPU is above 75 °C. No LLM unit is
+> ever touched; `ollama.service` no longer exists. The LLM-fallback count is
+> informational only (since 2026-08-27). The current table is in
+> `README.md`, "SWIM feed liveness and thermal load-shedding", and the
+> rationale in `docs/GUARDRAILS_JUSTIFICATION.md` §4. The "CLAUDE.md →
+> Ingest load-shedding" pointer below is dead (that section no longer
+> exists).
+>
+> ~~**Thresholds were~~
+> ~~redesigned 2026-08-23** (temperature and load are no longer symmetric,~~
+> ~~because every real trip on record has been load-driven, never~~
+> ~~temperature-driven). Current defaults in `main()`, all overridable from~~
+> ~~`dispatch.env`. **Corrected 2026-08-23: seven of them *are* set there** —~~
+> ~~`dispatch.env:278-284` carries `THERMAL_GUARD_{ENABLED,TIER1_TEMP_C,~~
+> ~~TIER2_TEMP_C,RESUME_TEMP_C,RESUME_DWELL_S,TIER1_FEEDS,TIER2_FEEDS}`, all~~
+> ~~agreeing with the script defaults. What is genuinely unset is the~~
+> ~~*load/fallback* family added in the redesign (`LOAD_INFO_MIN`,~~
+> ~~`LOAD_LOCKDOWN`, `RESUME_LOAD`, `TEMP_INFO_C`, `FALLBACK_TRIGGER_COUNT`,~~
+> ~~`FALLBACK_WINDOW_S`), which therefore runs on script-only defaults — the~~
+> ~~intended `_cfg()` pattern, not a misconfiguration. Re-derive both sides~~
+> ~~with `grep -n 'THERMAL_GUARD_' scripts/thermal-ingest-guard.py` and~~
+> ~~`grep -n '^THERMAL_GUARD_' /etc/corporatetraveldc/dispatch.env`:~~
+>
+> | ~~Trip~~ | ~~Condition~~ | ~~What's shed~~ |
 > |---|---|---|
-> | Temp tier 1 | `temp ≥ 74.0 °C` | `THERMAL_GUARD_TIER1_FEEDS` = `tfms,stdds` |
-> | **LOCKDOWN** | `temp ≥ 79.0 °C` **or** `load1 ≥ 40.0` **or** ≥2 load-attributed brief fallbacks in 300 s | all six SWIM feeds (`ALL_SWIM_FEEDS`) + `ingest-core` + `LOCKDOWN_USER_UNITS` (`poller`, `pusher`, `runner`) + host `ollama.service`. Only `web` survives — this set is a hardcoded constant, deliberately *not* env-tunable. |
-> | Informational, no shed | `temp` 70–74 °C, or `load1` 15–40 | — |
-> | Restore | `temp < 65 °C` **and** `load1 < 15.0` **and** fallback count < 2, held 300 s | tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack |
+> | ~~Temp tier 1~~ | ~~`temp ≥ 74.0 °C`~~ | ~~`THERMAL_GUARD_TIER1_FEEDS` = `tfms,stdds`~~ |
+> | ~~**LOCKDOWN**~~ | ~~`temp ≥ 79.0 °C` **or** `load1 ≥ 40.0` **or** ≥2 load-attributed brief fallbacks in 300 s~~ | ~~all six SWIM feeds (`ALL_SWIM_FEEDS`) + `ingest-core` + `LOCKDOWN_USER_UNITS` (`poller`, `pusher`, `runner`) + host `ollama.service`. Only `web` survives — this set is a hardcoded constant, deliberately *not* env-tunable.~~ |
+> | ~~Informational, no shed~~ | ~~`temp` 70–74 °C, or `load1` 15–40~~ | ~~—~~ |
+> | ~~Restore~~ | ~~`temp < 65 °C` **and** `load1 < 15.0` **and** fallback count < 2, held 300 s~~ | ~~tier 1 restores `tfms,stdds`; LOCKDOWN restores the whole stack~~ |
 >
 > "Load-attributed brief fallback" comes from `common/llm.py`'s
 > `_record_load_fallback()` (`/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl`),
@@ -72,7 +107,11 @@ were running when this was written on 2026-08-11.
 > `journalctl --user -u corporatetraveldc-thermal-ingest-guard` before
 > treating it as a fault. See CLAUDE.md → "Ingest load-shedding".
 
-`corporatetraveldc-boot-stagger.service` staggers their startup, and
+`corporatetraveldc-boot-stagger.service` staggers their startup (corrected
+2026-10-15: since 2026-09-06 `corporatetraveldc-stack-boot-stagger.service`
+(`scripts/stack-boot-ctl.sh`) brings the seven ingest units up first, in its
+serialized, load-gated order. `corporatetraveldc-boot-stagger.service` runs
+after it as a safety net that starts only what is still down), and
 `scripts/ingest-feed-ctl.sh` provides per-feed control:
 
 ```bash
@@ -87,13 +126,13 @@ notam→itws→tbfm→tfms→stdds→fdps.)
 
 | File | Role |
 |---|---|
-| `main.py` | Entrypoint/supervisor — launches `swim_nms`, `nwws`, `amtrak` tasks + `LocalAirspaceMonitor` thread |
+| `main.py` | Entrypoint/supervisor — launches `swim_nms`, `nwws`, `amtrak` tasks + `LocalAirspaceMonitor` thread (each gated by its `*_ENABLED` flag; `amtrak` is off in every ingest Quadlet since 2026-09-24) |
 | `config.py` | Env-driven config (`NmsConfig`, `NwwsConfig`, `AmtrakConfig`, …) |
 | `swim_client.py` | Solace PubSub+ subscriber, per-feed sessions, heartbeats, backlog handling |
 | `nwws.py` | NWWS-OI XMPP MUC subscriber (`NWWS_WFO_FILTER` keeps only configured WFOs). Two silent-drop bugs fixed 2026-08-22: (1) the filter compared bare 3-letter codes (`LWX`) against the raw 4-letter ICAO `cccc` attribute (`KLWX`), so **every** configured-WFO product was dropped for the life of the feature — fixed by K-stripping normalization before the membership check (confirmed working: real KLWX/KAKQ rows in `nws_alerts` since the fix); (2) WPC products were looked up by AWIPS id (`PMDSPD`) against a `ttaaii`-keyed table (`FXUS02`) — fixed to prefer `ttaaii`. |
-| `amtrak.py` | Amtrak push-primary poller (`api.amtraker.com/v3/trains`, 300 s). ⚠️ **This is the only live train-data path**: despite this module's docstring, the poller-side REST fallback does not exist in runnable form — `poller/fetchers/amtrak.py` has a `run()` but is wired into no schedule (dead code, confirmed 2026-08-22). If this loop goes down there is no automatic recovery for train data. |
-| `local_airspace.py` | Local RF: UltraFeeder ADS-B poll (15 s) + ACARS router TCP (port 9080) |
-| `failover.py` | Heartbeat contract (`push:` prefix) |
+| `amtrak.py` | Amtrak push-primary poller (`api.amtraker.com/v3/trains`, 300 s). ~~⚠️ **This is the only live train-data path**: despite this module's docstring, the poller-side REST fallback does not exist in runnable form — `poller/fetchers/amtrak.py` has a `run()` but is wired into no schedule (dead code, confirmed 2026-08-22). If this loop goes down there is no automatic recovery for train data.~~ (corrected 2026-10-15: disabled here, `AMTRAK_ENABLED=false` since 2026-09-24. The live push writer is the separate `amtrak-tracker` container (`src/amtrak_tracker/`, stamps `push:amtrak`). The poller REST fallback `amtrak` has been in `FETCH_SCHEDULE` and `REST_FALLBACKS` since 2026-09-06 (gate 660 s).) |
+| `local_airspace.py` | Local RF: UltraFeeder ADS-B poll (15 s) + ACARS router TCP: plain ACARS on 9080 (`ACARS_ROUTER_PORT`) and, since 2026-10-03, VDL2 frames from dumpvdl2 on 15555 (`VDLM2_ROUTER_PORT`; 0 disables it) |
+| `failover.py` | Heartbeat contract (`push:` prefix); `PUSH_FEEDS` and `REST_FALLBACKS`, the single source of truth for which REST fetcher has a push twin |
 | `parsers/` | `fdps_parser.py`, `smes_parser.py` (STDDS), `tfms_parser.py`, `tbfm_parser.py`, `itws_parser.py`, `aim_parser.py` (FNS/NOTAM), `geo_filter.py` |
 
 ## SWIM feeds and credentials
@@ -110,20 +149,33 @@ SWIM_NMS_PASS_<KEY>
 SWIM_NMS_QUEUE_<KEY>
 ```
 
-All credentials live in `/etc/corporatetraveldc/dispatch-secrets.env` and all
+~~All credentials live in `/etc/corporatetraveldc/dispatch-secrets.env` and all
 six feeds are provisioned and live. To re-provision a single feed: update its
-vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
+vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.~~
+(corrected 2026-10-15: the master copy is still
+`/etc/corporatetraveldc/dispatch-secrets.env`, but since 2026-10-05 the ingest
+containers read the scoped file `/etc/corporatetraveldc/svc/ingest.env`,
+generated from the master against `scripts/service-env/ingest.allowlist`. To
+re-provision a feed: update its vars in the master file, regenerate the scoped
+file (`scripts/service-env/generate.py --write`), then
+`scripts/ingest-feed-ctl.sh restart <feed>`. No code changes are needed.)
 
 ## Heartbeat / failover contract
 
 - Each connected feed stamps `push:<feed>` in `feed_state` every 30 s
-  (`HEARTBEAT_INTERVAL = 30`); `PUSH_FEEDS = ("fdps", "stdds", "fns", "tbfm",
-  "tfms", "itws", "nws")`.
+  (`HEARTBEAT_INTERVAL = 30`); ~~`PUSH_FEEDS = ("fdps", "stdds", "fns", "tbfm",
+  "tfms", "itws", "nws")`~~ (corrected 2026-10-15: `PUSH_FEEDS` also has
+  `"amtrak"`, added 2026-09-06; `push:amtrak` is stamped once per 300 s poll by
+  amtrak-tracker, not every 30 s).
 - The poller checks `push_is_healthy(feed, max_age=90s)` before each REST poll
-  it has a push-primary for; a fresh heartbeat means push owns that feed.
-- On disconnect the heartbeat ages out and REST polling resumes automatically.
+  it has a push-primary for; a fresh heartbeat means push owns that feed
+  (amtrak: 660 s). Only `nws`, `notam` and `amtrak` have a REST twin
+  (corrected 2026-10-15).
+- On disconnect the heartbeat ages out and REST polling resumes automatically
+  for those three. The five other SWIM feeds just go stale (corrected 2026-10-15).
 - Reconnect backoff: 15/30/60/60/60 s. Stale-backlog handling:
-  `SWIM_BACKLOG_STALE_SECONDS` (default 7200) /
+  `SWIM_BACKLOG_STALE_SECONDS` (default ~~7200~~ 28800 = 8 h, corrected
+  2026-10-15 from `swim_client.py:77`) /
   `SWIM_BACKLOG_RECENT_FRACTION` (default 0.10).
 - Bad messages are captured to
   `/var/lib/corporatetraveldc/swim_bad_message_captures` (max 200).
@@ -167,7 +219,8 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 > not a `db.py` `SCHEMA_Vn` this time.
 >
 > **2026-08-30 afternoon pass** (audit backlog items; built + tested,
-> **staged only -- deliberately NOT deployed**, see below):
+> ~~**staged only -- deliberately NOT deployed**, see below~~; corrected
+> 2026-10-15: deployed, like every pass below):
 > - **RVR -> CPS**: `poller/skills/cps_recompute.py` now prefers
 >   touchdown RVR on the ITWS-active-config runways (worst-of fallback
 >   across all reporting runways) over METAR `visibility_sm`, converting
@@ -178,7 +231,11 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 >   own narrative and the RVR rows ride the SR-2 input hash. **This is a
 >   Part 135.609 scoring change and must not go live before the
 >   operator's own sign-off** -- hence staged-not-deployed for the whole
->   pass.
+>   pass. (Corrected 2026-10-15: it **is** live. `cps_recompute.py` runs
+>   hourly from the poller's `SKILL_SCHEDULE` with the RVR substitution and
+>   no runtime gate, and no sign-off is recorded in any doc. Open operator
+>   item: sign off on the 91.175(h) table, or gate the feature. See
+>   `README.md` "CPS".)
 > - **TDLS body parsing**: `smes_parser.parse_tdls_dcl_body()` regex-
 >   extracts SID/transition/expected runway/EDCT/altitudes/frequency/
 >   route from the raw PDC/CPDLC-DCL bodies (v42 nullable columns on
@@ -202,7 +259,7 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 >
 > **2026-08-30 evening pass** (backlog items 2 & 3; built + tested,
 > staged only, same not-deployed discipline as the afternoon pass):
-> - **REROUTE -> watchlist**: REROUTE advisories carry NO per-flight
+> - (2026-10-15: deployed.) **REROUTE -> watchlist**: REROUTE advisories carry NO per-flight
 >   identifier (re-verified against all 15 captures: zero
 >   aircraftId/gufi/callsign hits -- only airport/center scope lists,
 >   route strings, waypoints), so per-flight matching is by SCOPE
@@ -256,7 +313,9 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 >   (`acars_messages`, same tail, route/divert-consistent text) is
 >   attached as `confidence="fdps+acars"` when present -- a bonus,
 >   never a gate (operator refinement; this box's ACARS feed has never
->   produced a row). Runs only on first-sighting FH/AH filings. No real
+>   produced a row -- corrected 2026-10-15: VDL2-derived rows have flowed
+>   since 2026-10-03, see "Local airspace monitoring"). Runs only on
+>   first-sighting FH/AH filings. No real
 >   pairs exist yet to validate against (0 real diversions on record) --
 >   synthetic-row tests only, window is a cold-start value.
 > - **`drone` watchlist entry type** (`shared/watchlist.py` EntryType +
@@ -425,7 +484,7 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 > **2026-08-31 pass** (the late-night pass's one explicit blocker:
 > Detector D's convective-SIGMET archive; built + tested, staged only,
 > same not-deployed discipline):
-> - **Convective SIGMET fetcher + archive**
+> - (2026-10-15: deployed; the timer runs every 10 min and the table held 7,511 rows.) **Convective SIGMET fetcher + archive**
 >   (`poller/skills/convective_sigmet_archiver.py`, 10-min quadlet
 >   timer `corporatetraveldc-convective-sigmet-archiver.{container,timer}`):
 >   independent fetch of AWC's `/api/data/airsigmet` JSON (the same
@@ -459,11 +518,11 @@ vars, then `scripts/ingest-feed-ctl.sh restart <feed>` — no code changes.
 
 | Feed | Parser | Status |
 |---|---|---|
-| FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). |
-| STDDS/SMES | `smes_parser.py` | Live — ASDE-X surface tracks (`asdexMsg` position/mlat/adsb reports) at DCA/IAD/BWI → `surface_tracks` |
+| FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). Added 2026-10-15: since 2026-10-14 watch hits go through the shared flight-instance matcher (`common.flight_instance.match_watch_entry`, by leg rather than number), and the filed departure time (FH departure `runwayTime` estimated, first filing wins) is stored (`docs/FLIGHT_INSTANCE_RESOLVER.md`). FDPS is a tail source; FIDS is not. |
+| STDDS/SMES | `smes_parser.py` | Live — ASDE-X surface tracks (`asdexMsg` position/mlat/adsb reports) at DCA/IAD/BWI → `surface_tracks`. Added 2026-10-15: surface events at DCA/IAD/BWI are also appended to `surface_event_log` (pg_schema/0075, 120-day prune), which keeps ramp exits. Watch matching is by instance (`match_watch_surface_event`: departure events at the watch's origin, arrival events at its destination, inside the instance window). The TDES departure clearance links by GUFI to the FDPS plan, whose aircraft address gives the tail (operator, 2026-10-14). STDDS also carries RVR, TDES, TDLS and D-ATIS (see the 2026-08-30 notes above). |
 | STDDS/TAIS | `smes_parser.py` | Live — `TATrackAndFlightPlan` terminal radar tracks → `terminal_tracks` |
-| TFMS | `tfms_parser.py` | Live — see message-type table below |
-| TBFM | `tbfm_parser.py` | Live — `tbfm_sequences`, metering alerts |
+| TFMS | `tfms_parser.py` | Live — see message-type table below. FADT EDCT watch hits use the instance matcher since 2026-10-13/14 (added 2026-10-15) |
+| TBFM | `tbfm_parser.py` | Live — `tbfm_sequences`, metering alerts. Used as a tail source; time-fidelity reads it only inside the arrival window (added 2026-10-15) |
 | ITWS | `itws_parser.py` | Live — terminal weather products (microburst/wind shear/precip/etc., 25+ `product_msg_name` values observed), severity-gated `wx-alerts` |
 | FNS/AIM | `aim_parser.py` | Live — digital NOTAMs → `notams` table |
 
@@ -543,7 +602,15 @@ if hardware is absent:
   dark.
 - **ACARS** — TCP to the acars_router container (`ACARS_ROUTER_HOST` /
   `ACARS_ROUTER_PORT`, default `host.containers.internal:9080`), 10 s poll.
-  ⚠️ **`acars_messages` has zero rows ever** (re-confirmed 2026-08-23:
+  (Corrected 2026-10-15: the zero-rows finding below is history.
+  `acars_messages` held 93,195 rows on 2026-10-15, the newest 00:54Z, about
+  59,000 of them from the last 7 days. The cause was not upstream: this stack
+  has no VHF ACARS decoder, so every message is VDL2 from dumpvdl2, which
+  acars_router serves on port 15555, not 9080. Since 2026-10-03 a second
+  reader takes `VDLM2_ROUTER_PORT` (default 15555), flattens dumpvdl2 frames
+  into the ACARS row shape (`local_airspace.py`, the dumpvdl2 normalizer) and
+  feeds the same queue and OOOI matching.)
+  ~~⚠️ **`acars_messages` has zero rows ever** (re-confirmed 2026-08-23:
   `SELECT COUNT(*)` → 0): the `acars.heartbeat` file only proves the reader
   thread is alive, not that data flows. Since 2026-08-22 the reader tracks
   `lines_received`/`parse_failures` and logs a throttled connected-but-idle
@@ -555,7 +622,7 @@ if hardware is absent:
   midday LOCKDOWN restart), so the acars_router is genuinely emitting
   nothing — this reader is not silently dropping an unparseable format.
   The real fix is upstream of this box (router config or its own feed
-  source), not in `local_airspace.py`.
+  source), not in `local_airspace.py`.~~
 
 Alert routing (canonical, per module docstring):
 
@@ -591,9 +658,12 @@ rtl_eeprom -d 1 -s ACARS0130
 curl -s http://localhost:8000/api/v1/feeds | \
   python3 -c "import json,sys; [print(f['feed_name'], f['age_seconds']) for f in json.load(sys.stdin)['feeds'] if f['feed_name'].startswith('push:')]"
 
-# Recent ACARS traffic
-sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
-  "SELECT received_at, tail, flight, label FROM acars_messages ORDER BY id DESC LIMIT 10;"
+# Recent ACARS traffic (SUPERSEDED 2026-10-15: the SQLite file holds nothing live)
+# sqlite3 /var/lib/corporatetraveldc/corporatetraveldc.db \
+#   "SELECT received_at, tail, flight, label FROM acars_messages ORDER BY id DESC LIMIT 10;"
+# Current (2026-10-15), a count from Postgres:
+podman exec corporatetraveldc-pgsql sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -At \
+  -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*), max(received_at) FROM acars_messages;"' </dev/null
 ```
 
 Hourly health watch: `corporatetraveldc-ingest-feed-watch.timer` (at :05) runs
@@ -603,7 +673,8 @@ Hourly health watch: `corporatetraveldc-ingest-feed-watch.timer` (at :05) runs
 direct `:8000` URL that was unreachable from inside the container), plus the
 ntfy health endpoint — change-only pushes to `ops-health`, 6 h dedup.
 Staleness thresholds live in `src/web/main.py` (`healthz()` and
-`get_feeds()`): most REST feeds 900 s, `nws` 2700 s, `atcscc_opsplan` 7200 s,
+`get_feeds()`): most REST feeds 900 s (`amtrak`, `eurocontrol` and `jasdat`
+3600 s per `/api/v1/feeds` on 2026-10-15), `nws` 2700 s, `atcscc_opsplan` 7200 s,
 `dca_fids`/`iad_fids` **600 s** (raised 2026-08-10 from 180 s, which was
 tighter than the real 300 s poll interval), push heartbeats 300 s — except
 `push:tfms`/`push:tbfm`, which have no per-feed entry in that dict and fall

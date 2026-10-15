@@ -1,11 +1,22 @@
 ---
 name: flight-hifi-track
 description: High-fidelity 2-min ADS-B/ADS-C position tracker — any international, overwater, or demo flight
-converted_from: ua925-hifi-track (UA925-specific)
+converted_from: ua925-hifi-track (single-flight specific)
 converted_to_skill: flight-hifi-track
 ---
 
 FLIGHT HIGH-FIDELITY POSITION TRACKER
+
+[Status 2026-10-15] Superseded by `skills/flight-hifi-track/SKILL.md` (shipped in this repo,
+rewritten 2026-08-31). That skill resolves callsign, hex and registration LOCAL ONLY, adds an
+OOOI watchlist entry, and pushes to `flight-alerts` and `dispatch-debriefs` through
+`POST /admin/push-alert`. Direct `api.airplanes.live` position/identity lookups, as in STEP 1
+below, have been against the standing "no third-party position/lookup APIs" rule since
+2026-08-27/28; do not run this file's STEP 1 as written. Kept for the design note and the
+history of the conversion.
+The only allowed airplanes.live path is the shared fallback `src/common/airplanes_live.py`
+(reinstated 2026-10-08, off unless `AIRPLANES_LIVE_FALLBACK=1`, runs only after every local
+source has no contact, never sends a LADD-listed identifier).
 
 [Re-verified 2026-08-23] Both external calls below still work as written:
 `GET https://api.airplanes.live/v2/hex/<hex>` and `/v2/callsign/<callsign>`
@@ -25,9 +36,9 @@ Use this task for:
 - Any flight where signal type (ADS-B vs ADS-C vs MLAT) needs to be logged alongside position
 
 CONFIGURE BEFORE ACTIVATING — set these three values for the target flight:
-  TARGET_HEX      = "<6-char ICAO hex>"   # e.g. 443bd3
-  TARGET_CALLSIGN = "<ICAO callsign>"     # e.g. UAL925
-  TARGET_LABEL    = "<friendly label>"    # e.g. UA925 or Q5CXO
+  TARGET_HEX      = "<6-char ICAO hex>"   # e.g. 44**** (example masked 2026-10-15)
+  TARGET_CALLSIGN = "<ICAO callsign>"     # e.g. `<ICAO callsign>` (example removed 2026-10-15)
+  TARGET_LABEL    = "<friendly label>"    # e.g. `<label>` (example removed 2026-10-15)
 
 DESIGN NOTE — HEX ID vs CALLSIGN:
 Always query by ICAO hex rather than callsign. This bypasses two problems:
@@ -42,10 +53,12 @@ Always query by ICAO hex rather than callsign. This bypasses two problems:
 Poll every 2 minutes regardless of signal type (ADS-B or ADS-C). Always fire ntfy.
 
 STEP 1 — Fetch via hex (primary, avoids callsign cache and privacy filters):
-GET https://api.airplanes.live/v2/hex/<TARGET_HEX>
+~~GET https://api.airplanes.live/v2/hex/<TARGET_HEX>~~
 
-If empty, fallback:
-GET https://api.airplanes.live/v2/callsign/<TARGET_CALLSIGN>
+~~If empty, fallback:~~
+~~GET https://api.airplanes.live/v2/callsign/<TARGET_CALLSIGN>~~
+(corrected 2026-10-15: banned for this flow since 2026-08-27/28; resolve position through the
+local path in `skills/flight-hifi-track/SKILL.md` Step 1.)
 
 Extract: lat, lon, alt_baro, alt_geom, gs, track, true_heading, rssi, seen, type (adsb_icao/adsc/mlat), squawk, hex, r.
 

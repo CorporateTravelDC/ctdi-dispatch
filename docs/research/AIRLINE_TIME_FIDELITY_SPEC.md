@@ -2,6 +2,8 @@
 
 Status: **rolling monitor, running indefinitely** (operator, 2026-10-08), rebuilt like the 30-day facility disruption baseline. Monday 2026-10-12 is the first review checkpoint, not an end date. Nothing here alerts, and nothing writes to the database.
 
+Checkpoint 1 was run on 2026-10-13: [AIRLINE_TIME_FIDELITY_CHECKPOINT_2026-10-13.md](AIRLINE_TIME_FIDELITY_CHECKPOINT_2026-10-13.md). Its next steps 1-2 shipped 2026-10-14 (1491bf5a): per-flight pairing by INSTANCE-v1 and the append-only surface event log (sections 2, 6, 7). Pairing rule: [FLIGHT_INSTANCE_RESOLVER.md](../FLIGHT_INSTANCE_RESOLVER.md#pairing-rule-for-time-fidelity-instance-v1-agreed-2026-10-13).
+
 **Publication rule (operator, 2026-10-08).** This public document and the public rolling output carry **anchor-carrier aggregates only**: the US big three plus major European and Gulf carriers. The marketing-vs-operating (codeshare) breakdown, regional operators flying under a brand, watched flights and aircraft, and the bellwether flights live in a **private ledger sibling** (`docs/research/private/`, dropped from the public mirror). The data exists and the numbers are real; the attribution detail stays private.
 
 ## 1. Question
@@ -19,6 +21,7 @@ Bellwethers: two operator-chosen commercial flights into Dulles on which the rep
 | Airline-reported OOOI (TFMS `flightTimeData`) | `flight_ooooi_times` | OUT, OFF, ON, IN as reported; filed departure/arrival | NAS-wide, **effectively from 2026-09-23** |
 | FDPS (ERAM) | `flight_events.raw_json` | departure/arrival runway times, positions | NAS-wide from 2026-09-08; latest message per flight |
 | ASDE-X surface (STDDS SMES) | `surface_movement_events` | ramp exit, takeoff, landing, ramp entry, runway entries/exits | 43 airports; about 4,095 rows kept per airport (DC airports back to 09-08, hubs about two weeks); sampled |
+| ASDE-X surface log (STDDS SMES) | `surface_event_log` | the same events, append-only, with track and route; keeps the ramp exit the slot table overwrites | KDCA, KIAD, KBWI only; from 2026-10-14; pruned at 120 days |
 | TDES (STDDS) | `tdes_departure_events` | clearance delivery time, parking gate | 70 towers, since 08-30 |
 | TBFM | `tbfm_sequences` | meter-fix ETAs | TBFM facilities |
 | Our watches | `watchlist_entries`, `watchlist_history` | OOOI lock and authority decision for watched flights | watched flights |
@@ -46,7 +49,7 @@ Bellwethers: two operator-chosen commercial flights into Dulles on which the rep
 
 United's reported takeoff time is usually the filed time rather than the observed takeoff; American and Delta report takeoff to within about half a minute. Landing, gate-in and pushback show no United-specific difference. European and Gulf anchors are in scope; their coverage in TFMS airline OOOI is to be measured.
 
-## 5. Open questions (first checkpoint Monday)
+## 5. Open questions (first checkpoint Monday; held 2026-10-13, see the checkpoint doc for what it answered)
 
 1. Does a frozen takeoff time accompany a schedule-shaped pushback time (fixed OUT-to-OFF gap)? On-time departure statistics use pushback, not takeoff.
 2. Where does the frozen value originate: the airline's message, or TFMS/ERAM filling it from the filed time? Compare with the FDPS departure actual and the first airborne position for DC departures.
@@ -57,7 +60,8 @@ United's reported takeoff time is usually the filed time rather than the observe
 
 ## 6. Monitor
 
-- **Collector** (`scripts/research/airline_time_fidelity_collect.py`, read-only, inside the web container) via `scripts/research/airline-time-fidelity-collect.sh`, timer `corporatetraveldc-airline-time-fidelity.timer` at 00:20/06:20/12:20/18:20 UTC, 8-hour lookback.
+- **Collector** (`scripts/research/airline_time_fidelity_collect.py`, read-only, inside the web container) via `scripts/research/airline-time-fidelity-collect.sh`, timer `corporatetraveldc-airline-time-fidelity.timer` at 00:20/06:20/12:20/18:20 UTC, 8-hour lookback (live 2026-10-15: active, last run 00:27Z).
+- **Pairing** (since 2026-10-14): per-flight rows pair surface events by INSTANCE-v1 (`common.flight_instance.v1_pair_instance`), reading both `surface_movement_events` and `surface_event_log`, with TBFM bounded to the instance's arrival window; each row carries `pairing_rule = "INSTANCE-v1"`. The nationwide per-airline OFF aggregate (`airline_daily`) still joins by callsign and origin within ±3 h.
 - **Scope:** every flight to or from KDCA, KIAD or KBWI; every flight watched in the last 14 days (by callsign or tail) and every route those flights fly, all carriers; the shuttle pairs BOS↔DCA and LGA↔DCA; the private bellwethers.
 - **Raw snapshots** are kept, not rolled off: they are the only lasting copy of the surface events.
 - **Rolling windows** (`scripts/research/airline_time_fidelity_rollup.py`), rebuilt every run: 30, 60 and 90 days. Private ledger output: by operating carrier, brand, route, route × carrier, weekday, hour. Public output: by anchor and by anchor × DC airport only.
@@ -68,7 +72,7 @@ United's reported takeoff time is usually the filed time rather than the observe
 - Surface data is sampled and capped per airport; absence of an event is not evidence.
 - FDPS keeps the latest message per flight, not the track.
 - Origins outside ASDE-X coverage have no independent observation.
-- Callsign-and-airport matching within ±3–4 h can mis-pair a same-callsign second leg; Monday's analysis drops ambiguous pairs.
+- ~~Callsign-and-airport matching within ±3–4 h can mis-pair a same-callsign second leg; Monday's analysis drops ambiguous pairs.~~ (corrected 2026-10-15: per-flight rows now pair by INSTANCE-v1, which rejects any event that fits a sibling instance and requires exactly one candidate. The limit still applies to the nationwide per-airline OFF aggregate, which joins by callsign and origin within ±3 h.)
 - Four to six weeks of data cannot show seasonality; the rolling windows exist so that it can later.
 - Data fidelity only: nothing here establishes intent or is an accusation.
 

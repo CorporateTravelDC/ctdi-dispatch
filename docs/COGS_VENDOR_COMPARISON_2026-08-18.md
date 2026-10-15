@@ -1,5 +1,7 @@
 # CorporateTravelDC — Data-Feed Cost-Avoidance Valuation (Vendor Comparison), 2026-08-18
 
+> **Status (2026-10-15):** dated record from the SQLite/Ollama era. Its §2.7 power and hardware derivation (≈ $23–39/yr, ≈ $765 one-time) is still the sourced figure cited by `docs/COST_STRUCTURE.md`; its totals are superseded by `docs/COGS_BUILD_VS_RENT_2026-09-28.md`, and its "$0 cloud LLM" framing is wrong in scope (a weekly Claude Opus job runs; see `docs/COST_STRUCTURE.md` §1).
+
 > **Internal planning estimate — NOT investor materials, NOT a vendor quote,
 > NOT an appraisal.** Same posture as `docs/COST_STRUCTURE.md`: all figures
 > are planning estimates as of **2026-08-18** (`~` = approximate; ranges are

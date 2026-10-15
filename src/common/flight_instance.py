@@ -239,6 +239,7 @@ class FlightInstance:
     sources: tuple = ()
     marketing: str | None = None
     updated_at: float | None = None
+    aircraft_type: str | None = None   # ICAO type designator (FDPS), for the turn class
 
     @property
     def best_dep(self) -> float | None:
@@ -319,7 +320,8 @@ def instance_from_flight_event(row: dict, marketing: str | None = None) -> Fligh
         key=key, hex=(hex_id or "").lower() or None, registration=reg,
         sched_dep=to_epoch(row.get("departure_time")), est_arr=to_epoch(row.get("arrival_time")),
         status=row.get("status"), gufi=row.get("flight_id"), sources=("fdps",),
-        marketing=marketing, updated_at=to_epoch(row.get("updated_at")))
+        marketing=marketing, updated_at=to_epoch(row.get("updated_at")),
+        aircraft_type=(row.get("aircraft_type") or "").strip().upper() or None)
 
 
 def _merge(into: FlightInstance, other: FlightInstance) -> None:
@@ -404,8 +406,9 @@ def instances_for_hex(hex_id: str, window_h: float = 30.0) -> list[FlightInstanc
     """Every FDPS-filed instance (flight_events, updated within window_h)
     whose OWN <flight> element carries this hex. The LIKE is only a
     prefilter -- raw_json batches bundle unrelated flights, so each hit is
-    re-parsed and kept only if its own aircraft address matches. Used by the
-    tail-change guard; called on a tail-change event, not per tick."""
+    re-parsed and kept only if its own aircraft address matches. ~20 s live on
+    47k rows: periodic callers go through poller.main._hex_instances (10-min
+    per-hex cache), never per tick."""
     hx = (hex_id or "").strip().upper()
     if not re.fullmatch(r"[0-9A-F]{6}", hx):
         return []
@@ -535,8 +538,18 @@ def _identity_matches(entry: dict, ident_upper: str | None, ident_icao: str | No
     return None
 
 
+def is_leg_watch(entry: dict) -> bool:
+    """2026-10-14 (swarm audit NB-02): leg/side checks apply only to a watch on ONE
+    leg -- a flight-number identifier with both origin and destination. A tail or
+    aircraft watch, or a permanent watch with only a home origin, follows the
+    aircraft or number on every leg (callsign matching, as before 2026-10-13)."""
+    return bool(parse_flight_ident(entry.get("identifier"))
+                and norm_airport(entry.get("origin")) and norm_airport(entry.get("destination")))
+
+
 def leg_rejection(entry: dict, origin: str | None, destination: str | None,
-                  sched_dep=None, tolerance_h: float = WATCH_SCHED_TOLERANCE_H) -> str | None:
+                  sched_dep=None, tolerance_h: float = WATCH_SCHED_TOLERANCE_H,
+                  diversion_without_sched: bool = False) -> str | None:
     """Why a message for the right NUMBER is the wrong LEG for this watch,
     or None if nothing contradicts it.
       - cross-direction / other route: an airport positively disagrees;
@@ -559,8 +572,12 @@ def leg_rejection(entry: dict, origin: str | None, destination: str | None,
     if sched_same is False:
         return "other_time_of_day"
     if d_ok is False:
-        if o_ok is True and sched_same is True:
-            return None  # same leg, amended destination (diversion)
+        # Same origin and same schedule: this leg, destination amended (a diversion).
+        # 2026-10-14 (swarm audit NB-03): callers whose messages never carry a schedule
+        # (FDPS plans, SMES arrivals on their own route) pass diversion_without_sched,
+        # so "schedule unknown" does not turn a diversion into another leg. TFMS stays strict.
+        if o_ok is True and (sched_same is True or (diversion_without_sched and sched_same is None)):
+            return None
         return "destination_mismatch"
     return None
 
@@ -568,7 +585,8 @@ def leg_rejection(entry: dict, origin: str | None, destination: str | None,
 def match_watch_entry(entries: Iterable[dict], identifier: str | None, *,
                       origin: str | None = None, destination: str | None = None,
                       hex_id: str | None = None, sched_dep=None,
-                      tolerance_h: float = WATCH_SCHED_TOLERANCE_H) -> dict | None:
+                      tolerance_h: float = WATCH_SCHED_TOLERANCE_H,
+                      diversion_without_sched: bool = False) -> dict | None:
     """First flight watch that (a) answers to this identifier -- exactly, by
     ICAO normalization, through a route-filtered codeshare_map operating
     callsign, or by hex -- AND (b) is not contradicted by the message's
@@ -584,10 +602,77 @@ def match_watch_entry(entries: Iterable[dict], identifier: str | None, *,
         how = _identity_matches(entry, ident_upper, ident_icao, hx)
         if not how:
             continue
-        why = leg_rejection(entry, origin, destination, sched_dep, tolerance_h)
+        why = (leg_rejection(entry, origin, destination, sched_dep, tolerance_h, diversion_without_sched)
+               if is_leg_watch(entry) else None)
         if why:
             log.debug("watch %s: %s matched by %s but rejected (%s; msg %s-%s sched %s)",
                       entry.get("id"), ident_upper or hx, how, why, origin, destination, sched_dep)
+            continue
+        return entry
+    return None
+
+
+SURFACE_DEPARTURE_EVENTS = ("spotout", "off")
+SURFACE_ARRIVAL_EVENTS = ("on", "runwayout", "spotin")
+_SURFACE_ARRIVAL_MAX_H = 20.0     # longest leg + delay: an arrival this long after the scheduled departure is another day
+
+
+def surface_leg_rejection(entry: dict, airport: str | None, event: str | None, event_time,
+                          dep_airport: str | None = None, dest_airport: str | None = None) -> str | None:
+    """Why an ASDE-X surface event for the right NUMBER is the wrong LEG for
+    this watch, or None. SMES sees one airport per message, which for a
+    shuttle or an out-and-back is both legs' endpoint, so the side and the
+    time decide:
+      - the message's own route (enhancedData), when present, must not
+        contradict the watch (leg_rejection);
+      - a departure event (spotout/off) must be at the watch's origin, an
+        arrival event (on/runwayout/spotin) at its destination;
+      - with a scheduled departure on the watch: a departure event inside
+        [sched - 2 h, sched + 6 h] (INSTANCE-v1's window), an arrival event
+        inside [sched - 2 h, sched + 20 h]."""
+    ev = (event or "").lower()
+    if dep_airport or dest_airport:
+        why = leg_rejection(entry, dep_airport, dest_airport,
+                            diversion_without_sched=ev in SURFACE_ARRIVAL_EVENTS)
+        if why:
+            return why
+    if ev in SURFACE_DEPARTURE_EVENTS:
+        side_ok, after_h = airports_agree(entry.get("origin"), airport), 6.0
+    elif ev in SURFACE_ARRIVAL_EVENTS:
+        side_ok, after_h = airports_agree(entry.get("destination"), airport), _SURFACE_ARRIVAL_MAX_H
+    else:
+        return None
+    if side_ok is False:
+        if ev in SURFACE_ARRIVAL_EVENTS and airports_agree(entry.get("origin"), dep_airport) is True:
+            pass    # arrival at an alternate on this leg's own route (diversion, NB-03)
+        else:
+            return "wrong_side_airport"
+    sched, t = to_epoch(entry.get("scheduled_departure")), to_epoch(event_time)
+    if sched is not None and t is not None and not (sched - 2 * 3600 <= t <= sched + after_h * 3600):
+        return "outside_instance_window"
+    return None
+
+
+def match_watch_surface_event(entries: Iterable[dict], callsign: str | None, *, airport: str | None,
+                              event: str | None, event_time=None, dep_airport: str | None = None,
+                              dest_airport: str | None = None) -> dict | None:
+    """First flight watch that answers to this callsign (exactly, by ICAO
+    normalization or a route-filtered codeshare operating callsign) and is
+    not contradicted by surface_leg_rejection."""
+    ident_upper = (callsign or "").upper().strip() or None
+    if not ident_upper:
+        return None
+    parsed = parse_flight_ident(ident_upper)
+    ident_icao = f"{parsed[0]}{parsed[1]}" if parsed else None
+    for entry in entries:
+        how = _identity_matches(entry, ident_upper, ident_icao, None)
+        if not how:
+            continue
+        why = (surface_leg_rejection(entry, airport, event, event_time, dep_airport, dest_airport)
+               if is_leg_watch(entry) else None)
+        if why:
+            log.debug("watch %s: %s matched by %s but surface event rejected (%s; %s at %s %s)",
+                      entry.get("id"), ident_upper, how, why, event, airport, event_time)
             continue
         return entry
     return None
@@ -680,11 +765,128 @@ def pair_events(reference: Iterable[dict], candidates: Iterable[dict], *,
     return res
 
 
+# ── Surface-event pairing: INSTANCE-v1 (time-fidelity checkpoint 2026-10-13) ─
+# Pairs ASDE-X surface events (spotout/off at the origin, on/runwayout/spotin
+# at the destination) with ONE airline instance. Never "nearest to the
+# reported time" (that biases toward agreement): exactly one surviving
+# candidate, or no pair. Rule text: docs/FLIGHT_INSTANCE_RESOLVER.md.
+
+V1_DEPARTURE_EVENTS = ("spotout", "off")
+V1_ARRIVAL_EVENTS = ("on", "runwayout", "spotin")
+V1_WINDOW_BEFORE_S = 2 * 3600
+V1_WINDOW_AFTER_S = 6 * 3600
+V1_RAMP_EXIT_TO_OFF_MAX_MIN = 90
+V1_RUNWAY_EXIT_TO_RAMP_ENTRY_MAX_MIN = 60
+
+
+def _v1_side(kind: str) -> str | None:
+    if kind in V1_DEPARTURE_EVENTS:
+        return "departure"
+    if kind in V1_ARRIVAL_EVENTS:
+        return "arrival"
+    return None
+
+
+def _v1_fits(inst: dict, ev: dict, side: str) -> bool:
+    """Same callsign, the relevant airport, inside the instance's window."""
+    airport = norm_airport(inst.get("origin") if side == "departure" else inst.get("destination"))
+    filed = to_epoch(inst.get("original_departure") if side == "departure" else inst.get("original_arrival"))
+    t = to_epoch(ev.get("event_time"))
+    if not airport or filed is None or t is None:
+        return False
+    if (ev.get("callsign") or "").strip().upper() != (inst.get("callsign") or "").strip().upper():
+        return False
+    if norm_airport(ev.get("airport")) != airport:
+        return False
+    return filed - V1_WINDOW_BEFORE_S <= t <= filed + V1_WINDOW_AFTER_S
+
+
+def _v1_route(x: dict, o: str = "departure_airport", d: str = "destination_airport") -> tuple[str, str] | None:
+    a, b = norm_airport(x.get(o)), norm_airport(x.get(d))
+    return (a, b) if a and b else None
+
+
+def v1_pair_surface(inst: dict, siblings: Iterable[dict], events: Iterable[dict],
+                    kind: str) -> tuple[dict | None, str | None]:
+    """(event, None) when exactly one `kind` event survives INSTANCE-v1 for
+    `inst`; else (None, reason): unknown_kind, no_candidates, route_mismatch,
+    sibling_ambiguous_routeknown, sibling_ambiguous_routeunknown,
+    multi_candidate. `inst`/`siblings` are flight_ooooi_times-shaped dicts
+    (callsign, origin, destination, original_departure, original_arrival);
+    siblings are the OTHER instances of the same callsign."""
+    side = _v1_side(kind)
+    if side is None:
+        return None, "unknown_kind"
+    route = _v1_route(inst, "origin", "destination")
+    sibs = [s for s in siblings if s is not inst]
+    survivors, last_reason = [], "no_candidates"
+    for ev in events:
+        if (ev.get("event") or "").lower() != kind or not _v1_fits(inst, ev, side):
+            continue
+        r = _v1_route(ev)
+        if r is not None:
+            if r != route:
+                last_reason = "route_mismatch"
+                continue
+            if any(_v1_fits(s, ev, side) and _v1_route(s, "origin", "destination") == r for s in sibs):
+                last_reason = "sibling_ambiguous_routeknown"
+                continue
+        elif any(_v1_fits(s, ev, side) for s in sibs):
+            last_reason = "sibling_ambiguous_routeunknown"
+            continue
+        survivors.append(ev)
+    # the same event seen twice (slot table + append-only log) is one event
+    distinct = {(norm_airport(e.get("airport")), to_epoch(e.get("event_time"))): e for e in survivors}
+    if len(distinct) == 1:
+        return next(iter(distinct.values())), None
+    return None, ("multi_candidate" if distinct else last_reason)
+
+
+def v1_pair_instance(inst: dict, siblings: Iterable[dict], events: Iterable[dict]) -> dict:
+    """{kind: {"event": ev|None, "reason": str|None}} for every surface kind,
+    with the sequence rules applied: ramp exit -> OFF must be 0 < d <= 90 min,
+    runway exit -> ramp entry 0 < d <= 60 min. The ramp event of a failing
+    pair is dropped (reason sequence_violation); the runway event is kept."""
+    evs, sibs = list(events), list(siblings)
+    out = {}
+    for kind in V1_DEPARTURE_EVENTS + V1_ARRIVAL_EVENTS:
+        ev, why = v1_pair_surface(inst, sibs, evs, kind)
+        out[kind] = {"event": ev, "reason": why}
+
+    def _seq(first: str, second: str, drop: str, max_min: float) -> None:
+        a, b = out[first]["event"], out[second]["event"]
+        if a is None or b is None:
+            return
+        d = (to_epoch(b.get("event_time")) - to_epoch(a.get("event_time"))) / 60.0
+        if not (0 < d <= max_min):
+            out[drop] = {"event": None, "reason": "sequence_violation"}
+
+    _seq("spotout", "off", "spotout", V1_RAMP_EXIT_TO_OFF_MAX_MIN)
+    _seq("runwayout", "spotin", "spotin", V1_RUNWAY_EXIT_TO_RAMP_ENTRY_MAX_MIN)
+    return out
+
+
 # ── Turn times ───────────────────────────────────────────────────────────────
 
 # Minimum scheduled turn by airframe class, minutes. Env override per class:
 # CTDC_MIN_TURN_MIN_NARROWBODY / _REGIONAL / _WIDEBODY (clamped 10-240).
 DEFAULT_MIN_TURN_MIN = {"narrowbody": 35, "regional": 30, "widebody": 75}
+
+
+# ICAO type-designator prefixes. Anything not listed is narrowbody (the
+# conservative middle: 35 min). Regional = CRJ/ERJ/E-jet/turboprop shapes.
+_WIDEBODY_PREFIXES = ("A30", "A31", "A33", "A34", "A35", "A38", "B74", "B76", "B77", "B78", "MD11", "IL96", "IL86")
+_REGIONAL_PREFIXES = ("CRJ", "E13", "E14", "E17", "E75", "E19", "E29", "DH8", "AT4", "AT7", "SF34", "B190", "J328")
+
+
+def aircraft_class_for_type(icao_type: str | None) -> str:
+    """'widebody' | 'regional' | 'narrowbody' from an ICAO type designator."""
+    t = (icao_type or "").strip().upper()
+    if t.startswith(_WIDEBODY_PREFIXES) and t not in ("A318", "A319"):
+        return "widebody"
+    if t.startswith(_REGIONAL_PREFIXES):
+        return "regional"
+    return "narrowbody"
 
 
 def min_turn_minutes(aircraft_class: str = "narrowbody") -> int:
@@ -701,18 +903,59 @@ def min_turn_minutes(aircraft_class: str = "narrowbody") -> int:
 
 # ── Tail-change guard ────────────────────────────────────────────────────────
 
-# Sources allowed to repoint a watch's hex on their own. "fids_destination"
-# = the DESTINATION airport's FIDS tail for this leg; "fdps" = the FAA flight
-# plan (aircraftDescription / ADS-B address on the plan). Anything else
-# (airplanes.live, OpenSky, AeroAPI, any tracker) can corroborate but never
-# repoints alone.
-AUTHORITATIVE_TAIL_SOURCES = frozenset({"fids_destination", "fdps", "tbfm", "tfms"})
+# Sources allowed to repoint a watch's hex on their own: SWIM only. "fdps" =
+# the FAA flight plan (aircraftDescription / ADS-B address on the plan);
+# "tdes" (2026-10-14, operator) = the plan linked to this flight's TDES
+# departure clearance at the origin (tdes_clearance_plan); "tbfm"/"tfms" =
+# those SWIM feeds showing the tail on this flight. FIDS is NOT a tail source
+# (operator 2026-10-14: "strictly TDES and FDPS based" -- MWAA FIDS is gate and
+# baggage enrichment only). Anything else (FIDS, airplanes.live, OpenSky,
+# AeroAPI, any tracker) can corroborate but never repoints alone.
+AUTHORITATIVE_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms"})
 # 2026-10-13 (operator: "strict, based off an FDPS, TBFM or TFMS that shows that flight"):
 # a SWIM source showing the candidate tail ON THE WATCHED FLIGHT is itself the proof, so rule
 # (c) (show the previous leg reaches the origin) is not required for these -- FDPS coverage
 # here is DC-area only and an inbound's previous leg is usually not on file. Rule (b) still
-# applies. A FIDS-only change still needs (c). There is no "unverified inbound" acceptance.
-SWIM_TAIL_SOURCES = frozenset({"fdps", "tbfm", "tfms"})
+# applies. FIDS is never a tail source (2026-10-14), so with SWIM-only sources (c) is currently unreachable. There is no "unverified inbound" acceptance.
+SWIM_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms"})
+
+
+def tdes_clearance_plan(callsigns: Iterable[str], origin: str | None, sched_dep,
+                        window_h: float = 3.0) -> FlightInstance | None:
+    """The FAA plan behind this flight's TDES departure clearance at `origin`
+    (TDES covers DCA/IAD/BWI among others), as an instance carrying the plan's
+    hex/registration -- or None. TDES has no tail of its own: its sfdps_gufi is
+    the FAA-internal GUFI that the FDPS plan carries in supplementalData
+    (FDPS_GUFI), so the link is that string inside the plan's raw message,
+    for the same callsign. Clearances outside [sched - window_h, sched +
+    window_h] belong to another instance and are ignored; more than one
+    distinct linked plan -> None (never pick one)."""
+    o = norm_airport(origin)
+    sched = to_epoch(sched_dep)
+    if not o or sched is None:
+        return None
+    cs = sorted({c.upper() for c in callsigns if c})
+    if not cs:
+        return None
+    clearances = _rows(
+        f"SELECT callsign, event_time, sfdps_gufi FROM tdes_departure_events WHERE airport IN (?, ?) "
+        f"AND callsign IN ({','.join('?' * len(cs))})", (o, "K" + o, *cs))
+    plans: dict[str, FlightInstance] = {}
+    for t in clearances:
+        te = to_epoch(t.get("event_time"))
+        g = (t.get("sfdps_gufi") or "").strip()
+        if te is None or not g or abs(te - sched) > window_h * 3600.0:
+            continue
+        parsed = parse_flight_ident(t["callsign"])
+        if not parsed:
+            continue
+        for row in _rows("SELECT * FROM flight_events WHERE airline = ? AND flight_num = ? AND updated_at > ?",
+                         (parsed[0], parsed[1], sched - 36 * 3600.0)):
+            if g in (row.get("raw_json") or ""):
+                inst = instance_from_flight_event(row)
+                if inst is not None and inst.hex:
+                    plans[inst.gufi or g] = inst
+    return next(iter(plans.values())) if len(plans) == 1 else None
 
 _ACTIVE_STATUSES = frozenset({"active", "airborne", "enroute", "en route", "departed"})
 
@@ -786,7 +1029,7 @@ def decide_tail_change(*, watched: FlightInstance, candidate_hex: str | None,
     auth = [s for s in srcs if s in AUTHORITATIVE_TAIL_SOURCES]
     if not auth:
         return _no(f"source not authoritative ({', '.join(srcs) or 'none'}); needs FDPS, TBFM "
-                   f"or TFMS showing this flight, or the destination FIDS tail -- never a tracker alone")
+                   f"or TFMS showing this flight (or the TDES clearance's FDPS plan) -- never FIDS or a tracker alone")
 
     turn = min_turn_min if min_turn_min is not None else min_turn_minutes()
     turn_s = turn * 60.0

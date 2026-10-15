@@ -1,5 +1,7 @@
 # Hardware-backed signing: design (proposal, not wired) -- 2026-10-13, operator decisions recorded
 
+> **Status (2026-10-15):** still a proposal. No code references a key class, attestation or `verify-required`, and no hardware key is enrolled; every approval today is a software passphrase-key SSH signature (`docs/AGENT_TRUST_MODEL.md` §3). Tooling versions in §1 re-checked: OpenSSH 10.2p1, libfido2 1.16.0, OpenSC 0.27.1, GnuPG 2.4.9.
+
 Operator request 2026-10-13. Goal: high-leverage actions (commits, pushes, approvals, lockdown thaw) can
 require a **physical key plus a secret the operator knows**, without locking anyone into one vendor or one
 key model. YubiKey 5C is the operator's default; the design must also work with older YubiKeys and other

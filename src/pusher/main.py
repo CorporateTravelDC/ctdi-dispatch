@@ -83,16 +83,26 @@ _NWS_MAX_AGE_SEC        = 1800  # 30 min -- NWS alert poll cadence is slower
 
 
 def _tfr_window(t: dict) -> str:
-    """'Active 14:00Z / 10:00 ET Mon 10-14 to 16:00Z / 12:00 ET Mon 10-14' (UTC + ET)."""
+    """'Active 14:00Z / 10:00 ET Mon 10-14 to 16:00Z / 12:00 ET Mon 10-14' (UTC + ET), plus
+    each area's window when the FAA gives more than one (2026-10-14: times come from the
+    TFR detail record; the list feed has none). 'window not published' when unknown."""
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     def fmt(e):
-        if not e:
-            return "?"
         u = datetime.fromtimestamp(float(e), timezone.utc)
         et = u.astimezone(ZoneInfo("America/New_York"))
         return f"{u:%H:%M}Z / {et:%H:%M} ET {et:%a %m-%d}"
-    return f"Active {fmt(t.get('effective_start'))} to {fmt(t.get('effective_end'))}"
+    s, e = t.get("effective_start"), t.get("effective_end")
+    if not s and not e:
+        return "Active window not published by the FAA yet"
+    out = f"Active {fmt(s) if s else '?'} to {fmt(e) if e else '?'}"
+    try:
+        areas = (json.loads(t.get("raw_json") or "{}") or {}).get("area_windows_utc") or []
+    except (TypeError, ValueError):
+        areas = []
+    if len(areas) > 1:
+        out += "\nArea windows: " + "; ".join(f"{fmt(a)} to {fmt(b)}" for a, b in areas)
+    return out
 
 
 def _vip_tfr_alert(t: dict) -> tuple[str, str, str]:
@@ -128,6 +138,75 @@ def vip_cutover_baseline() -> int:
     marker.write_text(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} silenced {n} active VIP TFR(s)\n")
     log.info("VIP cutover: %d active VIP TFR(s) recorded as already alerted (no push)", n)
     return n
+
+
+VIP_WINDOW_FIX_MARKER = "pusher-vip-window-fix-2026-10-15"
+VIP_WINDOW_FIX_STATE = "pusher-vip-window-fix-pending.json"
+VIP_WINDOW_FIX_GIVE_UP_S = 2 * 3600
+
+
+def vip_window_corrections() -> int:
+    """2026-10-15 (operator): VIP TFRs pushed between the 2026-10-14 cutover and the
+    window fix went out reading "Active ? to ?" (the FAA list feed has no times). Send
+    each one that is STILL ACTIVE one corrected alert with its real window, once, ever.
+
+    Candidates are fixed on the first run: the TFR dedup entries recorded after the
+    cutover marker's time (the cutover's own silenced entries share its timestamp, so
+    they are excluded) and before this first run (later pushes already carry times).
+    A candidate waits until the poller has filled its window; one that has expired or
+    left the FAA list is dropped. Sent on tfr-alert + hot-alerts at priority 4 (a
+    correction, not a new event: no Pushover Emergency). The dedup is untouched. Done
+    when every candidate is sent or dropped, or after 2 h; then a one-time marker."""
+    sd = pathlib.Path(config.state_dir())
+    marker, state = sd / VIP_WINDOW_FIX_MARKER, sd / VIP_WINDOW_FIX_STATE
+    if marker.exists():
+        return 0
+    now = time.time()
+    if state.exists():
+        pending = json.loads(state.read_text())
+    else:
+        cut_marker = sd / VIP_CUTOVER_MARKER
+        try:
+            import calendar
+            cut = calendar.timegm(time.strptime(cut_marker.read_text().split()[0], "%Y-%m-%dT%H:%M:%SZ"))
+        except (OSError, ValueError, IndexError):
+            marker.write_text(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} no cutover marker: nothing to correct\n")
+            return 0
+        raw = _tfr_dedup._load()
+        ids = sorted(k for k, v in raw.items() if cut + 60 < float(v.get("ts") or 0) <= now)
+        pending = {"since": now, "ids": ids, "sent": [], "dropped": []}
+        state.write_text(json.dumps(pending))
+        log.info("VIP window correction: %d candidate(s) pushed with '?' since the cutover", len(ids))
+    active = {t["tfr_id"]: t for t in db.get_active_tfrs() if t["is_vip"]}
+    remaining, sent = [], 0
+    for tid in pending["ids"]:
+        t = active.get(tid)
+        if t is None:
+            pending["dropped"].append(tid)          # expired or no longer in the FAA list
+            continue
+        if not t.get("effective_start") and not t.get("effective_end"):
+            remaining.append(tid)                   # the poller has not filled the window yet
+            continue
+        _, _, message = _vip_tfr_alert(t)
+        message = f"CORRECTED TIMES (the earlier alert read '? to ?')\n{message}"[:1000]
+        title = f"VIP TFR {tid}: corrected times"
+        ok = send_ntfy("tfr-alert", message, priority=4, title=title)
+        send_ntfy("hot-alerts", message, priority=4, title=title)
+        if ok:
+            pending["sent"].append(tid)
+            sent += 1
+        else:
+            remaining.append(tid)
+    pending["ids"] = remaining
+    if remaining and now - float(pending["since"]) < VIP_WINDOW_FIX_GIVE_UP_S:
+        state.write_text(json.dumps(pending))
+        return sent
+    marker.write_text(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} corrected {pending['sent']}; "
+                      f"dropped (expired/gone) {pending['dropped']}; gave up {remaining}\n")
+    state.unlink(missing_ok=True)
+    log.info("VIP window correction done: sent %s, dropped %s, gave up %s",
+             pending["sent"], pending["dropped"], remaining)
+    return sent
 
 
 def push_vip_tfrs() -> int:
@@ -744,6 +823,10 @@ async def main() -> None:
 
     while not shutdown.is_set():
         try:
+            try:
+                vip_window_corrections()
+            except Exception as e:
+                log.error("VIP window correction failed: %s", e)
             vip_count = push_vip_tfrs()
             if vip_count:
                 log.info("Pushed %d VIP TFR alerts", vip_count)

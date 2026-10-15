@@ -1,6 +1,6 @@
 # Spec: hazard / EMCOMM-CERT deployment composition (staged 2026-10-10)
 
-**Status: spec only. Not wired, not deployed, disabled by default.** Source: the ChatGPT design package posted to the coordination board on 2026-10-09. The board messages are the verbatim record:
+**Status:** ~~spec only.~~ (corrected 2026-10-15: the §3 skeleton shipped on 2026-10-10 as `src/common/composition.py`, `tests/common/test_composition.py` and `emcomm-cert-hazard-operations.json`; see §3.) **Not wired, not deployed, disabled by default.** Source: the ChatGPT design package posted to the coordination board on 2026-10-09. The board messages are the verbatim record:
 
 | Artifact | Board id |
 |---|---|
@@ -20,7 +20,7 @@ This is the first **composition**: one core profile plus overlays. The eight ear
 | An NWWS-OI connector | Live: `src/ingest/nwws.py`, with VTEC phenomenon/significance mapping | Inherited as is |
 | An FAA ITWS connector | Live via SWIM (`ingest-itws`) | Inherited; terminal **context**, never a public warning |
 | NHC advisories, USGS events | **Absent** (0 references in src) | Proposed-only feed adapters, each a separate approval; not part of the core |
-| HEARS / HEART / SHARES | SHARES is an auth tier (`src/auth/auth.py`, Tier 2). Credentialed radio frequencies live only in `~/.secrets` (`docs/regulated-operator-setup.md`). No HEARS/HEART runtime | Preserve as is. The composition may only **reference** tiers and never carry frequencies or credentials |
+| HEARS / HEART / SHARES | SHARES is an auth tier (`src/auth/auth.py`, Tier 2). Credentialed radio frequencies ~~live only in `~/.secrets` (`docs/regulated-operator-setup.md`)~~ never enter code, configs, exports, ntfy bodies or the repo; the shipped configs are placeholders (`docs/regulated-operator-setup.md` "CUI / FOUO handling", corrected 2026-10-15). No HEARS/HEART runtime | Preserve as is. The composition may only **reference** tiers and never carry frequencies or credentials |
 | EMCOMM / CERT roles | No runtime concept (CERT hits in src are TLS certificates) | The overlay stays `disabled`. Roles have to be designed (accounts/groups) before any enablement |
 | MCOM | Not defined anywhere in the repo | The operator defines it before the MCOM draft is mapped |
 | ACARS | Out of scope by the proposal's own terms | Unchanged |
@@ -53,6 +53,24 @@ This is the first **composition**: one core profile plus overlays. The eight ear
   - season can raise review cadence but never triggers an alert by itself.
 
 ## 3. Skeleton core (first build slice, after the 2026-10-10 token rotation)
+
+> **Shipped 2026-10-10 (checked 2026-10-15 at main 1491bf5a).** Differences from the plan below:
+> - `composition.py` has no dataclasses. It works on plain dicts: `load()`, `validate()`, `compile()`, `diff()`
+>   and a `CompositionError`.
+> - The example file has five overlays and **all five** are `enabled: false`: `weather-alerting` (NWWS),
+>   `aviation-terminal-context` (ITWS), and `tropical-cyclone`, `earthquake-impact`, `emcomm-cert` with a
+>   `status: proposed ...` note. There is no top-level `enabled` key; `state` is `mapped`, and
+>   `escalation` holds `outward_delivery: disabled`, `radio_tx: disabled` and
+>   `thresholds: UNSET_VERIFY_WITH_OPERATOR`.
+> - Of the §2 validation rules, these are implemented: state check, any state past `shadow` refused (there is
+>   no activation record yet, so `pilot`/`active` are always refused), `outward_delivery`/`radio_tx` must be
+>   `disabled` (any other value is refused; a missing key counts as disabled), overlay key conflicts and audience
+>   expansion beyond the core (checked on enabled overlays only), and the core SHA-256 pin (checked in `load()`; a composition with **no** pin is
+>   accepted without a check). **Not yet
+>   implemented:** rejecting an unknown overlay, rejecting a missing overlay dependency, and permission (as
+>   opposed to audience) expansion.
+> - Tests: 7 test functions, covering the list below (the "dry-run diff is empty" case is the example
+>   compiling to the core unchanged).
 
 1. `src/common/composition.py`: the schema dataclasses, `load()`, `validate()`, `compile()` and `diff()`. The reference profile is the only core.
 2. `docs/deployment-profiles/compositions/emcomm-cert-hazard-operations.json`: the proposal mapped onto the crosswalk. `enabled: false`, `state: mapped`, NWWS and ITWS overlays only; the NHC/USGS/EMCOMM overlays are present but `enabled: false`, marked `proposed`.

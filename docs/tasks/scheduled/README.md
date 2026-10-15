@@ -1,20 +1,34 @@
 # Scheduled Tasks → Skills
 
-_Verified 2026-08-11, re-verified against live state 2026-08-23: of the
+_Verified 2026-08-11, re-verified against live state 2026-08-23: ~~of the
 three skills below, only `flight-hifi-track` ships in this repo
 (`skills/flight-hifi-track/SKILL.md` — `ls skills/` returns exactly
 `corporatetraveldc-dispatch-ops` and `flight-hifi-track`);
 `overwater-adsb-handoff-track` and `nec-train-hifi-track` live on the
 Cowork/agent side and are invoked by trigger phrase only. The design
-rationale sections remain current._
+rationale sections remain current.~~_
+
+> **Status (corrected 2026-10-15):** all three skills below now ship in
+> this repo: `skills/flight-hifi-track/`, `skills/nec-train-hifi-track/`
+> and `skills/overwater-adsb-handoff-track/`, each with a `SKILL.md`. They
+> are still invoked by trigger phrase. The "Hex ID" rationale below is
+> **not** current. It describes querying a third-party aggregator by hex to
+> get past privacy filters, and that conflicts with the platform's rules
+> since 2026-08-27/28 and 2026-10-08. Position and identity resolution is
+> local first. The one third-party lookup, the airplanes.live fallback
+> (`src/common/airplanes_live.py`), runs only after every local source has
+> no contact, and **never sends an identifier on the FAA LADD list**, so it
+> never bypasses a privacy block. Use the platform's own resolution code
+> (`skills/flight-hifi-track/SKILL.md` §Rewritten 2026-08-31), not direct
+> aggregator calls. The rail rationale (numeric train ID) is still current.
 
 > **Endpoint re-verification, 2026-08-23.** The two dispatch endpoints the
 > archived task files below call are both still live, with one caveat
 > each:
 >
-> - `GET /api/v1/amtrak` (`src/web/main.py:766`) — **Tier 0**, no
+> - `GET /api/v1/amtrak` (`src/web/main.py:766`; at `:1159` on 2026-10-15) — **Tier 0**, no
 >   `Authorization` header needed, exactly as the task files use it.
-> - `POST /admin/push-test-alert` (`src/web/main.py:2201`) — still works,
+> - `POST /admin/push-test-alert` (`src/web/main.py:2201`; at `:2636` on 2026-10-15, still the legacy alias with the 200-char limit) — still works,
 >   but it is explicitly a **legacy alias**; the canonical route is
 >   `POST /admin/push-alert` (same handler, stacked decorators). It
 >   requires **admin tier** (`Depends(require_admin("admin.alert.push"))`),
@@ -48,18 +62,20 @@ This bypasses two issues:
 1. **Callsign caching** — aggregators like airplanes.live cache callsign lookups and may serve
    stale positions for minutes. Hex queries go to the raw ADS-B record directly.
 
-2. **Privacy filters** — FlightAware, FlightRadar24, and similar services apply privacy blocks
+2. ~~**Privacy filters** — FlightAware, FlightRadar24, and similar services apply privacy blocks
    based on tail number or callsign. Unfiltered aggregators (airplanes.live) expose the hex ID
    regardless, so a hex query returns real-time position even when the callsign query is
    suppressed or stale. This is effective in ~90% of privacy-filtered cases. The operator
    confirmed: "It bypasses privacy blocks because most privacies only do the tail number, not
-   the hex. In 90% of the cases, it bypasses the caching."
+   the hex. In 90% of the cases, it bypasses the caching."~~ (superseded 2026-10-15: bypassing
+   privacy blocks is not a platform behaviour. LADD-listed identifiers are never sent to any
+   third party; see the status note at the top.)
 
 ### Trains — Numeric Train ID vs Service Name
 
-Always query by **numeric train ID** (2155, 137) rather than service name ("Acela").
+Always query by **numeric train ID** (e.g. `<NNNN>`; real watched train numbers removed 2026-10-15) rather than service name ("Acela").
 
-1. Service names are not unique — "Acela" refers to dozens of departures; "2155" is one
+1. Service names are not unique — "Acela" refers to dozens of departures; one numeric ID is one
    specific departure. GTFS-RT and Amtrak's native APIs use numeric train ID as primary key.
 
 2. Feed caching — aggregators may cache service-name lookups the same way aircraft aggregators
@@ -77,6 +93,6 @@ Always query by **numeric train ID** (2155, 137) rather than service name ("Acel
 
 | File | Formerly | Now |
 |------|----------|-----|
-| `ua925-adsb-track.md` | Scheduled task, UA925-specific | Generic template, converted to skill `overwater-adsb-handoff-track` |
-| `ua925-hifi-track.md` | Scheduled task, UA925-specific | Generic template, converted to skill `flight-hifi-track` |
+| `ua925-adsb-track.md` | Scheduled task, single-flight-specific (number kept only in the legacy filename) | Generic template, converted to skill `overwater-adsb-handoff-track` |
+| `ua925-hifi-track.md` | Scheduled task, single-flight-specific (number kept only in the legacy filename) | Generic template, converted to skill `flight-hifi-track` |
 | `nec-train-hifi-track.md` | Scheduled task | Converted to skill `nec-train-hifi-track` |

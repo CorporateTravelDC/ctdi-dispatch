@@ -1,6 +1,6 @@
 # Privileged access: sudo grants and the approval gate
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state, including `sudo -n -l` from the operator account (not re-verifiable without sudo), on 2026-10-15 ~01:23Z / 2026-10-14 21:23 ET.)
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -15,13 +15,13 @@ resolve.
 | Account | sudo | Source |
 |---|---|---|
 | `corporatetraveldc` (operator, uid 1000) | Full sudo **with password** (`wheel`), plus a set of NOPASSWD entries (below) | `id`; `/etc/sudoers.d/` |
-| Team accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-openai-codex`, `ctdc-agent-llama`, `ctdc-agent-dispatch`, `ctdc-agent-anthropic-cowork`) | **None.** Not in `wheel`; groups are their own + `ctdc-dev` + `ctdc-agents` (`id -nG`, 2026-10-06). `scripts/agent-segmentation/verify.sh` check 3 fails if any has passwordless sudo or is in wheel/sudo. | `plan.sh` step for each account |
-| Operator -> agent | `/etc/sudoers.d/50-<account>`: `corporatetraveldc ALL=(<account>) NOPASSWD: <repo>/scripts/agent-run.sh` -- the operator can drive an agent; the agent cannot drive anyone. | `scripts/agent-segmentation/plan.sh` |
+| Team accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-openai-codex`, `ctdc-agent-llama`, `ctdc-agent-dispatch`, `ctdc-agent-anthropic-cowork`, and since 2026-10-08 `ctdc-agent-openai-chatgpt`) | **None.** Not in `wheel`; groups are their own + `ctdc-dev` + `ctdc-agents` (`id -nG`, 2026-10-06). `scripts/agent-segmentation/verify.sh` check 3 fails if any has passwordless sudo or is in wheel/sudo. | `plan.sh` step for each account |
+| Operator -> agent | `/etc/sudoers.d/50-<account>`: `corporatetraveldc ALL=(<account>) NOPASSWD: <repo>/scripts/agent-run.sh` -- the operator can drive an agent; the agent cannot drive anyone. (operator-account `sudo -n -l`, 2026-10-15; not re-verifiable without sudo: only `ctdc-agent-anthropic-claude` has this entry.) | `scripts/agent-segmentation/plan.sh` |
 
 Root-run automation does not use sudo at all: the system units
 (`corporatetraveldc-team-liveness`, `-skill-grants`, `-watchdog`,
 `-tailscale-cert-renew`, `-nts-cert-refresh`, `-stall-monitor`,
-`-watchdog-tune`) execute root-owned installed copies from
+`-watchdog-tune`, and, live by 2026-10-13, `-agent-leak-scan`) execute root-owned installed copies from
 `/usr/local/libexec/ctdc/`, put there by `sudo scripts/install-root-copies.sh`
 (an interactive operator step after each sign). `corporatetraveldc-llama-council`
 runs as `User=ctdc-agent-llama` with `NoNewPrivileges=yes`,
@@ -65,7 +65,7 @@ stay passwordless.~~
 
 **Done 2026-10-07 (applied by the deploy relay).** The passwordless rules for
 `dnf remove *`, `dnf autoremove`, `semanage port -a *` and every dead `ollama*`
-rule are removed and replaced by one rule:
+rule are ~~removed and~~ replaced by one rule:
 
 ```
 <operator> ALL=(root) NOPASSWD: /usr/local/libexec/ctdc/approved-exec.py
@@ -84,6 +84,20 @@ against the signed manifest) executes a `sudo` approval only after it has:
 A process running as the operator can no longer run those commands without a
 signature, and a forged database row does not help it. See
 `docs/AGENT_TRUST_MODEL.md` §9.1.
+
+**How it is applied (corrected 2026-10-15; source: operator-account `sudo -n -l`, 2026-10-15; not re-verifiable without sudo, `/etc/sudoers.d` is root-only; the tracked `config/sudoers.d/zz-ctdc-approved-exec` matches the later-PASSWD explanation).** The old NOPASSWD
+lines are **still present**. They are neutralised by a later
+`(root) PASSWD:` entry for `dnf remove *`, `dnf autoremove`, `semanage port -a *`
+(both paths) and every `ollama*` command; sudoers applies the last matching
+entry, so those commands now ask for the operator's password (as review 03
+verified). Deleting the dead lines is still owed. Other NOPASSWD entries that
+remain live and are not approval-gated: `systemctl status argononed/cpupower`,
+`systemctl reload nginx`, `cpupower frequency-set -g schedutil`, two
+`ausearch ... --start today` reads, `systemctl {start,stop,enable,disable,mask,unmask}
+argononed`, `systemctl {enable,disable} cpupower`, and `systemctl restart
+pihole-FTL / unbound`. The root executor has never consumed an approval live:
+its ledger directory `/var/lib/ctdc-approved-exec` does not exist yet, and the
+review 09 end-to-end run as root is still owed (R09-E1).
 
 ## The approval gate (`scripts/sudo-approval-gate.sh`)
 
@@ -136,7 +150,12 @@ overrides. A higher priority never lengthens the TTL or defaults to allow.
 The same signed-approval mechanism now also gates council/arena convenes
 (`kind=council`, `council-close`), agent-gateway vendor links and holds
 (`connector-link`, `connector-hold`), gateway thaw (`gateway-thaw`) and
-console sign-in (`console-login`).
+console sign-in (`console-login`). Each kind has its own expiry bounds
+(`governance.APPROVAL_TTL_POLICY`, table in `docs/AGENT_TRUST_MODEL.md` §3).
+Since 2026-10-11 a requester can withdraw its own pending request
+(`POST /api/v1/approvals/{id}/withdraw`, signed, audited as
+`approval.withdrawn`). Since 2026-10-12 a repeated console sign-in tap while a
+request is pending is its own audit event (`console.login.retap`).
 
 **Frequency-promotion check** (`GET /admin/approval-requests?command_pattern=`):
 reports how many times a pattern was allowed in the last 7 days and flags

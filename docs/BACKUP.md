@@ -2,6 +2,14 @@
 
 `scripts/backup/ctdi-backup.sh`: encrypted, deduplicated, ledgered backups of the platform, synced to one parameterized off-box target.
 
+**Current state (re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box).** Nightly Borg archives are
+written on the box (`~/.local/state/ctdc-backup/borg`, on the same NVMe btrfs volume as the data) and synced to
+Proton Drive (`proton:ctdi-backup`; last good syncs 2026-10-13 05:30Z and 2026-10-14 06:41Z, the latter after the
+stall described under "Sync caps"). `backup-freshness` reported OK on its 2026-10-14 13:15Z and 19:15Z runs. This is
+an off-box **copy**, not a tested disaster-recovery path: the only restore test so far is a check of the dumps
+(`pg_restore --list`, hashes), not a restore into a database or onto new hardware, and the only restore-test run is a
+manual one on 2026-10-11 23:23Z (see the schedule table). The Pi 5 rebuild sequence is in `docs/PI5-BOOT-CONFIG.md`.
+
 ## What is backed up
 
 | Item | How | Notes |
@@ -28,7 +36,7 @@ Borg reads the passphrase at run time from `BACKUP_PASSPHRASE_FILE` (operator-on
 The FAA LADD tables (`faa_ladd_aircraft`, `faa_ladd_removals`) are CUI. By default their **data never leaves the box**:
 
 - The off-box dump carries the LADD schema but not its rows (`--exclude-table-data`).
-- Each run writes a **local-only** LADD dump to `~/.local/state/ctdc-backup/cui-local/` (0600). The newest `BACKUP_CUI_LOCAL_KEEP` dumps are kept and older ones are shredded.
+- Each run writes a **local-only** LADD dump to `~/.local/state/ctdc-backup/cui-local/` (0600). The newest `BACKUP_CUI_LOCAL_KEEP` (default 7) dumps are kept and ~~older ones are shredded~~ (corrected 2026-10-15: older ones are deleted with `shred -fu` (`ctdi-backup.sh:107`), but on btrfs, which is copy-on-write, the overwrite does not reach the original blocks, so this is a plain delete in effect. The real controls are the 0600 mode, the dumps never leaving the box, and physical custody of the box. The stage directory and the restore test already use plain `rm` for this reason (`ctdi-backup.sh:81-83`, `backup-restore-test.sh:24`).)
 - Each run appends a **`#` stamp** (`kind: cui-stamp`, `"stamp": "#"`) to the private ledger. It records:
   - the **SHA-256** of that local dump;
   - its size and local path;
@@ -64,21 +72,27 @@ rclone keeps its own config (`BACKUP_RCLONE_CONFIG`, operator-only). Its credent
 
 ## Sizing (measured 2026-10-09)
 
+> **Re-measured 2026-10-15:** each nightly archive now covers about 20.5 GB before deduplication and compression
+> (ledger `original_size` of the 2026-10-14 archive; 19.6 GB on 10-12 and 10-13). The Borg repository is 27 GB on disk
+> (`du -sh`), and the 2026-10-12 Proton seed was 19 GB. The root volume is 83% used
+> (188 G of 238 G, 39 G free; `df -h /`), so the local repository is now a material share of the free space. The
+> figures below are the 2026-10-09 estimate, kept for the record.
+
 The first full archive is about 10–14 GB before deduplication and compression:
 
 - dispatch DB: 13 GB live, about 3–5 GB as a compressed dump;
 - Nextcloud: 5.3 GB of files and 135 MB of database;
 - platform state: 5.2 GB once models are excluded.
 
-Daily increments are expected to be small, mostly the dispatch dump. This fits easily in the 2 TB Proton allotment.
+~~Daily increments are expected to be small, mostly the dispatch dump.~~ (corrected 2026-10-15: they are not small. Borg's `deduplicated_size` was 4.5 GB, 5.0 GB and 4.2 GB for the 10-12, 10-13 and 10-14 archives. The compressed dispatch dump changes almost entirely every night, so it barely deduplicates, and each nightly sync uploads several GB, roughly 30 min or more at the 2.5 MB/s soft cap.) This still fits in the 2 TB Proton allotment.
 
 ## Schedule, restore test and freshness (2026-10-11)
 
 | Unit | When | What |
 |---|---|---|
-| `corporatetraveldc-backup.timer` | daily 03:40 UTC (±10 min) | `ctdi-backup.sh`: dumps, LADD `#` stamp, Borg archive, prune and compact, sync to `BACKUP_TARGET` |
-| `corporatetraveldc-backup-restore-test.timer` | Sundays 05:30 UTC | `backup-restore-test.sh`: extracts the newest archive's dumps, matches their SHA-256 against the ledger, runs `pg_restore --list` on each (read-only, inside the Postgres container), checks the local LADD dump against its `#` stamp, writes a `restore-test` ledger entry. Nothing is restored into a live database. |
-| `corporatetraveldc-backup-freshness.timer` | every 6 h | `backup_freshness.py` fails and pages when the last backup is older than 36 h, the last successful off-box sync is older than 36 h (when a target is set), the restore test is older than 8 days or failed, or the ledger chain breaks. |
+| `corporatetraveldc-backup.timer` | daily ~~03:40 UTC (±10 min)~~ 03:40-03:50 UTC (corrected 2026-10-15: `RandomizedDelaySec=10m` only delays, it never starts early) | `ctdi-backup.sh`: dumps, LADD `#` stamp, Borg archive, prune and compact, sync to `BACKUP_TARGET` |
+| `corporatetraveldc-backup-restore-test.timer` | Sundays 05:30 UTC (as of 2026-10-15 the timer has not fired yet: it was enabled 2026-10-11 23:23Z, after that Sunday's 05:30Z slot, so no scheduled slot has come up. The only `restore-test` ledger entry is the manual run of 2026-10-11 23:23Z. The first scheduled run is Sun 2026-10-18 05:30Z, ahead of the 8-day freshness limit at 2026-10-19 23:23Z.) | `backup-restore-test.sh`: extracts the newest archive's dumps, matches their SHA-256 against the ledger, runs `pg_restore --list` on each (read-only, inside the Postgres container), checks the local LADD dump against its `#` stamp, writes a `restore-test` ledger entry. Nothing is restored into a live database. |
+| `corporatetraveldc-backup-freshness.timer` | every 6 h (01:15, 07:15, 13:15, 19:15 UTC) | `backup_freshness.py` fails and pages when the last backup is older than 36 h, the last successful off-box sync is older than 36 h (when a target is set), no target is set while `BACKUP_REQUIRE_OFFBOX=1` (the default since the 2026-10-13 security batch (127a2f76): on-box only is a standing failure, not a quiet state), any agent snapshot is older than 36 h, the restore test is older than 8 days or failed, or the ledger chain breaks. |
 
 All three page through `corporatetraveldc-unit-failure-notify@` on failure.
 
@@ -91,7 +105,7 @@ Default behaviour for **every** `ctdc-agent-*` account (`CTDC_SNAPSHOT_EXCLUDE` 
 | `corporatetraveldc-agent-home-snapshot.timer` (system, root) | daily 03:20 UTC | `agent-home-snapshot.sh` (installed root copy): tars each agent home into `/var/lib/corporatetraveldc/agent-snapshots/<account>/` (operator-owned, 0600, SHA-256 beside it, last 7 kept). ~~**Credentials are excluded** (SSH private keys, auth and token files, keyrings): a restored agent re-enrolls.~~ **Superseded 2026-10-12:** the name excludes missed a Claude Code session key and a browser profile (see below). Now: wider excludes plus a tripwire that deletes any archive still holding a credential-shaped name and fails the unit. A restored agent re-enrolls. |
 | `corporatetraveldc-agent-timecard.timer` (user) | daily 03:50 UTC | `agent_timecard.py`: the agent analogue of a daily run sheet or call-center performance sheet. For the previous UTC day it records shift (first and last activity), work (tool calls, board posts, contributions, signed requests), exceptions (refused or failed calls) and custody (that day's snapshot hash, the covering backup archive). JSON goes to `/var/lib/corporatetraveldc/agent-timecards/`, the readable card to vault `04-Syntheses/agent-timecards/`, and the card's SHA-256 to the private ledger. |
 
-The freshness check also pages when any agent snapshot is more than 36 h old.
+The freshness check also pages when any agent snapshot is more than 36 h old. It checks every `ctdc-agent-*` account (minus `CTDC_SNAPSHOT_EXCLUDE`, or exactly `CTDC_SNAPSHOT_AGENTS` when set): six accounts on 2026-10-15, all with a 2026-10-14 03:20Z snapshot. Before that batch (2026-10-13, 127a2f76) it checked only the Codex account.
 
 **2026-10-12 incident (docs-parity audit, verified on the box).** The 2026-10-11 and 10-12 snapshots captured a
 Claude Code session key (`.claude/sessions/*.key`) in the Claude agent's home and a Brave browser profile
@@ -156,6 +170,7 @@ its profile held no sign-in.
   deadline still wins). It was a fixed `load1 >= 15` with no limit: on 2026-10-13 the box's resting load (17-20)
   held an unchanged acarshub image 45 min. Tests: `tests/scripts/test_load_gate.py`.
 - The nightly sync also waits for a running seed upload (`corporatetraveldc-proton-seed`), up to 90 min.
+- **Flags and exit behaviour** (`ctdi-backup.sh [--no-sync] [--dry-run]`): `--no-sync` writes the archive and ledger entries but skips the off-box sync. Borg exit code 1 (a warning, such as an unreadable file) no longer aborts the run: the archive is kept, the warning is logged, and the ledger's `backup` entry carries `borg_warnings: true`. Exit 2 or higher fails the unit. Excluded from every archive: `/var/lib/corporatetraveldc/models` (pinned by digest, re-pullable), `__pycache__`, `*.tmp`, and the root-only `/etc/corporatetraveldc/cf-honeypot.token` (the operator account cannot read it; it is re-issuable). The heavy-job wait is up to 2 h, after which the backup is skipped and the unit fails.
 - `--dry-run` now exits before any dump, ledger write or LADD rotation (it used to run both dumps and append a
   cui-stamp; the 2026-10-12 22:22Z cui-stamp in the ledger is that dry run, not a backup).
 - The dumps read `</dev/null`: `podman exec -i` used to read the caller's stdin and swallowed the rest of a relay.

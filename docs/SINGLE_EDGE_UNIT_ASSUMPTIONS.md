@@ -1,6 +1,9 @@
 # Guardrail values assume a SINGLE EDGE UNIT (one Raspberry Pi 5)
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a (plus the staged batch) and the live box: the guard, watchdog
+and one-uplink rows are corrected; rows for the slice envelope, the heavy-job turn, the rollout load gate, the
+`/tmp` floor and load stamps are added.
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -9,7 +12,9 @@ timeout or scheduling weight in this stack.**
 
 Every performance and resource guardrail here was tuned for one topology:
 the whole stack on a single Raspberry Pi 5 (4× Cortex-A76, 16 GB RAM, **no
-GPU**, one thermal/power envelope, one uplink). The numbers below are the
+GPU**, one thermal/power envelope, one uplink). (2026-10-15: "one uplink" is
+literally true right now. The cellular backup, `enu1`, has had no internet since
+2026-10-06; see `docs/NETWORK_FAILOVER.md`.) The numbers below are the
 result of **shared-resource contention on one box**, not general truths. If
 the topology changes they become wrong or needlessly conservative and must
 be re-derived per node.
@@ -30,7 +35,7 @@ llama.cpp tiers were merged into one unit 2026-09-06. They are in git history.
 | llama.cpp unit (`corporatetraveldc-llama.service`) | `CPUQuota=200%`, `-t 2 -tb 2`, two slots (`-np 2 --kv-unified -c 12288`), `MemoryLow=5120M`, `MemoryHigh=7168M`, `MemoryMax=8448M`, `MemorySwapMax=0`, `--cache-ram 0` | Inference is hard-capped at two cores so ingest keeps the other two; hot/chat requests can only preempt a report, never add a third core |
 | llama unit `CPUWeight` | 9000 in the tracked unit file; **10000 live** via a `systemctl --user set-property` drop-in (`~/.config/systemd/user.control/corporatetraveldc-llama.service.d/50-CPUWeight.conf`, plus `IOWeight=10000`) — the repo does not reflect the live value | Same contention reasoning; the drift is a finding, not a design |
 | Long-runner lock (`src/common/llama_pool.py`) | one long-running generation box-wide (`long-runner.lock`), one long-runner container at a time (`long-runner-unit.lock`, Quadlet `flock -w`) | Two concurrent report generations would starve the alert path on two cores |
-| `thermal-ingest-guard.py` | temp ≥ 74 °C sheds `tfms,stdds`; LOCKDOWN at ≥ 79 °C or load1 ≥ 40 sheds everything except web (never llama); restore < 65 °C and load1 < 20 (half the trip) held 300 s; 600 s observe-only after any restore; LLM-fallback count informational only | load1 bands are calibrated to **4 cores** (40 = 10× core count). On a de-consolidated stack the LOCKDOWN scope (stopping poller/pusher/runner with the SWIM feeds) is wrong |
+| `thermal-ingest-guard.py` | ~~temp ≥ 74 °C sheds `tfms,stdds`; LOCKDOWN at ≥ 79 °C or load1 ≥ 40 sheds everything except web (never llama); restore < 65 °C and load1 < 20 (half the trip) held 300 s~~ (corrected 2026-10-15: a load guard since 2026-10-13. LOCKDOWN only at load1 ≥ 40 (`THERMAL_GUARD_LOAD_LOCKDOWN`), shedding everything except web, never llama; temperature never sheds. After a 300 s dwell, resume is held only while load1 > 30 (`THERMAL_GUARD_HOLD_LOAD`) or the CPU is above 75 °C (`THERMAL_GUARD_HOLD_TEMP_C`, 1 °C hysteresis once above it); the 74/79 °C trips and the 65 °C resume bar are retired.) 600 s observe-only after any restore; LLM-fallback count informational only | load1 bands are calibrated to **4 cores** (40 = 10× core count). On a de-consolidated stack the LOCKDOWN scope (stopping poller/pusher/runner with the SWIM feeds) is wrong |
 | `OLLAMA_PREFLIGHT_COOL_TARGET_C` | 70.0 in `dispatch.env` (code fallback 62.0, `llm.py:463`) | Same thermal envelope |
 | Pre-flight load gate (`llm.py`) | batch inference waits (bounded, 180 s observed) while load1 is above target (7.00 observed in the 18:05Z ops-brief run), then proceeds | Load is shared with ingest |
 | `OLLAMA_TIMEOUT` (client budget, legacy name) | **240** in `dispatch.env`; code default 900 (`llm.py:366`) | CPU-bound generation time on 2 cores |
@@ -38,7 +43,12 @@ llama.cpp tiers were merged into one unit 2026-09-06. They are in git history.
 | DNS / Tailscale `CPUWeight` | 10000 for tailscaled, pihole-FTL, unbound (`/etc/systemd/system.control/*/50-CPUWeight.conf`) | They contend with inference on the same cores |
 | Boot stagger | `scripts/stack-boot-ctl.sh` `ORDER` = 32 units brought up one at a time; default window 60 s (`SERIAL_BRINGUP_MIN_WINDOW_S`), per-unit overrides (`poller:180`, `ingest-fdps:90`, `ingest-core:90`, `web:90`, `runner:90`, `ntfy:30`, `pgsql:30`) | Avoids a boot storm on one RAM/CPU budget |
 | Rolling maintenance windows | 3–4 quiet windows a day drawn from the 30-day load profile (`quiet-window-report`); 9 long-runners start one at a time inside them (`maintenance-dispatch`) | Only one heavy job fits at a time |
-| Systemd hardware watchdog | `RuntimeWatchdogSec=3min` for the diagnostic week; re-derived 2026-10-11 20:00 ET / 2026-10-12 00:00Z as 1.2 × worst observed stall (floor 30 s, cap 180 s) | A 14 s watchdog tripped on a load-20 stall on this box (2026-10-04) |
+| Systemd hardware watchdog | ~~`RuntimeWatchdogSec=3min` for the diagnostic week; re-derived 2026-10-11 20:00 ET / 2026-10-12 00:00Z as 1.2 × worst observed stall (floor 30 s, cap 180 s)~~ (corrected 2026-10-15: **30 s** live since the 2026-10-12 00:00Z tune; the worst stall in the week was 0.0 s, so the 30 s floor applied. The tracked `config/systemd/system.conf.d/zz-ctdc-watchdog.conf` still says 180 because the tune rewrites only the live file. `corporatetraveldc-stall-monitor` is still running.) | A 14 s watchdog tripped on a load-20 stall on this box (2026-10-04) |
+| `production.slice` envelope (added 2026-10-15) | `MemoryLow=6144M`, `MemoryHigh=13400M`, `MemoryMax=13780M` (`.config/systemd/user/production.slice`, same live) | The production containers' share of one 16 GB box; everything outside the slice lives in the remainder |
+| One heavy job at a time (added 2026-10-15) | `scripts/lib/heavy_lock.sh`: nightly backup, weekly restore test, full-load rollout (`serialized-rollout.sh`) and stack refresh share one turn; a waiter gives up after 7200 s | The 2026-10-12 03:40Z backup started six minutes into a full-load rollout (load 20.5 on 4 cores) |
+| Rollout hold-before-restart gate (added 2026-10-15) | `scripts/lib/load_gate.sh`: hold while load1 ≥ max(15, 1.25 × the load at rollout start), at most 900 s, then proceed only below load1 30 | The box's resting load (17-20) is above the old fixed 15, which held an unchanged image restart for 45 min on 2026-10-13 |
+| `/tmp` free-space floor (added 2026-10-15) | `scripts/tmp-headroom-guard.sh` every 5 min: keep ≥ 10% (`TMP_MIN_FREE_PCT`) of the 8 GB `/tmp` tmpfs free | `/tmp` is RAM-backed on this box; it filled on 2026-10-14 and broke GPG checks and the integrity sweep |
+| Load stamps (added 2026-10-15) | `scripts/lib/load_stamp.py`: test session start/end, failures, timeouts and slow tests append load average, load per CPU, PSI and the top CPU consumers (command names only) to `~/.local/state/ctdc-tests/load-stamps.jsonl` (`CTDC_LOAD_STAMP=0` turns it off; wired in `tests/conftest.py`) | A failure blamed on load must carry the load value measured on this box |
 
 ## When these become obsolete
 
@@ -49,7 +59,8 @@ llama.cpp tiers were merged into one unit 2026-09-06. They are in git history.
 - **Dispatch containers spread across nodes:** the 1536m / 300% template and
   the CPU weights were sized for N containers on one 16 GB / 4-core box;
   `thermal-ingest-guard.py`'s load bands and LOCKDOWN scope go with it.
-- **A larger single box:** re-derive every CPU weight and CPU-bound timeout.
+- **A larger single box:** re-derive every CPU weight and CPU-bound timeout,
+  and the load bands in the guard, the rollout gate and the slice envelope.
 
 ## Rule of thumb
 
@@ -60,7 +71,8 @@ each value as a starting point to re-measure.
 *(Cross-refs: per-container resource rationale lives in each Quadlet's
 comments; the guard's thresholds in `scripts/thermal-ingest-guard.py`
 `main()`; the boot order in `scripts/stack-boot-ctl.sh`; the watchdog tuning
-in `config/systemd/system.conf.d/zz-ctdc-watchdog.conf`.)*
+in `config/systemd/system.conf.d/zz-ctdc-watchdog.conf` (the live value is in
+`/etc/systemd/system.conf.d/`, see the watchdog row).)*
 
 ---
 

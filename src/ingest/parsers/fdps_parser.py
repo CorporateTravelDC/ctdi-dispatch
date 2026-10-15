@@ -754,6 +754,17 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
         if eta_el is not None:
             eta_estimated = (eta_el.get("time") or "").strip() or None
 
+    # 2026-10-14 (flight-instance resolver): the filed departure time. Confirmed
+    # on live FH (filed plan) messages: departure > runwayPositionAndTime >
+    # runwayTime > estimated/@time (the proposed runway departure); no other
+    # departure-time element is carried. Stored once per plan (first filing
+    # wins, db.upsert_flight_event) so FDPS-only instances get a date.
+    etd_estimated: str | None = None
+    if dep_elem is not None and source == "FH":
+        etd_el = _find_path_local30(dep_elem, "runwayPositionAndTime", "runwayTime", "estimated")
+        if etd_el is not None:
+            etd_estimated = (etd_el.get("time") or "").strip() or None
+
     return {
         "source": source,
         "gufi": gufi,
@@ -771,6 +782,7 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
         "flight_status": flight_status,
         "route_text": route_text,
         "eta_estimated": eta_estimated,
+        "etd_estimated": etd_estimated,
         "raw_xml": raw_xml,
     }
 
@@ -1698,7 +1710,7 @@ def write_flight_event(parsed: dict) -> bool:
         origin=parsed.get("origin"),
         destination=parsed.get("destination"),
         aircraft_type=parsed.get("aircraft_type"),
-        departure_time=None,
+        departure_time=_iso_epoch(parsed.get("etd_estimated")),
         arrival_time=arrival_time,
         status=(parsed.get("flight_status") or "").lower() or None,
         position_lat=parsed.get("latitude"),
@@ -1847,6 +1859,16 @@ def _fire_fdps_nas_alert(callsign: str, hex_id: str, parsed: dict,
         log.error("fdps: family-alert fire failed for %s: %s", callsign, e)
 
 
+def _iso_epoch(v: str | None) -> float | None:
+    """FIXM ISO time -> epoch seconds, None if absent/unparseable."""
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def check_fdps_watchlist(parsed: dict) -> None:
     """
     Check a parsed FDPS event against active flight watchlist entries.
@@ -1880,9 +1902,14 @@ def check_fdps_watchlist(parsed: dict) -> None:
     # the only real mechanism here; removed the dead arm entirely instead
     # of pointing it at a real column, since no such per-entry GUFI-pin
     # feature exists to restore.
+    # 2026-10-14 (flight-instance resolver): identifier OR route-filtered
+    # codeshare operating callsign, AND the plan's airports must not
+    # contradict the watch -- the other leg of an out-and-back no longer hits.
+    from common.flight_instance import match_watch_entry
     for entry in entries:
-        ident = entry["identifier"].upper()
-        if callsign != ident:
+        if not callsign or match_watch_entry([entry], callsign, origin=parsed.get("origin"),
+                                             destination=parsed.get("destination"),
+                                             diversion_without_sched=True) is None:
             continue
 
         try:
@@ -1908,7 +1935,7 @@ def check_fdps_watchlist(parsed: dict) -> None:
                 _fire_fdps_nas_alert(callsign, entry.get("hex_id") or "", parsed,
                                      dist_nm=None)
         except Exception as e:
-            log.error("fdps watchlist event for %s: %s", ident, e)
+            log.error("fdps watchlist event for %s: %s", callsign, e)
 
 
 def _maybe_alert_on_approach(entry: dict, parsed: dict) -> None:

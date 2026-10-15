@@ -1,6 +1,10 @@
 # ISO/IEC 42001 Alignment: [operator LLC] / CTDI
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live system at 2026-10-15 ~01:00Z /
+2026-10-14 21:00 ET. A.3, A.7, A.9 and A.10 changed; the Net position
+follows.)
 
 Standalone reference for a client, partner or auditor. The short version sits
 in `COMPLIANCE_SECURITY.md` §4.
@@ -38,18 +42,18 @@ this table in a proposal.]
 | Control area | What exists today | Assessment |
 | :--- | :--- | :--- |
 | **A.2 -- Policies related to AI** | No standalone, management-approved AI policy. Rules that act as policy are enforced in code and in `docs/DESIGN-PRINCIPLES.md` (local-inference default, CUI rules). | **Gap.** The substance exists; the document does not. |
-| **A.3 -- Internal organization** | One human operator. Since 2026-10-04 the AI agents run as separate Unix accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-cowork`, `ctdc-agent-llama`, plus two preloaded) with no sudo and read-only repository access; an agent can request but never approve a gated action (approval = a human's SSH signature, requester != approver, `src/common/governance.py`); agents are kill-able by signed kill orders with quorum rules (`scripts/kill-order.sh`, `scripts/team-liveness.sh`). | **Partial.** Human-vs-agent separation of duties is implemented in code; there is no second human, so no human-to-human segregation, no AI risk owner distinct from the builder/operator, no governance committee. |
+| **A.3 -- Internal organization** | One human operator. Since 2026-10-04 the AI agents run as separate Unix accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-cowork`, `ctdc-agent-llama`, plus two preloaded) (2026-10-15: six agent home directories exist on the box: `ctdc-agent-anthropic-claude`, `-anthropic-cowork`, `-dispatch`, `-llama`, `-openai-chatgpt`, `-openai-codex`) with no sudo and read-only repository access; an agent can request but never approve a gated action (approval = a human's SSH signature, requester != approver, `src/common/governance.py`); agents are kill-able by signed kill orders with quorum rules (`scripts/kill-order.sh`, `scripts/team-liveness.sh`). | **Partial.** Human-vs-agent separation of duties is implemented in code; there is no second human, so no human-to-human segregation, no AI risk owner distinct from the builder/operator, no governance committee. |
 | **A.4 -- Resources for AI systems** | Evidenced resource guardrails: per-container memory/CPU caps, the inference server's own cgroup limits (`CPUQuota=200%`, `MemoryMax=8448M`, no swap), a thermal/load guard with an incident history (`GUARDRAILS_JUSTIFICATION.md`). Network bandwidth is **not** guarded (SWIM ingest unscoped, ~240 GiB/day in early October 2026). | **Aligned** for compute/memory/thermal; **gap** for network. |
 | **A.5 -- Assessing impacts of AI systems** | No documented impact-assessment method. Decisions are made case by case by the operator, sometimes with blind adversarial reviews (e.g. the 2026-10-04 safety + code-review duel recorded in `docs/AGENT_SEGMENTATION.md`), but not to a written method. | **Gap.** (The previous revision mislabelled this row "Data for AI systems" and filled it with responsibility-allocation content, which belongs under A.3.) |
 | **A.6 -- AI system life cycle** | A consistent practice: changes staged, then a signed whole-tree manifest and signed commit by the operator, root-run code installed only from verified copies, images rebuilt from the signed tree and gated before restart (`scripts/stack-refresh.sh`), skills granted per agent from a signed catalog (`scripts/skill-grants.sh`). | **Partial.** Real and enforced in tooling; not written up as a lifecycle policy an auditor could review on its own. |
-| **A.7 -- Data for AI systems** | No query or model input/output leaves the box by default: inference is one local llama.cpp server on the tailnet IP. CUI radio data (SHARES/HEARS/HEART) is never in code, configs, exports or documents. Workspace writes from agents pass the CUI/PII scrub gate. The audit log is hash-chained on Postgres and archived with signatures rather than deleted (`COMPLIANCE_SECURITY.md` §3). | **Aligned.** |
+| **A.7 -- Data for AI systems** | ~~No query or model input/output leaves the box by default: inference is one local llama.cpp server on the tailnet IP.~~ (corrected 2026-10-15) The platform's own skill inference is one local llama.cpp server on the tailnet IP, and no operational feed data or skill prompt leaves the box by default. Data does reach cloud models by other paths: the weekly second-brain dump sends the full `CLAUDE.md` and the Claude Code memory to Anthropic (`claude --model opus -p`, `scripts/second-brain-weekly-dump.sh:139`, timer enabled), and the operator's interactive agents (Claude Code, Codex, Cowork, ChatGPT) run on Anthropic and OpenAI plans and see whatever they are given. The rule that no secret, credential, CUI or PII value goes into tracked files covers `CLAUDE.md` too. CUI radio data (SHARES/HEARS/HEART) is never in code, configs, exports or documents. LADD identifiers are never sent to airplanes.live and are blocked from the public mirror by a push-time tripwire. Workspace writes from agents pass the CUI/PII scrub gate. The audit log is hash-chained on Postgres and archived with signatures rather than deleted, with the open limits listed in `COMPLIANCE_SECURITY.md` §3. | ~~**Aligned.**~~ **Partial** (2026-10-15): the controls are real, but data does leave by the cloud-agent paths, and those paths have no written data-handling assessment. |
 | **A.8 -- Information for interested parties** | This document and `COMPLIANCE_SECURITY.md` are the disclosure. No formal communications process. | **Partial.** |
-| **A.9 -- Use of AI systems** | Deterministic fallback when local inference is down; no silent failover to a cloud provider. The Anthropic fallback in `src/common/llm.py` is closed by `ANTHROPIC_FALLBACK_ENABLED=false` (live `dispatch.env`) and per-call `allow_anthropic=False`. Pre-flight thermal/load checks gate inference (`preflight_cool_launch_if_needed()`). Human approval for gated actions is a signature, not a tap (`scripts/approve.sh`); agents draft into the shared workspace but have no publish, overwrite or delete route. | **Aligned.** |
-| **A.10 -- Third-party and customer relationships** | Local inference removes model-vendor data handling for operational data. Cloud agents (Anthropic, OpenAI) can reach the platform only through the agent gateway, per-agent OAuth, one MCP endpoint per identity, revocable from our side and killable in one command (`scripts/agent-gateway.sh kill-all`). Container networking is per-container opt-in. | **Aligned**, with the gateway as the one deliberate third-party surface. |
+| **A.9 -- Use of AI systems** | Deterministic fallback when local inference is down; no silent failover to a cloud provider. The Anthropic fallback in `src/common/llm.py` is closed by `ANTHROPIC_FALLBACK_ENABLED=false` (live `dispatch.env` as of the 2026-10-06 check; the code default is also `false`, `llm.py:399`) and per-call `allow_anthropic=False`. (2026-10-15: the one deliberate scheduled cloud call, the weekly second-brain dump, falls back the other way: if it fails, a load-gated local Llama job (`claude_weekly_llama_fallback`) redoes it.) Pre-flight thermal/load checks gate inference (`preflight_cool_launch_if_needed()`). Human approval for gated actions is a signature, not a tap (`scripts/approve.sh`); agents draft into the shared workspace but have no publish, overwrite or delete route. | **Aligned.** |
+| **A.10 -- Third-party and customer relationships** | Local inference removes model-vendor data handling for operational data. Remote cloud agents (Cowork, ChatGPT) can reach the platform only through the agent gateway, per-agent OAuth, one MCP endpoint per identity, revocable from our side and killable in one command (`scripts/agent-gateway.sh kill-all`). Container networking is per-container opt-in. (corrected 2026-10-15) The gateway is not the only third-party AI surface. On the box, vendor CLIs run under their own Unix accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-openai-codex`) and under the operator's account, and the weekly dump calls Anthropic on a timer. Non-AI third parties that receive data are listed in `COMPLIANCE_SECURITY.md` §2, "Third parties this deployment contacts": the airplanes.live fallback, the ADS-B/MLAT and VDL2 feeds, Pushover, Cloudflare, Proton Drive and GitHub. No supplier assessment exists for any of them. | ~~**Aligned**, with the gateway as the one deliberate third-party surface.~~ **Partial** (2026-10-15): the gateway controls are real, but there are other vendor paths and no supplier review. |
 
 ## The gap list
 
-Four things would need to exist before an audit could be attempted; none
+~~Four~~ Five (2026-10-15) things would need to exist before an audit could be attempted; none
 exists today:
 
 1. A formal, management-approved AI policy consolidating the rules already in
@@ -58,13 +62,18 @@ exists today:
    (human-vs-agent separation now exists in code; human roles do not).
 3. A documented AI risk / impact-assessment method (A.5).
 4. A management-review cadence.
+5. (added 2026-10-15) A written data-handling and supplier assessment for
+   the cloud-agent and vendor-CLI paths (A.7, A.10).
 
 ## Net position
 
 CTDI and [operator LLC] are not ISO/IEC 42001 certified and do not
 claim to be. The hard technical work -- data handling, vendor isolation,
 resource governance, signed human approval -- is largely done; the
-management-system paperwork is not.
+management-system paperwork is not. (2026-10-15: "vendor isolation" holds
+for the platform's own inference and operational data. It does not hold for
+the operator's cloud agents or the weekly Claude dump, which is why A.7 and
+A.10 are now Partial.)
 
 Update this document if an audit is started, a gap closes (move it into the
 table with evidence), or the architecture changes (for example, enabling the

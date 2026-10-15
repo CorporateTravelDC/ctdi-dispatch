@@ -7,6 +7,8 @@ deduplicated on 2026-08-11.** See **[SDR_SERVICES.md](SDR_SERVICES.md)** for
 the current SDR service map (enabled vs `.disabled`), dongle serialization,
 and enablement procedure. Kept as a pointer so existing links don't break.
 Re-confirmed 2026-10-06: still a pure pointer, no drift.
+Re-confirmed 2026-10-15: still a pure pointer. `SDR_SERVICES.md` now also
+covers the SDR data flow, outbound data sharing, monitoring and host setup.
 
 ---
 

@@ -1,6 +1,8 @@
 # PostgreSQL — the dispatch write path
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a (plus the staged batch, which adds no migration) and the live
+database (SELECT-only counts).
 
 ## Status
 
@@ -10,17 +12,21 @@ set in the live `/etc/corporatetraveldc/dispatch.env` and in the tracked
 `config/dispatch.env`. `DISPATCH_DB_BACKEND=sqlite` remains a supported code
 path for tests, dev and rollback; nothing in production runs it.
 
-- `src/common/db_backend.py`: `PG_TABLES` lists **102** tables;
+- `src/common/db_backend.py`: `PG_TABLES` lists ~~**102**~~ **104** tables (corrected 2026-10-15);
   `REFERENCE_TABLES` is an empty frozenset (machinery kept for any future
   SQLite-only reference set).
-- `src/common/pg_schema/`: **73** migration files, `0001_bootstrap.sql`
+- `src/common/pg_schema/`: ~~**73** migration files, `0001_bootstrap.sql`
   through `0073_console_and_gateway_switch.sql`, contiguous, defining **122**
-  distinct tables (the `PG_TABLES` set plus the second-brain index, demo and
+  distinct tables~~ (corrected 2026-10-15: **75** migration files, `0001_bootstrap.sql`
+  through `0075_surface_event_log.sql`, contiguous; 124 distinct `CREATE TABLE` names
+  across the files, and the live database holds 122 tables) (the `PG_TABLES` set plus the second-brain index, demo and
   newer governance/gateway tables). Applied in filename order by
   `scripts/pg_migrate.py` (wrapper `scripts/pg-migrate.sh [--dry-run] [--status]`),
   tracked in `schema_migrations`.
-  `[UNVERIFIED: which migrations are applied on the live instance — the
-  database was not queried]`.
+  ~~`[UNVERIFIED: which migrations are applied on the live instance — the
+  database was not queried]`.~~ (verified 2026-10-15: `schema_migrations` has 75
+  rows, the newest `0075_surface_event_log.sql`; its columns are `filename`,
+  `applied_at`, `checksum`.)
 - The one deliberate SQLite store left: `src/demo/demo_api.py` reads
   `/var/lib/corporatetraveldc-demo-source/demo-source.db` (1.9 GB), the
   scrubbed public-playback derivative produced by
@@ -69,6 +75,12 @@ because it trades freshness for throughput.
   signers and authz tiers (0066–0067), approval keys and signed approvals /
   council / workspace (0068–0069), token action scopes (0070), agent gateway
   (0071), ES invites (0072), console and gateway kill switch (0073).
+- 0074 `reference_import_ledger`: an append-only, hash-chained record of every
+  LADD filter/remove import and weekly FAA registry download (source basename,
+  size, SHA-256, resulting row counts); each backup pins its head
+  (`docs/BACKUP.md`). 0075 `surface_event_log` (2026-10-14): an append-only log
+  of DCA/IAD/BWI surface events that keeps ramp exits for time-fidelity work,
+  pruned at 120 days (280 rows at the 2026-10-15 check).
 - Future reference candidates named in the decision: GTFS static, UAS
   registry, MMSI registry (SQLite reference unless hot-joined).
 
@@ -131,6 +143,20 @@ Change both `pgsql-secrets.env` and `DISPATCH_PG_PASSWORD` in
 `ALTER ROLE dispatch PASSWORD …` (`POSTGRES_PASSWORD` is read only at
 initdb). Never quote either value.
 
+### 3.4 Backups and signed data manifests (added 2026-10-15)
+
+- **Backups:** the nightly `ctdi-backup.sh` takes `pg_dump -Fc` inside the
+  container (LADD table data excluded; it stays on the box) into an encrypted Borg
+  archive synced to Proton Drive. The weekly restore test runs `pg_restore --list`
+  on the dumps and nothing more. Details: `docs/BACKUP.md`.
+- **Signed DB manifests:** `scripts/sign-db-manifest.sh` runs
+  `scripts/snapshot-db-manifest.py` to write a point-in-time content-hash manifest
+  of chosen tables and GPG-signs it (operator key, or the agent key under a grant or
+  approval). It is the data counterpart of `scripts/sign-manifest.sh`. The tracked
+  manifests are the 2026-09-19 checkpoints in `manifests/`
+  (`DB_MANIFEST_checkpoint1_reference.json` and `..._second_brain.json`, each with an
+  `.asc`). No timer runs it; it is manual.
+
 ## 4. Access layer (`src/common/db_backend.py`)
 
 - `DISPATCH_DB_BACKEND=postgres` → one `psycopg_pool.ConnectionPool` per
@@ -170,7 +196,8 @@ The SWIM backlog floor `SWIM_BACKLOG_STALE_SECONDS` now defaults to 28800 s
 ## 6. Retention and partitioning — not implemented
 
 The planned weekly range partitions with partition-drop retention do
-**not** exist: no migration creates a partitioned table. Retention today is
+**not** exist: no migration creates a partitioned table (live
+`pg_partitioned_table` count 0 on 2026-10-15). Retention today is
 row deletion by poller skills:
 
 - `flight_events_cleanup.py`: `RETENTION_DAYS = 30` — rows older than 30
@@ -182,13 +209,34 @@ row deletion by poller skills:
   `stdds_safety_status_history`, `local_airspace_alerts`,
   `international_aviation_feed`, expired session grants and board auth.
   `nas_programs` is deliberately never pruned.
+- Full table (added 2026-10-15; defaults from `src/common/db.py`, `src/poller/main.py`):
 
-Both 30-day windows are below the 90-day floor the 2026-09-05 decision set.
+  | Table | Window | How |
+  |---|---|---|
+  | `flight_events` | 30 days | `flight-cleanup` (daily): archive to the vault, then delete; watchlist-protected flights kept |
+  | `surface_movement_events` | 30 days (`SURFACE_ARCHIVE_RETENTION_DAYS`) | `surface-cleanup`: archive to the vault (`archives/surface_movement_events`), then delete |
+  | `train_events`, `international_aviation_feed` | 30 days | `retention-prune` (daily) |
+  | `osint_items` | 30 days | `osint-monitor` skill (every 900 s), `db.osint_prune_items` |
+  | `webhook_events`, `flight_ooooi_times`, `local_airspace_alerts` | 90 days | `retention-prune` |
+  | `surface_event_log` | 120 days | `retention-prune` (since 2026-10-14) |
+  | `board_messages`, `stdds_safety_status_history` | 180 days | `retention-prune` |
+  | session grants, board enrol nonces and tokens | 30 days after expiry (session grants); 7 days after expiry (board enrol nonces and tokens) | `retention-prune` |
+  | `audit_log` | never deleted in place | `audit-log-archive` (daily, maintenance window): rows past `AUDIT_ARCHIVE_RETENTION_DAYS` (90) are exported to the Nextcloud vault (which runs on this same box) with a GPG-signed checkpoint and replaced by a signed stub; the old 90-day prune is a refusing stub |
+  | `convective_sigmet_archive` | never pruned, append-only by design | written every 10 min by `corporatetraveldc-convective-sigmet-archiver` (7,518 rows on 2026-10-15) |
+  | `nas_programs` | never pruned | deliberate |
+
+~~Both 30-day windows are below the 90-day floor the 2026-09-05 decision set.~~
+(corrected 2026-10-15: five windows are below the 90-day floor the 2026-09-05
+decision set: `flight_events`, `surface_movement_events`, `train_events`,
+`international_aviation_feed` and `osint_items`, all 30 days.)
 
 ## 7. Next choke point
 
 CPU and thermal headroom on the Pi, not the database: every new parser adds
-load that the thermal guard sheds first.
+load that the ~~thermal~~ load guard sheds first (since 2026-10-13
+`thermal-ingest-guard.py` sheds only at load1 ≥ 40; temperature no longer sheds).
+Disk is the other limit now: the root volume is 83% used (2026-10-15), shared by the
+Postgres volume and the local Borg repository.
 
 ---
 

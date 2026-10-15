@@ -5,8 +5,8 @@
 ## Provenance
 
 - Received from the operator as `ctdi-parameterized-deployment-templates.zip` (sha256 `0738d34c2ab8834059f6e4a1d3a8967636b7cb92ffd5ce1ac59126a0e131f01c`).
-- Files copied unchanged: `README.md`, `validate_profiles.py`, `schemas/profile.schema.json`, `profiles/*.json` (base plus eight verticals: chauffeur-regulated, executive-assistant-chief-of-staff, content-creator, independent-journalist, cfo, cmo, cpa, gig-worker).
-- Reviewed on staging: placeholders only (`CHANGE_ME`, `example-*`, null coordinates); no secrets, credentials, personal data or real identifiers. `python3 validate_profiles.py` → "Checked 9 profiles / PASS: schema and security invariants".
+- Files copied unchanged: `README.md`, `validate_profiles.py`, `schemas/profile.schema.json`, `profiles/*.json` (base plus eight verticals: chauffeur-regulated, executive-assistant-chief-of-staff, content-creator, independent-journalist, cfo, cmo, cpa, gig-worker). (2026-10-15: no longer byte-identical to the zip. The schema, profiles and validator were changed on 2026-10-09 (see "Status, 2026-10-09"), and `README.md` carries a dated status note at the top since 2026-10-15. The zip's sha256 above identifies the original.)
+- Reviewed on staging: placeholders only (`CHANGE_ME`, `example-*`, null coordinates); no secrets, credentials, personal data or real identifiers. `python3 validate_profiles.py` → "Checked 9 profiles / PASS: schema and security invariants". (2026-10-15: "Checked 11 profiles / PASS"; the validator now also checks `src/common/profiles/` and `private/`.)
 
 ## Notes for when the work starts (observations, nothing changed)
 
@@ -24,3 +24,9 @@
 - **Geography provider:** the same module answers airports by role, airport lookup, airports within a radius and the receiver position, from the profile only. Coordinates and zones are resolved when a profile is written (public airport reference data; OpenStreetMap/Nominatim for free-text places, one request per place under its usage policy), never at runtime.
 - **First consumer:** the METAR fetcher's station list (identical default). Also fixed: any 4-character ICAO station now parses (non-US stations used to become `UNKN`).
 - **Next consumers, one at a time:** surface-tracking airports (SMES/STDDS), the DC-area and facility sets, the geo filter's centre and radius, NWWS offices, NOTAM zones, FIDS airports and their airport-local zone, the receiver position (making a missing position an explicit error, pack gate 6).
+
+## Status, 2026-10-15
+
+- **Consumers:** still one. `src/poller/fetchers/metar.py` is the only module that imports `common.deployment_profile` (checked at main 1491bf5a). The "next consumers" list above is unchanged and is backlog item 4 (after the 2026-10-12 time-fidelity checkpoint); gate 6 (a missing receiver position is an error) is not implemented, so the DC fallback still applies.
+- **Compositions:** the skeleton from `compositions/EMCOMM-HAZARD-COMPOSITION-SPEC.md` §3 shipped on 2026-10-10 (`src/common/composition.py`, `tests/common/test_composition.py`, `compositions/emcomm-cert-hazard-operations.json`). Nothing reads compositions at runtime.
+- **Public mirror:** `private/` is still dropped by `scripts/scrub-public-tree.py`.

@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** Model still live; `tfms_airline` (tier 40) added 2026-10-05; FIDS never confirms any phase; line numbers stale; ungated writers listed in [FLIGHT_INSTANCE_RESOLVER.md](FLIGHT_INSTANCE_RESOLVER.md#standing-rules-respected).
+
 # OOOI Source Authority — SWIM as Validator of Record
 
 **Written 2026-09-28.** Code-validated. Documents the source-authority model

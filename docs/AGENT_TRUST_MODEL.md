@@ -1,6 +1,6 @@
 # Agent and operator trust model
 
-Verified against the code at HEAD and the running system on 2026-10-07 12:00Z–13:30Z / 08:00–09:30 ET; hardening pass applied the same day (status changes are marked inline, the earlier status struck through).
+Verified against the code at HEAD and the running system on 2026-10-07 12:00Z–13:30Z / 08:00–09:30 ET; hardening pass applied the same day (status changes are marked inline, the earlier status struck through). Refreshed 2026-10-15 ~01:20Z (UTC; 2026-10-14 21:20 ET) against HEAD 1491bf5a plus the staged next-relay batch and the live database: the approval TTL table (§3), withdraw (§3, §4), live connectors (§7), the audit catalog and the review 09 audit-chain findings (§11, §12, §13), and the superuser database role (§9.7). Review 09 findings R09-1 to R09-4 are **open defects**, not fixed.
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -47,7 +47,7 @@ Mechanical human authority holds against **every principal that is not running a
 
 It does **not** hold against code running **as the operator account**. A process running as the operator — including the operator's own interactive agent session, which runs outside `agents.slice` as a designed exception (`docs/AGENT_SEGMENTATION.md`) — can read:
 
-- the database password, the admin API token, and the operator's board signing key, which has no passphrase;
+- the database password, the admin API token, and the operator's board signing key, which has no passphrase. (Added 2026-10-15: the application database role is a Postgres **superuser** and owns `audit_log`, so the database password is full database authority, including rewriting the audit chain and disabling its trigger; §9.7, open R09-3);
 - the agent manifest-signing GPG key, which has no passphrase by design;
 - a set of passwordless sudo rules (§9.1).
 
@@ -145,7 +145,7 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | Signer liveness | ENFORCED | the signer must be an active human board signer, so the team-liveness switch revokes approval authority with everything else |
 | Tap / notification link can allow | NOT POSSIBLE | `db.resolve_approval_request` raises `ApprovalNeedsSignature` for `allow`; a tap can only **deny**, and only with the per-request deny key from the push |
 
-**Expiry is per request class, not universal.** Ten minutes is the default and the value for the sudo gate and console login. It is not a system-wide invariant. Since 2026-10-07 every kind has a **hard maximum** (`governance.MAX_TTL_S`, the values below); a caller may ask for less, never more:
+**Expiry is per request class, not universal.** Ten minutes is the default and the value for the sudo gate and console login. It is not a system-wide invariant. Since 2026-10-07 every kind has a **hard maximum** (`governance.MAX_TTL_S`, the values below); a caller may ask for less, never more. Since 2026-10-11 the defaults and bounds come from one table, `governance.APPROVAL_TTL_POLICY` (default, min, max per kind); an `APPROVAL_TTL_<KIND>_S` environment override is clamped to that kind's bounds, and councils derive theirs from their own deadline (`governance.approval_ttl`):
 
 | Kind | TTL | Set in |
 |---|---|---|
@@ -153,9 +153,14 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | `sudo` via `POST /admin/approval-requests` | ~~caller-chosen, no upper bound~~ **≤ 600 s (2026-10-07)** | `governance.MAX_TTL_S` caps every kind at creation; a longer request is refused (400) |
 | `console-login` | 600 s | `console.LOGIN_TTL_S` |
 | `connector-link` | 900 s | `agent_gateway.PENDING_TTL_S` |
-| `gateway-thaw` | 3600 s | `agent_gateway.request_thaw` |
-| `connector-hold` | 24 h | `agent_gateway.request_hold` |
-| `council` / `council-close` | 24 h | `governance.COUNCIL_APPROVAL_TTL_S` |
+| `gateway-thaw` | ~~3600 s~~ (corrected 2026-10-15) default 1800 s, bounds 300-3600 s | `agent_gateway.request_thaw` → `governance.approval_ttl("gateway-thaw")` |
+| `connector-hold` | ~~24 h~~ (corrected 2026-10-15) default 1800 s, bounds 300-3600 s | `agent_gateway.request_hold` → `governance.approval_ttl("connector-hold")` |
+| `council` | ~~24 h~~ (corrected 2026-10-15) 10% of the council's deadline, bounds 1800-14400 s (30 min to 4 h) | `governance.approval_ttl("council", deadline_hours=...)` |
+| `council-close` | ~~24 h~~ (corrected 2026-10-15) 25% of the remaining time, bounds 900-7200 s (15 min to 2 h) | `governance.approval_ttl("council-close", remaining_s=...)` |
+
+~~`governance.COUNCIL_APPROVAL_TTL_S`~~ (24 h) is still defined at `governance.py:57` but nothing in `src/` uses it (2026-10-15).
+
+**Withdraw (since 2026-10-11).** The requester may withdraw its own **pending** request: `POST /api/v1/approvals/{id}/withdraw`, board-signed by the requester (`governance.withdraw_approval`). It moves `pending` to `withdrawn` only, is power-reducing (needs no approver signature), and is audited (`approval.withdrawn`). A requester still cannot allow or deny its own request. A council whose approval is expired, withdrawn or denied follows it to that status instead of staying `requested` (`governance._reconcile_councils`, audited as `council.status`).
 
 > NO RESPONSE IS NOT APPROVAL. UNANSWERED REQUESTS EXPIRE AND CONFER NO AUTHORITY. (ENFORCED for every kind above.)
 
@@ -166,6 +171,7 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | Channel | Request creation | Human interaction | Authorization | Server-side check | What then executes |
 |---|---|---|---|---|---|
 | **SSH (`scripts/approve.sh`)** | any code path above | the operator runs `approve.sh allow\|deny <id>` from an SSH session | the approval key signs the canonical text; the passphrase is typed by the human | `POST /api/v1/approvals/{id}/resolve` → `governance.resolve_signed` (Tier 0 by design: the signature is the credential; rate-limited to 20/min) | the consumer that created the request (below) |
+| **Withdraw (requester)** | the requester's own pending request | the requester signs `POST /api/v1/approvals/{id}/withdraw` with its board key | none needed: withdrawing only removes authority | `governance.withdraw_approval`: requester must match, status must be `pending` | nothing; the request reads `withdrawn` |
 | **ntfy push** | the sudo gate and the approval routes push the request with a **deny** link | the operator reads it on the phone | none: the push carries the deny key only | `GET /admin/approval-requests/{id}/resolve?action=deny&k=<key>` resolves **deny** only; `allow` is always 403 | nothing |
 | **Native vendor access request** (connector link) | the vendor's OAuth `/oauth/authorize` → `authorize_start` | the vendor shows a consent page naming the account; the operator signs with `approve.sh` | `connector-link` approval over a spec binding connector, account, vendor, client id, redirect URI and scope | `authorize_status` issues the code once, only after `allowed`; `exchange_code` requires PKCE S256, the same client and redirect URI, single use, and an open gateway | a per-connector access token (1 h) and a rotating refresh token |
 
@@ -244,7 +250,7 @@ Namespaces are distinct (`board`, `approval`, `kill`), so a signature cannot be 
 
 ## 7. Agent connectors and the gateway (F, G, H)
 
-`src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`. One MCP endpoint per agent identity, `/mcp/<slug>`, each mapped to its own team account (live today: `cowork` and `claude-code`, each a distinct account).
+`src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`. One MCP endpoint per agent identity, `/mcp/<slug>`, each mapped to its own team account (live today: ~~`cowork` and `claude-code`, each a distinct account~~ (corrected 2026-10-15 from `agent_connectors`: four enabled connectors, `chatgpt`, `claude-code`, `codex` and `cowork`, mapped to four distinct accounts; `chatgpt`, `codex` and `cowork` each have one active connection, `claude-code`'s connection is dormant (`agent_connections`, 2026-10-15))).
 
 ### 7.1 Identity separation (F)
 
@@ -370,6 +376,10 @@ See §0 and §1. This is the single-operator fallback kept by design; a multi-ac
 
 The checkbox is UI friction, not an authorization boundary. Authorization for every console action is the signed console session plus CSRF. Only re-opening and holds need a fresh signature.
 
+### 9.7 The application database role is a superuser — **NOT ENFORCED (open, review 09 R09-3; recorded here 2026-10-15)**
+
+Live 2026-10-15: the role the application connects as has `rolsuper = t` and owns `audit_log`. Anything that holds the database password (the operator account and every container that is given it) can therefore delete or rewrite `audit_log` rows, recompute the whole chain, disable the chain trigger, and run operating-system commands through the database server (`COPY ... TO PROGRAM`). This is wider than §9.5's "anything holding the database password can re-key `approval_signers`". Fix not yet made: remove superuser from the application role, move `audit_log` ownership to a separate role, and revoke UPDATE / DELETE / TRUNCATE on it from the application role. Team agent accounts are not affected: they hold no database credentials.
+
 ---
 
 ## 10. Manifest signing and the `sign-manifest:agent-key` grant (L)
@@ -413,10 +423,22 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | Reader invites, revokes, sign-outs, promos, freeze, resume, kill-all | ~~no~~ **yes** — `reader.*` (actor, target id) | `es_invite_events` |
 | Root execution of an approved sudo command | journal (`approved-exec`) + root-only ledger | the ledger file holds argv, signer and exit code |
 | Agent manifest signing | yes (script-written) | the signature itself |
+| Requester withdraws a pending request (added 2026-10-15) | **yes** — `approval.withdrawn` (id, kind, requester) | `approval_requests.status = withdrawn` |
+| Council follows its approval to expired / withdrawn / denied (added 2026-10-15) | **yes** — `council.status` (id, status, because) | `council_sessions.status` |
+| Any authorised **signed** non-GET board request: board posts, council requests and closes, workspace contributions, approval withdrawals (approval resolutions are signed with the approval key and audited separately, not by this row) (added 2026-10-15; since 2026-10-10) | **yes** — `board.signed.request` (route, signer, cosigner, policy, sha256 of the body and of the signature; never the body) | — |
+| Console sign-in re-tap while that browser's request is still pending (added 2026-10-15; since 2026-10-12) | **yes** — `console.login.retap` (approval id, re-tap count, user agent, first 80 chars) | a fresh push for the same request |
 
 **Verification.** ~~No code verifies the chain.~~ `src/common/audit_chain.py` recomputes every chained row **in SQL**, with the trigger's exact expression, and checks every `prev_hash` link. `scripts/scheduled-integrity-sweep.sh` runs it every 15 minutes, fails with a priority-5 push on any mismatch or broken link, and logs the head hash each run, which keeps a copy of the chain head outside the database. First live run: 419 chained rows intact, plus 12,250 rows written before the trigger existed, counted and not judged.
 
 **What this still does not prove.** A writer who can rewrite the table can also recompute the whole chain. Detecting that needs an anchor the writer cannot change: the journaled head hashes are the current anchor, and signed checkpoints (`audit_checkpoints`, schema present) are the planned one. The governance tables themselves remain ordinary mutable state; the chain covers the **event record**, not the tables.
+
+**Open defects in the chain and its verification (review 09; recorded here 2026-10-15; none fixed, none in the staged next-relay batch):**
+
+- **Deleting the newest rows is not detected (R09-2).** The remaining rows still verify, and nothing compares the head with an earlier one: the sweep only *logs* `head_hash` to the journal and never reads it back. "Journaled head hashes are the current anchor" is therefore an after-the-fact manual reconstruction aid, not an automatic check. `audit_checkpoints` has 0 rows live (its only writer, the audit-log-archive skill, inserts one only when it archives rows older than 90 days; the oldest row is from 2026-08-16), so no signed anchor exists (R02 open item).
+- **Concurrent writers can fork the chain (R09-1).** The trigger (`src/common/pg_schema/0062_audit_tamper_evidence.sql:45-48`) takes its advisory lock *after* the row's id is assigned and then chains to `ORDER BY id DESC LIMIT 1`; the verifier walks rows in id order. Two concurrent inserts can therefore chain out of id order and the sweep would report a break with no tampering. Review 09 reproduced it in 5 of 5 runs with 20 concurrent writers; the 96 sweeps of the last 24 h reported intact.
+- **A verifier error is reported as healthy (R09-4).** `scheduled-integrity-sweep.sh:104-108` treats only rc 1 *with* `"intact": false` in the output as a failure. Any other non-zero result, including a verifier exception (rc 1 with a traceback) or a down web container, logs "audit chain check unavailable" as a warning, the sweep stays OK and nothing is pushed.
+- **The application role is a superuser and owns `audit_log` (R09-3)**, §9.7: anyone with the database password can rewrite and re-hash the whole chain or disable the trigger.
+- **Field delimiter (low).** The trigger joins the hashed fields with a bare `|` (no length prefix or escaping), so text could be moved between free-text fields (`remote_addr`, `detail`) by someone with UPDATE access without breaking the chain.
 
 ## 12. Security invariants / end policies
 
@@ -433,7 +455,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | 9 | Emergency containment: global controls fail closed | **ENFORCED** | gateway freeze refuses every endpoint; reader freeze refuses every sign-in path |
 | 10 | Explicit reopening | **ENFORCED** for the agent gateway (signed thaw); **NOT ENFORCED** for reader sign-ins (resume needs a session, no signature) | §7.3, §8 |
 | 11 | Canonical authorization: signatures bind canonical material, not labels | ~~ENFORCED for the command / spec; NOT ENFORCED for the reason text~~ **ENFORCED (2026-10-07)** for command, pattern, reason, requester, kind, expiry and action | §3 |
-| 12 | Audit honesty | **ENFORCED** for the event record (governance events chained and verified every 15 min); **PARTIAL** against a writer who recomputes the whole chain (external anchor: journaled head hashes) | §11 |
+| 12 | Audit honesty | ~~**ENFORCED** for the event record (governance events chained and verified every 15 min)~~ (corrected 2026-10-15: **PARTIAL**. Governance events are chained and verified every 15 min, and an edited row is detected; deleting the newest rows is not (R09-2), a verifier error reads as healthy (R09-4), concurrent writers can fork the chain into a false alarm (R09-1), and the app role is a superuser that owns the table (R09-3). All open.) **PARTIAL** against a writer who recomputes the whole chain (external anchor: journaled head hashes, logged but never compared) | §11, §9.7 |
 | 13 | No equivalence inflation: an agent signature is not a human signature | **ENFORCED** | §6, §10 |
 | 14 | Private control plane: overlay membership is a prerequisite, not authorization | **ENFORCED** (overlay or host-local) | §5.1 |
 
@@ -459,11 +481,12 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | Direct invocation bypassing the sudo gate | ~~possible for NOPASSWD patterns~~ **refused (verified live, review 03)**: the only passwordless rule is the root executor, which re-verifies the signature | `sudo -n -l` after the deploy relay; `tests/scripts/test_approved_exec.py` |
 | Agent GPG key used without a grant | **possible for operator-account processes** — the designed exception (§0); not possible for managed agent accounts | key protection and script inspection (§10) |
 | Forged approval row (database write) used to run a root command | refused: the signature must verify against the root-owned pin | `test_a_valid_signature_verifies_and_a_forged_row_does_not` |
-| Approval executed twice; late execution | refused: root ledger with `O_EXCL`; 5-minute window | `test_each_approval_executes_at_most_once`, `test_row_state_and_timing` |
+| Approval executed twice; late execution | refused: root ledger with `O_EXCL`; 5-minute window | `test_each_approval_executes_at_most_once`, `test_row_state_and_timing`. (Added 2026-10-15: unit tests only. The live end-to-end run as root, review 09 §E.1, has never been done; the executor's ledger directory `/var/lib/ctdc-approved-exec` does not exist, so it has never consumed an approval. Open, R09-E1.) |
 | Reason or pattern edited after signing | signature fails | `test_canonical_v2_binds_pattern_and_reason` |
 | Over-long request lifetime | refused (400) | `test_ttl_is_capped_per_kind`, `test_admin_route_binds_the_token_label_as_requester` |
 | Console login redeemed long after approval | refused | `test_an_allowed_login_cannot_be_redeemed_long_after_expiry` |
-| Audit row edited or removed | flagged within 15 min | `common.audit_chain` in the integrity sweep |
+| Audit row edited or removed | ~~flagged within 15 min~~ (corrected 2026-10-15: an edited row, or a removed row with later rows after it, is flagged within 15 min; removing the **newest** rows is **not** detected (R09-2); a verifier that errors is logged as "unavailable" and the sweep stays OK (R09-4)) | `common.audit_chain` in the integrity sweep |
+| Concurrent audit writers (added 2026-10-15) | chain breaks with no tampering, 5 of 5 runs at 20 writers (R09-1, open) | review 09 D5b |
 | Production destructive tests | not performed | by design; covered by fixtures above |
 
 ---

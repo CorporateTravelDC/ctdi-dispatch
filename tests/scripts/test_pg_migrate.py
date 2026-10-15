@@ -72,7 +72,8 @@ def _run(*args) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts" / "pg_migrate.py"),
          "--database", SCRATCH_DB, *args],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=240,   # 2026-10-15: 75 migrations ran past 60 s under load (preflight caught it)
+
     )
 
 

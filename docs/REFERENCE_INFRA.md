@@ -7,6 +7,8 @@
 > Verified against the private source on 2026-10-06 22:45Z / 18:45 ET
 > (private source verified against HEAD 2c3f81b and live state at 18:25Z / 14:25 ET;
 > the reference deployment is one Raspberry Pi 5).
+> Re-checked 2026-10-15 01:00Z against the private source's code (main plus the
+> staged batch) and live state; corrections are dated inline.
 
 ---
 
@@ -50,6 +52,9 @@ substitutes placeholders and drops operator-only files.
 
 - **Uplink**: Wi-Fi primary plus a cellular USB-Ethernet backup, selected by
   route metric and an active failover watchdog (§3.1). There is no bond.
+  (Added 2026-10-15: in the reference deployment the cellular backup has been
+  out of service since 2026-10-06, so there is currently no working second
+  path. The watchdog still runs, but it only alerts.)
 - **Public ingress**: a Cloudflare Tunnel (`cloudflared` as a **user** unit,
   `--protocol http2`, config file tracked in the repo and diffed against the
   live copy) to nginx on the host. Every public hostname routes to nginx
@@ -73,7 +78,8 @@ substitutes placeholders and drops operator-only files.
 - **Systemd watchdog**: hardware watchdog via `RuntimeWatchdogSec`, set from
   measured scheduling stalls (a stall monitor records every ≥ 1.5 s stall; a
   one-shot tune timer derives the value as 1.2 × worst stall, floor 30 s,
-  cap 180 s).
+  cap 180 s). (Added 2026-10-15: the tune ran on 2026-10-12 and set 30 s,
+  the floor, which is the live value. The stall monitor is still running.)
 
 ### 3.1 Uplink failover
 
@@ -98,20 +104,22 @@ Nothing is live.
 
 ## 4. Service map
 
-Reference figures: 35 containers running; 76 tracked `.container` Quadlets
-(38 long-running, 38 oneshot). Ports below bind to `127.0.0.1` unless noted;
+Reference figures: ~~35 containers running; 76 tracked `.container` Quadlets
+(38 long-running, 38 oneshot)~~ (corrected 2026-10-15: 37 long-running
+containers plus any oneshots mid-run; 77 tracked `.container` Quadlets, 38
+long-running and 39 oneshot). Ports below bind to `127.0.0.1` unless noted;
 "tailnet" means the node's tailnet address (e.g. `192.0.2.10`).
 
 **Core spine**
 
 | Service | Port(s) | Role |
 |---|---|---|
-| `web` | 127.0.0.1 + tailnet :8000 | FastAPI tiered REST API (~126 routes), agent gateway, operator console. One uvicorn worker. |
+| `web` | 127.0.0.1 + tailnet :8000 | FastAPI tiered REST API (about 128 routes; ~~about 126~~ before 2026-10-15), agent gateway, operator console. One uvicorn worker. |
 | `poller` | — | Async scheduler: 12 REST fetchers, in-process skills, watchlist sweeps, admin trigger directory |
 | `pusher` | — | ntfy sender; polls the DB every 30 s for unnotified events |
 | `ingest-core` | — | NWS push (NWWS-OI) + local airspace from own RF receivers |
 | `ingest-{fdps,stdds,tfms,tbfm,itws,notam}` | — | One SWIM push feed per container (`notam` = AIM/FNS). Any one restarts without dropping the rest. Load-shed under pressure (§4.1). |
-| `pgsql` | 127.0.0.1:5432 + shared socket volume | PostgreSQL 16, the live database (73 numbered migrations) |
+| `pgsql` | 127.0.0.1:5432 + shared socket volume | PostgreSQL 16, the live database (~~73~~ 75 numbered migrations, corrected 2026-10-15) |
 
 **Feeds / members gate / runner / demo**
 
@@ -122,7 +130,8 @@ Reference figures: 35 containers running; 76 tracked `.container` Quadlets
 | `runner` | 127.0.0.1 + tailnet :8001 | Ops dashboard; tailnet-only |
 | `runner-demo` | 127.0.0.1 + tailnet :8005 → 8001 | Public demo runner; `DEMO_MODE` (off by default) enables an app-layer password gate |
 | `demo` | — | Recorder → Postgres `demo_snapshots` every 300 s |
-| `demo-api` | 127.0.0.1 + tailnet :8004 | Playback API over a scrubbed, promoted SQLite copy (§4.3) |
+| `demo-api` | 127.0.0.1 + tailnet :8004 | Playback API over a scrubbed, promoted SQLite copy (§4.3). Added 2026-10-15: it and `runner-demo` also mount the Postgres socket, for the password-gate profiles only. |
+| demo portals (added 2026-10-15) | 127.0.0.1 + tailnet, one port each | Two static `nginx` containers that serve password-gated client-preview sites. Not exposed through the tunnel in the reference deployment. |
 
 **SDR / RF (optional, hardware-dependent)**: an ADS-B aggregator
 (`ultrafeeder`: tailnet :8080/:8081, Beast :30005, SBS on localhost :30003),
@@ -150,13 +159,25 @@ fail2ban, the llama unit, and the root units in §4.4.
 A thermal/CPU guard (`scripts/thermal-ingest-guard.py`) runs every 120 s and
 **stops containers under pressure, restarting them when the box recovers**:
 
+| ~~Trip~~ | ~~Condition~~ | ~~What is shed~~ |
+|---|---|---|
+| ~~Temp, mild~~ | ~~CPU ≥ 74 °C~~ | ~~the two heaviest SWIM feeds (`tfms`, `stdds`)~~ |
+| ~~**Lockdown**~~ | ~~CPU ≥ 79 °C **or** 1-min load ≥ 40~~ | ~~all six SWIM feeds, core ingest, poller, pusher, runner. `web` survives; the LLM server is never touched.~~ |
+| ~~Informational~~ | ~~70–74 °C, load 15–40, or any LLM-contention fallback count~~ | ~~nothing~~ |
+| ~~Restore~~ | ~~< 65 °C **and** load < 20 (half the lockdown trip), held 300 s~~ | ~~in boot order; each restarted feed is re-checked and a failed one raises a p5 `RESTORE FAILED`~~ |
+| ~~Dormancy~~ | ~~600 s after any restore: observe only (≥ 79 °C still trips)~~ | ~~—~~ |
+
+(corrected 2026-10-15: the reference deployment changed this to a **load
+guard only** on 2026-10-13. The box idles around 65 °C with the stack shed,
+so a load trip could never clear under a 65 °C restore bar, and no real trip
+had ever been temperature-driven. Temperature now never sheds.)
+
 | Trip | Condition | What is shed |
 |---|---|---|
-| Temp, mild | CPU ≥ 74 °C | the two heaviest SWIM feeds (`tfms`, `stdds`) |
-| **Lockdown** | CPU ≥ 79 °C **or** 1-min load ≥ 40 | all six SWIM feeds, core ingest, poller, pusher, runner. `web` survives; the LLM server is never touched. |
-| Informational | 70–74 °C, load 15–40, or any LLM-contention fallback count | nothing |
-| Restore | < 65 °C **and** load < 20 (half the lockdown trip), held 300 s | in boot order; each restarted feed is re-checked and a failed one raises a p5 `RESTORE FAILED` |
-| Dormancy | 600 s after any restore: observe only (≥ 79 °C still trips) | — |
+| **Lockdown** | 1-min load ≥ 40 | all six SWIM feeds, core ingest, poller, pusher, runner. `web` survives; the LLM server is never touched. |
+| Informational | load 15–40, CPU above 75 °C, or any LLM-contention fallback count | nothing |
+| Restore | after a 300 s dwell; held only while load > 30 or the CPU is above 75 °C (that hold clears below 74 °C) | in boot order; each restarted feed is re-checked and a failed one raises a p5 `RESTORE FAILED` |
+| Dormancy | 600 s after any restore: observe only (evaluated anyway at ≥ 79 °C; temperature still sheds nothing) | — |
 
 History, from the reference deployment's operating data: a two-stage load
 ladder (trip 10/14, restore < 6) was replaced 2026-08-23 because every real
@@ -183,9 +204,9 @@ that is parsed, never sourced, and takes precedence over the in-repo pin.
 
 | Surface | When checked |
 |---|---|
-| Oneshot Quadlets (+ `demo-api`) started via `Exec=scripts/verified-exec.sh …` | each start |
+| Oneshot Quadlets (+ `demo-api`; 40 in the reference deployment, 2026-10-15) started via `Exec=scripts/verified-exec.sh …` | each start |
 | `src/common/llm.py` | before inference (refuses if the verifier is missing) |
-| Integrity sweep timer | every 15 min, whole tree (~1,250 files) |
+| Integrity sweep timer | every 15 min, whole tree (about 1,440 files; ~~about 1,250~~ before 2026-10-15) |
 | Long-running app containers (web, poller, pusher, ingest, runner, …) | at build: images are built only from a signed, clean tree and pass an in-image gate; the sweep covers the rest |
 
 Any tracked edit left unsigned fails the sweep within 15 minutes. Deploy
@@ -211,8 +232,10 @@ replays a 2026-08 window.
 | Local-LLM council participant | hourly | runs as the LLM service account |
 | NTS cert refresh | daily | chrony NTS certificate |
 | Tailnet cert renew | daily | nginx tailnet HTTPS certificate; reload-or-restart nginx |
-| Watchdog tune | once | set `RuntimeWatchdogSec` from stall data |
+| Watchdog tune | once | set `RuntimeWatchdogSec` from stall data (fired 2026-10-12: 30 s) |
 | Stall monitor | running | records ≥ 1.5 s scheduling stalls |
+| Agent transcript leak scan (added 2026-10-15) | hourly | redacts and scans every agent account's transcripts |
+| Agent home snapshot (added 2026-10-15) | daily | root snapshot of every agent home, for the nightly backup |
 
 Root-run scripts execute from root-owned installed copies
 (`/usr/local/libexec/<prefix>/`), installed by `scripts/install-root-copies.sh`
@@ -224,9 +247,14 @@ never from the operator's checkout.
 - **Postgres** is primary (`DISPATCH_DB_BACKEND=postgres`). Containers reach
   it through a shared socket volume mounted at `/var/run/postgresql`; host
   processes use `127.0.0.1:5432`. Schema = numbered, additive migrations
-  under `src/common/pg_schema/` (73 at this revision). SQLite remains as a
+  under `src/common/pg_schema/` (~~73~~ 75 at this revision, corrected 2026-10-15). SQLite remains as a
   rollback selector and for the demo playback copy.
 - **Second-brain index** lives in the same Postgres since 2026-09-19 (§10).
+- **Backups** (added 2026-10-15): a nightly encrypted, deduplicated Borg
+  archive of the databases, platform state and configuration is synced to one
+  parameterized off-box target. The target only ever holds Borg-encrypted
+  chunks, and LADD table data stays on the box by default. A freshness check
+  runs every 6 h and a restore test weekly. Detail: `docs/BACKUP.md`.
 - **Vault files** live in Nextcloud (WebDAV), not in the platform DB.
 - **State/report files** live under `/var/lib/<prefix>/`, which is mounted
   into containers with `:z`. Rule learned the hard way: nothing under that
@@ -249,17 +277,18 @@ env passthrough, enforced by a contract test.
 
 ### 4.7 Scheduling
 
-63 active user timers in the reference deployment, in these groups:
+~~63~~ 67 (corrected 2026-10-15) active `<prefix>-*` user timers in the reference deployment, in these groups:
 
 | Group | Pattern |
 |---|---|
 | Briefs | hourly ops brief, hourly advance brief, fallback monitor |
 | Rolling maintenance | a dispatcher every 20 min (+ random offset) starts enrolled long-runners (daily topic watches, digests) **one at a time** inside the day's drawn quiet windows; enrolled jobs have no timer of their own. A daily report builds a 30-day load profile and draws 3–4 two-hour windows per day (≥ 4 h apart, one overnight); a missing/stale profile falls back to a fixed overnight window. The operational day rolls at 05:00 local. |
 | Weekly | Monday weeklies (watches, desk memo, summary, vault weekly) |
-| Daily | usage snapshot, DNS restart, vault index scan, demo archiver, codeshare seed, freshness audit, ops plan, image prune, LLM restart, vault daily digest |
-| Several per day | entity-tracking digest and semantic compile (every 6 h), RSS (2 h), pull-path verify |
-| Every few minutes | thermal guard, memory watch, ingest restart, failover watchdog (60 s), SDR crash-loop guard, egress compliance push, Nextcloud and SWIM-session health, board sweep, integrity sweeps (platform and website), feed DB integrity check, … |
+| Daily | usage snapshot, DNS restart, vault index scan, demo archiver, codeshare seed, freshness audit, ops plan, image prune, LLM restart, vault daily digest; added 2026-10-15: backup, agent time card, dependency audit, uplink reminder |
+| Several per day | entity-tracking digest and semantic compile (every 6 h), RSS (2 h), pull-path verify; added 2026-10-15: backup freshness (6 h), airline time-fidelity collector (6 h), weekly-LLM-job backstop check (6 h) |
+| Every few minutes | thermal guard, memory watch, ingest restart, failover watchdog (60 s), SDR crash-loop guard, egress compliance push, Nextcloud and SWIM-session health, board sweep, integrity sweeps (platform and website), feed DB integrity check; added 2026-10-15: Nextcloud cron (5 min), `/tmp` headroom guard (5 min), … |
 | Image lifecycle | weekly refresh (Sunday) + an **adversarial tripwire** (below) |
+| Weekly, added 2026-10-15 | backup restore test (Sunday); a weekly vault dump run by a cloud LLM CLI (Sunday) |
 
 Long-runners share one `flock` with a bounded wait and an exit code (75)
 that counts as success when the lock is busy. Timer zones: wall-clock jobs
@@ -408,19 +437,29 @@ operator's push, and can only deny.
 - Every event fires two ntfy pushes: a domain topic and a concise `dispatch`
   summary. Dedup is forward-only by content hash.
 - Flight tracking is local-first: own ADS-B receiver, SWIM flight data,
-  locally imported registries, airport FIDS, schedule inference. OOOI phases
+  locally imported registries, ~~airport FIDS,~~ schedule inference. OOOI phases
   never revert; same-phase source precedence ACARS > SWIM surface > SWIM
   traffic-flow (incl. airline-reported) > TBFM > ADS-B > FIDS. ADS-B never
   asserts landing/in-gate; SWIM beats airline-posted times. Marketing vs
   operating flight numbers resolve through a codeshare map. An optional
   FlightAware AeroAPI tier is dormant without a key.
+  (corrected 2026-10-15: airport FIDS is gate and baggage enrichment only. It
+  is never an identity or tail source, and the OOOI authority gate denies
+  every FIDS phase claim; the FIDS rank above only breaks ties. Tail sources
+  are SWIM only: flight data, the departure clearance linked to its flight
+  plan, arrival sequencing and traffic flow. Watches match a specific flight
+  instance (the leg), not just a number. An optional third-party fallback
+  (airplanes.live) exists. Off by default, the reference deployment enables
+  it: it is asked only after every local source has no contact, for position
+  and identity only, never for an identifier on the FAA LADD privacy list,
+  and it has no OOOI authority.)
 - Escalating per-family, per-ARTCC topics (`tfms-*`, `tbfm-*`, `fdps-*`,
   `itws-*`, `aim_fns-*` × centre) with per-topic throttle/enable/sanitize via
   admin routes.
 
 | Topic | Content | Priority |
 |---|---|---|
-| `tfr-alert` / `hot-alerts` | VIP/high-priority TFR, severe ops events | 5 |
+| `tfr-alert` / `hot-alerts` | VIP/high-priority TFR, severe ops events (2026-10-15: each VIP TFR alerts once, with its own FAA text and active window, and again only if the FAA changes it) | 5 |
 | `flight-alerts` / `train-alerts` / `vessel-alerts` | Watchlist events | 2–5 |
 | `dispatch` | Concise bottom line, all events | mirrors source |
 | `cps` | Critical Predictability State changes | 3–5 |
@@ -458,8 +497,12 @@ bridge processes — was retired 2026-08-18 and the repo archived.
 ## 10. Second-brain vault & multi-agent coordination (optional layer)
 
 Not required for the platform. A WebDAV (Nextcloud) vault, PARA-organised,
-under a dedicated non-admin account, with every write path running through a
-CUI/PII **block** gate (refuse and surface, never silently redact). The vault
+under a dedicated non-admin account, with ~~every write path running through a
+CUI/PII **block** gate~~ (corrected 2026-10-15: a CUI/PII **block** gate that
+each writer calls itself. The WebDAV client's `put()` does not enforce it,
+and some writers in the reference deployment, such as the archival/cleanup
+skills, export analysis and skill snapshots, do not call it) (refuse and
+surface, never silently redact). The vault
 index, semantic layer and knowledge-graph tables live in the platform's
 PostgreSQL. Agents read a scoped set of folders through the API or the
 gateway and write only through the signed, create-only workspace route; no

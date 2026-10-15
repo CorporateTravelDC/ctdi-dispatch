@@ -2,7 +2,10 @@
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET
 (`src/runner/main.py`, 2,883 lines; `src/runner/frontend/`; the two runner
-Quadlets; nginx and cloudflared config).
+Quadlets; nginx and cloudflared config). Rechecked 2026-10-15 01:40Z against
+1491bf5a (`main.py` now 2,915 lines, still 30 route decorators): both instances
+up, `:8005/healthz` 200, `/manifest.webmanifest` and `/sw.js` 200 on :8001;
+corrections marked inline.
 
 ## Overview
 
@@ -17,16 +20,26 @@ the dispatch web API.
 | Live ops dashboard | `corporatetraveldc-runner.service` | 8001 on 127.0.0.1 and 100.x.x.x | **Tailnet-only**: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). No public hostname. `DISPATCH_BASE_URL=http://100.x.x.x:8000`. |
 | Public demo | `corporatetraveldc-runner-demo.service` | 8005 → 8001 on 127.0.0.1 and 100.x.x.x | `https://dispatch-runner.example.com` (tunnel → nginx → :8005) returns 200; `:8005/healthz` 200. `DEMO_MODE=true` in the Quadlet; `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`. Reads the demo API (`DISPATCH_BASE_URL=http://100.x.x.x:8004`), whose data file has not been refreshed since 2026-08-14 14:21Z. Its nginx vhost exists only on the host. |
 
-**Trust model.** `_is_trusted()` is purely IP-based: client IP from
-`CF-Connecting-IP` exclusively when present, else the socket peer / first
-`X-Forwarded-For` hop; trusted nets are Tailscale CGNAT `100.64.0.0/10`,
+**Trust model.** `_is_trusted()` is purely IP-based: ~~client IP from
+`CF-Connecting-IP` exclusively when present,~~ (corrected 2026-10-15; not true
+when written either: since the 2026-08-25 fix `CF-Connecting-IP` is honoured
+only when `Host` is in `_CLOUDFLARE_FRONTED_HOSTNAMES`, today just
+`dispatch-runner.example.com`, `main.py:357`; on any other host the
+header is ignored) client IP from `CF-Connecting-IP` on the Cloudflare-fronted
+host, else the socket peer / first `X-Forwarded-For` hop; trusted nets are Tailscale CGNAT `100.64.0.0/10`,
 loopback and RFC1918 (`_TRUSTED_NETS`, `main.py:188`). It never reads
 `X-CTDI-Public`, and no Cloudflare Access policy fronts the demo hostname.
 App-layer gates regardless of `DEMO_MODE`: `PUT /api/v1/config` (404
 untrusted), `GET /api/v1/frontend-config` (untrusted callers get a
 placeholder coordinate and empty widget key), `GET`/`DELETE /api/chat/history`
-(404 untrusted). `proxy_dispatch()`'s `DEMO_MODE` + session-cookie check is
-the only hostname-wide gate, and it is active on the demo instance.
+(404 untrusted). ~~`proxy_dispatch()`'s `DEMO_MODE` + session-cookie check is
+the only hostname-wide gate, and it is active on the demo instance.~~
+(corrected 2026-10-15: since 2026-10-13 (127a2f76, 03:38Z) the hostname-wide
+gate is the `demo_gate` middleware, `main.py:415`, which fronts every `/api/*`
+route and `/healthz` for untrusted visitors on the demo instance (open with no
+login: `/healthz`, `/api/whoami`, `/api/demo/status`, POST `/api/demo/login`;
+`main.py:410`); see "Demo gate" at the
+end. `proxy_dispatch()`'s own check still runs behind it.)
 
 **Retired:** `ops.example.com` (2026-08-02) — hard-404 by
 hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
@@ -49,14 +62,16 @@ hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
    middleware (`main.py:382`) returns 404 (not 403) to an untrusted origin on
    the admin proxy prefix and on any non-GET to `/api/dispatch/api/v1/*`.
 2. **Demo gate** (demo instance): `DEMO_MODE=true` + untrusted origin ⇒ the
-   `ctdc_demo_session` cookie is required — HMAC-SHA256 keyed with
+   `ctdc_demo_session` cookie is required (since 2026-10-13 (127a2f76, 03:38Z) for every `/api/*`
+   read except the open paths, 401 without it; writes and `/api/ask` 403 even
+   with it; `demo_gate`, `main.py:415`) — HMAC-SHA256 keyed with
    `DEMO_SESSION_SECRET`, minted by `POST /api/demo/login` (password checked
    by the demo backend; cookie `httponly`, `secure`, `samesite=lax`, default
    8 h). Signals are sanitized server-side.
-3. **Tier-1 token injection**: for `_TIER1_PATHS` (`main.py:1803`; 5 paths:
+3. **Tier-1 token injection**: for `_TIER1_PATHS` (~~`main.py:1803`~~ `main.py:1835` as of 2026-10-15; 5 paths:
    `tfr-enriched`, `radio`, `cui/status`, `watchlist`, `watchlist/history`)
    the proxy injects the runner's cert-tier `RUNNER_ENRICHED_TOKEN`
-   unconditionally; for `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY` (`main.py:1833`;
+   unconditionally; for `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY` (~~`main.py:1833`~~ `main.py:1865`;
    4 paths: `knowledge-graph/html`, `knowledge-graph/meta`, `vault/file`,
    `osint/scopes`) only for trusted origins. A client `Authorization` header
    always wins. Watchlist **reads** are injected on purpose (Ops sees the real

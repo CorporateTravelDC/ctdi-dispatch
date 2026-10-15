@@ -79,6 +79,7 @@ declare -A MODELS=(
   [corporatetraveldc-pi5-disruption-weather-digest]="disruption-weather-digest"
   [corporatetraveldc-pi5-ep-advance]="ep-advance"
   [corporatetraveldc-pi5-ep-advance-trend]="ep-advance-trend"
+  [corporatetraveldc-pi5-ep-advance-venues]="ep-advance-venues"
   [corporatetraveldc-pi5-executive-protection-daily-watch]="executive-protection-daily-watch"
   [corporatetraveldc-pi5-gig-economy-daily-watch]="gig-economy-daily-watch"
   [corporatetraveldc-pi5-ops-brief]="ops-brief"

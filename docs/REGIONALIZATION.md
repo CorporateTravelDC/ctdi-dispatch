@@ -1,6 +1,9 @@
 # CTDI Regionalization Guide
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay on 2026-10-15 ~01:10Z / 2026-10-14 21:10 ET. Every
+constant in §2 was re-found at the file named.)
 
 How to deploy Corporate Travel Dispatch Intelligence outside Washington, DC.
 The architecture is the same everywhere; geography is set in configuration
@@ -22,6 +25,10 @@ Write bare `KEY=value` — `EnvironmentFile=` keeps quote characters.
 | `NOTAM_FACILITY_FILTER` | Extra NOTAM facilities beyond the permanent set | — |
 | `AMTRAK_PRIMARY_STATION`, `AMTRAK_REGIONAL_STATIONS`, `AMTRAK_WATCHLIST_STATIONS`, `AMTRAK_CORE_ROUTES` | Rail hub and routes | `AMTRAK_PRIMARY_STATION=WAS` in the template |
 | `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON`, `ULTRAFEEDER_SCAN_RADIUS_NM` | Receiver location (see `GPS_COORDINATE_CONFIGURATION.md`) | in the secrets file |
+| `DISPATCH_PROFILE` (added 2026-10-15; live since 2026-10-09) | Path to a deployment profile JSON. Unset = the bundled reference profile `src/common/profiles/ctdi-reference.json`, which reproduces the DC behaviour. Precedence everywhere: an explicit environment setting, then the profile, then the reference. | unset (reference profile) `[UNVERIFIED: live dispatch.env not re-read]` |
+| `DISPATCH_LOCAL_TZ` (added 2026-10-15) | Operator-local zone for day-keyed work (`common/optime.py`, `deployment_profile.local_timezone()`) | default `America/New_York` |
+| `DISPATCH_DAY_ROLLOVER` (added 2026-10-15) | Local time at which the operational day rolls over (`common/optime.py`) | default `05:00` |
+| `AIRPLANES_LIVE_FALLBACK` (added 2026-10-15) | Enables the third-party airplanes.live fallback lookup (`DATA_SOURCES.md` §3). Off in the template | on per the 2026-10-12 audit `[UNVERIFIED: live dispatch.env not re-read 2026-10-15]` |
 
 The `amtrak-tracker` container's station is set in its quadlet
 (`Environment=FILTER_STATION=WAS`).
@@ -29,13 +36,16 @@ The `amtrak-tracker` container's station is set in its quadlet
 ## 2. Code constants that are DC-specific
 
 These are constants, not settings; a non-DC deployment edits them (and
-re-signs the manifest):
+re-signs the manifest). (2026-10-15: of these, only the METAR station list
+reads the deployment profile so far. The rest are still constants; moving
+them to the profile one consumer at a time is planned work. Design pack:
+`docs/deployment-profiles/`.)
 
 | File | Constant | DC value |
 |---|---|---|
 | `src/poller/skills/ops_brief.py` | `HUB_AIRPORTS`, `NWS_ALERTS_URL` | KDCA,KIAD,KBWI + 12 hubs; `area=VA,MD,DC,NY,NJ,CT,MA,PA,DE,RI` |
 | `src/poller/fetchers/nws.py` | `ALERTS_URL`, zone forecast URLs | `area=DC,MD,VA`; DCZ001, MDZ014, VAZ036 |
-| `src/poller/fetchers/metar.py` | `DC_STATIONS` (also CPS scoring) | KDCA KIAD KBWI KFDK KHEF KJYO KGAI |
+| `src/poller/fetchers/metar.py` | `DC_STATIONS` (also CPS scoring) | KDCA KIAD KBWI KFDK KHEF KJYO KGAI (~~constant~~ corrected 2026-10-15: since 2026-10-09 these are the profile's airports with role `metar`; the list above is the fallback) |
 | `src/ingest/parsers/aim_parser.py` | `_PERMANENT_AIRPORTS` (NOTAM watch set) | same seven |
 | `src/ingest/parsers/geo_filter.py` | 250 NM radius around DCA, `CORE_AIRPORTS` (30) | FDPS storage filter |
 | `src/ingest/parsers/fdps_parser.py` | `DC_LAT/DC_LON`, `MARINE_ONE_RADIUS_NM` | DCA, 50 NM |
@@ -49,6 +59,13 @@ re-signs the manifest):
 | `src/poller/skills/faa_cifp_parse.py` | `_AIRPORTS` (21) and bounding box | DC/Baltimore terminal area |
 | `src/geo/dc_airspace.py` | P-56A/B, DC FRZ, DC SFRA polygons, served at `GET /api/v1/airspace` | DC |
 | `src/common/personas.py` | `ops-brief` persona section labels | LEAD, DC METRO, NAS PROGRAMS, ATCSCC FORECAST, TFRs, NWS ALERTS, AMTRAK NEC, BOTTOM LINE |
+| `src/poller/skills/route_impact.py` (added 2026-10-15) | `_dc_vip()`: the VIP TFR ground-route narrative runs only for TFRs whose facility is ZDC/KZDC/PCT | ZDC, PCT |
+| `src/common/personas.py` (added 2026-10-15) | route-impact persona: corridor roads and timing rules, Andrews movements holding DCA, Camp David (I-270/US-15/MD-77), Mount Weather (VA-7/VA-601) | DC region |
+
+The VIP TFR alert itself is not regional. Every VIP TFR nationwide alerts
+once, at p5 on `tfr-alert` and `hot-alerts` plus Pushover, and again only if
+the FAA changes it (`pusher/main.py::push_vip_tfrs`). Only the ground-route
+narrative is DC-specific.
 
 Persona edits take effect on the next request (no rebuild);
 `personas.py` is manifest-covered, so re-sign.
@@ -103,7 +120,10 @@ with a national or EUROCONTROL alert source.
 
 `GET /api/v1/aircraft/{identifier}` queries both the FAA and OpenSky
 registries (`source`: `faa`, `opensky` or `faa+opensky`). Identity resolution is local-only (own ADS-B → SWIM →
-local registry tables) since 2026-08-27; airplanes.live is not queried.
+local registry tables) since 2026-08-27~~; airplanes.live is not queried~~
+(corrected 2026-10-15: since 2026-10-08 airplanes.live is asked as a
+fallback after every local source has no contact, never for a LADD-listed
+identifier, and only when `AIRPLANES_LIVE_FALLBACK=1`. See `DATA_SOURCES.md` §3).
 
 ## 6. Rail
 

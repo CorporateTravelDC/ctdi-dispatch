@@ -639,6 +639,8 @@ class WatchlistSweep:
                     # Independent of OOOI-phase hit/miss above.
                     _check_flight_fdps_cache(entry, ident)
                     _check_flight_fids(entry, ident)
+                    _check_flight_inbound(entry, ident)
+                    _check_flight_tdes_tail(entry, ident)
                 except Exception as e:
                     log.debug("flight sweep %s: %s", ident, e)
 
@@ -1751,6 +1753,201 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
 # 2026-10-03: table moved to common.airline_codes (single source). The old
 # private copy here mapped ASH -> YX (wrong: ASH is Mesa = YV).
 from common.airline_codes import ICAO_TO_IATA as _ICAO_TO_IATA_CARRIER  # noqa: E402
+
+
+_HEX_INSTANCES_CACHE: dict[str, tuple[float, list]] = {}
+HEX_INSTANCES_TTL_S = 600
+
+
+def _hex_instances(hex_id: str) -> list:
+    """fi.instances_for_hex is a raw_json LIKE scan (~20 s live, swarm audit NB-05): one
+    scan per aircraft per 10 min, shared by the inbound tracker and the tail guard."""
+    from common import flight_instance as fi
+    hx = (hex_id or "").lower()
+    hit = _HEX_INSTANCES_CACHE.get(hx)
+    now = time.time()
+    if hit and now - hit[0] < HEX_INSTANCES_TTL_S:
+        return hit[1]
+    insts = fi.instances_for_hex(hx)
+    _HEX_INSTANCES_CACHE[hx] = (now, insts)
+    for k in [k for k, v in _HEX_INSTANCES_CACHE.items() if now - v[0] > HEX_INSTANCES_TTL_S]:
+        _HEX_INSTANCES_CACHE.pop(k, None)
+    return insts
+
+
+def _watch_sched_dep(entry: dict, ident: str):
+    """The watch's scheduled departure, or -- when it carries none (0 of 13 live watches
+    did on 10-14, swarm audit NB-04) -- today's instance from TFMS/FDPS: exactly one
+    instance of this flight from the watch's origin scheduled in [now - 6 h, now + 24 h].
+    None when that is not unique (never a guess)."""
+    from common import flight_instance as fi
+    if entry.get("scheduled_departure"):
+        return entry["scheduled_departure"]
+    now = time.time()
+    try:
+        cands = [i for i in fi.resolve(ident, entry.get("origin"), entry.get("destination"))
+                 if i.sched_dep is not None and now - 6 * 3600 <= i.sched_dep <= now + 24 * 3600
+                 and fi.airports_agree(i.key.origin, entry.get("origin")) is not False]
+    except Exception as e:
+        log.debug("watch sched %s: %s", ident, e)
+        return None
+    deps = {round(i.sched_dep) for i in cands}
+    return next(iter(deps)) if len(deps) == 1 else None
+
+
+_INBOUND_DEDUP = PushDedup("inbound_tracker")
+_INBOUND_LAST_RUN: dict[str, float] = {}
+INBOUND_EVERY_S = 600          # instances_for_hex is a raw_json scan: not every tick
+INBOUND_LOOKAHEAD_H = 6.0      # start watching the inbound this long before the scheduled departure
+_INBOUND_PRIORITY = {"late_beyond_turn": 4, "diverted": 4, "cancelled": 4, "on_time": 2, "at_origin": 2}
+
+
+def _check_flight_inbound(entry: dict, ident: str) -> None:
+    """2026-10-14 (flight-instance resolver, section 4): "where's my inbound".
+    For a watch with a hex that has not pushed back, from INBOUND_LOOKAHEAD_H
+    before its scheduled departure: find the assigned tail's leg into the
+    watched origin (instances_for_hex + previous_leg) and assess it with the
+    turn for its airframe class. One push per status transition; the dedup
+    content is the status and the inbound's instance key, never times or
+    slack. 'unknown' (inbound outside DC FDPS coverage, the usual case for a
+    non-DC origin) is logged, not pushed. Reads only; never an OOOI phase."""
+    from common import flight_instance as fi
+    hex_id = (entry.get("hex_id") or "").strip().lower()
+    if not hex_id or (entry.get("oooi_phase") or "").lower() in ("out", "off", "on", "in"):
+        return
+    sched = fi.to_epoch(_watch_sched_dep(entry, ident))
+    now = time.time()
+    if sched is None or not (sched - INBOUND_LOOKAHEAD_H * 3600 <= now <= sched + 3600):
+        return
+    if now - _INBOUND_LAST_RUN.get(entry["id"], 0.0) < INBOUND_EVERY_S:
+        return
+    _INBOUND_LAST_RUN[entry["id"]] = now
+    ops = fi.operating_identities(ident, entry.get("origin"), entry.get("destination"))
+    op_ident = f"{ops[-1][0]}{ops[-1][1]}" if len(ops) == 2 else ident
+    key = fi.FlightInstanceKey.make(op_ident, entry.get("origin"), entry.get("destination"), sched)
+    if key is None:
+        return
+    watched = fi.FlightInstance(key=key, sched_dep=sched, sched_arr=fi.to_epoch(entry.get("scheduled_arrival")))
+    candidates = _hex_instances(hex_id)
+    inbound = fi.previous_leg(candidates, watched)
+    a = fi.assess_inbound(watched, inbound,
+                          aircraft_class=fi.aircraft_class_for_type(inbound.aircraft_type if inbound else None))
+    if a.status == "unknown":
+        log.debug("inbound %s: %s", ident, a.summary)
+        return
+    slot = f"{entry['id']}:inbound"
+    ck = content_hash(f"inbound:{entry['id']}:{a.status}:{a.inbound}")
+    if not _INBOUND_DEDUP.should_push(slot, ck):
+        return
+    from shared.watchlist import watchlist_event_hit
+    watchlist_event_hit(
+        entry["id"], a.summary,
+        {"watchlist_trigger": "inbound_" + a.status, "identifier": ident, "inbound": a.inbound,
+         "flags": list(a.flags), "min_turn_min": a.min_turn_min, "slack_min": a.slack_min},
+        priority=_INBOUND_PRIORITY.get(a.status, 3),
+    )
+    _INBOUND_DEDUP.record(slot, ck)
+
+
+def _guarded_tail_change(entry: dict, ident: str, *, source: str, label: str, new_hex: str | None,
+                         tail: str | None, exclude_gufi: str | None = None) -> None:
+    """Run a candidate tail through decide_tail_change with ONE source and act
+    on the decision: accepted -> repoint + push with the reason; rejected ->
+    one note per (watch, candidate hex). Keyed on the OPERATING flight (a
+    marketing number's own filing would otherwise look like "the tail is
+    filed on another leg"). Any error is a rejection, never a silent repoint.
+    Identity only: never an OOOI phase."""
+    from common import flight_instance as fi
+    prior_hex = (entry.get("hex_id") or "").lower() or None
+    if not new_hex or new_hex.lower() == prior_hex:
+        return
+    new_hex = new_hex.lower()
+    tail = tail or fi.registration_for_hex(new_hex)
+    from shared.watchlist import watchlist_event_hit
+    try:
+        ops = fi.operating_identities(ident, entry.get("origin"), entry.get("destination"))
+        op_ident = f"{ops[-1][0]}{ops[-1][1]}" if len(ops) == 2 else ident
+        sched = _watch_sched_dep(entry, ident)
+        watched_key = fi.FlightInstanceKey.make(op_ident, entry.get("origin"), entry.get("destination"), sched)
+        if watched_key is None:
+            decision = fi.TailChangeDecision(False, True, "watched leg has no usable instance key",
+                                             new_hex, tail, prior_hex)
+        else:
+            watched = fi.FlightInstance(
+                key=watched_key, gufi=exclude_gufi, sched_dep=fi.to_epoch(sched),
+                sched_arr=fi.to_epoch(entry.get("scheduled_arrival")))
+            candidates = _hex_instances(new_hex)
+            decision = fi.decide_tail_change(
+                watched=watched, candidate_hex=new_hex, candidate_registration=tail, prior_hex=prior_hex,
+                sources=(source,), candidate_instances=candidates,
+                previous=fi.previous_leg(candidates, watched, exclude_gufi=exclude_gufi),
+                exclude_gufi=exclude_gufi)
+    except Exception as e:
+        log.warning("%s tail guard %s: %s -- change not accepted", source, entry.get("id"), e)
+        decision = fi.TailChangeDecision(False, True, f"guard error: {e}", new_hex, tail, prior_hex)
+    if decision.accepted:
+        watchlist_event_hit(
+            entry["id"],
+            f"{ident} {label}: TAIL CHANGE {prior_hex}/{entry.get('registration') or '?'} "
+            f"→ {new_hex}/{tail or '?'} ({decision.reason})",
+            {"watchlist_trigger": f"{source}_tail_change", "identifier": ident, "prior_hex": prior_hex,
+             "new_hex": new_hex, "prior_registration": entry.get("registration"),
+             "new_registration": tail, "reason": decision.reason},
+            priority=4,
+        )
+        db.update_watchlist_hex_registration(entry["id"], new_hex, tail, source=source)
+        return
+    if decision.changed:
+        slot = f"{entry['id']}:tail"
+        ck = content_hash(f"tailguard:{entry['id']}:{new_hex}")
+        if _TAIL_GUARD_DEDUP.should_push(slot, ck):
+            watchlist_event_hit(
+                entry["id"],
+                f"{ident} {label}: tail change NOT accepted ({prior_hex} → {new_hex}/{tail or '?'}): "
+                f"{decision.reason}",
+                {"watchlist_trigger": f"{source}_tail_change_rejected", "identifier": ident,
+                 "prior_hex": prior_hex, "candidate_hex": new_hex, "candidate_registration": tail,
+                 "reason": decision.reason},
+                priority=3,
+            )
+            _TAIL_GUARD_DEDUP.record(slot, ck)
+
+
+_TDES_TAIL_LAST_RUN: dict[str, float] = {}
+_TDES_LAST_CANDIDATE: dict[str, tuple] = {}
+TDES_TAIL_EVERY_S = 600
+TDES_ORIGINS = ("DCA", "IAD", "BWI")
+
+
+def _check_flight_tdes_tail(entry: dict, ident: str) -> None:
+    """2026-10-14 (operator): the departure clearance is evidence of the tail
+    for every watched flight departing DCA/IAD/BWI. TDES's clearance links (by
+    the FAA-internal GUFI) to the FDPS plan, whose aircraft address is the
+    tail flying THIS instance (fi.tdes_clearance_plan, +-3 h of the scheduled
+    departure). A SWIM source, so rule (c) is not required; rule (b) is.
+    Before takeoff only; at most every 10 min per watch."""
+    from common import flight_instance as fi
+    if fi.norm_airport(entry.get("origin")) not in TDES_ORIGINS:
+        return
+    if (entry.get("oooi_phase") or "").lower() in ("off", "on", "in"):
+        return
+    now = time.time()
+    if now - _TDES_TAIL_LAST_RUN.get(entry["id"], 0.0) < TDES_TAIL_EVERY_S:
+        return
+    _TDES_TAIL_LAST_RUN[entry["id"]] = now
+    ops = fi.operating_identities(ident, entry.get("origin"), entry.get("destination"))
+    plan = fi.tdes_clearance_plan([f"{c}{n}" for c, n in ops], entry.get("origin"),
+                                  _watch_sched_dep(entry, ident))
+    if plan is None or not plan.hex:
+        return
+    seen = (plan.hex.lower(), plan.gufi)
+    if _TDES_LAST_CANDIDATE.get(entry["id"]) == seen:
+        return              # same candidate and plan as last time: already decided (NB-05)
+    _TDES_LAST_CANDIDATE[entry["id"]] = seen
+    if fi.airports_agree(plan.key.destination, entry.get("destination")) is False:
+        return
+    _guarded_tail_change(entry, ident, source="tdes", label=f"TDES {fi.norm_airport(entry.get('origin'))}",
+                         new_hex=plan.hex, tail=plan.registration, exclude_gufi=plan.gufi)
 
 
 def _check_flight_fids(entry: dict, ident: str) -> None:

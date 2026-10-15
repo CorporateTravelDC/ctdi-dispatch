@@ -1,6 +1,6 @@
 # Build integrity: locked inputs, provenance and their limits
 
-> **Canonical document.** Current state of how runtime images are built (updated 2026-10-08 after review 06), what is pinned, what is recorded, and what is **not** established. Changes after this point keep the old wording struck through with the date, per the repository convention. The pass that produced this document, with its evidence, is the frozen record `docs/security-reviews/2026-10-07-05-reproducible-builds.md`.
+> **Canonical document.** Current state of how runtime images are built (updated 2026-10-08 after review 06; review 09 and the 2026-10-14 swarm audit folded in on 2026-10-15), what is pinned, what is recorded, and what is **not** established. Changes after this point keep the old wording struck through with the date, per the repository convention. The pass that produced this document, with its evidence, is the frozen record `docs/security-reviews/2026-10-07-05-reproducible-builds.md`.
 
 This document avoids "reproducible build" as a blanket claim. It uses four assurance levels:
 
@@ -27,6 +27,8 @@ The question this layer answers: **is the code running in a container exactly wh
 | An SBOM or receipt is edited | no SBOM existed | the receipt holds the SBOM digest; the verifier recomputes it and can re-derive the SBOM from the image |
 | A lock or Containerfile is edited after signing | the signed-manifest sweep (15 min) | unchanged: every lock, intent file and the build tooling are inside the signed manifest (a `.gitignore` rule that would have excluded `build/` and `scripts/build/` was fixed in the same pass) |
 
+**Open defects in this layer (added 2026-10-15; review 09 and the 2026-10-14 swarm audit, none fixed, none in the staged next-relay batch):** D-01 (a missing SBOM file passes `check-deploy`), R09-5 (a tag re-pointed at another service's recorded image passes `check-deploy` and the sweep), R09-6 (commit signature status `U` accepted, no fingerprint pin), R09-7 (base-image digests and architecture not re-checked at verify time), R09-8 (null or unknown `source_commit` is UNVERIFIED, not FAILED; one malformed receipt aborts the whole run), NEW-3 (two tracked `podman build` paths outside the build policy), R04-GAP (no vulnerability scan of third-party images, OS packages or the SBOMs). Each is described where it applies below.
+
 Out of scope: an attacker with the operator's Unix account. That account can rebuild, re-record and re-sign. The receipts are not separately signed (see "Limits").
 
 ## Properties
@@ -35,16 +37,16 @@ Out of scope: an attacker with the operator's Unix account. That account can reb
 |---|---|---|---|
 | Python resolution is fixed | **ENFORCED** | `pip install --require-hashes --no-deps --only-binary=:all: -r <lock>` in every Containerfile; `build-policy.py` python-install check | adversarial tests 01, 06; `pip check` clean in all 11 trial images |
 | Python artifact hashes | **ENFORCED** | the same install flags; pip refuses any file whose sha256 is not in the lock | test 02 (real pip, offline: a substituted file fails, the real one installs) |
-| Lock is current with its intent | **ENFORCED** at sign and sweep | `# input-digest:` in each lock vs the `.in` closure; `build-policy.py` locks check; the integrity sweep | tests 01, 01b |
+| Lock is current with its intent | **ENFORCED** ~~at sign and sweep~~ (corrected 2026-10-15: at the sweep only, which runs `build-policy.py --quiet` every 15 min, `scheduled-integrity-sweep.sh:120`; `sign-manifest.sh` does not run the build policy, so a stale lock can be signed and is flagged at the next sweep) | `# input-digest:` in each lock vs the `.in` closure; `build-policy.py` locks check; the integrity sweep | tests 01, 01b |
 | Node dependency lock | **ENFORCED** | `npm ci` against the committed `package-lock.json` in a builder stage; the runtime image carries only the built static files | test 05 (real `npm ci` refuses a desynced pair) |
 | Base-image identity | **ENFORCED** | fully qualified `FROM name:tag@sha256:<index>`; `build-policy.py` base-images check; `pin-base-images.py --verify-remote` | tests 03, 04, 04b, 04c; three indexes verified to carry arm64 and amd64 |
-| Build architecture | **ENFORCED** (since 2026-10-08) | every `podman build` in the build scripts passes `--platform linux/<host arch>`; `provenance.py record` refuses an image whose architecture is not the host's, so it is held like a failed build; `build-policy.py` build-commands check | `Review06Incident` tests. Added after the 2026-10-08 incident: a digest names an index, and podman resolves it to whatever member is cached locally, so a cached amd64 copy produced amd64 production images (review 06) |
+| Build architecture | **ENFORCED** (since 2026-10-08) for the three build scripts the policy names | every `podman build` in ~~the build scripts~~ (corrected 2026-10-15: `build-images.sh`, `scripts/stack-refresh.sh` and `scripts/serialized-rollout.sh`, the `BUILD_SCRIPTS` list at `build-policy.py:32`; two other tracked paths, `scripts/deploy-acars-stack.sh:46` and the runner heredoc in `scripts/session-restore.sh:137`, run `podman build` with no `--platform` and no receipt. Both are dormant: the acars script's inputs do not exist and the heredoc branch never fires in the current tree. Open, NEW-3) passes `--platform linux/<host arch>`; `provenance.py record` refuses an image whose architecture is not the host's, so it is held like a failed build; `build-policy.py` build-commands check | `Review06Incident` tests. Added after the 2026-10-08 incident: a digest names an index, and podman resolves it to whatever member is cached locally, so a cached amd64 copy produced amd64 production images (review 06) |
 | OS-package reconstruction | **PARTIAL** | `APT::Snapshot` set from `ARG APT_SNAPSHOT` before `apt-get update`; `build-policy.py` os-packages check | test 07c/07d; trial builds installed gnupg 2.4.7-21+deb13u1 from `snapshot.debian.org/…/20261007T000000Z`. Partial because the snapshot service is external and not mirrored here |
 | External binary / model verification | **PARTIAL** | `corporatetraveldc-llama.service` `ExecStartPre=sha256sum --strict --check config/llama/artifacts.sha256` (binary, its 18 libraries, the model) | test `test_llama_artifacts_are_checked_before_start`; digests match today. Partial: the files' upstream origin was never recorded, so the digests prove "unchanged since 2026-10-07", not "matches the vendor" |
 | Runtime executable downloads | **NONE FOUND in first-party code**; third-party exceptions listed | inventory below; `build-policy.py` downloads check for build paths | repository search, review 05 |
 | SBOM | **ENFORCED for locally built images** (generated from the built image) | `provenance.py record` in stack-refresh, serialized-rollout and build-images.sh; failure holds the image | trial: 168 components for web, re-derived identical; test 08 |
 | Image provenance receipt | **ENFORCED for locally built images built after this change** | same call sites. `build-images.sh` recorded no receipt for its runner build until 2026-10-08; every build command must now be followed by a record (`build-policy.py`) | tests 09, 09b, 12, `SourceBinding`, `Review06Incident` |
-| Deployment artifact binding | **ENFORCED for restarts done by serialized-rollout** (prevention). **DETECTED within 15 minutes** for every other start: timer jobs, crash restarts and manual restarts start from the tag without a gate | `provenance.py check-deploy` before each rollout restart; `provenance.py verify --running` in the integrity sweep checks every running container's actual image id **and** the current image behind every local tag, exited timer jobs included | tests 09, `FinalPassF1`; a name never recorded is UNVERIFIED (pre-provenance), not VERIFIED |
+| Deployment artifact binding | **ENFORCED for restarts done by serialized-rollout** (prevention), with gaps (2026-10-15: `check-deploy` passes an image with no receipt and no recorded name as UNVERIFIED, passes a missing SBOM file (D-01), and never compares the receipt's `deploy_name` with the tag (R09-5)). **DETECTED within 15 minutes** for every other start: timer jobs, crash restarts and manual restarts start from the tag without a gate | `provenance.py check-deploy` before each rollout restart; `provenance.py verify --running` in the integrity sweep checks every running container's actual image id **and** the current image behind every local tag, exited timer jobs included | tests 09, `FinalPassF1`; a name never recorded is UNVERIFIED (pre-provenance), not VERIFIED |
 | Bit-for-bit rebuild | **NOT CLAIMED** | none | experiment below |
 | Third-party image pinning | **NOT ENFORCED** (tags, auto-updated weekly) | stack-refresh's audit compares running ids with what it pulled; `provenance.py record-external` records an SBOM per pulled image | see "Third-party images" |
 
@@ -197,9 +199,9 @@ An auditor answers the six questions as follows:
 
 | Question | Answered by |
 |---|---|
-| What source was reviewed? | the signed commit, plus the manifest digest in the receipt; the verifier checks the commit's signature status and that its `MANIFEST.sha256` hashes to the recorded digest |
+| What source was reviewed? | the signed commit, plus the manifest digest in the receipt; the verifier checks the commit's signature status and that its `MANIFEST.sha256` hashes to the recorded digest. (Limit, 2026-10-15, open R09-6: status `G` or `U` both count as VERIFIED, `provenance.py:337-339`, so any key in the operator's keyring passes; `verify-manifest.sh` pins the fingerprint, provenance does not.) |
 | What dependencies were authorized? | the lock at that commit; the verifier checks that the receipt's lock digest equals the file at that commit |
-| What base image was used? | the index digest in the receipt, checked against the Containerfile at that commit |
+| What base image was used? | the index digest in the receipt, ~~checked against the Containerfile at that commit~~ (corrected 2026-10-15, open R09-7: the verifier only tests that each recorded entry has a non-empty digest, `provenance.py:358-360`; it does not parse the commit's `FROM` lines. It is bound indirectly: the Containerfile's own digest is checked against the commit, and the build filled `base_images` from that file. `architecture` is never re-checked at verify time) |
 | What artifact was produced? | the image id |
 | What actually landed in it? | the SBOM; with `--deep`, the verifier re-derives it from the image |
 | Is that what was deployed? | `check-deploy` before each restart; `verify --running` every 15 minutes |
@@ -231,15 +233,15 @@ Signing the source alone does not answer questions 4–6. The receipt and the ru
 
 Statuses are VERIFIED, FAILED, UNVERIFIED and NOT APPLICABLE:
 - **FAILED** exits 1.
-- **UNVERIFIED** is printed as UNVERIFIED and never as success. It covers an image built before provenance existed, or one built from an older signed commit. An older commit is normal between a docs-only commit and the next weekly rebuild.
+- **UNVERIFIED** is printed as UNVERIFIED and never as success. It covers an image built before provenance existed, or one built from an older signed commit. An older commit is normal between a docs-only commit and the next weekly rebuild. (Added 2026-10-15, open R09-8: a receipt whose `source_commit` is null or not in the repository is also only UNVERIFIED, and nothing alerts on UNVERIFIED. `load_receipt` and `known_names` have no per-file error handling, so one malformed receipt or `by-name/*.json` ends the whole run with a traceback; that fails closed, rc 1.)
 
-The integrity sweep (every 15 minutes) runs both. FAILED fails the sweep with a priority-5 push; the UNVERIFIED count is logged each run.
+The integrity sweep (every 15 minutes) runs both. FAILED fails the sweep with a priority-5 push; the UNVERIFIED count is logged each run. Live 2026-10-15 01:05Z: `18 verified, 0 unverified, 0 failed`.
 
 ## Deployment identity
 
 Quadlets still name `localhost/<image>:latest`. Rewriting 50+ unit files to an image id on every build would make every routine rebuild a signed change to the unit files. Instead, the binding is enforced at the two points where a tag turns into a running container:
 
-- **serialized-rollout** runs `check-deploy` before restarting each locally built unit. The tag must resolve to an image id that has a receipt. If the name has receipts but this id does not (a substituted tag), the unit is HELD. This is prevention, but only for rollout restarts.
+- **serialized-rollout** runs `check-deploy` before restarting each locally built unit. ~~The tag must resolve to an image id that has a receipt.~~ (corrected 2026-10-15, `provenance.py:420-427`: an id with no receipt passes as UNVERIFIED when the name was never recorded; it fails only on the rows "receipt" (name recorded under another id), "image id", "sbom digest" and "image". A missing SBOM file passes (D-01), and a tag re-pointed at another service's recorded image passes because `deploy_name` is not compared (R09-5). The source and signature rows are not consulted at this step.) If the name has receipts but this id does not (a substituted tag), the unit is HELD. This is prevention, but only for rollout restarts.
 - **The sweep** (every 15 minutes) checks every running container's actual image id and the image behind every local tag that any container uses, exited timer jobs included. This is detection: a timer job, crash restart or manual restart that starts from a substituted tag is not blocked, and is reported at the next sweep at priority 5.
 
 The image id is a content address, so a substituted image cannot carry the original id.
@@ -289,9 +291,9 @@ Production keeps compiling bytecode, because skipping it moves compilation to ev
 
 ## Third-party images
 
-16 images (nginx ×5 units, Postgres ×2, Nextcloud, ntfy, Open WebUI, Proton Mail Bridge, RSS-Bridge, nine SDR-feeder images) run from tags:
+~~16 images (nginx ×5 units, Postgres ×2, Nextcloud, ntfy, Open WebUI, Proton Mail Bridge, RSS-Bridge, nine SDR-feeder images)~~ (corrected 2026-10-15 from the live quadlets: 15 distinct third-party images across 20 units: nginx ×5 units, Postgres ×2, Nextcloud, ntfy (pinned `v2.25.0`), Open WebUI, Proton Mail Bridge, RSS-Bridge, and eight SDR-feeder images) run from tags:
 
-- 13 are `AutoUpdate=registry`.
+- 13 are `AutoUpdate=registry` (re-checked live 2026-10-15).
 - stack-refresh pulls them weekly, deliberately, for upstream security fixes.
 - Postgres changes only through `safe-pg-image-update.sh`.
 - A Nextcloud major-version jump is held.
@@ -303,7 +305,7 @@ Production keeps compiling bytecode, because skipping it moves compilation to ev
 **Not established:**
 - pinning;
 - review before update;
-- vulnerability scanning of these images. The SBOMs make scanning possible; no scanner is installed. Trivy 0.69.3 and Grype 0.117 are available as Fedora packages.
+- vulnerability scanning of these images. The SBOMs make scanning possible; no scanner is installed. Trivy 0.69.3 and Grype 0.117 are available as Fedora packages. (2026-10-15, open R04-GAP: still none on the host, `command -v grype trivy syft osv-scanner` finds nothing. `dependency-audit.py` covers npm locks, Python requirements and `pip freeze` inside first-party images only; OS packages in first-party images and every recorded SBOM are not checked against advisories either.)
 
 ## Repurposeability
 
@@ -331,7 +333,8 @@ Image names come from the deployment's own rollout lists, and the llama artifact
 - **Receipts are not signed.** Their integrity rests on the image id (a content address) and on the signed commit they name. The operator account, or anything running as it, can write a matching receipt for an image it built. That is the same trust boundary as the signing key (`docs/AGENT_TRUST_MODEL.md` §0). Signing receipts with the approval key is the next step.
 - The Debian snapshot service and the registries are external. Their unavailability fails builds closed.
 - **Model and binary origin was never recorded.** Integrity from today on is enforced; authenticity is not.
-- **Images already running were built before this change.** They report UNVERIFIED until stack-refresh or the rollout rebuilds them.
+- ~~**Images already running were built before this change.** They report UNVERIFIED until stack-refresh or the rollout rebuilds them.~~ (corrected 2026-10-15: every running local image has since been rebuilt with a receipt; the 01:05Z sweep reported 0 unverified.)
+- **Open verifier defects:** D-01, R09-5, R09-6, R09-7, R09-8, NEW-3 and R04-GAP, listed under "Threat model". Until fixed, read VERIFIED as "matches a receipt this account wrote", with those exceptions.
 - **Third-party images:** see above.
 - <del>The **[operator LLC abbreviation]utive contact API** image (website repository) still uses `python:3.12-slim` by tag and exact pins without hashes. It gets a receipt, because its build goes through stack-refresh, but its Containerfile is not under this policy yet.</del> SUPERSEDED 2026-10-08: the contact API image is now under the same policy (its own `build/policy.toml`, a hashed lock, base by digest, apt snapshot), checked with `build-policy.py --root <website repo>`.
 - The **Executive Standard verifier** runs code bind-mounted from the website repository, outside this repository's manifest (open finding S1, `docs/FINDINGS_2026-10-06.md`).

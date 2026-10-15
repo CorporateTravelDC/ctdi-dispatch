@@ -1,4 +1,5 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:15Z against main 1491bf5a and the live box: no live `.timer` carries the banned line.
 
 # Timer `[Unit] Requires=` boot storm — root cause and standing rule
 
@@ -6,9 +7,12 @@ Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
 pointing at its own `.service` in the `[Unit]` section.** The timer→service
 binding is implicit from the filename (`[Timer] Unit=` defaults to the
 same basename with `.service`), so the line buys nothing and costs a boot
-storm. `scripts/check-timer-requires.sh` enforces this — **but see the
+storm. `scripts/check-timer-requires.sh` enforces this. ~~**but see the
 Findings section below: its coverage has a real gap, and two live root
-timers still violate the rule today.**
+timers still violate the rule today.**~~ (corrected 2026-10-15: there is no
+Findings section; the coverage gap and the two root-timer violations were
+closed on 2026-10-06, see "Enforcement" below. Re-checked live: no user or
+system timer carries the line.)
 
 ## What it actually does
 
@@ -22,6 +26,15 @@ instant `timers.target` is reached — on every boot — and again on any
 Proven live 2026-09-05 18:33:16 EDT on `corporatetraveldc-thermal-sample`:
 restarting **only** the timer ran the service immediately, while the
 timer's own next scheduled fire was 18:35:00.
+
+**Same mechanism, not covered by the guard: `.path` units (2026-10-15).** Two
+enabled user path units carry `Requires=` on their own service, tracked and
+live: `corporatetraveldc-knowledge-graph-compile.path` and
+`corporatetraveldc-semantic-compile-daily.path`. Starting a path unit (at boot,
+or on restart) therefore starts its service at once, exactly like the timers
+above. `check-timer-requires.sh` scans `*.timer` only, so it does not see them.
+Either drop the line (the `[Path] Unit=` line already binds the service) or
+record a deliberate exemption.
 
 ## The incident (2026-09-05 reboot, ~17:47 EDT)
 
@@ -41,7 +54,11 @@ temperature stayed unremarkable at 65°C.
 just finished bringing up.** Recovery was impossible without intervention:
 resume needed load1 < 15 *and* temp < 65°C held 300s, and the 14 LLM jobs
 were grinding at ~1.8 tok/s against a 2-thread server. The platform sat
-down for ~30 minutes: no alerts, no PWA, no ingest.
+down for ~30 minutes: no alerts, no PWA, no ingest. (The guard's rules have
+changed since: as of 2026-10-13 it is a load guard only. It sheds only at
+load1 ≥ 40, and after a 300 s dwell resume is held only while load1 > 30 or
+the CPU is above 75 °C; temperature never sheds and the 65 °C resume bar is
+retired. See `scripts/thermal-ingest-guard.py`.)
 
 ## Why the boot-stagger units did not prevent it
 
@@ -69,7 +86,10 @@ propagation* only — it pulls the unit in at start exactly like `Requires=`.
 explicitly, yet still fired at 17:48:11, one second after `timers.target`.
 Only the `Requires=` pull-in explains that. `Persistent=true` remains a
 real but secondary concern (post-outage catch-up bunching) — see
-`docs/NETWORK_FAILOVER.md` "Still open" for the related note.
+~~`docs/NETWORK_FAILOVER.md` "Still open" for the related note.~~
+[`docs/NETWORK_FAILOVER.md`](NETWORK_FAILOVER.md) "Findings for the operator", item 3 (corrected 2026-10-15: the
+"Still open" section is superseded; 12 live platform timers now set `RandomizedDelaySec=` (8 user, 4 `corporatetraveldc-*` system) and 43 live user timers set
+`Persistent=true`).
 
 ## Correct timer shape
 
@@ -97,7 +117,9 @@ Operator standing rule: the guard captures all timers regardless of level.
 - every live system timer (`/etc/systemd/system/*.timer`, world-readable, so
   no privilege is needed).
 
-It runs in the signing pass and fails it on any hit.
+It runs in the signing pass and fails it on any hit (it is called from
+`scripts/pre-commit`), and the 15-minute integrity sweep
+(`scripts/scheduled-integrity-sweep.sh`) runs it too.
 `tests/scripts/test_timer_requires_all_levels.py` holds the scan scope and
 asserts that no tracked timer requires its own service.
 

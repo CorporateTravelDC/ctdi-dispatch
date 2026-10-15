@@ -1,6 +1,6 @@
 # Sovereign Skill Supply Chain
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:19Z / 2026-10-14 21:19 ET, except where marked UNVERIFIED.)
 
 Operator-owned skill lifecycle: fork in, own + sign + audit, run offline,
 grant per agent, publish out -- under the operator's key, with no external
@@ -18,10 +18,11 @@ IP on a vendor's infrastructure.
 
 | Location | What | Integrity |
 |---|---|---|
-| `skills/<name>/` in this repo (8: `corporatetraveldc-dispatch-ops`, `flight-hifi-track`, `hub-arrivals-lookup`, `linkedin-export-analyzer`, `morning`, `nec-train-hifi-track`, `overwater-adsb-handoff-track`, `second-brain-remember`) | the operator's own skills | covered by the signed tree manifest; the operator's `~/.claude/skills/` copies were byte-identical on 2026-10-06 |
+| `skills/<name>/` in this repo (8: `corporatetraveldc-dispatch-ops`, `flight-hifi-track`, `hub-arrivals-lookup`, `linkedin-export-analyzer`, `morning`, `nec-train-hifi-track`, `overwater-adsb-handoff-track`, `second-brain-remember`) | the operator's own skills | covered by the signed tree manifest; the operator's `~/.claude/skills/` copies were byte-identical on 2026-10-06 (and again on 2026-10-15, `diff -rq` per skill). The twin gate is `scripts/skills-sync.sh` (`check` exits 1 on any divergence or missing live copy; `apply --i-am-the-operator` copies repo to live; vendor dirs listed in `scripts/lib/skills-vendor-ignore.txt` are never touched); it runs in stack-refresh's audit and in `check-claude-md-drift.sh`. Provenance and licence of `morning` are not recorded (open) |
 | `skills/vendor-pins.txt` | 16 vendor skills pinned by tree hash (`built-in-browser`, `chrome-browser`, `computer-use`, `deep-research`, `doc-coauthoring`, `docs`, `docx`, `google-workspace`, `import-memory`, `internal-comms`, `mcp-builder`, `pdf`, `pptx`, `skill-creator`, `web-artifacts-builder`, `xlsx`) | the pin file is signed; the vendor bytes are **not** committed (several are proprietary-licensed) |
 | `.claude/skills/` in this repo (`dispatch-context-guardian`, `personal-export-analysis`) | project skills | signed with the tree |
-| `~/.claude/skills/` (operator) | the operator's working set (26 entries) | not signed in place; snapshotted (below) |
+| `.agents/skills/` in this repo (same two names; added 2026-10-15) | the copy Codex reads | signed with the tree, but a **diverged, stale fork**: every file of both skills differs from `.claude/skills/` (2026-10-15 `diff -rq`), it is not in the grant catalog, and `skills-sync.sh` does not compare it. Open: regenerate it from `.claude/skills/` or mark it unmaintained |
+| `~/.claude/skills/` (operator) | the operator's working set (27 entries with `synced` and `.trash`, re-counted 2026-10-15; 25 skills) | not signed in place; snapshotted (below) |
 
 Embedded tokens: the repo skills no longer carry a live token. The remaining
 `ctdc_cowork_` strings are placeholders or a note that the old literal was
@@ -43,10 +44,14 @@ runs the installed copy `/usr/local/libexec/ctdc/skill-grants.sh apply
 root-owned read-only copies into each agent's home, removes revoked ones,
 quarantines unsanctioned or agent-owned skill directories to
 `~/.claude/.ctdc-skills-quarantine`, and restores in-place edits.
+Copies go only to `~/.claude/skills`, so a codex-mode agent account's Codex
+CLI receives no granted skill (2026-10-15).
 
-Live on 2026-10-06 18:06Z it was holding ("checkout does not verify against
+~~Live on 2026-10-06 18:06Z it was holding ("checkout does not verify against
 the signed manifest -- nothing changed") because of an unsigned working-tree
-change to `scripts/stack-refresh.sh`. Tests: `tests/scripts/test_skill_grants.py`
+change to `scripts/stack-refresh.sh`.~~ (corrected 2026-10-15: applying normally;
+the 01:08Z run reported `2 agent account(s), 0 finding(s)`. Edits now happen in
+the guard worktree, so main keeps verifying.) Tests: `tests/scripts/test_skill_grants.py`
 (28). Design: `docs/AGENT_SEGMENTATION.md` "Skills: grants and clawback".
 
 ## Operator's Claude Code settings (`~/.claude/settings.json`, outside the repo)
@@ -56,12 +61,16 @@ change to `scripts/stack-refresh.sh`. Tests: `tests/scripts/test_skill_grants.py
 | `syncClaudeAiSkills` | `false` |
 | `env.DISABLE_TELEMETRY` | `"1"` |
 | `env.DISABLE_ERROR_REPORTING` | `"1"` |
-| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | **not set** (the previous revision said it was) |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | **not set** (the previous revision said it was; still not set 2026-10-15) |
+| `syncClaudeAiPlugins` (added 2026-10-15) | `false` |
+| `env.DISABLE_AUTOUPDATER` (added 2026-10-15) | `"1"` |
+| `env.CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL` (added 2026-10-15) | `"1"` |
 
 `~/.claude/skills/synced/` still exists (one entry, dated 2026-09-18); the
 earlier expectation that it would be trashed on the next launch did not hold.
-Synced plugins are preserved under `~/.claude/plugins-vendored/`. A plugin-sync
-off-switch is still unconfirmed.
+Synced plugins are preserved under `~/.claude/plugins-vendored/`. ~~A plugin-sync
+off-switch is still unconfirmed.~~ (corrected 2026-10-15: `syncClaudeAiPlugins`
+is `false` in the live settings.)
 
 ## Snapshots: `scripts/skill-snapshot.sh` (unchanged since 2026-09-28)
 
@@ -83,8 +92,9 @@ signed; the vault was not listed.]
 
 ## Phase status
 
-- **Phase 0 -- control + offline foundation:** done, except the plugin-sync
-  switch and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (above).
+- **Phase 0 -- control + offline foundation:** done, except ~~the plugin-sync
+  switch and~~ `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (above; the plugin-sync
+  switch is off as of 2026-10-15).
 - **Phase 1 -- growth (snapshots):** done (first cut).
 - **Repo inclusion (was blocked on embedded tokens):** done -- operational
   skills are in `skills/`, signed with the tree, and distributed by grant.

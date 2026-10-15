@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** shipped (see the AS-BUILT section at the bottom), but the live causal and cluster tiers are empty: every compile seen 2026-10-14/15 reports 0 `statistically_associated` and 0 `member_of_cluster` edges, so the AS-BUILT counts of 1,380 and 56 no longer hold. Current state and the cause: `docs/CAUSAL_REASONING_ROADMAP.md` and `docs/SECOND_BRAIN_STATUS.md` §5.
+
 # Geometric Reasoning + Second Brain Rework — Design Proposal
 
 **Status:** proposal, not implemented. No code changes have been made for any

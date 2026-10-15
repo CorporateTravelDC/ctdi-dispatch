@@ -1,5 +1,7 @@
 # Local Model Evaluation and Swap — 2026-09-21
 
+> **Status (2026-10-15):** the decision stands: Qwen3-4B-Instruct-2507 q4_0 is still the one resident model. The "known follow-up" below is done: the model now lives at `/var/lib/corporatetraveldc/models/qwen3-4b-instruct-2507-q4_0.gguf` and is digest-pinned in `config/llama/artifacts.sha256`, checked before every start. Current server settings are in `docs/DEDICATED_MODELS_PLAN.md` §1.
+
 **Status:** decided and deployed. phi3-mini → Qwen3-4B-Instruct-2507 is live
 as of this date. This doc is the record of why, with real measured data —
 not vendor benchmarks, not web-search estimates, actual runs on this exact

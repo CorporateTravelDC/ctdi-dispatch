@@ -27,10 +27,22 @@ FIXM = ('<flight><departure departurePoint="KAUS"><runwayPositionAndTime><runway
 
 
 def flight(**kw):
-    base = {"airline_out_time": "2026-10-08T17:07:00Z", "airline_off_time": "2026-10-08T17:24:00Z",
+    base = {"gufi": "g-test", "callsign": "ZZZ101", "origin": "KXXX", "destination": "KIAD",
+            "airline_out_time": "2026-10-08T17:07:00Z", "airline_off_time": "2026-10-08T17:24:00Z",
             "airline_on_time": "2026-10-08T20:13:00Z", "airline_in_time": "2026-10-08T20:18:00Z",
             "original_departure": "2026-10-08T17:24:00Z", "original_arrival": "2026-10-08T20:19:00Z"}
     return {**base, **kw}
+
+
+def ev(airport, event, t, route=None, cs="ZZZ101"):
+    o, d = route or (None, None)
+    return {"airport": airport, "event": event, "event_time": t, "callsign": cs, "track_id": "1",
+            "departure_airport": o, "destination_airport": d}
+
+
+def derive(m, f, fdps, events, sibs=()):
+    from common.flight_instance import v1_pair_instance
+    return m.derive(f, fdps, v1_pair_instance(f, sibs, events), events)
 
 
 def test_fdps_runway_times_reads_both_sides_and_kinds():
@@ -40,24 +52,25 @@ def test_fdps_runway_times_reads_both_sides_and_kinds():
     assert m.fdps_runway_times(None) == {}
 
 
+SFC = [ev("KXXX", "spotout", "2026-10-08T17:09:30Z"), ev("KXXX", "off", "2026-10-08T17:20:00Z"),
+       ev("KIAD", "on", "2026-10-08T20:12:30Z"), ev("KIAD", "runwayout", "2026-10-08T20:13:30Z"),
+       ev("KIAD", "spotin", "2026-10-08T20:15:00Z")]
+
+
 def test_frozen_off_and_deltas_against_surface_observation():
     m = load()
-    sfc_org = [{"airport": "KXXX", "event": "spotout", "event_time": "2026-10-08T17:09:30Z"},
-               {"airport": "KXXX", "event": "off", "event_time": "2026-10-08T17:20:00Z"}]
-    sfc_dst = [{"airport": "KIAD", "event": "on", "event_time": "2026-10-08T20:12:30Z"},
-               {"airport": "KIAD", "event": "spotin", "event_time": "2026-10-08T20:15:00Z"}]
-    d = m.derive(flight(), m.fdps_runway_times(FIXM), sfc_org, sfc_dst)
+    d = derive(m, flight(), m.fdps_runway_times(FIXM), SFC)
     assert d["frozen_off"] is True and d["frozen_on"] is False
     assert d["off_vs_filed_min"] == 0.0 and d["off_vs_fdps_min"] == 0.0
     assert d["off_vs_surface_min"] == 4.0                 # reported 4 min after the observed takeoff
     assert d["on_vs_surface_min"] == 0.5
     assert d["reported_taxi_out_min"] == 17.0 and d["observed_ramp_exit_to_off_min"] == 10.5
-    assert d["in_vs_ramp_entry_min"] == 3.0
+    assert d["in_vs_ramp_entry_min"] == 3.0 and d["observed_runway_exit_to_ramp_entry_min"] == 1.5
 
 
 def test_no_observation_means_none_never_zero():
     m = load()
-    d = m.derive(flight(airline_off_time=None), {}, [], [])
+    d = derive(m, flight(airline_off_time=None), {}, [])
     assert d["frozen_off"] is False
     assert d["off_vs_surface_min"] is None and d["off_vs_fdps_min"] is None
     assert d["surface_coverage"] == {"origin": False, "destination": False}
@@ -65,8 +78,45 @@ def test_no_observation_means_none_never_zero():
 
 def test_events_outside_the_window_are_not_matched():
     m = load()
-    far = [{"airport": "KXXX", "event": "off", "event_time": "2026-10-07T17:20:00Z"}]   # the day before
-    assert m.derive(flight(), {}, far, [])["off_vs_surface_min"] is None
+    far = [ev("KXXX", "off", "2026-10-07T17:20:00Z")]   # the day before
+    assert derive(m, flight(), {}, far)["off_vs_surface_min"] is None
+
+
+def test_never_nearest_two_candidates_give_no_pair():
+    m = load()
+    two = [ev("KXXX", "off", "2026-10-08T17:20:00Z"), ev("KXXX", "off", "2026-10-08T19:30:00Z")]
+    assert derive(m, flight(), {}, two)["off_vs_surface_min"] is None
+
+
+def test_return_to_gate_ramp_exit_fails_the_sequence_rule():
+    # the 10-13 American case: push at schedule, back to gate, second push 2 h later; only one spotout survives
+    # (the slot table) and it is 110 min before takeoff, so the ramp-exit pair is rejected, OFF is kept
+    from common.flight_instance import v1_pair_instance
+    events = [ev("KXXX", "spotout", "2026-10-08T15:30:00Z"), ev("KXXX", "off", "2026-10-08T17:20:00Z")]
+    p = v1_pair_instance(flight(), [], events)
+    assert p["spotout"] == {"event": None, "reason": "sequence_violation"}
+    assert p["off"]["event"] is not None
+
+
+def test_route_and_siblings():
+    from common.flight_instance import v1_pair_instance
+    f = flight()
+    wrong_route = [ev("KXXX", "off", "2026-10-08T17:20:00Z", route=("KXXX", "KBOS"))]
+    assert v1_pair_instance(f, [], wrong_route)["off"]["reason"] == "route_mismatch"
+    # an out-and-back sibling departing the same airport 3 h later: a routeless event in both windows is ambiguous
+    sib = flight(gufi="g-sib", destination="KLGA", original_departure="2026-10-08T20:24:00Z",
+                 original_arrival="2026-10-08T21:30:00Z")
+    routeless = [ev("KXXX", "off", "2026-10-08T19:00:00Z")]
+    assert v1_pair_instance(f, [sib], routeless)["off"]["reason"] == "sibling_ambiguous_routeunknown"
+    # with the route known it belongs to this instance only
+    known = [ev("KXXX", "off", "2026-10-08T19:00:00Z", route=("KXXX", "KIAD"))]
+    assert v1_pair_instance(f, [sib], known)["off"]["event"] is not None
+
+
+def test_the_same_event_from_slot_table_and_log_is_one_candidate():
+    from common.flight_instance import v1_pair_instance
+    dup = [ev("KXXX", "off", "2026-10-08T17:20:00Z"), ev("KXXX", "off", "2026-10-08T17:20:00Z", route=("KXXX", "KIAD"))]
+    assert v1_pair_instance(flight(), [], dup)["off"]["event"] is not None
 
 
 # -- rolling rollup and the publication rule (operator, 2026-10-08) ---------------------------

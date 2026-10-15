@@ -223,10 +223,26 @@ WATCHED = _inst("GJS4520", "DCA", "ORD", "2026-10-11T22:00:00Z", "2026-10-12T00:
                 gufi="G-1")
 
 
-def test_guard_accepts_authoritative_free_tail_with_a_timely_inbound():
+@pytest.fixture
+def nonswim_source(monkeypatch):
+    """Rule (c) only applies to an authoritative source that is not SWIM. Since 2026-10-14 every
+    authoritative source is SWIM (FIDS is no longer a tail source), so these tests add a synthetic one."""
+    monkeypatch.setattr(fi, "AUTHORITATIVE_TAIL_SOURCES", fi.AUTHORITATIVE_TAIL_SOURCES | {"test_nonswim"})
+    return "test_nonswim"
+
+
+def test_fids_is_not_a_tail_source():
+    prev = _inst("GJS4511", "ORD", "DCA", "2026-10-11T18:30:00Z", "2026-10-11T20:40:00Z")
+    for src in ("fids_destination", "fids_origin", "fids"):
+        d = fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
+                                  sources=[src], previous=prev, min_turn_min=35)
+        assert not d.accepted and "not authoritative" in d.reason
+
+
+def test_guard_accepts_authoritative_free_tail_with_a_timely_inbound(nonswim_source):
     prev = _inst("GJS4511", "ORD", "DCA", "2026-10-11T18:30:00Z", "2026-10-11T20:40:00Z")
     d = fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", candidate_registration="N001TS",
-                              prior_hex="000001", sources=["fids_destination"],
+                              prior_hex="000001", sources=[nonswim_source],
                               candidate_instances=[prev, WATCHED], previous=prev, min_turn_min=35)
     assert d.accepted and d.changed
     assert "45 min spare over a 35-min turn" in d.reason
@@ -241,7 +257,7 @@ def test_guard_rejects_a_tracker_alone_even_when_everything_else_fits():
     assert "NOT accepted" in d.note("UAL4520")
     # a tracker corroborating an authoritative source is fine
     assert fi.decide_tail_change(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
-                                 sources=["airplanes_live", "fids_destination"],
+                                 sources=["airplanes_live", "tdes"],
                                  previous=prev, min_turn_min=35).accepted
 
 
@@ -258,11 +274,11 @@ def test_guard_rejects_a_tail_filed_on_another_overlapping_instance():
                                  previous=prev, min_turn_min=35).accepted
 
 
-def test_guard_previous_leg_rules():
+def test_guard_previous_leg_rules(nonswim_source):
     # the previous-leg rule (c) applies to a FIDS-only change; a SWIM source showing the
     # tail on this flight does not need it (2026-10-13, see test_swim_shows_the_flight_*)
     common = dict(watched=WATCHED, candidate_hex="000002", prior_hex="000001",
-                  sources=["fids_destination"], min_turn_min=35)
+                  sources=[nonswim_source], min_turn_min=35)
     late = _inst("GJS4511", "ORD", "DCA", "2026-10-11T19:30:00Z", "2026-10-11T21:40:00Z")
     d = fi.decide_tail_change(previous=late, **common)
     assert not d.accepted and "15 min short of a 35-min turn" in d.reason
@@ -340,3 +356,71 @@ def test_min_turn_default_and_env_override(monkeypatch):
     monkeypatch.setenv("CTDC_MIN_TURN_MIN_NARROWBODY", "5000")
     assert fi.min_turn_minutes("narrowbody") == 240
     assert fi.min_turn_minutes("widebody") == 75
+
+
+# ── 2026-10-14: surface-event watch matching (SMES) ──────────────────────────
+
+def _w(**kw):
+    base = {"id": "wl-test", "identifier": "ZZZ1893", "origin": "KDCA", "destination": "KFLL",
+            "scheduled_departure": "2026-10-14T12:00:00Z"}
+    return {**base, **kw}
+
+
+def test_surface_event_on_the_other_leg_of_an_out_and_back_is_rejected(fdb):
+    w = _w()
+    # morning DCA->FLL watch; the afternoon FLL->DCA leg lands at DCA: an arrival at the watch's ORIGIN
+    assert fi.surface_leg_rejection(w, "KDCA", "on", "2026-10-14T21:00:00Z") == "wrong_side_airport"
+    # its takeoff from FLL is a departure at the watch's DESTINATION
+    assert fi.surface_leg_rejection(w, "KFLL", "off", "2026-10-14T18:00:00Z") == "wrong_side_airport"
+    # this leg's own events pass
+    assert fi.surface_leg_rejection(w, "KDCA", "spotout", "2026-10-14T11:55:00Z") is None
+    assert fi.surface_leg_rejection(w, "KFLL", "on", "2026-10-14T14:40:00Z") is None
+
+
+def test_surface_event_outside_the_instance_window_is_rejected(fdb):
+    w = _w(destination="KLGA")
+    # a shuttle number: the next day's (or a much later) departure from the same airport is another instance
+    assert fi.surface_leg_rejection(w, "KDCA", "off", "2026-10-15T12:05:00Z") == "outside_instance_window"
+    assert fi.surface_leg_rejection(w, "KDCA", "off", "2026-10-14T12:20:00Z") is None
+
+
+def test_surface_event_route_from_enhanced_data_must_agree(fdb):
+    w = _w()
+    assert fi.surface_leg_rejection(w, "KDCA", "off", "2026-10-14T12:20:00Z", "KDCA", "KMCO") == "destination_mismatch"
+
+
+def test_match_watch_surface_event_picks_the_right_watch(fdb):
+    am, pm = _w(id="am"), _w(id="pm", origin="KFLL", destination="KDCA", scheduled_departure="2026-10-14T19:00:00Z")
+    got = fi.match_watch_surface_event([am, pm], "ZZZ1893", airport="KDCA", event="on",
+                                       event_time="2026-10-14T21:40:00Z")
+    assert got["id"] == "pm"
+    got = fi.match_watch_surface_event([am, pm], "ZZZ1893", airport="KDCA", event="off",
+                                       event_time="2026-10-14T12:10:00Z")
+    assert got["id"] == "am"
+
+
+# ── 2026-10-14 swarm audit: NB-02 (aircraft / origin-only watches), NB-03 (diversions) ──────
+
+def test_origin_only_and_tail_watches_follow_every_leg(fdb):
+    home = {"id": "w-home", "identifier": "ZZZ77", "origin": "KADW", "destination": None}
+    tail = {"id": "w-tail", "identifier": "N000TS", "origin": "KDCA", "destination": None}
+    assert not fi.is_leg_watch(home) and not fi.is_leg_watch(tail)
+    assert fi.match_watch_entry([home], "ZZZ77", origin="KTEB", destination="KADW")["id"] == "w-home"
+    assert fi.match_watch_surface_event([tail], "N000TS", airport="KTEB", event="spotout",
+                                        event_time="2026-10-14T12:00:00Z")["id"] == "w-tail"
+
+
+def test_a_diversion_is_still_this_leg(fdb):
+    w = _w(identifier="ZZZ100", destination="KORD")
+    # FDPS (no schedule on its messages): amended destination is this leg diverting
+    assert fi.match_watch_entry([w], "ZZZ100", origin="KDCA", destination="KMKE",
+                                diversion_without_sched=True)["id"] == "wl-test"
+    # TFMS-style strict default: unproven without a schedule
+    assert fi.match_watch_entry([w], "ZZZ100", origin="KDCA", destination="KMKE") is None
+    # SMES: landing at the alternate, route from enhancedData starts at the watch origin
+    assert fi.match_watch_surface_event([w], "ZZZ100", airport="KMKE", event="on",
+                                        event_time="2026-10-14T13:30:00Z",
+                                        dep_airport="KDCA", dest_airport="KMKE")["id"] == "wl-test"
+    # without a route, an arrival elsewhere is still not this leg
+    assert fi.match_watch_surface_event([w], "ZZZ100", airport="KMKE", event="on",
+                                        event_time="2026-10-14T13:30:00Z") is None

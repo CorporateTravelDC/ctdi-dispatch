@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** Build steps 1-2 shipped: the §1 provider guard (`_is_amtrak_route`, `src/poller/main.py:2154`; route list from `TRAIN_PROVIDER_ROUTES_AMTRAK`, default `_AMTRAK_ROUTE_DEFAULT`) and §2/§3 phase + live ETA (`pg_schema/0064_train_phase_eta.sql`, monotonic `db.update_train_phase`). Since 2026-10-13 a train push compares only the current run's events (amtraker `origSchDep`; 16 h fallback). Not built: §4 per-provider topics (no `amtrak-alerts`/`marc-alerts`/`vre-alerts` in code), the rest of §5 (`TRAIN_PROVIDERS`, MARC/VRE route keys), §6 segment metering, and MARC/VRE fetchers. Train skill procedure: [docs/tasks/scheduled/nec-train-hifi-track.md](tasks/scheduled/nec-train-hifi-track.md).
+
 # Train Parity Design — 2026-09-23
 
 Written under the standing rule that **aviation is the parity benchmark**

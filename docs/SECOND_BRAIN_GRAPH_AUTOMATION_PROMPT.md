@@ -1,19 +1,19 @@
 # Second-Brain Knowledge Graph — Automation (status + the unbuilt trend pass)
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:45Z / 2026-10-14 21:45 ET.)
 
 Drafted 2026-08-11 as a prompt for a weekly `claude -p` run that would retrofit links, rebuild the graph and write a trend report. That design was overtaken: the two deterministic steps got their own units, and the "LLM agent with tools on a timer" pattern it copied was abandoned for this repo. What remains unbuilt is the **trend report**. This file now records what runs, what was dropped and why, and the trend spec in a form that fits the current pattern.
 
 ## What runs today
 
-| Step | Unit (user, `corporatetraveldc-…`) | Tracked schedule | Live state 2026-10-06 |
+| Step | Unit (user, `corporatetraveldc-…`) | Tracked schedule | Live state ~~2026-10-06~~ 2026-10-15 |
 |---|---|---|---|
-| Link retrofit (`python3 -m second_brain.knowledge_graph.retrofit_links`: `03-Entities/` hubs + marked `<!-- auto-wikilinks -->` footers; idempotent; never touches `00-Inbox/rss/`, `notepad/processed/`, `.internal-backups/`) | `retrofit-links` (container + timer) | 00/06/12/18:05 ET | timer **disabled**; no recorded run |
-| Graph build (`python3 -m second_brain.knowledge_graph.build_graph`, read-only; writes `graph.json` + `vault-graph.html`, live copy in `/var/lib/corporatetraveldc/knowledge_graph/`) | `knowledge-graph-compile` (container + timer + `.path`) | 00/06/12/18:08 ET, plus whenever a note lands in `01-Sources/manual/` | timer **disabled**; `.path` active; last build 2026-10-06 10:58Z |
-| Index refresh (`index_db --scan`) | `second-brain-index-scan` | 04:00 ET (08:00Z) | ran 08:00Z but PROPFIND returned 401 (see `docs/SECOND_BRAIN_STATUS.md` §5) |
+| Link retrofit (`python3 -m second_brain.knowledge_graph.retrofit_links`: `03-Entities/` hubs + marked `<!-- auto-wikilinks -->` footers; idempotent; never touches `00-Inbox/rss/`, `notepad/processed/`, `.internal-backups/`) | `retrofit-links` (container + timer) | 00/06/12/18:05 ET | timer **disabled**; no recorded run (unchanged 2026-10-15) |
+| Graph build (`python3 -m second_brain.knowledge_graph.build_graph`, read-only; writes `graph.json` + `vault-graph.html`, live copy in `/var/lib/corporatetraveldc/knowledge_graph/`) | `knowledge-graph-compile` (container + timer + `.path`) | 00/06/12/18:08 ET, plus whenever a note lands in `01-Sources/manual/` | timer **disabled**; `.path` active; last build ~~2026-10-06 10:58Z~~ 2026-10-13 16:07Z |
+| Index refresh (`index_db --scan`) | `second-brain-index-scan` | 04:00 ET (08:00Z) | ~~ran 08:00Z but PROPFIND returned 401 (see `docs/SECOND_BRAIN_STATUS.md` §5)~~ fixed 2026-10-06; 2026-10-14 08:01Z success, 17,034 files seen, 0 errors |
 | Trend report | none | — | **not built** |
 
-Last build (10:58Z): 2,959 curated notes, 3,058 nodes, 11,425 edges, 120 organic / 837 retrofit links, 35 unresolved links, 60 isolated notes. The repo copy `src/second_brain/knowledge_graph/graph.json` is the 2026-08-18 build (545 curated notes) and is not refreshed by the units; read the live copy.
+~~Last build (10:58Z): 2,959 curated notes, 3,058 nodes, 11,425 edges, 120 organic / 837 retrofit links, 35 unresolved links, 60 isolated notes.~~ Last build (corrected 2026-10-15, `graph.json` meta `generated_at` 2026-10-13 16:07Z): 3,378 curated notes, 3,477 nodes, 12,634 edges, 120 organic / 837 retrofit links, 35 unresolved links, 108 isolated notes. The organic and retrofit counts have not moved since 2026-10-06, which is what a disabled retrofit and link-free writers predict. The repo copy `src/second_brain/knowledge_graph/graph.json` is the 2026-08-18 build (545 curated notes) and is not refreshed by the units; read the live copy. That repo copy and `vault-graph.html` carry real vault note paths and ship to the public mirror (no `scripts/scrub-public-tree.py` rule); whether to drop them is an open operator decision (`docs/SECOND_BRAIN_STATUS.md` §5).
 
 ## What was dropped, and why
 
@@ -25,7 +25,7 @@ Last build (10:58Z): 2,959 curated notes, 3,058 nodes, 11,425 edges, 120 organic
 
 Shape: a deterministic script diffs the newest live `graph.json` against dated snapshots, emits structured facts, and hands them to `local-llm-synthesize.sh` for prose; the report lands as a vault note (or `docs/`, uncommitted) and the raw facts land even if the model is down.
 
-1. **Snapshot** the live `graph.json` to a dated copy under `/var/lib/corporatetraveldc/graph-snapshots/` before each weekly diff (directory does not exist yet; never pruned).
+1. **Snapshot** the live `graph.json` to a dated copy under `/var/lib/corporatetraveldc/graph-snapshots/` before each weekly diff (directory does not exist yet, still absent 2026-10-15; never pruned).
 2. **Facts**, each with note/hub names and numbers, "no change" allowed:
    - RISING: hubs whose degree grew notably; one burst vs. sustained multi-week growth.
    - GONE QUIET: previously well-connected hubs with zero new links for 2+ weeks.
@@ -37,7 +37,7 @@ Shape: a deterministic script diffs the newest live `graph.json` against dated s
 
 Cadence when built: weekly, time-based, after the Monday weeklies have landed (the second-brain weekly synthesis runs Mon 04:30 ET); graph inputs are vault writes, not commits, so a commit hook would fire at the wrong times. Every timer added for it must carry an explicit `America/New_York` (the host clock is UTC since 2026-10-06).
 
-Open for the operator: whether the disabled `retrofit-links` and `knowledge-graph-compile` timers are disabled deliberately (the tracked files say they should run every 6 h).
+Open for the operator: whether the disabled `retrofit-links` and `knowledge-graph-compile` timers are disabled deliberately (the tracked files say they should run every 6 h). Still open 2026-10-15: `systemctl --user is-enabled` reports both timers `disabled`, the `.path` unit `enabled`.
 
 ---
 

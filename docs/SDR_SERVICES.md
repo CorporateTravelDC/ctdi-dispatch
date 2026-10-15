@@ -1,4 +1,8 @@
-Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against `podman ps`, the live quadlets, udev rules and
+timers on 2026-10-15 ~01:10Z / 2026-10-14 21:10 ET. New sections: data flow,
+outbound sharing, monitoring, host setup.)
 
 # SDR Services — Current State & Enabling Disabled Containers
 
@@ -23,13 +27,16 @@ a pointer here.
 
 | Quadlet | Role | Notes |
 |---|---|---|
-| `corporatetraveldc-ultrafeeder` | ADS-B 1090 MHz decode + tar1090 (:8080), feeds FlightAware/FR24/adsbhub/airplanes.live/OpenSky MLAT | running |
-| `corporatetraveldc-acarsrouter` | ACARS/VDL2 message router (:9080) | running |
-| `corporatetraveldc-dumpvdl2` | VDL Mode 2 decoder — shares the `ACARS0130` dongle (`Environment=RTL_SERIAL=ACARS0130`, whole-bus `AddDevice=/dev/bus/usb`, not the `/dev/rtl_sdr_acars` symlink) | running |
-| `corporatetraveldc-acarshub` | ACARS web UI (127.0.0.1:9081) | running |
-| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST | custom local image, running |
+| `corporatetraveldc-ultrafeeder` | ADS-B 1090 MHz decode + tar1090 (:8080), feeds FlightAware/FR24/airplanes.live/OpenSky MLAT (ADSBHub dropped 2026-10-15) | running (2026-10-15: tar1090 on `100.x.x.x:8080` and `:8081`; Beast `30005` published on all interfaces; SBS `127.0.0.1:30003`. Full feed list under "Outbound sharing") |
+| `corporatetraveldc-acarsrouter` | ACARS/VDL2 message router (:9080) | running (2026-10-15: serves plain ACARS on TCP `9080` and VDL2 on TCP `15555`, both published on all interfaces; receives VDL2 from dumpvdl2 over ZMQ `45555`) |
+| `corporatetraveldc-dumpvdl2` | VDL Mode 2 decoder — shares the `ACARS0130` dongle (`Environment=RTL_SERIAL=ACARS0130`, ~~whole-bus `AddDevice=/dev/bus/usb`, not the `/dev/rtl_sdr_acars` symlink~~ (corrected 2026-10-15: `AddDevice=/dev/rtl_sdr_acars` plus a read-only `/dev/bus/usb` volume, scoped since 2026-08-26; the image's start script is overlaid with the tracked `containers/dumpvdl2/launch.sh`), `FEED_ID` set in the quadlet) | running |
+| `corporatetraveldc-acarshub` | ACARS web UI (~~127.0.0.1:9081~~ `100.x.x.x:8092`, tailnet only; corrected 2026-10-15 from the quadlet's `PublishPort`) | running |
+| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST | custom local image, running. (2026-10-15: all three sources exist in code, but in practice only airframes.io produces watchlist matches: 3 `MATCH [AIRFRAMES` in the last 24 h; the 2026-10-12 audit counted 3 airframes, 0 local, 0 Jumpseat over 7 days. The router sends only VDL2 to UDP 5005, and the watcher does not parse the registration nested inside a VDL2 message, so local VDL2 rarely matches a watched registration) |
 | `corporatetraveldc-piaware` / `-fr24feed` / `-planefinder` / `-airnavradar` | Aggregator feeders (FlightAware / FR24 / PlaneFinder / RadarBox) | running |
 | `corporatetraveldc-sdr-crashloop-guard.timer` | Every 5 min — checks ultrafeeder/dumpvdl2 for lost USB device or restart-loop, auto-stops either | active (its `.service` is `inactive dead` between runs, as expected for a oneshot) |
+
+The local VDL2 messages also reach the database by a second path that does
+not go through the watcher (see "Data flow" below).
 
 **Still `.disabled` (hardware not yet acquired).** Serials below are the
 real `RTL_SERIAL=` values in the Quadlets and the real placeholder serials
@@ -37,12 +44,17 @@ in `/etc/udev/rules.d/99-rtlsdr-adsb.rules`:
 
 | Quadlet (repo path) | Dongle serial | Freq | Watcher |
 |---|---|---|---|
-| `.config/containers/systemd/corporatetraveldc-acarsdec.container.disabled` (duplicate copy at `systemd/`, plus an archived copy under `systemd/retired-20261003/`) | `ACARS0130` | 129–131 MHz | acars-watcher (UDP 5005) |
-| `systemd/quadlets/corporatetraveldc-dumphfdl-{0008,0011,0017}.container.disabled` | `HFDL0008` / `HFDL0011` / `HFDL0017` | 8 / 11 / 17 MHz | acars-watcher (UDP 5005) |
-| `systemd/corporatetraveldc-dumphfdl.container.disabled` — superseded by the three above | comments say `hfdl0HF`; no live udev rule matches it | 2–22 MHz HF | acars-watcher (UDP 5005) |
+| `.config/containers/systemd/corporatetraveldc-acarsdec.container.disabled` (~~duplicate copy at `systemd/`,~~ plus an archived copy under `systemd/retired-20261003/`; corrected 2026-10-15: there is no copy at `systemd/`) | `ACARS0130` | 129–131 MHz | acars-watcher (UDP 5005) |
+| `systemd/quadlets/corporatetraveldc-dumphfdl-{0008,0011,0017}.container.disabled` | `HFDL0008` / `HFDL0011` / `HFDL0017` | 8 / 11 / 17 MHz | ~~acars-watcher (UDP 5005)~~ none yet (corrected 2026-10-15: acarsrouter has no HFDL input, so HFDL would not reach UDP 5005 without a router change) |
+| `systemd/corporatetraveldc-dumphfdl.container.disabled` — superseded by the three above | comments say `hfdl0HF`; no live udev rule matches it | 2–22 MHz HF | ~~acars-watcher (UDP 5005)~~ none yet (corrected 2026-10-15: same as the row above, acarsrouter has no HFDL input) |
 | `systemd/quadlets/corporatetraveldc-ais-catcher.container.disabled` (AIS-catcher; NMEA/JSON on :8110) | `AIS0162` | 161–162 MHz | `systemd/corporatetraveldc-ais-watcher.container.disabled` (UDP 5006) |
 | `systemd/corporatetraveldc-ais.container.disabled` — superseded by ais-catcher above | comments say `ais0AIS`; no live udev rule matches it | 161–162 MHz | same |
 | `systemd/corporatetraveldc-utm-watcher.container.disabled` (OpenDroneID / Remote-ID drone watcher, `src/utm_watcher/`) | n/a — listens for UDP Remote-ID broadcasts | 2.4/5.8 GHz Remote-ID | utm-watcher itself |
+
+(2026-10-15) The staged acarsdec quadlet uses `ACARS0130`, the dongle that
+`dumpvdl2` already holds. Enabling it as written would fight `dumpvdl2` for
+the device. It also uses whole-bus `AddDevice=/dev/bus/usb` and loads
+`dispatch-secrets.env`.
 
 None of the above exists in the live `~/.config/containers/systemd/`
 (re-confirmed 2026-10-06: no `*.disabled` file there) — "disabled" means
@@ -50,8 +62,83 @@ None of the above exists in the live `~/.config/containers/systemd/`
 A new, unrelated `.disabled` file now also exists at
 `.config/containers/systemd/amtrak-tracker.container.disabled` — out of
 scope for this doc (not an SDR service); not otherwise investigated here.
+(Re-confirmed 2026-10-15: same staged set, none installed live.)
+
+(2026-10-15) Two more staged watchers, for the record: the **ais-watcher**
+(`src/ais_watcher/ais_watcher.py`) watches only the MMSIs in
+`AIS_STATIC_MMSI` and does not read the platform's vessel watchlist. The
+**utm-watcher** (`src/utm_watcher/`) is inert: no Remote ID receiver exists,
+and its USS REST poller idles until `USS_API_BASE` and `USS_API_KEY` are set.
+
+## Data flow (added 2026-10-15)
+
+```
+ADSB1090 dongle -> ultrafeeder (readsb/tar1090) -> aircraft.json
+    -> ingest-core local_airspace.py (15 s poll) -> proximity alerts, local positions
+    -> outbound feeds (below)
+ACARS0130 dongle -> dumpvdl2 --ZMQ 45555--> acarsrouter
+    -> TCP 15555 (VDL2) and TCP 9080 (plain ACARS; nothing produces it here)
+         -> ingest-core local_airspace.py -> acars_messages -> ACARS/OOOI evidence
+    -> UDP 5005 (VDL2 only) -> acars-watcher -> ntfy on a watched registration
+    -> outbound feeds (below)
+```
+
+`acars_messages` held 93,190 rows on 2026-10-15, 9,986 of them from the last
+24 h. ACARS phase evidence is read by `common/acars.py` (Jumpseat, then
+airframes.io, then local) for the pusher and poller OOOI logic. ADS-B never
+asserts ON or IN.
+
+## Outbound sharing (added 2026-10-15)
+
+The receivers share data with third parties. MLAT networks receive the
+receiver's precise position; feeder accounts carry station identifiers.
+Credentials and feeder keys live in per-feeder files under
+`/etc/corporatetraveldc/` (`piaware-`, `fr24feed-`, `planefinder-`,
+`airnavradar-`, `ultrafeeder-secrets.env`). Names only here.
+
+| From | Destination | What |
+|---|---|---|
+| ultrafeeder | `piaware.flightaware.com:30005` | ADS-B (Beast reduced) |
+| ultrafeeder | `data-out.flightradar24.com:10001` | ADS-B |
+| ~~ultrafeeder~~ | ~~`data.adsbhub.org:5002`~~ | ~~ADS-B~~ (removed 2026-10-15: operator dropped ADSBHub; its server had dropped the feed every ~16 s since 10-14) |
+| ultrafeeder | `feed.airplanes.live:30004` | ADS-B |
+| ultrafeeder | `collector.opensky-network.org:30003` | MLAT (receiver position) |
+| ultrafeeder | `feed.airplanes.live:31090` | MLAT (receiver position) |
+| piaware, fr24feed, planefinder, airnavradar containers | FlightAware, FR24, PlaneFinder, AirNav Radar | their own feeder clients |
+| acarsrouter | `feed.airframes.io:5553` (TCP) | VDL2 |
+| acarsrouter | `feedthe.acarsdrama.com:5555` (UDP) | VDL2 |
+| acarsrouter | `feedthe.acarsdrama.com:5550`, `feed.airframes.io:5550` (UDP) | plain ACARS (none produced today) |
+
+## Monitoring (added 2026-10-15)
+
+| Timer | State 2026-10-15 |
+|---|---|
+| `corporatetraveldc-sdr-crashloop-guard.timer` | enabled, active |
+| `corporatetraveldc-adsb-feed-silence-watchdog.timer` | **disabled** |
+| `corporatetraveldc-acars-feed-silence-watchdog.timer` | **disabled** |
+| `corporatetraveldc-adsb-link-watchdog.timer` | **disabled** |
+
+Only the crash-loop guard runs. A receiver that stays up but goes quiet
+(antenna, cable, feed silence) raises no alert today.
+
+## Host setup (added 2026-10-15)
+
+A new deployment needs, besides the udev rules below:
+
+- `/etc/modprobe.d/99-rtlsdr-blacklist.conf` (repo: `config/99-rtlsdr-blacklist.conf`),
+  which keeps the kernel DVB driver off the dongles; installed here.
+- The SELinux module `selinux/corporatetraveldc-sdr-usb.te` (built by
+  `selinux/apply-selinux-policy.sh`) for container USB access.
 
 ## Enabling a disabled service
+
+> (2026-10-15) Read before using the commands below. The `podman build` lines
+> bypass the build policy (no `--platform`, no provenance record). The staged
+> ais-watcher and utm-watcher quadlets load the master `dispatch-secrets.env`
+> and join `corporatetraveldc.network`, which does not exist. The acarsdec
+> quadlet conflicts with dumpvdl2 (see above). Each one needs its quadlet
+> brought up to the current conventions first: scoped env file, scoped
+> device, an existing network, a policy build.
 
 ```bash
 # note the repo-side source path differs per service -- see the table above
@@ -75,10 +162,17 @@ podman build -t localhost/corporatetraveldc-ais-watcher:latest src/ais_watcher/
 ## Dongle serialization
 
 Each dongle gets a unique EEPROM serial so udev can create stable symlinks
-(`rtl-eeprom-reserialize.sh`, run with only the target dongle connected).
+(~~`rtl-eeprom-reserialize.sh`, run with only the target dongle connected~~
+corrected 2026-10-15: `scripts/rtl-eeprom-reserialize.sh` is a historical
+one-off. It renames the ACARS dongle to `vdl20130`, which no live udev rule
+or quadlet uses, so running it as written would break the VDL2 chain. Program
+a new dongle with `rtl_eeprom -s <SERIAL>` by hand, with only that dongle
+connected. `scripts/deploy-acars-stack.sh` is obsolete as well, and is not
+to be run: it builds from inputs that no longer exist and ignores the boot
+stagger).
 
 Live 2026-10-06 (`lsusb` shows two Realtek RTL2838s; `ls -l /dev/rtl_sdr_*`
-shows both symlinks resolved): **`ADSB1090`** → `/dev/rtl_sdr_adsb`, and
+shows both symlinks resolved; same on 2026-10-15): **`ADSB1090`** → `/dev/rtl_sdr_adsb`, and
 **`ACARS0130`** → `/dev/rtl_sdr_acars` — both still correctly keyed, though
 the underlying bus paths have moved again since 2026-08-23 (see
 `docs/HARDWARE_GUIDANCE.md`'s live USB table — bus path is not the
@@ -89,7 +183,7 @@ the `hfdl0HF`/`ais0AIS` forms in the two superseded staged quadlets. There
 is no separate VDL2 dongle planned — `dumpvdl2` shares `ACARS0130`.
 
 Live rules, verbatim from `/etc/udev/rules.d/99-rtlsdr-adsb.rules`
-(re-confirmed 2026-10-06, unchanged):
+(re-confirmed 2026-10-06, unchanged; identical to the repo copy on 2026-10-15):
 
 ```
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ATTRS{serial}=="ADSB1090", SYMLINK+="rtl_sdr_adsb", MODE="0666"
@@ -103,8 +197,10 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ## Notes
 
-- ACARS, VDL2, and HFDL all feed the same `acars-watcher` via UDP 5005 —
-  same message shape (registrations, OOOI, flight data).
+- ~~ACARS, VDL2, and HFDL all feed the same `acars-watcher` via UDP 5005 —
+  same message shape (registrations, OOOI, flight data).~~ (corrected
+  2026-10-15: only VDL2 reaches UDP 5005 (`AR_SEND_UDP_VDLM2`). The router
+  sends plain ACARS only to the outbound feeds, and it has no HFDL input.)
 - AIS uses MMSI vessel identifiers and its own `ais-watcher` on UDP 5006;
   the watchlist's vessel sweep (AISHub) works independently of local AIS
   receive — see `src/shared/watchlist_README.md`.

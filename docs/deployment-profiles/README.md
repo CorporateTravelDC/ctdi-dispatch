@@ -1,5 +1,12 @@
 # CTDI parameterized deployment profiles — design pack v1
 
+> **Status (2026-10-15):** this is the operator-supplied pack's own README. Since it was received, gate 1 has a
+> first implementation: a typed loader and geography provider (`src/common/deployment_profile.py`), the
+> reference profile `src/common/profiles/ctdi-reference.json`, and one runtime consumer (the METAR fetcher's
+> station list). A composition compiler skeleton exists (`src/common/composition.py`, nothing reads it at
+> runtime). The other gates are open. Current state: [`STAGED.md`](STAGED.md) and
+> [`compositions/EMCOMM-HAZARD-COMPOSITION-SPEC.md`](compositions/EMCOMM-HAZARD-COMPOSITION-SPEC.md).
+
 **Status: design-stage contracts, NOT directly executable CTDI deployment configuration.**
 Adapters, migrations, policies, and runtime tests are required before deployment.
 
@@ -28,5 +35,6 @@ independent-journalist, cfo, cmo, cpa, gig-worker.
 11. Never claim compliance certification from a template; obtain sector-specific review.
 12. Pilot with a separate organization and credentials before production promotion.
 
-`python3 validate_profiles.py` checks structure and security invariants.
+`python3 validate_profiles.py` checks structure and security invariants (11 profiles on 2026-10-15: the
+nine in `profiles/`, the bundled reference profile and the private live profile).
 These example profiles contain placeholders and must not be deployed unchanged.

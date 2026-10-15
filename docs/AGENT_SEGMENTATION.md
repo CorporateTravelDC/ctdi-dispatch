@@ -1,6 +1,6 @@
 # Team segmentation: humans and agents
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: status, accounts, liveness, connectors, board tiers, skills and approvals re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:05-01:25Z / 2026-10-14 21:05-21:25 ET. Test counts below were not re-counted.)
 
 > Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
 
@@ -8,15 +8,15 @@ Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 
 The file keeps the name `AGENT_SEGMENTATION.md` because other docs link to it. Since 2026-10-04 its scope covers **human teammates** and **agent runtimes** as two parallel groups. The second brain is the authority for the rules referenced here; this file is the engineering design and runbook. Tooling lives in `scripts/agent-segmentation/`.
 
-## Status at a glance (live, 2026-10-06 18:15Z)
+## Status at a glance (live, ~~2026-10-06 18:15Z~~ 2026-10-15 ~01:05Z)
 
 | | State |
 |---|---|
 | Resource isolation | `agents.slice` / `humans.slice` tracked under `.config/systemd/user/`; installed per account by `plan.sh` |
-| Privilege separation | **executed** for agents: five team accounts exist (table below); no human teammate account exists yet (`ctdc-ops` has no members) |
-| Registry `/etc/ctdc-accounts.conf` (root:root 0644) | `ctdc-agent-anthropic-claude agent claude 0` · `ctdc-agent-openai-codex agent claude 1` · `ctdc-agent-llama service none 0` · `ctdc-agent-dispatch service none 1` · `ctdc-agent-anthropic-cowork service none 0` |
-| Groups | `ctdc-dev` = operator + all five accounts; `ctdc-agents` = all five; `ctdc-ops` = empty |
-| Liveness (last run 17:18Z) | claude: live (`refresh=0.0d session=active key=active`); llama + cowork: live (service, `key=active`); codex + dispatch: preloaded, skipped |
+| Privilege separation | **executed** for agents: ~~five~~ six team accounts exist (table below; corrected 2026-10-15); no human teammate account exists yet (`ctdc-ops` has no members) |
+| Registry `/etc/ctdc-accounts.conf` (root:root 0644) | ~~`ctdc-agent-openai-codex agent claude 1`~~ (corrected 2026-10-15, live file): `ctdc-agent-anthropic-claude agent claude 0` · `ctdc-agent-llama service none 0` · `ctdc-agent-dispatch service none 1` · `ctdc-agent-anthropic-cowork service none 0` · `ctdc-agent-openai-codex agent codex 0` · `ctdc-agent-openai-chatgpt service none 0` |
+| Groups | `ctdc-dev` = operator + all ~~five~~ six accounts; `ctdc-agents` = all ~~five~~ six; `ctdc-ops` = empty |
+| Liveness (~~last run 17:18Z~~ run 2026-10-15 01:05Z) | claude: live (`refresh=0.0d session=active key=active`); codex: live (`kind=agent/codex refresh=6.6d session=active key=active`); llama, cowork, chatgpt: live (service, `key=active`); dispatch: preloaded, skipped. ~~codex + dispatch: preloaded, skipped~~ |
 | System units | `corporatetraveldc-team-liveness.timer` (hourly), `corporatetraveldc-team-liveness-orders.path`, `corporatetraveldc-skill-grants.timer` (hourly), `corporatetraveldc-llama-council.timer` (hourly :41) -- all active; 0 failed system or user units |
 | Agent gateway | `https://agents.example.com` answering (`/.well-known/oauth-authorization-server` 200 with PKCE S256 only) |
 | Repo | `corporatetraveldc:ctdc-dev`, `drwxr-sr-x`, `core.sharedRepository=false`; no group-writable non-symlink file in the checkout |
@@ -25,9 +25,10 @@ The file keeps the name `AGENT_SEGMENTATION.md` because other docs link to it. S
 |---|---|---|---|---|
 | `ctdc-agent-anthropic-claude` | 1001 | agent / claude | `/bin/bash` | the primary on-box agent; runs its own remote-control unit `(CTDC-AGENT-ANTHROPIC-CLAUDE) Corporate Travel Dispatch Remote Control` (operator's copy of the unit is disabled) |
 | `ctdc-agent-anthropic-cowork` | 1002 | service / none | `/usr/sbin/nologin` | Cowork runs in Anthropic's cloud and never SSHes in; identity anchor for the gateway connector |
-| `ctdc-agent-openai-codex` | 1003 | agent / claude, **preloaded** | `/bin/bash` | expired, signer inactive until `--activate` |
+| `ctdc-agent-openai-codex` | 1003 | ~~agent / claude, **preloaded**~~ agent / codex, active (corrected 2026-10-15) | `/bin/bash` | ~~expired, signer inactive until `--activate`~~ activated 2026-10-08 in codex mode (see "Codex agents"); live |
 | `ctdc-agent-llama` | 1004 | service / none | `/usr/sbin/nologin` | the local llama.cpp model as a council/arena participant |
 | `ctdc-agent-dispatch` | 1005 | service / none, **preloaded** | `/usr/sbin/nologin` | reserved identity for a rewritten chat panel |
+| `ctdc-agent-openai-chatgpt` (added 2026-10-15 pass; created 2026-10-08) | 1006 | service / none | `/usr/sbin/nologin` | ChatGPT's identity anchor for the `chatgpt` gateway connector (see "ChatGPT") |
 
 **Designed exception:** the operator's own Claude Code session runs as the operator (uid 1000), outside `agents.slice`, by design -- see "Designed exception" below for why and what still binds it.
 
@@ -99,7 +100,7 @@ Removed from the agent subset on 2026-10-04 (duel X1/H4), each with its reason r
 
 Accounts load the subset with `WITH_DISPATCH_ENV_FILES=<subset> scripts/with-dispatch-env.sh <cmd>` (the plan writes that export into `~/.config/ctdc-env.sh`), never `source`.
 
-Containers are a separate boundary: since 2026-10-05 every first-party quadlet reads its own scoped file `/etc/corporatetraveldc/svc/<service>.env` (generated by `scripts/service-env/`). At HEAD 53 tracked quadlets reference `svc/` and none references `dispatch-secrets.env`; nine scoped files exist (`acars-watcher`, `amtrak-tracker`, `demo`, `execstandard-verifier`, `ingest`, `poller`, `pusher`, `runner`, `web`).
+Containers are a separate boundary: since 2026-10-05 every first-party quadlet reads its own scoped file `/etc/corporatetraveldc/svc/<service>.env` (generated by `scripts/service-env/`). At HEAD ~~53~~ 54 (re-counted 2026-10-15) tracked quadlets reference `svc/` and none references `dispatch-secrets.env` (exception, 2026-10-15: five dormant tracked quadlets still have `EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env`: `.config/containers/systemd/corporatetraveldc-acarsdec.container.disabled`, `systemd/corporatetraveldc-{ais-watcher,dumphfdl,utm-watcher}.container.disabled`, `systemd/quadlets/corporatetraveldc-ais-catcher.container.disabled`, plus the four `systemd/retired-20261003/` copies; dormant is not exempt, so each must be moved to a scoped `svc/` file before it is ever enabled); nine scoped files exist (`acars-watcher`, `amtrak-tracker`, `demo`, `execstandard-verifier`, `ingest`, `poller`, `pusher`, `runner`, `web`).
 
 ### No secret on a command line
 
@@ -107,7 +108,7 @@ Containers are a separate boundary: since 2026-10-05 every first-party quadlet r
 
 ### Root never executes the checkout
 
-The scripts root runs are installed to `/usr/local/libexec/ctdc/` (root:root) by `scripts/install-root-copies.sh`, which verifies the signed manifest first, refuses bytes that differ from the signed hash, and records hashes in `/usr/local/libexec/ctdc/.ctdc-installed` (`--check` reports stale copies). Installed today: `team-liveness.sh`, `skill-grants.sh` + `skill_grants.py`, `watchdog.sh`, `watchdog-tune.sh`, `renew-tailscale-cert.sh`, `tailscale-cert-refresh-nts.sh`, `stall-monitor.py`, `lockdown.sh`, `restore-network.sh`, `cf-honeypot-ban.sh`, `cf-honeypot-notes.sh`, `installed-check.sh`, `lib/`. Order after every sign: `scripts/sign-manifest.sh` -> commit -> `sudo scripts/install-root-copies.sh` -> `sudo systemctl daemon-reload`.
+The scripts root runs are installed to `/usr/local/libexec/ctdc/` (root:root) by `scripts/install-root-copies.sh`, which verifies the signed manifest first, refuses bytes that differ from the signed hash, and records hashes in `/usr/local/libexec/ctdc/.ctdc-installed` (`--check` reports stale copies). Installed today: `team-liveness.sh`, `skill-grants.sh` + `skill_grants.py`, `watchdog.sh`, `watchdog-tune.sh`, `renew-tailscale-cert.sh`, `tailscale-cert-refresh-nts.sh`, `stall-monitor.py`, `lockdown.sh`, `restore-network.sh`, `cf-honeypot-ban.sh`, `cf-honeypot-notes.sh`, `installed-check.sh`, `lib/`; added since (listed 2026-10-15): `approved-exec.py` + `approved-exec.conf` (the root executor, `docs/AGENT_TRUST_MODEL.md` §9.1), `transcript_leak_scan.py` (the hourly `--agents` leak scan), `agent-home-snapshot.sh`. Order after every sign: `scripts/sign-manifest.sh` -> commit -> `sudo scripts/install-root-copies.sh` -> `sudo systemctl daemon-reload`.
 
 `board-signer-ctl.sh` stays in the checkout because root calls it only through `runuser` as the operator (the signer registry is in the operator's rootless Postgres container, which root cannot see). `corporatetraveldc-llama-council.service` also runs from the checkout, but as `ctdc-agent-llama`, after an `ExecStartPre` manifest check of the two files it uses.
 
@@ -124,7 +125,7 @@ Everything privileged is dry-run by default and refuses to execute without root 
 | `secrets-subset.py` | builds a subset; `--check`/`--dry-run` write nothing |
 | `verify.sh [--user NAME]` | run as the operator (uses `sudo -u`); per-account checks 1-6f and fleet checks 7-8b, refined per kind from the registry; exit 1 on any FAIL |
 | `rollback.sh` | `--remove-agent NAME` / `--remove-service NAME` / `--remove-human NAME` / `--shared`; removes the registry line; prints (does not run) the signer deactivate + `revoke-tokens` |
-| `render-onboarding.sh NAME [--install]` | renders `onboarding-template.md` to `/home/NAME/CLAUDE.md` (root:NAME 0444) |
+| `render-onboarding.sh NAME [--install]` | renders `onboarding-template.md` to `/home/NAME/CLAUDE.md` (root:NAME 0444); since 2026-10-08 the same pamphlet also goes to `AGENTS.md` and `~/.codex/AGENTS.md` (Codex reads those) |
 | `publish-pamphlet-to-vault.sh NAME` | for a cloud identity: the same pamphlet, scrub-gated, written to `01-Sources/personal-notes/Series/agents/NAME/PAMPHLET.md` |
 
 ### Account kinds
@@ -139,7 +140,7 @@ The registry line is `name kind login_mode preloaded`. Group membership decides 
 | `service` / `none` | `/usr/sbin/nologin`; no linger, no user manager, no inbound key | none | `--add-service NAME` or `--convert-to-service NAME` |
 | `human` / `ssh` | bash; `humans.slice`; their key | real shell, exactly one key commented `NAME@`, not locked/expired, SSH login within 14 d | `--add-human NAME --ssh-pubkey-file F` |
 
-`--preload` creates an agent or service **inert on arrival**: `chage -E 0`, no linger, registry `preloaded=1`, signer registered then deactivated (the plan prints that command). The liveness switch logs it as `preloaded` and skips it. `--activate NAME` lifts the expiry, unlocks, enables linger (not for services), flips the registry to 0 and prints the signer `activate` plus the mode's next step. The new-account grace (3 d) is measured from the home directory's birth time (`created_at()` in `team-liveness.sh`: `stat -c %W`), not from activation. An account preloaded more than 3 days before `--activate` therefore has no grace: a claude-mode agent without fresh credentials, or without its signer re-activated, is made inert on the next hourly run. Run the login and `board-signer-ctl.sh activate` in the same sitting as `--activate` [finding: `ctdc-agent-openai-codex` was created 2026-10-05, so its grace has lapsed after 2026-10-08].
+`--preload` creates an agent or service **inert on arrival**: `chage -E 0`, no linger, registry `preloaded=1`, signer registered then deactivated (the plan prints that command). The liveness switch logs it as `preloaded` and skips it. `--activate NAME` lifts the expiry, unlocks, enables linger (not for services), flips the registry to 0 and prints the signer `activate` plus the mode's next step. The new-account grace (3 d) is measured from the home directory's birth time (`created_at()` in `team-liveness.sh`: `stat -c %W`), not from activation. An account preloaded more than 3 days before `--activate` therefore has no grace: a claude-mode agent without fresh credentials, or without its signer re-activated, is made inert on the next hourly run. Run the login and `board-signer-ctl.sh activate` in the same sitting as `--activate` ~~[finding: `ctdc-agent-openai-codex` was created 2026-10-05, so its grace has lapsed after 2026-10-08]~~ (closed 2026-10-15: codex was activated in codex mode on 2026-10-08 and is live).
 
 `--convert-to-service NAME` (2026-10-05, used for Cowork): stops the account, sets the nologin shell, removes `authorized_keys`, registry `service none 0`; the signing key and signer stay.
 
@@ -197,7 +198,7 @@ The agent rules still apply on every plan: drafts only, never publish, never app
 
 ### Adding accounts (current commands)
 
-The five accounts above already exist; these are the commands for the next one. Signer registration runs as the **operator** (not under sudo); the plan prints the exact line, which copies the root-only pubkey to a temp file with `sudo cat`.
+The ~~five~~ six accounts above already exist; these are the commands for the next one. Signer registration runs as the **operator** (not under sudo); the plan prints the exact line, which copies the root-only pubkey to a temp file with `sudo cat`.
 
 ```
 # agent (claude mode)
@@ -281,11 +282,13 @@ Tests: `tests/scripts/test_team_liveness.py` (63 tests; drives the verdict logic
 |---|---|---|
 | `key` | `X-Board-Key` | every route not listed |
 | `normal` | alive + (`X-Board-Key` or a valid signature from an active signer) | `POST/GET /api/v1/board`, `GET /api/v1/vault/research[/list]`, `GET /api/v1/approvals`, `GET /api/v1/council` |
-| `signed` | the account's own signature; a shared key never qualifies | `POST /api/v1/council`, `POST /api/v1/council/close`, `POST /api/v1/workspace/contribute` |
+| `signed` | the account's own signature; a shared key never qualifies | `POST /api/v1/council`, `POST /api/v1/council/close`, `POST /api/v1/workspace/contribute`, `POST /api/v1/approvals/withdraw` (added 2026-10-11; listed here 2026-10-15) |
 | `high` | signature AND a minted token with lifetime <= 24 h (`BOARD_HIGH_TOKEN_MAX_TTL`); the master `BOARD_KEY` never qualifies | **none yet** -- implemented and tested, reserved for future delete/pin/ack |
 | `cosign` | signature AND an admin's cosignature over the same message | **none yet** |
 
 Tests: `tests/web/test_board_signer.py` (22).
+
+Since 2026-10-10 every authorised **signed** non-GET request on these routes is also a hash-chained audit row, `board.signed.request` (route, signer, cosigner, policy, sha256 of the body and the signature; never the body). Replay limit (open, low): `ReplayCache` is in-process, so a web restart empties it; see `docs/BOARD_SIGNING.md`.
 
 ## Skills: grants and clawback
 
@@ -295,13 +298,13 @@ Catalog, three sources:
 
 | Source | Bytes from | Trust |
 |---|---|---|
-| signed | `skills/<name>/` (8 at HEAD: `corporatetraveldc-dispatch-ops`, `flight-hifi-track`, `hub-arrivals-lookup`, `linkedin-export-analyzer`, `morning`, `nec-train-hifi-track`, `overwater-adsb-handoff-track`, `second-brain-remember`) | each file checked against `MANIFEST.sha256` |
-| vendor | the operator's `~/.claude/skills/<name>` | pinned by tree hash in `skills/vendor-pins.txt` (16 pins); bytes not committed (some are proprietary-licensed); a copy that does not match its pin is withheld |
+| signed | `skills/<name>/` (8 at HEAD, re-checked 2026-10-15: `corporatetraveldc-dispatch-ops`, `flight-hifi-track`, `hub-arrivals-lookup`, `linkedin-export-analyzer`, `morning`, `nec-train-hifi-track`, `overwater-adsb-handoff-track`, `second-brain-remember`) | each file checked against `MANIFEST.sha256` |
+| vendor | the operator's `~/.claude/skills/<name>` | pinned by tree hash in `skills/vendor-pins.txt` (16 pins, re-checked 2026-10-15); bytes not committed (some are proprietary-licensed); a copy that does not match its pin is withheld |
 | project | `.claude/skills/` (`dispatch-context-guardian`, `personal-export-analysis`) | auto-loaded in the repo; clawback is `skillOverrides: "off"` in the agent's `settings.json` |
 
 `skills/skill-capabilities.txt` records what each skill needs beyond its text; a test fails if a grantable skill has no entry.
 
-Grants: `/etc/ctdc-skill-grants.conf` (root 0644, parsed, never sourced), lines `grant|deny <account|*> <skill|*> [task=ID] [until=ISO-8601+offset]`. Deny beats grant; expired lines lapse both ways; naive timestamps are rejected. Live file: `grant <account> *` for `ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-cowork` and `ctdc-agent-openai-codex` (no deny lines). The last apply that ran reported `2 agent account(s), 0 finding(s)`; every hourly run on 2026-10-06 13:07Z-17:13Z HELD because the checkout carries an uncommitted edit (`scripts/stack-refresh.sh`) and fails verify-manifest [finding]. Missing/unreadable grants file, or a checkout that fails verify-manifest = **HOLD** (nothing changes).
+Grants: `/etc/ctdc-skill-grants.conf` (root 0644, parsed, never sourced), lines `grant|deny <account|*> <skill|*> [task=ID] [until=ISO-8601+offset]`. Deny beats grant; expired lines lapse both ways; naive timestamps are rejected. Live file: `grant <account> *` for `ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-cowork` and `ctdc-agent-openai-codex` (no deny lines). The last apply that ran reported `2 agent account(s), 0 finding(s)` (re-checked 2026-10-15 01:08Z: same summary; the HELD runs of 2026-10-06 13:07Z-17:13Z are history, main now stays at its signed commit while edits happen in the guard worktree). Limit (2026-10-15): grants are installed only into `~/.claude/skills`, so the codex-mode account's Codex CLI receives none of them. Missing/unreadable grants file, or a checkout that fails verify-manifest = **HOLD** (nothing changes).
 
 Apply, per agent account: keeps `~/.claude/skills` root-owned (quarantining an agent-owned, symlinked or non-directory one to `~/.claude/.ctdc-skills-quarantine/`); installs each granted skill as a root-owned read-only copy with a `.ctdc-grant` marker; removes revoked/expired copies; restores in-place edits (a finding); as the agent with `O_NOFOLLOW` fds, merges `skillOverrides` and the context-guardian Stop + SessionStart hooks into `settings.json`. Findings -> ntfy p4; last report `/var/lib/ctdc-liveness/skill-grants.json`.
 
@@ -319,21 +322,21 @@ sudo systemctl start corporatetraveldc-skill-grants.service
 
 Code: `src/common/governance.py`, routes in `src/web/main.py` (`/api/v1/approvals*`, `/api/v1/council*`, `/api/v1/workspace/contribute`), migration `0069`; tests `tests/web/test_signed_approvals.py` (21).
 
-**Signed approvals.** An approval is a human's SSH signature (namespace `corporatetraveldc-approval`) over one request's canonical text: id, action, kind, requester, expiry and sha256 of the exact command or spec. It verifies only against `approval_signers` -- a human's **approval key**, deliberately not the board key (the operator's board key has no passphrase, so any operator-uid process can use it). `approver-ctl.sh register` refuses a key that opens with an empty passphrase; the server refuses a key equal to any board key, self-approval, and a signer whose board row is not an active `kind=human`. `scripts/approve.sh list|show|allow|deny ID` (off-box: `approve.sh message` + `approve.sh submit`). Phone pushes only notify and offer **Deny**; no tap or link can allow (`db.resolve_approval_request` refuses `allow`). Approval kinds in use include `council`, `connector-link`, `connector-hold`, `gateway-thaw`, `console-login`.
+**Signed approvals.** An approval is a human's SSH signature (namespace `corporatetraveldc-approval`) over one request's canonical text: id, action, kind, requester, expiry and sha256 of the exact command or spec. It verifies only against `approval_signers` -- a human's **approval key**, deliberately not the board key (the operator's board key has no passphrase, so any operator-uid process can use it). `approver-ctl.sh register` refuses a key that opens with an empty passphrase; the server refuses a key equal to any board key, self-approval, and a signer whose board row is not an active `kind=human`. `scripts/approve.sh list|show|allow|deny ID` (off-box: `approve.sh message` + `approve.sh submit`). Phone pushes only notify and offer **Deny**; no tap or link can allow (`db.resolve_approval_request` refuses `allow`). Approval kinds in use include `council`, `connector-link`, `connector-hold`, `gateway-thaw`, `console-login`. Expiry per kind comes from `governance.APPROVAL_TTL_POLICY` (table in `docs/AGENT_TRUST_MODEL.md` §3). Since 2026-10-11 a requester can **withdraw** its own pending request (`POST /api/v1/approvals/{id}/withdraw`, signed; audited as `approval.withdrawn`); it still cannot allow or deny it.
 
-**Council / arena.** `scripts/council.sh request --mode council|arena --subject S --participant A[:required] ...` (signed with the requester's board key) creates a convene that does nothing until a human signs it; `council.sh convene` = request + approve. On approval each participant gets the convene on the board's `council` thread and a workspace write grant for task `council-<id>` until the deadline. Arena is blind until a human-signed close. A `:required` miss is reported by `board_sweep`, never a kill.
+**Council / arena.** `scripts/council.sh request --mode council|arena --subject S --participant A[:required] ...` (signed with the requester's board key) creates a convene that does nothing until a human signs it; `council.sh convene` = request + approve. On approval each participant gets the convene on the board's `council` thread and a workspace write grant for task `council-<id>` until the deadline. Arena is blind until a human-signed close. A `:required` miss is reported by `board_sweep`, never a kill. Council states (added 2026-10-15): `requested` until the convene approval is signed; a council whose approval expires, is withdrawn or is denied moves to `expired` / `withdrawn` / `denied` (`governance._reconcile_councils`, audited as `council.status`) instead of staying `requested`.
 
 **Shared workspace.** Everyone reads through the research routes (scope: `01-Sources/personal-notes/Series/` plus `04-Syntheses/`, `02-Concepts/`, `00-Inbox/cross-link-findings/`, `01-Sources/manual/`). Writes only via `POST /api/v1/workspace/contribute` (client `scripts/workspace-contribute.sh`): signed, scrub-gated, server-chosen path `Series/contributions/<task>/<account>/<UTC>-<slug>.md`, WebDAV create-only (`webdav_client.put_create_only`). No delete, overwrite or publish route. Grants: `scripts/workspace-grants.sh grant|deny <account|*> [--task ID] [--until ISO+offset]`, `revoke`, `lock`/`unlock`; deny wins; migration 0069 seeds `grant * *`.
 
 **Publisher guardrail.** Agents draft; they never publish. No team account holds a route or credential to Executive Standard, Substack or the members site.
 
-**llama as participant.** `corporatetraveldc-llama-council.{service,timer}` runs `scripts/llama-council-responder.py` as `ctdc-agent-llama` (hourly at :41 + up to 5 min jitter; `User=ctdc-agent-llama`, `ProtectSystem=strict`, `NoNewPrivileges`). At most one convene per run; skips when load1 >= 12 (`LLAMA_COUNCIL_LOAD_MAX`) or the model server is unreachable. In the three days to 18:15Z it skipped 30 of 31 runs on load (load1 17-19) and found no convene on the other [finding: as deployed it effectively never participates during the day].
+**llama as participant.** `corporatetraveldc-llama-council.{service,timer}` runs `scripts/llama-council-responder.py` as `ctdc-agent-llama` (hourly at :41 + up to 5 min jitter; `User=ctdc-agent-llama`, `ProtectSystem=strict`, `NoNewPrivileges`). At most one convene per run; skips when load1 >= 12 (`LLAMA_COUNCIL_LOAD_MAX`) or the model server is unreachable. In the three days to 18:15Z it skipped 30 of 31 runs on load (load1 17-19) and found no convene on the other [finding: as deployed it effectively never participates during the day; still true 2026-10-15: every run in the last 24 h skipped on load (load1 13.8-24.9) while a convene was waiting on ctdc-agent-llama].
 
 ## Agent gateway: cloud agents over OAuth 2.1 + MCP
 
 `https://agents.example.com` -- an OAuth 2.1 authorization server plus one remote-MCP endpoint per connector, `POST /mcp/<slug>` -> a team account. Code: `src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`; migrations `0071` (connectors, clients, pending, connections, tokens) and `0073` (`agent_gateway_settings`, the freeze flag); tests `tests/web/test_agent_gateway.py` (15). The hostname must not sit under a Cloudflare Access application; nginx exposes only the OAuth, MCP and `.well-known` paths.
 
-- **Connectors**: `scripts/agent-gateway.sh add-connector SLUG ACCOUNT VENDOR` (slug `^[a-z0-9][a-z0-9-]{1,31}$`); `connectors` lists them. The Cowork connector (slug `cowork` -> `ctdc-agent-anthropic-cowork`) is linked and serving MCP tools [UNVERIFIED: the connector table was not queried; evidence is the working claude.ai connector in this session's tool list]. Per-agent slugs for on-box Claude Code, Codex, llama and ChatGPT were requested by the operator on 2026-10-05 and are not set up [UNVERIFIED for the same reason].
+- **Connectors**: `scripts/agent-gateway.sh add-connector SLUG ACCOUNT VENDOR` (slug `^[a-z0-9][a-z0-9-]{1,31}$`); `connectors` lists them. ~~The Cowork connector (slug `cowork` -> `ctdc-agent-anthropic-cowork`) is linked and serving MCP tools [UNVERIFIED: the connector table was not queried; evidence is the working claude.ai connector in this session's tool list]. Per-agent slugs for on-box Claude Code, Codex, llama and ChatGPT were requested by the operator on 2026-10-05 and are not set up [UNVERIFIED for the same reason].~~ (corrected 2026-10-15 from `agent_connectors`: four connectors, all enabled, each mapped to its own account: `chatgpt`, `claude-code`, `codex`, `cowork`; `chatgpt`, `codex` and `cowork` each have one active connection, `claude-code`'s is dormant. llama has no connector.)
 - **Linking**: the vendor's OAuth flow lands on a consent page that shows an approval id; the link completes only when the operator signs it (`approve.sh allow`, kind `connector-link`). PKCE S256 is mandatory; token endpoint auth `none`; clients via Dynamic Client Registration or a Client ID Metadata Document; loopback `http://localhost:<port>` redirects accepted for native clients (RFC 8252), https elsewhere. Pending authorizations wait 15 min; codes live 10 min.
 - **Tokens**: access 1 h, rotating refresh; our refresh grant idles out after 30 days without a hold.
 - **Our side is authoritative**: every renewal and tool call checks the account's signer is active (liveness, `deactivate`, `revoke-tokens` all end the chain) and the operator dead-man (operator login within 14 d, read from `operator-last-login`; refuses without revoking).
@@ -342,7 +345,7 @@ Code: `src/common/governance.py`, routes in `src/web/main.py` (`/api/v1/approval
 - **Kill switch**: `agent-gateway.sh revoke SLUG|ACCOUNT`, `disable|enable SLUG`, and `kill-all` (freeze: every OAuth/MCP endpoint answers 503, every connection revoked, every connector disabled). `thaw` needs the operator's signature (kind `gateway-thaw`); connectors are then re-enabled and each vendor re-links. Also on the phone console (`docs/OPERATOR_CONSOLE.md`).
 - **Vendor limits (checked 2026-10-05)**: ChatGPT Pro = MCP read/fetch only; ChatGPT agent mode does not use custom MCP apps; a Claude connector belongs to the Claude account, so every Claude surface using it acts as the same identity; Claude connector auth settings cannot be edited after adding (remove + re-add).
 
-Cloud pamphlet: `publish-pamphlet-to-vault.sh ACCOUNT` writes `Series/agents/ACCOUNT/PAMPHLET.md`. Its prepended "cloud client" block still tells the client its credential is a board token sent as `X-Board-Key` with a 12-hourly refresh; for Cowork that is stale (Cowork now reaches the platform through the gateway connector) [finding].
+Cloud pamphlet: `publish-pamphlet-to-vault.sh ACCOUNT` writes `Series/agents/ACCOUNT/PAMPHLET.md`. Its prepended "cloud client" block still tells the client its credential is a board token sent as `X-Board-Key` with a 12-hourly refresh; for Cowork that is stale (Cowork now reaches the platform through the gateway connector) [finding, still open 2026-10-15: the block also tells every cloud client, ChatGPT included, that it runs in "Anthropic's cloud"].
 
 ### Designed exception: the operator's own agent session runs outside `agents.slice`
 
@@ -377,7 +380,7 @@ not a gap:
 ## Open questions for the operator
 
 - Read-only Postgres role (`DISPATCH_PG_RO_*`): name and table set; still not created.
-- Per-agent gateway slugs (on-box Claude Code, Codex, llama, ChatGPT) and whether on-box Claude Code must be kept off the Cowork claude.ai connector.
+- ~~Per-agent gateway slugs (on-box Claude Code, Codex, llama, ChatGPT) and whether on-box Claude Code must be kept off the Cowork claude.ai connector.~~ (closed 2026-10-15: `claude-code`, `codex` and `chatgpt` slugs exist alongside `cowork`; llama has none.)
 
 ---
 

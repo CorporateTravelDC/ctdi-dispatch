@@ -1,6 +1,6 @@
 # Honeypot paths + fail2ban auto-ban
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: files, vhost coverage, installed copies and the fail2ban unit re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:22Z / 2026-10-14 21:22 ET.)
 `fail2ban-client status`, `/var/log/fail2ban.log`, `/var/log/nginx/honeypot.log`
 and the audit log are root-only and were not read for this revision, so
 current ban counts and the last successful Cloudflare-edge ban are
@@ -41,15 +41,19 @@ A tripwire across the nginx-fronted stack, aimed at two kinds of client:
 | `fail2ban/action.d/cloudflare-token-corporatetraveldc.conf` | this repo | edge ban action |
 | `fail2ban/jail.d/nginx-limit-req-corporatetraveldc.conf` | this repo | rate-limit jail (below) |
 | `fail2ban/action.d/corporatetraveldc-lockdown.conf` | this repo | installed but **used by no jail** since the limit-req fix |
+| `nginx/conf.d/00-rate-limit-corporatetraveldc.conf` (added 2026-10-15) | this repo | the `limit_req_zone` definitions the rate-limit jail depends on (`corporatetraveldc_lr` 10 r/s, `corporatetraveldc_demo_login` 1 r/s) |
+| `nginx/conf.d/00-log-format-cfreal.conf` (added 2026-10-15) | this repo | access-log format that records the real client address behind the Cloudflare tunnel (2026-10-05) |
 | `/etc/fail2ban/jail.local` | live only (root 0600) | `[DEFAULT] cfzone = <zone id>` only |
 | `/etc/corporatetraveldc/cf-honeypot.token` | live only (root:root 0600) | the zone-scoped Cloudflare token |
 
 Live copies of the tracked nginx files (`00-honeypot.conf`,
 `snippets/honeypot.conf`, and the dispatch/cloud/dav/agents vhosts) are
-byte-identical to HEAD (`cmp`, 2026-10-06), and the live
-`honeypot-website.conf` is identical to the website repo's copy.
+byte-identical to HEAD (`cmp`, 2026-10-06; re-checked 2026-10-15, together with
+the mcp, ntfy, openwebui, pihole and tailscale-dispatch-runner vhosts, all
+identical), and the live
+`honeypot-website.conf` is identical to the website repo's copy (not re-checked 2026-10-15).
 
-## Vhost coverage (live `/etc/nginx/conf.d`, 2026-10-06)
+## Vhost coverage (live `/etc/nginx/conf.d`, 2026-10-06; unchanged 2026-10-15)
 
 | Vhost | Trap include |
 |---|---|
@@ -70,6 +74,15 @@ content.
 **Untracked live vhosts:** `acars.`, `adsb.` and `dispatch-runner.` exist in
 `/etc/nginx/conf.d/` but in no repository checked (this repo, the website
 repo, the Executive Standard repo). A rebuild from repos would lose them.
+(2026-10-15: still untracked here; `members.executivestandard.…`,
+`invite.executivestandard.…`, `www.…` and `es-headers.conf` are not in this
+repo either. `dispatch-runner.…` is the only vhost that uses the
+`corporatetraveldc_demo_login` zone.)
+
+**Rate-limit coverage (added 2026-10-15, live).** `limit_req` is applied in the
+agents, dispatch, dispatch-runner, invite, mcp, ntfy, openwebui, pihole, acars,
+adsb and tailscale-dispatch-runner vhosts. The `cloud.`, `dav.`, `www.` and
+`members.` vhosts have none, so the rate-limit jail cannot fire for them.
 
 ## Deployment (root, never hand-copied)
 
@@ -88,9 +101,12 @@ actionban = /usr/local/libexec/ctdc/installed-check.sh "scripts/cf-honeypot-ban.
 
 The installed copies in `/usr/local/libexec/ctdc/` (`cf-honeypot-ban.sh`,
 `cf-honeypot-notes.sh`, `lockdown.sh`, `restore-network.sh`,
-`installed-check.sh`) and the live `/etc/fail2ban/{action.d,jail.d}` files
-were all written 2026-10-06 17:43Z. `fail2ban.service` is active since
-2026-10-06 10:17Z.
+`installed-check.sh`) ~~and the live `/etc/fail2ban/{action.d,jail.d}` files
+were all written 2026-10-06 17:43Z~~ (corrected 2026-10-15: were last written
+by `install-root-copies.sh` on 2026-10-14 22:18Z; the `/etc/fail2ban` files are
+root-only and their dates were not re-read). `fail2ban.service` is active since
+2026-10-06 10:17Z (unchanged 2026-10-15; `install-root-copies.sh` reloads, it
+does not restart, see postmortem 1 below).
 
 nginx files are still copied by hand (`sudo cp` + `sudo nginx -t && sudo
 systemctl reload nginx`). A change to a `limit_req_zone` key needs a restart,
@@ -129,7 +145,7 @@ label here) so the action can reach `api.cloudflare.com`.
 `selinux/corporatetraveldc-secrets-isolation.te` grants `fail2ban_t` read on
 `ctdc_secret_cf_honeypot_t` -- but that type labels `~/.secrets/cf-honeypot.token`,
 and the action now reads `/etc/corporatetraveldc/cf-honeypot.token`, which is
-labelled `container_file_t` (`ls -Z`, 2026-10-06). [UNVERIFIED: whether
+labelled `container_file_t` (`ls -Z`, 2026-10-06; same on 2026-10-15). [UNVERIFIED, still on 2026-10-15: whether
 `fail2ban_t` may read `container_file_t`; if it may not, every edge ban since
 the 2026-10-03 move fails while the local firewalld ban still works. Check
 with `sudo ausearch -m avc -se fail2ban_t --start 10/03/2026` and the last

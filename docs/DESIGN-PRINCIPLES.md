@@ -1,6 +1,7 @@
 # Design Principles — corporatetraveldc-dispatch
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
+§2–§4 re-checked 2026-10-15 01:00Z against main `1491bf5a` plus the staged batch and the live timers.
 
 ## 1. Local-first, offline-capable by default
 
@@ -30,8 +31,21 @@ The single cloud path, in `src/common/llm.py`, needs **both** gates open:
 module default is `false` (since 2026-08-26; `llm.py:399`), and this
 deployment also sets `ANTHROPIC_FALLBACK_ENABLED=false` in
 `/etc/corporatetraveldc/dispatch.env`. Callers can further pass
-`allow_anthropic=False`, as the brief skills do. Result on this deployment:
-zero cloud LLM calls.
+`allow_anthropic=False`, as the brief skills do. ~~Result on this deployment:
+zero cloud LLM calls.~~ (corrected 2026-10-15: that holds for the platform's
+own runtime inference path (`llm.py`, `llm.py:399` default still `false`), but
+not for the deployment as a whole. One scheduled job calls a cloud model
+outside `llm.py`. `corporatetraveldc-second-brain-weekly-dump.timer` (enabled,
+Sun 02:00Z) runs `claude --model opus -p …`
+(`scripts/second-brain-weekly-dump.sh:139`) and sends it `CLAUDE.md` and
+Claude's memory files. Its local backstop,
+`corporatetraveldc-claude-weekly-llama-fallback`, runs only after a failure;
+see `README.md` "Local LLM" for its known defect. The operator's agents
+(Claude Code and Codex on the box, ChatGPT and Cowork through the agent
+gateway) are vendor-hosted models. They are operator tooling, not the
+platform's inference path, but they are cloud LLM use on this deployment.
+This job predates the "zero" statement, so the statement was not accurate when
+written.)
 
 Rules for contributors:
 
@@ -69,6 +83,14 @@ External **data feeds** (NWS, METAR, FAA TFR, SWIM NMS, Amtrak, ATCSCC ops
 plan) are acceptable dependencies: government or public-interest sources,
 read-only, no operator data sent, most with a last-known-good cache.
 
+(Added 2026-10-15) One lookup does send operator data: the **airplanes.live
+fallback** (`src/common/airplanes_live.py`). The code default is off; this
+deployment turns it on with `AIRPLANES_LIVE_FALLBACK=1` since 2026-10-09 01:06Z (2026-10-08 21:06 ET). It
+sends the hex or callsign of an aircraft this deployment is following to a
+third party, but only after every local source has no contact, and never for
+an identifier on the FAA LADD list. It has no OOOI authority. Treat it as an
+opt-in exception to "no operator data sent".
+
 Their credentials (FAA NMS API client id/secret, SWIM NMS accounts) are
 optional: a missing key marks one feed `awaiting_credentials` and degrades
 it; it does not break the system. Only NWS, NOTAM and Amtrak have both a push
@@ -90,10 +112,17 @@ operator queries, cost per token, and add a commercial runtime dependency.
 | Pi-hole + Unbound | Open source | High | DNS |
 | Tailscale | Commercial | Medium — headscale | Network identity; not in the inference path |
 | Cloudflare Tunnel + Access | Commercial | Medium — nginx + DDNS | Public ingress and identity gate; not in the inference path |
+| Anthropic (Claude CLI, Opus) — added 2026-10-15 | Commercial | Medium — local Llama backstop exists but cannot generate as configured | Weekly second-brain dump (scheduled cloud inference, above); also the operator's Claude Code agent sessions. **In** an inference path, outside `llm.py`. |
+| OpenAI (Codex CLI, ChatGPT via the agent gateway) — added 2026-10-15 | Commercial | High — agents are optional | Operator agent tooling; not in the platform's runtime path |
+| airplanes.live — added 2026-10-15 | Community aggregator | High — fallback only, off by default | Position/identity lookup after local sources fail (§3) |
+| Proton Drive (via rclone) — added 2026-10-15 | Commercial | High — the target is a parameter (SMB, S3, SFTP, others) | Off-box backup target since 2026-10-12; receives only Borg-encrypted chunks, LADD rows excluded (`docs/BACKUP.md`) |
+| Borg | Open source | High | Backup archiver (`scripts/backup/ctdi-backup.sh`) |
 
 Tailscale and Cloudflare are acceptable because they are outside the
 inference path and have alternatives. A contributor who removes them should
-add the alternative as an opt-in, not a replacement.
+add the alternative as an opt-in, not a replacement. (Added 2026-10-15: the
+Anthropic row does not meet that test today. It is in an inference path, and
+its only fallback does not work as configured.)
 
 ---
 

@@ -24,6 +24,7 @@ _PRUNE_JOBS = (
     ("webhook_events", db.prune_webhook_events),
     ("flight_ooooi_times", db.prune_flight_ooooi_times),
     ("stdds_safety_status_history", db.prune_stdds_safety_status_history),
+    ("surface_event_log", db.prune_surface_event_log),
     ("local_airspace_alerts", db.prune_local_airspace_alerts),
     ("international_aviation_feed", db.prune_international_aviation_feed),
     ("session_grants", db.prune_expired_session_grants),

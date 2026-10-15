@@ -1,4 +1,6 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:15Z against main 1491bf5a (plus the staged batch) and the live box: the backup uplink is
+still down (see the status updates); the mechanism below is unchanged.
 
 # Uplink failover — how it actually works on this box
 
@@ -84,6 +86,10 @@ sitting on cellular is throttling, which is why fail-back exists.
   no internet it pushes a reminder on Mondays; after 3 consecutive good daily checks it pushes once
   ("back and stable") and goes quiet; if the link drops again the weekly reminders restart. State:
   `~/.local/state/ctdc-uplink/state.json`. Tests: `tests/scripts/test_uplink_reminder.py`.
+- **Re-check 2026-10-15 01:14Z:** the watchdog still logs `primary=wld0:ok backup=enu1:DOWN default_via=wld0
+  failed_over=0` every minute. Each run now takes about 22 s because every enu1 probe waits out its timeout. The
+  reminder timer is enabled (last run 2026-10-14 14:07Z). A primary failure today still lands in the "both down,
+  alert only" branch. The nightly Proton sync (`docs/BACKUP.md`) runs over wld0 only (`BACKUP_IFACE=wld0`).
 - When the new SIM is in: validate failover end to end (pull the primary, confirm SWIM and the tunnel move
   over and back), keep IPv6 off on that link (the 2026-09-02 hotspot IPv6 throttle), keep bulk traffic
   (the nightly off-box sync, image pulls) off it by default, and add it to vnStat tracking.
@@ -172,10 +178,16 @@ the route fixes resolution automatically.
    not a real failover. This is consistent with the reported 2026-10-06
    06:01 ET incident and suggests the backup has not recovered since.
 2. (fixed 2026-10-06) `PRIMARY_CON_DEFAULT` now matches the live lowercase profile `jorransgateway`.
-3. `RandomizedDelaySec=` is set on only two timers fleet-wide, and most
+3. ~~`RandomizedDelaySec=` is set on only two timers fleet-wide, and most
    timers carry `Persistent=true`; see `docs/BOOT_STORM_TIMER_REQUIRES.md`
    for the related, more serious finding about two root timers still
-   carrying a self-referential `Requires=`.
+   carrying a self-referential `Requires=`.~~ (corrected 2026-10-15:
+   `RandomizedDelaySec=` is now on 12 live timers, 8 of 78 user timers and
+   4 of 9 `corporatetraveldc-*` system timers; 43 live user timers carry
+   `Persistent=true`, so post-outage catch-up can still bunch. The two root
+   timers' self-referential `Requires=` lines were removed on 2026-10-06 and
+   no live timer carries one now; see
+   [`docs/BOOT_STORM_TIMER_REQUIRES.md`](BOOT_STORM_TIMER_REQUIRES.md).)
 
 ---
 

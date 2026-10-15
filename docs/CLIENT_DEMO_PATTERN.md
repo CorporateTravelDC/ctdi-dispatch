@@ -18,9 +18,17 @@ installed, but **no instance of it exists** — no
 `corporatetraveldc-client-demo@<slug>` container or timer is installed. A
 fixed-hostname successor, the "demo portals"
 (`corporatetraveldc-demo-portal-{client,personal}.container`, ports 8088 and
-8087, swapped with `scripts/demo-portal.sh`), is tracked since 2026-09-18 but
-not installed, has no tunnel ingress, and its header points at a
-`docs/DEMO_PORTALS.md` that does not exist.
+8087, swapped with `scripts/demo-portal.sh`), is tracked since 2026-09-18 ~~but
+not installed,~~ (corrected 2026-10-15: installed 2026-10-12 and both
+`corporatetraveldc-demo-portal-client` and `-personal` are active, bound to
+127.0.0.1 and the Tailscale address only) has no tunnel ingress (no 8087/8088
+route in the tracked `cloudflared/` or `nginx/` config), and its header points at a
+`docs/DEMO_PORTALS.md` that does not exist (still missing 2026-10-15).
+
+Rechecked 2026-10-15 01:45Z: still no `corporatetraveldc-client-demo@<slug>`
+instance; `corporatetraveldc-ccw-demo` and `corporatetraveldc-ccw-preview1` are
+active; the `corporatetraveldc-ccw-demo-webdev-expiry.timer` last fired
+2026-08-25 04:10Z and has no next run.
 
 ## The pieces
 

@@ -1,4 +1,6 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (last boot 2026-10-06 10:17Z): disk use,
+`/tmp`, kernel command line, watchdog and the recovery sequence updated below.
 
 # Raspberry Pi 5 — Boot Configuration Reference (Fedora ARM)
 
@@ -21,9 +23,11 @@ Re-derived with `cat /etc/os-release`, `uname -a`, `lsblk`, `df -h`, and
 | OS | Fedora Linux 44 (Workstation Edition), aarch64 — kernel `6.18.50-1.rpi5.fc44.aarch64` (**changed** from the 2026-08-23 `6.18.36` baseline — a kernel update has landed since) |
 | Boot device | NVMe (`nvme0n1`, 238.5 GB) — no SD card present or used |
 | `/boot` | `nvme0n1p1` (488 MB, **vfat**), 70% used — contains `config.txt` directly; there is no `/boot/firmware/` |
-| Root / home | `nvme0n1p2` (238 GB, **btrfs**) — one partition, two subvolumes: `subvol=/root` → `/`, `subvol=/home` → `/home` (same device shows twice in `df`), now **65% used** (146G/238G) — up from the 48% recorded 2026-08-11; grown with ~2 months of ingest/vault data |
+| Root / home | `nvme0n1p2` (238 GB, **btrfs**) — one partition, two subvolumes: `subvol=/root` → `/`, `subvol=/home` → `/home` (same device shows twice in `df`), ~~now **65% used** (146G/238G) — up from the 48% recorded 2026-08-11; grown with ~2 months of ingest/vault data~~ (corrected 2026-10-15: **83% used**, 188G of 238G, 39G free, per `df -h /`; it was 77% at the 2026-10-12 audit. The local Borg backup repository, 27 GB, lives on this volume; see `docs/BACKUP.md`) |
 | Swap | `zram0` (8 GiB compressed RAM swap) **plus** a disk-backed swap file `/var/swap/nvme-overflow.swap` (8 GiB, priority 10) on the NVMe. By design (operator, 2026-10-06): an OOM safety margin so zram + swap file = 16 GiB of swap. zram (higher priority) absorbs normal pressure; the NVMe file is only touched once zram is full, so a runaway build or model load pages out instead of tripping the OOM killer. |
 | Firmware config | `/boot/config.txt` (uses `os_prefix=/efi/`) |
+| `/tmp` | **tmpfs**, 8 GB (32% used at the 2026-10-15 check). On 2026-10-14 ~23:15Z it filled to 100% with 6,005 leaked test databases, which broke GPG signature checks in the integrity sweep. Since then `corporatetraveldc-tmp-headroom-guard.timer` (user, every 5 min) keeps at least 10% free, reclaiming only this user's stale test databases, old pytest directories and 24 h-old `mktemp` entries, and sends one ops-health alert if it is still under the floor (`scripts/tmp-headroom-guard.sh`) |
+| Kernel command line | `serial-getty@ttyAMA0.service` is masked (2026-10-12; it was in a restart loop). The persisted command line `/boot/efi/cmdline.txt` (unchanged since 2026-07-11) still carries `console=serial0,115200 console=tty1`. The firmware maps serial0 to ttyAMA0, so the running kernel shows `console=ttyAMA0,115200` in `/proc/cmdline` and will keep doing so after a reboot. Removing the kernel console from the UART means editing `serial0,115200` out of `/boot/efi/cmdline.txt` (operator, root); as of 2026-10-15 no file under /boot has changed since 2026-10-11. |
 
 Because the whole system lives on NVMe, "what survives an SD card
 failure" doesn't apply. The failure domain is the NVMe drive itself;
@@ -70,12 +74,21 @@ the leftover `dtoverlay=argonone` line are both real, both harmless.)
 
 ### Hardware watchdog — now overridden from the default 14s
 
+**Current (2026-10-15): 30 s.** `systemctl show -p RuntimeWatchdogUSec` → `30s`. The one-shot tune ran on
+2026-10-12 00:00Z (and again at 03:34:59Z), found a worst stall of 0.0 s since 2026-10-05 01:15, and wrote
+`RuntimeWatchdogSec=30` (the floor) into the live `/etc/systemd/system.conf.d/zz-ctdc-watchdog.conf`.
+**Drift:** the tracked copy `config/systemd/system.conf.d/zz-ctdc-watchdog.conf` still says
+`RuntimeWatchdogSec=180`, because `scripts/watchdog-tune.sh` rewrites only the live file. Reinstalling the
+tracked copy would put 180 s back. `corporatetraveldc-stall-monitor.service` is still enabled and running
+after the diagnostic week; whether it stays is an open operator item. The paragraph below is the 2026-10-06
+record.
+
 `dtparam=watchdog=on` enables the BCM2835 hardware watchdog at the kernel
 level; **the actual timeout is set by systemd**, not by this line. Live
 2026-10-06: `systemctl show -p RuntimeWatchdogUSec` → **`3min`** (180s),
 via `/etc/systemd/system.conf.d/zz-ctdc-watchdog.conf` (RuntimeWatchdogSec=180),
 which overrides the stock `watchdog.conf`'s `RuntimeWatchdogSec=14`. This
-is a **diagnostic override, not permanent**: it was raised after the
+~~is a **diagnostic override, not permanent**~~ was a diagnostic override (superseded 2026-10-12 by the 30 s tune above): it was raised after the
 2026-10-04 19:53 ET hard reset, in which a >14s scheduling stall (under
 load ~20 from concurrent rebuilds/restarts/test runs) tripped the
 hardware watchdog with no shutdown sequence logged. `corporatetraveldc-stall-monitor`
@@ -131,6 +144,9 @@ tooling.
 
 ## Recovery sequence (NVMe failure, Fedora)
 
+> **Status (2026-10-15):** this sequence has never been run end to end. The weekly restore test checks the
+> dumps inside the newest archive (hashes, `pg_restore --list`); it does not restore onto new hardware.
+
 1. Flash Fedora Workstation/Server for aarch64 (Raspberry Pi) to a new NVMe
    drive or temporary SD card.
 2. Restore `/boot/config.txt` from this document (serial console + watchdog
@@ -145,6 +161,14 @@ tooling.
    `.config/containers/systemd/`, `systemctl --user daemon-reload`, then
    let `corporatetraveldc-stack-boot-stagger.service` /
    `corporatetraveldc-boot-stagger.service` bring the stack up staggered.
+   - **Restore the data (added 2026-10-15) before the staggered bring-up:** Install `borgbackup` and the pinned rclone (`docs/BACKUP.md`), put
+     the Borg passphrase file back from the operator's offline copy (with `borg key export` output; without both,
+     the archives cannot be read), and pull the repository back from Proton Drive (`proton:ctdi-backup`) with a
+     fresh rclone login. Extract the newest archive: `pg_restore` the dispatch and Nextcloud dumps into fresh
+     Postgres containers before the app stack starts, and restore `/var/lib/corporatetraveldc`,
+     `/etc/corporatetraveldc` (secret-bearing), the `nextcloud-html` volume and `/var/lib/vnstat`. Not in the
+     archive: the model files (re-download them) and the LADD table data, which never leaves the box (its local-only
+     dumps are lost with the drive; obtain the FAA list again and re-import it per `docs/LADD_CUI_HANDLING.md`). Check the private ledger with `backup_ledger.py verify`, then re-enable the backup, freshness and restore-test timers.
 5. Reinstall the host-level layers that live outside this repo: Tailscale
    (native `tailscaled.service` — see `docs/HEADLESS_ACCESS.md`), Pi-hole +
    Unbound (`pihole-unbound-selinux-internal` repo), nginx vhosts
@@ -156,7 +180,13 @@ tooling.
    two cores — confirmed live 2026-10-06) and its sibling
    `corporatetraveldc-llama-restart.timer`, currently serving
    Qwen3-4B-Instruct-2507 (q4_0) (swapped from phi3-mini 2026-09-21; see
-   `docs/MODEL_EVALUATION_2026-09-21.md`). Ollama was retired at the
+   `docs/MODEL_EVALUATION_2026-09-21.md`). Since 2026-10-07 the unit's
+   `ExecStartPre` runs `sha256sum --strict --check config/llama/artifacts.sha256`,
+   so the llama-server binary, its libraries (under `/usr/local/lib/ollama/`)
+   and the model file must match the pinned digests or the service will not
+   start. Re-installed artifacts must be the same versions, or the pin file
+   updated and signed. Related units: `corporatetraveldc-llama-council.timer` (system) and
+   `corporatetraveldc-claude-weekly-llama-fallback.timer` (user). Ollama was retired at the
    2026-08-27 cutover; `build-models.sh` is now only a Modelfile↔personas.py
    verifier, not a build step.
 

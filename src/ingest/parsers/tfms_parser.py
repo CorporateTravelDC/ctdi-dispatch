@@ -2224,11 +2224,15 @@ def _handle_fadt(fi_message: ET.Element) -> list[dict]:
     # list can run to hundreds of flights, and _match_watchlist_flight()
     # opens a fresh DB read every call (fine for the one-flight-per-message
     # fltd handlers it was written for, pathological inside this loop).
-    watchlist_by_ident: dict[str, dict] = {}
+    # 2026-10-14 (flight-instance resolver): matched per slot with the shared
+    # instance matcher (identifier or route-filtered codeshare, airports must
+    # agree), so an EDCT for the other leg of an out-and-back no longer
+    # alerts this watch.
+    from common.flight_instance import match_watch_entry
+    flight_watches: list[dict] = []
     try:
         from shared.watchlist import get_active_entries
-        for _e in get_active_entries(entry_type="flight"):
-            watchlist_by_ident[_e["identifier"].upper().strip()] = _e
+        flight_watches = list(get_active_entries(entry_type="flight"))
     except Exception as e:
         log.error("tfms: FADT watchlist prefetch failed (continuing storage-only): %s", e)
 
@@ -2253,7 +2257,8 @@ def _handle_fadt(fi_message: ET.Element) -> list[dict]:
                 return None
             return 1 if v.strip().lower() == "true" else 0
 
-        entry = watchlist_by_ident.get(aircraft_id.upper().strip())
+        entry = match_watch_entry(flight_watches, aircraft_id, origin=dep_apt,
+                                  destination=arr_apt) if flight_watches else None
         dc_relevant = dep_apt in _FADT_DC_APTS or arr_apt in _FADT_DC_APTS
         if not dc_relevant and entry is None:
             continue

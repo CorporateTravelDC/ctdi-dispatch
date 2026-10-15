@@ -17,6 +17,15 @@ The host wrapper (airline-time-fidelity-collect.sh) appends the output to a
 dated JSONL file. Surface data is kept only ~4,095 rows per airport, so the
 collector snapshots every 6 hours with an 8-hour lookback; duplicates are
 expected and removed at analysis time by (gufi, collected_at latest).
+
+2026-10-14 (checkpoint 1, next steps 1-2): surface events are paired by
+INSTANCE-v1 (common.flight_instance.v1_pair_instance: side and airport,
+[filed - 2 h, filed + 6 h], exact route, siblings rejected, exactly one
+candidate, sequence rules), never "nearest to the reported time". Events come
+from the slot table AND the append-only surface_event_log (DCA/IAD/BWI, keeps
+the ramp exit the slot table overwrites), each with track_id and route. The
+TBFM lookup is bounded to the instance's arrival window. Output rows carry
+pairing_rule = "INSTANCE-v1" and per-kind rejection reasons.
 """
 from __future__ import annotations
 
@@ -69,29 +78,16 @@ def fdps_runway_times(raw: str | None) -> dict:
     return out
 
 
-def nearest(events: list[dict], kind: str, around, before_h=4, after_h=4):
-    """The surface event of `kind` nearest to `around` within the window."""
-    c = ts(around)
-    if c is None:
-        return None
-    best = None
-    for e in events:
-        if e["event"] != kind:
-            continue
-        t = ts(e["event_time"])
-        if t is None or not (c - timedelta(hours=before_h) <= t <= c + timedelta(hours=after_h)):
-            continue
-        if best is None or abs((t - c).total_seconds()) < abs((ts(best["event_time"]) - c).total_seconds()):
-            best = e
-    return best
+PAIRING_RULE = "INSTANCE-v1"
 
 
-def derive(f: dict, fdps: dict, sfc_org: list, sfc_dst: list) -> dict:
-    """All comparisons for one flight. Sign convention: reported - observed."""
-    off_obs = nearest(sfc_org, "off", f["airline_off_time"] or f["original_departure"])
-    out_obs = nearest(sfc_org, "spotout", f["airline_out_time"] or f["original_departure"])
-    on_obs = nearest(sfc_dst, "on", f["airline_on_time"] or f["original_arrival"])
-    in_obs = nearest(sfc_dst, "spotin", f["airline_in_time"] or f["original_arrival"])
+def derive(f: dict, fdps: dict, paired: dict, events: list | tuple = ()) -> dict:
+    """All comparisons for one flight. Sign convention: reported - observed.
+    `paired` is flight_instance.v1_pair_instance() output; `events` the
+    surface events considered (for coverage only)."""
+    def ev(kind):
+        return (paired.get(kind) or {}).get("event")
+    off_obs, out_obs, on_obs, in_obs = ev("off"), ev("spotout"), ev("on"), ev("spotin")
     return {
         "frozen_off": bool(f["airline_off_time"]) and f["airline_off_time"] == f["original_departure"],
         "frozen_on": bool(f["airline_on_time"]) and f["airline_on_time"] == f["original_arrival"],
@@ -107,7 +103,10 @@ def derive(f: dict, fdps: dict, sfc_org: list, sfc_dst: list) -> dict:
         "in_vs_ramp_entry_min": minutes(f["airline_in_time"], in_obs and in_obs["event_time"]),
         "observed_ramp_exit_to_off_min": minutes(off_obs and off_obs["event_time"], out_obs and out_obs["event_time"]),
         "observed_on_to_ramp_entry_min": minutes(in_obs and in_obs["event_time"], on_obs and on_obs["event_time"]),
-        "surface_coverage": {"origin": bool(sfc_org), "destination": bool(sfc_dst)},
+        "observed_runway_exit_to_ramp_entry_min": minutes(in_obs and in_obs["event_time"],
+                                                          ev("runwayout") and ev("runwayout")["event_time"]),
+        "surface_coverage": {"origin": any(e["airport"] == f["origin"] for e in events),
+                             "destination": any(e["airport"] == f["destination"] for e in events)},
     }
 
 
@@ -146,7 +145,47 @@ def brands(c, airline: str, flight_num: str) -> list[str]:
         (airline, flight_num)).fetchall() if r["marketing_carrier"] and r["marketing_carrier"] != airline})
 
 
+SURFACE_COLS = "track_id, airport, callsign, event, event_time, departure_airport, destination_airport"
+
+
+def surface_events(c, cs: str, airports: tuple) -> list[dict]:
+    """Slot-table events plus the append-only log (pg_schema/0075), deduplicated
+    by (airport, event, event_time). The log is read in its own transaction so a
+    missing table (not yet migrated) cannot abort the main read."""
+    rows = [dict(r) for r in c.execute(
+        f"SELECT {SURFACE_COLS} FROM surface_movement_events WHERE callsign = ? AND airport IN (?, ?)",
+        (cs, *airports)).fetchall()]
+    try:
+        from common import db
+        with db.conn() as c2:
+            rows += [dict(r) for r in c2.execute(
+                f"SELECT {SURFACE_COLS} FROM surface_event_log WHERE callsign = ? AND airport IN (?, ?)",
+                (cs, *airports)).fetchall()]
+    except Exception:
+        pass
+    seen, out = set(), []
+    for e in rows:
+        k = (e["airport"], e["event"], e["event_time"])
+        if k in seen:
+            # keep the copy that carries a route
+            if e.get("departure_airport") and e.get("destination_airport"):
+                out = [x if (x["airport"], x["event"], x["event_time"]) != k else e for x in out]
+            continue
+        seen.add(k)
+        out.append(e)
+    return out
+
+
+def siblings(c, f: dict) -> list[dict]:
+    """The OTHER instances of this callsign within two days (INSTANCE-v1 rule 5)."""
+    return [dict(r) for r in c.execute(
+        "SELECT gufi, callsign, origin, destination, original_departure, original_arrival FROM flight_ooooi_times "
+        "WHERE callsign = ? AND gufi <> ? AND updated_at BETWEEN ? AND ?",
+        (f["callsign"], f["gufi"], f["updated_at"] - 2 * 86400, f["updated_at"] + 2 * 86400)).fetchall()]
+
+
 def collect(c, now: float) -> list[dict]:
+    from common.flight_instance import v1_pair_instance
     since = now - LOOKBACK_H * 3600
     ph = ",".join("?" * len(DC_AIRPORTS))
     w_calls, w_routes = watched_scope(c, now)
@@ -160,11 +199,8 @@ def collect(c, now: float) -> list[dict]:
     collected_at = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for f in flights:
         cs = f["callsign"]
-        ev = [dict(r) for r in c.execute(
-            "SELECT airport, event, event_time FROM surface_movement_events WHERE callsign = ? AND airport IN (?, ?)",
-            (cs, f["origin"], f["destination"])).fetchall()]
-        sfc_org = [e for e in ev if e["airport"] == f["origin"]]
-        sfc_dst = [e for e in ev if e["airport"] == f["destination"]]
+        ev = surface_events(c, cs, (f["origin"], f["destination"]))
+        paired = v1_pair_instance(f, siblings(c, f), ev)
         fe = c.execute(
             "SELECT raw_json, updated_at FROM flight_events WHERE airline = ? AND flight_num = ? AND origin = ? "
             "AND destination = ? AND updated_at BETWEEN ? AND ? ORDER BY updated_at DESC LIMIT 1",
@@ -174,9 +210,13 @@ def collect(c, now: float) -> list[dict]:
         tdes = c.execute(
             "SELECT clearance_delivery_time, parking_gate, event_time FROM tdes_departure_events "
             "WHERE callsign = ? AND airport = ? ORDER BY event_time DESC LIMIT 1", (cs, f["origin"])).fetchone()
+        # TBFM carries no route: bound it to this instance's arrival window instead
+        arr = ts(f["original_arrival"])
         tbfm = [dict(r) for r in c.execute(
             "SELECT meter_fix, facility, eta, eta_kind, last_seen FROM tbfm_sequences WHERE flight_id = ? "
-            "ORDER BY last_seen DESC LIMIT 6", (cs,)).fetchall()]
+            "ORDER BY last_seen DESC LIMIT 12", (cs,)).fetchall()]
+        tbfm = [t for t in tbfm if arr is not None and ts(t["eta"]) is not None
+                and arr - timedelta(hours=2) <= ts(t["eta"]) <= arr + timedelta(hours=6)][:6]
         wl = c.execute(
             "SELECT id, oooi_phase, oooi_source, oooi_lock_source, oooi_lock_at, oooi_authority_note "
             "FROM watchlist_entries WHERE identifier = ? ORDER BY added_at DESC LIMIT 1", (cs,)).fetchone()
@@ -192,12 +232,16 @@ def collect(c, now: float) -> list[dict]:
             "reported": {k: f[k] for k in ("airline_out_time", "airline_off_time", "airline_on_time",
                                            "airline_in_time", "original_departure", "original_arrival")},
             "fdps": fdps,
-            "surface": sorted(({"airport": e["airport"], "event": e["event"], "t": e["event_time"]} for e in ev
-                               if e["event"] in SURFACE_EVENTS), key=lambda e: e["t"]),
+            "surface": sorted(({"airport": e["airport"], "event": e["event"], "t": e["event_time"],
+                                "track_id": e.get("track_id"), "departure_airport": e.get("departure_airport"),
+                                "destination_airport": e.get("destination_airport")} for e in ev
+                               if e["event"] in SURFACE_EVENTS), key=lambda e: e["t"] or ""),
+            "pairing_rule": PAIRING_RULE,
+            "pairing_reasons": {k: v["reason"] for k, v in paired.items() if v["reason"]},
             "tdes": dict(tdes) if tdes else None,
             "tbfm": tbfm,
             "watch": dict(wl) if wl else None,
-            "derived": derive(f, fdps, sfc_org, sfc_dst),
+            "derived": derive(f, fdps, paired, ev),
         })
     return out
 

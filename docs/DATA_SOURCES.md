@@ -1,6 +1,10 @@
 # CTDI Data Sources & Access Guide
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live system at 2026-10-15 00:51Z /
+2026-10-14 20:51 ET. Each changed claim is struck through with its correction
+beside it; text without a correction was re-checked and still holds.)
 
 This file covers two categories, and the distinction matters:
 
@@ -67,6 +71,13 @@ own copy; unlisted feeds default to 3600 s).
 | `push:nws` | `ingest-core` NWWS-OI heartbeat | 30 s | 300 s | — | age 27 s |
 | `push:amtrak` | `amtrak-tracker` container, once per 300 s poll | 300 s | 300 s | — | age 171 s |
 
+Re-check 2026-10-15 00:51Z: the same 20 rows, and `/healthz` `status: ok`.
+Every push heartbeat was under 35 s old (`push:amtrak`, which stamps once
+per poll, read 25 s). The REST rows behind a healthy push are old by design: `nws`
+607,026 s and `notam` 105,810 s, both `push_covered: true`. `amtrak` was
+1,208 s with `push_covered: false`, which is the same §8 inconsistency, still
+open. `eurocontrol` and `jasdat` were still `awaiting_credentials`.
+
 Push-twin semantics (`src/ingest/failover.py`): a push source stamps
 `push:<feed>` while connected. Before a fetcher with a twin runs, the poller
 calls `push_is_healthy(feed, max_age)`; a fresh heartbeat with no error means
@@ -100,8 +111,8 @@ durable exclusive queue (`src/ingest/swim_client.py`, `src/ingest/config.py`):
 
 | Feed key / heartbeat | Env key suffix | Parser | Main tables / role |
 |---|---|---|---|
-| `fdps` / `push:fdps` | `FDPS` | `ingest/parsers/fdps_parser.py` | `flight_events`, route versions, diversions, Marine One/VIP detection |
-| `stdds` / `push:stdds` | `STDDS` | `ingest/parsers/smes_parser.py` | ASDE-X surface, TAIS (PCT), SafetyLogic, surface-movement events, RVR, TDES, TDLS (PDC/CPDLC), D-ATIS |
+| `fdps` / `push:fdps` | `FDPS` | `ingest/parsers/fdps_parser.py` | `flight_events`, route versions, diversions, Marine One/VIP detection; the filed departure time (first filing wins, 2026-10-14); the plan's aircraft address is a tail source |
+| `stdds` / `push:stdds` | `STDDS` | `ingest/parsers/smes_parser.py` | ASDE-X surface, TAIS (PCT), SafetyLogic, surface-movement events, RVR, TDES, TDLS (PDC/CPDLC), D-ATIS; since 2026-10-14 also the append-only `surface_event_log` for KDCA/KIAD/KBWI (pg_schema/0075, pruned at 120 days by `retention_prune`, keeps the ramp exits the slot table overwrites; 167 rows at 2026-10-15 00:51Z). A TDES departure clearance at DCA/IAD/BWI links by its FAA-internal GUFI to the FDPS plan, and that plan's aircraft address is a tail source |
 | `tfms` / `push:tfms` | `TFMS` | `ingest/parsers/tfms_parser.py` | `nas_programs` (GDP/GS/AFP/RSTR), APTC, GADV, per-flight times, reroutes, plan removals |
 | `fns` / `push:fns` | `AIM` | `ingest/parsers/aim_parser.py` | `notams` (AIXM 5.1 digital NOTAMs) |
 | `tbfm` / `push:tbfm` | `TBFM` | `ingest/parsers/tbfm_parser.py` | `tbfm_sequences` (meter-fix sequencing) |
@@ -115,6 +126,11 @@ optional `SWIM_NMS_HOST_<KEY>` (falls back to `SWIM_NMS_HOST`), and
 `dispatch.env` (fixed 2026-10-05 13:18Z; before that every connect got
 "Message VPN Not Allowed" and `push:fns` had never delivered — the REST
 fallback carried NOTAMs). The heartbeat key stays `fns` for compatibility.
+
+**Tail sources are SWIM only** (operator decision, 2026-10-14): FDPS, the
+TDES clearance linked to the FDPS plan, TBFM and TFMS. FIDS is never a tail
+or identity source (`tests/poller/test_fids_not_a_tail_source.py`); see
+§3 "DCA / IAD FIDS".
 
 TFRs are **not** taken from SWIM. TFR data comes only from
 `tfr.faa.gov/tfrapi/getTfrList` (`poller/fetchers/tfr.py`, 300 s); a SWIM
@@ -179,6 +195,20 @@ every 2 min) restarts any single ingest container at ≥ 90 % of its memory cap
   list — check `/var/lib/corporatetraveldc/thermal_ingest_guard_state.json`
   (live 18:12Z: `tier 0`) before concluding a feed is broken.
 
+### Session-health watcher (observe only)
+
+`scripts/swim-session-health-watch.sh`, run every 5 min by
+`corporatetraveldc-swim-session-health.timer` (active 2026-10-15). It sums
+`SOLCLIENT_SUBCODE_KEEP_ALIVE_FAILURE` lines across the `ingest-*` units per
+sample. A sample with 15 or more (`FAIL_THRESHOLD`) counts as degraded. After
+600 s of degraded samples (`SUSTAINED_SECS`) it sends one `ops-health` push at
+priority 4, repeated at most every 1800 s (`ALERT_COOLDOWN_SECS`). State is in
+`/var/lib/corporatetraveldc/swim-session-health/state.json`; `--status`
+prints it without alerting. It never restarts or touches a container.
+
+Parser-level detail (which message type lands in which table) is in
+`src/ingest/README.md`.
+
 **Access:** [portal.swim.faa.gov](https://portal.swim.faa.gov/) (SCDS),
 no fee, FAA eligibility review. Standing convention (operator): a SWIM
 account whose integrity is in doubt is retired and replaced with a fresh
@@ -223,14 +253,54 @@ product). Credentials `NWWS_JID`, `NWWS_PASSWORD`. Registration:
 ### AviationWeather.gov METAR (`metar`)
 
 `https://aviationweather.gov/api/data/metar?ids={stations}&format=raw&taf=false&hours=1`
-for `DC_STATIONS` = KDCA, KIAD, KBWI, KFDK, KHEF, KJYO, KGAI. No credentials.
-Covers ICAO codes worldwide.
+for ~~`DC_STATIONS` = KDCA, KIAD, KBWI, KFDK, KHEF, KJYO, KGAI~~ (corrected
+2026-10-15: since 2026-10-09 `DC_STATIONS` is read from the deployment
+profile, the airports with role `metar` (`common.deployment_profile`,
+`poller/fetchers/metar.py:25-34`). The bundled reference profile reproduces
+the same seven stations, and the hard-coded list stays as the fallback if the
+profile fails to load). No credentials. Covers ICAO codes worldwide.
+
+### AviationWeather.gov AIRMET/SIGMET (`airsigmet`)
+
+`https://aviationweather.gov/api/data/airsigmet` (AWC Data API), no
+credentials. One shared client and normalizer, `src/common/airsigmet.py`, used by:
+
+- `poller/skills/convective_sigmet_archiver.py`, run every 10 min by
+  `corporatetraveldc-convective-sigmet-archiver.timer`. It writes the
+  append-only `convective_sigmet_archive` table (7,511 rows on 2026-10-15) and
+  never prunes it, by design. It keys each SIGMET on its id plus `valid_from`,
+  because AWC series numbers restart.
+- the web map overlay (`web/main.py`), and the public demo's `demo-api`, which
+  calls the same AWC endpoint live (`src/demo/demo_api.py:705`).
+
+No `/api/v1/feeds` row.
+
+### FAA CIFP (procedures, fixes, holds)
+
+The weekly AeroNav CIFP download is parsed into `cifp_*` tables, which the
+TBFM runway-ETA code and `tbfm-arrival-enrichment` (every 15 min) read.
+Details: `docs/CIFP_DATA.md`.
+
+### ATCSCC advisories (ops brief)
+
+`poller/skills/ops_brief.py` reads the legacy advisories database at
+`https://www.fly.faa.gov/adv/adv_list` and `.../adv_otherdis` for the brief's
+forecast section. It needs no credentials. It is not a feed row.
 
 ### FAA TFR list (`tfr`) and NAS status (`nas`)
 
 `https://tfr.faa.gov/tfrapi/getTfrList` and
 `https://nasstatus.faa.gov/api/airport-status-information`. No credentials,
 300 s each, never push-gated.
+
+VIP TFR detail (next relay): the list carries no times, so for each VIP TFR
+only, `tfr.py` also fetches `https://tfr.faa.gov/download/detail_<id>.xml`
+(10 s timeout). It reads the overall window (`dateEffective`/`dateExpire`,
+UTC) and each area's window (`ScheduleGroup`). The result is cached per
+NOTAM and FAA mod time, so a TFR is fetched again only when the FAA changes
+it. A failed fetch is not cached, and the next poll retries it. Before this,
+every VIP TFR's `effective_start`/`effective_end` was NULL, and pushes read
+"Active ? to ?".
 
 ### ATCSCC ops plan (`atcscc_opsplan`)
 
@@ -249,7 +319,8 @@ same-day-terminated watchlist sessions. No external source.
 ### DCA / IAD FIDS (`dca_fids`, `iad_fids`)
 
 MWAA JSON endpoints, enrichment only (gate, terminal, baggage) — FIDS may
-never assert an OOOI phase. See `docs/DCA_IAD_FIDS.md`.
+never assert an OOOI phase, and since 2026-10-14 it is never a tail or
+identity source either. See `docs/DCA_IAD_FIDS.md`.
 
 ### Amtrak (`push:amtrak` primary, `amtrak` REST fallback)
 
@@ -279,8 +350,11 @@ entry, no feed row, no `TRAIN_PROVIDERS` code. Design:
 `https://registry.faa.gov/database/ReleasableAircraft.zip`, no credentials.
 `poller/fetchers/faa_registry.py`, run daily from `WatchlistSweep`
 (`FAA_REGISTRY_INTERVAL` = 86400 s), HTTP Range resume with a 2400 s
-(40 min) ceiling. Live `GET /api/v1/aircraft-registry/status`: 317,240
-records, 310,768 valid, last updated 2026-10-05 20:18Z. Lookup:
+(40 min) ceiling. Live `GET /api/v1/aircraft-registry/status`: ~~317,240
+records, 310,768 valid, last updated 2026-10-05 20:18Z~~ (2026-10-15 00:51Z:
+317,601 records, 310,830 valid, last updated 2026-10-14 20:41Z). Each registry
+import also appends a hash-chained entry to `reference_import_ledger`
+(5 `faa-registry` entries on 2026-10-15). Lookup:
 `GET /api/v1/aircraft/{identifier}` queries the FAA registry **and** the
 OpenSky registry and returns `source` = `faa`, `opensky` or `faa+opensky`
 (404 only when neither has it), so foreign registrations resolve when
@@ -290,11 +364,17 @@ OpenSky has them.
 
 The automated `registry.faa.gov/database/LADD_Aircraft.zip` download
 (`faa_registry.py` `_FAA_LADD_URL`) has redirected to an FAA office page since
-June 2026 and imports nothing; the registry import treats that as non-fatal.
+June 2026 ~~and imports nothing; the registry import treats that as
+non-fatal~~ (corrected 2026-10-15: it has not been called at all since
+2026-10-08, when the call was retired (`faa_registry.py:334-342`), because a
+full replace from it would have wiped the CUI list and its removals; the URL
+constant remains only in commented-out code).
 Live LADD data arrives by a manual weekly CUI import
 (`scripts/import-ladd-filter.py` → `faa_ladd_aircraft`, removals persisted in
-`faa_ladd_removals`, migration 0063). Live status endpoint reports 73,369
-LADD entries. Handling rules: `docs/LADD_CUI_HANDLING.md`. The ADX/IndustryLADD
+`faa_ladd_removals`, migration 0063), and that import is the only writer. Live
+status endpoint reports ~~73,369~~ 73,543 LADD entries (2026-10-15 00:51Z;
+84 recorded removals; the latest import is ledgered at 2026-10-13 15:47Z).
+Handling rules: `docs/LADD_CUI_HANDLING.md`. The ADX/IndustryLADD
 portal path ([adx.faa.gov](https://adx.faa.gov), Login.gov, eligibility for a
 small commercial operator unconfirmed; inquiry address `LADD@faa.gov`) has no
 code.
@@ -307,19 +387,67 @@ code.
 `s3.opensky-network.org`; downloads only when a new month appears. The rolling
 `aircraftDatabase.csv` has been frozen since Nov 2024. No credentials.
 
-### FlightAware AeroAPI — dormant
+### FlightAware AeroAPI — ~~dormant~~ wired; whether it is live is unverified (corrected 2026-10-15)
 
 `poller/main.py::_check_flight_aeroapi()` reads `FLIGHTAWARE_AEROAPI_KEY`;
 `common/flight_resolver.py` reads `FLIGHTAWARE_API_KEY`. Local sources are
 primary (2026-08-27 local-only rule). `FLIGHTAWARE_AEROAPI_KEY` is on **no**
 service allowlist, so the poller path cannot receive a key even if one is set.
-`[UNVERIFIED: whether FLIGHTAWARE_API_KEY has a value — secrets not read]`.
+`FLIGHTAWARE_API_KEY`, however, is on **seven** allowlists (amtrak-tracker,
+demo, ingest, poller, pusher, runner, web; 2026-10-15). If it has a value,
+`resolve_arrivals()` (`GET /api/v1/fids/{airport}/arrivals`, step 3 after
+SWIM and the MWAA website) makes metered calls to
+`aeroapi.flightaware.com/aeroapi/airports/<icao>/flights/scheduled_arrivals`.
+`[UNVERIFIED: whether FLIGHTAWARE_API_KEY has a value — secrets not read.
+Live arrivals lookups at 00:56Z answered from SWIM, so step 3 was not reached.]`
 
-### airplanes.live — not queried
+### airplanes.live — ~~not queried~~ fallback only, enabled on this deployment (corrected 2026-10-15)
 
-No programmatic calls since 2026-08-27. Remaining uses: `globe.airplanes.live`
+~~No programmatic calls since 2026-08-27. Remaining uses: `globe.airplanes.live`
 links in push bodies, the runner's globe iframe, and the box feeds the
-aggregator via ultrafeeder.
+aggregator via ultrafeeder.~~ (corrected 2026-10-15: reinstated 2026-10-08
+after the operator's feeder account was whitelisted. The rules are in
+`src/common/airplanes_live.py`:)
+
+- **Fallback only.** It is asked only after every local source (own ADS-B
+  receiver, ingested FDPS, local registry) has no contact. It is never first
+  and never a second opinion. Callers: `shared/watchlist.py:352-366` (by hex,
+  by callsign) and the poller's flight sweep (`_check_flight_airplanes_live`).
+- **Position and identity only.** Its data is ADS-B, so it has no OOOI
+  authority: it never asserts ON or IN.
+- **LADD guard.** An identifier on the LADD list is never sent. If the LADD
+  check itself fails, the identifier is treated as listed and nothing is sent.
+- **Etiquette.** `https://api.airplanes.live/v2`, one request at a time at
+  least 1.1 s apart per process, 5 s timeout, 30 s cache, identified
+  User-Agent.
+- **Switch.** `AIRPLANES_LIVE_FALLBACK=1` in `dispatch.env`. The code
+  default and `config/dispatch.env.example` are off, so a fresh deployment
+  calls no third party. `[Enabled here per the 2026-10-12 parity audit; the
+  live dispatch.env was not read in this pass.]`
+
+Unchanged: `globe.airplanes.live/?icao=<hex>` links in push bodies, the
+runner's globe iframe, and the box feeding the aggregator through ultrafeeder
+(ADS-B to `feed.airplanes.live:30004`, MLAT to `:31090`; see
+`docs/SDR_SERVICES.md`).
+
+### Local receivers (own ADS-B and VDL2)
+
+The box's own receivers are the primary position source:
+
+- **ADS-B 1090 MHz:** the `corporatetraveldc-ultrafeeder` container
+  (readsb + tar1090). `ingest/local_airspace.py` in `ingest-core` polls
+  `ULTRAFEEDER_URL/data/aircraft.json` every 15 s within
+  `ULTRAFEEDER_SCAN_RADIUS_NM` (default 80) of the receiver position
+  (`docs/GPS_COORDINATE_CONFIGURATION.md`).
+- **VDL2:** `dumpvdl2` → `acarsrouter`. `local_airspace.py` reads the VDL2
+  stream on `VDLM2_ROUTER_PORT` (default 15555) and plain ACARS on
+  `ACARS_ROUTER_PORT` (default 9080) into `acars_messages`. That table held
+  93,190 rows on 2026-10-15, 9,986 of them from the last 24 h, newest
+  00:53Z. This retires the old "zero rows ever" caveat: the 2026-10-03 VDL2
+  reader fixed it.
+
+Both receivers also share their data outward with third parties; the
+destinations are in `docs/SDR_SERVICES.md`.
 
 ### ACARS (aggregators + local decode)
 
@@ -331,7 +459,12 @@ and poller (ACARS phase evidence for OOOI). `src/acars_watcher/` runs as
 `corporatetraveldc-dumpvdl2`, `-acarsrouter`, `-acarshub`;
 `corporatetraveldc-acarsdec` and the `dumphfdl` units are `.disabled`. No
 `/api/v1/feeds` row (not a poller fetcher).
-`[UNVERIFIED: acars_messages row count — database not queried]`.
+~~`[UNVERIFIED: acars_messages row count — database not queried]`~~
+(2026-10-15: 93,190 rows, written by `ingest-core`'s VDL2 reader; see
+"Local receivers" above). The watcher's three sources all run, but in
+practice only airframes.io produces watchlist matches (3 `MATCH [AIRFRAMES`
+lines in the watcher's last 24 h of journal; the 2026-10-12 audit counted
+3 airframes, 0 local, 0 Jumpseat over 7 days).
 
 ### AIS / vessels
 
@@ -351,6 +484,27 @@ Three-tier chain for the runner's `/api/ais/vessels` and the MMSI watchlist:
 3. **AISHub** (`AIS_AISHUB_ID`, runner + poller allowlists),
    `poller/main.py::_check_vessel_aishub`, 300 s vessel sweep, writes
    `vessel_events`. `[UNVERIFIED: whether AIS_AISHUB_ID has a value]`.
+   `vessel_events` held 0 rows on 2026-10-15, so the sweep has never written
+   anything.
+
+### Derived reference data
+
+These are built on the box from the sources above, not fetched:
+
+| Data | Built by | Store | Schedule |
+|---|---|---|---|
+| Codeshare map (marketing to operating carrier for wholly-owned regionals; contract regionals are counted, not guessed) | `scripts/seed-dc-codeshare.py` from FDPS traffic at DC-metro airports | `codeshare_map` (684 rows, 2026-10-15) | `corporatetraveldc-codeshare-seed.timer`, daily 04:40 America/New_York (08:40Z while EDT, 09:40Z while EST) |
+| Airline time fidelity (TFMS airline-reported OOOI vs FDPS, ASDE-X, TDES and TBFM, paired by INSTANCE-v1) | `scripts/research/airline_time_fidelity_collect.py` (read-only, runs in the web container) | `/var/lib/corporatetraveldc/research/airline-time-fidelity/<day>.jsonl` | `corporatetraveldc-airline-time-fidelity.timer`, 00/06/12/18:20Z |
+| TBFM runway arrival time | `poller/skills/tbfm_arrival_enrichment.py` + CIFP | `flight_events.arrival_time` | every 15 min |
+
+Publication of the time-fidelity results is split by operator rule: public
+material carries anchor-carrier aggregates only.
+
+### Link-only references (no server-side fetch)
+
+`web/main.py` hands the browser image URLs on `radar.weather.gov`,
+`www.wpc.ncep.noaa.gov`, `ocean.weather.gov` and `tgftp.nws.noaa.gov`, and the
+browser loads them directly. The server does not fetch these.
 
 ---
 
@@ -444,23 +598,32 @@ and read by no code. None appear in `/api/v1/feeds`.
   `/api/v1/feeds`, although `failover.push_stale_thresholds()` defines 300 s
   for every push feed.
 
+Both were re-verified on 2026-10-15 and are still present
+(`src/web/main.py:865-891`; finding OPS-04 in the 2026-10-14 audit). The
+result is a false STALE on the admin and overview dashboards only, because
+the alerting path keys on `error`, not age.
+
 ---
 
 ## 9. Thermal ingest guard
 
 `scripts/thermal-ingest-guard.py`, run every 120 s by
 `corporatetraveldc-thermal-ingest-guard.timer` (user scope, `OnBootSec=60`).
-Sheds ingest — and under LOCKDOWN the whole stack except `web` — on heat or
-extreme load; restores when signals hold clear. ntfy alerts go to
+~~Sheds ingest — and under LOCKDOWN the whole stack except `web` — on heat or
+extreme load; restores when signals hold clear.~~ (corrected 2026-10-15:
+since the 2026-10-13 operator directive it is a **load** guard. Only
+`load1 >= 40` sheds, and it sheds into LOCKDOWN, the whole stack except `web`.
+Temperature never sheds anything; it can only hold a restore. See
+`scripts/thermal-ingest-guard.py:17-27`, `:715-718`.) ntfy alerts go to
 `ops-health`.
 
 | State | Condition (defaults) | Action |
 |---|---|---|
-| Temp tier 1 | `temp >= 74.0 C` | stop `THERMAL_GUARD_TIER1_FEEDS` (`tfms,stdds`) |
-| LOCKDOWN (tier 2) | `temp >= 79.0 C` **or** `load1 >= 40.0` | stop all six SWIM containers (`ALL_SWIM_FEEDS = fdps, stdds, tfms, tbfm, itws, notam`), `ingest-core`, and `LOCKDOWN_USER_UNITS` = `corporatetraveldc-poller`, `-pusher`, `-runner`. `web` stays up. No LLM unit is touched. |
-| Informational | `temp` 70–74 C; `load1` 15–40; LLM-contention fallback count | log only, no push, no action |
-| Restore | `temp < 65.0 C` and `load1 <` resume bar, held `THERMAL_GUARD_RESUME_DWELL_S` (300 s) | resume bar = `THERMAL_GUARD_LOAD_LOCKDOWN × THERMAL_GUARD_RESUME_FRACTION` = 40 × 0.5 = **20** (re-measured 2026-10-03; was 15), unless `THERMAL_GUARD_RESUME_LOAD` is set. Dwell resets above resume + hysteresis (temp +1.0 C, load +3.0). |
-| Dormant | `THERMAL_GUARD_RESTORE_DORMANT_S` (600 s) after any restore | log only; only `temp >= 79 C` can still trip |
+| ~~Temp tier 1~~ | ~~`temp >= 74.0 C`~~ | ~~stop `THERMAL_GUARD_TIER1_FEEDS` (`tfms,stdds`)~~ (retired 2026-10-13: `temp1_trip` is hard-wired `False`) |
+| LOCKDOWN (tier 2) | ~~`temp >= 79.0 C` **or**~~ `load1 >= 40.0` (`THERMAL_GUARD_LOAD_LOCKDOWN`; the 79 C trip was retired 2026-10-13) | stop all six SWIM containers (`ALL_SWIM_FEEDS = fdps, stdds, tfms, tbfm, itws, notam`), `ingest-core`, and `LOCKDOWN_USER_UNITS` = `corporatetraveldc-poller`, `-pusher`, `-runner`. `web` stays up. No LLM unit is touched. |
+| Informational | ~~`temp` 70–74 C;~~ `temp >= 75 C` at tier 0; `load1` 15–40; LLM-contention fallback count | log only, no push, no action |
+| Restore | ~~`temp < 65.0 C` and `load1 <` resume bar, held `THERMAL_GUARD_RESUME_DWELL_S` (300 s)~~ (corrected 2026-10-15) `load1 <= THERMAL_GUARD_HOLD_LOAD` (30) and no temperature hold, held for `THERMAL_GUARD_RESUME_DWELL_S` (300 s) | ~~resume bar = `THERMAL_GUARD_LOAD_LOCKDOWN × THERMAL_GUARD_RESUME_FRACTION` = 40 × 0.5 = **20** (re-measured 2026-10-03; was 15), unless `THERMAL_GUARD_RESUME_LOAD` is set. Dwell resets above resume + hysteresis (temp +1.0 C, load +3.0).~~ The 65 C resume bar is retired: the box idles at about 65 C with the stack shed, so the 2026-10-13 22:05Z load trip could not clear itself. A temperature hold engages only when the CPU goes above `THERMAL_GUARD_HOLD_TEMP_C` (75 C), and clears below 74 C (75 minus `THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C`, 1.0). The dwell resets on a temperature hold or on `load1 >= 33` (30 + `THERMAL_GUARD_RESUME_LOAD_HYSTERESIS`, 3.0). `RESUME_FRACTION`/`RESUME_LOAD` are still read but no longer gate the restore. |
+| Dormant | `THERMAL_GUARD_RESTORE_DORMANT_S` (600 s) after any restore | log only; ~~only `temp >= 79 C` can still trip~~ (corrected 2026-10-15: at `temp >=` `THERMAL_GUARD_TIER2_TEMP_C` (79) the cycle is evaluated normally instead, but since temperature never sheds, only the load trip can fire) |
 
 LOCKDOWN restore is serialized through `scripts/lib/serial-bringup.sh`
 (SWIM feeds lightest-first, then ingest-core, poller, pusher, runner), each
@@ -474,7 +637,12 @@ Live `dispatch.env` sets seven guard variables (`ENABLED`, `TIER1_TEMP_C`,
 `LOAD_LOCKDOWN`, `RESUME_FRACTION`, `RESUME_LOAD`, both hysteresis values,
 `RESTORE_DORMANT_S`, `FALLBACK_TRIGGER_COUNT`, `FALLBACK_WINDOW_S`) runs on
 its script default. `THERMAL_GUARD_TIER2_FEEDS` is vestigial: LOCKDOWN uses
-the fixed lists above. The LLM-contention signal
+the fixed lists above. (2026-10-15: since 2026-10-13 `TIER1_TEMP_C` and
+`RESUME_TEMP_C` are ignored as well; `TIER2_TEMP_C` is still read, but only
+for the dormancy exception in the table above. The two new knobs,
+`THERMAL_GUARD_HOLD_LOAD` and `THERMAL_GUARD_HOLD_TEMP_C`, run on their script
+defaults `[UNVERIFIED: the live dispatch.env was not read in this pass]`.)
+The LLM-contention signal
 (`/var/lib/corporatetraveldc/llm_load_fallback_events.jsonl`, written by
 `common/llm.py`) has been informational-only since 2026-08-27.
 

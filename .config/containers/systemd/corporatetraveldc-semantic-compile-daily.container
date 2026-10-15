@@ -25,8 +25,10 @@ Description=Corporate Travel DC -- daily second-brain semantic layer recompile
 # established cap for the other heavy second-brain jobs (second-brain-weekly,
 # aam-weekly-watch); this unit was simply the one that never got bumped. Host
 # had 7.7G available at the time of the change.
-Memory=1024m
-PodmanArgs=--memory-swap=1024m
+# 2026-10-15: 1024m -> 1536m. OOM-killed at the 1 GB cap at 16:15Z and 16:33Z as the vault grew
+# (it fit at 10:05Z the same day); the box has ~7 GB available.
+Memory=1536m
+PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest
 Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z

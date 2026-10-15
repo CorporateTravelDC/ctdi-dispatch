@@ -186,6 +186,21 @@ def _isolate_default_db_path(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_tempfiles(monkeypatch, tmp_path):
+    """2026-10-14: about 20 tests create NamedTemporaryFile(suffix=".db",
+    delete=False) databases and never remove them. On this box /tmp is an
+    8 GB tmpfs: 6,005 leaked .db/-wal/-shm files (6.4 GB, 10-06 to 10-14)
+    filled it, and the build-provenance step failed with no space. Every
+    tempfile in a test now lands in the test's own tmp_path, which pytest
+    prunes (it keeps the last 3 runs)."""
+    import tempfile
+    d = tmp_path / "tempfile"
+    d.mkdir(exist_ok=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(d))
+    monkeypatch.setenv("TMPDIR", str(d))        # subprocesses (scripts under test) too
+
+
+@pytest.fixture(autouse=True)
 def _isolate_state_dir(monkeypatch, tmp_path):
     """common.config.state_dir() (DISPATCH_STATE_DIR) backs several
     real-file writers besides the DB -- common.push_dedup.PushDedup's

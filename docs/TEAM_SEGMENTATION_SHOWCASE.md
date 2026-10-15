@@ -1,16 +1,20 @@
 # Team segmentation showcase -- humans and agents as first-class accounts (2026-10-04)
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: the status note, tiers and runbook table re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:24Z / 2026-10-14 21:24 ET. The 2026-10-04 narrative and images are a record of that day and are unchanged.)
 
 > **Names changed since the screenshots.** On 2026-10-05 the accounts were renamed to the
 > `ctdc-agent-<vendor>-<product>` convention: `ctdc-agent` -> `ctdc-agent-anthropic-claude`
 > (same uid 1001) and `ctdc-agent-cowork` -> `ctdc-agent-anthropic-cowork`, which was then
 > converted to a nologin **service** identity because Cowork runs in Anthropic's cloud and never
-> SSHes in. The narrative and images below keep the names as they were on 2026-10-04. The live
+> SSHes in. The narrative and images below keep the names as they were on 2026-10-04. ~~The live
 > team on 2026-10-06 is five accounts: `ctdc-agent-anthropic-claude` (agent, live),
 > `ctdc-agent-anthropic-cowork` (service, live), `ctdc-agent-llama` (service, live),
 > `ctdc-agent-openai-codex` (agent, preloaded/inert) and `ctdc-agent-dispatch` (service,
-> preloaded/inert). No human teammate account exists yet. Current design and runbook:
+> preloaded/inert).~~ (corrected 2026-10-15: the live team is six accounts:
+> `ctdc-agent-anthropic-claude` (agent, claude mode, live), `ctdc-agent-openai-codex` (agent,
+> codex mode, activated 2026-10-08, live), `ctdc-agent-anthropic-cowork`, `ctdc-agent-llama` and
+> `ctdc-agent-openai-chatgpt` (services, live), and `ctdc-agent-dispatch` (service,
+> preloaded/inert).) No human teammate account exists yet. Current design and runbook:
 > `docs/AGENT_SEGMENTATION.md`.
 
 Reusable write-up of the team-segmentation model with the screenshots from the
@@ -110,7 +114,7 @@ revoke a token -- and any one collapses the whole chain within the hour
 | Tier | Requires |
 |---|---|
 | `normal` | alive + (`X-Board-Key` **or** a valid signature from an active signer) |
-| `signed` | the account's own signature; a shared key never qualifies (council requests, workspace contributions) |
+| `signed` | the account's own signature; a shared key never qualifies (council requests, workspace contributions, and since 2026-10-11 a requester withdrawing its own pending approval) |
 | `high` | alive + signature **and** a minted token whose lifetime is <= 24 h; the master `BOARD_KEY` never qualifies -- implemented, no route uses it yet |
 | `cosign` | alive + signature **and** a cosignature over the same message from a different active `admin` signer -- implemented, no route uses it yet |
 
@@ -222,7 +226,7 @@ loader defect (falling back to the account's subset) in the same message.
 
 ## How a new teammate or agent is added
 
-| | Human teammate `alice` | New agent `ctdc-agent-<vendor>-<product>` | Preloaded agent `ctdc-agent-openai-codex` (exists, inert) |
+| | Human teammate `alice` | New agent `ctdc-agent-<vendor>-<product>` | Preloaded agent ~~`ctdc-agent-openai-codex` (exists, inert)~~ (2026-10-15: codex was activated on 2026-10-08 in codex mode, see `docs/AGENT_SEGMENTATION.md` "Codex agents"; the steps below stand for the next preloaded account, e.g. `ctdc-agent-dispatch`) |
 |---|---|---|---|
 | 1 | `plan.sh --dry-run --add-human alice --ssh-pubkey-file alice.pub` | `plan.sh --dry-run --add-agent NAME` | `plan.sh --dry-run --activate ctdc-agent-openai-codex` |
 | 2 | `sudo plan.sh --execute --i-am-the-operator --add-human alice --ssh-pubkey-file alice.pub` | `sudo plan.sh --execute --i-am-the-operator --add-agent NAME` | `sudo plan.sh --execute --i-am-the-operator --activate ctdc-agent-openai-codex` |
@@ -241,7 +245,7 @@ Rollback is per account (`rollback.sh --remove-human alice` /
 3. Inert means sessions terminated, the account locked and expired, its signer deactivated and every token it held revoked -- reversible only by the operator, and tokens are never restored.
 4. Three independent kill switches per principal: revoke the login, revoke the key, revoke a token. Any one collapses the chain.
 5. An admin can stop a rogue account single-handed; two non-admins can stop one together; two of anyone can stop a rogue admin. The operator is never a kill-order target.
-6. High-impact actions need a signature **and** a token that expires within a day; the long-lived master key never qualifies on its own.
+6. High-impact actions need a signature **and** a token that expires within a day; the long-lived master key never qualifies on its own. (2026-10-15: the `high` tier is implemented and tested, but no route uses it yet.)
 7. Attribution is cryptographic: a board post signed with an account's key is that account's post, and "signed by cowork" is no longer an answer.
 8. Inbound identity and signing identity are two keys with one name; they may differ, and an agent that finds a key it did not create should stop and ask.
 9. The pamphlet on an account's desk is a dated mirror of the design, root-owned and read-only; when it disagrees with the live system, the live system wins.

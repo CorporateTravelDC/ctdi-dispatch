@@ -1,6 +1,6 @@
 # Published GPG keys (/keys/)
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: files, fingerprints and the signing subkey re-verified against HEAD 1491bf5a on 2026-10-15 ~01:22Z / 2026-10-14 21:22 ET; the two host URLs were **not** re-fetched in this pass, so the State column still dates from 2026-10-06.)
 
 Canonical set (operator-directed 2026-09-03). Source of truth:
 `src/executive_standard/assets/keys/` in this repo;
@@ -10,12 +10,12 @@ copy under `www/keys/` in the website repo.
 
 | Host | URL | State on 2026-10-06 |
 |---|---|---|
-| Main site | `https://www.example.com/keys/<name>.pub` | **200**; all five files byte-identical to this repo (sha256 compared) |
-| Blog | `https://executivestandard.example.com/keys/<name>.pub` | **302 to `/welcome`** -- behind the Executive Standard reader gate, so not publicly fetchable [UNVERIFIED: since when]. Point readers at the main-site URLs. |
+| Main site | `https://www.example.com/keys/<name>.pub` | **200**; all five files byte-identical to this repo (sha256 compared). 2026-10-15: the website repo's `www/keys/` copies are still byte-identical to this repo's (local compare; the live URL was not fetched) |
+| Blog | `https://executivestandard.example.com/keys/<name>.pub` | **302 to `/welcome`** -- behind the Executive Standard reader gate, so not publicly fetchable [UNVERIFIED: since when]. Point readers at the main-site URLs. Only the main site serves the keys publicly. |
 
 | File | Fingerprint | UID | Purpose |
 |---|---|---|---|
-| `developer.pub` | `3B29752DACA3544CEA60D01A7B81F49CD96C1631` | Corporate Travel DC, "Rotated Production GPG Key - Rotated July 2026", `developer@example.com` | Current production key: git commit signing and, via its signing subkey `419A864CC29A09513039B6E03033FB4D01903159`, the tree manifest at HEAD. |
+| `developer.pub` | `3B29752DACA3544CEA60D01A7B81F49CD96C1631` | Corporate Travel DC, "Rotated Production GPG Key - Rotated July 2026", `developer@example.com` | Current production key: git commit signing and, via its signing subkey `419A864CC29A09513039B6E03033FB4D01903159`, the tree manifest at HEAD (re-checked 2026-10-15: `MANIFEST.sha256.asc` and commit 1491bf5a are both signed by that subkey). |
 | `developer-legacy.pub` | `7C961E3F4AA00DACC6EAE09C4D8ECF145865A6F6` | `developer@example.com` | Superseded by the July 2026 rotation; kept published for contacts who still encrypt to it. Key material says created 2025-10-25. |
 | `operator_sheldon.pub` | `9D41B32F413B1E74E22EB376DF400C5404735E0A` | the operator's business address at `example.com` | Personal/business identity, separate from the developer signing key. |
 | `operatorwsheldon.pub` | `CF68244D782F2C2CDC28679D19BBCEA4C2F3AEF1` | the operator's personal ProtonMail address (in the key UID; not repeated here) | Personal identity. |
@@ -44,10 +44,10 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 
 | ~~File~~ | ~~Fingerprint~~ | ~~UID~~ | ~~Purpose~~ |
 |---|---|---|---|
-| ~~`developer.pub`~~ | ~~`3B29752DACA3544CEA60D01A7B81F49CD96C1631`~~ | ~~Corporate Travel DC (the operator) "Rotated Production GPG Key - Rotated July 2026" `<developer@example.com>`~~ | ~~Current production key -- git commit signing, day-to-day.~~ |
+| ~~`developer.pub`~~ | ~~`3B29752DACA3544CEA60D01A7B81F49CD96C1631`~~ | ~~Corporate Travel DC ([name redacted 2026-10-15]) "Rotated Production GPG Key - Rotated July 2026" `<developer@example.com>`~~ | ~~Current production key -- git commit signing, day-to-day.~~ |
 | ~~`developer-legacy.pub`~~ | ~~`7C961E3F4AA00DACC6EAE09C4D8ECF145865A6F6`~~ | ~~`<developer@example.com>`~~ | ~~Superseded by the July 2026 rotation to `developer.pub`. (Key material says created 2025-10-25 -- this doc's original "created 2026-07-03, five days before" claim contradicted the .pub itself; corrected 2026-09-03.) Kept published deliberately, not stale cruft -- backward compatibility for encrypted chat/mail from contacts who still have this as the recipient key.~~ |
-| ~~`operator_sheldon.pub`~~ | ~~`9D41B32F413B1E74E22EB376DF400C5404735E0A`~~ | ~~`<operator@example.com>`~~ | ~~Personal/business identity, separate from the developer signing key.~~ |
-| ~~`operatorwsheldon.pub`~~ | ~~`CF68244D782F2C2CDC28679D19BBCEA4C2F3AEF1`~~ | ~~`<owner@example.com>`~~ | ~~Personal ProtonMail identity.~~ |
+| ~~`operator_sheldon.pub`~~ | ~~`9D41B32F413B1E74E22EB376DF400C5404735E0A`~~ | ~~`<[personal business address redacted 2026-10-15]>`~~ | ~~Personal/business identity, separate from the developer signing key.~~ |
+| ~~`operatorwsheldon.pub`~~ | ~~`CF68244D782F2C2CDC28679D19BBCEA4C2F3AEF1`~~ | ~~`<[personal address redacted 2026-10-15]>`~~ | ~~Personal ProtonMail identity.~~ |
 | ~~`embargo.pub`~~ | ~~`FFE7969B97A3D2FB1FC1D0300C2BC838EFD1C9F2`~~ | ~~`<embargo@example.com>`~~ | ~~FAA LADD (Limiting Aircraft Data Displayed) correspondence and anything security-report related.~~ |
 
 ~~Deliberately NOT published: the CTDI Break-Glass Authorization key, the CTDI Pi Agent Signing key, the CTDI Dispatch Agent (Claude Code sign-manifest.sh delegate) key, and the "Developer Laptop GPG Signing Key" -- all four are internal/automated-signing keys with no reason for an external party to hold or verify against them.~~

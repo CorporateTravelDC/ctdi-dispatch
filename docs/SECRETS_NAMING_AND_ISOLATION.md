@@ -1,8 +1,11 @@
 # Secrets naming convention and SELinux isolation registry
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET~~
+(corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged
+next-relay batch and live state on 2026-10-15 ~01:20Z / 2026-10-14 21:20 ET)
 (file names, owners, modes and SELinux labels only -- no file content was
-read).
+read). Disposition of every credential exposed in 2026-10 (rotated, revoked,
+retired, effectively rotated): `docs/CREDENTIALS_REGISTER.md` (private only).
 
 Operator directive 2026-09-24. This file is the registry. A credential that is
 not listed here is not governed -- add the row when you add the file.
@@ -91,7 +94,8 @@ nothing yet.
 | `ctdi_corporateatravler-graphene` | `ctdi-phone.key` |
 
 The 2026-09-23 cross-reference of the two device credentials to `auth_tokens`
-(ids 21 and 6; id 6 with no expiry) is kept as history. [UNVERIFIED: current
+(ids 21 and 6; id 6 with no expiry) is kept as history. Both are "effectively
+rotated" (operator decision 2026-10-14, `docs/CREDENTIALS_REGISTER.md`). [UNVERIFIED: current
 `auth_tokens` rows; `/healthz` reports 6 active tokens on 2026-10-06.]
 
 ## Registry: `/etc/corporatetraveldc/` (dir `root:corporatetraveldc 0750`)
@@ -99,17 +103,28 @@ The 2026-09-23 cross-reference of the two device credentials to `auth_tokens`
 The whole tree is labelled `container_file_t` (`selinux/apply-selinux-policy.sh`
 step 3), so the label confers no per-file isolation; DAC does. No container
 mounts the directory; containers receive values through `EnvironmentFile=`.
+(Added 2026-10-15: host-side, every Python process that imports `src/common/config.py`
+loads the whole master file into its environment at import, `config.py:27-28`, so
+every host importer gets every master secret; scoping it is an open decision.)
 
 | File | Owner / mode | Consumer |
 | --- | --- | --- |
-| `dispatch-secrets.env` | corporatetraveldc 0600 | the **master** secret file. Read by operator scripts (`scripts/rotate-credential.sh` rewrites it in place) and by `scripts/service-env/generate.py`. No container reads it since 2026-10-05. |
-| `svc/<svc>.env` (`acars-watcher`, `amtrak-tracker`, `demo`, `execstandard-verifier`, `ingest`, `poller`, `pusher`, `runner`, `web`) | root:corporatetraveldc 0640, dir 0750 | per-service scoped secrets generated from the allowlists in `scripts/service-env/<svc>.allowlist` (names per service: poller 52, ingest 40, web 21, runner 18, demo 15, amtrak-tracker 12, pusher 12, acars-watcher 4, execstandard-verifier 1). |
-| `dispatch.env` | corporatetraveldc 0640 | non-secret config, read by 63 quadlets |
+| `dispatch-secrets.env` | corporatetraveldc 0600 | the **master** secret file. Read by operator scripts (`scripts/rotate-credential.sh` rewrites it in place; it rotates four names: `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD`), by `scripts/service-env/generate.py`, by `scripts/relay-nudge.py` (parses, never sources; added 2026-10-15), by the transcript leak guard (to know what to look for, `scripts/leak-guard/transcript_leak_scan.py`), and by any host process importing `src/common/config.py`. No running container reads it since 2026-10-05 (five dormant tracked `.container.disabled` quadlets still name it, see `docs/AGENT_SEGMENTATION.md`, 2026-10-15). |
+| `svc/<svc>.env` (`acars-watcher`, `amtrak-tracker`, `demo`, `execstandard-verifier`, `ingest`, `poller`, `pusher`, `runner`, `web`) | root:corporatetraveldc 0640, dir 0750 | per-service scoped secrets generated from the allowlists in `scripts/service-env/<svc>.allowlist` (names per service: ~~poller 52, ingest 40, web 21, runner 18, demo 15, amtrak-tracker 12, pusher 12, acars-watcher 4, execstandard-verifier 1~~; re-counted 2026-10-15 as non-comment lines: poller 51, ingest 40, web 20, runner 18, demo 14, amtrak-tracker 12, pusher 12, acars-watcher 4, execstandard-verifier 1). Files root:corporatetraveldc 0640 (re-checked 2026-10-15). |
+| `dispatch.env` | corporatetraveldc 0640 | non-secret config, read by ~~63~~ 64 tracked quadlets (re-counted 2026-10-15) |
 | `cf-honeypot.token` | root:root 0600 | fail2ban's Cloudflare edge-ban action (`CFTOKEN_FILE`) |
+| `ntfy-root.token` (added 2026-10-15; live since 2026-10-14) | root:root 0600 | the publish-only `root-alerts` ntfy token used by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert), passed on a private fd; path override `NTFY_ROOT_TOKEN_FILE` |
+| `approval-allowed-signers` (added 2026-10-15; since 2026-10-07) | root:root 0644 | the root-owned approval-key pin that `approved-exec.py` verifies every signature against (public keys, not a secret; `docs/AGENT_TRUST_MODEL.md` §9.1) |
+| `backup/borg-passphrase` (added 2026-10-15) | dir corporatetraveldc 0700, file 0600 | the Borg repository key passphrase, read from the file by `scripts/backup/ctdi-backup.sh` (`BACKUP_PASSPHRASE_FILE`); no passphrase agent |
 | `signing-pin` | root:root 0644 | GPG fingerprint pin for `verify-manifest.sh` (not a secret) |
-| `pgsql-secrets.env`, `ntfy-secrets.env`, `demo-secrets.env`, `ultrafeeder-secrets.env`, `piaware-secrets.env`, `fr24feed-secrets.env`, `planefinder-secrets.env`, `airnavradar-secrets.env` | corporatetraveldc 0600 | one container each via `EnvironmentFile=` (pgsql, ntfy, ultrafeeder, piaware, fr24feed, planefinder, airnavradar), except `demo-secrets.env`, read by both `demo-api` and `runner-demo` |
+| `pgsql-secrets.env`, `ntfy-secrets.env`, `demo-secrets.env`, `ultrafeeder-secrets.env`, `piaware-secrets.env`, `fr24feed-secrets.env`, `planefinder-secrets.env`, `airnavradar-secrets.env` | corporatetraveldc 0600 | one container each via `EnvironmentFile=` (pgsql, ntfy, ultrafeeder, piaware, fr24feed, planefinder, airnavradar), except `demo-secrets.env`, read by both `demo-api` and `runner-demo`. Since 2026-10-10 (b2a97645) `DEMO_ADMIN_TOKEN` is demo-api's own value, no longer a copy of the live admin token (name only; `src/demo/demo_api.py:90`) |
 | `contact.env` | corporatetraveldc 0640 | `csexec-contact` container |
 | `dispatch.env.bak-20261004`, `PORTS.md` | 0640 / 0644 | backup; port notes |
+
+Outside `/etc/corporatetraveldc` (added 2026-10-15): `~/.config/rclone/rclone.conf`
+(operator, 0600) is the backup off-box target's rclone configuration
+(`BACKUP_RCLONE_CONFIG`). Its contents were not read; whether the Proton remote
+is configured yet is tracked in `docs/BACKUP.md`.
 
 Team-group subsets: `/etc/ctdc-agent/` (root:ctdc-agents 0750) and
 `/etc/ctdc-ops/` (root:ctdc-ops 0750), written by

@@ -1,6 +1,6 @@
 # Auth Token Proxy Pattern
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state, ports, scoped env files and the live `auth_tokens` row, on 2026-10-15 ~01:24Z / 2026-10-14 21:24 ET.)
 **Applies to:** the dispatch runner (`src/runner/main.py`, container port
 8001) proxying to dispatch-web (`src/web/main.py`, port 8000).
 
@@ -122,11 +122,30 @@ would still 403; they are deliberately not listed.
 
 | Property | How |
 |----------|------------------|
-| Token never in the browser | injected by the runner |
+| Token never in the browser | injected by the runner (the runner's service token only; see the admin-token note below) |
 | Token never in git or the public mirror | value only in `/etc/corporatetraveldc/` (outside the repo); `push-public.sh` scrubs and the pre-commit hook blocks credential patterns |
 | Token not in other containers | only `runner.allowlist` names it among the generated service files |
 | Client token wins | `if auth:` is evaluated first |
 | Blast radius of a compromised runner | the cert-tier token: Tier 0 + Tier 1 reads; no Tier 2, no admin |
+
+**An operator-supplied admin token does live in the browser (added 2026-10-15).**
+The runner's Settings panel has an optional "sync" field
+(`src/runner/frontend/src/components/SettingsPanel.jsx:19`,
+`src/runner/frontend/src/hooks/useLayerConfig.js:50`): a token pasted there is
+stored in the browser's `localStorage` under `ctdc_admin_token` and sent as
+`Authorization: Bearer` on `/api/dispatch/api/v1/config` calls, where the
+client token wins over injection. Anything with script access to that origin,
+or DevTools on that device, can read it. It is opt-in and per device; leaving
+the field empty keeps the browser token-free. Whether to keep it is an open
+decision.
+
+**`GET /api/v1/whoami-token` (added 2026-10-15).** Dispatch-web resolves a
+presented bearer token to `{tier, user_label, department, token_prefix}`
+(Tier 0: an invalid or missing token answers as anonymous). The runner calls it
+to learn the operator identity behind a forwarded `Authorization` header
+(`_resolve_operator_identity`) without its own database access. It is
+rate-limited (60 calls per 60 s, in memory) because it would otherwise be a
+token-guessing oracle (`src/web/main.py:184`).
 
 ---
 
@@ -152,8 +171,11 @@ sudo python3 scripts/service-env/generate.py --write runner
 systemctl --user restart corporatetraveldc-runner.service
 ```
 
-[UNVERIFIED: the live `auth_tokens` row for `runner-enriched-proxy` and its
-expiry; the table was not queried.] `scripts/rotate-credential.sh` does not
+~~[UNVERIFIED: the live `auth_tokens` row for `runner-enriched-proxy` and its
+expiry; the table was not queried.]~~ (corrected 2026-10-15: the live row
+(tier `cert`, label `runner-enriched-proxy`) is active with no expiry; its
+disposition is in the private credentials register, `docs/CREDENTIALS_REGISTER.md`
+(private only).) `scripts/rotate-credential.sh` does not
 cover this token (it handles `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`,
 `NEXTCLOUD_APP_PASSWORD`).
 

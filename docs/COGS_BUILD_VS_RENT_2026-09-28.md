@@ -1,5 +1,7 @@
 # CTDI Dispatch — COGS (self-hosted) vs. Subscription-Only Replacement Cost, 2026-09-28
 
+> **Status (2026-10-15):** dated record, not re-derived. Read these before quoting it: (1) the "cloud-LLM spend is a measured $0" claims (§0, §1 line "Cloud LLM inference") are wrong in scope: a weekly Claude Opus job runs via the Claude CLI and the agents run on vendor plans, and the SR-1 log records configured model labels, not inference (see `docs/COST_STRUCTURE.md` §1 correction); (2) Column 1 has no line for the Proton Drive off-box backup, live since 2026-10-12 (`docs/BACKUP.md`); (3) the internal totals disagree: the "Monthly equivalent ≈ $5,125 – $11,820 / mo" line and the two later "$61.5k–$141.8k" figures disagree with the §0/§2 headline range ($61,529 – $334,955/yr; $5,127 – $27,913/mo); (4) live inputs have moved (38–40 running containers on 2026-10-15, varies with oneshot jobs; not 35). The current cost picture and its open [UNVERIFIED] lines are in `docs/COST_STRUCTURE.md`.
+
 > **Internal planning estimate — NOT investor materials, NOT a vendor quote,
 > NOT an appraisal.** Same posture and HOLD status as
 > `docs/COST_STRUCTURE.md` §2 and `docs/COGS_VENDOR_COMPARISON_2026-08-18.md`:

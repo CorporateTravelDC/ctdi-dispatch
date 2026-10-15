@@ -75,6 +75,7 @@ def metrics(rows: list[dict]) -> dict:
     offs = vals("off_vs_surface_min")
     out = {
         "flights": len(rows),
+        "instance_v1_flights": sum(1 for r in rows if r.get("pairing_rule") == "INSTANCE-v1"),
         "arrivals_reported": len(arr),
         "late_over_15_pct": round(100 * sum(1 for d in arr if d > 15) / len(arr), 1) if arr else None,
         "median_on_vs_filed_min": round(statistics.median(arr), 1) if arr else None,

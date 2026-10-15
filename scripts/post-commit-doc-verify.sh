@@ -28,7 +28,18 @@
 # investigation is wanted for a specific commit, run it by hand.
 set -uo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 2026-10-15: the repo root comes from git, not from this file's location. Installed as
+# .git/hooks/post-commit, "dirname/.." resolved to .git/, so every ./scripts/... call
+# failed ("local-llm-synthesize.sh: No such file", "(search unavailable)") on every
+# commit since the hook copy was installed; only the tracked copy worked.
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [[ -z "${REPO_DIR}" ]]; then
+    _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    case "${_here}" in
+        */.git/hooks) REPO_DIR="$(cd "${_here}/../.." && pwd)" ;;   # installed hook copy
+        *)            REPO_DIR="$(cd "${_here}/.." && pwd)" ;;      # scripts/ copy
+    esac
+fi
 cd "${REPO_DIR}" || exit 0
 
 REASON="${1:-commit}"   # "commit" or "deploy"

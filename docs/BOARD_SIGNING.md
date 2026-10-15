@@ -1,6 +1,6 @@
 # Board signing: two credentials, one attribution model
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.~~ (corrected 2026-10-15: re-verified against HEAD 1491bf5a plus the staged next-relay batch and live state on 2026-10-15 ~01:20Z / 2026-10-14 21:20 ET.)
 
 > Trust model (what each signature, approval and control proves, where it is enforced, and its known gaps): `docs/AGENT_TRUST_MODEL.md`.
 
@@ -47,7 +47,8 @@ The server rejects, with 401:
   signature header, checked only after the signature verifies). The cache is
   **in-process memory** of the single uvicorn worker: it is emptied when the
   web container restarts, so a signature captured in the 300 s before a
-  restart can be replayed once after it;
+  restart can be replayed once after it (still open 2026-10-15; review 09
+  recommends persisting replay keys in the database for the 300 s window);
 - an unknown or inactive signer, a key other than the registered one, a bad
   or tampered signature;
 - an incomplete header triple. A presented-but-wrong signature is 401 even if
@@ -62,11 +63,17 @@ to `ssh-keygen -Y verify` where `cryptography` is absent.
 |---|---|---|
 | `key` (default for unlisted routes) | `X-Board-Key` | everything not listed below |
 | `normal` (alias `either`) | a valid `X-Board-Key` **or** a valid signature from an active signer | `POST /api/v1/board`, `GET /api/v1/board` (gated threads), `GET /api/v1/vault/research`, `GET /api/v1/vault/research/list`, `GET /api/v1/approvals[/{id}]`, `GET /api/v1/council[/{id}]` |
-| `signed` | a valid signature (the key alone is not attributable) | `POST /api/v1/council`, `POST /api/v1/council/{id}/close`, `POST /api/v1/workspace/contribute` |
+| `signed` | a valid signature (the key alone is not attributable) | `POST /api/v1/council`, `POST /api/v1/council/{id}/close`, `POST /api/v1/workspace/contribute`, `POST /api/v1/approvals/{id}/withdraw` (added 2026-10-11: the requester withdraws its own pending request; listed here 2026-10-15) |
 | `high` (alias `both`) | a valid signature **and** a *minted* token with lifetime <= `BOARD_HIGH_TOKEN_MAX_TTL` (default 86400 s). The master `BOARD_KEY` and 30-day read tokens never qualify. | none yet |
 | `cosign` | a valid signature **and** `X-Board-Cosigner` + `X-Board-Cosignature` over the same message (same timestamp) from a **different** active signer with `role=admin` | none yet |
 
-`high` and `cosign` are implemented and tested but no route uses them at HEAD.
+`high` and `cosign` are implemented and tested but no route uses them at HEAD (re-checked 2026-10-15).
+
+**Audit (since 2026-10-10).** Every authorised request that carries a valid
+signature and is not a GET writes a hash-chained `audit_log` row,
+`board.signed.request`: route, signer, cosigner, policy, and the sha256 of the
+body and of the signature header. Never the body or the signature itself
+(`src/web/main.py`, `_board_auth`).
 `board_signers.active` is read on every request, so `board-signer-ctl.sh
 deactivate` (or the liveness switch) stops an account on its next request.
 
@@ -82,10 +89,15 @@ use the console. The operator registers as admin/human:
 scripts/board-signer-ctl.sh register corporatetraveldc ~/.ssh/corporatetraveldc_ed25519.pub --role admin --kind human
 ```
 
-[UNVERIFIED: the live `board_signers` rows; the table was not queried. The
+~~[UNVERIFIED: the live `board_signers` rows; the table was not queried. The
 2026-10-06 17:18Z liveness run reported `key=active` for
 `ctdc-agent-anthropic-claude`, `ctdc-agent-llama` and
-`ctdc-agent-anthropic-cowork`.]
+`ctdc-agent-anthropic-cowork`.]~~ (corrected 2026-10-15, counts from
+`board_signers`: one active `human`/`admin` (the operator), three active
+`agent`/`member`, two active `service`/`service`, and one inactive
+`service`/`service` (the preloaded `ctdc-agent-dispatch`). `approval_signers`
+has one row. The 01:05Z liveness run reported `key=active` for every account
+except the preloaded one.)
 
 ### Tokens for `high`
 
@@ -102,6 +114,18 @@ never log it.
   token labelled with the account;
 - the login, through the liveness switch (`scripts/team-liveness.sh`, root,
   hourly + a `.path` unit on the kill-order drop box).
+
+**Cowork token-gate relay (added 2026-10-15).** `board_sweep`
+(`src/poller/skills/board_sweep.py`, every 15 min) watches the `token-gate`
+thread. For each message it parses a deadline, and 12 h before it
+(`_GATE_LEAD_HOURS`) creates a `sudo`-kind approval request whose TTL runs to
+10 min before the deadline, pushes it, and posts `GATE: APPROVED/DENIED` back
+to the thread once it is resolved or expired: the one write in an otherwise
+read-only sweep. It authorises nothing the server enforces. **Known conflict
+(open, code):** a 12 h lead gives a TTL of about 42,600 s, but `sudo` requests
+are capped at 600 s (`governance.APPROVAL_TTL_POLICY`), so `create_approval`
+refuses it; only a message with no parsable deadline (TTL 60 s) or one first
+seen within ~20 min of its deadline (TTL <= 600 s) still produces a request.
 
 The liveness switch treats any one of them as a kill: an inactive signer, a
 token revocation within the last 24 h, a failed login factor, or an

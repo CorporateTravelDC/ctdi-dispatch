@@ -1,0 +1,10 @@
+[Unit]
+Description=healthchecks.io dead-man ping every 5 minutes (set the check's period 5 min, grace 10 min)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

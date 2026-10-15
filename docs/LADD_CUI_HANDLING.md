@@ -1,10 +1,14 @@
 # LADD filter data — CUI (SP-PRVCY) handling
 
-Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+~~Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.~~
+(corrected 2026-10-15: re-verified against main 1491bf5a plus the batch staged
+for the next relay, and against the live system at 2026-10-15 ~01:00Z /
+2026-10-14 21:00 ET.)
 
 The FAA's automated `LADD_Aircraft.zip` download
 (`src/poller/fetchers/faa_registry.py`, `_FAA_LADD_URL`) has redirected to
-an FAA office page since June 2026 and produces nothing. Current LADD
+an FAA office page since June 2026 and produces nothing (since 2026-10-08
+the poller no longer calls it at all; see "One source only" below). Current LADD
 (Limiting Aircraft Data Displayed) data comes as files the operator
 downloads manually each week: an "FAA Source" filter, a broader "Industry"
 filter (a strict superset, confirmed 2026-08-31), and a separate "remove"
@@ -27,7 +31,14 @@ list. All are marked CUI SP-PRVCY.
      (`db.faa_is_ladd()` / the registry lookups), not just a row count. Every sampled
      entry must report LADD; every removal must not. Report counts only, never identifiers.
   3. Only then `shred -u` the source files. The database is the system of record, not
-     the intake files.
+     the intake files. (corrected 2026-10-15: this host's root filesystem is
+     btrfs, which is copy-on-write, so `shred` cannot overwrite the old blocks in
+     place and in practice works as a delete. `scripts/backup/ctdi-backup.sh:81-82`
+     says the same. Copies in the container's `/tmp` sit on tmpfs, in RAM. The
+     controls that matter are that the files stay in the operator's account,
+     that their contents never reach a tracked file, and the import ledger
+     below. The word "shred" in this doc means "delete with best-effort
+     overwrite".)
 
   <del>**Import, then delete the source files.** `PYTHONPATH=src python3 scripts/import-ladd-filter.py <faa_source> <industry> [--remove <remove_file> ...]` (a single filter file also works). This is a **full replace** of `faa_ladd_aircraft` through `db.faa_upsert_ladd()`, which refuses to wipe the table on an empty or failed parse. The database is the system of record, not the intake files.</del> SUPERSEDED 2026-10-08: the procedure did not verify the import through the lookup, and the source files were never deleted (12 had accumulated since 2026-08-25; shredded 2026-10-08).
 - **Removals persist.** Every `--remove` entry is recorded in
@@ -41,8 +52,10 @@ list. All are marked CUI SP-PRVCY.
   marks and flight-ID/callsign strings. `faa_ladd_aircraft.n_number` is a
   flat membership column for all three.
 - **Lookup forms (fixed 2026-10-08).** Entries are stored exactly as the FAA
-  files list them, so US registrations carry the leading N (`N01AB`, illustrative), while
-  the FAA registry uses `01AB`. `db.faa_is_ladd()` now matches the
+  files list them, so US registrations carry the leading N (~~an illustrative example was
+  given here~~ example removed 2026-10-15 under the masking rule; the form is
+  `N` followed by the registry's number), while the FAA registry stores the
+  number without the N. `db.faa_is_ladd()` now matches the
   identifier as given plus the other registration form
   (`db.ladd_lookup_keys()`); an N followed by a letter is a flight ID and is
   never stripped. Before the fix the lookup stripped the N from every input
@@ -56,9 +69,9 @@ list. All are marked CUI SP-PRVCY.
   would have wiped the CUI-sourced list and skipped the recorded removals.
   The CUI import above is now the only writer.
 
-Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
+Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). (2026-10-15 00:51Z: `ladd: 73543`, 84 recorded removals. `reference_import_ledger` holds two `ladd-import` entries, 2026-10-09 23:08Z and 2026-10-13 15:47Z.) <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
 
-**Import ledger (2026-10-09).** Every import now appends a hash-chained entry to `reference_import_ledger` (migration 0074, `src/common/import_ledger.py`). The entry records each source file's basename, size and SHA-256 with its role (filter or remove), plus the resulting counts. Hashes and counts only, never an identifier. Take the hash before the source files are shredded; the importer does this itself. The 2026-10-06 load predates the ledger. The operator re-supplied both 10-06 files on 2026-10-09, and `import-ladd-filter.py --stamp-only` recorded their hashes after confirming they match the loaded table exactly (+0 / -0). The tables were not changed, and the files were shredded afterwards. `--stamp-only` is the general way to record the source of any earlier load. Each backup's `#` stamp records the ledger head (docs/BACKUP.md).
+**Import ledger (2026-10-09).** Every import now appends a hash-chained entry to `reference_import_ledger` (migration 0074, `src/common/import_ledger.py`). The entry records each source file's basename, size and SHA-256 with its role (filter or remove), plus the resulting counts. Hashes and counts only, never an identifier. Take the hash before the source files are shredded; the importer does this itself. The 2026-10-06 load predates the ledger. The operator re-supplied both 10-06 files on 2026-10-09, and `import-ladd-filter.py --stamp-only` recorded their hashes after confirming they match the loaded table exactly (+0 / -0). The tables were not changed, and the files were shredded afterwards. `--stamp-only` is the general way to record the source of any earlier load. Each backup's `#` stamp records the ledger head (docs/BACKUP.md). (added 2026-10-15) `import_ledger.verify()` (`src/common/import_ledger.py:86`) checks the chain, but nothing calls it on a schedule: the ledger can be checked, and nothing checks it automatically.
 
 ## Where LADD status is and is not exposed
 
@@ -73,6 +86,47 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   history feature built on this data must stay loopback + tailnet
   authenticated, never on a publicly reachable port (operator directive
   2026-08-31).
+- **Third-party lookups (added 2026-10-15).** The airplanes.live fallback
+  (`src/common/airplanes_live.py`, enabled on this deployment since
+  2026-10-08) never sends a LADD-listed identifier. For a hex it first maps
+  the hex to its registration. If the LADD check fails, the identifier is
+  treated as listed and nothing is sent. The query alone would tell a third
+  party which privacy-listed aircraft is being followed. Not covered: the
+  airframes.io and ACARS Drama REST reads by registration
+  (`src/acars_watcher/acars_watcher.py`, `src/common/acars.py`) have no LADD
+  check (2026-10-15, open).
+- **Backups (added 2026-10-15).** The off-box backup carries the LADD table
+  schema but not its rows (`docs/BACKUP.md`). Local CUI dumps stay on the box
+  (`BACKUP_CUI_LOCAL_KEEP`, default 7), and older ones are removed with
+  `shred -fu`, which on btrfs is a delete (see step 3 above).
+
+## Push-time tripwire and history scan (added 2026-10-15)
+
+- **Tripwire (since 2026-10-09).** Before every public push,
+  `scripts/push-public.sh` (step 4b) pipes the identifiers from
+  `faa_ladd_aircraft` and `faa_ladd_removals` on stdin into
+  `scripts/leak-guard/ladd_public_check.py --tree <extracted tree>`. Any
+  whole-token match, or a match on one hyphen-separated part, stops the push
+  (exit 7). It fails closed when fewer than 1,000 identifiers arrive. Output
+  is file:line and counts only. The identifiers are never written to disk or
+  printed. A confirmed coincidence (an ordinary word that is also an entry)
+  is allowed by adding its SHA-256, never the value, to
+  `scripts/leak-guard/ladd-public-allow.sha256`. `--review` shows matching
+  tokens and is for the operator's own terminal only.
+- **Why it exists.** Three identifiers quoted from the 2026-08-25 filter
+  files sat in a doc and a docstring, public mirror included, from the first
+  sanitized push until 2026-10-09.
+- **History.** The tripwire guards the tree being published, not the history
+  already published. `scripts/leak-guard/ladd_history_scan.py` (2026-10-14)
+  scans every blob, commit message and tag reachable from any ref using the
+  same matching rule. It can write the git-filter-repo replacement file
+  (mode 0600; the file holds CUI, so shred it after use). Office files are
+  read through their XML, as the tripwire reads them; identifiers inside an
+  Office file stop the scan (exit 3), because text replacement cannot rewrite
+  a zip. The public mirror's history was rewritten with it on 2026-10-15
+  01:44Z / 21:44 ET 10-14 (6 identifiers; tip tree unchanged; a fresh-clone
+  rescan finds 0). The archived public repository `corporatetravel-dispatch-mcp`
+  still has 2 identifiers in its history (open operator item).
 
 ## Storage
 

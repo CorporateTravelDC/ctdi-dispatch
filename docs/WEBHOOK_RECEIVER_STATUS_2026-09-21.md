@@ -1,3 +1,5 @@
+> **Status (2026-10-15):** the three receivers are still in `src/web/routes/webhooks.py`, but no vendor has been connected and `webhook_events` holds 0 rows (live read). The "Blocker" section below is out of date: `docs/INTEGRATION_SPEC.md` §3 records a path-scoped Cloudflare Access bypass for `/webhooks/*` in place by 2026-10-06. Topics and priorities are in `docs/ALERT_REFERENCE.md` §2 (`reservations`, `calls`); the 2026-10-13 ntfy audit lists both as silent by design.
+
 # Webhook Receiver Status — 2026-09-21
 
 ## What's live now

@@ -1,4 +1,5 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
+Re-checked 2026-10-15 ~01:40Z against main 1491bf5a plus the staged next-relay batch (guard worktree) and the live box. The staged batch changes no cost line.
 
 # CorporateTravelDC — Cost Structure: Dispatch Platform Hardware Tiers
 
@@ -13,8 +14,10 @@ Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
 > The core compute in Tier 1 corresponds to the primary dispatch Pi plus
 > the proposed Ollama-offload Pi in `docs/INFRA_MAP.md` §3.1 — confirmed
 > **still PROPOSED, not built**, live 2026-10-06
-> (`grep -n "3.1" docs/INFRA_MAP.md` → "PROPOSED — dedicated Ollama-offload
-> Pi (second Pi 5) — NOT built"). Note the naming is now stale: the
+> ~~(`grep -n "3.1" docs/INFRA_MAP.md` → "PROPOSED — dedicated Ollama-offload
+> Pi (second Pi 5) — NOT built")~~ (corrected 2026-10-15: the heading now
+> reads "3.1 PROPOSED — second Pi for inference — NOT built",
+> `docs/INFRA_MAP.md:59`; still not built). Note the naming is now stale: the
 > platform's local-inference layer has since moved from Ollama to
 > llama.cpp (`corporatetraveldc-llama.service`); the proposal's thermal/
 > cost rationale (moving inference heat off the primary Pi) still applies
@@ -22,6 +25,16 @@ Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
 > `docs/HARDWARE_GUIDANCE.md` for thermal history and
 > `docs/DESIGN-PRINCIPLES.md` for the local-inference / data-sovereignty
 > rationale.
+>
+> **What actually runs (live, 2026-10-15).** One node: a Raspberry Pi 5
+> Model B Rev 1.1, 16 GB RAM (`MemTotal` 16,599,696 kB), 4 cores, one
+> 238 GB NVMe root volume (83% used, 39 GB free, `df -h /`). The tiers
+> below all include the unbuilt offload Pi in their floor, so none of them
+> is the price of the box that runs today. The sourced figure for the actual
+> single node is **≈ $765 one-time** (Pi 5 16 GB + NVMe + case/PSU + the
+> ~$160 two-SDR RF adder), `docs/COGS_VENDOR_COMPARISON_2026-08-18.md` §2.7,
+> carried into `docs/COGS_BUILD_VS_RENT_2026-09-28.md` §1. That figure is
+> also an operator estimate, not a receipt [UNVERIFIED as of 2026-10-15].
 
 ---
 
@@ -95,7 +108,13 @@ The real deployment today is **not** the full-quality tier: ADS-B + VDL2
 SDRs only, no dedicated roof runs, no tuned antennas — confirmed live
 2026-10-06 against `docs/SDR_SERVICES.md` and `podman ps`: exactly two
 RTL-SDR dongles in service (`ADSB1090` for ultrafeeder, `ACARS0130`
-shared by dumpvdl2), no HFDL/AIS/UTM hardware installed.
+shared by dumpvdl2), no HFDL/AIS/UTM hardware installed. Re-checked
+2026-10-15: `corporatetraveldc-ultrafeeder` and `corporatetraveldc-dumpvdl2`
+are running (`podman ps`), no HFDL/AIS container runs, and the only units
+that open an RTL-SDR dongle are those two (acarshub/acarsrouter/acars-watcher
+consume their output; no HFDL/AIS unit exists). The antennas, coax, any LNA and the dongles'
+replacement history are not itemized anywhere [UNVERIFIED as of
+2026-10-15]; the ~$160 adder is the operator's estimate.
 
 - Adds ~$160 on top of the floor (SDR dongles only, modest/indoor
   antennas, short cable runs).
@@ -112,8 +131,29 @@ shared by dumpvdl2), no HFDL/AIS/UTM hardware installed.
 | Reference — actual buildout | ADS-B + VDL2 SDR only | +~$160 | **sub-$900** |
 | 2 — Full-quality build | full SDR + tuned antennas + roof runs | +$400–$500 | ≈ $1,100–$1,200 |
 
-Cost model across all tiers: one-time CapEx, then near-zero marginal cost
-(electricity only) — no recurring per-feed or per-token charges.
+~~Cost model across all tiers: one-time CapEx, then near-zero marginal cost
+(electricity only) — no recurring per-feed or per-token charges.~~
+(corrected 2026-10-15: the *hardware* has no per-feed or per-token charge,
+but running the platform as built today also has recurring lines beyond
+electricity: the Proton plan behind the off-box backup (live since
+2026-10-12) and the mail bridge, the weekly Claude Opus job, the vendor
+plans the agents run on, and the domain. See "Recurring lines" in §2. The
+backup uplink currently costs nothing because it has no service.)
+
+> **Correction (2026-10-15): this log is not evidence of inference.** SR-1
+> rows record the model *label* a skill was configured with, written on
+> every run whether or not a model was called. Examples from the last 24 h
+> (to 2026-10-15 01:38Z): `flight-impact`, which makes no LLM call, wrote
+> 277 rows labelled `corporatetraveldc-pi5-osint` (a name with no persona in
+> `src/common/personas.py`, so it could not reach the model even if it
+> tried); and `deterministic` rows come mostly from skills that never call
+> a model (`convective-sigmet-archiver` 144, `tbfm-arrival-enrichment` 128,
+> `board-sweep` 96, `feed-db-integrity-check` 48, `cps-recompute` 25,
+> `ingest-feed-watch` 24, of 472). So "deterministic" is not a fallback
+> rate, and the log shows only that no *skill* is configured with a cloud
+> model. It says nothing about the cloud jobs that run outside SR-1 (the
+> weekly Claude Opus dump, agent vendor plans). The struck conclusions
+> below are kept for the record.
 
 **Live evidence for the "no per-token charges" half of that claim
 (re-derived live 2026-10-06 — the hardware figures above are unchanged
@@ -127,11 +167,22 @@ invocation on this box. Across **73,284 logged invocations spanning
 > timestamped sample, not a fixed fact.** Re-derive with
 > `wc -l /var/lib/corporatetraveldc/api-usage.csv` (minus the header).
 > The *ratios* and the zero-cloud-calls result are the durable claims.
+> (2026-10-15 sample: 84,744 data rows, 2026-06-27 00:00Z → 2026-10-15
+> 01:38Z; `deterministic` 26,169, ~31%; cloud-model name matches 0; token
+> columns still sum to 0. The ratios describe labels, not inference; see the
+> correction above.)
 
-- **Zero cloud calls, still.** `grep -icE 'claude|anthropic|gpt|openai'`
-  over the whole log returns **0** (re-confirmed 2026-10-06). Every row's
+- ~~**Zero cloud calls, still.**~~ (corrected 2026-10-15: zero *skill rows
+  labelled with a cloud model*; the Claude Opus weekly job and the agent
+  plans never write to this log.) `grep -icE 'claude|anthropic|gpt|openai'`
+  over the whole log returns **0** (re-confirmed 2026-10-06; still 0 on
+  2026-10-15 with `sonnet|haiku|opus` added). ~~Every row's
   `model` is either a local `corporatetraveldc-pi5-*` model or the literal
-  `deterministic` (template fallback).
+  `deterministic` (template fallback).~~ (corrected 2026-10-15: 58,022 rows
+  carry a `corporatetraveldc-pi5-*` label and 26,179 `deterministic`; 424
+  are `none` (entity-tracking-digest, semantic-compile-daily, still being
+  written as of 2026-10-14) and 146 are a malformed `csexec-osint` label
+  with an inline comment, all from 2026-07-09. None names a cloud model.)
 - **Correction from the 2026-08-23 revision of this doc:** those local
   models are no longer served by Ollama. Ollama was retired at the
   2026-08-27 cutover; the model column still reads `corporatetraveldc-pi5-*`
@@ -140,8 +191,13 @@ invocation on this box. Across **73,284 logged invocations spanning
   Qwen3-4B-Instruct-2507 (q4_0). The "local, not cloud" conclusion is
   unaffected — the provider changed, the zero-cloud-calls fact did not.
 - `deterministic` is the single most common value in the full log
-  (22,431 of 73,284 rows, ~31%) — the degraded/fallback path is a
-  **template render**, not a billed cloud call, consistent with
+  (22,431 of 73,284 rows, ~31%) — ~~the degraded/fallback path is a
+  **template render**, not a billed cloud call, consistent with~~
+  (corrected 2026-10-15: most `deterministic` rows are skills that never
+  call a model, see the correction above; a skill whose model call fails
+  logs its configured model label with `status=fallback`, for example 98
+  `route-impact` and 88 `tfr-enrichment` fallback rows in the last 24 h. The
+  fallback is still a template render, never a cloud call, because of)
   `ANTHROPIC_FALLBACK_ENABLED=false` (confirmed set live in
   `/etc/corporatetraveldc/dispatch.env`, name/value-shape only — the
   literal value `false` is itself non-sensitive and was already quoted in
@@ -149,9 +205,19 @@ invocation on this box. Across **73,284 logged invocations spanning
   (13,418), `corporatetraveldc-pi5-route-impact` (12,685), `corporatetraveldc-pi5-osint`
   (12,196).
 
-So the recurring inference cost attributable to this platform is
+~~So the recurring inference cost attributable to this platform is
 genuinely **$0**, not merely "low" — the only recurring line remains
-power.
+power.~~ (corrected 2026-10-15: never true as written — the weekly Claude Opus
+dump, `scripts/second-brain-weekly-dump.sh`, has been scheduled since
+2026-08-25, before this 2026-10-06 re-derivation. What is true: **skill inference** runs on
+the local llama.cpp server and costs only power. The platform also runs a
+scheduled cloud job: `corporatetraveldc-second-brain-weekly-dump.timer`
+(enabled, Sunday 02:00Z, behind the `maintenance-window-guard.sh`
+ExecCondition, which skipped the 2026-10-11 run) calls
+`claude --model opus` (`scripts/second-brain-weekly-dump.sh:139`) on the
+operator's Claude plan, and the agents run on vendor plans. Their cost is
+not recorded on the box [UNVERIFIED as of 2026-10-15]. Power is also not the
+only recurring line; see "Recurring lines" in §2.)
 
 > **Gotcha for anyone computing a token-based cost from this log:** the
 > `input_tokens`/`output_tokens`/`cache_*` columns still sum to **0**
@@ -172,12 +238,12 @@ hardware cost above:
 
 | Option | Cost | Recurring? | Data delivered | Sovereignty / ownership |
 |---|---|---|---|---|
-| **This platform — full-quality build (Tier 2)** | **~$900–$1,200 one-time** | **No** | ADS-B **+ ACARS + VDL + weather + full cross-referencing** | **Yes** — permanent, on-prem |
+| **This platform — full-quality build (Tier 2)** | ~~**~$900–$1,200 one-time**~~ (corrected 2026-10-15: **≈ $1,100–$1,200 + NVMe**, the Tier 2 figure in §1; ~$900 is the reference buildout, not Tier 2) | **No** | ADS-B **+ ACARS + VDL + weather + full cross-referencing** | **Yes** — permanent, on-prem |
 | FlightAware — enterprise-tier ADS-B feed | **~$1,200/year** | Yes | ADS-B only | No |
 | FlightRadar24 — enterprise tier | **from ~$500/year** | Yes | ADS-B only | No |
 
 **The point:** the platform's one-time hardware cost — even at the higher
-~$900–$1,200 full-SDR/antenna tier — is roughly comparable to, or less
+~~about $900–$1,200~~ ≈ $1,100–$1,200 + NVMe (corrected 2026-10-15) full-SDR/antenna tier — is roughly comparable to, or less
 than, one year of either single-data-type subscription, and delivers
 materially more (ADS-B + ACARS + VDL + weather + cross-referencing +
 permanent ownership) than a recurring single-feed rental.
@@ -186,10 +252,38 @@ permanent ownership) than a recurring single-feed rental.
 
 | Operating cost | Annual | Attributable to the platform? |
 |---|---|---|
-| **Power** | ~$50–$100/year | **Yes** |
+| **Power** | ~~about $50–$100/year~~ (corrected 2026-10-15: **≈ $23–$39/year**, 10.5–17.6 W continuous at $0.2540/kWh, EIA Table 5.6.A DC residential May 2026, derived in `docs/COGS_VENDOR_COMPARISON_2026-08-18.md` §2.7; the $50–100 figure was an unsourced placeholder) | **Yes** |
 | **Internet** (business fiber) | up to ~$5,000–$6,000/year at the high end | **Generally no** — pre-existing business expense independent of this platform |
 
+### Recurring lines beyond power (added 2026-10-15)
+
+Amounts are not recorded anywhere on the box; each is marked rather than
+guessed.
+
+| Line | What runs (live 2026-10-15) | Annual | Attributable to the platform? |
+|---|---|---|---|
+| **Off-box backup storage** | Nightly encrypted Borg archives synced to Proton Drive (`BACKUP_TARGET=proton:ctdi-backup`, live since 2026-10-12; `corporatetraveldc-backup.timer`, `-backup-freshness.timer`, `-backup-restore-test.timer` all scheduled). Each nightly sync uploads several GB; the seed was 19 GB, within a 2 TB allotment (`docs/BACKUP.md`). | [UNVERIFIED as of 2026-10-15] — Proton plan price not recorded | **Yes**, at least the storage share |
+| **Proton mail relay** | `corporatetraveldc-protonbridge` (running). Bridge needs a paid Proton plan; whether it is the same plan as the Drive storage is not recorded. | [UNVERIFIED as of 2026-10-15] | Shared business cost |
+| **Scheduled cloud LLM** | Weekly Claude Opus second-brain dump (see §1 correction). | [UNVERIFIED as of 2026-10-15] — rides on the operator's Claude plan | Partly |
+| **Agent vendor plans** | Claude Code, Codex and ChatGPT/Cowork agents used to build and operate the platform. | [UNVERIFIED as of 2026-10-15] | Development and operations, not runtime |
+| **Backup uplink** | `enu1`, a Verizon phone hotspot, has had no internet service since 2026-10-06 over pricing; a prepaid SIM is planned (`docs/NETWORK_FAILOVER.md`). | $0 today; prepaid SIM cost [UNVERIFIED as of 2026-10-15] | **Yes** once restored |
+| **Domain** | `.com` renewal shared across the public hostnames | ~$10–15 [EST, carried from `docs/COGS_BUILD_VS_RENT_2026-09-28.md` §1; registrar not recorded] | Shared |
+
+The primary uplink is the Wi-Fi gateway on `wld0` (`docs/NETWORK_FAILOVER.md`);
+its plan type and price are not recorded on the box [UNVERIFIED as of 2026-10-15].
+
 *(Same HOLD-for-investor-promotion status as the rest of §2.)*
+
+### See also (added 2026-10-15)
+
+- `docs/COGS_BUILD_VS_RENT_2026-09-28.md` — the most recent two-column COGS
+  model (self-hosted vs subscription replacement). Dated record; read its
+  status note first.
+- `docs/COGS_VENDOR_COMPARISON_2026-08-18.md` §2.7 — the sourced power and
+  hardware derivation used above.
+- `docs/BACKUP.md` — the backup target, sizing and schedule.
+- `docs/DEDICATED_MODELS_PLAN.md` — what the local model server is and who
+  calls it.
 
 ---
 

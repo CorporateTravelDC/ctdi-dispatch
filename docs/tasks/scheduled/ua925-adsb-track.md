@@ -1,13 +1,22 @@
 ---
 name: overwater-adsb-handoff-track
 description: ADS-C to ADS-B handoff tracker — monitors satellite→ground ADS-B acquisition for any international or overwater flight
-converted_from: ua925-adsb-track (UA925-specific)
+converted_from: ua925-adsb-track (single-flight specific)
 converted_to_skill: overwater-adsb-handoff-track
 ---
 
 OVERWATER / INTERNATIONAL FLIGHT — ADS-C TO ADS-B HANDOFF TRACKER
 
-[Re-verified 2026-08-23] Both external calls below still work as written:
+[Status 2026-10-15] The skill that runs is `skills/overwater-adsb-handoff-track/SKILL.md`
+(shipped in this repo). It uses the canonical `POST /admin/push-alert`, not the legacy alias
+below; where this file and the skill differ, the skill wins. The airplanes.live calls were not
+re-tested on 2026-10-15. Do not run the direct `api.airplanes.live` calls below. The skill
+resolves position and identity locally first and reaches airplanes.live only through the shared
+fallback `src/common/airplanes_live.py` (off unless `AIRPLANES_LIVE_FALLBACK=1`), which never
+sends a LADD-listed identifier.
+
+[Re-verified 2026-08-23, history only] ~~Both external calls below still work as written:~~
+(corrected 2026-10-15: direct calls are not allowed; see the status note above.)
 `GET https://api.airplanes.live/v2/hex/<hex>` and `/v2/callsign/<callsign>`
 each return 200 with the documented `{"ac":[...]}` shape (empty `ac` when the
 aircraft is not currently on feed — that is the "landed or feed lost" case,
@@ -24,9 +33,9 @@ Use this task for:
 - Demo tracking of a specific inbound aircraft
 
 CONFIGURE BEFORE ACTIVATING — set these three values for the target flight:
-  TARGET_HEX      = "<6-char ICAO hex>"   # e.g. 443bd3
-  TARGET_CALLSIGN = "<ICAO callsign>"     # e.g. UAL925
-  TARGET_LABEL    = "<friendly label>"    # e.g. UA925 or Q5CXO
+  TARGET_HEX      = "<6-char ICAO hex>"   # e.g. 44**** (example masked 2026-10-15)
+  TARGET_CALLSIGN = "<ICAO callsign>"     # e.g. `<ICAO callsign>` (example removed 2026-10-15)
+  TARGET_LABEL    = "<friendly label>"    # e.g. `<label>` (example removed 2026-10-15)
 
 DESIGN NOTE — HEX ID vs CALLSIGN:
 Always query by ICAO hex rather than callsign. This bypasses two problems:

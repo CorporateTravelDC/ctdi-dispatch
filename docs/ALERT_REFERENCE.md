@@ -1,6 +1,10 @@
 # Alert Reference — ntfy topics, triggers, and dedup logic
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+Re-verified 2026-10-15 ~01:35Z against the guard worktree (HEAD 1491bf5a plus
+the batch staged for the next relay) and the live system. Changes are marked
+"(corrected 2026-10-15: ...)"; behaviour that exists only in the staged batch
+is marked "(next relay)".
 
 Catalog of ntfy publishers: what fires, which topic, what priority, what
 stops repeats. Design rationale is in `ALERT_ARCHITECTURE.md`. This catalog
@@ -8,24 +12,44 @@ is not guaranteed complete; the reliable enumeration is a fresh grep for
 `send(`, `send_dual(`, `send_run_status(`, `fire_family_alert(`,
 `_fire_ntfy_dual(`, `ntfy_send`, `ntfy_alert`, `hot_push(` and raw
 `curl`/`urllib`/`requests.post` to the ntfy base across `src/` and
-`scripts/`. Line numbers below are as of db64018; re-derive with `grep -n`.
+`scripts/`. ~~Line numbers below are as of db64018~~ (corrected 2026-10-15:
+line numbers below were re-derived against the guard worktree; they move with
+every batch); re-derive with `grep -n`.
 
 ## 1. Publishing paths
 
 | Path | Used by | Retry | Fallback |
 |---|---|---|---|
-| `shared/watchlist.py::_fire_ntfy_dual(domain_topic, title, detail, dispatch, priority)` — full body to the domain topic, one-liner to `dispatch` | ingest parsers (also via `fire_family_alert`), web webhooks/watchlist routes, `watchlist_event_hit`, `poller/tools/watchlist_import.py` | 3 attempts, exponential backoff | none |
-| `common/ntfy_push.py::send()` / `send_dual()` (defaults `dispatch-debriefs` + `dispatch-ops`) / `send_run_status()` | poller skills, pusher, `aim_parser` direct sends | 3 attempts; ambiguous 401/403 guard | `NTFY_FALLBACK_URL` — **not set** in the live `dispatch.env`; the ntfy quadlet publishes only `2586:2586` |
-| `src/pusher/main.py::hot_push()` | pusher priority-5 events | via `send()` | co-fires **Pushover Emergency** (`common/pushover.py`, `PUSHOVER_TOKEN`/`PUSHOVER_USER_KEY` on the pusher allowlist) — the only out-of-band channel in code. `[UNVERIFIED: whether the Pushover keys have values]` |
-| Hand-rolled Python: `ingest/local_airspace.py::_fire_ntfy` (`:123`), `acars_watcher`, `ais_watcher`, `scripts/thermal-ingest-guard.py`, `governor-watch.py`, `dns-anomaly-watch.py`, `failover-kickover-guardrail.py` | — | none | none |
+| `shared/watchlist.py::_fire_ntfy_dual(domain_topic, title, detail, dispatch, priority)` — full body to the domain topic, one-liner to `dispatch` | ingest parsers (also via `fire_family_alert`), web webhooks/watchlist routes, `watchlist_event_hit`, `poller/tools/watchlist_import.py` | 3 attempts, exponential backoff; since 2026-10-13 a 401/403 gets one delayed retry and is then logged as NOT delivered | none |
+| `common/ntfy_push.py::send()` / `send_dual()` (defaults `dispatch-debriefs` + `dispatch-ops`) / `send_run_status()` | poller skills, pusher, `aim_parser` direct sends | 3 attempts; ~~ambiguous 401/403 guard~~ (corrected 2026-10-15: since 2026-10-13 a 401/403 gets one retry after `_AUTH_RETRY_DELAY_SECS` (2 s) and is then a failure. The old guard logged it as "known false-negative, treating as delivered"; 3 of 3 such messages checked had never been stored by ntfy). Bodies are capped at 60,000 bytes (`_MAX_BODY_BYTES`) with a truncation note | `NTFY_FALLBACK_URL` — **not set** in the live `dispatch.env` (re-checked 2026-10-15); the ntfy quadlet publishes only `2586:2586` |
+| `src/pusher/main.py::hot_push()` | ~~pusher priority-5 events~~ (corrected 2026-10-15: the VIP TFR push and the wind ≥ 30 kt alert only; CPS RED is p5 through plain `send_ntfy()`, with no Pushover) | via `send()` | co-fires **Pushover Emergency** (`common/pushover.py`, `PUSHOVER_TOKEN`/`PUSHOVER_USER_KEY` on the pusher allowlist) — the only out-of-band channel in code. `push_vip_tfrs` calls `hot_push` once per topic (`tfr-alert`, then `hot-alerts`), so each VIP TFR fires two Pushover Emergencies. `[UNVERIFIED: whether the Pushover keys have values]` |
+| Hand-rolled Python: `ingest/local_airspace.py::_fire_ntfy` (~~`:123`~~ `:136`), `acars_watcher`, `ais_watcher`, `scripts/thermal-ingest-guard.py`, `governor-watch.py`, `dns-anomaly-watch.py`, `failover-kickover-guardrail.py`, `dependency-audit.py`, `relay-nudge.py` | — | none | none |
 | Standalone shell scripts (§7) | each defines its own `ntfy_send` | none (most `|| true`) | none |
 
 Since the 2026-10-05 argv sweep, scripts pass the ntfy token on a private fd
 (`authhdr` / `-H @<(...)`), never on the curl command line.
 
+**Root-run scripts (2026-10-14).** `watchdog.sh`, `lockdown.sh`,
+`restore-network.sh`, `restart-stack.sh`, `threat-initiate.sh`,
+`threat-resolve.sh` and `renew-tailscale-cert.sh` publish with the token of
+the publish-only ntfy account `root-alerts`, which can write to `ops-health`
+and `hot-alerts` and nothing else. The token is read from the root-only file
+`/etc/corporatetraveldc/ntfy-root.token` (live 2026-10-15: present, 0600,
+root-owned) and sent through a private fd. A failed send is now logged. Before
+this, every send from these scripts got a 403 that `|| true` hid; see
+`NTFY_TOPIC_AUDIT_2026-10-13.md`. The installed copies in
+`/usr/local/libexec/ctdc/` (watchdog, lockdown, restore-network,
+renew-tailscale-cert) carry the change (checked 2026-10-15).
+
+**Server (live 2026-10-15).** `/etc/ntfy/server.yml` and the tracked
+`config/ntfy/server.yml` both set `auth-default-access: deny-all`,
+`cache-duration: "72h"` (2026-10-14; it was the 12 h default, so a phone
+offline overnight missed messages) and `message-size-limit: "65536"`.
+
 `ntfy-container-alert.service`, named by `ntfy.container`'s
-`OnFailure=`, does not exist — if ntfy itself dies nothing alerts (only the
-pusher's Pushover co-fire for p5 events is independent of ntfy).
+`OnFailure=`, does not exist (re-checked 2026-10-15) — if ntfy itself dies
+nothing alerts (only the pusher's Pushover co-fire for `hot_push` events is
+independent of ntfy).
 
 ### Dedup semantics (`common/push_dedup.py`, redesigned 2026-09-03)
 
@@ -36,52 +60,61 @@ the retention horizon `max(dedup_secs × 10, 7 days)`. `hot=True` bypasses.
 for time-based uses (TTL guards, episode gates, still-active heartbeats).
 `bucket_count()` bands counts by 5 so ±1 churn hashes the same.
 
+Rule (operator 2026-10-14): a content key is built from the event's own
+stable fields only, never from timestamps, narratives or counts. The VIP TFR
+re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
+`[HH:MMZ]` stamp.
+
 ## 2. Topic index
 
 | Topic | Publishers | Priority |
 |---|---|---|
-| `hot-alerts` | `aim_parser` VIP NOTAM (p5); pusher VIP TFR (`hot_push`, p5) and wind ≥ 30 kt CPS NO-GO (`hot_push`, p5); `route_impact.py`, `tfr_enrichment.py` (VIP TFR, p5); `board_sweep.py`; `lockdown.sh` (p4); `threat-initiate.sh` (p5); `watchdog.sh` (p5 manual-run-required); `runner-health-watchdog.sh` (p4/p5, also `X-Email`); `net-failover-watchdog.sh` | 4–5 |
-| `tfr-alert` | `fdps_parser` Marine One / VIP callsign (p5); pusher VIP TFR (p5, with `hot-alerts`); `tfr_enrichment.py` | 3–5 |
+| `hot-alerts` | `aim_parser` VIP NOTAM (p5); pusher VIP TFR (`hot_push`, p5) and wind ≥ 30 kt CPS NO-GO (`hot_push`, p5); pusher VIP window correction (p4, once, no Pushover; next relay); `route_impact.py` (DC-area VIP TFRs, p5, once per VIP set); ~~`tfr_enrichment.py` (VIP TFR, p5)~~ (corrected 2026-10-15: no VIP push since 2026-10-14, see §6); `board_sweep.py`; `lockdown.sh` (p4); `threat-initiate.sh` (p5); `watchdog.sh` (p5 "System Restart Needed (manual run required)", once per distinct problem; p4 "Full Stack Restart" on a manual `--allow-system-restart` run); ~~`runner-health-watchdog.sh` (p4/p5, also `X-Email`); `net-failover-watchdog.sh`~~ (corrected 2026-10-15: both publish to `ops-health` only; the runner watchdog moved off `hot-alerts` on 2026-09-05) | 4–5 |
+| `tfr-alert` | `fdps_parser` Marine One / VIP callsign (p5, title "POTUS MOVEMENT"); pusher VIP TFR (p5, with `hot-alerts`); pusher VIP window correction (p4, next relay); ~~`tfr_enrichment.py`~~ (corrected 2026-10-15: no longer publishes) | 4–5 |
 | `nas-alerts` | `aim_parser` residual NOTAMs only (p3, `aim_parser.py:482`) | 3 |
-| `wx-alerts` | `itws_parser` (p4, `:772`); pusher METAR wind/direction change (p3) | 3–4 |
+| `wx-alerts` | `itws_parser` (p4, `:772`); pusher METAR wind/direction change (p3) and a routine update at most hourly while any primary station has wind | 3–4 |
 | `tbfm-alerts` / `tbfm-<zone>` | `tbfm_parser` via `fire_family_alert` (`:497`) | 2 (+1 escalating) |
-| `tfms-alerts` / `tfms-<zone>` | `tfms_parser` (`:603` RSTR/GDP/GS, `:1501` APTC, `:1600` GADV) | 3 (+1) |
-| `fdps-alerts` / `fdps-<zone>` | `fdps_parser` (`:1841` watchlist/proximity; `:1184` alt saturation; `:1391` diversion continuation); `aim_parser` flight restrictions (`:472`) | 3–5 |
+| `tfms-alerts` / `tfms-<zone>` | `tfms_parser` (~~`:603`~~ `:633` RSTR/GDP/GS, ~~`:1501`~~ `:1538` APTC, ~~`:1600`~~ `:1637` GADV) | 3 (+1) |
+| `fdps-alerts` / `fdps-<zone>` | `fdps_parser` (~~`:1841`~~ `:1857` watchlist/proximity; ~~`:1184`~~ `:1200` alt saturation; ~~`:1391`~~ `:1407` diversion continuation); `aim_parser` flight restrictions (`:472`). Since 2026-10-13 K-prefixed center codes (`KZDC`) normalise, so ZDC restriction NOTAMs reach `fdps-zdc` | 3–5 |
 | `itws-alerts` / `itws-<zone>` | `itws_parser` (`:778`) | 4 (+1) |
 | `aim_fns-alerts` / `aim_fns-<zone>` | `aim_parser` residual (`:490`) | 3 (+1) |
-| `stdds-alerts`, `stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>` | `smes_parser` (`:407` PCT, `:607` surface, `:1031` safety — silenced, `:1283` taxi) | 1–3 |
-| `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`) | 2–4 |
-| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher | 2–4 |
-| `vessel-alerts` | `watchlist_event_hit` vessel branch (`shared/watchlist.py:665`); web watchlist add/remove (`web/routes/watchlist.py:469`, batch `:558`) | 2–3 |
-| `dispatch` | the concise leg of every `_fire_ntfy_dual`; `local_airspace` Marine One / emergency squawk (`dispatch` only, `:272`, `:305`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py` | matches pair |
-| `dispatch-debriefs` / `dispatch-ops` | `send_dual` defaults: `weekly_summary.py:210` (both legs, p3, `email=True`); `ops_brief.py` full leg; `send_run_status()` pings on `dispatch-ops` (p2 ok / p4 fail) from 11 skills: aam daily/weekly, aviation, concierge-travel, executive-protection, gig-economy, trains-yachts daily watches, second-brain daily/weekly, disruption-weather-digest, transport-pattern-digest; `watchdog.sh` | 2–4 |
-| `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (`:460`); `brief-fallback-monitor.sh` | 3–5 |
-| `ops-health` | most guards and scripts (§6, §7); thermal guard | 1–5 |
+| `stdds-alerts`, ~~`stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>`~~ (corrected 2026-10-15: since 2026-10-13 every tracked airport fires its zone topic `stdds-<zone>`, so DCA/IAD/BWI now reach `stdds-zdc`; per-airport topics exist only in the priority zones zdc, zny, zatl, zob: `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`, `-atl`, `-cle`/`-pit`/`-dtw`) | `smes_parser` (`:407` PCT, ~~`:607`~~ `:623` surface, ~~`:1031`~~ `:1048` safety — silenced, ~~`:1283`~~ `:1310` taxi) | 1–3 |
+| `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`, inbound tracker `inbound_*`, `fdps_tail_change` / `tdes_tail_change` and their `_rejected` notes; §5); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`) | 2–4 |
+| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`; by a code bug it also sends vessel and drone retries here, §4) | 2–4 |
+| `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ `:708`); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ `web/routes/watchlist.py:511`, batch map `:600`). No vessel watches and no AIS source live, so silent by design | 2–3 |
+| `dispatch` | the concise leg of every `_fire_ntfy_dual`; `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ `:288`, `:321`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
+| `dispatch-debriefs` / `dispatch-ops` | `send_dual` defaults: `weekly_summary.py:210` (both legs, p3, `email=True`); `ops_brief.py` full leg; `send_run_status()` pings on `dispatch-ops` (p2 ok / p4 fail) from 11 skills: aam daily/weekly, aviation, concierge-travel, executive-protection, gig-economy, trains-yachts daily watches, second-brain daily/weekly, disruption-weather-digest, transport-pattern-digest; ~~`watchdog.sh`~~ (corrected 2026-10-15: the watchdog publishes only to `ops-health` and `hot-alerts`, and its `root-alerts` token can reach nothing else). Bodies over 60,000 bytes are truncated (2026-10-13; two ~46k-character briefs had been rejected) | 2–4 |
+| `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (`:460`); ~~`brief-fallback-monitor.sh`~~ (corrected 2026-10-15: it publishes to `BRIEF_FALLBACK_TOPIC`, default `ops-health`, which neither its unit nor `dispatch.env` overrides) | 3 |
+| `ops-health` | most guards and scripts (§6, §7); thermal guard; `brief-fallback-monitor.sh` (max); `tmp-headroom-guard.sh` (p4); `runner-health-watchdog.sh` (p4/p5); `net-failover-watchdog.sh`; `unit-failure-notify@` (p4); `dependency-audit.py` (p4/p3); `relay-nudge.py` (default p4); the integrity sweep (p5) | 1–5 |
 | `ep` / `ep-advance` | `ep_advance_brief.py` (`ep` p3 concise, `ep-advance` p4 full); `ep_advance_venues.py` (`ep-advance`) | 3–4 |
-| `cps` | pusher on CPS score change (p3) and wind change ≥ 10 kt / ≥ 45° (p3) | 3 |
+| `cps` | pusher on CPS score change ~~(p3) and wind change ≥ 10 kt / ≥ 45° (p3)~~ (corrected 2026-10-15: priority by score, GREEN 3 / YELLOW 4 / RED 5, plain ntfy with no Pushover. Wind changes never go to `cps`: they go to `wx-alerts`, or `hot-alerts` at ≥ 30 kt. The `push_wx_change` docstring still says "cps") | 3–5 |
 | `osint-alerts` | `osint_monitor.py` (`PUSH_PRIORITY[score_label]`) | varies |
-| `reservations` | `web/routes/webhooks.py` LimoAnywhere (`:220`) | 3 |
-| `calls` | `web/routes/webhooks.py` RingCentral and 3CX | 3 |
+| `reservations` | `web/routes/webhooks.py` LimoAnywhere (`:220`); no vendor connected, 0 `webhook_events` rows live | 3 |
+| `calls` | `web/routes/webhooks.py` RingCentral (`:257`) and 3CX (`:287`); not connected | 3 |
 | `approval-gate` | `sudo-approval-gate.sh` (p4; p5 if the command contains `kill`/`ollama-governor` or `APPROVAL_GATE_DR=1`; `APPROVAL_GATE_PRIORITY` overrides); also `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh`, `cowork-coord-24h-check.sh` | 4–5 |
 | ~~`dispatch-alerts`~~ | ~~`check-pat-expiry.sh` only (token from `~/.secrets/ntfy.token`)~~ | ~~4–5~~ | RETIRED 2026-10-14 with the script (`docs/RETIRED.md`) |
 
-`ep-briefs` is reserved; nothing publishes to it.
+`ep-briefs` is reserved; nothing publishes to it. `osint-marketing` is retired
+(merged into `osint-alerts` with a `[MKT]` prefix).
 
 ## 3. Ingest parsers
 
 ### FDPS (`ingest/parsers/fdps_parser.py`)
 
-- **Marine One / VIP** (`check_marine_one` → `_fire_marine_one_ntfy`, `:1792`):
+- **Marine One / VIP** (`check_marine_one` → `_fire_marine_one_ntfy`, ~~`:1792`~~ `:1798`):
   `is_marine_one()` = callsign in `MARINE_ONE_CALLSIGNS`, or matching
   `^CRANE\d{2}$` (AF1/AF2 training callsigns, 2026-10-05), or squawk
   7700/5000/5001. Source `FH` alerts on callsign alone; `TH` must be within
   `MARINE_ONE_RADIUS_NM` (50) of DCA. `tfr-alert`, p5, no dedup. Writes a
-  30-minute `swim_alert` row.
+  30-minute `swim_alert` row. Since 2026-10-13 a CRANE sighting is not
+  labelled Marine One; the push title is "POTUS MOVEMENT: <callsign>".
 - **Watchlist** (`check_fdps_watchlist`): `FH` → `watchlist_event_hit` p3,
   `CL` → p4, each plus `_fire_fdps_nas_alert` (despite its name it calls
   `fire_family_alert("fdps", "fdps", …, base_priority=3)`). `TH` →
   `_maybe_alert_on_approach` within 50 nm of destination, deduped by
-  `_FDPS_PROX_DEDUP` (600 s).
+  `_FDPS_PROX_DEDUP` (600 s). Since 1491bf5a a hit must match the watched leg
+  (the shared instance matcher in `common/flight_instance.py`), not only the
+  flight number.
 - `fdps_alt_saturation` and `fdps_diversion_continuation`: first occurrence,
   isolated, p4, no zone (facility `None`).
 
@@ -142,32 +175,70 @@ Routing:
 | Call site | feed_name | Topics | Escalation | Base | Dedup |
 |---|---|---|---|---|---|
 | `:407` PCT track-count trend | `stdds` | `stdds-alerts` only (`zone_split=False`) | escalating | 2 | `_STDDS_PCT_DEDUP` 300 s |
-| `:607` ASDE-X surface congestion | `stdds_surface` | + per-airport/zone | escalating | 2 | `_STDDS_SURFACE_DEDUP` 300 s |
-| `:1031` SafetyLogic hold-bar | `stdds_safety` | + per-airport/zone | first occurrence/change | 3 | none — `check_incursion_alert` returns early on an unchanged bitmask (`:982`) |
-| `:1283` surface-movement taxi | `stdds_taxi` | + per-airport/zone | escalating | 2 | `_STDDS_TAXI_DEDUP` 300 s |
+| ~~`:607`~~ `:623` ASDE-X surface congestion | `stdds_surface` | + zone topic, + airport topic in zdc/zny/zatl/zob | escalating | 2 | `_STDDS_SURFACE_DEDUP` 300 s |
+| ~~`:1031`~~ `:1048` SafetyLogic hold-bar | `stdds_safety` | + zone topic, + airport topic in zdc/zny/zatl/zob | first occurrence/change | 3 | none — `check_incursion_alert` returns early on an unchanged bitmask (~~`:982`~~ `:1000`) |
+| ~~`:1283`~~ `:1310` surface-movement taxi | `stdds_taxi` | + zone topic, + airport topic in zdc/zny/zatl/zob | escalating | 2 | `_STDDS_TAXI_DEDUP` 300 s |
+
+~~Topics "+ per-airport/zone"~~ (corrected 2026-10-15: since 2026-10-13 the
+zone comes from `_stdds_sector_for()` (DCA/IAD/BWI → `zdc`) and the airport
+topics from `_stdds_airport_topics()`, limited to
+`_STDDS_AIRPORT_TOPIC_ZONES` = zdc, zny, zatl, zob. Taxi alerts used to
+overwrite the zone with the bare airport code (since 752e0e0e, 2026-08-03),
+which produced undocumented topics such as `stdds-las`.)
 
 `stdds_safety` is **silenced live** (`silenced_feeds` in
 `/var/lib/corporatetraveldc/sector_coalesce_silence.json`, 2026-09-04
-decision). Non-DC airports fire one priority lower (floor 1). SMES OOOI
-watchlist events: `_SMES_OOOI_DEDUP` (1800 s); TDES/TDLS watchlist: 1800 s.
+decision; re-checked 2026-10-15). Non-DC airports fire one priority lower
+(floor 1). SMES OOOI watchlist events: `_SMES_OOOI_DEDUP` (1800 s); since
+1491bf5a they match by leg (departure events at the watch's origin, arrival
+events at its destination, inside the instance window). TDES/TDLS watchlist
+(`tdes_departure`, `tdls_clearance`): 1800 s.
 
 ## 4. Pusher (`src/pusher/main.py`, 30 s loop)
 
 | Function | Topic | Priority |
 |---|---|---|
-| `push_vip_tfrs` | `tfr-alert` + `hot-alerts` via `hot_push` (ntfy + Pushover) | 5 |
-| `push_cps_update` | `cps` | 3 |
-| `push_wx_change` (METAR primaries; ≥ 10 kt or ≥ 45° change; suppressed if METAR > 1200 s old or 3 failures) | `wx-alerts` p3, or `hot-alerts` via `hot_push` at ≥ 30 kt | 3 / 5 |
+| `push_vip_tfrs` | `tfr-alert` + `hot-alerts`, each via `hot_push` (ntfy + Pushover) | 5 |
+| `vip_cutover_baseline` (2026-10-14, once ever, marker `pusher-vip-cutover-2026-10-14`, present live) | none: recorded the VIP TFRs active at cutover as already alerted, without pushing | — |
+| `vip_window_corrections` (next relay; once ever, marker `pusher-vip-window-fix-2026-10-15`) | `tfr-alert` + `hot-alerts`, plain ntfy, no Pushover | 4 |
+| `push_cps_update` | `cps` | ~~3~~ (corrected 2026-10-15: 3 / 4 / 5 for GREEN / YELLOW / RED; no Pushover) |
+| `push_wx_change` (METAR primaries KDCA/KIAD/KBWI; ≥ 10 kt or ≥ 45° change, or a routine update at most hourly while any has wind; suppressed if METAR > 1200 s old or 3 failures) | `wx-alerts` p3, or `hot-alerts` via `hot_push` at ≥ 30 kt | 3 / 5 |
 | `push_flight_watchlist_landings` (periodic landing dedup) | `flight-alerts` | 4 |
-| `push_watchlist_retries` | `flight-alerts`/`train-alerts` + `dispatch` | per event |
+| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ (corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`) | per event |
 | `send_test_alert` (admin trigger `push_test_alert`, `poller/main.py:436`) | caller-chosen, default `ops-health` | caller-chosen |
+
+**VIP TFRs (2026-10-14).** FAA `type: "VIP"` decides what is VIP. Each VIP
+TFR alerts once, with its own FAA text and its active window (UTC + ET), and
+again only if the FAA changes it: the dedup is forward-only `should_push` on
+the TFR id + its FAA text + the FAA mod time, never a narrative or a stamp.
+There is no hourly re-fire. ~~(hourly active-VIP-TFR re-push)~~ (corrected
+2026-10-15: the periodic re-push ended 2026-10-14.) No weather appears in any
+VIP output.
+
+**VIP windows (next relay).** The FAA list feed carries no times, so every
+VIP push since the cutover read "Active ? to ?" (live 2026-10-15: 0 of 8 VIP
+`tfrs` rows have a window). The staged `poller/fetchers/tfr.py` reads each VIP
+TFR's FAA detail record (UTC `dateEffective`/`dateExpire`, plus each area's
+schedule window), fetched once per (NOTAM, FAA mod time). The push then shows
+the window, the area windows when there is more than one, or "Active window
+not published by the FAA yet". `vip_window_corrections` sends each VIP TFR
+that was pushed with "? to ?" and is still active one alert headed
+"CORRECTED TIMES" at p4 on `tfr-alert` + `hot-alerts`, without Pushover. It
+waits for the poller to fill the window, drops TFRs that expired or left the
+list, gives up after 2 h, then writes its marker. The TFR dedup is untouched.
+
+**Test alerts.** `poller/main.py:436-446` resolves the `push_test_alert`
+trigger as `success` whatever `send_test_alert` returns, so a failed send is
+recorded as a success (code bug, open; live `trigger_log`: 320 success,
+3 failed).
 
 ## 5. Watchlist OOOI events (poller, `src/poller/main.py`)
 
 Authority rules live in `common/db.py::_oooi_authority_check` and gate the
 assertive phases `off`/`on`/`in`:
 
-- FIDS never asserts a phase (enrichment only).
+- FIDS never asserts a phase (enrichment only: gate and baggage). FIDS is
+  also never a tail or identity source.
 - **ADS-B never asserts `on` or `in`** (`_OOOI_ADSB_SOURCES` = `adsb`,
   `local_adsb`, `dump1090`), 2026-10-05.
 - **`tfms_airline` is denied `out`/`off` at an SMES origin and `on`/`in` at
@@ -179,7 +250,7 @@ assertive phases `off`/`on`/`in`:
   within 900 s) and the same receiver already held a track on the entry.
 
 Push labels: `pre_departure → off` seen from ADS-B is labelled
-"first seen airborne (takeoff not observed)", p4 (`:1094`).
+"first seen airborne (takeoff not observed)", p4 (~~`:1094`~~ `:1098`).
 **Departure overdue (db64018, deployed — poller image built 17:46Z):** at
 scheduled departure + 90 min with the entry still `pre_departure`,
 `_departure_overdue_check` asks ACARS, then FDPS, then TFMS airline times;
@@ -189,8 +260,44 @@ seen by ADS-B" (p4); otherwise it pushes "departure overdue -- not observed
 90+ min after scheduled departure; no OFF asserted" (trigger
 `departure_overdue`, p4) and leaves the phase. The old schedule-inferred
 OFF is gone. The schedule-based **IN** inference remains, requires ACARS
-`on`/`in` confirmation, and writes through `db.update_watchlist_oooi_phase`
-(not the authority-gated writer).
+`on`/`in` confirmation (FIDS cannot confirm it), and writes through
+`db.update_watchlist_oooi_phase` (not the authority-gated writer).
+
+### Identity and inbound triggers (2026-10-13/14)
+
+These go through `watchlist_event_hit`, so they reach `flight-alerts` +
+`dispatch`. None of them writes an OOOI phase.
+
+| `watchlist_trigger` | Fires when | Priority | Dedup |
+|---|---|---|---|
+| `fdps_tail_change` | FDPS shows a different aircraft address on this flight and `decide_tail_change` accepts it; the watch is repointed | 4 | per change |
+| `fdps_tail_change_rejected` | a candidate tail was not accepted (reason in the body) | 3 | once per (watch, candidate hex), `PushDedup("fdps_tail_guard")` |
+| `tdes_tail_change` | for a watch departing DCA/IAD/BWI, the TDES departure clearance links by GUFI to an FDPS plan whose aircraft address differs, and the guard accepts it; checked at most every 10 min per watch | 4 | per change |
+| `tdes_tail_change_rejected` | as above, not accepted | 3 | as for FDPS |
+| `inbound_on_time`, `inbound_at_origin` | from 6 h before the watch's scheduled departure, the assigned tail's inbound leg into the origin is on time or already in | 2 | one push per status transition; content = status + inbound instance key, never times or slack |
+| `inbound_late_beyond_turn`, `inbound_diverted`, `inbound_cancelled` | the inbound will not make the turn for its airframe class, diverted, or cancelled | 4 | as above |
+
+Tail sources are SWIM only: FDPS, the TDES-linked FDPS plan, TBFM, TFMS.
+`unknown` inbound status (usually an inbound outside DC FDPS coverage) is
+logged, not pushed. In 1491bf5a both the inbound tracker and the TDES check
+needed the watch's own `scheduled_departure`, which 13 of the 16 live flight
+watches lack (the three added 2026-10-15 00:41-00:43Z carry one); neither has
+fired yet (live 2026-10-15: no `inbound_*` or `tdes_tail_change*` rows in
+`watchlist_history`). In the next relay they fall
+back to today's TFMS/FDPS instance when it is unique (`_watch_sched_dep`).
+Also in the next relay, a TDES-accepted repoint is recorded with
+`hex_source='tdes'` (it was stored as `fdps`).
+
+Other `watchlist_trigger` values in the code: `identity_resolved`,
+`identity_mismatch`, `identity_mismatch_reg`, `oooi_<phase>`,
+`oooi_in_inferred`, `oooi_off`, `oooi_seeded_at_add`, `diversion`,
+`fdps_fh`, `fdps_cl`, `fdps_th_approach`, `fdps_th_meterfix_approach`,
+`fdps_cancelled`, `fdps_destination_change`, `fdps_status`, `fids_update`,
+`smes_oooi`, `tdes_departure`, `tdls_clearance`, `tbfm_sequenced`,
+`tfms_*` (tmi, tmi_update, ooooi, departure, arrival, amendment, edct,
+reroute, flight_route, flight_create, flight_schedule_activate,
+flight_plan_cancellation, oceanic_report, track_approach), `acars_<type>`,
+`watchlist_proximity`, `train_sweep`, `vessel_position`.
 
 ## 6. Poller skills
 
@@ -201,8 +308,8 @@ OFF is gone. The schedule-based **IN** inference remains, requires ACARS
 | `daily_brief.py` | **none** | — | writes `daily-brief.txt` only; docstring claims `ops-brief`; no timer |
 | `freshness_audit.py` | **none** | — | writes `freshness-audit.txt` only; docstring claims `ops-health`; timer daily 06:00 America/New_York (10:00Z while EDT) |
 | `ep_advance_brief.py` / `ep_advance_venues.py` | `ep` / `ep-advance` | 3 / 4 | |
-| `route_impact.py` | `hot-alerts` | 5 | VIP TFRs only, dedup on VIP TFR IDs |
-| `tfr_enrichment.py` | `tfr-alert` + `hot-alerts` | 5 | VIP only, `hot=True` |
+| `route_impact.py` | `hot-alerts` | 5 | ~~VIP TFRs only, dedup on VIP TFR IDs~~ (corrected 2026-10-15: DC-area VIP TFRs only; one alert per VIP set, forward-only dedup on the VIP TFRs' ids + FAA text; the message leads with each TFR's window (UTC + ET; area windows in the next relay); plain ntfy, no Pushover) |
+| `tfr_enrichment.py` | ~~`tfr-alert` + `hot-alerts`~~ none | — | ~~VIP only, `hot=True`~~ (corrected 2026-10-15: since 2026-10-14 `build_inputs()` sets every TFR `vip: False`, so the skill makes no VIP model call and no push; it writes its summary to the DB only) |
 | `osint_monitor.py` | `osint-alerts` | by score | 900 s skill |
 | `cps_recompute.py` | none (pusher sends `cps`) | — | |
 | `feed_db_integrity_check.py`, `ingest_feed_watch.py`, `pull_path_verify.py` (p4 fail / p1 ok), `nms_v240_post_deploy_check.py`, `faa_cifp_pull.py`, `faa_cifp_parse.py` | `ops-health` | — | |
@@ -213,26 +320,33 @@ OFF is gone. The schedule-based **IN** inference remains, requires ACARS
 ## 7. Standalone scripts
 
 All post to `ops-health` unless noted; no retry. Root-run scripts
-(`watchdog.sh`, team liveness, cert renewal) execute from the installed
-copies in `/usr/local/libexec/ctdc/`.
+(`watchdog.sh`, team liveness, cert renewal, lockdown, restore-network)
+execute from the installed copies in `/usr/local/libexec/ctdc/`; the seven
+root scripts named in §1 publish with the `root-alerts` token.
 
 | Script | Topic / priority | Notes |
 |---|---|---|
-| `watchdog.sh` (root timer `corporatetraveldc-watchdog.timer`, 90 s) | `hot-alerts` p5 when `pihole-FTL`/`cloudflared`/`tailscaled` need a restart (alert-only without `--allow-system-restart`); `ops-health` p3→p2 around automatic restarts of `web`/`poller`/`pusher` (300 s cooldown); CRIT feed staleness alert-only | does not write `watchdog-last-run.json` (absent), so `GET /admin/watchdog/status` always reports unavailable |
-| `thermal-ingest-guard.py` | p5 LOCKDOWN shed, p4 tier-1 shed, p5 RESTORE FAILED, p3 verified restore | the action silences other publishers; see `DATA_SOURCES.md` §9 |
-| `runner-health-watchdog.sh` (5 min) | `hot-alerts` p4 auto-restart / p5 failed restart (30-min cooldown), `X-Email` relay | skips at guard tier 2 |
-| `failover-kickover-guardrail.py` (5 min) | p4, p5 on push+REST double failure for `nws`/`notam` (force-fires a `refresh_feed` trigger) | |
-| `lockdown.sh` / `restore-network.sh` | `hot-alerts` p4 / `ops-health` p3 | |
-| `threat-initiate.sh` / `threat-resolve.sh` | `hot-alerts` p5 / `ops-health` p3 | |
-| `renew-tailscale-cert.sh`, `restart-stack.sh` | p3 | same priority for success and failure |
-| `container-mem-watch.sh`, `scheduled-ingest-restart.sh`, `nextcloud-health-check.sh`, `scheduled-integrity-sweep.sh`, `sdr-crashloop-guard.sh`, `claude-md-drift-daily.sh`, `ntfy-topic-count-watchdog.sh` (warn > 140) | variable | |
-| `brief-fallback-monitor.sh` | `max`, topic `BRIEF_FALLBACK_TOPIC` | |
+| `watchdog.sh` (root timer `corporatetraveldc-watchdog.timer`, 90 s) | `hot-alerts` p5 when `pihole-FTL`/`cloudflared`/`tailscaled` need a restart (alert-only without `--allow-system-restart`); `ops-health` p3→p2 around automatic restarts of `web`/`poller`/`pusher` (300 s cooldown), "Restart Suppressed" p3/p2 during the cooldown; CRIT feed staleness alert-only ("Warning", p2) | Since 2026-10-14: the repeating alerts (Warning, Restart Suppressed, System Restart Needed) are sent once per distinct problem (key = title + issue names with ages stripped; cleared when healthy); REST feeds `nws`/`notam`/`amtrak` are ignored while their push feed is current; the DNS check asks the local resolver for an answer (the `dns-stack-ready.target` it used to check does not exist). Does not write `watchdog-last-run.json` (absent, re-checked 2026-10-15), so `GET /admin/watchdog/status` always reports unavailable |
+| `tmp-headroom-guard.sh` (user timer `corporatetraveldc-tmp-headroom-guard.timer`, 5 min; 2026-10-14) | `ops-health` p4, once per distinct problem (key = names of the largest `/tmp` entries, never sizes or times), cleared when healthy; only when `/tmp` is still under 10% free after reclaiming this user's stale test DBs, old pytest dirs and 24 h-old mktemp entries | `--dry-run`, `--status`; log `/var/lib/corporatetraveldc/tmp-headroom-guard/guard.log` |
+| `healthcheck-ping.sh` (user timer `corporatetraveldc-healthcheck-ping.timer`, 5 min; 2026-10-15) | **external**: healthchecks.io (not ntfy). Success ping when local `/healthz` is ok, `/fail` otherwise; healthchecks.io itself alerts the operator when pings stop, which covers the box being offline (ntfy cannot: it runs on the box). Set the check's period 5 min, grace 10 min | ping URL in `~/.secrets/healthchecks_ping.url` (0600, untracked), passed to curl on stdin; `--dry-run` |
+| `thermal-ingest-guard.py` | p5 LOCKDOWN shed, ~~p4 tier-1 shed,~~ p5 RESTORE FAILED, p3 verified restore | (corrected 2026-10-15: since 2026-10-13 it is a load guard: LOCKDOWN only at load1 ≥ 40, and temperature never sheds, so the tier-1 shed and its p4 alert can no longer fire.) The action silences other publishers; see `DATA_SOURCES.md` §9 |
+| `runner-health-watchdog.sh` (5 min) | ~~`hot-alerts`~~ `ops-health` p4 auto-restart / p5 failed restart (30-min cooldown), `X-Email` relay | skips at guard tier 2 |
+| `failover-kickover-guardrail.py` (5 min) | ~~p4,~~ p5 on push+REST double failure for `nws`/`notam` (force-fires a `refresh_feed` trigger) | (corrected 2026-10-15: there is one alert, p5; the p4 was never sent, it is only the helper's unused default. Coverage is `nws`, `notam` and, since 2026-09-06, `amtrak`. Since 2026-10-14 the forced trigger is written into the poller's `corporatetraveldc-triggers` volume; the host `/run` directory it used before was never seen by the poller, so its triggers had been dead since 2026-09-18. Live 2026-10-15: no `trigger_log` row left unresolved) |
+| `lockdown.sh` / `restore-network.sh` | `hot-alerts` p4 / `ops-health` p3 | `root-alerts` token |
+| `threat-initiate.sh` / `threat-resolve.sh` | `hot-alerts` p5 / `ops-health` p3 | `root-alerts` token |
+| `renew-tailscale-cert.sh`, `restart-stack.sh` | p3 | same priority for success and failure; `root-alerts` token |
+| `container-mem-watch.sh`, `scheduled-ingest-restart.sh`, `nextcloud-health-check.sh`, `scheduled-integrity-sweep.sh` (p5: "BUILD PROVENANCE FAILED", "INTEGRITY SWEEP FAILED", "AUDIT CHAIN BROKEN", "ENV QUOTING REGRESSION"), `sdr-crashloop-guard.sh`, `claude-md-drift-daily.sh`, `ntfy-topic-count-watchdog.sh` (warn > 140) | variable | |
+| `brief-fallback-monitor.sh` (hourly at :50) | `max`, topic `BRIEF_FALLBACK_TOPIC` (default `ops-health`; not overridden live) | (2026-10-14) fires only when a brief fell back on its LATEST run, with a short narrative: which briefs fell back, each brief's fallbacks over the last 6 runs, and whether the trend is improving, worsening or steady. The old "≥ half the window" rule kept paging for hours after the model recovered |
+| `swim-session-health-watch.sh` (5 min) | p4 "SWIM session health: DEGRADED" | summed keep-alive failures ≥ 15 per sample, sustained 600 s, 1800 s cooldown |
+| `dependency-audit.py` (daily timer) | p4 vulnerable packages / p3 could not run | |
+| `backup_freshness.py` (6-hourly timer) | through `unit-failure-notify@` (p4) | exits 1 when backups, the off-box sync, a restore test or an agent snapshot is stale |
+| `relay-nudge.py` | default `ops-health` p4 (`--topic`, `--priority`) | used by relays and `uplink_reminder.py` |
 | `governor-watch.py` | p3, p5 on FIX FAILED | |
 | `dns-anomaly-watch.py` | p4, p5 on anomaly / denylist gap | |
 | ~~`check-pat-expiry.sh`~~ | ~~`dispatch-alerts` p4/p5~~ | RETIRED 2026-10-14 (`scripts/retired-20261014/`) |
 | `sudo-approval-gate.sh` | `approval-gate` | **Deny-only** push (one `Deny` action button); allowing requires `scripts/approve.sh allow <id>` (SSH signature); `db.resolve_approval_request` refuses an unsigned allow |
-| `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** |
-| Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (`hot-alerts` + `ops-health`), `stack-refresh.sh`, `maintenance-dispatch.sh`, `swim-session-health-watch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`OnFailure=` handler on 7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |
+| `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** (re-checked 2026-10-15) |
+| Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (~~`hot-alerts` +~~ `ops-health` only; p5 alerts, p3 "restored"), `stack-refresh.sh`, `maintenance-dispatch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`ops-health` p4, title "<unit> failed"; `OnFailure=` handler on ~~7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed~~ (corrected 2026-10-15: 11 units, tracked and installed: agent-timecard, backup, backup-freshness, backup-restore-test, codeshare-seed, dependency-audit, docs-drift-weekly, quiet-window-report, second-brain-weekly-dump, stack-refresh-tripwire, weekly-external-image-update; tbfm-arrival-enrichment no longer has it)), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |
 
 ## 8. Push reliability history
 
@@ -243,8 +357,15 @@ copies in `/usr/local/libexec/ctdc/`.
 - 2026-07-19: `container-mem-watch.sh` / `scheduled-ingest-restart.sh` read
   `NTFY_TOKEN` from the wrong file and silently 403'd — fixed.
 - 2026-08-20: approval-gate notifications delivered but not alerting on
-  Android (stale notification channel) — fixed by resubscribing; this ntfy
-  server has no per-topic ACLs.
+  Android (stale notification channel) — fixed by resubscribing; ~~this ntfy
+  server has no per-topic ACLs~~ (corrected 2026-10-15: since 2026-10-14 the
+  `root-alerts` account has write-only access to `ops-health` and
+  `hot-alerts` (operator setup; the ACL itself was not read in this pass)).
+- 2026-10-13 (`NTFY_TOPIC_AUDIT_2026-10-13.md`): the seven root scripts had
+  published with no token and every send 403'd behind `|| true` (five p5
+  "System Restart Needed" pages lost in 30 days); intermittent 401/403s on a
+  valid token were real drops, not false negatives; two ~46k-character briefs
+  were rejected for size. All fixed 2026-10-13/14 (§1).
 
 ---
 
@@ -265,7 +386,7 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 
 > ~~**2026-08-11 addendum — read this first.** The per-parser catalog below is the 2026-07-27 sweep and remains accurate for the paths it covers, but it **predates the escalating family-alert rollout (2026-08-02/03)**, which changed how SWIM-parser alerts reach ntfy:  - New topic families with per-zone siblings: `tfms-alerts`/`tfms-<zone>`, `tbfm-alerts`/`tbfm-<zone>`, `fdps-alerts`, `itws-alerts`, `aim_fns-alerts` (zones: zny, zdc, zid, zob, zatl, zhu, zla, zse) — all routed through `shared/sector_coalesce.py::fire_family_alert()`, escalating-only, with a per-topic throttle (default 60 s min interval), per-topic enable/sanitize switches, and per-(feed, sector) escalation thresholds. The *settings* (enable/throttle-interval-override/sanitize/ escalation-threshold-override) are JSON-persisted to `/var/lib/corporatetraveldc/sector_coalesce_silence.json`; the throttle's live "last fired" clock is a SEPARATE file, `/var/lib/corporatetraveldc/sector_coalesce_throttle.json` (added 2026-09-04 -- see `docs/ALERT_ARCHITECTURE.md` §2 Layer 1 for why the clock needed its own cross-process-shared file). Admin API: `GET/POST /api/v1/sectors/topic/{topic}[/throttle|/enabled|/sanitize]` (`web/routes/sectors.py`). Design rationale: `docs/ALERT_ARCHITECTURE.md`. **Note (2026-08-19): the per-topic enable/throttle/sanitize switches only govern topics fired through `fire_family_alert()` — they are consulted in exactly one place (`sector_coalesce.py:301-309`) and neither `ntfy_push.send()` nor `watchlist._fire_ntfy_dual()` checks them. See ALERT_ARCHITECTURE.md §1 for the full scope caveat.** - **CORRECTED 2026-08-19: `stdds` IS wired.** The "deliberately not wired (no alert-worthy criteria defined yet)" line above was true when written and became stale on 2026-08-03. `src/ingest/parsers/smes_parser.py` now has four live `fire_family_alert("stdds", ...)` call sites — PCT track-count trend (`smes_parser.py:390`, feed_name `stdds`, `zone_split=False`), ASDE-X surface congestion (`:584`, feed_name `stdds_surface`), SafetyLogicHoldBar incursion (`:902`, feed_name `stdds_safety`, `escalating_only=False`), and taxi-phase (`:1047`, feed_name `stdds_taxi`) — three of the four fronted by a 300-second `PushDedup` (`_STDDS_PCT_DEDUP`/`_STDDS_SURFACE_DEDUP`/ `_STDDS_TAXI_DEDUP`, `smes_parser.py:540-542`); the incursion path deliberately has none and is gated on a real bitmask change instead (see the STDDS section below). Live traffic confirmed on `stdds-alerts` and `stdds-zatl` in the ntfy cache. STDDS also uses the only per-*airport* zone split on the platform (`stdds-dca`/`stdds-iad`/ `stdds-bwi` instead of a pooled `stdds-zdc`) — see `docs/ALERT_ARCHITECTURE.md` §6. - `vessel-alerts` now carries vessel add/remove **and position events**: vessel *position* events used to misroute to `train-alerts` (`watchlist_event_hit()` had no vessel branch) — **fixed 2026-08-11** with an explicit vessel branch (`VSL ` title prefix). See `src/shared/watchlist_README.md`. - **TFMS `flightPlanAmendmentInformation` gained content-hash dedup 2026-08-10**: keyed `tfms:amendment:{entry_id}:{route_text}` against the 30-min `_TFMS_ALERT_DEDUP` window, so unchanged rebroadcasts are suppressed indefinitely while a genuinely new amendment fires immediately. It was previously the one TFMS watchlist path with no dedup beyond the generic 5-minute window. - The brief-class pipeline gained `brief-fallback-monitor` (hourly, loud alert on deterministic-fallback degradation, 2026-08-08).~~
 
-> ~~**2026-09-03 addendum — `common/push_dedup.py` was redesigned to forward-only semantics.** Root cause: UAL1369 — three unchanged TFMS TMI assignments each re-paged 7× in 42 min, because TFMS rebroadcasts active TMIs every ~5–8 min and the old "content changed OR window elapsed" semantics re-fired on the clock. `should_push(key, content_key)` now fires on first sighting or a genuine content-hash change only; an unchanged hash stays suppressed indefinitely (up to a `max(dedup_secs*10, 7 days)` retention horizon, past which one deliberate slow re-fire occurs). `hot=True` (VIP/POTUS p5) bypasses dedup entirely. The old OR semantics survive under an explicit name, `should_push_periodic()`, reserved for genuinely time-based designs: TTL idempotency guards (the ntfy ambiguous 401/403 guard), constant-content episode gates (fdps proximity, flight landing), and deliberate still-active heartbeats (severe ITWS, feed health, pusher's hourly active-VIP-TFR re-push). Where a per-parser entry below describes a dedup *window* re-firing on elapse, read it against this: only `should_push_periodic()` callers still do that; plain `should_push()` callers are forward-only now. New alert paths should default to `should_push()`.~~
+> ~~**2026-09-03 addendum — `common/push_dedup.py` was redesigned to forward-only semantics.** Root cause: a watched flight [flight number redacted 2026-10-15] — three unchanged TFMS TMI assignments each re-paged 7× in 42 min, because TFMS rebroadcasts active TMIs every ~5–8 min and the old "content changed OR window elapsed" semantics re-fired on the clock. `should_push(key, content_key)` now fires on first sighting or a genuine content-hash change only; an unchanged hash stays suppressed indefinitely (up to a `max(dedup_secs*10, 7 days)` retention horizon, past which one deliberate slow re-fire occurs). `hot=True` (VIP/POTUS p5) bypasses dedup entirely. The old OR semantics survive under an explicit name, `should_push_periodic()`, reserved for genuinely time-based designs: TTL idempotency guards (the ntfy ambiguous 401/403 guard), constant-content episode gates (fdps proximity, flight landing), and deliberate still-active heartbeats (severe ITWS, feed health, pusher's hourly active-VIP-TFR re-push). Where a per-parser entry below describes a dedup *window* re-firing on elapse, read it against this: only `should_push_periodic()` callers still do that; plain `should_push()` callers are forward-only now. New alert paths should default to `should_push()`.~~
 
 **~~How to read this~~** *(former heading)*
 

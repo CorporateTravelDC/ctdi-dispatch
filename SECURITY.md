@@ -1,6 +1,8 @@
 # Security Policy
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
+Partly re-checked 2026-10-15 01:00Z (main `1491bf5a` plus the staged batch): the manifest signer, the
+verified-exec count, and the review 09 (2026-10-08) limits added under "Integrity guarantees".
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -24,7 +26,7 @@ Fingerprints re-derived 2026-10-06 with `gpg --show-keys security/*.asc` and
 
 | Fingerprint | File | Covers |
 |---|---|---|
-| `3B29752DACA3544CEA60D01A7B81F49CD96C1631` (primary), signing subkey `419A864CC29A09513039B6E03033FB4D01903159` | `security/trusted-signing-key.pub.asc` (first key block) | Git commit signing (`commit.gpgsign=true`, `user.signingkey` = the primary) **and the signed tree manifest at HEAD**: `MANIFEST.sha256.asc` at db64018 was made by subkey `419A86…3159` (2026-10-06 17:42Z). |
+| `3B29752DACA3544CEA60D01A7B81F49CD96C1631` (primary), signing subkey `419A864CC29A09513039B6E03033FB4D01903159` | `security/trusted-signing-key.pub.asc` (first key block) | Git commit signing (`commit.gpgsign=true`, `user.signingkey` = the primary) **and the signed tree manifest at HEAD**: `MANIFEST.sha256.asc` at db64018 was made by subkey `419A86…3159` (2026-10-06 17:42Z); at `1491bf5a` it is again that subkey (signature dated 2026-10-14; re-checked 2026-10-15 with `gpg --list-packets`). |
 | `CC1509BD9278086F113EAF24E10F126919390B37` | `security/trusted-signing-key.pub.asc` (second, independent key block) | The agent delegate key used by `scripts/sign-manifest.sh --agent` and by `poller/skills/audit_log_archive.py` for audit checkpoints. Pinned as `AGENT_SIGNING_KEY_FINGERPRINT`; `verify-manifest.sh` accepts a manifest signed by either pinned key. |
 | `C0E92095063C7AE670E590563A0E7B60576BBF22` | `security/pi-agent-signing-key.pub.asc` | Routine automated rotation signing only; not valid for break-glass. |
 | `5DA4A5A13949643EB7BF93A40B0744999425A548` | `security/breakglass-authorization-key.pub.asc` | Break-glass authorization. |
@@ -55,9 +57,12 @@ An agent running **as the human operator's own account** is a designed fallback 
   against the root-owned pin `/etc/corporatetraveldc/signing-pin`
   (root:root 0644; it takes precedence over the tracked `security/signing.env`),
   then checks every hash and full coverage.
-- **Prevention, at start:** the 39 live timer-triggered skill quadlets run
+- **Prevention, at start:** the ~~39 live timer-triggered skill quadlets run
   through `scripts/verified-exec.sh` (`grep -l verified-exec
-  ~/.config/containers/systemd/*.container | wc -l` = 39), and
+  ~/.config/containers/systemd/*.container | wc -l` = 39)~~ (corrected
+  2026-10-15: 40 live quadlets, the 39 timer-triggered oneshots plus
+  `demo-api`, run through `scripts/verified-exec.sh`; the same `grep` now
+  returns 40), and
   `src/common/llm.py::_verify_before_inference()` runs before every inference.
 - **Detection, after the fact:** the long-running containers (web, poller,
   pusher, ingest-*, runner) start straight from `CMD` with no verifying
@@ -85,6 +90,19 @@ An agent running **as the human operator's own account** is a designed fallback 
   governance events (approvals, console, agent gateway, reader access) are in
   the chain too, and the integrity sweep re-verifies the whole chain every
   15 minutes (`docs/AGENT_TRUST_MODEL.md` §11).
+  **Known limits (added 2026-10-15, from security review 09,
+  `docs/security-reviews/2026-10-08-09-adversarial-validation.md`; open, not fixed):**
+  the application database role is a Postgres superuser and owns
+  `audit_log` (R09-3). Anyone with that role, for example code running in a
+  container that holds the database password, can rewrite and re-hash the
+  whole chain or disable the trigger. Nothing persists the last verified head,
+  so deleting the newest rows is not detected (R09-2). Concurrent writers can
+  fork the chain, because the row id is assigned before the trigger's lock
+  (R09-1). A verifier that errors is logged as "unavailable" and treated as
+  healthy, not as a failure (R09-4). The chain fields are joined with a bare
+  `|` (2026-10-14 audit finding R09-CC9-10;
+  `src/common/pg_schema/0062_audit_tamper_evidence.sql:55-57`). The chain detects casual edits to rows in the middle of the
+  log; it is not tamper-proof against the database role.
 - **Human-in-the-loop approvals** are an SSH signature from a human approval
   key over the exact request (`scripts/approve.sh`, `src/common/governance.py`);
   a phone tap or link can only deny. What this does and does not bind, where
@@ -123,6 +141,16 @@ read-only repo access (see `docs/AGENT_SEGMENTATION.md`).
   signed commit; deploys and the 15-minute sweep check running images against
   those receipts. Bit-for-bit reproducibility is not claimed. Details, levels
   and limits: `docs/REPRODUCIBLE_BUILDS.md`.
+  **Known limits of the receipt check (added 2026-10-15, review 09 and the
+  2026-10-14 audit; open):** the receipt's base-image digests are checked only
+  for being present, not against the commit's `FROM` lines, and its
+  architecture is not re-checked (R09-7). The deploy gate passes an image
+  whose SBOM file is missing (D-01). A commit signature with unknown trust
+  (`U`, any key in the operator keyring) counts as verified (R09-6). The
+  receipt is looked up by image id only, so a tag re-pointed at another
+  service's image passes (R09-5). A missing source commit is reported
+  UNVERIFIED, not failed, and one malformed receipt aborts the whole run
+  (R09-8).
 
 ## CUI handling
 

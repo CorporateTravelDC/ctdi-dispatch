@@ -1,6 +1,9 @@
 # Alert Architecture — Tunable Visibility, Not Noise
 
 Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
+Re-verified 2026-10-15 ~01:35Z against the guard worktree (HEAD 1491bf5a plus
+the batch staged for the next relay) and the live system; changes are marked
+"(corrected 2026-10-15: ...)".
 
 This is the "why". `ALERT_REFERENCE.md` is the per-publisher "what"
 (topics, triggers, priorities, dedup); `INFRA_MAP.md` §8 covers the
@@ -25,15 +28,29 @@ or Layer 1 control:
 
 - direct pushes from parsers (VIP NOTAM → `hot-alerts`, Marine One →
   `tfr-alert`, ITWS → `wx-alerts`, residual NOTAM → `nas-alerts`);
-- the pusher (VIP TFRs, CPS, wind change, watchlist landings) — its
-  priority-5 events also co-fire a Pushover Emergency (`hot_push()`);
+- the pusher (VIP TFRs, CPS, wind change, watchlist landings) — ~~its
+  priority-5 events also co-fire a Pushover Emergency (`hot_push()`)~~
+  (corrected 2026-10-15: only the VIP TFR push and the wind ≥ 30 kt alert go
+  through `hot_push()` and co-fire a Pushover Emergency; CPS RED is p5 on
+  plain ntfy, and route impact's VIP hot alert does not use Pushover). Each
+  VIP TFR alerts once with its FAA text and window, again only if the FAA
+  changes it (2026-10-14);
+- watchlist events through `watchlist_event_hit` (`flight-alerts` +
+  `dispatch`), including the tail-change guard (`fdps_tail_change`,
+  `tdes_tail_change`, and their `_rejected` notes) and the inbound tracker
+  (`inbound_*`, one push per status transition), all added 2026-10-13/14;
 - poller skills, web webhooks, `ingest/local_airspace.py`, the ACARS/AIS
   watchers, and the standalone `scripts/` publishers (watchdogs, guards).
+  The seven root-run scripts publish with the publish-only `root-alerts`
+  token, which can write only `ops-health` and `hot-alerts` (2026-10-14);
+  their repeating watchdog alerts are sent once per distinct problem.
 
 Two further limits:
 
 - **The model assumes the stack is running.** A thermal-ingest-guard
-  LOCKDOWN (`temp >= 79 C` or `load1 >= 40`) stops all six SWIM containers,
+  LOCKDOWN (~~`temp >= 79 C` or `load1 >= 40`~~ (corrected 2026-10-15: since
+  2026-10-13 `load1 >= 40` only; temperature no longer sheds anything, see
+  `scripts/thermal-ingest-guard.py` header)) stops all six SWIM containers,
   `ingest-core`, `poller`, `pusher` and `runner`; only `web` survives. Every
   family topic, and the pusher's paths, go dark together; the guard's own
   `ops-health` push is among the few things still able to publish. Silence
@@ -83,7 +100,7 @@ API reports the new state immediately because web's own memory has it.
 
 Live silence file 18:12Z: `silenced_feeds: ["stdds_safety"]`, all other
 settings empty (operator decision 2026-09-04: SafetyLogic bitmask meaning
-unconfirmed).
+unconfirmed). Unchanged when re-read 2026-10-15.
 
 Server-side Layer 1 controls are global to the deployment: muting a topic
 stops it for every subscriber. Per-subscriber muting exists only client-side
@@ -150,7 +167,10 @@ for every other airport. Applies to surface, safety and taxi; the PCT call
 passes a fixed 2.
 
 VIP paths are never coalesced: VIP NOTAM → `hot-alerts` p5, Marine One /
-VIP callsign → `tfr-alert` p5.
+VIP callsign → `tfr-alert` p5. The same holds for VIP TFRs (pusher →
+`tfr-alert` + `hot-alerts` p5, once per TFR) and route impact's DC-area VIP
+hot alert (`hot-alerts` p5, once per VIP set); see `ALERT_REFERENCE.md` §4
+and §6.
 
 ## 5. Zones and the regional-focus pattern
 
@@ -176,15 +196,29 @@ Facilities outside it resolve to `OTHER`.
 TFMS RSTR/GDP/GS and GADV are gated by `is_tracked_facility()` (all eight
 zones); TFMS APTC is still gated by the DC-only `_DC_FACILITIES`.
 
-STDDS is the one family with per-airport topics: `sector_override` makes
+Since 2026-10-13, K-prefixed center codes (for example `KZDC` from the
+FDC-NOTAM path) normalise to their zone; before that they resolved to
+`OTHER`, so ZDC restriction NOTAMs reached `fdps-alerts` but never
+`fdps-zdc`.
+
+~~STDDS is the one family with per-airport topics: `sector_override` makes
 DCA/IAD/BWI publish to `stdds-dca` / `stdds-iad` / `stdds-bwi` rather than a
-pooled `stdds-zdc`; other zones pool. To re-home a deployment, change
-`_STDDS_REGIONAL_AIRPORTS` in `ingest/parsers/smes_parser.py` (and see
+pooled `stdds-zdc`; other zones pool.~~ (corrected 2026-10-15: since
+2026-10-13 every tracked STDDS airport fires its zone topic, so DCA/IAD/BWI
+now reach `stdds-zdc`. STDDS is still the one family with per-airport
+topics, but only inside the priority zones in `_STDDS_AIRPORT_TOPIC_ZONES`
+(zdc, zny, zatl, zob): `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`,
+`-atl`, `-cle`/`-pit`/`-dtw`. Other zones get the zone topic only. Taxi
+alerts had been overwriting the zone with the bare airport code since
+2026-08-03, which produced undocumented topics such as `stdds-las`.) To
+re-home a deployment, change `_STDDS_REGIONAL_AIRPORTS` (and
+`_STDDS_AIRPORT_TOPIC_ZONES`) in `ingest/parsers/smes_parser.py` (and see
 `REGIONALIZATION.md` for the other DC constants).
 
 Alerting is bounded to these zones on purpose; storage stays nationwide.
 `scripts/ntfy-topic-count-watchdog.sh` warns at 140 topics
 (`WARN_THRESHOLD`). Live `--status` 18:12Z: **86 topics**, peak seen 111.
+The watchdog's own 15-minute run logged **84 topics** at 2026-10-15 01:30Z.
 
 ## 6. Multi-office use
 
@@ -201,7 +235,14 @@ per-subscriber server-side muting (Layer 1 is global). Future work only.
   promise, or correct the docstrings (§2).
 - Content-based escalation for TBFM/TFMS (§3 Layer 2).
 - STDDS surface `Asset*` / `*ServiceStatus` message shapes remain unparsed by
-  design; RVR, TDES, TDLS and D-ATIS are parsed for storage only, not alerts.
+  design; ~~RVR, TDES, TDLS and D-ATIS are parsed for storage only, not
+  alerts~~ (corrected 2026-10-15: RVR and D-ATIS are storage only; TDES and
+  TDLS also feed watchlist events (`tdes_departure`, `tdls_clearance`), and
+  since 1491bf5a the TDES departure clearance drives the TDES tail check
+  for watches departing DCA/IAD/BWI). None of them uses a family topic.
+- Code bugs found by the 2026-10-13 ntfy audit, still open: the poller
+  resolves `push_test_alert` as success whatever the send returns, and the
+  pusher's retry path sends vessel (and drone) retries to `train-alerts`.
 
 ---
 
