@@ -594,3 +594,70 @@ class LoginFactors(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Authority(unittest.TestCase):
+    """2026-10-15 (operator): inert and reactivation need a live network, or an explicit offline
+    lockdown plus a signed liveness approval for that account and action. No time-based grace."""
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory(); self.fr = FakeRoot(self._tmp.name)
+        self.inert = self.fr.root / "var/lib/corporatetraveldc/team-liveness/inert/bot1"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def offline(self):
+        (self.fr.root / "network-down").write_text("")
+
+    def lockdown(self, ago=600):
+        f = self.fr.root / "lockdown-active"; f.write_text("x"); os.utime(f, (NOW - ago, NOW - ago))
+
+    def approve(self, name, action, ago=60):
+        d = self.fr.root / "approvals"; d.mkdir(exist_ok=True)
+        f = d / f"{name}.{action}"; f.write_text("ok 00000000-0000-0000-0000-00000000000b\n"); os.utime(f, (NOW - ago, NOW - ago))
+
+    def test_network_live_inert_acts(self):
+        self.fr.account("bot1", "ctdc-agents")
+        rc, out = self.fr.run("--execute", "--i-am-the-operator")
+        self.assertIn("inert authorized -- network live", out); self.assertTrue(self.inert.exists())
+
+    def test_offline_without_lockdown_holds_and_changes_nothing(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline()
+        rc, out = self.fr.run("--execute", "--i-am-the-operator")
+        self.assertIn("STALE but HELD", out); self.assertIn("no lockdown active", out)
+        self.assertFalse(self.inert.exists()); self.assertNotIn("chage -E 0", self.fr.actions())
+        self.assertIn("action held (no authority)", self.fr.actions())
+        n = self.fr.actions().count("action held"); self.fr.run("--execute", "--i-am-the-operator")
+        self.assertEqual(self.fr.actions().count("action held"), n)          # one alert per hold episode
+
+    def test_offline_lockdown_without_approval_holds(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline(); self.lockdown()
+        rc, out = self.fr.run("--execute", "--i-am-the-operator")
+        self.assertIn("no signed liveness-inert-bot1 approval", out); self.assertFalse(self.inert.exists())
+
+    def test_offline_lockdown_with_signed_approval_acts(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline(); self.lockdown(); self.approve("bot1", "inert")
+        rc, out = self.fr.run("--execute", "--i-am-the-operator")
+        self.assertIn("offline lockdown + signed approval", out); self.assertTrue(self.inert.exists())
+
+    def test_approval_from_before_the_lockdown_does_not_count(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline(); self.lockdown(ago=600); self.approve("bot1", "inert", ago=3600)
+        self.fr.run("--execute", "--i-am-the-operator"); self.assertFalse(self.inert.exists())
+
+    def test_approval_for_another_action_does_not_count(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline(); self.lockdown(); self.approve("bot1", "reactivate")
+        self.fr.run("--execute", "--i-am-the-operator"); self.assertFalse(self.inert.exists())
+
+    def test_reactivate_offline_refused_then_allowed_with_lockdown_approval(self):
+        self.fr.account("bot1", "ctdc-agents"); self.fr.run("--execute", "--i-am-the-operator")
+        self.offline()
+        rc, out = self.fr.run("--reactivate", "bot1", "--i-am-the-operator")
+        self.assertEqual(rc, 5); self.assertIn("refused", out); self.assertNotIn("chage -E -1", self.fr.actions())
+        self.lockdown(); self.approve("bot1", "reactivate")
+        rc, out = self.fr.run("--reactivate", "bot1", "--i-am-the-operator")
+        self.assertEqual(rc, 0); self.assertIn("chage -E -1 bot1", self.fr.actions())
+
+    def test_dry_run_needs_no_authority(self):
+        self.fr.account("bot1", "ctdc-agents"); self.offline()
+        rc, out = self.fr.run(); self.assertIn("dry-run: would make inert", out); self.assertEqual(self.fr.actions(), "")

@@ -52,7 +52,8 @@ from common import board_sign, db
 
 NAMESPACE_APPROVAL = "corporatetraveldc-approval"
 APPROVAL_KINDS = ("sudo", "council", "council-close", "connector-link", "connector-hold",   # common/agent_gateway.py
-                  "gateway-thaw", "console-login")                                    # gateway kill switch; web/routes/console.py
+                  "gateway-thaw", "console-login",                                    # gateway kill switch; web/routes/console.py
+                  "liveness")   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
 COUNCIL_MODES = ("council", "arena")
 COUNCIL_APPROVAL_TTL_S = 24 * 3600
 WORKSPACE_ROOT = "01-Sources/personal-notes/Series"
@@ -202,6 +203,7 @@ APPROVAL_TTL_POLICY = {
     "sudo": (600, 60, 600), "console-login": (600, 60, 600), "connector-link": (900, 300, 900),
     "connector-hold": (1800, 300, 3600), "gateway-thaw": (1800, 300, 3600),
     "council": (14400, 1800, 14400), "council-close": (3600, 900, 7200),
+    "liveness": (1800, 300, 3600),
 }
 COUNCIL_TTL_FRACTION = 0.10         # of the council's deadline
 COUNCIL_CLOSE_TTL_FRACTION = 0.25   # of the council's remaining time

@@ -22,6 +22,11 @@
 #   rename     <from> <to>               carry the signer (and its tokens' labels and
 #                                        workspace grants) over to a renamed account
 #                                        (plan.sh --rename-account, 2026-10-05)
+#   liveness-approval <account> <inert|reactivate> <since-epoch>
+#                                        print "ok <id>" when a SIGNED, allowed approval of kind
+#                                        liveness, pattern liveness-<action>-<account>, was resolved
+#                                        at or after <since-epoch>; else "none" (2026-10-15: the
+#                                        offline-lockdown authority for team-liveness.sh)
 #   show       <account>                 line 1: "<active|inactive|none> <role> <kind>"
 #                                        line 2: the registered pubkey (if any)
 #   list
@@ -38,12 +43,12 @@ SECRETS=/etc/corporatetraveldc/dispatch-secrets.env
 ENVF=/etc/corporatetraveldc/dispatch.env
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
 CMD="${1:-}"; [[ -n "$CMD" ]] || usage; shift
-ACCT=""; ARG3=""; ROLE=""; KIND=""
+ACCT=""; ARG3=""; ARG4=""; ROLE=""; KIND=""
 while (( $# )); do
   case "$1" in
     --role) shift; ROLE="${1:-}" ;;
     --kind) shift; KIND="${1:-}" ;;
-    *) if [[ -z "$ACCT" ]]; then ACCT="$1"; elif [[ -z "$ARG3" ]]; then ARG3="$1"; else usage; fi ;;
+    *) if [[ -z "$ACCT" ]]; then ACCT="$1"; elif [[ -z "$ARG3" ]]; then ARG3="$1"; elif [[ -z "$ARG4" ]]; then ARG4="$1"; else usage; fi ;;
   esac; shift
 done
 case "$CMD" in
@@ -51,6 +56,7 @@ case "$CMD" in
   set-role) [[ -n "$ACCT" && ( -n "$ROLE" || -n "$KIND" ) ]] || usage ;;
   revoked-since) [[ -n "$ACCT" && "$ARG3" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage ;;
   rename) [[ -n "$ACCT" && "$ARG3" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || usage ;;
+  liveness-approval) [[ -n "$ACCT" && "$ARG3" =~ ^(inert|reactivate)$ && "$ARG4" =~ ^[0-9]+$ ]] || usage ;;
   list) ;;
   *) usage ;;
 esac
@@ -156,6 +162,15 @@ SELECT (SELECT COUNT(*) FROM board_tokens WHERE label = '$(sql_lit "$ACCT")' AND
      + (SELECT COUNT(*) FROM auth_tokens  WHERE user_label = '$(sql_lit "$ACCT")' AND revoked_at > ${ARG3});
 EOF
       ;;
+    liveness-approval)
+      r=$(psql_run -tA <<EOF
+SELECT id FROM approval_requests
+WHERE kind = 'liveness' AND command_pattern = 'liveness-${ARG3}-$(sql_lit "$ACCT")' AND status = 'allowed'
+  AND resolved_by IS NOT NULL AND resolution_sig IS NOT NULL AND resolved_at >= ${ARG4}
+ORDER BY resolved_at DESC LIMIT 1;
+EOF
+)
+      if [[ -n "$r" ]]; then echo "ok ${r}"; else echo none; fi ;;
     rename)
       F="$(sql_lit "$ACCT")"; T="$(sql_lit "$ARG3")"
       psql_run <<EOF
@@ -187,10 +202,10 @@ EOF
 else
   # sqlite / dev: go through common.db so tests exercise the same helpers
   [[ "$CMD" == register ]] && resolve_pubkey "$ARG3"
-  PYTHONPATH="${REPO_ROOT}/src" python3 - "$CMD" "$ACCT" "${PUB:-}" "${COMMENT:-}" "${ARG3:-}" "${ROLE:-}" "${KIND:-}" <<'PYEOF'
+  PYTHONPATH="${REPO_ROOT}/src" python3 - "$CMD" "$ACCT" "${PUB:-}" "${COMMENT:-}" "${ARG3:-}" "${ROLE:-}" "${KIND:-}" "${ARG4:-}" <<'PYEOF'
 import sys
 from common import db
-cmd, acct, pub, comment, arg3, role, kind = sys.argv[1:8]
+cmd, acct, pub, comment, arg3, role, kind, arg4 = sys.argv[1:9]
 if cmd == "register":
     db.board_signer_upsert(acct, pub, comment or None, "registered by board-signer-ctl", role or None, kind or None)
     print(f"registered {acct} ({comment})" + (f" role={role}" if role else "") + (f" kind={kind}" if kind else ""))
@@ -207,6 +222,14 @@ elif cmd == "revoke-tokens":
     from common import agent_gateway; agent_gateway.revoke_account(acct, "revoke-tokens")
 elif cmd == "revoked-since":
     print(db.board_tokens_revoked_since(acct, float(arg3)))
+elif cmd == "liveness-approval":
+    from common import governance
+    governance._ensure_approvals()
+    with db.conn() as c:
+        r = c.execute("SELECT id FROM approval_requests WHERE kind = 'liveness' AND command_pattern = ? AND status = 'allowed'"
+                      " AND resolved_by IS NOT NULL AND resolution_sig IS NOT NULL AND resolved_at >= ?"
+                      " ORDER BY resolved_at DESC LIMIT 1", (f"liveness-{arg3}-{acct}", float(arg4))).fetchone()
+    print(f"ok {r['id']}" if r else "none")
 elif cmd == "rename":
     with db.conn() as c:
         db._ensure_board_auth(c)

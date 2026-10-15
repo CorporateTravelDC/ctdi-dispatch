@@ -1,0 +1,8 @@
+[Unit]
+Description=Warn once, a day ahead, before the Claude Code login (refresh token) expires (ops-health p4)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/claude-login-expiry-check.py
+TimeoutStartSec=2min
+Nice=10

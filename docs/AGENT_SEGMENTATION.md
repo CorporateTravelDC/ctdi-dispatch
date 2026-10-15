@@ -256,6 +256,8 @@ Thresholds (env overrides): `LIVENESS_AGENT_MAX_STALE` 7 d, `LIVENESS_SSH_MAX_ID
 
 **Registry unavailable = HOLD**: nobody is made inert and nobody passes the key factor; the unit exits 2 and sends ntfy p4.
 
+**Authority: network or lockdown (2026-10-15).** Making an account inert and `--reactivate` are authorized only when the network is verifiably live (an HTTPS request with certificate verification to `LIVENESS_NET_PROBES`, default `https://login.tailscale.com` and `https://api.github.com`, succeeds; a captive portal or a dead uplink fails), or when an offline compromise lockdown is active (`/run/corporatetraveldc-lockdown-active`, `scripts/lockdown.sh`) AND a signed, allowed approval of kind `liveness`, pattern `liveness-<inert|reactivate>-<account>`, was resolved after the lockdown began and within `LIVENESS_LOCKDOWN_APPROVAL_MAX_AGE` (12 h) (`board-signer-ctl.sh liveness-approval`). Otherwise the action is held: logged, one ntfy p4 per hold episode, nothing changed; a refused `--reactivate` exits 5. Why: on 2026-10-15 the switch made a healthy Codex agent inert 24 minutes after a reboot, because the agents' units start before the network. The operator chose this over a time-based grace, which would loosen the guard; lockdown investigations and air-gapped operation keep an explicit, signed path. Guardrail proof: vault `guardrail-proofs/2026-10-15-agent-inert-and-reactivation.md`.
+
 The run also writes the operator's last login to `/var/lib/corporatetraveldc/team-liveness/operator-last-login` (root 0644), which the agent gateway's operator dead-man reads.
 
 `--status` prints a table with `KIND` and `MODE` columns; `--user NAME` evaluates one account; run without sudo it reports root-only factors as `unreadable-unprivileged`.

@@ -50,6 +50,24 @@
 # REACTIVATE re-enables login/linger/signer explicitly; tokens are NOT
 # restored -- the operator mints new ones.
 #
+# AUTHORITY: NETWORK OR LOCKDOWN (operator 2026-10-15). Making an account inert
+# (stale verdict or kill order) and --reactivate are AUTHORIZED only when
+#   (1) the network is verifiably live: an HTTPS request with certificate
+#       verification to one of LIVENESS_NET_PROBES succeeds (any HTTP status;
+#       a captive portal or a dead uplink fails TLS or the connect), OR
+#   (2) an explicit offline compromise-lockdown is active
+#       (/run/corporatetraveldc-lockdown-active, scripts/lockdown.sh) AND a
+#       SIGNED, allowed approval of kind "liveness", pattern
+#       liveness-<inert|reactivate>-<account>, was resolved after the lockdown
+#       began and within LIVENESS_LOCKDOWN_APPROVAL_MAX_AGE (12 h).
+# Otherwise the action is HELD: logged, one ops-health alert per hold episode,
+# nothing changed -- the verdict itself is unchanged and acts on the first run
+# with authority. Why: on 2026-10-15 the switch made a healthy Codex agent
+# inert 24 min after a reboot, because the agents' units start before the
+# network. A time-based grace would loosen the guard; this keeps every factor
+# and adds only "is anyone actually able to be here", while lockdown
+# investigations and truly air-gapped operation still have an explicit path.
+#
 # KILL ORDERS (scripts/kill-order.sh): signed JSON files under
 # <state>/orders/<target>/. Each is valid when: signature verifies against the
 # issuer's registered key (namespace corporatetraveldc-kill), issuer alive and
@@ -96,6 +114,9 @@ REVOKE_LOOKBACK="${LIVENESS_REVOCATION_LOOKBACK:-86400}"
 ORDER_MAX_AGE="${LIVENESS_ORDER_MAX_AGE:-$((7*86400))}"
 QUORUM_NON_ADMIN="${QUORUM_NON_ADMIN:-2}"
 QUORUM_FOR_ADMIN="${QUORUM_FOR_ADMIN:-2}"
+NET_PROBES="${LIVENESS_NET_PROBES:-https://login.tailscale.com https://api.github.com}"
+LOCKDOWN_FILE="/run/corporatetraveldc-lockdown-active"
+LOCKDOWN_APPROVAL_MAX_AGE="${LIVENESS_LOCKDOWN_APPROVAL_MAX_AGE:-$((12*3600))}"
 FAKE="${LIVENESS_FAKE_ROOT:-}"
 STATE_DIR="/var/lib/corporatetraveldc/team-liveness"; [[ -n "$FAKE" ]] && STATE_DIR="${FAKE}/var/lib/corporatetraveldc/team-liveness"
 INERT_DIR="${STATE_DIR}/inert"; ORDERS_DIR="${STATE_DIR}/orders"
@@ -114,6 +135,39 @@ hook() {
   else "$HOOK_SCRIPT" "$@"; fi
 }
 HOOK="$HOOK_SCRIPT"   # existence checks below use the path; calls go through hook()
+
+# ---------------------------------------------- authority: network or lockdown ----
+# FAKE: network live unless <fake>/network-down exists; lockdown = <fake>/lockdown-active
+# (its mtime is the start); approvals = <fake>/approvals/<account>.<action> holding "ok <id>".
+network_live() {
+  if [[ -n "${FAKE:-}" ]]; then [[ ! -e "${FAKE}/network-down" ]]; return; fi
+  local u; for u in $NET_PROBES; do
+    curl -s -o /dev/null --max-time 8 --proto '=https' "$u" 2>/dev/null && return 0   # TLS verified; any HTTP status
+  done
+  return 1
+}
+lockdown_since() {   # epoch the lockdown began, or nothing
+  local f="$LOCKDOWN_FILE"; [[ -n "${FAKE:-}" ]] && f="${FAKE}/lockdown-active"
+  [[ -f "$f" ]] && stat -c %Y "$f" 2>/dev/null
+}
+lockdown_approval() {   # <account> <action> <since> -> "ok <id>" | "none"
+  if [[ -n "${FAKE:-}" ]]; then
+    local a="${FAKE}/approvals/$1.$2"
+    if [[ -f "$a" ]] && (( $(stat -c %Y "$a") >= $3 )); then head -1 "$a"; else echo none; fi; return
+  fi
+  [[ -x "$HOOK" ]] || { echo none; return; }
+  hook liveness-approval "$1" "$2" "$3" 2>/dev/null | head -1 || echo none
+}
+AUTH_WHY=""
+authorized() {   # <account> <inert|reactivate> -> 0 authorized / 1 held; AUTH_WHY says which
+  if network_live; then AUTH_WHY="network live"; return 0; fi
+  local since; since=$(lockdown_since)
+  if [[ -z "$since" ]]; then AUTH_WHY="network not live and no lockdown active"; return 1; fi
+  local floor=$(( now - LOCKDOWN_APPROVAL_MAX_AGE )); (( since > floor )) && floor=$since
+  local r; r=$(lockdown_approval "$1" "$2" "$floor")
+  if [[ "$r" == ok\ * ]]; then AUTH_WHY="offline lockdown + signed approval ${r#ok }"; return 0; fi
+  AUTH_WHY="network not live; lockdown active but no signed liveness-$2-$1 approval since it began"; return 1
+}
 
 EXECUTE=0; OPERATOR_OK=0; STATUS=0; ONE=""; REACT=""
 while (( $# )); do
@@ -398,7 +452,12 @@ make_inert() {
 }
 reactivate() {
   local name="$1"
-  log info "REACTIVATE ${name}"
+  if ! authorized "$name" reactivate; then
+    log warn "REACTIVATE ${name} HELD -- ${AUTH_WHY}"
+    echo "refused: reactivation needs a live network, or an active lockdown plus a signed approval (kind liveness, pattern liveness-reactivate-${name})" >&2
+    exit 5
+  fi
+  log info "REACTIVATE ${name} (${AUTH_WHY})"
   act chage -E -1 "$name"
   act usermod -U "$name" 2>/dev/null || act usermod -p '*' "$name"   # passwordless account: '*' = no password, not "locked"
   local row; row=$(accounts | awk -v u="$name" '$1==u {print $2, $3, $4}'); local grp=${row%% *}; local lm; lm=$(echo "$row" | awk '{print $3}')
@@ -586,7 +645,7 @@ if (( MUTATE )); then prepare_order_dirs; stage_orders; fi
 process_orders
 if (( ${#ROWS[@]} == 0 )); then log info "no team accounts yet (groups ctdc-agents / ctdc-ops empty) -- nothing to evaluate"; exit 0; fi
 if (( STATUS )); then printf '%-20s %-12s %-8s %-7s %-9s %-6s %-40s %s\n' ACCOUNT GROUP KIND MODE STATE INERT DETAIL REASON; fi
-rc=0; HELD=0
+rc=0; HELD=0; AUTH_HELD=0
 for row in "${ROWS[@]}"; do
   read -r name group rkind rmode rpre <<<"$row"
   [[ -n "$ONE" && "$name" != "$ONE" ]] && continue
@@ -598,10 +657,22 @@ for row in "${ROWS[@]}"; do
   if [[ "$VERDICT" == live ]]; then log info "${name} (${group}): live ${DETAIL}"; continue; fi
   if [[ "$inert" == YES ]]; then continue; fi
   if (( EXECUTE )); then
+    if ! authorized "$name" inert; then
+      log warn "${name} (${group}): STALE but HELD -- ${AUTH_WHY} (would make inert: ${REASON})"; AUTH_HELD=$((AUTH_HELD+1)); rc=1; continue
+    fi
+    log info "${name}: inert authorized -- ${AUTH_WHY}"
     if [[ -n "${KILL_READY[$name]:-}" ]]; then make_inert "$name" "$REASON" 5; archive_orders "$name"; else make_inert "$name" "$REASON"; fi
   else log warn "${name} (${group}): STALE -- ${REASON} (dry-run: would make inert)"; fi
   rc=1
 done
+if (( EXECUTE )); then   # one alert per hold episode; cleared when nothing is held for authority
+  if (( AUTH_HELD )); then
+    if [[ ! -e "${STATE_DIR}/authority-hold" ]]; then
+      ntfy_send "team-liveness: action held (no authority)" "${AUTH_HELD} inert action(s) held: ${AUTH_WHY}. Nothing changed; they act on the first run with a live network, or under lockdown with a signed liveness approval." 4
+      mkdir -p "$STATE_DIR" && date -Is >"${STATE_DIR}/authority-hold"
+    fi
+  else rm -f "${STATE_DIR}/authority-hold"; fi
+fi
 if (( HELD )) && (( ! STATUS )); then
   # the registry could not be reached: nothing was killed and nothing passed on
   # the key factor; alert and exit 2 (not in the unit's SuccessExitStatus)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Claude Code login expiry check, once a day at 13:00Z / 09:00 ET (alert lands 24-48 h before expiry)
+
+[Timer]
+OnCalendar=*-*-* 13:00:00 UTC
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target
