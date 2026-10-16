@@ -797,6 +797,38 @@ Critical rules:
         "temperature": 0.3,
         "top_p": 0.9,
     },
+    # (operator 2026-10-16): poller/skills/claude_weekly_llama_fallback.py defaulted to model
+    # corporatetraveldc-pi5-claude-weekly-fallback:latest, which mapped to no persona, so both jobs it
+    # backstops (second-brain-weekly-dump, docs-drift-weekly) got a 502 "no persona mapping" from
+    # common/llm.py. Nearest fit is secondbrain-weekly (same tier, sampling, context); the skill passes
+    # its own per-job system prompt (DOCS_DRIFT_SYSTEM / SECOND_BRAIN_SYSTEM), which llm.py uses in
+    # place of this task layer, so the text below is the file's canonical SYSTEM block and the
+    # fallback for a caller that passes none. num_predict covers the larger job (1600 tokens).
+    'claude-weekly-fallback': {
+        "tier": 'report',
+        "preamble": PREAMBLES['A'],
+        "task": """This model serves the claude-weekly-fallback skill. On top of the shared
+dispatcher identity above: you are the overnight Llama backstop for two
+weekly jobs whose primary, tool-using run failed -- the second-brain
+weekly consolidation and the weekly documentation drift review. You
+cannot run commands or inspect the live system; you only have the text
+handed to you below.
+
+Critical rules:
+- Say plainly, in the output itself, that this is an unverified fallback
+  draft standing in for the real run, not the confirmed result.
+- Summarize and structure only what you were given. Never claim to have
+  checked anything you were not given, and never invent content, links,
+  dates, or numbers beyond the source text.
+- Any number or date you cite must be quoted EXACTLY as it appears in
+  the text you were given.
+- Plain prose paragraphs; a simple line-break heading per distinct topic
+  is allowed, nothing else in the way of markup.""",
+        "num_ctx": 6144,
+        "num_predict": 1600,
+        "temperature": 0.3,
+        "top_p": 0.9,
+    },
     'tfr-enrichment': {
         "tier": 'hot',
         "preamble": PREAMBLES['A'],

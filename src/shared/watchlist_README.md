@@ -175,6 +175,7 @@ doubling backoff.
 | flight | `flight-alerts` | `dispatch` |
 | train | `train-alerts` | `dispatch` |
 | vessel | `vessel-alerts` | `dispatch` |
+| drone | `drone-alerts` (operator 2026-10-16; was the train branch) | `dispatch` |
 
 > **2026-08-11:** an earlier revision of this file documented a live bug —
 > `watchlist_event_hit()` in `src/shared/watchlist.py` had no vessel branch,

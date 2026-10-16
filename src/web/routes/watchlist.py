@@ -597,7 +597,8 @@ async def remove_watchlist_entry(
     ident = entry["identifier"]
     etype = entry["entry_type"]
     _REMOVE_TOPIC = {"flight": "flight-alerts", "train": "train-alerts",
-                     "vessel": "vessel-alerts"}
+                     "vessel": "vessel-alerts",
+                     "drone": "drone-alerts"}   # (operator 2026-10-16): drone removals went to "dispatch" only
     _fire_ntfy_dual(
         domain_topic=_REMOVE_TOPIC.get(etype, "dispatch"),
         title=f"Watchlist: {ident} removed",

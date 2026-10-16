@@ -54,7 +54,12 @@ RestartSec=30
 # corporatetraveldc-stack-boot-stagger.service began), so the staggered
 # boot never actually owned the boot. Startup is owned by
 # corporatetraveldc-stack-boot-stagger.service (scripts/stack-boot-ctl.sh,
-# serialized + load-gated via scripts/lib/serial-bringup.sh), which lists
-# this unit in its ORDER.
+# serialized + load-gated via scripts/lib/serial-bringup.sh), ~~which lists
+# this unit in its ORDER~~ -- corrected 2026-10-16: stack-boot-ctl.sh's
+# ORDER never listed either portal, so after a reboot both stayed down
+# until started by hand. Boot start is now owned by
+# .config/systemd/user/corporatetraveldc-demo-portals-boot.service, a
+# oneshot that runs after corporatetraveldc-boot-stagger.service (the
+# end of the serialized rollout) and starts both portals with --no-block.
 # No WantedBy here on purpose -- do not re-add without re-introducing
 # the boot storm.

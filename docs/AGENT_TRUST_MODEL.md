@@ -157,6 +157,7 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | `connector-hold` | ~~24 h~~ (corrected 2026-10-15) default 1800 s, bounds 300-3600 s | `agent_gateway.request_hold` → `governance.approval_ttl("connector-hold")` |
 | `council` | ~~24 h~~ (corrected 2026-10-15) 10% of the council's deadline, bounds 1800-14400 s (30 min to 4 h) | `governance.approval_ttl("council", deadline_hours=...)` |
 | `council-close` | ~~24 h~~ (corrected 2026-10-15) 25% of the remaining time, bounds 900-7200 s (15 min to 2 h) | `governance.approval_ttl("council-close", remaining_s=...)` |
+| `board-gate` (Cowork board token-gate reply) | ~~kind `sudo`, TTL = the whole time to the gate deadline minus 10 min~~ (corrected 2026-10-16: that TTL exceeded the 600 s sudo cap on every 12 h lead, so `create_approval` refused it and the gate never fired) 10% of the remaining time to the deadline minus the 10 min buffer, default 1800 s, bounds 300-7200 s (5 min to 2 h) | `poller/skills/board_sweep.py` → `governance.approval_ttl("board-gate", remaining_s=...)`; `scripts/approve.sh` template |
 
 ~~`governance.COUNCIL_APPROVAL_TTL_S`~~ (24 h) is still defined at `governance.py:57` but nothing in `src/` uses it (2026-10-15).
 

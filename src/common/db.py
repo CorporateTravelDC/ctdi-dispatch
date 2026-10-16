@@ -4414,19 +4414,24 @@ def opensky_registry_sweep_removed(cutoff_epoch: float) -> int:
     return _safe_mark_and_sweep("opensky_aircraft_registry", cutoff_epoch)
 
 
-def update_watchlist_oooi_phase(entry_id: str, phase: str, updated_at: str) -> None:
+def update_watchlist_oooi_phase(entry_id: str, phase: str, updated_at: str, *, source: str) -> bool:
     """Persist the OOOI phase tracker's own state for entry_id.
 
     Deliberately separate from update_watchlist_last_event()'s
     last_event_summary column — see init_db_v16() docstring for why sharing
     that field with every other alert type caused repeated re-firing.
+
+    (operator 2026-10-16): no longer a lock-less UPDATE. Every phase write
+    names its source and goes through update_watchlist_oooi_phase_authoritative()
+    (forward-only; FIDS and inference never assert; ADS-B never asserts ON/IN;
+    a source below the lock holder's tier cannot overwrite a SWIM-asserted
+    phase while SWIM is live). The three callers that used this writer to
+    bypass the gate (poller OOOI block, schedule inference, sweep-time ACARS)
+    now call the gated writer directly; this wrapper stays so no caller can
+    write a phase without a source. Returns True if applied.
     """
-    with conn() as c:
-        c.execute("""
-            UPDATE watchlist_entries
-            SET oooi_phase=?, oooi_phase_updated_at=?
-            WHERE id=?
-        """, (phase, updated_at, entry_id))
+    return update_watchlist_oooi_phase_authoritative(entry_id, phase, source=source,
+                                                     updated_at=updated_at)
 
 
 def upsert_international_aviation_records(source: str, records: list[dict]) -> int:

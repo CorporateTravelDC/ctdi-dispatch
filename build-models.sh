@@ -93,6 +93,7 @@ declare -A MODELS=(
   [corporatetraveldc-pi5-transport-digest]="transport-digest"
   [corporatetraveldc-pi5-weekly-summary]="weekly-summary"
   [corporatetraveldc-pi5-chat]="chat"
+  [corporatetraveldc-pi5-claude-weekly-fallback]="claude-weekly-fallback"   # (operator 2026-10-16)
 )
 
 assert_modelfile_integrity() {  # GUARD 0 -- unchanged from the old build path

@@ -638,8 +638,10 @@ def push_watchlist_retries() -> int:
 
         # 2026-10-15 (parity audit): vessel retries went to train-alerts with train
         # copy. Same topic as the original send (shared/watchlist.py vessel branch).
+        # (operator 2026-10-16): drone retries likewise -- own topic, never train-alerts.
         topic, prefix, noun = {"flight": ("flight-alerts", "FLT ", "Flight "),
-                               "vessel": ("vessel-alerts", "VSL ", "Vessel ")}.get(
+                               "vessel": ("vessel-alerts", "VSL ", "Vessel "),
+                               "drone": ("drone-alerts", "UAS ", "Drone ")}.get(
                                    etype, ("train-alerts", "TRN ", "Train "))
         title = prefix + ident + ": " + summary[:60]
         dispatch_body = noun + ident + ": " + summary

@@ -130,7 +130,16 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # token could never actually verify here).
 EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
 Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
-Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+# 2026-10-16 (operator rule: the public demo is logically AND physically
+# separated from production): the `Volume=corporatetraveldc-pgsql-sock:
+# /var/run/postgresql` line that stood here is removed. This container
+# has no Postgres code path at all (chat history is a local sqlite file
+# in the demo-only mount above; DISPATCH_DB_BACKEND=sqlite is pinned by
+# demo-secrets.env), yet it mounted the production socket while
+# dispatch.env pointed DISPATCH_PG_DB/USER at the production pair.
+# DISPATCH_DEMO_ISOLATION=1 makes common.db_backend refuse that pair
+# outright should any future code path reach for it.
+Environment=DISPATCH_DEMO_ISOLATION=1
 AutoUpdate=local
 
 [Service]

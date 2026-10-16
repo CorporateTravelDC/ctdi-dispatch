@@ -710,6 +710,15 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
         detail_body = f"{name} (MMSI {ident})\n{event_summary}" if name else f"MMSI {ident}\n{event_summary}"
         dispatch_body = f"Vessel {ident}: {event_summary}"
         title_prefix = "VSL "
+    elif etype == "drone":
+        # (operator 2026-10-16): Part 107 UAS events fell through to the
+        # train branch ("train-alerts", "TRN " title, "Train <id>" copy) --
+        # the same misroute vessels had until 2026-08-11. Own topic now.
+        domain_topic = "drone-alerts"
+        name = entry.get("notes") or ""
+        detail_body = f"{name} (UAS {ident})\n{event_summary}" if name else f"UAS {ident}\n{event_summary}"
+        dispatch_body = f"Drone {ident}: {event_summary}"
+        title_prefix = "UAS "
     else:
         domain_topic = "train-alerts"
         route_name = entry.get("route_name") or ""
@@ -881,16 +890,21 @@ def sweep_landed_flights() -> int:
                                 # the phase found and let normal tracking
                                 # continue from here instead of losing the
                                 # entry.
-                                db.update_watchlist_oooi_phase(
-                                    entry_id, acars_phase_found,
-                                    now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                # (operator 2026-10-16): through the authority
+                                # gate as source "acars" (network aggregator,
+                                # tier 30), not the lock-less writer. Accepted
+                                # or rejected, the entry is retained.
+                                applied = db.update_watchlist_oooi_phase_authoritative(
+                                    entry_id, acars_phase_found, source="acars",
+                                    updated_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                                 )
                                 log.warning(
                                     "watchlist: %s NOT swept -- ACARS shows "
                                     "phase=%s at sweep time despite no prior "
-                                    "oooi progression (source=%s)",
+                                    "oooi progression (source=%s; phase write %s)",
                                     entry["identifier"], acars_phase_found,
                                     acars_msg.get("_source", "ACARS"),
+                                    "accepted" if applied else "rejected by the authority gate",
                                 )
                         else:
                             reason = ("dead -- no ACARS/ADS-B contact "

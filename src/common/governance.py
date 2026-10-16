@@ -53,7 +53,8 @@ from common import board_sign, db
 NAMESPACE_APPROVAL = "corporatetraveldc-approval"
 APPROVAL_KINDS = ("sudo", "council", "council-close", "connector-link", "connector-hold",   # common/agent_gateway.py
                   "gateway-thaw", "console-login",                                    # gateway kill switch; web/routes/console.py
-                  "liveness")   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
+                  "liveness",   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
+                  "board-gate")   # (operator 2026-10-16): Cowork board token-gate reply, poller/skills/board_sweep.py
 COUNCIL_MODES = ("council", "arena")
 COUNCIL_APPROVAL_TTL_S = 24 * 3600
 WORKSPACE_ROOT = "01-Sources/personal-notes/Series"
@@ -204,6 +205,11 @@ APPROVAL_TTL_POLICY = {
     "connector-hold": (1800, 300, 3600), "gateway-thaw": (1800, 300, 3600),
     "council": (14400, 1800, 14400), "council-close": (3600, 900, 7200),
     "liveness": (1800, 300, 3600),
+    # (operator 2026-10-16): the Cowork board token gate. board_sweep used kind "sudo" with a TTL
+    # derived from the gate's deadline (12 h lead - 10 min buffer), which the 600 s sudo cap refused,
+    # so the gate never fired. Default 1800 s (the operator is usually mobile and sees it via ntfy);
+    # derived like a council: COUNCIL_TTL_FRACTION of the remaining time, clamped to the bounds.
+    "board-gate": (1800, 300, 7200),
 }
 COUNCIL_TTL_FRACTION = 0.10         # of the council's deadline
 COUNCIL_CLOSE_TTL_FRACTION = 0.25   # of the council's remaining time
@@ -225,6 +231,8 @@ def approval_ttl(kind: str, *, deadline_hours: float | None = None, remaining_s:
         base = float(deadline_hours) * 3600 * COUNCIL_TTL_FRACTION
     elif kind == "council-close" and remaining_s is not None:
         base = max(0.0, float(remaining_s)) * COUNCIL_CLOSE_TTL_FRACTION
+    elif kind == "board-gate" and remaining_s is not None:   # (operator 2026-10-16)
+        base = max(0.0, float(remaining_s)) * COUNCIL_TTL_FRACTION
     else:
         base = default
     return float(min(hi, max(lo, base)))

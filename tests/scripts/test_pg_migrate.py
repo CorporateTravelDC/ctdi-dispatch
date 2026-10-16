@@ -13,10 +13,12 @@ Covers the two things the Phase 1 handoff explicitly needs verified:
     schema_migrations checksum-tracked skip path, not just DDL happening
     to be idempotent).
 """
+import os
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -27,6 +29,20 @@ from common import config, db_backend  # noqa: E402
 
 SCRATCH_DB = "corporatetraveldc_pgphase1_test"
 
+# 2026-10-16: db_backend._pg_conninfo() refuses under a non-postgres backend
+# (demo/production isolation guard), and tests/conftest.py pins the whole
+# process to sqlite at import. This module is explicitly about Postgres, so
+# it names the backend itself -- in-process and for the subprocess runner.
+PG_ENV = {"DISPATCH_DB_BACKEND": "postgres"}
+
+
+def _scratch_conninfo() -> str:
+    with mock.patch.dict(os.environ, PG_ENV):
+        return db_backend._pg_conninfo().replace(  # noqa: SLF001
+            f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
+            f"dbname={SCRATCH_DB}",
+        )
+
 
 def _postgres_reachable() -> bool:
     try:
@@ -34,10 +50,7 @@ def _postgres_reachable() -> bool:
     except ImportError:
         return False
     try:
-        conninfo = db_backend._pg_conninfo().replace(  # noqa: SLF001
-            f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
-            f"dbname={SCRATCH_DB}",
-        )
+        conninfo = _scratch_conninfo()
         with psycopg.connect(conninfo, connect_timeout=3) as c:
             c.execute("SELECT 1")
         return True
@@ -57,10 +70,7 @@ def scratch_schema():
 
     # Postgres reserves the "pg_" prefix for system schemas.
     schema = f"phase1_migtest_{uuid.uuid4().hex[:8]}"
-    conninfo = db_backend._pg_conninfo().replace(  # noqa: SLF001
-        f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
-        f"dbname={SCRATCH_DB}",
-    )
+    conninfo = _scratch_conninfo()
     with psycopg.connect(conninfo, autocommit=True) as c:
         c.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
     yield schema
@@ -73,6 +83,7 @@ def _run(*args) -> subprocess.CompletedProcess:
         [sys.executable, str(REPO_ROOT / "scripts" / "pg_migrate.py"),
          "--database", SCRATCH_DB, *args],
         capture_output=True, text=True, timeout=240,   # 2026-10-15: 75 migrations ran past 60 s under load (preflight caught it)
+        env={**os.environ, **PG_ENV},
 
     )
 
@@ -135,10 +146,7 @@ def test_all_76_pg_bound_and_second_brain_tables_created(scratch_schema):
     result = _run("--schema", scratch_schema)
     assert result.returncode == 0, result.stderr
 
-    conninfo = db_backend._pg_conninfo().replace(  # noqa: SLF001
-        f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
-        f"dbname={SCRATCH_DB}",
-    )
+    conninfo = _scratch_conninfo()
     with psycopg.connect(conninfo, row_factory=dict_row) as c:
         rows = c.execute(
             "SELECT table_name FROM information_schema.tables "

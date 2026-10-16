@@ -4,22 +4,36 @@ demo.profiles — password-gated access profiles for the public demo.
 Deliberately decoupled from the main app's src/auth/auth.py: that module
 is tightly bound to common.db (the live operational database), and
 demo_api.py's whole design point is to never touch live state (see its
-module docstring). This still gets its own table (demo_profiles,
-pg_schema/0057_demo.sql) and its own admin gate, proportionate to what it
-actually protects -- a handful of shared passwords keeping casual
-visitors out of a public playback loop, not a multi-tenant credential
-system.
+module docstring). This still gets its own table and its own admin gate,
+proportionate to what it actually protects -- a handful of shared
+passwords keeping casual visitors out of a public playback loop, not a
+multi-tenant credential system.
 
-2026-09-20 Postgres cutover (operator directive -- see src/demo/db.py's
-module docstring for the full rationale): this used to be its own
-standalone SQLite file (/var/lib/corporatetraveldc-demo-state/
-demo_access.db, opened directly via sqlite3.connect() on every call).
-Now goes through common.db_backend.pg_conn() directly (this module is
-small enough -- 7 live rows, no polling loop -- that a dedicated
-src/demo/db.py-style wrapper would be pure ceremony; see that module's
-own docstring for why demo_snapshots got one and this didn't: this
-module's connection use is already exactly one call per public function,
-no shared/looping state to centralize).
+Storage (2026-10-16, operator rule: the public demo is logically AND
+physically separated from production):
+
+  DISPATCH_DB_BACKEND=sqlite (what both public-demo containers pin via
+  demo-secrets.env) -- its own SQLite file in the demo-state volume,
+  DEMO_ACCESS_DB (default /var/lib/corporatetraveldc-demo-state/
+  demo_access.db, table `profiles` -- the exact file and schema this
+  module used before 2026-09-20, so the rows already in that volume keep
+  working). Nothing in this path can reach production: no Postgres
+  socket is mounted, and common.db_backend.pg_conn() refuses under a
+  non-postgres backend anyway.
+
+  DISPATCH_DB_BACKEND=postgres -- demo_profiles via
+  common.db_backend.pg_conn() (pg_schema/0057_demo.sql). This is the
+  2026-09-20 cutover shape; it is only correct once the demo has its OWN
+  Postgres instance and role (follow-up, operator decision), and
+  pg_conn() refuses the production pair under DISPATCH_DEMO_ISOLATION=1.
+
+History: 2026-09-20 moved this store from demo_access.db onto Postgres
+("everything live on Postgres"); that put the public demo's only
+database client on the production database (one instance, one db, one
+superuser role) -- demo-api, pinned to sqlite, was still targeting
+production and only failed for lack of a password (verified live
+2026-10-16 12:13Z). The sqlite path is restored so the demo login works
+with no path to production at all.
 
 Same non-negotiable as the main auth module: plaintext passwords are
 never stored. A profile's plaintext is returned to the caller exactly
@@ -37,9 +51,12 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
 import string
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from common import db_backend
 
@@ -51,6 +68,70 @@ SESSION_SECRET = os.environ.get("DEMO_SESSION_SECRET") or secrets.token_hex(32)
 SESSION_TTL_SECONDS = int(os.environ.get("DEMO_SESSION_TTL_SECONDS", str(8 * 3600)))
 
 PBKDF2_ITERATIONS = 200_000
+
+# The demo-state volume (rw, demo-owned, never /var/lib/corporatetraveldc
+# -- see corporatetraveldc-demo-api.container's F6 mount narrowing).
+DEFAULT_ACCESS_DB = "/var/lib/corporatetraveldc-demo-state/demo_access.db"
+
+# Legacy (pre-2026-09-20) shape, kept byte-for-byte so the file already in
+# the volume is read as-is. Booleans are INTEGER 0/1 here, BOOLEAN on
+# Postgres; every caller treats them as truthy, so one SQL text serves
+# both (sqlite >= 3.23 accepts TRUE/FALSE, >= 3.35 RETURNING).
+_SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS profiles (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    label         TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt          TEXT NOT NULL,
+    window_days   INTEGER NOT NULL,
+    speed         REAL NOT NULL DEFAULT 1.0,
+    auto_scale    INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+"""
+
+
+def access_db_path() -> str:
+    """Resolved at call time (not import) so a test or a quadlet can point
+    it elsewhere without reloading the module."""
+    return os.environ.get("DEMO_ACCESS_DB", DEFAULT_ACCESS_DB)
+
+
+def store_kind() -> str:
+    """'postgres' or 'sqlite' -- follows DISPATCH_DB_BACKEND exactly; there
+    is no third option and no silent fallback from one to the other."""
+    return "postgres" if db_backend.backend() == "postgres" else "sqlite"
+
+
+def _table() -> str:
+    return "demo_profiles" if store_kind() == "postgres" else "profiles"
+
+
+@contextmanager
+def _store():
+    """One connection per public function, commit on success / rollback on
+    exception on both backends. Yields a connection whose execute() takes
+    `?` placeholders and whose rows support row["col"] and dict(row)."""
+    if store_kind() == "postgres":
+        with db_backend.pg_conn() as c:
+            yield c
+        return
+    path = Path(access_db_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(path), timeout=10)
+    try:
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.executescript(_SQLITE_SCHEMA)
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    finally:
+        c.close()
 
 
 def _hash(password: str, salt: bytes) -> str:
@@ -81,9 +162,9 @@ def create_profile(label: str, window_days: int, speed: float = 1.0,
     password_hash = _hash(plaintext, salt)
     created_at = datetime.now(timezone.utc).isoformat()
 
-    with db_backend.pg_conn() as c:
+    with _store() as c:
         row = c.execute(
-            "INSERT INTO demo_profiles "
+            f"INSERT INTO {_table()} "
             "(label, password_hash, salt, window_days, speed, auto_scale, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (label, password_hash, salt.hex(), window_days, speed, auto_scale, created_at),
@@ -101,17 +182,22 @@ def create_profile(label: str, window_days: int, speed: float = 1.0,
 
 def list_profiles(include_inactive: bool = False) -> list[dict]:
     where = "" if include_inactive else "WHERE active"
-    with db_backend.pg_conn() as c:
+    with _store() as c:
         rows = c.execute(
             f"SELECT id, label, window_days, speed, auto_scale, created_at, active "
-            f"FROM demo_profiles {where} ORDER BY created_at DESC"
+            f"FROM {_table()} {where} ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def revoke_profile(profile_id: int) -> bool:
-    with db_backend.pg_conn() as c:
-        cur = c.execute("UPDATE demo_profiles SET active = FALSE WHERE id = ?", (profile_id,))
+    """True only when an ACTIVE profile was revoked. 2026-10-16: the
+    statement used to match on id alone, so revoking an already-revoked
+    (or never-active) id reported True on both backends while the admin
+    route answers 404 "No such active profile" on False -- `AND active`
+    makes the result mean what the route says."""
+    with _store() as c:
+        cur = c.execute(f"UPDATE {_table()} SET active = FALSE WHERE id = ? AND active", (profile_id,))
         return cur.rowcount > 0
 
 
@@ -119,10 +205,10 @@ def authenticate(password: str) -> dict | None:
     """Check password against every active profile. Small N (a handful
     of live demo links at most), so a linear scan is fine and keeps this
     simple -- no need for a lookup index on something that isn't a key."""
-    with db_backend.pg_conn() as c:
+    with _store() as c:
         rows = c.execute(
             "SELECT id, label, password_hash, salt, window_days, speed, auto_scale "
-            "FROM demo_profiles WHERE active"
+            f"FROM {_table()} WHERE active"
         ).fetchall()
 
     for row in rows:

@@ -127,10 +127,27 @@ def twin_after_sign(lines: list[str]) -> list[tuple[int, str, str]]:
             for n, l in enumerate(lines, 1) if n > sign and TWIN_INSTALL.search(l)]
 
 
+UNIT_INSTALL = re.compile(r"install\s[^\n]*\.config/(containers/)?systemd/[^\n]*\.(service|timer|container|path)\b")
+REBASELINE = re.compile(r"REBASELINE=1\s[^\n]*stack-refresh\.sh\s[^\n]*--tripwire")
+
+
+def unit_install_without_rebaseline(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-16: the mid-week stack tripwire fingerprints the user unit set; every relay that
+    installed a new unit since 10-12 changed it, and the tripwire failed on 10-16 07:21Z, which then
+    blocked the next relay at the drift gate. A relay that installs a unit must re-record the audit
+    baselines (REBASELINE=1 scripts/stack-refresh.sh --tripwire --dry-run --now) after the commit."""
+    installs = [n for n, l in enumerate(lines, 1) if UNIT_INSTALL.search(l) and not l.lstrip().startswith("#")]
+    if installs and not any(REBASELINE.search(l) for l in lines):
+        return [(installs[0], "installs a systemd unit without re-recording the stack-refresh audit baselines",
+                 "add after the commit: REBASELINE=1 bash scripts/stack-refresh.sh --tripwire --dry-run --now")]
+    return []
+
+
 def lint(text: str) -> list[tuple[int, str, str]]:
     out = []
     lines = text.splitlines()
     out += twin_after_sign(lines)
+    out += unit_install_without_rebaseline(lines)
     first = next((l for l in lines if l.strip()), "")
     if not re.match(r"\s*bash\s+<<'RELAY'\s*$", first):
         out.append((1, "relay must start with `bash <<'RELAY'` (quoted delimiter: nothing expands at paste)",

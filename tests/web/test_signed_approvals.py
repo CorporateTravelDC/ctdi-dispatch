@@ -398,6 +398,39 @@ def test_ttl_policy_per_kind_and_clamped(monkeypatch):
     assert max(gov.MAX_TTL_S.values()) <= 4 * 3600                       # nothing waits 24 h any more
 
 
+# -- board-gate (operator 2026-10-16) -------------------------------------------
+
+def test_board_gate_ttl_is_derived_like_a_council_and_clamped(monkeypatch):
+    """poller/skills/board_sweep.py: kind board-gate, TTL = COUNCIL_TTL_FRACTION of the time left to the
+    Cowork gate deadline (minus its 10 min buffer), clamped to (300, 7200); default 1800 s."""
+    monkeypatch.delenv("APPROVAL_TTL_BOARD_GATE_S", raising=False)
+    assert "board-gate" in gov.APPROVAL_KINDS
+    assert gov.APPROVAL_TTL_POLICY["board-gate"] == (1800, 300, 7200)
+    assert gov.approval_ttl("board-gate") == 1800                                   # no deadline known
+    assert gov.approval_ttl("board-gate", remaining_s=12 * 3600 - 600) == 4260      # the 12 h lead
+    assert gov.approval_ttl("board-gate", remaining_s=48 * 3600) == 7200            # cap (2 h)
+    assert gov.approval_ttl("board-gate", remaining_s=60) == 300                    # floor
+    assert gov.approval_ttl("board-gate", remaining_s=-5) == 300
+    monkeypatch.setenv("APPROVAL_TTL_BOARD_GATE_S", "999999")
+    assert gov.approval_ttl("board-gate", remaining_s=12 * 3600) == 7200            # env clamped too
+
+
+def test_board_gate_12h_lead_is_no_longer_refused(team):
+    """The old request (kind sudo, TTL = the whole 12 h lead minus the buffer) was refused by the 600 s
+    sudo cap, so the gate never fired; the same lead as kind board-gate is accepted."""
+    lead = 12 * 3600 - 600
+    with pytest.raises(gov.GovernanceError) as e:
+        gov.create_approval("cowork-board-token-gate", "Post GATE reply", kind="sudo",
+                            requester="board:cowork", ttl_seconds=lead)
+    assert e.value.status == 400
+    ttl = gov.approval_ttl("board-gate", remaining_s=lead)
+    created = gov.create_approval("cowork-board-token-gate", "Post GATE reply", kind="board-gate",
+                                  requester="board:cowork", ttl_seconds=ttl)
+    row = db.get_approval_request(created["id"])
+    assert row["kind"] == "board-gate" and row["status"] == "pending"
+    assert abs(_ttl(created["id"]) - 4260) < 1
+
+
 def test_council_approval_expiry_follows_its_deadline(team):
     cs = _convene()                                    # 24 h deadline
     assert abs(_ttl(cs["approval_id"]) - 2.4 * 3600) < 2

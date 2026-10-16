@@ -1199,24 +1199,32 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
         # beyond just the one confirming message.
         acars_ctx = _acars_reason_context(ident, entry.get("registration") or reg)
         summary_full = summary_full + "\n" + acars_ctx
+        # Persist the new phase to its own field FIRST -- this is what stops
+        # the next check from re-deriving a stale phase and re-firing this
+        # same transition. Independent of watchlist_event_hit's own 5-min
+        # dedup (which only rate-limits identical event_types; it does not
+        # fix mis-detected "new" transitions).
+        # (operator 2026-10-16): through the authority gate, naming the source
+        # that confirmed the transition (confirm_src: acars | fdps), not the
+        # lock-less writer -- so a tier-30 confirmation can never overwrite a
+        # SWIM-asserted phase while SWIM is live, and nothing fires unless the
+        # write was accepted. The event's "source" field used to claim
+        # "acars"/"adsb" even when FDPS was the confirming source.
+        if not db.update_watchlist_oooi_phase_authoritative(
+                entry["id"], current_phase, source=confirm_src,
+                updated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")):
+            log.info("flight OOOI: %s %s->%s from %s REJECTED by the authority gate -- "
+                     "phase held, nothing fired", ident, last_phase, current_phase, confirm_src)
+            return True
         watchlist_event_hit(entry["id"], summary_full,
                             {"watchlist_trigger": f"oooi_{current_phase}",
                              "identifier": ident, "hex": hex_id, "reg": reg,
                              "alt_ft": alt, "gs_kt": gs, "lat": lat, "lon": lon,
                              "phase": current_phase, "acars_context": acars_ctx,
-                             "source": "acars" if acars else "adsb",
+                             "source": confirm_src,
                              "tracking_url": tracking_url},
                             priority=priority)
-        # Persist the new phase to its own field immediately -- this is what
-        # stops the next check from re-deriving a stale phase and re-firing
-        # this same transition. Independent of watchlist_event_hit's own
-        # 5-min dedup (which only rate-limits identical event_types; it does
-        # not fix mis-detected "new" transitions).
-        db.update_watchlist_oooi_phase(
-            entry["id"], current_phase,
-            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        )
-        log.info("flight OOOI: %s %s→%s", ident, last_phase, current_phase)
+        log.info("flight OOOI: %s %s→%s (%s)", ident, last_phase, current_phase, confirm_src)
 
     return True
 
@@ -1414,20 +1422,30 @@ def _check_flight_schedule_inference(entry: dict, ident: str) -> None:
                 )
                 return
 
-            confirm_src = "ACARS"   # the only source that can reach here (FIDS never confirms IN; 2026-10-05)
+            # (operator 2026-10-16): schedule inference never writes the OOOI
+            # phase. It used to write oooi_phase=in through the lock-less
+            # writer (the sweep then deleted the entry on that phase); now it
+            # records the inferred phase in the watchlist_history row only
+            # (event_detail.inferred_phase, asserted=False) -- a non-
+            # authoritative record -- and the asserted phase is left to the
+            # SWIM surface/airline parsers (SMES/TFMS) and the gated ACARS
+            # path. One record per entry: the phase stays "off", so without
+            # this guard the inference would re-fire every tick.
+            if any(h.get("event_type") == "oooi_in_inferred"
+                   for h in db.get_watchlist_history(entry_id=entry["id"], limit=200)):
+                return
             acars_ctx = _acars_reason_context(ident, entry.get("registration"))
-            summary = f"{ident} IN — at gate ({confirm_src}-confirmed, ADS-B dark)\n{acars_ctx}"
+            summary = (f"{ident} IN (inferred, not asserted) — schedule window reached, "
+                       f"ACARS agrees, ADS-B dark; awaiting SWIM/ACARS phase write\n{acars_ctx}")
             watchlist_event_hit(
                 entry["id"], summary,
                 {"watchlist_trigger": "oooi_in_inferred",
-                 "identifier": ident,
+                 "identifier": ident, "inferred_phase": "in", "asserted": False,
+                 "source": "schedule_inference",
                  "note": reason, "acars_context": acars_ctx},
                 priority=4,
             )
-            db.update_watchlist_oooi_phase(
-                entry["id"], "in", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            )
-            log.info("flight schedule infer: %s IN (%s)", ident, reason)
+            log.info("flight schedule infer: %s IN inferred, not asserted (%s)", ident, reason)
 
     # Departure check: past sched_dep+90min with no OFF seen yet.
     # 2026-10-06 (operator: "inference may never assert"): this used to push

@@ -28,3 +28,16 @@ def test_every_persona_file_is_in_the_manifest_or_staged_for_it():
     # A new persona file is signed by the relay that ships it; until then it may be absent from the
     # committed manifest, but never for a persona that already shipped in an earlier commit.
     assert len(unsigned) <= 1, f"persona files missing from the signed manifest: {unsigned}"
+
+
+# (operator 2026-10-16): the weekly Llama backstop's model name must map to a persona, or
+# common/llm.py answers 502 "no persona mapping" and both jobs it backstops never get a draft.
+def test_claude_weekly_fallback_model_maps_to_its_persona():
+    from common.personas import persona_key_for
+    import poller.skills.claude_weekly_llama_fallback as fb
+    assert fb.OLLAMA_MODEL.startswith("corporatetraveldc-pi5-claude-weekly-fallback")   # name kept
+    assert persona_key_for(fb.OLLAMA_MODEL) == "claude-weekly-fallback"
+    assert persona_key_for("corporatetraveldc-pi5-claude-weekly-fallback:latest") == "claude-weekly-fallback"
+    p, sib = PERSONAS["claude-weekly-fallback"], PERSONAS["secondbrain-weekly"]
+    assert (p["tier"], p["top_p"], p["num_ctx"]) == (sib["tier"], sib["top_p"], sib["num_ctx"])
+    assert p["num_predict"] >= 1600    # the larger of the two jobs' max_tokens

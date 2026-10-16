@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import time
+from zoneinfo import ZoneInfo   # (operator 2026-10-16): gate push shows the window end in UTC + ET
 
 import requests
 
@@ -215,13 +216,20 @@ def _handle_token_gate(new_msgs: list) -> None:
             continue
         if now < entry["fire_at"]:
             continue
-        ttl = max(60.0, entry["deadline_for_ttl"] - _GATE_DEADLINE_BUFFER_S - now)
         from common import governance
+        # (operator 2026-10-16): kind "board-gate", TTL derived the way councils
+        # derive theirs (COUNCIL_TTL_FRACTION of the time left to the deadline
+        # minus the buffer, clamped to the kind's bounds). This was kind "sudo"
+        # with the whole remaining time as TTL; sudo is capped at 600 s, so the
+        # 12 h lead was refused by governance.create_approval and the gate
+        # never fired.
+        ttl = governance.approval_ttl(
+            "board-gate", remaining_s=entry["deadline_for_ttl"] - _GATE_DEADLINE_BUFFER_S - now)
         created = governance.create_approval(
             "cowork-board-token-gate",
             f"Post GATE: APPROVED/DENIED reply to Cowork board message {mid} "
             f"({entry.get('subject')})",
-            kind="sudo", requester=f"board:{entry.get('from') or 'cowork'}",
+            kind="board-gate", requester=f"board:{entry.get('from') or 'cowork'}",
             reasoning=f"Cowork token-gate request from {entry.get('from')}: {entry.get('subject')}",
             ttl_seconds=ttl,
         )
@@ -240,7 +248,11 @@ def _handle_token_gate(new_msgs: list) -> None:
             f"Cowork board gate: {entry.get('subject')}",
             f"From Cowork: {entry.get('subject')}\ndeadline: {deadline_str}\n"
             f"approve over SSH: scripts/approve.sh allow {request_id}\n"
-            f"valid until {_GATE_DEADLINE_BUFFER_S // 60} min before deadline. "
+            # (operator 2026-10-16): the window is the derived TTL, not the
+            # whole lead -- say when it ends (UTC + ET).
+            f"valid {int(ttl // 60)} min, until "
+            f"{time.strftime('%H:%M UTC', time.gmtime(now + ttl))} / "
+            f"{_dt.datetime.fromtimestamp(now + ttl, _dt.timezone.utc).astimezone(ZoneInfo('America/New_York')).strftime('%H:%M ET')}. "
             f"No signature = denied at expiry.",
             4,
             deny_url,

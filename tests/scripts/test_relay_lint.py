@@ -53,5 +53,13 @@ def test_missing_wrapper():
 def test_live_twin_install_must_precede_signing():
     bad = "scripts/sign-manifest.sh; git add -A\ninstall -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\""
     assert any("after sign-manifest" in w for w in lint(bad))
-    good = "install -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\"\nscripts/sign-manifest.sh; git add -A"
+    good = ("install -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\"\nscripts/sign-manifest.sh; git add -A"
+            "\nREBASELINE=1 bash scripts/stack-refresh.sh --tripwire --dry-run --now")
     assert not lint(good)
+
+
+def test_unit_install_requires_tripwire_rebaseline():
+    """2026-10-16: a relay that installs a unit must re-baseline the stack-refresh tripwire."""
+    relay = 'install -m 644 .config/systemd/user/x.timer "$HOME/.config/systemd/user/x.timer"\nscripts/sign-manifest.sh'
+    assert any("audit baselines" in why for why in lint(relay))
+    assert not any("audit baselines" in why for why in lint(relay + "\nREBASELINE=1 bash scripts/stack-refresh.sh --tripwire --dry-run --now"))

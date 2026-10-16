@@ -11,6 +11,18 @@ changes when it is active: NOTHING) -- common.db.conn() keeps using its
 existing thread-local sqlite3 connection exactly as it does today. This
 module is not even imported unless something asks for it.
 
+2026-10-16 (operator rule: the public demo is logically AND physically
+separated from production): _pg_conninfo() and pg_conn() REFUSE (raise
+PostgresRefused) when DISPATCH_DB_BACKEND is anything but postgres --
+until then a process that pinned itself to sqlite (the demo containers,
+via demo-secrets.env) could still reach production through any direct
+pg_conn() caller (src/demo/profiles.py did, failing only for lack of a
+password). With DISPATCH_DEMO_ISOLATION=1 (set by the demo quadlets)
+they also refuse any conninfo whose dbname or user is the production
+pair, so a demo container that inherits dispatch.env's DISPATCH_PG_*
+can never open the production database even once a demo Postgres
+instance and role exist. See _refuse_unless_postgres_allowed().
+
 DISPATCH_DB_BACKEND=postgres -- common.db.conn() delegates to pg_conn()
 below: one psycopg_pool.ConnectionPool per process, dict_row rows,
 autocommit off, the same "with conn() as c: ... commit on success,
@@ -141,6 +153,67 @@ def backend() -> str:
     switch in /etc/corporatetraveldc/dispatch.env -- nothing in this
     codebase ever writes it."""
     return config.get("DISPATCH_DB_BACKEND", "sqlite").strip().lower()
+
+
+# The production database/role pair (one Postgres instance, one database,
+# one superuser role as of 2026-10-16 -- docs/DEMO_DATA_ISOLATION_PLAN_
+# 2026-08-13.md status note). A demo-side process must never hold a
+# connection to either.
+PRODUCTION_PG_DB = "corporatetraveldc"
+PRODUCTION_PG_USER = "dispatch"
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+class PostgresRefused(RuntimeError):
+    """This process is not allowed to open a Postgres connection: either
+    DISPATCH_DB_BACKEND is not `postgres` (the operator pinned it to
+    sqlite, e.g. the public-demo containers) or DISPATCH_DEMO_ISOLATION=1
+    and the resolved dbname/user is the production pair. Raised BEFORE any
+    socket is opened; the message never carries a password."""
+
+
+def demo_isolation() -> bool:
+    """DISPATCH_DEMO_ISOLATION=1 -- set by the public-demo quadlets
+    (corporatetraveldc-demo-api, corporatetraveldc-runner-demo), never in
+    the shared dispatch.env (it would refuse production itself)."""
+    return config.get("DISPATCH_DEMO_ISOLATION", "").strip().lower() in _TRUTHY
+
+
+def _refuse_unless_postgres_allowed(dbname: str | None = None, user: str | None = None) -> None:
+    """2026-10-16 demo/production isolation guard, called by _pg_conninfo()
+    and pg_conn() before anything touches a socket. Two independent
+    refusals:
+
+    1. DISPATCH_DB_BACKEND != postgres. The sqlite override used to be
+       honoured only by common.db.conn()'s branch; every direct pg_conn()
+       caller (demo.profiles, demo.db, second_brain.index_db, audit_chain)
+       ignored it and went to Postgres anyway -- the demo-api container,
+       pinned to sqlite, was targeting the production database and only
+       failed for lack of a password (verified live 2026-10-16 12:13Z).
+    2. DISPATCH_DEMO_ISOLATION=1 and the dbname OR user is the production
+       pair. Either half alone is production: the production role on a
+       demo database is still the superuser; a demo role on the production
+       database is still production data.
+    """
+    b = backend()
+    if b != "postgres":
+        raise PostgresRefused(
+            f"db_backend: DISPATCH_DB_BACKEND={b!r} -- this process is pinned "
+            "off Postgres; a direct pg_conn()/_pg_conninfo() caller must not "
+            "reach it (demo/production isolation, 2026-10-16)"
+        )
+    if demo_isolation():
+        if dbname is None:
+            dbname = config.get("DISPATCH_PG_DB", PRODUCTION_PG_DB)
+        if user is None:
+            user = config.get("DISPATCH_PG_USER", PRODUCTION_PG_USER)
+        if dbname == PRODUCTION_PG_DB or user == PRODUCTION_PG_USER:
+            raise PostgresRefused(
+                "db_backend: DISPATCH_DEMO_ISOLATION=1 refuses the production "
+                f"database/role (dbname={dbname!r}, user={user!r}) -- a demo "
+                "process gets its own Postgres instance and role or none at all"
+            )
 
 
 # ── SQL translation ──────────────────────────────────────────────────────────
@@ -485,6 +558,7 @@ def _pg_conninfo() -> str:
     port = config.get("DISPATCH_PG_PORT", "5432")
     dbname = config.get("DISPATCH_PG_DB", "corporatetraveldc")
     user = config.get("DISPATCH_PG_USER", "dispatch")
+    _refuse_unless_postgres_allowed(dbname, user)
     password = config.get("DISPATCH_PG_PASSWORD", "")
     parts = [f"host={host}", f"port={port}", f"dbname={dbname}", f"user={user}"]
     if password:
@@ -701,7 +775,14 @@ def pg_conn() -> Generator[_TranslatingConnection, None, None]:
     """Postgres counterpart to common.db.conn()'s sqlite contract:
     `with pg_conn() as c: ...` commits on normal exit, rolls back on
     exception -- provided by psycopg_pool.ConnectionPool.connection()
-    itself, not reimplemented here."""
+    itself, not reimplemented here.
+
+    2026-10-16: refuses (PostgresRefused) unless DISPATCH_DB_BACKEND is
+    postgres and, under DISPATCH_DEMO_ISOLATION=1, the target is not the
+    production database/role -- checked on every call, not only when the
+    pool is first built, so an already-open pool cannot outlive a flip of
+    the switch."""
+    _refuse_unless_postgres_allowed()
     pool = _get_pool()
     with pool.connection() as raw:
         yield _TranslatingConnection(raw)
@@ -828,7 +909,11 @@ def ref_conn() -> Generator[_RefGuardedConnection, None, None]:
 #   db.py:2154-2161                     `r[0]` through `r[5]` (feed_data_usage
 #                                        usage-stats row unpacked positionally)
 #
-# None of these are reachable today (DISPATCH_DB_BACKEND defaults to and
-# stays sqlite in every env file). Before any of these accessor functions
-# is exercised under DISPATCH_DB_BACKEND=postgres, rewrite the access to
-# `row["col"]` first.
+# 2026-10-16 correction: the sentence that stood here ("none of these are
+# reachable today -- DISPATCH_DB_BACKEND defaults to and stays sqlite in
+# every env file") has been false since the 2026-09-19 cutover:
+# config/dispatch.env sets DISPATCH_DB_BACKEND=postgres, so every accessor
+# runs under Postgres in production. Only the two public-demo containers
+# pin sqlite (demo-secrets.env). The line numbers above are the 2026-09-17
+# audit and have drifted; any positional access still present must be
+# rewritten to `row["col"]` when touched.

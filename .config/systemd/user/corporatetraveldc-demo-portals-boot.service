@@ -1,0 +1,23 @@
+[Unit]
+Description=Corporate Travel DC -- start the two demo portals after the serialized boot rollout
+# 2026-10-16: corporatetraveldc-demo-portal-client / -personal carry no
+# WantedBy= (the 2026-09-06 anti-boot-storm rule) and their headers said
+# corporatetraveldc-stack-boot-stagger.service's ORDER would start them --
+# it never listed either, so after every reboot both portals stayed down
+# until someone noticed. This oneshot owns their boot start instead: it
+# runs after corporatetraveldc-boot-stagger.service, the last step of the
+# serialized, load-gated rollout (stack-boot-stagger -> boot-stagger), so
+# the two nginx containers come up only once the whole production stack
+# is up, never alongside it. Requires= so a failed or missing rollout
+# never starts them early; --no-block so this unit does not hold
+# default.target while podman pulls/starts the containers.
+After=corporatetraveldc-boot-stagger.service
+Requires=corporatetraveldc-boot-stagger.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemctl --user start --no-block corporatetraveldc-demo-portal-client.service corporatetraveldc-demo-portal-personal.service
+
+[Install]
+WantedBy=default.target

@@ -24,6 +24,7 @@ This intentionally does NOT create the scratch database itself (tests
 should not have CREATE DATABASE privilege exercised implicitly) -- it is
 provisioned once, out of band, exactly like the above.
 """
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -59,10 +60,17 @@ def _postgres_reachable() -> bool:
     except ImportError:
         return False
     try:
-        conninfo = db_backend._pg_conninfo().replace(  # noqa: SLF001
-            f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
-            f"dbname={SCRATCH_DB}",
-        )
+        # 2026-10-16: _pg_conninfo() refuses under a non-postgres backend
+        # (demo/production isolation guard) and tests/conftest.py pins the
+        # process to sqlite at import; this probe is about Postgres, so it
+        # names the backend itself, exactly as _require_scratch_db() does
+        # per test.
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"DISPATCH_DB_BACKEND": "postgres"}):
+            conninfo = db_backend._pg_conninfo().replace(  # noqa: SLF001
+                f"dbname={config.get('DISPATCH_PG_DB', 'corporatetraveldc')}",
+                f"dbname={SCRATCH_DB}",
+            )
         with psycopg.connect(conninfo, connect_timeout=3) as c:
             c.execute("SELECT 1")
         return True

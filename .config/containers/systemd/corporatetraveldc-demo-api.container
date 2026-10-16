@@ -43,13 +43,22 @@ PublishPort=127.0.0.1:8004:8004
 PublishPort=100.x.x.x:8004:8004
 Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z
 Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z
-# 2026-09-20: demo.profiles (this process's own password-gate table)
-# moved off its standalone demo_access.db SQLite file onto Postgres
-# (demo_profiles, pg_schema/0057_demo.sql) -- same socket-volume
-# convention as every other Postgres-connected app container. Does NOT
-# reopen the F6 mount narrowing above: this is a separate named volume
-# (the shared Postgres socket dir), never /var/lib/corporatetraveldc.
-Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+# 2026-10-16 (operator rule: the public demo is logically AND physically
+# separated from production). The 2026-09-20 line that stood here --
+# `Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql`, added when
+# demo.profiles moved onto Postgres (demo_profiles, pg_schema/0057) --
+# gave this public-facing container the PRODUCTION Postgres socket: one
+# instance, one database, one superuser role, and dispatch.env below
+# points DISPATCH_PG_DB/USER at exactly that pair. It only ever failed
+# for lack of a password. Removed: no Postgres socket is mounted here at
+# all. demo.profiles keeps its password-gate store in demo_access.db on
+# the demo-state volume above (DISPATCH_DB_BACKEND=sqlite, pinned by
+# demo-secrets.env), and DISPATCH_DEMO_ISOLATION=1 makes
+# common.db_backend refuse the production database/role outright even
+# if a socket ever reappears. A demo-owned Postgres instance and role
+# are a separate operator decision (docs/DEMO_DATA_ISOLATION_PLAN_
+# 2026-08-13.md, status note).
+Environment=DISPATCH_DEMO_ISOLATION=1
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-08-26 fix (Opus blind review C-22 follow-up): DEMO_SESSION_SECRET
 # lives here, scoped ONLY to the two public-demo containers -- never load

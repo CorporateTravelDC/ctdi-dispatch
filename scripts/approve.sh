@@ -89,6 +89,10 @@ def explain(r):
                      "APPROVE: the next liveness run may make that account inert (or reactivate it) while offline, within 12 h of the lockdown start. DENY: the action stays held."),
         "sudo": ("A privileged (sudo) command on the host.", "Read the exact command below before signing.",
                  "APPROVE: that exact command may run once. DENY: it does not run."),
+        # (operator 2026-10-16)
+        "board-gate": (f"Cowork's board-write token gate: {r.get('command_pattern')} -- a courtesy GATE reply on the Cowork board, requested by {r.get('requester') or 'the board'}.",
+                       "Low stakes: it only posts GATE: APPROVED or GATE: DENIED back to the token-gate thread so Cowork can refresh its own board-write token. It authorizes nothing the server enforces (the weekly presence attestation is separate and cannot be satisfied here).",
+                       "APPROVE: the next board sweep posts GATE: APPROVED. DENY or let it expire: it posts GATE: DENIED."),
     }.get(kind, (f"An approval of kind {kind!r}.", "No plain-language template for this kind yet: read the request below.", ""))
     print("--- what this is ---\n" + what[0] + "\n--- why / when to approve ---\n" + what[1]
           + ("\n--- effect ---\n" + what[2] if what[2] else "")

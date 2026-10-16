@@ -1,5 +1,64 @@
 # Demo Data Isolation — Sovereign Scrubbed Source Plan
 
+> **Status note, 2026-10-16 (code + quadlets; verified against the live box
+> 2026-10-16 12:13Z).** Operator rule: the public demo is logically **and**
+> physically separated from production. On 2026-10-16 it was not: one
+> Postgres instance (`corporatetraveldc-pgsql`), one database
+> `corporatetraveldc`, one superuser role `dispatch`; the
+> `corporatetraveldc-demo-api` and `corporatetraveldc-runner-demo` quadlets
+> mounted the production socket volume `corporatetraveldc-pgsql-sock` and
+> loaded `dispatch.env` with `DISPATCH_PG_DB`/`DISPATCH_PG_USER` pointing at
+> that pair. demo-api pinned `DISPATCH_DB_BACKEND=sqlite` (demo-secrets.env,
+> 2026-09-28), but `src/common/db_backend.py`'s `pg_conn()` never consulted
+> the backend, so `src/demo/profiles.py` (moved onto Postgres 2026-09-20,
+> `pg_schema/0057_demo.sql`) targeted production and failed only for lack of
+> a password — the demo login had been broken since the cutover, not isolated.
+>
+> **Enforced now (this commit):**
+>
+> - `src/common/db_backend.py`: `_pg_conninfo()` and `pg_conn()` raise
+>   `PostgresRefused` when `DISPATCH_DB_BACKEND` is not `postgres` (the
+>   sqlite pin is honoured by every direct caller, not only `db.conn()`), and
+>   under `DISPATCH_DEMO_ISOLATION=1` refuse any connection whose dbname
+>   **or** user is the production pair, before a socket is opened.
+> - `src/demo/profiles.py`: under a non-postgres backend the password-gate
+>   store is its own SQLite file in the demo-state volume
+>   (`DEMO_ACCESS_DB`, default `/var/lib/corporatetraveldc-demo-state/
+>   demo_access.db`, the pre-2026-09-20 `profiles` table byte-for-byte, so the
+>   file already in that volume works as-is). Postgres `demo_profiles` remains
+>   the shape for a future demo-owned instance.
+> - Quadlets: `corporatetraveldc-demo-api.container` and
+>   `corporatetraveldc-runner-demo.container` no longer mount
+>   `corporatetraveldc-pgsql-sock` and set `Environment=DISPATCH_DEMO_ISOLATION=1`.
+>   `config/demo-secrets.env.example` now tracks the live
+>   `DISPATCH_DB_BACKEND=sqlite` pin; `config/dispatch.env.example` documents
+>   the flag (commented out — it must never be active in the shared file).
+> - Tests: `tests/common/test_db_backend_demo_isolation.py`,
+>   `tests/demo/test_profiles_sqlite.py`,
+>   `tests/scripts/test_demo_quadlets_isolation.py` (no public-demo quadlet
+>   mounts the production socket or `/var/lib/corporatetraveldc`).
+>
+> **Remaining (operator decisions, not done here):**
+>
+> - A separate demo Postgres instance and role (the demo's own
+>   `demo_profiles`/`demo_snapshots` home). Until then the demo app
+>   containers have no Postgres at all, by design.
+> - The two trusted-side producers keep production access: the recorder
+>   (`corporatetraveldc-demo.container`) mounts `/var/lib/corporatetraveldc`
+>   **read-write** and the production socket (it writes `demo_snapshots` to
+>   the production database), as does
+>   `corporatetraveldc-second-brain-demo-archiver-daily.container`. They serve
+>   nothing publicly, and the isolation test names them explicitly so nothing
+>   else joins them.
+> - The Postgres `demo_profiles` table may hold profiles created through the
+>   admin API between 2026-10-10 (when the admin token started working) and
+>   2026-10-16; the sqlite file holds the 7 rows of 2026-08-02 (4 active). If
+>   any newer profile matters, export it host-side (read-only) into the sqlite
+>   file; otherwise re-create it through `/admin/demo/profiles` after the
+>   restart.
+>
+> Claims in the plan below that this supersedes are struck through in place.
+
 Written 2026-08-13. Design/planning document for operator review — **no code
 in this repo changes as part of this doc**. It responds to finding F6 of the
 red-team pass (`docs/LIVE_PENTEST_REDTEAM_2026-08-13.md`, branch
@@ -152,9 +211,12 @@ Sign off on the open questions in §5, and on the two directory names:
   mounted `:ro` into demo-api (and runner-demo only if verification in
   Phase 4 shows it needs any mount at all).
 - `/var/lib/corporatetraveldc-demo-state/` — tiny read-write directory for
-  `demo_access.db` (profiles/passwords, 12 KB, currently at
+  `demo_access.db` (profiles/passwords, 12 KB, ~~currently at
   `/var/lib/corporatetraveldc/demo_access.db` per `src/demo/profiles.py`
-  line 33). It is already fully independent of live data, but it **must**
+  line 33~~ relocated there 2026-08-26; moved onto the production Postgres
+  2026-09-20; back in this directory as the demo's own store since
+  2026-10-16, see the status note). It is already fully independent of live
+  data, but it **must**
   leave the live directory or demo-api keeps a live-dir mount forever and
   the whole point of Phase 4 is lost. Kept separate from demo-source so the
   scrub output stays a strictly read-only surface for every demo process.
@@ -233,7 +295,8 @@ sovereign file exists but nothing serves it until this sign-off.
   cycle behind now**." That is a strictly stronger property — the old
   boundary was temporal only; the new one is artifact-based and temporal.
   `DEMO_ANCHOR_OVERRIDE` stays as a curation knob. `profiles.py`'s `DB`
-  default moves to the demo-state directory.
+  default moves to the demo-state directory (done 2026-08-26; ~~undone by the
+  2026-09-20 Postgres move~~ restored 2026-10-16 as `DEMO_ACCESS_DB`).
 
 ### Phase 4 — Container mount narrowing (highest-risk step)
 
@@ -242,15 +305,21 @@ still runs the old config:
 
 - `corporatetraveldc-demo-api.container`: replace the live-dir volume with
   `Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z`
-  plus `…-demo-state:…-demo-state:z` (rw — profile admin writes).
+  plus `…-demo-state:…-demo-state:z` (rw — profile admin writes). (Done
+  2026-08-14. ~~The 2026-09-20 Postgres move then added the production socket
+  volume `corporatetraveldc-pgsql-sock` to this container~~ — removed
+  2026-10-16, status note.)
 - `corporatetraveldc-runner-demo.container`: first *verify* what its
   live-dir mount is actually for — the runner in demo mode proxies demo-api
   over HTTP and plausibly needs no state mount at all; if so, delete the
   volume line outright rather than narrowing it.
 - `corporatetraveldc-demo.container` (recorder): keep its live-API HTTP
   access (it is trusted-side by design) but narrow its mount to a staging
-  directory holding `demo.db` — after this phase, **no container in the
-  demo pipeline mounts `/var/lib/corporatetraveldc` at all**.
+  directory holding `demo.db` — after this phase, ~~**no container in the
+  demo pipeline mounts `/var/lib/corporatetraveldc` at all**~~ (not done as
+  of 2026-10-16: the recorder still mounts `/var/lib/corporatetraveldc`
+  read-write and the production Postgres socket — remaining item, status
+  note).
 
 **Rollback path, explicit:** the quadlets are git-tracked; rollback is
 `git checkout` of the previous `.container` file + `systemctl --user
@@ -358,7 +427,9 @@ pentest branch merges or in a follow-up dated doc.
    — recommend yes, in this pass: it's demo-owned state, and leaving it in
    the live directory forces demo-api to keep a live-dir mount, defeating
    Phase 4. The only real question is timing, and doing it any later means
-   doing Phase 4 twice.
+   doing Phase 4 twice. (Decided yes, done 2026-08-26; ~~superseded by the
+   2026-09-20 move onto Postgres~~ — that move put the demo's only database
+   client on production and is reversed 2026-10-16, status note.)
 5. **Default loop window**: keep `LOOP_DAYS=14` with the trailing anchor
    (recommended — profiles/tiers already handle longer windows), or widen
    the default to 28 to match the backfill span?

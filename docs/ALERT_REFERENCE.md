@@ -80,8 +80,9 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 | `aim_fns-alerts` / `aim_fns-<zone>` | `aim_parser` residual (`:490`) | 3 (+1) |
 | `stdds-alerts`, ~~`stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>`~~ (corrected 2026-10-15: since 2026-10-13 every tracked airport fires its zone topic `stdds-<zone>`, so DCA/IAD/BWI now reach `stdds-zdc`; per-airport topics exist only in the priority zones zdc, zny, zatl, zob: `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`, `-atl`, `-cle`/`-pit`/`-dtw`) | `smes_parser` (`:407` PCT, ~~`:607`~~ `:623` surface, ~~`:1031`~~ `:1048` safety — silenced, ~~`:1283`~~ `:1310` taxi) | 1–3 |
 | `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`, inbound tracker `inbound_*`, `fdps_tail_change` / `tdes_tail_change` and their `_rejected` notes; §5); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`) | 2–4 |
-| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`; by a code bug it also sends vessel and drone retries here, §4) | 2–4 |
+| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`~~; by a code bug it also sends vessel and drone retries here, §4~~ (corrected 2026-10-16: train retries only; vessel retries moved to `vessel-alerts` on 2026-10-15 and drone retries to `drone-alerts` on 2026-10-16, `pusher/main.py:641`)) | 2–4 |
 | `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ `:708`); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ `web/routes/watchlist.py:511`, batch map `:600`). No vessel watches and no AIS source live, so silent by design | 2–3 |
+| `drone-alerts` | (added 2026-10-16) `watchlist_event_hit` drone branch (`shared/watchlist.py`, `UAS ` title, "Drone <id>" dispatch copy); web watchlist remove map (`web/routes/watchlist.py`, no drone add route exists); pusher retries (`push_watchlist_retries`); `utm_watcher` Remote ID hits (`NTFY_TOPIC` default, was `flight-alerts`). Until 2026-10-16 drone events fell through to the train branch and reached `train-alerts` with `TRN ` titles. Not in `ntfy_push.TOPIC_CLICK`, the runner's `ntfy_stream` default list or `NtfyFeedView` (neither is `vessel-alerts`), so a tap opens the runner root. No drone watches live | 2–4 |
 | `dispatch` | the concise leg of every `_fire_ntfy_dual`; `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ `:288`, `:321`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
 | `dispatch-debriefs` / `dispatch-ops` | `send_dual` defaults: `weekly_summary.py:210` (both legs, p3, `email=True`); `ops_brief.py` full leg; `send_run_status()` pings on `dispatch-ops` (p2 ok / p4 fail) from 11 skills: aam daily/weekly, aviation, concierge-travel, executive-protection, gig-economy, trains-yachts daily watches, second-brain daily/weekly, disruption-weather-digest, transport-pattern-digest; ~~`watchdog.sh`~~ (corrected 2026-10-15: the watchdog publishes only to `ops-health` and `hot-alerts`, and its `root-alerts` token can reach nothing else). Bodies over 60,000 bytes are truncated (2026-10-13; two ~46k-character briefs had been rejected) | 2–4 |
 | `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (`:460`); ~~`brief-fallback-monitor.sh`~~ (corrected 2026-10-15: it publishes to `BRIEF_FALLBACK_TOPIC`, default `ops-health`, which neither its unit nor `dispatch.env` overrides) | 3 |
@@ -204,7 +205,7 @@ events at its destination, inside the instance window). TDES/TDLS watchlist
 | `push_cps_update` | `cps` | ~~3~~ (corrected 2026-10-15: 3 / 4 / 5 for GREEN / YELLOW / RED; no Pushover) |
 | `push_wx_change` (METAR primaries KDCA/KIAD/KBWI; ≥ 10 kt or ≥ 45° change, or a routine update at most hourly while any has wind; suppressed if METAR > 1200 s old or 3 failures) | `wx-alerts` p3, or `hot-alerts` via `hot_push` at ≥ 30 kt | 3 / 5 |
 | `push_flight_watchlist_landings` (periodic landing dedup) | `flight-alerts` | 4 |
-| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ (corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`) | per event |
+| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ ~~(corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`)~~ (corrected 2026-10-16: `flight-alerts` / `vessel-alerts` / `drone-alerts` / `train-alerts` by entry type, same topic, title prefix and noun as the original send, + `dispatch`; `pusher/main.py:641`) | per event |
 | `send_test_alert` (admin trigger `push_test_alert`, `poller/main.py:436`) | caller-chosen, default `ops-health` | caller-chosen |
 
 **VIP TFRs (2026-10-14).** FAA `type: "VIP"` decides what is VIP. Each VIP
@@ -259,9 +260,26 @@ a confirming source moves the phase to `off` through
 seen by ADS-B" (p4); otherwise it pushes "departure overdue -- not observed
 90+ min after scheduled departure; no OFF asserted" (trigger
 `departure_overdue`, p4) and leaves the phase. The old schedule-inferred
-OFF is gone. The schedule-based **IN** inference remains, requires ACARS
+OFF is gone. ~~The schedule-based **IN** inference remains, requires ACARS
 `on`/`in` confirmation (FIDS cannot confirm it), and writes through
-`db.update_watchlist_oooi_phase` (not the authority-gated writer).
+`db.update_watchlist_oooi_phase` (not the authority-gated writer).~~
+(corrected 2026-10-16: OOOI authority is hard-set to SWIM for every writer.
+The schedule-based **IN** inference still requires ACARS `on`/`in` agreement
+but **never writes the OOOI phase**: it records the inferred phase once per
+entry in the `watchlist_history` row only (`oooi_in_inferred`,
+`event_detail.inferred_phase="in"`, `asserted=false`, `source=
+"schedule_inference"`; push text "IN (inferred, not asserted)", p4) and the
+asserted phase is left to the SWIM surface/airline parsers (SMES/TFMS) and
+the gated ACARS path. The poller OOOI block (`_check_flight_airplanes_live`)
+and the sweep-time ACARS phase (`sweep_landed_flights`) now write through
+`update_watchlist_oooi_phase_authoritative` naming their confirming source
+(`acars` or `fdps`), and the OOOI block fires only when the gate accepted
+the write; `db.update_watchlist_oooi_phase` itself requires a `source` and
+delegates to the gate, so no caller can write a phase without naming one.
+The gate's rules apply to all of them: FIDS and inference never assert;
+ADS-B never asserts ON or IN; a source below the lock holder's tier cannot
+overwrite a SWIM-asserted phase while SWIM is live. Tests:
+`tests/poller/test_oooi_writers_gated.py`.)
 
 ### Identity and inbound triggers (2026-10-13/14)
 

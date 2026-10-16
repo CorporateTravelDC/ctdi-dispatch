@@ -546,7 +546,7 @@ at an SMES destination (KDCA/KIAD/KBWI).
 | Topic | Content | Priority |
 |---|---|---|
 | `tfr-alert` / `hot-alerts` | ~~VIP/POTUS TFR, Marine One/AF1, severe-ops events~~ (corrected 2026-10-15: each VIP TFR (FAA type VIP, any region) alerts once on both topics, with Pushover co-fire. The alert carries its own FAA text and active window (UTC + ET; the window comes from the FAA detail record, next relay) and fires again only if the FAA changes the TFR. A DC-area VIP set also gets route impact's ground-route hot alert, once per set. CRANE sightings are no longer labelled Marine One. Severe-ops events also use this tier. See `docs/ALERT_REFERENCE.md`.) | 5 |
-| `flight-alerts` / `train-alerts` / `vessel-alerts` | Watchlist events per domain | 2–5 |
+| `flight-alerts` / `train-alerts` / `vessel-alerts` / `drone-alerts` (added 2026-10-16: drone events used to fall through to `train-alerts`) | Watchlist events per domain | 2–5 |
 | `dispatch` | Concise bottom line for all events | mirrors source |
 | `dispatch-debriefs` / `dispatch-ops` | Full debrief tables / weekly aggregate | 2–3 |
 | `cps` | CPS score changes | 3–5 |

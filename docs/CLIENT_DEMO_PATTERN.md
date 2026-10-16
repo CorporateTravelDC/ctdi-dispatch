@@ -25,6 +25,16 @@ not installed,~~ (corrected 2026-10-15: installed 2026-10-12 and both
 route in the tracked `cloudflared/` or `nginx/` config), and its header points at a
 `docs/DEMO_PORTALS.md` that does not exist (still missing 2026-10-15).
 
+2026-10-16: the two portal quadlets carry no `WantedBy=` (anti-boot-storm
+rule) and their headers claimed `stack-boot-ctl.sh`'s ORDER would start them
+— it never listed either, so after every reboot both stayed down until
+started by hand. New
+`.config/systemd/user/corporatetraveldc-demo-portals-boot.service` (oneshot,
+`After=`/`Requires=corporatetraveldc-boot-stagger.service`, the end of the
+serialized rollout; `WantedBy=default.target`) starts both portals with
+`systemctl --user start --no-block` once the whole stack is up. Test:
+`tests/scripts/test_demo_portals_boot.py`.
+
 Rechecked 2026-10-15 01:45Z: still no `corporatetraveldc-client-demo@<slug>`
 instance; `corporatetraveldc-ccw-demo` and `corporatetraveldc-ccw-preview1` are
 active; the `corporatetraveldc-ccw-demo-webdev-expiry.timer` last fired

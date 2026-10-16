@@ -61,7 +61,7 @@ import requests
 # ---------------------------------------------------------------------------
 DISPATCH_BASE_URL     = os.environ.get("DISPATCH_BASE_URL",    "http://100.x.x.x:8000")
 DISPATCH_ADMIN_TOKEN  = os.environ.get("DISPATCH_ADMIN_TOKEN", "")
-NTFY_TOPIC            = os.environ.get("NTFY_TOPIC",           "flight-alerts")
+NTFY_TOPIC            = os.environ.get("NTFY_TOPIC",           "drone-alerts")   # (operator 2026-10-16): was flight-alerts; UAS has its own topic
 
 # Comma-separated UAS IDs (CTA-2063-A serial numbers or session IDs) to
 # always watch, on top of the synced entry_type=="drone" watchlist.
