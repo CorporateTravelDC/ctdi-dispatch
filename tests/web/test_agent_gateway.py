@@ -111,7 +111,8 @@ def test_mcp_tools_are_attributed_to_the_account(env):
     _, tok = _link(env)
     assert _mcp(env, tok["access_token"], "initialize", {"protocolVersion": "2025-06-18"}).json()["result"]["protocolVersion"] == "2025-06-18"
     names = {t["name"] for t in _mcp(env, tok["access_token"], "tools/list").json()["result"]["tools"]}
-    assert {"board_read", "board_post", "research_read", "workspace_contribute", "council_request"} <= names
+    assert names == {"status", "board_read", "board_post", "research_list", "research_read", "workspace_contribute",
+                     "council_request", "skill_read"}                      # exactly eight (AGENT_TRUST_MODEL §7.2)
     out = _mcp(env, tok["access_token"], "tools/call", {"name": "board_post", "arguments": {
         "to": "dispatch", "thread": "coord", "subject": "hi", "body": "check-in"}}).json()["result"]
     assert not out.get("isError")
@@ -314,3 +315,116 @@ def test_every_tool_call_is_in_the_audit_chain_without_its_content(env):
     assert ok[-1]["account"] == "ctdc-agent-anthropic-cowork" and len(ok[-1]["args_sha256"]) == 64
     assert any(d.get("tool") == "no_such_tool" and d["outcome"] == "unknown-tool" for d in details)
     assert all(secret_draft not in json.dumps(d) for d in details)
+
+
+# -- skill_read (2026-10-16): the READ side of the skill grants for connectors ----------------
+
+@pytest.fixture
+def skills(tmp_path, monkeypatch):
+    """A synthetic signed catalog + grants file; never the live manifest or
+    /etc/ctdc-skill-grants.conf. alpha/beta are signed; gamma is not in the
+    manifest; delta's manifest hash is wrong."""
+    import importlib.util
+    from web.routes import agent_gateway as route
+    repo = tmp_path / "skillrepo"
+    for n, body in {"alpha": "# alpha\nalpha instructions\n", "beta": "# beta\nbeta instructions\n",
+                    "gamma": "# gamma\nunsigned\n", "delta": "# delta\nedited after the sign\n"}.items():
+        (repo / "skills" / n).mkdir(parents=True)
+        (repo / "skills" / n / "SKILL.md").write_text(body)
+    (repo / "skills" / "beta" / "scripts").mkdir()
+    (repo / "skills" / "beta" / "scripts" / "run.sh").write_text("#!/bin/sh\necho hi\n")
+    lines = []
+    for n in ("alpha", "beta"):
+        for p in sorted((repo / "skills" / n).rglob("*")):
+            if p.is_file():
+                lines.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(repo)}")
+    lines.append(f"{'0' * 64}  skills/delta/SKILL.md")
+    (repo / "MANIFEST.sha256").write_text("\n".join(lines) + "\n")
+    grants = tmp_path / "grants.conf"
+    grants.write_text("grant ctdc-agent-anthropic-cowork alpha\n")
+    spec = importlib.util.spec_from_file_location(
+        "ctdc_skill_grants_test", Path(__file__).parent.parent.parent / "scripts/lib/skill_grants.py")
+    sg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sg)
+    monkeypatch.setattr(route, "_SKILL_GRANTS_MOD", sg)
+    monkeypatch.setattr(route, "SKILLS_REPO", str(repo))
+    monkeypatch.setattr(route, "SKILL_GRANTS_CONF", str(grants))
+    return {"repo": repo, "grants": grants, "sg": sg}
+
+
+def _skill(env, tok, name=None):
+    args = {} if name is None else {"name": name}
+    return _mcp(env, tok, "tools/call", {"name": "skill_read", "arguments": args}).json()["result"]
+
+
+def test_skill_read_granted_skill_is_readable_and_audited(env, skills):
+    _, tok = _link(env)
+    out = _skill(env, tok["access_token"], "alpha")
+    assert not out.get("isError") and out["content"][0]["text"] == "# alpha\nalpha instructions\n"
+    with db.conn() as c:
+        rows = [r[0] for r in c.execute("SELECT detail FROM audit_log WHERE action = ?", ("agent.tool.call",))]
+    calls = [json.loads(d) if isinstance(d, str) else d for d in rows]
+    last = [d for d in calls if d.get("tool") == "skill_read"][-1]
+    assert last["outcome"] == "ok" and last["account"] == "ctdc-agent-anthropic-cowork" and last["connector"] == "cowork"
+    assert "alpha" not in json.dumps(last)                                   # arguments hashed, never copied
+
+
+def test_skill_read_ungranted_skill_is_refused(env, skills):
+    _, tok = _link(env)
+    out = _skill(env, tok["access_token"], "beta")                           # signed, in the catalog, not granted
+    assert out.get("isError") and out["content"][0]["text"] == "refused: skill not granted"
+    skills["grants"].write_text("grant * *\ndeny ctdc-agent-anthropic-cowork beta\n")   # deny beats grant
+    out = _skill(env, tok["access_token"], "beta")
+    assert out.get("isError") and out["content"][0]["text"] == "refused: skill not granted"
+    out = _skill(env, tok["access_token"], "nosuch")                         # unknown reads the same as ungranted
+    assert out.get("isError") and out["content"][0]["text"] == "refused: skill not granted"
+    skills["grants"].unlink()                                                # missing grants file = HOLD
+    out = _skill(env, tok["access_token"], "alpha")
+    assert out.get("isError") and out["content"][0]["text"] == "refused: skills unavailable"
+
+
+def test_skill_read_unsigned_or_mismatched_hash_is_refused(env, skills):
+    _, tok = _link(env)
+    skills["grants"].write_text("grant * *\n")
+    for n in ("gamma", "delta"):
+        out = _skill(env, tok["access_token"], n)
+        assert out.get("isError"), n
+        assert out["content"][0]["text"] == "refused: skill failed manifest verification"
+        assert str(skills["repo"]) not in json.dumps(out)                    # no paths in the error
+    (skills["repo"] / "skills/alpha/SKILL.md").write_text("# alpha\nedited after the sign\n")
+    out = _skill(env, tok["access_token"], "alpha")
+    assert out.get("isError") and out["content"][0]["text"] == "refused: skill failed manifest verification"
+
+
+def test_skill_read_bad_name_is_refused(env, skills):
+    _, tok = _link(env)
+    skills["grants"].write_text("grant * *\n")
+    for bad in ("../alpha", "alpha/../beta", "/etc/passwd", ".alpha", "a b", "x" * 65):
+        out = _skill(env, tok["access_token"], bad)
+        assert out.get("isError") and out["content"][0]["text"] == "refused: invalid skill name", bad
+
+
+def test_skill_read_star_lists_only_granted_names(env, skills):
+    _, tok = _link(env)
+    skills["grants"].write_text("grant * *\ndeny ctdc-agent-anthropic-cowork beta\n")
+    for name in ("*", None, ""):
+        out = _skill(env, tok["access_token"], name)
+        assert not out.get("isError"), name
+        assert json.loads(out["content"][0]["text"]) == ["alpha", "delta", "gamma"]   # names only, beta denied
+    skills["grants"].write_text("grant ctdc-agent-anthropic-claude *\n")    # another account's grant is not ours
+    assert json.loads(_skill(env, tok["access_token"], "*")["content"][0]["text"]) == []
+
+
+def test_skill_read_service_account_grant_resolves_for_read(env, skills):
+    """The cowork signer is kind=service (the env fixture). apply installs files
+    only for kind=agent registry rows; resolve() is account-name based, so a
+    service account is a valid grant target for READ."""
+    sg = skills["sg"]
+    rules = sg.load_rules(str(skills["grants"]))
+    cat = sg.catalog(str(skills["repo"]), "/nonexistent")
+    eff, denied, _ = sg.resolve(rules, "ctdc-agent-anthropic-cowork", cat)
+    assert set(eff) == {"alpha"} and not denied
+    assert db.board_signer_get("ctdc-agent-anthropic-cowork")["kind"] == "service"
+    _, tok = _link(env)
+    assert json.loads(_skill(env, tok["access_token"], "*")["content"][0]["text"]) == ["alpha"]
+    assert _skill(env, tok["access_token"], "alpha")["content"][0]["text"].startswith("# alpha")

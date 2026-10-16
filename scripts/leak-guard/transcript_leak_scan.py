@@ -49,8 +49,19 @@ SECRETS_ENV = Path(os.environ.get("LEAK_GUARD_SECRETS_ENV", "/etc/corporatetrave
 # named by the file). The healthchecks.io ping URL lives here: anyone holding it can
 # fake "alive". Its last path segment (the check id) is matched on its own too, so a
 # copy without the scheme is caught. Colon-separated override for tests.
+# The default names the OPERATOR's home by account, not "~": the hourly root run
+# (corporatetraveldc-agent-leak-scan) would otherwise look in /root and never load it
+# (parity audit 2026-10-15).
+def _operator_home() -> str:
+    try:
+        import pwd
+        return pwd.getpwnam("corporatetraveldc").pw_dir
+    except (KeyError, ImportError):
+        return os.path.expanduser("~")
+
+
 EXTRA_FILES = [Path(p).expanduser() for p in os.environ.get(
-    "LEAK_GUARD_EXTRA_FILES", "~/.secrets/healthchecks_ping.url").split(":") if p]
+    "LEAK_GUARD_EXTRA_FILES", f"{_operator_home()}/.secrets/healthchecks_ping.url").split(":") if p]
 MIN_LEN = 12
 LIVE_MINUTES = 15
 TEXT_SUFFIXES = {".jsonl", ".json", ".txt", ".log", ".output", ".md", ".out", ""}

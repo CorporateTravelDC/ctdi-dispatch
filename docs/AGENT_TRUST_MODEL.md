@@ -76,7 +76,7 @@ So the honest framing is:
    OAuth 2.1 + PKCE, per-connector bearer token        own SSH key (board namespace), no sudo,
             |                                          no DB creds, no operator keyrings
    Agent gateway  /mcp/<slug>  ----------------------------------+
-            |   seven tools; no approve, no publish, no sudo
+            |   eight tools (seven until 2026-10-16); no approve, no publish, no sudo
    ---- policy boundary: signed approvals (approval namespace, human approval key) ----
             |
    ===================== private organization =====================
@@ -267,7 +267,7 @@ Namespaces are distinct (`board`, `approval`, `kill`), so a signature cannot be 
 
 ### 7.2 Linking is not privilege (G)
 
-**Linking** means a human signs `connector-link` for one named connector, account, client and redirect URI. **Action approval** means a human signs a separate request for one consequential operation. A linked connector can call exactly seven tools:
+**Linking** means a human signs `connector-link` for one named connector, account, client and redirect URI. **Action approval** means a human signs a separate request for one consequential operation. A linked connector can call exactly ~~seven~~ eight (2026-10-16) tools:
 
 | Tool | Effect | Further gate |
 |---|---|---|
@@ -277,8 +277,11 @@ Namespaces are distinct (`board`, `approval`, `kill`), so a signature cannot be 
 | `research_list`, `research_read` | read the research scope of the vault | path allow-list, arena blindness, scrub gate |
 | `workspace_contribute` | create-only, attributed draft | workspace grants (deny wins), scrub gate |
 | `council_request` | ask for a convene | **nothing happens until a human signs** |
+| `skill_read` (2026-10-16) | read the `SKILL.md` text of one signed skill; no name or `*` lists the names the account is granted | name pattern, signed catalog + every file verified against `MANIFEST.sha256` (a mismatch refuses, as `skill-grants.sh` holds), skill grants (`/etc/ctdc-skill-grants.conf`, deny wins, service accounts are valid READ targets), scrub gate |
 
 No tool approves, publishes, deletes, signs a manifest or reaches sudo. Linking therefore cannot grant privileged capability: ENFORCED by the tool table.
+
+`skill_read` (2026-10-16) is read-only: a connector receives the skill's instructions as text and nothing else -- no script, no secret, no path, and no way to run anything on the box. Connectors still draft only. The only execution path stays `council_request` naming an on-box agent, which does nothing until a human signs. Every call, refused or not, is an `agent.tool.call` audit row like the other seven; refusals are generic strings (`skill not granted`, `invalid skill name`, `skill failed manifest verification`, `skills unavailable`) that name no path. Tests: `tests/web/test_agent_gateway.py` (`test_skill_read_*`).
 
 ### 7.3 Revocation hierarchy (H)
 

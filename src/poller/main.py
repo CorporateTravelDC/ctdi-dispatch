@@ -439,11 +439,15 @@ class TriggerReactor:
                 _topic    = payload.get("topic", "ops-health")
                 _title    = payload.get("title")
                 _priority = int(payload.get("priority", 3))
-                await asyncio.get_event_loop().run_in_executor(
+                _sent = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: pusher_main.send_test_alert(
                         _msg, topic=_topic, title=_title, priority=_priority)
                 )
-                db.resolve_trigger(trigger_id, "success")
+                # 2026-10-15 (parity audit / ntfy audit): a failed send was recorded as success.
+                if _sent:
+                    db.resolve_trigger(trigger_id, "success")
+                else:
+                    db.resolve_trigger(trigger_id, "failed", "ntfy and Pushover both failed")
             else:
                 log.warning("Unknown trigger type: %s", trigger_type)
                 db.resolve_trigger(trigger_id, "failed", f"unknown type: {trigger_type}")
@@ -1502,8 +1506,11 @@ def _fdps_tail_change_decision(entry: dict, plan: dict, new_hex: str,
     on the plan's OPERATING callsign with the watch's route/schedule; the
     candidate tail's other filings come from flight_events (DC-area FDPS
     only, so a watch whose origin is outside that coverage usually has no
-    visible previous leg -> rejected, by rule (c)). Any error -> rejection,
-    never a silent repoint."""
+    visible previous leg). Since 2026-10-13 a SWIM source showing the tail on
+    the watched flight is itself the proof, so rule (c) does not apply to
+    SWIM sources and is unreachable while FIDS is not a tail source
+    (flight_instance.SWIM_TAIL_SOURCES); rule (b) still applies. Any error ->
+    rejection, never a silent repoint."""
     from common import flight_instance as fi
     try:
         watched_key = fi.FlightInstanceKey.make(

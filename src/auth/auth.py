@@ -225,9 +225,12 @@ def require_admin(action: str):
     the cached copy rather than a second, empty stream -- this is safe by
     construction, not by convention.
 
-    Retention: audit_log itself had no prune job (unbounded growth) --
-    poller/skills/audit_log_prune.py (added the same day) now deletes rows
-    older than 90 days daily.
+    Retention: audit_log rows are never deleted in place.
+    poller/skills/audit_log_archive.py runs daily in the maintenance window:
+    rows past AUDIT_ARCHIVE_RETENTION_DAYS (default 90) are signed, uploaded
+    off-box, and replaced on-device by a signed stub. (parity audit
+    2026-10-15: this said audit_log_prune.py deletes rows after 90 days;
+    that skill was retired to a no-op stub on 2026-09-22.)
 
     2026-08-25 fix (Opus blind review C-9): a failed authorization used to
     raise its 403 before ever reaching the db.audit() call below, so admin-

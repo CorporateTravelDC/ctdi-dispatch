@@ -84,6 +84,9 @@ def explain(r):
                     "APPROVE: the council goes active until its deadline. DENY: nothing happens."),
         "council-close": ("A request to CLOSE a council.", "Ends contributions.",
                           "APPROVE: the council closes and further contributions are refused. DENY: it stays open."),
+        "liveness": (f"Liveness switch authority under an OFFLINE LOCKDOWN: {r.get('command_pattern')}.",
+                     "Approve only during a compromise lockdown you started, for exactly this account and action; online, the switch needs no approval.",
+                     "APPROVE: the next liveness run may make that account inert (or reactivate it) while offline, within 12 h of the lockdown start. DENY: the action stays held."),
         "sudo": ("A privileged (sudo) command on the host.", "Read the exact command below before signing.",
                  "APPROVE: that exact command may run once. DENY: it does not run."),
     }.get(kind, (f"An approval of kind {kind!r}.", "No plain-language template for this kind yet: read the request below.", ""))

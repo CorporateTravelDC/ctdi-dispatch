@@ -49,6 +49,8 @@ Volume=corporatetraveldc-triggers:/run/corporatetraveldc
 # Nothing untrusted reaches these containers (operator, 2026-09-23), so :z
 # shared relabelling is acceptable.
 Volume=/opt/corporatetraveldc/watchlists:/opt/corporatetraveldc/watchlists:z
+# 2026-10-16: skill grants (root 0644, parsed never sourced) for the gateway's skill_read; read-only
+Volume=/etc/ctdc-skill-grants.conf:/etc/ctdc-skill-grants.conf:ro
 
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the web image reads

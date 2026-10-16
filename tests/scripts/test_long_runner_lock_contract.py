@@ -13,9 +13,9 @@ bare flock again.
 
 Contract (per unit):
   * Exec= uses `flock ... -w <N>` (bounded wait)
-  * either `-E 75` + `SuccessExitStatus` containing 75 (97b9075 form), or
-    an explicit sh -c wrapper that maps flock's give-up exit to a clean
-    skip (transport-pattern-digest's documented form)
+  * `-E 75` + `SuccessExitStatus` containing 75 (97b9075 form); the sh -c
+    exit-1 wrapper is no longer accepted (parity audit 2026-10-15: it also
+    hid the job's own exit 1)
   * TimeoutStartSec >= wait + run budget, where the run budget is the
     pre-existing figure recorded in the unit's own comment; we assert the
     weaker, mechanical part: TimeoutStartSec > wait.
@@ -65,17 +65,22 @@ class LongRunnerLockContract(unittest.TestCase):
                                    "TimeoutStartSec must exceed the lock wait, else the queue "
                                    "wait alone can trip the start timeout (the 2026-10-02 hang)")
 
-                if "-E 75" in exec_line:
-                    ses = _field(text, "SuccessExitStatus") or ""
-                    self.assertIn("75", ses.split(),
-                                  "-E 75 without SuccessExitStatus=75: a lock give-up would "
-                                  "be a unit failure (page) instead of a clean skip")
-                else:
-                    # The only other accepted form: an explicit wrapper that
-                    # maps flock's exit 1 (gave up) to exit 0 with a log line.
-                    self.assertTrue(exec_line.startswith("/bin/sh -c") and "rc=$?" in exec_line,
-                                    "lock give-up must be mapped to a clean skip "
-                                    "(-E 75 + SuccessExitStatus=75, or the sh -c rc wrapper)")
+                # (parity audit 2026-10-15) -E 75 is the only accepted form.
+                # The sh -c wrapper that mapped flock's exit 1 (gave up) to
+                # exit 0 also swallowed the skill's own exit 1 (a real
+                # failure) as a "skip" -- transport-pattern-digest, until
+                # 2026-10-15.
+                self.assertIn("-E 75", exec_line,
+                              "lock give-up must exit 75 (flock -E 75), distinct from a "
+                              "job's own exit 1")
+                ses = _field(text, "SuccessExitStatus") or ""
+                self.assertIn("75", ses.split(),
+                              "-E 75 without SuccessExitStatus=75: a lock give-up would "
+                              "be a unit failure (page) instead of a clean skip")
+                self.assertNotIn("1", ses.split(),
+                                 "SuccessExitStatus must not include 1: that hides real failures")
+                self.assertNotRegex(exec_line, r'\[ "\$rc" -eq 1 \]',
+                                    "an exit-1 -> 0 wrapper hides the job's real failures")
 
 
 if __name__ == "__main__":

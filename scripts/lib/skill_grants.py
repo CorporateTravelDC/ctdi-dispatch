@@ -25,11 +25,13 @@ A deny beats any grant. Expired lines are ignored (a timed deny lapses, a
 timed grant lapses). A missing/unreadable grants file = HOLD: nothing changes.
 
 Apply (root, hourly, --execute): for every agent account in the registry,
-materialize the granted signed+vendor skills into ~/.claude/skills as
+materialize the granted signed+vendor skills into the account's skill root
+(~/.claude/skills; ~/.agents/skills for login mode codex, 2026-10-16) as
 root-owned read-only copies (marker .ctdc-grant), remove revoked ones,
-quarantine anything unsanctioned or tampered, and merge skillOverrides + the
-context-guardian hooks into the agent's settings.json AS THE AGENT. All
-filesystem work inside a home goes through O_NOFOLLOW directory fds.
+quarantine anything unsanctioned or tampered, and (claude mode) merge
+skillOverrides + the context-guardian hooks into the agent's settings.json AS
+THE AGENT. All filesystem work inside a home goes through O_NOFOLLOW
+directory fds.
 """
 from __future__ import annotations
 
@@ -55,6 +57,22 @@ SKIP_NAMES = {"__pycache__", ".DS_Store", MARKER}
 SKILL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 ACCT_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 GUARDIAN = ".claude/skills/dispatch-context-guardian/scripts"
+# 2026-10-16: per login mode, (directory under the home that holds "skills/",
+# directory whose presence means the account is provisioned for that CLI).
+# Until this, every mode got ~/.claude/skills, so a codex-mode account's Codex
+# CLI never saw a granted skill. Codex 0.160.0 (ext/skills/src/host_roots.rs)
+# reads $HOME/.agents/skills -- its user-scope root, the same convention as the
+# repo's .agents/skills/ -- and $CODEX_HOME/skills; but it keeps its bundled
+# .system skills and skill-installer output under $CODEX_HOME/skills, so a
+# root-owned grants root there would quarantine Codex's own files. Grants for
+# codex mode go to ~/.agents/skills; ~/.codex (created by plan.sh codex_setup)
+# marks the account as provisioned. ssh mode keeps ~/.claude/skills.
+SKILL_BASE = {"codex": (".agents", ".codex")}
+DEFAULT_SKILL_BASE = (".claude", ".claude")
+
+
+def skill_base(mode: str) -> tuple[str, str]:
+    return SKILL_BASE.get(mode, DEFAULT_SKILL_BASE)
 
 
 # ---------------------------------------------------------------- grants file
@@ -324,6 +342,42 @@ def digest(items):
     return h.hexdigest()
 
 
+# ------------------------------------------------------- source verification
+def load_manifest(repo: str) -> dict[str, str]:
+    """{relpath: sha256} from <repo>/MANIFEST.sha256 (empty when absent)."""
+    m = {}
+    p = os.path.join(repo, "MANIFEST.sha256")
+    if os.path.exists(p):
+        for raw in open(p):
+            parts = raw.split()
+            if len(parts) == 2:
+                m[parts[1].lstrip("*")] = parts[0]
+    return m
+
+
+def verify_source(name: str, entry: dict, manifest: dict[str, str]):
+    """Verify one catalog entry's bytes: a signed skill file-by-file against the
+    signed manifest, a vendor skill against its pin. -> (files, digest) where
+    files = [(rel, abspath, mode)]; raises ValueError(reason) when the skill
+    must be withheld. Shared by apply (installs) and the agent gateway's
+    skill_read (2026-10-16: connectors READ granted skills through this check)."""
+    try:
+        files = tree_files(entry["path"])
+    except (ValueError, OSError) as e:
+        raise ValueError(f"source unusable ({e})") from None
+    if entry["source"] == "signed":
+        for rel, p in files:
+            key = f"skills/{name}/{rel}"
+            want = manifest.get(key)
+            if want is None or file_sha(p) != want:
+                raise ValueError(f"{key} {'not in' if want is None else 'differs from'} the signed manifest")
+    elif entry["source"] == "vendor":
+        have = digest([(rel, file_sha(p)) for rel, p in files])
+        if have != entry["pin"]:
+            raise ValueError(f"vendor copy {have[:12]} does not match signed pin {entry['pin'][:12]}")
+    return [(rel, p, os.stat(p).st_mode) for rel, p in files], digest([(rel, file_sha(p)) for rel, p in files])
+
+
 # ---------------------------------------------------------------------- apply
 class Applier:
     def __init__(self, a):
@@ -331,17 +385,7 @@ class Applier:
         self.fake = bool(os.environ.get("SKILL_GRANTS_FAKE_ROOT"))
         self.mutate = a.execute and (self.fake or os.geteuid() == 0)
         self.root_uid = int(os.environ.get("SKILL_GRANTS_FAKE_ROOT_UID", os.getuid())) if self.fake else 0
-        self.manifest = self._manifest()
-
-    def _manifest(self):
-        m = {}
-        p = os.path.join(self.a.repo, "MANIFEST.sha256")
-        if os.path.exists(p):
-            for raw in open(p):
-                parts = raw.split()
-                if len(parts) == 2:
-                    m[parts[1].lstrip("*")] = parts[0]
-        return m
+        self.manifest = load_manifest(self.a.repo)
 
     def find(self, msg):
         self.findings.append(msg)
@@ -362,26 +406,19 @@ class Applier:
         pw = pwd.getpwnam(acct)
         return pw.pw_uid, pw.pw_gid
 
-    # source verification -> list of (rel, abspath, mode) or None (withheld)
+    # source verification -> (files, digest) or None (withheld, finding recorded)
     def source_files(self, name, entry):
         try:
-            files = tree_files(entry["path"])
-        except (ValueError, OSError) as e:
-            self.find(f"{name}: source unusable ({e}) -- withheld from every agent")
+            return verify_source(name, entry, self.manifest)
+        except ValueError as e:
+            why = str(e)
+            if why.startswith("source unusable"):
+                self.find(f"{name}: {why} -- withheld from every agent")
+            elif why.startswith("vendor copy"):
+                self.find(f"{name}: {why} -- withheld (re-pin + sign if the upgrade is intended)")
+            else:
+                self.find(f"{name}: {why} -- withheld")
             return None
-        if entry["source"] == "signed":
-            for rel, p in files:
-                key = f"skills/{name}/{rel}"
-                want = self.manifest.get(key)
-                if want is None or file_sha(p) != want:
-                    self.find(f"{name}: {key} {'not in' if want is None else 'differs from'} the signed manifest -- withheld")
-                    return None
-        elif entry["source"] == "vendor":
-            have = digest([(rel, file_sha(p)) for rel, p in files])
-            if have != entry["pin"]:
-                self.find(f"{name}: vendor copy {have[:12]} does not match signed pin {entry['pin'][:12]} -- withheld (re-pin + sign if the upgrade is intended)")
-                return None
-        return [(rel, p, os.stat(p).st_mode) for rel, p in files], digest([(rel, file_sha(p)) for rel, p in files])
 
     def install_copy(self, name, files, want, root_fd, uid, gid, info):
         tmp = f".{name}.new"
@@ -442,39 +479,53 @@ class Applier:
         finally:
             os.close(sub)
 
-    def quarantine(self, name, claude_fd, root_fd, why):
-        if not lexists(QUARANTINE, claude_fd):
-            os.mkdir(QUARANTINE, 0o700, dir_fd=claude_fd)
+    def quarantine(self, name, base_fd, root_fd, why, base=".claude"):
+        """Move <name> (an entry of the skills root, or the root itself when
+        root_fd is None) into ~/<base>/.ctdc-skills-quarantine/."""
+        if not lexists(QUARANTINE, base_fd):
+            os.mkdir(QUARANTINE, 0o700, dir_fd=base_fd)
             if not self.fake:
-                os.chown(QUARANTINE, 0, 0, dir_fd=claude_fd, follow_symlinks=False)
-        qfd = open_dir(QUARANTINE, claude_fd)
+                os.chown(QUARANTINE, 0, 0, dir_fd=base_fd, follow_symlinks=False)
+        qfd = open_dir(QUARANTINE, base_fd)
         try:
             dest = f"{time.strftime('%Y%m%dT%H%M%S')}-{name}"
-            os.rename(name, dest, src_dir_fd=root_fd if root_fd is not None else claude_fd, dst_dir_fd=qfd)
+            os.rename(name, dest, src_dir_fd=root_fd if root_fd is not None else base_fd, dst_dir_fd=qfd)
         finally:
             os.close(qfd)
-        return f"~/.claude/{QUARANTINE}/{dest} ({why})"
+        return f"~/{base}/{QUARANTINE}/{dest} ({why})"
 
     def apply_account(self, acct, mode, rules, cat):
         eff, denied, _ = resolve(rules, acct, cat)
         home = self.home_of(acct)
         uid, gid = self.owner(acct)
+        base, provisioned = skill_base(mode)
         try:
             hfd = os.open(home, O_DIR)
         except OSError as e:
             self.find(f"{acct}: home {home} unusable ({e}) -- skipped")
             return
         try:
-            try:
-                cfd = open_dir(".claude", hfd)
-            except FileNotFoundError:
-                self.note(f"{acct}: no ~/.claude yet (account not provisioned) -- skipped")
+            if not lexists(provisioned, hfd):
+                self.note(f"{acct}: no ~/{provisioned} yet (account not provisioned) -- skipped")
                 return
+            if base != provisioned and not lexists(base, hfd):
+                # codex: ~/.agents is not part of plan.sh's provisioning; it is
+                # the account's own directory (like ~/.claude), only skills/
+                # inside it is root-owned.
+                if not self.mutate:
+                    self.note(f"{acct}: would create ~/{base} (owned by the account) and root-owned ~/{base}/skills with "
+                              f"{len([n for n in eff if cat[n]['source'] in ('signed', 'vendor')])} skill(s)")
+                    return
+                os.mkdir(base, 0o755, dir_fd=hfd)
+                if not self.fake:
+                    os.chown(base, uid, gid, dir_fd=hfd, follow_symlinks=False)
+            try:
+                cfd = open_dir(base, hfd)
             except OSError as e:
-                self.find(f"{acct}: ~/.claude is not a plain directory ({e}) -- skipped")
+                self.find(f"{acct}: ~/{base} is not a plain directory ({e}) -- skipped")
                 return
             try:
-                self._apply_skills(acct, eff, cat, cfd, gid)
+                self._apply_skills(acct, eff, cat, cfd, gid, base)
                 if mode == "claude":
                     self._apply_settings(acct, denied, cat, cfd, uid, gid)
             finally:
@@ -482,21 +533,22 @@ class Applier:
         finally:
             os.close(hfd)
 
-    def _apply_skills(self, acct, eff, cat, cfd, gid):
+    def _apply_skills(self, acct, eff, cat, cfd, gid, base=".claude"):
         want = {n: v for n, v in eff.items() if cat[n]["source"] in ("signed", "vendor")}
+        label = f"~/{base}/skills"
         # the skills root itself must be a real directory owned by root
         if lexists("skills", cfd):
             st = os.stat("skills", dir_fd=cfd, follow_symlinks=False)
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != self.root_uid:
                 why = "symlink/non-directory" if not stat.S_ISDIR(st.st_mode) else "not root-owned (pre-grants layout or tamper)"
                 if self.mutate:
-                    self.find(f"{acct}: ~/.claude/skills {why} -> quarantined to {self.quarantine('skills', cfd, None, why)}")
+                    self.find(f"{acct}: {label} {why} -> quarantined to {self.quarantine('skills', cfd, None, why, base)}")
                 else:
-                    self.find(f"{acct}: ~/.claude/skills {why} (would quarantine)")
+                    self.find(f"{acct}: {label} {why} (would quarantine)")
                     return
         if not lexists("skills", cfd):
             if not self.mutate:
-                self.note(f"{acct}: would create root-owned ~/.claude/skills with {len(want)} skill(s)")
+                self.note(f"{acct}: would create root-owned {label} with {len(want)} skill(s)")
                 return
             os.mkdir("skills", 0o755, dir_fd=cfd)
             if not self.fake:
@@ -512,7 +564,7 @@ class Applier:
                         rmtree_fd(e, rfd)
                     self.note(f"{acct}: {e} revoked{'' if self.mutate else ' (would remove)'}")
                 elif self.mutate:
-                    self.find(f"{acct}: unsanctioned skill {e!r} -> {self.quarantine(e, cfd, rfd, 'no grant')}")
+                    self.find(f"{acct}: unsanctioned skill {e!r} -> {self.quarantine(e, cfd, rfd, 'no grant', base)}")
                 else:
                     self.find(f"{acct}: unsanctioned skill {e!r} (would quarantine)")
             for n, info in sorted(want.items()):

@@ -40,6 +40,10 @@ RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50sna
 COPY src/ src/
 COPY scripts/verify-manifest.sh scripts/verify-manifest.sh
 COPY scripts/verified-exec.sh scripts/verified-exec.sh
+# 2026-10-16: the agent gateway's skill_read serves manifest-verified, granted skills (scripts/lib/skill_grants.py
+# resolves grants + verifies skills/ against the manifest copied below; fails closed when either is missing).
+COPY scripts/lib/skill_grants.py scripts/lib/skill_grants.py
+COPY skills/ skills/
 COPY security/trusted-signing-key.pub.asc security/trusted-signing-key.pub.asc
 # 2026-08-25 fix (Opus blind review C-4 follow-up): verify-manifest.sh
 # now requires signing.env (SIGNING_KEY_FINGERPRINT/AGENT_SIGNING_KEY_

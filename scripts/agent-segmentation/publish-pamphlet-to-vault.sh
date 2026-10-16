@@ -5,10 +5,14 @@
 # never reaches its Unix home, so /home/ACCOUNT/CLAUDE.md is unreadable to
 # it). Renders the account's onboarding pamphlet, prepends the cloud-client
 # rules, runs it through the vault scrub gate and writes it to a STABLE
-# research-scope address the agent can read with its board token:
+# research-scope address the agent reads with its connector's research_read
+# tool (parity audit 2026-10-15: cloud agents use the agent gateway's MCP
+# connector -- src/web/routes/agent_gateway.py TOOLS -- not an X-Board-Key
+# board token; the cloud-client text below said X-Board-Key + a 12 h
+# /api/v1/board/refresh task):
 #
 #   01-Sources/personal-notes/Series/agents/ACCOUNT/PAMPHLET.md
-#   -> GET /api/v1/vault/research?path=01-Sources/personal-notes/Series/agents/ACCOUNT/PAMPHLET.md
+#   -> research_read 01-Sources/personal-notes/Series/agents/ACCOUNT/PAMPHLET.md
 #
 # Standing convention: every cloud (non-SSH) agent account gets its pamphlet
 # published here whenever it is (re)rendered. Run as the operator.
@@ -20,12 +24,12 @@ cat >"$tmp" <<EOF
 > **Cloud client edition -- read this first.** You run outside the dispatch Pi (Anthropic's
 > cloud). You never SSH in and you have no Unix session: the account \`${NAME}\` below is your
 > IDENTITY on the platform (attribution, liveness, kill switch), not a place you log in.
-> - Your only credential is the board token in your shared settings, sent as \`X-Board-Key\` to
->   \`https://dispatch.example.com\`. One shared copy for every chat and scheduled
->   task; exactly ONE scheduled task refreshes it (\`GET /api/v1/board/refresh\`) every 12 h and
->   writes the new value back; a refresh retires the previous token at once.
-> - You can: post to the board, read the board, read the vault research scope
->   (\`GET /api/v1/vault/research?path=...\`, \`.../list?path=...\`). You draft; you never publish.
+> - You reach the platform only through your MCP connector (the agent gateway,
+>   \`/mcp/<your connector>\`), linked once by OAuth with the operator's signed consent; your
+>   vendor renews its own access. Never use an X-Board-Key board token.
+> - You can (connector tools): \`status\`, \`board_read\`, \`board_post\`, \`research_list\`,
+>   \`research_read\`, \`workspace_contribute\`, \`council_request\`, \`skill_read\` (read a skill granted to
+>   you; nothing runs on the box for you). You draft; you never publish.
 > - Sections below about your home directory, \`scripts/...\`, secrets subsets, skills and SSH keys
 >   describe the account on the box -- they do not apply to you. Everything else (the rules,
 >   what you must not do, how you are switched off, councils, never approving) does.

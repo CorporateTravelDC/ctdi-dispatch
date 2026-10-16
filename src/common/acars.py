@@ -167,8 +167,22 @@ def _best_phase_from_messages(messages: list[dict], cutoff_epoch: float) -> tupl
     }
 
 
+def _ladd_listed(registration: str) -> bool:
+    """Parity audit 2026-10-15: a LADD-listed registration is never sent to a third
+    party. Same rule as common.airplanes_live: unknown = not listed, a lookup
+    failure = treat as listed (fail closed, no external query)."""
+    try:
+        from common import db
+        return bool(db.faa_is_ladd(registration))
+    except Exception as e:  # noqa: BLE001 -- fail closed
+        log.debug("jumpseat: LADD check failed (%s) -- not querying", type(e).__name__)
+        return True
+
+
 def _query_jumpseat_phase(registration: str, cutoff_epoch: float) -> tuple[str, dict] | None:
     if not _JUMPSEAT_TOKEN or not registration:
+        return None
+    if _ladd_listed(registration):
         return None
     try:
         resp = requests.get(

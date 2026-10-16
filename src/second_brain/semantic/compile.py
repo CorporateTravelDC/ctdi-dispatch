@@ -653,6 +653,25 @@ def _resolve_note_ts(mtime: str | None, indexed_at: str | None) -> tuple[datetim
         return datetime.min.replace(tzinfo=timezone.utc), indexed_at or ""
 
 
+def _parse_note_ts(s: str | None) -> datetime | None:
+    """Parse a stored note_ts back to a datetime. note_ts is whatever
+    _resolve_note_ts() returned as text: usually the WebDAV mtime in RFC 1123
+    form ("Wed, 15 Oct 2026 17:58:00 GMT"), else indexed_at in ISO form.
+    2026-10-15 (parity audit): the causal/cluster window read it with
+    fromisoformat() only, which rejects the RFC 1123 form, so every note was
+    skipped and both tiers stayed at 0 edges."""
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)
+    except (TypeError, ValueError, IndexError):
+        try:
+            dt = datetime.fromisoformat(s)
+        except (TypeError, ValueError):
+            return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def assign_chronology(conn) -> int:
     """Deterministic, timestamp-only temporal-precedence linking -- writes
     INTO semantic_note_derivations (relation='preceded_by',
@@ -1126,12 +1145,9 @@ def assign_causal_associations(conn, window_days: int = CAUSAL_WINDOW_DAYS,
     for r in conn.execute(
             "SELECT path, instance_type, identifier, note_ts "
             "FROM semantic_note_instance_refs").fetchall():
-        try:
-            ts = datetime.fromisoformat(r["note_ts"])
-        except (TypeError, ValueError):
+        ts = _parse_note_ts(r["note_ts"])
+        if ts is None:
             continue
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
         if ts < cutoff:
             continue
         ent = f"{r['instance_type']}:{r['identifier']}"

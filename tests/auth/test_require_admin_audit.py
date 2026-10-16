@@ -88,3 +88,15 @@ def test_redact_audit_detail_strips_userinfo():
 def test_redact_audit_detail_leaves_ordinary_fields_alone():
     detail = {"sector": "DCA-N", "enabled": True}
     assert _redact_audit_detail(detail) == detail
+
+
+def test_retention_docstring_names_the_live_archive_not_the_retired_prune():
+    # (parity audit 2026-10-15) the docstring said audit_log_prune.py deletes
+    # rows after 90 days; that skill is a retired no-op stub and audit rows are
+    # archived (signed, off-box), never deleted in place.
+    from poller.skills import audit_log_prune
+    doc = require_admin.__doc__
+    assert "audit_log_archive.py" in doc
+    assert "now deletes rows" not in doc
+    assert "never deleted in place" in doc
+    assert "RETIRED" in audit_log_prune.__doc__

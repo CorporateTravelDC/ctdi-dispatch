@@ -27,6 +27,10 @@
 #                                        liveness, pattern liveness-<action>-<account>, was resolved
 #                                        at or after <since-epoch>; else "none" (2026-10-15: the
 #                                        offline-lockdown authority for team-liveness.sh)
+#   liveness-request <account> <inert|reactivate> "<reason>"
+#                                        create the pending approval (kind liveness) that the
+#                                        offline-lockdown path reads; prints its id. Sign it with
+#                                        scripts/approve.sh allow <id> (operator, 2026-10-15)
 #   show       <account>                 line 1: "<active|inactive|none> <role> <kind>"
 #                                        line 2: the registered pubkey (if any)
 #   list
@@ -57,6 +61,7 @@ case "$CMD" in
   revoked-since) [[ -n "$ACCT" && "$ARG3" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage ;;
   rename) [[ -n "$ACCT" && "$ARG3" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || usage ;;
   liveness-approval) [[ -n "$ACCT" && "$ARG3" =~ ^(inert|reactivate)$ && "$ARG4" =~ ^[0-9]+$ ]] || usage ;;
+  liveness-request) [[ -n "$ACCT" && "$ARG3" =~ ^(inert|reactivate)$ && -n "$ARG4" ]] || usage ;;
   list) ;;
   *) usage ;;
 esac
@@ -92,6 +97,23 @@ resolve_pubkey() {
   [[ "$PUB" == ssh-ed25519\ * ]] || { echo "only ssh-ed25519 keys are accepted" >&2; exit 65; }
   COMMENT=$(printf '%s' "$PUB" | awk '{print $3}')
 }
+
+# 2026-10-15 (parity audit): the request the offline-lockdown path reads had no creator.
+# Goes through common.governance on either backend (postgres via the env wrapper).
+if [[ "$CMD" == liveness-request ]]; then
+  runner=(); pg_backend && runner=("${REPO_ROOT}/scripts/with-dispatch-env.sh")
+  "${runner[@]}" env PYTHONPATH="${REPO_ROOT}/src" python3 - "$ACCT" "$ARG3" "$ARG4" <<'PYEOF'
+import getpass, sys
+from common import governance
+acct, action, reason = sys.argv[1:4]
+cmd = f"team-liveness.sh {'--execute (make inert)' if action == 'inert' else '--reactivate'} {acct} under offline lockdown"
+r = governance.create_approval(f"liveness-{action}-{acct}", cmd, kind="liveness",
+                               requester=f"operator:{getpass.getuser()}", reasoning=reason,
+                               ttl_seconds=governance.approval_ttl("liveness"))
+print(f"requested {r['id']} (liveness-{action}-{acct}); sign with: scripts/approve.sh allow {r['id']}")
+PYEOF
+  exit 0
+fi
 
 if pg_backend; then
   case "$CMD" in

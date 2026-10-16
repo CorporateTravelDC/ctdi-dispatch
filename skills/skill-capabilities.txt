@@ -11,6 +11,12 @@ morning                          dispatch API reads; scheduling a recurring task
 nec-train-hifi-track             dispatch API reads; ntfy pushes operator-only (see flight-hifi-track)
 overwater-adsb-handoff-track     dispatch API reads; ntfy pushes operator-only
 second-brain-remember            vault WRITE -> agents use the workspace contribution route (coming); until then hand the note to the operator
+adversarial-doc-refresh          repo + live read-only checks on the box (systemctl/podman/git/SELECT-only psql); output = guard worktree (operator) or workspace contribution (agents); agents never commit, sign or publish
+adversarial-pentest              read-mostly probes of this box's own endpoints and config (1-2 requests, no writes); output = security-review record draft; agents never fix, publish or approve
+adversarial-sweep                everything the two base skills need; multi-stage, operator checkpoints between stages
+adversarial-sweep-docs-first     everything the two base skills need; multi-stage, operator checkpoints between stages
+adversarial-sweep-docs-first-revalidated     everything the two base skills need; multi-stage, operator checkpoints between stages; re-validation waits for signed rollouts
+adversarial-sweep-pentest-first-revalidated  everything the two base skills need; multi-stage, operator checkpoints between stages; re-validation waits for signed rollouts
 dispatch-context-guardian        public dispatch API reads; gated sections are skipped without the admin token (by design)
 personal-export-analysis         vault reads via the research route; raw WebDAV/Nextcloud admin = operator-only
 built-in-browser                 a browser surface on the client; none on this box

@@ -225,7 +225,8 @@ if [[ -n "$ADD_AGENT" ]]; then
     run "install -m 0644 -o ${U} -g ${U} ${AGENTS_SLICE_SRC} ${H}/.config/systemd/user/agents.slice"
     run "${REPO_ROOT}/scripts/skill-grants.sh grant ${U} '*'"
     run "${REPO_ROOT}/scripts/skill-grants.sh apply --execute"
-    note "2026-10-04: skills are GRANTED, not copied by the account -- every tracked + pinned vendor skill by default (grant ${U} *); claw back with: sudo scripts/skill-grants.sh deny ${U} <skill> [--task ID] [--until ISO+offset]. apply also merges the context-guardian hooks into ${H}/.claude/settings.json (as ${U}). The hourly corporatetraveldc-skill-grants.timer keeps it reconciled."
+    note "2026-10-04: skills are GRANTED, not copied by the account -- every tracked + pinned vendor skill by default (grant ${U} *); claw back with: sudo scripts/skill-grants.sh deny ${U} <skill> [--task ID] [--until ISO+offset]. apply also merges the context-guardian hooks into ${H}/.claude/settings.json (as ${U}). The hourly corporatetraveldc-skill-grants.timer keeps it reconciled. (2026-10-16: copies land in ~/.claude/skills for claude mode, ~/.agents/skills for codex mode; the settings.json hook merge is claude-mode only)"
+
     if [[ "$LOGIN_MODE" == codex ]]; then
         note "login-mode codex: no Claude CLI; the Codex CLI and its remote-control unit are installed below (codex_setup)"
     elif [[ "$LOGIN_MODE" == claude ]]; then

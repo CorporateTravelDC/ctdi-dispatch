@@ -888,7 +888,14 @@ async def get_feeds() -> JSONResponse:
     # tfr/nas). This dict was making /api/v1/feeds report push_covered=true for
     # both, hiding 2+ days of real staleness on the admin/overview dashboards
     # while the underlying REST polls were also being silently skipped.
-    push_covers: dict[str, str] = {"nws": "push:nws", "notam": "push:fns"}
+    # (parity audit 2026-10-15) push_covers and the push heartbeat windows now
+    # come from ingest.failover (REST_FALLBACKS), the same table /healthz and
+    # the poller gate read. The hand-written {"nws", "notam"} copy here left
+    # out amtrak, so the amtrak REST row read stale while push:amtrak was
+    # current, and the fixed 300 s window read amtrak's per-poll (~300 s)
+    # heartbeat as dead.
+    push_covers: dict[str, str] = _failover.push_covers()
+    stale_thresholds.update({k: int(v) for k, v in _failover.push_stale_thresholds().items()})
     feed_by_name = {f["feed_name"]: f for f in feeds}
 
     # Belt-and-suspenders pull-path viability (poller/skills/pull_path_verify.py,
@@ -912,7 +919,7 @@ async def get_feeds() -> JSONResponse:
             push = feed_by_name.get(push_name)
             if push and push["fetched_at"] and not push["error"]:
                 push_age = int(now - push["fetched_at"])
-                push_covered = push_age <= 300
+                push_covered = push_age <= _failover.cover_max_age(name)
 
         # When a push source is actively covering this feed, the pull-side's
         # own error (e.g. "awaiting_credentials") is real but not actionable
@@ -1636,44 +1643,14 @@ async def start_watchlist(
                          "run_date": run_date}, status_code=201)
 
 
-@app.get("/api/v1/watchlist")
-async def list_watchlists(
-    tier: Tier = Depends(require_tier(Tier.T1)),
-) -> JSONResponse:
-    """List all currently active watchlist sessions."""
-    import json as _json
-    active = db.get_active_watchlists()
-    return JSONResponse({"active": [
-        {"id": w["id"], "session_type": w["session_type"],
-         "subject": w["subject"], "run_date": w["run_date"],
-         "started_at": w["started_at"],
-         "session_data": _json.loads(w["session_data"] or "{}")}
-        for w in active
-    ], "count": len(active)})
-
-
-class WatchlistTerminateRequest(BaseModel):
-    terminal_summary: Optional[str] = None
-
-
-@app.delete("/api/v1/watchlist/{session_id}")
-async def terminate_watchlist(
-    session_id: str,
-    body: WatchlistTerminateRequest = WatchlistTerminateRequest(),
-    tier: Tier = Depends(require_tier(Tier.T1)),
-) -> JSONResponse:
-    """Terminate a watchlist session. Data is preserved in the runsheet."""
-    session = db.get_watchlist_session(session_id)
-    if not session:
-        raise HTTPException(404, f"Session {session_id!r} not found")
-    if session["status"] == "terminated":
-        raise HTTPException(409, "Session already terminated")
-    summary = body.terminal_summary or (
-        f"{session['session_type'].title()} {session['subject']} monitoring completed.")
-    db.terminate_watchlist_session(session_id, summary)
-    return JSONResponse({"id": session_id, "status": "terminated",
-                         "terminal_summary": summary,
-                         "run_date": session["run_date"]})
+# (parity audit 2026-10-15) GET /api/v1/watchlist (list_watchlists) and
+# DELETE /api/v1/watchlist/{session_id} (terminate_watchlist) removed: dead
+# duplicates. app.include_router(watchlist_router) above registers the
+# router's GET "" and DELETE "/{entry_id}" first, and Starlette serves the
+# first full match, so these two handlers were never reached. The live
+# handlers are web/routes/watchlist.py list_watchlist_entries and
+# remove_watchlist_entry. POST /api/v1/watchlist above has no router twin
+# and stays.
 
 
 # ── ATCSCC Ops Plan (Tier 0 + Tier 1 range) ───────────────────────────────────
@@ -2152,16 +2129,19 @@ async def get_tfr_enriched(
 async def get_cui_status(
     request: Request,
     tier: Tier = Depends(require_tier(Tier.T2)),
+    identity: dict = Depends(resolve_identity),
 ) -> JSONResponse:
     """
     CUI status endpoint — Tier 2. Audit-logged.
     Returns only placeholder confirmation — actual credentialed data lives on Pi,
     operator-populated. No frequencies here. CUI rules absolute.
     """
-    # Get token prefix from Authorization header for audit.
-    auth_header = request.headers.get("Authorization", "")
-    token_raw = auth_header.removeprefix("Bearer ").strip()
-    token_prefix = token_raw[:12] if token_raw else None
+    # (parity audit 2026-10-15) The audit actor is the token's stored
+    # token_prefix ("ctdc_<user>_", no secret part), the same value
+    # require_admin() writes. This used to keep the first 12 raw characters
+    # of the bearer token, which for a short user label includes characters
+    # of the random secret.
+    token_prefix = identity.get("token_prefix")
 
     db.audit(
         action="cui_status_read",
@@ -2451,8 +2431,12 @@ async def get_faa_registry_status() -> JSONResponse:
     try:
         db.init_db_v11()
         counts = db.faa_registry_count()
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception:
+        import logging as _logging
+        # (parity audit 2026-10-15) Tier 0: log the exception here, never
+        # return its text (DB errors can carry hosts, paths, SQL).
+        _logging.getLogger(__name__).exception("aircraft-registry/status: registry count failed")
+        return JSONResponse({"error": "registry status unavailable"}, status_code=500)
     return JSONResponse(counts)
 
 

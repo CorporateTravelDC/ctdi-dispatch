@@ -53,3 +53,20 @@ def test_everything_else_is_none(tmp_path):
 def test_bad_arguments_refused(tmp_path):
     r = subprocess.run([CTL, "liveness-approval", "bot1", "delete", "1"], env=_env(tmp_path), capture_output=True, text=True)
     assert r.returncode == 64
+
+
+def test_liveness_request_creates_a_pending_liveness_approval(tmp_path):
+    r = subprocess.run([CTL, "liveness-request", "bot1", "reactivate", "lockdown drill"], env=_env(tmp_path),
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "liveness-reactivate-bot1" in r.stdout and "approve.sh allow" in r.stdout
+    rid = r.stdout.split()[1]
+    code = ("import sys\nfrom common import db\nrow = db.get_approval_request(sys.argv[1])\n"
+            "print(row['status'], row.get('kind'), row['command_pattern'])\n")
+    out = subprocess.run(["python3", "-c", code, rid], env=_env(tmp_path), capture_output=True, text=True).stdout.strip()
+    assert out == "pending liveness liveness-reactivate-bot1"
+    assert look(tmp_path, "bot1", "reactivate", 0) == "none"        # pending is not authority
+
+
+def test_liveness_request_refuses_bad_action(tmp_path):
+    r = subprocess.run([CTL, "liveness-request", "bot1", "delete", "x"], env=_env(tmp_path), capture_output=True, text=True)
+    assert r.returncode == 64

@@ -593,7 +593,7 @@ Two `main.py` routes are shadowed (see CHANGES findings).
 
 ### 4.3 Agent gateway MCP surface (`src/web/routes/agent_gateway.py`)
 
-`POST /mcp/<slug>` (JSON-RPC, streamable HTTP, Bearer access token) exposes seven tools:
+`POST /mcp/<slug>` (JSON-RPC, streamable HTTP, Bearer access token) exposes ~~seven~~ eight tools (`skill_read` added 2026-10-16: read-only, grant-gated, manifest-verified):
 `status`, `board_read`, `board_post`, `research_list`, `research_read`,
 `workspace_contribute`, `council_request` — attributed to the connector's account. Kill
 switch and per-connector state: `agent_gateway_settings` / `agent_connectors`

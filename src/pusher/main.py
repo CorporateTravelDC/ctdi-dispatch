@@ -636,10 +636,13 @@ def push_watchlist_retries() -> int:
         summary = row.get("event_summary") or ""
         priority = int(row.get("ntfy_priority") or 3)
 
-        topic = "flight-alerts" if etype == "flight" else "train-alerts"
-        prefix = "FLT " if etype == "flight" else "TRN "
+        # 2026-10-15 (parity audit): vessel retries went to train-alerts with train
+        # copy. Same topic as the original send (shared/watchlist.py vessel branch).
+        topic, prefix, noun = {"flight": ("flight-alerts", "FLT ", "Flight "),
+                               "vessel": ("vessel-alerts", "VSL ", "Vessel ")}.get(
+                                   etype, ("train-alerts", "TRN ", "Train "))
         title = prefix + ident + ": " + summary[:60]
-        dispatch_body = ("Flight " if etype == "flight" else "Train ") + ident + ": " + summary
+        dispatch_body = noun + ident + ": " + summary
 
         ok1 = send_ntfy(topic, summary, priority=priority, title=title)
         ok2 = send_ntfy("dispatch", dispatch_body, priority=priority, title=title)

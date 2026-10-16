@@ -48,7 +48,13 @@ EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 # never fail) and the same bounded wait local-llm-synthesize.sh already uses
 # (`flock -w 300`). A skipped digest costs one cycle; a failed unit costs a
 # page and a blocked signing gate.
-Exec=/bin/sh -c 'flock -w 1200 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/transport_pattern_digest.py; rc=$?; [ "$rc" -eq 1 ] && { echo "transport-pattern-digest: long-runner lock still held after 1200s -- skipping this cycle (not a failure)"; exit 0; }; exit "$rc"'
+# (parity audit 2026-10-15) The sh -c wrapper above mapped EVERY exit 1 to a
+# logged "lock still held" skip and exit 0 -- but exit 1 is also what the
+# skill (an uncaught Python exception) and verified-exec.sh return on a real
+# failure, so those were hidden as skips. Now the 97b9075 form every other
+# lock-taking unit uses: flock's give-up exits 75 (EX_TEMPFAIL), mapped to a
+# clean skip by SuccessExitStatus=75 below; exit 1 is a unit failure again.
+Exec=/usr/bin/flock --verbose -w 1200 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/transport_pattern_digest.py
 
 [Service]
 # 2026-09-21 maintenance window (operator directive): long report-tier
@@ -96,3 +102,6 @@ Type=oneshot
 # 1200 lock wait + 1000 mining + 420 preflight gates + 600 digest call
 # + ~80 cushion = 3300s.
 TimeoutStartSec=3300
+# (parity audit 2026-10-15) Exit 75 (EX_TEMPFAIL) = flock gave up waiting for
+# the long-runner lock (see Exec=). A clean, logged skip -- not a failure.
+SuccessExitStatus=75

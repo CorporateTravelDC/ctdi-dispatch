@@ -208,7 +208,8 @@ def test_c9_no_agent_tool_reaches_a_signature_gated_action(env):
         out = _mcp(env, tok["access_token"], "tools/call", {"name": "research_read", "arguments": {"path": bad}}).json()["result"]
         assert out.get("isError")
     assert {t["name"] for t in _mcp(env, tok["access_token"], "tools/list").json()["result"]["tools"]} == {
-        "status", "board_read", "board_post", "research_list", "research_read", "workspace_contribute", "council_request"}
+        "status", "board_read", "board_post", "research_list", "research_read", "workspace_contribute", "council_request",
+        "skill_read"}                                                       # eight since 2026-10-16 (read-only skill text)
 
 
 def _sig_with(key, row):

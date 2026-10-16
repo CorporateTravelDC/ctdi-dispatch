@@ -454,7 +454,7 @@ reactivate() {
   local name="$1"
   if ! authorized "$name" reactivate; then
     log warn "REACTIVATE ${name} HELD -- ${AUTH_WHY}"
-    echo "refused: reactivation needs a live network, or an active lockdown plus a signed approval (kind liveness, pattern liveness-reactivate-${name})" >&2
+    echo "refused: reactivation needs a live network, or an active lockdown plus a signed approval (kind liveness): scripts/board-signer-ctl.sh liveness-request ${name} reactivate \"<reason>\", then scripts/approve.sh allow <id>" >&2
     exit 5
   fi
   log info "REACTIVATE ${name} (${AUTH_WHY})"

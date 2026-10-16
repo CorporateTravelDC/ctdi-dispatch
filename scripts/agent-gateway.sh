@@ -5,6 +5,8 @@
 #   agent-gateway.sh add-connector SLUG ACCOUNT VENDOR   e.g. cowork ctdc-agent-anthropic-cowork anthropic
 #   agent-gateway.sh connectors                          list connector slugs -> accounts
 #   agent-gateway.sh status [SLUG]                       sessions: active | dormant | held | revoked
+#   agent-gateway.sh link [AUTHORIZE_URL]                headless link (2026-10-16): fetch the consent page,
+#                                                         sign, poll, deliver the loopback callback locally
 #   agent-gateway.sh hold SLUG --days N                  keep our side of the link open through a vendor
 #                                                         lapse (N <= 90); asks for YOUR signature
 #   agent-gateway.sh release SLUG                        end a hold early
@@ -20,7 +22,7 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${REPO_ROOT}/scripts/lib/gov-exec.sh"
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
 CMD="${1:-}"; shift || true
 case "$CMD" in
   add-connector) [[ $# -eq 3 ]] || usage
@@ -36,6 +38,7 @@ base = os.environ.get("GATEWAY_BASE_URL", "https://agents.example.com")
 print(f"connector {slug} -> {acct} ({vendor}); give the vendor: {base}/mcp/{slug}")
 PYEOF
     ;;
+  link) exec "${REPO_ROOT}/scripts/agent-gateway-link.sh" "$@" ;;
   connectors)
     gov_py <<'PYEOF'
 from common import agent_gateway as g

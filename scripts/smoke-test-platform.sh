@@ -63,7 +63,7 @@ declare -A ENDPOINTS=(
   [dispatch-web]="http://100.x.x.x:8000/healthz"
   [dispatch-runner]="http://100.x.x.x:8001/healthz"
   [ntfy]="http://100.x.x.x:2586/v1/health"
-  [ollama]="http://100.x.x.x:11434/api/tags"
+  [llama]="http://100.x.x.x:8093/health"   # 2026-10-15: was the retired Ollama :11434
 )
 for name in "${!ENDPOINTS[@]}"; do
   url="${ENDPOINTS[$name]}"
@@ -76,20 +76,23 @@ for name in "${!ENDPOINTS[@]}"; do
   fi
 done
 
-echo "=== 4. ACARS ingest freshness (0 rows ever as of 2026-08-17 audit -- known-dead, tracked here so a real fix is visible) ==="
-acars_count=$(sqlite3 -readonly -cmd ".timeout 5000" /var/lib/corporatetraveldc/corporatetraveldc.db \
-  "SELECT COUNT(*) FROM acars_messages WHERE received_at > strftime('%s','now','-6 hours');" 2>/dev/null || echo "ERR")
-if [[ "$acars_count" == "ERR" ]]; then
-  echo "  SKIP: could not query acars_messages (db locked or unreachable)"
+echo "=== 4. ACARS ingest freshness (Postgres acars_messages; local receiver rows since 2026-10-03) ==="
+# 2026-10-15 (parity audit): read Postgres, not the retired SQLite file. Credentials are
+# read in-script from the env files and passed to psql through the environment only.
+pg_user=$(grep -m1 '^DISPATCH_PG_USER=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2- || true)
+pg_db=$(grep -m1 '^DISPATCH_PG_DB=' /etc/corporatetraveldc/dispatch.env 2>/dev/null | cut -d= -f2- || true)
+pg_pw=$(grep -m1 '^DISPATCH_PG_PASSWORD=' /etc/corporatetraveldc/dispatch-secrets.env 2>/dev/null | cut -d= -f2- || true)
+acars_count=$(PGPASSWORD="$pg_pw" podman exec -e PGPASSWORD corporatetraveldc-pgsql psql -U "${pg_user:-dispatch}" \
+  -d "${pg_db:-corporatetraveldc}" -At -c \
+  "SELECT COUNT(*) FROM acars_messages WHERE received_at::timestamptz > now() - interval '6 hours';" 2>/dev/null || echo "ERR")
+unset pg_pw
+if [[ ! "$acars_count" =~ ^[0-9]+$ ]]; then
+  echo "  SKIP: could not query acars_messages (database unreachable)"
 elif [[ "$acars_count" -gt 0 ]]; then
   echo "  OK: ${acars_count} ACARS message(s) in last 6h"
 else
-  echo "  KNOWN-FAIL: 0 ACARS messages in last 6h (acars-watcher/acarsrouter show"
-  echo "              'active' but the pipeline -- local UDP AND airframes.io REST"
-  echo "              -- has produced zero rows, ever, as of 2026-08-17. Not"
-  echo "              counted in fail_count below since this is a known, already-"
-  echo "              reported issue, not a new smoke-test failure -- remove this"
-  echo "              carve-out once it's actually fixed."
+  echo "  FAIL: 0 ACARS messages in last 6h (acarsrouter / dumpvdl2 / ingest-core local_airspace)"
+  fail_count=$((fail_count + 1))
 fi
 
 echo

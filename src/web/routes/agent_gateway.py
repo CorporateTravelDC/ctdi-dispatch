@@ -16,13 +16,17 @@ path strips the Authorization header OAuth/MCP clients must send.
 
 Tools reach exactly what a board-token agent reaches today -- board read/post,
 the vault research scope, workspace contributions, council requests -- and
-are attributed to the connector's account.
+are attributed to the connector's account. 2026-10-16: plus skill_read, the
+READ side of the skill grants (scripts/lib/skill_grants.py): the SKILL.md of a
+signed, manifest-verified skill the account is granted, scrub-gated.
 """
 from __future__ import annotations
 
 import html
+import importlib.util
 import json
 import os
+import pathlib
 import posixpath
 import time
 
@@ -35,6 +39,10 @@ from common import db, governance
 router = APIRouter()
 BASE = os.environ.get("GATEWAY_BASE_URL", "https://agents.example.com").rstrip("/")
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
+# skill_read reads from the checkout this code runs from (the signed skills/ tree
+# + MANIFEST.sha256) and the root-owned grants file; both overridable for tests.
+SKILLS_REPO = os.environ.get("CTDC_REPO_ROOT") or str(pathlib.Path(__file__).resolve().parents[3])
+SKILL_GRANTS_CONF = os.environ.get("SKILL_GRANTS_CONF", "/etc/ctdc-skill-grants.conf")
 
 
 def _oauth_err(e: gw.GatewayError) -> JSONResponse:
@@ -195,7 +203,69 @@ TOOLS = [
                                                        "participants": {"type": "array", "items": {"type": "object"}},
                                                        "deadline_hours": {"type": "number"}},
                      "required": ["mode", "subject", "participants"]}},
+    {"name": "skill_read", "description": "Read the SKILL.md of a signed skill you are granted (instructions only; "
+                                          "you run nothing here). No name, or '*', lists the names you are granted.",
+     "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
 ]
+
+
+_SKILL_GRANTS_MOD = None
+
+
+def _skill_grants():
+    """scripts/lib/skill_grants.py, loaded from the same checkout (it is not a
+    package). Missing = the catalog is unreachable: skill_read fails closed."""
+    global _SKILL_GRANTS_MOD
+    if _SKILL_GRANTS_MOD is None:
+        p = os.path.join(SKILLS_REPO, "scripts", "lib", "skill_grants.py")
+        spec = importlib.util.spec_from_file_location("ctdc_skill_grants", p) if os.path.isfile(p) else None
+        if spec is None or spec.loader is None:
+            raise ValueError("skills unavailable")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SKILL_GRANTS_MOD = mod
+    return _SKILL_GRANTS_MOD
+
+
+def _skill_read(name: str | None, account: str):
+    """2026-10-16: the READ side of the skill grants for connectors. Returns the
+    SKILL.md text of skill `name` when (a) the name is well-formed, (b) the
+    skill is in the SIGNED catalog and every file matches MANIFEST.sha256,
+    (c) the grants file grants it to this account (deny wins; a service
+    account such as ctdc-agent-anthropic-cowork is a valid grant target for
+    reading -- apply still installs files for kind=agent rows only), and (d)
+    the text passes the scrub gate. No name / '*' -> the granted names only.
+    Every refusal is a generic string: no paths, no reasons that enumerate."""
+    sg = _skill_grants()
+    try:
+        rules = sg.load_rules(SKILL_GRANTS_CONF)
+        cat = sg.catalog(SKILLS_REPO, sg.VENDOR_ROOT)
+    except (OSError, ValueError):                 # unreadable / bad grants file = HOLD, like apply
+        raise ValueError("skills unavailable") from None
+    granted = sg.resolve(rules, account, cat)[0]
+    readable = sorted(n for n in granted if cat[n]["source"] == "signed")
+    name = (name or "").strip()
+    if name in ("", "*"):
+        return readable
+    if not sg.SKILL_RE.match(name):
+        raise ValueError("invalid skill name")
+    if name not in readable:
+        raise ValueError("skill not granted")
+    try:
+        files, _ = sg.verify_source(name, cat[name], sg.load_manifest(SKILLS_REPO))
+    except (OSError, ValueError):
+        raise ValueError("skill failed manifest verification") from None
+    path = next((p for rel, p, _ in files if rel == "SKILL.md"), None)
+    if path is None:
+        raise ValueError("skill unavailable")
+    try:
+        with open(path, "rb") as f:
+            text = f.read(1 << 20).decode("utf-8", "replace")
+    except OSError:
+        raise ValueError("skill unavailable") from None
+    from web import main as wm
+    wm._scrub_gate(text, source="agent-gateway-skill-read")
+    return text
 
 
 def _text(obj) -> dict:
@@ -259,6 +329,9 @@ def _call(name: str, args: dict, cx: dict):
     if name == "council_request":
         return governance.council_create(acct, str(args["mode"]), str(args["subject"]), str(args.get("brief", "")),
                                          args.get("participants") or [], float(args.get("deadline_hours") or 48))
+    if name == "skill_read":
+        skill = args.get("name")
+        return _skill_read(str(skill) if skill is not None else None, acct)
     raise KeyError(name)
 
 

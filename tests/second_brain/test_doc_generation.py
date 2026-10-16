@@ -85,3 +85,21 @@ def test_markdown_to_docx_empty_input_does_not_crash(tmp_path):
     out = markdown_to_docx("", str(tmp_path / "empty.docx"), title="Empty")
     doc = Document(out)
     assert doc.paragraphs[0].text == "Empty"
+
+
+def test_struck_text_renders_struck_in_docx_and_pptx(tmp_path):
+    """2026-10-15 docs parity: corrected claims keep the old wording ~~struck~~; generated files
+    must show it struck, not as literal tildes."""
+    from docx import Document
+    from pptx import Presentation
+    from second_brain.doc_generation import markdown_to_docx_branded, markdown_to_pptx, markdown_to_pptx_branded
+    runs = _parse_inline_runs("now ~~21 **models**~~ one model")
+    assert [r[0] for r in runs] == ["now ", "21 models", " one model"]
+    md = "# T\n\nCost ~~$0 cloud~~ $0 per-call in the skill path.\n\n- ~~old~~ new\n"
+    d = tmp_path / "x.docx"; markdown_to_docx_branded(md, str(d))
+    struck = [r.text for p in Document(str(d)).paragraphs for r in p.runs if r.font.strike]
+    assert "$0 cloud" in struck and "~~" not in "".join(p.text for p in Document(str(d)).paragraphs)
+    for fn in (markdown_to_pptx, markdown_to_pptx_branded):
+        s = tmp_path / f"{fn.__name__}.pptx"; fn(md, str(s))
+        xml = "".join(sh.text_frame._txBody.xml for sl in Presentation(str(s)).slides for sh in sl.shapes if sh.has_text_frame)
+        assert 'strike="sngStrike"' in xml and "~~" not in xml, fn.__name__

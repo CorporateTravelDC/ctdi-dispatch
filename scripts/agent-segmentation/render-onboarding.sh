@@ -29,6 +29,7 @@ fi
 [[ "$KIND" == service ]] && SLICE="(none -- a service identity runs no user manager)"
 case "$LOGIN_MODE" in
   claude) LOGIN_TEXT="you log in with the Claude CLI once (\`sudo -u ${NAME} -i claude\`); your liveness is that login's refresh (must refresh within 7 days)" ;;
+  codex)  LOGIN_TEXT="you log in with the Codex CLI once (\`sudo -u ${NAME} -i codex login --device-auth\`, approved by the operator); your liveness is that login's refresh (within 14 days) AND your Codex daemon running (its remote-control unit active, or a codex process)" ;;
   ssh)    LOGIN_TEXT="you arrive over SSH as \`${NAME}\` with the single inbound key below; your liveness is your last SSH login (within 7 days for agents, 14 for humans)" ;;
   *)      LOGIN_TEXT="you do NOT log in -- a service identity has a nologin shell and never a session; you sign. Your liveness is your signer key, your tokens, and the absence of a kill order" ;;
 esac

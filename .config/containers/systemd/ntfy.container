@@ -3,7 +3,11 @@ Description=ntfy — primary push broker (container, port 2586)
 After=network-online.target
 StartLimitBurst=3
 StartLimitIntervalSec=120s
-OnFailure=ntfy-container-alert.service
+# (parity audit 2026-10-15) OnFailure=ntfy-container-alert.service removed:
+# that unit never existed, so the hook did nothing. Not repointed at
+# corporatetraveldc-unit-failure-notify@: that notifier delivers THROUGH ntfy,
+# which is the unit that just failed. An on-box alert for ntfy itself needs
+# a non-ntfy path; none exists yet (open item, not closed here).
 
 [Container]
 Memory=1536m

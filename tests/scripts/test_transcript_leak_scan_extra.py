@@ -31,3 +31,16 @@ def test_ping_url_and_bare_id_are_found_and_redacted(tmp_path, monkeypatch):
 def test_missing_extra_file_is_ignored(tmp_path, monkeypatch):
     m = load(monkeypatch, tmp_path / "absent.url")
     assert m.load_secret_values(tmp_path / "no-env-file") == {}
+
+
+def test_default_names_the_operator_home_not_tilde(monkeypatch):
+    """Parity audit 2026-10-15: the hourly root run resolved "~" to /root and never loaded the
+    operator's ping URL. The default must name the operator account's home."""
+    import pwd
+    monkeypatch.delenv("LEAK_GUARD_EXTRA_FILES", raising=False)
+    monkeypatch.setenv("HOME", "/root")
+    spec = importlib.util.spec_from_file_location("tls_default", SCRIPT)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    want = Path(pwd.getpwnam("corporatetraveldc").pw_dir) / ".secrets/healthchecks_ping.url"
+    assert m.EXTRA_FILES == [want]

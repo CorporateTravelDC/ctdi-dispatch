@@ -145,20 +145,44 @@ _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
 
+class _Struck(str):
+    """A run of ~~struck~~ text. 2026-10-15 (docs parity): corrected claims keep the
+    old wording struck through in the source markdown; the generated docx/pptx must
+    show it struck, not as literal tildes. A str subclass so every caller's
+    (text, bold, italic) unpacking keeps working; renderers check _is_struck()."""
+
+
+def _is_struck(text) -> bool:
+    return isinstance(text, _Struck)
+
+
+def _strike_docx(run, text) -> None:
+    if _is_struck(text):
+        run.font.strike = True
+
+
+def _strike_pptx(run, text) -> None:
+    if _is_struck(text):
+        run._r.get_or_add_rPr().set("strike", "sngStrike")
+
+
 def _parse_inline_runs(text: str) -> list[tuple[str, bool, bool]]:
-    """Split a line into (text, bold, italic) runs on **bold** / *italic*
-    markers. Not a real tokenizer -- doesn't handle nested or overlapping
-    emphasis, which is fine for the vault content this targets."""
+    """Split a line into (text, bold, italic) runs on ~~struck~~ / **bold** /
+    *italic* markers. Struck runs come back as _Struck strings (markers inside a
+    struck span are dropped). Not a real tokenizer -- doesn't handle nested or
+    overlapping emphasis, which is fine for the vault content this targets."""
     runs: list[tuple[str, bool, bool]] = []
     pos = 0
-    pattern = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*")
+    pattern = re.compile(r"~~(.+?)~~|\*\*(.+?)\*\*|\*(.+?)\*")
     for m in pattern.finditer(text):
         if m.start() > pos:
             runs.append((text[pos:m.start()], False, False))
         if m.group(1) is not None:
-            runs.append((m.group(1), True, False))
+            runs.append((_Struck(m.group(1).replace("**", "").replace("`", "")), False, False))
+        elif m.group(2) is not None:
+            runs.append((m.group(2), True, False))
         else:
-            runs.append((m.group(2), False, True))
+            runs.append((m.group(3), False, True))
         pos = m.end()
     if pos < len(text):
         runs.append((text[pos:], False, False))
@@ -230,6 +254,7 @@ def render_docx(blocks: list[dict], output_path: str, title: str | None = None) 
                 run = p.add_run(text)
                 run.bold = bold
                 run.italic = italic
+                _strike_docx(run, text)
         elif block["type"] == "table":
             rows = block["rows"]
             if not rows:
@@ -246,6 +271,7 @@ def render_docx(blocks: list[dict], output_path: str, title: str | None = None) 
                 run = p.add_run(text)
                 run.bold = bold
                 run.italic = italic
+                _strike_docx(run, text)
                 run.font.size = Pt(11)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -289,6 +315,7 @@ def _add_inline_runs_docx(paragraph, text: str, theme: dict, base_color: str | N
         run = paragraph.add_run(run_text)
         run.bold = bold
         run.italic = italic
+        _strike_docx(run, run_text)
         if size:
             run.font.size = Pt(size)
         run.font.name = theme["body_font"]
@@ -452,12 +479,16 @@ def render_pptx(slides: list[dict], output_path: str, title: str | None = None) 
         bullets = spec.get("bullets", [])
         if not bullets:
             continue
-        body.text = bullets[0]
-        body.paragraphs[0].font.size = PptxPt(18)
-        for b in bullets[1:]:
-            p = body.add_paragraph()
-            p.text = b
-            p.font.size = PptxPt(18)
+        for i, b in enumerate(bullets):
+            p = body.paragraphs[0] if i == 0 else body.add_paragraph()
+            # 2026-10-15: per-run so ~~struck~~ and **bold** render instead of printing markers
+            for run_text, rbold, ritalic in _parse_inline_runs(b):
+                run = p.add_run()
+                run.text = run_text
+                _strike_pptx(run, run_text)
+                run.font.size = PptxPt(18)
+                run.font.bold = rbold
+                run.font.italic = ritalic
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
@@ -543,6 +574,7 @@ def _add_textbox(slide, left, top, width, height, text: str, *, size: int, bold:
         for run_text, rbold, ritalic in _parse_inline_runs(text):
             run = p.add_run()
             run.text = run_text
+            _strike_pptx(run, run_text)
             run.font.size = PptxPt(size)
             run.font.bold = bold or rbold
             run.font.italic = italic or ritalic
@@ -550,13 +582,16 @@ def _add_textbox(slide, left, top, width, height, text: str, *, size: int, bold:
             tc = _tier_pptx_color(run_text) if rbold else None
             run.font.color.rgb = _pptx_rgb(tc or color)
     else:
-        run = p.add_run()
-        run.text = text
-        run.font.size = PptxPt(size)
-        run.font.bold = bold
-        run.font.italic = italic
-        run.font.name = font
-        run.font.color.rgb = _pptx_rgb(color)
+        # 2026-10-15: per-run so ~~struck~~ corrections render struck, not as literal tildes
+        for run_text, rbold, ritalic in _parse_inline_runs(text):
+            run = p.add_run()
+            run.text = run_text
+            _strike_pptx(run, run_text)
+            run.font.size = PptxPt(size)
+            run.font.bold = bold or rbold
+            run.font.italic = italic or ritalic
+            run.font.name = font
+            run.font.color.rgb = _pptx_rgb(color)
     return box
 
 
@@ -601,6 +636,7 @@ def _add_bullet_cards(slide, bullets: list[str], theme: dict, top_emu: int) -> N
         for run_text, rbold, ritalic in _parse_inline_runs(bullet):
             run = p.add_run()
             run.text = run_text
+            _strike_pptx(run, run_text)
             run.font.size = PptxPt(13)
             run.font.bold = rbold
             run.font.italic = ritalic
@@ -626,6 +662,7 @@ def _add_bullet_list(slide, bullets: list[str], theme: dict, top_emu: int) -> No
         for run_text, rbold, ritalic in _parse_inline_runs(bullet):
             run = p.add_run()
             run.text = run_text
+            _strike_pptx(run, run_text)
             run.font.size = PptxPt(14)
             run.font.bold = rbold
             run.font.italic = ritalic

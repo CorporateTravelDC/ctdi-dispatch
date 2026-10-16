@@ -44,8 +44,23 @@ runs the installed copy `/usr/local/libexec/ctdc/skill-grants.sh apply
 root-owned read-only copies into each agent's home, removes revoked ones,
 quarantines unsanctioned or agent-owned skill directories to
 `~/.claude/.ctdc-skills-quarantine`, and restores in-place edits.
-Copies go only to `~/.claude/skills`, so a codex-mode agent account's Codex
-CLI receives no granted skill (2026-10-15).
+~~Copies go only to `~/.claude/skills`, so a codex-mode agent account's Codex
+CLI receives no granted skill (2026-10-15).~~ (fixed 2026-10-16: the skill
+root follows the account's login mode in `/etc/ctdc-accounts.conf`:
+`~/.claude/skills` for `claude` and `ssh`, `~/.agents/skills` for `codex`.
+Evidence for the Codex root: the pinned Codex 0.160.0 binary
+(`ext/skills/src/host_roots.rs`) names `.agents/skills` under `$HOME` as its
+user-scope skill root and `$CODEX_HOME/skills` (`~/.codex/skills`) as the
+second; the operator's live `~/.agents/skills/` holds Codex's user skills
+(26 entries) while `~/.codex/skills/.system` holds Codex's own bundled skills
+and skill-installer output, so a root-owned grants root there would
+quarantine Codex's files. Same root-owned read-only copies, `.ctdc-grant`
+marker, manifest/pin verification, clawback, in-place-edit restore and
+quarantine (`~/.agents/.ctdc-skills-quarantine`); `~/.agents` itself is
+created owned by the account when missing; no `settings.json` merge in codex
+mode; `~/.codex` marks the account as provisioned. Claude-mode accounts are
+unchanged. Takes effect live once the root copy is refreshed
+(`install-root-copies.sh`) and the hourly apply runs.)
 
 ~~Live on 2026-10-06 18:06Z it was holding ("checkout does not verify against
 the signed manifest -- nothing changed") because of an unsigned working-tree
