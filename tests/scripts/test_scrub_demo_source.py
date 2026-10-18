@@ -106,6 +106,7 @@ def world(tmp_path, monkeypatch):
     db.faa_upsert_ladd(LADD)
     m = load()
     monkeypatch.setattr(m, "verify_self", lambda: None)
+    monkeypatch.setattr(m, "MAX_LOAD", 1e9)    # tests never wait on this host's load
     monkeypatch.setattr(m, "Q_KEY_FILE", tmp_path / "secrets" / "demo-q-registry.key")   # never the real home
     return m, (lambda: _sqlite(prod)), (lambda: _sqlite(demo)), prod, demo
 
@@ -285,3 +286,12 @@ def test_worker_processes_give_the_same_result(world, monkeypatch):
     assert run(m, src, tgt, "--backfill", "--days", "7", "--workers", "3") == 0
     got = target_texts(demo)
     assert len(got) == 7 and not any("QSYN1" in v for v in got.values())
+
+
+def test_waits_for_load_headroom(world, monkeypatch):
+    m = world[0]
+    loads = iter([41.0, 30.0, 23.9])
+    slept = []
+    monkeypatch.setattr(m, "MAX_LOAD", 24.0)
+    waited = m._wait_for_headroom(sleep=slept.append, loadavg=lambda: (next(loads),))
+    assert len(slept) == 2 and waited == 2 * m.LOAD_POLL_S

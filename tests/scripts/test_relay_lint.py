@@ -108,3 +108,20 @@ def test_completion_sentinel():
     bad = "bash <<'RELAY'\nset -euo pipefail\ntrap 'echo finished OK' EXIT\necho hi\nRELAY\n"
     whys = [w for _, w, _ in m.lint(bad)]
     assert any("RELAY_DONE=1" in w for w in whys) and any("trap reports OK" in w for w in whys)
+
+
+def test_heavy_step_needs_load_wait():
+    assert any("load wait" in w for w in lint("PYTHONPATH=src python3 -m pytest -q tests"))
+    assert not any("load wait" in w for w in lint("scripts/relay-wait-load.sh\nPYTHONPATH=src python3 -m pytest -q tests"))
+    assert any("load wait" in w for w in lint("bash scripts/serialized-rollout.sh"))
+
+
+def test_relay_wait_load_script(tmp_path):
+    import subprocess
+    f = tmp_path / "loadavg"
+    f.write_text("12.0 10.0 9.0 1/1 1\n")
+    env = {"PATH": "/usr/bin:/bin", "LOADAVG_FILE": str(f), "RELAY_LOAD_POLL_S": "0", "RELAY_LOAD_WAIT_MAX_S": "0"}
+    script = SCRIPT.parent / "relay-wait-load.sh"
+    assert subprocess.run(["bash", str(script)], env=env).returncode == 0
+    f.write_text("31.0 30.0 29.0 1/1 1\n")
+    assert subprocess.run(["bash", str(script)], env=env, capture_output=True).returncode == 1

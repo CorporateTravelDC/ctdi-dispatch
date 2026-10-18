@@ -658,6 +658,31 @@ def _scrub_page(source_factory: Callable[[], Any], page: list, gate: LaddGate,
 # parent) and each opens its own LADD gate (fail closed, exit 5 as before).
 _WORK: dict[str, Any] = {}
 
+# 2026-10-17: the backfill ignored the box's load and tripped the
+# thermal-ingest-guard LOCKDOWN (load1 >= 40, whole stack shed) twice; the
+# baseline here already sits at 20-30, and the lockdown sheds the stack, not
+# this job. So the job steps aside on its own: before each page it waits while
+# load1 >= DEMO_SCRUB_MAX_LOAD (default 24), and at most `workers` pages are
+# in flight.
+MAX_LOAD = float(os.environ.get("DEMO_SCRUB_MAX_LOAD", "24"))
+LOAD_POLL_S = float(os.environ.get("DEMO_SCRUB_LOAD_POLL_S", "15"))
+
+
+def _wait_for_headroom(sleep: Callable[[float], None] | None = None,
+                       loadavg: Callable[[], tuple] = os.getloadavg) -> float:
+    """Block while load1 >= MAX_LOAD. Returns seconds waited."""
+    import time
+    sleep = sleep or time.sleep
+    waited = 0.0
+    announced = False
+    while (load1 := loadavg()[0]) >= MAX_LOAD:
+        if not announced:
+            print(f"[scrub-demo-source] load1 {load1:.1f} >= {MAX_LOAD:g} -- pausing", flush=True)
+            announced = True
+        sleep(LOAD_POLL_S)
+        waited += LOAD_POLL_S
+    return waited
+
 
 def _worker_init() -> None:
     db_backend._pool = None
@@ -701,6 +726,7 @@ def promote_snapshots(source_factory: Callable[[], Any], target: Target, since: 
 
     if workers <= 1 or len(pages) <= 1:
         for page in pages:
+            _wait_for_headroom()
             _take(_scrub_page(source_factory, page, gate, qreg))
     else:
         import concurrent.futures as cf
@@ -709,16 +735,23 @@ def promote_snapshots(source_factory: Callable[[], Any], target: Target, since: 
         done = 0
         with cf.ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"),
                                     initializer=_worker_init) as ex:
-            for fut in cf.as_completed([ex.submit(_worker_page, pg) for pg in pages]):
-                try:
-                    _take(fut.result())
-                except ScrubFatal:
-                    raise
-                except Exception as e:  # noqa: BLE001 -- a worker failure never passes rows
-                    raise ScrubFatal(f"scrub worker failed ({type(e).__name__}) -- fail closed")
-                done += 1
-                if done % 20 == 0 or done == len(pages):
-                    print(f"[scrub-demo-source] pages {done}/{len(pages)}", flush=True)
+            pending: set = set()
+            queue = list(pages)
+            while queue or pending:
+                while queue and len(pending) < workers:
+                    _wait_for_headroom()
+                    pending.add(ex.submit(_worker_page, queue.pop(0)))
+                finished, pending = cf.wait(pending, return_when=cf.FIRST_COMPLETED)
+                for fut in finished:
+                    try:
+                        _take(fut.result())
+                    except ScrubFatal:
+                        raise
+                    except Exception as e:  # noqa: BLE001 -- a worker failure never passes rows
+                        raise ScrubFatal(f"scrub worker failed ({type(e).__name__}) -- fail closed")
+                    done += 1
+                    if done % 20 == 0 or done == len(pages):
+                        print(f"[scrub-demo-source] pages {done}/{len(pages)}", flush=True)
     return promoted, dropped, reasons, redactions, max_at
 
 

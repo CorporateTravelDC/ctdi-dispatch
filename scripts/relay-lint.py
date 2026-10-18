@@ -191,6 +191,30 @@ def podman_reads_stdin(n, line, code, ctx):
                 "end the command with `</dev/null`")
 
 
+HEAVY = re.compile(r"\bpytest\b|serialized-rollout\.sh|scrub-demo-source\.py\s[^\n]*--(backfill|refresh)|\bsystemd-run\b|relay-preflight\.sh")
+
+
+def heavy_without_load_wait(lines: list[str]) -> list[tuple[int, str, str]]:
+    # 2026-10-17/18: relay work stacked on a 20-30 load baseline tripped the LOCKDOWN (load1 >= 40)
+    # twice; operator: "make the relays load aware". Every heavy step waits for headroom first.
+    out = []
+    prev = ""          # last code line of the previous command
+    before = ""        # the line before the current command's first line
+    cont = False
+    for n, l in enumerate(lines, 1):
+        code = _code(l)
+        if not cont:
+            before = prev
+        if HEAVY.search(code) and "relay-wait-load" not in code and "relay-wait-load" not in before:
+            out.append((n, "heavy step without a load wait (stacked load trips the LOCKDOWN at load1 >= 40)",
+                        "put `scripts/relay-wait-load.sh` on the line before it"))
+        if code.strip():
+            cont = code.rstrip().endswith("\\")
+            if not cont:
+                prev = code
+    return out
+
+
 def completion_sentinel(lines: list[str]) -> list[tuple[int, str, str]]:
     # 2026-10-17: a relay whose stdin was consumed ends at EOF with rc=0; the trap said OK. The trap may
     # report success only when the relay's last line ran.
@@ -215,6 +239,7 @@ def lint(text: str) -> list[tuple[int, str, str]]:
     out += unit_install_without_rebaseline(lines)
     out += demo_quadlet_isolation(lines)
     out += completion_sentinel(lines)
+    out += heavy_without_load_wait(lines)
     first = next((l for l in lines if l.strip()), "")
     if not re.match(r"\s*bash\s+<<'RELAY'\s*$", first):
         out.append((1, "relay must start with `bash <<'RELAY'` (quoted delimiter: nothing expands at paste)",
