@@ -70,6 +70,7 @@ declare -A UNIT_NAME=(
   [ingest-fdps]="${UNIT_PREFIX}ingest-fdps"
   [ingest-core]="${UNIT_PREFIX}ingest-core"
   [pgsql]="${UNIT_PREFIX}pgsql"
+  [pgsql-demo]="${UNIT_PREFIX}pgsql-demo"
   [ntfy]="ntfy"
   [poller]="${UNIT_PREFIX}poller"
   [web]="${UNIT_PREFIX}web"
@@ -150,6 +151,10 @@ ORDER=(
   rss-bridge
   demo
   acars-watcher
+  # 2026-10-16 (demo/production database split): the demo Postgres instance
+  # starts right before its first consumer. Relay 1 only stands it up;
+  # demo-api/runner-demo begin using it in relay 2.
+  pgsql-demo:30
   demo-api
   runner-demo
   amtrak-tracker

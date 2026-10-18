@@ -143,11 +143,78 @@ def unit_install_without_rebaseline(lines: list[str]) -> list[tuple[int, str, st
     return []
 
 
+DEMO_QUADLETS = ("corporatetraveldc-demo-api", "corporatetraveldc-runner-demo")
+DEMO_QUADLET_FORBIDDEN = ("corporatetraveldc-pgsql-sock", "/etc/corporatetraveldc/dispatch.env",
+                          "dispatch-secrets.env", "/etc/corporatetraveldc/svc/")
+QUADLET_DIR = REPO / ".config/containers/systemd"
+DEMO_QUADLET_RE = re.compile(r"corporatetraveldc-(demo-api|runner-demo)\.container")
+
+
+def demo_quadlet_isolation(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-16 (demo/production database split; the regression found that day: demo-api and
+    runner-demo had been given the production Postgres socket and dispatch.env on 2026-09-20). A relay
+    line that installs a demo quadlet must not be installing one that carries the production socket
+    volume, dispatch.env, dispatch-secrets.env or the scoped svc/ files -- checked against the TRACKED
+    quadlet the line installs -- and no relay line may append such a line to a demo quadlet."""
+    out = []
+    for n, l in enumerate(lines, 1):
+        if l.lstrip().startswith("#"):
+            continue
+        m = DEMO_QUADLET_RE.search(l)
+        if not m:
+            continue
+        hit = next((f for f in DEMO_QUADLET_FORBIDDEN if f in l), None) \
+            or (re.search(r"pgsql-sock|dispatch\.env|dispatch-secrets|/svc/", l.replace("\\/", "/")) or [None])[0]
+        if hit:
+            out.append((n, f"relay line gives demo quadlet {m.group(0)} production access ({hit})",
+                        "the public demo never mounts the production socket or loads dispatch.env / secrets"))
+            continue
+        if re.search(r"\binstall\b", l):
+            q = QUADLET_DIR / m.group(0)
+            if q.is_file():
+                active = [x for x in q.read_text().splitlines() if x.strip() and not x.lstrip().startswith("#")]
+                bad = [f for f in DEMO_QUADLET_FORBIDDEN if any(f in x for x in active)
+                       and not (f == "/etc/corporatetraveldc/dispatch.env" and not any("DISPATCH_ROLE=demo" in x for x in active))]
+                if bad:
+                    out.append((n, f"installs demo quadlet {m.group(0)} which carries production access ({', '.join(bad)})",
+                                "remove the production socket volume / env files from the tracked quadlet first"))
+    return out
+
+
+@rule
+def podman_reads_stdin(n, line, code, ctx):
+    # 2026-10-17: `podman healthcheck run ... >/dev/null` inside bash <<'RELAY' read the rest of the relay
+    # from stdin; bash hit EOF, exited 0, and the trap reported "finished OK" with steps 3-5 never run.
+    if re.search(r"\bpodman\s+(exec|run|healthcheck\s+run|start\s+-a|attach)\b", code) \
+            and "</dev/null" not in line and "<<" not in line and "|" not in code.split("podman", 1)[0]:
+        return ("podman reads stdin inside a relay (it would consume the relay text)",
+                "end the command with `</dev/null`")
+
+
+def completion_sentinel(lines: list[str]) -> list[tuple[int, str, str]]:
+    # 2026-10-17: a relay whose stdin was consumed ends at EOF with rc=0; the trap said OK. The trap may
+    # report success only when the relay's last line ran.
+    body = [l for l in lines if l.strip()]
+    if len(body) < 3:
+        return []
+    out = []
+    if body[-1].strip() == "RELAY" and body[-2].strip() != "RELAY_DONE=1":
+        out.append((len(lines), "relay must end with `RELAY_DONE=1` (stdin eaten -> EOF -> rc 0 looks like success)",
+                    "add `RELAY_DONE=1` as the last line before RELAY"))
+    for n, l in enumerate(lines, 1):
+        if l.lstrip().startswith("trap ") and "OK" in l and "RELAY_DONE" not in l:
+            out.append((n, "trap reports OK without checking RELAY_DONE",
+                        "report OK only when rc==0 AND RELAY_DONE==1"))
+    return out
+
+
 def lint(text: str) -> list[tuple[int, str, str]]:
     out = []
     lines = text.splitlines()
     out += twin_after_sign(lines)
     out += unit_install_without_rebaseline(lines)
+    out += demo_quadlet_isolation(lines)
+    out += completion_sentinel(lines)
     first = next((l for l in lines if l.strip()), "")
     if not re.match(r"\s*bash\s+<<'RELAY'\s*$", first):
         out.append((1, "relay must start with `bash <<'RELAY'` (quoted delimiter: nothing expands at paste)",

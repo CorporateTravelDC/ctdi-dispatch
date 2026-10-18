@@ -28,13 +28,52 @@ def store(tmp_path, monkeypatch):
     return path
 
 
-def test_store_kind_follows_the_backend(store, monkeypatch):
+def test_store_kind_follows_backend_and_role(store, monkeypatch):
+    """2026-10-16 split: Postgres here means the DEMO instance, selected by
+    DISPATCH_ROLE=demo on a postgres backend; the backend alone never does."""
     assert profiles.store_kind() == "sqlite"
     assert profiles._table() == "profiles"  # noqa: SLF001
     monkeypatch.setenv("DISPATCH_DB_BACKEND", "postgres")
     monkeypatch.setattr(profiles.db_backend, "backend", lambda: "postgres")
+    assert profiles.store_kind() == "sqlite", "postgres backend without the demo role stays on the sqlite file"
+    monkeypatch.setenv("DISPATCH_ROLE", "demo")
     assert profiles.store_kind() == "postgres"
     assert profiles._table() == "demo_profiles"  # noqa: SLF001
+
+
+def test_demo_role_uses_the_demo_pool_and_never_pg_conn(store, monkeypatch, tmp_path):
+    """Under DISPATCH_ROLE=demo the store is db_backend.demo_pg_conn (the
+    demo instance). A sqlite twin of pg_schema_demo's demo_profiles stands
+    in; pg_conn stays tripwired by conftest and is never reached."""
+    import sqlite3
+    from contextlib import contextmanager
+
+    twin = tmp_path / "demo-instance.db"
+    c = sqlite3.connect(twin)
+    c.executescript(
+        "CREATE TABLE demo_profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, password_hash TEXT NOT NULL, "
+        "salt TEXT NOT NULL, window_days INTEGER NOT NULL, speed REAL NOT NULL DEFAULT 1.0, auto_scale BOOLEAN NOT NULL DEFAULT 0, "
+        "created_at TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT 1);")
+    c.commit(); c.close()
+
+    @contextmanager
+    def fake_demo_pg_conn():
+        conn = sqlite3.connect(twin); conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    monkeypatch.setenv("DISPATCH_DB_BACKEND", "postgres")
+    monkeypatch.setenv("DISPATCH_ROLE", "demo")
+    monkeypatch.setattr(profiles.db_backend, "backend", lambda: "postgres")
+    monkeypatch.setattr(profiles.db_backend, "demo_pg_conn", fake_demo_pg_conn)
+    created = profiles.create_profile("Demo P", window_days=14, password="demo-pass-1234")
+    assert profiles.authenticate("demo-pass-1234")["label"] == "Demo P"
+    assert profiles.revoke_profile(created["id"]) is True
+    assert profiles.authenticate("demo-pass-1234") is None
+    assert not store.exists(), "the sqlite file was never touched under the demo role"
 
 
 def test_round_trip_create_authenticate_list_revoke(store):

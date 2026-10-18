@@ -23,6 +23,16 @@ pair, so a demo container that inherits dispatch.env's DISPATCH_PG_*
 can never open the production database even once a demo Postgres
 instance and role exist. See _refuse_unless_postgres_allowed().
 
+2026-10-16 (later, demo/production database SPLIT, relay 1): a second
+instance exists -- corporatetraveldc-pgsql-demo, database
+corporatetraveldc_demo, roles demo / demo_owner -- reached ONLY through
+demo_pg_conn() (its own pool, DEMO_PG_* env). pg_conn() refuses outright
+under DISPATCH_ROLE=demo; _pg_conninfo() refuses the demo db/roles by name;
+_demo_pg_conninfo() refuses the production db/role by name. common.db.conn()
+goes through role_conn(), which picks the pool by DISPATCH_ROLE. The only
+process holding both credentials is scripts/scrub-demo-source.py, the one
+bridge from production to the demo instance (the push-public pattern).
+
 DISPATCH_DB_BACKEND=postgres -- common.db.conn() delegates to pg_conn()
 below: one psycopg_pool.ConnectionPool per process, dict_row rows,
 autocommit off, the same "with conn() as c: ... commit on success,
@@ -162,6 +172,25 @@ def backend() -> str:
 PRODUCTION_PG_DB = "corporatetraveldc"
 PRODUCTION_PG_USER = "dispatch"
 
+# The demo instance (2026-10-16, demo/production database split, relay 1):
+# a SECOND Postgres server, corporatetraveldc-pgsql-demo, with its own data
+# and socket volumes, its own database and its own roles. `demo` is the
+# read-mostly application role the public-demo containers connect as;
+# `demo_owner` is that instance's bootstrap owner, used only host-side by
+# scripts/pg_migrate.py --instance demo and scripts/scrub-demo-source.py
+# (the one process that holds both the production and the demo credential,
+# by design -- exactly as push-public.sh is the one bridge to the public
+# tree). Neither role exists on the production instance, and
+# config/pg_hba.conf rejects them there by name.
+DEMO_PG_DB = "corporatetraveldc_demo"
+DEMO_PG_USER = "demo"
+DEMO_PG_OWNER = "demo_owner"
+DEMO_PG_DEFAULT_HOST = "/var/run/postgresql-demo"
+# TCP publish of the demo instance on the host (PublishPort=127.0.0.1:5433:
+# 5432 in the quadlet) -- used only when DEMO_PG_HOST is a socket path that
+# does not exist on this host (bare-host tools), mirroring _pg_host().
+DEMO_PG_HOST_FALLBACK_PORT = "5433"
+
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -173,11 +202,32 @@ class PostgresRefused(RuntimeError):
     socket is opened; the message never carries a password."""
 
 
+class DemoIsolationError(PostgresRefused):
+    """A demo-side process reached for the production instance, or a
+    production-side accessor was pointed at the demo database/role
+    (2026-10-16 demo/production split). Subclass of PostgresRefused so every
+    existing `except PostgresRefused` still catches it. Raised before any
+    pool is built or socket opened; never carries a password."""
+
+
 def demo_isolation() -> bool:
     """DISPATCH_DEMO_ISOLATION=1 -- set by the public-demo quadlets
     (corporatetraveldc-demo-api, corporatetraveldc-runner-demo), never in
     the shared dispatch.env (it would refuse production itself)."""
     return config.get("DISPATCH_DEMO_ISOLATION", "").strip().lower() in _TRUTHY
+
+
+def dispatch_role() -> str:
+    """DISPATCH_ROLE -- `demo` for the public-demo containers (set in
+    config/demo.env, relay 2 of the split), empty/anything else for
+    production. A demo-role process is routed to demo_pg_conn() by
+    common.db.conn() and REFUSED by pg_conn(); nothing in this codebase
+    writes it."""
+    return config.get("DISPATCH_ROLE", "").strip().lower()
+
+
+def is_demo_role() -> bool:
+    return dispatch_role() == "demo"
 
 
 def _refuse_unless_postgres_allowed(dbname: str | None = None, user: str | None = None) -> None:
@@ -553,12 +603,27 @@ def _pg_libpq_quote(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+def _refuse_demo_pair_on_production(dbname: str, user: str) -> None:
+    """2026-10-16 split: the production accessor must never be pointed at
+    the demo database or the demo roles -- that would be the production
+    pool (and the production password, delivered to every production
+    container) opening the public mirror, or a `demo`-named role existing
+    on the production instance at all. Either half alone is refused."""
+    if dbname == DEMO_PG_DB or user in (DEMO_PG_USER, DEMO_PG_OWNER):
+        raise DemoIsolationError(
+            "db_backend: _pg_conninfo() refuses the demo database/role "
+            f"(dbname={dbname!r}, user={user!r}) -- the demo instance is reached "
+            "only through demo_pg_conn() (demo/production split, 2026-10-16)"
+        )
+
+
 def _pg_conninfo() -> str:
     host = _pg_host()
     port = config.get("DISPATCH_PG_PORT", "5432")
     dbname = config.get("DISPATCH_PG_DB", "corporatetraveldc")
     user = config.get("DISPATCH_PG_USER", "dispatch")
     _refuse_unless_postgres_allowed(dbname, user)
+    _refuse_demo_pair_on_production(dbname, user)
     password = config.get("DISPATCH_PG_PASSWORD", "")
     parts = [f"host={host}", f"port={port}", f"dbname={dbname}", f"user={user}"]
     if password:
@@ -781,11 +846,144 @@ def pg_conn() -> Generator[_TranslatingConnection, None, None]:
     postgres and, under DISPATCH_DEMO_ISOLATION=1, the target is not the
     production database/role -- checked on every call, not only when the
     pool is first built, so an already-open pool cannot outlive a flip of
-    the switch."""
+    the switch. Under DISPATCH_ROLE=demo it refuses outright
+    (DemoIsolationError): a demo-role process has demo_pg_conn() and
+    nothing else, whatever its DISPATCH_PG_* say."""
+    if is_demo_role():
+        raise DemoIsolationError(
+            "db_backend: pg_conn() refused -- DISPATCH_ROLE=demo; the production "
+            "instance is not reachable from a demo-role process (use demo_pg_conn())"
+        )
     _refuse_unless_postgres_allowed()
     pool = _get_pool()
     with pool.connection() as raw:
         yield _TranslatingConnection(raw)
+
+
+# ── Demo instance pool (2026-10-16 demo/production split, relay 1) ──────────
+#
+# A second, independent pool to the demo Postgres instance
+# (corporatetraveldc-pgsql-demo). Same translating connection, same
+# check=/reset= standard as the production pool (see _reset_pooled_connection).
+# Nothing demo-facing uses it until relay 2 sets DISPATCH_ROLE=demo in the
+# demo quadlets; until then the only caller is scripts/scrub-demo-source.py
+# (host-side, as demo_owner).
+
+_demo_pool = None
+_demo_pool_lock = threading.Lock()
+
+
+def _demo_pg_host() -> tuple[str, bool]:
+    """(host, fell_back). Mirrors _pg_host(): a container reaches the demo
+    instance over the socket volume mounted at DEMO_PG_HOST (a directory
+    path); a bare-host process (the scrub, pg_migrate --instance demo) has no
+    such mount, so a path that does not exist falls back to TCP loopback,
+    where the quadlet publishes the instance on 127.0.0.1:5433."""
+    host = config.get("DEMO_PG_HOST", DEMO_PG_DEFAULT_HOST)
+    if host.startswith("/") and not Path(host).exists():
+        log.info(
+            "db_backend: DEMO_PG_HOST=%s does not exist on this host -- falling "
+            "back to 127.0.0.1:%s (bare-host TCP loopback path)",
+            host, config.get("DEMO_PG_PORT", DEMO_PG_HOST_FALLBACK_PORT),
+        )
+        return "127.0.0.1", True
+    return host, False
+
+
+def _demo_pg_conninfo() -> str:
+    """Conninfo for the demo instance from DEMO_PG_HOST / DEMO_PG_PORT /
+    DEMO_PG_DB / DEMO_PG_USER / DEMO_PG_PASSWORD. Refuses (before any
+    socket) unless DISPATCH_DB_BACKEND is postgres, and refuses
+    (DemoIsolationError) the production database or role by name: the demo
+    pool pointed at production would be the whole split undone by one env
+    line."""
+    b = backend()
+    if b != "postgres":
+        raise PostgresRefused(
+            f"db_backend: DISPATCH_DB_BACKEND={b!r} -- this process is pinned off "
+            "Postgres; demo_pg_conn() must not reach the demo instance either"
+        )
+    host, fell_back = _demo_pg_host()
+    port = config.get("DEMO_PG_PORT", "") or (DEMO_PG_HOST_FALLBACK_PORT if fell_back else "5432")
+    dbname = config.get("DEMO_PG_DB", DEMO_PG_DB)
+    user = config.get("DEMO_PG_USER", DEMO_PG_USER)
+    if dbname == PRODUCTION_PG_DB or user == PRODUCTION_PG_USER:
+        raise DemoIsolationError(
+            "db_backend: _demo_pg_conninfo() refuses the production database/role "
+            f"(dbname={dbname!r}, user={user!r}) -- the demo pool never opens "
+            "production (demo/production split, 2026-10-16)"
+        )
+    password = config.get("DEMO_PG_PASSWORD", "")
+    parts = [f"host={host}", f"port={port}", f"dbname={dbname}", f"user={user}"]
+    if password:
+        parts.append(f"password={password}")
+    parts.append(f"application_name={_pg_libpq_quote(_pg_app_name())}")
+    return " ".join(parts)
+
+
+def _build_demo_pool():
+    import psycopg_pool
+    from psycopg.rows import dict_row
+
+    return psycopg_pool.ConnectionPool(
+        conninfo=_demo_pg_conninfo(),
+        min_size=1,
+        max_size=max(1, int(config.get("DEMO_PG_POOL_MAX", "4"))),
+        kwargs={"row_factory": dict_row, "autocommit": False},
+        open=True,
+        check=psycopg_pool.ConnectionPool.check_connection,
+        reset=_reset_pooled_connection,
+    )
+
+
+def _get_demo_pool():
+    global _demo_pool
+    if _demo_pool is None:
+        with _demo_pool_lock:
+            if _demo_pool is None:
+                _demo_pool = _build_demo_pool()
+                import atexit
+                atexit.register(close_demo_pool)
+    return _demo_pool
+
+
+def close_demo_pool() -> None:
+    global _demo_pool
+    with _demo_pool_lock:
+        if _demo_pool is not None:
+            try:
+                _demo_pool.close()
+            except Exception:
+                pass
+            _demo_pool = None
+
+
+@contextmanager
+def demo_pg_conn() -> Generator[_TranslatingConnection, None, None]:
+    """The demo instance's counterpart to pg_conn(): same commit-on-exit /
+    rollback-on-exception contract, same SQL translation, its own pool.
+    Refusals (backend not postgres; production db/role by name) happen in
+    _demo_pg_conninfo() before the pool exists, and are re-checked on every
+    call so an open pool cannot outlive an env flip."""
+    _demo_pg_conninfo()
+    pool = _get_demo_pool()
+    with pool.connection() as raw:
+        yield _TranslatingConnection(raw)
+
+
+@contextmanager
+def role_conn() -> Generator[_TranslatingConnection, None, None]:
+    """The ONE Postgres entry point common.db.conn() uses: the demo pool
+    under DISPATCH_ROLE=demo, the production pool otherwise. Keeps the two
+    accessors out of common.db itself, so the import-boundary test
+    (tests/demo/test_demo_accessor_boundary.py) can hold that only this
+    module and scripts/scrub-demo-source.py name both."""
+    if is_demo_role():
+        with demo_pg_conn() as c:
+            yield c
+        return
+    with pg_conn() as c:
+        yield c
 
 
 # ── ref_conn(): SQLite-only handle for the 11 reference tables ──────────────

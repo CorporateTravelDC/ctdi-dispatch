@@ -7,15 +7,26 @@ its DISPATCH_BASE_URL at this service instead of the live one and get a
 drop-in "demo mode" -- no runner code changes required.
 
 Privacy boundary (2026-08-14, physically enforced, not just cosmetic):
-this service reads ONLY /var/lib/corporatetraveldc-demo-source/demo-source.db
--- a sovereign file, separate top-level directory from the live
-/var/lib/corporatetraveldc tree, populated exclusively by
-scripts/scrub-demo-source.py (the one component trusted to touch live
+this service reads ONLY the sovereign demo source -- populated exclusively
+by scripts/scrub-demo-source.py (the one component trusted to touch live
 data, running host-side on its own schedule, never inside a container).
 This process holds no live-DB connection at all -- not app-level
-"we choose not to query it," but literally no code path that can. See
+"we choose not to query it," but literally no code path that can: this
+module never names common.db_backend.pg_conn() (the production accessor);
+tests/demo/test_demo_accessor_boundary.py holds that. See
 docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md for the full design and
 docs/PENTEST_CLEARANCE_CHECK_2026-08-13.md for the F6 finding this closes.
+
+Two sources, selected by DEMO_SOURCE (2026-10-16 demo/production split):
+  sqlite   (default) -- /var/lib/corporatetraveldc-demo-source/demo-source.db,
+           the sovereign SQLite file, opened mode=ro. Relay 1 leaves this in
+           force.
+  postgres -- the DEMO Postgres instance (corporatetraveldc-pgsql-demo,
+           database corporatetraveldc_demo, role `demo`) through
+           common.db_backend.demo_pg_conn(); tables snapshots / brief_archive
+           / meta of src/common/pg_schema_demo/0001. Relay 2 flips the
+           quadlet to this. Same anchor / virtual-timestamp logic on both;
+           /healthz reports which source is live.
 
 The invariant is stronger than the pre-2026-08-14 version: it used to be
 "only OLD data is reachable" (temporal only, but reading the live DB
@@ -53,16 +64,31 @@ import sqlite3
 import zlib
 import httpx
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from fastapi import FastAPI, Query, Header, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from common import db_backend
 from demo.recorder import RETENTION_TIERS
 from demo import profiles as demo_profiles
 
 DEMO_DB   = os.environ.get("DEMO_DB", "/var/lib/corporatetraveldc-demo-source/demo-source.db")
 LOOP_DAYS = int(os.environ.get("DEMO_LOOP_DAYS", "14"))
+
+SOURCE_KINDS = ("sqlite", "postgres")
+
+
+def source_kind() -> str:
+    """DEMO_SOURCE, read at call time (a test or quadlet can switch it
+    without reloading the module): 'sqlite' (default, the sovereign file)
+    or 'postgres' (the demo instance). Anything else is an error, not a
+    silent fallback."""
+    kind = os.environ.get("DEMO_SOURCE", "sqlite").strip().lower() or "sqlite"
+    if kind not in SOURCE_KINDS:
+        raise RuntimeError(f"DEMO_SOURCE={kind!r} is not one of {SOURCE_KINDS}")
+    return kind
 
 # Optional fixed anchor override (ISO date/datetime), added 2026-08-02.
 # Without this, _anchor() below picks the EARLIEST point where every
@@ -143,15 +169,42 @@ _window_end_cache_checked = False
 _legacy_anchor_cache: datetime | None = None
 
 
-def _conn() -> sqlite3.Connection:
-    # Read-only URI connection -- this process must never write
-    # DEMO_DB (the sovereign demo-source file); scripts/scrub-demo-source.py
-    # is the only writer, and mixing writers risks lock contention against
-    # a service that also has a public-facing surface.
-    return sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
+class _PgSource:
+    """One pooled demo-instance connection with the same two-method surface
+    the handlers use on the sqlite path: execute(sql, params) -> cursor
+    (rows are dicts, so row["col"] works exactly as on sqlite3.Row), and
+    close(). The pool's context manager is entered here and exited in
+    close(); handlers already pair _conn() with a finally: conn.close()."""
+
+    __slots__ = ("_cm", "_c")
+
+    def __init__(self):
+        self._cm = db_backend.demo_pg_conn()
+        self._c = self._cm.__enter__()
+
+    def execute(self, sql: str, params: tuple = ()):
+        return self._c.execute(sql, params)
+
+    def close(self) -> None:
+        self._cm.__exit__(None, None, None)
 
 
-def _window_end(conn: sqlite3.Connection) -> datetime | None:
+def _conn() -> Any:
+    """A read handle on the selected source. sqlite: a read-only URI
+    connection -- this process must never write DEMO_DB (the sovereign
+    demo-source file); scripts/scrub-demo-source.py is the only writer, and
+    mixing writers risks lock contention against a service that also has a
+    public-facing surface. Rows are name-addressable on both sources
+    (sqlite3.Row / psycopg dict_row), and every query below reads columns
+    by name, never by position."""
+    if source_kind() == "postgres":
+        return _PgSource()
+    c = sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def _window_end(conn: Any) -> datetime | None:
     """The sovereign file's own meta.window_end -- written exclusively by
     scripts/scrub-demo-source.py when it promotes newly scrubbed content.
     Deliberately window_days-independent (unlike the anchor derived from
@@ -167,12 +220,12 @@ def _window_end(conn: sqlite3.Connection) -> datetime | None:
         row = conn.execute("SELECT value FROM meta WHERE key='window_end'").fetchone()
     except sqlite3.OperationalError:
         row = None
-    if row and row[0]:
-        _window_end_cache = datetime.fromisoformat(row[0])
+    if row and row["value"]:
+        _window_end_cache = datetime.fromisoformat(row["value"])
     return _window_end_cache
 
 
-def _anchor(conn: sqlite3.Connection, window_days: int = LOOP_DAYS) -> datetime | None:
+def _anchor(conn: Any, window_days: int = LOOP_DAYS) -> datetime | None:
     """2026-08-14: trailing anchor derived from _window_end(), NOT the
     oldest-ever snapshot. anchor = window_end - window_days, so the loop
     replays the most RECENTLY promoted window_days-sized slice, advancing
@@ -208,19 +261,19 @@ def _anchor(conn: sqlite3.Connection, window_days: int = LOOP_DAYS) -> datetime 
         return _legacy_anchor_cache
     try:
         row = conn.execute(
-            "SELECT MAX(first_seen) FROM ("
+            "SELECT MAX(first_seen) AS anchor FROM ("
             "  SELECT endpoint, MIN(captured_at) AS first_seen FROM snapshots GROUP BY endpoint"
-            ")"
+            ") AS firsts"
         ).fetchone()
     except sqlite3.OperationalError:
         return None
-    if not row or not row[0]:
+    if not row or not row["anchor"]:
         return None
-    _legacy_anchor_cache = datetime.fromisoformat(row[0])
+    _legacy_anchor_cache = datetime.fromisoformat(row["anchor"])
     return _legacy_anchor_cache
 
 
-def _virtual_timestamp(conn: sqlite3.Connection, window_days: int = LOOP_DAYS,
+def _virtual_timestamp(conn: Any, window_days: int = LOOP_DAYS,
                        speed: float = 1.0) -> datetime | None:
     """The one function that decides what point in history to replay.
 
@@ -250,12 +303,12 @@ def _virtual_timestamp(conn: sqlite3.Connection, window_days: int = LOOP_DAYS,
     return anchor + offset
 
 
-def _seed_ready(conn: sqlite3.Connection, window_days: int = LOOP_DAYS) -> tuple[bool, int]:
+def _seed_ready(conn: Any, window_days: int = LOOP_DAYS) -> tuple[bool, int]:
     anchor = _anchor(conn, window_days)
     if anchor is None:
         return False, 0
-    newest_row = conn.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()
-    newest = datetime.fromisoformat(newest_row[0]) if newest_row and newest_row[0] else anchor
+    newest_row = conn.execute("SELECT MAX(captured_at) AS newest FROM snapshots").fetchone()
+    newest = datetime.fromisoformat(newest_row["newest"]) if newest_row and newest_row["newest"] else anchor
     span_days = (newest - anchor).total_seconds() / 86400
     return span_days >= window_days, int(span_days)
 
@@ -292,8 +345,27 @@ def _resolve_playback_params(session: str | None, window: str | None,
 
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
-    exists = os.path.exists(DEMO_DB)
-    return JSONResponse({"ok": exists, "demo_db": DEMO_DB, "loop_days": LOOP_DAYS})
+    """Reports which source is live (2026-10-16). sqlite: the file exists.
+    postgres: one SELECT on the demo instance's meta table succeeds (a
+    refused or unreachable demo pool is ok=false, never a 500 with a
+    conninfo in it)."""
+    kind = source_kind()
+    body: dict = {"source": kind, "loop_days": LOOP_DAYS}
+    if kind == "sqlite":
+        body["ok"] = os.path.exists(DEMO_DB)
+        body["demo_db"] = DEMO_DB
+        return JSONResponse(body)
+    try:
+        conn = _conn()
+        try:
+            conn.execute("SELECT COUNT(*) AS n FROM meta").fetchone()
+        finally:
+            conn.close()
+        body["ok"] = True
+    except Exception as e:  # noqa: BLE001 -- a health probe reports, never raises
+        body["ok"] = False
+        body["error"] = type(e).__name__
+    return JSONResponse(body)
 
 
 @app.get("/api/v1/demo/readiness")
@@ -304,7 +376,7 @@ async def demo_readiness() -> JSONResponse:
     conn = _conn()
     try:
         ready, span_days = _seed_ready(conn)
-        total = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) AS n FROM snapshots").fetchone()["n"]
         tier, next_tier = _current_tier(span_days)
         return JSONResponse({
             "ready": ready,
@@ -331,7 +403,6 @@ def _brief_archive_lookup(brief_type: str, at: datetime) -> dict | None:
     type/window -- callers fall back to the same "not available yet" text
     the live app itself returns in that case."""
     c = _conn()
-    c.row_factory = sqlite3.Row
     try:
         row = c.execute(
             "SELECT id, generated_at, brief_type, content, source FROM brief_archive "
@@ -352,7 +423,6 @@ def _brief_archive_history(brief_type: str | None, at: datetime, limit: int) -> 
     timestamp `at`, optionally filtered by type -- backs /brief/history.
     Same sovereign-file-only read path as _brief_archive_lookup() above."""
     c = _conn()
-    c.row_factory = sqlite3.Row
     try:
         if brief_type:
             rows = c.execute(
@@ -373,7 +443,7 @@ def _brief_archive_history(brief_type: str | None, at: datetime, limit: int) -> 
         c.close()
 
 
-def _load_snapshot(conn: sqlite3.Connection, endpoint: str, at: datetime) -> tuple[str, str, bool] | None:
+def _load_snapshot(conn: Any, endpoint: str, at: datetime) -> tuple[str, str, bool] | None:
     """Most recent snapshot for `endpoint` at or before virtual timestamp `at`.
     Returns (payload_text, captured_at, synthetic) or None. `synthetic`
     reflects scripts/scrub-demo-source.py's replay-fill mechanism (2026-08-14)
@@ -390,16 +460,16 @@ def _load_snapshot(conn: sqlite3.Connection, endpoint: str, at: datetime) -> tup
         ).fetchone()
     except sqlite3.OperationalError:
         # Sovereign file predates the synthetic column (pre-2026-08-14).
+        # sqlite only: the demo instance's schema has always had it.
         row = conn.execute(
-            "SELECT payload, payload_hash, compressed, captured_at FROM snapshots "
+            "SELECT payload, payload_hash, compressed, captured_at, 0 AS synthetic FROM snapshots "
             "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
             (endpoint, at.isoformat()),
         ).fetchone()
-        if row is not None:
-            row = (*row, 0)
     if row is None:
         return None
-    payload, _payload_hash, compressed, captured_at, synthetic = row
+    payload = bytes(row["payload"]) if not isinstance(row["payload"], str) else row["payload"]
+    compressed, captured_at, synthetic = row["compressed"], row["captured_at"], row["synthetic"]
     if compressed:
         text = zlib.decompress(payload).decode("utf-8", errors="replace")
     else:

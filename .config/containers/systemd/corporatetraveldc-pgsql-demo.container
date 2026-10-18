@@ -1,0 +1,95 @@
+# corporatetraveldc-pgsql-demo -- PostgreSQL 16 for the PUBLIC DEMO (2026-10-16,
+# demo/production database split, relay 1). See docs/POSTGRES_MIGRATION.md
+# "Two instances" and docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md (addendum).
+#
+# Why a second server, not a second database on corporatetraveldc-pgsql: the
+# operator rule is logical AND physical separation. One instance means one
+# superuser, one shared memory, one socket directory, one set of hba rules
+# that a single wrong line turns into production access (found live
+# 2026-10-16: demo-api and runner-demo mounted the production socket). This
+# instance has its own data volume, its own socket volume, its own
+# database (corporatetraveldc_demo) and its own roles (demo_owner, demo);
+# none of them exist on the production instance, and config/pg_hba.conf
+# rejects them there by name.
+#
+# What is in it: only what scripts/scrub-demo-source.py promotes from
+# production (snapshots, brief_archive, meta -- scrubbed, >= 24 h old, LADD-
+# gated), plus the demo's own demo_profiles, chat_messages and the scrub
+# ledger (src/common/pg_schema_demo/0001). It is REBUILDABLE from production
+# by `scrub-demo-source.py --backfill`, which is why the nightly backup
+# excludes it (docs/BACKUP.md).
+#
+# Image: the SAME line as corporatetraveldc-pgsql.container, on purpose --
+# scripts/safe-pg-image-update.sh is the only sanctioned image change path
+# and serialized-rollout.sh skips every postgres:* unit without
+# PG_CANARY_DONE=1, so the two instances move together.
+#
+# Networking: the demo app containers (relay 2) mount the socket volume
+# corporatetraveldc-pgsql-demo-sock at /var/run/postgresql-demo and set
+# DEMO_PG_HOST to that path. TCP is published on 127.0.0.1:5433 ONLY for the
+# host-side scrub and pg_migrate --instance demo (as demo_owner); the hba
+# rules reject the `demo` role over TCP altogether.
+#
+# Memory: 512 MB cap. The demo working set is a few hundred MB of zlib
+# payloads read by one process; shared_buffers 128 MB, max_connections 30
+# (config/postgresql-demo.conf).
+[Unit]
+Description=corporatetraveldc -- PostgreSQL 16 (public demo instance, scrub-fed)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=corporatetraveldc-pgsql-demo
+AutoUpdate=registry
+# Host loopback ONLY, for the host-side scrub / migrate -- demo containers
+# use the socket volume below.
+PublishPort=127.0.0.1:5433:5432
+Network=pasta:--map-gw
+# Non-secret identity. The password lives ONLY in
+# /etc/corporatetraveldc/pgsql-demo-secrets.env (example:
+# config/pgsql-demo-secrets.env.example) -- a DEDICATED file: never
+# pgsql-secrets.env (the production password), never dispatch-secrets.env.
+# NEVER quote values in any env file here (scripts/check-env-quoting.sh).
+Environment=POSTGRES_DB=corporatetraveldc_demo
+Environment=POSTGRES_USER=demo_owner
+Environment=PGDATA=/var/lib/postgresql/data/pgdata
+Environment=TZ=UTC
+Environment=CORPORATETRAVELDC_UNIT=%N
+EnvironmentFile=/etc/corporatetraveldc/pgsql-demo-secrets.env
+Volume=corporatetraveldc-pgsql-demo-data:/var/lib/postgresql/data
+# Unix socket directory, shared with the demo app containers only (never
+# mounted by a production unit -- tests/scripts/test_demo_isolation.py).
+Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql
+# Tuned config + hba rules are TRACKED and bind-mounted read-only, reviewed
+# and signed like everything else.
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/postgresql-demo.conf:/etc/postgresql/postgresql.conf:ro,Z
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/pg_hba-demo.conf:/etc/postgresql/pg_hba.conf:ro,Z
+Exec=postgres -c config_file=/etc/postgresql/postgresql.conf
+ShmSize=128m
+HealthCmd=pg_isready -U demo_owner -d corporatetraveldc_demo
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+# Hard cap 512 M RAM; up to 512 M more may spill to the overflow swapfile
+# (same shape as the production instance, a quarter of the size).
+Memory=512m
+PodmanArgs=--memory-swap=1024m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+MemoryLow=128M
+CPUWeight=50
+CPUQuota=100%
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+# Give a checkpoint time to finish on stop (same reasoning as the production
+# instance).
+TimeoutStopSec=90
+
+[Install]
+# No WantedBy on purpose -- same anti-boot-storm rule as every other long-
+# running unit here. Startup is owned by corporatetraveldc-stack-boot-stagger
+# .service (scripts/stack-boot-ctl.sh ORDER: pgsql-demo starts before demo-api).

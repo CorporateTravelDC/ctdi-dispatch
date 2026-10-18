@@ -52,6 +52,12 @@ CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
 BW_SOFT="$(setting BACKUP_BWLIMIT_SOFT_MB 2.5)"; BW_HARD="$(setting BACKUP_BWLIMIT_HARD_MB 3)"; BW_IFACE="$(setting BACKUP_IFACE wld0)"
 DISPATCH_PG=corporatetraveldc-pgsql
 NEXTCLOUD_PG=nextcloud-db
+# 2026-10-16 (demo/production database split): the DEMO instance, corporatetraveldc-pgsql-demo,
+# is deliberately NOT dumped. Everything in it is a scrubbed derivative of the production dump
+# above plus demo_profiles (copied once with scrub-demo-source.py --profiles) and demo chat
+# history; `scripts/scrub-demo-source.py --backfill` rebuilds it from production in one run.
+# Backing it up would only ship a second, weaker copy of production data. docs/BACKUP.md.
+BACKUP_EXCLUDED_INSTANCES=(corporatetraveldc-pgsql-demo)   # rebuildable by backfill, never dumped
 LADD_TABLES=(faa_ladd_aircraft faa_ladd_removals)   # CUI: identifiers of LADD-listed aircraft
 SYNC=1; DRY=0
 for a in "$@"; do case "$a" in --no-sync) SYNC=0 ;; --dry-run) DRY=1 ;; *) echo "usage: $0 [--no-sync] [--dry-run]" >&2; exit 64 ;; esac; done

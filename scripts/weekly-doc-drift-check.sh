@@ -25,10 +25,44 @@
 # it is down, the report still lands with raw findings. That is the whole
 # point: a maintenance check must not depend on an LLM being available, let
 # alone on frontier credits.
+#
+# 2026-10-16 (operator): the 09-21 rewrite dropped the one thing the weekly
+# job was for -- PROSE docs against the live system; it only re-ran the
+# CLAUDE.md checker and listed units/containers. The "Doc claims" section
+# below is deterministic: scripts/doc-claims-check.py extracts every repo
+# path, unit name and documented timer schedule from README.md, docs/*.md
+# (non-dated) and skills/*/SKILL.md and verifies each against git ls-files,
+# systemctl list-unit-files and the installed timer's OnCalendar /
+# OnUnitActiveSec. Misses are [DRIFT] lines in the report and the ntfy
+# summary carries the count. Narrative stays optional (local model only).
 set -uo pipefail
+# A bearer token never goes on a command line (/proc/<pid>/cmdline is readable
+# by every team account): authhdr NAME TOKEN puts the header on a private fd
+# and sets NAME=(-H @/dev/fd/N) for ONE curl call. Same helper as
+# scripts/claude-md-drift-daily.sh.
+authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}" || exit 1
+
+ENV_FILE="/etc/corporatetraveldc/dispatch.env"
+SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
+read_env_var() {
+    local key="$1" file="$2"
+    [[ -f "${file}" ]] || return 0
+    grep -m1 "^${key}=" "${file}" 2>/dev/null | cut -d'=' -f2-
+}
+NTFY_BASE="$(read_env_var NTFY_BASE_URL "${ENV_FILE}")"; NTFY_BASE="${NTFY_BASE:-http://127.0.0.1:2586}"
+NTFY_OPS="$(read_env_var NTFY_OPS_TOPIC "${ENV_FILE}")";  NTFY_OPS="${NTFY_OPS:-ops-health}"
+NTFY_TOKEN="$(read_env_var NTFY_TOKEN "${SECRETS_FILE}")"; NTFY_TOKEN="${NTFY_TOKEN%%:*}"
+ntfy_send() {
+    local title="$1" msg="$2" priority="${3:-3}"
+    local auth_args=()
+    [[ -n "${NTFY_TOKEN}" ]] && authhdr auth_args "${NTFY_TOKEN}"
+    curl -sf --max-time 5 "${auth_args[@]}" \
+        -H "Title: ${title}" -H "Priority: ${priority}" -H "Tags: memo" \
+        -d "${msg}" "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1
+}
 
 DATE_TAG="$(date +%Y-%m-%d)"
 LOG_DIR="/var/lib/corporatetraveldc/docs-drift-check"
@@ -44,13 +78,28 @@ echo "=== weekly-doc-drift-check ${DATE_TAG} $(date '+%H:%M:%S %Z') ==="
 
 # ── Facts: deterministic, no model ───────────────────────────────────────────
 FACTS_FILE="$(mktemp)"
-trap 'rm -f "${FACTS_FILE}"' EXIT
+CLAIMS_FILE="$(mktemp)"
+trap 'rm -f "${FACTS_FILE}" "${CLAIMS_FILE}"' EXIT
+
+# Doc claims vs live system (2026-10-16): deterministic, stdlib python.
+# Captured to its own file first so the miss count can go into the ntfy
+# summary; exit 1 = misses found, which is a finding, not a failure.
+python3 scripts/doc-claims-check.py >"${CLAIMS_FILE}" 2>&1 || true
+CLAIM_MISSES="$(grep -c '^\[DRIFT\]' "${CLAIMS_FILE}" || true)"
+CLAIM_SUMMARY="$(grep '^\[SUMMARY\]' "${CLAIMS_FILE}" || echo '[SUMMARY] doc-claims-check did not run')"
 
 {
     echo "## Deterministic drift checks (scripts/check-claude-md-drift.sh)"
     # Not --pre-sign: that mode suppresses [OK] lines and skips the
     # manifest-vs-signature check, both of which we want recorded here.
     bash scripts/check-claude-md-drift.sh 2>&1 || true
+
+    echo
+    echo "## Doc claims vs live system (scripts/doc-claims-check.py)"
+    echo "README.md, docs/*.md (non-dated), skills/*/SKILL.md: repo paths vs git ls-files,"
+    echo "unit names vs systemctl list-unit-files, documented timer schedules vs the installed"
+    echo "timer's OnCalendar/OnUnitActiveSec. Struck text is skipped. One [DRIFT] line per miss."
+    cat "${CLAIMS_FILE}"
 
     echo
     echo "## Failed / crash-looping units"
@@ -88,7 +137,9 @@ last check. Be specific and name units and files exactly as given. State only \
 what the facts support -- if something is not in the facts, do not mention it, \
 and never invent a cause for a failure."
 
-NARRATIVE="$(./scripts/local-llm-synthesize.sh "${SYSTEM_PROMPT}" 900 <"${FACTS_FILE}")"
+# Optional: the local model may be down or shedding; the report lands either way.
+NARRATIVE="$(./scripts/local-llm-synthesize.sh "${SYSTEM_PROMPT}" 900 <"${FACTS_FILE}" 2>/dev/null || true)"
+[[ -n "${NARRATIVE}" ]] || NARRATIVE="_(no narrative: local model unavailable; the raw findings below are the report)_"
 
 # APPEND, never truncate. post-commit-doc-verify.sh writes into this same
 # dated file, and the two genuinely collide: the weekly timer and a major
@@ -122,5 +173,17 @@ fi
 } >>"${REPORT}"
 
 echo "wrote ${REPORT}"
+echo "${CLAIM_SUMMARY}"
+
+# ntfy summary (ops-health, p3 with misses, p2 clean): the miss count is the
+# headline; the report path is where the [DRIFT] lines are.
+CLAUDE_MD_DRIFT="$(grep -c '^\[DRIFT\]' "${FACTS_FILE}" || true)"
+CLAUDE_MD_DRIFT=$(( CLAUDE_MD_DRIFT - CLAIM_MISSES ))
+if [[ "${CLAIM_MISSES}" -gt 0 || "${CLAUDE_MD_DRIFT}" -gt 0 ]]; then
+    ntfy_send "Weekly doc drift: ${CLAIM_MISSES} doc-claim miss(es)" \
+        "${CLAIM_SUMMARY#\[SUMMARY\] }; CLAUDE.md drift lines: ${CLAUDE_MD_DRIFT} -- see ${REPORT}" 3
+else
+    ntfy_send "Weekly doc drift: clean" "${CLAIM_SUMMARY#\[SUMMARY\] } -- ${REPORT}" 2
+fi
 # Deliberately does NOT commit. Same rule the previous version carried: this
 # runs unattended, and an unattended process must never write to git history.

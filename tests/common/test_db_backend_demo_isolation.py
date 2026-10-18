@@ -58,7 +58,7 @@ def test_backend_value_is_normalised(real, monkeypatch):
     # " Postgres " is the postgres backend; "sqlite3" / "" are not.
     monkeypatch.setenv("DISPATCH_PG_HOST", "127.0.0.1")
     monkeypatch.setenv("DISPATCH_PG_DB", "ctdc_demo")
-    monkeypatch.setenv("DISPATCH_PG_USER", "demo")
+    monkeypatch.setenv("DISPATCH_PG_USER", "mirror")   # 2026-10-16: `demo` is the demo instance's role, refused here
     monkeypatch.setenv("DISPATCH_DB_BACKEND", " Postgres ")
     assert "dbname=ctdc_demo" in real._pg_conninfo()  # noqa: SLF001
     for bad in ("sqlite3", ""):
@@ -88,7 +88,7 @@ def test_isolation_flag_refuses_either_half_of_the_pair(real, monkeypatch):
     monkeypatch.setenv("DISPATCH_PG_HOST", "127.0.0.1")
     monkeypatch.setenv("DISPATCH_DEMO_ISOLATION", "1")
     monkeypatch.setenv("DISPATCH_PG_DB", db_backend.PRODUCTION_PG_DB)
-    monkeypatch.setenv("DISPATCH_PG_USER", "demo")
+    monkeypatch.setenv("DISPATCH_PG_USER", "mirror")
     with pytest.raises(db_backend.PostgresRefused):
         real._pg_conninfo()  # noqa: SLF001
     monkeypatch.setenv("DISPATCH_PG_DB", "ctdc_demo")
@@ -97,16 +97,22 @@ def test_isolation_flag_refuses_either_half_of_the_pair(real, monkeypatch):
         real._pg_conninfo()  # noqa: SLF001
 
 
-def test_isolation_flag_allows_a_demo_pair(real, monkeypatch):
-    """Conninfo for a demo-owned database/role is built (no socket opened)."""
+def test_isolation_flag_allows_a_non_production_pair(real, monkeypatch):
+    """Conninfo for a non-production database/role is built (no socket
+    opened). 2026-10-16: the actual demo pair (corporatetraveldc_demo /
+    demo) is now refused on THIS accessor too -- it belongs to
+    demo_pg_conn() (tests/common/test_db_backend_demo_instance.py)."""
     monkeypatch.setenv("DISPATCH_DB_BACKEND", "postgres")
     monkeypatch.setenv("DISPATCH_PG_HOST", "127.0.0.1")
     monkeypatch.setenv("DISPATCH_DEMO_ISOLATION", "1")
     monkeypatch.setenv("DISPATCH_PG_DB", "ctdc_demo")
-    monkeypatch.setenv("DISPATCH_PG_USER", "demo")
+    monkeypatch.setenv("DISPATCH_PG_USER", "mirror")
     ci = real._pg_conninfo()  # noqa: SLF001
-    assert "dbname=ctdc_demo" in ci and "user=demo" in ci
+    assert "dbname=ctdc_demo" in ci and "user=mirror" in ci
     assert "password=" not in ci
+    monkeypatch.setenv("DISPATCH_PG_USER", db_backend.DEMO_PG_USER)
+    with pytest.raises(db_backend.DemoIsolationError):
+        real._pg_conninfo()  # noqa: SLF001
 
 
 def test_production_untouched_without_the_flag(real, monkeypatch):

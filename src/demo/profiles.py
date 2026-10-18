@@ -21,11 +21,16 @@ physically separated from production):
   socket is mounted, and common.db_backend.pg_conn() refuses under a
   non-postgres backend anyway.
 
-  DISPATCH_DB_BACKEND=postgres -- demo_profiles via
-  common.db_backend.pg_conn() (pg_schema/0057_demo.sql). This is the
-  2026-09-20 cutover shape; it is only correct once the demo has its OWN
-  Postgres instance and role (follow-up, operator decision), and
-  pg_conn() refuses the production pair under DISPATCH_DEMO_ISOLATION=1.
+  DISPATCH_ROLE=demo AND DISPATCH_DB_BACKEND=postgres (the relay-2 shape
+  of the 2026-10-16 demo/production split, set by config/demo.env) --
+  demo_profiles on the DEMO Postgres instance through
+  common.db_backend.demo_pg_conn() (src/common/pg_schema_demo/0001, same
+  columns as production's pg_schema/0057 table). This module never names
+  pg_conn() at all -- tests/demo/test_demo_accessor_boundary.py holds that
+  -- so there is no code path from the public demo to production,
+  whatever the environment says. ~~DISPATCH_DB_BACKEND=postgres alone used
+  to select pg_conn() (the 2026-09-20 shape)~~ -- removed 2026-10-16: a
+  postgres backend without the demo role falls back to the sqlite file.
 
 History: 2026-09-20 moved this store from demo_access.db onto Postgres
 ("everything live on Postgres"); that put the public demo's only
@@ -99,9 +104,14 @@ def access_db_path() -> str:
 
 
 def store_kind() -> str:
-    """'postgres' or 'sqlite' -- follows DISPATCH_DB_BACKEND exactly; there
-    is no third option and no silent fallback from one to the other."""
-    return "postgres" if db_backend.backend() == "postgres" else "sqlite"
+    """'postgres' (the demo instance, DISPATCH_ROLE=demo + a postgres
+    backend) or 'sqlite' (everything else). ~~follows DISPATCH_DB_BACKEND
+    exactly~~ -- since 2026-10-16 the backend alone never selects Postgres
+    here: the only Postgres this module may touch is the demo instance,
+    and that is selected by the role."""
+    if db_backend.backend() == "postgres" and db_backend.is_demo_role():
+        return "postgres"
+    return "sqlite"
 
 
 def _table() -> str:
@@ -114,7 +124,7 @@ def _store():
     exception on both backends. Yields a connection whose execute() takes
     `?` placeholders and whose rows support row["col"] and dict(row)."""
     if store_kind() == "postgres":
-        with db_backend.pg_conn() as c:
+        with db_backend.demo_pg_conn() as c:
             yield c
         return
     path = Path(access_db_path())

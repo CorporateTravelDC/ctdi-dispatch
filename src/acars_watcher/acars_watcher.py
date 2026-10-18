@@ -14,6 +14,19 @@ text and reflected in push priority and title tags.
 Watchlist synced from dispatch OOOI watchlist every WATCHLIST_REFRESH_INTERVAL
 seconds.  Static registrations can be pinned via ACARS_STATIC_REGS env var.
 
+Two lists, since 2026-10-16 (operator: keep the LADD list for Jumpseat):
+  - the FULL set (GET /api/v1/watchlist entries + sessions, plus
+    ACARS_STATIC_REGS) is what the local UDP and airframes.io window
+    matches are checked against -- those sources arrive on their own and
+    matching them locally sends nothing anywhere;
+  - the Jumpseat thread queries a third party BY registration, so it uses
+    ONLY GET /api/v1/watchlist/registrations -- the same identifiers with
+    every LADD-listed one removed by the dispatch API's production LADD
+    filter (this container has no database of its own). If that route is
+    unavailable the thread polls nothing and says so; it never falls back
+    to the full set, and no filtered registration is ever logged here
+    (the route does not return them, and this file logs counts only).
+
 Secret: JUMPSEAT_API_KEY env var  OR  ~/.secrets/jumpseat.key
 """
 
@@ -70,6 +83,10 @@ MSG_QUEUE: queue.Queue = queue.Queue(maxsize=5000)
 # Shared watched registrations — main() owns writes; poller threads read
 _WATCHED_LOCK: threading.Lock = threading.Lock()
 _WATCHED_REGS: set = set()
+# 2026-10-16: the Jumpseat thread's list -- ONLY ever filled from
+# GET /api/v1/watchlist/registrations (LADD-filtered by the dispatch API).
+# Empty whenever that route was unavailable at the last refresh.
+_JUMPSEAT_REGS: set = set()
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "corporatetraveldc-acars-watcher/3.0"})
@@ -276,7 +293,10 @@ def get_watched_registrations() -> set:
                     reg = s.get("registration", "") or s.get("subject", "")
                     if reg:
                         watched.add(normalize_reg(reg))
-            log.info("Watchlist: %d reg(s) → %s", len(watched), watched or "{none}")
+            # 2026-10-16: count only. The full set includes whatever the
+            # LADD filter removes from the Jumpseat list, so naming it here
+            # would log a filtered registration by subtraction.
+            log.info("Watchlist: %d reg(s)", len(watched))
         else:
             log.warning("Watchlist HTTP %s", resp.status_code)
     except Exception as exc:
@@ -284,10 +304,53 @@ def get_watched_registrations() -> set:
     return watched
 
 
+def get_jumpseat_registrations() -> Optional[set]:
+    """The Jumpseat thread's list: GET /api/v1/watchlist/registrations, the
+    flight-watch identifiers with every LADD-listed one removed by the
+    dispatch API (2026-10-16). Returns None when the route is unavailable
+    (non-200, bad body, network error) -- the caller then polls NOTHING;
+    there is no fallback to the full set. Never logs a registration."""
+    try:
+        resp = DISPATCH_SESSION.get(
+            f"{DISPATCH_BASE_URL}/api/v1/watchlist/registrations", timeout=10
+        )
+        if resp.status_code != 200:
+            log.warning("Jumpseat list: HTTP %s from /api/v1/watchlist/registrations "
+                        "-- polling nothing until it answers", resp.status_code)
+            return None
+        data = resp.json()
+        regs = data.get("registrations") if isinstance(data, dict) else None
+        if not isinstance(regs, list):
+            log.warning("Jumpseat list: malformed body -- polling nothing")
+            return None
+        out = {normalize_reg(r) for r in regs if isinstance(r, str) and r.strip()}
+        log.info("Jumpseat list: %d reg(s) (LADD-filtered by the API: %s)",
+                 len(out), data.get("ladd_filtered", "?"))
+        return out
+    except Exception as exc:
+        log.warning("Jumpseat list: unavailable (%s) -- polling nothing", exc)
+        return None
+
+
 def _sync_shared_watched(regs: set):
     with _WATCHED_LOCK:
         _WATCHED_REGS.clear()
         _WATCHED_REGS.update(regs)
+
+
+def _sync_jumpseat_regs(regs: Optional[set]):
+    with _WATCHED_LOCK:
+        _JUMPSEAT_REGS.clear()
+        if regs:
+            _JUMPSEAT_REGS.update(regs)
+
+
+def refresh_watchlists() -> set:
+    """Refresh both lists; returns the full set for the main loop's matching."""
+    watched = get_watched_registrations()
+    _sync_shared_watched(watched)
+    _sync_jumpseat_regs(get_jumpseat_registrations())
+    return watched
 
 
 # ---------------------------------------------------------------------------
@@ -415,10 +478,69 @@ def rest_poller_thread():
 # Thread 3: ACARS Drama Jumpseat REST poller (per-registration)
 # ---------------------------------------------------------------------------
 
+def _jumpseat_poll_once(seen_ids: set) -> int:
+    """One Jumpseat cycle over _JUMPSEAT_REGS (the LADD-filtered list from
+    GET /api/v1/watchlist/registrations -- never _WATCHED_REGS). Returns the
+    number of registrations queried; 0 when the list is empty, which is
+    also what an unavailable route leaves behind."""
+    with _WATCHED_LOCK:
+        regs = set(_JUMPSEAT_REGS)
+
+    if not regs:
+        log.debug("Jumpseat: filtered list empty — nothing polled")
+        return 0
+
+    polled = 0
+    for reg in regs:
+        try:
+            resp = JUMPSEAT_SESSION.get(
+                f"{JUMPSEAT_API_BASE}/messages/search",
+                params={"registration": reg, "limit": "20", "source": "messages"},
+                timeout=15,
+            )
+            polled += 1
+            if resp.status_code == 200:
+                data = resp.json()
+                items = (data.get("items", data)
+                         if isinstance(data, dict) else data)
+                for item in items:
+                    item_id = str(item.get("id", ""))
+                    if item_id and item_id in seen_ids:
+                        continue
+                    if item_id:
+                        seen_ids.add(item_id)
+                    # Normalize to internal format and enqueue
+                    msg = _normalize_jumpseat(item, reg)
+                    try:
+                        MSG_QUEUE.put_nowait(msg)
+                    except queue.Full:
+                        log.warning("Jumpseat: MSG_QUEUE full — dropping")
+            elif resp.status_code == 401:
+                log.error("Jumpseat: 401 — token invalid or expired")
+                time.sleep(3600)
+                break
+            elif resp.status_code == 429:
+                retry = int(resp.headers.get("Retry-After", 60))
+                log.warning("Jumpseat: rate-limited — sleeping %ds", retry)
+                time.sleep(retry)
+                break
+            else:
+                log.warning("Jumpseat: HTTP %s for %s", resp.status_code, reg)
+        except Exception as exc:
+            log.error("Jumpseat poll error (%s): %s", reg, exc)
+
+        # Small inter-registration gap to avoid hammering the API
+        time.sleep(2)
+    return polled
+
+
 def jumpseat_poller_thread():
     """
     Polls ACARS Drama Jumpseat /v1/messages/search?registration=<REG>
-    for each currently watched registration every JUMPSEAT_POLL_INT seconds.
+    every JUMPSEAT_POLL_INT seconds for each registration on the
+    LADD-filtered list (GET /api/v1/watchlist/registrations, refreshed by
+    main() with the watchlist). 2026-10-16: never the full watched set --
+    when the route is unavailable the list is empty and nothing is polled.
 
     Requires JUMPSEAT_API_KEY env var or ~/.secrets/jumpseat.key.
     Silently idles if no token is available.
@@ -428,57 +550,12 @@ def jumpseat_poller_thread():
                     "(set JUMPSEAT_API_KEY or write ~/.secrets/jumpseat.key)")
         return
 
-    log.info("Jumpseat poller active — interval %ds", JUMPSEAT_POLL_INT)
+    log.info("Jumpseat poller active — interval %ds (LADD-filtered list only)",
+             JUMPSEAT_POLL_INT)
     seen_ids: set = set()
 
     while True:
-        with _WATCHED_LOCK:
-            regs = set(_WATCHED_REGS)
-
-        if not regs:
-            log.debug("Jumpseat: watchlist empty — sleeping")
-            time.sleep(JUMPSEAT_POLL_INT)
-            continue
-
-        for reg in regs:
-            try:
-                resp = JUMPSEAT_SESSION.get(
-                    f"{JUMPSEAT_API_BASE}/messages/search",
-                    params={"registration": reg, "limit": "20", "source": "messages"},
-                    timeout=15,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    items = (data.get("items", data)
-                             if isinstance(data, dict) else data)
-                    for item in items:
-                        item_id = str(item.get("id", ""))
-                        if item_id and item_id in seen_ids:
-                            continue
-                        if item_id:
-                            seen_ids.add(item_id)
-                        # Normalize to internal format and enqueue
-                        msg = _normalize_jumpseat(item, reg)
-                        try:
-                            MSG_QUEUE.put_nowait(msg)
-                        except queue.Full:
-                            log.warning("Jumpseat: MSG_QUEUE full — dropping")
-                elif resp.status_code == 401:
-                    log.error("Jumpseat: 401 — token invalid or expired")
-                    time.sleep(3600)
-                    break
-                elif resp.status_code == 429:
-                    retry = int(resp.headers.get("Retry-After", 60))
-                    log.warning("Jumpseat: rate-limited — sleeping %ds", retry)
-                    time.sleep(retry)
-                    break
-                else:
-                    log.warning("Jumpseat: HTTP %s for %s", resp.status_code, reg)
-            except Exception as exc:
-                log.error("Jumpseat poll error (%s): %s", reg, exc)
-
-            # Small inter-registration gap to avoid hammering the API
-            time.sleep(2)
+        _jumpseat_poll_once(seen_ids)
 
         # Trim seen_ids to avoid unbounded growth
         if len(seen_ids) > 50000:
@@ -538,16 +615,14 @@ def main():
     threading.Thread(target=rest_poller_thread,   daemon=True, name="airframes").start()
     threading.Thread(target=jumpseat_poller_thread, daemon=True, name="jumpseat").start()
 
-    watched           = get_watched_registrations()
-    _sync_shared_watched(watched)
+    watched           = refresh_watchlists()
     last_watchlist_ts = time.monotonic()
     seen_ids: set     = set()
 
     log.info("Main loop running")
     while True:
         if time.monotonic() - last_watchlist_ts >= WATCHLIST_REFRESH_INT:
-            watched           = get_watched_registrations()
-            _sync_shared_watched(watched)
+            watched           = refresh_watchlists()
             last_watchlist_ts = time.monotonic()
 
         try:

@@ -99,6 +99,44 @@ database. `demo-api` also calls AWC's airsigmet API live
 containers connect as; their environment was not inspected.]` The isolation
 boundary is therefore the application code, not the mount layout.
 
+**Demo/production database split (2026-10-16, relay 1 of 4 -- tracked, not yet
+live).** Operator rule: the public demo is fed ONLY by a scrub from production
+into a logically and physically separate database, as `push-public.sh` feeds
+the public tree. The boundary, as built in this batch:
+
+- A second Postgres server, `corporatetraveldc-pgsql-demo` (own data and socket
+  volumes, database `corporatetraveldc_demo`, roles `demo` / `demo_owner`,
+  `config/postgresql-demo.conf` + `config/pg_hba-demo.conf`: the `demo` role on
+  the socket only, `demo_owner` on socket + `127.0.0.1:5433`, everything else
+  rejected). Its whole schema is the six demo tables
+  (`src/common/pg_schema_demo/0001`); no flight, watchlist, auth, token, audit
+  or LADD table can exist there (`tests/scripts/test_pg_schema_demo.py`).
+- The production `config/pg_hba.conf` rejects the demo roles and the demo
+  database BY NAME before its catch-alls.
+- `src/common/db_backend.py`: `demo_pg_conn()` is the only way to the demo
+  instance (own pool, `DEMO_PG_*`); `pg_conn()` refuses outright under
+  `DISPATCH_ROLE=demo`; each accessor refuses the other instance's database
+  and roles by name. `common.db.conn()` routes by role. `src/demo/profiles.py`
+  and `src/demo/demo_api.py` never name the production accessor;
+  `scripts/scrub-demo-source.py` is the only file naming both
+  (`tests/demo/test_demo_accessor_boundary.py`).
+- The scrub (PG -> PG, host-side, the one process holding both credentials):
+  nine endpoints only, >= 24 h old, LADD-gated through the production filter
+  itself (`common.db.faa_ladd_listed_batch`, the code behind
+  `faa_is_ladd` / `airplanes_live._ladd_listed`; an empty table or a failed
+  lookup is FATAL, exit 5), substitutions, tail/hex shape sweeps, fail-closed
+  verification, 52-week retention, one hash-chained `scrub_ledger` row per run.
+- Live check every 15 min (`scripts/demo-isolation-check.sh` from the
+  integrity sweep; `ops-health` p4): running demo containers' mounts and env
+  names, the production instance's sessions and roles, the demo instance's
+  roles and tables.
+
+Relay 1 changes nothing demo-facing: the demo containers still run as they did
+on 2026-10-16 (sqlite pin, no Postgres socket). Relay 2 flips them to
+`config/demo.env` (`DISPATCH_ROLE=demo`, `DEMO_SOURCE=postgres`); relays 3-4
+retire the sovereign SQLite file and move the recorder. Plan and hand steps:
+`docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` (addendum 2026-10-16).
+
 **The demo file is frozen, not refreshed.**
 `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never
 fired (`LastTriggerUSec` empty); the file's mtime is still

@@ -21,6 +21,17 @@ Usage:
     scripts/pg_migrate.py --schema pg_phase1_test
     scripts/pg_migrate.py --dry-run       # print what would run, do nothing
     scripts/pg_migrate.py --status        # list applied vs. pending, exit
+    scripts/pg_migrate.py --instance demo # the DEMO instance (see below)
+
+--instance demo (2026-10-16, demo/production database split): applies
+src/common/pg_schema_demo/*.sql to the demo Postgres instance
+(corporatetraveldc-pgsql-demo) through db_backend._demo_pg_conninfo() --
+DEMO_PG_HOST/PORT/DB/USER/PASSWORD, never DISPATCH_PG_*. The connecting role
+must be demo_owner (DDL runs as the instance's owner; refused otherwise), and
+the password is DEMO_PG_PASSWORD or, when that is unset, POSTGRES_PASSWORD
+from /etc/corporatetraveldc/pgsql-demo-secrets.env (the instance's own
+bootstrap password IS demo_owner's). The two instances never share a
+migration directory, a tracking table or a credential.
 """
 
 from __future__ import annotations
@@ -33,22 +44,63 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
 SCHEMA_DIR = SRC / "common" / "pg_schema"
+DEMO_SCHEMA_DIR = SRC / "common" / "pg_schema_demo"
+DEMO_SECRETS_FILE = Path("/etc/corporatetraveldc/pgsql-demo-secrets.env")
 
 sys.path.insert(0, str(SRC))
 
 from common import config, db_backend  # noqa: E402
 
+INSTANCES = ("production", "demo")
 
-def migration_files() -> list[Path]:
-    return sorted(SCHEMA_DIR.glob("*.sql"), key=lambda p: p.name)
+
+def schema_dir(instance: str) -> Path:
+    return DEMO_SCHEMA_DIR if instance == "demo" else SCHEMA_DIR
+
+
+def migration_files(instance: str = "production") -> list[Path]:
+    return sorted(schema_dir(instance).glob("*.sql"), key=lambda p: p.name)
+
+
+def read_env_value(path: Path, key: str) -> str:
+    """One KEY from a podman-style env file, verbatim (no quote stripping,
+    no shell sourcing -- scripts/with-dispatch-env.sh's rules). Never
+    printed."""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith(key + "="):
+                return line[len(key) + 1:]
+    except OSError:
+        pass
+    return ""
+
+
+def prepare_demo_env() -> str | None:
+    """Pin the demo instance's host-side identity before conninfo is built:
+    DEMO_PG_USER must be demo_owner, and DEMO_PG_PASSWORD falls back to the
+    instance's bootstrap password file. Returns an error string or None."""
+    user = config.get("DEMO_PG_USER", db_backend.DEMO_PG_OWNER)
+    if user != db_backend.DEMO_PG_OWNER:
+        return (f"--instance demo runs DDL as {db_backend.DEMO_PG_OWNER!r} only "
+                f"(DEMO_PG_USER={user!r})")
+    import os
+    os.environ.setdefault("DEMO_PG_USER", db_backend.DEMO_PG_OWNER)
+    if not config.get("DEMO_PG_PASSWORD", ""):
+        pw = read_env_value(DEMO_SECRETS_FILE, "POSTGRES_PASSWORD")
+        if pw:
+            os.environ["DEMO_PG_PASSWORD"] = pw
+    return None
 
 
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def build_conninfo(database: str | None) -> str:
-    conninfo = db_backend._pg_conninfo()  # noqa: SLF001 -- intentional reuse
+def build_conninfo(database: str | None, instance: str = "production") -> str:
+    if instance == "demo":
+        conninfo = db_backend._demo_pg_conninfo()  # noqa: SLF001 -- intentional reuse
+    else:
+        conninfo = db_backend._pg_conninfo()  # noqa: SLF001 -- intentional reuse
     if database:
         # Replace the dbname= token rather than reconstructing the whole
         # string, so host-fallback/password logic stays identical to the
@@ -66,14 +118,22 @@ def main() -> int:
     ap.add_argument("--schema", default="public", help="Postgres schema to apply into (default: public).")
     ap.add_argument("--dry-run", action="store_true", help="Print what would be applied, change nothing.")
     ap.add_argument("--status", action="store_true", help="List applied/pending migrations and exit.")
+    ap.add_argument("--instance", choices=INSTANCES, default="production",
+                    help="Which Postgres instance: production (DISPATCH_PG_*, pg_schema/) or demo "
+                         "(DEMO_PG_*, pg_schema_demo/; as demo_owner). Default: production.")
     args = ap.parse_args()
 
     import psycopg
 
-    conninfo = build_conninfo(args.database)
-    files = migration_files()
+    if args.instance == "demo":
+        err = prepare_demo_env()
+        if err:
+            print(f"REFUSING: {err}", file=sys.stderr)
+            return 2
+    conninfo = build_conninfo(args.database, args.instance)
+    files = migration_files(args.instance)
     if not files:
-        print(f"No migration files found in {SCHEMA_DIR}", file=sys.stderr)
+        print(f"No migration files found in {schema_dir(args.instance)}", file=sys.stderr)
         return 1
 
     with psycopg.connect(conninfo, autocommit=False) as conn:
@@ -115,13 +175,15 @@ def main() -> int:
             pending.append((f, checksum))
 
         if args.status:
-            print(f"{len(applied)} applied, {len(pending)} pending (schema={args.schema}, db={args.database or config.get('DISPATCH_PG_DB', 'corporatetraveldc')})")
+            default_db = (config.get("DEMO_PG_DB", db_backend.DEMO_PG_DB) if args.instance == "demo"
+                          else config.get("DISPATCH_PG_DB", "corporatetraveldc"))
+            print(f"{len(applied)} applied, {len(pending)} pending (instance={args.instance}, schema={args.schema}, db={args.database or default_db})")
             for f, _ in pending:
                 print(f"  pending: {f.name}")
             return 0
 
         if not pending:
-            print(f"Nothing to do -- all {len(files)} migrations already applied (schema={args.schema}).")
+            print(f"Nothing to do -- all {len(files)} migrations already applied (instance={args.instance}, schema={args.schema}).")
             return 0
 
         if args.dry_run:
@@ -147,7 +209,7 @@ def main() -> int:
             conn.commit()
             print(f"applied {f.name}")
 
-        print(f"Applied {len(pending)} migration(s) (schema={args.schema}).")
+        print(f"Applied {len(pending)} migration(s) (instance={args.instance}, schema={args.schema}).")
     return 0
 
 

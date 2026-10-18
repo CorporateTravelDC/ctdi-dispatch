@@ -1,5 +1,7 @@
 [Unit]
-Description=Corporate Travel DC -- weekly documentation drift check (Fable, both repos, live-system verified)
+Description=Corporate Travel DC -- weekly documentation drift check (one repo; live facts + doc claims checked deterministically, local-model narrative optional)
+# 2026-10-16: Description no longer says "Fable, both repos": since the 2026-09-21
+# rewrite the script shells out to no cloud model, and it checks this repo only.
 # 2026-08-26: this unit has a confirmed real failure mode (a Sunday-09:00
 # fire landing during an exhausted Claude usage window exits non-zero with
 # no retry, per docs/LIVE_STATE_CHECK_2026-08-26.md's finding 3) and only

@@ -129,7 +129,25 @@ ${prov_output}" | head -40)"
         5
 fi
 
-if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 ]]; then
+# 2026-10-16 (demo/production database split): the LIVE isolation check --
+# running demo containers' mounts and env NAMES, the production instance's
+# sessions/roles, the demo instance's roles/tables (scripts/demo-isolation-
+# check.sh). A finding is an ops-health p4 and fails the sweep; the check
+# prints findings only, never a value. Tracked-file checks live in
+# tests/scripts/test_demo_isolation.py.
+demo_iso_rc=0
+demo_iso_output="$("${REPO_DIR}/scripts/demo-isolation-check.sh" --quiet 2>&1)" || demo_iso_rc=$?
+if [[ ${demo_iso_rc} -ne 0 ]]; then
+    log "error" "SWEEP FAILED -- demo/production isolation check:"
+    log "error" "${demo_iso_output}"
+    ntfy_send "DEMO ISOLATION CHECK FAILED" \
+        "$(basename "${REPO_DIR}"): a running demo container or a Postgres instance crosses the demo/production boundary. Check ${LOG_FILE}." \
+        4
+else
+    log "info" "demo/production isolation: clean"
+fi
+
+if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 && ${demo_iso_rc} -eq 0 ]]; then
     log "info" "sweep OK: ${output}"
     printf '{"status":"ok","last_run_epoch":%s,"last_run_iso":"%s"}\n' \
         "${now_epoch}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${STATE_FILE}"

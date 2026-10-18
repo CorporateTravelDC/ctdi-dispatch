@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily CLAUDE.md drift backstop, 05:15 ET -- clear of 04:00 vault index scan, 04:15 demo archiver, 04:35 disruption digest, ahead of the 06:00 freshness audit. No Ollama use, so the inference-stacking constraint governing those slots doesn't apply here, but kept clear of them anyway to keep the scheduling pattern legible.
+Description=Daily CLAUDE.md drift backstop, 09:15 UTC (05:15 EDT / 04:15 EST; UTC since 2026-10-16) -- clear of 04:00 vault index scan, 04:15 demo archiver, 04:35 disruption digest, ahead of the 06:00 freshness audit. No Ollama use, so the inference-stacking constraint governing those slots doesn't apply here, but kept clear of them anyway to keep the scheduling pattern legible.
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -7,7 +7,8 @@ Description=Daily CLAUDE.md drift backstop, 05:15 ET -- clear of 04:00 vault ind
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=*-*-* 05:15:00 America/New_York
+# 2026-10-16 (operator): drift timers run on UTC. Was *-*-* 05:15:00 America/New_York.
+OnCalendar=*-*-* 09:15:00 UTC
 Persistent=true
 
 [Install]

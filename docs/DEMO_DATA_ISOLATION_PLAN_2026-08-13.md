@@ -40,16 +40,17 @@
 >
 > **Remaining (operator decisions, not done here):**
 >
-> - A separate demo Postgres instance and role (the demo's own
+> - ~~A separate demo Postgres instance and role (the demo's own
 >   `demo_profiles`/`demo_snapshots` home). Until then the demo app
->   containers have no Postgres at all, by design.
+>   containers have no Postgres at all, by design.~~ (decided 2026-10-16:
+>   built in relay 1 of the database split, addendum below.)
 > - The two trusted-side producers keep production access: the recorder
 >   (`corporatetraveldc-demo.container`) mounts `/var/lib/corporatetraveldc`
 >   **read-write** and the production socket (it writes `demo_snapshots` to
 >   the production database), as does
 >   `corporatetraveldc-second-brain-demo-archiver-daily.container`. They serve
 >   nothing publicly, and the isolation test names them explicitly so nothing
->   else joins them.
+>   else joins them. (Relay 4 of the split narrows the recorder, addendum below.)
 > - The Postgres `demo_profiles` table may hold profiles created through the
 >   admin API between 2026-10-10 (when the admin token started working) and
 >   2026-10-16; the sqlite file holds the 7 rows of 2026-08-02 (4 active). If
@@ -58,6 +59,74 @@
 >   restart.
 >
 > Claims in the plan below that this supersedes are struck through in place.
+
+> **Addendum, 2026-10-16 -- the demo/production DATABASE split (relay 1 of 4,
+> code and tracked units only; nothing demo-facing changes until relay 2).**
+>
+> *The regression, in three lines.* 2026-09-18..20: the platform moved to one
+> Postgres instance, one database, one superuser role, and the demo's two
+> stores followed (`demo_snapshots`, `demo_profiles`, pg_schema/0057). The two
+> public-demo quadlets were given the production socket volume and
+> `dispatch.env`, so the public demo's only database client pointed at
+> production, failing only for lack of a password (found 2026-10-16 12:13Z).
+>
+> *The hard rule (operator, 2026-10-16).* The public demo is fed ONLY by a
+> scrub from production into a logically **and** physically separate
+> database, exactly as `push-public.sh` feeds the public tree: production =
+> private; the demo Postgres instance = public mirror;
+> `scripts/scrub-demo-source.py` = the only bridge. LADD-listed identifiers
+> never reach a demo surface (fail CLOSED); the production superuser password
+> never enters `demo-secrets.env`; `runner-demo` is not a production unit.
+>
+> *Relays.*
+>
+> 1. **Relay 1 (this batch, additive).** New instance
+>    `corporatetraveldc-pgsql-demo` (quadlet, `config/postgresql-demo.conf`,
+>    `config/pg_hba-demo.conf`; data + socket volumes; `127.0.0.1:5433`; 512 MB)
+>    in the boot order before demo-api and in the rollout list; production
+>    `config/pg_hba.conf` rejects `demo` / `demo_owner` / `corporatetraveldc_demo`
+>    by name before its catch-alls; schema `src/common/pg_schema_demo/0001`
+>    (`snapshots`, `brief_archive`, `meta`, `demo_profiles`, `chat_messages`,
+>    hash-chained `scrub_ledger`; the `demo` role created LOGIN with no
+>    password, minimum grants) applied by `scripts/pg_migrate.py --instance
+>    demo`; `db_backend.demo_pg_conn()` (own pool, `DEMO_PG_*`) with refusals
+>    both ways and `common.db.conn()` routed by `DISPATCH_ROLE`;
+>    `src/demo/profiles.py` on the demo pool under `DISPATCH_ROLE=demo`,
+>    `src/demo/demo_api.py` on it under `DEMO_SOURCE=postgres` (default still
+>    the sovereign file; `/healthz` names the source); the scrub rewritten PG ->
+>    PG (nine endpoints, >= 24 h floor, LADD gate through the production
+>    filter -- empty or failed = exit 5 -- substitutions, tail/hex sweeps,
+>    fail-closed verify, 52-week prune, one ledger row per run, `--backfill
+>    --days N` / `--refresh` / `--profiles` / `--verify-ledger` / `--dry-run`);
+>    the refresh service runs it (timer still disabled); guards:
+>    `tests/scripts/test_demo_isolation.py`, `tests/demo/test_demo_accessor_boundary.py`,
+>    `tests/scripts/test_pg_schema_demo.py`, `tests/scripts/test_scrub_demo_source.py`,
+>    a relay-lint rule, and the live `scripts/demo-isolation-check.sh` in the
+>    15-minute sweep (`ops-health` p4); examples `config/demo.env.example`,
+>    `config/pgsql-demo-secrets.env.example`, `DEMO_PG_PASSWORD` in
+>    `config/demo-secrets.env.example`; the nightly backup excludes the instance.
+> 2. **Relay 2 (flip).** Install `/etc/corporatetraveldc/demo.env`
+>    (`DISPATCH_ROLE=demo`, `DISPATCH_DB_BACKEND=postgres`, `DEMO_PG_*`,
+>    `DEMO_SOURCE=postgres`) and `DEMO_PG_PASSWORD` in `demo-secrets.env`;
+>    `ALTER ROLE demo PASSWORD` typed on the box; the two demo quadlets drop
+>    `dispatch.env` for `demo.env`, mount `corporatetraveldc-pgsql-demo-sock` at
+>    `/var/run/postgresql-demo`, and restart. The isolation tests then forbid
+>    `dispatch.env` in them. Enable `corporatetraveldc-demo-source-refresh.timer`.
+> 3. **Relay 3 (retire the file).** Remove the sovereign SQLite mount and
+>    `DEMO_DB` from demo-api; delete the `DEMO_SOURCE=sqlite` path and
+>    `/var/lib/corporatetraveldc-demo-source` after a last diff of what the
+>    file holds against the instance.
+> 4. **Relay 4 (producers).** The recorder keeps HTTP access to the live API but
+>    loses the `/var/lib/corporatetraveldc` read-write mount; the demo archiver
+>    skill likewise; the `demo` role's grants are re-audited once relay 2's
+>    traffic is observed.
+>
+> *Operator hand steps, relay 1 (the only ones).* Create
+> `/etc/corporatetraveldc/pgsql-demo-secrets.env` (mode 0600, service user)
+> with ONE line, `POSTGRES_PASSWORD=<value>`, typed through
+> `read -rs ... </dev/tty` into the file -- never on a command line, never the
+> production value, never quoted. Nothing else until relay 2: no quadlet
+> changes to demo-api/runner-demo, the refresh timer stays disabled.
 
 Written 2026-08-13. Design/planning document for operator review — **no code
 in this repo changes as part of this doc**. It responds to finding F6 of the

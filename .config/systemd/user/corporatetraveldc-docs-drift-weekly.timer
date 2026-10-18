@@ -1,8 +1,11 @@
 [Unit]
-Description=Weekly documentation drift check, every Monday morning
+Description=Weekly documentation drift check, Monday 09:00 UTC (05:00 EDT / 04:00 EST)
+# 2026-10-16 (operator): drift timers run on UTC, stated explicitly. Was
+# `Mon *-*-* 09:00:00` with no zone (the host is UTC, so the time is unchanged).
+# No self-referential Requires=/Wants= -- see docs/BOOT_STORM_TIMER_REQUIRES.md.
 
 [Timer]
-OnCalendar=Mon *-*-* 09:00:00
+OnCalendar=Mon *-*-* 09:00:00 UTC
 Persistent=true
 
 [Install]

@@ -107,6 +107,9 @@ ROLLOUT=(
   "csexec-contact|local|localhost/csexec-contact:latest|$WEBSITE/contact-api|Containerfile|60"
   # --- externals: pull = update check
   "corporatetraveldc-pgsql|ext|docker.io/library/postgres:16-alpine|||60"
+  # 2026-10-16: the public-demo Postgres instance (demo/production split); same
+  # image, same canary-only change path (PG_CANARY_DONE), its own volumes.
+  "corporatetraveldc-pgsql-demo|ext|docker.io/library/postgres:16-alpine|||30"
   "nextcloud-db|ext|docker.io/library/postgres:16-alpine|||60"
   "nextcloud-app|ext|docker.io/library/nextcloud:stable-apache|||120"
   "ntfy|ext|docker.io/binwiederhier/ntfy:v2.25.0|||30"

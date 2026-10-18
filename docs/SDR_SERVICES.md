@@ -31,7 +31,7 @@ a pointer here.
 | `corporatetraveldc-acarsrouter` | ACARS/VDL2 message router (:9080) | running (2026-10-15: serves plain ACARS on TCP `9080` and VDL2 on TCP `15555`, both published on all interfaces; receives VDL2 from dumpvdl2 over ZMQ `45555`) |
 | `corporatetraveldc-dumpvdl2` | VDL Mode 2 decoder — shares the `ACARS0130` dongle (`Environment=RTL_SERIAL=ACARS0130`, ~~whole-bus `AddDevice=/dev/bus/usb`, not the `/dev/rtl_sdr_acars` symlink~~ (corrected 2026-10-15: `AddDevice=/dev/rtl_sdr_acars` plus a read-only `/dev/bus/usb` volume, scoped since 2026-08-26; the image's start script is overlaid with the tracked `containers/dumpvdl2/launch.sh`), `FEED_ID` set in the quadlet) | running |
 | `corporatetraveldc-acarshub` | ACARS web UI (~~127.0.0.1:9081~~ `100.x.x.x:8092`, tailnet only; corrected 2026-10-15 from the quadlet's `PublishPort`) | running |
-| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST | custom local image, running. (2026-10-15: all three sources exist in code, but in practice only airframes.io produces watchlist matches: 3 `MATCH [AIRFRAMES` in the last 24 h; the 2026-10-12 audit counted 3 airframes, 0 local, 0 Jumpseat over 7 days. The router sends only VDL2 to UDP 5005, and the watcher does not parse the registration nested inside a VDL2 message, so local VDL2 rarely matches a watched registration) |
+| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST. ~~The Jumpseat poller queries ACARS Drama by registration for every watched registration from `GET /api/v1/watchlist`~~ (2026-10-16, operator: keep the LADD list for Jumpseat -- the Jumpseat poller's list is ONLY `GET /api/v1/watchlist/registrations`, the flight-watch identifiers with every LADD-listed one removed by the dispatch API's production LADD filter (`common.db.faa_is_ladd` / `faa_lookup_by_hex`; the container has no database); a lookup error is 503 and the thread polls nothing, with a warning, rather than fall back to the full set; the local UDP and airframes.io threads keep the full set; filtered registrations are counted, never returned or logged) | custom local image, running. (2026-10-15: all three sources exist in code, but in practice only airframes.io produces watchlist matches: 3 `MATCH [AIRFRAMES` in the last 24 h; the 2026-10-12 audit counted 3 airframes, 0 local, 0 Jumpseat over 7 days. The router sends only VDL2 to UDP 5005, and the watcher does not parse the registration nested inside a VDL2 message, so local VDL2 rarely matches a watched registration) |
 | `corporatetraveldc-piaware` / `-fr24feed` / `-planefinder` / `-airnavradar` | Aggregator feeders (FlightAware / FR24 / PlaneFinder / RadarBox) | running |
 | `corporatetraveldc-sdr-crashloop-guard.timer` | Every 5 min — checks ultrafeeder/dumpvdl2 for lost USB device or restart-loop, auto-stops either | active (its `.service` is `inactive dead` between runs, as expected for a oneshot) |
 
@@ -86,7 +86,9 @@ ACARS0130 dongle -> dumpvdl2 --ZMQ 45555--> acarsrouter
 `acars_messages` held 93,190 rows on 2026-10-15, 9,986 of them from the last
 24 h. ACARS phase evidence is read by `common/acars.py` (Jumpseat, then
 airframes.io, then local) for the pusher and poller OOOI logic. ADS-B never
-asserts ON or IN.
+asserts ON or IN. The watcher's own Jumpseat polling is LADD-filtered since
+2026-10-16 (`GET /api/v1/watchlist/registrations`, row above); `common/acars.py`
+already LADD-checked its Jumpseat lookups (`db.faa_is_ladd`, 2026-10-16).
 
 ## Outbound sharing (added 2026-10-15)
 

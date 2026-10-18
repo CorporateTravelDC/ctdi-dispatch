@@ -15,6 +15,7 @@ manual one on 2026-10-11 23:23Z (see the schedule table). The Pi 5 rebuild seque
 | Item | How | Notes |
 |---|---|---|
 | Dispatch Postgres | `pg_dump -Fc` inside the container (its own env carries the credentials) | LADD table **data** excluded by default (see below) |
+| Demo Postgres (`corporatetraveldc-pgsql-demo`, added 2026-10-16) | **not dumped** (`BACKUP_EXCLUDED_INSTANCES` in `ctdi-backup.sh`) | The demo/production split's second instance holds only scrubbed derivatives of the production dump above (plus `demo_profiles`, copied once, and demo chat history). `scripts/scrub-demo-source.py --backfill` rebuilds it from production in one run; a dump would only ship a second, weaker copy of production data. Its data volume `corporatetraveldc-pgsql-demo-data` is not in the archive either. |
 | Nextcloud database | `pg_dump -Fc` inside `nextcloud-db` | |
 | Nextcloud files | the `nextcloud-html` volume, read through `podman unshare` | |
 | Platform state | `/var/lib/corporatetraveldc` | `models/` excluded (pinned by digest, re-pullable) |

@@ -1,7 +1,26 @@
+# corporatetraveldc-demo-source-refresh.service -- the nightly production ->
+# demo-instance scrub (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 5;
+# rewritten 2026-10-16 for the demo/production database split, relay 1).
+#
+# Runs HOST-SIDE, uncontainerized: this is the one process that holds both
+# the production credential (dispatch.env + dispatch-secrets.env, read as
+# `dispatch`) and the demo instance owner's (pgsql-demo-secrets.env, whose
+# POSTGRES_PASSWORD is demo_owner's; the scrub maps it to DEMO_PG_PASSWORD
+# itself, never on a command line). It writes the demo instance over
+# 127.0.0.1:5433 as demo_owner (DEMO_PG_HOST is the socket path by default,
+# which does not exist on the host, so db_backend falls back to loopback).
+# The paired timer (04:45 ET) is tracked but NOT enabled in relay 1.
 [Unit]
-Description=Scrub+promote newly staged demo content into the sovereign demo-source file (docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 5)
+Description=Scrub+promote staged demo content from production into the demo Postgres instance (the only bridge)
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+# Names only; the loader (scripts/lib/with_dispatch_env.py semantics, via the
+# service's own EnvironmentFile=) never echoes a value.
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/pgsql-demo-secrets.env
+Environment=PYTHONPATH=/opt/corporatetraveldc/private/ctdi-dispatch-internal/src
+Environment=DEMO_PG_USER=demo_owner
 ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scrub-demo-source.py --refresh

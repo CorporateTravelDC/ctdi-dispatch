@@ -133,10 +133,16 @@ def _force_sqlite_backend_and_trip_on_postgres(monkeypatch, request):
             "suite runs on isolated SQLite only (tests/conftest.py, 2026-10-03)")
 
     monkeypatch.setattr(db_backend, "backend", lambda: "sqlite")
-    for name in ("_build_pool", "_get_pool", "pg_conn", "_pg_conninfo"):
+    # 2026-10-16: the demo instance's pool (demo_pg_conn / role_conn, the
+    # demo/production split) is tripwired the same way -- no test opens a
+    # socket to either instance.
+    for name in ("_build_pool", "_get_pool", "pg_conn", "_pg_conninfo",
+                 "_build_demo_pool", "_get_demo_pool", "demo_pg_conn", "_demo_pg_conninfo",
+                 "role_conn"):
         if hasattr(db_backend, name):
             monkeypatch.setattr(db_backend, name, _trip)
     monkeypatch.setattr(db_backend, "_pool", None, raising=False)
+    monkeypatch.setattr(db_backend, "_demo_pool", None, raising=False)
     yield
 
 

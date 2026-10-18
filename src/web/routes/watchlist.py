@@ -104,6 +104,82 @@ async def watchlist_history(
     return JSONResponse({"history": rows, "count": len(rows)})
 
 
+# ── GET /api/v1/watchlist/registrations ───────────────────────────────────────
+# 2026-10-16 (operator: keep the LADD list for Jumpseat). The acars-watcher
+# container has no database, so its ACARS Drama Jumpseat poller built its
+# per-registration query list straight from GET /api/v1/watchlist and sent
+# every watched registration -- LADD-listed ones included -- to a third-party
+# search endpoint. This route is the ONLY list the Jumpseat thread may use:
+# the same flight-watch identifiers the watcher derives (entries + active
+# sessions, normalised the way the watcher does), minus every one the
+# production LADD filter lists. A lookup error is a 503, never an unfiltered
+# list, and the removed identifiers are never returned, only counted.
+
+def _watcher_normalize_reg(reg) -> str:
+    """Mirror of acars_watcher.normalize_reg(): upper-case, dashes removed."""
+    return str(reg).upper().replace("-", "").strip() if reg else ""
+
+
+def ladd_filtered_watch_registrations() -> tuple[list[str], int]:
+    """(kept identifiers sorted, number of LADD-listed identifiers removed).
+
+    One group per flight watch entry (identifier + registration, LADD-checked
+    by either form and by the entry's hex through faa_lookup_by_hex) and per
+    active flight session (registration or subject). A listed group drops
+    all of its identifiers; an identifier shared with a listed group stays
+    out even if another group carries it. Raises on any lookup failure --
+    the route turns that into 503 (fail closed)."""
+    groups: list[tuple[set[str], str | None]] = []
+    for e in db.get_watchlist_entries(entry_type="flight"):
+        idents = {_watcher_normalize_reg(e.get("identifier")),
+                  _watcher_normalize_reg(e.get("registration"))}
+        idents.discard("")
+        groups.append((idents, (e.get("hex_id") or "").strip() or None))
+    for s in db.get_active_watchlists():
+        if s.get("session_type") != "flight":
+            continue
+        idents = {_watcher_normalize_reg(s.get("registration") or s.get("subject"))}
+        idents.discard("")
+        groups.append((idents, None))
+
+    kept: set[str] = set()
+    removed: set[str] = set()
+    for idents, hex_id in groups:
+        if not idents:
+            continue
+        listed = any(db.faa_is_ladd(i) for i in idents)
+        if not listed and hex_id:
+            rec = db.faa_lookup_by_hex(hex_id)
+            listed = bool(rec and rec.get("ladd"))
+        (removed if listed else kept).update(idents)
+    kept -= removed
+    return sorted(kept), len(removed)
+
+
+@router.get("/registrations")
+async def watchlist_registrations(
+    tier: Tier = Depends(require_tier(Tier.T1)),
+) -> JSONResponse:
+    """Flight-watch registrations with every LADD-listed one removed. Tier 1+.
+
+    Consumer: acars-watcher's Jumpseat thread (the only list it polls from).
+    503 when the LADD lookup fails; the filtered identifiers are counted,
+    never listed."""
+    try:
+        regs, n_filtered = ladd_filtered_watch_registrations()
+    except Exception as exc:  # noqa: BLE001 -- any lookup failure fails closed
+        raise HTTPException(
+            status_code=503,
+            detail="LADD filter unavailable; no unfiltered registration list is served",
+        ) from exc
+    return JSONResponse({
+        "registrations": regs,
+        "count": len(regs),
+        "ladd_filtered": n_filtered,
+        "checked_at": _now_iso(),
+    })
+
+
 # ── POST /api/v1/watchlist/flights ────────────────────────────────────────────
 
 class FlightWatchlistRequest(BaseModel):

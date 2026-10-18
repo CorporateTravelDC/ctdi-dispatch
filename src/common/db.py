@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Iterable
 
 from common import config
 
@@ -92,7 +92,12 @@ def conn() -> Generator[sqlite3.Connection, None, None]:
     """
     from common import db_backend
     if db_backend.backend() == "postgres":
-        with db_backend.pg_conn() as pgc:
+        # 2026-10-16 demo/production split: role_conn() is the production
+        # pool (pg_conn) unless DISPATCH_ROLE=demo, in which case it is the
+        # demo instance's pool (demo_pg_conn) -- so runner-demo's chat
+        # history and anything else routed through here lands on the demo
+        # instance once relay 2 sets the role, with no call-site changes.
+        with db_backend.role_conn() as pgc:
             yield pgc
         return
 
@@ -3813,20 +3818,82 @@ def ladd_lookup_keys(identifier: str) -> list[str]:
     return keys
 
 
+_LADD_BATCH_CHUNK = 500
+
+
+def faa_ladd_listed_batch(identifiers: Iterable[str]) -> set[str]:
+    """The subset of `identifiers` (registrations in either form, foreign
+    marks, flight-ID/callsign strings) that are on the LADD privacy list --
+    ONE code path for the live platform (faa_is_ladd / faa_lookup_by_hex /
+    airplanes_live._ladd_listed) and for scripts/scrub-demo-source.py's
+    per-row gate (2026-10-16, operator: reuse the production filter, do not
+    build a second LADD mechanism). Same table (faa_ladd_aircraft), same key
+    expansion (ladd_lookup_keys), chunked IN queries through conn().
+
+    Returns the matching INPUT identifiers (normalised upper-case). Raises
+    on any database error -- the scrub treats that as fatal (fail closed);
+    the live callers already treat a lookup failure as "listed"."""
+    wanted: dict[str, str] = {}
+    for ident in identifiers:
+        raw = (ident or "").strip().upper()
+        if not raw:
+            continue
+        for k in ladd_lookup_keys(raw):
+            wanted.setdefault(k, raw)
+    if not wanted:
+        return set()
+    keys = list(wanted)
+    hits: set[str] = set()
+    with conn() as c:
+        for i in range(0, len(keys), _LADD_BATCH_CHUNK):
+            chunk = keys[i:i + _LADD_BATCH_CHUNK]
+            rows = c.execute(
+                "SELECT n_number FROM faa_ladd_aircraft WHERE n_number IN ("
+                + ",".join("?" * len(chunk)) + ")",
+                tuple(chunk),
+            ).fetchall()
+            for r in rows:
+                hits.add(wanted[r["n_number"]])
+    return hits
+
+
+def faa_ladd_hex_batch(hexes: Iterable[str]) -> set[str]:
+    """The subset of `hexes` (24-bit Mode S, any case) whose registry entry is
+    LADD-listed, in two chunked queries instead of one full-table scan per
+    hex (2026-10-17: faa_lookup_by_hex's LOWER(mode_s_hex)=? per hex made the
+    28-day demo backfill take ~8 h). Same tables and key expansion as
+    faa_lookup_by_hex + faa_is_ladd. Returns lower-case input hexes. Raises
+    on any database error (the scrub fails closed on it)."""
+    wanted = sorted({(h or "").strip().lower() for h in hexes if (h or "").strip()})
+    if not wanted:
+        return set()
+    n_by_hex: dict[str, str] = {}
+    with conn() as c:
+        for i in range(0, len(wanted), _LADD_BATCH_CHUNK):
+            chunk = wanted[i:i + _LADD_BATCH_CHUNK]
+            for r in c.execute(
+                "SELECT LOWER(mode_s_hex) AS h, n_number FROM faa_aircraft_registry WHERE LOWER(mode_s_hex) IN ("
+                + ",".join("?" * len(chunk)) + ")",
+                tuple(chunk),
+            ).fetchall():
+                if r["n_number"]:
+                    n_by_hex[r["h"]] = r["n_number"]
+    if not n_by_hex:
+        return set()
+    listed = faa_ladd_listed_batch(n_by_hex.values())
+    return {h for h, n in n_by_hex.items() if (n or "").strip().upper() in listed}
+
+
 def faa_is_ladd(n_number: str) -> bool:
     """Return True if the identifier (registration in either form, or a
     flight-ID string) is on the LADD privacy list.
     SUPERSEDED 2026-10-08: key = n_number.upper().lstrip("N") ... WHERE n_number=key
-    (stripped the N from every input, so US registrations never matched)."""
-    keys = ladd_lookup_keys(n_number)
-    if not keys:
+    (stripped the N from every input, so US registrations never matched).
+    2026-10-16: the single-identifier case of faa_ladd_listed_batch(), so
+    the live lookup and the demo scrub's batch gate are literally one path."""
+    if not ladd_lookup_keys(n_number):
         return False
-    with conn() as c:
-        row = c.execute(
-            "SELECT 1 FROM faa_ladd_aircraft WHERE n_number IN (" + ",".join("?" * len(keys)) + ")",
-            tuple(keys),
-        ).fetchone()
-    return row is not None
+    return bool(faa_ladd_listed_batch([n_number]))
 
 
 def faa_registry_meta_set(key: str, value: str) -> None:
