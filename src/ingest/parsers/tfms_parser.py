@@ -3330,6 +3330,7 @@ def write_tfms_programs(programs: list[dict]) -> int:
                 raw_json=json.dumps(p),
                 key_scheme=key_scheme,
                 legacy_correlate_id=legacy_correlate_id,
+                source=db.NAS_SOURCE_TFMS,
             )
             written += 1
         except Exception as e:

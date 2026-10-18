@@ -2558,6 +2558,9 @@ async def main() -> None:
         # 2026-09-05: cifp_fixes/cifp_procedure_legs/cifp_holds -- faa_cifp_parse.py
         # (fired via its own weekly timer, after faa_cifp_pull.py) writes here.
         db.init_db_v45()
+        # 2026-10-18: nas_programs.source -- the REST NAS fetcher stamps it and
+        # deactivates only its own rows (pg_schema/0076 on Postgres).
+        db.init_db_v47()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

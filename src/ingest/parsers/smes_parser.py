@@ -1205,7 +1205,9 @@ def _match_watchlist_flight(record: dict) -> dict | None:
         return None
     try:
         from shared.watchlist import get_active_entries
-        entries = get_active_entries(entry_type="flight")
+        # 2026-10-18 (lean-out L1): per-process 3 s cache (operator D2) -- this
+        # ran one DB read per surface event.
+        entries = get_active_entries(entry_type="flight", cached=True)
     except Exception as e:
         log.error("stdds: watchlist lookup failed: %s", e)
         return None

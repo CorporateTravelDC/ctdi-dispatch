@@ -73,6 +73,20 @@ def run() -> dict:
         log_usage(SKILL_NAME, "none", 0, 0, status=status, gate_result="new")
 
 
-if __name__ == "__main__":
+def main() -> int:
+    """2026-10-18 (relay L1, leanout F3/F5): exit non-zero on any compile
+    error. run() used to be printed and the process exited 0 whatever it
+    returned, so a lock/statement-timeout failure (~17% of runs since 10-04)
+    left the unit at Result=success and OnFailure=/ops-health never saw it.
+    The error dict is still printed to the journal; the exit code is now the
+    unit's verdict. The run ledger row (semantic_compile_runs, ok=false) is
+    written by compile_layer() itself."""
     import json as _json
-    print(_json.dumps(run(), indent=2))
+    result = run()
+    print(_json.dumps(result, indent=2, default=str))
+    return 0 if result.get("status") == "ok" else 1
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

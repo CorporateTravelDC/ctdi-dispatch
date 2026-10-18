@@ -150,6 +150,14 @@ def run() -> dict:
     feed_name = "nas"
     fetched_at = time.time()
 
+    # 2026-10-18 (lean-out L1): TFMS-sourced programs end at their own
+    # end_time (db.expire_ended_tfms_programs). Runs on this 300 s cadence
+    # whether or not the REST fetch below succeeds; never fails the fetch.
+    try:
+        db.expire_ended_tfms_programs()
+    except Exception as e:
+        log.error("NAS: TFMS program expiry failed: %s", e)
+
     try:
         programs = fetch()
         active_ids = [p["program_id"] for p in programs]
@@ -163,8 +171,11 @@ def run() -> dict:
                 prog_type=p["type"],
                 facility=p["facility"],
                 raw_json=json.dumps(p["raw"]),
+                source=db.NAS_SOURCE_REST,
             )
 
+        # 2026-10-18 (lean-out L1): REST rows only, and only rows still
+        # active; TFMS programs end at their own end_time instead.
         db.deactivate_absent_programs(active_ids)
 
         db.upsert_feed(feed_name, fetched_at, error=None,

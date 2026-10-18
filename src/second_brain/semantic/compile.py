@@ -62,6 +62,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import bisect
@@ -223,6 +224,9 @@ def _create_schema(conn) -> None:
             CREATE INDEX idx_snir_path ON semantic_note_instance_refs(path);
             CREATE INDEX idx_snir_type_id ON semantic_note_instance_refs(instance_type, identifier);
         """)
+        # 2026-10-18: the run ledger is NOT in _TABLES (never dropped or
+        # truncated); this is the test double of pg_schema/0077.
+        conn.execute(_SQLITE_RUNS_DDL)
         return
     for t in _TABLES:
         conn.execute(f"TRUNCATE TABLE {t}")
@@ -1840,42 +1844,176 @@ def most_recent_geometry_entity(db_path: str | None = None) -> str | None:
         return best_path
 
 
-def compile_layer(db_path: str | None = None,
-                  ontology_path: str | None = None) -> dict:
-    m = load(ontology_path)
-    with _connect(db_path) as conn:
-        # 2026-09-19: the pre-write cache-warming reads that used to live
-        # here (SELECT COUNT(*) FROM vault_notes_fts/vault_documents) were
-        # a lock-avoidance mitigation for SQLite's exclusive-lock mode --
-        # see _connect()'s HISTORICAL comment above. Postgres's MVCC has
-        # no such lock to avoid, so they were removed rather than kept as
-        # meaningless overhead.
-        _create_schema(conn)
-        _write_model(conn, m)
-        result = assign(conn, m)
-        result["derivations"] = assign_derivations(conn)
-        result["chronology_edges"] = assign_chronology(conn)
-        result["geometry_edges"] = assign_geometry(conn)
-        # Phase 2 runs AFTER assign_geometry in the same pass, by necessity:
-        # it aggregates the proximate_to edges that call just wrote. Running it
-        # against a stale graph would measure the previous compile's geometry.
-        result["causal_edges"] = assign_causal_associations(conn)
-        # Phase 3 consumes Phase 2's output, so it runs last in the chain.
-        result["cluster_edges"] = assign_clusters(conn)
+# ── Compile run ledger + `semantic-compiled` sentinel (2026-10-18, relay L1) ──
+#
+# The compile failed ~17% of runs (lock / statement timeouts) while its unit
+# reported success, and nothing said which compiles completed. Contract
+# (docs/SECOND_BRAIN_STATUS.md "Compile run ledger and sentinel"):
+#   - every run writes one semantic_compile_runs row (pg_schema/0077);
+#   - an ok row is written inside the compile's own transaction and takes
+#     compile_seq = previous max + 1, so the counter moves only when the whole
+#     layer committed;
+#   - a failed run gets an ok=false row from a separate connection after the
+#     rollback (best effort: if the database itself is the failure, the row
+#     may be missing, the exception still propagates);
+#   - after the commit only, the sentinel file `semantic-compiled` is replaced
+#     (write + rename) under the shared trigger dir, holding compile_seq, the
+#     run's seq and the UTC time. Nothing watches it yet (the pamphlet
+#     generator and the baseline layer are later relays).
+_log = logging.getLogger(__name__)
+SECOND_BRAIN_TRIGGER_DIR = "/var/lib/corporatetraveldc/second-brain-triggers"
+COMPILED_SENTINEL_NAME = "semantic-compiled"
 
-        now = datetime.now(timezone.utc).isoformat()
-        meta = {
-            "semantic_layer_version": m.version,
-            "compiled_at": now,
-            "namespace": m.namespace,
-            **{k: str(v) for k, v in m.stats().items()},
-            **{k: str(v) for k, v in result.items()},
-        }
-        conn.executemany("INSERT OR REPLACE INTO semantic_meta(key, value) VALUES (?,?)",
-                         sorted(meta.items()))
-        conn.commit()
+_SQLITE_RUNS_DDL = """
+    CREATE TABLE IF NOT EXISTS semantic_compile_runs (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+        ok INTEGER NOT NULL, error TEXT, derivations INTEGER, concepts INTEGER,
+        duration_s REAL, compile_seq INTEGER UNIQUE
+    )
+"""
+
+_RUNS_INSERT = (
+    "INSERT INTO semantic_compile_runs(started_at, finished_at, ok, error, "
+    "derivations, concepts, duration_s, compile_seq) VALUES (?,?,?,?,?,?,?,?) "
+    "RETURNING seq"
+)
+
+
+def _row_value(row, key: str, idx: int = 0):
+    """dict_row (Postgres) or sqlite3.Row/tuple (test double)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return row[idx]
+
+
+def _record_ok_run(conn, started_at: datetime, finished_at: datetime,
+                   duration_s: float, derivations, concepts) -> tuple[int, int]:
+    """Inside the compile's transaction. Returns (seq, compile_seq)."""
+    if not isinstance(conn, sqlite3.Connection):
+        # Serialises two compiles racing for the same next number (the unit
+        # is a oneshot, so this only matters for a hand run during a timer run).
+        conn.execute("LOCK TABLE semantic_compile_runs IN SHARE ROW EXCLUSIVE MODE")
+    row = conn.execute(
+        "SELECT COALESCE(MAX(compile_seq), 0) AS n FROM semantic_compile_runs").fetchone()
+    compile_seq = int(_row_value(row, "n")) + 1
+    row = conn.execute(_RUNS_INSERT, (
+        _ts(started_at, conn), _ts(finished_at, conn), True, None,
+        _int_or_none(derivations), _int_or_none(concepts), round(duration_s, 3), compile_seq,
+    )).fetchone()
+    return int(_row_value(row, "seq")), compile_seq
+
+
+def _record_failed_run(db_path: str | None, started_at: datetime, error: BaseException) -> int | None:
+    """After the rollback, on a fresh connection. Best effort; returns seq or None."""
+    finished = datetime.now(timezone.utc)
+    msg = f"{type(error).__name__}: {error}"[:2000]
+    try:
+        with _connect(db_path) as conn:
+            if isinstance(conn, sqlite3.Connection):
+                conn.execute(_SQLITE_RUNS_DDL)
+            row = conn.execute(_RUNS_INSERT, (
+                _ts(started_at, conn), _ts(finished, conn), False, msg, None, None,
+                round((finished - started_at).total_seconds(), 3), None,
+            )).fetchone()
+            conn.commit()
+            return int(_row_value(row, "seq"))
+    except Exception as e:  # never mask the compile's own failure
+        _log.error(
+            "semantic compile: could not record the failed run: %s", type(e).__name__)
+        return None
+
+
+def _ts(dt: datetime, conn):
+    return dt.isoformat() if isinstance(conn, sqlite3.Connection) else dt
+
+
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_compiled_sentinel(sentinel_dir: str, payload: dict) -> str:
+    os.makedirs(sentinel_dir, exist_ok=True)
+    final = os.path.join(sentinel_dir, COMPILED_SENTINEL_NAME)
+    tmp = final + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
+    os.replace(tmp, final)
+    return final
+
+
+def compile_layer(db_path: str | None = None,
+                  ontology_path: str | None = None,
+                  sentinel_dir: str | None = None) -> dict:
+    """Full recompile. sentinel_dir: where `semantic-compiled` goes after a
+    successful commit; default SECOND_BRAIN_TRIGGER_DIR on the production path
+    (db_path None), and no sentinel on a test db_path unless one is given."""
+    started = datetime.now(timezone.utc)
+    t0 = time.monotonic()
+    m = load(ontology_path)
+    try:
+        with _connect(db_path) as conn:
+            # 2026-09-19: the pre-write cache-warming reads that used to live
+            # here (SELECT COUNT(*) FROM vault_notes_fts/vault_documents) were
+            # a lock-avoidance mitigation for SQLite's exclusive-lock mode --
+            # see _connect()'s HISTORICAL comment above. Postgres's MVCC has
+            # no such lock to avoid, so they were removed rather than kept as
+            # meaningless overhead.
+            _create_schema(conn)
+            _write_model(conn, m)
+            result = assign(conn, m)
+            result["derivations"] = assign_derivations(conn)
+            result["chronology_edges"] = assign_chronology(conn)
+            result["geometry_edges"] = assign_geometry(conn)
+            # Phase 2 runs AFTER assign_geometry in the same pass, by necessity:
+            # it aggregates the proximate_to edges that call just wrote. Running it
+            # against a stale graph would measure the previous compile's geometry.
+            result["causal_edges"] = assign_causal_associations(conn)
+            # Phase 3 consumes Phase 2's output, so it runs last in the chain.
+            result["cluster_edges"] = assign_clusters(conn)
+
+            finished = datetime.now(timezone.utc)
+            now = finished.isoformat()
+            seq, compile_seq = _record_ok_run(
+                conn, started, finished, time.monotonic() - t0,
+                result.get("derivations"), result.get("assignments"))
+            meta = {
+                "semantic_layer_version": m.version,
+                "compiled_at": now,
+                "namespace": m.namespace,
+                **{k: str(v) for k, v in m.stats().items()},
+                **{k: str(v) for k, v in result.items()},
+                "compile_seq": str(compile_seq),
+            }
+            conn.executemany("INSERT OR REPLACE INTO semantic_meta(key, value) VALUES (?,?)",
+                             sorted(meta.items()))
+            conn.commit()
+    except Exception as e:
+        _record_failed_run(db_path, started, e)
+        raise
     result["compiled_at"] = now
     result["version"] = m.version
+    result["run_seq"] = seq
+    result["compile_seq"] = compile_seq
+    if sentinel_dir is None and db_path is None:
+        sentinel_dir = SECOND_BRAIN_TRIGGER_DIR
+    if sentinel_dir:
+        # After the commit only. Best effort: the layer is already committed,
+        # a sentinel write failure must not turn a good compile into a failure.
+        try:
+            _write_compiled_sentinel(sentinel_dir, {
+                "compile_seq": compile_seq, "seq": seq, "compiled_at": now,
+                "geometry_edges": result.get("geometry_edges"),
+                "causal_edges": result.get("causal_edges"),
+                "cluster_edges": result.get("cluster_edges"),
+            })
+        except OSError as e:
+            _log.warning(
+                "semantic compile: sentinel not written: %s", type(e).__name__)
     return result
 
 

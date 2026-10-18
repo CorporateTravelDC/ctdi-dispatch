@@ -1881,7 +1881,9 @@ def check_fdps_watchlist(parsed: dict) -> None:
 
     try:
         from shared.watchlist import get_active_entries, watchlist_event_hit
-        entries = get_active_entries(entry_type="flight")
+        # 2026-10-18 (lean-out L1): per-process 3 s cache (operator D2) -- this
+        # ran one DB read per FH/TH/CL message.
+        entries = get_active_entries(entry_type="flight", cached=True)
     except Exception as e:
         log.error("fdps watchlist lookup failed: %s", e)
         return

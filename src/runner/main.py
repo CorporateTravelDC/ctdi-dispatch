@@ -1342,12 +1342,123 @@ _TOPIC_RX: dict[str, re.Pattern] = {
 }
 
 
+# 2026-10-18 (relay L1, panel phase 0): the live shapes of the endpoints the panel
+# reads, verified with one GET each against dispatch-web on 2026-10-18:
+#   cps     {score, label, factors{}, narrative, computed_at}
+#   weather {metars: [{station, ceiling_ft, visibility_sm, wind_kt, precip_code, obs_time, fetched_at}]}
+#   tfr     {tfrs: [{tfr_id, is_vip, effective_start, effective_end}], count}
+#   feeds   {feeds: [{feed_name, age_seconds, stale_threshold_seconds, push_covered, error, ...}]}
+#   alerts  {alerts: [{alert_id, event_type, area_desc, severity, headline, ...}], count}
+#   notam   {notams: [{notam_id, facility, classification, text_body, ...}], count}
+#   amtrak  {available, summary, fetched_at, trains: [...]}
+#   brief   text/plain (the daily brief file), not JSON
+# The old code read weather.stations[*].raw_text and treated tfr/alerts/notams as
+# bare lists, so the model was told "TFRS: none active" with ~80 active and got no
+# weather; the brief's r.json() failed and the brief was dropped. The helpers below
+# read the shapes above and still accept a bare list (older callers, fixtures).
+_CTX_LIST_KEYS = {"weather": "metars", "tfr": "tfrs", "feeds": "feeds",
+                  "alerts": "alerts", "notam": "notams", "amtrak": "trains"}
+_BRIEF_CTX_CHARS = 600
+
+
+def _ctx_items(ctx: dict[str, Any], topic: str) -> list[dict] | None:
+    """The topic's item list, [] when the payload has none, None when the topic
+    was not fetched at all."""
+    if topic not in ctx:
+        return None
+    payload = ctx[topic]
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get(_CTX_LIST_KEYS.get(topic, ""))
+        if not isinstance(items, list):
+            items = []
+    else:
+        items = []
+    return [i for i in items if isinstance(i, dict)]
+
+
+def _ctx_count(ctx: dict[str, Any], topic: str, items: list[dict]) -> int:
+    payload = ctx.get(topic)
+    if isinstance(payload, dict) and isinstance(payload.get("count"), int):
+        return payload["count"]
+    return len(items)
+
+
+def _utc_hhmm(epoch) -> str:
+    try:
+        return datetime.datetime.fromtimestamp(float(epoch), datetime.timezone.utc).strftime("%H:%MZ")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
+def _metar_line(m: dict) -> str:
+    bits = []
+    if m.get("ceiling_ft") is not None:
+        bits.append(f"ceiling {m['ceiling_ft']} ft")
+    else:
+        bits.append("no ceiling")
+    if m.get("visibility_sm") is not None:
+        bits.append(f"vis {m['visibility_sm']} sm")
+    if m.get("wind_kt") is not None:
+        bits.append(f"wind {m['wind_kt']} kt")
+    if m.get("precip_code"):
+        bits.append(f"precip {m['precip_code']}")
+    obs = _utc_hhmm(m.get("obs_time"))
+    if obs:
+        bits.append(f"obs {obs}")
+    return f"  {m.get('station') or '?'}: {', '.join(bits)}"
+
+
+def _weather_lines(ctx: dict[str, Any], limit: int | None = None) -> list[str] | None:
+    items = _ctx_items(ctx, "weather")
+    if items is None:
+        return None
+    lines = [_metar_line(m) for m in items if m.get("station")]
+    if not lines and isinstance(ctx.get("weather"), dict):
+        # legacy {"stations": {ICAO: {raw_text}}} shape
+        stations = ctx["weather"].get("stations") or {}
+        if isinstance(stations, dict):
+            lines = [f"  {icao}: {(d.get('raw_text') or '').strip()}"
+                     for icao, d in stations.items()
+                     if isinstance(d, dict) and d.get("raw_text")]
+    return lines[:limit] if limit else lines
+
+
+def _feed_status(feed_list: list[dict]) -> tuple[list[str], list[str], list[str]]:
+    """(errors, stale, nominal) feed names. Stale = older than the feed's own
+    stale_threshold_seconds (900 s when absent) and not push-covered."""
+    errors, stale, nominal = [], [], []
+    for f in feed_list:
+        name = f.get("feed_name")
+        err = f.get("error")
+        if err and "pending" not in str(err):
+            errors.append(name)
+            continue
+        threshold = f.get("stale_threshold_seconds") or 900
+        if (f.get("age_seconds") or 0) > threshold and not f.get("push_covered") and not err:
+            stale.append(name)
+        else:
+            nominal.append(name)
+    return errors, stale, nominal
+
+
+def _brief_text(ctx: dict[str, Any]) -> str:
+    brief = ctx.get("brief")
+    if isinstance(brief, str):
+        return brief.strip()
+    if isinstance(brief, dict):
+        return str(brief.get("text") or brief.get("summary") or brief.get("brief") or "").strip()
+    return ""
+
+
 async def _build_context_rich() -> dict[str, Any]:
     """
     Fetch all dispatch feed data in parallel. Returns a structured dict keyed
     by topic. Never raises — missing feeds produce no entry (caller handles).
     This is the canonical data source; LLMs get a stringified view of this,
     but the raw dict is available for local resolution without LLM involvement.
+    2026-10-18: a non-JSON body (the brief is text/plain) is kept as text.
     """
     endpoints = {
         "cps":     "api/v1/cps",
@@ -1368,8 +1479,13 @@ async def _build_context_rich() -> dict[str, Any]:
         for topic, task in tasks.items():
             try:
                 r = await task
-                if r.status_code == 200:
+                if r.status_code != 200:
+                    continue
+                ctype = (r.headers.get("content-type") or "").lower()
+                if "json" in ctype:
                     ctx[topic] = r.json()
+                else:
+                    ctx[topic] = r.text
             except Exception:
                 pass
     return ctx
@@ -1379,68 +1495,61 @@ def _context_to_str(ctx: dict[str, Any]) -> str:
     """Flatten rich context dict to a string block for LLM injection."""
     parts: list[str] = []
 
-    if "cps" in ctx:
+    if isinstance(ctx.get("cps"), dict):
         cps = ctx["cps"]
         parts.append(
             f"CPS: {cps.get('score','?')} / {cps.get('label','?')} — "
             f"{cps.get('narrative','')}"
         )
 
-    if "weather" in ctx:
-        stations = ctx["weather"].get("stations") or {}
-        wx_lines = [
-            f"  {icao}: {(d.get('raw_text') or '').strip()}"
-            for icao, d in list(stations.items())[:6]
-            if d.get("raw_text")
-        ]
-        if wx_lines:
-            parts.append("WEATHER (METAR):\n" + "\n".join(wx_lines))
+    wx_lines = _weather_lines(ctx, limit=8)
+    if wx_lines:
+        parts.append("WEATHER (METAR):\n" + "\n".join(wx_lines))
 
-    if "tfr" in ctx:
-        tfrs = ctx["tfr"]
-        if isinstance(tfrs, list) and tfrs:
+    tfrs = _ctx_items(ctx, "tfr")
+    if tfrs is not None:
+        n = _ctx_count(ctx, "tfr", tfrs)
+        if n:
             vip = [t for t in tfrs if t.get("is_vip")]
-            ids = ", ".join(t.get("notam_id") or t.get("id") or "?" for t in tfrs[:6])
-            parts.append(f"TFRS: {len(tfrs)} active ({len(vip)} VIP/POTUS) — {ids}")
+            ids = ", ".join(str(t.get("tfr_id") or t.get("notam_id") or t.get("id") or "?")
+                            for t in (vip + [t for t in tfrs if not t.get("is_vip")])[:6])
+            parts.append(f"TFRS: {n} active ({len(vip)} VIP/POTUS) — {ids}")
         else:
             parts.append("TFRS: none active")
 
-    if "feeds" in ctx:
-        feed_list = ctx["feeds"].get("feeds") if isinstance(ctx["feeds"], dict) else ctx["feeds"]
-        if isinstance(feed_list, list):
-            errors = [
-                f.get("feed_name") for f in feed_list
-                if f.get("error") and "pending" not in str(f.get("error", ""))
-            ]
-            stale  = [
-                f.get("feed_name") for f in feed_list
-                if (f.get("age_seconds") or 0) > 900 and not f.get("error")
-            ]
-            if errors:
-                parts.append(f"FEED ERRORS: {', '.join(filter(None, errors))}")
-            elif stale:
-                parts.append(f"FEEDS STALE: {', '.join(filter(None, stale))}")
-            else:
-                parts.append("FEEDS: nominal")
+    feed_list = _ctx_items(ctx, "feeds")
+    if feed_list:
+        errors, stale, _nominal = _feed_status(feed_list)
+        if errors:
+            parts.append(f"FEED ERRORS: {', '.join(filter(None, errors))}")
+        elif stale:
+            parts.append(f"FEEDS STALE: {', '.join(filter(None, stale))}")
+        else:
+            parts.append("FEEDS: nominal")
 
-    if "alerts" in ctx:
-        alerts = ctx["alerts"]
-        if isinstance(alerts, list) and alerts:
-            headlines = "; ".join(
-                a.get("headline") or a.get("event") or "?" for a in alerts[:3]
-            )
-            parts.append(f"NWS ALERTS ({len(alerts)}): {headlines}")
+    alerts = _ctx_items(ctx, "alerts")
+    if alerts:
+        headlines = "; ".join(
+            a.get("headline") or a.get("event_type") or a.get("event") or "?" for a in alerts[:3]
+        )
+        parts.append(f"NWS ALERTS ({_ctx_count(ctx, 'alerts', alerts)}): {headlines}")
+    elif alerts is not None:
+        parts.append("NWS ALERTS: none active")
 
-    if "amtrak" in ctx:
-        amtrak = ctx["amtrak"]
-        summary = amtrak.get("summary", "")
+    if isinstance(ctx.get("amtrak"), dict):
+        summary = ctx["amtrak"].get("summary", "")
         if summary:
             parts.append(f"AMTRAK/WAS: {summary}")
 
-    if "notam" in ctx:
-        notams = ctx["notam"]
-        if isinstance(notams, list) and notams:
-            parts.append(f"NOTAMS: {len(notams)} active")
+    notams = _ctx_items(ctx, "notam")
+    if notams is not None:
+        n = _ctx_count(ctx, "notam", notams)
+        if n:
+            parts.append(f"NOTAMS: {n} active")
+
+    brief = _brief_text(ctx)
+    if brief:
+        parts.append(f"LATEST BRIEF (first {_BRIEF_CTX_CHARS} chars):\n{brief[:_BRIEF_CTX_CHARS]}")
 
     return "\n".join(parts)
 
@@ -1461,7 +1570,7 @@ def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
 
     parts: list[str] = []
 
-    if "cps" in matched and "cps" in ctx:
+    if "cps" in matched and isinstance(ctx.get("cps"), dict):
         cps = ctx["cps"]
         score = cps.get("score", "?")
         label = cps.get("label", "")
@@ -1474,76 +1583,58 @@ def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
             parts.append("Factors: " + ", ".join(f"{k}={v}" for k, v in factors.items()))
 
     if "weather" in matched and "weather" in ctx:
-        stations = ctx["weather"].get("stations") or {}
-        wx_lines = [
-            f"  {icao}: {(d.get('raw_text') or '').strip()}"
-            for icao, d in stations.items()
-            if d.get("raw_text")
-        ]
-        if wx_lines:
-            parts.append("METAR:\n" + "\n".join(wx_lines))
-        else:
-            parts.append("METAR: no data")
+        wx_lines = _weather_lines(ctx)
+        parts.append("METAR:\n" + "\n".join(wx_lines) if wx_lines else "METAR: no data")
 
-    if "tfr" in matched and "tfr" in ctx:
-        tfrs = ctx["tfr"]
-        if isinstance(tfrs, list):
-            if tfrs:
+    if "tfr" in matched:
+        tfrs = _ctx_items(ctx, "tfr")
+        if tfrs is not None:
+            n = _ctx_count(ctx, "tfr", tfrs)
+            if n:
                 vip = [t for t in tfrs if t.get("is_vip")]
-                parts.append(f"TFRs active: {len(tfrs)} ({len(vip)} VIP/POTUS)")
-                for t in tfrs[:8]:
-                    nid  = t.get("notam_id") or t.get("id") or "?"
-                    area = (t.get("area") or "")[:60]
-                    eff  = t.get("effective") or ""
-                    parts.append(f"  {nid}: {area}{(' eff '+eff) if eff else ''}".strip())
+                parts.append(f"TFRs active: {n} ({len(vip)} VIP/POTUS)")
+                for t in (vip + [t for t in tfrs if not t.get("is_vip")])[:8]:
+                    nid = t.get("tfr_id") or t.get("notam_id") or t.get("id") or "?"
+                    window = " - ".join(x for x in (_utc_hhmm(t.get("effective_start")),
+                                                     _utc_hhmm(t.get("effective_end"))) if x)
+                    tag = " VIP" if t.get("is_vip") else ""
+                    parts.append(f"  {nid}{tag}{(' ' + window) if window else ''}")
             else:
                 parts.append("TFRs: none active")
 
     if "amtrak" in matched and "amtrak" in ctx:
-        amtrak = ctx["amtrak"]
+        amtrak = ctx["amtrak"] if isinstance(ctx["amtrak"], dict) else {}
         summary = amtrak.get("summary", "")
         parts.append(f"Amtrak/WAS: {summary}" if summary else "Amtrak: no data")
 
-    if "notam" in matched and "notam" in ctx:
-        notams = ctx["notam"]
-        if isinstance(notams, list) and notams:
-            parts.append(f"NOTAMs: {len(notams)} active")
-            for n in notams[:5]:
-                nid  = n.get("notam_id") or n.get("id") or "?"
-                text = (n.get("text") or n.get("message") or "")[:100]
-                parts.append(f"  {nid}: {text}")
-        else:
-            parts.append("NOTAMs: none active")
+    if "notam" in matched:
+        notams = _ctx_items(ctx, "notam")
+        if notams is not None:
+            n = _ctx_count(ctx, "notam", notams)
+            if n:
+                parts.append(f"NOTAMs: {n} active")
+                for x in notams[:5]:
+                    nid  = x.get("notam_id") or x.get("id") or "?"
+                    text = (x.get("text_body") or x.get("text") or x.get("message") or "")[:100]
+                    parts.append(f"  {nid}: {text}")
+            else:
+                parts.append("NOTAMs: none active")
 
-    if "alerts" in matched and "alerts" in ctx:
-        alerts = ctx["alerts"]
-        if isinstance(alerts, list) and alerts:
-            parts.append(f"NWS Alerts: {len(alerts)}")
-            for a in alerts[:5]:
-                headline = a.get("headline") or a.get("event") or "?"
-                parts.append(f"  {headline}")
-        else:
-            parts.append("NWS Alerts: none active")
+    if "alerts" in matched:
+        alerts = _ctx_items(ctx, "alerts")
+        if alerts is not None:
+            if alerts:
+                parts.append(f"NWS Alerts: {_ctx_count(ctx, 'alerts', alerts)}")
+                for a in alerts[:5]:
+                    headline = a.get("headline") or a.get("event_type") or a.get("event") or "?"
+                    parts.append(f"  {headline}")
+            else:
+                parts.append("NWS Alerts: none active")
 
-    if "feeds" in matched and "feeds" in ctx:
-        feed_list = (
-            ctx["feeds"].get("feeds")
-            if isinstance(ctx["feeds"], dict)
-            else ctx["feeds"]
-        )
-        if isinstance(feed_list, list):
-            errors = [
-                f.get("feed_name") for f in feed_list
-                if f.get("error") and "pending" not in str(f.get("error", ""))
-            ]
-            stale = [
-                f.get("feed_name") for f in feed_list
-                if (f.get("age_seconds") or 0) > 900 and not f.get("error")
-            ]
-            nominal = [
-                f.get("feed_name") for f in feed_list
-                if not f.get("error") and (f.get("age_seconds") or 0) <= 900
-            ]
+    if "feeds" in matched:
+        feed_list = _ctx_items(ctx, "feeds")
+        if feed_list:
+            errors, stale, nominal = _feed_status(feed_list)
             if errors:
                 parts.append(f"Feed errors: {', '.join(filter(None, errors))}")
             if stale:
@@ -1551,17 +1642,12 @@ def _local_answer(query: str, ctx: dict[str, Any]) -> str | None:
             if not errors and not stale:
                 parts.append(f"Feeds nominal: {len(nominal)} active")
 
-    if "brief" in matched and "brief" in ctx:
-        brief = ctx["brief"]
-        if isinstance(brief, dict):
-            text = brief.get("text") or brief.get("summary") or brief.get("brief") or ""
-            if text:
-                parts.append(f"Brief:\n{text[:600]}")
-            else:
-                # flatten whatever keys exist
-                parts.append("Brief: " + json.dumps(brief, default=str)[:300])
-        elif isinstance(brief, str):
-            parts.append(f"Brief:\n{brief[:600]}")
+    if "brief" in matched:
+        brief = _brief_text(ctx)
+        if brief:
+            parts.append(f"Brief:\n{brief[:_BRIEF_CTX_CHARS]}")
+        elif isinstance(ctx.get("brief"), dict):
+            parts.append("Brief: " + json.dumps(ctx["brief"], default=str)[:300])
 
     return "\n".join(parts) if parts else None
 
@@ -1665,8 +1751,20 @@ async def _llm_stream(system: str, messages: list[dict], model: str | None = Non
     yield f"data: {json.dumps({'type': 'no_llm'})}\n\n"
 
 
+# 2026-10-18 (relay L1, panel phase 0, open question PARITY.md 6.4 / decision G2):
+# /api/ask had no trust check on the production runner. It runs the box's LLM with
+# operator context in the prompt and writes the operator's chat history, the same
+# data GET/DELETE /api/chat/history already trust-gate. Same gate, same mechanism:
+# _is_trusted() (tailnet/LAN origin; the runner has no operator token or session of
+# its own, the browser drawer sends none) and the same 404 "surface does not exist"
+# answer. The demo refusal is unchanged and comes first: demo_gate returns 403 to
+# every untrusted demo caller before this route runs (_DEMO_NEVER).
+def _ask_allowed(request: Request) -> bool:
+    return _is_trusted(request)
+
+
 @app.post("/api/ask")
-async def ask_dispatch(req: AskRequest):
+async def ask_dispatch(req: AskRequest, request: Request):
     """
     Local-first dispatch chat. Resolution order:
 
@@ -1683,6 +1781,9 @@ async def ask_dispatch(req: AskRequest):
 
     SSE events: {"type":"text","text":"..."} | {"type":"done"} | {"type":"error","detail":"..."}
     """
+    if not _ask_allowed(request):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     # 2026-08-27 cutover: llama.cpp (common/llama_pool.py) is always
     # configured on this box -- no env var gate anymore. Actual
     # reachability failures are handled inside _llm_stream()'s own
@@ -1713,7 +1814,8 @@ async def ask_dispatch(req: AskRequest):
         ctx     = await _build_context_rich()
         local   = _local_answer(raw_message, ctx)
         ctx_str = _context_to_str(ctx)
-        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 2026-10-18: UTC, labelled (host and containers are UTC; never a bare time).
+        now     = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
         system_prompt = (
             "You are the dispatch AI assistant for [operator LLC], LLC — a boutique executive services firm: "

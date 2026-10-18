@@ -94,7 +94,7 @@ hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
 | GET | `/api/vdl2/messages` · `/api/acars/messages` · `/api/hfdl/messages` | Decoded message feeds (acarshub; HFDL hardware pending) |
 | GET | `/api/ais/vessels` | AIS vessels (hardware pending; AISHub/Kpler sources) |
 | GET | `/api/utm/drones` | Remote-ID / UAS view (receiver disabled pending hardware) |
-| POST | `/api/ask` | Dispatch Drawer chat (SSE) |
+| POST | `/api/ask` | Dispatch Drawer chat (SSE); 2026-10-18: 404 unless `_is_trusted` (tailnet/LAN), same gate as `/api/chat/history` |
 | GET / DELETE | `/api/chat/history` | Chat history (trust-gated) |
 | GET / POST / DELETE | `/api/dispatch/{path}` | Proxy → dispatch web API |
 | GET | `/api/stream` | SSE: CPS + TFR count + feed health, 30 s |

@@ -228,8 +228,17 @@ def _check_dedup(entry_id: str, event_type: str, event_detail: dict) -> bool:
     return True
 
 
-def get_active_entries(entry_type: EntryType | None = None) -> list[dict]:
-    """Return all non-expired watchlist entries from DB."""
+def get_active_entries(entry_type: EntryType | None = None,
+                       cached: bool = False) -> list[dict]:
+    """Return all non-expired watchlist entries from DB.
+
+    cached=True (2026-10-18, lean-out L1): read through
+    db.get_watchlist_entries_cached() -- a per-process cache of
+    db.WATCHLIST_CACHE_TTL_S (3 s, operator D2), dropped by any watchlist
+    write in the same process. For the per-message ingest paths only
+    (FDPS FH/TH/CL, SMES surface events); everything else reads the DB."""
+    if cached:
+        return db.get_watchlist_entries_cached(entry_type=entry_type)
     return db.get_watchlist_entries(entry_type=entry_type)
 
 

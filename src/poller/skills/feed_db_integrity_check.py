@@ -132,16 +132,20 @@ def _critical_field_null_rate(conn, table: str, ts_col: str, ts_type: str,
     (nothing to conclude either way)."""
     if ts_type == "epoch":
         cutoff = time.time() - lookback_s
-        total = conn.execute(
-            f"SELECT COUNT(*) AS n FROM {table} WHERE {ts_col} > ?", (cutoff,)
-        ).fetchone()["n"]
+        # 2026-10-18 (lean-out L1): one pass over the hour instead of two
+        # COUNTs over the same range (34 runs/24 h over 500 ms at 10.3 s avg;
+        # the time is heap-visibility fetches, so a second scan doubled it).
+        # Same totals, same None-on-empty, same thresholds in run_check().
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n, "
+            f"COUNT(*) FILTER (WHERE {field} IS NULL OR {field} = 0) AS n_null "
+            f"FROM {table} WHERE {ts_col} > ?",
+            (cutoff,),
+        ).fetchone()
+        total = row["n"] or 0
         if total == 0:
             return None
-        null_count = conn.execute(
-            f"SELECT COUNT(*) AS n FROM {table} WHERE {ts_col} > ? AND ({field} IS NULL OR {field} = 0)",
-            (cutoff,),
-        ).fetchone()["n"]
-        return total, null_count
+        return total, row["n_null"] or 0
     else:
         # ISO-column tables in this map don't currently have a
         # critical_fields entry -- string-timestamp cutoff comparison

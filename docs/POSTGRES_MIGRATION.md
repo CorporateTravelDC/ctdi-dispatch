@@ -83,6 +83,18 @@ because it trades freshness for throughput.
   (`docs/BACKUP.md`). 0075 `surface_event_log` (2026-10-14): an append-only log
   of DCA/IAD/BWI surface events that keeps ramp exits for time-fidelity work,
   pruned at 120 days (280 rows at the 2026-10-15 check).
+- 2026-10-18 (lean-out L1, staged, not yet applied): 0076 `nas_programs.source`
+  (`'rest'` | `'tfms'`, which writer owns the row's lifecycle; backfill stamps
+  `'rest'` on the ~450 rows of the REST program_id shape, `db.NAS_REST_SHAPE_SQL`;
+  SQLite twin `db.init_db_v47`). The REST fetcher's `deactivate_absent_programs`
+  now touches only active REST rows (it rewrote ~59k already-inactive rows every
+  300 s, 39.4 M of 63.8 M updates in 59 h, and switched off every TFMS program
+  within 5 min); TFMS rows end at their own `end_time`
+  (`db.expire_ended_tfms_programs`). 0078 drops `idx_flight_events_callsign`, an
+  exact duplicate of `idx_flight_events_airline_num` (both `btree (airline,
+  flight_num)`, 0 scans). Both set `lock_timeout` 10 s so a held table fails the
+  migration fast instead of queueing writers. The relay must apply 0076 before
+  the rollout: the new code writes the `source` column.
 - Future reference candidates named in the decision: GTFS static, UAS
   registry, MMSI registry (SQLite reference unless hot-joined).
 
@@ -160,7 +172,8 @@ loopback sources; reachability is enforced by the loopback bind.
 - Guards: `statement_timeout = 60s`, `lock_timeout = 10s`,
   `idle_in_transaction_session_timeout = 60s`.
 - Observability: `pg_stat_statements` preloaded, `track_io_timing = on`,
-  `log_min_duration_statement = 500ms`.
+  `log_min_duration_statement = 500ms`. (2026-10-18: `CREATE EXTENSION` was
+  never run, so the view does not exist; the L1 relay creates it, §3.6.)
 
 Config edits need `systemctl --user restart corporatetraveldc-pgsql` (the
 files are bind-mounted individually; an editor that replaces the inode
@@ -186,6 +199,33 @@ initdb). Never quote either value.
   manifests are the 2026-09-19 checkpoints in `manifests/`
   (`DB_MANIFEST_checkpoint1_reference.json` and `..._second_brain.json`, each with an
   `.asc`). No timer runs it; it is manual.
+
+### 3.6 Index work outside migrations (added 2026-10-18)
+
+`scripts/pg_migrate.py` applies each file in one transaction, and `CREATE INDEX
+CONCURRENTLY` / `REINDEX ... CONCURRENTLY` refuse to run in one; a plain `CREATE
+INDEX` blocks every writer for the whole build. So the read-path indexes and the
+bloat rebuild live in `scripts/pg-maintenance.sh` (one `psql -c` per statement,
+`statement_timeout=0`, `lock_timeout=300s`, idempotent: a valid index is skipped,
+an invalid one is dropped `CONCURRENTLY` and rebuilt):
+
+- `create-indexes-concurrently [NAME...]`: `idx_nas_programs_active` (`nas_programs
+  (type, facility) WHERE active = 1`), `idx_flight_ooooi_times_callsign_updated`
+  (`(callsign, updated_at)`), `idx_flight_events_registration_upper`
+  (`(upper(registration), updated_at) INCLUDE (airline, flight_num) WHERE
+  registration IS NOT NULL`), `idx_flight_events_flight_num_origin` (`(flight_num,
+  origin)`).
+- `reindex-flight-events-updated-at`: `REINDEX INDEX CONCURRENTLY
+  idx_flight_events_updated_at` (2,151 MB for ~966k rows on 2026-10-18; skipped
+  under 512 MB; the key changes on every upsert, so re-check monthly with `status`).
+- `status`: read-only state and size of each.
+
+Relays call the two write subcommands on the line after `scripts/relay-wait-load.sh`
+(relay-lint treats them as heavy steps). A fresh or restored instance gets these
+indexes only from this script, after `pg_migrate`. `CREATE EXTENSION IF NOT EXISTS
+pg_stat_statements` (operator D5, 2026-10-18) is a separate psql step in the same
+relay; until it runs, the preloaded library has no view. EXPLAIN before/after for
+each index: this batch's commit notes (lean-out L1).
 
 ## 4. Access layer (`src/common/db_backend.py`)
 

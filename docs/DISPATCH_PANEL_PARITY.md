@@ -2,6 +2,8 @@
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
 
+**2026-10-18 (relay L1):** the context-shape bug and the prod trust gate on `/api/ask` are fixed in code (sections 2 and 6, marked). `src/runner/main.py` line numbers at or after `_build_context_rich` shift again with that change; the function names stay.
+
 Written 2026-10-04 from the live code and a read-only look at the live
 system. Purpose: let someone rebuild the dispatch chat panel ("dispatch
 drawer" / chat bar) to behavioural parity **without reading the current
@@ -88,13 +90,15 @@ Each line: behaviour → source. Replay these as parity tests.
 
 **Context block semantics** (`_context_to_str`, `main.py:1346`) — intended content:
 - [ ] `CPS: <score> / <label> — <narrative>`
-- [ ] `WEATHER (METAR):` up to 6 stations, raw METAR text
-- [ ] `TFRS: N active (M VIP/POTUS) — id, id, …` or `TFRS: none active`
-- [ ] `FEED ERRORS: …` | `FEEDS STALE: …` (age > 900 s) | `FEEDS: nominal`
-- [ ] `NWS ALERTS (N): headline; headline; headline`
+- [ ] ~~`WEATHER (METAR):` up to 6 stations, raw METAR text~~ (corrected 2026-10-18: up to 8 stations, one line each from `metars[]`: `<station>: ceiling <ft> ft | no ceiling, vis <sm> sm, wind <kt> kt, precip <code>, obs HH:MMZ`; the API has no raw METAR text)
+- [ ] `TFRS: N active (M VIP/POTUS) — id, id, …` (N = the API's `count`, VIP ids first) or `TFRS: none active`
+- [ ] `FEED ERRORS: …` | `FEEDS STALE: …` ~~(age > 900 s)~~ (corrected 2026-10-18: age > the feed's own `stale_threshold_seconds`, 900 s only when absent, and not `push_covered`) | `FEEDS: nominal`
+- [ ] `NWS ALERTS (N): headline; headline; headline` (2026-10-18: `NWS ALERTS: none active` when the list is empty)
 - [ ] `AMTRAK/WAS: <summary>`
-- [ ] `NOTAMS: N active`
+- [ ] `NOTAMS: N active` (N = the API's `count`)
+- [ ] (added 2026-10-18) `LATEST BRIEF (first 600 chars):` followed by the start of the text/plain daily brief
 - **DO NOT REPLICATE** — live shape mismatch (verified 2026-10-04 against the API): weather reads `.stations` (API: `metars[]` with `station/ceiling_ft/visibility_sm/wind_kt`, no raw text), tfr/alerts/notam are read as lists (API: `{tfrs[]}`, `{alerts[]}`, `{notams[]}`), so **the model receives only CPS/FEEDS/AMTRAK and is told "TFRS: none active" while 87 are active** (re-checked 2026-10-06: `_context_to_str` at `main.py:1346` is unchanged; `/api/v1/tfr` returned 87 entries; `/api/v1/brief` is `text/plain`. Re-checked 2026-10-15: still unchanged at `main.py:1378`, still reads `weather.stations` and treats `tfr` as a list; `/api/v1/tfr` returned 73). The local resolver (`:1416`) has the identical mismatch for the weather/tfr/notam/alerts topics, so those topics fall through to the LLM. The same bug class was fixed in `restore_dispatch_state.py` on 2026-10-03. The rebuild must consume the shapes in section 3.
+- **Fixed 2026-10-18 (relay L1, panel phase 0; staged, live after the runner rollout):** `_context_to_str` and `_local_answer` now read the section 3 shapes through `_ctx_items` / `_ctx_count` (`src/runner/main.py`), still accepting a bare list; `_build_context_rich` keeps a non-JSON body as text, so the brief is no longer dropped. Each of the eight endpoints was re-read with one GET on 2026-10-18 (cps, weather, tfr 82 entries, feeds, alerts 21, notams 6,628, amtrak, brief text/plain ~96 KB): the shapes in section 3 still hold, and no other mismatch was found beyond weather (no `raw_text`), the stale threshold and `event_type` for alerts. The prompt timestamp is now UTC and labelled (`…Z`; it was a bare local time). Tests: `tests/runner/test_ask_context_shapes.py` (fixtures of every live shape).
 
 **Streaming / output**
 - [ ] Response is `text/event-stream`, headers `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`, `X-Dispatch-Model: <effective model>` (`:1762-1770`).
@@ -110,7 +114,7 @@ Each line: behaviour → source. Replay these as parity tests.
 - [ ] After every exchange, user turn + assistant turn are inserted into `chat_messages(role, content, ts)` (`:2017`); history is the last 40 rows chronological (`:2007`); `GET /api/chat/history?limit=80` returns `{"messages":[{role,content}], "count"}`; `DELETE` clears all (`:2031`).
 - [ ] Both history endpoints 404 (not 403) unless `_is_trusted(request)` — IP-based: CF-Connecting-IP if present, else peer/X-Forwarded-For against `_TRUSTED_NETS` (`:188-260`).
   - 2026-10-13: when testing this, send the public `Host` too (`Host: dispatch-runner.example.com`); `CF-Connecting-IP` alone is ignored on other hosts since the 2026-08-25 C-2 fix (see auth-token-proxy-pattern.md step 3).
-- [ ] `/api/ask` itself is **not** trust-gated and not in the `tailscale_gate` prefixes (`:382`); on prod it is reachable only because the runner is tailnet/loopback-bound. ~~On the demo instance it is behind `DEMO_MODE`'s cookie gate in `proxy_dispatch` for data, but the ask path itself is open.~~ (corrected 2026-10-15: since `127a2f76`, 2026-10-13, the demo instance refuses `/api/ask` with 403 for every untrusted caller, session or not: `_DEMO_NEVER = {"/api/ask"}`, `main.py:411`, enforced by `demo_gate`, `:415`; tests `tests/runner/test_demo_gate.py`. Trusted callers are unaffected.)
+- [ ] ~~`/api/ask` itself is **not** trust-gated and not in the `tailscale_gate` prefixes (`:382`); on prod it is reachable only because the runner is tailnet/loopback-bound.~~ (corrected 2026-10-18, relay L1, decision G2: `/api/ask` now returns 404 unless `_is_trusted(request)`, the same gate and answer as the history endpoints, checked in the route before any context fetch or model call; tests `tests/runner/test_ask_trust_gate.py`. The runner has no operator token or session of its own and the drawer sends none, so the trusted origin is the operator tier here. Still not in the `tailscale_gate` prefixes.) ~~On the demo instance it is behind `DEMO_MODE`'s cookie gate in `proxy_dispatch` for data, but the ask path itself is open.~~ (corrected 2026-10-15: since `127a2f76`, 2026-10-13, the demo instance refuses `/api/ask` with 403 for every untrusted caller, session or not: `_DEMO_NEVER = {"/api/ask"}`, `main.py:411`, enforced by `demo_gate`, `:415`; tests `tests/runner/test_demo_gate.py`. Trusted callers are unaffected.)
 
 **Refusals / safety**
 - [ ] No content filter, no refusal logic, no tool sandbox — the model is instructed not to speculate beyond the injected data. Model override accepts any string; an unknown model name maps to no persona → `no_llm` → local answer (`:1562`).
@@ -150,7 +154,7 @@ Headers: `X-Dispatch-Model`.
 | alerts | `/api/v1/alerts` | `{alerts:[{alert_id, event_type, area_desc, severity, certainty, effective, expires, headline}], count}` |
 | notam | `/api/v1/notams` | `{notams:[{notam_id, facility, classification, effective_start, effective_end, text_body}], count}` (~6,000 rows — do not inject raw) |
 | amtrak | `/api/v1/amtrak` | `{available, summary, fetched_at, trains:[{train_num, route, origin, destination, status, delay_minutes, …}]}` |
-| brief | `/api/v1/brief` | **not JSON** (text body) — current code's `r.json()` raises and the topic is silently dropped |
+| brief | `/api/v1/brief` | **not JSON** (`text/plain`, ~96 KB on 2026-10-18) — ~~current code's `r.json()` raises and the topic is silently dropped~~ (fixed 2026-10-18: kept as text, first 600 chars injected) |
 
 ### DB tables read/written by the panel
 - `chat_messages(role TEXT, content TEXT, ts DOUBLE)` — read last 40, write 2 per exchange. Nothing else is read directly; all state comes via the HTTP API above.
@@ -213,11 +217,11 @@ There are no real transcripts (0 rows). Synthesise goldens from the contract:
 1. **Persona ownership**: should the panel use the shared `chat` persona text (`personas.py`) plus state injection, or keep its own inline prompt? Today it is the inline one; the persona file is the better single source for fine-tuning tone.
 2. **Identity strings in the prompt** (operator name, callsigns, affiliations, location) — keep in the system prompt (model sees them every turn) or move to a local config the rebuilt backend reads? They are in `main.py` today.
 3. **History policy**: 40 turns forever vs. token-capped window vs. per-session; and whether `chat_messages` should be per-user once the ctdc-agent split lands.
-4. **Trust gating of `/api/ask`**: currently open on the runner; gate it like history (404 when untrusted) or keep open on the tailnet-only instance? (2026-10-15: decided for the demo instance only, refused to untrusted callers since 2026-10-13; the prod instance question stays open.)
+4. **Trust gating of `/api/ask`**: currently open on the runner; gate it like history (404 when untrusted) or keep open on the tailnet-only instance? (2026-10-15: decided for the demo instance only, refused to untrusted callers since 2026-10-13; ~~the prod instance question stays open.~~ 2026-10-18: closed, operator-approved relay L1: prod gated like history, 404 when untrusted.)
 5. **Fine-tune vs RAG-only first**: the 794 MB semantic layer + 13.6 k vault docs make RAG viable immediately on the Pi (needs an embedding model and an index store — none exists today); fine-tuning needs the GPU rental and the scrub pipeline. Recommended order: fix the context-shape bug (gives parity today) → RAG over vault+docs → synthesise goldens → fine-tune on personas + synthesised Q/A.
 6. **Which model to fine-tune**: qwen3-4b (current) on a 2-thread, 12 k-context budget, or a smaller model with a bigger context for RAG? The box's constraint is the 2 cores reserved for llama, not RAM.
 7. **Knowledge graph**: enable `knowledge-graph-compile.timer` as a RAG source (adds load in the maintenance window) or treat the semantic tables as sufficient.
-8. **`/api/v1/brief` returns text** — make it JSON (it is dropped today) or have the panel accept text.
+8. **`/api/v1/brief` returns text** — make it JSON (it is dropped today) or have the panel accept text. (2026-10-18: the panel accepts text; the endpoint is unchanged.)
 9. **Demo instance**: does the rebuilt panel need to serve the sanitised demo runner (:8005) with the same contract? Today both instances run the same code path.
 10. **Vocabulary store**: build it from `_TOPIC_RX` + personas + feed names + `semantic_unmapped_tags` as a tracked JSON (so the resolver and the retriever share it), or leave it implicit in code.
 

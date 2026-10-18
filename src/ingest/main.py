@@ -106,6 +106,8 @@ async def main() -> None:
                           # before the first sequence write on a fresh DB.
                           # ALTER TABLE with a duplicate-column guard;
                           # idempotent.
+        db.init_db_v47()  # 2026-10-18: nas_programs.source -- write_tfms_programs
+                          # stamps 'tfms' (pg_schema/0076 on Postgres).
         # 2026-08-30 SWIM-audit tables (stdds_rvr / tdes_departure_events /
         # tdls_messages / datis_snapshots / tfms_edct_slots /
         # fdps_destination_changes + flight_events extras columns). Lives in

@@ -1,5 +1,10 @@
 [Unit]
 Description=Corporate Travel DC -- daily second-brain semantic layer recompile
+# 2026-10-18 (relay L1): semantic_compile_daily.py now exits 1 on a failed
+# compile (it returned an error dict and exited 0, so ~17% failed runs showed
+# Result=success). No OnFailure= existed; route failures to the same ntfy path
+# the other wired units use (tbfm-arrival-enrichment, claude-weekly-llama-fallback).
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Container]
 # 2026-09-22: 384m -> 768m. This unit was OOM-killed (status 137, 465.1M

@@ -191,7 +191,10 @@ def podman_reads_stdin(n, line, code, ctx):
                 "end the command with `</dev/null`")
 
 
-HEAVY = re.compile(r"\bpytest\b|serialized-rollout\.sh|scrub-demo-source\.py\s[^\n]*--(backfill|refresh)|\bsystemd-run\b|relay-preflight\.sh")
+# 2026-10-18: pg-maintenance.sh's CONCURRENTLY builds read whole tables (~5 GB for flight_events);
+# its read-only `status` is not heavy.
+HEAVY = re.compile(r"\bpytest\b|serialized-rollout\.sh|scrub-demo-source\.py\s[^\n]*--(backfill|refresh)|\bsystemd-run\b|relay-preflight\.sh"
+                   r"|pg-maintenance\.sh\s+(create-indexes-concurrently|reindex-)")
 
 
 def heavy_without_load_wait(lines: list[str]) -> list[tuple[int, str, str]]:

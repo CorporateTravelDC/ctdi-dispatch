@@ -116,6 +116,15 @@ def test_heavy_step_needs_load_wait():
     assert any("load wait" in w for w in lint("bash scripts/serialized-rollout.sh"))
 
 
+def test_pg_maintenance_builds_need_load_wait():
+    # 2026-10-18: CONCURRENTLY index builds read whole tables; `status` is read-only.
+    assert any("load wait" in w for w in lint("bash scripts/pg-maintenance.sh create-indexes-concurrently"))
+    assert any("load wait" in w for w in lint("bash scripts/pg-maintenance.sh reindex-flight-events-updated-at"))
+    assert not any("load wait" in w for w in lint(
+        "bash scripts/relay-wait-load.sh\nbash scripts/pg-maintenance.sh create-indexes-concurrently idx_nas_programs_active"))
+    assert not any("load wait" in w for w in lint("bash scripts/pg-maintenance.sh status"))
+
+
 def test_relay_wait_load_script(tmp_path):
     import subprocess
     f = tmp_path / "loadavg"

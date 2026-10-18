@@ -665,8 +665,10 @@ async def console_login(request: Request):
         # 2026-10-12: a re-tap while this browser's request is still pending reuses it
         # (one signable request per browser) but is still its own audit event + push.
         with db.conn() as c:
-            n = c.execute("SELECT count(*) FROM audit_log WHERE action = 'console.login.retap' AND detail LIKE ?",
-                          (f"%{row['id']}%",)).fetchone()[0]
+            # 2026-10-18: rows from db.conn() are dict-shaped on Postgres (KeyError: 0 -> HTTP 500 on
+            # every re-tap while a login request was pending); name the column, never index by position.
+            n = c.execute("SELECT count(*) AS n FROM audit_log WHERE action = 'console.login.retap' AND detail LIKE ?",
+                          (f"%{row['id']}%",)).fetchone()["n"]
         governance.audit("console.login.retap", {"approval_id": row["id"], "retap": int(n) + 1, "ua": ua})
         _push_login(row, int(n) + 1, ua)
         return RedirectResponse("/console", status_code=303)

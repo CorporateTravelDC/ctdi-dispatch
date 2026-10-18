@@ -136,6 +136,7 @@ _SECOND_BRAIN_TABLES = frozenset({
     "semantic_agents", "semantic_metrics", "semantic_note_concepts",
     "semantic_unmapped_tags", "semantic_note_derivations",
     "semantic_note_instance_refs",  # 0059 (2026-09-20, geometric Phase 0)
+    "semantic_compile_runs",  # 0077 (2026-10-18, compile run ledger)
 })
 
 

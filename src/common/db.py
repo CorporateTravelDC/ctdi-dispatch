@@ -1144,22 +1144,52 @@ def get_metar_snapshot() -> list[dict]:
 
 # ── NAS helpers ───────────────────────────────────────────────────────────────
 
+NAS_SOURCE_REST = "rest"   # poller/fetchers/nas.py (FAA NAS status REST feed)
+NAS_SOURCE_TFMS = "tfms"   # ingest/parsers/tfms_parser.write_tfms_programs (SWIM TFMS)
+
+# 2026-10-18 (lean-out L1, pg_schema/0076): the REST feed's program_id shape,
+# for rows written before nas_programs.source existed (source IS NULL). The
+# REST fetcher keys every program "<facility>-<type>-<reason>" or
+# "<facility>-Closure" (poller/fetchers/nas.py); TFMS keys start with the type
+# ("GS-IAD-<epoch>") or are FCM restriction ids, and TFMS types (MIT, STOP,
+# APREQ, TBM, MINIT, DSP, AFP) never appear in the REST list. The same
+# predicate is the 0076 backfill, so the two can never disagree.
+NAS_REST_SHAPE_SQL = (
+    "(type IN ('DEP', 'ARR', 'Delay', 'Closure', 'GS', 'GDP') AND "
+    "(program_id = facility || '-Closure' OR program_id LIKE facility || '-' || type || '-%'))"
+)
+_NAS_REST_ROWS_SQL = f"(source = 'rest' OR (source IS NULL AND {NAS_REST_SHAPE_SQL}))"
+_NAS_TFMS_ROWS_SQL = f"(source = 'tfms' OR (source IS NULL AND NOT {NAS_REST_SHAPE_SQL}))"
+
+# A TFMS program with no end_time in its payload is treated as ended once
+# TFMS has not re-sent it for this long (measured 2026-10-18 03:40Z: all 2,619
+# MIT/APREQ/TBM/STOP/MINIT/DSP rows of the last 3 days carry a numeric end_time;
+# 19 of them were still in the future).
+NAS_TFMS_NO_END_STALE_S = 6 * 3600
+
+
 def upsert_nas_program(program_id: str, prog_type: str, facility: str,
                        raw_json: str, key_scheme: int | None = None,
-                       legacy_correlate_id: str | None = None) -> None:
+                       legacy_correlate_id: str | None = None,
+                       source: str | None = None) -> None:
     """key_scheme/legacy_correlate_id: see SCHEMA_V36 / init_db_v36()'s
     docstring. Both default to None (not applicable) for callers that
     don't pass them -- the REST poller/fetchers/nas.py path and any AFP
     write never set these, only write_tfms_programs()'s GDP/GS branch
     does. COALESCE on update so a later call that omits these (there
     isn't one today, but nothing guarantees that forever) can't blank out
-    a value a previous call already set."""
+    a value a previous call already set.
+
+    source (2026-10-18, pg_schema/0076): NAS_SOURCE_REST or NAS_SOURCE_TFMS,
+    the writer that owns the row's lifecycle. deactivate_absent_programs()
+    (REST) only ever touches REST rows; expire_ended_tfms_programs() only
+    TFMS rows. COALESCE-kept like key_scheme."""
     with conn() as c:
         c.execute("""
             INSERT INTO nas_programs
                 (program_id, type, facility, raw_json, active, fetched_at,
-                 key_scheme, legacy_correlate_id)
-            VALUES (?, ?, ?, ?, 1, unixepoch(), ?, ?)
+                 key_scheme, legacy_correlate_id, source)
+            VALUES (?, ?, ?, ?, 1, unixepoch(), ?, ?, ?)
             ON CONFLICT(program_id) DO UPDATE SET
                 type=excluded.type,
                 facility=excluded.facility,
@@ -1167,8 +1197,10 @@ def upsert_nas_program(program_id: str, prog_type: str, facility: str,
                 active=1,
                 fetched_at=excluded.fetched_at,
                 key_scheme=COALESCE(excluded.key_scheme, nas_programs.key_scheme),
-                legacy_correlate_id=COALESCE(excluded.legacy_correlate_id, nas_programs.legacy_correlate_id)
-        """, (program_id, prog_type, facility, raw_json, key_scheme, legacy_correlate_id))
+                legacy_correlate_id=COALESCE(excluded.legacy_correlate_id, nas_programs.legacy_correlate_id),
+                source=COALESCE(excluded.source, nas_programs.source)
+        """, (program_id, prog_type, facility, raw_json, key_scheme, legacy_correlate_id,
+              source))
 
 
 def find_legacy_nas_program(prog_type: str, facility: str,
@@ -1193,15 +1225,79 @@ def find_legacy_nas_program(prog_type: str, facility: str,
         return row["program_id"] if row else None
 
 
-def deactivate_absent_programs(active_ids: list[str]) -> None:
+def deactivate_absent_programs(active_ids: list[str]) -> int:
+    """REST feed (poller/fetchers/nas.py): mark REST programs that left the
+    feed inactive. Returns the number of rows changed.
+
+    2026-10-18 (lean-out L1, operator-approved): two fixes.
+      - `AND active = 1`: the old statement rewrote every absent row, the
+        ~59k already-inactive ones included, every 300 s -- 39.4 M of the
+        DB's 63.8 M row updates in the 59 h after the 10-15 reboot (61.7 %),
+        most of the WAL full-page images, 266 runs/day over 500 ms.
+      - REST rows only (_NAS_REST_ROWS_SQL): the old statement also set
+        active=0 on every TFMS-sourced row (MIT/STOP/APREQ/TBM/MINIT/DSP/AFP,
+        key_scheme=2 GS/GDP) within 5 minutes of TFMS writing it, contrary to
+        SCHEMA_V36's docstring ("deactivate_absent_programs() is only called
+        from the REST path, a completely different program_id scheme"). TFMS
+        rows now end through expire_ended_tfms_programs().
+    An empty list still returns without touching anything (unchanged)."""
     if not active_ids:
-        return
+        return 0
     with conn() as c:
         placeholders = ",".join("?" * len(active_ids))
-        c.execute(f"""
+        cur = c.execute(f"""
             UPDATE nas_programs SET active=0
-            WHERE program_id NOT IN ({placeholders})
+            WHERE active = 1
+              AND {_NAS_REST_ROWS_SQL}
+              AND program_id NOT IN ({placeholders})
         """, active_ids)
+        return cur.rowcount or 0
+
+
+def expire_ended_tfms_programs(now: float | None = None) -> int:
+    """TFMS programs end at their own end_time (2026-10-18, lean-out L1).
+
+    Before the REST-only scoping above, TFMS rows were (wrongly) switched off
+    by the REST job within 5 minutes; with no end at all they would stay
+    active forever and every get_active_nas_programs() consumer (route impact,
+    CPS GDP factor, briefs, opsplan) would list every program TFMS ever sent.
+    Each TFMS payload (raw_json, written by write_tfms_programs) carries the
+    program's own end_time (epoch); a row whose end_time has passed is set
+    inactive. A row with no usable end_time is set inactive once TFMS has not
+    re-sent it for NAS_TFMS_NO_END_STALE_S. A later TFMS re-send reactivates
+    the row (upsert sets active=1), same as before.
+
+    Reads only active TFMS rows (the active=1 partial index), parses end_time
+    in Python (no JSON SQL, same on both backends), and updates only rows that
+    actually change. Returns the number of rows set inactive."""
+    now = time.time() if now is None else now
+    with conn() as c:
+        rows = c.execute(f"""
+            SELECT program_id, raw_json, fetched_at FROM nas_programs
+            WHERE active = 1 AND {_NAS_TFMS_ROWS_SQL}
+        """).fetchall()
+        ended: list[str] = []
+        for r in rows:
+            end_time = None
+            try:
+                payload = json.loads(r["raw_json"] or "{}")
+                if isinstance(payload, dict):
+                    end_time = payload.get("end_time")
+            except (TypeError, ValueError):
+                payload = None
+            if isinstance(end_time, (int, float)) and not isinstance(end_time, bool):
+                if end_time < now:
+                    ended.append(r["program_id"])
+            elif (r["fetched_at"] or 0) < now - NAS_TFMS_NO_END_STALE_S:
+                ended.append(r["program_id"])
+        if not ended:
+            return 0
+        placeholders = ",".join("?" * len(ended))
+        cur = c.execute(f"""
+            UPDATE nas_programs SET active=0
+            WHERE active = 1 AND program_id IN ({placeholders})
+        """, ended)
+        return cur.rowcount or 0
 
 
 def get_active_nas_programs() -> list[dict]:
@@ -2694,6 +2790,56 @@ def get_watchlist_entries(entry_type: str | None = None,
             if "show_regional" in e and e["show_regional"] is not None:
                 e["show_regional"] = bool(e["show_regional"])
         return entries
+
+
+# ── Watchlist read cache (2026-10-18, lean-out L1; operator D2: TTL 3 s) ────
+# get_watchlist_entries() ran once per FDPS FH/TH/CL message and once per SMES
+# surface event (ingest/parsers/fdps_parser.check_fdps_watchlist,
+# smes_parser._match_watchlist_flight): 22.4 M index scans of watchlist_entries
+# in 59 h, ~105 transactions/s, each casting every row's auto_remove_at. Those
+# two hot paths read get_watchlist_entries_cached() instead: one DB read per
+# entry_type per process per WATCHLIST_CACHE_TTL_S. Every db.py function that
+# writes watchlist_entries drops this process's cache (_WATCHLIST_WRITERS,
+# wrapped at the bottom of this module; tests/common/test_watchlist_read_cache.py
+# fails if a new writer is missing from the list), so a process sees its own
+# writes at once. A watch added, changed or removed by another process (web,
+# poller) reaches these two paths at most WATCHLIST_CACHE_TTL_S late.
+WATCHLIST_CACHE_TTL_S = 3.0
+_watchlist_cache: dict = {}            # (entry_type, database) -> (monotonic stamp, generation, entries)
+_watchlist_cache_lock = threading.Lock()
+_watchlist_cache_gen = 0
+_watchlist_clock = time.monotonic      # test hook
+
+
+def invalidate_watchlist_cache() -> None:
+    """Drop this process's cached watchlist reads (any watchlist write)."""
+    global _watchlist_cache_gen
+    with _watchlist_cache_lock:
+        _watchlist_cache_gen += 1
+        _watchlist_cache.clear()
+
+
+def get_watchlist_entries_cached(entry_type: str | None = None,
+                                 ttl: float = WATCHLIST_CACHE_TTL_S) -> list[dict]:
+    """get_watchlist_entries(entry_type) through a per-process TTL cache.
+    Returns fresh shallow copies of the entry dicts, so a caller that edits
+    one cannot change what the next caller sees. A read that races a write
+    in this process is not stored (generation check)."""
+    from common import db_backend
+    # Keyed by database too: a test that swaps db._db_path never sees another
+    # database's cached rows.
+    key = (entry_type, "postgres" if db_backend.backend() == "postgres" else str(_db_path()))
+    now = _watchlist_clock()
+    with _watchlist_cache_lock:
+        hit = _watchlist_cache.get(key)
+        gen = _watchlist_cache_gen
+        if hit is not None and now - hit[0] < ttl and hit[1] == gen:
+            return [dict(e) for e in hit[2]]
+    entries = get_watchlist_entries(entry_type=entry_type)
+    with _watchlist_cache_lock:
+        if gen == _watchlist_cache_gen:
+            _watchlist_cache[key] = (now, gen, entries)
+    return [dict(e) for e in entries]
 
 
 def delete_watchlist_entry(entry_id: str) -> dict | None:
@@ -7952,6 +8098,24 @@ def init_db_v46() -> None:
             c.execute("ALTER TABLE tbfm_sequences ADD COLUMN eta_kind TEXT")
 
 
+# ── nas_programs.source -- v47, 2026-10-18 (lean-out L1; pg_schema/0076) ────
+# Which writer owns a nas_programs row's lifecycle: 'rest' (the FAA NAS
+# status REST fetcher, poller/fetchers/nas.py, which deactivates programs
+# that leave its list) or 'tfms' (SWIM TFMS, tfms_parser.write_tfms_programs;
+# rows end at their own end_time, expire_ended_tfms_programs()). The backfill
+# stamps 'rest' on existing rows of the REST program_id shape
+# (NAS_REST_SHAPE_SQL) -- a few hundred rows; TFMS rows keep NULL, which every
+# reader treats by shape. Same statements as 0076 on Postgres.
+def init_db_v47() -> None:
+    """Apply v47 schema -- nas_programs.source (+ REST-shape backfill)."""
+    with conn() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(nas_programs)")}
+        if "source" not in cols:
+            c.execute("ALTER TABLE nas_programs ADD COLUMN source TEXT")
+        c.execute(f"UPDATE nas_programs SET source = 'rest' "
+                  f"WHERE source IS NULL AND {NAS_REST_SHAPE_SQL}")
+
+
 def cifp_meta_set(key: str, value: str) -> None:
     with conn() as c:
         c.execute(
@@ -8024,3 +8188,38 @@ def cifp_replace_all(cycle: str, fixes: list[dict], legs: list[dict],
     cifp_meta_set("last_full_import", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     return {"ok": True, "cycle": cycle, "fixes": len(fixes), "legs": len(legs),
             "holds": len(holds)}
+
+
+# ── Watchlist writers drop the read cache (see get_watchlist_entries_cached) ──
+# Every function in this module whose SQL writes watchlist_entries. Wrapped
+# here, after every definition, so internal calls go through the wrapper too.
+_WATCHLIST_WRITERS = (
+    "upsert_watchlist_entry", "set_watchlist_identity",
+    "set_watchlist_identity_operator_confirmed",
+    "extend_watchlist_auto_remove_for_delay", "delete_watchlist_entry",
+    "update_watchlist_last_event", "update_watchlist_fdps_confirmation",
+    "sweep_expired_watchlist_entries", "update_watchlist_oooi_phase",
+    "update_watchlist_fdps_status", "update_watchlist_fids_status",
+    "update_train_phase", "update_watchlist_oooi_phase_authoritative",
+    "record_oooi_local_track", "update_watchlist_tbfm_status",
+    "update_watchlist_uas_phase", "update_watchlist_destination",
+    "update_watchlist_hex_registration", "mark_watchlist_hex_corroborated",
+)
+
+
+def _invalidates_watchlist_cache(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            invalidate_watchlist_cache()
+    wrapper._invalidates_watchlist_cache = True
+    return wrapper
+
+
+for _name in _WATCHLIST_WRITERS:
+    globals()[_name] = _invalidates_watchlist_cache(globals()[_name])
+del _name
