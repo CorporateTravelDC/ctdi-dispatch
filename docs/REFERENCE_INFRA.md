@@ -247,8 +247,10 @@ never from the operator's checkout.
 - **Postgres** is primary (`DISPATCH_DB_BACKEND=postgres`). Containers reach
   it through a shared socket volume mounted at `/var/run/postgresql`; host
   processes use `127.0.0.1:5432`. Schema = numbered, additive migrations
-  under `src/common/pg_schema/` (~~73~~ 75 at this revision, corrected 2026-10-15). SQLite remains as a
-  rollback selector and for the demo playback copy.
+  under `src/common/pg_schema/` (~~73~~ 75 at this revision, corrected 2026-10-15). ~~SQLite remains as a
+  rollback selector and for the demo playback copy.~~ (2026-10-19: every platform SQLite file was
+  destroyed once Postgres served production and the demo; SQLite remains only inside Pi-hole, vnstat
+  and ACARS Hub's own UI store. The code's SQLite backend and twin migrations are still in the tree.)
 - **Second-brain index** lives in the same Postgres since 2026-09-19 (§10).
 - **Backups** (added 2026-10-15): a nightly encrypted, deduplicated Borg
   archive of the databases, platform state and configuration is synced to one

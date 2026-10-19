@@ -10,7 +10,9 @@ PodmanArgs=--memory-swap=1536m
 Image=ghcr.io/sdr-enthusiasts/acars_router:latest
 ContainerName=corporatetraveldc-acarsrouter
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
-EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-10-19 (operator): dispatch.env no longer loaded. This is a third-party image; it read none of
+# the platform's settings (checked inside the running container), so it gets none of them
+# (tests/scripts/test_third_party_env_scope.py).
 # 2026-08-26 (Opus blind review C-4): dispatch-secrets.env intentionally
 # NOT loaded here -- third-party code parsing untrusted network input,
 # never referenced any value from that file, used to get the full ~95-key

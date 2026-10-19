@@ -68,7 +68,7 @@ The platform began as a single-operator deployment and was made ready for multip
 
 | Data | Processing location | External egress | Storage |
 | :--- | :--- | :--- | :--- |
-| Operational feeds (weather, TFR, NOTAM, ATCSCC, Amtrak, ADS-B/ASDE-X, runsheet) | Rootless Podman containers | Read-only pulls from government/public sources, plus the third-party pulls and outbound receiver feeds listed below | Local Postgres (primary since the ~~2026-09-20~~ 2026-09-18 cutover (corrected 2026-10-15: the write path moved 2026-09-18, `docs/POSTGRES_MIGRATION.md` §5; the last live SQLite stores followed on 2026-09-20)); SQLite remains for some paths and the demo playback file |
+| Operational feeds (weather, TFR, NOTAM, ATCSCC, Amtrak, ADS-B/ASDE-X, runsheet) | Rootless Podman containers | Read-only pulls from government/public sources, plus the third-party pulls and outbound receiver feeds listed below | Local Postgres (primary since the ~~2026-09-20~~ 2026-09-18 cutover (corrected 2026-10-15: the write path moved 2026-09-18, `docs/POSTGRES_MIGRATION.md` §5; the last live SQLite stores followed on 2026-09-20)); ~~SQLite remains for some paths and the demo playback file~~ (2026-10-19: platform SQLite files destroyed; SQLite only inside Pi-hole, vnstat and ACARS Hub) |
 | LLM inference | One native llama.cpp server, user unit `corporatetraveldc-llama.service`, bound to the tailnet IP `100.x.x.x:8093` only (`ss -ltn`) | None | Ephemeral |
 | Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres (trigger-computed; ~~no code verifies the chain; governance, console, gateway and reader events are outside it~~ verified every 15 min by the integrity sweep, governance events included since 2026-10-07 -- `docs/AGENT_TRUST_MODEL.md` §11; limits found by review 09 and still open on 2026-10-15: concurrent writers can fork the chain, deleting the newest rows is not detected, and a verifier that errors is logged as "unavailable" without a push -- see §3); past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
 | Public demo | `corporatetraveldc-runner-demo` (:8005) + `demo-api`, reading a separate SQLite file for playback (corrected 2026-10-15: and connected to the shared production Postgres, see below) | Public vhost `dispatch-runner.example.com` (200 on 2026-10-06); app-layer password gate active (`Environment=DEMO_MODE=true` in the quadlet, `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`) | `/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount |
@@ -470,6 +470,15 @@ alone hides HTTP errors. Established fixing `scripts/cf-honeypot-ban.sh`
 (2026-08-09).
 
 ---
+
+### 5.x Third-party images get no platform settings (2026-10-19)
+
+The eight third-party SDR images (ACARS Hub, acars_router, dumpvdl2, UltraFeeder, PiAware, FR24, PlaneFinder,
+AirNav Radar) no longer load `/etc/corporatetraveldc/dispatch.env`. They had been given every platform setting
+(database host and user, SWIM hosts, internal URLs, backup target name) while reading none of them; the secrets
+file was already withheld since 2026-08-26. Each keeps only its own per-container file. Enforced by
+`tests/scripts/test_third_party_env_scope.py`: an image not built here (`Image=` not `localhost/`) may not load
+`dispatch.env` or `dispatch-secrets.env`.
 
 ## 6. Request trust model: network ACL vs application tier
 
