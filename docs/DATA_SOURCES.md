@@ -320,7 +320,11 @@ same-day-terminated watchlist sessions. No external source.
 
 MWAA JSON endpoints, enrichment only (gate, terminal, baggage) — FIDS may
 never assert an OOOI phase, and since 2026-10-14 it is never a tail or
-identity source either. See `docs/DCA_IAD_FIDS.md`.
+identity source either. See `docs/DCA_IAD_FIDS.md`. (2026-10-18, next relay:
+never a time or a status either -- stripped from every lookup and route; the
+lowest gate tier below SWIM TDES, ACARS and the AeroAPI fallback
+(`common/gate_assignments.py`, migration 0079); optional feeds that never
+change `/healthz` status; cache capped at 900 s, every failed fetch recorded.)
 
 ### Amtrak (`push:amtrak` primary, `amtrak` REST fallback)
 
@@ -394,12 +398,22 @@ code.
 primary (2026-08-27 local-only rule). `FLIGHTAWARE_AEROAPI_KEY` is on **no**
 service allowlist, so the poller path cannot receive a key even if one is set.
 `FLIGHTAWARE_API_KEY`, however, is on **seven** allowlists (amtrak-tracker,
-demo, ingest, poller, pusher, runner, web; 2026-10-15). If it has a value,
+demo, ingest, poller, pusher, runner, web; 2026-10-15). ~~If it has a value,
 `resolve_arrivals()` (`GET /api/v1/fids/{airport}/arrivals`, step 3 after
 SWIM and the MWAA website) makes metered calls to
 `aeroapi.flightaware.com/aeroapi/airports/<icao>/flights/scheduled_arrivals`.
 `[UNVERIFIED: whether FLIGHTAWARE_API_KEY has a value — secrets not read.
-Live arrivals lookups at 00:56Z answered from SWIM, so step 3 was not reached.]`
+Live arrivals lookups at 00:56Z answered from SWIM, so step 3 was not reached.]`~~
+(2026-10-18, next relay; operator: AeroAPI is the gate/baggage FALLBACK ONLY.)
+`resolve_arrivals()` no longer calls it. The only caller is
+`common/gate_aeroapi.py` from the poller's flight sweep: `GET
+/flights/<operating callsign>`, only when no SWIM or ACARS value exists for a
+watched leg's arrival gate (or, outside DCA/IAD/BWI, its baggage claim), at most
+twice per leg (~45 min before the ETA and after ON), daily cap
+`AEROAPI_GATE_DAILY_CAP` (default 50), every call ledgered in
+`aeroapi_gate_calls` before it is made. The static allowlist scan still finds
+the key in all seven import closures (now at `common/gate_aeroapi.py`), but only
+the poller's sweep calls it.
 
 ### airplanes.live — ~~not queried~~ fallback only, enabled on this deployment (corrected 2026-10-15)
 
@@ -465,6 +479,18 @@ and poller (ACARS phase evidence for OOOI). `src/acars_watcher/` runs as
 practice only airframes.io produces watchlist matches (3 `MATCH [AIRFRAMES`
 lines in the watcher's last 24 h of journal; the 2026-10-12 audit counted
 3 airframes, 0 local, 0 Jumpseat over 7 days).
+2026-10-18 (next relay): the watcher's 0 local matches had a cause:
+`extract_reg_from_msg` read top-level keys only, and dumpvdl2 nests the
+registration at `vdl2.avlc.acars.reg` (with a leading "." pad), so every
+local UDP datagram was dropped before the watchlist check; it now reads that
+shape too (`acars_flags.extract_fields`, shared with the classifier). Message
+type flags (`common/acars_flags.py`; FLAGS list and rules in its docstring
+and `docs/ALERT_REFERENCE.md` §5) are stored per row in
+`acars_messages.acars_flags` (migration 0081) and returned per message by the
+runner's `/api/acars/messages`, `/api/vdl2/messages` and `/api/hfdl/messages`,
+which take `?flags=oooi,eta` (any of; 400 on an unknown name). Those routes
+read acarshub and the aggregators, not `acars_messages`, and have no TFR
+geometry, so `tfr_area` appears only on stored rows.
 
 ### AIS / vessels
 

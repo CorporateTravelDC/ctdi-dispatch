@@ -25,6 +25,7 @@ _PRUNE_JOBS = (
     ("flight_ooooi_times", db.prune_flight_ooooi_times),
     ("stdds_safety_status_history", db.prune_stdds_safety_status_history),
     ("surface_event_log", db.prune_surface_event_log),
+    ("gate_baggage_* + aeroapi_gate_calls", db.prune_gate_baggage),   # 2026-10-18, 120 d
     ("local_airspace_alerts", db.prune_local_airspace_alerts),
     ("international_aviation_feed", db.prune_international_aviation_feed),
     ("session_grants", db.prune_expired_session_grants),

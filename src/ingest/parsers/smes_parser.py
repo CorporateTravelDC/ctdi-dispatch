@@ -1729,15 +1729,29 @@ def handle_tdes_apds_record(rec: dict) -> bool:
         except Exception as e:
             log.error("stdds: TDES departure-event write failed for %s at %s: %s",
                       rec.get("callsign"), rec.get("airport"), e)
+        # 2026-10-18 (gate batch): the parkingGate is SWIM departure-gate
+        # evidence (top tier) for common.gate_assignments. LADD-listed legs are
+        # dropped there before storage; placeholders ('G', 'N/A') never count;
+        # an error here never touches the TDES row or the push below.
+        from common import gate_assignments as _ga
+        gate_key = None
+        try:
+            gate_key, _gate_res = _ga.record_tdes(rec)
+        except Exception as e:
+            log.debug("stdds: TDES gate evidence for %s at %s: %s",
+                      rec.get("callsign"), rec.get("airport"), type(e).__name__)
         if entry is not None:
             # The gate number + clearance-delivery time, before pushback --
-            # exactly the curb-side detail a dispatcher can act on. 30-min
-            # dedup per (entry, event content) so a rebroadcast doesn't
-            # re-fire, matching _check_tbfm_watchlist_hits' cadence.
+            # exactly the curb-side detail a dispatcher can act on.
+            # 2026-10-18: dedup on the leg + gate only. SUPERSEDED key:
+            # tdes:{entry}:{event_time}:{parking_gate} -- the event_time made a
+            # re-clearance at the same gate push again. A placeholder gate
+            # ('G', 'N/A') is not shown as a gate.
+            gate_norm, _ph, _fl = _ga.normalize_value("gate", rec.get("parking_gate"), "swim_tdes")
             dedup_key = content_hash(
-                f"tdes:{entry['id']}:{rec['event_time']}:{rec.get('parking_gate')}")
+                f"tdes:{entry['id']}:{gate_key or rec.get('callsign')}:{gate_norm or ''}")
             if _TDES_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
-                gate = rec.get("parking_gate")
+                gate = gate_norm
                 summary = (f"{rec['callsign']} clearance delivered at {rec['airport']}"
                            + (f", gate {gate}" if gate else "")
                            + (f" -> {rec['destination_airport']}"
@@ -1754,6 +1768,16 @@ def handle_tdes_apds_record(rec: dict) -> bool:
                         priority=3,
                     )
                     _TDES_WATCHLIST_DEDUP.record(entry["id"], dedup_key)
+                    # This push named the departure gate: the resolved-assignment
+                    # push (poller) must not repeat it for the same value + status.
+                    if gate and gate_key is not None:
+                        try:
+                            cur = _ga.leg_assignments(gate_key)["departure_gate"]
+                            if cur["value"] == gate and cur["status"] in ("observed", "provisional"):
+                                _ga.mark_pushed(entry["id"], gate_key, "departure", "gate",
+                                                gate, cur["status"])
+                        except Exception as e:
+                            log.debug("stdds: TDES gate push mark: %s", type(e).__name__)
                 except Exception as e:
                     log.error("stdds: TDES watchlist hit failed for %s: %s",
                               rec.get("callsign"), e)

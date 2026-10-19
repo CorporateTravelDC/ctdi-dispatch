@@ -1,0 +1,259 @@
+{
+ "shapes": {
+  "dumpvdl2": {
+   "vdl2": {
+    "freq": 136975000,
+    "station": "SYNTH-VDL",
+    "t": {
+     "sec": 1,
+     "usec": 0
+    },
+    "avlc": {
+     "src": {
+      "addr": "A0B0C0",
+      "type": "Aircraft"
+     },
+     "dst": {
+      "addr": "100000",
+      "type": "Ground station"
+     },
+     "acars": {
+      "reg": ".N0TEST1",
+      "flight": "TST101",
+      "label": "QQ",
+      "blk_id": "2",
+      "ack": "!",
+      "mode": "2",
+      "msg_text": "OFF 1912"
+     }
+    }
+   }
+  },
+  "acarsdec": {
+   "freq": 131.55,
+   "channel": 1,
+   "mode": "2",
+   "label": "H1",
+   "block_id": "4",
+   "ack": "!",
+   "tail": "N0TEST2",
+   "flight": "TST102",
+   "text": "#M1BPOSN38512W077123,FIX01,191200,350"
+  },
+  "airframes": {
+   "id": 1,
+   "tail": "N0TEST3",
+   "flightNumber": "TST103",
+   "label": "RA",
+   "linkDirection": "uplink",
+   "text": "YOUR ARR GATE B12 BAG CLAIM 4",
+   "timestamp": "2026-10-18T19:00:00Z"
+  },
+  "jumpseat": {
+   "id": "js-1",
+   "_source": "JUMPSEAT",
+   "registration": "N0TEST4",
+   "tail": "N0TEST4",
+   "flight": "TST104",
+   "flightNumber": "TST104",
+   "label": "5Z",
+   "direction": "downlink",
+   "text": "REQ GATE ASSIGNMENT ETA 1935",
+   "cleanedText": "REQ GATE ASSIGNMENT ETA 1935"
+  }
+ },
+ "expected_fields": {
+  "dumpvdl2": {
+   "tail": "N0TEST1",
+   "flight": "TST101",
+   "label": "QQ",
+   "direction": "downlink"
+  },
+  "acarsdec": {
+   "tail": "N0TEST2",
+   "flight": "TST102",
+   "label": "H1",
+   "direction": "downlink"
+  },
+  "airframes": {
+   "tail": "N0TEST3",
+   "flight": "TST103",
+   "label": "RA",
+   "direction": "uplink"
+  },
+  "jumpseat": {
+   "tail": "N0TEST4",
+   "flight": "TST104",
+   "label": "5Z",
+   "direction": "downlink"
+  }
+ },
+ "cases": [
+  [
+   {
+    "label": "QP",
+    "text": "OUT 1850",
+    "block_id": "1"
+   },
+   [
+    "oooi"
+   ]
+  ],
+  [
+   {
+    "label": "31",
+    "text": "/OUT 1850 /FOB 120",
+    "block_id": "1"
+   },
+   [
+    "oooi"
+   ]
+  ],
+  [
+   {
+    "label": "H1",
+    "text": "WOW OFF OFF 1912",
+    "block_id": "2"
+   },
+   [
+    "oooi"
+   ]
+  ],
+  [
+   {
+    "label": "H1",
+    "text": "ETA KDCA 2010",
+    "block_id": "3"
+   },
+   [
+    "eta"
+   ]
+  ],
+  [
+   {
+    "label": "RA",
+    "text": "YOUR ARR GATE 35",
+    "block_id": "A"
+   },
+   [
+    "gate_assign"
+   ]
+  ],
+  [
+   {
+    "label": "5Z",
+    "text": "GATE REQ",
+    "block_id": "5"
+   },
+   [
+    "gate_request"
+   ]
+  ],
+  [
+   {
+    "label": "RA",
+    "text": "BAGS ON CAROUSEL 3",
+    "block_id": "B"
+   },
+   [
+    "baggage"
+   ]
+  ],
+  [
+   {
+    "label": "RA",
+    "text": "KDCA METAR 181852Z 18008KT 10SM",
+    "block_id": "C"
+   },
+   [
+    "weather"
+   ]
+  ],
+  [
+   {
+    "label": "A9",
+    "text": "DCA ATIS INFO K 1852Z",
+    "block_id": "D"
+   },
+   [
+    "atis"
+   ]
+  ],
+  [
+   {
+    "label": "AA",
+    "text": "/SYNTHA.AT1.N0TEST5 CLIMB TO FL350",
+    "block_id": "E"
+   },
+   [
+    "cpdlc_adsc"
+   ]
+  ],
+  [
+   {
+    "label": "H1",
+    "text": "#DFB FAULT CODE 21-51 PACK 1 INOP",
+    "block_id": "6"
+   },
+   [
+    "maintenance"
+   ]
+  ],
+  [
+   {
+    "label": "H1",
+    "text": "#M1BPOSN38512W077123,FIX01,191200,350",
+    "block_id": "7"
+   },
+   [
+    "position_report"
+   ]
+  ],
+  [
+   {
+    "label": "5Z",
+    "text": "WILL DIVERT TO KIAD MEDICAL",
+    "block_id": "8"
+   },
+   [
+    "diversion"
+   ]
+  ],
+  [
+   {
+    "label": "5Z",
+    "text": "ADVISE TFR ACTIVE OVER STADIUM",
+    "block_id": "9"
+   },
+   [
+    "tfr_notam_mention"
+   ]
+  ],
+  [
+   {
+    "label": "5Z",
+    "text": "THANKS SEE YOU TOMORROW",
+    "block_id": "0"
+   },
+   [
+    "free_text"
+   ]
+  ],
+  [
+   {
+    "label": "SQ",
+    "text": "02XAIAD",
+    "block_id": ""
+   },
+   []
+  ],
+  [
+   {
+    "label": "_d",
+    "text": "",
+    "block_id": "1"
+   },
+   []
+  ]
+ ]
+}

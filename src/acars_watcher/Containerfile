@@ -19,7 +19,13 @@ COPY requirements.txt .
 # SUPERSEDED 2026-10-07: pip install requests==2.34.2 urllib3==2.8.0 (exact but unhashed; transitive deps unpinned)
 RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r requirements.txt
 
-COPY acars_watcher.py .
+COPY acars_watcher.py acars_flags.py ./
+# 2026-10-18 (gate batch): acars_gate_parser.py is the byte-identical twin of
+# src/common/acars_gate_parser.py (tests/common/test_acars_gate_parser.py pins it);
+# acars_gate_forward.py forwards parsed gate/baggage announcements to dispatch.
+COPY acars_gate_parser.py acars_gate_forward.py ./
+# 2026-10-18: acars_flags.py is the byte-identical twin of src/common/acars_flags.py
+# (this build context is src/acars_watcher alone); a test fails if they differ.
 
 # Drop privileges
 RUN useradd -r -s /sbin/nologin watcher

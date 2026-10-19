@@ -1,0 +1,13 @@
+<XNOTAM-Update version="0.1" origin="" created="2026-10-18T15:33:18">
+  <Group><Add><Not>
+    <NotUid><txtNameAcctFac>FDC</txtNameAcctFac><dateIndexYear>2026</dateIndexYear><noSeqNo>9004</noSeqNo><txtLocalName>synthetic nogeo</txtLocalName></NotUid>
+    <dateEffective>2026-10-19T00:00:00</dateEffective>
+    <dateExpire>2026-10-26T00:00:00</dateExpire>
+    <codeTimeZone>EDT</codeTimeZone>
+    <AffLocGroup><txtNameCity>WASHINGTON</txtNameCity><txtNameUSState>DISTRICT OF COLUMBIA</txtNameUSState></AffLocGroup>
+    <codeFacility>FDC</codeFacility>
+    <TfrNot><codeType>SECURITY</codeType>
+    </TfrNot>
+    <txtDescrTraditional>!FDC 6/9004 FDC..SPECIAL NOTICE..SYNTHETIC SECURITY EVENT WASHINGTON, DC.</txtDescrTraditional>
+  </Not></Add></Group>
+</XNOTAM-Update>

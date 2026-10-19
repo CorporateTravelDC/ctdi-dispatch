@@ -53,7 +53,7 @@ renumbering (which would silently re-rank existing locks):
 
 | tier | sources | role |
 |---|---|---|
-| **40** | `fdps`, `swim_fids`, `tbfm`, `tfms`, `smes`, `itws`, `aim` | **SWIM — the validator of record** |
+| **40** | `fdps`, ~~`swim_fids`~~, `tbfm`, `tfms`, `smes`, `itws`, `aim` | **SWIM — the validator of record** (2026-10-18, next relay: `swim_fids` removed -- an unused name the exact `source == "fids"` deny did not cover; the deny now matches any source containing `fids`) |
 | **30** | `acars`, `adsb` | network aggregators (off-box, multi-receiver) — admitted alongside SWIM |
 | **20** | `fids` | **MWAA airport display — ENRICHMENT ONLY**, never reached for an assertive phase (see below) |
 | **10** | `local_adsb`, `local_acars`, `dump1090`, `acarshub`, `dumpvdl2` | **local receivers** — authority only via the (a)+(b) escape hatch |

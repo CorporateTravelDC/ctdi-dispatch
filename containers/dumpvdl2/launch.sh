@@ -8,7 +8,12 @@ set -e
 
 VDLM_BIN="/usr/local/bin/dumpvdl2"
 # shellcheck disable=SC2001
-FREQ_STRING="136650000 136800000 136900000 136925000 136975000 "
+# 2026-10-18 (operator): add the DC-area channels we were missing (136.700 / 136.725 / 136.775 / 136.825 /
+# 136.875) and drop 136.900 / 136.925, which carried 1 and 16 of 123,904 stored messages (0.01%) over the
+# full retained window 2026-10-04..10-18 (operator rule: under 10% over 14-30 days -> drop). 8 channels is
+# dumpvdl2's maximum; the auto centre (midpoint) with oversample 12 (1.26 MHz) covers 136.650-136.975 with room.
+# This line is the only place the frequency list lives: the quadlet's FREQUENCIES= is never read.
+FREQ_STRING="136650000 136700000 136725000 136775000 136800000 136825000 136875000 136975000 "
 VDLM_CMD=()
 
 if [[ -z "${RTL_SERIAL}" ]] && [[ -n "${SERIAL}" ]]; then

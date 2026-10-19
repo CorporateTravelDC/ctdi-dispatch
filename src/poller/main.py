@@ -605,7 +605,8 @@ class WatchlistSweep:
           3. Schedule inference   (ADS-B dark fallback)
 
         FDPS (FAA filed flight plan: destination/cancellation/status) and
-        FIDS (DCA/IAD gate/baggage/status, MWAA feed) are NOT part of that
+        FIDS (DCA/IAD gate/baggage~~/status~~, MWAA feed; 2026-10-18: gate,
+        terminal and baggage only, via _check_flight_gates) are NOT part of that
         fallback chain -- they're independent plan/airport-system signals,
         so both are checked every tick for every entry regardless of
         whether the OOOI-phase chain above got an ADS-B hit. 2026-07-27:
@@ -615,7 +616,9 @@ class WatchlistSweep:
         Both fixed/added same day.
 
         Triggers: OUT, OFF, ON, IN, delay >15min, delay >30min, diversion,
-        FDPS status/destination/cancellation, FIDS gate/baggage/status.
+        FDPS status/destination/cancellation, resolved gate/baggage
+        assignments (~~FIDS gate/baggage/status~~ 2026-10-18: every gate source,
+        common.gate_assignments; FIDS is gate/terminal/baggage only).
         Standing directive: all watchlist flights use this trigger set --
         transient and permanent entries alike (get_active_entries below
         already returns both, no tier filter).
@@ -642,7 +645,7 @@ class WatchlistSweep:
 
                     # Independent of OOOI-phase hit/miss above.
                     _check_flight_fdps_cache(entry, ident)
-                    _check_flight_fids(entry, ident)
+                    _check_flight_gates(entry, ident)
                     _check_flight_inbound(entry, ident)
                     _check_flight_tdes_tail(entry, ident)
                 except Exception as e:
@@ -1182,8 +1185,6 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
         if confirm_src == "acars":
             src_label = acars_msg.get("label") or acars_msg.get("_source") or "ACARS"
             summary = f"{summary} — confirmed via ACARS ({src_label})"
-        elif confirm_src == "fids":
-            summary = f"{summary} — confirmed via FIDS"
         else:
             summary = f"{summary} — confirmed via FDPS"
         if tracking_url:
@@ -1230,61 +1231,9 @@ def _check_flight_airplanes_live(entry: dict, ident: str) -> bool:
 
 
 
-def _fids_shows_landed(entry: dict, ident: str) -> bool:
-    """
-    True if DCA/IAD FIDS currently reports this flight as landed/arrived.
-    Reuses the same airport/carrier/flight-number resolution as
-    _check_flight_fids(). Returns False (not "unknown") for any flight not
-    routed through DCA/IAD, or on any lookup failure -- callers treat False
-    as "no FIDS corroboration available," not as a negative signal.
-    """
-    import re
-    dest = (entry.get("destination") or "").upper()
-    origin = (entry.get("origin") or "").upper()
-    if dest in ("KDCA", "DCA"):
-        airport = "DCA"
-    elif dest in ("KIAD", "IAD"):
-        airport = "IAD"
-    elif origin in ("KDCA", "DCA"):
-        airport = "DCA"
-    elif origin in ("KIAD", "IAD"):
-        airport = "IAD"
-    else:
-        return False
-
-    m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
-    if not m:
-        return False
-    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
-    if not iata_carrier:
-        return False
-    flight_num = m.group(2)
-
-    try:
-        from common.airport_fids import lookup_arrival
-        result = lookup_arrival(airport, iata_carrier, flight_num)
-    except Exception:
-        return False
-    if not result:
-        return False
-    status_lower = (result.get("status") or "").lower()
-    return "land" in status_lower or "arrived" in status_lower
-
-
-# 2026-07-28 operator directive: "ACARS/FDPS/FIDS/VDL IS the sole authority
-# of any oooi alert period going forward." VDL2 is already folded into
-# ACARS (common.acars.get_latest_phase pulls from ACARS/VDL2/HFDL
-# uniformly -- there is no separate VDL check to add). This generalizes
-# the landed-only FIDS check above into a full four-phase confirmer so the
-# same standard applies to OUT/OFF, not just ON/IN.
-_FIDS_STATUS_TO_PHASE = {
-    "outgate":    "out",
-    "inair":      "off",
-    "landed":     "on",
-    "ingate":     "in",
-    "in customs": "in",
-}
-
+# 2026-10-18 (operator, gate batch): the dead FIDS-to-OOOI code that sat here --
+# _fids_shows_landed() (no caller) and _FIDS_STATUS_TO_PHASE (no reader) -- was
+# removed. FIDS never supplies a time, a status, a tail or an OOOI phase.
 
 # 2026-10-12: the FIDS phase-confirmation helper was removed -- FIDS never confirms an OOOI phase (2026-09-27 rule);
 # its last caller (the ADS-B sweep's OUT/OFF confirmation) was taken out the same day.
@@ -1975,106 +1924,108 @@ def _check_flight_tdes_tail(entry: dict, ident: str) -> None:
                          new_hex=plan.hex, tail=plan.registration, exclude_gufi=plan.gufi)
 
 
-def _check_flight_fids(entry: dict, ident: str) -> None:
-    """Check DCA/IAD FIDS (MWAA feed, poller.fetchers.dca_fids/iad_fids,
-    common/airport_fids.py) for gate/baggage/status on a watchlisted flight,
-    firing when any of those change since last tick.
+def _check_flight_gates(entry: dict, ident: str) -> None:
+    """2026-10-18 (operator, gate batch): gate / terminal / baggage for a flight
+    watch from every source, through common.gate_assignments. Runs the two
+    sweep-side providers -- MWAA FIDS (DCA/IAD, lowest tier) and the budgeted
+    AeroAPI fallback -- then pushes each changed, KNOWN resolved assignment
+    (SWIM TDES and ACARS evidence arrive from ingest and the web route). No
+    push for an unknown or conflicting value; dedup on leg + side + field +
+    value + status only. Any failure here is logged and swallowed: OOOI and
+    every other check in the sweep are unaffected by enrichment errors."""
+    from common import gate_assignments as ga
+    try:
+        key = ga.watch_leg_key(entry, ident, _watch_sched_dep(entry, ident))
+    except Exception as e:
+        log.debug("gates %s: leg key: %s", ident, e)
+        return
+    if key is None:
+        return
+    for step in (_check_flight_fids, _check_flight_aeroapi_gate):
+        try:
+            step(entry, ident, key)
+        except Exception as e:
+            log.debug("gates %s: %s: %s", ident, step.__name__, e)
+    try:
+        ga.push_watch_changes(entry, ident, key)
+    except Exception as e:
+        log.debug("gates %s: push: %s", ident, e)
 
-    2026-07-27: net-new wiring, not a reconnect -- FIDS was added
-    2026-07-14 (commit 74db2c2) purely as an on-demand
-    GET /api/v1/fids/{airport}/{flight} lookup (what hub-arrivals-lookup and
-    flight-hifi-track's baggage-claim step call). It was never hooked into
-    the continuous OOOI watchlist sweep at all; there was nothing to
-    disconnect. FIDS only covers DCA and IAD (MWAA-operated), so this is a
-    genuine no-op for any entry not routed through one of those two.
+
+def _check_flight_aeroapi_gate(entry: dict, ident: str, key) -> None:
+    """AeroAPI, fallback only (common.gate_aeroapi): no higher source has the
+    arrival gate (or a non-DC baggage claim), at most 2 calls per leg (~45 min
+    before the ETA, after ON), daily cap, every call ledgered."""
+    from common import gate_aeroapi, gate_assignments as ga
+    inst = ga.leg_instance(key)
+    eta = (inst.best_arr if inst else None) or _ep_or_none(entry.get("scheduled_arrival"))
+    gate_aeroapi.maybe_fetch(key, eta=eta, phase=entry.get("oooi_phase"),
+                             phase_at=_ep_or_none(entry.get("oooi_phase_updated_at")))
+
+
+def _ep_or_none(value):
+    from common import flight_instance as fi
+    return fi.to_epoch(value)
+
+
+def _check_flight_fids(entry: dict, ident: str, key) -> None:
+    """MWAA FIDS (poller.fetchers.dca_fids/iad_fids, common/airport_fids.py) as
+    the LOWEST-tier gate/baggage provider for a watched leg touching DCA/IAD.
+    Writes evidence only (common.gate_assignments); pushes come from the
+    resolved assignment in _check_flight_gates.
+
+    2026-10-18 (operator, gate batch):
+      - FIDS supplies gate, terminal and baggage ONLY -- never a time, a status,
+        a tail or an OOOI phase. The status word that 21 of 40 fids_update
+        pushes carried in the last 30 days is gone with the push itself.
+      - Origin side fixed: at the watch's ORIGIN this read that airport's
+        ARRIVALS board for the flight number (another leg's gate on an
+        out-and-back); it now reads the DEPARTURES board, departure gate only.
+      - The row is matched to the SWIM/TFMS-verified leg by route and by its
+        published time inside the leg's own window (the one permitted use of a
+        FIDS time; never stored, logged or shown). No verified times: only a
+        route that is unique on the board matches.
+    History: net-new 2026-07-27 (FIDS had been an on-demand lookup only).
     """
     import re
-    dest = (entry.get("destination") or "").upper()
-    origin = (entry.get("origin") or "").upper()
-    if dest in ("KDCA", "DCA"):
-        airport = "DCA"
-    elif dest in ("KIAD", "IAD"):
-        airport = "IAD"
-    elif origin in ("KDCA", "DCA"):
-        airport = "DCA"
-    elif origin in ("KIAD", "IAD"):
-        airport = "IAD"
-    else:
+    from common import airport_fids, gate_assignments as ga
+    sides = []
+    if key.destination in ("DCA", "IAD"):
+        sides.append(("arrival", key.destination, key.origin))
+    if key.origin in ("DCA", "IAD"):
+        sides.append(("departure", key.origin, key.destination))
+    if not sides:
         return
-
     m = re.match(r"^([A-Za-z]{2,3})(\d+[A-Za-z]?)$", ident.strip())
     if not m:
         return
-    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper())
+    iata_carrier = _ICAO_TO_IATA_CARRIER.get(m.group(1).upper()) or \
+        (m.group(1).upper() if len(m.group(1)) == 2 else None)
     if not iata_carrier:
         return
     flight_num = m.group(2)
-
-    try:
-        from common.airport_fids import lookup_arrival
-        result = lookup_arrival(airport, iata_carrier, flight_num)
-    except Exception as e:
-        log.debug("fids check %s: %s", ident, e)
-        return
-    if not result:
-        return
-
-    summary = (f"{ident} FIDS {airport}: gate {result.get('gate') or '?'} "
-               f"baggage {result.get('baggage') or '?'} "
-               f"{result.get('status') or ''}").strip()
-    from datetime import datetime, timezone
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # 2026-07-27 follow-up fix #1: this used to compare against the SHARED
-    # entry["last_event_summary"] field, which every other check type
-    # (FDPS, OOOI, proximity, schedule inference) also overwrites -- an
-    # intervening fire from any of those made this see a false "changed"
-    # FIDS summary and re-fire an unchanged one. Confirmed root cause of
-    # three duplicate "...Landed" pushes for UAL2670 on 2026-07-27, ~5min
-    # apart, each sitting between unrelated fdps_status fires. Now compares
-    # against its own dedicated last_fids_status column (SCHEMA_V23), same
-    # pattern as oooi_phase / last_fdps_status.
-    # FIDS is ENRICHMENT ONLY -- gate + baggage assignment. It is NOT an OOOI
-    # source and MUST NEVER assert an OOOI phase (out/off/on/in). Operator
-    # directive 2026-09-27: MWAA's airport display is neither SWIM nor a
-    # network aggregator (the only sources the standing OOOI-authority rule
-    # admits), and it is known wrong on landed timing -- UAL2670 2026-07-27 and
-    # UAL599 2026-09-27 both showed "Landed"/early arrival while still airborne.
-    #
-    # The phase-promotion blocks that used to live here (FIDS "Landed"->on and
-    # "InGate"->in, guarded only by an ACARS cross-check that no-ops when ACARS
-    # has no coverage) were the false-early-landing bug. Root cause: an
-    # ADS-B-only-tracked flight holds no OOOI authority lock -- the airborne
-    # "off" is written by the lock-less plain update_watchlist_oooi_phase(), and
-    # no authoritative caller ever asserts "off" -- so tier-20 FIDS sailed
-    # through _oooi_authority_check's unlocked fall-through and asserted a
-    # landing at cruise. Removed entirely. OOOI belongs to
-    # SWIM/TBFM/TFMS/SMES/FDPS + network ADS-B/ACARS; FIDS informs gate and
-    # baggage and nothing else. A hard backstop deny for source=="fids" also
-    # sits in db._oooi_authority_check so this path cannot be reintroduced.
-    #
-    # Dedup and fire on the gate/baggage enrichment only, never on the arrival
-    # status: a status-only flip (-> "Landed"/"InGate") must produce no FIDS
-    # push, because that would be FIDS speaking to OOOI. last_fids_status is a
-    # private cache for this function (verified no other reader) and now holds
-    # the enrichment key, not the status-bearing summary. The arrival status is
-    # still carried in the event detail/summary as display context on a
-    # gate/baggage-triggered push, but never triggers one on its own.
-    gate = result.get("gate")
-    baggage = result.get("baggage")
-    enrich_key = f"gate={gate or '?'} baggage={baggage or '?'}"
-    if enrich_key == (entry.get("last_fids_status") or ""):
-        return
-
-    from shared.watchlist import watchlist_event_hit
-    watchlist_event_hit(
-        entry["id"], summary,
-        {"watchlist_trigger": "fids_update", "identifier": ident,
-         "airport": airport, "gate": gate, "baggage": baggage,
-         "status": result.get("status")},
-        priority=3,
-    )
-    db.update_watchlist_fids_status(entry["id"], enrich_key, now_iso)
+    inst = ga.leg_instance(key)
+    for side, airport, other in sides:
+        window = None
+        if inst is not None:
+            if side == "arrival":
+                anchor = inst.sched_arr or inst.est_arr
+                window = ((anchor - 2 * 3600, anchor + 8 * 3600) if anchor else
+                          ((inst.sched_dep, inst.sched_dep + 16 * 3600) if inst.sched_dep else None))
+            elif inst.sched_dep:
+                window = (inst.sched_dep - 2 * 3600, inst.sched_dep + 8 * 3600)
+        row = airport_fids.match_leg(airport, side, iata_carrier, flight_num, other, window)
+        if row is None:
+            continue
+        payload_ref = airport_fids.get_payload_hash(airport)
+        now_iso = ga._iso()
+        fields = (("gate", "terminal", "baggage") if side == "arrival" else ("gate",))
+        obs = [ga.Observation(key=key, side=side, field=f, value_raw=row.get(f), source="mwaa_fids",
+                              observed_at=now_iso, leg_match=row["leg_match"], evidence_type="display",
+                              confidence=0.7, parser_version="mwaa-fids-2", airport=airport,
+                              raw_table="mwaa_fids_payload", raw_ref=payload_ref)
+               for f in fields]
+        ga.record(obs, ladd_idents=[ident, entry.get("registration")], ladd_hexes=[entry.get("hex_id")])
 
 
 def _check_vessel_aishub(entry: dict, mmsi: str, aishub_id: str) -> None:
@@ -2561,6 +2512,9 @@ async def main() -> None:
         # 2026-10-18: nas_programs.source -- the REST NAS fetcher stamps it and
         # deactivates only its own rows (pg_schema/0076 on Postgres).
         db.init_db_v47()
+        # 2026-10-18: tfrs.vip_push_reason -- the TFR fetcher stamps it
+        # (pg_schema/0081 on Postgres).
+        db.init_db_v50()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

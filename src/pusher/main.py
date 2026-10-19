@@ -6,7 +6,8 @@ and fires ntfy priority 5 alerts.
 Also handles test alerts from admin trigger.
 
 ntfy topics:
-  tfr-alert   — VIP/POTUS TFR — priority 5 (max)
+  tfr-alert   — VIP-class TFR (VIP/POTUS; 2026-10-18: + SECURITY with presidential
+                language, the 40103(b)(3)/99.7 basis, or ZDC) — priority 5 (max)
   cps         — CPS score change — priority 3
   ops-brief   — daily/weekly brief — priority 3
   ops-health  — freshness audit / test alerts — priority 3
@@ -84,8 +85,10 @@ _NWS_MAX_AGE_SEC        = 1800  # 30 min -- NWS alert poll cadence is slower
 
 def _tfr_window(t: dict) -> str:
     """'Active 14:00Z / 10:00 ET Mon 10-14 to 16:00Z / 12:00 ET Mon 10-14' (UTC + ET), plus
-    each area's window when the FAA gives more than one (2026-10-14: times come from the
-    TFR detail record; the list feed has none). 'window not published' when unknown."""
+    each area's window (2026-10-14: times come from the TFR detail record; the list feed
+    has none). 2026-10-18: area windows are listed whenever there is more than one, or
+    when the single area's window differs from the overall one. 'window not published'
+    when unknown."""
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     def fmt(e):
@@ -100,22 +103,90 @@ def _tfr_window(t: dict) -> str:
         areas = (json.loads(t.get("raw_json") or "{}") or {}).get("area_windows_utc") or []
     except (TypeError, ValueError):
         areas = []
-    if len(areas) > 1:
+    if len(areas) > 1 or (len(areas) == 1 and (areas[0][0] != s or areas[0][1] != e)):
         out += "\nArea windows: " + "; ".join(f"{fmt(a)} to {fmt(b)}" for a, b in areas)
     return out
 
 
-def _vip_tfr_alert(t: dict) -> tuple[str, str, str]:
-    """(dedup key, content hash, message) for one VIP TFR: its own FAA text and window.
-    The hash is the TFR's own text + FAA mod time only -- never a narrative or a stamp."""
+# 2026-10-18 (operator: TFR widening). Words for tfrs.vip_push_reason; mirrors
+# poller.fetchers.tfr.REASON_WORDS (kept here so the pusher imports nothing from the
+# poller's fetcher module and its requests session).
+TFR_REASON_WORDS = {
+    "vip_type": "FAA type VIP (VIP movement)",
+    "vip_text": "presidential/VIP language in the FAA text",
+    "security_presidential": "SECURITY TFR with presidential language in the FAA text",
+    "security_residence": "SECURITY TFR at a protected residence",
+    "security_zdc": "SECURITY TFR in Washington Center (ZDC) airspace -- affects DCA/IAD/BWI",
+    "security_legal_basis": "SECURITY TFR under 49 USC 40103(b)(3) / 14 CFR 99.7 (national defense airspace)",
+}
+_VIP_REASONS = frozenset({"vip_type", "vip_text"})
+# 2026-10-18 (operator, tiered): mirrors poller.fetchers.tfr.HOT_REASONS. Any of these
+# = VIP-class (p5 tfr-alert + hot-alerts, Pushover Emergency); security_legal_basis
+# alone = a plain p3 tfr-alert (no hot-alerts, no Pushover).
+_HOT_REASONS = frozenset({"vip_type", "vip_text", "security_presidential",
+                          "security_residence", "security_zdc"})
+
+
+def _tfr_raw(t: dict) -> dict:
     try:
-        d = json.loads(t.get("raw_json") or "{}") or {}
+        return json.loads(t.get("raw_json") or "{}") or {}
     except (TypeError, ValueError):
-        d = {}
+        return {}
+
+
+def _tfr_reasons(t: dict) -> list[str]:
+    """Every push reason for a TFR row: raw_json's list, else the stored primary
+    reason, else ['vip_type'] for an is_vip row written before the 10-18 classifier."""
+    reasons = [r for r in (_tfr_raw(t).get("vip_push_reasons") or []) if r in TFR_REASON_WORDS]
+    if not reasons and t.get("vip_push_reason") in TFR_REASON_WORDS:
+        reasons = [t["vip_push_reason"]]
+    if not reasons and t.get("is_vip"):
+        reasons = ["vip_type"]
+    return reasons
+
+
+def _is_vip_class(t: dict) -> bool:
+    """Any push at all (either tier). Kept under its 10-18 name."""
+    return bool(_tfr_reasons(t))
+
+
+def _tfr_tier(t: dict) -> str | None:
+    """'hot' | 'p3' | None -- see _HOT_REASONS."""
+    r = set(_tfr_reasons(t))
+    if r & _HOT_REASONS:
+        return "hot"
+    if "security_legal_basis" in r:
+        return "p3"
+    return None
+
+
+def _security_only(t: dict) -> bool:
+    """VIP-class only through the 10-18 SECURITY widening (gated by the cutover)."""
+    r = _tfr_reasons(t)
+    return bool(r) and not (_VIP_REASONS & set(r)) and not t.get("is_vip")
+
+
+def _vip_tfr_alert(t: dict) -> tuple[str, str, str]:
+    """(dedup key, content hash, message) for one VIP-class TFR: its own FAA text, why
+    it is VIP-class (2026-10-18), and its window. The hash is the TFR's own text + FAA
+    mod time only -- never a narrative, a stamp, or the reason wording."""
+    d = _tfr_raw(t)
     vip_text = " ".join(str(d.get("description") or "").split()) or "VIP/POTUS TFR active."
-    message = f"VIP TFR {t['tfr_id']}: {vip_text}\n{_tfr_window(t)}"[:1000]
+    reasons = _tfr_reasons(t)
+    kind = "SECURITY" if reasons and not (_VIP_REASONS & set(reasons)) and not t.get("is_vip") else "VIP"
+    # A plain FAA-type VIP TFR keeps the 10-14 text exactly (its own text + window);
+    # every other reason says in words why it is VIP-class.
+    residence = d.get("residence")
+    words = [TFR_REASON_WORDS[r] + (f" ({residence})" if r == "security_residence" and residence else "")
+             for r in reasons]
+    why = "" if set(reasons) <= {"vip_type"} else "Why: " + "; ".join(words) + "\n"
+    message = f"{kind} TFR {t['tfr_id']}: {vip_text}\n{why}{_tfr_window(t)}"[:1000]
     h = content_hash(f"{t['tfr_id']}|{vip_text}|{d.get('mod_abs_time') or d.get('mod_date') or ''}")
     return t["tfr_id"], h, message
+
+
+def _tfr_title(t: dict) -> str:
+    return f"{'SECURITY' if _security_only(t) else 'VIP'} TFR: {t['tfr_id']}"
 
 
 VIP_CUTOVER_MARKER = "pusher-vip-cutover-2026-10-14"
@@ -209,9 +280,136 @@ def vip_window_corrections() -> int:
     return sent
 
 
+# ── 2026-10-18 SECURITY widening: one-time cutover + one-time correction ───────
+# The poller now classes SECURITY TFRs VIP-class (presidential language, the
+# 40103(b)(3)/99.7 legal basis -- carried by nearly every SECURITY TFR -- or a ZDC
+# facility). Without a cutover the first poll after the rollout would hot-push
+# (p5 + Pushover Emergency) every long-standing SECURITY TFR in the FAA list at once
+# (41 on 2026-10-18, some dating to 2015). Same pattern as the 10-14 VIP cutover:
+# once the poller's new classification has landed, every active SECURITY TFR is
+# recorded as already alerted WITHOUT a push, then a one-time marker; only SECURITY
+# TFRs that appear (or that the FAA changes) afterwards push. Until the marker
+# exists, security-only rows are not pushed at all (VIP rows push as before).
+# 6/0100 (Palm Beach) is excluded: it gets the one-time corrected alert below.
+TFR_SECURITY_CUTOVER_MARKER = "pusher-tfr-security-cutover-2026-10-18"
+TFR_SECURITY_CUTOVER_STATE = "pusher-tfr-security-cutover-pending.json"
+TFR_SECURITY_CUTOVER_GIVE_UP_S = 2 * 3600
+TFR_CLASS_VERSION = "2026-10-18"           # poller.fetchers.tfr.CLASS_VERSION
+
+TFR_WIDEN_FIX_MARKER = "tfr-security-widen-2026-10-18"
+TFR_WIDEN_FIX_STATE = "tfr-security-widen-pending.json"
+TFR_WIDEN_FIX_IDS = ("6/0100",)
+TFR_WIDEN_FIX_GIVE_UP_S = 24 * 3600
+
+
+def _now_stamp() -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def _is_security(t: dict) -> bool:
+    return str(_tfr_raw(t).get("type") or "").strip().upper() == "SECURITY"
+
+
+def _tfr_classification_landed(since: float, tfrs: list[dict]) -> bool:
+    """A poller run after `since` succeeded and its rows carry the 10-18 class
+    version (or there is no SECURITY TFR to classify)."""
+    try:
+        st = next((f for f in db.get_feed_states() if f.get("feed_name") == "tfr"), None)
+    except Exception:
+        return False
+    if not st or st.get("error") or float(st.get("fetched_at") or 0) <= since:
+        return False
+    sec = [t for t in tfrs if _is_security(t)]
+    return not sec or any(_tfr_raw(t).get("class_v") == TFR_CLASS_VERSION for t in sec)
+
+
+def tfr_security_cutover() -> int:
+    """Record every active SECURITY TFR (except TFR_WIDEN_FIX_IDS) as already alerted,
+    without pushing, once the poller's 10-18 classification has landed. Runs once,
+    ever (marker); gives up waiting after 2 h and baselines what is there."""
+    sd = pathlib.Path(config.state_dir())
+    marker, state = sd / TFR_SECURITY_CUTOVER_MARKER, sd / TFR_SECURITY_CUTOVER_STATE
+    if marker.exists():
+        return 0
+    now = time.time()
+    if state.exists():
+        since = float(json.loads(state.read_text()).get("since") or now)
+    else:
+        since = now
+        state.write_text(json.dumps({"since": since}))
+    tfrs = db.get_active_tfrs()
+    if not _tfr_classification_landed(since, tfrs) and now - since < TFR_SECURITY_CUTOVER_GIVE_UP_S:
+        return 0
+    n = 0
+    for t in tfrs:
+        if _is_security(t) and t["tfr_id"] not in TFR_WIDEN_FIX_IDS:
+            key, h, _ = _vip_tfr_alert(t)
+            if _tfr_dedup.should_push(key, h):
+                _tfr_dedup.record(key, h)
+                n += 1
+    marker.write_text(f"{_now_stamp()} silenced {n} active SECURITY TFR(s)\n")
+    state.unlink(missing_ok=True)
+    log.info("TFR security cutover: %d active SECURITY TFR(s) recorded as already alerted (no push)", n)
+    return n
+
+
+def tfr_security_widen_corrections() -> int:
+    """2026-10-18 (operator): 6/0100 Palm Beach (SECURITY, NTL DEFENSE AIRSPACE, 49 USC
+    40103(b)(3), 2026-10-20 to 2027-10-20) was stored is_vip=0 with no window and never
+    pushed. Once the widened poller has classified it VIP-class (tiered rule: a
+    protected residence, security_residence) AND filled its window,
+    send ONE corrected alert, once ever, on tfr-alert + hot-alerts at priority 4 (a
+    correction, plain ntfy, no Pushover -- the 10-15 'pusher-vip-window-fix' pattern),
+    and record it in the TFR dedup so the normal path does not push it again. Dropped
+    if it leaves the FAA list; gives up after 24 h. Then a one-time marker."""
+    sd = pathlib.Path(config.state_dir())
+    marker, state = sd / TFR_WIDEN_FIX_MARKER, sd / TFR_WIDEN_FIX_STATE
+    if marker.exists():
+        return 0
+    now = time.time()
+    if state.exists():
+        pending = json.loads(state.read_text())
+    else:
+        pending = {"since": now, "ids": list(TFR_WIDEN_FIX_IDS), "sent": [], "dropped": []}
+        state.write_text(json.dumps(pending))
+    active = {t["tfr_id"]: t for t in db.get_active_tfrs()}
+    remaining, sent = [], 0
+    for tid in pending["ids"]:
+        t = active.get(tid)
+        if t is None:
+            pending["dropped"].append(tid)
+            continue
+        if _tfr_tier(t) != "hot" or (not t.get("effective_start") and not t.get("effective_end")):
+            remaining.append(tid)          # the widened poller has not classified / timed it yet
+            continue
+        key, h, message = _vip_tfr_alert(t)
+        message = ("CORRECTED: now VIP-class under the 2026-10-18 SECURITY TFR widening "
+                   f"(no alert was sent before)\n{message}")[:1000]
+        title = f"{_tfr_title(t)} (corrected)"
+        ok = send_ntfy("tfr-alert", message, priority=4, title=title)
+        send_ntfy("hot-alerts", message, priority=4, title=title)
+        if ok:
+            _tfr_dedup.record(key, h)
+            db.mark_tfr_notified(tid)
+            pending["sent"].append(tid)
+            sent += 1
+        else:
+            remaining.append(tid)
+    pending["ids"] = remaining
+    if remaining and now - float(pending["since"]) < TFR_WIDEN_FIX_GIVE_UP_S:
+        state.write_text(json.dumps(pending))
+        return sent
+    marker.write_text(f"{_now_stamp()} corrected {pending['sent']}; dropped (gone) {pending['dropped']}; "
+                      f"gave up {remaining}\n")
+    state.unlink(missing_ok=True)
+    log.info("TFR security widen correction done: sent %s, dropped %s, gave up %s",
+             pending["sent"], pending["dropped"], remaining)
+    return sent
+
+
 def push_vip_tfrs() -> int:
     """
-    Check for VIP TFRs not yet notified. Fire ntfy priority 5 for each, once,
+    Check for VIP-class TFRs not yet notified. Fire ntfy priority 5 for each, once,
     with its active window; again only if the FAA changes the TFR.
     Returns count pushed.
 
@@ -219,12 +417,23 @@ def push_vip_tfrs() -> int:
     DC ground-route narrative is route_impact's own hot alert). The dedup content
     is the TFR's own text only -- the enrichment narrative starts with a fresh [HH:MMZ] stamp every run,
     so hashing it re-fired every VIP TFR on every enrichment run (10-13/14).
+
+    2026-10-18 (operator: TFR widening): VIP-class = tfrs.vip_push_reason (or an
+    is_vip row from before the classifier). SECURITY-only rows wait for the one-time
+    cutover marker; the TFR_WIDEN_FIX_IDS wait for their one-time correction.
     """
+    sd = pathlib.Path(config.state_dir())
+    security_open = (sd / TFR_SECURITY_CUTOVER_MARKER).exists()
+    widen_fix_done = (sd / TFR_WIDEN_FIX_MARKER).exists()
     tfrs = db.get_active_tfrs()
     pushed = 0
 
     for t in tfrs:
-        if not t["is_vip"]:
+        if not _is_vip_class(t):
+            continue
+        if _security_only(t) and not security_open:
+            continue
+        if t["tfr_id"] in TFR_WIDEN_FIX_IDS and not widen_fix_done:
             continue
 
         key, h, message = _vip_tfr_alert(t)
@@ -234,9 +443,14 @@ def push_vip_tfrs() -> int:
         if not _tfr_dedup.should_push(key, h):
             continue
 
-        # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
-        success = hot_push("tfr-alert", message, title=f"VIP TFR: {t['tfr_id']}")
-        hot_push("hot-alerts", message, title=f"VIP TFR: {t['tfr_id']}")
+        title = _tfr_title(t)
+        if _tfr_tier(t) == "hot":
+            # Hot push: ntfy (tfr-alert + hot-alerts) + Pushover Emergency co-fire.
+            success = hot_push("tfr-alert", message, title=title)
+            hot_push("hot-alerts", message, title=title)
+        else:
+            # 2026-10-18 (operator, tiered): legal basis only -- plain p3 tfr-alert.
+            success = send_ntfy("tfr-alert", message, priority=3, title=title)
         if success:
             db.mark_tfr_notified(t["tfr_id"])
             _tfr_dedup.record(key, h)
@@ -335,9 +549,10 @@ _landing_dedup_adsb  = PushDedup("flight-landing-adsb", dedup_secs=7200)    # 2h
 
 
 def _landing_dedup_for(result: str) -> PushDedup:
-    # landed_fids is poller.py's own corroborated (FIDS/FDPS/ACARS) phase --
-    # same authoritative tier as landed_acars, not an ADS-B guess.
-    return _landing_dedup_acars if result in ("landed_acars", "landed_fids") else _landing_dedup_adsb
+    # landed_poller is poller.py's own authority-gated phase (SWIM/ACARS; FIDS
+    # can never write it) -- same tier as landed_acars, not an ADS-B guess.
+    # 2026-10-18: renamed from "landed_fids", which claimed FIDS confirms ON/IN.
+    return _landing_dedup_acars if result in ("landed_acars", "landed_poller") else _landing_dedup_adsb
 
 
 def _ultrafeeder_url() -> str:
@@ -397,10 +612,11 @@ def _check_flight_landing(
 
     Source priority:
       0. poller.py's own oooi_phase (watchlist_entries.oooi_phase) — 2026-08-13.
-         poller.py already runs the full "ACARS/FDPS/FIDS/VDL IS the sole
-         authority" corroboration chain (2026-07-28 directive) for every
-         permanent/transient entry it sweeps -- FIDS's Landed/InGate status in
-         particular confirms ON/IN independent of ACARS. This function used to
+         poller.py already runs the authority-gated corroboration chain for
+         every permanent/transient entry it sweeps. ~~FIDS's Landed/InGate
+         status in particular confirms ON/IN independent of ACARS.~~
+         (2026-10-18: FIDS never confirms any phase -- db._oooi_authority_check
+         denies every source containing "fids" since 2026-09-27/10-18.) This function used to
          re-derive everything from scratch using ONLY ACARS+ADS-B, meaning
          pusher never saw FIDS-confirmed landings poller had already
          established -- exactly the gap that let AS506's predecessor flight go
@@ -428,7 +644,7 @@ def _check_flight_landing(
     if state["notified"]:
         return None
 
-    # ── 0. poller.py's already-corroborated FIDS/FDPS/ACARS phase ───────────
+    # ── 0. poller.py's already-corroborated (authority-gated) phase ─────────
     if oooi_phase in ("on", "in") and oooi_phase_updated_at:
         try:
             from datetime import datetime, timezone
@@ -444,7 +660,7 @@ def _check_flight_landing(
                 )
                 state["airborne"] = False
                 state["notified"] = True
-                return "landed_fids"
+                return "landed_poller"
         except Exception as e:
             log.debug("%s: oooi_phase freshness check failed (non-fatal): %s", cs, e)
 
@@ -832,6 +1048,14 @@ async def main() -> None:
                 vip_window_corrections()
             except Exception as e:
                 log.error("VIP window correction failed: %s", e)
+            try:
+                tfr_security_cutover()
+            except Exception as e:
+                log.error("TFR security cutover failed: %s", e)
+            try:
+                tfr_security_widen_corrections()
+            except Exception as e:
+                log.error("TFR security widen correction failed: %s", e)
             vip_count = push_vip_tfrs()
             if vip_count:
                 log.info("Pushed %d VIP TFR alerts", vip_count)

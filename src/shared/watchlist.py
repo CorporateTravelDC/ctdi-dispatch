@@ -156,6 +156,9 @@ _TRIGGER_NOISE_KEYS: dict[str, frozenset[str]] = {
     "fdps_th_meterfix_approach": _PROX_TELEMETRY_KEYS,
     "tfms_track_approach": frozenset({"latitude", "longitude", "minutes_out"}),
     "watchlist_proximity": frozenset({"distance_nm", "altitude_ft"}),
+    # 2026-10-18 (gate batch): a gate/baggage push is identified by leg + side +
+    # field + value + status only -- never by which source supplied it.
+    "gate_assignment": frozenset({"source"}),
 }
 # Raw message payloads are dropped from the hash for EVERY trigger:
 # fdps_parser's TH/FH/CL handlers spread {**parsed} into event_detail, and
@@ -218,7 +221,11 @@ def _check_dedup(entry_id: str, event_type: str, event_detail: dict) -> bool:
     sufficient. Now folds a stable per-constraint identity (fca_id, falling
     back to fca_name) into the key itself so each concurrent constraint
     gets its own independent dedup slot and history."""
-    sub_id = event_detail.get("fca_id") or event_detail.get("fca_name") or ""
+    # 2026-10-18: "slot" (gate_assignment pushes, "<side>:<field>") gives the
+    # arrival gate, the baggage claim and the departure gate of one leg their
+    # own slots, so one never reads as a change of another.
+    sub_id = (event_detail.get("fca_id") or event_detail.get("fca_name")
+              or event_detail.get("slot") or "")
     key = f"{entry_id}:{event_type}:{sub_id}" if sub_id else f"{entry_id}:{event_type}"
     normalized = _normalize_detail_for_hash(event_detail)
     ck = content_hash(json.dumps(normalized, sort_keys=True, default=str))

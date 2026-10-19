@@ -1,0 +1,23 @@
+<XNOTAM-Update version="0.1" origin="" created="2026-10-18T15:33:18">
+  <Group><Add><Not>
+    <NotUid><txtNameAcctFac>FDC</txtNameAcctFac><dateIndexYear>2026</dateIndexYear><noSeqNo>9003</noSeqNo><txtLocalName>synthetic stadium</txtLocalName></NotUid>
+    <dateEffective>2026-10-22T22:00:00</dateEffective>
+    <dateExpire>2026-10-23T04:00:00</dateExpire>
+    <codeTimeZone>EDT</codeTimeZone>
+    <AffLocGroup><txtNameCity>Synthetic Park</txtNameCity><txtNameUSState>NEW YORK</txtNameUSState></AffLocGroup>
+    <codeFacility>ZNY</codeFacility>
+    <TfrNot><codeType>91.137</codeType>
+      <TFRAreaGroup>
+        <aseTFRArea><txtName>Stadium</txtName><ScheduleGroup><dateEffective>2026-10-22T22:00:00</dateEffective><dateExpire>2026-10-23T01:00:00</dateExpire></ScheduleGroup></aseTFRArea>
+        <abdMergedArea><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.88000000N</geoLat><geoLong>073.93000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.87330127N</geoLat><geoLong>073.89695975W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85500000N</geoLat><geoLong>073.87277260W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.83000000N</geoLat><geoLong>073.86391950W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.80500000N</geoLat><geoLong>073.87277260W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.78669873N</geoLat><geoLong>073.89695975W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.78000000N</geoLat><geoLong>073.93000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.78669873N</geoLat><geoLong>073.96304025W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.80500000N</geoLat><geoLong>073.98722740W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.83000000N</geoLat><geoLong>073.99608050W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85500000N</geoLat><geoLong>073.98722740W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.87330127N</geoLat><geoLong>073.96304025W</geoLong></Avx></abdMergedArea>
+        <aseShapes><Abd><Avx><codeType>CIR</codeType><geoLat>40.83000000N</geoLat><geoLong>073.93000000W</geoLong><valRadiusArc>3.0</valRadiusArc><uomRadiusArc>NM</uomRadiusArc></Avx></Abd></aseShapes>
+      </TFRAreaGroup>
+      <TFRAreaGroup>
+        <aseTFRArea><txtName>Lot</txtName><ScheduleGroup><dateEffective>2026-10-23T01:00:00</dateEffective><dateExpire>2026-10-23T04:00:00</dateExpire></ScheduleGroup></aseTFRArea>
+        <abdMergedArea><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.86666667N</geoLat><geoLong>073.90000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.86443376N</geoLat><geoLong>073.88898326W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85833333N</geoLat><geoLong>073.88091844W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85000000N</geoLat><geoLong>073.87796652W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.84166667N</geoLat><geoLong>073.88091844W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.83556624N</geoLat><geoLong>073.88898326W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.83333333N</geoLat><geoLong>073.90000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.83556624N</geoLat><geoLong>073.91101674W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.84166667N</geoLat><geoLong>073.91908156W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85000000N</geoLat><geoLong>073.92203348W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.85833333N</geoLat><geoLong>073.91908156W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.86443376N</geoLat><geoLong>073.91101674W</geoLong></Avx></abdMergedArea>
+        <aseShapes><Abd><Avx><codeType>CIR</codeType><geoLat>40.85000000N</geoLat><geoLong>073.90000000W</geoLong><valRadiusArc>1.0</valRadiusArc><uomRadiusArc>NM</uomRadiusArc></Avx></Abd></aseShapes>
+      </TFRAreaGroup>
+    </TfrNot>
+    <txtDescrTraditional>!FDC 6/9003 ZNY NY..AIRSPACE SYNTHETIC PARK, NY..TEMPORARY FLIGHT RESTRICTIONS WI 3NM OF THE STADIUM FOR A SPORTING EVENT.</txtDescrTraditional>
+  </Not></Add></Group>
+</XNOTAM-Update>

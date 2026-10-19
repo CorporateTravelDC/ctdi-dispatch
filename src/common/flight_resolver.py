@@ -3,8 +3,21 @@ common/flight_resolver.py
 --------------------------
 Layered arrivals resolver for DCA / IAD / BWI:
   1. FAA SWIM (flight_events table) -- primary, all three hubs
-  2. MWAA airport-website FIDS scrape -- fallback, DCA/IAD only
-  3. FlightAware AeroAPI -- fallback, all three hubs (funded 2026-07-20)
+  2. MWAA airport-website FIDS scrape -- fallback, DCA/IAD only, gate /
+     terminal / baggage ONLY (2026-10-18)
+  ~~3. FlightAware AeroAPI -- fallback, all three hubs (funded 2026-07-20)~~
+     (removed 2026-10-18, operator: AeroAPI is called only as the budgeted,
+     ledgered per-watched-leg gate/baggage fallback in common.gate_aeroapi --
+     never automatically from a board lookup)
+
+2026-10-18 (operator, gate batch): the website tier no longer serves the FIDS
+`status` or `scheduled` (FIDS never supplies a time or a status), no longer
+filters on the FIDS status, and the forward window is computed in airport-local
+time: it compared a naive container-UTC datetime.now() with the naive ET
+publishedTime, so the window sat 4-5 h off. The published time is used only to
+pick rows inside the window; it is never returned.
+
+The history below is kept as written.
 
 Why AeroAPI is tier 3 for ALL hubs, not just BWI: SWIM has been 0 rows
 platform-wide all session (see below), so DCA/IAD were silently running on
@@ -44,11 +57,8 @@ entirely, already served by common/train tooling and GET /api/v1/amtrak.
 """
 
 import logging
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
-
-import requests
 
 from common import db as _db
 from common.airport_fids import (
@@ -56,6 +66,7 @@ from common.airport_fids import (
     get_data as website_get_data,
     _effective_gate,
     _effective_claim,
+    _published_epoch,
 )
 
 log = logging.getLogger("common.flight_resolver")
@@ -84,28 +95,9 @@ from common.airline_codes import IATA_TO_ICAO as IATA_TO_ICAO_CARRIER  # noqa: E
 # not yet observed live since the table is empty; kept permissive).
 FORWARD_LOOKING_SWIM_STATUSES = {"active", "scheduled", "airborne", "enroute", "en_route"}
 
-FORWARD_LOOKING_WEBSITE_STATUSES = {"Scheduled", "InAir", "Delayed"}
-
-# AeroAPI's free-text status field -- forward-looking values seen in
-# practice (2026-07-20 live test): "Scheduled", "En Route", "En Route /
-# Delayed", "Scheduled / Delayed". Excludes "Landed", "Cancelled",
-# "Diverted" and similar terminal states. Substring-matched, not exact,
-# since AeroAPI appends qualifiers like "/ Delayed" to the base state.
-FORWARD_LOOKING_AEROAPI_STATUS_HINTS = ("scheduled", "en route", "en-route", "airborne")
-
-FLIGHTAWARE_API_BASE = "https://aeroapi.flightaware.com/aeroapi"
-FLIGHTAWARE_TIMEOUT = 15
-
-
-def _aeroapi_key() -> Optional[str]:
-    """
-    Read FLIGHTAWARE_API_KEY from the environment (podman --env-file loads
-    dispatch-secrets.env into the container's environment; see CLAUDE.md).
-    Funded and wired in 2026-07-20 -- key lives at
-    ~/.secrets/flightaware_aeroapi.key on the host, copied into
-    dispatch-secrets.env by an operator action, never hardcoded here.
-    """
-    return os.environ.get("FLIGHTAWARE_API_KEY") or None
+# 2026-10-18: FORWARD_LOOKING_WEBSITE_STATUSES (a filter on the FIDS status) and
+# the AeroAPI tier's constants/_aeroapi_key() were removed with that tier; the
+# AeroAPI key is read only by common.gate_aeroapi.
 
 
 def _query_swim(airport: str, carriers: Optional[set], within_minutes: int) -> list[dict]:
@@ -173,27 +165,18 @@ def _query_website(airport: str, carriers: Optional[set], within_minutes: int) -
     if data is None:
         return []
 
-    now = datetime.now()
-    cutoff = now + timedelta(minutes=within_minutes)
+    now_ep = datetime.now(timezone.utc).timestamp()
+    cutoff_ep = now_ep + within_minutes * 60
 
-    results = []
+    picked = []
     for f in data.get("arrivals", []):
         iata = f.get("IATA")
         if carriers and iata not in carriers:
             continue
-        status = f.get("status")
-        if status not in FORWARD_LOOKING_WEBSITE_STATUSES:
+        pub_ep = _published_epoch(f)          # ET-aware; selection only, never returned
+        if pub_ep is None or not (now_ep <= pub_ep <= cutoff_ep):
             continue
-        pub = f.get("publishedTime")
-        if not pub:
-            continue
-        try:
-            pub_dt = datetime.strptime(pub, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-        if not (now <= pub_dt <= cutoff):
-            continue
-        results.append({
+        picked.append((pub_ep, {
             "source":        "website",
             "airport":       airport,
             "flight_id":     None,
@@ -201,111 +184,25 @@ def _query_website(airport: str, carriers: Optional[set], within_minutes: int) -
             "flight_num":    f.get("flightnumber"),
             "carrier":       iata,
             "origin":        f.get("dep_airport_code"),
-            "status":        status,
-            "scheduled":     pub,
             "gate":          _effective_gate(f),
             "terminal":      f.get("arr_terminal"),
             "baggage_claim": _effective_claim(f, airport),
-        })
-    return results
-
-
-def _query_aeroapi(airport: str, carriers: Optional[set], within_minutes: int) -> list[dict]:
-    """
-    FlightAware AeroAPI scheduled_arrivals for one hub. Paid/metered --
-    only called when SWIM and the website fallback both came up empty, per
-    the waterfall in resolve_arrivals(). Response schema confirmed live
-    2026-07-20 against KDCA: {"scheduled_arrivals": [{ident, ident_icao,
-    ident_iata, operator, operator_iata, flight_number, codeshares_iata,
-    cancelled, origin: {code_iata,...}, destination: {...}, scheduled_in,
-    estimated_in, actual_in, status, ...}]}.
-    """
-    api_key = _aeroapi_key()
-    if not api_key:
-        return []
-
-    icao = HUB_ICAO.get(airport)
-    if not icao:
-        return []
-
-    try:
-        resp = requests.get(
-            f"{FLIGHTAWARE_API_BASE}/airports/{icao}/flights/scheduled_arrivals",
-            headers={"x-apikey": api_key, "Accept": "application/json"},
-            params={"max_pages": 1},
-            timeout=FLIGHTAWARE_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as exc:
-        log.warning("flight_resolver: aeroapi fetch failed for %s: %s", airport, exc)
-        return []
-    except ValueError as exc:
-        log.warning("flight_resolver: aeroapi parse error for %s: %s", airport, exc)
-        return []
-
-    now = datetime.now(timezone.utc)
-    cutoff = now + timedelta(minutes=within_minutes)
-
-    results = []
-    for f in data.get("scheduled_arrivals", []):
-        if f.get("cancelled") or f.get("diverted"):
-            continue
-
-        iata = (f.get("operator_iata") or "").upper() or None
-        codeshare_iatas = {
-            (c or "")[:2].upper() for c in (f.get("codeshares_iata") or [])
-        }
-        if carriers:
-            match_set = ({iata} if iata else set()) | codeshare_iatas
-            if not (match_set & carriers):
-                continue
-
-        sched_raw = f.get("estimated_in") or f.get("scheduled_in")
-        if not sched_raw:
-            continue
-        try:
-            sched_dt = datetime.strptime(sched_raw, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
-            )
-        except ValueError:
-            continue
-        if not (now <= sched_dt <= cutoff):
-            continue
-
-        status = f.get("status") or ""
-        if not any(hint in status.lower() for hint in FORWARD_LOOKING_AEROAPI_STATUS_HINTS):
-            continue
-
-        origin_info = f.get("origin") or {}
-        results.append({
-            "source":        "aeroapi",
-            "airport":       airport,
-            "flight_id":     f.get("ident_icao"),
-            "airline":       f.get("operator"),
-            "flight_num":    f.get("flight_number"),
-            "carrier":       iata,
-            "origin":        origin_info.get("code_iata") or origin_info.get("code"),
-            "status":        status,
-            "scheduled":     sched_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "gate":          None,   # AeroAPI's free tier doesn't return gate/terminal
-            "terminal":      None,
-            "baggage_claim": None,
-        })
-    return results
+        }))
+    picked.sort(key=lambda t: t[0])
+    return [r for _ep, r in picked]
 
 
 def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int = 90) -> dict:
     """
-    Layered resolver: SWIM (flight_events) -> MWAA website (DCA/IAD only)
-    -> FlightAware AeroAPI (all three hubs). Each tier is only queried if
-    the previous one returned nothing, so a healthy SWIM feed means
-    AeroAPI (metered/paid) never gets called.
+    Layered resolver: SWIM (flight_events) -> MWAA website (DCA/IAD only,
+    gate/terminal/baggage only). ~~-> FlightAware AeroAPI (all three hubs)~~
+    (removed 2026-10-18: AeroAPI is the per-watched-leg budgeted fallback in
+    common.gate_aeroapi, never called from here).
 
     Returns:
         {
           "airport":     "DCA",
-          "source_used": "swim" | "website" | "aeroapi" | "none",
+          "source_used": "swim" | "website" | "none",
           "results":     [...],
           "note":        str or None,
         }
@@ -330,7 +227,8 @@ def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int
             "results":     website_results,
             "note": (
                 "SWIM (flight_events) had no matching rows -- served from the "
-                "MWAA website fallback. Root-caused 2026-08-07 (this note was "
+                "MWAA website fallback: gate, terminal and baggage only (FIDS "
+                "never supplies a time or a status, 2026-10-18). Root-caused 2026-08-07 (this note was "
                 "previously wrong -- corrected here rather than left stale): "
                 "flight_events IS actively receiving fresh FDPS writes (confirmed "
                 "live, ~6,400 rows/hour) -- ingest connectivity itself is fine. "
@@ -349,28 +247,11 @@ def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int
             ),
         }
 
-    aeroapi_results = _query_aeroapi(airport, carriers_set, within_minutes)
-    if aeroapi_results:
-        return {
-            "airport":     airport,
-            "source_used": "aeroapi",
-            "results":     aeroapi_results,
-            "note": (
-                "Neither SWIM nor the MWAA website fallback had matching rows "
-                "-- served from FlightAware AeroAPI (paid/metered; wired "
-                f"2026-07-20). No gate/terminal/baggage data at this tier."
-                + ("" if airport in WEBSITE_AIRPORTS else
-                   " This is BWI's only data path -- MWAA doesn't operate it.")
-            ),
-        }
-
-    if not _aeroapi_key():
-        note = (
-            "No matching flights from SWIM or the website fallback, and "
-            "FlightAware AeroAPI is not queryable right now (no key loaded)."
-        )
-    else:
-        note = "No matching flights from SWIM, the website fallback, or AeroAPI."
+    note = (
+        "No matching flights from SWIM or the website fallback. AeroAPI is not "
+        "queried from board lookups (2026-10-18: per-watched-leg gate/baggage "
+        "fallback only, budgeted -- common.gate_aeroapi)."
+    )
     return {
         "airport":     airport,
         "source_used": "none",

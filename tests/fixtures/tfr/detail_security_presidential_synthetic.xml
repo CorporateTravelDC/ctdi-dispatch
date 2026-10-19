@@ -1,0 +1,18 @@
+<XNOTAM-Update version="0.1" origin="" created="2026-10-18T15:33:18">
+  <Group><Add><Not>
+    <NotUid><txtNameAcctFac>FDC</txtNameAcctFac><dateIndexYear>2026</dateIndexYear><noSeqNo>9002</noSeqNo><txtLocalName>synthetic presidential</txtLocalName></NotUid>
+    <dateEffective>2026-10-21T14:00:00</dateEffective>
+    <dateExpire>2026-10-21T20:00:00</dateExpire>
+    <codeTimeZone>EDT</codeTimeZone>
+    <AffLocGroup><txtNameCity>Synthetic City</txtNameCity><txtNameUSState>OHIO</txtNameUSState></AffLocGroup>
+    <codeFacility>ZOB</codeFacility>
+    <TfrNot><codeType>91.141</codeType>
+      <TFRAreaGroup>
+        <aseTFRArea><txtName>Area A</txtName><ScheduleGroup><dateEffective>2026-10-21T14:00:00</dateEffective><dateExpire>2026-10-21T20:00:00</dateExpire></ScheduleGroup></aseTFRArea>
+        <abdMergedArea><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.05000000N</geoLat><geoLong>081.50000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.04330127N</geoLat><geoLong>081.46687468W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.02500000N</geoLat><geoLong>081.44262525W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.00000000N</geoLat><geoLong>081.43374935W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.97500000N</geoLat><geoLong>081.44262525W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.95669873N</geoLat><geoLong>081.46687468W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.95000000N</geoLat><geoLong>081.50000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.95669873N</geoLat><geoLong>081.53312532W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>40.97500000N</geoLat><geoLong>081.55737475W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.00000000N</geoLat><geoLong>081.56625065W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.02500000N</geoLat><geoLong>081.55737475W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>41.04330127N</geoLat><geoLong>081.53312532W</geoLong></Avx></abdMergedArea>
+        <aseShapes><Abd><Avx><codeType>CIR</codeType><geoLat>41.00000000N</geoLat><geoLong>081.50000000W</geoLong><valRadiusArc>3.0</valRadiusArc><uomRadiusArc>NM</uomRadiusArc></Avx></Abd></aseShapes>
+      </TFRAreaGroup>
+    </TfrNot>
+    <txtDescrTraditional>!FDC 6/9002 ZOB OH..AIRSPACE SYNTHETIC CITY, OH..TEMPORARY FLIGHT RESTRICTIONS FOR THE MOVEMENT OF THE PRESIDENT.</txtDescrTraditional>
+  </Not></Add></Group>
+</XNOTAM-Update>

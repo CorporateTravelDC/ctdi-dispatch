@@ -49,7 +49,7 @@ DEMO_SESSION_SECRET  # src/demo/profiles.py:50
 EUROCONTROL_NM_B2B_CERT_PATH  # src/poller/fetchers/eurocontrol.py:42
 EUROCONTROL_NM_B2B_PASS  # src/poller/fetchers/eurocontrol.py:38
 EUROCONTROL_NM_B2B_USER  # src/poller/fetchers/eurocontrol.py:34
-FLIGHTAWARE_API_KEY  # src/common/flight_resolver.py:108
+FLIGHTAWARE_API_KEY  # src/common/gate_aeroapi.py:_key (2026-10-18; was flight_resolver.py:108, tier removed)
 JASDAT_PASS  # src/poller/fetchers/jasdat.py:35
 JASDAT_USER  # src/poller/fetchers/jasdat.py:31
 ULTRAFEEDER_LAT  # src/ingest/local_airspace.py:47

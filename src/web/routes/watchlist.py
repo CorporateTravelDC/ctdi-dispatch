@@ -209,8 +209,13 @@ class FlightWatchlistRequest(BaseModel):
     registration: Optional[str] = None
     # 2026-10-13: FIDS (GET /api/v1/fids/...) and flight-hifi-track call the
     # airframe "tail"; a body carrying {"tail": ...} was silently dropped by
-    # pydantic (extra keys are ignored) and stored registration=None. Accepted
-    # as an alias of `registration` (registration wins if both are given).
+    # pydantic (extra keys are ignored) and stored registration=None. ~~Accepted
+    # as an alias of `registration` (registration wins if both are given).~~
+    # 2026-10-18 (operator, gate batch): NOT stored. "tail" is FIDS's name for
+    # the field, and this alias was the channel through which a FIDS tail could
+    # become a stored registration (tails are SWIM-only). The field is still
+    # declared so a body carrying it is answered with `ignored_fields: ["tail"]`
+    # instead of being dropped silently.
     tail: Optional[str] = None
 
 
@@ -235,7 +240,7 @@ async def add_flight_watchlist(
     # doesn't sit un-trackable on airplanes.live just because nobody
     # remembered to look it up by hand.
     resolved_hex_id = (body.hex_id or "").strip() or None
-    resolved_registration = (body.registration or body.tail or "").strip().upper() or None
+    resolved_registration = (body.registration or "").strip().upper() or None   # never body.tail (2026-10-18)
     if resolved_registration and not resolved_hex_id:
         try:
             faa_rec = db.faa_lookup_by_n_number(resolved_registration)
@@ -421,6 +426,8 @@ async def add_flight_watchlist(
     )
 
     response = dict(entry)
+    if body.tail:
+        response["ignored_fields"] = ["tail"]
     response["fdps_confirmed"] = fdps_confirmed
     response["oooi_phase_seeded"] = seeded_phase
     response["operating_callsign"] = operating_callsign
@@ -697,7 +704,7 @@ class FlightBatchItem(BaseModel):
     added_by: str = "api"
     hex_id: Optional[str] = None  # see FlightWatchlistRequest, 2026-07-22
     registration: Optional[str] = None
-    tail: Optional[str] = None  # alias of registration, see FlightWatchlistRequest 2026-10-13
+    tail: Optional[str] = None  # ignored, never stored (2026-10-18), see FlightWatchlistRequest
 
 
 class FlightBatchRequest(BaseModel):
@@ -721,10 +728,11 @@ async def add_flight_watchlist_batch(
             errors.append("empty identifier skipped")
             continue
         entry_id = _make_id("flight", ident)
-        # 2026-10-13: same registration=None gap as the single add -- accept
-        # `tail`, reverse-resolve a hex-only add from the local registries.
+        # 2026-10-13: same registration=None gap as the single add --
+        # reverse-resolve a hex-only add from the local registries.
+        # (2026-10-18: `tail` is no longer accepted as a registration.)
         item_hex = (item.hex_id or "").strip() or None
-        item_reg = (item.registration or item.tail or "").strip().upper() or None
+        item_reg = (item.registration or "").strip().upper() or None
         if item_hex and not item_reg:
             from common.flight_instance import registration_for_hex
             item_reg = registration_for_hex(item_hex)

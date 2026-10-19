@@ -1,7 +1,14 @@
 """
 web/routes/fids.py
 ------------------
-Airport FIDS routes -- gate, baggage carousel, and arrival status.
+Airport FIDS routes -- gate, terminal and baggage carousel ONLY.
+
+2026-10-18 (operator, gate batch): FIDS never supplies a time, a status or a
+tail. GET /{airport}/{flight} no longer returns status, scheduled, estimated,
+remaining or tail (they came straight from MWAA's display); it stays a FIDS
+diagnostic (a 404 when MWAA has no row is honest there). For a flight's gate
+and baggage from every source, use GET /api/v1/flights/{ident}/assignments
+(web/routes/assignments.py), which answers 200 even with FIDS down.
 
 GET /api/v1/fids/{airport}           -- snapshot (arrivals/departures counts)
 GET /api/v1/fids/{airport}/arrivals  -- layered SWIM+website arrivals lookup
@@ -29,6 +36,9 @@ from common.airport_fids import AIRPORTS, get_data, lookup_arrival
 from common.flight_resolver import resolve_arrivals, SUPPORTED_HUB_AIRPORTS
 
 router = APIRouter(prefix="/api/v1/fids", tags=["fids"])
+
+# FIDS never supplies these (operator 2026-10-18).
+FIDS_FORBIDDEN_FIELDS = ("status", "scheduled", "estimated", "remaining", "tail")
 
 
 def _validate(airport: str) -> str:
@@ -107,14 +117,15 @@ def fids_flight(
     ),
 ) -> JSONResponse:
     """
-    Gate + baggage carousel + status for a specific arrival -- Tier 0.
+    Gate + terminal + baggage carousel for a specific arrival -- Tier 0.
 
     flight = IATA carrier code + flight number, e.g. AA1557, UA928, DL404.
 
     Returns:
-        airport, iata, flight_number, status, gate, terminal,
-        baggage (carousel), scheduled, estimated, remaining,
-        tail, dep_airport, dep_gate, dep_terminal
+        airport, iata, flight_number, gate, terminal, baggage (carousel),
+        dep_airport, dep_gate, dep_terminal
+    (2026-10-18: status, scheduled, estimated, remaining and tail removed --
+    FIDS is not a time, status or tail source.)
     """
     airport = _validate(airport)
     flight = flight.upper().strip()
@@ -148,4 +159,7 @@ def fids_flight(
                    + (f" for {date}" if date else ""),
         )
 
+    # Belt and braces: whatever lookup_arrival() returns, these never leave the route.
+    for k in FIDS_FORBIDDEN_FIELDS:
+        result.pop(k, None)
     return JSONResponse(result)

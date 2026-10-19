@@ -58,6 +58,7 @@ import secrets as _secrets
 from second_brain.scrub_gate import ScrubGateBlocked as _ScrubGateBlocked, gate as _scrub_gate
 from web.routes.watchlist import router as watchlist_router
 from web.routes.fids import router as fids_router
+from web.routes.assignments import router as assignments_router  # 2026-10-18: gate/baggage assignments (H2)
 from web.routes.airspace import router as airspace_router
 from web.routes.data_usage import router as data_usage_router
 from web.routes.webhooks import router as webhooks_router
@@ -102,6 +103,7 @@ app.add_middleware(
 
 app.include_router(watchlist_router)
 app.include_router(fids_router)
+app.include_router(assignments_router)
 app.include_router(airspace_router)
 app.include_router(data_usage_router)
 app.include_router(webhooks_router)
@@ -795,11 +797,18 @@ async def healthz() -> JSONResponse:
     # by a fixed 300 s check.
     push_covers = _failover.push_covers()
     feed_by_name = {f["feed_name"]: f for f in feeds}
+    # 2026-10-18 (H1): optional enrichment feeds (FIDS) are listed on their own
+    # and never decide status_val -- see ingest.failover.OPTIONAL_FEEDS.
+    optional_stale = []
 
     for f in feeds:
         name = f["feed_name"]
         t = thresholds.get(name, 3600)
         age = now - (f["fetched_at"] or 0) if f["fetched_at"] else None
+        if _failover.is_optional(name):
+            if age is None or age > t or f.get("error"):
+                optional_stale.append(name)
+            continue
         if age is None or age > t:
             # Check if a healthy push source is covering this REST feed.
             push_name = push_covers.get(name)
@@ -822,6 +831,7 @@ async def healthz() -> JSONResponse:
     return JSONResponse({
         "status": status_val,
         "reason": reason,
+        "optional_stale": optional_stale,
         "snapshot_age_seconds": snapshot_age,
         "audit_count_24h": db.audit_count_24h(),
         "token_count_active": db.active_token_count(),
@@ -935,6 +945,8 @@ async def get_feeds() -> JSONResponse:
 
         result.append({
             "feed_name":              name,
+            # 2026-10-18 (H1): enrichment feed -- never changes /healthz status.
+            "optional":               _failover.is_optional(name),
             "fetched_at":             f["fetched_at"],
             "age_seconds":            age,
             "stale_threshold_seconds": threshold,

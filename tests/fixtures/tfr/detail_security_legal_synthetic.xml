@@ -1,0 +1,18 @@
+<XNOTAM-Update version="0.1" origin="" created="2026-10-18T15:33:18">
+  <Group><Add><Not>
+    <NotUid><txtNameAcctFac>FDC</txtNameAcctFac><dateIndexYear>2026</dateIndexYear><noSeqNo>9001</noSeqNo><txtLocalName>synthetic legal</txtLocalName></NotUid>
+    <dateEffective>2026-10-20T12:01:00</dateEffective>
+    <dateExpire>2027-10-20T12:00:00</dateExpire>
+    <codeTimeZone>EDT</codeTimeZone>
+    <AffLocGroup><txtNameCity>Synthetic Beach</txtNameCity><txtNameUSState>FLORIDA</txtNameUSState></AffLocGroup>
+    <codeFacility>ZMA</codeFacility>
+    <TfrNot><codeType>99.7</codeType>
+      <TFRAreaGroup>
+        <aseTFRArea><txtName>Area A</txtName><ScheduleGroup><dateEffective>2026-10-20T12:01:00</dateEffective><dateExpire>2027-10-20T12:00:00</dateExpire></ScheduleGroup></aseTFRArea>
+        <abdMergedArea><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.40666667N</geoLat><geoLong>081.42000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.40443376N</geoLat><geoLong>081.41067368W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.39833333N</geoLat><geoLong>081.40384633W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.39000000N</geoLat><geoLong>081.40134735W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.38166667N</geoLat><geoLong>081.40384633W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.37556624N</geoLat><geoLong>081.41067368W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.37333333N</geoLat><geoLong>081.42000000W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.37556624N</geoLat><geoLong>081.42932632W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.38166667N</geoLat><geoLong>081.43615367W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.39000000N</geoLat><geoLong>081.43865265W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.39833333N</geoLat><geoLong>081.43615367W</geoLong></Avx><Avx><codeDatum>WGE</codeDatum><codeType>GRC</codeType><geoLat>30.40443376N</geoLat><geoLong>081.42932632W</geoLong></Avx></abdMergedArea>
+        <aseShapes><Abd><Avx><codeType>CIR</codeType><geoLat>30.39000000N</geoLat><geoLong>081.42000000W</geoLong><valRadiusArc>1.0</valRadiusArc><uomRadiusArc>NM</uomRadiusArc></Avx></Abd></aseShapes>
+      </TFRAreaGroup>
+    </TfrNot>
+    <txtDescrTraditional>!FDC 6/9001 ZMA FL..AIRSPACE SYNTHETIC BEACH, FL..TEMPORARY FLIGHT RESTRICTIONS. PURSUANT TO 49 USC 40103(B)(3), THE FEDERAL AVIATION ADMINISTRATION (FAA) CLASSIFIES THE AIRSPACE DEFINED IN THIS NOTAM AS 'NTL DEFENSE AIRSPACE'. PURSUANT TO 14 CFR 99.7, SPECIAL SECURITY INSTRUCTIONS, ALL ACFT FLT OPS ARE PROHIBITED WI AN AREA DEFINED AS 1NM RADIUS. UAS OPR ARE WARNED THAT PURSUANT TO 10 U.S.C. SECTION 130I AND THE PRESIDENTIAL THREAT PROTECTION ACT, SECURITY ACTION MAY BE TAKEN.</txtDescrTraditional>
+  </Not></Add></Group>
+</XNOTAM-Update>

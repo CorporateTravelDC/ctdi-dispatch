@@ -70,7 +70,7 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 | Topic | Publishers | Priority |
 |---|---|---|
 | `hot-alerts` | `aim_parser` VIP NOTAM (p5); pusher VIP TFR (`hot_push`, p5) and wind ≥ 30 kt CPS NO-GO (`hot_push`, p5); pusher VIP window correction (p4, once, no Pushover; next relay); `route_impact.py` (DC-area VIP TFRs, p5, once per VIP set); ~~`tfr_enrichment.py` (VIP TFR, p5)~~ (corrected 2026-10-15: no VIP push since 2026-10-14, see §6); `board_sweep.py`; `lockdown.sh` (p4); `threat-initiate.sh` (p5); `watchdog.sh` (p5 "System Restart Needed (manual run required)", once per distinct problem; p4 "Full Stack Restart" on a manual `--allow-system-restart` run); ~~`runner-health-watchdog.sh` (p4/p5, also `X-Email`); `net-failover-watchdog.sh`~~ (corrected 2026-10-15: both publish to `ops-health` only; the runner watchdog moved off `hot-alerts` on 2026-09-05) | 4–5 |
-| `tfr-alert` | `fdps_parser` Marine One / VIP callsign (p5, title "POTUS MOVEMENT"); pusher VIP TFR (p5, with `hot-alerts`); pusher VIP window correction (p4, next relay); ~~`tfr_enrichment.py`~~ (corrected 2026-10-15: no longer publishes) | 4–5 |
+| `tfr-alert` | `fdps_parser` Marine One / VIP callsign (p5, title "POTUS MOVEMENT"); pusher ~~VIP TFR~~ VIP-class TFR (2026-10-18, next relay, tiered: type VIP, or type SECURITY with presidential language, at a protected residence, or in ZDC -- p5, with `hot-alerts`; type SECURITY outside ZDC with only the 49 USC 40103(b)(3) / 14 CFR 99.7 basis -- **p3, `tfr-alert` only**, no `hot-alerts`, no Pushover; title "VIP TFR: <id>" or "SECURITY TFR: <id>"); pusher VIP window correction (p4, next relay); pusher 6/0100 widening correction (p4, once, marker `tfr-security-widen-2026-10-18`, next relay); ~~`tfr_enrichment.py`~~ (corrected 2026-10-15: no longer publishes) | 4–5 |
 | `nas-alerts` | `aim_parser` residual NOTAMs only (p3, `aim_parser.py:482`) | 3 |
 | `wx-alerts` | `itws_parser` (p4, `:772`); pusher METAR wind/direction change (p3) and a routine update at most hourly while any primary station has wind | 3–4 |
 | `tbfm-alerts` / `tbfm-<zone>` | `tbfm_parser` via `fire_family_alert` (`:497`) | 2 (+1 escalating) |
@@ -79,7 +79,7 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 | `itws-alerts` / `itws-<zone>` | `itws_parser` (`:778`) | 4 (+1) |
 | `aim_fns-alerts` / `aim_fns-<zone>` | `aim_parser` residual (`:490`) | 3 (+1) |
 | `stdds-alerts`, ~~`stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>`~~ (corrected 2026-10-15: since 2026-10-13 every tracked airport fires its zone topic `stdds-<zone>`, so DCA/IAD/BWI now reach `stdds-zdc`; per-airport topics exist only in the priority zones zdc, zny, zatl, zob: `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`, `-atl`, `-cle`/`-pit`/`-dtw`) | `smes_parser` (`:407` PCT, ~~`:607`~~ `:623` surface, ~~`:1031`~~ `:1048` safety — silenced, ~~`:1283`~~ `:1310` taxi) | 1–3 |
-| `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`, inbound tracker `inbound_*`, `fdps_tail_change` / `tdes_tail_change` and their `_rejected` notes; §5); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`; 2026-10-16: `acars_watcher`'s ACARS Drama Jumpseat thread polls only the LADD-filtered list from `GET /api/v1/watchlist/registrations` -- ~~every watched registration from `GET /api/v1/watchlist`~~ -- and polls nothing when that route is unavailable; local UDP and airframes.io matching keep the full set) | 2–4 |
+| `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`, inbound tracker `inbound_*`, `fdps_tail_change` / `tdes_tail_change` and their `_rejected` notes; §5); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`; 2026-10-16: `acars_watcher`'s ACARS Drama Jumpseat thread polls only the LADD-filtered list from `GET /api/v1/watchlist/registrations` -- ~~every watched registration from `GET /api/v1/watchlist`~~ -- and polls nothing when that route is unavailable; local UDP and airframes.io matching keep the full set); ingest ACARS flag pushes `acars_tfr_area` / `acars_diversion` for watched flights (2026-10-18, next relay; p4, p5 when VIP-listed; §5) | ~~2–4~~ 2–5 |
 | `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`~~; by a code bug it also sends vessel and drone retries here, §4~~ (corrected 2026-10-16: train retries only; vessel retries moved to `vessel-alerts` on 2026-10-15 and drone retries to `drone-alerts` on 2026-10-16, `pusher/main.py:641`)) | 2–4 |
 | `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ `:708`); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ `web/routes/watchlist.py:511`, batch map `:600`). No vessel watches and no AIS source live, so silent by design | 2–3 |
 | `drone-alerts` | (added 2026-10-16) `watchlist_event_hit` drone branch (`shared/watchlist.py`, `UAS ` title, "Drone <id>" dispatch copy); web watchlist remove map (`web/routes/watchlist.py`, no drone add route exists); pusher retries (`push_watchlist_retries`); `utm_watcher` Remote ID hits (`NTFY_TOPIC` default, was `flight-alerts`). Until 2026-10-16 drone events fell through to the train branch and reached `train-alerts` with `TRN ` titles. Not in `ntfy_push.TOPIC_CLICK`, the runner's `ntfy_stream` default list or `NtfyFeedView` (neither is `vessel-alerts`), so a tap opens the runner root. No drone watches live | 2–4 |
@@ -193,13 +193,20 @@ decision; re-checked 2026-10-15). Non-DC airports fire one priority lower
 (floor 1). SMES OOOI watchlist events: `_SMES_OOOI_DEDUP` (1800 s); since
 1491bf5a they match by leg (departure events at the watch's origin, arrival
 events at its destination, inside the instance window). TDES/TDLS watchlist
-(`tdes_departure`, `tdls_clearance`): 1800 s.
+(`tdes_departure`, `tdls_clearance`): 1800 s. ~~The TDES dedup key was
+`tdes:{entry}:{event_time}:{parking_gate}`~~ (2026-10-18, next relay: leg +
+gate only, so a re-clearance at the same gate does not push again; a
+placeholder gate `G` / `N/A` is not shown as a gate; the TDES gate is also
+stored as SWIM departure-gate evidence, see "Gate / baggage assignments" in
+section 5).
 
 ## 4. Pusher (`src/pusher/main.py`, 30 s loop)
 
 | Function | Topic | Priority |
 |---|---|---|
-| `push_vip_tfrs` | `tfr-alert` + `hot-alerts`, each via `hot_push` (ntfy + Pushover) | 5 |
+| `push_vip_tfrs` (2026-10-18, next relay: every row with `tfrs.vip_push_reason` non-NULL, or a pre-classifier `is_vip` row; SECURITY-only rows wait for the cutover marker below, 6/0100 for its correction) | hot tier (`vip_type`, `vip_text`, `security_presidential`, `security_residence`, `security_zdc`): `tfr-alert` + `hot-alerts`, each via `hot_push` (ntfy + Pushover); legal-basis-only tier (`security_legal_basis` alone): `tfr-alert`, plain ntfy | 5 / 3 |
+| `tfr_security_cutover` (2026-10-18, next relay; once ever, marker `pusher-tfr-security-cutover-2026-10-18`) | none: once a poller run after the pusher start has written the 10-18 classification (`raw_json.class_v`), records every active SECURITY TFR except 6/0100 as already alerted, without pushing (41 SECURITY TFRs in the list on 2026-10-18, some from 2015); gives up waiting after 2 h | — |
+| `tfr_security_widen_corrections` (2026-10-18, next relay; once ever, marker `tfr-security-widen-2026-10-18`) | `tfr-alert` + `hot-alerts`, plain ntfy, no Pushover: one "CORRECTED:" alert for 6/0100 Palm Beach once it is in the hot tier (`security_residence`) and its window is known; recorded in the TFR dedup; dropped if it leaves the list; gives up after 24 h | 4 |
 | `vip_cutover_baseline` (2026-10-14, once ever, marker `pusher-vip-cutover-2026-10-14`, present live) | none: recorded the VIP TFRs active at cutover as already alerted, without pushing | — |
 | `vip_window_corrections` (next relay; once ever, marker `pusher-vip-window-fix-2026-10-15`) | `tfr-alert` + `hot-alerts`, plain ntfy, no Pushover | 4 |
 | `push_cps_update` | `cps` | ~~3~~ (corrected 2026-10-15: 3 / 4 / 5 for GREEN / YELLOW / RED; no Pushover) |
@@ -227,6 +234,42 @@ that was pushed with "? to ?" and is still active one alert headed
 "CORRECTED TIMES" at p4 on `tfr-alert` + `hot-alerts`, without Pushover. It
 waits for the poller to fill the window, drops TFRs that expired or left the
 list, gives up after 2 h, then writes its marker. The TFR dedup is untouched.
+
+**TFR widening (2026-10-18, next relay; operator decision).** 6/0100 Palm
+Beach (type SECURITY, 'NTL DEFENSE AIRSPACE', 49 USC 40103(b)(3), 2026-10-20 to
+2027-10-20) was stored `is_vip=0` with no window and never pushed. Now
+`poller/fetchers/tfr.py` fetches the FAA detail record for every VIP **and
+SECURITY** TFR (once per NOTAM + FAA mod time; a failed refresh keeps the last
+parsed detail) and stores the window, the area windows and the area geometry
+(`raw_json.areas_geo`, `common/tfr_geo.py`). The push is tiered (operator,
+2026-10-18). Hot tier, VIP-class p5 with `hot-alerts` and Pushover: type VIP
+(`vip_type`); type SECURITY whose list or detail text carries presidential
+language (`security_presidential`; the "PRESIDENTIAL THREAT PROTECTION ACT"
+UAS boilerplate is ignored); type SECURITY at a protected residence
+(`security_residence`: `PROTECTED_RESIDENCES` in `poller/fetchers/tfr.py`,
+maintained by the operator, seeded with Palm Beach, FL and Bedminster, NJ;
+matched on the detail record's city + state, the list description, or an area
+centre within 3 nm, no external lookup); type SECURITY whose FAA facility is ZDC
+(`security_zdc`: stadiums and events included, for their effect on
+DCA/IAD/BWI); and, as before, any other type whose list text matches a VIP
+pattern (`vip_text`). P3 tier, `tfr-alert` only: type SECURITY whose only
+reason is the legal basis -- 49 USC 40103(b)(3), 'NTL/NATIONAL DEFENSE
+AIRSPACE', 14 CFR 99.7 or "99.7 SPECIAL SECURITY INSTRUCTIONS" (TfrNot/codeType
+99.7 counts; `security_legal_basis`). A SECURITY TFR with none of these (a
+stadium outside ZDC with no legal-basis text) gets the window treatment only.
+The first reason is stored in `tfrs.vip_push_reason` (migration 0081), all of
+them in `raw_json.vip_push_reasons`. `is_vip` keeps its old meaning for the
+briefs and route impact. ZDC is decided by the record's own facility; only a
+record with no ARTCC facility (nationwide FDC NOTAMs) falls back to a coarse,
+over-inclusive box around ZDC on its area centres, then to the state/city text
+(DC, MD, VA, DE). Live check 2026-10-18 18:46Z: every one of 10 sampled
+SECURITY TFRs cites 40103(b)(3) and 99.7, so almost every new SECURITY TFR
+nationwide pushes: at p3 on `tfr-alert` outside ZDC, at p5 inside ZDC or at a
+protected residence. Push text: "<VIP|SECURITY>
+TFR <id>: <FAA text>", a "Why:" line in words (absent for a plain type-VIP TFR,
+whose 10-14 text is unchanged), the UTC + ET window, and each area window when
+there is more than one or the one differs from the overall window. Dedup
+unchanged: TFR id + FAA text + FAA mod time.
 
 **Test alerts.** `poller/main.py:436-446` resolves the `push_test_alert`
 trigger as `success` whatever `send_test_alert` returns, so a failed send is
@@ -310,12 +353,72 @@ Other `watchlist_trigger` values in the code: `identity_resolved`,
 `identity_mismatch`, `identity_mismatch_reg`, `oooi_<phase>`,
 `oooi_in_inferred`, `oooi_off`, `oooi_seeded_at_add`, `diversion`,
 `fdps_fh`, `fdps_cl`, `fdps_th_approach`, `fdps_th_meterfix_approach`,
-`fdps_cancelled`, `fdps_destination_change`, `fdps_status`, `fids_update`,
+`fdps_cancelled`, `fdps_destination_change`, `fdps_status`, ~~`fids_update`~~ (retired 2026-10-18, next relay: replaced by `gate_assignment`; 21 of its 40 pushes in 30 days carried a FIDS status word),
 `smes_oooi`, `tdes_departure`, `tdls_clearance`, `tbfm_sequenced`,
 `tfms_*` (tmi, tmi_update, ooooi, departure, arrival, amendment, edct,
 reroute, flight_route, flight_create, flight_schedule_activate,
-flight_plan_cancellation, oceanic_report, track_approach), `acars_<type>`,
+flight_plan_cancellation, oceanic_report, track_approach), `acars_<type>` (2026-10-18, next relay: its detail carries `acars_flags`, see the next paragraph),
 `watchlist_proximity`, `train_sweep`, `vessel_position`.
+
+**Gate / baggage assignments (2026-10-18, next relay; operator decisions).**
+Trigger `gate_assignment`, p3, `flight-alerts` + `dispatch` through
+`watchlist_event_hit`. Evidence from SWIM TDES (`parkingGate`, departure; ingest),
+ACARS (airframes.io, Jumpseat, local -- the acars-watcher forwards parsed gate
+announcements to `POST /api/v1/gate-observations/acars`), the AeroAPI fallback
+and MWAA FIDS (poller) goes into `gate_baggage_observations` (migration 0079);
+`common/gate_assignments.py` resolves one value per leg, side and field --
+precedence SWIM > ACARS > AeroAPI > FIDS, a lower tier never replaces a live
+higher-tier value, same-tier disagreement is `conflicting`. The poller's flight
+sweep (`_check_flight_gates`) pushes a CHANGED, KNOWN resolved value: arrival
+gate (terminal in the text), arrival baggage claim, departure gate, each its own
+slot (`event_detail.slot`). Dedup: `PushDedup("gate_assignment")` per watch and
+slot, keyed on a hash of leg + side + field + value + status only (never a time
+or a source; a TDES clearance push that already named the gate marks the slot).
+No push for `unknown` or `conflicting`. The text carries the value, our status
+(`provisional` when not observed) and the source tier -- never a FIDS status
+word or time. LADD-listed legs are dropped before storage. AeroAPI: called only
+when no SWIM/ACARS value exists for a watched leg's arrival gate (or a non-DC
+baggage claim), at most twice per leg (~45 min before ETA, after ON), daily cap
+`AEROAPI_GATE_DAILY_CAP` (default 50), ledger `aeroapi_gate_calls`.
+~~FIDS `fids_update`: gate/baggage/status push from `_check_flight_fids`, read
+from the arrivals board even at the watch's origin~~ (2026-10-18: FIDS writes
+evidence only; the origin side reads the departures board).
+
+**ACARS type flags (2026-10-18, next relay).** `common/acars_flags.py`
+(byte-identical copy in `src/acars_watcher/`) labels each ACARS/VDL2 message,
+deterministically from label, sublabel, direction and text shape, with any of
+`oooi`, `eta`, `gate_assign`, `gate_request`, `baggage`, `weather`, `atis`,
+`cpdlc_adsc`, `maintenance`, `position_report`, `free_text`,
+`tfr_notam_mention`, `diversion`, `tfr_area`. The ingest writer
+(`local_airspace.py`) stores them in `acars_messages.acars_flags` (migration
+0081) and adds them as `acars_flags` to the detail of the `acars_<type>`
+events it already fires (same `flight-alerts` + `dispatch` topics; no new
+topic, no new push). `oooi` is a label only: it never asserts a phase, which
+stays with `update_watchlist_oooi_phase_authoritative` on the gated paths.
+TFR ties use the stored `tfrs.raw_json.areas_geo` (VIP and SECURITY TFRs only;
+other TFR types have no stored geometry, so only the text rule applies to
+them): `tfr_notam_mention` = the text names a TFR/NOTAM/restricted area, or
+DIVERT/HOLD with a position within 30 nm of an active TFR area; `tfr_area` = a
+watched flight's position report inside an active TFR area (lateral only).
+The acars-watcher adds the flags to its `flight-alerts` title in braces
+(`{oooi}`), and since 2026-10-18 reads the dumpvdl2-nested registration
+(`vdl2.avlc.acars.reg`), so local UDP matches can fire at all; its log lines
+carry counts and flags, never a registration.
+
+**ACARS flag pushes (2026-10-18, next relay).** For a WATCHED flight,
+`local_airspace._flag_pushes` turns two flags into `watchlist_event_hit` pushes
+(`flight-alerts` + `dispatch`): `acars_tfr_area` (position inside an active TFR
+area; body "<callsign> inside active TFR <id>" + the TFR's window, UTC + ET)
+and `acars_diversion` (body "<callsign> ACARS: diverting to <dest>", or
+"destination not stated"). Priority 4, or 5 when the entry is VIP-listed
+(`shared/vip_listed.py`: a `permanent_flights.json` entry whose route_name is
+VC-25A, VC-25B, C-32, C-37, C-40, C-40C or E-4B, or whose notes mention
+AF1/AF2/SAM/Nightwatch; read from the file where it is mounted, else from the
+permanent-tier `watchlist_entries` row the poller copies from it -- ingest-core
+does not mount the file). Dedup on content only, `PushDedup("acars_flag_push")`:
+(watch id, TFR id) and (watch id, new destination). The body and detail carry
+no position, registration, hex or message text. Unwatched flights never push;
+OOOI phases are untouched.
 
 ## 6. Poller skills
 
@@ -349,7 +452,7 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `claude-login-expiry-check.py` (user timer `corporatetraveldc-claude-login-expiry.timer`, daily 13:00Z / 09:00 ET; 2026-10-15) | `ops-health` p4, ONCE per login, at the first daily check with <= 48 h left (so 24-48 h before the Claude Code refresh token expires; 28-day lifetime from sign-in, not extended by renewals); key = the login's own expiry, cleared by a new sign-in. Reads only `refreshTokenExpiresAt`, never a token | `--status`; log `/var/lib/corporatetraveldc/claude-login-expiry/check.log` |
 | `team-liveness.sh` authority hold (root timer, hourly; 2026-10-15) | `ops-health` p4, once per hold episode (marker `team-liveness/authority-hold`, cleared when nothing is held): an inert action was due but the network was not verifiably live and no lockdown + signed `liveness` approval existed; nothing changed | `team-liveness.sh --status`; `board-signer-ctl.sh liveness-approval NAME ACTION SINCE` |
 | `demo-isolation-check.sh` (run by `scheduled-integrity-sweep.sh`, 15 min; 2026-10-16) | `ops-health` p4 "DEMO ISOLATION CHECK FAILED", every sweep while the finding stands (no cooldown: the sweep's own OK/FAILED state file is the record) | Live demo/production database boundary: a RUNNING demo container (`corporatetraveldc-demo-api`, `corporatetraveldc-runner-demo`, or any container with `DISPATCH_ROLE=demo`) mounting `corporatetraveldc-pgsql-sock`, `/var/lib/corporatetraveldc` or `/etc/corporatetraveldc/svc`, or carrying the env NAME `DISPATCH_PG_PASSWORD`; a demo application session or a `demo`/`demo_owner` role on the production instance; on the demo instance a superuser other than `demo_owner`, a `dispatch` role, or a table outside the six demo tables (+ `schema_migrations`). Findings name containers, roles and tables, never a value. A demo instance that is not running is reported, not failed (relay 1). Also fails the sweep (exit 1, state file `FAILED`) |
-| `healthcheck-ping.sh` (user timer `corporatetraveldc-healthcheck-ping.timer`, 5 min; 2026-10-15) | **external**: healthchecks.io (not ntfy). Success ping when local `/healthz` is ok, `/fail` otherwise; healthchecks.io itself alerts the operator when pings stop, which covers the box being offline (ntfy cannot: it runs on the box). Set the check's period 5 min, grace 10 min | ping URL in `~/.secrets/healthchecks_ping.url` (0600, untracked), passed to curl on stdin; `--dry-run` |
+| `healthcheck-ping.sh` (user timer `corporatetraveldc-healthcheck-ping.timer`, 5 min; 2026-10-15) | **external**: healthchecks.io (not ntfy). Success ping when local `/healthz` is ok, `/fail` otherwise (2026-10-18, next relay: optional enrichment feeds -- `dca_fids`, `iad_fids`, `ingest.failover.OPTIONAL_FEEDS` -- go to `/healthz`'s own `optional_stale` list and never change its status, so a stale MWAA scrape no longer sends `/fail`; `/api/v1/feeds` rows carry `optional`, and `ingest_feed_watch` reads it); healthchecks.io itself alerts the operator when pings stop, which covers the box being offline (ntfy cannot: it runs on the box). Set the check's period 5 min, grace 10 min | ping URL in `~/.secrets/healthchecks_ping.url` (0600, untracked), passed to curl on stdin; `--dry-run` |
 | `thermal-ingest-guard.py` | p5 LOCKDOWN shed, ~~p4 tier-1 shed,~~ p5 RESTORE FAILED, p3 verified restore | (corrected 2026-10-15: since 2026-10-13 it is a load guard: LOCKDOWN only at load1 ≥ 40, and temperature never sheds, so the tier-1 shed and its p4 alert can no longer fire.) The action silences other publishers; see `DATA_SOURCES.md` §9 |
 | `runner-health-watchdog.sh` (5 min) | ~~`hot-alerts`~~ `ops-health` p4 auto-restart / p5 failed restart (30-min cooldown), `X-Email` relay | skips at guard tier 2 |
 | `failover-kickover-guardrail.py` (5 min) | ~~p4,~~ p5 on push+REST double failure for `nws`/`notam` (force-fires a `refresh_feed` trigger) | (corrected 2026-10-15: there is one alert, p5; the p4 was never sent, it is only the helper's unused default. Coverage is `nws`, `notam` and, since 2026-09-06, `amtrak`. Since 2026-10-14 the forced trigger is written into the poller's `corporatetraveldc-triggers` volume; the host `/run` directory it used before was never seen by the poller, so its triggers had been dead since 2026-09-18. Live 2026-10-15: no `trigger_log` row left unresolved) |

@@ -4,7 +4,8 @@
 
 Only the caller's own `registration` field ever set it, so three ordinary
 adds lost it: a hex-only add (never reverse-resolved), a body that called
-it "tail" (FIDS's name; pydantic dropped it), and an add with no identity
+it "tail" (FIDS's name; pydantic dropped it -- 2026-10-18: now deliberately
+ignored, a FIDS tail is never stored), and an add with no identity
 while the FAA plan found through codeshare_map (GJS4520) carried both hex
 and tail. Identities here are synthetic (hex 000001, tail N000TS).
 """
@@ -49,11 +50,14 @@ def test_hex_only_add_reverse_resolves_the_tail(route):
     assert _stored(out["id"])["registration"] == "N000TS"
 
 
-def test_tail_alias_is_accepted(route):
+def test_tail_alias_is_never_stored(route):
+    # 2026-10-18 (operator): "tail" is FIDS's name for the airframe; a FIDS tail must
+    # never become a stored registration (tails are SWIM-only). Was: accepted as an alias.
     out = _add(route, identifier="ZZZ4521", tail="n000ts", origin="DCA", destination="ORD")
     stored = _stored(out["id"])
-    assert stored["registration"] == "N000TS"
-    assert stored["hex_id"] == "000001"          # existing registry tail->hex path, now reachable
+    assert stored["registration"] is None
+    assert stored["hex_id"] is None
+    assert out["ignored_fields"] == ["tail"]
 
 
 def test_codeshare_fdps_plan_supplies_hex_and_tail_with_provenance(route):
@@ -83,4 +87,5 @@ def test_batch_add_resolves_tail_too(route):
                                              {"identifier": "ZZZ4524", "tail": "N000TS"}])
     asyncio.run(route.add_flight_watchlist_batch(body, tier=Tier.ADMIN))
     regs = {e["identifier"]: e["registration"] for e in db.get_watchlist_entries(entry_type="flight")}
-    assert regs["ZZZ4523"] == "N000TS" and regs["ZZZ4524"] == "N000TS"
+    # hex-only add still reverse-resolves; a `tail` is never stored (2026-10-18)
+    assert regs["ZZZ4523"] == "N000TS" and regs["ZZZ4524"] is None

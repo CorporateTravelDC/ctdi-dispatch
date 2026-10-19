@@ -54,6 +54,19 @@ REST_FALLBACKS: dict[str, dict] = {
     "amtrak": {"push_feed": "amtrak", "push_max_age": 660},
 }
 
+# 2026-10-18 (operator, gate batch; Phase A hard gate H1): enrichment feeds whose
+# age or error never changes /healthz status. They are reported in their own
+# `optional_stale` list there, flagged `optional: true` in /api/v1/feeds, and
+# ingest_feed_watch reads that flag. MWAA FIDS supplies gate/terminal/baggage
+# only; a stale scrape used to send healthchecks.io /fail (healthcheck-ping
+# fails on any status but "ok"), telling the dead-man the box was down.
+OPTIONAL_FEEDS: frozenset[str] = frozenset({"dca_fids", "iad_fids"})
+
+
+def is_optional(feed_name: str) -> bool:
+    return feed_name in OPTIONAL_FEEDS
+
+
 # Status-page floor for a push heartbeat row (web stale_thresholds and the
 # push_covered window). The web never suppresses a poll, so it tolerates
 # more than the poller's 90 s gate -- one missed guard sample must not

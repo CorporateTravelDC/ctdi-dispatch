@@ -1739,10 +1739,35 @@ def write_flight_event(parsed: dict) -> bool:
         log.debug("fdps: flight_event extras update failed for %s (non-fatal): %s",
                   flight_id, e)
 
-    log.info("fdps: wrote flight_event for %s (%s -> %s, source=%s)",
-             parsed.get("callsign") or parsed.get("gufi"),
-             parsed.get("origin"), parsed.get("destination"), parsed.get("source"))
+    _note_flight_event_written(parsed.get("source"))
+    log.debug("fdps: wrote flight_event (%s -> %s, source=%s)",
+              parsed.get("origin"), parsed.get("destination"), parsed.get("source"))
     return True
+
+
+# 2026-10-18 (leak hygiene): the per-message INFO line "fdps: wrote flight_event
+# for <callsign or GUFI> ..." put a registration in the journal on every GA / N-number
+# flight (their callsign IS the tail), several per second. Now: the per-message line
+# is DEBUG and names no aircraft; INFO gets one count summary per
+# FDPS_WRITE_SUMMARY_S. scripts/leak-guard/transcript_leak_scan.py flags the old
+# line's shape if it ever shows up in a transcript again.
+FDPS_WRITE_SUMMARY_S = 300
+_write_counts: dict = {}
+_write_window_start = time.monotonic()
+
+
+def _note_flight_event_written(source: str | None) -> None:
+    global _write_window_start
+    key = source or "unknown"
+    _write_counts[key] = _write_counts.get(key, 0) + 1
+    now = time.monotonic()
+    if now - _write_window_start >= FDPS_WRITE_SUMMARY_S:
+        total = sum(_write_counts.values())
+        by_source = ", ".join(f"{k}={v}" for k, v in sorted(_write_counts.items()))
+        log.info("fdps: wrote %d flight_event(s) in the last %ds (%s)",
+                 total, int(now - _write_window_start), by_source)
+        _write_counts.clear()
+        _write_window_start = now
 
 
 # ── Marine One detection ──────────────────────────────────────────────────────

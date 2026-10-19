@@ -289,9 +289,20 @@ def init_db_all() -> None:
 # ── Feed state helpers ─────────────────────────────────────────────────────────
 
 def upsert_feed(feed_name: str, fetched_at: float, error: str | None,
-                payload_hash: str | None = None) -> None:
+                payload_hash: str | None = None, *, keep_fetched_at: bool = False) -> None:
+    """keep_fetched_at (2026-10-18, FIDS): on an error, record it without
+    advancing an existing row's fetched_at, so the row's age keeps measuring the
+    last SUCCESSFUL fetch (a new row still takes fetched_at)."""
     with conn() as c:
-        if error:
+        if error and keep_fetched_at:
+            c.execute("""
+                INSERT INTO feed_state (feed_name, fetched_at, error, consecutive_failures, payload_hash)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(feed_name) DO UPDATE SET
+                    error=excluded.error,
+                    consecutive_failures=feed_state.consecutive_failures+1
+            """, (feed_name, fetched_at, error, payload_hash))
+        elif error:
             c.execute("""
                 INSERT INTO feed_state (feed_name, fetched_at, error, consecutive_failures, payload_hash)
                 VALUES (?, ?, ?, 1, ?)
@@ -1062,17 +1073,23 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
 
 def upsert_tfr(tfr_id: str, raw_json: str, is_vip: bool,
                effective_start: float | None = None,
-               effective_end: float | None = None) -> None:
+               effective_end: float | None = None,
+               vip_push_reason: str | None = None) -> None:
+    """vip_push_reason (2026-10-18, migration 0081 / SQLite v50): why the TFR is
+    VIP-class for the pusher (poller.fetchers.tfr.REASON_ORDER), NULL when it is not.
+    is_vip keeps its old meaning (FAA type VIP or a VIP text pattern)."""
     with conn() as c:
         c.execute("""
-            INSERT INTO tfrs (tfr_id, raw_json, is_vip, effective_start, effective_end)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO tfrs (tfr_id, raw_json, is_vip, effective_start, effective_end,
+                              vip_push_reason)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(tfr_id) DO UPDATE SET
                 raw_json=excluded.raw_json,
                 is_vip=excluded.is_vip,
                 effective_start=excluded.effective_start,
-                effective_end=excluded.effective_end
-        """, (tfr_id, raw_json, int(is_vip), effective_start, effective_end))
+                effective_end=excluded.effective_end,
+                vip_push_reason=excluded.vip_push_reason
+        """, (tfr_id, raw_json, int(is_vip), effective_start, effective_end, vip_push_reason))
 
 
 def get_active_tfrs() -> list[dict]:
@@ -3382,17 +3399,21 @@ def insert_acars_message(received_at: str, freq_mhz: float | None,
                          ack: str | None, mode: str | None,
                          msg_text: str | None, raw: str | None,
                          watchlist_hit: int = 0,
-                         watchlist_entry_id: str | None = None) -> None:
+                         watchlist_entry_id: str | None = None,
+                         acars_flags: str | None = None) -> None:
+    """acars_flags (2026-10-18, migration 0081 / SQLite v50): comma-joined type
+    flags from common.acars_flags.to_column(), NULL when none."""
     with conn() as c:
         c.execute("""
             INSERT INTO acars_messages
                 (received_at, freq_mhz, icao_hex, tail, flight, msg_type,
                  label, block_id, ack, mode, msg_text, raw,
-                 watchlist_hit, watchlist_entry_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 watchlist_hit, watchlist_entry_id, acars_flags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (received_at, freq_mhz, icao_hex, tail, flight, msg_type,
               label, block_id, ack, mode, msg_text, raw,
-              watchlist_hit, watchlist_entry_id))
+              watchlist_hit, watchlist_entry_id, acars_flags))
+
 
 
 def insert_local_airspace_alert(fired_at: str, alert_type: str,
@@ -6284,7 +6305,10 @@ _OOOI_SOURCE_PRIORITY = {"fids": -1, "adsb": 0, "tbfm": 1, "tfms_airline": 2, "t
 # renumbering (which would silently re-rank existing locks).
 _OOOI_SOURCE_TIER = {
     # Tier 40 -- SWIM. The validator of record.
-    "fdps": 40, "swim_fids": 40, "tbfm": 40, "tfms": 40, "smes": 40,
+    # 2026-10-18: "swim_fids" removed -- an unused SWIM-tier name the exact
+    # source=="fids" deny did not cover (Phase A #13, latent bypass). TFDM gets
+    # its own name when it exists. Any source containing "fids" is now denied.
+    "fdps": 40, "tbfm": 40, "tfms": 40, "smes": 40,
     # 2026-10-05: TFMS-carried AIRLINE-POSTED OOOI times, split from "tfms".
     # Same tier (so the lock rules are unchanged) but never allowed to assert
     # a milestone a SWIM surface observation covers -- see the rule in
@@ -6381,8 +6405,10 @@ def _oooi_authority_check(phase: str, source: str, lock: dict) -> tuple[bool, st
     # caller that ever passed source="fids" (poller._check_flight_fids) has had
     # its phase-promotion removed; deny here too so no future caller can
     # reintroduce the false-early-landing path an airport display created.
-    if source == "fids":
-        return False, f"DENY fids: enrichment-only, never OOOI-authoritative (phase={phase})"
+    # 2026-10-18: any source NAME containing "fids" (was: exactly "fids"), so a
+    # renamed or prefixed FIDS source ("swim_fids", "mwaa_fids") cannot slip past.
+    if "fids" in (source or "").lower():
+        return False, f"DENY {source}: FIDS is enrichment-only, never OOOI-authoritative (phase={phase})"
 
     # ADS-B is never the authority for ON or IN (operator directive
     # 2026-10-05, JZA825: the aircraft was still at 8,650 ft when the airline
@@ -8114,6 +8140,41 @@ def init_db_v47() -> None:
             c.execute("ALTER TABLE nas_programs ADD COLUMN source TEXT")
         c.execute(f"UPDATE nas_programs SET source = 'rest' "
                   f"WHERE source IS NULL AND {NAS_REST_SHAPE_SQL}")
+
+
+# ── TFR push reason + ACARS flags -- v50, 2026-10-18 (pg_schema/0081) ───────
+# v48/v49 are left free for the gate/baggage batch (pg_schema/0079-0080) built
+# alongside this one; init_db_all() sorts by number, so the gap is harmless.
+#
+# tfrs.vip_push_reason: why poller.fetchers.tfr classed the TFR VIP-class for
+#   the pusher (vip_type | vip_text | security_presidential | security_zdc |
+#   security_legal_basis), NULL when it is not. is_vip is unchanged.
+# acars_messages.acars_flags: comma-separated message-type flags from
+#   acars_watcher.acars_flags (oooi, eta, gate_assign, ...), NULL on rows written
+#   before 10-18. Filter with (',' || acars_flags || ',') LIKE '%,<flag>,%'.
+def init_db_v50() -> None:
+    """Apply v50 schema -- tfrs.vip_push_reason, acars_messages.acars_flags."""
+    with conn() as c:
+        for table, col in (("tfrs", "vip_push_reason"), ("acars_messages", "acars_flags")):
+            cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+            if cols and col not in cols:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+
+
+# ── gate / baggage assignments -- v48, 2026-10-18 (gate batch; pg_schema/0079) ─
+# gate_baggage_observations / _assignments / _assignment_history and the
+# aeroapi_gate_calls ledger. The DDL lives with its only writer,
+# common.gate_assignments (_SQLITE_DDL), which also runs it lazily on SQLite.
+def init_db_v48() -> None:
+    """Apply v48 schema -- gate/baggage assignment tables (SQLite twin of 0079)."""
+    from common import gate_assignments
+    gate_assignments.ensure_tables()
+
+
+def prune_gate_baggage(days: int = 120) -> int:
+    """Gate/baggage evidence, resolved state, history and the AeroAPI ledger."""
+    from common import gate_assignments
+    return gate_assignments.prune(days)
 
 
 def cifp_meta_set(key: str, value: str) -> None:

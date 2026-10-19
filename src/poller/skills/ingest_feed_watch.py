@@ -111,14 +111,22 @@ def run_check() -> tuple[str, list[str]]:
     will never change without an operator-side external action:
       - feed error "awaiting_credentials" (eurocontrol/jasdat as of
         2026-08-09) -- pending external registration, not a degradation.
-      - dca_fids/iad_fids in the /healthz stale-feed list -- the known
-        MWAA-scrape marginal-freshness quirk (187s vs a 180s threshold),
-        already understood and not urgent (see this session's feed-health
-        review). Any OTHER feed_name appearing in that same reason string
-        still counts as a real, novel problem.
+      - optional feeds (/api/v1/feeds `optional: true`, 2026-10-18 --
+        ingest.failover.OPTIONAL_FEEDS, today dca_fids/iad_fids) in the
+        /healthz stale list. /healthz no longer puts them there (they go
+        to its own `optional_stale` list); the flag read here keeps an
+        older web image from paging on them. Their fetch ERRORS still
+        count (labelled optional) -- that is the honest FIDS outage alarm.
+        Any OTHER feed_name in that reason string is a real, novel problem.
     """
     problems: list[str] = []
-    _KNOWN_STALE_FEEDS = {"dca_fids", "iad_fids"}
+
+    try:
+        feeds = _check_feeds()
+    except Exception as e:
+        feeds = []
+        problems.append(f"/api/v1/feeds unreachable: {e}")
+    optional = {(f.get("feed_name") or f.get("name")) for f in feeds if f.get("optional")}
 
     try:
         hz = _check_healthz()
@@ -129,22 +137,17 @@ def run_check() -> tuple[str, list[str]]:
     if hz is not None and hz.get("status") != "ok":
         reason = hz.get("reason") or ""
         stale_named = [s.strip() for s in reason.replace("Stale feeds:", "").split(",") if s.strip()]
-        novel_stale = [s for s in stale_named if s not in _KNOWN_STALE_FEEDS]
+        novel_stale = [s for s in stale_named if s not in optional]
         if novel_stale:
             problems.append(f"platform health degraded: stale feed(s) {', '.join(novel_stale)}")
-
-    try:
-        feeds = _check_feeds()
-    except Exception as e:
-        feeds = []
-        problems.append(f"/api/v1/feeds unreachable: {e}")
 
     for f in feeds:
         name = f.get("feed_name") or f.get("name")
         error = f.get("display_error") if "display_error" in f else f.get("error")
         push_covered = f.get("push_covered")
         if error and not push_covered and error != "awaiting_credentials":
-            problems.append(f"feed '{name}': {error}")
+            tag = " (optional enrichment feed)" if name in optional else ""
+            problems.append(f"feed '{name}'{tag}: {error}")
 
     if not _check_ntfy():
         problems.append("ntfy /v1/health reports unhealthy or unreachable")

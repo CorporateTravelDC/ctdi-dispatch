@@ -18,9 +18,41 @@ tail or identity source either. Tails come from SWIM only: FDPS, the TDES
 clearance linked to the FDPS plan, TBFM and TFMS. Two guardrail tests pin
 this: `tests/poller/test_fids_not_a_tail_source.py` and
 `tests/common/test_flight_instance.py::test_fids_is_not_a_tail_source`. The
-`tail` value MWAA puts on its board is still parsed and passed through
-unchanged in the single-flight response below. Nothing uses it to identify
-an aircraft or to detect a tail change.
+~~`tail` value MWAA puts on its board is still parsed and passed through
+unchanged in the single-flight response below.~~ (2026-10-18, next relay:
+no longer returned at all.) Nothing uses it to identify an aircraft or to
+detect a tail change.
+
+**2026-10-18 (operator decisions, next relay): gate / terminal / baggage
+ONLY.** FIDS never supplies a time, a status or a tail:
+
+- `lookup_arrival` / `lookup_departure` and `GET /api/v1/fids/{airport}/{flight}`
+  no longer return `status`, `scheduled`, `estimated`, `remaining` or `tail`;
+  the resolver's website tier no longer returns `status` / `scheduled` nor
+  filters on the FIDS status; `scripts/hub_arrivals_lookup.py` likewise.
+- The published time is used in one place only, `airport_fids.match_leg()`,
+  to pick the row that belongs to a SWIM/TFMS-verified leg inside that leg's
+  own window. Never stored, logged or shown.
+- FIDS is the LOWEST gate tier (SWIM > ACARS > AeroAPI > FIDS) and the only
+  DC carousel source (plus proven ACARS carousel formats). The poller's
+  `_check_flight_fids` writes evidence to `gate_baggage_observations`
+  (model and rules: the `src/common/gate_assignments.py` docstring); pushes come from the resolved
+  assignment (`gate_assignment`), never from FIDS directly (`fids_update` is
+  retired). At a watch's ORIGIN it now reads the DEPARTURES board and only
+  the departure gate (it read that airport's arrivals board for the flight
+  number, i.e. another leg's gate on an out-and-back).
+- Outage visibility: a cached payload older than `FIDS_MAX_STALE_S` (900 s)
+  is never served; `run_for` records every failed fetch in `feed_state.error`
+  even while a cache within the cap is served, without advancing
+  `fetched_at` (before: a failure with any cache stamped the feed healthy);
+  a failed fetch backs off 60 s per airport for the poller's checks.
+- Health: `dca_fids` / `iad_fids` are optional feeds
+  (`ingest.failover.OPTIONAL_FEEDS`): `/healthz` lists them in
+  `optional_stale` and its status ignores them; `/api/v1/feeds` rows carry
+  `optional: true`.
+- For a flight's gate and baggage from every source use
+  `GET /api/v1/flights/{ident}/assignments` (always 200; `unknown` when no
+  source has a value).
 
 ## Source
 
@@ -38,8 +70,10 @@ Eastern wall clock**. `airport_fids.py` computes its reference date in
 `America/New_York` (`_AIRPORT_TZ`, fixed 2026-09-27: a UTC "today" matched
 tomorrow's instance of a daily flight after 00:00Z).
 
-Fields used: `IATA`, `flightnumber`, `status` (Scheduled, InAir, InGate,
-Landed, OutGate, Delayed, Cancelled, Departed, In Customs), `gate` /
+Fields used (2026-10-18: `status`, `actualtime`, `mwaaTime`, the tail and
+`remaining_time` are no longer read; `publishedTime` only to match a row to a
+leg): `IATA`, `flightnumber`, ~~`status` (Scheduled, InAir, InGate,
+Landed, OutGate, Delayed, Cancelled, Departed, In Customs),~~ `gate` /
 `mod_gate` (override wins), `arr_terminal`, `baggage`/`claim`/`claim1-3`,
 `publishedTime`, `actualtime`, `mwaaTime` (override wins),
 `aircraftInfo.tail_number` (display only, see Role), `arrivalInfo[0].remaining_time`.
@@ -51,7 +85,7 @@ values to 15; `airport_fids._iad_remap()` replicates it.
 
 ```
 src/common/airport_fids.py          fetch + 60 s cache + lookups (web and poller)
-src/common/flight_resolver.py       layered arrivals resolver (SWIM -> website -> AeroAPI -> none)
+src/common/flight_resolver.py       layered arrivals resolver (SWIM -> website -> ~~AeroAPI ->~~ none; AeroAPI tier removed 2026-10-18)
 src/poller/fetchers/airport_fids.py run_for(airport)
 src/poller/fetchers/dca_fids.py     run() -> run_for("DCA")
 src/poller/fetchers/iad_fids.py     run() -> run_for("IAD")
@@ -80,10 +114,12 @@ default 90). `resolve_arrivals()` tries, in order, and reports
 
 1. `swim` — `flight_events` (all three hubs);
 2. `website` — MWAA FIDS (DCA/IAD);
-3. `aeroapi` — FlightAware AeroAPI (~~dormant without a key~~ corrected
+3. ~~`aeroapi` — FlightAware AeroAPI (~~dormant without a key~~ corrected
    2026-10-15: `FLIGHTAWARE_API_KEY` is on seven service allowlists, `web`
    included, so this step makes metered calls if the key has a value
-   `[UNVERIFIED: secrets not read]`; see `DATA_SOURCES.md` §3);
+   `[UNVERIFIED: secrets not read]`; see `DATA_SOURCES.md` §3);~~
+   (removed 2026-10-18, next relay: AeroAPI is called only as the budgeted
+   per-watched-leg gate/baggage fallback, `common/gate_aeroapi.py`)
 4. `none` — with an explanatory `note`.
 
 Live 18:08Z: `DCA/arrivals?within_minutes=60` and `BWI/arrivals?within_minutes=60`
@@ -95,9 +131,11 @@ fields).
 ### `GET /api/v1/fids/{airport}/{flight}` — single flight
 
 DCA/IAD only. Example `GET /api/v1/fids/DCA/AA1557?date=2026-06-24`; returns
-`airport, iata, flight_number, status, gate, terminal, baggage, scheduled,
-estimated, remaining, tail, dep_airport, dep_gate, dep_terminal`, or 404
-when the flight is not on the board.
+~~`airport, iata, flight_number, status, gate, terminal, baggage, scheduled,
+estimated, remaining, tail, dep_airport, dep_gate, dep_terminal`~~ (2026-10-18,
+next relay) `airport, iata, flight_number, gate, terminal, baggage,
+dep_airport, dep_gate, dep_terminal`, or 404 when the flight is not on the
+board (a FIDS diagnostic; the assignments route above answers 200).
 
 ## BWI
 

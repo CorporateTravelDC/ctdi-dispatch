@@ -35,7 +35,8 @@ from typing import Optional
 
 import requests
 
-from common import db
+from common import acars_flags, db, tfr_geo
+from common.push_dedup import PushDedup
 from shared.watchlist import get_active_entries, watchlist_event_hit
 
 log = logging.getLogger("ingest.local_airspace")
@@ -111,6 +112,136 @@ _ACARS_LABEL_OOOI: dict[str, str] = {
     "16": "DLY",    # delay report
     "B6": "OPOS",   # oceanic position
 }
+
+# ── ACARS type flags + TFR context (2026-10-18) ───────────────────────────────
+# Every acars_messages row gets acars_flags (common.acars_flags.classify). The TFR
+# ties use the areas the poller stores in tfrs.raw_json["areas_geo"] -- present
+# only for VIP and SECURITY TFRs (the only types whose FAA detail record is
+# fetched); other TFR types (hazards, sports, space ops) have no stored geometry,
+# so for them only the text rule ("TFR"/"NOTAM"/"RESTRICTED AREA" ...) can flag.
+#   tfr_notam_mention  text mentions a TFR/NOTAM/restricted area, or DIVERT/HOLD
+#                      with a position within TFR_NEAR_NM of an active TFR area
+#   tfr_area           a WATCHED flight's position report inside an active TFR
+#                      area (lateral only; floors/ceilings are not checked)
+# Flags are labels for filtering and event detail. They never set an OOOI phase:
+# phases go through db.update_watchlist_oooi_phase_authoritative() on the gated
+# paths only (tests/ingest/test_acars_flags_ingest.py holds that line).
+TFR_NEAR_NM = 30.0
+_TFR_AREAS_TTL_S = 60.0
+_tfr_areas_cache: dict = {"at": -1e18, "areas": []}
+
+
+def _active_tfr_areas() -> list[dict]:
+    """Areas of the TFRs in effect now (start passed or unknown, not expired),
+    read through a 60 s in-process cache -- one tfrs read a minute, not one per
+    ACARS message. A read failure yields [] (no TFR flag), never an exception."""
+    now = time.time()
+    if now - _tfr_areas_cache["at"] < _TFR_AREAS_TTL_S:
+        return _tfr_areas_cache["areas"]
+    areas: list[dict] = []
+    try:
+        for t in db.get_active_tfrs():
+            start = t.get("effective_start")
+            if start and float(start) > now:
+                continue
+            try:
+                d = json.loads(t.get("raw_json") or "{}") or {}
+            except (TypeError, ValueError):
+                continue
+            # Each area carries its TFR's id and window, for the tfr_area push.
+            areas.extend({**a, "tfr_id": t.get("tfr_id"), "tfr_start": t.get("effective_start"),
+                          "tfr_end": t.get("effective_end")}
+                         for a in (d.get("areas_geo") or []) if isinstance(a, dict))
+    except Exception as e:
+        log.debug("acars: active TFR areas unavailable: %s", e)
+    _tfr_areas_cache.update(at=now, areas=areas)
+    return areas
+
+
+def _tfr_area_at(lat: float, lon: float) -> dict | None:
+    """The first active TFR area containing (lat, lon), with its tfr_id/window."""
+    for a in _active_tfr_areas():
+        if tfr_geo.point_in_area(lat, lon, a):
+            return a
+    return None
+
+
+# ── Flag pushes for watched flights (2026-10-18, operator) ─────────────────────
+# A WATCHED flight whose message is flagged tfr_area or diversion pushes through
+# watchlist_event_hit (flight-alerts + dispatch) at p4, or p5 when the entry is
+# VIP-listed (shared.vip_listed). Dedup on content only, never time:
+#   tfr_area   (watch id, TFR notam id)
+#   diversion  (watch id, new destination; "unstated" when the text names none)
+# The push names the callsign and the TFR id + its FAA window (UTC + ET), or the
+# new destination -- never a position, a registration or a hex. OOOI is untouched:
+# these are events, not phases.
+_FLAG_PUSH_DEDUP = PushDedup("acars_flag_push")
+_DIVERT_DEST_RE = re.compile(r"\b(?:DIVERT(?:ING|ED)?|DVRT)\s+(?:TO\s+)?([A-Z]{3,4})\b")
+_NOT_AIRPORTS = frozenset({"DUE", "FOR", "NOW", "ASAP", "THE", "AND", "BACK", "WILL", "WX",
+                           "MED", "OUR", "YOUR", "PLAN", "REQ", "INTO", "FROM", "ALTN"})
+
+
+def _divert_destination(text: str | None) -> str:
+    m = _DIVERT_DEST_RE.search((text or "").upper())
+    if m and m.group(1) not in _NOT_AIRPORTS:
+        return m.group(1)
+    return "unstated"
+
+
+def _utc_et(epoch) -> str:
+    if not epoch:
+        return "?"
+    from zoneinfo import ZoneInfo
+    u = datetime.fromtimestamp(float(epoch), timezone.utc)
+    et = u.astimezone(ZoneInfo("America/New_York"))
+    return f"{u:%H:%M}Z / {et:%H:%M} ET {et:%a %m-%d}"
+
+
+def _flag_pushes(entry: dict, ident: str, flight: str | None, msg: dict, flags: list[str]) -> int:
+    """Fire the tfr_area / diversion pushes for one watched-flight message. Returns
+    the number fired. Never raises into the ingest path."""
+    from shared.vip_listed import is_vip_listed
+    if "tfr_area" not in flags and "diversion" not in flags:
+        return 0
+    priority = 5 if is_vip_listed(entry) else 4
+    callsign = flight or ident
+    fired = 0
+    if "tfr_area" in flags:
+        f = acars_flags.extract_fields(msg)
+        area = _tfr_area_at(f["lat"], f["lon"]) if f["lat"] is not None else None
+        tid = (area or {}).get("tfr_id")
+        if tid:
+            key = f"{entry['id']}:tfr_area:{tid}"
+            if _FLAG_PUSH_DEDUP.should_push(key, "1"):
+                window = f"Active {_utc_et(area.get('tfr_start'))} to {_utc_et(area.get('tfr_end'))}"
+                watchlist_event_hit(
+                    entry["id"], f"{callsign} inside active TFR {tid}\n{window}",
+                    {"watchlist_trigger": "acars_tfr_area", "identifier": ident,
+                     "tfr_id": tid, "source": "acars", "acars_flag": "tfr_area"},
+                    priority=priority)
+                _FLAG_PUSH_DEDUP.record(key, "1")
+                fired += 1
+    if "diversion" in flags:
+        dest = _divert_destination(acars_flags.extract_fields(msg)["text"])
+        key = f"{entry['id']}:diversion:{dest}"
+        if _FLAG_PUSH_DEDUP.should_push(key, "1"):
+            where = f"diverting to {dest}" if dest != "unstated" else "diverting (destination not stated)"
+            watchlist_event_hit(
+                entry["id"], f"{callsign} ACARS: {where}",
+                {"watchlist_trigger": "acars_diversion", "identifier": ident,
+                 "new_destination": dest, "source": "acars", "acars_flag": "diversion"},
+                priority=priority)
+            _FLAG_PUSH_DEDUP.record(key, "1")
+            fired += 1
+    return fired
+
+
+def _acars_message_flags(msg: dict, watched: bool) -> list[str]:
+    areas = _active_tfr_areas()
+    near = (lambda la, lo: tfr_geo.point_in_any(la, lo, areas, TFR_NEAR_NM)) if areas else None
+    inside = (lambda la, lo: tfr_geo.point_in_any(la, lo, areas)) if (areas and watched) else None
+    return acars_flags.classify(msg, in_tfr=inside, near_tfr=near)
+
 
 # ── Haversine distance ─────────────────────────────────────────────────────────
 
@@ -493,6 +624,10 @@ def _normalize_acars(msg: dict) -> Optional[dict]:
         "tail": reg,
         "flight": (ac.get("flight") or "").strip() or None,
         "label": ac.get("label"),
+        "sublabel": ac.get("sublabel"),
+        # 2026-10-18: AVLC source type decides the link direction for the type flags.
+        "direction": ("downlink" if src.get("type") == "Aircraft"
+                      else "uplink" if src.get("type") in ("Ground station", "Ground") else ""),
         "freq": freq_mhz,
         "icao": (src.get("addr") or "") if src.get("type") in (None, "Aircraft") else "",
         "text": ac.get("msg_text"),
@@ -537,6 +672,7 @@ def _process_acars_message(msg: dict) -> None:
     # Watchlist match
     watchlist_hit = 0
     watchlist_entry_id = None
+    matched = None
     try:
         # 2026-10-03: ACARS/VDL2 `flight` is IATA-style (WN4060) while
         # watchlist identifiers are ICAO (SWA4060); exact-match never fired
@@ -544,8 +680,9 @@ def _process_acars_message(msg: dict) -> None:
         # carriers normalise to None and cannot false-match), and also match
         # the ACARS tail against the entry's registration column, not only
         # its identifier.
+        # 2026-10-18: cached read (3 s, the FDPS/SMES per-message pattern).
         from common.airline_codes import same_flight
-        entries = get_active_entries(entry_type="flight")
+        entries = get_active_entries(entry_type="flight", cached=True)
         tail_upper = (tail or "").upper().replace("-", "")
         for entry in entries:
             ident = (entry.get("identifier") or "").upper()
@@ -554,21 +691,43 @@ def _process_acars_message(msg: dict) -> None:
                (tail_upper and tail_upper in (ident.replace("-", ""), reg)):
                 watchlist_hit = 1
                 watchlist_entry_id = entry["id"]
-                if msg_type:
-                    summary = (f"{ident} ACARS {msg_type}"
-                               + (f": {msg_text[:80]}" if msg_text else ""))
-                    watchlist_event_hit(
-                        entry["id"], summary,
-                        {"watchlist_trigger": f"acars_{msg_type.lower()}",
-                         "identifier": ident, "label": label,
-                         "msg_type": msg_type, "tail": tail,
-                         "icao_hex": icao_hex, "msg_text": msg_text,
-                         "source": "acars"},
-                        priority=4 if msg_type in ("OFF", "ON", "IN") else 3,
-                    )
+                matched = (entry, ident)
                 break
     except Exception as e:
         log.debug("acars watchlist match: %s", e)
+
+    # 2026-10-18: type flags (classified from the same normalized fields).
+    try:
+        flags = _acars_message_flags(msg, watched=bool(watchlist_hit))
+    except Exception as e:
+        log.debug("acars flags: %s", e)
+        flags = []
+
+    if matched and flags:
+        try:
+            _flag_pushes(matched[0], matched[1], flight, msg, flags)
+        except Exception as e:
+            log.debug("acars flag push: %s", e)
+
+    if matched and msg_type:
+        entry, ident = matched
+        try:
+            summary = (f"{ident} ACARS {msg_type}"
+                       + (f": {msg_text[:80]}" if msg_text else ""))
+            watchlist_event_hit(
+                entry["id"], summary,
+                {"watchlist_trigger": f"acars_{msg_type.lower()}",
+                 "identifier": ident, "label": label,
+                 "msg_type": msg_type, "tail": tail,
+                 "icao_hex": icao_hex, "msg_text": msg_text,
+                 "source": "acars",
+                 # 2026-10-18: subscribers filter on these (event detail, same
+                 # topic); a flag is a label, never a phase assertion.
+                 "acars_flags": flags},
+                priority=4 if msg_type in ("OFF", "ON", "IN") else 3,
+            )
+        except Exception as e:
+            log.debug("acars watchlist event: %s", e)
 
     try:
         db.insert_acars_message(
@@ -577,6 +736,7 @@ def _process_acars_message(msg: dict) -> None:
             block_id=block_id, ack=ack, mode=mode, msg_text=msg_text,
             raw=raw, watchlist_hit=watchlist_hit,
             watchlist_entry_id=watchlist_entry_id,
+            acars_flags=acars_flags.to_column(flags),
         )
     except Exception as e:
         log.debug("acars_messages insert: %s", e)

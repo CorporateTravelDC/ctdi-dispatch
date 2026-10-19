@@ -108,6 +108,9 @@ async def main() -> None:
                           # idempotent.
         db.init_db_v47()  # 2026-10-18: nas_programs.source -- write_tfms_programs
                           # stamps 'tfms' (pg_schema/0076 on Postgres).
+        db.init_db_v50()  # 2026-10-18: acars_messages.acars_flags -- the local
+                          # ACARS writer (local_airspace) stamps type flags
+                          # (pg_schema/0081 on Postgres).
         # 2026-08-30 SWIM-audit tables (stdds_rvr / tdes_departure_events /
         # tdls_messages / datis_snapshots / tfms_edct_slots /
         # fdps_destination_changes + flight_events extras columns). Lives in

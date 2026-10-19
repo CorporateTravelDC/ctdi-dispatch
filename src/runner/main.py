@@ -946,6 +946,42 @@ def _should_sanitize_signals(request: Request) -> bool:
 
 # ── VDL2 endpoint -----------------------------------------------------------
 
+# ── ACARS type flags (2026-10-18) -------------------------------------------
+# Every message these three routes return carries "flags" (common.acars_flags.
+# classify on the normalized message), and ?flags=oooi,eta keeps only messages
+# with ANY of the named flags (400 on an unknown name). The routes read
+# acarshub/aggregators, not acars_messages, and have no TFR geometry here, so
+# "tfr_area" never appears in these responses and "tfr_notam_mention" comes
+# from the text rule only; the stored acars_messages.acars_flags (ingest)
+# carries the TFR-geometry flags.
+
+def _parse_flag_filter(value) -> list:
+    from common import acars_flags
+    if not isinstance(value, str):      # a direct call (tests) passes the Query default object
+        value = ""
+    try:
+        return acars_flags.parse_filter(value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _with_flags(payload: dict, want: list) -> dict:
+    from common import acars_flags
+    msgs = []
+    for m in payload.get("messages") or []:
+        if isinstance(m, dict):
+            m = {**m, "flags": acars_flags.classify(m)}
+            if want and not set(want) & set(m["flags"]):
+                continue
+        elif want:
+            continue
+        msgs.append(m)
+    out = {**payload, "messages": msgs, "count": len(msgs)}
+    if want:
+        out["flags_filter"] = want
+    return out
+
+
 @app.get("/api/vdl2/messages")
 async def vdl2_messages(
     request: Request,
@@ -953,6 +989,8 @@ async def vdl2_messages(
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
+    flags: str   = Query("", description="comma-separated ACARS type flags (common.acars_flags.FLAGS); "
+                                         "only messages carrying ANY of them are returned"),
 ):
     """VDL2 messages. Local acarshub first; falls back to airframes.io.
 
@@ -964,27 +1002,28 @@ async def vdl2_messages(
     real-time, local or third-party -- only synthetic. Short-circuits to
     _synthetic_signal_messages() with zero network calls.
     """
+    want = _parse_flag_filter(flags)
     if DEMO_MODE:
         msgs = _synthetic_signal_messages("vdl2")
-        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "synthetic", "messages": msgs, "count": len(msgs)}, want)
     # DEMO_MODE is guaranteed False past this point -- nothing here ever
     # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("vdl2", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "local", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.debug("VDL2 local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("VDLM2", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.debug("VDL2 acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("vdl2", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "airframes.io", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.warning("VDL2 all sources unavailable: %s", e)
-    return {"source": "none", "messages": [], "count": 0}
+    return _with_flags({"source": "none", "messages": [], "count": 0}, want)
 
 # ── ACARS endpoint ----------------------------------------------------------
 
@@ -995,6 +1034,8 @@ async def acars_messages(
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
+    flags: str   = Query("", description="comma-separated ACARS type flags (common.acars_flags.FLAGS); "
+                                         "only messages carrying ANY of them are returned"),
 ):
     """ACARS messages. Local acarshub first; falls back to airframes.io.
 
@@ -1002,27 +1043,28 @@ async def acars_messages(
     vdl2_messages() above -- the demo instance must never touch anything
     real-time, local or third-party -- only synthetic.
     """
+    want = _parse_flag_filter(flags)
     if DEMO_MODE:
         msgs = _synthetic_signal_messages("acars")
-        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "synthetic", "messages": msgs, "count": len(msgs)}, want)
     # DEMO_MODE is guaranteed False past this point -- nothing here ever
     # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("acars", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "local", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.debug("ACARS local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("ACARS", since, lat, lon, dist)
-        return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.debug("ACARS acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("acars", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "airframes.io", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.warning("ACARS all sources unavailable: %s", e)
-    return {"source": "none", "messages": [], "count": 0}
+    return _with_flags({"source": "none", "messages": [], "count": 0}, want)
 
 # ── HFDL endpoint -----------------------------------------------------------
 
@@ -1033,6 +1075,8 @@ async def hfdl_messages(
     lat:   float = Query(DEFAULT_LAT),
     lon:   float = Query(DEFAULT_LON),
     dist:  int   = Query(DEFAULT_DIST),
+    flags: str   = Query("", description="comma-separated ACARS type flags (common.acars_flags.FLAGS); "
+                                         "only messages carrying ANY of them are returned"),
 ):
     """
     HFDL messages. Local acarshub first, then acarsdrama, then airframes.io.
@@ -1053,30 +1097,31 @@ async def hfdl_messages(
     # vdl2_messages()/acars_messages() above -- the demo instance must
     # never touch anything real-time, local or third-party -- only
     # synthetic.
+    want = _parse_flag_filter(flags)
     if DEMO_MODE:
         msgs = _synthetic_signal_messages("hfdl")
-        return {"source": "synthetic", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "synthetic", "messages": msgs, "count": len(msgs)}, want)
     # DEMO_MODE is guaranteed False past this point -- nothing here ever
     # needs sanitizing, the demo instance never reaches this code path.
     try:
         msgs = await _acarshub_messages("hfdl", since)
-        return {"source": "local", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "local", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.debug("HFDL local unavailable: %s -- trying acarsdrama", e)
     try:
         msgs = await _acarsdrama_messages("HFDL", since, lat, lon, dist)
         if msgs:
-            return {"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}
+            return _with_flags({"source": "acarsdrama.com", "messages": msgs, "count": len(msgs)}, want)
         log.debug("HFDL acarsdrama returned 0 messages (Jumpseat carries no HFDL) -- trying airframes.io")
     except Exception as e:
         log.debug("HFDL acarsdrama unavailable: %s -- trying airframes.io", e)
     try:
         msgs = await _airframes_messages("hfdl", since, lat, lon, dist)
-        return {"source": "airframes.io", "messages": msgs, "count": len(msgs)}
+        return _with_flags({"source": "airframes.io", "messages": msgs, "count": len(msgs)}, want)
     except Exception as e:
         log.warning("HFDL all sources unavailable: %s", e)
     hw = "hardware_pending" if not ACARSDRAMA_TOKEN and not AIRFRAMES_TOKEN else "unavailable"
-    return {"source": "none", "messages": [], "count": 0, "detail": hw}
+    return _with_flags({"source": "none", "messages": [], "count": 0, "detail": hw}, want)
 
 # ── AIS helpers -------------------------------------------------------------
 

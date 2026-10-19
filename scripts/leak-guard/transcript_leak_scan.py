@@ -14,7 +14,9 @@ What it looks for
     JSON-escaped form (transcripts are JSONL);
   * token shapes that are secrets wherever they appear: platform API tokens
     (ctdc_<user>_<32>), gateway access/refresh tokens (dga_/dgr_), and
-    "Authorization: Bearer <token>" / "X-Board-Key: <token>" header values.
+    "Authorization: Bearer <token>" / "X-Board-Key: <token>" header values;
+  * registration-bearing log-line shapes (2026-10-18): the identifier in the old
+    FDPS "fdps: wrote flight_event for <id> (" journal line.
 
 Default roots: ~/.claude/projects and /tmp/claude-<uid> (session transcripts and
 tool outputs). Agent accounts' homes are only readable by root: --agents scans every
@@ -73,6 +75,16 @@ TOKEN_PATTERNS = [
     ("gateway-token", re.compile(rb"\bdg[ar]_[A-Za-z0-9_-]{40,}")),
     ("bearer-header", re.compile(rb"(?i)(?<=authorization: bearer )[A-Za-z0-9._~+/=-]{20,}")),
     ("board-key-header", re.compile(rb"(?i)(?<=x-board-key: )[A-Za-z0-9._~+/=-]{20,}")),
+] + [
+    # 2026-10-18 (leak hygiene): registration-bearing log-line shapes. Only the
+    # identifier is matched (and redacted); the rest of the line stays readable.
+    # fdps_parser logged "fdps: wrote flight_event for <callsign or GUFI> (<o> -> <d>,
+    # source=..)" at INFO on every message until 2026-10-18 -- for GA flights the
+    # callsign IS the tail. The slot is redacted whatever it holds (an airline callsign
+    # cannot be told from a registration by shape alone).
+    (label, re.compile(rx)) for label, rx in (
+        ("fdps-log-registration", rb"(?<=fdps: wrote flight_event for )[A-Za-z0-9.:-]{2,64}(?= \()"),
+    )
 ]
 PLACEHOLDER = re.compile(rb"^(?:0+|[xX]+|REDACTED.*)$")
 

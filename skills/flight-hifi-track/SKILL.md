@@ -14,7 +14,7 @@ Default handler for any flight query. Resolves position/identity from local sour
 
 Refreshed against HEAD 1491bf5a plus the batch staged for the next relay and the live Pi (2026-10-15 ~01:50Z / 2026-10-14 21:50 ET). Four things changed since 2026-08-31; the steps below are corrected in place, old text struck.
 
-1. **FIDS is not an identity source** (operator, 2026-10-14). MWAA FIDS is gate, baggage and schedule enrichment only: never OOOI, never a tail. Aircraft tails come from SWIM only: the FDPS flight plan, the FDPS plan linked to this flight's TDES departure clearance at DCA/IAD/BWI, TBFM and TFMS (`AUTHORITATIVE_TAIL_SOURCES` in `src/common/flight_instance.py:914`; guardrail `tests/common/test_flight_instance.py::test_fids_is_not_a_tail_source`). The FIDS response still has a `tail` field; do not use it to look up a hex, and do not send it as `registration`/`tail` on the watchlist add.
+1. **FIDS is not an identity source** (operator, 2026-10-14). MWAA FIDS is gate, ~~baggage and schedule~~ terminal and baggage enrichment only (2026-10-18: never a time or a status either): never OOOI, never a tail. Aircraft tails come from SWIM only: the FDPS flight plan, the FDPS plan linked to this flight's TDES departure clearance at DCA/IAD/BWI, TBFM and TFMS (`AUTHORITATIVE_TAIL_SOURCES` in `src/common/flight_instance.py:914`; guardrail `tests/common/test_flight_instance.py::test_fids_is_not_a_tail_source`). ~~The FIDS response still has a `tail` field; do not use it to look up a hex, and do not send it as `registration`/`tail` on the watchlist add.~~ (2026-10-18: the FIDS route no longer returns `tail`, `status`, `scheduled`, `estimated` or `remaining`, and the watchlist add ignores a `tail` field. Read gate and baggage from the assignments route, below.)
 2. **A watch may be added without a hex.** `POST /api/v1/watchlist/flights` takes `hex_id`/`registration` as optional. The poller resolves and locks the airframe itself from local ADS-B, FDPS and the TDES-linked plan, and repoints it only on a SWIM source showing a different tail on this flight. Add the watch as soon as the flight and leg are known; do not wait for a hex.
 3. **airplanes.live is back as a code-side fallback** (operator, 2026-10-08): `src/common/airplanes_live.py`, off unless `AIRPLANES_LIVE_FALLBACK=1`, asked only after every local source has no contact, never sent a LADD-listed identifier, position/identity only, no OOOI authority. Reach it only through `shared.watchlist._remote_ac_by_hex()` / `_remote_ac_by_callsign()`, never with a direct HTTP call. The 2026-08-31 "never call airplanes.live" note above stays right for direct calls.
 4. **The database is Postgres** (`corporatetraveldc-pgsql`, since 2026-09-19/20). Step 1h's SQLite queries are replaced with Postgres ones.
@@ -24,7 +24,7 @@ Refreshed against HEAD 1491bf5a plus the batch staged for the next relay and the
 2. **Local FDPS** — already-ingested FAA SWIM data (NAS-wide, no range limit, but doesn't always carry hex/position). With the TDES-linked plan, TBFM and TFMS, the only sources of an aircraft tail (2026-10-15).
 3. **Local FAA/OpenSky registry tables** — registration → hex, for the cross-check step (the registration must come from a SWIM source, 2026-10-15)
 3a. **airplanes.live fallback** (added 2026-10-15) — only through the shared helpers, only when 1–3 found nothing; see the correction block above.
-4. **MWAA FIDS** — DCA/IAD only, for gate/baggage/schedule/status (separate from identity resolution; 2026-10-15: never a tail, never OOOI)
+4. ~~**MWAA FIDS** — DCA/IAD only, for gate/baggage/schedule/status (separate from identity resolution; 2026-10-15: never a tail, never OOOI)~~ **Gate / baggage assignments** (2026-10-18) — `GET /api/v1/flights/<ident>/assignments` (see "Gate / baggage lookup" below): SWIM TDES > ACARS > AeroAPI fallback > MWAA FIDS, gate / terminal / baggage only; never a time, a status, a tail or OOOI
 5. **Web search** — only when 1–3 are ALL dark. Airline website FIDS or FlightAware in search results is fine to read; this box does not call any flight-tracking API directly beyond what's listed above.
 
 The `globe.airplanes.live/?icao=<hex>` link in ntfy pushes is fine to keep — a click-through convenience URL for the operator's phone, not a lookup this box performs.
@@ -80,9 +80,9 @@ from shared.watchlist import _local_ac_by_hex
 ac = _local_ac_by_hex("<HEX>")
 ```
 
-**1f. Both 1b and 1c empty** — check MWAA FIDS if the destination is DCA or IAD (see FIDS lookup below) before giving up; it often has schedule/gate~~/tail~~ data even when nothing is airborne yet (corrected 2026-10-15: use it for schedule and gate only; its tail is not an identity source). Add the watch anyway (Step 2): the poller keeps trying the SWIM sources and the airplanes.live fallback. Only fall back to web search (1g) once FIDS is also unhelpful or the destination isn't DCA/IAD.
+**1f. Both 1b and 1c empty** — ~~check MWAA FIDS if the destination is DCA or IAD (see FIDS lookup below) before giving up; it often has schedule/gate~~/tail~~ data even when nothing is airborne yet (corrected 2026-10-15: use it for schedule and gate only; its tail is not an identity source).~~ (2026-10-18) check the assignments route (see "Gate / baggage lookup" below) for gate and baggage; it never answers schedule, status or identity questions -- the schedule comes from TFMS / the FDPS plan. Add the watch anyway (Step 2): the poller keeps trying the SWIM sources and the airplanes.live fallback. Only fall back to web search (1g) once ~~FIDS~~ the assignments route is also unhelpful (2026-10-18).
 
-**1g. Web search fallback** (only when local ADS-B, local FDPS, AND FIDS are all dark or inapplicable):
+**1g. Web search fallback** (only when local ADS-B, local FDPS, AND ~~FIDS~~ the assignments route (2026-10-18) are all dark or inapplicable):
 ```
 web_search("[ICAO_CALLSIGN] flight status [YYYY-MM-DD]")
 ```
@@ -116,7 +116,7 @@ ORDER BY updated_at DESC LIMIT 10;
 
 Airlines commonly reuse ONE flight number for multiple legs of the same aircraft's rotation in a single day. If the most recent rows show the aircraft completing a DIFFERENT leg that just landed at the ORIGIN of the leg you care about, that's "still on the ground / airborne on a prior leg, hasn't re-filed yet" — report it as such, don't just say "not found."
 
-**The opposite, equally real trap: shuttle-frequency routes reuse the SAME flight number for MULTIPLE INDEPENDENT departures on the same route, same day** (confirmed live 2026-08-31: a United shuttle-route flight into KIAD (flight number and origin generalized 2026-10-15 for the public mirror) had an `active` FDPS row with real live position — 4800ft, descending, near IAD — hours before the actual departure being tracked, because that flight number runs multiple times daily on that route, not because it was mid-rotation). This is NOT the same failure mode as Step 1a's regional-callsign case or the multi-leg rotation above — here `flight_num`/`airline` genuinely, correctly matches, it's just a *different instance* of that number from earlier or later the same day. An `active` hit under the right flight number and route is NOT sufficient confirmation you've found the right departure — cross-check the row's actual `updated_at` timestamp and position against the SCHEDULED time from FIDS (or what the operator told you; 2026-10-15: the plan's own filed departure, `departure_time`, is stored too) before treating it as live status for the flight you're tracking. Hex-locking to a same-day-but-wrong-instance hex is exactly the 2026-07-23 mistake (see Design notes below) — verify before locking, don't just take the first `active` row.
+**The opposite, equally real trap: shuttle-frequency routes reuse the SAME flight number for MULTIPLE INDEPENDENT departures on the same route, same day** (confirmed live 2026-08-31: a United shuttle-route flight into KIAD (flight number and origin generalized 2026-10-15 for the public mirror) had an `active` FDPS row with real live position — 4800ft, descending, near IAD — hours before the actual departure being tracked, because that flight number runs multiple times daily on that route, not because it was mid-rotation). This is NOT the same failure mode as Step 1a's regional-callsign case or the multi-leg rotation above — here `flight_num`/`airline` genuinely, correctly matches, it's just a *different instance* of that number from earlier or later the same day. An `active` hit under the right flight number and route is NOT sufficient confirmation you've found the right departure — cross-check the row's actual `updated_at` timestamp and position against the SCHEDULED time ~~from FIDS~~ (2026-10-18: FIDS is not a time source) from TFMS / the FDPS plan (or what the operator told you; 2026-10-15: the plan's own filed departure, `departure_time`, is stored too) before treating it as live status for the flight you're tracking. Hex-locking to a same-day-but-wrong-instance hex is exactly the 2026-07-23 mistake (see Design notes below) — verify before locking, don't just take the first `active` row.
 
 **Query 2 — has the SPECIFIC route been filed yet today:**
 ```sql
@@ -147,12 +147,20 @@ If this route/flight-number has a high cancelled/dropped fraction, say so in the
 
 ---
 
-## FIDS lookup (DCA/IAD only)
+## Gate / baggage lookup (2026-10-18; was "FIDS lookup")
 
 ```
+GET http://100.x.x.x:8000/api/v1/flights/<IDENT>/assignments?origin=<ORIG>&destination=<DEST>&date=<YYYY-MM-DD>
+GET http://100.x.x.x:8000/api/v1/flights/<IDENT>/<YYYY-MM-DD>/assignments
+```
+Tier 1 (tailnet or a token). `<IDENT>` is the marketing or operating number (`UA1234`, `UAL1234`; codeshares resolve through `codeshare_map`); `date` is the scheduled departure date in UTC. **Always 200** -- a field no source has reads `unknown`, never a 404, so a FIDS outage is not "no gate answer". Per field -- `arrival_gate`, `arrival_terminal`, `arrival_baggage`, `departure_gate` -- it returns `value`, `status` (`observed` | `provisional` | `conflicting` | `unknown`; earlier values are listed under `superseded`), `source` (SWIM TDES | ACARS | AeroAPI | MWAA FIDS), `observed_at` (UTC) and `freshness`. Precedence: SWIM TDES > ACARS (airframes.io = Jumpseat) > AeroAPI (fallback, budgeted) > MWAA FIDS (DCA/IAD only; the only DC carousel source besides proven ACARS formats). `conflicting` = two equal-tier sources disagree: say so, do not pick one. Top-level `fields` = the first (newest) leg; `legs` lists every match -- pass origin/destination/date to narrow. A LADD-listed flight answers `unknown` everywhere.
+
+Nothing here is a time, a status, a tail or an OOOI phase; never feed it to Step 1d or the watchlist add.
+
+~~```
 GET http://100.x.x.x:8000/api/v1/fids/<DCA|IAD>/<IATA><FLIGHT_NUM>
 ```
-No auth required (Tier 0). Returns `status`/`gate`/`terminal`/`baggage`/`scheduled`/`estimated`/`tail`/`dep_airport`/`dep_gate`/`dep_terminal` when MWAA has the flight. Often the *best* early source for a flight that hasn't departed yet ~~— it has the assigned tail before ADS-B or FDPS have anything, which unblocks Step 1e's hex-based tracking immediately via Step 1d's registry lookup~~ (corrected 2026-10-15: for schedule, gate and baggage only. Its `tail` is not an identity source, operator 2026-10-14; never feed it to Step 1d or the watchlist add. Its `status` is not OOOI.) Optional `?date=YYYY-MM-DD`.
+No auth required (Tier 0). Returns `status`/`gate`/`terminal`/`baggage`/`scheduled`/`estimated`/`tail`/`dep_airport`/`dep_gate`/`dep_terminal` when MWAA has the flight.~~ (2026-10-18: `GET /api/v1/fids/...` is now a FIDS diagnostic returning gate / terminal / baggage / dep_* only -- no status, time or tail -- and 404s when MWAA has no row. Use the assignments route above.) ~~Often the *best* early source for a flight that hasn't departed yet~~ ~~— it has the assigned tail before ADS-B or FDPS have anything, which unblocks Step 1e's hex-based tracking immediately via Step 1d's registry lookup~~ ~~(corrected 2026-10-15: for schedule, gate and baggage only. Its `tail` is not an identity source, operator 2026-10-14; never feed it to Step 1d or the watchlist add. Its `status` is not OOOI.) Optional `?date=YYYY-MM-DD`.~~
 
 ---
 
@@ -177,7 +185,7 @@ Content-Type: application/json
 }
 ```
 
-(2026-10-15) `hex_id` and `registration` are optional: omit them when no local ADS-B or SWIM source has shown the airframe yet, and never fill them from FIDS. `tail` is accepted as an alias of `registration`. Also optional: `scheduled_departure`, `scheduled_arrival` (ISO, with offset), `auto_remove_at`, `notes`. Sending `origin` matters: it is the only check that stops the route filling the identity from a stale earlier plan (Step 1c).
+(2026-10-15) `hex_id` and `registration` are optional: omit them when no local ADS-B or SWIM source has shown the airframe yet, and never fill them from FIDS. ~~`tail` is accepted as an alias of `registration`.~~ (2026-10-18: a `tail` field is ignored and never stored -- the response says `ignored_fields: ["tail"]`; send `registration` from a SWIM source only.) Also optional: `scheduled_departure`, `scheduled_arrival` (ISO, with offset), `auto_remove_at`, `notes`. Sending `origin` matters: it is the only check that stops the route filling the identity from a stale earlier plan (Step 1c).
 
 Returns **201**, always — re-adding the same flight refreshes it in place (`entry_id` deterministic, `INSERT … ON CONFLICT(id) DO UPDATE`, `src/common/db.py`). Never branch on a `409`; there isn't one. The response carries `ontime_history_14d` — surface it in the debrief when it isn't `{"insufficient_data": true}`.
 
@@ -193,9 +201,9 @@ Both this route and Step 3/4/5's `/admin/push-alert` require an **admin-tier** b
 
 **Fire this step whenever flight phase is DESCENT, APPROACH, or GROUND** (alt_baro < 8000ft OR baro_rate < −500 fpm with alt < 15000ft, OR alt_baro < 1000ft) **and the aircraft is actually flying the leg being tracked** — not a prior rotation leg under a different callsign (see Step 1a's regional-operator note; check the destination in the live `ac`/FDPS data matches, not just that a hex-locked aircraft is airborne somewhere).
 
-Check MWAA FIDS first (see FIDS lookup above, if dest is DCA or IAD). If `baggage` is present → use it, label push `[FIDS]`.
+~~Check MWAA FIDS first (see FIDS lookup above, if dest is DCA or IAD). If `baggage` is present → use it, label push `[FIDS]`.~~ (2026-10-18) Read the assignments route first (see "Gate / baggage lookup" above). If `arrival_baggage.status` is `observed` or `provisional` → use its value, label the push with its `source` (`[MWAA FIDS]`, `[ACARS]`, `[AeroAPI]`; add `provisional` when it is). Take the gate from `arrival_gate` the same way (`TBD` when `unknown`; on `conflicting` write both values and `unconfirmed`).
 
-If FIDS unavailable, estimate:
+If no source has the baggage claim (`unknown` or `conflicting`), estimate:
 
 | Condition | Domestic (dest ICAO starts with K) | International |
 |---|---|---|
@@ -203,7 +211,7 @@ If FIDS unavailable, estimate:
 | alt_baro 1000–5000ft (short final / rollout) | +20 min | +40 min |
 | alt_baro 5000–8000ft (approach) | +30 min | +50 min |
 
-If an ETA is available from the watchlist entry or FIDS, use `ETA + buffer` instead.
+If an ETA is available from the watchlist entry ~~or FIDS~~ (2026-10-18: or TFMS / TBFM -- never FIDS, which is not a time source), use `ETA + buffer` instead.
 
 **Push to `flight-alerts` with priority 4 (HIGH):**
 ```
@@ -215,10 +223,10 @@ Content-Type: application/json
   "topic": "flight-alerts",
   "priority": 4,
   "title": "<CALLSIGN> [<HEX>] -- BAGGAGE CLAIM",
-  "message": "<CALLSIGN> <REG>: GATE <GATE|TBD> | BAGGAGE <CAROUSEL|est ~HH:MM> (<phase>, <ALT_BARO>ft) -- <DEST_ICAO> [FIDS|est]"
+  "message": "<CALLSIGN> <REG>: GATE <GATE|TBD> | BAGGAGE <CAROUSEL|est ~HH:MM> (<phase>, <ALT_BARO>ft) -- <DEST_ICAO> [<assignments source>|est]"
 }
 ```
-Example (FIDS confirmed; synthetic registration; flight number generalized 2026-10-15 for the public mirror): `AAL<n> Q7FJP: GATE D38 | BAGGAGE 11 | InAir -- est 23:09Z/19:09 ET -- KDCA [FIDS]` (time label corrected 2026-10-15: UTC + ET, never ET alone)
+Example (synthetic registration; flight number generalized 2026-10-15 for the public mirror): ~~`AAL<n> Q7FJP: GATE D38 | BAGGAGE 11 | InAir -- est 23:09Z/19:09 ET -- KDCA [FIDS]`~~ (2026-10-18: no FIDS status word -- `<phase>` is the tracked phase from Step 1) `AAL<n> Q7FJP: GATE D38 | BAGGAGE 11 (approach, 4200ft) -- KDCA [MWAA FIDS, provisional]` (time label corrected 2026-10-15: UTC + ET, never ET alone)
 
 If the flight is en route (CRUISE or CLIMB, or still on a prior rotation leg), do NOT fire this push — include the estimated baggage time in the debrief table only (Step 6).
 
@@ -280,9 +288,10 @@ Squawk:           <SQUAWK>
 Position source:  Local ADS-B | Local FDPS | airplanes.live fallback | unavailable
 Phase:            CLIMB | CRUISE | DESCENT | GROUND  (flag if on a prior rotation leg, not yet the tracked leg)
 OOOI:             Added to watchlist (<entry id>) | [SKIP] Pi offline
-Destination:      <DEST_ICAO>, source: FIDS | FDPS | ADS-B | web | unknown
-Schedule (FIDS):  sched <HH:MM>Z/<HH:MM> ET / est <HH:MM>Z/<HH:MM> ET -- gate <GATE>, terminal <T>, baggage <CAROUSEL>  [if DCA/IAD]
-Baggage ETA:      Carousel <N> [FIDS] | est ~<HH:MM>Z/<HH:MM> ET | not yet applicable -- <reason>
+Destination:      <DEST_ICAO>, source: FDPS | TFMS | ADS-B | web | unknown   (2026-10-18: never FIDS)
+Schedule:         sched <HH:MM>Z/<HH:MM> ET / est <HH:MM>Z/<HH:MM> ET, source: TFMS | FDPS plan | TBFM  (2026-10-18: was "Schedule (FIDS)"; FIDS is not a time source)
+Gate / baggage:   arr gate <GATE> (T<T>) / baggage <CAROUSEL> / dep gate <GATE>, each with its assignments status + source (SWIM TDES | ACARS | AeroAPI | MWAA FIDS) | unknown
+Baggage ETA:      Carousel <N> [<assignments source>] | est ~<HH:MM>Z/<HH:MM> ET | not yet applicable -- <reason>
 ```
 
 (Template time fields corrected 2026-10-15 to match this rule; they read `sched <HH:MM> / est <HH:MM> ET` and `est ~<HH:MM> local`.) Every time given is either UTC AND Eastern together (e.g. `13:50Z / 09:50 ET`) or explicitly UTC-only (`13:50Z`) -- never Eastern alone, never bare (operator standing rule, 2026-10-06; supersedes 2026-08-27). Containers AND the host run in UTC: never print `time.localtime()`/`date` output with an ET label -- convert with America/New_York explicitly.
@@ -297,7 +306,7 @@ For North Atlantic inbounds (EHAM, EGLL, LFPG → KIAD/KJFK/KBOS): ADS-B typical
 
 ## Design notes
 
-**Source hierarchy is strict and entirely local through the first four tiers:** local ADS-B → local FDPS → local registry tables → FIDS → web search, in that order, web search only as a genuine last resort. Never mix sources without labeling which one answered. (2026-10-15: the airplanes.live fallback sits after the registry tables, through the shared helpers only; FIDS answers schedule, gate and baggage questions, not identity ones.)
+**Source hierarchy is strict and entirely local through the first four tiers:** local ADS-B → local FDPS → local registry tables → ~~FIDS~~ the assignments route (2026-10-18; gate / terminal / baggage only) → web search, in that order, web search only as a genuine last resort. Never mix sources without labeling which one answered. (2026-10-15: the airplanes.live fallback sits after the registry tables, through the shared helpers only; ~~FIDS answers schedule, gate and baggage questions, not identity ones.~~ 2026-10-18: FIDS answers gate, terminal and baggage questions only -- through the assignments route -- never schedule, status or identity ones.)
 
 **Regional-operator callsigns are a confirmed, not hypothetical, failure mode.** A branded flight number (DAL<n>) can be operated by a wholly different ICAO callsign (RPA<m>) for the entire flight (example numbers generalized 2026-10-15 for the public mirror). Hex-based tracking (Step 1e) is what makes this transparent — resolve the hex once (~~via FIDS tail → registry lookup, or~~ corrected 2026-10-15: via a SWIM tail → registry lookup, or a direct ADS-B/FDPS hit under either callsign) and track by hex from then on.
 

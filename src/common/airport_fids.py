@@ -26,8 +26,14 @@ Key fields per arrival:
   arrivalInfo[0].remaining_time,
   arrivalInfo[0].position  (JSON str: Altitude/Speed/Heading)
 
-Status values: Scheduled, InAir, InGate, Landed, OutGate, Delayed,
-               Cancelled, Departed, In Customs
+2026-10-18 (operator, gate batch): FIDS supplies gate, terminal and baggage
+ONLY. It never supplies a time, a status or a tail: this module no longer
+returns status / scheduled / estimated / remaining / tail from any lookup, and
+the published time is read in exactly one place, match_leg(), to pick the row
+that belongs to a SWIM/TFMS-verified leg inside that leg's own window. It is
+never stored, logged or returned. A cached payload older than
+FIDS_MAX_STALE_S is never served (lookups read "unknown" instead of an old
+gate), and a failed fetch backs off FIDS_FAIL_BACKOFF_S per airport.
 """
 
 import hashlib
@@ -78,11 +84,25 @@ _COOKIE = "flight-info=1"
 _TIMEOUT = 10
 _CACHE_TTL = 60  # seconds -- matches DCA CDN max-age
 
+# 2026-10-18 (Phase A finding #10): a failed fetch used to fall back to the
+# cache WHATEVER its age, and run_for() then stamped the feed healthy -- so an
+# MWAA outage read as "ok" while pushes and the API carried an hours-old gate.
+# Past this cap the cache is not served at all.
+import os as _os  # noqa: E402
+
+FIDS_MAX_STALE_S = int(_os.environ.get("FIDS_MAX_STALE_S", "900") or 900)
+# After a failed fetch, non-forced callers (the poller's per-watch FIDS check)
+# do not try that airport again for this long: one outage costs at most one
+# 10 s timeout per airport per minute, not one per DC watch per sweep.
+FIDS_FAIL_BACKOFF_S = 60
+
 # ---------------------------------------------------------------------------
 # In-process cache (per-container; not shared across poller and web)
 # ---------------------------------------------------------------------------
 
 _cache: dict[str, dict] = {}  # airport -> {ts, data, payload_hash}
+_last_fail: dict[str, float] = {}   # airport -> monotonic time of the last failed fetch
+_last_error: dict[str, str] = {}    # airport -> error of the LAST fetch attempt (cleared on success)
 
 
 def _now() -> float:
@@ -104,30 +124,46 @@ def _fetch_raw(airport: str) -> Optional[dict]:
         resp = requests.get(cfg["url"], headers=headers, timeout=_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("payload is not an object")
         log.info(
             "airport_fids: %s -- %d arrivals, %d departures",
             airport,
             len(data.get("arrivals", [])),
             len(data.get("departures", [])),
         )
+        _last_error.pop(airport.upper(), None)
         return data
     except requests.RequestException as exc:
         log.warning("airport_fids: %s fetch failed -- %s", airport, exc)
+        _last_error[airport.upper()] = f"fetch failed: {type(exc).__name__}"
         return None
     except (ValueError, KeyError) as exc:
         log.warning("airport_fids: %s parse error -- %s", airport, exc)
+        _last_error[airport.upper()] = f"parse error: {type(exc).__name__}"
         return None
+
+
+def _usable_cache(airport: str) -> Optional[dict]:
+    cached = _cache.get(airport)
+    if cached and (_now() - cached["ts"]) <= FIDS_MAX_STALE_S:
+        return cached["data"]
+    return None
 
 
 def get_data(airport: str, force: bool = False) -> Optional[dict]:
     """
-    Return cached FIDS payload, refreshing if stale (> 60s).
-    Returns stale cache on failure rather than None.
+    Return the FIDS payload, refreshing when the cache is older than 60 s.
+    On a failed fetch: the cache if it is at most FIDS_MAX_STALE_S old, else
+    None (2026-10-18 -- never an older payload). Non-forced callers skip the
+    fetch for FIDS_FAIL_BACKOFF_S after a failure.
     """
     airport = airport.upper()
     cached = _cache.get(airport)
     if not force and cached and (_now() - cached["ts"]) < _CACHE_TTL:
         return cached["data"]
+    if not force and airport in _last_fail and (_now() - _last_fail[airport]) < FIDS_FAIL_BACKOFF_S:
+        return _usable_cache(airport)
 
     fresh = _fetch_raw(airport)
     if fresh is not None:
@@ -137,17 +173,23 @@ def get_data(airport: str, force: bool = False) -> Optional[dict]:
             "data": fresh,
             "hash": hashlib.sha256(raw_bytes).hexdigest()[:16],
         }
+        _last_fail.pop(airport, None)
         return fresh
 
+    _last_fail[airport] = _now()
+    usable = _usable_cache(airport)
+    if usable is not None:
+        log.warning("airport_fids: %s using cache (age %.0fs, cap %ds)",
+                    airport, _now() - cached["ts"], FIDS_MAX_STALE_S)
+        return usable
     if cached:
-        log.warning(
-            "airport_fids: %s using stale cache (age %.0fs)",
-            airport,
-            _now() - cached["ts"],
-        )
-        return cached["data"]
-
+        log.warning("airport_fids: %s cache older than %ds -- not served", airport, FIDS_MAX_STALE_S)
     return None
+
+
+def last_fetch_error(airport: str) -> Optional[str]:
+    """The error of the most recent fetch attempt for this airport, or None if it succeeded."""
+    return _last_error.get(airport.upper())
 
 
 def get_payload_hash(airport: str) -> Optional[str]:
@@ -192,26 +234,25 @@ def _effective_gate(flight: dict) -> Optional[str]:
     return str(g).strip().strip("-") if g and g != "NULL" else None
 
 
-def _effective_status(flight: dict) -> Optional[str]:
-    return flight.get("mod_status") or flight.get("status")
-
-
-def _effective_time(flight: dict) -> Optional[str]:
-    return (
-        flight.get("mwaaTime")
-        or flight.get("actualtime")
-        or flight.get("publishedTime")
-    )
+def _published_epoch(flight: dict) -> Optional[float]:
+    """The row's published time (naive airport-local ET) as an epoch -- used ONLY
+    by match_leg() / the date filter below to pick a row. Never returned."""
+    pub = flight.get("publishedTime")
+    if not pub:
+        return None
+    try:
+        return datetime.strptime(pub, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_AIRPORT_TZ).timestamp()
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-STATUS_PRIORITY = {
-    "InGate": 0, "Landed": 1, "In Customs": 2, "InAir": 3,
-    "OutGate": 4, "Delayed": 5, "Scheduled": 6, "Cancelled": 7,
-}
+def _pick_nearest_now(matches: list[dict]) -> dict:
+    now = time.time()
+    return min(matches, key=lambda f: abs((_published_epoch(f) or 0) - now))
 
 
 def lookup_arrival(
@@ -229,23 +270,21 @@ def lookup_arrival(
         flight_number: Numeric string, e.g. "1557"
         date_str:      "YYYY-MM-DD" -- defaults to today
 
-    Returns normalized dict or None:
+    Returns normalized dict or None (2026-10-18: no status, scheduled,
+    estimated, remaining or tail -- FIDS is gate/terminal/baggage only):
         {
             "airport":        "DCA",
             "iata":           "AA",
             "flight_number":  "1557",
-            "status":         "InAir",
             "gate":           "D38",
             "terminal":       "2",
             "baggage":        "11",
-            "scheduled":      "2026-06-24 19:14:00",
-            "estimated":      "2026-06-24 19:09:00",
-            "remaining":      "00:38:46",
-            "tail":           "Q7FJP",
             "dep_airport":    "BOS",
             "dep_gate":       "B15",
             "dep_terminal":   "B",
         }
+    Several rows for the number (a daily flight, the next day's instance):
+    the one published nearest now. For a watched leg use match_leg().
     """
     if date_str is None:
         date_str = datetime.now(_AIRPORT_TZ).strftime("%Y-%m-%d")  # airport-local ET, not container-UTC
@@ -272,25 +311,15 @@ def lookup_arrival(
     if not matches:
         return None
 
-    flight = sorted(
-        matches,
-        key=lambda f: STATUS_PRIORITY.get(_effective_status(f) or "", 99),
-    )[0]
-
-    arrival_info = (flight.get("arrivalInfo") or [{}])[0]
+    flight = _pick_nearest_now(matches)
 
     return {
         "airport":       airport,
         "iata":          flight.get("IATA", "").upper(),
         "flight_number": str(flight.get("flightnumber", "")),
-        "status":        _effective_status(flight),
         "gate":          _effective_gate(flight),
         "terminal":      flight.get("arr_terminal"),
         "baggage":       _effective_claim(flight, airport),
-        "scheduled":     flight.get("publishedTime"),
-        "estimated":     _effective_time(flight),
-        "remaining":     arrival_info.get("remaining_time"),
-        "tail":          (flight.get("aircraftInfo") or {}).get("tail_number"),
         "dep_airport":   flight.get("dep_airport_code"),
         "dep_gate":      flight.get("dep_gate"),
         "dep_terminal":  flight.get("dep_terminal"),
@@ -318,17 +347,14 @@ def lookup_departure(
         flight_number: Numeric string, e.g. "6203"
         date_str:      "YYYY-MM-DD" -- defaults to today
 
-    Returns normalized dict or None:
+    Returns normalized dict or None (2026-10-18: no status, scheduled,
+    estimated or tail):
         {
             "airport":        "IAD",
             "iata":           "UA",
             "flight_number":  "6203",
-            "status":         "OutGate",
             "gate":           "C20",
             "terminal":       "A",
-            "scheduled":      "2026-07-28 14:53:00",
-            "estimated":      "2026-07-28 19:31:00",
-            "tail":           "Q8GD5",
             "arr_airport":    "IAD",
             "arr_gate":       "1",
             "arr_terminal":   None,
@@ -358,26 +384,67 @@ def lookup_departure(
     if not matches:
         return None
 
-    flight = sorted(
-        matches,
-        key=lambda f: STATUS_PRIORITY.get(_effective_status(f) or "", 99),
-    )[0]
-
-    # aircraftInfo is a LIST on departure records -- take the first entry.
-    aircraft_list = flight.get("aircraftInfo") or [{}]
-    aircraft = aircraft_list[0] if aircraft_list else {}
+    flight = _pick_nearest_now(matches)
 
     return {
         "airport":       airport,
         "iata":          flight.get("IATA", "").upper(),
         "flight_number": str(flight.get("flightnumber", "")),
-        "status":        _effective_status(flight),
         "gate":          _effective_gate(flight),
         "terminal":      flight.get("dep_terminal"),
-        "scheduled":     flight.get("publishedTime"),
-        "estimated":     _effective_time(flight),
-        "tail":          aircraft.get("tail_number"),
         "arr_airport":   flight.get("airportcode"),
         "arr_gate":      flight.get("arr_gate"),
         "arr_terminal":  flight.get("arr_terminal"),
     }
+
+
+def match_leg(
+    airport: str,
+    side: str,
+    iata: str,
+    flight_number: str,
+    other_airport: Optional[str],
+    window: Optional[tuple[float, float]],
+) -> Optional[dict]:
+    """The FIDS row for ONE verified flight leg, gate/terminal/baggage only.
+
+    side="arrival":   the ARRIVALS board of `airport` (the leg's destination);
+                      the row's origin must not contradict `other_airport`.
+    side="departure": the DEPARTURES board of `airport` (the leg's origin) --
+                      2026-10-18 fix: the origin side used to read the
+                      arrivals board for the flight number, i.e. another
+                      leg's gate on an out-and-back; only the departure gate
+                      is returned. The row's destination must not contradict
+                      `other_airport`.
+    window: (start, end) epoch bounds from the leg's own SWIM/TFMS times. A row
+    matches only when its published time falls inside -- the one permitted use
+    of a FIDS time (operator 2026-10-18); it is never returned. With no window
+    (no verified times), only a route that is unique on the board matches
+    (leg_match 'route_only'). None when no single row matches."""
+    from common.flight_instance import airports_agree
+
+    airport = airport.upper()
+    data = get_data(airport)
+    if data is None:
+        return None
+    board = data.get("arrivals" if side == "arrival" else "departures", [])
+    route_key = "dep_airport_code" if side == "arrival" else "airportcode"
+    rows = [
+        f for f in board
+        if f.get("IATA", "").upper() == iata.upper()
+        and str(f.get("flightnumber", "")).lstrip("0") == str(flight_number).lstrip("0")
+        and airports_agree(f.get(route_key), other_airport) is not False
+    ]
+    if window is not None:
+        lo, hi = window
+        rows = [f for f in rows if (ep := _published_epoch(f)) is not None and lo <= ep <= hi]
+        leg_match = "route_watch"
+    else:
+        leg_match = "route_only"
+    if len(rows) != 1:
+        return None
+    f = rows[0]
+    if side == "arrival":
+        return {"gate": _effective_gate(f), "terminal": f.get("arr_terminal"),
+                "baggage": _effective_claim(f, airport), "leg_match": leg_match}
+    return {"gate": _effective_gate(f), "leg_match": leg_match}

@@ -131,6 +131,9 @@ PG_TABLES: frozenset[str] = frozenset({
     "reference_import_ledger",
     # 2026-10-14: append-only surface event log (pg_schema/0075)
     "surface_event_log",
+    # 2026-10-18: gate/baggage assignment model + AeroAPI fallback ledger (pg_schema/0079)
+    "gate_baggage_observations", "gate_baggage_assignments",
+    "gate_baggage_assignment_history", "aeroapi_gate_calls",
     "board_enroll_nonces", "board_messages", "board_presence",
     "board_refresh_grace", "board_signers", "board_tokens", "brief_archive",
     "cifp_fixes", "cifp_holds", "cifp_meta", "cifp_procedure_legs",

@@ -44,6 +44,14 @@ from typing import Optional
 
 import requests
 
+# 2026-10-18: message-type flags (acars_flags.py, byte-identical to
+# src/common/acars_flags.py). Package import in tests, flat import in the image
+# (WORKDIR /app holds acars_watcher.py + acars_flags.py side by side).
+try:
+    from . import acars_flags
+except ImportError:
+    import acars_flags  # type: ignore[no-redef]
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -185,48 +193,34 @@ def normalize_reg(reg: str) -> str:
 
 
 def extract_reg_from_msg(msg: dict) -> str:
-    for key in ("tail", "registration", "reg", "aircraft_reg", "acars.reg"):
-        v = msg.get(key, "")
-        if v:
-            return str(v).strip()
-    acars = msg.get("acars") or {}
-    if isinstance(acars, dict):
-        v = acars.get("reg", "") or acars.get("tail", "")
-        if v:
-            return str(v).strip()
-    return ""
+    """Registration from any supported shape: dumpvdl2 (vdl2.avlc.acars.reg, with its
+    leading "." pad stripped), acarsdec / airframes.io / Jumpseat top-level fields,
+    or a nested "acars" dict. 2026-10-18 (uplink diagnosis): this read top-level keys
+    only, so every local dumpvdl2 datagram on UDP 5005 came back "" and was dropped
+    before the watchlist match -- the local path could never fire."""
+    return acars_flags.extract_fields(msg)["tail"]
 
 
 def build_ntfy_payload(reg: str, msg: dict, source: str) -> dict:
-    tail   = extract_reg_from_msg(msg) or reg
-    flight_raw = (msg.get("flight")
-                  or msg.get("flightNumber")
-                  or (msg.get("acars") or {}).get("flight")
-                  or "")
-    # airframes.io occasionally attaches a flight-state ENRICHMENT OBJECT
-    # (dict, e.g. {'id':..., 'flight':'AA2141', 'flightIcao':'AAL2141', ...})
-    # to the "flight" field instead of a plain flight-number string. Without
-    # this guard, an f-string on that dict dumps its raw repr() straight into
-    # the ntfy title -- confirmed live 2026-07-26 on Q5WX3/AA2141. Pull a
-    # sane flight number back out of it, don't just stringify the object.
-    if isinstance(flight_raw, dict):
-        flight = (flight_raw.get("flight")
-                  or flight_raw.get("flightIata")
-                  or flight_raw.get("flightIcao")
-                  or "")
-    else:
-        flight = str(flight_raw) if flight_raw else ""
-    label  = (msg.get("label")
-              or (msg.get("acars") or {}).get("label")
+    fields = acars_flags.extract_fields(msg)
+    tail   = fields["tail"] or reg
+    # airframes.io's "flight" enrichment object (a dict, seen live 2026-07-26 on
+    # an AA flight) is unwrapped by extract_fields, so its repr() never reaches
+    # the ntfy title; dumpvdl2's vdl2.avlc.acars.flight is read the same way.
+    flight = fields["flight"]
+    label  = (fields["label"]
               or msg.get("type")
               or "ACARS")
-    text   = (msg.get("cleanedText")
-              or msg.get("text")
-              or (msg.get("acars") or {}).get("msg_text")
-              or msg.get("message")
-              or "").strip()
+    text   = fields["text"]
     freq   = str(msg.get("freq") or msg.get("frequency") or "")
     station = msg.get("station") or {}
+    vdl2 = msg.get("vdl2") if isinstance(msg.get("vdl2"), dict) else None
+    if vdl2:                                   # dumpvdl2: Hz + a station name string
+        try:
+            freq = freq or f"{float(vdl2.get('freq')) / 1e6:.3f}"
+        except (TypeError, ValueError):
+            pass
+        station = station or vdl2.get("station") or {}
     sta_loc = (msg.get("stationLocation")
                or (station.get("location") if isinstance(station, dict) else "")
                or "")
@@ -236,6 +230,9 @@ def build_ntfy_payload(reg: str, msg: dict, source: str) -> dict:
 
     signals, priority, edct_raw = classify_text(text)
     sig_tag = f" [{','.join(signals)}]" if signals else ""
+    flags = acars_flags.classify(msg)
+    if flags and flags != ["free_text"]:
+        sig_tag += f" {{{','.join(flags)}}}"
 
     if flight:
         title = f"{tail} ({flight}) — {label}{sig_tag} [{source}]"
@@ -263,6 +260,7 @@ def build_ntfy_payload(reg: str, msg: dict, source: str) -> dict:
         "priority": priority,
         "title":    title,
         "message":  body,
+        "acars_flags": flags,
     }
 
 
@@ -365,7 +363,8 @@ def fire_ntfy(payload: dict):
             timeout=10,
         )
         if resp.status_code in (200, 204):
-            log.info("ntfy → %s | %s", payload["topic"], payload["title"])
+            # 2026-10-18: topic only -- the title carries the registration.
+            log.info("ntfy → %s", payload["topic"])
         else:
             log.warning("ntfy HTTP %s: %s", resp.status_code, resp.text[:80])
     except Exception as exc:
@@ -403,7 +402,7 @@ def udp_listener_thread():
                         msg["_source"] = "LOCAL"
                         MSG_QUEUE.put_nowait(msg)
                 except json.JSONDecodeError:
-                    log.debug("UDP non-JSON from %s: %s", addr, line[:80])
+                    log.debug("UDP non-JSON datagram line (%d bytes)", len(line))
         except Exception as exc:
             log.error("UDP recv error: %s", exc)
             time.sleep(1)
@@ -525,9 +524,9 @@ def _jumpseat_poll_once(seen_ids: set) -> int:
                 time.sleep(retry)
                 break
             else:
-                log.warning("Jumpseat: HTTP %s for %s", resp.status_code, reg)
+                log.warning("Jumpseat: HTTP %s", resp.status_code)
         except Exception as exc:
-            log.error("Jumpseat poll error (%s): %s", reg, exc)
+            log.error("Jumpseat poll error: %s", type(exc).__name__)
 
         # Small inter-registration gap to avoid hammering the API
         time.sleep(2)
@@ -639,25 +638,39 @@ def main():
             if len(seen_ids) > 20000:
                 seen_ids = set(list(seen_ids)[10000:])
 
+        # >>> gate/baggage hook (2026-10-18 gate batch; owner: acars_gate_forward.py).
+        # Every received message, before the registration filter; never raises,
+        # never blocks, never changes what this loop does with the message.
+        try:
+            import acars_gate_forward
+            acars_gate_forward.offer(msg)
+        except Exception:
+            pass
+        # <<< gate/baggage hook
+
         reg_raw = extract_reg_from_msg(msg)
         if not reg_raw:
             continue
 
         if normalize_reg(reg_raw) in watched:
-            source  = msg.get("_source", "UNKNOWN")
-            payload = build_ntfy_payload(reg_raw, msg, source)
-            signals_text = ""
-            signals, _, _ = classify_text(
-                msg.get("cleanedText") or msg.get("text") or ""
-            )
-            if signals:
-                signals_text = f" signals={signals}"
-            log.info(
-                "MATCH [%s] %s%s — %s",
-                source, reg_raw, signals_text,
-                (msg.get("cleanedText") or msg.get("text") or "")[:80],
-            )
-            fire_ntfy(payload)
+            handle_watched_match(reg_raw, msg)
+
+
+_match_counts: dict = {}
+
+
+def handle_watched_match(reg_raw: str, msg: dict) -> dict:
+    """A message from a watched registration: push it (flight-alerts) and count it.
+    2026-10-18: logs carry source, signals and type flags only -- never the
+    registration or the message text (either can name the aircraft)."""
+    source  = msg.get("_source", "UNKNOWN")
+    payload = build_ntfy_payload(reg_raw, msg, source)
+    signals, _, _ = classify_text(acars_flags.extract_fields(msg)["text"])
+    _match_counts[source] = _match_counts.get(source, 0) + 1
+    log.info("MATCH [%s] #%d signals=%s flags=%s", source, _match_counts[source],
+             signals or "-", payload.get("acars_flags") or "-")
+    fire_ntfy({k: v for k, v in payload.items() if k != "acars_flags"})
+    return payload
 
 
 if __name__ == "__main__":

@@ -33,10 +33,15 @@ convention):
     --direction  arrivals|departures (default: arrivals)
     --json       emit JSON instead of a human-readable table
 
-Only flights still in a forward-looking state are included --
+~~Only flights still in a forward-looking state are included --
 Scheduled / InAir / Delayed. Already-landed (InGate/Landed/OutGate) or
 Cancelled flights are excluded even if their published time falls in the
-window, since the question this script answers is "what's still coming."
+window, since the question this script answers is "what's still coming."~~
+2026-10-18 (operator, gate batch): FIDS supplies gate, terminal and baggage
+ONLY -- never a time or a status. The FIDS status filter is gone, and the
+output no longer carries `status` or `scheduled`; the published time only
+selects rows inside the window (in airport-local time) and orders them.
+For one flight from every source use GET /api/v1/flights/{ident}/assignments.
 """
 import argparse
 import json
@@ -48,7 +53,7 @@ sys.path.insert(0, "/opt/corporatetraveldc/private/ctdi-dispatch-internal/src")
 
 from common.airport_fids import get_data, _effective_gate, _effective_claim  # noqa: E402
 
-FORWARD_LOOKING_STATUSES = {"Scheduled", "InAir", "Delayed"}
+# 2026-10-18: FORWARD_LOOKING_STATUSES (a filter on the FIDS status) removed.
 
 
 def lookup(airports, carriers, within_minutes, direction):
@@ -82,9 +87,6 @@ def lookup(airports, carriers, within_minutes, direction):
             iata = f.get("IATA")
             if carriers and iata not in carriers:
                 continue
-            status = f.get("status")
-            if status not in FORWARD_LOOKING_STATUSES:
-                continue
             pub = f.get("publishedTime")
             if not pub:
                 continue
@@ -96,12 +98,11 @@ def lookup(airports, carriers, within_minutes, direction):
                 continue
 
             results.append({
+                "_order": pub,                 # selection/ordering only, removed below
                 "airport": airport,
                 "carrier": iata,
                 "airline": f.get("airline"),
                 "flight": f.get("flightnumber"),
-                "status": status,
-                "scheduled": pub,
                 "other_airport": f.get("dep_airport_code") if direction == "arrivals" else f.get("airportcode"),
                 "city": f.get("city"),
                 "gate": _effective_gate(f),
@@ -109,7 +110,9 @@ def lookup(airports, carriers, within_minutes, direction):
                 "baggage_claim": _effective_claim(f, airport) if direction == "arrivals" else None,
             })
 
-    results.sort(key=lambda r: r["scheduled"])
+    results.sort(key=lambda r: r["_order"])
+    for r in results:
+        r.pop("_order", None)
     return results, errors
 
 
@@ -135,7 +138,6 @@ def main():
           f"({', '.join(airports)}, carriers={','.join(carriers) or 'ALL'})")
     for r in results:
         line = (f"  {r['carrier']} {r['flight']:>5}  {r['airport']}  "
-                f"{r['scheduled'][-8:-3]}  {r['status']:<10}  "
                 f"{r['other_airport'] or '?':>4}  gate {r['gate'] or '?'}"
                 f"  T{r['terminal'] or '?'}")
         if r.get("baggage_claim"):
