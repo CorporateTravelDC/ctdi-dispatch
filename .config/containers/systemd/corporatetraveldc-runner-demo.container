@@ -96,7 +96,7 @@
 
 [Unit]
 Description=Corporate Travel DC -- dispatch-runner PWA, demo-playback mode (port 8005)
-After=network-online.target corporatetraveldc-demo-api.service
+After=network-online.target corporatetraveldc-demo-api.service corporatetraveldc-pgsql-demo.service
 Wants=corporatetraveldc-demo-api.service
 
 [Container]
@@ -122,13 +122,25 @@ Environment=SSE_INTERVAL_SEC=30
 # documents as the one thing meant to gate the public demo -- flipping
 # this makes that already-stated intent actually true, not new hardening.
 Environment=DEMO_MODE=true
-EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# ~~EnvironmentFile=/etc/corporatetraveldc/dispatch.env~~ (removed 2026-10-19,
+# relay 2). Besides the production DISPATCH_PG_* pair it handed this container
+# ULTRAFEEDER_URL -- the very path back to local ADS-B data the 2026-08-27
+# comment above says is "deliberately NOT set here". The three settings the
+# demo runner does need (LLAMA_BASE_URL, OLLAMA_CHAT_MODEL; NTFY is
+# suppressed under DEMO_MODE) are copied by name into demo.env
+# (scripts/demo-env.py seed), loaded LAST below.
 # DEMO_SESSION_SECRET -- scoped ONLY to this + demo-api, see that
 # quadlet's identical comment and demo-secrets.env's own header for the
 # shared-secret bug this fixes (both sides previously fell back to their
 # own independent random per-process secret, so a demo-api-issued session
 # token could never actually verify here).
 EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
+# 2026-10-19 relay 2: demo identity + rollback switch, loaded last (see
+# corporatetraveldc-demo-api.container for why DEMO_SOURCE and
+# DISPATCH_DB_BACKEND live in the file, not here). Under
+# DISPATCH_DB_BACKEND=postgres the chat history goes to the demo instance's
+# chat_messages; under the sqlite rollback it stays in the demo-only mount.
+EnvironmentFile=/etc/corporatetraveldc/demo.env
 Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
 # 2026-10-16 (operator rule: the public demo is logically AND physically
 # separated from production): the `Volume=corporatetraveldc-pgsql-sock:
@@ -140,6 +152,10 @@ Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
 # DISPATCH_DEMO_ISOLATION=1 makes common.db_backend refuse that pair
 # outright should any future code path reach for it.
 Environment=DISPATCH_DEMO_ISOLATION=1
+# 2026-10-19 relay 2: a demo-role process on the demo instance's own socket
+# volume (never corporatetraveldc-pgsql-sock).
+Environment=DISPATCH_ROLE=demo
+Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo
 AutoUpdate=local
 
 [Service]

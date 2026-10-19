@@ -1,13 +1,21 @@
 [Unit]
-Description=Run demo-source scrub+promote refresh at 04:45 ET (right after the 04:15 demo-archiver, same quiet period, no Ollama use so no stacking concern)
+Description=Run the demo-source scrub+promote refresh daily at 03:17 UTC (paced; see the service)
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
 # Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
 # binding is implicit from the filename; the line was never needed.
+#
+# 2026-10-19 (demo/production split, relay 3: enabled). ~~04:45
+# America/New_York~~ -> 03:17 UTC: a quiet minute off the :00/:15/:30/:45
+# marks the frequent timers use, outside the 04:15 ET demo-archiver window,
+# pinned to UTC like the other daily jobs (host and containers are UTC).
+# The 24 h minimum-age floor makes the exact hour irrelevant to what is
+# promoted. Lean-out L2's stagger map owns timer minutes: if it moves this,
+# it moves only the OnCalendar line.
 
 [Timer]
-OnCalendar=*-*-* 04:45:00 America/New_York
+OnCalendar=*-*-* 03:17:00 UTC
 Persistent=true
 
 [Install]

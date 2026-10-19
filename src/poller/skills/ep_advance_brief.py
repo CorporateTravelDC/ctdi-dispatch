@@ -58,6 +58,7 @@ import requests
 from common import config, db, ntfy_push as _ntfy
 from common.aam_watch import get_aam_watch_section
 from common.sr1_log import log_usage
+from common.input_gate import InputGate, make_key, mask_stamps
 
 log = logging.getLogger(__name__)
 
@@ -765,6 +766,15 @@ def _cps_section() -> str:
     )
 
 
+def _cps_key() -> str:
+    """CPS stable fields for the input gate: score and label, never its narrative."""
+    try:
+        cps = db.get_latest_cps() or {}
+    except Exception:
+        return "?"
+    return f"{cps.get('score', '?')}/{cps.get('label', '?')}"
+
+
 def _route_section() -> str:
     route = db.get_latest_route_narrative()
     if not route or not route.get("route_narrative"):
@@ -1269,10 +1279,38 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             threats,
         ])
 
-        result = _call_ollama(prompt)
-        if result:
+        # 2026-10-19 (lean-out L2, F7): input gate. Key = stable DATA fields
+        # only (operator rule: dedup never hashes timestamps): no pull stamp,
+        # CPS score/label without its narrative, no route narrative (derived
+        # from the TFR/weather inputs already keyed), OSINT item lines without
+        # the header count, the static threat-site block as-is.
+        input_key = make_key({
+            "tfr": tfr,
+            "weather": mask_stamps(weather),
+            "nws": mask_stamps(nws),
+            "cps": _cps_key(),
+            "osint": "\n".join(l for l in osint.splitlines() if not l.startswith("=== ACTIVE OSINT FEED")),
+            "threats": threats,
+        })
+        gate = InputGate("ep-advance")
+        reused = None if force else gate.reusable(input_key)
+        result = None
+        if reused:
+            now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
+            full_text = (f"EP-ADVANCE {now_label} (Ollama/{OLLAMA_MODEL}, input unchanged)\n"
+                         f"{gate.no_change_note(reused)}\n\n{reused['narrative']}")
+            concise = reused.get("concise") or ""
+            status = "ok"
+            log.info("ep-advance: brief generated via Ollama/%s (input unchanged -- model call skipped)",
+                     OLLAMA_MODEL)
+        else:
+            result = _call_ollama(prompt)
+        if reused:
+            pass
+        elif result:
             full_text, concise = result
             status = "ok"
+            gate.record(input_key, full_text.split("\n\n", 1)[-1], concise)
             log.info("ep-advance: brief generated via Ollama/%s", OLLAMA_MODEL)
         else:
             # 2026-08-06: narrow safety net around the fallback ITSELF --

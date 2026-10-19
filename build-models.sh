@@ -138,7 +138,11 @@ if not m:
     sys.exit(2)
 
 modelfile_system = m.group(1).strip()
-persona_system = build_system_prompt(suffix).strip()
+# 2026-10-19 (G8): the Modelfile SYSTEM block is the base prompt; the signed
+# glossary rules appendix (CTDC_PERSONA_RULES_APPENDIX=1, set in the poller
+# image) is appended at call time and is never part of a Modelfile, so the
+# comparison always excludes it, whatever the caller's environment says.
+persona_system = build_system_prompt(suffix, rules_appendix=False).strip()
 
 # Whitespace-normalized comparison (collapse runs of whitespace) -- this
 # catches real content drift (added/removed/reworded sentences) without

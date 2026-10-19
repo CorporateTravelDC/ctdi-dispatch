@@ -16,6 +16,10 @@ def load(monkeypatch, tmp_path):
     env = tmp_path / "secrets.env"
     env.write_text("")
     monkeypatch.setenv("LEAK_GUARD_SECRETS_ENV", str(env))
+    # 2026-10-19: no dispatch env -> the LADD class is not attempted (warning only);
+    # tests/scripts/test_transcript_leak_scan_ladd.py covers it with a synthetic list.
+    monkeypatch.delenv("DISPATCH_DB_BACKEND", raising=False)
+    monkeypatch.delenv("DISPATCH_DB", raising=False)
     monkeypatch.setenv("LEAK_GUARD_EXTRA_FILES", str(tmp_path / "none"))
     spec = importlib.util.spec_from_file_location("tls_fdps", REPO / "scripts/leak-guard/transcript_leak_scan.py")
     m = importlib.util.module_from_spec(spec)

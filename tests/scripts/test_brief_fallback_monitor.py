@@ -21,7 +21,9 @@ def run(tmp_path, outcomes: dict[str, list[str]]):
     (bindir / "journalctl").write_text(
         f'#!/bin/bash\nfor a in "$@"; do [[ -f "{data}/$a" ]] && cat "{data}/$a"; done; exit 0\n')
     (bindir / "journalctl").chmod(0o755)
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", DRY_RUN="1")
+    # 2026-10-19 (L2 F4): the monitor keeps a per-unit outcome history; never the real one.
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", DRY_RUN="1",
+               BRIEF_FALLBACK_STATE_DIR=str(tmp_path / "state"))
     r = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30)
     return r.stdout
 

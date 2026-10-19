@@ -19,6 +19,13 @@ def load(monkeypatch, tmp_path):
     env = tmp_path / "secrets.env"
     env.write_text(f"FAKE_PASSWORD={FAKE}\nSHORT=abc\nPUBLIC_HOST=tcps://ems1.swim.faa.gov:55443\n")
     monkeypatch.setenv("LEAK_GUARD_SECRETS_ENV", str(env))
+    # 2026-10-19: never load the operator's real single-value secret files in a test (a
+    # failing test's traceback printed the real ping URL from the loaded secrets dict).
+    monkeypatch.setenv("LEAK_GUARD_EXTRA_FILES", str(tmp_path / "no-extra-file"))
+    # 2026-10-19: no dispatch env -> the LADD class is not attempted (warning only);
+    # tests/scripts/test_transcript_leak_scan_ladd.py covers it with a synthetic list.
+    monkeypatch.delenv("DISPATCH_DB_BACKEND", raising=False)
+    monkeypatch.delenv("DISPATCH_DB", raising=False)
     spec = importlib.util.spec_from_file_location("tls", REPO / "scripts/leak-guard/transcript_leak_scan.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
@@ -84,11 +91,11 @@ def test_a_file_that_leaks_during_the_run_is_left_as_live_not_failed(monkeypatch
     _old(late)
     real_scan, calls = m.scan, []
 
-    def scan(roots, secrets):                                          # the leak lands between the two scans
+    def scan(roots, secrets, ladd=None):                               # the leak lands between the two scans
         calls.append(1)
         if len(calls) == 2:
             late.write_text(FAKE)
-        return real_scan(roots, secrets)
+        return real_scan(roots, secrets, ladd)
     monkeypatch.setattr(m, "scan", scan)
     assert m.main(["redact", "--root", str(root)]) == 0
     out = capsys.readouterr().out

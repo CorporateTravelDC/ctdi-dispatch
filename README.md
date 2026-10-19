@@ -66,6 +66,7 @@ long-running baseline.
 - **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail here is tuned for one Pi 5 under shared-resource contention.
 - **[Backups](docs/BACKUP.md)** — encrypted Borg backups, nightly, synced to an off-box target; freshness check and weekly restore test (added 2026-10-15).
 - **[Retired code index](docs/RETIRED.md)** — everything taken out of service, by folder (added 2026-10-15).
+- **[Glossary](docs/GLOSSARY.md)** — acronyms, platform terms and the logic rules with their enforcing tests, generated from `docs/glossary.yaml` (added 2026-10-19).
 
 ### Documentation index (added 2026-10-15)
 

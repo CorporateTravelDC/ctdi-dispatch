@@ -134,3 +134,50 @@ def test_relay_wait_load_script(tmp_path):
     assert subprocess.run(["bash", str(script)], env=env).returncode == 0
     f.write_text("31.0 30.0 29.0 1/1 1\n")
     assert subprocess.run(["bash", str(script)], env=env, capture_output=True).returncode == 1
+
+
+# 2026-10-19 (operator, Gate-1b) -------------------------------------------------------------
+
+def test_leak_guard_relay_must_redact_before_its_first_push():
+    redact = "python3 scripts/leak-guard/transcript_leak_scan.py redact"
+    why = "push before `transcript_leak_scan.py redact`"
+    assert any(why in w for w in lint("git add -A scripts/leak-guard/\ngit push origin main"))
+    assert any(why in w for w in lint(f"git push origin main\n{redact}"))                 # redact after push
+    assert any(why in w for w in lint("git commit -F - <<'MSG'\nTranscript leak scan learns LADD\nMSG\n"
+                                      "scripts/push-public.sh </dev/null"))
+    assert not any(why in w for w in lint(f"{redact}\ngit push origin main\nscripts/push-public.sh </dev/null"))
+    assert not any(why in w for w in lint("git push origin main"))                       # no leak-scan change
+    assert not any(why in w for w in lint("# leak-guard untouched\ngit push origin main"))   # comments don't count
+
+
+def test_secret_read_needs_a_control_character_check_before_use():
+    why = "without a control-character check"
+    assert any(why in w for w in lint("read -rs -p 'Key: ' K </dev/tty\nprintf '%s' \"$K\" > \"$HOME/.secrets/x.key\""))
+    assert any(why in w for w in lint("read -r -p 'Token: ' API_TOKEN </dev/tty\nprintf '%s\\n' \"${API_TOKEN}\" > f"))
+    assert not any(why in w for w in lint("source scripts/lib/secret_input.sh\nread -rs -p 'Key: ' K </dev/tty\n"
+                                          "secret_check K\nprintf '%s' \"$K\" > f"))
+    assert not any(why in w for w in lint("read -rs -p 'Key: ' K </dev/tty; secret_check K\nprintf '%s' \"$K\" > f"))
+    assert not any(why in w for w in lint("source scripts/lib/secret_input.sh\nsecret_read K 'Key: '\nprintf '%s' \"$K\" > f"))
+    assert not any(why in w for w in lint("read -r -p 'Token: ' TOKEN </dev/tty\n"
+                                          "[[ \"$TOKEN\" == *[[:cntrl:]]* ]] && exit 1\nprintf '%s' \"$TOKEN\" > f"))
+    assert not any(why in w for w in lint("read -r -p 'Name: ' NAME </dev/tty\necho \"$NAME\""))   # not a secret
+    assert not any(why in w for w in lint("read -rs -p 'URL: ' U </dev/tty"))                      # never used
+
+
+def test_secret_input_helper_refuses_control_characters(tmp_path):
+    import subprocess
+    helper = SCRIPT.parent / "lib/secret_input.sh"
+    tty = tmp_path / "tty"
+    script = tmp_path / "t.sh"
+    script.write_text(
+        f"source {helper}\n"
+        "for v in 'fake-ok-value' $'a\\x1bb' $'a\\rb' $'a\\tb' $'a\\x7fb' $'a\\x01b'; do\n"
+        "  X=\"$v\"; if secret_check X 2>/dev/null; then echo pass; else echo \"refused ${#X}\"; fi\n"
+        "done\n"
+        f"SECRET_INPUT_TTY={tty} secret_read Y 'p: ' 2>/dev/null && echo \"read ${{#Y}}\" || echo \"read-refused ${{#Y}}\"\n")
+    tty.write_bytes(b"fake-ok-value\n")
+    r = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
+    assert r.stdout.split("\n")[:6] == ["pass"] + ["refused 0"] * 5 and "read 13" in r.stdout
+    tty.write_bytes(b"fake\x1b[31mvalue\n")
+    r = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
+    assert "read-refused 0" in r.stdout and "fake" not in r.stdout + r.stderr

@@ -7,7 +7,10 @@ Description=Feed/DB integrity check every 30 min -- catches feed-claims-healthy-
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=*:0/30
+# 2026-10-19 (lean-out L2 / F12 stagger map): *:0/30 -> *:26/30 (:26/:56). Same cadence, off the
+# shared :00/:05/:10.../:30 seconds where five */5 jobs, three */15 jobs and the */30
+# integrity check all fired together (~102 starts at :00, ~96 at :30 per day).
+OnCalendar=*:26/30
 Persistent=false
 
 [Install]

@@ -5,7 +5,8 @@
     always recorded in feed_state without advancing fetched_at;
   - a failed fetch backs off 60 s per airport for the poller's checks;
   - match_leg reads the DEPARTURES board at a leg's origin (was: arrivals);
-  - the resolver's website window is computed in airport-local time.
+  - ~~the resolver's website window is computed in airport-local time.~~
+    (2026-10-19: the website tier is gone; FIDS-only arrivals drop out.)
 
 Every MWAA HTTP call is mocked (common.airport_fids.requests.get); outbound HTTP
 is not blocked globally. Synthetic flights only."""
@@ -174,17 +175,14 @@ def test_match_leg_uses_the_published_time_only_inside_the_leg_window(fids):
     assert af.match_leg("DCA", "arrival", "ZZ", "901", "ORD", None) is None      # route contradicts
 
 
-def test_resolver_website_tier_serves_no_status_or_time_and_uses_local_time(fids, monkeypatch):
+def test_resolver_fids_only_arrivals_drop_out_of_the_forward_list(fids, monkeypatch):
+    # 2026-10-19 (operator, Gate-1b): the FIDS published time no longer selects
+    # forward-window rows (was: the website tier picked 901/902 by publishedTime).
     from common import flight_resolver as fr
     monkeypatch.setattr(fr, "_query_swim", lambda *a, **k: [])
     out = fr.resolve_arrivals("DCA", ["ZZ"], within_minutes=90)
-    assert out["source_used"] == "website"
-    assert {r["flight_num"] for r in out["results"]} == {"901", "902"}
-    for r in out["results"]:
-        assert "status" not in r and "scheduled" not in r
-    # published 30 min out in ET: inside a 90-min window computed in UTC epoch terms;
-    # the old naive container-UTC vs ET comparison put it 4-5 h off.
-    assert fr.resolve_arrivals("DCA", ["ZZ"], within_minutes=10)["source_used"] == "none"
+    assert out["source_used"] == "none" and out["results"] == []
+    assert fids[1] == []                       # the FIDS board was never fetched
 
 
 def test_resolver_never_calls_aeroapi(fids, monkeypatch):

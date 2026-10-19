@@ -56,14 +56,17 @@ done
 # skills table from the grants file (scripts/lib/skill_grants.py render); agents only
 if [[ "$KIND" == agent ]]; then SKILLS=$(python3 "$REPO_ROOT/scripts/lib/skill_grants.py" --repo "$REPO_ROOT" render "$NAME" 2>&1 || echo "_(skills table unavailable -- run scripts/skill-grants.sh list ${NAME})_")
 else SKILLS="_(skills are granted to agent accounts; humans use their own Claude setup)_"; fi
+# glossary appendix (2026-10-19, batch G1): logic rules + platform and agent terms from
+# docs/glossary.yaml via scripts/render-glossary.py --pamphlet (deterministic, no live state)
+GLOSSARY=$(python3 "$REPO_ROOT/scripts/render-glossary.py" --repo "$REPO_ROOT" --pamphlet 2>/dev/null || echo "_(glossary unavailable -- read docs/GLOSSARY.md)_")
 render() {
-python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" <<'PYEOF'
+python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" "$GLOSSARY" <<'PYEOF'
 import sys, datetime
-tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills = sys.argv[1:15]
+tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills, glossary = sys.argv[1:16]
 t = open(tpl).read()
 for k, v in {"NAME": name, "UID": uid, "KIND": kind, "ROLE": role, "GROUPS": groups, "HOME": home,
              "SLICE": slice_, "SUBSET": subset, "REPOS": repos.rstrip("\n"),
-             "LOGIN_MODE": login_mode, "LOGIN_TEXT": login_text, "PRELOAD_BANNER": preload_banner, "SKILLS": skills.rstrip("\n"),
+             "LOGIN_MODE": login_mode, "LOGIN_TEXT": login_text, "PRELOAD_BANNER": preload_banner, "SKILLS": skills.rstrip("\n"), "GLOSSARY": glossary.rstrip("\n"),
              "RENDERED": datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")}.items():
     t = t.replace("{{" + k + "}}", v)
 sys.stdout.write(t)

@@ -48,11 +48,22 @@ set -uo pipefail
 # sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
 authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
-STATE_DIR="/var/lib/corporatetraveldc/container-mem-watch"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/journal-cursor.sh
+. "${REPO_ROOT}/scripts/lib/journal-cursor.sh"
+
+# *_DIR / *_FILE overrides are test hooks; the timer uses the defaults.
+STATE_DIR="${MEM_WATCH_STATE_DIR:-/var/lib/corporatetraveldc/container-mem-watch}"
 STATE_FILE="${STATE_DIR}/state.json"
 LOG_FILE="${STATE_DIR}/watch.log"
-LOCK_FILE="/run/user/$(id -u)/container-mem-watch.lock"
-ENV_FILE="/etc/corporatetraveldc/dispatch.env"
+KERNEL_CURSOR_FILE="${STATE_DIR}/kernel-journal.cursor"
+LOCK_FILE="${MEM_WATCH_LOCK_FILE:-/run/user/$(id -u)/container-mem-watch.lock}"
+ENV_FILE="${MEM_WATCH_ENV_FILE:-/etc/corporatetraveldc/dispatch.env}"
+# Lean-out L2 / F12 (2026-10-19): the one `podman stats` snapshot per cycle is
+# published here (atomic rename) for scheduled-ingest-restart.sh, which used to
+# run its own `podman stats` once per ingest service (7 per run, every 2 min).
+# Line 1: "# epoch <unix seconds>", then "<name>|<mem%>" lines.
+STATS_SNAPSHOT="${CONTAINER_STATS_SNAPSHOT:-/run/user/$(id -u)/container-mem-stats.snapshot}"
 
 # Thresholds
 HIGH_PCT=80            # % of cap considered "under pressure"
@@ -62,7 +73,7 @@ OOM_ALERT_COOLDOWN_SECS=900
 SAMPLE_KEEP=60          # ring buffer length per container (~2hr at 2min cadence)
 OOM_KEEP=20             # OOM event timestamps kept per container
 
-SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
+SECRETS_FILE="${MEM_WATCH_SECRETS_FILE:-/etc/corporatetraveldc/dispatch-secrets.env}"
 
 mkdir -p "${STATE_DIR}"
 
@@ -193,15 +204,28 @@ podman events --format json --filter event=died \
 #    used to cross-confirm which died/137 events were genuinely OOM (vs.
 #    a manual stop/kill timeout also producing exit 137).
 # ---------------------------------------------------------------------------
+# Lean-out L2 / F4 (2026-10-19): resume from the saved kernel-journal cursor
+# (scripts/lib/journal-cursor.sh) instead of a --since/--until search each
+# run; --until stays so an oom line after the podman-events window is read
+# next run, alongside its died event. No cursor yet / older than 30 min: the
+# old --since read, once.
 kernel_oom_tmpf=$(mktemp "${STATE_DIR}/.koom.XXXXXX")
-journalctl -k --since "${since_iso}" --until "${until_iso}" -o cat 2>/dev/null \
-    | grep "oom-kill:constraint=CONSTRAINT_MEMCG" > "${kernel_oom_tmpf}" 2>/dev/null || true
+kernel_raw_tmpf=$(mktemp "${STATE_DIR}/.kraw.XXXXXX")
+jc_read "${kernel_raw_tmpf}" "${KERNEL_CURSOR_FILE}" "${since_iso}" 1800 \
+    -k --until "${until_iso}" -o cat || true
+grep -a "oom-kill:constraint=CONSTRAINT_MEMCG" "${kernel_raw_tmpf}" > "${kernel_oom_tmpf}" 2>/dev/null || true
+rm -f "${kernel_raw_tmpf}"
 
 # ---------------------------------------------------------------------------
 # 3. Current memory snapshot for every live container
 # ---------------------------------------------------------------------------
 stats_tmpf=$(mktemp "${STATE_DIR}/.stats.XXXXXX")
 podman stats --no-stream --format '{{.Name}}|{{.MemPerc}}' > "${stats_tmpf}" 2>/dev/null || true
+if [[ -s "${stats_tmpf}" ]]; then
+    snap_tmp="${STATS_SNAPSHOT}.tmp.$$"
+    { echo "# epoch $(date +%s)"; cat "${stats_tmpf}"; } > "${snap_tmp}" 2>/dev/null \
+        && mv -f "${snap_tmp}" "${STATS_SNAPSHOT}" 2>/dev/null || rm -f "${snap_tmp}"
+fi
 
 trap 'rm -f "${LOCK_FILE}" "${died_tmpf}" "${kernel_oom_tmpf}" "${stats_tmpf}"' EXIT INT TERM
 

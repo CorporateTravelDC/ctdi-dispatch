@@ -128,6 +128,38 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   rescan finds 0). The archived public repository `corporatetravel-dispatch-mcp`
   still has 2 identifiers in its history (open operator item).
 
+## Transcript leak scan: LADD class (added 2026-10-19, Gate-1b)
+
+- **What.** `scripts/leak-guard/transcript_leak_scan.py` (on-box agent
+  transcripts and tool outputs) has a pattern class `ladd-identifier`. Its
+  list is the production filter's own: `faa_ladd_aircraft UNION
+  faa_ladd_removals`, the same union `push-public.sh` pipes into the
+  tripwire, read in-process through `common.db.conn()` only when the scan runs
+  with the dispatch env (`scripts/with-dispatch-env.sh`). The identifiers are
+  never printed, logged or written; output is file, class and count.
+- **Union only, no tier column (by design, operator 2026-10-19).** The scan
+  does not distinguish listed from removed entries, or one filter file's
+  tier from another: an identifier in either table is one class. Nothing is
+  gained by telling them apart in a transcript, and a tier label next to a
+  hit would itself describe the entry.
+- **Matching.** Whole tokens of letters, digits and hyphens, case-sensitive,
+  each hyphen part too (the tripwire's rule); every entry in its N-form and
+  its registry form without the N; flight-ID strings as listed. JSON escapes
+  are separators; base64 payloads of 200+ characters are skipped (random
+  noise, not text anyone wrote); an all-digit registry form is never matched
+  (it would hit every number). Coincidences use the tripwire's hash allow
+  file.
+- **Redaction.** `redact` replaces each hit with `[ladd-redacted]` through
+  the scan's atomic temp-file + rename path (same mode, owner kept under
+  root), and files written in the last 15 minutes (a live session) are left
+  for a later run, as for every other class.
+- **Fail closed.** With the dispatch env and the list unreadable (database
+  down, or fewer than 1,000 identifiers), the scan prints `LADD class
+  'ladd-identifier' NOT CHECKED` and exits 3 on both `scan` and `redact`.
+  Without the dispatch env it prints the same as a warning and exits 3 only
+  under `--require-ladd`. (Open, 2026-10-19: `push-public.sh` and
+  `relay-preflight.sh` still call the scan without the dispatch env.)
+
 ## Storage
 
 Postgres: `faa_ladd_aircraft` (migration 0053) and `faa_ladd_removals`

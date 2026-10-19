@@ -529,6 +529,7 @@ def main(force: bool = False) -> None:
     total_new      = 0
     total_pushed   = 0
     total_scored   = 0
+    total_seen     = 0   # already stored: skipped before the model
     model_used     = OLLAMA_MODEL if LLAMA_BASE_URL else MODEL
 
     try:
@@ -581,6 +582,18 @@ def main(force: bool = False) -> None:
                         continue   # no match at all — skip
 
                     content_hash = _content_hash(url, title)
+                    # 2026-10-19 (lean-out L2, F7): dedup BEFORE the model.
+                    # An already-stored item was re-narrated every 15 min and
+                    # the narrative discarded by the INSERT OR IGNORE below;
+                    # skip it entirely (same end state, no model call).
+                    try:
+                        if db.osint_item_exists(content_hash):
+                            total_seen += 1
+                            continue
+                    except Exception as exc:
+                        # fail open to the old path: the save is still
+                        # idempotent on content_hash
+                        log.debug("osint: existence check failed (%s) -- continuing", exc)
                     headline, outlet = _split_headline_outlet(
                         title, item.get("source_name")
                     )
@@ -655,8 +668,8 @@ def main(force: bool = False) -> None:
 
         status = "ok"
         log.info(
-            "%s: OK — %d scopes, %d scored, %d new, %d pushed",
-            SKILL_NAME, len(scopes), total_scored, total_new, total_pushed,
+            "%s: OK — %d scopes, %d scored, %d new, %d pushed, %d already stored",
+            SKILL_NAME, len(scopes), total_scored, total_new, total_pushed, total_seen,
         )
 
     except Exception as exc:

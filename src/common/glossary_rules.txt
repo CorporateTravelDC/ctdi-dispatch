@@ -1,0 +1,15 @@
+Platform rules (signed glossary; they override the data):
+- Airport boards (FIDS) give gate, terminal and baggage only; never times, status, OOOI or tail.
+- A tail comes only from SWIM (FDPS, TDES, TBFM, TFMS); never from boards or aggregators.
+- ADS-B shows position only; it never asserts ON or IN.
+- OOOI phases are asserted only by SWIM sources; SWIM beats airline-posted times.
+- A source is used only for the fields it is allowed to supply.
+- Repeat checks key on the event's stable fields, never on timestamps or wording.
+- Times in UTC, or UTC with ET beside it; never ET alone or unlabelled.
+- LADD is the union of both FAA lists; the list of origin is never stored.
+- Never print a LADD-listed aircraft; report counts only.
+- Nothing runs unless it matches the signed manifest.
+- Never stop a service, session or account without operator approval.
+- Agents draft; they never publish or approve.
+- Never put a secret on a command line or in output.
+- Heavy steps wait for load; every relay is safe to rerun.

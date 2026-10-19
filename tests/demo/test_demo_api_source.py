@@ -144,8 +144,31 @@ def test_healthz_reports_the_source(sqlite_source, monkeypatch):
 
     monkeypatch.setattr(demo_api.db_backend, "demo_pg_conn", refusing)
     body = client.get("/healthz").json()
-    assert body == {"source": "postgres", "loop_days": demo_api.LOOP_DAYS, "ok": False, "error": "DemoIsolationError"}
+    assert {k: body[k] for k in ("source", "loop_days", "ok", "error")} == {
+        "source": "postgres", "loop_days": demo_api.LOOP_DAYS, "ok": False, "error": "DemoIsolationError"}
     assert "demo_db" not in body
+    assert set(body) == {"source", "loop_days", "ok", "error", "started_at", "uptime_s", "requests", "profiles_store"}
+
+
+def test_healthz_counts_api_requests_per_source(pg_source, tmp_path, monkeypatch):
+    """2026-10-19 (relay-4 evidence): /api/ requests are counted under the
+    source that answered them; /healthz itself is not counted; no path or
+    client detail is kept, only the two integers."""
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(demo_api, "_REQUESTS", {"sqlite": 0, "postgres": 0})
+    client = TestClient(demo_api.app)
+    monkeypatch.setenv("DEMO_SOURCE", "postgres")
+    client.get("/api/v1/demo/readiness"); client.get("/api/v1/demo/readiness")
+    client.get("/healthz")
+    body = client.get("/healthz").json()
+    assert body["requests"] == {"sqlite": 0, "postgres": 2}
+    assert body["source"] == "postgres" and body["ok"] is True
+    assert body["started_at"].endswith("Z") and body["uptime_s"] >= 0
+    sovereign = tmp_path / "sovereign.db"; _fill(sovereign)
+    monkeypatch.setattr(demo_api, "DEMO_DB", str(sovereign))
+    monkeypatch.setenv("DEMO_SOURCE", "sqlite")
+    client.get("/api/v1/demo/readiness")
+    assert client.get("/healthz").json()["requests"] == {"sqlite": 1, "postgres": 2}
 
 
 def test_module_never_names_the_production_accessor():

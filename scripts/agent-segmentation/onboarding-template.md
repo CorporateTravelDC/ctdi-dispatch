@@ -163,6 +163,10 @@ Retired -- never use, never revive:
 - Report outcomes faithfully; when a step is skipped, say so.
 - Hand the operator exact, copy-pasteable commands for anything privileged.
 
+## Glossary and logic rules (generated from `docs/glossary.yaml`)
+
+{{GLOSSARY}}
+
 ## Authoritative sources (read these; do not edit this pamphlet)
 
 - `/opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/AGENT_SEGMENTATION.md` -- the design, runbook, authorization model

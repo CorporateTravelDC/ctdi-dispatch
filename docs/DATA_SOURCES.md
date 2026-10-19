@@ -325,6 +325,15 @@ never a time or a status either -- stripped from every lookup and route; the
 lowest gate tier below SWIM TDES, ACARS and the AeroAPI fallback
 (`common/gate_assignments.py`, migration 0079); optional feeds that never
 change `/healthz` status; cache capped at 900 s, every failed fetch recorded.)
+(2026-10-19, Gate-1b, operator: the FIDS published time no longer selects
+anything for the forward window. ~~`resolve_arrivals()` tier 2, the MWAA website,
+picked rows by an airport-local window on the published time~~: the tier is
+removed, so `GET /api/v1/fids/{airport}/arrivals` and
+`scripts/hub_arrivals_lookup.py` (which now reads the resolver) list
+SWIM-timed arrivals only, with their SWIM times (`source_used` is `swim` or
+`none`); a FIDS-only arrival drops out. The hub script's departures mode returns
+no rows. Gate / terminal / baggage for one flight: `GET
+/api/v1/flights/{ident}/assignments`.)
 
 ### Amtrak (`push:amtrak` primary, `amtrak` REST fallback)
 

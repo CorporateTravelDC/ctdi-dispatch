@@ -42,77 +42,55 @@ ONLY -- never a time or a status. The FIDS status filter is gone, and the
 output no longer carries `status` or `scheduled`; the published time only
 selects rows inside the window (in airport-local time) and orders them.
 For one flight from every source use GET /api/v1/flights/{ident}/assignments.
+~~the published time only selects rows inside the window~~ (2026-10-19,
+operator, Gate-1b: the FIDS published time is removed from forward-window
+selection entirely. Arrivals now come from common.flight_resolver
+.resolve_arrivals() -- SWIM-timed rows only, with their SWIM times (UTC), DCA,
+IAD and BWI; a FIDS-only arrival drops out. Departures have no SWIM-timed
+forward source here, so --direction departures returns no rows and says so.)
 """
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/opt/corporatetraveldc/private/ctdi-dispatch-internal/src")
 
-from common.airport_fids import get_data, _effective_gate, _effective_claim  # noqa: E402
+from common.flight_resolver import resolve_arrivals, SUPPORTED_HUB_AIRPORTS  # noqa: E402
 
 # 2026-10-18: FORWARD_LOOKING_STATUSES (a filter on the FIDS status) removed.
+# 2026-10-19: the FIDS board is no longer read here at all (published time out
+# of the forward window; gate/baggage per flight: /api/v1/flights/{ident}/assignments).
 
 
 def lookup(airports, carriers, within_minutes, direction):
-    # FIDS times are naive Eastern wall-clock; never read the host clock's zone.
-    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
-    cutoff = now + timedelta(minutes=within_minutes)
-    carriers = {c.upper() for c in carriers} if carriers else None
-
     results = []
     errors = []
+    if direction != "arrivals":
+        errors.append(
+            "departures: no SWIM-timed forward source in this script; the FIDS "
+            "published time is not used for window selection (2026-10-19)."
+        )
+        return results, errors
     for airport in airports:
         airport = airport.upper()
-        if airport == "BWI":
-            errors.append(
-                "BWI: no free public FIDS feed (MAA-operated, not MWAA). "
-                "Would need a funded FlightAware AeroAPI key "
-                "(FLIGHTAWARE_API_KEY is currently unset) -- not attempted."
-            )
+        if airport not in SUPPORTED_HUB_AIRPORTS:
+            errors.append(f"{airport}: not supported (only {', '.join(SUPPORTED_HUB_AIRPORTS)}).")
             continue
-        if airport not in ("DCA", "IAD"):
-            errors.append(f"{airport}: not supported by this script (only DCA/IAD).")
+        out = resolve_arrivals(airport, carriers or None, within_minutes)
+        if out.get("source_used") != "swim":
+            if out.get("note"):
+                errors.append(f"{airport}: {out['note']}")
             continue
-
-        data = get_data(airport)
-        if data is None:
-            errors.append(f"{airport}: fetch failed (see poller logs / feed_state).")
-            continue
-
-        flights = data.get(direction, [])
-        for f in flights:
-            iata = f.get("IATA")
-            if carriers and iata not in carriers:
-                continue
-            pub = f.get("publishedTime")
-            if not pub:
-                continue
-            try:
-                pub_dt = datetime.strptime(pub, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                continue
-            if not (now <= pub_dt <= cutoff):
-                continue
-
+        for r in out.get("results", []):
             results.append({
-                "_order": pub,                 # selection/ordering only, removed below
                 "airport": airport,
-                "carrier": iata,
-                "airline": f.get("airline"),
-                "flight": f.get("flightnumber"),
-                "other_airport": f.get("dep_airport_code") if direction == "arrivals" else f.get("airportcode"),
-                "city": f.get("city"),
-                "gate": _effective_gate(f),
-                "terminal": f.get("arr_terminal") if direction == "arrivals" else f.get("dep_terminal"),
-                "baggage_claim": _effective_claim(f, airport) if direction == "arrivals" else None,
+                "flight": r.get("flight_id") or r.get("flight_num"),
+                "airline": r.get("airline"),
+                "other_airport": r.get("origin"),
+                "arrival_utc": r.get("scheduled"),    # SWIM time, UTC
+                "source": "swim",
             })
-
-    results.sort(key=lambda r: r["_order"])
-    for r in results:
-        r.pop("_order", None)
+    results.sort(key=lambda r: (r["arrival_utc"] or "", r["airport"]))
     return results, errors
 
 
@@ -137,12 +115,8 @@ def main():
     print(f"{len(results)} matching {args.direction} within {args.within}min "
           f"({', '.join(airports)}, carriers={','.join(carriers) or 'ALL'})")
     for r in results:
-        line = (f"  {r['carrier']} {r['flight']:>5}  {r['airport']}  "
-                f"{r['other_airport'] or '?':>4}  gate {r['gate'] or '?'}"
-                f"  T{r['terminal'] or '?'}")
-        if r.get("baggage_claim"):
-            line += f"  claim {r['baggage_claim']}"
-        print(line)
+        print(f"  {r['flight'] or '?':>8}  {r['airport']}  from {r['other_airport'] or '?':>4}"
+              f"  arr {r['arrival_utc'] or '?'}Z (SWIM)")
     for e in errors:
         print(f"  ! {e}")
 

@@ -33,7 +33,10 @@ path for tests, dev and rollback; nothing in production runs it.
   `scripts/scrub-demo-source.py`. ~~Its migration is a separate operator
   decision.~~ (decided 2026-10-16: it moves to a SECOND Postgres instance,
   not into this one -- §3.5 below; relay 1 tracks the instance, relay 2 flips
-  demo-api to it, relay 3 retires the file.)
+  demo-api to it, ~~relay 3 retires the file~~ (2026-10-19 renumbered: relay 3
+  enables the nightly refresh, relay 4 retires the file after
+  `scripts/demo-sqlite-retire-check.py` verifies N hours on Postgres; the
+  shred is the operator's, by hand).)
 
 SQLite files still on disk under `/var/lib/corporatetraveldc/` (18:12Z):
 `corporatetraveldc.db` 69 KB (the former 23 GB main file is no longer
@@ -122,12 +125,12 @@ never two databases on one:
 
 | | production `corporatetraveldc-pgsql` | demo `corporatetraveldc-pgsql-demo` |
 |---|---|---|
-| Database / roles | `corporatetraveldc` / `dispatch` (superuser) | `corporatetraveldc_demo` / `demo_owner` (owner), `demo` (app role, LOGIN, no password until the operator sets one) |
+| Database / roles | `corporatetraveldc` / `dispatch` (superuser) | `corporatetraveldc_demo` / `demo_owner` (owner), `demo` (app role, LOGIN, ~~no password until the operator sets one~~ password set in relay 2 by `scripts/demo-env.py set-password`: a SCRAM verifier on psql's stdin, 2026-10-19) |
 | Volumes | `corporatetraveldc-pgsql-data`, `-sock` | `corporatetraveldc-pgsql-demo-data`, `-demo-sock` (mounted at `/var/run/postgresql-demo` by the demo containers, relay 2) |
 | TCP (host only) | `127.0.0.1:5432` | `127.0.0.1:5433` (the scrub and `pg_migrate --instance demo`, as `demo_owner`) |
 | Config | `config/postgresql.conf`, `config/pg_hba.conf` (now rejects `demo`, `demo_owner` and `corporatetraveldc_demo` by name before the catch-alls) | `config/postgresql-demo.conf` (128 MB buffers, 30 connections), `config/pg_hba-demo.conf` (`demo` socket-only, `demo_owner` socket + TCP, all else `reject`) |
-| Schema | `src/common/pg_schema/` (75), `scripts/pg_migrate.py` | `src/common/pg_schema_demo/0001_demo_core.sql` (six tables: `snapshots`, `brief_archive`, `meta`, `demo_profiles`, `chat_messages`, `scrub_ledger`), `scripts/pg_migrate.py --instance demo` (refuses any role but `demo_owner`; own `schema_migrations`) |
-| Secret | `pgsql-secrets.env` (`POSTGRES_PASSWORD`), `DISPATCH_PG_PASSWORD` | `pgsql-demo-secrets.env` (`POSTGRES_PASSWORD` = `demo_owner`'s; must differ), `DEMO_PG_PASSWORD` in `demo-secrets.env` (the `demo` role) |
+| Schema | `src/common/pg_schema/` (75), `scripts/pg_migrate.py` | `src/common/pg_schema_demo/0001_demo_core.sql` (six tables: `snapshots`, `brief_archive`, `meta`, `demo_profiles`, `chat_messages`, `scrub_ledger`), `0002_demo_grants.sql` (2026-10-19 grants re-audit: `demo` SELECT-only on the four playback tables, SELECT/INSERT/UPDATE `demo_profiles`, SELECT/INSERT/DELETE `chat_messages`, nothing else; no sequence, `schema_migrations`, CREATE or TEMP; CONNECTION LIMIT 12; compared live by `demo-isolation-check.sh` §4), `scripts/pg_migrate.py --instance demo` (refuses any role but `demo_owner`; own `schema_migrations`) |
+| Secret | `pgsql-secrets.env` (`POSTGRES_PASSWORD`), `DISPATCH_PG_PASSWORD` | `pgsql-demo-secrets.env` (`POSTGRES_PASSWORD` = `demo_owner`'s; must differ), `DEMO_PG_PASSWORD` in ~~`demo-secrets.env`~~ `demo.env` (0600; the `demo` role; moved 2026-10-19, relay 2) |
 | Access layer | `db_backend.pg_conn()` / `_pg_conninfo()` (`DISPATCH_PG_*`); refuses the demo db/roles by name; refuses outright under `DISPATCH_ROLE=demo` | `db_backend.demo_pg_conn()` / `_demo_pg_conninfo()` (`DEMO_PG_*`, own pool); refuses the production db/role by name. `common.db.conn()` routes through `role_conn()` by `DISPATCH_ROLE` |
 | Boot / rollout | `stack-boot-ctl.sh` ORDER `pgsql:30` | ORDER `pgsql-demo:30` right before `demo-api`; `serialized-rollout.sh` external row (same image; postgres canary rule applies to both) |
 | Backup | nightly dump (LADD data local-only) | **not dumped** -- rebuildable by `scrub-demo-source.py --backfill` (`docs/BACKUP.md`) |
@@ -135,7 +138,9 @@ never two databases on one:
 
 The bridge: `scripts/scrub-demo-source.py` (host-side, `corporatetraveldc-demo-source-refresh.service`)
 reads production as `dispatch` and writes the demo instance as `demo_owner` --
-the one process holding both credentials, by design. Three table names
+the one process holding both credentials, by design (2026-10-19: its production
+reads run in `SET TRANSACTION READ ONLY` transactions; the timer is enabled in
+relay 3, daily 03:17 UTC, paced). Three table names
 coincide across the instances (`demo_profiles`, `chat_messages`,
 `brief_archive`) so that `src/demo/profiles.py`, `src/runner/main.py` and
 `src/demo/demo_api.py` run unchanged on the demo instance; nothing else of the

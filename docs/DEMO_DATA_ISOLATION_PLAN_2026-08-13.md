@@ -107,19 +107,24 @@
 >    `config/demo-secrets.env.example`; the nightly backup excludes the instance.
 > 2. **Relay 2 (flip).** Install `/etc/corporatetraveldc/demo.env`
 >    (`DISPATCH_ROLE=demo`, `DISPATCH_DB_BACKEND=postgres`, `DEMO_PG_*`,
->    `DEMO_SOURCE=postgres`) and `DEMO_PG_PASSWORD` in `demo-secrets.env`;
+>    `DEMO_SOURCE=postgres`) and `DEMO_PG_PASSWORD` in ~~`demo-secrets.env`~~
+>    `demo.env` (2026-10-19);
 >    `ALTER ROLE demo PASSWORD` typed on the box; the two demo quadlets drop
 >    `dispatch.env` for `demo.env`, mount `corporatetraveldc-pgsql-demo-sock` at
 >    `/var/run/postgresql-demo`, and restart. The isolation tests then forbid
->    `dispatch.env` in them. Enable `corporatetraveldc-demo-source-refresh.timer`.
-> 3. **Relay 3 (retire the file).** Remove the sovereign SQLite mount and
+>    `dispatch.env` in them. ~~Enable `corporatetraveldc-demo-source-refresh.timer`.~~
+>    (2026-10-19: the timer moved to relay 3; the grants re-audit moved here.)
+> 3. ~~**Relay 3 (retire the file).** Remove the sovereign SQLite mount and
 >    `DEMO_DB` from demo-api; delete the `DEMO_SOURCE=sqlite` path and
 >    `/var/lib/corporatetraveldc-demo-source` after a last diff of what the
->    file holds against the instance.
-> 4. **Relay 4 (producers).** The recorder keeps HTTP access to the live API but
+>    file holds against the instance.~~ (2026-10-19: relay 3 is the refresh
+>    timer; retiring the file is relay 4, below.)
+> 4. ~~**Relay 4 (producers).** The recorder keeps HTTP access to the live API but
 >    loses the `/var/lib/corporatetraveldc` read-write mount; the demo archiver
 >    skill likewise; the `demo` role's grants are re-audited once relay 2's
->    traffic is observed.
+>    traffic is observed.~~ (2026-10-19: relay 4 retires the SQLite file; the
+>    producers' narrowing is a later relay, not yet built; the grants re-audit
+>    is in relay 2.)
 >
 > *Operator hand steps, relay 1 (the only ones).* Create
 > `/etc/corporatetraveldc/pgsql-demo-secrets.env` (mode 0600, service user)
@@ -127,6 +132,79 @@
 > `read -rs ... </dev/tty` into the file -- never on a command line, never the
 > production value, never quoted. Nothing else until relay 2: no quadlet
 > changes to demo-api/runner-demo, the refresh timer stays disabled.
+
+> **Addendum, 2026-10-19 -- relays 2, 3 and 4 of the split (built; tracked
+> files only until the operator runs them; relay 4 is preparation only).**
+>
+> *Relay 2 -- the flip.*
+> - Quadlets `corporatetraveldc-demo-api` and `corporatetraveldc-runner-demo`:
+>   `Environment=DISPATCH_ROLE=demo` (identity, signed), `Volume=corporatetraveldc-
+>   pgsql-demo-sock:/var/run/postgresql-demo`, ~~`EnvironmentFile=.../dispatch.env`~~
+>   removed, `EnvironmentFile=/etc/corporatetraveldc/demo.env` loaded LAST (after
+>   `demo-secrets.env`, so its `DISPATCH_DB_BACKEND=postgres` wins over the old
+>   sqlite pin), `DISPATCH_DEMO_ISOLATION=1` kept, `After=` the demo instance.
+>   Dropping `dispatch.env` also removes `ULTRAFEEDER_URL` from runner-demo (the
+>   2026-08-27 comment claimed it was never set; `dispatch.env` set it).
+>   Neither container mounts `/etc/corporatetraveldc` (so `common.config`'s
+>   import-time load of `dispatch.env` / `dispatch-secrets.env` finds nothing).
+> - `DEMO_SOURCE` and `DISPATCH_DB_BACKEND` are in `demo.env`, NOT `Environment=`
+>   lines: podman's `-e` beats `--env-file`, and the rollback must not need a
+>   signed edit. **Rollback, one step:** `scripts/demo-env.py source sqlite` (sets
+>   the pair), then restart the two demo containers -- playback from the
+>   sovereign file (still mounted read-only), profiles from `demo_access.db`,
+>   chat in the demo-only mount: exactly the pre-flip state.
+>   `scripts/demo-env.py source postgres` undoes it.
+> - `demo.env` (example `config/demo.env.example`, 0600, service user) holds the
+>   demo identity, `DEMO_PG_PASSWORD` (moved from `demo-secrets.env`),
+>   `LLAMA_BASE_URL` / `OLLAMA_CHAT_MODEL` copied BY NAME from `dispatch.env`
+>   (`scripts/demo-env.py seed`; nothing else is ever copied), `DEMO_LOOP_DAYS`.
+>   `/etc/corporatetraveldc` is root:corporatetraveldc 0750, so the file is
+>   created once by `sudo install -m 600 -o corporatetraveldc -g corporatetraveldc
+>   config/demo.env.example /etc/corporatetraveldc/demo.env`; `demo-env.py`
+>   edits it in place afterwards.
+> - The `demo` role's password: `scripts/demo-env.py set-password` -- the value
+>   typed through `read -rs ... </dev/tty` (or generated when Enter is pressed),
+>   handed to Python through the environment, written to `demo.env` first, then
+>   applied as a SCRAM-SHA-256 verifier computed host-side (`ALTER ROLE demo
+>   PASSWORD 'SCRAM-SHA-256$...'` on psql's STDIN inside the demo instance, as
+>   demo_owner; the plaintext never reaches argv, the server or its log), and
+>   verified by logging in as `demo` over the socket (`podman exec -e
+>   PGPASSWORD`, passthrough). Rerun-safe: a value that logs in is left alone;
+>   one that does not is re-applied.
+> - Grants re-audit: `src/common/pg_schema_demo/0002_demo_grants.sql` --
+>   SELECT-only on `snapshots`, `brief_archive`, `meta`, `scrub_ledger`;
+>   SELECT/INSERT/UPDATE on `demo_profiles` and SELECT/INSERT/DELETE on
+>   `chat_messages` (the only writes the demo's own code makes: profile
+>   create/revoke, chat append/clear; SELECT-only there would break both); no
+>   sequence grants (identity columns need none), no `schema_migrations`, no
+>   CREATE/TEMP, CONNECT for `demo` only, CONNECTION LIMIT 12. The live sweep
+>   (`scripts/demo-isolation-check.sh` §4) compares the instance against
+>   exactly that set once 0002 is applied; §1b holds that a flipped container
+>   carries no `DISPATCH_PG_*` name and sees no `dispatch.env`.
+> - Profiles: all four active rows of `demo_access.db` already exist in the
+>   instance (relay 1's `--profiles`; checked 2026-10-19 by hashed key, counts
+>   only: 5 in the instance, 7 in the file, the 2 file-only rows inactive).
+> - demo-api `/healthz` adds `started_at`, `uptime_s`, `requests` (per source,
+>   since start) and `profiles_store`.
+>
+> *Relay 3 -- the nightly refresh.* `corporatetraveldc-demo-source-refresh.timer`
+> enabled at ~~04:45 America/New_York~~ **03:17 UTC**; the service runs
+> `scrub-demo-source.py --refresh --workers 1` at `Nice=19`, idle I/O, after
+> `scripts/relay-wait-load.sh` (load1 < 24, up to an hour), with the scrub's own
+> per-page pacing (`DEMO_SCRUB_MAX_LOAD=24`) and a wait before the LADD gate
+> opens, `TimeoutStartSec=4h`, `OnFailure=corporatetraveldc-unit-failure-notify@`.
+> Production reads go through `readonly_source()` (`SET TRANSACTION READ ONLY`).
+>
+> *Relay 4 -- retire the SQLite files (prepared, not run).*
+> `scripts/demo-sqlite-retire-check.py --hours N` verifies N continuous hours on
+> Postgres (healthz source/ok/profiles_store/uptime, zero sqlite-answered
+> requests, both containers started >= N h ago with the postgres pair), lists the
+> old demo SQLite files with sizes and open-file holders, writes the guardrail
+> proof **G26** record (sha256, size, mtime per file), and only then prints the
+> exact shred command -- for the operator to run by hand, never from a relay.
+> Removing the sovereign mount and the `DEMO_SOURCE=sqlite` path (a quadlet +
+> code change, not built yet) ends the rollback and must PRECEDE the shred;
+> narrowing the recorder and archiver is a later relay.
 
 Written 2026-08-13. Design/planning document for operator review — **no code
 in this repo changes as part of this doc**. It responds to finding F6 of the

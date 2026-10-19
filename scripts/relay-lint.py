@@ -235,6 +235,100 @@ def completion_sentinel(lines: list[str]) -> list[tuple[int, str, str]]:
     return out
 
 
+LEAK_SCAN_MENTION = re.compile(r"leak-guard|(?i:leak[ _-]?scan)")
+PUSH_LINE = re.compile(r"\bgit\b[^\n]*\spush\b|push-public\.sh")
+REDACT_LINE = re.compile(r"transcript_leak_scan\.py\s+redact\b")
+
+
+def leak_scan_redact_before_push(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-19 (operator, Gate-1b): a relay that changes the leak-guard patterns (it mentions
+    scripts/leak-guard/, or its commit message mentions the leak scan) must redact the on-box
+    transcripts with the NEW patterns before anything leaves the box: the first push would
+    otherwise go out with the old patterns' blind spot still in the transcripts. Text-level: a
+    `git push` (or push-public.sh) line before any `transcript_leak_scan.py redact` line."""
+    body = [(n, l) for n, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+    if not any(LEAK_SCAN_MENTION.search(l) for _n, l in body):
+        return []
+    push = next((n for n, l in body if PUSH_LINE.search(_code(l))), None)
+    if push is None:
+        return []
+    redact = next((n for n, l in body if REDACT_LINE.search(l)), None)
+    if redact is None or redact > push:
+        return [(push, "push before `transcript_leak_scan.py redact` in a relay that changes the leak scan",
+                 "run `python3 scripts/leak-guard/transcript_leak_scan.py redact` (then scan) before the first push")]
+    return []
+
+
+SECRETISH_VAR = re.compile(r"(?i)(key|token|secret|pass|pat\b|pw|cred|url|auth)")
+_READ_ARG_FLAGS = set("ptudnNai")
+
+
+def _read_vars(line: str) -> tuple[str, list[str]] | None:
+    """(flags, variable names) of a `read` command on this line, or None."""
+    import shlex
+    m = re.search(r"(?:^|[;&|(]\s*|\s)read\s", line)
+    if not m:
+        return None
+    rest = line[m.end():]
+    try:
+        lex = shlex.shlex(rest, posix=True, punctuation_chars=";&|<>()")
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        return None
+    flags, names, i = "", [], 0
+    while i < len(toks):
+        t = toks[i]
+        if t and t[0] in ";&|<>()":
+            break
+        if t.startswith("-") and len(t) > 1 and not names:
+            flags += t[1:]
+            if t[-1] in _READ_ARG_FLAGS:
+                i += 1                                # the flag's argument (-p prompt, -t 5 ...)
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t):
+            names.append(t)
+        i += 1
+    return flags, names
+
+
+def secret_read_without_control_check(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-19 (operator, Gate-1b): a secret pasted at a `read -rs` / `read -r` hand step can carry an
+    ESC sequence, a CR or a TAB into the file it is written to. The value must pass a control-character
+    check before its first use: `secret_check VAR` (scripts/lib/secret_input.sh), an explicit
+    `[[:cntrl:]]` test on it, or read it with `secret_read VAR` from the same helper instead."""
+    out = []
+    for n, l in enumerate(lines, 1):
+        if l.lstrip().startswith("#"):
+            continue
+        rv = _read_vars(l)
+        if not rv:
+            continue
+        flags, names = rv
+        if "r" not in flags:
+            continue
+        for v in names:
+            if not ("s" in flags or SECRETISH_VAR.search(v)):
+                continue
+            use = re.compile(r"\$\{?" + re.escape(v) + r"\b")
+            checked = False
+            same = l[l.find("read"):]
+            tail = same.split(v, 1)[1] if v in same else ""
+            for k, nxt in [(n, tail)] + list(enumerate(lines[n:], n + 1)):
+                if k != n and nxt.lstrip().startswith("#"):
+                    continue
+                if re.search(r"\bsecret_check\s+" + re.escape(v) + r"\b", nxt) or \
+                        ("[[:cntrl:]]" in nxt and (use.search(nxt) or v in nxt)):
+                    checked = True
+                    break
+                if use.search(nxt):
+                    break
+            if not checked and any(use.search(x) for x in lines[n - 1:]):
+                out.append((n, f"secret read into {v} is used without a control-character check",
+                            f"`source scripts/lib/secret_input.sh` and run `secret_check {v}` right after the read "
+                            f"(or use `secret_read {v} 'Prompt: '`)"))
+    return out
+
+
 def lint(text: str) -> list[tuple[int, str, str]]:
     out = []
     lines = text.splitlines()
@@ -243,6 +337,8 @@ def lint(text: str) -> list[tuple[int, str, str]]:
     out += demo_quadlet_isolation(lines)
     out += completion_sentinel(lines)
     out += heavy_without_load_wait(lines)
+    out += leak_scan_redact_before_push(lines)
+    out += secret_read_without_control_check(lines)
     first = next((l for l in lines if l.strip()), "")
     if not re.match(r"\s*bash\s+<<'RELAY'\s*$", first):
         out.append((1, "relay must start with `bash <<'RELAY'` (quoted delimiter: nothing expands at paste)",

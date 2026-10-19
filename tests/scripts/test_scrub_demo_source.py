@@ -295,3 +295,71 @@ def test_waits_for_load_headroom(world, monkeypatch):
     monkeypatch.setattr(m, "MAX_LOAD", 24.0)
     waited = m._wait_for_headroom(sleep=slept.append, loadavg=lambda: (next(loads),))
     assert len(slept) == 2 and waited == 2 * m.LOAD_POLL_S
+
+
+# -- 2026-10-19 relay 3: the nightly timer reads production, never writes it ----
+
+def test_production_source_is_wrapped_read_only(world):
+    """Every borrowed source connection opens with SET TRANSACTION READ ONLY
+    (the server then refuses any write), and main() wraps the production
+    accessor -- tests' injected sqlite twins are the only unwrapped factory."""
+    m = world[0]
+    seen: list[str] = []
+
+    class Rec:
+        def execute(self, sql, params=()):
+            seen.append(sql)
+            return self
+
+    @contextmanager
+    def fake():
+        yield Rec()
+
+    with m.readonly_source(fake)() as s:
+        s.execute("SELECT 1")
+    assert seen == ["SET TRANSACTION READ ONLY", "SELECT 1"]
+    text = (REPO / "scripts/scrub-demo-source.py").read_text()
+    assert "src = source_factory or readonly_source(db_backend.pg_conn)" in text
+
+
+def test_source_side_sql_is_select_only():
+    """Static: inside every `with source_factory() as s:` / `with
+    src() as s:` block the script executes SELECTs only; nothing on the
+    source path names INSERT/UPDATE/DELETE/TRUNCATE/ALTER/CREATE/DROP."""
+    text = (REPO / "scripts/scrub-demo-source.py").read_text()
+    calls = re.findall(r"\bs\.execute\(\s*((?:\"[^\"]*\"\s*)+)", text)
+    assert calls, "no source-side execute calls found"
+    for lit in calls:
+        sql = "".join(re.findall(r"\"([^\"]*)\"", lit)).strip().upper()
+        assert sql.startswith("SELECT ") or sql == "SET TRANSACTION READ ONLY", sql
+        assert not re.search(r"\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|CREATE|DROP|GRANT)\b", sql), sql
+
+
+def test_refresh_waits_before_the_ladd_gate(world, monkeypatch):
+    m, src, tgt, prod, demo = world
+    seed(prod, [("tfr", ago(days=3), json.dumps({"tfrs": [{"notam": "clean"}]}))])
+    assert run(m, src, tgt, "--backfill", "--days", "7") == 0
+    order: list[str] = []
+    monkeypatch.setattr(m, "_wait_for_headroom", lambda *a, **k: order.append("wait") or 0.0)
+    real_open = m.LaddGate.open
+    monkeypatch.setattr(m.LaddGate, "open", lambda self: (order.append("gate"), real_open(self))[1])
+    assert run(m, src, tgt, "--refresh") == 0
+    assert order[:2] == ["wait", "gate"]
+
+
+def test_refresh_units_are_paced_and_notify_on_failure():
+    units = REPO / ".config/systemd/user"
+    svc = [l.strip() for l in (units / "corporatetraveldc-demo-source-refresh.service").read_text().splitlines()
+           if l.strip() and not l.startswith("#")]
+    assert "OnFailure=corporatetraveldc-unit-failure-notify@%n.service" in svc
+    assert "Nice=19" in svc and "Type=oneshot" in svc
+    assert any(l.startswith("ExecStartPre=") and l.endswith("scripts/relay-wait-load.sh") for l in svc)
+    assert any(l.startswith("ExecStart=") and l.endswith("scripts/scrub-demo-source.py --refresh --workers 1") for l in svc)
+    assert "Environment=DEMO_SCRUB_MAX_LOAD=24" in svc and "Environment=RELAY_MAX_LOAD=24" in svc
+    assert any(l.startswith("TimeoutStartSec=") for l in svc)
+    assert not any("--backfill" in l or "--profiles" in l for l in svc)
+    timer = [l.strip() for l in (units / "corporatetraveldc-demo-source-refresh.timer").read_text().splitlines()
+             if l.strip() and not l.startswith("#")]
+    assert "OnCalendar=*-*-* 03:17:00 UTC" in timer and "Persistent=true" in timer
+    assert "WantedBy=timers.target" in timer
+    assert not any(l.startswith(("Requires=", "Wants=")) for l in timer)

@@ -96,18 +96,41 @@ def _quote(rel: str) -> str:
     return urllib.parse.quote(rel, safe="/")
 
 
-def _propfind(url: str) -> ET.Element:
+def _propfind(url: str, depth: str = "1") -> ET.Element:
+    # getetag (lean-out L2 / F12, 2026-10-19): Nextcloud changes a file's ETag
+    # when its content changes and propagates a change up to every parent
+    # collection, so the Notes/ root ETag says whether anything below changed.
     body = (
         '<?xml version="1.0"?>'
-        '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>'
+        '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>'
     )
     r = requests.request(
         "PROPFIND", url, auth=_src_auth(), data=body,
-        headers={"Host": SRC_HOST, "Depth": "1", "Content-Type": "application/xml"},
+        headers={"Host": SRC_HOST, "Depth": depth, "Content-Type": "application/xml"},
         timeout=30,
     )
     r.raise_for_status()
     return ET.fromstring(r.content)
+
+
+def _etag(resp_el: ET.Element) -> str:
+    el = resp_el.find(f"{_DAV}propstat/{_DAV}prop/{_DAV}getetag")
+    return (el.text or "").strip() if el is not None else ""
+
+
+def _root_etag() -> str:
+    """ETag of the Notes/ root collection (one Depth-0 PROPFIND); "" if absent."""
+    url = _src_root_url().rstrip("/") + "/"
+    for resp in _propfind(url, depth="0").findall(f"{_DAV}response"):
+        return _etag(resp)
+    return ""
+
+
+def _config_fingerprint() -> str:
+    """Routing inputs: a change here must re-walk even when no note changed."""
+    raw = json.dumps([SRC_USER, SRC_PATH, list(RESEARCH_PREFIXES), DEST_NOTES,
+                      DEST_RESEARCH, webdav_client.BUSINESS_ROOT])
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _is_collection(resp_el: ET.Element) -> bool:
@@ -115,9 +138,10 @@ def _is_collection(resp_el: ET.Element) -> bool:
     return rt is not None and rt.find(f"{_DAV}collection") is not None
 
 
-def _walk(rel: str = "") -> list[str]:
+def _walk(rel: str = "", etags: dict | None = None) -> list[str]:
     """Recursive Depth-1 walk of operator's Notes/ (Nextcloud disallows Depth:
-    infinity). Return .md paths relative to the Notes root."""
+    infinity). Return .md paths relative to the Notes root; when `etags` is
+    given, each file's ETag is recorded in it (relpath -> etag)."""
     cur = rel.strip("/")
     url = f"{_src_root_url()}/{_quote(cur)}".rstrip("/") + "/"
     marker = urllib.parse.urlparse(_src_root_url()).path.rstrip("/") + "/"
@@ -133,9 +157,11 @@ def _walk(rel: str = "") -> list[str]:
         if not relpath or relpath == cur:
             continue  # the collection being listed (itself)
         if _is_collection(resp):
-            files.extend(_walk(relpath))
+            files.extend(_walk(relpath, etags))
         elif relpath.lower().endswith(".md"):
             files.append(relpath)
+            if etags is not None:
+                etags[relpath] = _etag(resp)
     return files
 
 
@@ -189,13 +215,36 @@ def main() -> None:
 
     state = _load_state()
     written = skipped = blocked = 0
+    # Lean-out L2 / F12 (2026-10-19): this ran every 2 min and downloaded and
+    # hashed EVERY note each time (~715 full walks + downloads/day). Now:
+    #   1. one Depth-0 PROPFIND of the Notes/ root; if its ETag and the routing
+    #      config are what the last clean run saw, nothing changed -- exit
+    #      before any walk, download or DB connection;
+    #   2. otherwise walk, and download only notes whose ETag differs from the
+    #      one recorded at their last import (no ETag -> download, as before).
+    # The content hash stays the import decision for every downloaded note, and
+    # a run that blocked a note never records the root ETag, so it is retried.
+    # State keys "_root" / "_etags" sit beside the per-note entries.
+    meta_root = state.get("_root") or {}
+    root_tag = _root_etag()
+    cfg = _config_fingerprint()
+    if root_tag and meta_root.get("etag") == root_tag and meta_root.get("cfg") == cfg:
+        log.info("%s: Notes root unchanged since the last import -- nothing to do", SKILL_NAME)
+        return
+    known_etags: dict = state.get("_etags") or {}
 
     with get_conn() as conn:
-        sources = _walk("")
+        etags: dict = {}
+        sources = _walk("", etags)
         for relpath in sources:
+            dest, bucket = _route(relpath)
+            tag = etags.get(relpath, "")
+            if (tag and known_etags.get(relpath) == tag
+                    and str(state.get(relpath, "")).endswith(f" {dest}")):
+                skipped += 1
+                continue  # same ETag as at its last import, same destination
             content = _src_get(relpath)
             h = hashlib.sha256(content).hexdigest()
-            dest, bucket = _route(relpath)
             # State value is "<sha256>" (pre-2026-09-06) or "<sha256> <dest>".
             # Re-import when the source changed OR its routed destination did
             # (the prefix-routing fix moved existing research notes); a
@@ -204,6 +253,8 @@ def main() -> None:
             # routes. Nothing is ever deleted from the old location.
             if state.get(relpath) == f"{h} {dest}":
                 skipped += 1
+                if tag:
+                    known_etags[relpath] = tag
                 continue  # source unchanged since last import
 
             text = content.decode("utf-8", errors="replace")
@@ -223,9 +274,16 @@ def main() -> None:
                 ingest_method=bucket,
             )
             state[relpath] = f"{h} {dest}"
+            if tag:
+                known_etags[relpath] = tag
             written += 1
             log.info("%s: imported %s -> %s (%s)", SKILL_NAME, relpath, dest, bucket)
 
+        state["_etags"] = {k: v for k, v in known_etags.items() if k in etags}
+        if blocked == 0 and root_tag:
+            state["_root"] = {"etag": root_tag, "cfg": cfg}
+        else:
+            state.pop("_root", None)
         _save_state(state)
         log.info(
             "%s: %d imported, %d unchanged, %d blocked (from %d source notes)",

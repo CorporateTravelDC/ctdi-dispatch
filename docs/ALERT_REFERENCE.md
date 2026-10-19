@@ -383,6 +383,14 @@ baggage claim), at most twice per leg (~45 min before ETA, after ON), daily cap
 ~~FIDS `fids_update`: gate/baggage/status push from `_check_flight_fids`, read
 from the arrivals board even at the watch's origin~~ (2026-10-18: FIDS writes
 evidence only; the origin side reads the departures board).
+2026-10-19 (Gate-1b, operator): the push text no longer repeats the watch's own
+callsign after the title. ~~Title `FLT UAL1627: UAL1627 arrival gate C10 at DCA
+(provisional) [MWAA FIDS]`~~ -> `FLT UAL1627: arrival gate C10 at DCA
+(provisional) [MWAA FIDS]` (`push_text` in `common/gate_assignments.py` leaves the
+flight out when it is the watch's identifier, same string or the same flight in
+IATA/ICAO form; a different operating flight is still named). The bodies lose
+the repeat too. The word `provisional` is unchanged (operator has not decided).
+The 60-character title cut still applies (the source label can be cut short).
 
 **ACARS type flags (2026-10-18, next relay).** `common/acars_flags.py`
 (byte-identical copy in `src/acars_watcher/`) labels each ACARS/VDL2 message,
@@ -454,14 +462,14 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `demo-isolation-check.sh` (run by `scheduled-integrity-sweep.sh`, 15 min; 2026-10-16) | `ops-health` p4 "DEMO ISOLATION CHECK FAILED", every sweep while the finding stands (no cooldown: the sweep's own OK/FAILED state file is the record) | Live demo/production database boundary: a RUNNING demo container (`corporatetraveldc-demo-api`, `corporatetraveldc-runner-demo`, or any container with `DISPATCH_ROLE=demo`) mounting `corporatetraveldc-pgsql-sock`, `/var/lib/corporatetraveldc` or `/etc/corporatetraveldc/svc`, or carrying the env NAME `DISPATCH_PG_PASSWORD`; a demo application session or a `demo`/`demo_owner` role on the production instance; on the demo instance a superuser other than `demo_owner`, a `dispatch` role, or a table outside the six demo tables (+ `schema_migrations`). Findings name containers, roles and tables, never a value. A demo instance that is not running is reported, not failed (relay 1). Also fails the sweep (exit 1, state file `FAILED`) |
 | `healthcheck-ping.sh` (user timer `corporatetraveldc-healthcheck-ping.timer`, 5 min; 2026-10-15) | **external**: healthchecks.io (not ntfy). Success ping when local `/healthz` is ok, `/fail` otherwise (2026-10-18, next relay: optional enrichment feeds -- `dca_fids`, `iad_fids`, `ingest.failover.OPTIONAL_FEEDS` -- go to `/healthz`'s own `optional_stale` list and never change its status, so a stale MWAA scrape no longer sends `/fail`; `/api/v1/feeds` rows carry `optional`, and `ingest_feed_watch` reads it); healthchecks.io itself alerts the operator when pings stop, which covers the box being offline (ntfy cannot: it runs on the box). Set the check's period 5 min, grace 10 min | ping URL in `~/.secrets/healthchecks_ping.url` (0600, untracked), passed to curl on stdin; `--dry-run` |
 | `thermal-ingest-guard.py` | p5 LOCKDOWN shed, ~~p4 tier-1 shed,~~ p5 RESTORE FAILED, p3 verified restore | (corrected 2026-10-15: since 2026-10-13 it is a load guard: LOCKDOWN only at load1 ≥ 40, and temperature never sheds, so the tier-1 shed and its p4 alert can no longer fire.) The action silences other publishers; see `DATA_SOURCES.md` §9 |
-| `runner-health-watchdog.sh` (5 min) | ~~`hot-alerts`~~ `ops-health` p4 auto-restart / p5 failed restart (30-min cooldown), `X-Email` relay | skips at guard tier 2 |
-| `failover-kickover-guardrail.py` (5 min) | ~~p4,~~ p5 on push+REST double failure for `nws`/`notam` (force-fires a `refresh_feed` trigger) | (corrected 2026-10-15: there is one alert, p5; the p4 was never sent, it is only the helper's unused default. Coverage is `nws`, `notam` and, since 2026-09-06, `amtrak`. Since 2026-10-14 the forced trigger is written into the poller's `corporatetraveldc-triggers` volume; the host `/run` directory it used before was never seen by the poller, so its triggers had been dead since 2026-09-18. Live 2026-10-15: no `trigger_log` row left unresolved) |
+| `runner-health-watchdog.sh` (5 min; ~~`*:0/5`~~ `*:02/5` from 2026-10-19, next relay) | ~~`hot-alerts`~~ `ops-health` p4 auto-restart / p5 failed restart (30-min cooldown), `X-Email` relay | skips at guard tier 2 |
+| `failover-kickover-guardrail.py` (5 min; ~~`*:0/5`~~ `*:01/5` from 2026-10-19, next relay) | ~~p4,~~ p5 on push+REST double failure for `nws`/`notam` (force-fires a `refresh_feed` trigger) | (corrected 2026-10-15: there is one alert, p5; the p4 was never sent, it is only the helper's unused default. Coverage is `nws`, `notam` and, since 2026-09-06, `amtrak`. Since 2026-10-14 the forced trigger is written into the poller's `corporatetraveldc-triggers` volume; the host `/run` directory it used before was never seen by the poller, so its triggers had been dead since 2026-09-18. Live 2026-10-15: no `trigger_log` row left unresolved) |
 | `lockdown.sh` / `restore-network.sh` | `hot-alerts` p4 / `ops-health` p3 | `root-alerts` token |
 | `threat-initiate.sh` / `threat-resolve.sh` | `hot-alerts` p5 / `ops-health` p3 | `root-alerts` token |
 | `renew-tailscale-cert.sh`, `restart-stack.sh` | p3 | same priority for success and failure; `root-alerts` token |
-| `container-mem-watch.sh`, `scheduled-ingest-restart.sh`, `nextcloud-health-check.sh`, `scheduled-integrity-sweep.sh` (p5: "BUILD PROVENANCE FAILED", "INTEGRITY SWEEP FAILED", "AUDIT CHAIN BROKEN", "ENV QUOTING REGRESSION"; p4: "DEMO ISOLATION CHECK FAILED", added 2026-10-16, see its own row above), `sdr-crashloop-guard.sh`, `claude-md-drift-daily.sh`, `ntfy-topic-count-watchdog.sh` (warn > 140) | variable | |
-| `brief-fallback-monitor.sh` (hourly at :50) | `max`, topic `BRIEF_FALLBACK_TOPIC` (default `ops-health`; not overridden live) | (2026-10-14) fires only when a brief fell back on its LATEST run, with a short narrative: which briefs fell back, each brief's fallbacks over the last 6 runs, and whether the trend is improving, worsening or steady. The old "≥ half the window" rule kept paging for hours after the model recovered |
-| `swim-session-health-watch.sh` (5 min) | p4 "SWIM session health: DEGRADED" | summed keep-alive failures ≥ 15 per sample, sustained 600 s, 1800 s cooldown |
+| `container-mem-watch.sh`, `scheduled-ingest-restart.sh`, `nextcloud-health-check.sh`, `scheduled-integrity-sweep.sh` (p5: "BUILD PROVENANCE FAILED", "INTEGRITY SWEEP FAILED", "AUDIT CHAIN BROKEN", "ENV QUOTING REGRESSION"; p4: "DEMO ISOLATION CHECK FAILED", added 2026-10-16, see its own row above), `sdr-crashloop-guard.sh`, `claude-md-drift-daily.sh`, `ntfy-topic-count-watchdog.sh` (warn > 140) | variable | (2026-10-19, next relay: same thresholds and alerts; `container-mem-watch` reads the kernel journal from a saved cursor and publishes its one `podman stats` snapshot, which `scheduled-ingest-restart` reads when <= 150 s old -- ~~one `podman stats` per ingest service, 7 per run~~ -- else one `podman stats` per run) |
+| `brief-fallback-monitor.sh` (hourly at :50) | `max`, topic `BRIEF_FALLBACK_TOPIC` (default `ops-health`; not overridden live) | (2026-10-14) fires only when a brief fell back on its LATEST run, with a short narrative: which briefs fell back, each brief's fallbacks over the last 6 runs, and whether the trend is improving, worsening or steady. The old "≥ half the window" rule kept paging for hours after the model recovered (2026-10-19, next relay: same rule and window; each run reads only the entries after a per-unit journal cursor and keeps a small per-unit outcome history, ~~`--since "2 days ago" -n 1000` every hour~~) |
+| `swim-session-health-watch.sh` (5 min) | p4 "SWIM session health: DEGRADED" | summed keep-alive failures ≥ 15 per sample, sustained 600 s, 1800 s cooldown (2026-10-19, next relay: same thresholds; reads only the journal entries after a saved cursor for the 8 `corporatetraveldc-ingest-*` units by exact name -- ~~`-u 'corporatetraveldc-ingest-*' -S <last run>`~~, which mapped 2.5-4.5 GB of journal per run -- via `scripts/lib/journal-cursor.sh`) |
 | `dependency-audit.py` (daily timer) | p4 vulnerable packages / p3 could not run | |
 | `backup_freshness.py` (6-hourly timer) | through `unit-failure-notify@` (p4) | exits 1 when backups, the off-box sync, a restore test or an agent snapshot is stale |
 | `relay-nudge.py` | default `ops-health` p4 (`--topic`, `--priority`) | used by relays and `uplink_reminder.py` |
@@ -471,6 +479,22 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `sudo-approval-gate.sh` | `approval-gate` | **Deny-only** push (one `Deny` action button); allowing requires `scripts/approve.sh allow <id>` (SSH signature); `db.resolve_approval_request` refuses an unsigned allow |
 | `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** (re-checked 2026-10-15) |
 | Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (~~`hot-alerts` +~~ `ops-health` only; p5 alerts, p3 "restored"), `stack-refresh.sh`, `maintenance-dispatch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`ops-health` p4, title "<unit> failed"; `OnFailure=` handler on ~~7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed~~ (corrected 2026-10-15: 11 units, tracked and installed: agent-timecard, backup, backup-freshness, backup-restore-test, codeshare-seed, dependency-audit, docs-drift-weekly, quiet-window-report, second-brain-weekly-dump, stack-refresh-tripwire, weekly-external-image-update; tbfm-arrival-enrichment no longer has it)), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |
+
+**Schedule and verdict changes (2026-10-19, lean-out L2, next relay).** Same
+alerts, thresholds and priorities; only the start minute moves (off the shared
+:00/:30 seconds): `failover-kickover-guardrail` `*:01/5`, `runner-health-watchdog`
+`*:02/5`, `sdr-crashloop-guard` `*:03/5`, `thermal-sample` `*:04/5` (all ~~`*:0/5`~~),
+`board-sweep` `*:06/15`, `tbfm-arrival-enrichment` `*:07/15`,
+`ntfy-topic-count-watchdog` `*:08/15` (all ~~`*:0/15`~~), `feed-db-integrity-check`
+`*:26/30` (~~`*:0/30`~~; still every 30 min). `stack-refresh.sh --weekly`
+(`weekly-external-image-update`): a failed unit OUTSIDE the rollout list (or any
+system unit) is now reported in the log and the ntfy summary ("reported-only
+drift N") and no longer holds the refresh as an audit finding (~~exit 2, p5
+"AUDIT FINDINGS -- updates HELD"~~); the end verdict (p4 "ATTENTION", exit 1)
+counts failed units IN the rollout only (~~any failed user unit~~); every other
+drift kind still holds. SWIM ingest: during a backlog replay a feed pauses while
+load1 >= 30 (`SWIM_REPLAY_MAX_LOAD`), at most 900 s per connection; it logs a
+warning and sends no push.
 
 ## 8. Push reliability history
 

@@ -18,7 +18,7 @@ GET http://100.x.x.x:8000/api/v1/fids/<DCA|IAD|BWI>/arrivals?carriers=AA,UA&with
 ~~**Primary path — `mcp__corporatetravel-dispatch__dispatch_get_fids_arrivals`** (if the corporatetravel-dispatch MCP is connected):~~ (struck 2026-10-15, archived MCP)
 Three-tier layered resolver, in order (first non-empty wins):
 1. FAA SWIM (`flight_events` table, ingest-populated) — primary, all three hubs
-2. MWAA airport-website FIDS scrape — fallback, DCA/IAD only (BWI isn't MWAA-operated); 2026-10-18: gate / terminal / baggage only, rows picked by an airport-local time window, no status or time returned
+2. ~~MWAA airport-website FIDS scrape — fallback, DCA/IAD only (BWI isn't MWAA-operated); 2026-10-18: gate / terminal / baggage only, rows picked by an airport-local time window, no status or time returned~~ (removed 2026-10-19, operator: the FIDS published time no longer selects forward-window rows; FIDS-only arrivals drop out, `source_used` is `swim` or `none`. Gate / baggage for one flight: `GET /api/v1/flights/<IDENT>/assignments`.)
 3. ~~FlightAware AeroAPI — fallback, all three hubs (funded 2026-07-20, key at `~/.secrets/flightaware_aeroapi.key` → `dispatch-secrets.env` `FLIGHTAWARE_API_KEY`) (2026-10-15: still tier 3 in `flight_resolver.py:352`; whether a key value is set now was not checked, names only)~~ (removed 2026-10-18, operator: AeroAPI is only the budgeted per-watched-leg gate/baggage fallback, `common/gate_aeroapi.py`)
 
 Call with `airport` ('DCA'/'IAD'/'BWI'), optional `carriers` (comma IATA codes, e.g. 'AA,UA'), optional `within_minutes` (default 90). Response tells you which tier served the data (`source_used`) and why via a `note` field — a genuinely-empty window looks different from a missing-source situation.
@@ -30,7 +30,7 @@ Two-tier: MWAA website (DCA/IAD only, free) → FlightAware AeroAPI (any airport
 ```
 PYTHONPATH=src python3 scripts/hub_arrivals_lookup.py --airports DCA,IAD --carriers AA,UA --within 90
 ```
-Kept for when neither MCP is available; doesn't have the AeroAPI or SWIM tiers. (2026-10-18: no `status` / `scheduled` columns any more -- FIDS is not a time or status source.) (2026-10-15: run it through `scripts/with-dispatch-env.sh` from the repo root rather than sourcing env files.)
+~~Kept for when neither MCP is available; doesn't have the AeroAPI or SWIM tiers.~~ (2026-10-19: it now reads `resolve_arrivals()` -- SWIM-timed arrivals only, DCA/IAD/BWI, SWIM times in UTC; no FIDS board read; `--direction departures` returns no rows.) (2026-10-18: no `status` / `scheduled` columns any more -- FIDS is not a time or status source.) (2026-10-15: run it through `scripts/with-dispatch-env.sh` from the repo root rather than sourcing env files.)
 
 ### Parser status (as of 2026-07-20 — check before trusting "source_used: swim")
 

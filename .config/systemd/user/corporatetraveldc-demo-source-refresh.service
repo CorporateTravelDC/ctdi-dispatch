@@ -9,12 +9,34 @@
 # itself, never on a command line). It writes the demo instance over
 # 127.0.0.1:5433 as demo_owner (DEMO_PG_HOST is the socket path by default,
 # which does not exist on the host, so db_backend falls back to loopback).
-# The paired timer (04:45 ET) is tracked but NOT enabled in relay 1.
+# ~~The paired timer (04:45 ET) is tracked but NOT enabled in relay 1.~~
+#
+# 2026-10-19 (relay 3: the timer is enabled; it fires at 03:17 UTC). Paced so
+# a nightly run can never stack onto the 20-30 load baseline and trip the
+# thermal-ingest-guard LOCKDOWN (load1 >= 40):
+#   - ExecStartPre waits (scripts/relay-wait-load.sh) while load1 >= 24, up
+#     to an hour; still loaded after that -> the run fails and pages through
+#     OnFailure (tomorrow's run catches up: --refresh promotes everything
+#     since meta.window_end);
+#   - the scrub itself waits before the LADD gate opens and before every
+#     page while load1 >= DEMO_SCRUB_MAX_LOAD (24, its default);
+#   - --workers 1 (one scrub process; the 2-worker path is for a hand-run
+#     backfill only), Nice=19, idle I/O class.
+# Production is READ here, never written: the scrub's source reads run in
+# READ ONLY transactions (scripts/scrub-demo-source.py source_readonly), and
+# tests/scripts/test_scrub_demo_source.py holds that no production write
+# statement exists on its source path.
 [Unit]
 Description=Scrub+promote staged demo content from production into the demo Postgres instance (the only bridge)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Service]
 Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+# Bounded: a stuck run must not hold both credentials all day (the load wait
+# is at most 1 h; a normal nightly refresh is minutes).
+TimeoutStartSec=4h
 WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
 # Names only; the loader (scripts/lib/with_dispatch_env.py semantics, via the
 # service's own EnvironmentFile=) never echoes a value.
@@ -23,4 +45,7 @@ EnvironmentFile=/etc/corporatetraveldc/dispatch-secrets.env
 EnvironmentFile=/etc/corporatetraveldc/pgsql-demo-secrets.env
 Environment=PYTHONPATH=/opt/corporatetraveldc/private/ctdi-dispatch-internal/src
 Environment=DEMO_PG_USER=demo_owner
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scrub-demo-source.py --refresh
+Environment=DEMO_SCRUB_MAX_LOAD=24
+Environment=RELAY_MAX_LOAD=24
+ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/relay-wait-load.sh
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/scrub-demo-source.py --refresh --workers 1

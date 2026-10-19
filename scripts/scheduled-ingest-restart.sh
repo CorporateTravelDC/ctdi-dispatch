@@ -44,7 +44,7 @@ set -uo pipefail
 # sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
 authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
-STATE_DIR="/var/lib/corporatetraveldc/scheduled-ingest-restart"
+STATE_DIR="${INGEST_RESTART_STATE_DIR:-/var/lib/corporatetraveldc/scheduled-ingest-restart}"
 LOG_FILE="${STATE_DIR}/restart.log"
 # One state file per service now (was a single shared state.json) so each
 # container's cooldown is tracked independently.
@@ -116,7 +116,7 @@ COOLDOWN_SECS="${INGEST_RESTART_COOLDOWN_SECS:-300}"
 # threshold, flapping the two watchdogs against each other. Skip this
 # entire run whenever the guard is currently shed (tier > 0) or restored
 # within the last GUARD_GRACE_SECS.
-THERMAL_GUARD_STATE="/var/lib/corporatetraveldc/thermal_ingest_guard_state.json"
+THERMAL_GUARD_STATE="${INGEST_RESTART_GUARD_STATE:-/var/lib/corporatetraveldc/thermal_ingest_guard_state.json}"
 GUARD_GRACE_SECS="${INGEST_RESTART_GUARD_GRACE_SECS:-300}"
 
 MODE="run"
@@ -146,9 +146,36 @@ ntfy_send() {
         "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 || log "warn" "ntfy_send failed (token_set=$([[ -n \"${NTFY_TOKEN}\" ]] && echo yes || echo no))"
 }
 
+# Lean-out L2 / F12 (2026-10-19): one memory source. container-mem-watch.sh
+# (same 2-min cadence) already takes a `podman stats` snapshot every cycle and
+# publishes it to STATS_SNAPSHOT; this script used to run its own
+# `podman stats --no-stream` once PER SERVICE (7 per run). Now: the published
+# snapshot when it is at most STATS_MAX_AGE_SECS old, otherwise ONE
+# `podman stats` for the whole run. Threshold, cooldown and guard logic are
+# unchanged.
+STATS_SNAPSHOT="${CONTAINER_STATS_SNAPSHOT:-/run/user/$(id -u)/container-mem-stats.snapshot}"
+STATS_MAX_AGE_SECS="${INGEST_RESTART_STATS_MAX_AGE_SECS:-150}"
+STATS_CACHE=""
+STATS_LOADED=0
+load_stats() {
+    (( STATS_LOADED )) && return 0
+    STATS_LOADED=1
+    local snap_epoch now
+    if [[ -f "${STATS_SNAPSHOT}" ]]; then
+        snap_epoch=$(sed -n '1s/^# epoch \([0-9][0-9]*\)$/\1/p' "${STATS_SNAPSHOT}" 2>/dev/null)
+        now=$(date +%s)
+        if [[ -n "${snap_epoch}" ]] && (( now - snap_epoch <= STATS_MAX_AGE_SECS )); then
+            STATS_CACHE=$(tail -n +2 "${STATS_SNAPSHOT}" 2>/dev/null)
+            [[ -n "${STATS_CACHE}" ]] && return 0
+        fi
+    fi
+    STATS_CACHE=$(podman stats --no-stream --format '{{.Name}}|{{.MemPerc}}' 2>/dev/null)
+}
+
 mem_pct_now() {
     local service="$1"
-    podman stats --no-stream --format '{{.Name}}|{{.MemPerc}}' 2>/dev/null \
+    load_stats
+    printf '%s\n' "${STATS_CACHE}" \
         | awk -F'|' -v svc="systemd-${service%.service}" '$1==svc {gsub("%","",$2); print $2}'
 }
 
@@ -194,6 +221,10 @@ if [[ "${MODE}" != "status" ]] && guard_recently_active; then
     log "info" "thermal-ingest-guard is shed or restored within the last ${GUARD_GRACE_SECS}s -- skipping this entire run to avoid a compounding restart on a stack already mid-recovery"
     exit 0
 fi
+
+# Load the memory snapshot ONCE here, in the main shell: mem_pct_now runs in
+# $(...) subshells, where a lazy load would not persist between services.
+load_stats
 
 if [[ "${MODE}" == "status" ]]; then
     echo "threshold:          ${RESTART_THRESHOLD_PCT}%"

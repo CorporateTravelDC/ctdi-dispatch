@@ -11,12 +11,15 @@ and baggage from every source, use GET /api/v1/flights/{ident}/assignments
 (web/routes/assignments.py), which answers 200 even with FIDS down.
 
 GET /api/v1/fids/{airport}           -- snapshot (arrivals/departures counts)
-GET /api/v1/fids/{airport}/arrivals  -- layered SWIM+website arrivals lookup
+GET /api/v1/fids/{airport}/arrivals  -- SWIM-timed forward arrivals lookup
+                                        (website tier removed 2026-10-19)
 GET /api/v1/fids/{airport}/{flight}  -- single flight lookup, e.g. AA1557
 
 Snapshot + single-flight routes: DCA, IAD only (website scrape).
-Layered arrivals route: DCA, IAD, BWI (SWIM primary, website fallback
-for DCA/IAD -- see common/flight_resolver.py for why BWI is SWIM-only).
+Arrivals route: DCA, IAD, BWI, SWIM only. ~~(SWIM primary, website fallback
+for DCA/IAD -- see common/flight_resolver.py for why BWI is SWIM-only).~~
+(2026-10-19, operator: the FIDS published time no longer selects forward-window
+rows; FIDS-only arrivals drop out.)
 Tier 0 -- no auth required (same as /api/v1/weather).
 
 NOTE ON ROUTE ORDER: /{airport}/arrivals must stay registered before
@@ -86,12 +89,11 @@ def fids_arrivals(
     """
     Layered arrivals lookup -- Tier 0.
 
-    Primary source: FAA SWIM (flight_events table, ingest-populated).
-    Fallback: MWAA airport-website FIDS scrape (DCA/IAD only -- BWI is
-    not MWAA-operated and has no equivalent free feed; see
-    common/flight_resolver.py for the reasoning and the AeroAPI option).
+    Source: FAA SWIM (flight_events table, ingest-populated), SWIM times only.
+    ~~Fallback: MWAA airport-website FIDS scrape (DCA/IAD only)~~ (removed
+    2026-10-19, operator: FIDS-only arrivals drop out of the forward list).
 
-    Response includes "source_used" (swim/website/none) and a "note"
+    Response includes "source_used" (swim/none) and a "note"
     explaining why, so callers can tell a genuinely-empty window apart
     from a missing-source situation.
     """

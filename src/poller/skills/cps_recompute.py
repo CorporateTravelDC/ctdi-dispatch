@@ -237,15 +237,23 @@ def build_inputs() -> dict:
             {"type": p["type"], "facility": p["facility"]}
             for p in nas
         ], key=lambda x: (x["type"], x["facility"])),
+        # 2026-10-19 (lean-out L2; standing rule "dedup never hashes
+        # timestamps"): last_seen is no longer carried in these rows, so the
+        # SR-2 gate hash covers only the alert's own content. It was hashed
+        # before, and with the L2 heartbeat change (last_seen touched at most
+        # every 300 s) the gate would have re-fired on a heartbeat schedule.
+        # Freshness is resolved HERE instead, the same way as the RVR rows:
+        # a stale alert drops out of the inputs (which DOES change the hash,
+        # correctly -- an expiring wind-shear alert must re-score).
         "itws": sorted([
             {
                 "airport":      a["airport"],
                 "product_type": a["product_type"],
                 "severity":     a["severity"],
                 "detail":       a["detail"],
-                "last_seen":    a["last_seen"],
             }
             for a in itws
+            if _itws_row_is_fresh(a)
         ], key=lambda x: (x["airport"], x["product_type"])),
         # 2026-08-30: RVR + active-runway-config are part of every score's
         # audit trail (SR-2 gate hash) from the moment they exist, per the
@@ -407,7 +415,9 @@ def _compute_cps(inputs: dict) -> dict:
         # entirely between observation cycles. See ITWS_SEVERE_PRODUCTS
         # comment above for the severity mapping.
         for itws_row in itws_by_station.get(sta, []):
-            if not _itws_row_is_fresh(itws_row):
+            # build_inputs() already dropped stale rows and strips last_seen;
+            # a row that still carries one (a caller-built input) is checked.
+            if "last_seen" in itws_row and not _itws_row_is_fresh(itws_row):
                 continue
             severity = itws_row.get("severity") or 0
             product = itws_row["product_type"]

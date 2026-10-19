@@ -77,6 +77,89 @@ _RECONNECT_BACKOFF = [15, 30, 60, 60, 60]  # successive retry delays, capped at 
 BACKLOG_STALE_SECONDS = int(os.getenv("SWIM_BACKLOG_STALE_SECONDS", "28800"))       # 8h
 BACKLOG_RECENT_FRACTION = float(os.getenv("SWIM_BACKLOG_RECENT_FRACTION", "0.10"))  # last 10%
 
+# Load-gated backlog replay (lean-out L2 / F15, 2026-10-19). The thermal-
+# ingest-guard LOCKDOWN (load1 >= 40) stops all six SWIM feeds for ~30 min;
+# on restore every feed replays its durable-queue backlog (up to the 8 h
+# window above) as fast as it can, and that replay itself pushed load1 back
+# toward 40 (10-17 19:25Z and 22:31Z; the guard's own notes record a
+# cold-start peak of 40.28). Now, while a feed is REPLAYING (its last message
+# was older than SWIM_REPLAY_LAG_SECONDS), it stops pulling from the queue
+# whenever load1 >= SWIM_REPLAY_MAX_LOAD and resumes below that minus
+# SWIM_REPLAY_RESUME_GAP. Nothing is lost: the broker keeps the messages; the
+# 8 h triage above still decides what is kept. Live (caught-up) traffic is
+# never gated. A feed pauses at most SWIM_REPLAY_MAX_PAUSE_SECONDS per
+# connection, then replays ungated (feed-db-integrity alarms at 30 min of
+# silence, so the cap stays well inside it). SWIM_REPLAY_MAX_LOAD=0 disables.
+REPLAY_LAG_SECONDS = float(os.getenv("SWIM_REPLAY_LAG_SECONDS", "120"))
+REPLAY_MAX_LOAD = float(os.getenv("SWIM_REPLAY_MAX_LOAD", "30"))
+REPLAY_RESUME_GAP = float(os.getenv("SWIM_REPLAY_RESUME_GAP", "4"))
+REPLAY_MAX_PAUSE_SECONDS = float(os.getenv("SWIM_REPLAY_MAX_PAUSE_SECONDS", "900"))
+REPLAY_LOAD_CHECK_SECONDS = 2.0
+REPLAY_PAUSE_STEP_SECONDS = 5.0
+
+
+def _read_load1(path: str = "/proc/loadavg") -> float | None:
+    """Host load1 (the load average is not namespaced; containers see the host's)."""
+    try:
+        with open(path) as fh:
+            return float(fh.read().split()[0])
+    except Exception:
+        return None
+
+
+class _ReplayGate:
+    """Per-connection pause decision for backlog replay (see REPLAY_* above).
+
+    observe(age_s) after each message with a sender timestamp; should_pause()
+    before each receive; paused(step) to account a pause. Pure apart from the
+    injected load reader and clock, so it is unit-tested directly."""
+
+    def __init__(self, max_load: float = REPLAY_MAX_LOAD, resume_gap: float = REPLAY_RESUME_GAP,
+                 lag_s: float = REPLAY_LAG_SECONDS, max_pause_s: float = REPLAY_MAX_PAUSE_SECONDS,
+                 check_every_s: float = REPLAY_LOAD_CHECK_SECONDS, load_fn=_read_load1,
+                 clock=time.monotonic):
+        self.max_load = max_load
+        self.resume_gap = resume_gap
+        self.lag_s = lag_s
+        self.max_pause_s = max_pause_s
+        self.check_every_s = check_every_s
+        self.load_fn = load_fn
+        self.clock = clock
+        self.behind = False
+        self.is_paused = False
+        self.paused_total = 0.0
+        self.exhausted = max_load <= 0
+        self._last_check = None
+        self._last_load = None
+
+    def observe(self, age_s: float) -> None:
+        self.behind = age_s > self.lag_s
+        if not self.behind:
+            self.is_paused = False
+
+    def should_pause(self) -> bool:
+        if self.exhausted or not self.behind:
+            self.is_paused = False
+            return False
+        now = self.clock()
+        if self._last_check is None or now - self._last_check >= self.check_every_s:
+            self._last_check = now
+            self._last_load = self.load_fn()
+        load = self._last_load
+        if load is None:
+            self.is_paused = False          # unknown load: never stall ingest on it
+        elif self.is_paused:
+            self.is_paused = load >= self.max_load - self.resume_gap
+        else:
+            self.is_paused = load >= self.max_load
+        return self.is_paused
+
+    def paused(self, step_s: float) -> None:
+        self.paused_total += step_s
+        if self.paused_total >= self.max_pause_s:
+            self.exhausted = True
+            self.is_paused = False
+
 # Client-acknowledgement rollout (2026-08-05). Every feed until now built its
 # receiver with .with_message_auto_acknowledgement() -- the SDK's default,
 # which hands message disposal to the SDK's own internal delivery/ack thread.
@@ -186,7 +269,12 @@ def _capture_bad_message(feed_name: str, stage: str, error: Exception,
 # blocks -- a lagging pool just piles up pending Future objects in memory).
 _db_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="swim-db")
 
-_COUNTER_FLUSH_INTERVAL = 5.0  # seconds between batched feed_data_usage writes
+# 2026-10-19 (lean-out L2, F9): 5 s -> 60 s. Six feeds x one write per 5 s
+# (~224k updates on 6 rows / 59 h) for a usage page that shows running
+# totals. Counters now lag up to 60 s; the stop path still does a final
+# flush, so only a crash loses the last partial window.
+_COUNTER_FLUSH_INTERVAL = 60.0  # seconds between batched feed_data_usage writes
+_COUNTER_FLUSH_STOP_JOIN_S = 7.0  # the loop wakes at once on stop; bounded join
 _counter_lock = threading.Lock()
 _pending_counts: dict[str, list[int]] = {}  # feed_name -> [bytes_in, records_in, records_accepted]
 _counter_flush_stop = threading.Event()
@@ -238,7 +326,7 @@ def _start_counter_flush_thread() -> None:
 def _stop_counter_flush_thread() -> None:
     _counter_flush_stop.set()
     if _counter_flush_thread is not None:
-        _counter_flush_thread.join(timeout=_COUNTER_FLUSH_INTERVAL + 2)
+        _counter_flush_thread.join(timeout=_COUNTER_FLUSH_STOP_JOIN_S)
 
 
 def _stamp_healthy(feed_name: str) -> None:
@@ -556,11 +644,37 @@ class _NmsFeedSession:
         # existing heartbeat cadence below.
         last_priority_check = time.monotonic()
         PRIORITY_CHECK_INTERVAL = 5.0
+        replay_gate = _ReplayGate()
+        replay_pause_logged = False
         try:
             while not stop_ev.is_set():
                 if not service.is_connected:
                     log.warning("swim_client %s: service disconnected", feed_name)
                     break
+
+                # F15: load-gated backlog replay (see _ReplayGate).
+                if not suspended and replay_gate.should_pause():
+                    if not replay_pause_logged:
+                        log.warning(
+                            "swim_client %s: backlog replay paused -- load1 %.1f >= %.0f; "
+                            "messages stay queued on the broker (max %.0fs of pauses per "
+                            "connection)", feed_name, replay_gate._last_load or -1,
+                            replay_gate.max_load, replay_gate.max_pause_s)
+                        replay_pause_logged = True
+                    stop_ev.wait(REPLAY_PAUSE_STEP_SECONDS)
+                    replay_gate.paused(REPLAY_PAUSE_STEP_SECONDS)
+                    if replay_gate.exhausted:
+                        log.warning("swim_client %s: backlog replay pause budget used "
+                                    "(%.0fs) -- replaying ungated for this connection",
+                                    feed_name, replay_gate.paused_total)
+                    if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL:
+                        _db_pool.submit(_stamp_healthy, feed_name)
+                        last_hb = time.monotonic()
+                    continue
+                if replay_pause_logged and not replay_gate.is_paused:
+                    log.info("swim_client %s: backlog replay resumed (paused %.0fs so far)",
+                             feed_name, replay_gate.paused_total)
+                    replay_pause_logged = False
 
                 now_mono = time.monotonic()
                 if now_mono - last_priority_check >= PRIORITY_CHECK_INTERVAL:
@@ -608,6 +722,7 @@ class _NmsFeedSession:
                             if sender_ts_ms is not None:
                                 now_ms = time.time() * 1000.0
                                 age_seconds = (now_ms - sender_ts_ms) / 1000.0
+                                replay_gate.observe(age_seconds)
 
                                 if backlog_start_ts_ms is None:
                                     # First message on this connection -- decide

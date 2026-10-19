@@ -56,14 +56,38 @@ ntfy_alert() {  # $1=title $2=body ; MAX priority + token auth (no token == sile
     -d "$2" "${NTFY_BASE}/${ALERT_TOPIC}" >/dev/null 2>&1 || true
 }
 
+# Lean-out L2 / F4 (2026-10-19): this used to re-read 2 days of each unit's
+# journal every hour (`--since "2 days ago" -n 1000`, peaks of ~1.2 GB mapped).
+# Now each run reads only the entries after a per-unit cursor
+# (scripts/lib/journal-cursor.sh) and appends the classified outcomes to a
+# small per-unit history; the window is the last $WINDOW outcomes of that
+# history, exactly as before. First run (or a cursor older than 1 day): the old
+# 2-day read, once.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/journal-cursor.sh
+. "${REPO_ROOT}/scripts/lib/journal-cursor.sh"
+STATE_DIR="${BRIEF_FALLBACK_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/corporatetraveldc/brief-fallback-monitor}"
+mkdir -p "$STATE_DIR"
+HISTORY_KEEP=50
+
 # One outcome per run (dedupe the journal's double-logging by timestamp), newest last.
-outcomes_for() {
-  local unit="$1"
-  journalctl --user -u "$unit" --no-pager -n 1000 --since "2 days ago" 2>/dev/null \
-    | grep -aE 'brief generated' \
+classify_lines() {  # stdin: journal lines (short format) -> "Mon DD HH:MM:SS OUTCOME"
+  grep -aE 'brief generated' \
     | sed -E "s/^([A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9:]{8}).*[Dd]eterministic.*/\1 FALLBACK/; s/^([A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9:]{8}).*brief generated.*/\1 LLM/" \
-    | awk 'NF>=4 && ($4=="FALLBACK"||$4=="LLM") && !seen[$1" "$2" "$3]++ {print $4}' \
-    | tail -n "$WINDOW"
+    | awk 'NF>=4 && ($4=="FALLBACK"||$4=="LLM") {print $1" "$2" "$3" "$4}'
+}
+HISTORY_MAX_AGE=172800   # the old "--since 2 days ago": outcomes older than this leave the window
+outcomes_for() {  # history line: "<epoch read> Mon DD HH:MM:SS OUTCOME"
+  local unit="$1" hist="${STATE_DIR}/${1}.outcomes" cur="${STATE_DIR}/${1}.cursor" new now
+  now=$(date +%s)
+  new=$(mktemp "${STATE_DIR}/.new.XXXXXX")
+  jc_read "$new" "$cur" "2 days ago" 86400 --user -u "$unit" || true
+  touch "$hist"
+  { cat "$hist"; classify_lines < "$new" | sed "s/^/${now} /"; } \
+    | awk -v cut=$((now - HISTORY_MAX_AGE)) '$1>=cut && !seen[$2" "$3" "$4]++' \
+    | tail -n "$HISTORY_KEEP" > "${hist}.tmp" && mv -f "${hist}.tmp" "$hist"
+  rm -f "$new"
+  awk '{print $5}' "$hist" | tail -n "$WINDOW"
 }
 
 # 2026-10-14 (operator): alert when a brief FALLS BACK on its latest run, with a short narrative

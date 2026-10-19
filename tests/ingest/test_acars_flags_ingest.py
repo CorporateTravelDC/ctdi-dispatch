@@ -174,6 +174,17 @@ def test_oooi_unaffected_by_flag_pushes(env):
     assert sorted(h[1]["watchlist_trigger"] for h in env) == ["acars_diversion", "acars_off"]
 
 
+def test_vc25c_is_vip_listed(monkeypatch, tmp_path):
+    # 2026-10-19 (operator): VC-25C joins the VIP-listed types.
+    import shared.vip_listed as vl
+    assert "VC25C" in vl.VIP_ROUTE_NAMES
+    for route in ("VC-25C", "vc25c", "VC 25C", "VC-25B/VC-25C"):
+        assert vl.is_vip_record({"route_name": route}), route
+    monkeypatch.setattr(vl, "PERMANENT_WATCHLIST_DIR", tmp_path / "none")
+    vl._cache.update(mtime=None, by_id={})
+    assert vl.is_vip_listed({"id": "x", "tier": "permanent", "route_name": "VC-25C"})
+
+
 def test_vip_listed_predicate(monkeypatch, tmp_path):
     import shared.vip_listed as vl
     rec = vl.is_vip_record
@@ -181,7 +192,7 @@ def test_vip_listed_predicate(monkeypatch, tmp_path):
         assert rec({"route_name": route}), route
     for notes in ("AF1 backup", "flies as SAM41", "Nightwatch", "af2"):
         assert rec({"route_name": "757", "notes": notes}), notes
-    for r in ({"route_name": "British Airways LHR-IAD"}, {"route_name": "VC-25C"}, {"notes": "SAMPLE"}, None):
+    for r in ({"route_name": "British Airways LHR-IAD"}, {"route_name": "VC-25D"}, {"notes": "SAMPLE"}, None):
         assert not rec(r)
     monkeypatch.setattr(vl, "PERMANENT_WATCHLIST_DIR", tmp_path / "none")
     vl._cache.update(mtime=None, by_id={})

@@ -55,13 +55,27 @@ ExecStartPre=/usr/bin/sha256sum --strict --quiet --check /opt/corporatetraveldc/
 # -t 2: two generation threads. -tb 2: two prompt-eval threads too --
 #   prompt eval is the compute-bound phase and would otherwise spawn one
 #   thread per core. The cgroup quota below is the hard ceiling either way.
+# 2026-10-19 (lean-out L2, F7): --cache-ram 0 -> --cache-ram 1024
+#   --cache-reuse 256. With 0, the ~500-token shared preamble and the
+#   700-1,066-token personas were re-evaluated on almost every call (prompt
+#   eval at 4-6 tok/s: ~140-210 s per call). The host prompt cache keeps up
+#   to 1024 MiB of saved prompt state; --cache-reuse 256 reuses a cached
+#   prefix chunk of >= 256 tokens by KV shifting. Same output.
+#   MEMORY CHECK: Q8 KV is ~75 KB/token, so ~75 MB per cached ~1k-token
+#   persona; the 1024 MiB cap is the worst case on top of ~2.38 GB weights
+#   + ~2.4 GB KV pool, i.e. ~5.8 GB, under MemoryHigh=7168M (MemoryMax
+#   8448M). The box had ~147 MB free on 2026-10-18 with 6.6 GB page cache;
+#   after the restart check `systemctl --user show -p MemoryCurrent
+#   corporatetraveldc-llama` stays under MemoryHigh, and drop to
+#   --cache-ram 512 if it nears it.
+# SUPERSEDED 2026-10-19: --cache-ram 0
 ExecStart=/usr/local/lib/ollama/llama-server \
     -m /var/lib/corporatetraveldc/models/qwen3-4b-instruct-2507-q4_0.gguf \
     --host 100.x.x.x --port 8093 \
     -np 2 --kv-unified -c 12288 \
     -fa on -ctk q8_0 -ctv q8_0 \
     -t 2 -tb 2 \
-    --cache-ram 0 \
+    --cache-ram 1024 --cache-reuse 256 \
     --no-webui
 Restart=always
 RestartSec=5

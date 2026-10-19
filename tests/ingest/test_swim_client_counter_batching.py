@@ -110,3 +110,18 @@ def test_concurrent_accumulation_from_multiple_threads_is_not_lossy():
         expected_records * 10, expected_records, expected_records,
     ], "lock must prevent lost updates under concurrent accumulation"
     _reset_counters()
+
+
+# 2026-10-19 (lean-out L2, F9): flush cadence 5 s -> 60 s; stop still does a
+# final flush and does not wait out a whole interval.
+def test_flush_interval_is_60s_and_stop_does_a_final_flush_promptly():
+    import time
+    assert swim_client._COUNTER_FLUSH_INTERVAL == 60.0
+    _reset_counters()
+    with mock.patch.object(swim_client._db, "record_feed_bytes") as rec:
+        swim_client._start_counter_flush_thread()
+        swim_client._accumulate_feed_bytes("fdps", 100, 1, 1)
+        t0 = time.monotonic()
+        swim_client._stop_counter_flush_thread()
+        assert time.monotonic() - t0 < swim_client._COUNTER_FLUSH_STOP_JOIN_S
+    rec.assert_called_once_with("fdps", 100, 1, 1)

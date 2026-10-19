@@ -50,8 +50,9 @@ class DemoQuadlets(unittest.TestCase):
         """No production socket volume, no dispatch-secrets.env, no scoped
         svc/ file, no /var/lib/corporatetraveldc mount source. dispatch.env is
         forbidden once the quadlet declares DISPATCH_ROLE=demo (relay 2 moves
-        both to config/demo.env); until then the two named quadlets still load
-        it legitimately -- relay 1 changes nothing demo-facing."""
+        both to config/demo.env); ~~until then the two named quadlets still load
+        it legitimately -- relay 1 changes nothing demo-facing~~ (2026-10-19:
+        relay 2 flipped both, so the clause below now binds them)."""
         for p in demo_quadlets():
             lines = active(p)
             with self.subTest(unit=p.name):
@@ -64,6 +65,32 @@ class DemoQuadlets(unittest.TestCase):
                                          f"{p.name}: {l}")
                 if "Environment=DISPATCH_ROLE=demo" in lines or any("/etc/corporatetraveldc/demo.env" in l for l in lines):
                     self.assertFalse(any(PROD_ENV in l for l in lines), f"{p.name}: demo role but still loads dispatch.env")
+
+    def test_relay2_flip_both_demo_quadlets(self):
+        """2026-10-19 relay 2: both demo app quadlets are demo-role processes on
+        the demo instance's own socket volume, load demo-secrets.env then
+        demo.env LAST, and never dispatch.env. DEMO_SOURCE and
+        DISPATCH_DB_BACKEND are NOT Environment= lines (podman -e beats
+        --env-file, so the demo.env rollback switch would be dead)."""
+        for name in sorted(DEMO_APP):
+            lines = active(QUADLETS / f"{name}.container")
+            with self.subTest(unit=name):
+                self.assertIn("Environment=DISPATCH_ROLE=demo", lines)
+                self.assertIn("Environment=DISPATCH_DEMO_ISOLATION=1", lines)
+                self.assertIn(f"Volume={DEMO_SOCK}:/var/run/postgresql-demo", lines)
+                envfiles = [l for l in lines if l.startswith("EnvironmentFile=")]
+                self.assertEqual(envfiles, ["EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env",
+                                            "EnvironmentFile=/etc/corporatetraveldc/demo.env"])
+                self.assertFalse(any("dispatch.env" in l or "dispatch-secrets" in l for l in lines))
+                self.assertFalse(any(l.startswith(("Environment=DEMO_SOURCE", "Environment=DISPATCH_DB_BACKEND",
+                                                   "Environment=DEMO_PG_", "Environment=DISPATCH_PG_")) for l in lines))
+                vols = [l[len("Volume="):].split(":", 1)[0] for l in lines if l.startswith("Volume=")]
+                self.assertFalse(any(v.startswith("/etc/") for v in vols), vols)
+                self.assertTrue(any("corporatetraveldc-pgsql-demo.service" in l for l in lines if l.startswith("After=")))
+        api = active(QUADLETS / "corporatetraveldc-demo-api.container")
+        # the rollback path: the sovereign file and demo_access.db stay mounted until relay 4
+        self.assertIn("Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z", api)
+        self.assertIn("Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z", api)
 
     def test_no_non_demo_unit_mounts_the_demo_socket(self):
         """The recorder (corporatetraveldc-demo) and every other production
@@ -187,10 +214,10 @@ class Wiring(unittest.TestCase):
         svc = active(USER_UNITS / "corporatetraveldc-demo-source-refresh.service")
         self.assertIn("EnvironmentFile=/etc/corporatetraveldc/pgsql-demo-secrets.env", svc)
         self.assertIn("Environment=DEMO_PG_USER=demo_owner", svc)
-        self.assertTrue(any(l.startswith("ExecStart=") and l.endswith("scripts/scrub-demo-source.py --refresh") for l in svc))
+        self.assertTrue(any(l.startswith("ExecStart=") and l.endswith("scripts/scrub-demo-source.py --refresh --workers 1") for l in svc))
         self.assertFalse(any("pgsql-secrets.env" in l and "pgsql-demo-secrets" not in l for l in svc))
         timer = active(USER_UNITS / "corporatetraveldc-demo-source-refresh.timer")
-        self.assertIn("OnCalendar=*-*-* 04:45:00 America/New_York", timer)
+        self.assertIn("OnCalendar=*-*-* 03:17:00 UTC", timer)   # 2026-10-19 relay 3 (was 04:45 America/New_York)
         self.assertFalse(any(l.startswith(("Requires=", "Wants=")) for l in timer))
 
     def test_env_examples(self):
@@ -200,10 +227,16 @@ class Wiring(unittest.TestCase):
             self.assertIn("\n" + key, demo, key)
         self.assertNotIn("DISPATCH_PG_PASSWORD", demo)
         self.assertNotIn("\nDISPATCH_PG_", demo)
+        # 2026-10-19 relay 2: the demo role's password and the rollback pair live in demo.env
+        for key in ("DEMO_PG_PASSWORD=CHANGE_ME", "DISPATCH_DB_BACKEND=postgres", "LLAMA_BASE_URL=CHANGE_ME",
+                    "OLLAMA_CHAT_MODEL=CHANGE_ME"):
+            self.assertIn("\n" + key, demo, key)
+        for bad in ("\nULTRAFEEDER_URL", "\nACARSHUB_URL", "\nNTFY_TOKEN", "\nPOSTGRES_PASSWORD"):
+            self.assertNotIn(bad, demo, bad)
         secrets = (REPO / "config/demo-secrets.env.example").read_text()
-        self.assertIn("\nDEMO_PG_PASSWORD=CHANGE_ME", secrets)
+        self.assertNotIn("\nDEMO_PG_PASSWORD=", secrets)   # moved to demo.env (relay 2)
         self.assertNotIn("DISPATCH_PG_PASSWORD=", secrets)
-        self.assertIn("\nDISPATCH_DB_BACKEND=sqlite", secrets)   # relay-1 pin stays until relay 2
+        self.assertIn("\nDISPATCH_DB_BACKEND=sqlite", secrets)   # harmless default under demo.env
         pg = (REPO / "config/pgsql-demo-secrets.env.example").read_text()
         keys = [l.split("=", 1)[0] for l in pg.splitlines() if l and not l.startswith("#")]
         self.assertEqual(keys, ["POSTGRES_PASSWORD"])
@@ -233,6 +266,10 @@ case "$cmd" in
     # exec -i <container> sh -c '<script>' sh "<sql>"
     container="$2"; sql="${@: -1}"
     case "$sql" in
+      *"/etc/corporatetraveldc/dispatch"*) [[ -n "${FAKE_ETC_VISIBLE:-}" ]] && exit 1; exit 0 ;;
+      *"0002_demo_grants"*) echo "${FAKE_DEMO_0002-1}" ;;
+      *role_table_grants*) printf '%s\n' ${FAKE_DEMO_GRANTS:-} ;;
+      *rolbypassrls*) echo "${FAKE_DEMO_ATTRS:-false,false,false}" ;;
       *pg_stat_activity*) echo "${FAKE_PROD_SESSIONS:-0}" ;;
       *"rolname IN ('demo', 'demo_owner')"*) echo "${FAKE_PROD_DEMO_ROLES:-0}" ;;
       *rolsuper*) echo "${FAKE_DEMO_SUPERS:-}" ;;
@@ -261,6 +298,9 @@ CLEAN = dict(
     FAKE_ENV_corporatetraveldc_web="DISPATCH_PG_PASSWORD=not-a-real-value\n",
     FAKE_PROD_SESSIONS="0", FAKE_PROD_DEMO_ROLES="0", FAKE_DEMO_SUPERS="", FAKE_DEMO_DISPATCH="0",
     FAKE_DEMO_TABLES="snapshots brief_archive meta demo_profiles chat_messages scrub_ledger schema_migrations",
+    # 2026-10-19: the audited grant set after 0002 (unsorted on purpose: the check sorts)
+    FAKE_DEMO_GRANTS="snapshots:SELECT meta:SELECT brief_archive:SELECT scrub_ledger:SELECT demo_profiles:SELECT "
+                     "demo_profiles:INSERT demo_profiles:UPDATE chat_messages:SELECT chat_messages:INSERT chat_messages:DELETE",
 )
 
 
@@ -307,6 +347,40 @@ class LiveCheckLogic(unittest.TestCase):
         self.assertEqual(r.returncode, 1); self.assertIn("'dispatch' role exists on the demo", r.stdout)
         r = run_check(Path(self._tmp()), **dict(CLEAN, FAKE_RUNNING="corporatetraveldc-pgsql systemd-corporatetraveldc-web"))
         self.assertEqual(r.returncode, 0, r.stdout); self.assertIn("not running (relay 1", r.stdout)
+
+    def test_flipped_container_with_production_names_or_files_fails(self):
+        """2026-10-19 relay 2: a DISPATCH_ROLE=demo container carrying any
+        DISPATCH_PG_* name (dispatch.env loaded), mounting /etc/corporatetraveldc,
+        or seeing dispatch.env inside is a finding; names only, never values."""
+        env = dict(CLEAN, FAKE_ENV_corporatetraveldc_demo_api="DISPATCH_ROLE=demo\nDISPATCH_PG_DB=x\nDISPATCH_PG_USER=not-a-real-value\n")
+        r = run_check(Path(self._tmp()), **env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DISPATCH_PG_DB DISPATCH_PG_USER", r.stdout)
+        self.assertNotIn("not-a-real-value", r.stdout + r.stderr)
+        r = run_check(Path(self._tmp()), **dict(CLEAN, FAKE_ETC_VISIBLE="1"))
+        self.assertEqual(r.returncode, 1); self.assertIn("visible inside the container", r.stdout)
+        env = dict(CLEAN, FAKE_MOUNTS_corporatetraveldc_demo_api="- /etc/corporatetraveldc/demo.env /etc/x\n")
+        r = run_check(Path(self._tmp()), **env)
+        self.assertEqual(r.returncode, 1); self.assertIn("mounts from /etc/corporatetraveldc", r.stdout)
+        # an UNflipped container (no DISPATCH_ROLE) is not held to 1b
+        env = dict(CLEAN, FAKE_ENV_corporatetraveldc_demo_api="DISPATCH_PG_DB=x\n", FAKE_ETC_VISIBLE="1")
+        r = run_check(Path(self._tmp()), **env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_demo_role_grants_compared_after_0002(self):
+        r = run_check(Path(self._tmp()), **CLEAN)
+        self.assertEqual(r.returncode, 0, r.stdout); self.assertIn("demo role grants match the audited set", r.stdout)
+        extra = dict(CLEAN, FAKE_DEMO_GRANTS=CLEAN["FAKE_DEMO_GRANTS"] + " snapshots:INSERT")
+        r = run_check(Path(self._tmp()), **extra)
+        self.assertEqual(r.returncode, 1); self.assertIn("grants differ from the audited set", r.stdout)
+        missing = dict(CLEAN, FAKE_DEMO_GRANTS="snapshots:SELECT")
+        self.assertEqual(run_check(Path(self._tmp()), **missing).returncode, 1)
+        r = run_check(Path(self._tmp()), **dict(CLEAN, FAKE_DEMO_ATTRS="false,false,true"))
+        self.assertEqual(r.returncode, 1); self.assertIn("TEMP", r.stdout)
+        r = run_check(Path(self._tmp()), **dict(CLEAN, FAKE_DEMO_0002="0", FAKE_DEMO_GRANTS="snapshots:INSERT"))
+        self.assertEqual(r.returncode, 0, r.stdout); self.assertIn("not applied yet", r.stdout)
+        r = run_check(Path(self._tmp()), **dict(CLEAN, FAKE_DEMO_0002=""))
+        self.assertEqual(r.returncode, 1); self.assertIn("could not read schema_migrations", r.stdout)
 
     def _tmp(self) -> str:
         import tempfile

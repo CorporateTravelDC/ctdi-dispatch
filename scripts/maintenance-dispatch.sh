@@ -30,7 +30,7 @@ authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUEUE_FILE="${REPO_ROOT}/scripts/lib/maintenance-queue.txt"
 STATE="${HOME}/.cache/maintenance-queue.json"; mkdir -p "${HOME}/.cache"
-GUARD="${REPO_ROOT}/scripts/maintenance-window-guard.sh"
+GUARD="${MAINT_WINDOW_GUARD:-${REPO_ROOT}/scripts/maintenance-window-guard.sh}"   # override = test hook
 ENV_FILE=/etc/corporatetraveldc/dispatch.env; SECRETS_FILE=/etc/corporatetraveldc/dispatch-secrets.env
 log() { printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2"; }
 read_env_var() { local key="$1" file="$2"; [[ -f "$file" ]] || return 0; grep -m1 "^${key}=" "$file" 2>/dev/null | cut -d'=' -f2-; }
@@ -61,7 +61,16 @@ JTMP=$(mktemp); trap 'rm -f "$JTMP"' EXIT
 for u in "${QUEUE[@]}"; do
   at=$("${MQ[@]}" dispatched-at "$u"); [[ "$at" =~ ^[0-9]+$ ]] && (( at > 0 )) || continue
   a=0; is_active "$u" && a=1
-  journalctl --user -u "$u.service" --since "@$at" --no-pager -o cat >"$JTMP" 2>/dev/null || : >"$JTMP"
+  # Lean-out L2 / F4 (2026-10-19): a still-running job stays "dispatched"
+  # whatever its journal says (reconcile ignores the lines while active), so
+  # the journal is read only once the job has stopped -- one exact-unit read
+  # from its dispatch time, instead of one every ~20 min for the whole run
+  # (peaks of ~2 GB mapped).
+  if (( a )); then
+    : >"$JTMP"
+  else
+    "${JOURNALCTL:-journalctl}" --user -u "$u.service" --since "@$at" --no-pager -o cat >"$JTMP" 2>/dev/null || : >"$JTMP"
+  fi
   out=$("${MQ[@]}" reconcile "$u" "$a" "$JTMP")
   case "$out" in failed|failed-final) log warn "${u}: ${out}" ;; skipped|skipped-final) log info "${u}: ${out}" ;; esac
   [[ "$out" == failed-final ]] && ntfy_send "maintenance-dispatch: ${u} failed twice" "${TODAY}: ${u} failed on both attempts today; queue continued without it" 3

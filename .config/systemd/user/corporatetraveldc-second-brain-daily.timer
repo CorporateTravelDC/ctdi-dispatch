@@ -1,5 +1,5 @@
 [Unit]
-Description=Run second-brain daily digest every 2h, anchored 23:45 ET (that run remains the definitive full-day capture; the 2h siblings refresh the same day-file with fresher operational data throughout the day)
+Description=Run second-brain daily digest once a day at 23:45 ET (the definitive full-day capture)
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -16,7 +16,12 @@ OnCalendar=*-*-* 23:45:00 America/New_York
 # snapshot (CPS/TFR/NOTAM/NWS/METAR/Amtrak/watchlist/OSINT), it doesn't
 # create duplicates. Worst-case measured ceiling is 43min -- comfortable
 # margin under a 2h interval.
-OnUnitActiveSec=120min
+# 2026-10-19 (lean-out L2, F7): the 120-min repeat removed. It made this
+# "daily" job fire ~12x/day, each run one model call (~1.9k prompt / 350
+# out tokens, ~1-1.3 h/day of the long-runner lane). The 23:45 ET run was
+# always the definitive capture; intra-day refreshes are dropped.
+# Old: OnCalendar 23:45 ET + OnUnitActiveSec=120min. New: OnCalendar only.
+# SUPERSEDED 2026-10-19: OnUnitActiveSec=120min
 Persistent=true
 
 [Install]

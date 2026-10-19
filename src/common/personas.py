@@ -962,12 +962,54 @@ states.""",
 REPORT_POOL_NUM_CTX = max(p["num_ctx"] for p in PERSONAS.values() if p["tier"] == "report")
 
 
-def build_system_prompt(persona_key: str) -> str:
+# 2026-10-19 (batch G1 glossary): the compact logic-rules block generated from
+# docs/glossary.yaml by scripts/render-glossary.py. It is a tracked file, so the
+# signed manifest covers it; glossary_rules_block() verifies it before first use
+# and raises IntegrityCheckFailed on any mismatch ("nothing runs unsigned").
+# The appendix is on only when CTDC_PERSONA_RULES_APPENDIX=1. G8 (operator
+# 2026-10-19, "Let's add to personas"): the poller image sets it
+# (Containerfile.poller ENV), and every production persona call runs in a
+# poller-image container (skills, briefs, digests, poller.main). The runner
+# image never sets it: its /api/ask always passes its own system prompt, and
+# that image carries no verifier, so a rules lookup there would refuse.
+# build-models.sh compares Modelfiles with rules_appendix=False, so the flag
+# never shows up there as DRIFT.
+GLOSSARY_RULES_RELPATH = "src/common/glossary_rules.txt"
+RULES_APPENDIX_ENV = "CTDC_PERSONA_RULES_APPENDIX"
+_verified_rules_text: str | None = None
+
+
+def rules_appendix_enabled() -> bool:
+    import os
+    return os.environ.get(RULES_APPENDIX_ENV, "").strip() == "1"
+
+
+def glossary_rules_block() -> str:
+    """The signed compact rules block. Verified against the signed manifest
+    first (common.llm._verify_integrity), then read from the same root the
+    verifier checked and kept for the life of the process, so a file changed
+    after verification is never read into a prompt. Never read unverified."""
+    global _verified_rules_text
+    if _verified_rules_text is None:
+        from common import llm
+        llm._verify_integrity(GLOSSARY_RULES_RELPATH)
+        _verified_rules_text = (llm._REPO_ROOT / GLOSSARY_RULES_RELPATH).read_text(encoding="utf-8").strip()
+    return _verified_rules_text
+
+
+def build_system_prompt(persona_key: str, *, rules_appendix: bool | None = None) -> str:
     """Full system message for a persona: shared dispatcher preamble + this
     skill's own task layer, exactly as it appeared in the Modelfile's SYSTEM
-    block."""
+    block. With the rules appendix on (argument, else CTDC_PERSONA_RULES_APPENDIX=1)
+    the signed glossary rules block is appended after the task layer; nothing
+    else changes."""
     p = PERSONAS[persona_key]
-    return p["preamble"] + "\n\n" + p["task"]
+    text = p["preamble"] + "\n\n" + p["task"]
+    if rules_appendix is None:
+        rules_appendix = rules_appendix_enabled()
+    if rules_appendix:
+        text += "\n\n" + glossary_rules_block()
+    return text
 
 
 def sampling_params(persona_key: str) -> dict:

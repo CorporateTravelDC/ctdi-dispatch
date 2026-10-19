@@ -14,9 +14,22 @@ Per run: at most ONE active convene that names ctdc-agent-llama and has no
 contribution from it yet. Skips entirely when load1 >= LOAD_MAX (the box sheds
 work above ~12) or the model server is unreachable. Dry run: --dry-run prints
 what it would contribute and posts nothing.
+
+2026-10-19 (lean-out L2, F7): the draft now holds the box-wide long-runner
+generation lock (/var/lib/corporatetraveldc/llama-pool/long-runner.lock, the
+same flock common/llama_pool.long_runner_lock() takes for every report
+persona) instead of posting straight to the server beside a running report.
+The wait is bounded (LLAMA_COUNCIL_LOCK_WAIT_S, default 120 s): a busy lane
+means skip this hour, never queue into the unit's 20-min start timeout. A
+failed draft is recorded by a hash of its inputs (mode, subject, brief,
+source) in the unit's StateDirectory; the identical draft is not retried for
+LLAMA_COUNCIL_RETRY_AFTER_S (default 24 h) -- it used to be retried, and fail
+the same way, every hour. A changed brief or source retries at once.
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -37,6 +50,63 @@ KEY = os.environ.get("BOARD_SIGN_KEY", str(Path.home() / ".ssh" / f"{ME}_ed25519
 LOAD_MAX = float(os.environ.get("LLAMA_COUNCIL_LOAD_MAX", "12"))
 MAX_TOKENS = int(os.environ.get("LLAMA_COUNCIL_MAX_TOKENS", "900"))
 CONTRIB_ROOT = "01-Sources/personal-notes/Series/contributions"
+LOCK_PATH = os.environ.get("LLAMA_LONG_RUNNER_LOCK", "/var/lib/corporatetraveldc/llama-pool/long-runner.lock")
+LOCK_WAIT_S = float(os.environ.get("LLAMA_COUNCIL_LOCK_WAIT_S", "120"))
+RETRY_AFTER_S = float(os.environ.get("LLAMA_COUNCIL_RETRY_AFTER_S", "86400"))
+STATE_DIR = Path(os.environ.get("STATE_DIRECTORY") or (Path.home() / ".cache" / "llama-council"))
+FAILED_FILE = STATE_DIR / "failed-drafts.json"
+
+
+def draft_key(mode: str, subject: str, brief: str, source: str) -> str:
+    """Content key of a draft's INPUTS (never a timestamp)."""
+    return hashlib.sha256(json.dumps([mode, subject, brief or "", source or ""]).encode()).hexdigest()
+
+
+def _load_failed() -> dict:
+    try:
+        return json.loads(FAILED_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def recently_failed(key: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    at = _load_failed().get(key)
+    return at is not None and 0 <= now - float(at) < RETRY_AFTER_S
+
+
+def record_failure(key: str, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    failed = {k: v for k, v in _load_failed().items() if now - float(v) < RETRY_AFTER_S}
+    failed[key] = now
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = FAILED_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(failed))
+        os.replace(tmp, FAILED_FILE)
+    except OSError as e:
+        print(f"could not record the failed draft: {e}", file=sys.stderr)
+
+
+def acquire_long_runner_lock(wait_s: float = LOCK_WAIT_S):
+    """Return an fd holding the shared long-runner flock, or None if it stayed
+    busy for wait_s (or cannot be opened). Read-only open: flock needs no write
+    access, and this account only reads /var/lib/corporatetraveldc."""
+    try:
+        fd = os.open(LOCK_PATH, os.O_RDONLY)
+    except OSError as e:
+        print(f"long-runner lock unavailable ({type(e).__name__}): skipping this hour", file=sys.stderr)
+        return None
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(2.0)
 
 
 def signed(method: str, path_q: str, body: bytes = b"") -> tuple[int, dict]:
@@ -98,8 +168,22 @@ def main() -> int:
         if cs["subject"].startswith("01-Sources/") or cs["subject"].startswith("04-Syntheses/") or "/" in cs["subject"]:
             c2, doc = signed("GET", "/api/v1/vault/research?path=" + urllib.parse.quote(cs["subject"], safe="/"))
             source = doc.get("content", "") if c2 == 200 else ""
-        text = draft(cs["mode"], cs["subject"], cs.get("brief", ""), source)
+        key = draft_key(cs["mode"], cs["subject"], cs.get("brief", ""), source)
+        if recently_failed(key):
+            print(f"council-{cs['id']}: the identical draft failed within {RETRY_AFTER_S / 3600:.0f} h -- "
+                  "not retrying until its brief or source changes")
+            continue
+        fd = acquire_long_runner_lock()
+        if fd is None:
+            print(f"long-runner lane busy for {LOCK_WAIT_S:.0f}s: skipping this hour")
+            return 0
+        try:
+            text = draft(cs["mode"], cs["subject"], cs.get("brief", ""), source)
+        finally:
+            os.close(fd)
         if not text:
+            if not dry:
+                record_failure(key)
             return 1
         if dry:
             print(f"[dry-run] would contribute to council-{cs['id']}:\n{text[:2000]}")

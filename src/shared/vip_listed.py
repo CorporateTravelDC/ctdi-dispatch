@@ -1,5 +1,5 @@
 """VIP-listed aircraft (2026-10-18, operator: ACARS flag pushes at p5 for VIP-listed
-aircraft, p4 otherwise).
+aircraft, p4 otherwise). 2026-10-19 (operator): VC-25C added to the types.
 
 "VIP-listed" = an entry in watchlists/permanent_flights.json whose route_name is one
 of VIP_ROUTE_NAMES (compared without hyphens/spaces, each "/"-separated part on its
@@ -25,7 +25,8 @@ import threading
 from shared.watchlist import PERMANENT_WATCHLIST_DIR
 
 PERMANENT_FLIGHTS_FILE = "permanent_flights.json"
-VIP_ROUTE_NAMES = frozenset({"VC25A", "VC25B", "C32", "C37", "C40", "C40C", "E4B"})
+# 2026-10-19 (operator): VC-25C added.
+VIP_ROUTE_NAMES = frozenset({"VC25A", "VC25B", "VC25C", "C32", "C37", "C40", "C40C", "E4B"})
 _VIP_NOTES_RE = re.compile(r"\b(?:AF[12]|SAM\d*|NIGHTWATCH)\b", re.IGNORECASE)
 
 _lock = threading.Lock()

@@ -18,6 +18,17 @@
 #   3. the DEMO instance (when running) has no superuser but demo_owner, no
 #      `dispatch` role, and no table outside the six demo tables (+
 #      schema_migrations, the runner's bookkeeping).
+#   4. (2026-10-19, relay 2) once pg_schema_demo/0002_demo_grants.sql is
+#      applied: the `demo` role's table grants are EXACTLY DEMO_ROLE_GRANTS
+#      below (SELECT-only on the four playback tables; the demo's own
+#      demo_profiles / chat_messages writes), and it holds no role attribute,
+#      no CREATE on schema public and no TEMP on the database.
+#   1b. (2026-10-19, relay 2) a FLIPPED demo container (DISPATCH_ROLE=demo in
+#      its environment) carries no DISPATCH_PG_* name at all (the production
+#      identity dispatch.env used to hand it), mounts nothing from
+#      /etc/corporatetraveldc, and has neither dispatch.env nor
+#      dispatch-secrets.env at that path inside the container (common.config
+#      loads those paths on import when they exist).
 # Exit 0 clean, 1 any finding (one line per finding on stdout), 3 when
 # podman is unusable. A demo instance that is not running is reported, not
 # failed (relay 1 is additive; nothing demo-facing runs on it yet).
@@ -30,6 +41,9 @@ DEMO_PG="${DEMO_PG:-corporatetraveldc-pgsql-demo}"
 DEMO_APP_NAMES="corporatetraveldc-demo-api corporatetraveldc-runner-demo"
 PROD_SOCK_VOLUME="corporatetraveldc-pgsql-sock"
 DEMO_TABLES="snapshots brief_archive meta demo_profiles chat_messages scrub_ledger schema_migrations"
+# table:PRIVILEGE, sorted -- the same set tests/scripts/test_pg_schema_demo.py
+# EXPECTED_DEMO_GRANTS holds and pg_schema_demo/0002_demo_grants.sql grants.
+DEMO_ROLE_GRANTS="brief_archive:SELECT chat_messages:DELETE chat_messages:INSERT chat_messages:SELECT demo_profiles:INSERT demo_profiles:SELECT demo_profiles:UPDATE meta:SELECT scrub_ledger:SELECT snapshots:SELECT"
 QUIET=0; [[ "${1:-}" == "--quiet" ]] && QUIET=1
 FINDINGS=0
 
@@ -69,11 +83,23 @@ for c in ${running}; do
     fi
     if awk '{print $2}' <<<"${mounts}" | grep -qE '^/etc/corporatetraveldc/svc(/|$)'; then
         finding "${c} mounts the scoped secret directory /etc/corporatetraveldc/svc"
+    elif awk '{print $2}' <<<"${mounts}" | grep -qE '^/etc/corporatetraveldc(/|$)'; then
+        finding "${c} mounts from /etc/corporatetraveldc (env files belong in --env-file, never a mount)"
     fi
-    env_names=$(podman inspect "${c}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | cut -d= -f1)
+    env_all=$(podman inspect "${c}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)
+    env_names=$(cut -d= -f1 <<<"${env_all}")
     if grep -qx 'DISPATCH_PG_PASSWORD' <<<"${env_names}"; then
         finding "${c} carries DISPATCH_PG_PASSWORD in its environment (the production credential)"
     fi
+    # 1b. flipped (relay 2) demo containers: no production identity at all
+    if grep -qx 'DISPATCH_ROLE=demo' <<<"${env_all}"; then
+        pg_names=$(grep -E '^DISPATCH_PG_' <<<"${env_names}" | grep -vx 'DISPATCH_PG_PASSWORD' | sort -u | tr '\n' ' ')
+        [[ -n "${pg_names}" ]] && finding "${c} is DISPATCH_ROLE=demo but carries production name(s): ${pg_names}(dispatch.env loaded?)"
+        if ! podman exec "${c}" sh -c 'test ! -e /etc/corporatetraveldc/dispatch.env && test ! -e /etc/corporatetraveldc/dispatch-secrets.env' </dev/null >/dev/null 2>&1; then
+            finding "${c}: /etc/corporatetraveldc/dispatch.env or dispatch-secrets.env is visible inside the container"
+        fi
+    fi
+    unset env_all
     [[ ${FINDINGS} -eq ${before} ]] && ok "${c}: no production socket, no live tree, no svc dir, no production password name"
 done
 [[ ${demo_seen} -gt 0 ]] || info "no demo app container running"
@@ -119,6 +145,26 @@ if grep -qx "${DEMO_PG}" <<<"${running}"; then
     [[ -n "${supers}" || -n "${extra}" ]] || ok "${DEMO_PG}: demo_owner is the only superuser, no dispatch role, tables within the demo set"
 else
     info "${DEMO_PG} is not running (relay 1: additive, not yet started)"
+fi
+
+# -- 4. demo instance: the `demo` role's grants (after 0002) ------------------
+if grep -qx "${DEMO_PG}" <<<"${running}"; then
+    g0002=$(psql_in "${DEMO_PG}" "SELECT count(*) FROM schema_migrations WHERE filename = '0002_demo_grants.sql'")
+    if [[ "${g0002}" == "1" ]]; then
+        grants=$(psql_in "${DEMO_PG}" "SELECT table_name || ':' || privilege_type FROM information_schema.role_table_grants WHERE grantee = 'demo' ORDER BY 1" | sort | tr '\n' ' ' | sed 's/ $//')
+        if [[ "${grants}" != "${DEMO_ROLE_GRANTS}" ]]; then
+            finding "${DEMO_PG}: the demo role's grants differ from the audited set (have: ${grants:-none})"
+        fi
+        attrs=$(psql_in "${DEMO_PG}" "SELECT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit)::text || ',' || has_schema_privilege('demo', 'public', 'CREATE')::text || ',' || has_database_privilege('demo', current_database(), 'TEMP')::text FROM pg_roles WHERE rolname = 'demo' /* rolbypassrls */")
+        if [[ "${attrs}" != "false,false,false" ]]; then
+            finding "${DEMO_PG}: the demo role holds a role attribute, CREATE on schema public or TEMP (${attrs:-unreadable})"
+        fi
+        [[ "${grants}" == "${DEMO_ROLE_GRANTS}" && "${attrs}" == "false,false,false" ]] && ok "${DEMO_PG}: demo role grants match the audited set"
+    elif [[ "${g0002}" == "0" ]]; then
+        info "${DEMO_PG}: 0002_demo_grants.sql not applied yet (relay 2) -- grants not compared"
+    else
+        finding "${DEMO_PG}: could not read schema_migrations"
+    fi
 fi
 
 if [[ ${FINDINGS} -eq 0 ]]; then

@@ -1,21 +1,28 @@
 """
 common/flight_resolver.py
 --------------------------
-Layered arrivals resolver for DCA / IAD / BWI:
-  1. FAA SWIM (flight_events table) -- primary, all three hubs
-  2. MWAA airport-website FIDS scrape -- fallback, DCA/IAD only, gate /
-     terminal / baggage ONLY (2026-10-18)
+Forward arrivals resolver for DCA / IAD / BWI:
+  1. FAA SWIM (flight_events table) -- the only tier, all three hubs
+  ~~2. MWAA airport-website FIDS scrape -- fallback, DCA/IAD only, gate /
+     terminal / baggage ONLY (2026-10-18)~~ (removed 2026-10-19, operator,
+     Gate-1b: the FIDS published time no longer selects anything for the
+     forward window, so a FIDS-only arrival has no time to be placed in a
+     window by and drops out of the forward list. SWIM-timed arrivals stay,
+     with their SWIM times. For one flight's gate / terminal / baggage from
+     every source use GET /api/v1/flights/{ident}/assignments.)
   ~~3. FlightAware AeroAPI -- fallback, all three hubs (funded 2026-07-20)~~
      (removed 2026-10-18, operator: AeroAPI is called only as the budgeted,
      ledgered per-watched-leg gate/baggage fallback in common.gate_aeroapi --
      never automatically from a board lookup)
 
-2026-10-18 (operator, gate batch): the website tier no longer serves the FIDS
+~~2026-10-18 (operator, gate batch): the website tier no longer serves the FIDS
 `status` or `scheduled` (FIDS never supplies a time or a status), no longer
 filters on the FIDS status, and the forward window is computed in airport-local
 time: it compared a naive container-UTC datetime.now() with the naive ET
 publishedTime, so the window sat 4-5 h off. The published time is used only to
-pick rows inside the window; it is never returned.
+pick rows inside the window; it is never returned.~~ (superseded 2026-10-19:
+the website tier is gone from the forward list; the published time is not read
+here at all.)
 
 The history below is kept as written.
 
@@ -61,13 +68,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from common import db as _db
-from common.airport_fids import (
-    AIRPORTS as WEBSITE_AIRPORTS,
-    get_data as website_get_data,
-    _effective_gate,
-    _effective_claim,
-    _published_epoch,
-)
+
+# 2026-10-19 (operator, Gate-1b): no common.airport_fids import -- the FIDS
+# published time is not used for forward-window selection, and the website
+# tier (_query_website) that read it is removed.
 
 log = logging.getLogger("common.flight_resolver")
 
@@ -157,52 +161,19 @@ def _query_swim(airport: str, carriers: Optional[set], within_minutes: int) -> l
     return results
 
 
-def _query_website(airport: str, carriers: Optional[set], within_minutes: int) -> list[dict]:
-    if airport not in WEBSITE_AIRPORTS:
-        return []
-
-    data = website_get_data(airport)
-    if data is None:
-        return []
-
-    now_ep = datetime.now(timezone.utc).timestamp()
-    cutoff_ep = now_ep + within_minutes * 60
-
-    picked = []
-    for f in data.get("arrivals", []):
-        iata = f.get("IATA")
-        if carriers and iata not in carriers:
-            continue
-        pub_ep = _published_epoch(f)          # ET-aware; selection only, never returned
-        if pub_ep is None or not (now_ep <= pub_ep <= cutoff_ep):
-            continue
-        picked.append((pub_ep, {
-            "source":        "website",
-            "airport":       airport,
-            "flight_id":     None,
-            "airline":       f.get("airline"),
-            "flight_num":    f.get("flightnumber"),
-            "carrier":       iata,
-            "origin":        f.get("dep_airport_code"),
-            "gate":          _effective_gate(f),
-            "terminal":      f.get("arr_terminal"),
-            "baggage_claim": _effective_claim(f, airport),
-        }))
-    picked.sort(key=lambda t: t[0])
-    return [r for _ep, r in picked]
-
-
 def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int = 90) -> dict:
     """
-    Layered resolver: SWIM (flight_events) -> MWAA website (DCA/IAD only,
-    gate/terminal/baggage only). ~~-> FlightAware AeroAPI (all three hubs)~~
-    (removed 2026-10-18: AeroAPI is the per-watched-leg budgeted fallback in
-    common.gate_aeroapi, never called from here).
+    Forward arrivals from SWIM (flight_events), timed by SWIM only.
+    ~~-> MWAA website (DCA/IAD only, gate/terminal/baggage only)~~ (removed
+    2026-10-19, operator: the FIDS published time never selects a forward-window
+    row; FIDS-only arrivals drop out.) ~~-> FlightAware AeroAPI (all three
+    hubs)~~ (removed 2026-10-18: AeroAPI is the per-watched-leg budgeted
+    fallback in common.gate_aeroapi, never called from here).
 
     Returns:
         {
           "airport":     "DCA",
-          "source_used": "swim" | "website" | "none",
+          "source_used": "swim" | "none",
           "results":     [...],
           "note":        str or None,
         }
@@ -219,38 +190,13 @@ def resolve_arrivals(airport: str, carriers: Optional[list], within_minutes: int
             "note":        None,
         }
 
-    website_results = _query_website(airport, carriers_set, within_minutes)
-    if website_results:
-        return {
-            "airport":     airport,
-            "source_used": "website",
-            "results":     website_results,
-            "note": (
-                "SWIM (flight_events) had no matching rows -- served from the "
-                "MWAA website fallback: gate, terminal and baggage only (FIDS "
-                "never supplies a time or a status, 2026-10-18). Root-caused 2026-08-07 (this note was "
-                "previously wrong -- corrected here rather than left stale): "
-                "flight_events IS actively receiving fresh FDPS writes (confirmed "
-                "live, ~6,400 rows/hour) -- ingest connectivity itself is fine. "
-                "The real cause is that ingest/parsers/fdps_parser.py's "
-                "write_flight_event() hardcodes arrival_time=None on every write "
-                "(confirmed: 0 of 579k+ rows have ever had a non-null "
-                "arrival_time, going back to the earliest data on 2026-07-20) -- "
-                "FDPS position/status messages don't carry an arrival-time "
-                "estimate natively, and no enrichment step (e.g. joining "
-                "tbfm_sequences.eta by flight_id, which IS populated) was ever "
-                "built to fill it in. Since this function's SWIM query filters "
-                "on arrival_time BETWEEN now AND cutoff, it can structurally "
-                "never match a row -- this is the expected/permanent path for "
-                "DCA/IAD until arrival_time enrichment is built, not a transient "
-                "connectivity issue."
-            ),
-        }
-
     note = (
-        "No matching flights from SWIM or the website fallback. AeroAPI is not "
-        "queried from board lookups (2026-10-18: per-watched-leg gate/baggage "
-        "fallback only, budgeted -- common.gate_aeroapi)."
+        "No SWIM-timed arrivals in the window. The MWAA FIDS board is not a "
+        "time source and does not place flights in a forward window "
+        "(2026-10-19), and AeroAPI is not queried from board lookups "
+        "(2026-10-18: per-watched-leg gate/baggage fallback only, budgeted -- "
+        "common.gate_aeroapi). For one flight's gate / terminal / baggage use "
+        "GET /api/v1/flights/{ident}/assignments."
     )
     return {
         "airport":     airport,

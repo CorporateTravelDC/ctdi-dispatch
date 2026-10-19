@@ -7,7 +7,10 @@ Description=Dispatch-side board sweep every 15min -- surface new to:dispatch coo
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnCalendar=*:0/15
+# 2026-10-19 (lean-out L2 / F12 stagger map): *:0/15 -> *:06/15. Same cadence, off the
+# shared :00/:05/:10.../:30 seconds where five */5 jobs, three */15 jobs and the */30
+# integrity check all fired together (~102 starts at :00, ~96 at :30 per day).
+OnCalendar=*:06/15
 Persistent=false
 
 [Install]

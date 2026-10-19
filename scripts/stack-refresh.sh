@@ -166,6 +166,27 @@ d.append({"id": iid, "image": image, "svc": svc, "head": head, "ts": int(time.ti
 json.dump(d[-200:], open(path, "w"), indent=1)
 PYEOF
 }
+# classify_drift: stdin = check-claude-md-drift.sh output; one line per [DRIFT]
+# item: "NOTE <line>" for a failed/crash-looping unit outside rollout_units
+# (incl. every SYSTEM unit -- this refresh restarts user units only), else
+# "AUDIT <line>" (blocks the refresh, as before).
+classify_drift() {
+  local line u
+  while IFS= read -r line; do
+    [[ "$line" == "[DRIFT] "* ]] || continue
+    if [[ "$line" =~ ^\[DRIFT\]\ (SYSTEM\ )?unit\ ([^[:space:]]+)\ is\ failed/crash-looping ]]; then
+      u="${BASH_REMATCH[2]%.service}"
+      if [[ -z "${BASH_REMATCH[1]}" ]] && rollout_units | grep -qxF -- "$u"; then echo "AUDIT ${line}"; else echo "NOTE ${line}"; fi
+    else
+      echo "AUDIT ${line}"
+    fi
+  done
+}
+# failed_rollout_count: failed/crash-looping USER units that are rollout units
+failed_rollout_count() {
+  systemctl --user list-units --all --plain --no-legend --no-pager --state=failed,auto-restart 2>/dev/null \
+    | awk '{print $1}' | sed 's/\.service$//' | grep -cxF -f <(rollout_units) || true
+}
 is_our_build() { [[ -n "$1" && -f "$BUILT_IDS" ]] && grep -qF "\"$1" "$BUILT_IDS"; }   # 12-char id prefix
 debt_update() {  # debt_update "<unit=reason;unit=reason>" "<restarted-ok units space-separated>"
   # a dry-run reports but never writes the debt file (2026-10-04: a weekly
@@ -259,7 +280,25 @@ check_fp team_authorized_keys "$(fp_team_keys)" "$(fp_team_keys_raw)"
 # baseline must be re-recorded ONCE by the operator (REBASELINE=1 ... --dry-run
 # --now), never silently by this script -- see AGENT_SEGMENTATION.md runbook.
 # tracked vs live (quadlets, user units, skills) via the existing checkers
-drift_out=$(scripts/check-claude-md-drift.sh 2>&1); echo "$drift_out" | grep -qE "^\[DRIFT\]" && AUDIT+=("tracked-vs-live drift: $(echo "$drift_out" | grep -cE '^\[DRIFT\]') item(s) -- see check-claude-md-drift.sh")
+# 2026-10-19 (lean-out L2): a failed unit this refresh does not touch (the
+# airline-time-fidelity collector, a parked failover watcher, a system unit)
+# used to count as drift here and HOLD the whole weekly refresh (exit 2), and
+# the end-of-run verdict failed on ANY failed user unit. Failed-unit drift is
+# now scoped to the rollout's own units: outside them it is reported (log +
+# the ntfy summary) and the run continues; every other drift kind still holds.
+drift_out=$(scripts/check-claude-md-drift.sh 2>&1)
+DRIFT_AUDIT=0; NOTES=()
+while IFS= read -r c; do
+  case "$c" in
+    "AUDIT "*) DRIFT_AUDIT=$((DRIFT_AUDIT + 1)) ;;
+    "NOTE "*)  NOTES+=("${c#NOTE \[DRIFT\] }") ;;
+  esac
+done < <(printf '%s\n' "$drift_out" | classify_drift)
+(( DRIFT_AUDIT )) && AUDIT+=("tracked-vs-live drift: ${DRIFT_AUDIT} item(s) -- see check-claude-md-drift.sh")
+if (( ${#NOTES[@]} )); then
+  log warn "drift outside the units this refresh touches (reported, not blocking): ${#NOTES[@]}"
+  for n_ in "${NOTES[@]}"; do log warn "  - ${n_}"; done
+fi
 scripts/skills-sync.sh check >/dev/null 2>&1 || AUDIT+=("skills: executing copies differ from tracked (skills-sync.sh check)")
 # running containers: each must map to a tracked quadlet; locals must run the signed :latest and pass the in-image gate
 while read -r cname cimg; do
@@ -474,17 +513,18 @@ done < <(rollout_units)
 held_pairs=$(for u in "${!HELD_UNIT[@]}"; do printf '%s=%s;' "$u" "${HELD_UNIT[$u]}"; done)
 DEBT=$(debt_update "$held_pairs" "${RESTARTED_OK[*]}")
 FAILED=$(systemctl --user --failed --no-legend | wc -l)
+FAILED_ROLLOUT=$(failed_rollout_count)
 # 2026-10-07 (review 05): record what each running THIRD-PARTY image contains (SBOM keyed
 # by image id) after the pulls. Informational: externals float on tags by design, so this
 # records identity and contents; it is not a gate and never fails the run.
 "${REPO_ROOT}/scripts/build/provenance.py" record-external --running >/dev/null 2>&1 || log warn "external SBOM snapshot incomplete"
 HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8000/healthz)
 HELD_TXT=$(for u in "${!HELD_UNIT[@]}"; do printf '%s(%s) ' "$u" "${HELD_UNIT[$u]}"; done)
-SUMMARY="head ${HEAD_SHORT}; ext changed ${#CHANGED_EXT[@]}; local changed ${#CHANGED_LOCAL[@]}; restarted ${#RESTARTED_OK[@]}; held ${#HELD_UNIT[@]}${HELD_TXT:+ (${HELD_TXT% })}; pg canary-only ${#PG_EXEMPT[@]}; left behind ${#LEFT_BEHIND[@]}${LEFT_BEHIND:+ (${LEFT_BEHIND[*]})}; rollout rc ${rrc}; failed units ${FAILED}; healthz ${HEALTH}; ${DEBT}; log ${LOG##*/}"
+SUMMARY="head ${HEAD_SHORT}; ext changed ${#CHANGED_EXT[@]}; local changed ${#CHANGED_LOCAL[@]}; restarted ${#RESTARTED_OK[@]}; held ${#HELD_UNIT[@]}${HELD_TXT:+ (${HELD_TXT% })}; pg canary-only ${#PG_EXEMPT[@]}; left behind ${#LEFT_BEHIND[@]}${LEFT_BEHIND:+ (${LEFT_BEHIND[*]})}; rollout rc ${rrc}; failed units ${FAILED} (${FAILED_ROLLOUT} in the rollout)${NOTES:+; reported-only drift ${#NOTES[@]}}; healthz ${HEALTH}; ${DEBT}; log ${LOG##*/}"
 log info "${SUMMARY}"
 (( ${#LEFT_BEHIND[@]} )) && log error "LEFT BEHIND (not restarted, not held): ${LEFT_BEHIND[*]}"
 [[ "$MODE" == tripwire ]] && mark_tripwire_run
-if (( rrc != 0 || FAILED != 0 || ${#LEFT_BEHIND[@]} )) || [[ "$HEALTH" != 200 ]] || (( ${#HELD_UNIT[@]} )); then
+if (( rrc != 0 || FAILED_ROLLOUT != 0 || ${#LEFT_BEHIND[@]} )) || [[ "$HEALTH" != 200 ]] || (( ${#HELD_UNIT[@]} )); then
   ntfy_send "stack-refresh ${MODE}: ATTENTION" "${SUMMARY}" 4; exit 1
 fi
 ntfy_send "stack-refresh ${MODE}: OK" "${SUMMARY}" 2

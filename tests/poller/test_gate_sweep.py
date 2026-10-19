@@ -172,3 +172,26 @@ def test_any_fids_named_source_is_denied_oooi():
         ok, note = db._oooi_authority_check("on", src, {})
         assert not ok and "FIDS" in note, src
     assert "swim_fids" not in db._OOOI_SOURCE_TIER
+
+
+def test_push_title_does_not_repeat_the_callsign(monkeypatch):
+    # 2026-10-19 (operator, Gate-1b): "FLT UAL1627: UAL1627 arrival gate ..." -> the summary no
+    # longer names the flight the title already names; "provisional" unchanged. Synthetic flight.
+    import shared.watchlist as wl
+    entry = {"id": "wl-t-1", "identifier": "UAL991", "entry_type": "flight", "origin": "BOS", "destination": "DCA"}
+    fired = []
+    monkeypatch.setattr(wl.db, "get_watchlist_entries", lambda: [entry])
+    monkeypatch.setattr(wl, "_check_dedup", lambda *a, **k: False)
+    monkeypatch.setattr(wl, "_fire_ntfy_dual", lambda topic, title, detail, dispatch, prio: fired.append(title))
+    monkeypatch.setattr(wl.db, "insert_watchlist_history", lambda **k: None)
+    monkeypatch.setattr(wl.db, "update_watchlist_last_event", lambda *a: None)
+    for ident in ("UAL991", "ual991", "UA991"):
+        summary = ga.push_text(ga._shown_ident(ident, entry), "arrival", "gate", "C35", "provisional",
+                               "DCA", "mwaa_fids", "2")
+        assert summary == "arrival gate C35 (terminal 2) at DCA (provisional) [MWAA FIDS]"
+        wl.watchlist_event_hit(entry["id"], summary, {"watchlist_trigger": "gate_assignment"})
+    assert fired and all(t == "FLT UAL991: arrival gate C35 (terminal 2) at DCA (provisional) [MWAA FID" for t in fired)   # 60-char title cut
+    assert all(t.count("UAL991") == 1 for t in fired)
+    # a different flight than the watch's own identifier is still named
+    assert ga.push_text(ga._shown_ident("SKW5501", entry), "arrival", "gate", "C35", "observed",
+                        "DCA", "swim_tdes", None).startswith("SKW5501 arrival gate C35 at DCA [")

@@ -57,7 +57,15 @@ class QuadletContract(unittest.TestCase):
         self.assertGreaterEqual(f["timeout"], f["wait"] + RUN_BUDGET_S,
                                 "TimeoutStartSec must cover lock wait + run budget")
         self.assertLess(f["timeout"], 120 * 60,
-                        "must stay under the timer's 120min OnUnitActiveSec so firings never overlap")
+                        "keep the start budget under 2 h (the timer's old 120min repeat; still the ceiling)")
+
+    def test_timer_runs_once_a_day(self):
+        # 2026-10-19 (lean-out L2, F7): the 120-min repeat made this "daily"
+        # model job run ~12x/day. Only the 23:45 ET anchor remains.
+        timer = (REPO / ".config/systemd/user/corporatetraveldc-second-brain-daily.timer").read_text()
+        live = [l for l in timer.splitlines() if l and not l.lstrip().startswith("#")]
+        self.assertFalse([l for l in live if l.startswith("OnUnitActiveSec")], live)
+        self.assertIn("OnCalendar=*-*-* 23:45:00 America/New_York", live)
 
 
 @unittest.skipUnless(shutil.which("flock"), "util-linux flock not on PATH")

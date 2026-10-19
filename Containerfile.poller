@@ -71,4 +71,14 @@ ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# 2026-10-19 (G8, operator: "Let's add to personas"): every local-model persona
+# call in production runs in this image (skills, briefs, digests, poller.main),
+# so the signed glossary rules appendix is switched on here, once, for all of
+# them. common.personas verifies src/common/glossary_rules.txt against the
+# signed manifest (copied above with scripts/verify-manifest.sh) before first
+# use and refuses on a mismatch. Not set in the runner image (no verifier; its
+# /api/ask passes its own system prompt), not in dispatch.env, not in the
+# operator's shell. tests/common/test_personas_rules_appendix.py holds this.
+ENV CTDC_PERSONA_RULES_APPENDIX=1
+
 CMD ["python3", "-m", "poller.main"]

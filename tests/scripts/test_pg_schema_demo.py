@@ -57,8 +57,9 @@ def test_demo_schema_never_creates_a_production_table():
 
 
 def test_demo_schema_names_no_password_and_locks_the_app_role():
+    for f in DEMO_DIR.glob("*.sql"):
+        assert re.search(r"PASSWORD\s+'", f.read_text(), re.I) is None, f"a role password literal in {f.name}"
     text = (DEMO_DIR / "0001_demo_core.sql").read_text()
-    assert re.search(r"PASSWORD\s+'", text, re.I) is None, "a role password literal in tracked DDL"
     assert "ENCRYPTED PASSWORD" not in text.upper()
     assert "CREATE ROLE demo LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE" in text
     assert "GRANT SELECT, INSERT, UPDATE ON demo_profiles TO demo" in text
@@ -77,6 +78,51 @@ def test_demo_snapshot_shape_matches_the_sovereign_file():
     assert "prev_hash          TEXT    NOT NULL UNIQUE" in text and "entry_hash         TEXT    NOT NULL UNIQUE" in text
 
 
+# 2026-10-19 grants re-audit (relay 2): the exact privilege set the `demo` role
+# holds after 0002 -- the same table scripts/demo-isolation-check.sh section 4
+# compares the live instance against.
+EXPECTED_DEMO_GRANTS = {
+    "snapshots": {"SELECT"}, "brief_archive": {"SELECT"}, "meta": {"SELECT"}, "scrub_ledger": {"SELECT"},
+    "demo_profiles": {"SELECT", "INSERT", "UPDATE"},
+    "chat_messages": {"SELECT", "INSERT", "DELETE"},
+}
+GRANT_RE = re.compile(r"^GRANT\s+([A-Z, ]+?)\s+ON\s+(?!SCHEMA|DATABASE|ALL)([a-z_, ]+?)\s+TO\s+demo;", re.M)
+
+
+def test_grants_reaudit_0002_is_exactly_the_expected_set():
+    text = (DEMO_DIR / "0002_demo_grants.sql").read_text()
+    lines = [l for l in text.splitlines() if l and not l.startswith("--")]
+    body = "\n".join(lines)
+    # everything is revoked first, then re-granted
+    assert body.index("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM demo;") < body.index("GRANT SELECT ON")
+    assert "REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM demo;" in body
+    assert "REVOKE ALL ON DATABASE corporatetraveldc_demo FROM PUBLIC;" in body
+    assert "REVOKE ALL ON SCHEMA public FROM PUBLIC;" in body
+    granted: dict[str, set] = {}
+    for privs, tables in GRANT_RE.findall(body):
+        for t in (x.strip() for x in tables.split(",")):
+            granted.setdefault(t, set()).update(x.strip() for x in privs.split(","))
+    assert granted == EXPECTED_DEMO_GRANTS
+    # the four playback tables: SELECT only, never a write
+    for t in ("snapshots", "brief_archive", "meta", "scrub_ledger"):
+        assert granted[t] == {"SELECT"}, t
+    assert set(granted) == DEMO_TABLES, "grants name exactly the six demo tables"
+    for bad in ("TRUNCATE", "REFERENCES", "TRIGGER", "ALL PRIVILEGES", "GRANT ALL", "CREATE ON SCHEMA",
+                "SEQUENCES IN SCHEMA public TO demo", "schema_migrations TO demo", "WITH GRANT OPTION"):
+        assert bad not in body, bad
+    assert re.search(r"ALTER ROLE demo NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "
+                     r"CONNECTION LIMIT \d+;", body)
+    assert re.search(r"PASSWORD", body, re.I) is None, "no password in tracked DDL"
+
+
+def test_live_check_and_schema_agree_on_the_grant_set():
+    """scripts/demo-isolation-check.sh carries the same set, one
+    table:PRIVILEGE token per grant, sorted."""
+    sh = (REPO / "scripts/demo-isolation-check.sh").read_text()
+    want = " ".join(sorted(f"{t}:{p}" for t, ps in EXPECTED_DEMO_GRANTS.items() for p in ps))
+    assert f'DEMO_ROLE_GRANTS="{want}"' in sh
+
+
 def _load_migrate():
     spec = importlib.util.spec_from_file_location("pg_migrate", REPO / "scripts/pg_migrate.py")
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -85,7 +131,7 @@ def _load_migrate():
 
 def test_pg_migrate_instance_demo_uses_the_demo_dir_and_identity(monkeypatch, tmp_path):
     m = _load_migrate()
-    assert [p.name for p in m.migration_files("demo")] == ["0001_demo_core.sql"]
+    assert [p.name for p in m.migration_files("demo")] == ["0001_demo_core.sql", "0002_demo_grants.sql"]
     assert m.schema_dir("production") == REPO / "src/common/pg_schema"
     assert "0001_demo_core.sql" not in [p.name for p in m.migration_files("production")]
 

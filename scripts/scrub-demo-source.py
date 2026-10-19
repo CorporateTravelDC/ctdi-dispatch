@@ -56,6 +56,7 @@ Exit: 0 ok, 1 ledger broken, 2 usage/state, 5 fatal gate (manifest, LADD, identi
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import hmac
 import json
@@ -819,6 +820,22 @@ def copy_profiles(source_factory: Callable[[], Any], target: Target) -> tuple[in
     return copied, skipped
 
 
+def readonly_source(factory: Callable[[], Any]) -> Callable[[], Any]:
+    """2026-10-19 (relay 3, the nightly timer): every production read this
+    script makes through its source factory runs in a READ ONLY transaction
+    -- the server refuses any write on it (SQLSTATE 25006), so the one
+    process that holds both credentials can never change production even
+    through a bug. `SET TRANSACTION READ ONLY` is the first statement of each
+    borrowed connection's transaction (the pool's check runs in autocommit and
+    opens none), and the transaction ends when the context exits."""
+    @contextlib.contextmanager
+    def _ro():
+        with factory() as s:
+            s.execute("SET TRANSACTION READ ONLY")
+            yield s
+    return _ro
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -846,7 +863,9 @@ def main(argv: list[str] | None = None, *, source_factory: Callable[[], Any] | N
         verify_self()
     prepare_identity()
 
-    src = source_factory or db_backend.pg_conn
+    # Production is read through READ ONLY transactions (tests inject their
+    # own sqlite twins, which have no such statement).
+    src = source_factory or readonly_source(db_backend.pg_conn)
     tgt_factory = target_factory or db_backend.demo_pg_conn
     target = Target(tgt_factory, dry_run=args.dry_run)
     tag = "[scrub-demo-source]"
@@ -878,6 +897,9 @@ def main(argv: list[str] | None = None, *, source_factory: Callable[[], Any] | N
         mode = "refresh"
         print(f"{tag} REFRESH -- since window_end={since} (min age {args.min_age_hours} h, until {until})")
 
+    # 2026-10-19 relay 3: step aside before the first heavy read (the LADD
+    # gate loads the whole list), not only before each page.
+    _wait_for_headroom()
     gate = LaddGate()
     gate.open()
     qreg = QRegistry.load(create=not args.dry_run)

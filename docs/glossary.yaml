@@ -1,0 +1,383 @@
+# docs/glossary.yaml -- one source of vocabulary and logic rules for every reader
+# (operator, agents, local-model personas, deployment profiles). Design:
+# dispatch-panel rebuild, Part D4 (2026-10-18). Rendered by
+# scripts/render-glossary.py into docs/GLOSSARY.md (humans), the compact rules
+# block src/common/glossary_rules.txt (local-model personas) and the pamphlet
+# appendix. Edit this file, then run `scripts/render-glossary.py --write`;
+# `--check` fails when a generated file is stale.
+#
+# Entry fields: term, expansion, definition (one line, plain words), scope
+# (aviation | rail | weather | maritime | platform | agents), optional aliases.
+# Rules also carry `short` (the one-line form given to the local models) and
+# `enforced_by` (the test files that hold the rule; each must exist).
+#
+# Every entry carries `source` (G7, operator 2026-10-19: "Define or find the
+# proper FAA/ICAO and link the terms"): the primary definition, as
+# {cite, url} for an outside authority (FAA P/CG, FAA orders, FAA SWIM pages,
+# eCFR, ICAO, standards bodies; https only, domain on the allowlist in
+# scripts/render-glossary.py), {cite, path} for a platform term or rule (the
+# repository file or test that defines it; it must exist), or null when no
+# primary source was found (never a guessed link). Rules and platform terms
+# take a path, never a URL. Every URL was fetched and checked on 2026-10-19.
+# Where FAA and ICAO, or two FAA documents, differ the cite says so.
+#
+# Plain words only: no registrations, hexes, callsigns, addresses, hostnames,
+# tokens or account names (source URLs are the one allowed exception).
+# tests/docs/test_glossary.py checks this, the coverage of docs/, the rule
+# tests, the sources, and that rendering is deterministic.
+
+version: 1
+
+scopes: [aviation, rail, weather, maritime, platform, agents]
+
+# Which scopes a deployment profile receives. Derived from the profile JSON
+# (docs/deployment-profiles/profiles/*.json and private/*.json): every profile
+# gets `always`; each enabled module or source adds its scopes.
+profile_scopes:
+  always: [platform, agents]
+  modules:
+    aviation_watch: [aviation]
+    rail_watch: [rail]
+    weather_watch: [weather]
+    travel_coordination: [aviation, rail, weather]
+    dispatch: [aviation, weather]
+  sources:
+    flight_status: [aviation]
+    weather: [weather]
+    local_adsb: [aviation]
+    local_acars_vdl2: [aviation]
+    faa_registry: [aviation]
+    faa_tfr: [aviation]
+    faa_nas_status: [aviation]
+    nws_api: [weather]
+    nwws_oi: [weather]
+    aviationweather_metar: [weather, aviation]
+    amtrak: [rail]
+    swim_fdps: [aviation]
+    swim_stdds: [aviation]
+    swim_tfms: [aviation]
+    swim_tbfm: [aviation]
+    swim_itws: [weather, aviation]
+    swim_aim_fns: [aviation]
+    local_ais: [maritime]
+
+acronyms:
+  - {term: ACARS, expansion: Aircraft Communications Addressing and Reporting System, scope: aviation, definition: "Text datalink between aircraft and airline operations, received locally and from aggregators; a gate and phase hint, never an OOOI authority on its own.", source: {cite: "FAA JO 7340.2 Contractions, ACARS: aircraft communication addressing and reporting system (ICAO contraction); message label conventions are ARINC 618/620, not public", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: ACL, expansion: Access Control List, scope: platform, definition: "A list of who may read or write a resource.", source: {cite: "NIST CSRC Glossary, access control list (FAA JO 7340.2 uses ACL for altimeter check location)", url: "https://csrc.nist.gov/glossary/term/access_control_list"}}
+  - {term: ADDS, expansion: Aviation Digital Data Service, scope: weather, definition: "The Aviation Weather Center data service through which METARs and other aviation weather are fetched.", source: {cite: "NWS Aviation Weather Center help, What happened to ADDS? (retired; succeeded by the AWC Data API)", url: "https://aviationweather.gov/help/"}}
+  - {term: ADS-B, expansion: Automatic Dependent Surveillance-Broadcast, scope: aviation, definition: "Position broadcasts from aircraft, heard by the local antenna and by aggregators; position only, it never asserts ON or IN.", source: {cite: "FAA Pilot/Controller Glossary, AUTOMATIC DEPENDENT SURVEILLANCE-BROADCAST (ADS-B)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AUTOMATIC_DEPENDENT_SURVEILLANCE"}}
+  - {term: ADS-C, expansion: Automatic Dependent Surveillance-Contract, scope: aviation, definition: "Position reports sent by satellite datalink over oceans and remote areas, beyond ground receiver range.", source: {cite: "FAA Pilot/Controller Glossary, AUTOMATIC DEPENDENT SURVEILLANCE-CONTRACT (ADS-C)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html"}}
+  - {term: AeroAPI, expansion: FlightAware AeroAPI, scope: aviation, definition: "A paid commercial flight data API; the last-resort fallback for gate assignments, capped per leg and per day.", source: {cite: "FlightAware, AeroAPI product page (the vendor's own definition)", url: "https://www.flightaware.com/commercial/aeroapi/"}}
+  - {term: AFP, expansion: Airspace Flow Program, scope: aviation, definition: "A TFMS traffic program that meters flights through a constrained block of airspace.", source: {cite: "FAA Pilot/Controller Glossary, AIRSPACE FLOW PROGRAM (AFP)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIRSPACE_FLOW_PROGRAM_AFP"}}
+  - {term: AIM, expansion: Aeronautical Information Management, scope: aviation, definition: "The FAA service that publishes NOTAMs and aeronautical data; also short for the Aeronautical Information Manual.", source: {cite: "FAA Pilot/Controller Glossary, AERONAUTICAL INFORMATION MANUAL (AIM); the FAA office name Aeronautical Information Management has no P/CG entry", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AERONAUTICAL_INFORMATION_MANUAL_AIM"}}
+  - {term: AIS, expansion: Automatic Identification System (maritime); Aeronautical Information Services (aviation), scope: maritime, definition: "At sea, the position and identity broadcasts of vessels; in aviation documents, the service that publishes aeronautical information.", source: {cite: "USCG Navigation Center, Automatic Identification System overview (maritime sense); aviation sense: FAA P/CG AERONAUTICAL INFORMATION SERVICES (AIS)", url: "https://www.navcen.uscg.gov/automatic-identification-system-overview"}}
+  - {term: ANP, expansion: Agent Network Protocol, scope: agents, definition: "An open protocol suite for agent discovery and messaging between organisations; researched for linking deployments, not deployed.", source: {cite: "Agent Network Protocol, the project's specification site", url: "https://agent-network-protocol.com/"}}
+  - {term: APDS, expansion: Airport Data Service, scope: aviation, definition: "The STDDS service that carries runway visual range and other airport data.", source: {cite: "FAA SWIM data portal, STDDS Airport Data service (APDS)", url: "https://aa.data.faa.gov/data/service.jsf?uuid=8b1c1a98-1199-4eff-92f0-d4f7beba06b0"}}
+  - {term: APREQ, expansion: Approval Request, scope: aviation, definition: "A restriction under which a departure needs a release time from the receiving facility (call for release).", source: {cite: "FAA JO 7340.2 Contractions, APREQ: approval request; the P/CG procedure term is CALL FOR RELEASE", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: APTC, expansion: Airport Configuration, scope: aviation, definition: "The TFMS message that gives an airport's active runway configuration and rates.", source: null}
+  - {term: ARM, expansion: Advanced RISC Machine, scope: platform, definition: "The processor family of the edge unit; images are built for its 64-bit form.", source: null}
+  - {term: ARTCC, expansion: Air Route Traffic Control Center, scope: aviation, definition: "An en-route control center; each has a three-letter code starting with Z.", source: {cite: "FAA Pilot/Controller Glossary, AIR ROUTE TRAFFIC CONTROL CENTER (ARTCC)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIR_ROUTE_TRAFFIC_CONTROL_CENTER_ARTCC"}}
+  - {term: ASDE-X, expansion: Airport Surface Detection Equipment Model X, scope: aviation, definition: "Surface surveillance at large airports; its tracks reach the platform through STDDS.", source: {cite: "FAA Pilot/Controller Glossary, AIRPORT SURFACE DETECTION EQUIPMENT (ASDE), ASDE-X", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIRPORT_SURFACE_DETECTION_EQUIPMENT_ASDE"}}
+  - {term: ATCSCC, expansion: Air Traffic Control System Command Center, scope: aviation, definition: "The FAA national command center that issues advisories and traffic programs.", source: {cite: "FAA Pilot/Controller Glossary, AIR TRAFFIC CONTROL SYSTEM COMMAND CENTER (ATCSCC)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIR_TRAFFIC_CONTROL_SYSTEM_COMMAND_CENTER_ATCSCC"}}
+  - {term: ATFM, expansion: Air Traffic Flow Management, scope: aviation, definition: "The European and ICAO name for traffic flow measures.", source: {cite: "FAA JO 7340.2 Contractions, ATFM: air traffic flow management (ICAO contraction; ICAO Doc 4444 defines it, not freely published)", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: AWC, expansion: Aviation Weather Center, scope: weather, definition: "The NWS center that publishes METARs, TAFs and SIGMETs.", source: {cite: "NWS Aviation Weather Center, help page", url: "https://aviationweather.gov/help/"}}
+  - {term: B2B, expansion: Business-to-Business (EUROCONTROL Network Manager web services), scope: aviation, definition: "The EUROCONTROL interface for flight plans, flow measures and NOTAMs.", source: {cite: "EUROCONTROL, Network Manager business-to-business web services (NM B2B)", url: "https://www.eurocontrol.int/service/network-manager-business-business-b2b-web-services"}}
+  - {term: BOM, expansion: Bureau of Meteorology, scope: weather, definition: "Australia's national weather service.", source: {cite: "Bureau of Meteorology, About the Bureau", url: "https://www.bom.gov.au/inside/index.shtml"}}
+  - {term: BWI, expansion: Baltimore/Washington International Thurgood Marshall Airport, scope: aviation, aliases: [KBWI], definition: "One of the three DC-area hub airports the platform watches.", source: null}
+  - {term: CAA, expansion: Civil Aviation Authority, scope: aviation, definition: "The UK aviation regulator; its aircraft register was researched, not integrated.", source: {cite: "UK Civil Aviation Authority, official site", url: "https://www.caa.co.uk/"}}
+  - {term: CAAC, expansion: Civil Aviation Administration of China, scope: aviation, definition: "China's aviation regulator; real-time access is restricted.", source: {cite: "Civil Aviation Administration of China, official English site", url: "https://www.caac.gov.cn/en/"}}
+  - {term: CFR, expansion: Code of Federal Regulations, scope: aviation, definition: "US federal regulations; TFR legal bases are cited as sections of Title 14.", source: {cite: "eCFR, Title 14 Aeronautics and Space (the P/CG uses CFR for CALL FOR RELEASE)", url: "https://www.ecfr.gov/current/title-14"}}
+  - {term: CGNAT, expansion: Carrier-Grade Network Address Translation, scope: platform, definition: "Address sharing by an internet provider, which blocks inbound connections to the box.", source: {cite: "IETF RFC 6888, Common Requirements for Carrier-Grade NATs", url: "https://www.rfc-editor.org/rfc/rfc6888"}}
+  - {term: CIFP, expansion: Coded Instrument Flight Procedures, scope: aviation, definition: "The FAA dataset of procedures and runway geometry, used to estimate runway arrival times.", source: {cite: "FAA Aeronautical Information Services, Coded Instrument Flight Procedures (FAA JO 7340.2 uses CIFP for cancel IFR flight plan)", url: "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/cifp/"}}
+  - {term: CMA, expansion: China Meteorological Administration, scope: weather, definition: "China's national weather service.", source: {cite: "China Meteorological Administration, official English site", url: "https://www.cma.gov.cn/en/"}}
+  - {term: CPDLC, expansion: Controller-Pilot Data Link Communications, scope: aviation, definition: "Clearances sent as text by datalink; departure clearances appear in TDLS.", source: {cite: "FAA Pilot/Controller Glossary, CONTROLLER PILOT DATA LINK COMMUNICATIONS (CPDLC)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-c.html#CONTROLLER_PILOT_DATA_LINK_COMMUNICATIONS_CPDLC"}}
+  - {term: CPS, expansion: Critical Predictability State, scope: platform, aliases: [GREEN, YELLOW, RED], definition: "The platform's deterministic go/no-go score for ground operations, banded GREEN, YELLOW and RED.", source: {cite: "Platform term: the CPS recompute skill", path: "src/poller/skills/cps_recompute.py"}}
+  - {term: CRM, expansion: Customer Relationship Management, scope: platform, definition: "A system of record for clients and contacts; none is connected live.", source: null}
+  - {term: CSRF, expansion: Cross-Site Request Forgery, scope: platform, definition: "A web attack that rides a logged-in browser; state-changing routes defend against it.", source: {cite: "NIST CSRC Glossary, Cross-site Request Forgery (CSRF)", url: "https://csrc.nist.gov/glossary/term/cross_site_request_forgery"}}
+  - {term: CTDI, expansion: Corporate Travel Dispatch Intelligence, scope: platform, definition: "The name of this platform.", source: {cite: "Platform name: repository README", path: "README.md"}}
+  - {term: CUI, expansion: Controlled Unclassified Information, scope: platform, definition: "A federal marking for sensitive unclassified data; the LADD lists are CUI and never leave the box.", source: {cite: "32 CFR 2002.4(h), definition of Controlled Unclassified Information (NARA CUI program)", url: "https://www.ecfr.gov/current/title-32/section-2002.4"}}
+  - {term: DCA, expansion: Ronald Reagan Washington National Airport, scope: aviation, aliases: [KDCA], definition: "The DC hub airport closest to the city; its boards come from MWAA.", source: {cite: "Metropolitan Washington Airports Authority, Ronald Reagan Washington National Airport official site", url: "https://www.flyreagan.com/"}}
+  - {term: DHCP, expansion: Dynamic Host Configuration Protocol, scope: platform, definition: "How a network hands out addresses to devices.", source: {cite: "IETF RFC 2131, Dynamic Host Configuration Protocol", url: "https://www.rfc-editor.org/rfc/rfc2131"}}
+  - {term: DWD, expansion: Deutscher Wetterdienst, scope: weather, definition: "Germany's national weather service.", source: {cite: "Deutscher Wetterdienst, official site", url: "https://www.dwd.de/EN/Home/home_node.html"}}
+  - {term: EDCT, expansion: Expect Departure Clearance Time, scope: aviation, definition: "The takeoff time assigned to a flight held by a ground delay program.", source: {cite: "FAA Pilot/Controller Glossary, EXPECT DEPARTURE CLEARANCE TIME (EDCT) (FAA JO 7340.2 expands it as estimated departure clearance time)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-e.html#EXPECT_DEPARTURE_CLEARANCE_TIME_EDCT"}}
+  - {term: EEPROM, expansion: Electrically Erasable Programmable Read-Only Memory, scope: platform, definition: "The small firmware store that holds the edge unit's boot settings.", source: {cite: "NIST CSRC Glossary, Electrically Erasable Programmable Read-Only Memory", url: "https://csrc.nist.gov/glossary/term/eeprom"}}
+  - {term: EOBT, expansion: Estimated Off-Block Time, scope: aviation, definition: "When an aircraft is planned to push back from its gate.", source: {cite: "FAA JO 7340.2 Contractions, EOBT: estimated off-block time (ICAO contraction)", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: ET, expansion: "US Eastern Time (EST in winter, EDT in summer)", scope: platform, aliases: [EDT, EST], definition: "Shown only beside UTC, never alone; the host and containers run on UTC.", source: {cite: "49 CFR 71.4, Eastern zone (US standard time zone boundaries)", url: "https://www.ecfr.gov/current/title-49/section-71.4"}}
+  - {term: ETA, expansion: Estimated Time of Arrival, scope: aviation, definition: "On a watch, taken from SWIM only: TBFM first, then TFMS, then FDPS.", source: {cite: "FAA Pilot/Controller Glossary, ESTIMATED TIME OF ARRIVAL (gate for scheduled operators; TBFM ETAs are to the runway threshold or a meter point instead)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-e.html#ESTIMATED_TIME_OF_ARRIVAL"}}
+  - {term: FAA, expansion: Federal Aviation Administration, scope: aviation, definition: "The US aviation regulator and air navigation provider; the source of SWIM, NOTAMs, TFRs and LADD.", source: {cite: "Federal Aviation Administration, About FAA", url: "https://www.faa.gov/about"}}
+  - {term: FADT, expansion: "TFMS slot message (name kept from the old fuel advisory departure procedure)", scope: aviation, definition: "The TFMS message that carries each held flight's EDCT under a ground delay program.", source: null}
+  - {term: FDC, expansion: Flight Data Center, scope: aviation, definition: "FDC NOTAMs carry regulatory items such as TFRs and procedure changes.", source: {cite: "FAA Pilot/Controller Glossary, NOTICE TO AIRMEN (NOTAM): FDC NOTAM", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-n.html#NOTICE_TO_AIRMEN_NOTAM"}}
+  - {term: FDPS, expansion: Flight Data Publication Service, scope: aviation, aliases: [SFDPS], definition: "The SWIM feed of en-route flight plans and tracks (SFDPS is its full name); a tail authority.", source: {cite: "FAA SWIM, SWIM Flight Data Publication Service (SFDPS) (FAA JO 7340.2's FDPS is the ICAO flight data processing system)", url: "https://www.faa.gov/air_traffic/technology/swim/sfdps"}}
+  - {term: FIDO, expansion: Fast IDentity Online, scope: platform, aliases: [FIDO2], definition: "Hardware security key standards (FIDO2 is the current one) for logins and SSH keys.", source: {cite: "FIDO Alliance, specifications (FAA JO 7340.2 uses FIDO for Flight Inspection District Office)", url: "https://fidoalliance.org/specifications/"}}
+  - {term: FIDS, expansion: Flight Information Display System, scope: aviation, definition: "An airport's public departure and arrival boards; here gate, terminal and baggage only, never times, status or tail.", source: null}
+  - {term: FIXM, expansion: Flight Information Exchange Model, scope: aviation, definition: "The XML standard in which FDPS flight data arrives.", source: {cite: "FIXM, Flight Information Exchange Model home", url: "https://www.fixm.aero/"}}
+  - {term: FNS, expansion: Federal NOTAM System, scope: aviation, aliases: [AIM-FNS], definition: "The FAA NOTAM distribution feed, received over SWIM as AIM FNS.", source: {cite: "FAA SWIM data portal, Notice to Airmen (NOTAMs) Java Service: Federal NOTAM System", url: "https://aa.data.faa.gov/data/service.jsf?uuid=08c4033e-5faf-421f-b235-71f28ca5d8d9"}}
+  - {term: FQDN, expansion: Fully Qualified Domain Name, scope: platform, definition: "A complete host name including its domain.", source: {cite: "IETF RFC 9499, DNS Terminology (fully qualified domain name)", url: "https://www.rfc-editor.org/rfc/rfc9499"}}
+  - {term: FR24, expansion: Flightradar24, scope: aviation, definition: "A commercial ADS-B aggregator that the local receiver feeds.", source: {cite: "Flightradar24, About (the operator's own description)", url: "https://www.flightradar24.com/about"}}
+  - {term: FRZ, expansion: Flight Restricted Zone, scope: aviation, definition: "The inner, most restricted ring of airspace around Washington DC.", source: {cite: "14 CFR 93.335, Washington, DC Metropolitan Area Flight Restricted Zone (DC FRZ)", url: "https://www.ecfr.gov/current/title-14/section-93.335"}}
+  - {term: FTL, expansion: Faster Than Light (Pi-hole's DNS engine), scope: platform, definition: "The DNS server inside Pi-hole, which forwards to the local recursive resolver.", source: {cite: "Pi-hole documentation, FTLDNS", url: "https://docs.pi-hole.net/ftldns/"}}
+  - {term: GADV, expansion: General Advisory, scope: aviation, definition: "A free-text TFMS advisory from the command center.", source: null}
+  - {term: GDP, expansion: Ground Delay Program, scope: aviation, definition: "A traffic program that holds flights at their origins and assigns EDCTs.", source: {cite: "FAA Pilot/Controller Glossary, GROUND DELAY PROGRAM (GDP)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-g.html#GROUND_DELAY_PROGRAM_GDP"}}
+  - {term: GGUF, expansion: GPT-Generated Unified Format, scope: platform, definition: "The file format of the local language model weights.", source: null}
+  - {term: GIN, expansion: Generalized Inverted Index, scope: platform, definition: "A PostgreSQL index type used for full-text search of the vault.", source: {cite: "PostgreSQL 16 documentation, GIN Indexes", url: "https://www.postgresql.org/docs/16/gin.html"}}
+  - {term: GPG, expansion: GNU Privacy Guard, scope: platform, definition: "The signing tool; the operator's key signs commits and the repository manifest.", source: {cite: "GnuPG project home", url: "https://www.gnupg.org/"}}
+  - {term: GPS, expansion: Global Positioning System, scope: platform, definition: "Satellite positioning and time; it sets receiver locations.", source: {cite: "FAA Pilot/Controller Glossary, GLOBAL POSITIONING SYSTEM (GPS)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-g.html#GLOBAL_POSITIONING_SYSTEM_GPS"}}
+  - {term: GS, expansion: Ground Stop, scope: aviation, definition: "A traffic program that stops departures to an airport until it is lifted.", source: {cite: "FAA Pilot/Controller Glossary, GROUND STOP (GS)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-g.html#GROUND_STOP_GS"}}
+  - {term: GUFI, expansion: Globally Unique Flight Identifier, scope: aviation, definition: "The SWIM key for one flight instance across feeds.", source: {cite: "FAA SWIM, SFDPS (GUFI generation); defined in FIXM and ICAO FF-ICE", url: "https://www.faa.gov/air_traffic/technology/swim/sfdps"}}
+  - {term: HEMS, expansion: Helicopter Emergency Medical Services, scope: aviation, definition: "Medical helicopter operations.", source: null}
+  - {term: HFDL, expansion: High Frequency Data Link, scope: aviation, definition: "ACARS over HF radio, used by oceanic and remote aircraft.", source: null}
+  - {term: HOT update, expansion: Heap-Only Tuple update, scope: platform, definition: "A PostgreSQL row update that skips index writes when no indexed column changes.", source: {cite: "PostgreSQL 16 documentation, Heap-Only Tuples (HOT)", url: "https://www.postgresql.org/docs/16/storage-hot.html"}}
+  - {term: IAD, expansion: Washington Dulles International Airport, scope: aviation, aliases: [KIAD], definition: "The DC area's main international airport; its boards come from MWAA.", source: {cite: "Metropolitan Washington Airports Authority, Washington Dulles International Airport official site", url: "https://www.flydulles.com/"}}
+  - {term: IATA, expansion: International Air Transport Association, scope: aviation, definition: "The airline body behind two-letter airline and three-letter airport codes.", source: {cite: "IATA, About us", url: "https://www.iata.org/en/about/"}}
+  - {term: ICAO, expansion: International Civil Aviation Organization, scope: aviation, definition: "The UN aviation body behind three-letter airline codes, four-letter airport codes and 24-bit aircraft addresses.", source: {cite: "ICAO, About ICAO (also FAA P/CG INTERNATIONAL CIVIL AVIATION ORGANIZATION)", url: "https://www.icao.int/about-icao"}}
+  - {term: ICMP, expansion: Internet Control Message Protocol, scope: platform, definition: "Network control messages such as ping.", source: {cite: "IETF RFC 792, Internet Control Message Protocol", url: "https://www.rfc-editor.org/rfc/rfc792"}}
+  - {term: ITWS, expansion: Integrated Terminal Weather System, scope: weather, definition: "The FAA terminal weather products received over SWIM.", source: {cite: "FAA, Integrated Terminal Weather System (ITWS)", url: "https://www.faa.gov/air_traffic/technology/itws"}}
+  - {term: JASDAT, expansion: Japan AIS Data Tool, scope: aviation, definition: "Japan's NOTAM and aeronautical data service; integrated, waiting for credentials.", source: null}
+  - {term: JMA, expansion: Japan Meteorological Agency, scope: weather, definition: "Japan's national weather service.", source: {cite: "Japan Meteorological Agency, official English site", url: "https://www.jma.go.jp/jma/indexe.html"}}
+  - {term: KMA, expansion: Korea Meteorological Administration, scope: weather, definition: "South Korea's national weather service.", source: {cite: "Korea Meteorological Administration, official English site", url: "https://www.kma.go.kr/eng/index.jsp"}}
+  - {term: LADD, expansion: Limiting Aircraft Data Displayed, scope: aviation, definition: "The FAA privacy program; listed aircraft are never shown, only counted.", source: {cite: "FAA, Limiting Aircraft Data Displayed (LADD) program", url: "https://www.faa.gov/pilots/ladd"}}
+  - {term: LLM, expansion: Large Language Model, scope: agents, definition: "A text-generating model; the local one runs on the box, the cloud ones are agents.", source: {cite: "NIST CSRC Glossary, large language model", url: "https://csrc.nist.gov/glossary/term/large_language_model"}}
+  - {term: MARC, expansion: Maryland Area Regional Commuter, scope: rail, definition: "Maryland's commuter rail service into Washington Union Station.", source: {cite: "Maryland Transit Administration, MARC Train", url: "https://www.mta.maryland.gov/marc-train"}}
+  - {term: MCP, expansion: Model Context Protocol, scope: agents, definition: "The tool protocol cloud agents use to reach the platform through the agent gateway.", source: {cite: "Model Context Protocol, specification (latest)", url: "https://modelcontextprotocol.io/specification/latest"}}
+  - {term: METAR, expansion: Aviation Routine Weather Report, scope: weather, definition: "The routine hourly airport weather observation.", source: {cite: "FAA AIM 7-1-28, Key to Aviation Routine Weather Report (METAR); FAA JO 7340.2 marks METAR an ICAO contraction", url: "https://www.faa.gov/air_traffic/publications/atpubs/aim_html/chap7_section_1.html#7-1-28"}}
+  - {term: MFX, expansion: "Meter fix (TBFM message tag)", scope: aviation, definition: "TBFM's tag for an arrival's meter fix, the constraint point where TBFM computes the ETA and schedules the STA; eta_mfx is the ETA at that fix and eta_rwy the ETA at the runway threshold, and the platform adds fix-to-runway transit time only to a meter-fix ETA.", source: {cite: "FAA Pilot/Controller Glossary, METERING FIX (P/CG term; TBFM and FAA JO 7210.3 18-25 say meter fix; MFX itself is a TBFM message tag, not an FAA or ICAO contraction)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-m.html#METERING_FIX"}}
+  - {term: MIT, expansion: Miles-in-Trail, scope: aviation, definition: "A restriction that spaces flights a set distance apart on a route.", source: {cite: "FAA JO 7210.3, 18-7 Traffic Management Initiatives: Miles-in-trail (MIT)", url: "https://www.faa.gov/air_traffic/publications/atpubs/foa_html/chap18_section_7.html"}}
+  - {term: MLAT, expansion: Multilateration, scope: aviation, definition: "A position computed from when one signal reaches several receivers.", source: null}
+  - {term: MMSI, expansion: Maritime Mobile Service Identity, scope: maritime, definition: "The nine-digit radio identity of a vessel, carried in AIS.", source: {cite: "USCG Navigation Center, Maritime Mobile Service Identity", url: "https://www.navcen.uscg.gov/maritime-mobile-service-identity"}}
+  - {term: MWAA, expansion: Metropolitan Washington Airports Authority, scope: aviation, definition: "The operator of DCA and IAD and publisher of their FIDS boards.", source: {cite: "Metropolitan Washington Airports Authority, official site", url: "https://www.mwaa.com/"}}
+  - {term: NAIPS, expansion: National Aeronautical Information Processing System, scope: aviation, definition: "Airservices Australia's NOTAM and briefing system; researched only.", source: {cite: "Airservices Australia, NAIPS Internet Service", url: "https://www.airservicesaustralia.com/naips/"}}
+  - {term: NAS, expansion: National Airspace System, scope: aviation, definition: "The US airspace and its services; NAS Status is the FAA feed of airport delays and programs.", source: {cite: "FAA Pilot/Controller Glossary, NATIONAL AIRSPACE SYSTEM", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-n.html#NATIONAL_AIRSPACE_SYSTEM"}}
+  - {term: NDRB, expansion: National Data Release Board, scope: aviation, definition: "The FAA board that approves release of sensitive SWIM data.", source: {cite: "FAA Notice 1200.22 (amends FAA Order 1200.22E): NAS Data Release Board (NDRB)", url: "https://www.faa.gov/documentLibrary/media/Notice/%4E1200.22_Continuation_of_Multiple_Pen_and_Ink_Changes_to_FAA_Order_1200.22E_(17_Jul_2025)_AJR-2.pdf"}}
+  - {term: NEC, expansion: Northeast Corridor, scope: rail, definition: "Amtrak's Washington to Boston main line.", source: null}
+  - {term: NFC, expansion: Near-Field Communication, scope: platform, definition: "Short-range radio used by some hardware security keys.", source: {cite: "NIST CSRC Glossary, Near Field Communication (NFC)", url: "https://csrc.nist.gov/glossary/term/near_field_communication"}}
+  - {term: NFS, expansion: Network File System, scope: platform, definition: "A network file share protocol; none is mounted on the box.", source: {cite: "IETF RFC 7530, Network File System (NFS) Version 4 Protocol", url: "https://www.rfc-editor.org/rfc/rfc7530"}}
+  - {term: NMS, expansion: NOTAM Management Service, scope: aviation, definition: "The FAA NOTAM system and its API; older documents also use the letters for the SWIM subscription service.", source: {cite: "FAA JO 7340.2 Contractions, NMS: NOTAM Management Service", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: NOTAM, expansion: Notice to Airmen, scope: aviation, definition: "A published notice of a hazard, closure or restriction.", source: {cite: "FAA Pilot/Controller Glossary, NOTICE TO AIRMEN (NOTAM); FAA JO 7340.2 marks NOTAM an ICAO contraction; Notice to Air Missions was a former FAA expansion", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-n.html#NOTICE_TO_AIRMEN_NOTAM"}}
+  - {term: NTS, expansion: Network Time Security, scope: platform, definition: "Authenticated network time; the box serves it with chrony.", source: {cite: "IETF RFC 8915, Network Time Security for the Network Time Protocol", url: "https://www.rfc-editor.org/rfc/rfc8915"}}
+  - {term: NWS, expansion: National Weather Service, scope: weather, definition: "The US weather service; source of alerts and forecasts.", source: {cite: "National Weather Service, About the NWS", url: "https://www.weather.gov/about/"}}
+  - {term: NWWS, expansion: NOAA Weather Wire Service, scope: weather, aliases: [NWWS-OI], definition: "The NWS product stream; NWWS-OI is its open internet interface, received over XMPP.", source: {cite: "National Weather Service, NOAA Weather Wire Service", url: "https://www.weather.gov/nwws/"}}
+  - {term: OAuth, expansion: Open Authorization, scope: agents, definition: "The delegated login standard the agent gateway uses to link a vendor's agent once, with operator consent.", source: {cite: "IETF RFC 6749, The OAuth 2.0 Authorization Framework", url: "https://www.rfc-editor.org/rfc/rfc6749"}}
+  - {term: OOOI, expansion: "Out, Off, On, In", scope: aviation, definition: "The four phase times of a flight leg: gate departure, takeoff, landing, gate arrival.", source: {cite: "14 CFR 234.4, on-time reporting of actual gate departure and arrival and wheels-off and wheels-on times (no FAA or ICAO entry defines the acronym)", url: "https://www.ecfr.gov/current/title-14/section-234.4"}}
+  - {term: OUT, expansion: Out of the gate, scope: aviation, definition: "OOOI phase 1: the aircraft leaves its gate.", source: {cite: "14 CFR 234.4, actual departure time (gate) in on-time reporting", url: "https://www.ecfr.gov/current/title-14/section-234.4"}}
+  - {term: "OFF", expansion: Off the ground, scope: aviation, definition: "OOOI phase 2: takeoff.", source: {cite: "FAA Pilot/Controller Glossary, DEPARTURE TIME (the time an aircraft becomes airborne)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-d.html#DEPARTURE_TIME"}}
+  - {term: "ON", expansion: On the ground, scope: aviation, definition: "OOOI phase 3: landing; asserted only by a SWIM source.", source: {cite: "FAA Pilot/Controller Glossary, ARRIVAL TIME (the time an aircraft touches down)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#ARRIVAL_TIME"}}
+  - {term: IN, expansion: In the gate, scope: aviation, definition: "OOOI phase 4: arrival at the gate; asserted only by a SWIM source.", source: {cite: "14 CFR 234.4, actual arrival time (gate) in on-time reporting", url: "https://www.ecfr.gov/current/title-14/section-234.4"}}
+  - {term: OTP, expansion: One-Time Password, scope: platform, definition: "A short-lived login code; no OTP seed is stored on the box.", source: {cite: "NIST CSRC Glossary, One-time password", url: "https://csrc.nist.gov/glossary/term/one_time_password"}}
+  - {term: PAT, expansion: Personal Access Token, scope: platform, definition: "A long-lived API token for one user account, such as a code host token.", source: null}
+  - {term: PCT, expansion: Potomac TRACON, scope: aviation, definition: "The approach control facility for the Washington and Baltimore airports.", source: null}
+  - {term: PIA, expansion: Privacy ICAO Address, scope: aviation, definition: "An FAA program that gives an aircraft a temporary address not linked to its registration.", source: {cite: "FAA, Privacy ICAO Address (PIA) program", url: "https://www.faa.gov/air_traffic/technology/equipadsb/privacy"}}
+  - {term: PII, expansion: Personally Identifiable Information, scope: platform, definition: "Data that identifies a person; blocked by the scrub gate.", source: {cite: "NIST CSRC Glossary, personally identifiable information (PII)", url: "https://csrc.nist.gov/glossary/term/personally_identifiable_information"}}
+  - {term: PIV, expansion: Personal Identity Verification, scope: platform, definition: "A smart card standard for keys that never leave the card.", source: {cite: "NIST CSRC Glossary, Personal Identity Verification (PIV), FIPS 201", url: "https://csrc.nist.gov/glossary/term/personal_identity_verification"}}
+  - {term: PKCE, expansion: Proof Key for Code Exchange, scope: agents, definition: "The OAuth step that ties a login code to the client that asked for it.", source: {cite: "IETF RFC 7636, Proof Key for Code Exchange by OAuth Public Clients", url: "https://www.rfc-editor.org/rfc/rfc7636"}}
+  - {term: PKCS, expansion: Public-Key Cryptography Standards, scope: platform, definition: "Key and card standards; PKCS 11 is the smart card interface.", source: {cite: "IETF RFC 8017, PKCS #1: RSA Cryptography Specifications Version 2.2", url: "https://www.rfc-editor.org/rfc/rfc8017"}}
+  - {term: POTUS, expansion: President of the United States, scope: aviation, definition: "Presidential movement drives the highest-priority VIP pushes.", source: null}
+  - {term: PWA, expansion: Progressive Web App, scope: platform, definition: "A website that installs like an app on a phone.", source: null}
+  - {term: PWM, expansion: Pulse-Width Modulation, scope: platform, definition: "How the edge unit drives its fan speed.", source: null}
+  - {term: RAG, expansion: Retrieval-Augmented Generation, scope: agents, definition: "Feeding a model passages looked up for the question, instead of everything.", source: {cite: "NIST CSRC Glossary, retrieval-augmented generation", url: "https://csrc.nist.gov/glossary/term/retrieval_augmented_generation"}}
+  - {term: REST, expansion: Representational State Transfer, scope: platform, definition: "A plain web API style; also the name of polled feeds as opposed to pushed SWIM feeds.", source: {cite: "NIST CSRC Glossary, Representational State Transfer (REST)", url: "https://csrc.nist.gov/glossary/term/representational_state_transfer"}}
+  - {term: RPM, expansion: Revolutions Per Minute (fan) or RPM Package Manager (Fedora), scope: platform, definition: "Fan speed in thermal notes; the package format in system notes.", source: {cite: "RPM Package Manager project home (package sense)", url: "https://rpm.org/"}}
+  - {term: RSS, expansion: Really Simple Syndication, scope: platform, definition: "Feed format of the news and OSINT sources.", source: {cite: "RSS Advisory Board, RSS 2.0 Specification", url: "https://www.rssboard.org/rss-specification"}}
+  - {term: RTL-SDR, expansion: Realtek software-defined radio dongle, scope: platform, definition: "The low-cost USB radio receivers behind the local ADS-B, ACARS and VDL2 decoders.", source: null}
+  - {term: RVR, expansion: Runway Visual Range, scope: weather, definition: "Measured visibility along a runway, from STDDS; used instead of METAR visibility when present.", source: {cite: "FAA Pilot/Controller Glossary, RUNWAY VISUAL RANGE (RVR)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-r.html#RUNWAY_VISUAL_RANGE_RVR"}}
+  - {term: SBOM, expansion: Software Bill of Materials, scope: platform, definition: "The list of every package inside a built image.", source: {cite: "NIST CSRC Glossary, Software Bill of Materials", url: "https://csrc.nist.gov/glossary/term/software_bill_of_materials"}}
+  - {term: SBS, expansion: BaseStation format, scope: aviation, definition: "A plain text stream of decoded ADS-B messages from the local receiver.", source: null}
+  - {term: SCDS, expansion: SWIM Cloud Distribution Service, scope: aviation, definition: "The FAA cloud service that delivers SWIM feeds to subscribers.", source: {cite: "FAA SWIM, Getting Access to SWIM (SWIFT portal, SWIM Cloud Distribution Service)", url: "https://www.faa.gov/air_traffic/technology/swim/products/get_connected"}}
+  - {term: SDR, expansion: Software-Defined Radio, scope: platform, definition: "A radio receiver whose decoding is done in software.", source: null}
+  - {term: SFTP, expansion: SSH File Transfer Protocol, scope: platform, definition: "File transfer over SSH.", source: {cite: "IETF draft-ietf-secsh-filexfer-02, SSH File Transfer Protocol (an expired draft; no RFC)", url: "https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-02"}}
+  - {term: SHA-256, expansion: Secure Hash Algorithm 256-bit, scope: platform, definition: "The hash used by the signed manifest and the ledgers.", source: {cite: "NIST FIPS 180-4, Secure Hash Standard", url: "https://csrc.nist.gov/pubs/fips/180-4/upd1/final"}}
+  - {term: SIM, expansion: Subscriber Identity Module, scope: platform, definition: "The cellular card of the backup uplink.", source: {cite: "NIST CSRC Glossary, Subscriber Identity Module (SIM)", url: "https://csrc.nist.gov/glossary/term/subscriber_identity_module"}}
+  - {term: SMB, expansion: Server Message Block, scope: platform, definition: "The Windows file share protocol; a possible backup target.", source: {cite: "Microsoft Open Specifications, MS-SMB2 Server Message Block Protocol Versions 2 and 3", url: "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5606ad47-5ee0-437a-817e-70c366052962"}}
+  - {term: SMES, expansion: Surface Movement Event Service, scope: aviation, definition: "The STDDS service of airport surface tracks and events.", source: {cite: "FAA SWIM data portal, STDDS Surface Movement Event service (SMES)", url: "https://aa.data.faa.gov/data/service.jsf?uuid=4ad245f2-038f-47c0-be25-5e3b77ed748b"}}
+  - {term: SMTP, expansion: Simple Mail Transfer Protocol, scope: platform, definition: "Outbound email delivery.", source: {cite: "IETF RFC 5321, Simple Mail Transfer Protocol", url: "https://www.rfc-editor.org/rfc/rfc5321"}}
+  - {term: SPA, expansion: Single-Page Application, scope: platform, definition: "The web dashboard style: one page that loads data as needed.", source: null}
+  - {term: SSE, expansion: Server-Sent Events, scope: platform, definition: "A one-way live stream from server to browser.", source: {cite: "WHATWG HTML Living Standard, Server-sent events", url: "https://html.spec.whatwg.org/multipage/server-sent-events.html"}}
+  - {term: STA, expansion: Scheduled Time of Arrival, scope: aviation, definition: "In TBFM, the time the flow manager schedules a flight to cross its meter fix or runway.", source: {cite: "FAA Pilot/Controller Glossary, SCHEDULED TIME OF ARRIVAL (STA)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-s.html#SCHEDULED_TIME_OF_ARRIVAL_STA"}}
+  - {term: STDDS, expansion: SWIM Terminal Data Distribution System, scope: aviation, definition: "The SWIM family of airport feeds: SMES, TDES, TDLS, APDS.", source: {cite: "FAA SWIM, SWIM Terminal Data Distribution System (STDDS)", url: "https://www.faa.gov/air_traffic/technology/swim/stdds"}}
+  - {term: SWIM, expansion: System Wide Information Management, scope: aviation, definition: "The FAA data distribution system; the platform's authority for OOOI, tails and ETAs.", source: {cite: "FAA SWIM Program Overview", url: "https://www.faa.gov/air_traffic/technology/swim/overview"}}
+  - {term: TBFM, expansion: Time-Based Flow Management, scope: aviation, definition: "The FAA arrival metering system; source of meter-fix and runway times.", source: {cite: "FAA JO 7210.3, 18-25 Time-Based Flow Management (TBFM)", url: "https://www.faa.gov/air_traffic/publications/atpubs/foa_html/chap18_section_25.html"}}
+  - {term: TDES, expansion: Tower Departure Event Service, scope: aviation, definition: "The STDDS service of departure events and parking gates.", source: {cite: "FAA SWIM data portal, STDDS Tower Departure Event Service", url: "https://aa.data.faa.gov/data/service.jsf?uuid=d849ad14-c547-4346-b25f-756ae5e67e21"}}
+  - {term: TDLS, expansion: Tower Data Link Services, scope: aviation, definition: "The STDDS service of datalink departure clearances.", source: {cite: "FAA Pilot/Controller Glossary, TERMINAL DATA LINK SYSTEM (TDLS) (the FAA STDDS page says Tower Data Link Services)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-t.html#TERMINAL_DATA_LINK_SYSTEM_TDLS"}}
+  - {term: TFDM, expansion: Terminal Flight Data Manager, scope: aviation, definition: "The FAA tower flight data system; a future gate and stand source.", source: {cite: "FAA Pilot/Controller Glossary, TERMINAL FLIGHT DATA MANAGER (TFDM)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-t.html#TERMINAL_FLIGHT_DATA_MANAGER_TFDM"}}
+  - {term: TFMS, expansion: Traffic Flow Management System, scope: aviation, definition: "The FAA system of traffic programs, restrictions and per-flight delays.", source: {cite: "FAA SWIM data portal, Traffic Flow Management Data service (FAA JO 7340.2: traffic flow management system)", url: "https://aa.data.faa.gov/data/service.jsf?uuid=4d1d19ea-8ad1-4262-90a9-9594977b0203"}}
+  - {term: TFR, expansion: Temporary Flight Restriction, scope: aviation, aliases: [TFRS], definition: "A NOTAM that closes or limits airspace for a time.", source: {cite: "FAA Pilot/Controller Glossary, TEMPORARY FLIGHT RESTRICTION (TFR)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-t.html#TEMPORARY_FLIGHT_RESTRICTION_TFR"}}
+  - {term: TTL, expansion: Time To Live, scope: platform, definition: "How long a cached value or approval stays valid.", source: {cite: "NIST CSRC Glossary, Time to Live", url: "https://csrc.nist.gov/glossary/term/time_to_live"}}
+  - {term: TTP, expansion: TFDM Terminal Publication, scope: aviation, definition: "The SWIM feed that publishes TFDM data.", source: null}
+  - {term: U2F, expansion: Universal 2nd Factor, scope: platform, definition: "The older hardware security key standard, predecessor of FIDO2.", source: {cite: "FIDO Alliance, specifications (FIDO U2F)", url: "https://fidoalliance.org/specifications/"}}
+  - {term: UART, expansion: Universal Asynchronous Receiver-Transmitter, scope: platform, definition: "A serial port, here the board's debug console.", source: {cite: "NIST CSRC Glossary, Universal Asynchronous Receiver/Transmitter", url: "https://csrc.nist.gov/glossary/term/universal_asynchronous_receiver_transmitter"}}
+  - {term: UAS, expansion: Unmanned Aircraft System, scope: aviation, definition: "A drone and its control system.", source: {cite: "FAA JO 7340.2 Contractions, UAS: unmanned aircraft system (ICAO contraction)", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: USC, expansion: United States Code, scope: aviation, definition: "US statutes; some TFRs cite Title 49 as their legal basis.", source: {cite: "49 USC 40103, Sovereignty and use of airspace, the Title 49 section TFRs cite (GPO govinfo, 2024 edition)", url: "https://www.govinfo.gov/content/pkg/USCODE-2024-title49/html/USCODE-2024-title49-subtitleVII-partA-subparti-chap401-sec40103.htm"}}
+  - {term: UTC, expansion: Coordinated Universal Time, scope: platform, definition: "The time of the host, the containers and every stored stamp; shown alone or with ET.", source: {cite: "NIST CSRC Glossary, Coordinated Universal Time (FAA JO 7340.2 marks UTC an ICAO contraction)", url: "https://csrc.nist.gov/glossary/term/coordinated_universal_time"}}
+  - {term: VDL, expansion: VHF Data Link, scope: aviation, aliases: [VDL2], definition: "Digital VHF datalink for ACARS; VDL2 (mode 2) is decoded locally.", source: null}
+  - {term: VIP, expansion: Very Important Person, scope: aviation, definition: "A protected principal whose movement or restrictions drive top-priority pushes.", source: {cite: "FAA JO 7340.2 Contractions, VIP: very important person (ICAO contraction)", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
+  - {term: VIP TFR, expansion: VIP Temporary Flight Restriction, scope: aviation, definition: "A TFR protecting a VIP's movement or stay; pushed with its own window in UTC and ET.", source: {cite: "14 CFR 91.141, Flight restrictions in the proximity of the Presidential and other parties", url: "https://www.ecfr.gov/current/title-14/section-91.141"}}
+  - {term: VRE, expansion: Virginia Railway Express, scope: rail, definition: "Northern Virginia's commuter rail service into Washington Union Station.", source: null}
+  - {term: WAL, expansion: Write-Ahead Log, scope: platform, definition: "PostgreSQL's change log; heavy needless rewrites inflate it.", source: {cite: "PostgreSQL 16 documentation, Write-Ahead Logging (WAL)", url: "https://www.postgresql.org/docs/16/wal-intro.html"}}
+  - {term: WAS, expansion: Washington Union Station, scope: rail, definition: "Amtrak's station code for Washington Union Station.", source: null}
+  - {term: XMPP, expansion: Extensible Messaging and Presence Protocol, scope: weather, definition: "The chat protocol that carries NWWS-OI.", source: {cite: "IETF RFC 6120, Extensible Messaging and Presence Protocol (XMPP): Core", url: "https://www.rfc-editor.org/rfc/rfc6120"}}
+  - {term: ZDC, expansion: Washington ARTCC, scope: aviation, definition: "The en-route center for the DC region; SECURITY TFRs inside it push at top priority.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Washington); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ZID, expansion: Indianapolis ARTCC, scope: aviation, definition: "The Indianapolis en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Indianapolis); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ZLA, expansion: Los Angeles ARTCC, scope: aviation, definition: "The Los Angeles en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Los Angeles); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ZNY, expansion: New York ARTCC, scope: aviation, definition: "The New York en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (New York); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ZOB, expansion: Cleveland ARTCC, scope: aviation, definition: "The Cleveland en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Cleveland); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ZTL, expansion: Atlanta ARTCC, scope: aviation, definition: "The Atlanta en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Atlanta); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+
+platform:
+  - {term: relay, expansion: operator relay, scope: platform, definition: "One reviewed shell block the operator pastes to run a batch: lint, tests, sign, commit, push and roll out.", source: {cite: "Platform term: the relay linter every relay passes", path: "scripts/relay-lint.py"}}
+  - {term: guard worktree, expansion: staging worktree, scope: platform, definition: "A separate checkout where a batch is staged and checked before the relay commits it.", source: {cite: "Platform term: relay preflight, which runs the suite on the guard worktree", path: "scripts/relay-preflight.sh"}}
+  - {term: preflight, expansion: relay preflight, scope: platform, definition: "The checks a relay runs before it changes anything; any failure stops the relay.", source: {cite: "Platform term: relay preflight", path: "scripts/relay-preflight.sh"}}
+  - {term: relay-lint, expansion: relay linter, scope: platform, definition: "The checker every relay passes before it is posted; each bug that bit once becomes a rule here.", source: {cite: "Platform term: the relay linter", path: "scripts/relay-lint.py"}}
+  - {term: drift gate, expansion: CLAUDE.md drift check, scope: platform, definition: "The check that the scratchpad file agrees with the repository before a signing relay is posted.", source: {cite: "Platform term: the CLAUDE.md drift check", path: "scripts/check-claude-md-drift.sh"}}
+  - {term: signed manifest, expansion: signed repository manifest, scope: platform, definition: "A hash of every tracked file, signed by the operator; code and persona files are checked against it before they run.", source: {cite: "Platform term: manifest signing", path: "scripts/sign-manifest.sh"}}
+  - {term: push-public, expansion: public mirror push, scope: platform, definition: "Publishing the scrubbed public copy of the repository, always after the private push.", source: {cite: "Platform term: public mirror push", path: "scripts/push-public.sh"}}
+  - {term: public scrub, expansion: public tree scrub, scope: platform, definition: "Removes private files and blocks identifiers before the public mirror is pushed.", source: {cite: "Platform term: public tree scrub", path: "scripts/scrub-public-tree.py"}}
+  - {term: lockdown, expansion: thermal-ingest guard lockdown, scope: platform, aliases: [thermal guard], definition: "When load reaches 40 the load guard sheds the ingest stack until load falls; jobs must wait, not push through.", source: {cite: "Platform term: the thermal-ingest guard", path: "scripts/thermal-ingest-guard.py"}}
+  - {term: relay-wait-load, expansion: relay load wait, scope: platform, definition: "Holds a heavy relay step while the load is 24 or more; gives up after an hour, and a rerun resumes.", source: {cite: "Platform term: relay load wait", path: "scripts/relay-wait-load.sh"}}
+  - {term: tiers, expansion: "API access tiers T0, T1, T2 and ADMIN", scope: platform, definition: "T0 is anonymous, T1 a trusted network or certificate, T2 shared partners, ADMIN the operator; each route requires one.", source: {cite: "Platform term: the web API tier checks (require_tier)", path: "src/web/main.py"}}
+  - {term: board, expansion: coordination board, scope: agents, definition: "The signed message board where agents and the operator post notes, requests and replies.", source: {cite: "Platform term: board signing", path: "docs/BOARD_SIGNING.md"}}
+  - {term: board gate, expansion: board token gate, scope: agents, definition: "An approval the operator signs to answer a cloud agent's board request when its token nears expiry.", source: {cite: "Platform term: approval kinds and the board gate", path: "src/common/governance.py"}}
+  - {term: council, expansion: agent council, scope: agents, definition: "A review where several agents draft on one question, together (council) or adversarially (arena); the operator decides.", source: {cite: "Platform term: the council command", path: "scripts/council.sh"}}
+  - {term: approval kinds, expansion: signed approval kinds, scope: agents, definition: "The fixed set of things an operator signature can approve: sudo, council, council close, connector link and hold, gateway thaw, console login, liveness, board gate.", source: {cite: "Platform term: approval kinds", path: "src/common/governance.py"}}
+  - {term: liveness switch, expansion: team liveness check, scope: agents, definition: "Marks an idle or unverified account inert and reactivates it; acts only on a verified live network or with a signed liveness approval.", source: {cite: "Platform term: the team liveness switch", path: "scripts/team-liveness.sh"}}
+  - {term: dead-man, expansion: dead-man ping, scope: platform, definition: "An outside check that alerts when the box stops reporting in.", source: {cite: "Platform term: the external dead-man ping", path: "scripts/healthcheck-ping.sh"}}
+  - {term: pamphlet, expansion: onboarding pamphlet, scope: agents, definition: "The read-only page each account reads first: its identity, repositories, rules and how it is switched off.", source: {cite: "Platform term: the onboarding pamphlet template", path: "scripts/agent-segmentation/onboarding-template.md"}}
+  - {term: persona, expansion: local-model persona, scope: agents, definition: "The fixed system text and settings one skill gives the local model; each has a signed persona file.", source: {cite: "Platform term: the local-model persona registry", path: "src/common/personas.py"}}
+  - {term: skill grants, expansion: per-account skill grants, scope: agents, definition: "Which signed skills an agent account may read or run; no grant means no access.", source: {cite: "Platform term: per-account skill grants", path: "scripts/skill-grants.sh"}}
+  - {term: agent gateway, expansion: agent gateway, scope: agents, definition: "The OAuth and MCP front door for cloud agents; one connector per account, with a kill switch and a signed thaw.", source: {cite: "Platform term: the agent gateway routes", path: "src/web/routes/agent_gateway.py"}}
+  - {term: demo scrub, expansion: demo data scrub, scope: platform, aliases: [scrub (demo)], definition: "The one-way copy of production data into the demo instance, with every protected identifier substituted or dropped.", source: {cite: "Platform term: the demo source scrub", path: "scripts/scrub-demo-source.py"}}
+  - {term: Q mark, expansion: synthetic Q registration, scope: platform, definition: "A made-up stand-in mark, Q plus five characters, that replaces a protected aircraft identifier in demo and example data.", source: {cite: "Platform term: Q-mark substitution in the demo source scrub", path: "scripts/scrub-demo-source.py"}}
+  - {term: assignments, expansion: gate and baggage assignments, scope: aviation, definition: "The resolved gate, terminal and baggage belt per flight leg and side, chosen by source precedence; every value has a status.", source: {cite: "Platform term: gate and baggage assignments", path: "src/common/gate_assignments.py"}}
+  - {term: observed, expansion: assignment status observed, scope: aviation, definition: "A confirmed value from a trusted source.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: provisional, expansion: assignment status provisional, scope: aviation, definition: "A value from a lower-confidence source, such as airport boards, until a better source confirms it.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: superseded, expansion: assignment status superseded, scope: aviation, definition: "A value replaced by a newer or higher-precedence one; kept in history.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: conflicting, expansion: assignment status conflicting, scope: aviation, definition: "Sources disagree; nothing is pushed until they agree.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: unknown, expansion: assignment status unknown, scope: aviation, definition: "No source has a value yet.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: compile_seq, expansion: semantic compile sequence, scope: platform, aliases: [semantic-compiled sentinel], definition: "The gapless number of each successful semantic compile; the sentinel file is written after each one commits.", source: {cite: "Platform term: the semantic compile runs ledger (migration 0077)", path: "src/common/pg_schema/0077_semantic_compile_runs.sql"}}
+  - {term: second brain, expansion: second brain, scope: platform, definition: "The knowledge system built on the vault; the only authority for decisions and history.", source: {cite: "Platform term: second brain status", path: "docs/SECOND_BRAIN_STATUS.md"}}
+  - {term: vault, expansion: knowledge vault, scope: platform, definition: "The note store behind the second brain; agents read it and write only through attributed contributions.", source: {cite: "Platform term: second brain status", path: "docs/SECOND_BRAIN_STATUS.md"}}
+  - {term: casebook, expansion: incident casebook, scope: platform, definition: "The numbered record of things that went wrong and the guardrail each one produced.", source: null}
+  - {term: guardrail proof, expansion: guardrail proof entry, scope: platform, definition: "A ledger-backed record showing a new guardrail working on a real day.", source: {cite: "Platform term: guardrail proofs, as used in the agent segmentation design", path: "docs/AGENT_SEGMENTATION.md"}}
+  - {term: feature freeze, expansion: feature freeze, scope: platform, definition: "A period when only fixes, tests and documentation land, never new features.", source: null}
+
+rules:
+  - term: FIDS is gate and baggage only
+    expansion: FIDS = gate, terminal and baggage; never times, status or tail
+    scope: aviation
+    definition: "Airport boards may supply gate, terminal and baggage belt only; never departure or arrival times, flight status, OOOI or tail."
+    short: "Airport boards (FIDS) give gate, terminal and baggage only; never times, status, OOOI or tail."
+    enforced_by: [tests/common/test_airport_fids_gate_only.py, tests/poller/test_fids_never_confirms_oooi.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/common/test_airport_fids_gate_only.py}
+  - term: Tails are SWIM-only
+    expansion: tail numbers come from SWIM feeds only
+    scope: aviation
+    definition: "An aircraft's tail comes only from the SWIM flight feeds (FDPS, TDES, TBFM, TFMS); never from boards, aggregators or guesses."
+    short: "A tail comes only from SWIM (FDPS, TDES, TBFM, TFMS); never from boards or aggregators."
+    enforced_by: [tests/poller/test_fids_not_a_tail_source.py, tests/poller/test_fdps_tail_guard.py, tests/poller/test_tdes_tail.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/poller/test_fids_not_a_tail_source.py}
+  - term: ADS-B never asserts ON or IN
+    expansion: ADS-B is position only
+    scope: aviation
+    definition: "ADS-B may show where an aircraft is; it never asserts a landing or gate arrival."
+    short: "ADS-B shows position only; it never asserts ON or IN."
+    enforced_by: [tests/poller/test_oooi_writers_gated.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/poller/test_oooi_writers_gated.py}
+  - term: OOOI from the SWIM authority list only
+    expansion: OOOI asserted only by SWIM sources
+    scope: aviation
+    definition: "An OOOI phase is written only by a named source on the SWIM authority list, and SWIM beats airline-posted times on live watches."
+    short: "OOOI phases are asserted only by SWIM sources; SWIM beats airline-posted times."
+    enforced_by: [tests/poller/test_oooi_writers_gated.py, tests/poller/test_fids_never_confirms_oooi.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/poller/test_oooi_writers_gated.py}
+  - term: Restricted sources stay restricted
+    expansion: each source used only for what it is allowed to supply
+    scope: aviation
+    definition: "A source restricted to some fields is never used for others, and a to-do note is never an approval to widen it."
+    short: "A source is used only for the fields it is allowed to supply."
+    enforced_by: [tests/common/test_airport_fids_gate_only.py, tests/poller/test_fids_not_a_tail_source.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/common/test_airport_fids_gate_only.py}
+  - term: Dedup never hashes timestamps
+    expansion: content keys use the event's own stable fields
+    scope: platform
+    definition: "A duplicate check keys on the event's own stable fields, never on fetch times, narratives or counts, so a repeat is never pushed twice."
+    short: "Repeat checks key on the event's stable fields, never on timestamps or wording."
+    enforced_by: [tests/poller/test_tfr_security_widening.py, tests/common/test_push_dedup_hot.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/poller/test_tfr_security_widening.py}
+  - term: Times in UTC or UTC plus ET
+    expansion: never Eastern time alone or unlabelled
+    scope: platform
+    definition: "Every shown time is UTC, or UTC with ET beside it; never ET alone and never without a zone."
+    short: "Times in UTC, or UTC with ET beside it; never ET alone or unlabelled."
+    enforced_by: [tests/scripts/test_claude_login_expiry_check.py, tests/poller/test_tfr_vip_window.py, tests/scripts/test_thermal_sample_timezones.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/scripts/test_claude_login_expiry_check.py}
+  - term: LADD is the union of both lists
+    expansion: FAA Source list plus Industry list, no tier stored
+    scope: aviation
+    definition: "The LADD set is the union of the FAA Source and Industry lists; which list an entry came from is not stored."
+    short: "LADD is the union of both FAA lists; the list of origin is never stored."
+    enforced_by: [tests/common/test_ladd_union_no_tier.py, tests/common/test_import_ledger.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/common/test_ladd_union_no_tier.py}
+  - term: LADD identifiers never printed
+    expansion: counts only
+    scope: aviation
+    definition: "A LADD-listed aircraft is never shown, logged or echoed; only counts are reported."
+    short: "Never print a LADD-listed aircraft; report counts only."
+    enforced_by: [tests/common/test_import_ledger.py, tests/scripts/test_ladd_public_check.py, tests/scripts/test_synthetic_identifiers.py, tests/web/test_watchlist_registrations_ladd.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/common/test_import_ledger.py}
+  - term: Nothing runs unsigned
+    expansion: signed manifest before execution
+    scope: platform
+    definition: "Code, persona files and the persona rules block run only when they match the operator-signed manifest; a mismatch stops the run."
+    short: "Nothing runs unless it matches the signed manifest."
+    enforced_by: [tests/scripts/test_verify_manifest_pin.py, tests/scripts/test_persona_files_complete.py, tests/scripts/test_build_integrity.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/scripts/test_verify_manifest_pin.py}
+  - term: Nothing is stopped without operator approval
+    expansion: stopping needs the operator
+    scope: agents
+    definition: "No service, session or account is stopped or made inert by an agent on its own; it needs the operator or a signed approval."
+    short: "Never stop a service, session or account without operator approval."
+    enforced_by: [tests/scripts/test_team_liveness.py, tests/scripts/test_liveness_approval_lookup.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/scripts/test_team_liveness.py}
+  - term: Agents draft, never publish or approve
+    expansion: agents draft only
+    scope: agents
+    definition: "Agents write drafts and requests; publishing and approving take a human signature."
+    short: "Agents draft; they never publish or approve."
+    enforced_by: [tests/web/test_review09_agent_authority.py, tests/web/test_agent_gateway.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/web/test_review09_agent_authority.py}
+  - term: No secrets on command lines
+    expansion: secrets by stdin only
+    scope: platform
+    definition: "Secrets are read silently and passed on standard input, never on a command line or echoed."
+    short: "Never put a secret on a command line or in output."
+    enforced_by: [tests/scripts/test_relay_lint.py, tests/scripts/test_transcript_leak_scan.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/scripts/test_relay_lint.py}
+  - term: Relays are load-aware and rerun-safe
+    expansion: wait for load, resume on rerun
+    scope: platform
+    definition: "Every heavy relay step waits for load to fall first, and a relay can be rerun without harming what it already did."
+    short: "Heavy steps wait for load; every relay is safe to rerun."
+    enforced_by: [tests/scripts/test_relay_lint.py, tests/scripts/test_pg_maintenance.py]
+    source: {cite: "Operator rule, held by its first enforcing test", path: tests/scripts/test_relay_lint.py}
+
+# All-caps tokens used 3 or more times in the current docs that are not
+# vocabulary. Each group has a reason; the coverage test accepts these.
+ignore:
+  - reason: "General computing term with its standard meaning."
+    terms: [API, CLI, CPU, DIY, DNS, GPU, GUI, HTTP, HTTPS, ISO, JSON, LAN, OOM, PDF, PIN, RAM, RFC, SQL, SSD, SSH, TCP, TLS, UDP, UID, URI, URL, USB, USB-C, VPN]
+  - reason: "Ordinary English word written in capitals for emphasis, a heading or a status."
+    terms: [ACCOUNT, AGENT, AGENTS, ALERTS, ALL, AND, DATA, DEFAULT, DEMO, DONE, DOWN, DRAFT, EDGE, ENABLED, FAIL, FAILED, FIXED, HELD, HOLD, HOME, KEY, LIVE, MODE, NAME, NOT, ONE, ONLY, PARTIAL, POLICY, PROMPT, REAL, REQUEST, RESTORE, RETIRED, SINGLE, SKILL, STARTED, STATUS, SYSTEM, TEXT, UNIT]
+  - reason: "SQL, HTTP or Containerfile keyword quoted from code."
+    terms: [COPY, CMD, CREATE, DELETE, DESC, FROM, GET, HEAD, INDEX, LIMIT, "NULL", ORDER, POST, PUT, READ, SELECT, TABLE, UPDATE, WHERE, ATTRS]
+  - reason: "Name of a file, variable, placeholder or UI label, not a term."
+    terms: [README, CLAUDE, CTUID, PGDATA, SLUG, GLOBE, LIVE-ETC]
+  - reason: "ICAO airport location code: a place name, not vocabulary."
+    terms: [EDDF, EDDM, EGLL, EHAM, KATL, KBOS, KDEN, KDFW, KIAH, KJFK, KLAS, KLAX, KORD, KSEA, KSFO, LEMD, LLBG, OEJN, OMDB]
+  - reason: "NWS forecast office code: a place name, not vocabulary."
+    terms: [AKQ, CTP, LWX]
+  - reason: "Audit finding number, not vocabulary."
+    terms: [DP-5, NEW-3, R04-GAP, SR-1]
+  - reason: "Callsign prefix quoted from a detection rule: an identifier, not vocabulary."
+    terms: [CRANE]
+  - reason: "Federal radio program named only in the CUI-handling rules; no definition is published."
+    terms: [SHARES]
+  - reason: "Business form or currency code."
+    terms: [LLC, GBP]

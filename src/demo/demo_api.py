@@ -164,6 +164,29 @@ ENDPOINT_PATHS: dict[str, str] = {
 # most internet-exposed of the three apps.
 app = FastAPI(title="corporatetraveldc-demo-api", docs_url=None, redoc_url=None, openapi_url=None)
 
+# 2026-10-19 (demo/production split, relays 2 and 4): /healthz carries the
+# process start time and a per-source count of /api/ requests answered, so the
+# relay-4 retirement check (scripts/demo-sqlite-retire-check.sh) can prove the
+# demo served from Postgres -- and nothing from the sovereign SQLite file --
+# for N continuous hours before the operator shreds the file. Counts only;
+# no path, query or client detail is kept.
+import time as _time  # noqa: E402
+
+_STARTED_AT = _time.time()
+_REQUESTS: dict[str, int] = {k: 0 for k in SOURCE_KINDS}
+
+
+@app.middleware("http")
+async def _count_requests_by_source(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        try:
+            _REQUESTS[source_kind()] += 1
+        except RuntimeError:
+            pass
+    return response
+
+
 _window_end_cache: datetime | None = None
 _window_end_cache_checked = False
 _legacy_anchor_cache: datetime | None = None
@@ -346,11 +369,20 @@ def _resolve_playback_params(session: str | None, window: str | None,
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
     """Reports which source is live (2026-10-16). sqlite: the file exists.
+    2026-10-19: also started_at / uptime_s, requests answered per source since
+    start, and the profile store in use (relay-4 retirement evidence).
     postgres: one SELECT on the demo instance's meta table succeeds (a
     refused or unreachable demo pool is ok=false, never a 500 with a
     conninfo in it)."""
     kind = source_kind()
     body: dict = {"source": kind, "loop_days": LOOP_DAYS}
+    body["started_at"] = datetime.fromtimestamp(_STARTED_AT, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body["uptime_s"] = int(_time.time() - _STARTED_AT)
+    body["requests"] = dict(_REQUESTS)
+    try:
+        body["profiles_store"] = demo_profiles.store_kind()
+    except Exception as e:  # noqa: BLE001 -- a health probe reports, never raises
+        body["profiles_store"] = f"error:{type(e).__name__}"
     if kind == "sqlite":
         body["ok"] = os.path.exists(DEMO_DB)
         body["demo_db"] = DEMO_DB

@@ -7,7 +7,11 @@ Description=Check corporatetraveldc-ingest memory every 2 minutes, restart if ov
 # binding is implicit from the filename; the line was never needed.
 
 [Timer]
-OnBootSec=1min
+# 2026-10-19 (lean-out L2 / F12): 1min -> 90s, so each check runs ~30 s after
+# container-mem-watch (same 2-min cadence, OnBootSec=1min) has published its
+# `podman stats` snapshot, which this job now reads instead of running
+# podman stats itself (7 per run before). OnUnitActiveSec unchanged.
+OnBootSec=90s
 OnUnitActiveSec=2min
 Persistent=false
 

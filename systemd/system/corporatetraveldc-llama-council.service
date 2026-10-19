@@ -25,3 +25,9 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/corporatetraveldc
+# 2026-10-19 (lean-out L2, F7): /var/lib/ctdc-agent-llama-council, owned by
+# the service account, holds failed-drafts.json (an identical failed draft is
+# not retried hourly). The long-runner lock is opened read-only under
+# ProtectSystem=strict (flock needs no write access).
+StateDirectory=ctdc-agent-llama-council
+StateDirectoryMode=0700

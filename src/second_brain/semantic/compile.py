@@ -232,6 +232,43 @@ def _create_schema(conn) -> None:
         conn.execute(f"TRUNCATE TABLE {t}")
 
 
+# Lean-out L2 / D6 (2026-10-19): the compile is ONE batch transaction (TRUNCATE
+# every semantic_* table, rewrite ~1.3 M rows, commit) but ran under the
+# platform-wide OLTP guard rails in config/postgresql.conf (statement_timeout
+# 60s, lock_timeout 10s, idle_in_transaction_session_timeout 60s): ~17% of
+# runs failed (6 of 14 in the 04:02Z slot) on a lock or statement timeout.
+# The compile now sets batch-sized limits with SET LOCAL -- they last only for
+# its own transaction and revert at COMMIT/ROLLBACK, so a pooled connection
+# never carries them to the next caller and nothing global changes. The
+# idle-in-transaction limit covers the Python passes (geometry, clusters)
+# between statements. Values are bounded, never 0 (unbounded is what the
+# 2026-09-20 snapshot incident was). Env overrides accept only <n>, <n>ms,
+# <n>s or <n>min.
+COMPILE_TIMEOUTS = (
+    ("statement_timeout", "SEMANTIC_COMPILE_STATEMENT_TIMEOUT", "15min"),
+    ("lock_timeout", "SEMANTIC_COMPILE_LOCK_TIMEOUT", "90s"),
+    ("idle_in_transaction_session_timeout", "SEMANTIC_COMPILE_IDLE_TIMEOUT", "10min"),
+)
+_TIMEOUT_RE = re.compile(r"^[1-9][0-9]{0,6}(ms|s|min)?$")
+
+
+def _apply_batch_timeouts(conn) -> list[str]:
+    """SET LOCAL the compile's batch limits on the Postgres path; no-op on the
+    sqlite test double. Returns the statements issued (for tests/logging)."""
+    if isinstance(conn, sqlite3.Connection):
+        return []
+    issued = []
+    for guc, env, default in COMPILE_TIMEOUTS:
+        val = (os.environ.get(env) or default).strip()
+        if not _TIMEOUT_RE.match(val):
+            _log.warning("semantic compile: %s=%r is not <n>[ms|s|min]; using %s", env, val, default)
+            val = default
+        stmt = f"SET LOCAL {guc} = '{val}'"
+        conn.execute(stmt)
+        issued.append(stmt)
+    return issued
+
+
 def _write_model(conn, m: SemanticModel) -> None:
     for f in m.facets():
         conn.execute(
@@ -1963,6 +2000,7 @@ def compile_layer(db_path: str | None = None,
             # see _connect()'s HISTORICAL comment above. Postgres's MVCC has
             # no such lock to avoid, so they were removed rather than kept as
             # meaningless overhead.
+            _apply_batch_timeouts(conn)   # D6: before the TRUNCATE takes its locks
             _create_schema(conn)
             _write_model(conn, m)
             result = assign(conn, m)

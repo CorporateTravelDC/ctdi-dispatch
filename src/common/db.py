@@ -1071,13 +1071,35 @@ def board_refresh_token(presented: str, remote_addr: str | None = None) -> dict:
 
 # ── TFR helpers ───────────────────────────────────────────────────────────────
 
+# 2026-10-19 (lean-out L2, F9): heartbeat upserts. Several current-state
+# tables were rewritten on every re-broadcast only to bump last_seen
+# (stdds_safety_status, itws_alerts, tbfm_sequences; tfrs on every fetch).
+# Now: a content change is written at once; an unchanged row has its
+# last_seen touched at most once per HEARTBEAT_TOUCH_S. Every reader's
+# freshness window is >= 1200 s (feed_db_integrity_check 1800/3600 s, CPS
+# ITWS 1200 s, TBFM queue count 1800 s, TBFM enrichment 3 h), so a 300 s
+# touch never makes a live row look stale.
+HEARTBEAT_TOUCH_S = 300
+
+
+def _heartbeat_cutoff_iso() -> str:
+    """ISO cutoff ("%Y-%m-%dT%H:%M:%SZ", the format these last_seen columns
+    hold) before which an unchanged row's last_seen is refreshed."""
+    return (datetime.utcnow() - timedelta(seconds=HEARTBEAT_TOUCH_S)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def upsert_tfr(tfr_id: str, raw_json: str, is_vip: bool,
                effective_start: float | None = None,
                effective_end: float | None = None,
                vip_push_reason: str | None = None) -> None:
     """vip_push_reason (2026-10-18, migration 0081 / SQLite v50): why the TFR is
     VIP-class for the pusher (poller.fetchers.tfr.REASON_ORDER), NULL when it is not.
-    is_vip keeps its old meaning (FAA type VIP or a VIP text pattern)."""
+    is_vip keeps its old meaning (FAA type VIP or a VIP text pattern).
+
+    2026-10-19 (lean-out L2, F9): write on change only. The 5-min REST fetch
+    re-sent every row unchanged (84 of 84 rewritten per fetch, ~55.6k
+    updates / 59 h). tfrs has no last_seen column (expire_tfrs() sweeps by
+    absence), so an unchanged row is simply left alone."""
     with conn() as c:
         c.execute("""
             INSERT INTO tfrs (tfr_id, raw_json, is_vip, effective_start, effective_end,
@@ -1089,6 +1111,11 @@ def upsert_tfr(tfr_id: str, raw_json: str, is_vip: bool,
                 effective_start=excluded.effective_start,
                 effective_end=excluded.effective_end,
                 vip_push_reason=excluded.vip_push_reason
+            WHERE tfrs.raw_json IS DISTINCT FROM excluded.raw_json
+               OR tfrs.is_vip IS DISTINCT FROM excluded.is_vip
+               OR tfrs.effective_start IS DISTINCT FROM excluded.effective_start
+               OR tfrs.effective_end IS DISTINCT FROM excluded.effective_end
+               OR tfrs.vip_push_reason IS DISTINCT FROM excluded.vip_push_reason
         """, (tfr_id, raw_json, int(is_vip), effective_start, effective_end, vip_push_reason))
 
 
@@ -3208,7 +3235,13 @@ def upsert_tbfm_sequence(meter_fix: str, facility: str, flight_id: str,
     """eta_kind (v46, 2026-09-05): which arc the ETA came from --
     "rwy"/"mfx"/"dfx"/"sfx", or None when unknown. Keyword-with-default so
     existing callers and tests keep working; a None here means UNKNOWN and
-    must never be inferred as "mfx" downstream. See init_db_v46()."""
+    must never be inferred as "mfx" downstream. See init_db_v46().
+
+    2026-10-19 (lean-out L2, F9): TBFM re-sends the same sequence/ETA while a
+    flight sits in the queue; an unchanged row now only has last_seen touched
+    once it is HEARTBEAT_TOUCH_S old (see _heartbeat_cutoff_iso). Any change
+    is written at once. Readers' windows (1800 s queue count, 3 h enrichment,
+    1800 s integrity) are all >= 6x the touch interval."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     with conn() as c:
         c.execute("""
@@ -3223,8 +3256,15 @@ def upsert_tbfm_sequence(meter_fix: str, facility: str, flight_id: str,
                 assigned_speed=excluded.assigned_speed,
                 last_seen=excluded.last_seen,
                 eta_kind=excluded.eta_kind
+            WHERE tbfm_sequences.facility IS DISTINCT FROM excluded.facility
+               OR tbfm_sequences.eta IS DISTINCT FROM excluded.eta
+               OR tbfm_sequences.sequence_num IS DISTINCT FROM excluded.sequence_num
+               OR tbfm_sequences.assigned_speed IS DISTINCT FROM excluded.assigned_speed
+               OR tbfm_sequences.eta_kind IS DISTINCT FROM excluded.eta_kind
+               OR tbfm_sequences.last_seen IS NULL
+               OR tbfm_sequences.last_seen < ?
         """, (meter_fix, facility, flight_id, eta, sequence_num, assigned_speed,
-              now, eta_kind))
+              now, eta_kind, _heartbeat_cutoff_iso()))
 
 
 def get_active_tbfm_sequence_count(meter_fix: str, max_age_seconds: float = 1800) -> int:
@@ -3452,6 +3492,13 @@ def get_local_airspace_alerts_recent(entry_id: str, alert_type: str,
 def upsert_itws_alert(airport: str, product_type: str, severity: int | None,
                       detail: str | None, valid_time: str,
                       expires_time: str | None, raw_json: str) -> None:
+    """2026-10-19 (lean-out L2, F9): ITWS re-broadcasts its current product
+    state on nearly every SWIM message. Content = severity, detail,
+    expires_time: a change is written at once. valid_time (stamped "now" by
+    most handlers), raw_json (the payload incl. valid_time) and last_seen are
+    heartbeat fields: refreshed with any change, otherwise only once
+    last_seen is HEARTBEAT_TOUCH_S old. Readers: integrity check on
+    valid_time (3600 s), CPS freshness on last_seen (1200 s)."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     with conn() as c:
         c.execute("""
@@ -3466,8 +3513,13 @@ def upsert_itws_alert(airport: str, product_type: str, severity: int | None,
                 expires_time=excluded.expires_time,
                 raw_json=excluded.raw_json,
                 last_seen=excluded.last_seen
+            WHERE itws_alerts.severity IS DISTINCT FROM excluded.severity
+               OR itws_alerts.detail IS DISTINCT FROM excluded.detail
+               OR itws_alerts.expires_time IS DISTINCT FROM excluded.expires_time
+               OR itws_alerts.last_seen IS NULL
+               OR itws_alerts.last_seen < ?
         """, (airport, product_type, severity, detail, valid_time,
-              expires_time, raw_json, now))
+              expires_time, raw_json, now, _heartbeat_cutoff_iso()))
 
 
 def get_active_itws_alerts(airport: str | None = None) -> list[dict]:
@@ -3699,6 +3751,22 @@ def osint_save_item(scope_id: int, title: str, url: str, source_name: str | None
              headline, outlet, story_key),
         )
         return cur.rowcount > 0
+
+
+def osint_item_exists(content_hash: str) -> bool:
+    """True when an OSINT item with this content_hash is already stored.
+
+    2026-10-19 (lean-out L2, F7): osint_monitor asks this BEFORE it calls the
+    model, so an already-stored HIGH item is never re-narrated (the narrative
+    used to be generated and then thrown away by osint_save_item's INSERT OR
+    IGNORE). content_hash is UNIQUE on osint_items, so this is one index probe.
+    """
+    with conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM osint_items WHERE content_hash = ? LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        return row is not None
 
 
 def osint_get_feed(scope_id: int | None = None, min_score: int = 0,
@@ -7185,13 +7253,23 @@ def upsert_safety_status(airport: str, control: str | None,
     """Upsert the latest SafetyLogicHoldBar status for an airport. Returns
     the PREVIOUS status_bitmask value (None if this airport has never been
     seen before), so the caller can detect a change without a separate
-    SELECT."""
+    SELECT.
+
+    2026-10-19 (lean-out L2, F9): the previous-row SELECT already happened, so
+    an unchanged status (bitmask and control) whose last_seen is younger than
+    HEARTBEAT_TOUCH_S is not rewritten (~42 rows re-sent ~100x/h each before).
+    last_seen is ISO "%Y-%m-%dT%H:%M:%SZ" (smes_parser._now_iso), so the plain
+    string comparison is exact. Reader: integrity check (1800 s)."""
     with conn() as c:
         row = c.execute(
-            "SELECT status_bitmask FROM stdds_safety_status WHERE airport=?",
+            "SELECT status_bitmask, control, last_seen FROM stdds_safety_status WHERE airport=?",
             (airport,)
         ).fetchone()
         previous = row["status_bitmask"] if row else None
+        if (row is not None and row["status_bitmask"] == status_bitmask
+                and row["control"] == control and row["last_seen"]
+                and row["last_seen"] >= _heartbeat_cutoff_iso()):
+            return previous      # unchanged and touched within HEARTBEAT_TOUCH_S
         c.execute("""
             INSERT INTO stdds_safety_status (airport, control, status_bitmask, last_seen)
             VALUES (?, ?, ?, ?)

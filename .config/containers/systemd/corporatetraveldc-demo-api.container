@@ -30,7 +30,7 @@
 
 [Unit]
 Description=Corporate Travel DC -- demo playback API (port 8004, read-only over sovereign demo-source)
-After=network-online.target corporatetraveldc-demo.service
+After=network-online.target corporatetraveldc-demo.service corporatetraveldc-pgsql-demo.service
 Wants=corporatetraveldc-demo.service
 
 [Container]
@@ -59,13 +59,36 @@ Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-sta
 # are a separate operator decision (docs/DEMO_DATA_ISOLATION_PLAN_
 # 2026-08-13.md, status note).
 Environment=DISPATCH_DEMO_ISOLATION=1
-EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-10-19 (demo/production database split, relay 2 -- the flip). This
+# container is a DEMO-ROLE process: common.db.conn() and demo.profiles go to
+# the demo instance's own pool (db_backend.demo_pg_conn), pg_conn() refuses
+# outright. The role is identity, so it lives here (signed), not in an env
+# file. The demo instance is reached over its OWN socket volume, mounted at
+# DEMO_PG_HOST (config/demo.env); never corporatetraveldc-pgsql-sock
+# (tests/scripts/test_demo_isolation.py, relay-lint demo_quadlet_isolation).
+Environment=DISPATCH_ROLE=demo
+Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo
+# ~~EnvironmentFile=/etc/corporatetraveldc/dispatch.env~~ (removed 2026-10-19,
+# relay 2: it carried the production DISPATCH_PG_DB/USER pair and every
+# platform setting into a public-facing container; the demo needs none of
+# them). Its replacement is /etc/corporatetraveldc/demo.env, loaded LAST
+# below so its DISPATCH_DB_BACKEND=postgres wins over demo-secrets.env's old
+# sqlite pin (podman applies --env-file in order, later files win).
 # 2026-08-26 fix (Opus blind review C-22 follow-up): DEMO_SESSION_SECRET
 # lives here, scoped ONLY to the two public-demo containers -- never load
 # the full dispatch-secrets.env into a public-facing container. See
 # demo-secrets.env's own header comment for the convention this
 # establishes for future role-specific demos (EA, travel-agent, etc.).
 EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
+# demo.env (example: config/demo.env.example; 0600, service user) -- the demo
+# identity (DISPATCH_DB_BACKEND, DEMO_PG_*, DEMO_PG_PASSWORD for the `demo`
+# role only) and the ROLLBACK SWITCH: DEMO_SOURCE (postgres | sqlite) and
+# DISPATCH_DB_BACKEND are deliberately NOT Environment= lines here, because
+# podman's -e beats --env-file and the switch must flip without a signed
+# quadlet edit: `scripts/demo-env.py source sqlite` + restart puts playback
+# back on the sovereign file mounted above and profiles back on
+# demo_access.db (both mounts stay until relay 4 retires the file).
+EnvironmentFile=/etc/corporatetraveldc/demo.env
 AutoUpdate=local
 
 [Service]

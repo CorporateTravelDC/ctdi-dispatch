@@ -32,12 +32,37 @@ set -uo pipefail
 # sets NAME=(-H @/dev/fd/N) for ONE curl call (re-run it before each call).
 authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}<&-; exec {_AUTHHDR_FD}<<<"Authorization: Bearer $2"; _ah=(-H "@/dev/fd/${_AUTHHDR_FD}"); }
 
-STATE_DIR="/var/lib/corporatetraveldc/swim-session-health"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/journal-cursor.sh
+. "${REPO_ROOT}/scripts/lib/journal-cursor.sh"
+
+# *_DIR / *_FILE overrides are test hooks; the timer uses the defaults.
+STATE_DIR="${SWIM_HEALTH_STATE_DIR:-/var/lib/corporatetraveldc/swim-session-health}"
 STATE_FILE="${STATE_DIR}/state.json"
 LOG_FILE="${STATE_DIR}/watch.log"
-LOCK_FILE="/run/user/$(id -u)/swim-session-health-watch.lock"
-ENV_FILE="/etc/corporatetraveldc/dispatch.env"
-SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
+CURSOR_FILE="${STATE_DIR}/journal.cursor"
+LOCK_FILE="${SWIM_HEALTH_LOCK_FILE:-/run/user/$(id -u)/swim-session-health-watch.lock}"
+ENV_FILE="${SWIM_HEALTH_ENV_FILE:-/etc/corporatetraveldc/dispatch.env}"
+SECRETS_FILE="${SWIM_HEALTH_SECRETS_FILE:-/etc/corporatetraveldc/dispatch-secrets.env}"
+
+# Lean-out L2 / F4 (2026-10-19): the units are named EXACTLY (the old
+# 'corporatetraveldc-ingest-*' glob made journalctl map 2.5-4.5 GB of journal
+# per run, ~1 TB/day) and each run reads only entries after the saved cursor
+# (scripts/lib/journal-cursor.sh). Same set as the glob matched: every
+# corporatetraveldc-ingest-*.container quadlet (a test pins the two together).
+INGEST_UNITS=(
+    corporatetraveldc-ingest-core.service
+    corporatetraveldc-ingest-fdps.service
+    corporatetraveldc-ingest-stdds.service
+    corporatetraveldc-ingest-tfms.service
+    corporatetraveldc-ingest-tbfm.service
+    corporatetraveldc-ingest-itws.service
+    corporatetraveldc-ingest-notam.service
+    corporatetraveldc-ingest-feed-watch.service
+)
+# A cursor older than this is not trusted (job off for a while): fall back to
+# "since the last run", exactly the pre-cursor behaviour.
+CURSOR_MAX_AGE_SECS=1800
 
 # Thresholds -- tuned against today's live incident: degraded state ran
 # ~1450-1690 keep-alive failures per VPN in 6h (~4-4.7/min PER VPN,
@@ -137,10 +162,14 @@ fi
 since_iso=$(date -d "@${prior_ts}" --iso-8601=seconds)
 
 fail_tmpf=$(mktemp "${STATE_DIR}/.fails.XXXXXX")
-journalctl --user -u 'corporatetraveldc-ingest-*' --no-pager -S "${since_iso}" 2>/dev/null \
-    | grep "KEEP_ALIVE_FAILURE" > "${fail_tmpf}" 2>/dev/null || true
-
-trap 'rm -f "${LOCK_FILE}" "${fail_tmpf}"' EXIT INT TERM
+jrnl_tmpf=$(mktemp "${STATE_DIR}/.jrnl.XXXXXX")
+trap 'rm -f "${LOCK_FILE}" "${fail_tmpf}" "${jrnl_tmpf}"' EXIT INT TERM
+unit_args=()
+for u in "${INGEST_UNITS[@]}"; do unit_args+=(-u "$u"); done
+jc_read "${jrnl_tmpf}" "${CURSOR_FILE}" "${since_iso}" "${CURSOR_MAX_AGE_SECS}" \
+    --user "${unit_args[@]}" -o cat || true
+grep -a "KEEP_ALIVE_FAILURE" "${jrnl_tmpf}" > "${fail_tmpf}" 2>/dev/null || true
+: > "${jrnl_tmpf}"
 
 alert_output=$(python3 - "${STATE_FILE}" "${now_ts}" "${FAIL_THRESHOLD}" "${SUSTAINED_SECS}" \
     "${ALERT_COOLDOWN_SECS}" "${fail_tmpf}" <<'PYEOF'

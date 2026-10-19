@@ -53,6 +53,7 @@ from common.aam_watch import get_aam_watch_summary
 from common.disruption_weather_watch import get_disruption_weather_capsule
 from common.llm import generate as llm_generate, trim_to_token_budget
 from common.sr1_log import log_usage
+from common.input_gate import InputGate, make_key, mask_stamps
 
 log = logging.getLogger(__name__)
 
@@ -643,6 +644,15 @@ def _cps_section() -> str:
     )
 
 
+def _cps_key() -> str:
+    """CPS stable fields for the input gate: score and label, never its narrative."""
+    try:
+        cps = db.get_latest_cps() or {}
+    except Exception:
+        return "?"
+    return f"{cps.get('score', '?')}/{cps.get('label', '?')}"
+
+
 def _route_section() -> str:
     route = db.get_latest_route_narrative()
     if not route or not route.get("route_narrative"):
@@ -913,9 +923,15 @@ def _call_ollama(prompt_content: str) -> tuple[str, str] | None:
     return full_text, concise[:200]
 
 
-def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> tuple[str, str]:
+def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None,
+                        key_out: "dict | None" = None) -> tuple[str, str]:
     """
     Returns (prompt_content, raw_appendix).
+    key_out (2026-10-19, lean-out L2 F7): when given, key_out["key"] is set to
+    the input-gate key -- stable DATA fields only (see common/input_gate.py):
+    no pull stamp, no CPS/route narrative text, METAR issue groups, NAS
+    "as of" stamps and Amtrak cache ages masked; geometry left out (it is
+    appended to every brief deterministically anyway).
     prompt_content — fed to Claude for narrative generation.
     raw_appendix   — METAR + NAS raw data block, appended to BOTH the AI
                      narrative and the fallback brief for hybrid layout.
@@ -934,16 +950,19 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     raw_metar  = trim_to_token_budget(_metar_section(), 150)
     raw_nas    = trim_to_token_budget(_nas_section(), 200)
     raw_atcscc = trim_to_token_budget(_atcscc_forecast_section(prefetched_atcscc), 200)
+    tfr_text   = _tfr_section()
+    nws_text   = trim_to_token_budget(_nws_alerts_section(), 100)
+    amtrak_text = trim_to_token_budget(_amtrak_section(), 90)
 
     parts = [
         f"=== OPS BRIEF DATA PULL {now_utc} ===",
         f"CPS:\n{trim_to_token_budget(_cps_section(), 50)}",
-        f"TFRs:\n{_tfr_section()}",
+        f"TFRs:\n{tfr_text}",
         f"METARs (hub airports):\n{raw_metar}",
         f"FAA NAS PROGRAMS:\n{raw_nas}",
         f"ATCSCC OPERATIONS PLAN FORECAST:\n{raw_atcscc}",
-        f"NWS ALERTS (DC/Northeast):\n{trim_to_token_budget(_nws_alerts_section(), 100)}",
-        f"AMTRAK NEC:\n{trim_to_token_budget(_amtrak_section(), 90)}",
+        f"NWS ALERTS (DC/Northeast):\n{nws_text}",
+        f"AMTRAK NEC:\n{amtrak_text}",
     ]
     if route:
         parts.append(f"ROUTE NARRATIVE (local DB):\n{route}")
@@ -956,6 +975,17 @@ def build_brief_content(prefetched_atcscc: "tuple[str, dict] | None" = None) -> 
     # get_aam_watch_summary docstring) -- the full weekly report is too
     # long to add to an already token-constrained hourly prompt.
     aam_summary = get_aam_watch_summary("ops")
+    if key_out is not None:
+        key_out["key"] = make_key({
+            "cps": _cps_key(),
+            "tfr": tfr_text,
+            "metar": mask_stamps(raw_metar),
+            "nas": mask_stamps(raw_nas),
+            "atcscc": raw_atcscc,
+            "nws": nws_text,
+            "amtrak": mask_stamps(amtrak_text),
+            "aam": aam_summary or "",
+        })
     if aam_summary:
         parts.append(
             "ADVANCED AIR MOBILITY (this week's framing):\n"
@@ -1099,13 +1129,33 @@ def main(force: bool = False, run_trend: bool = False, deferred_rerun: bool = Fa
                         log_usage(SKILL_NAME, MODEL, 0, 0, status, "new")
                         return
 
-        content, raw_appendix = build_brief_content(prefetched_atcscc=atcscc_prefetch)
+        key_out: dict = {}
+        content, raw_appendix = build_brief_content(prefetched_atcscc=atcscc_prefetch,
+                                                    key_out=key_out)
 
-        # Try Ollama first; fall back to deterministic if unavailable / not configured.
-        ollama_result = _call_ollama(content)
-        if ollama_result:
+        # 2026-10-19 (lean-out L2, F7): input gate -- same data as the last
+        # model run (stable fields only, never timestamps) -> reuse that
+        # narrative instead of holding the model lane for 15-25 min.
+        gate = InputGate("ops-brief")
+        reused = None if force else gate.reusable(key_out.get("key"))
+        ollama_result = None
+        if reused:
+            now_label = datetime.now(timezone.utc).strftime("%b %d %H:%MZ")
+            full_text = (f"OPS BRIEF {now_label} (Ollama/{OLLAMA_MODEL}, input unchanged)\n"
+                         f"{gate.no_change_note(reused)}\n\n{reused['narrative']}")
+            concise = reused.get("concise") or ""
+            status = "ok"
+            log.info("%s: brief generated (Ollama/%s, input unchanged -- model call skipped)",
+                     SKILL_NAME, OLLAMA_MODEL)
+        else:
+            # Try Ollama first; fall back to deterministic if unavailable / not configured.
+            ollama_result = _call_ollama(content)
+        if reused:
+            pass
+        elif ollama_result:
             full_text, concise = ollama_result
             status = "ok"
+            gate.record(key_out.get("key"), full_text.split("\n\n", 1)[-1], concise)
             log.info("%s: brief generated (Ollama/%s)", SKILL_NAME, OLLAMA_MODEL)
         else:
             # 2026-08-06: narrow safety net around the fallback ITSELF --

@@ -609,16 +609,34 @@ def mark_pushed(entry_id: str, key: fi.FlightInstanceKey | str, side: str, field
     _push_dedup().record(dedup_slot(entry_id, side, field), push_key(str(key), side, field, value, status))
 
 
-def push_text(ident: str, side: str, field: str, value: str, status: str, airport: str | None,
+def push_text(ident: str | None, side: str, field: str, value: str, status: str, airport: str | None,
               source: str | None, terminal: str | None = None) -> str:
     """No status word from any source, no time: the value, our resolution status
-    and which source tier supplied it."""
+    and which source tier supplied it.
+
+    2026-10-19 (operator, Gate-1b): ident=None leaves the flight out -- the
+    watchlist push already puts the watch's identifier in the title ("FLT X: ")
+    and both bodies, so the summary repeated it ("FLT UAL1627: UAL1627 arrival
+    gate ..."). The word "provisional" is unchanged (operator has not decided)."""
     what = {"gate": "gate", "baggage": "baggage claim", "terminal": "terminal"}[field]
     where = f" at {airport}" if airport else ""
     term = f" (terminal {terminal})" if terminal and field == "gate" else ""
     label = SOURCE_LABELS.get(source or "", source or "?")
     qual = "" if status == "observed" else " (provisional)"
-    return f"{ident} {side} {what} {value}{term}{where}{qual} [{label}]"
+    who = f"{ident} " if ident else ""
+    return f"{who}{side} {what} {value}{term}{where}{qual} [{label}]"
+
+
+def _shown_ident(ident: str | None, entry: dict) -> str | None:
+    """The flight to name in the summary: None when it is the watch's own
+    identifier (same string, or the same flight in IATA/ICAO form), which the
+    push title and bodies already carry."""
+    from common.airline_codes import same_flight
+    watch = (entry.get("identifier") or "").strip().upper()
+    mine = (ident or "").strip().upper()
+    if not mine or mine == watch or same_flight(mine, watch):
+        return None
+    return ident
 
 
 def push_watch_changes(entry: dict, ident: str, key: fi.FlightInstanceKey,
@@ -645,7 +663,8 @@ def push_watch_changes(entry: dict, ident: str, key: fi.FlightInstanceKey,
             continue
         airport = key.destination if side == "arrival" else key.origin
         terminal = view.get("arrival_terminal", {}).get("value") if side == "arrival" else None
-        summary = push_text(ident, side, field, f["value"], f["status"], airport, f["source_id"], terminal)
+        summary = push_text(_shown_ident(ident, entry), side, field, f["value"], f["status"], airport,
+                            f["source_id"], terminal)
         from shared.watchlist import watchlist_event_hit
         watchlist_event_hit(entry["id"], summary,
                             {"watchlist_trigger": "gate_assignment", "slot": f"{side}:{field}",

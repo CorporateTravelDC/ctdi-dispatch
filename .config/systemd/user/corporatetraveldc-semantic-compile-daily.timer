@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the second-brain semantic-layer compile every 6h, fixed grid (00/06/12/18:02 ET)
+Description=Run the second-brain semantic-layer compile 4x daily, fixed grid (02:52/06:02/12:02/18:02 ET)
 # 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
 # that makes systemd start the service the instant this TIMER starts
 # (i.e. every boot, at timers.target), independent of OnCalendar/
@@ -26,7 +26,17 @@ Description=Run the second-brain semantic-layer compile every 6h, fixed grid (00
 # 2026-09-03 comment) -- systemd coalesces a .path-triggered start that
 # lands close to a .timer-triggered one into a single run, so no
 # double-fire risk from having both armed.
-OnCalendar=*-*-* 00,06,12,18:02:00 America/New_York
+#
+# 2026-10-19 (lean-out L2 / D6, operator-approved stagger map): the 00:02 ET
+# run (04:02Z under EDT) failed 6 of 14 times on lock/statement timeouts: it
+# lands inside the 03:40Z backup (+10 min random, runs ~1.5-2 h), beside the
+# 00:08 ET knowledge-graph compile, the 00:12 ET entity digest and the 00:05 ET
+# data-usage snapshot. It moves to 02:52 ET (06:52Z EDT / 07:52Z EST): after
+# the backup, after the 06:20Z (+10 min) airline-time-fidelity collector,
+# inside the 03-10Z quiet hours (D7), still the first compile of the new day.
+# The 06/12/18:02 ET runs are unchanged. Was: 00,06,12,18:02 ET.
+OnCalendar=*-*-* 02:52:00 America/New_York
+OnCalendar=*-*-* 06,12,18:02:00 America/New_York
 # Still true: a missed fire (box down at the grid mark) now only costs up
 # to 6h instead of 24h, but Persistent=true costs nothing to keep.
 Persistent=true
