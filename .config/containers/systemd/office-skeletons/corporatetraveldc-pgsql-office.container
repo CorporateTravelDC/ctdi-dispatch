@@ -1,0 +1,75 @@
+# corporatetraveldc-pgsql-office -- PostgreSQL 16 for the OFFICE SKELETONS
+# (Firefly III, Paperless-ngx, Vikunja). TEMPLATE, disabled until after the
+# feature freeze (operator 2026-10-20). docs/deployment-profiles/office-skeletons/
+# and docs/POSTGRES_MIGRATION.md (third instance).
+#
+# Why a third server, not more databases on corporatetraveldc-pgsql: the same
+# rule as the demo split (corporatetraveldc-pgsql-demo.container header) --
+# logical AND physical separation. Pack gate 7 says financial records are
+# isolated; the production instance is the SWIM write path; a runaway query in
+# an office app must never reach its buffers, autovacuum or max_connections.
+# Own data volume, own socket volume, own roles (office_owner, firefly,
+# paperless, vikunja) and databases; none exists on the production or demo
+# instance, and config/pg_hba.conf rejects them there by name.
+#
+# Disabled means: no [Install] section at all, not in scripts/stack-boot-ctl.sh
+# ORDER, not in scripts/serialized-rollout.sh, no timer, installed (by the
+# relay) only under ~/.config/containers/systemd/office-skeletons/. Started by
+# hand once, by the relay, to create the roles and databases
+# (src/common/pg_schema_office/0001_office_roles.sql), then stopped.
+#
+# Image: the SAME line as the production and demo instances on purpose
+# (scripts/safe-pg-image-update.sh is the only sanctioned postgres image
+# change path). No AutoUpdate: a dormant skeleton never changes underneath.
+#
+# Networking: office-db.network only (Internal=true): no PublishPort, no host
+# TCP, no egress. The apps connect by container name over that network
+# (config/pg_hba-office.conf: each role to its own database, `samenet`, scram);
+# host-side tools use `podman exec` on the socket.
+#
+# Memory: 384 MB cap; shared_buffers 64 MB, max_connections 40
+# (config/postgresql-office.conf).
+[Unit]
+Description=corporatetraveldc -- PostgreSQL 16 (office skeletons instance; template, disabled)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=corporatetraveldc-pgsql-office
+Network=office-db.network
+# Non-secret identity. The password lives ONLY in
+# /etc/corporatetraveldc/pgsql-office-secrets.env (example:
+# config/pgsql-office-secrets.env.example) -- a DEDICATED file: never
+# pgsql-secrets.env, pgsql-demo-secrets.env, dispatch.env or
+# dispatch-secrets.env. NEVER quote values (scripts/check-env-quoting.sh).
+Environment=POSTGRES_DB=office
+Environment=POSTGRES_USER=office_owner
+Environment=PGDATA=/var/lib/postgresql/data/pgdata
+Environment=TZ=UTC
+Environment=CORPORATETRAVELDC_UNIT=%N
+EnvironmentFile=/etc/corporatetraveldc/pgsql-office-secrets.env
+Volume=corporatetraveldc-pgsql-office-data:/var/lib/postgresql/data
+# Own unix socket directory; mounted by no other unit.
+Volume=corporatetraveldc-pgsql-office-sock:/var/run/postgresql
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/postgresql-office.conf:/etc/postgresql/postgresql.conf:ro,Z
+Volume=/opt/corporatetraveldc/private/ctdi-dispatch-internal/config/pg_hba-office.conf:/etc/postgresql/pg_hba.conf:ro,Z
+Exec=postgres -c config_file=/etc/postgresql/postgresql.conf
+ShmSize=96m
+HealthCmd=pg_isready -U office_owner -d office
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+Memory=384m
+PodmanArgs=--memory-swap=768m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+MemoryLow=64M
+CPUWeight=50
+CPUQuota=100%
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=90

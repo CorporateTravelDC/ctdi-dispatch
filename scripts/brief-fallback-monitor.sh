@@ -77,11 +77,31 @@ classify_lines() {  # stdin: journal lines (short format) -> "Mon DD HH:MM:SS OU
     | awk 'NF>=4 && ($4=="FALLBACK"||$4=="LLM") {print $1" "$2" "$3" "$4}'
 }
 HISTORY_MAX_AGE=172800   # the old "--since 2 days ago": outcomes older than this leave the window
+
+# 2026-10-20: lane accounting. src/common/brief_lane.py prints one
+# "brief-lane: unit=X lane=long|hot|none wait=Ns" line per run. lane=hot = promoted to the
+# second llama slot on long-runner contention; lane=none = no lane within the budget, the
+# brief was SKIPPED (exit 75). Skips write no "brief generated" line, so before this the
+# hourly 14:15-19:15Z ops-brief skips of 2026-10-20 never reached this monitor at all.
+record_lanes() {  # $1 unit, $2 new journal chunk, $3 now -> appends to ${STATE_DIR}/<unit>.lanes
+  local lanes="${STATE_DIR}/${1}.lanes"
+  touch "$lanes"
+  { cat "$lanes"
+    grep -aE 'brief-lane: unit=[^ ]+ lane=(long|hot|none) ' "$2" \
+      | sed -E "s/^([A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9:]{8}).* lane=(long|hot|none) .*/${3} \1 \2/"
+  } | awk -v cut=$(( $3 - HISTORY_MAX_AGE )) 'NF==5 && $1>=cut && !seen[$2" "$3" "$4]++' \
+    | tail -n 200 > "${lanes}.tmp" && mv -f "${lanes}.tmp" "$lanes"
+}
+lane_counts() {  # $1 unit -> "long=a hot=b skipped=c" over the last 24 h
+  awk -v cut=$(( $(date +%s) - 86400 )) '$1>=cut {n[$5]++} END {printf "long=%d hot=%d skipped=%d", n["long"], n["hot"], n["none"]}' \
+    "${STATE_DIR}/${1}.lanes" 2>/dev/null || echo "long=0 hot=0 skipped=0"
+}
 outcomes_for() {  # history line: "<epoch read> Mon DD HH:MM:SS OUTCOME"
   local unit="$1" hist="${STATE_DIR}/${1}.outcomes" cur="${STATE_DIR}/${1}.cursor" new now
   now=$(date +%s)
   new=$(mktemp "${STATE_DIR}/.new.XXXXXX")
   jc_read "$new" "$cur" "2 days ago" 86400 --user -u "$unit" || true
+  record_lanes "$unit" "$new" "$now"
   touch "$hist"
   { cat "$hist"; classify_lines < "$new" | sed "s/^/${now} /"; } \
     | awk -v cut=$((now - HISTORY_MAX_AGE)) '$1>=cut && !seen[$2" "$3" "$4]++' \
@@ -111,12 +131,13 @@ for unit in "${UNITS[@]}"; do
   if [ "$n" -eq 0 ]; then summary+="${unit}: no completed runs in window; "; continue; fi
   fb=0; for x in "${o[@]}"; do [ "$x" = "FALLBACK" ] && fb=$((fb+1)); done
   tr="$(trend_of "${o[@]}")"
-  summary+="${unit}: last ${n}=[${o[*]}] fb=${fb}/${n} trend=${tr}; "
+  lc="$(lane_counts "$unit")"
+  summary+="${unit}: last ${n}=[${o[*]}] fb=${fb}/${n} trend=${tr} lanes24h ${lc}; "
   if [ "${o[$((n-1))]}" = "FALLBACK" ]; then
     fell+=("$short")
-    lines+="${short}: fell back on its latest run; ${fb} of last ${n} fell back; trend ${tr}."$'\n'
+    lines+="${short}: fell back on its latest run; ${fb} of last ${n} fell back; trend ${tr}; lanes 24h ${lc}."$'\n'
   else
-    lines+="${short}: latest run used the model; ${fb} of last ${n} fell back; trend ${tr}."$'\n'
+    lines+="${short}: latest run used the model; ${fb} of last ${n} fell back; trend ${tr}; lanes 24h ${lc}."$'\n'
   fi
 done
 if [ "${#fell[@]}" -gt 0 ]; then

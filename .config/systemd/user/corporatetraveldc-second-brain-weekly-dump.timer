@@ -2,7 +2,9 @@
 Description=Weekly Second Brain consolidation dump, every Sunday early morning (ahead of Monday's docs-drift-weekly)
 
 [Timer]
-OnCalendar=Sun *-*-* 02:00:00
+# America/New_York, inside the 23:00-05:00 ET maintenance window the service's ExecCondition enforces.
+# The bare 02:00 was UTC (22:00 ET): every run since 2026-09-21 was skipped as exec-condition, silently.
+OnCalendar=Sun *-*-* 02:00:00 America/New_York
 Persistent=true
 
 [Install]

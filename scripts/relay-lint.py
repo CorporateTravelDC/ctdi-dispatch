@@ -56,6 +56,15 @@ def early_closing_pipe(n, line, code, ctx):
 
 
 @rule
+def sqlite_double_quoted_literal(n, line, code, ctx):
+    # 2026-10-20: the Pi-hole read relay ran `pihole-FTL sqlite3 ... "... strftime(\\"%s\\",\\"now\\") ..."`:
+    # SQLite reads a double-quoted token as a COLUMN name ("no such column: %s"), so two counts failed.
+    if re.search(r"\bsqlite3\b", line) and re.search(r'\\"[^"\\]*\\"', line):
+        return ("double-quoted text inside SQL passed to sqlite3 (SQLite reads it as a column name)",
+                "use single-quoted SQL string literals, e.g. strftime('%s','now','-1 day'), with the SQL in its own heredoc")
+
+
+@rule
 def stdin_reader(n, line, code, ctx):
     # 2026-10-15: `read -rs -p ... HCURL` inside bash <<'RELAY' read the relay's NEXT LINE as the URL,
     # skipping the validation line; the secret file got relay text and the dead-man check went down.
@@ -193,8 +202,17 @@ def podman_reads_stdin(n, line, code, ctx):
 
 # 2026-10-18: pg-maintenance.sh's CONCURRENTLY builds read whole tables (~5 GB for flight_events);
 # its read-only `status` is not heavy.
+# 2026-10-20 (cleanup sweep): the transcript leak scan (scan | redact reads every transcript on the
+# box), sign-manifest / verify-manifest (hash the whole tree), scrub-public-tree (rewrites and
+# re-verifies the whole tree), render-glossary / render-onboarding (render every doc / pamphlet) and
+# demo-sqlite-retire-check (hashes the SQLite files) are heavy too.
+# 2026-10-20 (phase D): a gate backfill run (gate-backfill-tdes / -airframes) is heavy; its
+# --dry-run / --g-prefix-report is not.
 HEAVY = re.compile(r"\bpytest\b|serialized-rollout\.sh|scrub-demo-source\.py\s[^\n]*--(backfill|refresh)|\bsystemd-run\b|relay-preflight\.sh"
-                   r"|pg-maintenance\.sh\s+(create-indexes-concurrently|reindex-)")
+                   r"|pg-maintenance\.sh\s+(create-indexes-concurrently|reindex-)"
+                   r"|transcript_leak_scan\.py\s+(scan|redact)\b|sign-manifest\.sh|verify-manifest\.sh|scrub-public-tree\.py"
+                   r"|render-glossary\.py|render-onboarding\.sh|demo-sqlite-retire-check\.py"
+                   r"|gate-backfill-tdes\.py(?![^\n]*--(dry-run|g-prefix-report))|gate-backfill-airframes\.py(?![^\n]*--dry-run)")
 
 
 def heavy_without_load_wait(lines: list[str]) -> list[tuple[int, str, str]]:

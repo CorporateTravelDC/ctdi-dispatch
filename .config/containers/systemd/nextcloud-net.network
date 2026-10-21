@@ -1,0 +1,9 @@
+# ~/.config/containers/systemd/nextcloud-net.network
+#
+# Private bridge network for the Nextcloud app + db pair -- same pattern
+# as acars-net.network. Only nextcloud-app needs a published host port;
+# nextcloud-db is reachable from nextcloud-app by container name over
+# this network's internal DNS, never exposed to the host.
+
+[Network]
+NetworkName=nextcloud-net

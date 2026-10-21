@@ -10,7 +10,7 @@
 **Status: design-stage contracts, NOT directly executable CTDI deployment configuration.**
 Adapters, migrations, policies, and runtime tests are required before deployment.
 
-Profiles: chauffeur-regulated, executive-assistant-chief-of-staff, content-creator,
+Profiles: chauffeur-regulated, ~~executive-assistant-chief-of-staff~~ executive-assistant, chief-of-staff (split 2026-10-20, operator: two distinct executive-suite positions; see [`office-skeletons/`](office-skeletons/README.md)), content-creator,
 independent-journalist, cfo, cmo, cpa, gig-worker.
 
 ## Architecture
@@ -35,6 +35,6 @@ independent-journalist, cfo, cmo, cpa, gig-worker.
 11. Never claim compliance certification from a template; obtain sector-specific review.
 12. Pilot with a separate organization and credentials before production promotion.
 
-`python3 validate_profiles.py` checks structure and security invariants (11 profiles on 2026-10-15: the
-nine in `profiles/`, the bundled reference profile and the private live profile).
+`python3 validate_profiles.py` checks structure and security invariants (~~11 profiles on 2026-10-15: the
+nine in `profiles/`~~ 12 profiles on 2026-10-20: the ten in `profiles/`, the bundled reference profile and the private live profile).
 These example profiles contain placeholders and must not be deployed unchanged.

@@ -29,7 +29,7 @@ operating carrier (ICAO) + flight number + origin + destination + scheduled date
 |---|---|---|
 | `flight_ooooi_times` (TFMS) | scheduled departure/arrival (`original_*`), airline OOOI times, status | Persisted nationally since 2026-09-22. This is the source that carries the date. |
 | `flight_events` (FDPS) | hex + registration (from the row's own `<flight>` element), runway ETA, status, filed departure time | DC-area only. ~~`departure_time` is written as NULL today, so an FDPS-only instance usually has no date.~~ (corrected 2026-10-15: since 1491bf5a FH messages store the proposed runway departure time, first filing wins, so FDPS-only instances have a date; see Done 2026-10-14. The docstring of `instance_from_flight_event` still says NULL.) |
-| `codeshare_map` | marketing -> operating, per route | |
+| `codeshare_map` | marketing -> operating, per route; since 2026-10-20 also public number -> ATC callsign (`relation`) | (2026-10-20, pg_schema/0082) `relation` = `codeshare` (marketing -> operating flight, as before) or `atc_callsign` (public number -> the alphanumeric callsign it is filed under: EK231 = UAE3MX, LH414 = DLH3Y, seeded from the IAD FIDS 2026-10-19); `season`, `retired_at`, `superseded_by`. Readers see current rows only (`retired_at IS NULL`); a relink retires the old row and keeps it. |
 | `tdes_departure_events` (STDDS TDES) | departure clearance at DCA/IAD/BWI with `sfdps_gufi` | No tail of its own; links to the FDPS plan (`tdes_clearance_plan`). |
 | FAA / OpenSky registries | tail <-> hex | `registration_for_hex`, `hex_for_registration` |
 
@@ -37,13 +37,21 @@ operating carrier (ICAO) + flight number + origin + destination + scheduled date
 
 `instances_for_hex(hex)` returns every FDPS filing whose own `<flight>` element carries the given hex. `raw_json` holds batches, so a `LIKE` match is only a prefilter and each hit is re-parsed. ~~This function runs on a tail-change event, never once per tick.~~ (corrected 2026-10-15: the scan takes about 20 s live. The FDPS repoint still calls it once per tail-change event, but the inbound tracker and the TDES tail check call it periodically, so those go through `poller.main._hex_instances`, a 10-minute per-hex cache (`HEX_INSTANCES_TTL_S = 600`), next relay.)
 
+## Lookaside learning (2026-10-20, next relay)
+
+`common/callsign_lookaside.py` keeps the `atc_callsign` links current. Nothing it stores is a FIDS time, status or tail.
+
+- **FIDS leg match** (`learn_from_fids`, from the poller's `_check_flight_fids` after `airport_fids.match_leg`). When the watch already resolves to a SWIM leg and the FIDS row matched inside that leg's window, the public number is linked to the leg's callsign (`fids_leg_match`; a `codeshare` row when the carrier differs). When nothing links yet (at most every 6 h per watch side): skipped if the number is filed under its own ICAO form on the route; else each of the carrier's SWIM legs on the route in the last 36 h (minus every number the board shows as its own flight) is tried with its own window; exactly one leg picking the row links it (`fids_route_unique` when it is the only such leg, `fids_leg_match` otherwise); two or more = ambiguous, nothing (AF50/AF52, QR707/QR709). LADD-listed identifiers are never linked (fail closed).
+- **Route continuity** (`relink_by_route_continuity`, daily from the poller `flight-cleanup` skill). A linked callsign absent on its route on each of the last 2 UTC days, with exactly one same-carrier callsign that is new to the route (not seen in the 14-day baseline) flying it inside +/-30 min of the old callsign's typical time (median FDPS estimated arrival) on both days: the old row is retired with `superseded_by`, the new one inserted (`route_continuity`, lower confidence), and a bellwether watch gets one p3 `atc_callsign_relink` push on `bellwether-alerts`. If the carrier went back to filing the public number itself, the link is just retired.
+- The existing `scripts/seed-dc-codeshare.py` FIDS codeshare pass already maps FIDS rows that share one leg (codeshares) onto the primary flight's current operating callsign, `atc_callsign` links included.
+
 ## Rules
 
 ### 1. Watch matching (TFMS, TBFM, FDPS, TFMS FADT; SMES in its own form below): wired
 
 `match_watch_entry(entries, identifier, origin=, destination=, hex_id=, sched_dep=)` returns the first watch that meets both conditions:
 
-- **It answers to the identifier.** The match can be exact, by ICAO normalization (`AA<n>` = `AAL<n>`), through a route-filtered `codeshare_map` operating callsign, or by hex.
+- **It answers to the identifier.** The match can be exact, by ICAO normalization (`AA<n>` = `AAL<n>`), through a route-filtered `codeshare_map` operating callsign, or by hex. (2026-10-20) Also through a current route-filtered `atc_callsign` link (EK231 answers to UAE3MX; `parse_flight_ident` now reads the alphanumeric ATC form as the FDPS split, UAE / 3MX). A match through the lookaside (`codeshare` or `atc_callsign`) must be **proven** on the watch's route: at least one message airport agrees with the watch (`lookaside_route_unproven`; SMES: the event's side airport), so a recycled alphanumeric or a message with no airports never advances the watch. Tests: `tests/ingest/test_watch_matcher_atc_callsign.py`.
 - **`leg_rejection` raises no objection:**
   - `origin_mismatch` / `cross_direction`: the message's origin positively disagrees with the watch's origin.
   - `other_time_of_day`: both scheduled departures are known and are more than 3 h apart (`WATCH_SCHED_TOLERANCE_H`).

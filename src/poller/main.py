@@ -1956,9 +1956,17 @@ def _check_flight_aeroapi_gate(entry: dict, ident: str, key) -> None:
     """AeroAPI, fallback only (common.gate_aeroapi): no higher source has the
     arrival gate (or a non-DC baggage claim), at most 2 calls per leg (~45 min
     before the ETA, after ON), daily cap, every call ledgered."""
-    from common import gate_aeroapi, gate_assignments as ga
+    from common import gate_aeroapi, gate_assignments as ga, watch_eta
     inst = ga.leg_instance(key)
-    eta = (inst.best_arr if inst else None) or _ep_or_none(entry.get("scheduled_arrival"))
+    # 2026-10-20: the watch ETA (SWIM only, TBFM > TFMS > FDPS) times the pre-ETA
+    # call; a meter-fix time counts only through its runway estimate.
+    w = None
+    try:
+        w = watch_eta.resolve(ident, getattr(key, "destination", None) or entry.get("destination"))
+    except Exception as e:
+        log.debug("gates %s: watch eta: %s", ident, e)
+    eta = ((w.runway_epoch if w else None) or (inst.best_arr if inst else None)
+           or _ep_or_none(entry.get("scheduled_arrival")))
     gate_aeroapi.maybe_fetch(key, eta=eta, phase=entry.get("oooi_phase"),
                              phase_at=_ep_or_none(entry.get("oooi_phase_updated_at")))
 
@@ -2004,17 +2012,22 @@ def _check_flight_fids(entry: dict, ident: str, key) -> None:
     if not iata_carrier:
         return
     flight_num = m.group(2)
+    from common import callsign_lookaside as cl
     inst = ga.leg_instance(key)
     for side, airport, other in sides:
-        window = None
-        if inst is not None:
-            if side == "arrival":
-                anchor = inst.sched_arr or inst.est_arr
-                window = ((anchor - 2 * 3600, anchor + 8 * 3600) if anchor else
-                          ((inst.sched_dep, inst.sched_dep + 16 * 3600) if inst.sched_dep else None))
-            elif inst.sched_dep:
-                window = (inst.sched_dep - 2 * 3600, inst.sched_dep + 8 * 3600)
+        # window bounds moved to callsign_lookaside.fids_window (same values) so
+        # the lookaside learner below picks rows by the identical rule.
+        window = cl.fids_window(inst, side)
         row = airport_fids.match_leg(airport, side, iata_carrier, flight_num, other, window)
+        # 2026-10-20 (bellwether batch): learn the public number -> ATC callsign
+        # (or codeshare) link from this match. Callsigns and the route only --
+        # never a FIDS time, status or tail. Failure never affects the gate step.
+        try:
+            cl.learn_from_fids(entry, ident, airport=airport, side=side, iata=iata_carrier,
+                               flight_num=flight_num, other=other, inst=inst, row=row,
+                               sched_date=key.sched_date)
+        except Exception as e:  # noqa: BLE001
+            log.debug("gates %s: lookaside learn: %s", ident, e)
         if row is None:
             continue
         payload_ref = airport_fids.get_payload_hash(airport)
@@ -2515,6 +2528,10 @@ async def main() -> None:
         # 2026-10-18: tfrs.vip_push_reason -- the TFR fetcher stamps it
         # (pg_schema/0081 on Postgres).
         db.init_db_v50()
+        # 2026-10-20: codeshare_map relation/season/retired_at/superseded_by +
+        # the two seeded ATC-callsign links, watchlist_entries.alert_topic (the
+        # file watcher copies it) -- pg_schema/0082 on Postgres.
+        db.init_db_v51()
 
     src_dir = Path(__file__).parent.parent
     trigger_dir = Path(config.trigger_dir())

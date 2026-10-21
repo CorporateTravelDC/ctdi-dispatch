@@ -86,6 +86,13 @@ active; the `corporatetraveldc-ccw-demo-webdev-expiry.timer` last fired
 - Doesn't check for port collisions across existing client-demo
   instances — pick an unused one yourself.
 
+A client preview is a static site and carries no flight data. The dispatch demo is separate: public
+callers only ever reach the demo runner (cleared, sanitized windows), never the live panel, and aircraft
+on the FAA's LADD privacy list get synthetic registrations, 15-minute bucketed times behind a hidden
+rotating per-leg offset, and a dark point at the inner marker / threshold / touchdown -- see
+`docs/dispatch-runner-design.md` "Public = demo, tailnet = live" and `docs/LADD_CUI_HANDLING.md`
+"Demo timing anti-correlation".
+
 ## Using it
 
 ```

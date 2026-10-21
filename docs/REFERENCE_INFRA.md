@@ -130,8 +130,23 @@ long-running and 39 oneshot). Ports below bind to `127.0.0.1` unless noted;
 | `runner` | 127.0.0.1 + tailnet :8001 | Ops dashboard; tailnet-only |
 | `runner-demo` | 127.0.0.1 + tailnet :8005 → 8001 | Public demo runner; `DEMO_MODE` (off by default) enables an app-layer password gate |
 | `demo` | — | Recorder → Postgres `demo_snapshots` every 300 s |
-| `demo-api` | 127.0.0.1 + tailnet :8004 | Playback API over a scrubbed, promoted SQLite copy (§4.3). Added 2026-10-15: it and `runner-demo` also mount the Postgres socket, for the password-gate profiles only. |
+| `demo-api` | 127.0.0.1 + tailnet :8004 | Playback API over ~~a scrubbed, promoted SQLite copy~~ a separate, demo-only Postgres instance that holds scrubbed, promoted data (§4.3; Postgres-only since 2026-10-20, no SQLite rollback). ~~Added 2026-10-15: it and `runner-demo` also mount the Postgres socket, for the password-gate profiles only.~~ (2026-10-16/19: they mount only the demo instance's socket; the password-gate profiles live there too.) |
 | demo portals (added 2026-10-15) | 127.0.0.1 + tailnet, one port each | Two static `nginx` containers that serve password-gated client-preview sites. Not exposed through the tunnel in the reference deployment. |
+
+**Office skeletons (templates, disabled; added 2026-10-20)**
+
+| Service | Port | Role |
+|---|---|---|
+| `pgsql-office` | — (internal network only) | PostgreSQL 16, third instance: one database and role per office service; never production or demo |
+| `valkey-office` | — (internal network only) | Task broker for the document store; persists nothing |
+| `firefly` | tailnet :8101 | Firefly III ledger for the CFO profile |
+| `paperless` | tailnet :8102 | Paperless-ngx document store shared by the EA and CFO profiles |
+| `vikunja` (optional) | tailnet :8103 | Initiative and project API for the Chief of Staff profile |
+
+None has an install section, a boot-order entry, a rollout row or a timer; each has its own secrets file and a
+pinned image, and every one is configured for PostgreSQL explicitly (no SQLite). The Nextcloud apps for the three
+profiles (Calendar, Contacts, Tasks, Deck, Collectives, Tables) are installed disabled. See
+`docs/deployment-profiles/office-skeletons/README.md`.
 
 **SDR / RF (optional, hardware-dependent)**: an ADS-B aggregator
 (`ultrafeeder`: tailnet :8080/:8081, Beast :30005, SBS on localhost :30003),
@@ -142,7 +157,7 @@ decoders (`acarsdec`, `dumphfdl`, AIS, UTM) ship as `*.container.disabled`
 until the hardware exists.
 
 **Collaboration**: Nextcloud app (127.0.0.1:8090) + its own Postgres on a
-dedicated podman network; Open WebUI (:3000) pointed at llama.cpp's
+dedicated podman network (its `.network` Quadlet tracked since 2026-10-20); Open WebUI (:3000) pointed at llama.cpp's
 OpenAI-compatible API.
 
 **Comms / misc**: `ntfy` (:2586); a local IMAP mail bridge (tailnet :1025);
@@ -217,10 +232,12 @@ install root copies → daemon-reload).
 
 Recorder → Postgres `demo_snapshots` (every 300 s). The only bridge to what
 the public demo serves is a scrub-and-promote script
-(`scripts/scrub-demo-source.py`) on its own timer, producing a scrubbed
-SQLite file the playback API reads. The demo is only as fresh as its last
-promote; in the reference deployment that timer is disabled, so the demo
-replays a 2026-08 window.
+(`scripts/scrub-demo-source.py`) on its own timer. ~~producing a scrubbed
+SQLite file the playback API reads~~ 2026-10-20: it writes the scrubbed rows into
+a second, demo-only Postgres instance, and the playback API reads only that
+instance. There is no SQLite source and no SQLite rollback. The demo is only as
+fresh as its last promote. ~~in the reference deployment that timer is disabled,
+so the demo replays a 2026-08 window~~ (2026-10-19: the timer runs nightly).
 
 ### 4.4 Root (system) units
 
@@ -250,7 +267,11 @@ never from the operator's checkout.
   under `src/common/pg_schema/` (~~73~~ 75 at this revision, corrected 2026-10-15). ~~SQLite remains as a
   rollback selector and for the demo playback copy.~~ (2026-10-19: every platform SQLite file was
   destroyed once Postgres served production and the demo; SQLite remains only inside Pi-hole, vnstat
-  and ACARS Hub's own UI store. The code's SQLite backend and twin migrations are still in the tree.)
+  and ACARS Hub's own UI store. ~~The code's SQLite backend and twin migrations are still in the tree.~~
+  2026-10-20: the SQLite backend is refused outside the test suite: `postgres` is the default, and
+  `sqlite` raises unless a test-only flag is set. The SQLite fallbacks (default file path, unused
+  reference-table handle, demo rollback) are removed. The twin migrations remain as test-only code
+  for a later batch; `docs/POSTGRES_MIGRATION.md` §3.7 lists them.)
 - **Second-brain index** lives in the same Postgres since 2026-09-19 (§10).
 - **Backups** (added 2026-10-15): a nightly encrypted, deduplicated Borg
   archive of the databases, platform state and configuration is synced to one
@@ -492,6 +513,8 @@ signature-gated.
 
 The earlier arrangement — `corporatetravel-dispatch-mcp` behind two OpenAPI
 bridge processes — was retired 2026-08-18 and the repo archived.
+(2026-10-20: the two leftover bridge unit files moved out of the active unit
+directory into a dated `retired-20261020/` folder, indexed in `docs/RETIRED.md`.)
 `agentic-management-tooling-mcp` remains an independent, standalone project.
 
 ---

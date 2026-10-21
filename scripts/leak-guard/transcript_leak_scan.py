@@ -12,16 +12,46 @@ What it looks for
   * every live secret value in /etc/corporatetraveldc/dispatch-secrets.env (the
     same parser the public leak gate uses; values >= 12 chars), raw and in its
     JSON-escaped form (transcripts are JSONL);
+  * (2026-10-20) every other credential file the platform holds (SOURCES below):
+    the other /etc/corporatetraveldc/*secrets*.env files (Postgres superuser
+    passwords for both instances, the demo session secret, ntfy, the SDR feeder
+    keys), demo.env's role password, /etc/corporatetraveldc/*.token (ntfy root,
+    Cloudflare honeypot) and every file in the operator's ~/.secrets (Cloudflare,
+    ntfy FCM, Proton Bridge, Tailscale node key, GitHub PAT, the demo Q-registry
+    key, SSH private keys ...) plus the tailnet TLS private keys (~/*.ts.net.key).
+    Env files other than dispatch-secrets.env contribute only secret-NAMED keys
+    (SECRET_KEY_NAME: no coordinates, hosts or model names). A binary key file is
+    matched in its hex and base64 forms; a multi-line key file (PEM / OpenSSH) by
+    up to KEY_BODY_LINES of its base64 body lines. Public material is skipped
+    (SOURCE_SKIP: *.pub, *.pub.asc, *.crt, the signing fingerprint files). Values
+    are read only inside this process, by path; a file this account cannot read
+    is reported by NAME as "not checked" (the hourly root run reads root-only
+    files), never silently passed;
   * token shapes that are secrets wherever they appear: platform API tokens
     (ctdc_<user>_<32>), gateway access/refresh tokens (dga_/dgr_), and
     "Authorization: Bearer <token>" / "X-Board-Key: <token>" header values;
+  * (2026-10-20) vendor credential shapes: private-key blocks (PEM, OpenSSH, PGP;
+    header plus a base64 body, redacted through the END line), GitHub tokens
+    (ghp_/gho_/ghu_/ghs_/ghr_, github_pat_), Anthropic sk-ant-, Tailscale tskey-
+    and private node keys (privkey:/nlpriv:), ntfy access tokens (tk_);
   * registration-bearing log-line shapes (2026-10-18): the identifier in the old
     FDPS "fdps: wrote flight_event for <id> (" journal line;
   * LADD identifiers (2026-10-19, Gate-1b), pattern class 'ladd-identifier':
     the production filter's own list (faa_ladd_aircraft UNION faa_ladd_removals,
     the same union push-public.sh pipes into the tripwire; one class, no tier),
     loaded in-process through common.db.conn() ONLY when run with the dispatch
-    env (scripts/with-dispatch-env.sh). Never printed, logged or written. Whole
+    env (scripts/with-dispatch-env.sh). Never printed, logged or written.
+    2026-10-20: "with the dispatch env" means the Postgres connection settings
+    common.db.conn() uses are set (DISPATCH_PG_HOST / _DB / _USER; DISPATCH_ENV_KEYS),
+    no longer DISPATCH_DB_BACKEND / DISPATCH_DB (the SQLite path is retired; dropping
+    DISPATCH_DB would have switched the class off silently). The operator-side
+    callers (pre-push, push-public.sh, relay-preflight.sh) run it through
+    scripts/with-dispatch-env.sh with --require-ladd, so an unreadable list fails
+    the push. The hourly ROOT unit cannot use common.db (the installed copy has no
+    src/, and root never imports operator-writable code) and root's python has no
+    Postgres driver: scripts/leak-guard/agent-leak-scan.sh pipes the same union out
+    of the operator's corporatetraveldc-pgsql container (the push-public.sh tripwire
+    pattern, runuser as the operator) into --ladd-stdin, also with --require-ladd. Whole
     upper-case tokens (letters, digits, hyphens; each hyphen part too, as the
     tripwire matches), JSON escapes (backslash-n, -t, -uXXXX) treated as separators;
     each entry in its N-form and its registry form without the N (N7QZK / 7QZK),
@@ -50,6 +80,8 @@ Output names the file, the secret's NAME and a count -- never a value.
           "PROOF: <n> file(s) redacted; rescan hits = 0". Exit 1 if the rescan
           still finds anything.
   --require-ladd   exit 3 whenever the LADD class could not be checked
+  --ladd-stdin     read the LADD list from stdin (one per line) instead of the database
+                   (2026-10-20, the root unit; implies --require-ladd)
 """
 from __future__ import annotations
 
@@ -81,6 +113,25 @@ def _operator_home() -> str:
 EXTRA_FILES = [Path(p).expanduser() for p in os.environ.get(
     "LEAK_GUARD_EXTRA_FILES", f"{_operator_home()}/.secrets/healthchecks_ping.url").split(":") if p]
 MIN_LEN = 12
+
+# ── Every other credential file (2026-10-20, freeze bug fix: coverage) ─────────
+# Colon-separated globs; LEAK_GUARD_SOURCES overrides (tests set it empty: a test
+# never loads a real secret file). Files already loaded above are skipped.
+def _default_sources() -> str:
+    home = _operator_home()
+    return ":".join(("/etc/corporatetraveldc/*secrets*.env", "/etc/corporatetraveldc/demo.env",
+                     "/etc/corporatetraveldc/*.token", f"{home}/.secrets/*", f"{home}/*.ts.net.key"))
+
+
+SOURCES = [p for p in os.environ.get("LEAK_GUARD_SOURCES", _default_sources()).split(":") if p]
+# Public material and flag files are never values (fingerprints and public keys are tracked in the repo).
+SOURCE_SKIP = re.compile(r"(?:\.pub|\.pub\.asc|\.crt|signing\.env|signing-pin|tailnet-disable|\.example|\.template|\.bak[-.\w]*)$")
+# In env files other than dispatch-secrets.env only secret-NAMED keys are values (a feeder
+# file's LAT/LONG, demo.env's model name or URLs are configuration).
+SECRET_KEY_NAME = re.compile(r"(?i)(PASS|SECRET|TOKEN|KEY|SHARECODE|FEEDER_ID|UUID|ACCOUNT|SID|VERIFY_SERVICE)")
+KEY_BODY_LINES = 3          # base64 body lines taken per multi-line key file (scan cost stays bounded)
+KEY_BODY_MIN = 32
+NOT_CHECKED: list[str] = []  # source files this account could not read (names only); set by load_secret_values
 LIVE_MINUTES = 15
 TEXT_SUFFIXES = {".jsonl", ".json", ".txt", ".log", ".output", ".md", ".out", ""}
 MAX_FILE_BYTES = 512 * 1024 * 1024
@@ -91,6 +142,19 @@ TOKEN_PATTERNS = [
     ("gateway-token", re.compile(rb"\bdg[ar]_[A-Za-z0-9_-]{40,}")),
     ("bearer-header", re.compile(rb"(?i)(?<=authorization: bearer )[A-Za-z0-9._~+/=-]{20,}")),
     ("board-key-header", re.compile(rb"(?i)(?<=x-board-key: )[A-Za-z0-9._~+/=-]{20,}")),
+    # 2026-10-20 (credential coverage): vendor shapes the git hooks knew and the transcripts did not.
+    # A private-key block needs a real base64 body after its header (a header named in prose is not
+    # key material) and is matched -- and redacted -- through its END line (or the end of the body run).
+    ("private-key-block", re.compile(
+        rb"-----BEGIN (?P<k>(?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----(?:\s|\\[rn])*"
+        rb"(?:[A-Za-z-]+: [^\r\n\\]*(?:\s|\\[rn])+){0,4}[A-Za-z0-9+/=]{40,}"
+        rb"[A-Za-z0-9+/=\s\\]*?(?:-----END (?P=k)-----|(?![A-Za-z0-9+/=\s\\]))")),
+    ("github-token", re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{36,}")),
+    ("github-pat", re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{50,}")),
+    ("anthropic-key", re.compile(rb"\bsk-ant-[A-Za-z0-9_-]{20,}")),
+    ("tailscale-key", re.compile(rb"\btskey-[A-Za-z0-9-]{20,}")),
+    ("tailscale-private-key", re.compile(rb"\b(?:privkey|nlpriv):[0-9a-f]{64}\b")),
+    ("ntfy-token", re.compile(rb"\btk_[a-z0-9]{29}\b")),
 ] + [
     # 2026-10-18 (leak hygiene): registration-bearing log-line shapes. Only the
     # identifier is matched (and redacted); the rest of the line stays readable.
@@ -161,8 +225,14 @@ def _ladd_hit_strings(text: bytes, ladd: frozenset[bytes], allow: set[str]) -> s
     return {h for h in hits if hashlib.sha256(h).hexdigest() not in allow}
 
 
+# 2026-10-20: the settings common.db.conn() / _pg_conninfo() actually connect with
+# (config/dispatch.env). Keyed on these, not DISPATCH_DB_BACKEND / DISPATCH_DB: the SQLite
+# path is retired, and removing DISPATCH_DB must not switch the LADD class off silently.
+DISPATCH_ENV_KEYS = ("DISPATCH_PG_HOST", "DISPATCH_PG_DB", "DISPATCH_PG_USER")
+
+
 def _dispatch_env() -> bool:
-    return bool(os.environ.get("DISPATCH_DB_BACKEND") or os.environ.get("DISPATCH_DB"))
+    return any(os.environ.get(k) for k in DISPATCH_ENV_KEYS)
 
 
 def ladd_forms(identifiers) -> frozenset[bytes]:
@@ -202,9 +272,26 @@ def load_ladd_identifiers() -> tuple[frozenset[bytes] | None, str]:
         idents = _ladd_from_db()
     except Exception as e:  # noqa: BLE001 -- any failure: the class is not checked
         return None, f"LADD list unreadable ({type(e).__name__})"
+    return _ladd_floor(idents)
+
+
+def _ladd_floor(idents: list[str]) -> tuple[frozenset[bytes] | None, str]:
     if len(idents) < LADD_MIN_IDENTIFIERS:
         return None, f"LADD list has {len(idents)} identifier(s) (< {LADD_MIN_IDENTIFIERS}; fail closed)"
     return ladd_forms(idents), ""
+
+
+def load_ladd_from_stream(stream) -> tuple[frozenset[bytes] | None, str]:
+    """2026-10-20 (--ladd-stdin, the root unit): one identifier per line on stdin, piped
+    from the database by agent-leak-scan.sh; never written anywhere. Same floor."""
+    try:
+        raw = stream.buffer.read() if hasattr(stream, "buffer") else stream.read()
+    except Exception as e:  # noqa: BLE001
+        return None, f"LADD stream unreadable ({type(e).__name__})"
+    if isinstance(raw, str):
+        raw = raw.encode()
+    idents = [l.decode("utf-8", "replace").strip() for l in raw.splitlines()]
+    return _ladd_floor([i for i in idents if i])
 
 
 def _ladd_allow() -> set[str]:
@@ -287,7 +374,101 @@ def load_secret_values(path: Path = SECRETS_ENV) -> dict[str, list[bytes]]:
         if tail != v and len(tail) >= MIN_LEN:
             forms.append(tail)
         out[f"file:{f.name}"] = forms
+    seen = {_real(path)} | {_real(f) for f in EXTRA_FILES}
+    NOT_CHECKED[:] = []
+    for name, forms in _load_sources(SOURCES, seen, NOT_CHECKED):
+        have = {x for fs in out.values() for x in fs}
+        forms = [x for x in forms if x not in have]      # one value, one name (counts stay honest)
+        if forms:
+            out[name] = forms
     return out
+
+
+def _real(p: Path) -> str:
+    return os.path.realpath(p)
+
+
+def _forms(v: bytes) -> list[bytes]:
+    forms = [v]
+    esc = json.dumps(v.decode("utf-8", "replace"))[1:-1].encode()
+    if esc != v:
+        forms.append(esc)
+    return forms
+
+
+def _value_forms(raw: bytes) -> list[bytes]:
+    """Forms a single-value or key file is matched in (never printed)."""
+    import base64
+    v = raw.strip()
+    if not v:
+        return []
+    try:
+        printable = all(c.isprintable() or c in "\r\n\t" for c in v.decode("ascii"))
+    except UnicodeDecodeError:
+        printable = False
+    if not printable:                                 # a raw binary key (the demo Q-registry HMAC key)
+        if len(raw) < 16:
+            return []
+        b64 = base64.b64encode(raw)
+        return list(dict.fromkeys([raw.hex().encode(), raw.hex().upper().encode(), b64, b64.rstrip(b"="),
+                                   base64.urlsafe_b64encode(raw).rstrip(b"=")]))
+    lines = [l.strip() for l in v.splitlines() if l.strip()]
+    if len(lines) == 1:
+        one = lines[0]
+        return _forms(one) if len(one) >= MIN_LEN and one not in NOT_SECRET and not PLACEHOLDER.match(one) else []
+    # multi-line: a PEM / OpenSSH private key -> a few of its base64 body lines (first, middle, last)
+    body = [l for l in lines if not l.startswith(b"-----") and b": " not in l and len(l) >= KEY_BODY_MIN]
+    if len(body) > KEY_BODY_LINES:
+        idx = sorted({round(i * (len(body) - 1) / (KEY_BODY_LINES - 1)) for i in range(KEY_BODY_LINES)})
+        body = [body[i] for i in idx]
+    return list(dict.fromkeys(body))
+
+
+def _env_values(raw: bytes, label: str):
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith(b"#") or b"=" not in line:
+            continue
+        k, _, v = line.partition(b"=")
+        k = k.strip().decode("utf-8", "replace")
+        if k.startswith("export "):
+            k = k[7:].strip()
+        v = v.strip().strip(b"'\"")
+        if (not SECRET_KEY_NAME.search(k) or len(v) < MIN_LEN or v in NOT_SECRET
+                or PLACEHOLDER.match(v) or v == b"CHANGE_ME"):
+            continue
+        yield f"{label}:{k}", _forms(v)
+
+
+def _load_sources(patterns, seen: set[str], not_checked: list[str]):
+    """(NAME, forms) for every credential file the globs name. Unreadable -> not_checked, by name."""
+    import glob
+    for pat in patterns:
+        parent = Path(pat).parent
+        if parent.exists() and not os.access(parent, os.R_OK | os.X_OK):
+            not_checked.append(f"{pat} (directory not listable)")
+            continue
+        for fp in sorted(glob.glob(pat)):
+            p = Path(fp)
+            rp = _real(p)
+            if rp in seen or SOURCE_SKIP.search(p.name) or SOURCE_SKIP.search(rp) or not os.path.isfile(rp):
+                continue
+            seen.add(rp)
+            try:
+                if os.path.getsize(rp) > 1024 * 1024:  # not a credential file
+                    continue
+                raw = p.read_bytes()
+            except PermissionError:
+                not_checked.append(str(p))
+                continue
+            except OSError:
+                continue
+            if p.name.endswith(".env"):
+                yield from _env_values(raw, p.name)
+            else:
+                forms = _value_forms(raw)
+                if forms:
+                    yield f"file:{p.name}", forms
 
 
 def default_roots() -> list[Path]:
@@ -416,15 +597,21 @@ def main(argv=None) -> int:
     ap.add_argument("--include-live", action="store_true")
     ap.add_argument("--require-ladd", action="store_true",
                     help="exit 3 whenever the LADD class could not be checked (no dispatch env included)")
+    ap.add_argument("--ladd-stdin", action="store_true",
+                    help="read the LADD list from stdin, one per line (root unit; implies --require-ladd)")
     a = ap.parse_args(argv)
     roots = a.root or (agent_roots() if a.agents else default_roots())
     secrets = load_secret_values()
     if not secrets:
         print("transcript-leak-scan: WARNING no live secret values loaded (secrets file unreadable); token shapes only")
-    ladd, why = load_ladd_identifiers()
+    if NOT_CHECKED:
+        # names only; the hourly root run (corporatetraveldc-agent-leak-scan) reads the root-only files
+        print(f"transcript-leak-scan: NOTE {len(NOT_CHECKED)} credential file(s) NOT CHECKED (unreadable to "
+              "this account): " + ", ".join(NOT_CHECKED))
+    ladd, why = load_ladd_from_stream(sys.stdin) if a.ladd_stdin else load_ladd_identifiers()
     # 3 = the LADD class was not checked where it had to be (dispatch env present,
-    # or --require-ladd): never a silent pass.
-    ladd_rc = 3 if ladd is None and (a.require_ladd or _dispatch_env()) else 0
+    # --require-ladd or --ladd-stdin): never a silent pass.
+    ladd_rc = 3 if ladd is None and (a.require_ladd or a.ladd_stdin or _dispatch_env()) else 0
     if ladd is None:
         print(f"transcript-leak-scan: {'ERROR' if ladd_rc else 'WARNING'} LADD class '{LADD_LABEL}' NOT CHECKED: {why}")
     if a.cmd == "redact":

@@ -16,3 +16,24 @@ Content-Signal directive.
 
 For access, partnership, or product enquiries, see the parent firm:
 https://example.com/contact.html
+
+## Privacy protections in this demo
+
+The public demo replays only cleared, sanitized windows copied from the live
+system by a one-way scrub; the live dispatch panel is never reachable from the
+public internet. Aircraft on the FAA's LADD privacy list get extra protection,
+because a synthetic registration alone does not hide timing (someone at an FBO
+could match the arrivals they saw to the demo):
+
+- each listed aircraft appears under a synthetic registration (Q followed by
+  five characters) that cannot be reversed without a key that never leaves the
+  operator's box;
+- every time on a listed aircraft's leg is rounded to a 15-minute bucket after
+  a hidden offset of 0-15 minutes that is different for every leg the aircraft
+  flies (consecutive legs at least 4 minutes apart), so no fixed lag can be
+  learned; when the order of an aircraft's legs cannot be confirmed, those
+  legs are left out of the demo;
+- a listed aircraft's leg goes dark at the approach's inner marker (or, where
+  that is not charted, the runway threshold, else the confirmed touchdown):
+  no landing time, gate, baggage, FBO, taxi or ground movement is shown;
+- if the privacy list cannot be checked, the data is withheld, never shown.

@@ -138,6 +138,24 @@ def run() -> None:
         log.debug("flight_events_cleanup: nothing older than %dd to archive", RETENTION_DAYS)
 
 
+def run_lookaside_continuity() -> dict | None:
+    """2026-10-20 (bellwether batch): the daily route-continuity relink of the
+    public-number -> ATC-callsign links (common.callsign_lookaside), riding this
+    existing daily flight_events job instead of a new unit. It reads only the
+    last ~16 days of flight_events, far inside RETENTION_DAYS, and runs before
+    the archive pass. A failure is logged and never stops the archive."""
+    try:
+        from common import callsign_lookaside
+        stats = callsign_lookaside.relink_by_route_continuity()
+        log.info("flight_events_cleanup: lookaside continuity -- %d link(s), %d relinked, %d pushed, %d error(s)",
+                 stats["links"], stats["relinked"], stats["pushed"], stats["errors"])
+        return stats
+    except Exception as e:  # noqa: BLE001
+        log.error("flight_events_cleanup: lookaside continuity failed (archive continues): %s", e)
+        return None
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    run_lookaside_continuity()
     run()

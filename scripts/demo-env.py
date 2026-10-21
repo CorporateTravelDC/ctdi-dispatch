@@ -5,9 +5,12 @@ containers (2026-10-19, demo/production database split, relay 2: the flip).
 demo.env (example: config/demo.env.example) is the demo containers' whole
 non-production environment: the demo identity (DISPATCH_DB_BACKEND, DEMO_PG_*),
 the `demo` role's password (DEMO_PG_PASSWORD -- the demo instance's
-application role, never a production value), the two settings runner-demo
-used to take from dispatch.env (LLAMA_BASE_URL, OLLAMA_CHAT_MODEL), and the
-rollback switch (DEMO_SOURCE + DISPATCH_DB_BACKEND). The quadlets load it LAST.
+application role, never a production value) and the two settings runner-demo
+used to take from dispatch.env (LLAMA_BASE_URL, OLLAMA_CHAT_MODEL). The
+quadlets load it LAST. ~~and the rollback switch (DEMO_SOURCE +
+DISPATCH_DB_BACKEND)~~ -- retired 2026-10-20 (operator decision 2026-10-19:
+only Pi-hole, vnstat and ACARS Hub touch SQLite; the sovereign file and
+demo_access.db are destroyed, so `source sqlite` rolled back to nothing).
 
 Subcommands (none prints a secret value; none puts one on a command line):
 
@@ -31,13 +34,10 @@ Subcommands (none prints a secret value; none puts one on a command line):
                    demo_owner with the container's own POSTGRES_PASSWORD. The
                    login check passes the value as PGPASSWORD through podman's
                    environment passthrough (`-e PGPASSWORD`, no value on argv).
-  source sqlite|postgres
-                   THE ROLLBACK SWITCH (one step + restart of the two demo
-                   containers): sqlite = DEMO_SOURCE=sqlite and
-                   DISPATCH_DB_BACKEND=sqlite (playback from the sovereign
-                   file, profiles from demo_access.db, chat in the demo-only
-                   mount -- exactly the pre-flip behaviour); postgres = both
-                   back to postgres.
+  ~~source sqlite|postgres~~
+                   removed 2026-10-20 with the sqlite rollback. `check` now
+                   requires DISPATCH_DB_BACKEND=postgres and refuses any
+                   DEMO_SOURCE line other than postgres.
 
 The file is rewritten IN PLACE (open r+, truncate): /etc/corporatetraveldc is
 root:corporatetraveldc 0750, so the service user cannot create or rename files
@@ -67,18 +67,22 @@ ROLE = "demo"
 DATABASE = "corporatetraveldc_demo"
 PLACEHOLDER = "CHANGE_ME"
 
+# 2026-10-20: DEMO_SOURCE is no longer required (the sqlite source is retired;
+# demo-api sets DEMO_SOURCE=postgres in its quadlet and defaults to it). A
+# leftover line must still say postgres (EXPECTED below).
 REQUIRED = ("DISPATCH_ROLE", "DISPATCH_DB_BACKEND", "DISPATCH_DEMO_ISOLATION", "DEMO_PG_HOST", "DEMO_PG_PORT",
-            "DEMO_PG_DB", "DEMO_PG_USER", "DEMO_PG_PASSWORD", "DEMO_SOURCE")
+            "DEMO_PG_DB", "DEMO_PG_USER", "DEMO_PG_PASSWORD")
 EXPECTED = {"DISPATCH_ROLE": "demo", "DISPATCH_DEMO_ISOLATION": "1", "DEMO_PG_HOST": "/var/run/postgresql-demo",
-            "DEMO_PG_DB": DATABASE, "DEMO_PG_USER": ROLE}
+            "DEMO_PG_DB": DATABASE, "DEMO_PG_USER": ROLE,
+            "DISPATCH_DB_BACKEND": "postgres", "DEMO_SOURCE": "postgres"}
 # Non-secret settings runner-demo used to inherit from dispatch.env; copied by
 # NAME only. Nothing else from dispatch.env may ever be copied (a DISPATCH_PG_*
 # or a token there is production).
 SEED_KEYS = ("LLAMA_BASE_URL", "OLLAMA_CHAT_MODEL")
 FORBIDDEN_PREFIXES = ("DISPATCH_PG_",)
 FORBIDDEN_KEYS = {"ULTRAFEEDER_URL", "ACARSHUB_URL", "DISPATCH_API_TOKEN", "POSTGRES_PASSWORD"}
-SWITCH = {"sqlite": {"DEMO_SOURCE": "sqlite", "DISPATCH_DB_BACKEND": "sqlite"},
-          "postgres": {"DEMO_SOURCE": "postgres", "DISPATCH_DB_BACKEND": "postgres"}}
+# ~~SWITCH = {"sqlite": ..., "postgres": ...}~~ -- the rollback switch is
+# retired (2026-10-20).
 # The password charset: no whitespace, quote, backslash, '#' or control
 # character -- the value goes unquoted into a podman env file and into a libpq
 # conninfo string (db_backend._demo_pg_conninfo), and ASCII needs no SASLprep.
@@ -247,7 +251,7 @@ def set_password() -> int:
     return 0
 
 
-# -- check / seed / source -----------------------------------------------------
+# -- check / seed ---------------------------------------------------------------
 
 def check() -> list[str]:
     problems: list[str] = []
@@ -273,9 +277,8 @@ def check() -> list[str]:
     for k in SEED_KEYS:
         if env.get(k, PLACEHOLDER) == PLACEHOLDER:
             problems.append(f"{k} not seeded")
-    pair = (env.get("DEMO_SOURCE"), env.get("DISPATCH_DB_BACKEND"))
-    if pair not in {("postgres", "postgres"), ("sqlite", "sqlite")}:
-        problems.append(f"switch half-set: DEMO_SOURCE={pair[0]} DISPATCH_DB_BACKEND={pair[1]}")
+    # ~~switch half-set check (DEMO_SOURCE + DISPATCH_DB_BACKEND as a pair)~~ --
+    # both are now postgres-only through EXPECTED above (2026-10-20).
     return problems
 
 
@@ -292,10 +295,6 @@ def seed() -> list[str]:
     return write_keys(updates)
 
 
-def switch(target: str) -> list[str]:
-    return write_keys(dict(SWITCH[target]))
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
@@ -309,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{TAG} FAIL: {p}")
             if not problems:
                 env = read_env()
-                print(f"{TAG} ok: {DEMO_ENV} 0600, required keys present, DEMO_SOURCE={env['DEMO_SOURCE']} "
+                print(f"{TAG} ok: {DEMO_ENV} 0600, required keys present, "
                       f"DISPATCH_DB_BACKEND={env['DISPATCH_DB_BACKEND']}")
             return 1 if problems else 0
         if cmd == "seed" and not rest:
@@ -321,16 +320,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if cmd == "set-password" and not rest:
             return set_password()
-        if cmd == "source" and len(rest) == 1 and rest[0] in SWITCH:
-            changed = switch(rest[0])
-            print(f"{TAG} DEMO_SOURCE={rest[0]} DISPATCH_DB_BACKEND={rest[0]} "
-                  f"({'changed: ' + ', '.join(changed) if changed else 'already set'}) -- restart "
-                  "corporatetraveldc-demo-api and corporatetraveldc-runner-demo to apply")
-            return 0
+        if cmd == "source":
+            print(f"{TAG} `source` is retired (2026-10-20): the demo runs on Postgres only and "
+                  "the sqlite rollback target is destroyed -- nothing changed", file=sys.stderr)
+            return 2
     except EnvFileError as e:
         print(f"{TAG} {e}", file=sys.stderr)
         return 2
-    print(f"{TAG} usage: check | seed | password-state | set-password | source sqlite|postgres", file=sys.stderr)
+    print(f"{TAG} usage: check | seed | password-state | set-password", file=sys.stderr)
     return 2
 
 

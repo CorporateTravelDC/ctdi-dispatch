@@ -17,16 +17,16 @@ tests/demo/test_demo_accessor_boundary.py holds that. See
 docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md for the full design and
 docs/PENTEST_CLEARANCE_CHECK_2026-08-13.md for the F6 finding this closes.
 
-Two sources, selected by DEMO_SOURCE (2026-10-16 demo/production split):
-  sqlite   (default) -- /var/lib/corporatetraveldc-demo-source/demo-source.db,
-           the sovereign SQLite file, opened mode=ro. Relay 1 leaves this in
-           force.
+Source (2026-10-16 demo/production split; Postgres-only since 2026-10-20):
   postgres -- the DEMO Postgres instance (corporatetraveldc-pgsql-demo,
            database corporatetraveldc_demo, role `demo`) through
            common.db_backend.demo_pg_conn(); tables snapshots / brief_archive
-           / meta of src/common/pg_schema_demo/0001. Relay 2 flips the
-           quadlet to this. Same anchor / virtual-timestamp logic on both;
-           /healthz reports which source is live.
+           / meta of src/common/pg_schema_demo/0001. /healthz reports it.
+  ~~sqlite (default) -- /var/lib/corporatetraveldc-demo-source/demo-source.db,
+           the sovereign SQLite file, opened mode=ro~~ -- removed 2026-10-20
+           (operator decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub
+           touch SQLite; the file and its mount are gone). DEMO_SOURCE=sqlite
+           is now an error, not a rollback.
 
 The invariant is stronger than the pre-2026-08-14 version: it used to be
 "only OLD data is reachable" (temporal only, but reading the live DB
@@ -37,7 +37,7 @@ the one function that enforces the temporal half.
 
 Loop design:
   - ANCHOR = window_end - window_days, where window_end comes from the
-    sovereign file's own meta table, written only by scrub-demo-source.py
+    demo instance's own meta table, written only by scrub-demo-source.py
     on a promotion. The anchor advances only when a promotion writes a
     new window_end -- NEVER as a function of wall-clock time at query
     time. (Pre-2026-08-14 this was MIN(captured_at) -- the oldest-ever
@@ -60,7 +60,6 @@ partial-window logic, and the readiness endpoint already tells the
 caller exactly how many days remain.
 """
 import os
-import sqlite3
 import zlib
 import httpx
 from datetime import datetime, timezone, timedelta
@@ -74,20 +73,22 @@ from common import db_backend
 from demo.recorder import RETENTION_TIERS
 from demo import profiles as demo_profiles
 
-DEMO_DB   = os.environ.get("DEMO_DB", "/var/lib/corporatetraveldc-demo-source/demo-source.db")
+# ~~DEMO_DB = /var/lib/corporatetraveldc-demo-source/demo-source.db~~ (removed
+# 2026-10-20 with the sqlite source).
 LOOP_DAYS = int(os.environ.get("DEMO_LOOP_DAYS", "14"))
 
-SOURCE_KINDS = ("sqlite", "postgres")
+SOURCE_KINDS = ("postgres",)
 
 
 def source_kind() -> str:
-    """DEMO_SOURCE, read at call time (a test or quadlet can switch it
-    without reloading the module): 'sqlite' (default, the sovereign file)
-    or 'postgres' (the demo instance). Anything else is an error, not a
-    silent fallback."""
-    kind = os.environ.get("DEMO_SOURCE", "sqlite").strip().lower() or "sqlite"
+    """DEMO_SOURCE, read at call time: 'postgres' (the demo instance; also
+    the value when unset). ~~'sqlite' (default, the sovereign file)~~ --
+    2026-10-20: sqlite is retired and anything but postgres is an error,
+    not a silent fallback."""
+    kind = os.environ.get("DEMO_SOURCE", "postgres").strip().lower() or "postgres"
     if kind not in SOURCE_KINDS:
-        raise RuntimeError(f"DEMO_SOURCE={kind!r} is not one of {SOURCE_KINDS}")
+        raise RuntimeError(f"DEMO_SOURCE={kind!r} is not one of {SOURCE_KINDS} "
+                           "(the sqlite source was retired 2026-10-20)")
     return kind
 
 # Optional fixed anchor override (ISO date/datetime), added 2026-08-02.
@@ -165,11 +166,11 @@ ENDPOINT_PATHS: dict[str, str] = {
 app = FastAPI(title="corporatetraveldc-demo-api", docs_url=None, redoc_url=None, openapi_url=None)
 
 # 2026-10-19 (demo/production split, relays 2 and 4): /healthz carries the
-# process start time and a per-source count of /api/ requests answered, so the
-# relay-4 retirement check (scripts/demo-sqlite-retire-check.sh) can prove the
-# demo served from Postgres -- and nothing from the sovereign SQLite file --
-# for N continuous hours before the operator shreds the file. Counts only;
-# no path, query or client detail is kept.
+# process start time and a per-source count of /api/ requests answered.
+# ~~so the relay-4 retirement check (scripts/demo-sqlite-retire-check.sh) can
+# prove the demo served from Postgres~~ -- that check is retired
+# (scripts/retired-20261020/; the file is destroyed); the counts stay as plain
+# health evidence. Counts only; no path, query or client detail is kept.
 import time as _time  # noqa: E402
 
 _STARTED_AT = _time.time()
@@ -193,10 +194,9 @@ _legacy_anchor_cache: datetime | None = None
 
 
 class _PgSource:
-    """One pooled demo-instance connection with the same two-method surface
-    the handlers use on the sqlite path: execute(sql, params) -> cursor
-    (rows are dicts, so row["col"] works exactly as on sqlite3.Row), and
-    close(). The pool's context manager is entered here and exited in
+    """One pooled demo-instance connection with the two-method surface the
+    handlers use: execute(sql, params) -> cursor (rows are dicts, read by
+    column name), and close(). The pool's context manager is entered here and exited in
     close(); handlers already pair _conn() with a finally: conn.close()."""
 
     __slots__ = ("_cm", "_c")
@@ -213,22 +213,18 @@ class _PgSource:
 
 
 def _conn() -> Any:
-    """A read handle on the selected source. sqlite: a read-only URI
-    connection -- this process must never write DEMO_DB (the sovereign
-    demo-source file); scripts/scrub-demo-source.py is the only writer, and
-    mixing writers risks lock contention against a service that also has a
-    public-facing surface. Rows are name-addressable on both sources
-    (sqlite3.Row / psycopg dict_row), and every query below reads columns
-    by name, never by position."""
-    if source_kind() == "postgres":
-        return _PgSource()
-    c = sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
-    c.row_factory = sqlite3.Row
-    return c
+    """A read handle on the demo instance (source_kind() validates
+    DEMO_SOURCE first). The `demo` role is SELECT-only on the playback
+    tables (pg_schema_demo/0002); scripts/scrub-demo-source.py is the only
+    writer. Rows are psycopg dict_rows and every query below reads columns
+    by name, never by position. ~~sqlite: a read-only URI connection on
+    DEMO_DB~~ (removed 2026-10-20)."""
+    source_kind()
+    return _PgSource()
 
 
 def _window_end(conn: Any) -> datetime | None:
-    """The sovereign file's own meta.window_end -- written exclusively by
+    """The demo instance's own meta.window_end -- written exclusively by
     scripts/scrub-demo-source.py when it promotes newly scrubbed content.
     Deliberately window_days-independent (unlike the anchor derived from
     it), so it's safe to cache for process lifetime the same way the old
@@ -239,10 +235,10 @@ def _window_end(conn: Any) -> datetime | None:
     if _window_end_cache_checked:
         return _window_end_cache
     _window_end_cache_checked = True
-    try:
-        row = conn.execute("SELECT value FROM meta WHERE key='window_end'").fetchone()
-    except sqlite3.OperationalError:
-        row = None
+    # 2026-10-20: ~~except sqlite3.OperationalError~~ removed -- it caught
+    # only the sqlite path's missing-table case; the demo schema
+    # (pg_schema_demo/0001) always has meta.
+    row = conn.execute("SELECT value FROM meta WHERE key='window_end'").fetchone()
     if row and row["value"]:
         _window_end_cache = datetime.fromisoformat(row["value"])
     return _window_end_cache
@@ -282,14 +278,11 @@ def _anchor(conn: Any, window_days: int = LOOP_DAYS) -> datetime | None:
     # a single value -- it doesn't depend on window_days.
     if _legacy_anchor_cache is not None:
         return _legacy_anchor_cache
-    try:
-        row = conn.execute(
-            "SELECT MAX(first_seen) AS anchor FROM ("
-            "  SELECT endpoint, MIN(captured_at) AS first_seen FROM snapshots GROUP BY endpoint"
-            ") AS firsts"
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return None
+    row = conn.execute(
+        "SELECT MAX(first_seen) AS anchor FROM ("
+        "  SELECT endpoint, MIN(captured_at) AS first_seen FROM snapshots GROUP BY endpoint"
+        ") AS firsts"
+    ).fetchone()
     if not row or not row["anchor"]:
         return None
     _legacy_anchor_cache = datetime.fromisoformat(row["anchor"])
@@ -368,12 +361,11 @@ def _resolve_playback_params(session: str | None, window: str | None,
 
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
-    """Reports which source is live (2026-10-16). sqlite: the file exists.
-    2026-10-19: also started_at / uptime_s, requests answered per source since
-    start, and the profile store in use (relay-4 retirement evidence).
-    postgres: one SELECT on the demo instance's meta table succeeds (a
-    refused or unreachable demo pool is ok=false, never a 500 with a
-    conninfo in it)."""
+    """Reports the source (2026-10-16; postgres only since 2026-10-20 --
+    ~~sqlite: the file exists~~). 2026-10-19: also started_at / uptime_s,
+    requests answered per source since start, and the profile store in use.
+    ok: one SELECT on the demo instance's meta table succeeds (a refused or
+    unreachable demo pool is ok=false, never a 500 with a conninfo in it)."""
     kind = source_kind()
     body: dict = {"source": kind, "loop_days": LOOP_DAYS}
     body["started_at"] = datetime.fromtimestamp(_STARTED_AT, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -383,10 +375,6 @@ async def healthz() -> JSONResponse:
         body["profiles_store"] = demo_profiles.store_kind()
     except Exception as e:  # noqa: BLE001 -- a health probe reports, never raises
         body["profiles_store"] = f"error:{type(e).__name__}"
-    if kind == "sqlite":
-        body["ok"] = os.path.exists(DEMO_DB)
-        body["demo_db"] = DEMO_DB
-        return JSONResponse(body)
     try:
         conn = _conn()
         try:
@@ -425,9 +413,9 @@ async def demo_readiness() -> JSONResponse:
 
 def _brief_archive_lookup(brief_type: str, at: datetime) -> dict | None:
     """Most recent brief_archive row of `brief_type` at or before virtual
-    timestamp `at`. 2026-08-14: reads from the SAME sovereign connection
-    (_conn(), DEMO_DB) as every other endpoint -- brief_archive now lives
-    in the sovereign file, populated by scripts/scrub-demo-source.py's
+    timestamp `at`. 2026-08-14: reads from the SAME demo-source connection
+    (_conn()) as every other endpoint -- brief_archive lives in the demo
+    source (the demo instance since 2026-10-19), populated by scripts/scrub-demo-source.py's
     scrub+promote pass, same as `snapshots`. This function used to open a
     dedicated live-DB connection (_live_conn(), since deleted) and query
     the real production brief_archive table directly -- that was F6, the
@@ -442,10 +430,9 @@ def _brief_archive_lookup(brief_type: str, at: datetime) -> dict | None:
             (brief_type, at.isoformat()),
         ).fetchone()
         return dict(row) if row else None
-    except sqlite3.OperationalError:
-        # brief_archive table doesn't exist yet on a not-yet-promoted
-        # sovereign file -- same "nothing available" outcome as empty.
-        return None
+    # 2026-10-20: ~~except sqlite3.OperationalError~~ (a not-yet-promoted
+    # sovereign file without brief_archive) removed: the demo schema always
+    # has the table, and that handler never caught on Postgres.
     finally:
         c.close()
 
@@ -469,8 +456,6 @@ def _brief_archive_history(brief_type: str | None, at: datetime, limit: int) -> 
                 (at.isoformat(), limit),
             ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
     finally:
         c.close()
 
@@ -483,21 +468,15 @@ def _load_snapshot(conn: Any, endpoint: str, at: datetime) -> tuple[str, str, bo
     fabricated content. Real rows always win: this query has no idea which
     rows are synthetic, it just picks the newest row <= `at`, and a real
     row promoted later for that same day naturally out-dates any synthetic
-    filler for that day."""
-    try:
-        row = conn.execute(
-            "SELECT payload, payload_hash, compressed, captured_at, synthetic FROM snapshots "
-            "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
-            (endpoint, at.isoformat()),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        # Sovereign file predates the synthetic column (pre-2026-08-14).
-        # sqlite only: the demo instance's schema has always had it.
-        row = conn.execute(
-            "SELECT payload, payload_hash, compressed, captured_at, 0 AS synthetic FROM snapshots "
-            "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
-            (endpoint, at.isoformat()),
-        ).fetchone()
+    filler for that day.
+
+    2026-10-20: ~~the sqlite fallback for a pre-2026-08-14 file without the
+    synthetic column~~ is removed; the demo instance's schema always has it."""
+    row = conn.execute(
+        "SELECT payload, payload_hash, compressed, captured_at, synthetic FROM snapshots "
+        "WHERE endpoint=? AND captured_at<=? ORDER BY captured_at DESC LIMIT 1",
+        (endpoint, at.isoformat()),
+    ).fetchone()
     if row is None:
         return None
     payload = bytes(row["payload"]) if not isinstance(row["payload"], str) else row["payload"]

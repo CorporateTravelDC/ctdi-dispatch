@@ -111,6 +111,12 @@ async def main() -> None:
         db.init_db_v50()  # 2026-10-18: acars_messages.acars_flags -- the local
                           # ACARS writer (local_airspace) stamps type flags
                           # (pg_schema/0081 on Postgres).
+        db.init_db_v51()  # 2026-10-20: codeshare_map lookaside columns -- every
+                          # SWIM watch matcher reads relation/retired_at
+                          # (pg_schema/0082 on Postgres).
+        db.init_db_v52()  # 2026-10-20: flight_ooooi_times.tfms_eta* -- the TFMS
+                          # FlightModify/FlightTimes writer stores eta[etaType,
+                          # timeValue] for the watch ETA (pg_schema/0083).
         # 2026-08-30 SWIM-audit tables (stdds_rvr / tdes_departure_events /
         # tdls_messages / datis_snapshots / tfms_edct_slots /
         # fdps_destination_changes + flight_events extras columns). Lives in

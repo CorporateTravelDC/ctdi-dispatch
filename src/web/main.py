@@ -176,6 +176,10 @@ async def startup() -> None:
         # write these either, but a future route-visualization/hole-detection
         # endpoint querying them needs the tables to exist on a fresh DB.
         db.init_db_v45()
+        # 2026-10-20: watchlist_entries.alert_topic + codeshare_map lookaside
+        # columns -- web's watchlist upsert writes alert_topic (pg_schema/0082
+        # on Postgres).
+        db.init_db_v51()
 
 
 # ── Tier 0 — Public (Cloudflare Tunnel + Tailscale) ───────────────────────────

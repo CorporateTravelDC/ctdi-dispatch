@@ -8,6 +8,8 @@ ntfy topic routing (canonical):
   Flights:  fire "flight-alerts" + "dispatch" simultaneously
   Trains:   fire "train-alerts"  + "dispatch" simultaneously
   Both:     domain topic = full detail; dispatch = concise bottom line
+  2026-10-20: a permanent entry with "alert_topic" (the bellwether set) fires
+  that topic ONLY ("bellwether-alerts", no dispatch copy) -- shared.watch_topic.
 """
 from __future__ import annotations
 
@@ -338,6 +340,31 @@ def _local_ac_by_callsign(callsign: str) -> dict | None:
     return None
 
 
+def _watch_callsigns(entry: dict, ident_clean: str) -> list[str]:
+    """2026-10-20 (bellwether batch): the callsigns a watch's aircraft may broadcast
+    or file under, in order: the identifier as typed, its ICAO form (BA293 ->
+    BAW293) and its current route-filtered lookaside links (codeshare operating
+    flight; ATC callsign EK231 -> UAE3MX). ADS-B and FDPS carry the ATC callsign,
+    never the public number. DB errors degrade to the identifier alone."""
+    out = [ident_clean]
+    try:
+        from common import flight_instance as fi
+        for c, n in fi.operating_identities(ident_clean, entry.get("origin"), entry.get("destination")):
+            if f"{c}{n}" not in out:
+                out.append(f"{c}{n}")
+    except Exception as e:  # noqa: BLE001
+        log.debug("watch callsign lookaside failed (non-fatal): %s", e)
+    return out
+
+
+def _first_hit(fn, callsigns: list[str]) -> dict | None:
+    for cs in callsigns:
+        ac = fn(cs)
+        if ac:
+            return ac
+    return None
+
+
 def _local_fdps_ac(callsign: str) -> dict | None:
     """FDPS-backed fallback when local ADS-B has no contact (out of local
     receiver range) -- SWIM data already ingested and stored locally, see
@@ -497,7 +524,8 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             and not entry.get("hex_corroborated_at")
         )
         if needs_corroboration:
-            ac = _local_ac_by_callsign(ident_clean) or _local_fdps_ac(ident_clean)
+            callsigns = _watch_callsigns(entry, ident_clean)
+            ac = _first_hit(_local_ac_by_callsign, callsigns) or _first_hit(_local_fdps_ac, callsigns)
             if ac:
                 observed_hex = (ac.get("hex") or "").lower().strip()
                 if observed_hex == expected_hex:
@@ -513,8 +541,10 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             resolved_via_hex = True
     else:
         # Bootstrap phase only -- no confirmed hex exists yet, callsign is
-        # the only way to discover one.
-        ac = _local_ac_by_callsign(ident_clean)
+        # the only way to discover one. 2026-10-20: every callsign the watch
+        # answers to (ICAO form, ATC-callsign / codeshare lookaside), in order.
+        callsigns = _watch_callsigns(entry, ident_clean)
+        ac = _first_hit(_local_ac_by_callsign, callsigns)
         if ac:
             callsign_live_confirmed = True
         if not ac and notes_hex:
@@ -528,14 +558,14 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
         if not ac:
             # Local ADS-B has nothing (likely out of receiver range) --
             # fall back to already-ingested FDPS SWIM data, still local.
-            ac = _local_fdps_ac(ident_clean)
+            ac = _first_hit(_local_fdps_ac, callsigns)
             if ac:
                 callsign_live_confirmed = True
         if not ac:
             # 2026-10-08: every local source is dark -- airplanes.live fallback
             # (live ADS-B under this callsign; position/identity only, no OOOI
             # authority -- the sweep's confirmation gate still applies).
-            ac = _remote_ac_by_callsign(ident_clean)
+            ac = _first_hit(_remote_ac_by_callsign, callsigns)
             if ac:
                 callsign_live_confirmed = True
     ac_list = [ac] if ac else []
@@ -698,7 +728,11 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
     etype = entry["entry_type"]
 
     if etype == "flight":
-        domain_topic = "flight-alerts"
+        # 2026-10-20 (operator): a bellwether (permanent record alert_topic) pushes
+        # on bellwether-alerts only -- shared.watch_topic; _fire_ntfy_dual drops
+        # the dispatch copy for it.
+        from shared.watch_topic import topic_for_entry
+        domain_topic = topic_for_entry(entry, "flight")
         origin = entry.get("origin") or ""
         dest = entry.get("destination") or ""
         route = f"{origin}→{dest}" if origin or dest else ""
@@ -1169,8 +1203,13 @@ def _fire_ntfy_dual(domain_topic: str, title: str, detail_body: str,
                   _NTFY_RETRY_ATTEMPTS, topic, last_exc, last_body)
 
     f1 = _ntfy_pool.submit(_push, domain_topic, detail_body)
-    f2 = _ntfy_pool.submit(_push, "dispatch", dispatch_body)
-    futures_wait([f1, f2], timeout=15)
+    futures = [f1]
+    # 2026-10-20 (operator): bellwether pushes skip the dispatch duplicate
+    # (shared.watch_topic.NO_DISPATCH_TOPICS).
+    from shared.watch_topic import sends_dispatch_copy
+    if sends_dispatch_copy(domain_topic):
+        futures.append(_ntfy_pool.submit(_push, "dispatch", dispatch_body))
+    futures_wait(futures, timeout=15)
 
 
 # ── Permanent watchlist file watcher ─────────────────────────────────────────
@@ -1283,6 +1322,10 @@ class WatchlistFileWatcher:
                 "show_regional": raw.get("show_regional"),
                 "days_active": raw.get("days_active"),
                 "sister_flight": raw.get("sister_flight"),
+                # 2026-10-20 (bellwether batch, pg_schema/0082): copied so
+                # containers without the watchlists volume route the same way
+                # (shared.watch_topic).
+                "alert_topic": raw.get("alert_topic"),
             })
 
         # Remove entries that were in the last load but are gone from the file.
@@ -1343,8 +1386,18 @@ def tfms_departure_state(ident: str, origin: str | None = None, destination: str
     """('off'|'out', airline time) from TFMS for this operating callsign when
     that milestone has already passed, else None. Departure side only."""
     now = now or datetime.now(timezone.utc)
-    row = db.get_recent_flight_ooooi(ident)
-    if not row or not _same_airport(row.get("origin"), origin) or not _same_airport(row.get("destination"), destination):
+    # 2026-10-20 (bellwether batch): a public number (EK231) is filed under its ICAO
+    # form or a current lookaside link (codeshare / ATC callsign UAE3MX), never as
+    # typed -- try each operating identity, route-filtered, in order.
+    from common import flight_instance as fi
+    candidates = [f"{c}{n}" for c, n in fi.operating_identities(ident, origin, destination)] or [ident]
+    row = None
+    for cs in candidates:
+        r = db.get_recent_flight_ooooi(cs)
+        if r and _same_airport(r.get("origin"), origin) and _same_airport(r.get("destination"), destination):
+            row = r
+            break
+    if not row:
         return None
     for key, phase in (("airline_off_time", "off"), ("airline_out_time", "out")):
         t = row.get(key)

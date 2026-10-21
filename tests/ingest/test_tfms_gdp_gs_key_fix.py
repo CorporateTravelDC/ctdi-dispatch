@@ -144,7 +144,8 @@ def test_write_tfms_programs_stamps_key_scheme_and_correlates_legacy_row():
         # program, now correctly keyed post-fix.
         written = write_tfms_programs([{
             "program_id": "GS-IAD-1755943200", "type": "GS", "facility": "IAD",
-            "start_time": 1755943200.0, "end_time": 1755954000.0,
+            # end_time far ahead (2026-10-21): an already-ended TFMS program is now stored inactive
+            "start_time": 1755943200.0, "end_time": 4102444800.0,
         }])
         assert written == 1
 

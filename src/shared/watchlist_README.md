@@ -176,6 +176,31 @@ doubling backoff.
 | train | `train-alerts` | `dispatch` |
 | vessel | `vessel-alerts` | `dispatch` |
 | drone | `drone-alerts` (operator 2026-10-16; was the train branch) | `dispatch` |
+| flight, permanent record with `"alert_topic": "bellwether-alerts"` (2026-10-20) | `bellwether-alerts` | nothing (no `dispatch` copy) |
+
+**Bellwether set (2026-10-20, operator).** `watchlists/permanent_flights.json`
+carries BA293 and 46 more bellwethers (inbound/outbound route pairs: LHR, DXB,
+MUC, CDG, DOH, FCO/ADD, HND to IAD; HND-ORD; ICN-DFW; HND-LAX; DEL-EWR; DEL-SFO
+inbound only; JNB-EWR; SFO/DCA transcons). Each has `identifier` = the PUBLIC
+flight number in IATA form (EK231, never the ATC callsign UAE3MX), ICAO
+origin/destination, `sister_flight` = its route pair partner's entry **id**,
+all seven `days_active`, and `"alert_topic": "bellwether-alerts"`. The file
+watcher copies `alert_topic` into `watchlist_entries.alert_topic`
+(pg_schema/0082) so containers without the watchlists volume route the same
+way; `shared/watch_topic.py` (`topic_for_entry`) is the one rule every
+watch-keyed push site uses (`watchlist_event_hit`, `_fire_ntfy_dual`, pusher
+retries and landings, web remove). Allowed values: `bellwether-alerts` only;
+anything else is ignored. VIP aircraft entries are unchanged.
+
+**Public number vs ATC callsign (2026-10-20).** Every SWIM matcher
+(`common/flight_instance.match_watch_entry` / `match_watch_surface_event`: TFMS,
+TBFM, FDPS, SMES/TDES) and `resolve_flight_identity` / `tfms_departure_state`
+here answer to a watch's own number, its ICAO form (`common.airline_codes`), and
+its current route-filtered lookaside links in `codeshare_map` (relation
+`codeshare` or `atc_callsign`). A lookaside match must be proven on the watch's
+route (at least one message airport agrees); another leg never advances the
+watch. Links are learned from FIDS leg matches and SWIM route continuity
+(`common/callsign_lookaside.py`); see docs/FLIGHT_INSTANCE_RESOLVER.md.
 
 > **2026-08-11:** an earlier revision of this file documented a live bug —
 > `watchlist_event_hit()` in `src/shared/watchlist.py` had no vessel branch,

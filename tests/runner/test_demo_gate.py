@@ -51,12 +51,19 @@ def test_trusted_requests_are_untouched(demo):
     assert c.delete("/api/chat/history", headers=h).status_code not in (401, 403)
 
 
-def test_live_runner_is_unaffected(monkeypatch):
+def test_live_runner_answers_only_trusted_origins(monkeypatch):
+    """2026-10-20 (operator): public = demo, tailnet = live. The live runner
+    404s every untrusted request (only /healthz stays open) and serves trusted
+    ones without the demo gate."""
     monkeypatch.setattr(rm, "DEMO_MODE", False)
-    monkeypatch.setattr(rm, "_is_trusted", lambda request: False)
-    c = TestClient(rm.app)
-    assert c.get("/api/demo/status").status_code != 403
-    assert c.get("/api/rss/categories").status_code not in (401, 403)
+    monkeypatch.setattr(rm, "_is_trusted", lambda request: request.headers.get("x-test-trusted") == "1")
+    c = TestClient(rm.app, raise_server_exceptions=False)
+    for path in ("/", "/api/demo/status", "/api/rss/categories", "/api/dispatch/api/v1/watchlist", "/api/adsb/local"):
+        assert c.get(path).status_code == 404, path
+    assert c.get("/healthz").status_code == 200
+    h = {"x-test-trusted": "1"}
+    assert c.get("/api/demo/status", headers=h).status_code not in (401, 403, 404)
+    assert c.get("/api/rss/categories", headers=h).status_code not in (401, 403, 404)
 
 
 # -- 2026-10-13: the trust rule the gate depends on, exactly as docs/dispatch-runner-design.md documents it --

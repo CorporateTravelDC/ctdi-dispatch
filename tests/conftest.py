@@ -6,7 +6,9 @@ CRITICAL CONTEXT (2026-09-05 real incident): this repo has no separate
 dev/staging box -- the Pi this runs on IS the live production dispatch
 system, and every config default in common/config.py points at REAL
 production infrastructure: DISPATCH_DB's default IS the real
-corporatetraveldc.db path, and NTFY_URL's default (http://localhost:8080)
+corporatetraveldc.db path (2026-10-20: no longer -- DISPATCH_DB has no default
+and that file is destroyed; the sqlite backend now needs
+CTDC_ALLOW_SQLITE_FOR_TESTS=1, set below), and NTFY_URL's default (http://localhost:8080)
 IS the real ntfy server, reachable from a bare host process since the
 ntfy container publishes that port to the host. There is no environment
 variable that needs to be SET for a test to hit production -- the
@@ -58,6 +60,16 @@ import os
 # config._load_env_file() only populates keys that are not already set, so
 # claiming this one first means dispatch.env's "postgres" never lands.
 os.environ["DISPATCH_DB_BACKEND"] = "sqlite"
+# 2026-10-20 (operator decision 2026-10-19: platform SQLite retired): the
+# sqlite backend is refused everywhere (db_backend.SqliteRetired) unless this
+# flag is set, and ONLY this file sets it (tests/common/test_no_platform_sqlite.py).
+# Subprocess tests inherit it through os.environ. Also re-set per test below.
+os.environ["CTDC_ALLOW_SQLITE_FOR_TESTS"] = "1"
+
+# 2026-10-20: the transcript leak scan reads every credential file on the box by
+# default (LEAK_GUARD_SOURCES); no test may load a real secret value (a failing
+# test's traceback once printed one). Tests that need sources set their own.
+os.environ["LEAK_GUARD_SOURCES"] = ""
 
 import pytest
 
@@ -126,6 +138,7 @@ def _force_sqlite_backend_and_trip_on_postgres(monkeypatch, request):
         return
 
     monkeypatch.setenv("DISPATCH_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("CTDC_ALLOW_SQLITE_FOR_TESTS", "1")
 
     def _trip(*_a, **_k):
         raise ProductionDatabaseTripwire(

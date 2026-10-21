@@ -48,6 +48,10 @@ PATTERNS=(
     "ghp_[A-Za-z0-9]"
     "ghs_[A-Za-z0-9]"
     "Bearer [A-Za-z0-9_\-\.]{20,}"
+    # 2026-10-20 (credential coverage): private-key block headers and Tailscale keys.
+    # [-]{5}, not five literal dashes: a pattern starting with "-" is read as a grep option.
+    "[-]{5}BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?[-]{5}"
+    "tskey-[A-Za-z0-9-]{20,}"
 )
 
 # Get staged diff (new/modified content only, no deletions)

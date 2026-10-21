@@ -20,6 +20,9 @@ def load(monkeypatch, tmp_path):
     # tests/scripts/test_transcript_leak_scan_ladd.py covers it with a synthetic list.
     monkeypatch.delenv("DISPATCH_DB_BACKEND", raising=False)
     monkeypatch.delenv("DISPATCH_DB", raising=False)
+    for k in ("DISPATCH_PG_HOST", "DISPATCH_PG_DB", "DISPATCH_PG_USER"):   # 2026-10-20: the keys that mean "dispatch env"
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LEAK_GUARD_SOURCES", "")
     monkeypatch.setenv("LEAK_GUARD_EXTRA_FILES", str(tmp_path / "none"))
     spec = importlib.util.spec_from_file_location("tls_fdps", REPO / "scripts/leak-guard/transcript_leak_scan.py")
     m = importlib.util.module_from_spec(spec)

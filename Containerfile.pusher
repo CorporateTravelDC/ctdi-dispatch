@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r
 # the same APT_SNAPSHOT always yields the same package versions. Refresh it
 # deliberately with scripts/build/pin-base-images.py (security updates).
 # SUPERSEDED 2026-10-07: apt-get update against the live mirror (floating).
-ARG APT_SNAPSHOT=20261007T000000Z
+ARG APT_SNAPSHOT=20261021T010650Z
 RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update -qq \
  && apt-get install -y --no-install-recommends gnupg \

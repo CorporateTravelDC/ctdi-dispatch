@@ -5,8 +5,10 @@ relay 2 (the flip): scripts/demo-env.py, the one tool that edits
 Held here: the SCRAM verifier matches RFC 7677; the password never reaches
 argv, stdout or the server (only its verifier, on psql's stdin); the file is
 edited in place (mode, inode kept); seed copies only the named non-secret
-keys; the rollback switch flips DEMO_SOURCE and DISPATCH_DB_BACKEND as a pair
-and the demo code then really reads the sovereign file and demo_access.db.
+keys. ~~the rollback switch flips DEMO_SOURCE and DISPATCH_DB_BACKEND as a pair
+and the demo code then really reads the sovereign file and demo_access.db~~ --
+2026-10-20: the sqlite rollback is retired; `source` refuses, `check` requires
+postgres, and the demo code refuses sqlite.
 No podman, no socket, no real /etc file: subprocess.run is faked and every
 path is under tmp_path.
 """
@@ -104,18 +106,18 @@ def test_password_shape():
 def test_write_keys_in_place_keeps_mode_and_inode(env):
     m, f = env
     ino = f.stat().st_ino
-    changed = m.write_keys({"DEMO_SOURCE": "sqlite", "NEW_KEY": "v"})
-    assert changed == ["DEMO_SOURCE", "NEW_KEY"]
+    changed = m.write_keys({"DEMO_LOOP_DAYS": "28", "NEW_KEY": "v"})
+    assert changed == ["DEMO_LOOP_DAYS", "NEW_KEY"]
     assert f.stat().st_ino == ino and (f.stat().st_mode & 0o777) == 0o600
     text = f.read_text()
-    assert "\nDEMO_SOURCE=sqlite\n" in text and text.endswith("NEW_KEY=v\n")
+    assert "\nDEMO_LOOP_DAYS=28\n" in text and text.endswith("NEW_KEY=v\n")
     assert "# /etc/corporatetraveldc/demo.env" in text, "comments preserved"
-    assert m.write_keys({"DEMO_SOURCE": "sqlite"}) == []
+    assert m.write_keys({"DEMO_LOOP_DAYS": "28"}) == []
     with pytest.raises(m.EnvFileError):
         m.write_keys({"X": 'quoted"value'})
     os.chmod(f, 0o640)
     with pytest.raises(m.EnvFileError, match="0600"):
-        m.write_keys({"DEMO_SOURCE": "postgres"})
+        m.write_keys({"DEMO_LOOP_DAYS": "14"})
 
 
 def test_missing_file_names_the_hand_step(env):
@@ -141,31 +143,35 @@ def test_check_seed_and_forbidden_keys(env, capsys):
     m.write_keys({"DISPATCH_PG_USER": "dispatch"})
     assert "forbidden key DISPATCH_PG_USER (production)" in m.check()
     f.write_text("\n".join(l for l in f.read_text().splitlines() if not l.startswith("DISPATCH_PG_USER")) + "\n")
+    # 2026-10-20: the backend and a leftover DEMO_SOURCE line must say postgres.
     m.write_keys({"DEMO_SOURCE": "sqlite"})
-    assert any(p.startswith("switch half-set") for p in m.check())
+    assert "DEMO_SOURCE is not postgres" in m.check()
+    m.write_keys({"DEMO_SOURCE": "postgres", "DISPATCH_DB_BACKEND": "sqlite"})
+    assert m.check() == ["DISPATCH_DB_BACKEND is not postgres"]
     assert m.main(["check"]) == 1
 
 
-def test_rollback_switch_is_one_step_and_the_code_follows_it(env, monkeypatch):
-    """`source sqlite` sets the pair; with the file's values in the process
-    environment (what podman --env-file does), demo-api reads the sovereign
-    file and the profile store is demo_access.db; `source postgres` undoes it."""
+def test_example_has_no_rollback_switch_and_check_does_not_need_demo_source(env):
+    """The example carries DISPATCH_DB_BACKEND=postgres as a constant and no
+    DEMO_SOURCE line (demo-api's quadlet sets it); check() passes without it."""
     m, f = env
-    assert m.main(["source", "sqlite"]) == 0
-    vals = m.read_env()
-    assert (vals["DEMO_SOURCE"], vals["DISPATCH_DB_BACKEND"]) == ("sqlite", "sqlite")
-    from demo import demo_api, profiles
-    # conftest pins backend() to sqlite for every test; read the env here as the real one does (no pool is opened)
-    monkeypatch.setattr(profiles.db_backend, "backend", lambda: os.environ.get("DISPATCH_DB_BACKEND", "sqlite").strip().lower())
-    for k in ("DEMO_SOURCE", "DISPATCH_DB_BACKEND", "DISPATCH_ROLE"):
-        monkeypatch.setenv(k, vals[k])
-    assert demo_api.source_kind() == "sqlite" and profiles.store_kind() == "sqlite"
-    assert m.main(["source", "postgres"]) == 0
-    vals = m.read_env()
-    for k in ("DEMO_SOURCE", "DISPATCH_DB_BACKEND"):
-        monkeypatch.setenv(k, vals[k])
-    assert demo_api.source_kind() == "postgres" and profiles.store_kind() == "postgres"
-    assert m.main(["source", "mysql"]) == 2
+    active = [l for l in f.read_text().splitlines() if l and not l.startswith("#")]
+    assert "DISPATCH_DB_BACKEND=postgres" in active
+    assert not any(l.startswith("DEMO_SOURCE=") for l in active)
+    assert "DEMO_SOURCE" not in m.REQUIRED
+    assert not hasattr(m, "SWITCH") and not hasattr(m, "switch")
+
+
+@pytest.mark.parametrize("arg", ["sqlite", "postgres", "mysql"])
+def test_source_subcommand_is_retired_and_writes_nothing(env, capsys, arg):
+    """2026-10-20: `source sqlite` used to roll the demo back to the sovereign
+    file and demo_access.db -- both destroyed -- so it is refused outright,
+    and so is every other argument; the file is untouched."""
+    m, f = env
+    before = f.read_text()
+    assert m.main(["source", arg]) == 2
+    assert f.read_text() == before
+    assert "retired" in capsys.readouterr().err
 
 
 def test_set_password_generates_writes_first_then_applies_by_verifier(env, monkeypatch, capsys):

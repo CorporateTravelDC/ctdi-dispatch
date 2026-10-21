@@ -1,0 +1,10 @@
+# office-web.network -- TEMPLATE, disabled until after the feature freeze
+# (office skeletons, operator 2026-10-20). docs/deployment-profiles/office-skeletons/.
+#
+# The front-end network of the three office apps (Firefly III, Paperless-ngx,
+# Vikunja): the one their tailnet-only PublishPort rides on (an Internal=true
+# network carries no port forwarding). The database and the broker are NOT on
+# it; each app reaches them over office-db.network.
+[Network]
+NetworkName=corporatetraveldc-office-web
+Driver=bridge

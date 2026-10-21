@@ -349,6 +349,12 @@ def _connect(db_path: str | None = None):
     _create_schema()'s isinstance branch, not the app supporting two
     backends in production."""
     if db_path:
+        # 2026-10-20: test-only path, refused outside the test suite
+        # (platform SQLite retired, operator 2026-10-19).
+        if not db_backend.sqlite_allowed_for_tests():
+            raise db_backend.SqliteRetired(
+                "semantic compile: an explicit sqlite db_path is test-only "
+                f"({db_backend.SQLITE_TEST_FLAG}=1)")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:

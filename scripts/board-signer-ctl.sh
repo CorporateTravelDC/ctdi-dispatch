@@ -39,8 +39,9 @@
 # (register) and from scripts/team-liveness.sh (show/deactivate/activate/
 # revoke-tokens/revoked-since). Postgres access: PGPASSWORD is read in-script
 # from the secrets file and never echoed; never shell-source the env files.
-# SQL goes through a quoted heredoc. Falls back to the sqlite backend via
-# common.db when DISPATCH_DB_BACKEND != postgres (tests / dev).
+# SQL goes through a quoted heredoc. ~~Falls back to the sqlite backend via
+# common.db when DISPATCH_DB_BACKEND != postgres (tests / dev).~~ 2026-10-20: the
+# sqlite path runs only under the test flag (see pg_backend below).
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECRETS=/etc/corporatetraveldc/dispatch-secrets.env
@@ -69,8 +70,21 @@ esac
 [[ -z "$ROLE" || "$ROLE" =~ ^(admin|member|service)$ ]] || { echo "role must be admin|member|service" >&2; exit 65; }
 [[ -z "$KIND" || "$KIND" =~ ^(human|agent|service)$ ]] || { echo "kind must be human|agent|service" >&2; exit 65; }
 
-# an explicit DISPATCH_DB_BACKEND in the environment (tests, dev) beats the deployment file
-pg_backend() { local b="${DISPATCH_DB_BACKEND:-}"; [[ -n "$b" ]] || b="$(grep -m1 '^DISPATCH_DB_BACKEND=' "$ENVF" 2>/dev/null | cut -d= -f2- || true)"; [[ "$b" == postgres ]]; }
+# an explicit DISPATCH_DB_BACKEND in the environment (tests, dev) beats the deployment file.
+# 2026-10-20 (operator 2026-10-19: platform SQLite retired): ~~anything but postgres
+# fell back to the sqlite backend via common.db~~ -- unset/empty means postgres; sqlite
+# is honoured only under CTDC_ALLOW_SQLITE_FOR_TESTS=1 (the test suite); any other
+# value refuses (exit 70) instead of falling back.
+pg_backend() {
+  local b="${DISPATCH_DB_BACKEND:-}"
+  [[ -n "$b" ]] || b="$(grep -m1 '^DISPATCH_DB_BACKEND=' "$ENVF" 2>/dev/null | cut -d= -f2- || true)"
+  case "${b:-postgres}" in
+    postgres) return 0 ;;
+    sqlite) [[ "${CTDC_ALLOW_SQLITE_FOR_TESTS:-}" == 1 ]] && return 1
+            echo "DISPATCH_DB_BACKEND=sqlite is retired (platform SQLite, 2026-10-19); test suite only" >&2; exit 70 ;;
+    *) echo "DISPATCH_DB_BACKEND must be postgres" >&2; exit 70 ;;
+  esac
+}
 cfg() { grep -m1 "^$1=" "$ENVF" 2>/dev/null | cut -d= -f2- || true; }   # grep's rc 1 must not trip set -e
 PG_USER="$(cfg DISPATCH_PG_USER)"; PG_USER="${PG_USER:-dispatch}"
 PG_DB="$(cfg DISPATCH_PG_DB)";     PG_DB="${PG_DB:-corporatetraveldc}"

@@ -55,16 +55,19 @@ def test_pg_conninfo_refuses_under_sqlite_backend(real, monkeypatch):
 
 
 def test_backend_value_is_normalised(real, monkeypatch):
-    # " Postgres " is the postgres backend; "sqlite3" / "" are not.
+    # " Postgres " is the postgres backend. ~~"sqlite3" / "" are not~~ --
+    # 2026-10-20 (platform SQLite retired): "" (and unset) now IS postgres, the
+    # default; "sqlite3" is an unknown value and raises SqliteRetired before
+    # any conninfo (tests/common/test_no_platform_sqlite.py covers backend()).
     monkeypatch.setenv("DISPATCH_PG_HOST", "127.0.0.1")
     monkeypatch.setenv("DISPATCH_PG_DB", "ctdc_demo")
     monkeypatch.setenv("DISPATCH_PG_USER", "mirror")   # 2026-10-16: `demo` is the demo instance's role, refused here
-    monkeypatch.setenv("DISPATCH_DB_BACKEND", " Postgres ")
-    assert "dbname=ctdc_demo" in real._pg_conninfo()  # noqa: SLF001
-    for bad in ("sqlite3", ""):
-        monkeypatch.setenv("DISPATCH_DB_BACKEND", bad)
-        with pytest.raises(db_backend.PostgresRefused):
-            real._pg_conninfo()  # noqa: SLF001
+    for ok in (" Postgres ", ""):
+        monkeypatch.setenv("DISPATCH_DB_BACKEND", ok)
+        assert "dbname=ctdc_demo" in real._pg_conninfo()  # noqa: SLF001
+    monkeypatch.setenv("DISPATCH_DB_BACKEND", "sqlite3")
+    with pytest.raises(db_backend.SqliteRetired):
+        real._pg_conninfo()  # noqa: SLF001
 
 
 @pytest.mark.parametrize("flag", ["1", "true", "YES", "on"])

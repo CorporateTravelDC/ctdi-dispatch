@@ -1,11 +1,14 @@
 [Unit]
-Description=Corporate Travel DC -- redact then scan every agent account's transcripts for live secret values (names and counts only)
+Description=Corporate Travel DC -- redact then scan every agent account's transcripts for live secret values and LADD identifiers (names and counts only)
 [Service]
 Type=oneshot
-Nice=10
+Nice=19
 IOSchedulingClass=idle
 # Closed files are redacted in place (owner and mode kept); files written in the last 15 min are a
 # live session and are left for the next run. The scan then fails the unit if any closed file still
 # carries a value, so a leak that cannot be redacted shows up as a failed unit.
-ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc/transcript_leak_scan.py redact --agents
-ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc/transcript_leak_scan.py scan --agents
+# 2026-10-20: one wrapper runs redact then scan with --require-ladd; the LADD list is piped from the
+# operator's corporatetraveldc-pgsql container into --ladd-stdin (never on disk), so an unreadable
+# list fails the unit (exit 3) instead of a silent "NOT CHECKED". Was: two ExecStart= lines without
+# the LADD class, Nice=10.
+ExecStart=/usr/local/libexec/ctdc/agent-leak-scan.sh

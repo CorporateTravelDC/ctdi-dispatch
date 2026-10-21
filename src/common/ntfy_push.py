@@ -67,6 +67,7 @@ TOPIC_CLICK: dict[str, str] = {
     "tfr-alert":            f"{RUNNER_BASE}/tfr",
     "hot-alerts":           f"{RUNNER_BASE}/tfr",              # VIP/POTUS movement — same signals view
     "flight-alerts":        f"{RUNNER_BASE}/map",              # ADS-B view
+    "bellwether-alerts":    f"{RUNNER_BASE}/map",              # 2026-10-20: bellwether set, same view as flight-alerts
     "cps":                  f"{RUNNER_BASE}/",                 # CpsIndicator is in the global header on every view
     "ops-health":           f"{RUNNER_BASE}/status",           # feed health / freshness
     "train-alerts":         f"{RUNNER_BASE}/trains",           # EOTD view

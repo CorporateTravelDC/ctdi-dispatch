@@ -4,7 +4,7 @@ Superseded by poller/skills/audit_log_archive.py. This file is kept as a
 refusing stub rather than deleted, deliberately: the schedule entry that
 used to point here lived in poller/main.py for a month, and the name
 still appears in src/auth/auth.py's comments,
-scripts/migrate-sqlite-to-pg.py's retention map, and the compliance docs.
+scripts/retired-20261020/migrate-sqlite-to-pg.py's retention map, and the compliance docs.
 Deleting the module would turn a re-added schedule entry into a "skill
 script not found" warning that reads like a packaging bug; a stub that
 says WHY makes the removal self-explaining at the one moment anyone

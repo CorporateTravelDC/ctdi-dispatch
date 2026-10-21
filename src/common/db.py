@@ -1,6 +1,10 @@
 """
-Database layer — SQLite, single file, append-friendly.
-Schema is authoritative here. Migrations are additive (ALTER TABLE only).
+Database layer. ~~SQLite, single file, append-friendly.~~ 2026-10-20:
+Postgres only in production and the demo (src/common/pg_schema/ is the
+authoritative schema); the SQLite SCHEMA and init_db_v* twins below serve the
+test suite only, under CTDC_ALLOW_SQLITE_FOR_TESTS=1 (operator decision
+2026-10-19; their removal is the post-freeze code half,
+docs/POSTGRES_MIGRATION.md §3.7).
 """
 
 import hashlib
@@ -39,6 +43,14 @@ _local = threading.local()
 
 
 def _open_connection() -> sqlite3.Connection:
+    # 2026-10-20: platform SQLite is retired (operator 2026-10-19). This is
+    # the test-flag path only -- refuse before any file is created.
+    from common import db_backend
+    if not db_backend.sqlite_allowed_for_tests():
+        raise db_backend.SqliteRetired(
+            "common.db: the SQLite connection is test-only "
+            f"({db_backend.SQLITE_TEST_FLAG}=1, tests/conftest.py); platform "
+            "SQLite is retired (operator 2026-10-19)")
     c = sqlite3.connect(str(_db_path()), timeout=10)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
@@ -80,9 +92,13 @@ def conn() -> Generator[sqlite3.Connection, None, None]:
     exception contract, dict rows, and a `?`/`:name` -> `%s`/`%(name)s`
     placeholder shim so nothing below this line changes. This is the ONLY
     branch point; every one of this module's 500+ call sites is untouched.
-    DISPATCH_DB_BACKEND defaults to (and, absent an explicit operator
-    change, stays) sqlite -- the branch below is today's behaviour,
-    byte-for-byte unchanged.
+    ~~DISPATCH_DB_BACKEND defaults to (and, absent an explicit operator
+    change, stays) sqlite~~ -- 2026-10-20: it defaults to postgres, and the
+    sqlite branch below runs only under the test flag
+    (db_backend.backend() raises SqliteRetired otherwise; operator decision
+    2026-10-19, platform SQLite retired). The SQLite schema and init_db_v*
+    twin migrators below remain for the test suite only -- removing them is
+    the post-freeze code half (docs/POSTGRES_MIGRATION.md §3.7).
 
     Reuses this thread's persistent connection rather than opening a new
     one every call (see _local above). If the connection itself turns
@@ -1227,23 +1243,37 @@ def upsert_nas_program(program_id: str, prog_type: str, facility: str,
     source (2026-10-18, pg_schema/0076): NAS_SOURCE_REST or NAS_SOURCE_TFMS,
     the writer that owns the row's lifecycle. deactivate_absent_programs()
     (REST) only ever touches REST rows; expire_ended_tfms_programs() only
-    TFMS rows. COALESCE-kept like key_scheme."""
+    TFMS rows. COALESCE-kept like key_scheme.
+
+    2026-10-21: a TFMS re-send whose own end_time has already passed is
+    stored inactive. TFMS keeps re-sending programs after they end, and the
+    unconditional active=1 switched them back on between expiry runs (399 of
+    408 "active" TFMS rows had ended on 2026-10-21)."""
+    active = 1
+    if source == NAS_SOURCE_TFMS:
+        try:
+            end_time = json.loads(raw_json or "{}").get("end_time")
+        except (TypeError, ValueError, AttributeError):
+            end_time = None
+        if (isinstance(end_time, (int, float)) and not isinstance(end_time, bool)
+                and end_time < time.time()):
+            active = 0
     with conn() as c:
         c.execute("""
             INSERT INTO nas_programs
                 (program_id, type, facility, raw_json, active, fetched_at,
                  key_scheme, legacy_correlate_id, source)
-            VALUES (?, ?, ?, ?, 1, unixepoch(), ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, unixepoch(), ?, ?, ?)
             ON CONFLICT(program_id) DO UPDATE SET
                 type=excluded.type,
                 facility=excluded.facility,
                 raw_json=excluded.raw_json,
-                active=1,
+                active=excluded.active,
                 fetched_at=excluded.fetched_at,
                 key_scheme=COALESCE(excluded.key_scheme, nas_programs.key_scheme),
                 legacy_correlate_id=COALESCE(excluded.legacy_correlate_id, nas_programs.legacy_correlate_id),
                 source=COALESCE(excluded.source, nas_programs.source)
-        """, (program_id, prog_type, facility, raw_json, key_scheme, legacy_correlate_id,
+        """, (program_id, prog_type, facility, raw_json, active, key_scheme, legacy_correlate_id,
               source))
 
 
@@ -1834,6 +1864,20 @@ def upsert_notam(notam_id: str, raw_json: str, facility: str,
                 last_seen_at=unixepoch()
         """, (notam_id, raw_json, facility, classification,
               effective_start, effective_end, text_body))
+
+
+def delete_notam_event_aliases(facility: str, number: str, issued: str) -> int:
+    """Delete GML-id ("Event_...") copies of the NOTAM identified by facility +
+    number + issued (aim_parser writes raw_json with json.dumps, so the field
+    text is exact). 2026-10-20: FNS NOTAMs with an empty year were keyed by
+    their GML id and later stored again under LOC/YEAR/NUMBER."""
+    with conn() as c:
+        cur = c.execute(
+            "DELETE FROM notams WHERE notam_id LIKE 'Event%' AND facility = ? "
+            "AND raw_json LIKE ? AND raw_json LIKE ?",
+            (facility, f'%"number": {json.dumps(number)}%', f'%"issued": {json.dumps(issued)}%'),
+        )
+        return cur.rowcount or 0
 
 
 def get_active_notams() -> list[dict]:
@@ -2638,6 +2682,8 @@ def get_active_swim_alerts() -> list[dict]:
 # ── Watchlist entry helpers ───────────────────────────────────────────────────
 
 def upsert_watchlist_entry(entry: dict) -> None:
+    # 2026-10-20 (bellwether batch, pg_schema/0082): alert_topic is owned by the
+    # permanent file watcher; a transient upsert of the same id never clears it.
     # days_active arrives as a python list (or None) from callers -- encode
     # to JSON text since SQLite has no native array column type. Decoded
     # back to a list in get_watchlist_entries() below.
@@ -2655,13 +2701,13 @@ def upsert_watchlist_entry(entry: dict) -> None:
                  auto_remove_at, added_at, added_by, notes,
                  last_event_at, last_event_summary, hex_id, registration,
                  subsection, show_national, show_regional, days_active,
-                 sister_flight)
+                 sister_flight, alert_topic)
             VALUES (:id, :entry_type, :tier, :identifier, :origin,
                     :destination, :route_name, :scheduled_departure,
                     :scheduled_arrival, :auto_remove_at, :added_at,
                     :added_by, :notes, :last_event_at, :last_event_summary,
                     :hex_id, :registration, :subsection, :show_national,
-                    :show_regional, :days_active, :sister_flight)
+                    :show_regional, :days_active, :sister_flight, :alert_topic)
             ON CONFLICT(id) DO UPDATE SET
                 identifier=excluded.identifier,
                 origin=excluded.origin,
@@ -2677,7 +2723,9 @@ def upsert_watchlist_entry(entry: dict) -> None:
                 show_national=excluded.show_national,
                 show_regional=excluded.show_regional,
                 days_active=excluded.days_active,
-                sister_flight=excluded.sister_flight
+                sister_flight=excluded.sister_flight,
+                alert_topic=CASE WHEN excluded.tier = 'permanent' THEN excluded.alert_topic
+                                 ELSE watchlist_entries.alert_topic END
         """, {
             "id": entry["id"],
             "entry_type": entry["entry_type"],
@@ -2701,6 +2749,7 @@ def upsert_watchlist_entry(entry: dict) -> None:
             "show_regional": None if show_regional is None else int(bool(show_regional)),
             "days_active": days_active_json,
             "sister_flight": entry.get("sister_flight"),
+            "alert_topic": entry.get("alert_topic"),
         })
 
 
@@ -5435,6 +5484,7 @@ def upsert_codeshare_mapping(marketing_carrier: str, marketing_flight_num: str |
             SELECT id FROM codeshare_map
             WHERE marketing_carrier IS ? AND marketing_flight_num IS ?
               AND operating_carrier IS ?
+              AND relation = 'codeshare' AND retired_at IS NULL
         """, (marketing_carrier, marketing_flight_num, operating_carrier)).fetchone()
         if existing:
             c.execute("""
@@ -5458,12 +5508,18 @@ def upsert_codeshare_mapping(marketing_carrier: str, marketing_flight_num: str |
 
 
 def get_codeshare_mapping_by_marketing(marketing_carrier: str, marketing_flight_num: str,
-                                        include_zero_confidence: bool = False) -> list[dict]:
+                                        include_zero_confidence: bool = False,
+                                        include_retired: bool = False) -> list[dict]:
+    """Current links for a marketing/public number, both relations ('codeshare'
+    and, since 2026-10-20 pg_schema/0082, 'atc_callsign'); each row carries its
+    `relation`. Retired links (relinked or retired, kept as history) only with
+    include_retired=True."""
     with conn() as c:
         q = """
             SELECT * FROM codeshare_map
             WHERE marketing_carrier = ? AND marketing_flight_num = ?
-        """ + ("" if include_zero_confidence else " AND confidence > 0") + """
+        """ + ("" if include_zero_confidence else " AND confidence > 0") + \
+            ("" if include_retired else " AND retired_at IS NULL") + """
             ORDER BY confidence DESC
         """
         rows = c.execute(q, ((marketing_carrier or "").upper(), marketing_flight_num)).fetchall()
@@ -5491,12 +5547,14 @@ def resolve_operating_callsign(ident: str) -> str | None:
 
 
 def get_codeshare_mapping_by_operating(operating_carrier: str, operating_flight_num: str,
-                                        include_zero_confidence: bool = False) -> list[dict]:
+                                        include_zero_confidence: bool = False,
+                                        include_retired: bool = False) -> list[dict]:
     with conn() as c:
         q = """
             SELECT * FROM codeshare_map
             WHERE operating_carrier = ? AND operating_flight_num = ?
-        """ + ("" if include_zero_confidence else " AND confidence > 0") + """
+        """ + ("" if include_zero_confidence else " AND confidence > 0") + \
+            ("" if include_retired else " AND retired_at IS NULL") + """
             ORDER BY confidence DESC
         """
         rows = c.execute(q, ((operating_carrier or "").upper(), operating_flight_num)).fetchall()
@@ -5552,6 +5610,208 @@ def decay_stale_codeshare_mappings(stale_after_days: int = 90, decay_amount: int
         "zeroed_out": zeroed,
         "generated_at": now,
     }
+
+
+# ── ATC-callsign lookaside -- v51, 2026-10-20 (bellwether batch; pg_schema/0082) ──
+# Watch identifiers are PUBLIC flight numbers (EK231, LH414). A carrier may file an
+# alphanumeric ATC callsign instead (EK231 = UAE3MX, LH414 = DLH3Y on 2026-10-19), so
+# codeshare_map gains relation ('codeshare' | 'atc_callsign'), season, retired_at and
+# superseded_by. An atc_callsign row: marketing_* = the public number (ICAO carrier +
+# number), operating_* = the ATC callsign split 3 + rest (UAE / 3MX), origin and
+# destination = the route it was seen on. One CURRENT link per public number and route;
+# a relink retires the old row (retired_at, superseded_by = the new id) and never
+# deletes it -- the W26 season change (2026-10-25) recycles alphanumerics.
+ATC_LINK_SOURCES = ("fids_route_unique", "fids_leg_match", "route_continuity", "operator")
+ATC_CALLSIGN_SEED = (
+    # Verified 2026-10-19 from the IAD FIDS: one FIDS row, one SWIM-verified leg on the route.
+    {"public": "EK231", "atc": "UAE3MX", "origin": "OMDB", "destination": "KIAD",
+     "season": "W26-pending", "source": "fids_route_unique"},
+    {"public": "LH414", "atc": "DLH3Y", "origin": "EDDM", "destination": "KIAD",
+     "season": "W26-pending", "source": "fids_route_unique"},
+)
+
+
+def split_public_number(ident: str | None) -> tuple[str, str] | None:
+    """('UAE', '231') from EK231 / UAE231 (IATA carriers to ICAO through
+    common.airline_codes; leading zeros stripped). None when it is not a flight number."""
+    from common.airline_codes import IATA_TO_ICAO, split_callsign
+    parts = split_callsign(ident)
+    if not parts:
+        return None
+    prefix, num = parts
+    if len(prefix) == 3 and prefix.isalpha():
+        return prefix, num
+    icao = IATA_TO_ICAO.get(prefix)
+    return (icao, num) if icao else None
+
+
+def split_atc_callsign(callsign: str | None) -> tuple[str, str] | None:
+    """('UAE', '3MX') from UAE3MX; ('KAL', '31') from KAL031. The ATC form is the
+    3-letter ICAO designator + 1-4 characters starting with a digit (FAA ACID)."""
+    import re
+    cs = (callsign or "").strip().upper().replace(" ", "")
+    m = re.match(r"^([A-Z]{3})([0-9][A-Z0-9]{0,3})$", cs)
+    if not m:
+        return None
+    rest = m.group(2)
+    if rest.isdigit():                # all-numeric: the same normalisation as split_callsign
+        rest = rest.lstrip("0") or "0"
+    return m.group(1), rest
+
+
+def _norm_apt(code: str | None) -> str | None:
+    c = (code or "").strip().upper()
+    if len(c) == 3 and c.isalpha():
+        return "K" + c
+    return c or None
+
+
+def get_atc_callsign_links(public_ident: str | None = None, include_retired: bool = False) -> list[dict]:
+    """atc_callsign rows (all, or one public number's), current only unless
+    include_retired. Newest first."""
+    where, params = ["relation = 'atc_callsign'"], []
+    if public_ident:
+        pub = split_public_number(public_ident)
+        if not pub:
+            return []
+        where.append("marketing_carrier = ? AND marketing_flight_num = ?")
+        params += [pub[0], pub[1]]
+    if not include_retired:
+        where.append("retired_at IS NULL")
+    with conn() as c:
+        rows = c.execute("SELECT * FROM codeshare_map WHERE " + " AND ".join(where)
+                         + " ORDER BY id DESC", tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_current_atc_callsign(public_ident: str, origin: str | None = None,
+                             destination: str | None = None) -> str | None:
+    """The current ATC callsign a public number is filed under on this route
+    (UAE3MX for EK231 OMDB-KIAD), or None. A link whose stored route positively
+    disagrees with the given origin/destination is not this flight."""
+    o, d = _norm_apt(origin), _norm_apt(destination)
+    for r in get_atc_callsign_links(public_ident):
+        ro, rd = _norm_apt(r.get("origin")), _norm_apt(r.get("destination"))
+        if o and ro and o != ro:
+            continue
+        if d and rd and d != rd:
+            continue
+        if r.get("confidence") is not None and int(r["confidence"]) <= 0:
+            continue
+        return f"{r['operating_carrier']}{r['operating_flight_num']}"
+    return None
+
+
+def upsert_atc_callsign_link(public_ident: str, atc_callsign: str, origin: str | None,
+                             destination: str | None, source: str,
+                             season: str | None = None) -> dict | None:
+    """Record or reinforce public number -> ATC callsign on one route. Returns
+    {"id", "action": "inserted"|"confirmed"|"relinked", "retired_id", "old_callsign"},
+    or None when either side is not a flight identifier or the callsign is just the
+    public number in ICAO form (nothing to look aside to).
+
+    One current link per (public number, origin, destination): a different callsign
+    for the same route retires the old row (retired_at, superseded_by = new id) and
+    inserts the new one -- the history row is kept, never deleted."""
+    if source not in ATC_LINK_SOURCES:
+        raise ValueError(f"unknown atc_callsign link source {source!r}")
+    pub = split_public_number(public_ident)
+    atc = split_atc_callsign(atc_callsign)
+    if not pub or not atc or pub == atc:
+        return None
+    o, d = _norm_apt(origin), _norm_apt(destination)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with conn() as c:
+        current = [dict(r) for r in c.execute("""
+            SELECT id, operating_carrier, operating_flight_num FROM codeshare_map
+            WHERE relation = 'atc_callsign' AND retired_at IS NULL
+              AND marketing_carrier = ? AND marketing_flight_num = ?
+              AND origin IS ? AND destination IS ?
+            ORDER BY id DESC
+        """, (pub[0], pub[1], o, d)).fetchall()]
+        for row in current:
+            if (row["operating_carrier"], row["operating_flight_num"]) == atc:
+                c.execute("""
+                    UPDATE codeshare_map
+                    SET confidence = confidence + 1, last_confirmed_at = ?,
+                        season = COALESCE(?, season)
+                    WHERE id = ?
+                """, (now, season, row["id"]))
+                return {"id": row["id"], "action": "confirmed", "retired_id": None,
+                        "old_callsign": None}
+        new_id = c.execute("""
+            INSERT INTO codeshare_map
+            (marketing_carrier, marketing_flight_num, operating_carrier, operating_flight_num,
+             origin, destination, confidence, source, first_seen_at, last_confirmed_at,
+             relation, season)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'atc_callsign', ?)
+            RETURNING id
+        """, (pub[0], pub[1], atc[0], atc[1], o, d, source, now, now, season)).fetchone()["id"]
+        retired_id = old_cs = None
+        for row in current:
+            c.execute("UPDATE codeshare_map SET retired_at = ?, superseded_by = ? WHERE id = ?",
+                      (now, new_id, row["id"]))
+            retired_id = row["id"]
+            old_cs = f"{row['operating_carrier']}{row['operating_flight_num']}"
+    return {"id": new_id, "action": "relinked" if retired_id else "inserted",
+            "retired_id": retired_id, "old_callsign": old_cs}
+
+
+def retire_atc_callsign_link(link_id: int, superseded_by: int | None = None) -> bool:
+    """Mark one link no longer current (kept as history). True if it was current."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with conn() as c:
+        cur = c.execute("UPDATE codeshare_map SET retired_at = ?, superseded_by = ? "
+                        "WHERE id = ? AND retired_at IS NULL", (now, superseded_by, link_id))
+        return (cur.rowcount or 0) > 0
+
+
+def seed_atc_callsign_links() -> int:
+    """Insert ATC_CALLSIGN_SEED rows that have no current link yet (the SQLite twin
+    of 0082's INSERT ... WHERE NOT EXISTS). Returns rows inserted."""
+    n = 0
+    for s_ in ATC_CALLSIGN_SEED:
+        if get_current_atc_callsign(s_["public"], s_["origin"], s_["destination"]):
+            continue
+        res = upsert_atc_callsign_link(s_["public"], s_["atc"], s_["origin"], s_["destination"],
+                                       s_["source"], season=s_["season"])
+        if res and res["action"] == "inserted":
+            n += 1
+    return n
+
+
+def init_db_v51() -> None:
+    """Apply v51 schema -- codeshare_map relation/season/retired_at/superseded_by,
+    watchlist_entries.alert_topic, and the ATC_CALLSIGN_SEED rows (SQLite twin of
+    pg_schema/0082)."""
+    with conn() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(codeshare_map)")}
+        if cols and "relation" not in cols:
+            c.execute("ALTER TABLE codeshare_map ADD COLUMN relation TEXT NOT NULL DEFAULT 'codeshare' "
+                      "CHECK (relation IN ('codeshare', 'atc_callsign'))")
+        for col, typ in (("season", "TEXT"), ("retired_at", "TEXT"), ("superseded_by", "INTEGER")):
+            if cols and col not in cols:
+                c.execute(f"ALTER TABLE codeshare_map ADD COLUMN {col} {typ}")
+        if cols:
+            c.execute("CREATE INDEX IF NOT EXISTS idx_codeshare_current_atc "
+                      "ON codeshare_map(marketing_carrier, marketing_flight_num) "
+                      "WHERE relation = 'atc_callsign' AND retired_at IS NULL")
+        wcols = {r[1] for r in c.execute("PRAGMA table_info(watchlist_entries)")}
+        if wcols and "alert_topic" not in wcols:
+            c.execute("ALTER TABLE watchlist_entries ADD COLUMN alert_topic TEXT")
+    if cols:
+        seed_atc_callsign_links()
+
+
+def init_db_v52() -> None:
+    """Apply v52 schema -- flight_ooooi_times.tfms_eta / tfms_eta_type /
+    tfms_eta_at, TFMS's own arrival estimate for the watch ETA's TFMS tier
+    (SQLite twin of pg_schema/0083; common/watch_eta.py)."""
+    with conn() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(flight_ooooi_times)")}
+        for col, typ in (("tfms_eta", "TEXT"), ("tfms_eta_type", "TEXT"), ("tfms_eta_at", "REAL")):
+            if cols and col not in cols:
+                c.execute(f"ALTER TABLE flight_ooooi_times ADD COLUMN {col} {typ}")
 
 
 def analyze_flight_number_patterns(min_samples: int = 5, dominance_threshold: float = 0.85) -> dict:
@@ -7021,8 +7281,15 @@ def upsert_flight_ooooi(gufi: str, callsign: str | None = None,
                          airline_in_time: str | None = None,
                          original_departure: str | None = None,
                          original_arrival: str | None = None,
-                         flight_status: str | None = None) -> None:
+                         flight_status: str | None = None,
+                         tfms_eta: str | None = None,
+                         tfms_eta_type: str | None = None) -> None:
     """Upsert one flight's OOOI/scheduled-time record, keyed by GUFI.
+
+    tfms_eta / tfms_eta_type (2026-10-20, pg_schema/0083): TFMS's own arrival
+    estimate, the TFMS tier of common.watch_eta. Written by a separate
+    statement in its own transaction so a database without 0083 loses only
+    the estimate (the caller logs the error), never the OOOI row.
     Only overwrites a column when the caller actually supplies a non-None
     value for it (COALESCE against the existing row) -- TFMS sends this
     data across several distinct message types over a flight's lifecycle
@@ -7073,6 +7340,30 @@ def upsert_flight_ooooi(gufi: str, callsign: str | None = None,
         """, (gufi, callsign, airline, flight_num, origin, destination,
               airline_out_time, airline_off_time, airline_on_time, airline_in_time,
               original_departure, original_arrival, flight_status))
+    if tfms_eta:
+        with conn() as c:
+            c.execute("UPDATE flight_ooooi_times SET tfms_eta=?, tfms_eta_type=?, tfms_eta_at=? "
+                      "WHERE gufi=?", (tfms_eta, (tfms_eta_type or "").upper() or None,
+                                       time.time(), gufi))
+
+
+def get_tfms_eta(callsign: str, destination: str | None = None) -> dict | None:
+    """Freshest TFMS arrival estimate for a callsign (and destination when
+    given), from flight_ooooi_times (pg_schema/0083). Returns the row's
+    tfms_eta, tfms_eta_type, tfms_eta_at, destination, gufi -- or None."""
+    if not callsign:
+        return None
+    sql = ("SELECT gufi, destination, tfms_eta, tfms_eta_type, tfms_eta_at FROM flight_ooooi_times "
+           "WHERE callsign=? AND tfms_eta IS NOT NULL")
+    args: list = [callsign.strip().upper()]
+    if destination:
+        sql += " AND (destination=? OR destination=?)"
+        d = destination.strip().upper()
+        args += [d, d[1:] if len(d) == 4 and d.startswith("K") else "K" + d]
+    sql += " ORDER BY tfms_eta_at DESC LIMIT 1"
+    with conn() as c:
+        r = c.execute(sql, tuple(args)).fetchone()
+    return dict(r) if r else None
 
 
 def get_recent_flight_ooooi(callsign: str, max_age_hours: float = 18.0) -> dict | None:
@@ -7081,14 +7372,24 @@ def get_recent_flight_ooooi(callsign: str, max_age_hours: float = 18.0) -> dict 
     2026-10-05: lets a watch added mid-flight learn the airline-reported
     OUT/OFF it missed (shared.watchlist.seed_departure_phase_from_tfms)."""
     import re
-    m = re.match(r"^([A-Za-z]+)(\d+[A-Za-z]?)$", (callsign or "").strip())
-    if not m:
-        return None
+    cs = (callsign or "").strip().upper()
+    m = re.match(r"^([A-Za-z]+)(\d+[A-Za-z]?)$", cs)
+    cutoff = time.time() - max_age_hours * 3600
     with conn() as c:
-        r = c.execute(
-            "SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? AND updated_at > ? "
-            "ORDER BY updated_at DESC LIMIT 1",
-            (m.group(1).upper(), m.group(2), time.time() - max_age_hours * 3600)).fetchone()
+        if m:
+            r = c.execute(
+                "SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? AND updated_at > ? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (m.group(1).upper(), m.group(2), cutoff)).fetchone()
+        elif split_atc_callsign(cs):
+            # 2026-10-20: an alphanumeric ATC callsign (UAE3MX) is stored with
+            # airline/flight_num NULL (upsert_flight_ooooi's split needs digits last);
+            # the callsign column has it (idx_flight_ooooi_times_callsign_updated).
+            r = c.execute(
+                "SELECT * FROM flight_ooooi_times WHERE callsign = ? AND updated_at > ? "
+                "ORDER BY updated_at DESC LIMIT 1", (cs, cutoff)).fetchone()
+        else:
+            return None
     return dict(r) if r else None
 
 

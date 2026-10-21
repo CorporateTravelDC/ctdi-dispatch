@@ -1,0 +1,13 @@
+# office-db.network -- TEMPLATE, disabled until after the feature freeze
+# (office skeletons for the CFO / Executive Assistant / Chief of Staff
+# profiles, operator 2026-10-20). docs/deployment-profiles/office-skeletons/.
+#
+# The back-end network of the office skeleton stack: corporatetraveldc-pgsql-office
+# and corporatetraveldc-valkey-office sit on it ALONE. Internal=true: no route
+# off the box, no egress, no host publish -- the only way in is from another
+# container on this network (the three office apps) or `podman exec`. Nothing
+# from the dispatch stack joins it (tests/scripts/test_office_skeletons.py).
+[Network]
+NetworkName=corporatetraveldc-office-db
+Driver=bridge
+Internal=true

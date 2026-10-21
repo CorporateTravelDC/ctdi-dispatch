@@ -1,0 +1,66 @@
+# corporatetraveldc-paperless -- Paperless-ngx, the document store shared by
+# the Executive Assistant (itineraries, e-tickets) and CFO (receipts of record)
+# skeletons. TEMPLATE, disabled until after the feature freeze (operator
+# 2026-10-20). docs/deployment-profiles/office-skeletons/.
+#
+# Database: PostgreSQL ONLY. Paperless defaults to SQLite when
+# PAPERLESS_DBENGINE is unset ("PostgreSQL and MariaDB users must set this
+# explicitly", Paperless configuration docs), so it is set here, in the tracked
+# quadlet, and tests/scripts/test_office_skeletons.py fails if it is ever
+# anything but `postgresql` or moved out. Database `paperless`, role
+# `paperless`, on corporatetraveldc-pgsql-office over office-db.network.
+# Broker: corporatetraveldc-valkey-office (PAPERLESS_REDIS carries the broker
+# password, so it lives in the secrets file).
+#
+# Secrets ONLY in /etc/corporatetraveldc/paperless-secrets.env (example:
+# config/paperless-secrets.env.example): PAPERLESS_SECRET_KEY,
+# PAPERLESS_DBPASS, PAPERLESS_REDIS. Never dispatch.env / dispatch-secrets.env.
+#
+# Load: one web worker, one task worker, one thread; OCR `auto` (born-digital
+# PDFs skip OCR); Nice 10 and a CPU cap, since OCR is the one real CPU risk on
+# this box. No Tika/Gotenberg (Office files are not consumed in the skeleton).
+#
+# Disabled: no [Install], not in stack-boot-ctl.sh ORDER or the rollout, no
+# timer. Publish: tailnet address only, port 8102.
+[Unit]
+Description=corporatetraveldc -- Paperless-ngx (EA/CFO skeleton documents; template, disabled)
+After=corporatetraveldc-pgsql-office.service corporatetraveldc-valkey-office.service
+Requires=corporatetraveldc-pgsql-office.service corporatetraveldc-valkey-office.service
+
+[Container]
+Image=docker.io/paperlessngx/paperless-ngx:3.3.3
+ContainerName=corporatetraveldc-paperless
+Network=office-db.network
+Network=office-web.network
+PublishPort=100.x.x.x:8102:8000
+Environment=PAPERLESS_DBENGINE=postgresql
+Environment=PAPERLESS_DBHOST=corporatetraveldc-pgsql-office
+Environment=PAPERLESS_DBPORT=5432
+Environment=PAPERLESS_DBNAME=paperless
+Environment=PAPERLESS_DBUSER=paperless
+Environment=PAPERLESS_URL=http://100.x.x.x:8102
+Environment=PAPERLESS_TIME_ZONE=UTC
+Environment=PAPERLESS_WEBSERVER_WORKERS=1
+Environment=PAPERLESS_TASK_WORKERS=1
+Environment=PAPERLESS_THREADS_PER_WORKER=1
+Environment=PAPERLESS_OCR_MODE=auto
+Environment=PAPERLESS_OCR_LANGUAGE=eng
+Environment=PAPERLESS_TIKA_ENABLED=false
+Environment=PAPERLESS_CONSUMER_POLLING=60
+Environment=TZ=UTC
+EnvironmentFile=/etc/corporatetraveldc/paperless-secrets.env
+Volume=corporatetraveldc-paperless-data:/usr/src/paperless/data
+Volume=corporatetraveldc-paperless-media:/usr/src/paperless/media
+Volume=corporatetraveldc-paperless-consume:/usr/src/paperless/consume
+Memory=1024m
+PodmanArgs=--memory-swap=1536m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+Nice=10
+CPUWeight=30
+CPUQuota=100%
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=300

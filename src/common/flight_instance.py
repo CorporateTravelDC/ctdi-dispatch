@@ -141,13 +141,32 @@ def _fmt_utc(ep: float | None) -> str:
 
 # ── Identifiers ──────────────────────────────────────────────────────────────
 
+_ATC_ALNUM_RE = re.compile(r"^([A-Z]{3})(\d[A-Z0-9]{1,3})$")
+_HEX6_RE = re.compile(r"^[0-9A-F]{6}$")
+
+
+def _parse_atc_alphanumeric(identifier: str | None) -> tuple[str, str] | None:
+    """2026-10-20 (bellwether batch): an alphanumeric ATC callsign -- the 3-letter
+    ICAO designator, a digit, then letters (UAE3MX, DLH3Y, AFR50N, QTR18F) -- as
+    ('UAE', '3MX'), the split the FDPS writer stores (airline = cs[:3]). These are
+    the forms the codeshare_map atc_callsign links point at. A 6-character all-hex
+    string is a Mode-S address, never a callsign."""
+    cs = (identifier or "").strip().upper().replace(" ", "")
+    if _HEX6_RE.match(cs):
+        return None
+    m = _ATC_ALNUM_RE.match(cs)
+    if not m or m.group(2).isdigit():
+        return None
+    return m.group(1), m.group(2)
+
+
 def parse_flight_ident(identifier: str | None) -> tuple[str, str] | None:
     """('GJS', '4520') from GJS4520 / G74520 / 'UA 4520' (IATA carriers go to
     ICAO through common.airline_codes). None for tails, blanks, and 2-char
     carriers we do not know -- never a guess."""
     parts = split_callsign(identifier)
     if not parts:
-        return None
+        return _parse_atc_alphanumeric(identifier)
     prefix, num = parts
     if len(prefix) == 3 and prefix.isalpha():
         return prefix, num
@@ -155,18 +174,22 @@ def parse_flight_ident(identifier: str | None) -> tuple[str, str] | None:
     return (icao, num) if icao else None
 
 
-def operating_identities(identifier: str | None, origin: str | None = None,
-                         destination: str | None = None) -> list[tuple[str, str]]:
-    """The identifier itself (ICAO form) plus every confirmed codeshare_map
-    operating flight for it whose stored route does not contradict the given
-    origin/destination. UAL4520 with a GJS4520 DCA-ORD row and an RPA4520
-    EWR-DCA row resolves to GJS4520 only when the watch says DCA-ORD.
+def operating_identities_detail(identifier: str | None, origin: str | None = None,
+                                destination: str | None = None) -> list[tuple[str, str, str]]:
+    """(carrier, number, relation) for the identifier itself ('identifier', ICAO
+    form) plus every CURRENT codeshare_map link whose stored route does not
+    contradict the given origin/destination: 'codeshare' (marketing -> operating
+    flight) and, since 2026-10-20 (pg_schema/0082), 'atc_callsign' (public number
+    -> the ATC callsign it is filed under: EK231 -> ('UAE', '3MX')). UAL4520 with a
+    GJS4520 DCA-ORD row and an RPA4520 EWR-DCA row resolves to GJS4520 only when
+    the watch says DCA-ORD. Retired links (relinked, kept as history) never count.
     DB errors (no codeshare_map table in a partial test DB) degrade to the
     identifier alone."""
     parsed = parse_flight_ident(identifier)
     if not parsed:
         return []
-    out: list[tuple[str, str]] = [parsed]
+    out: list[tuple[str, str, str]] = [(parsed[0], parsed[1], "identifier")]
+    seen = {parsed}
     carrier, num = parsed
     try:
         from common import db
@@ -182,10 +205,20 @@ def operating_identities(identifier: str | None, origin: str | None = None,
             continue
         if airports_agree(r.get("destination"), destination) is False:
             continue
-        op_n = (r.get("operating_flight_num") or num).lstrip("0") or "0"
-        if (op_c, op_n) not in out:
-            out.append((op_c, op_n))
+        op_n = (r.get("operating_flight_num") or num).upper()
+        if op_n.isdigit():
+            op_n = op_n.lstrip("0") or "0"
+        if (op_c, op_n) not in seen:
+            seen.add((op_c, op_n))
+            out.append((op_c, op_n, r.get("relation") or "codeshare"))
     return out
+
+
+def operating_identities(identifier: str | None, origin: str | None = None,
+                         destination: str | None = None) -> list[tuple[str, str]]:
+    """(carrier, number) pairs of operating_identities_detail: the identifier itself
+    (ICAO form) plus its current, route-filtered codeshare and ATC-callsign links."""
+    return [(c, n) for c, n, _rel in operating_identities_detail(identifier, origin, destination)]
 
 
 # ── Instance key + instance ──────────────────────────────────────────────────
@@ -364,8 +397,15 @@ def resolve(identifier: str, origin: str | None = None, destination: str | None 
     for carrier, num in operating_identities(identifier, origin, destination):
         mk = marketing if f"{carrier}{num}" != marketing else None
         found: list[FlightInstance] = []
-        for row in _rows("SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? "
-                         "ORDER BY updated_at DESC LIMIT ?", (carrier, num, limit_per_source)):
+        if re.fullmatch(r"\d+[A-Z]?", num):
+            tfms_sql, tfms_args = ("SELECT * FROM flight_ooooi_times WHERE airline = ? AND flight_num = ? "
+                                   "ORDER BY updated_at DESC LIMIT ?", (carrier, num, limit_per_source))
+        else:
+            # 2026-10-20: db.upsert_flight_ooooi stores an alphanumeric ATC callsign
+            # (UAE3MX) with airline/flight_num NULL; the callsign column has it.
+            tfms_sql, tfms_args = ("SELECT * FROM flight_ooooi_times WHERE callsign = ? "
+                                   "ORDER BY updated_at DESC LIMIT ?", (f"{carrier}{num}", limit_per_source))
+        for row in _rows(tfms_sql, tfms_args):
             inst = instance_from_tfms_row(row, mk)
             if inst:
                 found.append(inst)
@@ -500,42 +540,70 @@ def hex_for_registration(registration: str | None) -> str | None:
 WATCH_SCHED_TOLERANCE_H = 3.0
 
 _ALIAS_TTL_S = 300.0
-_alias_cache: dict[tuple, tuple[float, frozenset]] = {}
+_alias_cache: dict[tuple, tuple[float, dict]] = {}
 
 
 def clear_alias_cache() -> None:
     _alias_cache.clear()
 
 
-def watch_operating_aliases(entry: dict) -> frozenset:
-    """ICAO callsigns a watch answers to: its own identifier plus its
-    route-filtered codeshare operating flights. Cached per (identifier,
-    route) for five minutes so the national TFMS stream costs a dict probe,
-    not a codeshare query per message."""
+def watch_alias_relations(entry: dict) -> dict[str, str]:
+    """ICAO callsign -> how this watch answers to it: 'identifier' (its own
+    number, ICAO form: EK231 -> UAE231), 'codeshare' (route-filtered operating
+    flight) or 'atc_callsign' (route-filtered current ATC-callsign link, 2026-10-20:
+    EK231 -> UAE3MX). Cached per (identifier, route) for five minutes so the
+    national TFMS stream costs a dict probe, not a codeshare query per message."""
     ident = (entry.get("identifier") or "").upper().strip()
     ck = (ident, norm_airport(entry.get("origin")), norm_airport(entry.get("destination")))
     now = time.monotonic()
     hit = _alias_cache.get(ck)
     if hit and hit[0] > now:
         return hit[1]
-    aliases = frozenset(f"{c}{n}" for c, n in
-                        operating_identities(ident, entry.get("origin"), entry.get("destination")))
-    _alias_cache[ck] = (now + _ALIAS_TTL_S, aliases)
-    return aliases
+    rels = {f"{c}{n}": rel for c, n, rel in
+            operating_identities_detail(ident, entry.get("origin"), entry.get("destination"))}
+    _alias_cache[ck] = (now + _ALIAS_TTL_S, rels)
+    return rels
+
+
+def watch_operating_aliases(entry: dict) -> frozenset:
+    """ICAO callsigns a watch answers to: its own identifier plus its
+    route-filtered codeshare operating flights and ATC-callsign links."""
+    return frozenset(watch_alias_relations(entry))
+
+
+# 2026-10-20 (bellwether batch): a match through the lookaside (a codeshare's
+# operating callsign or an ATC-assigned alphanumeric) must be PROVEN on the watch's
+# route -- at least one message airport positively agrees -- not merely
+# uncontradicted. A recycled alphanumeric (W26 season change 2026-10-25) or a
+# codeshare's other leg would otherwise advance the watch from a message that
+# carries no airports.
+LOOKASIDE_RELATIONS = frozenset({"codeshare", "atc_callsign"})
 
 
 def _identity_matches(entry: dict, ident_upper: str | None, ident_icao: str | None,
                       hex_id: str | None) -> str | None:
-    """How a watch entry answers to this message, or None."""
+    """How a watch entry answers to this message, or None: 'identifier', 'hex',
+    'codeshare' or 'atc_callsign'. The raw upper-cased callsign is probed too:
+    an alphanumeric like UAE3MX is not flight-number shaped, so it has no ICAO
+    normal form."""
     e_ident = (entry.get("identifier") or "").upper().strip()
     if ident_upper and e_ident == ident_upper:
         return "identifier"
     if hex_id and (entry.get("hex_id") or "").lower().strip() == hex_id:
         return "hex"
-    if ident_icao and ident_icao in watch_operating_aliases(entry):
-        own = parse_flight_ident(e_ident)
-        return "identifier" if own and f"{own[0]}{own[1]}" == ident_icao else "codeshare"
+    if ident_icao or ident_upper:
+        rels = watch_alias_relations(entry)
+        for cand in (ident_icao, ident_upper):
+            if cand and cand in rels:
+                return rels[cand]
     return None
+
+
+def lookaside_route_unproven(entry: dict, origin: str | None, destination: str | None) -> bool:
+    """True when neither message airport positively agrees with the watch's route;
+    a lookaside (codeshare / ATC-callsign) match is then not trusted."""
+    return not (airports_agree(entry.get("origin"), origin) is True
+                or airports_agree(entry.get("destination"), destination) is True)
 
 
 def is_leg_watch(entry: dict) -> bool:
@@ -604,6 +672,8 @@ def match_watch_entry(entries: Iterable[dict], identifier: str | None, *,
             continue
         why = (leg_rejection(entry, origin, destination, sched_dep, tolerance_h, diversion_without_sched)
                if is_leg_watch(entry) else None)
+        if not why and how in LOOKASIDE_RELATIONS and lookaside_route_unproven(entry, origin, destination):
+            why = "lookaside_route_unproven"
         if why:
             log.debug("watch %s: %s matched by %s but rejected (%s; msg %s-%s sched %s)",
                       entry.get("id"), ident_upper or hx, how, why, origin, destination, sched_dep)
@@ -670,6 +740,14 @@ def match_watch_surface_event(entries: Iterable[dict], callsign: str | None, *, 
             continue
         why = (surface_leg_rejection(entry, airport, event, event_time, dep_airport, dest_airport)
                if is_leg_watch(entry) else None)
+        if not why and how in LOOKASIDE_RELATIONS and lookaside_route_unproven(entry, dep_airport, dest_airport):
+            # SMES sees one airport: a departure event there proves the origin,
+            # an arrival event the destination.
+            ev = (event or "").lower()
+            side = (entry.get("origin") if ev in SURFACE_DEPARTURE_EVENTS
+                    else entry.get("destination") if ev in SURFACE_ARRIVAL_EVENTS else None)
+            if airports_agree(side, airport) is not True:
+                why = "lookaside_route_unproven"
         if why:
             log.debug("watch %s: %s matched by %s but surface event rejected (%s; %s at %s %s)",
                       entry.get("id"), ident_upper, how, why, event, airport, event_time)
@@ -1145,7 +1223,11 @@ def assess_inbound(watched: FlightInstance, inbound: FlightInstance | None, *,
         flags.append("inbound_late_beyond_turn_buffer")
         status = "late_beyond_turn"
     late_txt = f"; departs ~{_fmt_utc(prop)} ({-slack:.0f} min late)" if slack is not None and slack < 0 else ""
-    summary = (f"{ident}: inbound {inbound.key} {'arrived' if inbound.act_arr else 'ETA'} "
+    # 2026-10-20: say which time this is -- an actual, a SWIM estimate (FDPS
+    # arrival_time, TBFM-derived), or only the schedule; never "ETA" for a schedule.
+    word = ("arrived" if inbound.act_arr else "ETA (FDPS, TBFM-derived)" if inbound.est_arr
+            else "scheduled arrival")
+    summary = (f"{ident}: inbound {inbound.key} {word} "
                f"{origin} {_fmt_utc(eta)}, ready {_fmt_utc(ready)} ({turn}-min turn) vs "
                f"sched {_fmt_utc(w_sched)}{late_txt}")
     return _mk(status, flags, eta=eta, ready=ready, prop=prop, slack=slack, summary=summary)

@@ -29,8 +29,8 @@ Counts at the verification time above (re-run the commands; they move):
 | Measure | Value | Command |
 |---|---|---|
 | Containers running | ~~35 long-running (36 at measurement: one oneshot skill mid-run)~~ (corrected 2026-10-15 00:51Z: 38 = 37 long-running, now including the two demo portals, + 1 oneshot skill mid-run) | `podman ps --format '{{.Names}}' \| wc -l` |
-| `.container` Quadlets tracked in this repo | ~~76 (38 long-running, 38 `Type=oneshot` skills/jobs)~~ (corrected 2026-10-15: 77 = 38 long-running + 39 `Type=oneshot` skills/jobs) | `ls .config/containers/systemd/*.container \| wc -l` |
-| Long-running Quadlets not installed live | ~~2: `corporatetraveldc-demo-portal-{client,personal}` (tracked, never installed). The `corporatetraveldc-client-demo@.container` template is now installed but has no instance~~ (corrected 2026-10-15: 0. Both demo portals have been installed and active since 2026-10-12 (see Status). The `corporatetraveldc-client-demo@.container` template is installed with no instance. The diff now shows only the repo-side `amtrak-tracker.container.disabled` and `corporatetraveldc-acarsdec.container.disabled` (these create no unit) and, live-only, two `corporatetraveldc-ultrafeeder.container.bak-*` files and `nextcloud-net.network`.) | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
+| `.container` Quadlets tracked in this repo | ~~76 (38 long-running, 38 `Type=oneshot` skills/jobs)~~ (corrected 2026-10-15: 77 = 38 long-running + 39 `Type=oneshot` skills/jobs) (2026-10-20: 76 after the cleanup relay retired `corporatetraveldc-ops-brief-deferred` and `corporatetraveldc-nms-v240-check` to `retired-20261020/`, `docs/RETIRED.md`) | `ls .config/containers/systemd/*.container \| wc -l` |
+| Long-running Quadlets not installed live | ~~2: `corporatetraveldc-demo-portal-{client,personal}` (tracked, never installed). The `corporatetraveldc-client-demo@.container` template is now installed but has no instance~~ (corrected 2026-10-15: 0. Both demo portals have been installed and active since 2026-10-12 (see Status). The `corporatetraveldc-client-demo@.container` template is installed with no instance. The diff now shows only the repo-side `amtrak-tracker.container.disabled` and `corporatetraveldc-acarsdec.container.disabled` (these create no unit) and, live-only, two `corporatetraveldc-ultrafeeder.container.bak-*` files and `nextcloud-net.network`.) (2026-10-20: `amtrak-tracker.container.disabled` retired; `nextcloud-net.network` now tracked; the two `.bak-*` files removed live by the cleanup relay; the diff shows only `corporatetraveldc-acarsdec.container.disabled` and the `retired-20261020/` folder.) | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
 | Active user timers | ~~64 (59 `corporatetraveldc-*`)~~ (corrected 2026-10-15: 72 listed, 67 of them `corporatetraveldc-*`; 75 `.timer` files tracked) | `systemctl --user list-timers --all` |
 | Root (system) timers for this stack | ~~7 (watchdog 90 s, team-liveness, skill-grants, llama-council, NTS cert refresh, Tailscale cert renew, watchdog-tune one-shot)~~ (corrected 2026-10-15: 9. Those 7, plus `corporatetraveldc-agent-leak-scan` (hourly) and `corporatetraveldc-agent-home-snapshot` (daily 03:20Z). The watchdog-tune one-shot fired 2026-10-12 00:00Z.) | `systemctl list-timers --all` |
 | Failed user or system units | ~~1: `corporatetraveldc-integrity-sweep` (user), failing on the unsigned staged files of this batch; clears at the next sign~~ (corrected 2026-10-15 00:51Z: 0 user, 0 system. While a batch's edited files are unsigned, the integrity sweep fails until the next sign.) | `systemctl --user --failed; systemctl --failed` |
@@ -171,7 +171,7 @@ ship under `security/`. `SECURITY.md` at the repo root is the authority.
 |---|---|
 | Database | **Postgres** (`corporatetraveldc-pgsql`, `postgres:16-alpine`), `DISPATCH_DB_BACKEND=postgres` in `/etc/corporatetraveldc/dispatch.env`. Containers reach it over the unix socket in the shared `corporatetraveldc-pgsql-sock` volume mounted at `/var/run/postgresql`; the host reaches it on `127.0.0.1:5432`. Cutover 2026-09-18 (reference/chat/demo tables 09-19/09-20). ~~73~~ 75 (corrected 2026-10-15) additive migrations in `src/common/pg_schema/`. `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset; `sqlite` survives only as a rollback backend selector. See `docs/POSTGRES_MIGRATION.md`. |
 | Ops dashboard (runner) | Tailnet-only: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). `ops.example.com` was retired 2026-08-02 and is hard-404'd by `_RETIRED_HOSTNAMES` in `src/runner/main.py`. |
-| Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. **The data it replays is stale:** demo-api serves `/var/lib/corporatetraveldc-demo-source/demo-source.db`, last written 2026-08-14 14:21Z; the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never fired. Re-checked 2026-10-15 00:55Z: all still true (`:8005/healthz` ok, public hostname 200, file unchanged since 2026-08-14 14:21:42Z, timer disabled). Added 2026-10-15: runner-demo and demo-api also mount the shared Postgres socket and load `dispatch.env`, because the demo password-gate profiles (`demo_profiles`, migration 0057) moved to Postgres on 2026-09-20. Playback data still comes only from `demo-source.db`. |
+| Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. **The data it replays is stale:** demo-api serves `/var/lib/corporatetraveldc-demo-source/demo-source.db`, last written 2026-08-14 14:21Z; the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never fired. Re-checked 2026-10-15 00:55Z: all still true (`:8005/healthz` ok, public hostname 200, file unchanged since 2026-08-14 14:21:42Z, timer disabled). Added 2026-10-15: runner-demo and demo-api also mount the shared Postgres socket and load `dispatch.env`, because the demo password-gate profiles (`demo_profiles`, migration 0057) moved to Postgres on 2026-09-20. Playback data still comes only from `demo-source.db`. (2026-10-20: superseded. Since relay 2 (2026-10-19), playback and profiles come from the demo Postgres instance `corporatetraveldc-pgsql-demo`, and the refresh timer runs nightly at 03:17 UTC. `demo-source.db` is destroyed, and the sqlite rollback and both sovereign mounts are removed: `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` addendum 2026-10-20.) |
 | Demo portals (added 2026-10-15) | `corporatetraveldc-demo-portal-client` (:8088) and `-personal` (:8087): `nginx:alpine` containers serving `/home/corporatetraveldc/demos` read-only, bound to 127.0.0.1 and the tailnet IP. Installed and active since 2026-10-12. They have no tunnel ingress (none in `cloudflared/config.yml`). Swapped with `scripts/demo-portal.sh`. Their Quadlet headers cite `docs/DEMO_PORTALS.md`, which does not exist; `docs/CLIENT_DEMO_PATTERN.md` describes the pattern. |
 | Backups (added 2026-10-15) | `corporatetraveldc-backup.timer` (daily 03:40Z): an encrypted Borg archive, synced to the off-box Proton Drive target (live since 2026-10-12). LADD table data stays on the box. `backup-freshness` runs every 6 h and `backup-restore-test` Sun 05:30Z; root `agent-home-snapshot` runs 03:20Z. See `docs/BACKUP.md`. |
 | Backup uplink (added 2026-10-15) | The cellular backup uplink has been down since 2026-10-06, so failover has no working second path. See `docs/NETWORK_FAILOVER.md`. |
@@ -211,7 +211,7 @@ demo recorder/API and the execstandard verifier share one Postgres database
 │                   Postgres (corporatetraveldc-pgsql)               │
 │                                                                    │
 │  runner (:8001, tailnet-only ops dashboard, proxies web :8000)     │
-│  runner-demo (:8005) → demo-api (:8004) → frozen demo-source.db    │
+│  runner-demo (:8005) → demo-api (:8004) → demo Postgres instance   │
 │  amtrak-tracker (Amtrak push) · SDR stack · ntfy · Nextcloud ·     │
 │  Open WebUI · 38 timer-driven oneshot skill containers             │
 │                                                                    │
@@ -232,7 +232,7 @@ demo recorder/API and the execstandard verifier share one Postgres database
 | `systemd-amtrak-tracker` | `localhost/corporatetraveldc-amtrak-tracker:latest` | Amtrak push writer (api.amtraker.com), stamps `push:amtrak` |
 | `systemd-corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Ops dashboard SPA + API, port 8001, tailnet-only |
 | `systemd-corporatetraveldc-runner-demo` | same runner image | Demo playback, host port 8005 → container 8001, `DISPATCH_BASE_URL=http://100.x.x.x:8004` |
-| `systemd-corporatetraveldc-demo` / `systemd-corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Recorder (writes `demo_snapshots` in Postgres) / read-only playback API on :8004 over the scrubbed `demo-source.db` |
+| `systemd-corporatetraveldc-demo` / `systemd-corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Recorder (writes `demo_snapshots` in Postgres) / read-only playback API on :8004 over ~~the scrubbed `demo-source.db`~~ the demo Postgres instance (2026-10-20) |
 | `systemd-corporatetraveldc-execstandard-verifier` | poller image | `auth_request` verifier for the members site, 127.0.0.1:8787 |
 
 ### Auxiliary containers (same host)
@@ -603,12 +603,15 @@ or gate it.
   not to `demo.db` any more (that file was last written 2026-09-21).
   Defaults `DEMO_RECORDER_RETENTION=364`, `DEMO_RECORDER_SEED_TARGET=14` are
   `os.environ.get` defaults in `src/demo/recorder.py:45-48`.
-- `corporatetraveldc-demo-api` (:8004) serves only the scrubbed file
-  `/var/lib/corporatetraveldc-demo-source/demo-source.db` (read-only mount),
+- `corporatetraveldc-demo-api` (:8004) serves only ~~the scrubbed file
+  `/var/lib/corporatetraveldc-demo-source/demo-source.db` (read-only mount)~~
+  the scrubbed rows in the demo Postgres instance (2026-10-20: the file is
+  destroyed and its mount removed),
   populated only by the host-side `scripts/scrub-demo-source.py` scrub+promote
-  pass. That pass's timer, `corporatetraveldc-demo-source-refresh.timer`, is
+  pass. ~~That pass's timer, `corporatetraveldc-demo-source-refresh.timer`, is
   disabled and has never run, so the file is still the 2026-08-14 14:21Z
-  promotion (1.8 GB). `/healthz` reports `loop_days: 14`.
+  promotion (1.8 GB).~~ (The timer has run nightly at 03:17 UTC since relay 3,
+  2026-10-19.) `/healthz` reports `loop_days: 14`.
 - `corporatetraveldc-runner-demo` (:8005) reads demo-api. With
   `DEMO_MODE=true` it is password-gated (`POST /api/demo/login`, HMAC-signed
   `ctdc_demo_session` cookie, `src/demo/profiles.py`, 8 h default) with
@@ -901,7 +904,7 @@ fresh email and passwords. New-deployment access: `docs/DATA_SOURCES.md`.
 |---|---|
 | `/opt/corporatetraveldc/private/ctdi-dispatch-internal/` | This repo (`/opt/corporatetraveldc/ctdi-dispatch-internal` is a symlink) |
 | `corporatetraveldc-pgsql` (volumes `corporatetraveldc-pgsql-data`, `corporatetraveldc-pgsql-sock`) | Live database |
-| `/var/lib/corporatetraveldc/corporatetraveldc.db` | Legacy SQLite path (`DISPATCH_DB`). **Present**: a 69,632-byte file last modified 2026-10-05 23:21Z (recreated by a CLI smoke test that used the wrong env-var name; see Findings in `CHANGES-core.md`). Not the live store. |
+| ~~`/var/lib/corporatetraveldc/corporatetraveldc.db`~~ | ~~Legacy SQLite path (`DISPATCH_DB`). **Present**: a 69,632-byte file last modified 2026-10-05 23:21Z (recreated by a CLI smoke test that used the wrong env-var name; see Findings in `CHANGES-core.md`). Not the live store.~~ (2026-10-20: destroyed by the 2026-10-19 relay. `DISPATCH_DB` has no default and is removed from `config/dispatch.env`, so nothing can re-create the file: `docs/POSTGRES_MIGRATION.md` §3.7.) |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Master secrets file (0600); source for the scoped files |
 | `/etc/corporatetraveldc/svc/<svc>.env` | Per-service scoped secrets (web, poller, pusher, ingest, runner, demo, amtrak-tracker, acars-watcher, execstandard-verifier); ~~53~~ 54 (corrected 2026-10-15) Quadlets read one |

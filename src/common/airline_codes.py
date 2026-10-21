@@ -38,6 +38,7 @@ IATA_TO_ICAO: dict[str, str] = {
     "QR": "QTR", "EK": "UAE", "EY": "ETD", "TK": "THY", "EI": "EIN",
     "IB": "IBE", "LX": "SWR", "OS": "AUA", "SK": "SAS", "AY": "FIN",
     "ET": "ETH", "SV": "SVA", "KE": "KAL", "NH": "ANA", "JL": "JAL",
+    "AI": "AIC",   # Air India -- 2026-10-20 (bellwether AI173 DEL-SFO)
     # Cargo
     "FX": "FDX", "5X": "UPS",
 }

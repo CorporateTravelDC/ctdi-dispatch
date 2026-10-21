@@ -37,6 +37,24 @@ def fmt_cps(cps: dict) -> str:
     return out
 
 
+def _idle_by_design(f: dict, name: str, err, fresh_push: set):
+    """2026-10-20: a feed that is not failing but idle by design, from the API's OWN per-feed
+    fields (/api/v1/feeds): push_covered (the REST fallback while its push twin is fresh --
+    NOTAM's push feed is push:fns, so pairing by identical name showed the notam REST
+    fallback as failing), optional (DCA/IAD FIDS) and error 'awaiting_credentials' (a source
+    not configured yet). The name pairing stays only for snapshots saved before the API
+    carried push_covered."""
+    if f.get("push_covered"):
+        return "○", " (REST fallback idle; push covers)"
+    if f.get("optional"):
+        return "○", " (optional)"
+    if err == "awaiting_credentials":
+        return "○", " (not configured)"
+    if "push_covered" not in f and not err and name in fresh_push:
+        return "○", " (REST fallback idle; push covers)"
+    return None
+
+
 def fmt_feeds(feeds: dict) -> str:
     if not feeds:
         return "unavailable"
@@ -63,8 +81,8 @@ def fmt_feeds(feeds: dict) -> str:
             fresh = (age is not None and thr is not None and age <= thr)
             ok = "✓" if (fresh and not err) else "✗"
             tail = f" err={str(err)[:40]}" if err else ""
-            if ok == "✗" and not err and name in fresh_push:
-                ok, tail = "○", " (REST fallback idle; push covers)"
+            if ok == "✗":
+                ok, tail = _idle_by_design(f, name, err, fresh_push) or (ok, tail)
             lines.append(f"  {ok} {name} (age={age}s/{thr}s){tail}")
     elif isinstance(feed_list, dict):
         for name, info in feed_list.items():

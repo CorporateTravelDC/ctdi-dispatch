@@ -20,10 +20,16 @@ Enforcement points:
   and `/tmp/claude-<uid>` (`transcript_leak_scan.py:87`); that is what `pre-push` and `push-public.sh` check.
   The agent accounts' Claude Code transcripts, `/tmp/claude-<uid>` and Codex session logs
   (`~/.codex/sessions`, `~/.codex/history.jsonl`) are readable only by root and are covered by the hourly
-  root run (`corporatetraveldc-agent-leak-scan.timer`, `scan --agents` / `redact --agents` from the installed
-  copy in `/usr/local/libexec/ctdc/`), not at push time.
-- `scripts/pre-push` refuses any push while a closed transcript carries a leak.
-- `scripts/push-public.sh` runs the same check (exit 6). It also runs the LADD tripwire on the final public tree (exit 7).
+  root run (`corporatetraveldc-agent-leak-scan.timer`, ~~`scan --agents` / `redact --agents` from the installed
+  copy in `/usr/local/libexec/ctdc/`~~ (2026-10-20, next relay: `agent-leak-scan.sh` from the installed copy,
+  redact then scan, both `--agents --require-ladd --ladd-stdin`, the LADD list piped from the database)), not at
+  push time.
+- `scripts/pre-push` refuses any push while a closed transcript carries a leak (2026-10-20, next relay: or while
+  the LADD class cannot be checked; run through `scripts/with-dispatch-env.sh` with `--require-ladd`).
+- `scripts/push-public.sh` runs the same check (exit 6; 2026-10-20: also with `--require-ladd`). It also runs the
+  LADD tripwire on the final public tree (exit 7).
+- what is matched (2026-10-20, next relay): every credential file on the box, not only `dispatch-secrets.env`,
+  and the vendor key shapes; see `docs/COMPLIANCE_SECURITY.md` §2 "Transcript leak scan".
 
 ## What it looked like on the day
 

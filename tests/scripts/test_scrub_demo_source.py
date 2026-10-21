@@ -53,6 +53,8 @@ CREATE TABLE brief_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, generated_at T
 CREATE TABLE demo_profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, password_hash TEXT NOT NULL,
     salt TEXT NOT NULL, window_days INTEGER NOT NULL, speed REAL NOT NULL DEFAULT 1.0, auto_scale BOOLEAN NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT 1);
+CREATE TABLE flight_events (flight_id TEXT PRIMARY KEY, airline TEXT, flight_num TEXT, registration TEXT,
+    departure_time REAL, arrival_time REAL);
 """
 LADD = ["QSYN1", "QX-ABC", "QCALL7", "QHEX9"]
 LISTED_HEX = "abc123"          # registry row QHEX9 <-> this hex
@@ -120,6 +122,21 @@ def seed(prod: Path, rows: list[tuple[str, str, str]], briefs: list[tuple[str, s
             c.execute("INSERT INTO brief_archive (generated_at, brief_type, content, source) VALUES (?, ?, ?, 'skill')", (at, kind, text))
 
 
+def seed_legs(prod: Path, idents: list[str], around: str | float, extra: tuple = ()):
+    """SWIM legs (flight_events) for LADD idents: one leg an hour before
+    `around` on that operational day and the days either side, plus `extra`
+    departure epochs. The demo LADD timing orders legs from these; without
+    them a LADD aircraft-day is dropped (fail closed)."""
+    base = around if isinstance(around, (int, float)) else \
+        datetime.fromisoformat(around).replace(tzinfo=timezone.utc).timestamp()
+    deps = [base - 3600 + j * 86400 for j in (-1, 0, 1)] + list(extra)
+    with _sqlite(prod) as c:
+        for ident in idents:
+            for i, dep in enumerate(deps):
+                c.execute("INSERT INTO flight_events (flight_id, registration, departure_time) VALUES (?, ?, ?)",
+                          (f"{ident}-{i}", ident, dep))
+
+
 def target_texts(demo: Path) -> dict[tuple[str, str], str]:
     with _sqlite(demo) as c:
         rows = c.execute("SELECT endpoint, captured_at, payload, synthetic FROM snapshots").fetchall()
@@ -140,6 +157,7 @@ def test_ladd_listed_rows_never_reach_the_target(world, capsys):
         ("amtrak", ago(days=3), "foreign mark QX-ABC seen"),                                     # listed hyphenated mark
         ("cps", ago(days=3), json.dumps({"score": 3, "note": "all fine"})),
     ])
+    seed_legs(prod, ["QSYN1", "QCALL7", "QX-ABC"], ago(days=3))
     assert run(m, src, tgt, "--backfill", "--days", "7") == 0
     got = target_texts(demo)
     # 2026-10-17 (operator): listed aircraft are substituted, every record is kept
@@ -149,10 +167,14 @@ def test_ladd_listed_rows_never_reach_the_target(world, capsys):
         assert ident not in joined
     q = m.QRegistry.load(tmp_q := m.Q_KEY_FILE)
     assert tmp_q.stat().st_mode & 0o777 == 0o600
-    assert q.mark("QSYN1") in joined and q.mark("QCALL7") in joined and "[hex-redacted]" in joined
+    assert q.mark("QSYN1") in joined and q.mark("QCALL7") in joined
+    # 2026-10-20: a record known only by its (redacted) hex has no identifier to
+    # order its legs from SWIM -- the LADD timing drops it (fail closed)
+    assert json.loads(got[("weather", next(a for e, a in got if e == "weather"))]) == {"aircraft": []}
     assert re.fullmatch(r"Q[0-9A-HJ-NPR-Z]{5}", q.mark("QSYN1"))
     out = capsys.readouterr().out
     assert "ladd registration substituted" in out and "ladd callsign substituted" in out and "ladd hex redacted" in out
+    assert "ladd aircraft-day dropped (no SWIM leg order)" in out
     assert "QSYN1" not in out and "QCALL7" not in out
 
 
@@ -363,3 +385,59 @@ def test_refresh_units_are_paced_and_notify_on_failure():
     assert "OnCalendar=*-*-* 03:17:00 UTC" in timer and "Persistent=true" in timer
     assert "WantedBy=timers.target" in timer
     assert not any(l.startswith(("Requires=", "Wants=")) for l in timer)
+
+
+def test_ladd_legs_bucketed_and_dark_through_the_full_scrub(world, capsys):
+    """2026-10-20 (operator): LADD legs reach the demo with times on the
+    15-minute grid (hidden per-leg offset) and nothing arrival-side; counts
+    only in the ledger and the report, never a key or an offset."""
+    m, src, tgt, prod, demo = world
+    at = ago(days=3)
+    eta = (datetime.now(timezone.utc) - timedelta(days=3, minutes=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    seed(prod, [("route", at, json.dumps({"vip_flags": [
+        {"callsign": "QCALL7", "eta": eta, "gate": "B12", "status": "landed", "destination": "KIAD"},
+        {"callsign": "CLEAN1", "eta": eta, "gate": "C3"}]}))],
+        briefs=[(at, "ops", f"QSYN1 ETA 14:07Z.\nQSYN1 landed 14:21Z at gate 7.\nCalm winds.\n")])
+    seed_legs(prod, ["QCALL7", "QSYN1"], at)
+    assert run(m, src, tgt, "--backfill", "--days", "7") == 0
+    got = json.loads(target_texts(demo)[("route", at)])["vip_flags"]
+    q = m.QRegistry.load(m.Q_KEY_FILE)
+    ladd = next(f for f in got if f["callsign"] == q.mark("QCALL7"))
+    assert "gate" not in ladd and "status" not in ladd
+    t = datetime.fromisoformat(ladd["eta"].replace("Z", "+00:00"))
+    assert t.minute % 15 == 0 and t.second == 0
+    assert next(f for f in got if f["callsign"] == "CLEAN1") == {"callsign": "CLEAN1", "eta": eta, "gate": "C3"}
+    with _sqlite(demo) as c:
+        brief = c.execute("SELECT content FROM brief_archive").fetchone()["content"]
+        ledger = json.loads(c.execute("SELECT dropped_by_class FROM scrub_ledger").fetchone()["dropped_by_class"])
+    assert "landed" not in brief and "gate 7" not in brief and "Calm winds." in brief
+    assert int(re.search(r"ETA \d\d:(\d\d)Z", brief).group(1)) % 15 == 0
+    assert any(k.startswith("ladd timing: ") for k in ledger)
+    assert all(not re.search(r"\d", k) for k in ledger)
+    out = capsys.readouterr().out
+    assert "ladd timing: ladd leg timed" in out and "QCALL7" not in out and "QSYN1" not in out
+
+
+def test_purge_promoted_then_rebackfill_rescrubs_old_rows(world):
+    """2026-10-20: rows promoted before the LADD timing rules keep their real
+    times under ON CONFLICT DO NOTHING; --purge-promoted clears them (ledger
+    row, counts only) so the re-backfill re-scrubs everything."""
+    m, src, tgt, prod, demo = world
+    at = ago(days=3)
+    seed(prod, [("route", at, json.dumps({"vip_flags": [{"callsign": "QCALL7", "eta": "2026-10-18T14:07:12Z"}]}))])
+    seed_legs(prod, ["QCALL7"], at, extra=(datetime(2026, 10, 18, 13, 0, tzinfo=timezone.utc).timestamp(),))
+    with _sqlite(demo) as c:   # an old-rule row already promoted at the same key
+        c.execute("INSERT INTO snapshots (endpoint, captured_at, payload, payload_hash, compressed, synthetic) "
+                  "VALUES ('route', ?, ?, 'old', 1, 0)", (at, blob('{"vip_flags":[{"eta":"2026-10-18T14:07:12Z"}]}')))
+        c.execute("INSERT INTO meta (key, value) VALUES ('window_end', ?)", (at,))
+    assert run(m, src, tgt, "--purge-promoted", "--dry-run") == 0
+    assert len(target_texts(demo)) == 1                                  # dry run deletes nothing
+    assert run(m, src, tgt, "--purge-promoted") == 0
+    assert target_texts(demo) == {}
+    with _sqlite(demo) as c:
+        assert c.execute("SELECT value FROM meta WHERE key='window_end'").fetchone() is None
+        row = c.execute("SELECT mode, dropped_by_class FROM scrub_ledger").fetchone()
+    assert row["mode"] == "purge" and json.loads(row["dropped_by_class"]) == {"purged before re-backfill": 1}
+    assert run(m, src, tgt, "--backfill", "--days", "7") == 0
+    eta = json.loads(target_texts(demo)[("route", at)])["vip_flags"][0]["eta"]
+    assert datetime.fromisoformat(eta.replace("Z", "+00:00")).minute % 15 == 0

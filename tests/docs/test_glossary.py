@@ -185,8 +185,15 @@ def test_every_profile_gets_a_slice(data):
     assert "aviation" not in scopes["cfo"] and "aviation" not in scopes["base"]
     assert {"aviation", "rail", "weather"} <= scopes["chauffeur-regulated"]
     cfo = json.loads(rg.render_profile(data, "cfo", "json", REPO))
-    assert cfo["acronyms"] and all(e["scope"] in ("platform", "agents") for sec in ("acronyms", "platform", "rules") for e in cfo[sec])
+    # 2026-10-20 (CFO, EA and CoS profiles): the CFO slice gains the finance, governance and office
+    # scopes; it still carries nothing from aviation, rail, weather or maritime.
+    assert cfo["acronyms"] and all(e["scope"] in ("platform", "agents", "finance", "governance", "office")
+                                   for sec in ("acronyms", "platform", "rules") for e in cfo[sec])
+    assert any(e["scope"] == "finance" for e in cfo["acronyms"])
     assert "FIDS" not in rg.render_profile(data, "cfo", "rules", REPO)
+    assert {"cfo", "executive-assistant", "chief-of-staff"} <= set(profiles)
+    assert "finance" in scopes["cfo"] and "scheduling" in scopes["executive-assistant"]
+    assert "governance" in scopes["chief-of-staff"] and "aviation" not in scopes["chief-of-staff"]
 
 
 def test_profile_scope_map_names_only_real_modules_and_sources(data):

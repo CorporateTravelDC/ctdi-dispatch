@@ -1,0 +1,59 @@
+# corporatetraveldc-firefly -- Firefly III, the CFO skeleton's ledger (budgets,
+# categories, tags per trip, rules; REST /api/v1 with personal access tokens).
+# TEMPLATE, disabled until after the feature freeze (operator 2026-10-20).
+# docs/deployment-profiles/office-skeletons/CFO.md.
+#
+# Database: PostgreSQL ONLY (DB_CONNECTION=pgsql below; the image's default is
+# mysql, and nothing here may fall back to SQLite -- tests/scripts/
+# test_office_skeletons.py). Database `firefly`, role `firefly`, on
+# corporatetraveldc-pgsql-office over office-db.network.
+#
+# Non-secret settings are Environment= lines HERE (tracked, signed, tested);
+# podman applies --env after --env-file, so the secrets file cannot override
+# them. Secrets ONLY in /etc/corporatetraveldc/firefly-secrets.env (example:
+# config/firefly-secrets.env.example): APP_KEY, DB_PASSWORD, STATIC_CRON_TOKEN.
+# Never dispatch.env / dispatch-secrets.env (third-party image).
+#
+# Disabled: no [Install], not in stack-boot-ctl.sh ORDER or the rollout, no
+# timer (recurring transactions need a cron call; that timer is written at
+# activation, not now). Publish: tailnet address only, port 8101.
+[Unit]
+Description=corporatetraveldc -- Firefly III (CFO skeleton; template, disabled)
+After=corporatetraveldc-pgsql-office.service
+Requires=corporatetraveldc-pgsql-office.service
+
+[Container]
+Image=docker.io/fireflyiii/core:version-6.7.9
+ContainerName=corporatetraveldc-firefly
+Network=office-db.network
+Network=office-web.network
+PublishPort=100.x.x.x:8101:8080
+Environment=APP_ENV=production
+Environment=APP_DEBUG=false
+Environment=TZ=UTC
+Environment=DEFAULT_LANGUAGE=en_US
+Environment=DB_CONNECTION=pgsql
+Environment=DB_HOST=corporatetraveldc-pgsql-office
+Environment=DB_PORT=5432
+Environment=DB_DATABASE=firefly
+Environment=DB_USERNAME=firefly
+Environment=PGSQL_SSL_MODE=disable
+Environment=PGSQL_SCHEMA=public
+Environment=TRUSTED_PROXIES=**
+Environment=LOG_CHANNEL=stdout
+Environment=APP_LOG_LEVEL=notice
+Environment=SEND_ERROR_MESSAGE=false
+Environment=MAIL_MAILER=log
+Environment=AUTHENTICATION_GUARD=web
+EnvironmentFile=/etc/corporatetraveldc/firefly-secrets.env
+Volume=corporatetraveldc-firefly-upload:/var/www/html/storage/upload
+Memory=384m
+PodmanArgs=--memory-swap=512m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+CPUWeight=50
+CPUQuota=100%
+Restart=on-failure
+RestartSec=15

@@ -2,8 +2,9 @@
 # Quadlet -- ~/.config/containers/systemd/ under corporatetraveldc
 # Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-demo-api
 #
-# Read-only playback API over the sovereign demo-source file (see
-# src/demo/demo_api.py). Reuses the corporatetraveldc-demo image (recorder
+# Read-only playback API over the demo Postgres instance
+# (corporatetraveldc-pgsql-demo; see src/demo/demo_api.py). ~~over the
+# sovereign demo-source file~~ -- Postgres-only since 2026-10-20. Reuses the corporatetraveldc-demo image (recorder
 # image already has fastapi/uvicorn via requirements.txt) with an Exec=
 # override -- no separate Containerfile needed for a second process mode
 # of the same image.
@@ -20,16 +21,19 @@
 # mode=ro at the SQLite URI level -- an app-level convention, not an
 # OS-enforced boundary. A fully compromised demo-api process (a lower-
 # trust, public-surface-by-design component) held real read-write mount
-# permissions on the live production DB. Now: two narrow mounts, the
+# permissions on the live production DB. ~~Now: two narrow mounts, the
 # sovereign demo-source directory read-only and the demo-state directory
-# (profiles/passwords, already fully independent of live data)
-# read-write for its own admin writes. This container has ZERO filesystem
-# path to /var/lib/corporatetraveldc at all anymore -- not an app-level
-# choice not to read it, no path to it exists.
-# See docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 4.
+# (profiles/passwords) read-write~~ -- 2026-10-20: both removed (operator
+# decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub touch SQLite; the
+# sovereign file and demo_access.db are destroyed and their code paths
+# gone). This container mounts NO host directory at all -- only the demo
+# instance's socket volume below -- so it has ZERO filesystem path to
+# /var/lib/corporatetraveldc or to any SQLite file.
+# tests/scripts/test_demo_isolation.py and tests/common/test_no_platform_sqlite.py
+# hold that. See docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md Phase 4.
 
 [Unit]
-Description=Corporate Travel DC -- demo playback API (port 8004, read-only over sovereign demo-source)
+Description=Corporate Travel DC -- demo playback API (port 8004, read-only over the demo Postgres instance)
 After=network-online.target corporatetraveldc-demo.service corporatetraveldc-pgsql-demo.service
 Wants=corporatetraveldc-demo.service
 
@@ -41,8 +45,9 @@ Environment=CORPORATETRAVELDC_UNIT=%N
 Exec=scripts/verified-exec.sh uvicorn demo.demo_api:app --host 0.0.0.0 --port 8004
 PublishPort=127.0.0.1:8004:8004
 PublishPort=100.x.x.x:8004:8004
-Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z
-Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z
+# ~~Volume=/var/lib/corporatetraveldc-demo-source:...:ro,z~~ and
+# ~~Volume=/var/lib/corporatetraveldc-demo-state:...:z~~ -- removed 2026-10-20
+# (the sqlite rollback they served is retired; both host dirs were empty).
 # 2026-10-16 (operator rule: the public demo is logically AND physically
 # separated from production). The 2026-09-20 line that stood here --
 # `Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql`, added when
@@ -51,9 +56,10 @@ Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-sta
 # instance, one database, one superuser role, and dispatch.env below
 # points DISPATCH_PG_DB/USER at exactly that pair. It only ever failed
 # for lack of a password. Removed: no Postgres socket is mounted here at
-# all. demo.profiles keeps its password-gate store in demo_access.db on
+# all. ~~demo.profiles keeps its password-gate store in demo_access.db on
 # the demo-state volume above (DISPATCH_DB_BACKEND=sqlite, pinned by
-# demo-secrets.env), and DISPATCH_DEMO_ISOLATION=1 makes
+# demo-secrets.env)~~ (2026-10-20: demo_profiles on the demo instance, the
+# only store), and DISPATCH_DEMO_ISOLATION=1 makes
 # common.db_backend refuse the production database/role outright even
 # if a socket ever reappears. A demo-owned Postgres instance and role
 # are a separate operator decision (docs/DEMO_DATA_ISOLATION_PLAN_
@@ -72,8 +78,9 @@ Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo
 # relay 2: it carried the production DISPATCH_PG_DB/USER pair and every
 # platform setting into a public-facing container; the demo needs none of
 # them). Its replacement is /etc/corporatetraveldc/demo.env, loaded LAST
-# below so its DISPATCH_DB_BACKEND=postgres wins over demo-secrets.env's old
-# sqlite pin (podman applies --env-file in order, later files win).
+# below. ~~so its DISPATCH_DB_BACKEND=postgres wins over demo-secrets.env's old
+# sqlite pin~~ -- 2026-10-20: the backend and the source are signed
+# Environment= lines (next paragraph); podman's -e beats every --env-file.
 # 2026-08-26 fix (Opus blind review C-22 follow-up): DEMO_SESSION_SECRET
 # lives here, scoped ONLY to the two public-demo containers -- never load
 # the full dispatch-secrets.env into a public-facing container. See
@@ -81,13 +88,16 @@ Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo
 # establishes for future role-specific demos (EA, travel-agent, etc.).
 EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
 # demo.env (example: config/demo.env.example; 0600, service user) -- the demo
-# identity (DISPATCH_DB_BACKEND, DEMO_PG_*, DEMO_PG_PASSWORD for the `demo`
-# role only) and the ROLLBACK SWITCH: DEMO_SOURCE (postgres | sqlite) and
-# DISPATCH_DB_BACKEND are deliberately NOT Environment= lines here, because
-# podman's -e beats --env-file and the switch must flip without a signed
-# quadlet edit: `scripts/demo-env.py source sqlite` + restart puts playback
-# back on the sovereign file mounted above and profiles back on
-# demo_access.db (both mounts stay until relay 4 retires the file).
+# identity (DEMO_PG_*, DEMO_PG_PASSWORD for the `demo` role only).
+# ~~and the ROLLBACK SWITCH: DEMO_SOURCE (postgres | sqlite) and
+# DISPATCH_DB_BACKEND are deliberately NOT Environment= lines here ...
+# `scripts/demo-env.py source sqlite` + restart~~ -- 2026-10-20: the sqlite
+# rollback is retired (nothing to roll back to; the files are destroyed and
+# common.db_backend raises SqliteRetired on DISPATCH_DB_BACKEND=sqlite). Both
+# are now signed constants: podman's -e beats --env-file, so the live
+# demo-secrets.env's leftover sqlite pin cannot win.
+Environment=DISPATCH_DB_BACKEND=postgres
+Environment=DEMO_SOURCE=postgres
 EnvironmentFile=/etc/corporatetraveldc/demo.env
 AutoUpdate=local
 

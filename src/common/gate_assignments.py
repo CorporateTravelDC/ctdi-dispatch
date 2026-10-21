@@ -402,7 +402,8 @@ def _validate(obs: Observation) -> None:
 
 
 def record(observations: list[Observation], *, ladd_idents: Iterable[str | None] = (),
-           ladd_hexes: Iterable[str | None] = (), now: float | None = None) -> RecordResult:
+           ladd_hexes: Iterable[str | None] = (), now: float | None = None,
+           reason: str | None = None) -> RecordResult:
     """Store evidence for ONE leg (all observations share obs.key) and re-resolve the
     touched slots. LADD-listed (or LADD-unknown) legs are dropped before anything is
     written. Never raises on a LADD or store error; the caller's own path goes on."""
@@ -431,7 +432,7 @@ def record(observations: list[Observation], *, ladd_idents: Iterable[str | None]
                 res.duplicates += 1
             touched.add((o.side, o.field))
     for side, field in sorted(touched):
-        ch = refresh_slot(key, side, field, now=now, reason=f"record:{observations[0].source}")
+        ch = refresh_slot(key, side, field, now=now, reason=reason or f"record:{observations[0].source}")
         if ch:
             res.changes.append(ch)
     return res
@@ -877,7 +878,7 @@ def _clean_hit(hit: dict) -> dict | None:
     return out
 
 
-def ingest_acars(items: list[dict]) -> dict:
+def ingest_acars(items: list[dict], *, reason: str | None = None) -> dict:
     """Bind, LADD-check and store gate/baggage announcements from ACARS. Each item
     is an envelope {source, label, timestamp, direction, flight, msg_id} plus either
     `hit` (fields already parsed by acars_gate_forward -- the watcher sends no
@@ -941,7 +942,7 @@ def ingest_acars(items: list[dict]) -> dict:
             continue
         try:
             r = record(obs, ladd_idents=[env.get("flight"), inst.registration],
-                       ladd_hexes=[inst.hex])
+                       ladd_hexes=[inst.hex], reason=reason)
         except Exception as e:
             log.warning("gate: acars store failed: %s", type(e).__name__)
             bump("store_error")
@@ -976,7 +977,7 @@ def tdes_leg(callsign: str, airport: str | None, destination: str | None,
     return make_key(parsed[0], parsed[1], airport, destination, t), "route_date"
 
 
-def record_tdes(rec: dict) -> tuple[fi.FlightInstanceKey | None, RecordResult | None]:
+def record_tdes(rec: dict, *, reason: str | None = None) -> tuple[fi.FlightInstanceKey | None, RecordResult | None]:
     """Departure-gate evidence from one stored TDES clearance record."""
     gate = rec.get("parking_gate")
     if gate is None:
@@ -990,4 +991,4 @@ def record_tdes(rec: dict) -> tuple[fi.FlightInstanceKey | None, RecordResult | 
                       observed_at=iso_utc(rec.get("event_time")) or _iso(), leg_match=match,
                       evidence_type="clearance", confidence=0.95, parser_version="tdes-1",
                       airport=rec.get("airport"), raw_table="tdes_departure_events", raw_ref=ev, event_key=ev)
-    return key, record([obs])
+    return key, record([obs], reason=reason)

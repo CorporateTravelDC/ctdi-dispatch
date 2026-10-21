@@ -673,6 +673,13 @@ def preflight_load_gate_if_needed(priority: str) -> None:
 # fully-unreachable function pretending to still do something.
 
 
+def lane_override() -> str | None:
+    """'hot' when common/brief_lane.py promoted this process (CTDC_LLM_LANE=hot,
+    set only after it took the hot-lane unit lock); else None. Any other value
+    is ignored, so a typo can never invent a lane."""
+    return "hot" if (os.getenv("CTDC_LLM_LANE") or "").strip().lower() == "hot" else None
+
+
 def ollama_post_with_retry(
     payload: dict,
     timeout: float,
@@ -768,7 +775,13 @@ def ollama_post_with_retry(
     #   everything  -> hold the box-wide long-runner lock for the request:
     #   else           one report in flight, ever; the next one WAITS and
     #                  is never refused, never preempted, never killed.
-    if tier in ("hot", "chat"):
+    if tier in ("hot", "chat") or lane_override() == "hot":
+        # 2026-10-20: lane_override() = an operational brief promoted by
+        # common/brief_lane.py on long-runner contention. It holds the
+        # single-occupant hot-lane unit lock, so at most one promoted brief
+        # posts here at a time; it takes llama's second slot beside the
+        # running report and never stops it (standing rule: hot may take the
+        # second slot, never a third core, never a kill).
         resp = _post(llama_pool.LLAMA_PORT)
     else:
         with llama_pool.long_runner_lock(persona_key) as port:
@@ -906,6 +919,10 @@ def generate(
     Passive (does not itself touch ingest containers); "hot" priority skips
     it entirely, same as the pause-aware waits.
     """
+    if lane_override() == "hot" and priority != "hot":
+        log.info("llm: lane override -- this run was promoted to the hot lane (CTDC_LLM_LANE=hot); "
+                 "priority %s -> hot (no pre-flight waits, second slot)", priority)
+        priority = "hot"
     preflight_cool_launch_if_needed(priority)
     # Both gates must be open -- see module docstring. Computed once so
     # the two branches below log identically regardless of which path

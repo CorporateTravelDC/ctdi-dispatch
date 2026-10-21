@@ -1,0 +1,27 @@
+{
+  "id": "exec-office-crossover",
+  "version": "0.1.0",
+  "state": "mapped",
+  "status": "template, disabled until after the feature freeze (operator 2026-10-20)",
+  "source": "operator decisions 2026-10-20 (CFO, EA and CoS as separate profiles; crossover demo), mapped per EXEC-OFFICE-CROSSOVER.md",
+  "core": {"path": "../profiles/executive-assistant.json", "sha256": "bd61c104f34dd6c1f59df4a042e6761feab466ab40b8a32b334eaa3b1bf5549a"},
+  "overlays": [
+    {"id": "cfo-finance", "enabled": false, "profile": "../profiles/cfo.json", "status": "template: Firefly III and Paperless-ngx installed disabled", "settings": {}},
+    {"id": "cos-governance", "enabled": false, "profile": "../profiles/chief-of-staff.json", "status": "template: Nextcloud Deck, Collectives, Tables installed disabled; Vikunja optional", "settings": {}}
+  ],
+  "audience_policy": {"default": "internal_operations", "permitted_groups": []},
+  "escalation": {"outward_delivery": "disabled", "radio_tx": "disabled"},
+  "crossover": {
+    "link_key": "trip tag: trip- plus a synthetic id, carried by the calendar event, the documents, the ledger lines and the initiative card",
+    "data": "synthetic seed data only; the public demo is never fed from production except through the demo scrub",
+    "permissions": "none shared: each profile keeps its own scopes, roles and database; the crossover is tags and links",
+    "steps": [
+      {"profile": "executive-assistant", "service": "nextcloud-calendar", "action": "travel event with a flight number (never a tail)"},
+      {"profile": "executive-assistant", "service": "dispatch", "action": "watchlist entry from the flight number; LADD filter and flight-alerts unchanged"},
+      {"profile": "executive-assistant", "service": "paperless-ngx", "action": "e-ticket and car-service receipt, tagged with the trip tag"},
+      {"profile": "cfo", "service": "firefly-iii", "action": "one transaction per receipt, trip tag, budget Travel, document link in notes; payments above threshold need a signed approval"},
+      {"profile": "chief-of-staff", "service": "nextcloud-deck", "action": "initiative card linking the event, the ledger tag report and the decision page"}
+    ]
+  },
+  "explicit": {}
+}

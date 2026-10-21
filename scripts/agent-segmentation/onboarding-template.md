@@ -12,6 +12,7 @@ this file.
 |---|---|
 | account | `{{NAME}}` (uid {{UID}}) |
 | kind / role | {{KIND}} / {{ROLE}} |
+| runs as | {{DEPLOYMENT_PROFILE}} |
 | login mode | `{{LOGIN_MODE}}` -- {{LOGIN_TEXT}} |
 | groups | {{GROUPS}} |
 | home | `{{HOME}}` -- your working directory; scratch work lives here |
@@ -40,6 +41,32 @@ this file.
   `Series/contributions/<task>/{{NAME}}/`; nobody (you included) can overwrite
   or delete a contribution. You hold no vault credential: the Nextcloud admin login is raw
   WebDAV over everyone's work and is never given to a team account.
+  **"Jarvis" and "Jarvis's notebook" are the operator's names for this exact
+  system** -- not a separate persona, not a different store. If the operator
+  or a note says "ask Jarvis", "check Jarvis's notebook" or "put it in
+  Jarvis", that means this vault, through the same research/workspace routes
+  above. Canonical statement: vault
+  `01-Sources/manual/REVIEW-DOCUMENTS-AND-BOARD-SHARING-STANDING-RULE.md`.
+- Two shared drop folders on this box, both `root:ctdc-dev` mode 3775
+  (setgid + sticky; group write, world read-only) -- every account, including
+  yours, is a `ctdc-dev` member. These are plain filesystem paths, NOT the
+  vault; a drop here is not durable and is not indexed, searched or backed up
+  the way a vault note is. Reaching them at all requires an actual Unix
+  session on this box -- true for every on-box account (Claude Code, Codex,
+  llama) and NOT true for a cloud-gateway account (Cowork, ChatGPT), which
+  has no session to reach them from; nothing below changes that for a cloud
+  account.
+  - `/srv/ctdc-publish-drop/` -- general two-way handoff, operator<->agent or
+    agent<->agent. Name what you drop so whoever picks it up knows it is
+    theirs and who left it; do not delete or overwrite another account's
+    drop. Existing convention: dated subfolders (`week-YYYY-MM-DD/`).
+  - `/srv/ctdc-publish-research/` -- research intake. The operator drops
+    source material here by hand or by SCP; agents treat it as a WATCH
+    folder (poll it; nothing pushes a notification). Same rules: read what's
+    new, never delete or rewrite someone else's drop. Durable findings still
+    go through `workspace-contribute.sh` (you) or `remember.py` (the
+    operator) into the vault, same as always -- this folder is intake, not
+    storage.
 - The board: post signed with your own key -- `scripts/board-sign.sh POST /api/v1/board body.json --send`.
   Normal routes accept your signature alone; high-impact routes need your
   signature AND a short-lived minted token (or an admin's cosignature). You
@@ -57,6 +84,15 @@ this file.
 - No tracked-file edits while a stack refresh or rollout is running.
 - No secret, credential, or PII value in any file, message, or transcript --
   not even "for illustration". Read secrets inside scripts; report status only.
+- No raw process or unit dumps into your session (2026-10-21): never print
+  `ps aux` / `ps -ef` / `pgrep -af` full command lines, `systemctl status` or
+  `systemctl cat` of a container unit, `podman inspect` env, or a quadlet body --
+  command lines and unit files carry feeder UUIDs, tokens and other secrets, and
+  your transcript leaves the box. Use `ps -eo pid,etime,comm`, `pgrep -l`,
+  `systemctl --user show -p ActiveState,SubState,NRestarts,Result`,
+  `podman ps` limited to names and status, or grep for the one key you need
+  with its value masked. If a full command line is truly needed, mask every
+  `--uuid`, `--user`, token and `KEY=value` before printing.
 - Python one-liners: never `python3 -c`; always `python3 - <<'EOF'` heredocs
   or a script file. Same for SQL fed to psql.
 
@@ -163,6 +199,10 @@ Retired -- never use, never revive:
 - Report outcomes faithfully; when a step is skipped, say so.
 - Hand the operator exact, copy-pasteable commands for anything privileged.
 
+## Deployment profiles (generated from `docs/deployment-profiles/`)
+
+{{PROFILES}}
+
 ## Glossary and logic rules (generated from `docs/glossary.yaml`)
 
 {{GLOSSARY}}
@@ -173,3 +213,5 @@ Retired -- never use, never revive:
 - `/opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/BOARD_SIGNING.md` -- how to sign
 - `/opt/corporatetraveldc/private/ctdi-dispatch-internal/CLAUDE.md` -- current task state (scratchpad)
 - vault: `corporatetraveldc/01-Sources/manual/` -- dated checkpoints; newest first
+- vault: `01-Sources/manual/PLATFORM-RULES-CANONICAL.md` -- the canonical cross-agent platform rules (MUST-READ); every agent reads this before relevant work
+- vault: `01-Sources/manual/REVIEW-DOCUMENTS-AND-BOARD-SHARING-STANDING-RULE.md` -- review-document placement, board-sharing convention, and the "Jarvis" naming rule quoted above

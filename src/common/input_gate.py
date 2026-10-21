@@ -65,6 +65,121 @@ def label_utc_et(epoch: float) -> str:
     return f"{dt:%H:%M}Z ({dt.astimezone(_ET):%H:%M} ET)"
 
 
+# ── Key helpers: DC relevance and weather bands (2026-10-20) ─────────────────
+# Diagnosis 2026-10-20: route-impact (every 300 s) and ep-advance (hourly)
+# logged gate=new on EVERY run -- route-impact keyed every national TFR and
+# NAS program (127 programs, ~33 changing per 5 min), ep-advance keyed raw
+# METAR ceiling/visibility/wind and the national VIP/TFR count. Neither
+# narrative is about any of that. These helpers build keys from what the
+# narrative actually depends on; the brief CONTENT still shows raw values.
+
+# Facilities that make a VIP TFR "DC-area" (the route narrative's own rule,
+# operator 2026-10-14): Washington Center and Potomac TRACON.
+DC_VIP_FACILITIES = frozenset({"ZDC", "KZDC", "PCT"})
+# NAS programs relevant to DC ground ops: the three DC airports
+# (common.gate_assignments.DC_AIRPORTS) plus Washington Center / Potomac TRACON.
+DC_NAS_CENTER_FACILITIES = frozenset({"ZDC", "PCT"})
+
+
+def tfr_facility(t: dict) -> str:
+    try:
+        return (json.loads(t.get("raw_json") or "{}").get("facility") or "").strip().upper()
+    except (TypeError, ValueError, AttributeError):
+        return ""
+
+
+def is_dc_vip_tfr(t: dict) -> bool:
+    return bool(t.get("is_vip")) and tfr_facility(t) in DC_VIP_FACILITIES
+
+
+def dc_vip_tfr_ids(tfrs) -> list[str]:
+    return sorted(str(t["tfr_id"]) for t in tfrs or [] if is_dc_vip_tfr(t))
+
+
+def _norm_facility(fac) -> str:
+    f = str(fac or "").strip().upper()
+    return f[1:] if len(f) == 4 and f.startswith("K") else f
+
+
+def dc_nas_key(programs) -> list[list[str]]:
+    """Sorted, de-duplicated [type, facility] for DC-area NAS programs. Keys on
+    the SET of program types per facility, never program ids: BWI/IAD alone
+    carry 11-12 rotating miles-in-trail entries whose ids churn every cycle."""
+    from common.gate_assignments import DC_AIRPORTS
+    keep = set(DC_AIRPORTS) | DC_NAS_CENTER_FACILITIES
+    out = {(str(p.get("type") or "").upper(), _norm_facility(p.get("facility")))
+           for p in programs or []}
+    return sorted([t, f] for t, f in out if f in keep)
+
+
+# Flight-category thresholds (FAA AIM 7-1-7 / aviationweather.gov categories).
+_CAT = (("LIFR", 500, 1.0), ("IFR", 1000, 3.0), ("MVFR", 3000, 5.0))
+WIND_STRONG_KT = 20          # sustained or gust at/above: crosswind/limo-door relevant
+WIND_HIGH_KT = 35            # at/above: high-wind operations
+_PRECIP_TYPES = ("TS", "FZ", "RA", "SN", "DZ", "PL", "GR", "GS", "SG", "IC", "UP")
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def flight_category(ceiling_ft, visibility_sm) -> str:
+    c, v = _num(ceiling_ft), _num(visibility_sm)
+    for name, cmax, vmax in _CAT:
+        if (c is not None and c < cmax) or (v is not None and v < vmax):
+            return name
+    return "VFR" if (c is not None or v is not None) else "UNKNOWN"
+
+
+def _band(value, edges) -> str:
+    x = _num(value)
+    if x is None:
+        return "none"
+    for e in edges:
+        if x < e:
+            return f"<{e:g}"
+    return f">={edges[-1]:g}"
+
+
+def wind_band(wind_kt, gust_kt=None) -> str:
+    w = max([x for x in (_num(wind_kt), _num(gust_kt)) if x is not None], default=None)
+    if w is None:
+        return "unknown"
+    return "high" if w >= WIND_HIGH_KT else "strong" if w >= WIND_STRONG_KT else "normal"
+
+
+def precip_types(code) -> list[str]:
+    """Precip TYPE only (thunder, freezing, rain, snow, ...): intensity (+/-)
+    and showery/vicinity descriptors are not a change of situation."""
+    s = str(code or "").upper()
+    return [p for p in _PRECIP_TYPES if p in s]
+
+
+def weather_key(metars, stations=("KDCA", "KIAD", "KBWI")) -> list[dict]:
+    """Banded per-station weather for a gate key: flight category, ceiling and
+    visibility bands, wind band, precip types. A 4500 -> 5000 ft ceiling or a
+    6 -> 9 kt wind is the same situation; VFR -> MVFR or rain -> thunder is not."""
+    rows = {m.get("station"): m for m in metars or [] if m.get("station") in stations}
+    out = []
+    for st in stations:
+        m = rows.get(st)
+        if not m:
+            out.append({"station": st, "missing": True})
+            continue
+        out.append({
+            "station": st,
+            "cat": flight_category(m.get("ceiling_ft"), m.get("visibility_sm")),
+            "ceil": _band(m.get("ceiling_ft"), (500, 1000, 3000)),
+            "vis": _band(m.get("visibility_sm"), (1, 3, 5)),
+            "wind": wind_band(m.get("wind_kt"), m.get("gust_kt")),
+            "precip": precip_types(m.get("precip_code")),
+        })
+    return out
+
+
 class InputGate:
     def __init__(self, name: str, state_dir: str | None = None,
                  max_reuse_s: int | None = None, now=time.time):

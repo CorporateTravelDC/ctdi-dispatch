@@ -6,10 +6,14 @@ and §3.1 for why a bare unix-socket-path host means "fall back to TCP
 loopback" instead of "fail" (a podman 5.8 pasta quirk already solved in
 Phase 0, not re-derived here).
 
-DISPATCH_DB_BACKEND=sqlite (the default, and the only thing this module
+~~DISPATCH_DB_BACKEND=sqlite (the default, and the only thing this module
 changes when it is active: NOTHING) -- common.db.conn() keeps using its
-existing thread-local sqlite3 connection exactly as it does today. This
-module is not even imported unless something asks for it.
+existing thread-local sqlite3 connection exactly as it does today.~~
+2026-10-20: postgres is the default (unset or empty) and the only backend a
+deployed process may run; `sqlite` is honoured only under
+CTDC_ALLOW_SQLITE_FOR_TESTS=1 (tests/conftest.py) and otherwise raises
+SqliteRetired (operator decision 2026-10-19: only Pi-hole, vnstat and ACARS
+Hub touch SQLite on this box; every platform SQLite file is destroyed).
 
 2026-10-16 (operator rule: the public demo is logically AND physically
 separated from production): _pg_conninfo() and pg_conn() REFUSE (raise
@@ -59,12 +63,9 @@ is run through translate_sql() first, which:
     psycopg's native pyformat style) outside of quoted literals/comments,
     so tuple and dict params both keep working unchanged.
 
-ref_conn() is a second, independent, SQLite-ONLY handle for the 11
-reference tables (docs/POSTGRES_MIGRATION.md §2) -- always SQLite, no
-matter what DISPATCH_DB_BACKEND says, because those tables never move.
-Its statement wrapper raises if a statement names any write-path (PG-
-bound) table, so a query cannot silently keep depending on the two table
-families still physically living in the same SQLite file today.
+~~ref_conn() is a second, independent, SQLite-ONLY handle for the 11
+reference tables~~ -- deleted 2026-10-20 (no callers since the 2026-09-19
+reference-table move; it would have re-created the platform SQLite file).
 """
 
 from __future__ import annotations
@@ -74,7 +75,6 @@ import hashlib
 import logging
 import os
 import re
-import sqlite3
 import sys
 import threading
 from contextlib import contextmanager
@@ -161,11 +161,49 @@ PG_TABLES: frozenset[str] = frozenset({
 })
 
 
+# 2026-10-20 (operator decision 2026-10-19: the only things on the box allowed
+# to touch SQLite are Pi-hole, vnstat and ACARS Hub; every platform SQLite file
+# is destroyed). The sqlite backend survives ONLY for the test suite, which
+# still runs the SQLite twin migrators on throwaway files under tmp_path:
+# tests/conftest.py sets this flag before common.config is imported. Nothing
+# outside tests/ may set it (tests/common/test_no_platform_sqlite.py).
+SQLITE_TEST_FLAG = "CTDC_ALLOW_SQLITE_FOR_TESTS"
+BACKENDS = ("postgres", "sqlite")
+
+
+class SqliteRetired(RuntimeError):
+    """DISPATCH_DB_BACKEND=sqlite (or an unknown value) outside the test
+    suite. Platform SQLite is retired (2026-10-19); production and the demo
+    run on Postgres only. Raised before any file is opened."""
+
+
+def sqlite_allowed_for_tests() -> bool:
+    return os.environ.get(SQLITE_TEST_FLAG, "").strip() == "1"
+
+
 def backend() -> str:
-    """DISPATCH_DB_BACKEND, defaulting to sqlite. This is an operator
-    switch in /etc/corporatetraveldc/dispatch.env -- nothing in this
-    codebase ever writes it."""
-    return config.get("DISPATCH_DB_BACKEND", "sqlite").strip().lower()
+    """DISPATCH_DB_BACKEND. ~~defaulting to sqlite~~ -- 2026-10-20: defaults
+    to postgres (unset or empty). `sqlite` is honoured ONLY when
+    CTDC_ALLOW_SQLITE_FOR_TESTS=1 (set by tests/conftest.py); otherwise, and
+    for any value that is neither, this raises SqliteRetired -- a process
+    that would have opened the destroyed platform SQLite file fails loudly
+    at its first database call instead. Nothing in this codebase writes the
+    variable; it is an operator setting in the env files."""
+    raw = config.get("DISPATCH_DB_BACKEND", "").strip().lower() or "postgres"
+    if raw == "postgres":
+        return raw
+    if raw == "sqlite" and sqlite_allowed_for_tests():
+        return raw
+    if raw == "sqlite":
+        raise SqliteRetired(
+            "db_backend: DISPATCH_DB_BACKEND=sqlite -- platform SQLite is retired "
+            "(operator 2026-10-19); production and the demo run on Postgres only. "
+            f"The sqlite backend exists only for the test suite ({SQLITE_TEST_FLAG}=1, "
+            "tests/conftest.py). Remove the setting or set it to postgres."
+        )
+    raise SqliteRetired(
+        f"db_backend: DISPATCH_DB_BACKEND={raw!r} is not one of {BACKENDS}"
+    )
 
 
 # The production database/role pair (one Postgres instance, one database,
@@ -199,8 +237,8 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 class PostgresRefused(RuntimeError):
     """This process is not allowed to open a Postgres connection: either
-    DISPATCH_DB_BACKEND is not `postgres` (the operator pinned it to
-    sqlite, e.g. the public-demo containers) or DISPATCH_DEMO_ISOLATION=1
+    DISPATCH_DB_BACKEND is not `postgres` (only possible under the test
+    flag since 2026-10-20; ~~the public-demo containers pinned sqlite~~) or DISPATCH_DEMO_ISOLATION=1
     and the resolved dbname/user is the production pair. Raised BEFORE any
     socket is opened; the message never carries a password."""
 
@@ -358,8 +396,9 @@ def _rewrite_sqlite_insert_dialect(sql: str) -> str:
     (board_refresh_grace: PRIMARY KEY old_token_hash is exactly the first
     column in its INSERT's explicit column list). The other 5 raw
     INSERT-OR-REPLACE sites in db.py target reference tables (faa_*,
-    opensky_*, cifp_*) and never reach this function -- ref_conn() always
-    executes on plain sqlite3, unmodified."""
+    opensky_*, cifp_*); ~~ref_conn() always executes on plain sqlite3,
+    unmodified~~ (ref_conn() deleted 2026-10-20 -- they go through
+    db.conn() like everything else)."""
     if _INSERT_OR_IGNORE_RE.search(sql):
         sql = _INSERT_OR_IGNORE_RE.sub("INSERT INTO", sql)
         return sql.rstrip() + "\nON CONFLICT DO NOTHING"
@@ -989,105 +1028,16 @@ def role_conn() -> Generator[_TranslatingConnection, None, None]:
         yield c
 
 
-# ── ref_conn(): SQLite-only handle for the 11 reference tables ──────────────
-
-_ref_local = threading.local()
-
-
-def _open_ref_connection() -> sqlite3.Connection:
-    from common import config as _config
-
-    p = Path(_config.db_path())
-    p.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(p), timeout=10)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
-
-
-def close_ref_thread_connection() -> None:
-    c = getattr(_ref_local, "conn", None)
-    if c is not None:
-        try:
-            c.close()
-        except sqlite3.Error:
-            pass
-        _ref_local.conn = None
-
-
-_TABLE_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
-
-
-def _guard_cross_engine(sql: str) -> None:
-    """Raise if `sql` names any write-path (Postgres-bound) table. Today
-    every reference table and every write-path table still physically
-    live in the same SQLite file (nothing has moved yet -- this is Phase
-    1, purely additive), so a query joining across both would silently
-    "work" against stale/soon-to-be-removed data instead of failing loud.
-    This is a textual guard (whole-word match against the
-    PG_TABLES set), deliberately over the actual SQL text rather than a
-    query plan -- cheap, and every current ref-table call site is a
-    simple single-table statement so false positives are not expected in
-    practice; a genuine false positive (a column or alias that happens to
-    share a PG table's name) should rename the alias rather than route
-    around this guard."""
-    found = {m.group(1) for m in _TABLE_NAME_RE.finditer(sql)} & PG_TABLES
-    if found:
-        raise ValueError(
-            f"ref_conn(): statement references write-path table(s) "
-            f"{sorted(found)} -- reference tables (SQLite-only) and "
-            f"write-path tables (Postgres-bound) cannot share a query or "
-            f"transaction. See docs/POSTGRES_MIGRATION.md §2."
-        )
-
-
-class _RefGuardedConnection:
-    __slots__ = ("_raw",)
-
-    def __init__(self, raw):
-        object.__setattr__(self, "_raw", raw)
-
-    def execute(self, sql, *a, **kw):
-        _guard_cross_engine(sql)
-        return self._raw.execute(sql, *a, **kw)
-
-    def executemany(self, sql, *a, **kw):
-        _guard_cross_engine(sql)
-        return self._raw.executemany(sql, *a, **kw)
-
-    def executescript(self, sql, *a, **kw):
-        _guard_cross_engine(sql)
-        return self._raw.executescript(sql, *a, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self._raw, name)
-
-    def __setattr__(self, name, value):
-        setattr(self._raw, name, value)
-
-
-@contextmanager
-def ref_conn() -> Generator[_RefGuardedConnection, None, None]:
-    """SQLite-only handle for the 11 reference tables. Always SQLite,
-    regardless of DISPATCH_DB_BACKEND -- reference tables never move (see
-    module docstring). Independent thread-local connection from
-    common.db.conn()'s, so using both in the same thread/request does not
-    fight over one cached handle."""
-    c = getattr(_ref_local, "conn", None)
-    if c is None:
-        c = _open_ref_connection()
-        _ref_local.conn = c
-    guarded = _RefGuardedConnection(c)
-    try:
-        yield guarded
-        c.commit()
-    except Exception:
-        try:
-            c.rollback()
-        except sqlite3.Error:
-            close_ref_thread_connection()
-        raise
+# ── ~~ref_conn(): SQLite-only handle for the 11 reference tables~~ ───────────
+#
+# 2026-10-20 (operator decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub
+# may touch SQLite on this box): ref_conn(), _open_ref_connection(),
+# close_ref_thread_connection(), _guard_cross_engine() and
+# _RefGuardedConnection are deleted. ref_conn() had no caller since the
+# 2026-09-19 reference-table move (REFERENCE_TABLES is empty) and, if anything
+# had called it, it would have re-created the platform SQLite file at
+# config.db_path() -- which the 2026-10-19 relay shredded.
+# tests/common/test_no_platform_sqlite.py holds that it stays gone.
 
 
 # ── sqlite3.Row positional-access audit (informational) ─────────────────────

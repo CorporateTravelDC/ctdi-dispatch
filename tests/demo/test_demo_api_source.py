@@ -1,9 +1,11 @@
 """tests/demo/test_demo_api_source.py -- 2026-10-16 demo/production database
-split: src/demo/demo_api.py reads the sovereign SQLite file by default and
-the demo instance under DEMO_SOURCE=postgres, with the same anchor /
-virtual-timestamp logic and name-keyed rows on both. The "demo instance" is
-a sqlite twin handed in through a fake common.db_backend.demo_pg_conn (the
-real one stays tripwired); nothing opens a socket.
+split: src/demo/demo_api.py reads the demo instance (DEMO_SOURCE=postgres,
+also the default). ~~reads the sovereign SQLite file by default~~ -- the
+sqlite source is retired 2026-10-20 (operator decision 2026-10-19: only
+Pi-hole, vnstat and ACARS Hub touch SQLite); DEMO_SOURCE=sqlite is an error.
+The "demo instance" is a sqlite twin handed in through a fake
+common.db_backend.demo_pg_conn (a test double only; the real one stays
+tripwired); nothing opens a socket.
 """
 from __future__ import annotations
 
@@ -52,17 +54,7 @@ def _reset_caches(monkeypatch):
     monkeypatch.setattr(demo_api, "DEMO_ANCHOR_OVERRIDE", "")
 
 
-@pytest.fixture
-def sqlite_source(tmp_path, monkeypatch):
-    path = tmp_path / "demo-source.db"; _fill(path)
-    monkeypatch.setenv("DEMO_SOURCE", "sqlite")
-    monkeypatch.setattr(demo_api, "DEMO_DB", str(path))
-    return path
-
-
-@pytest.fixture
-def pg_source(tmp_path, monkeypatch):
-    path = tmp_path / "demo-instance.db"; _fill(path)
+def _fake_pool(monkeypatch, path: Path) -> list:
     opened = []
 
     @contextmanager
@@ -76,8 +68,13 @@ def pg_source(tmp_path, monkeypatch):
 
     monkeypatch.setenv("DEMO_SOURCE", "postgres")
     monkeypatch.setattr(demo_api.db_backend, "demo_pg_conn", fake_demo_pg_conn)
-    monkeypatch.setattr(demo_api, "DEMO_DB", str(tmp_path / "does-not-exist.db"))
     return opened
+
+
+@pytest.fixture
+def pg_source(tmp_path, monkeypatch):
+    path = tmp_path / "demo-instance.db"; _fill(path)
+    return _fake_pool(monkeypatch, path)
 
 
 def _check_logic():
@@ -100,21 +97,42 @@ def _check_logic():
     assert [r["brief_type"] for r in demo_api._brief_archive_history(None, T0 + timedelta(days=6), 5)] == ["ops"]  # noqa: SLF001
 
 
-def test_sqlite_source_logic_unchanged(sqlite_source):
-    assert demo_api.source_kind() == "sqlite"
-    _check_logic()
-
-
-def test_postgres_source_same_logic_through_the_demo_pool(pg_source):
+def test_postgres_source_logic_through_the_demo_pool(pg_source):
     assert demo_api.source_kind() == "postgres"
     _check_logic()
     assert pg_source, "the demo pool was used"
 
 
+def test_source_defaults_to_postgres(monkeypatch):
+    monkeypatch.delenv("DEMO_SOURCE", raising=False)
+    assert demo_api.source_kind() == "postgres"
+    monkeypatch.setenv("DEMO_SOURCE", "")
+    assert demo_api.source_kind() == "postgres"
+
+
+def test_sqlite_source_is_retired(monkeypatch):
+    """2026-10-20: ~~test_sqlite_source_logic_unchanged~~ -- DEMO_SOURCE=sqlite
+    is refused by source_kind() and by _conn() before any connection, and the
+    module no longer imports sqlite3 or names a DEMO_DB file."""
+    monkeypatch.setenv("DEMO_SOURCE", "sqlite")
+
+    def boom(*_a, **_k):
+        raise AssertionError("demo pool reached under DEMO_SOURCE=sqlite")
+    monkeypatch.setattr(demo_api.db_backend, "demo_pg_conn", boom)
+    with pytest.raises(RuntimeError, match="retired"):
+        demo_api.source_kind()
+    with pytest.raises(RuntimeError, match="DEMO_SOURCE"):
+        demo_api._conn()  # noqa: SLF001
+    import ast
+    tree = ast.parse(Path(demo_api.__file__).read_text())
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    assert "sqlite3" not in imported and not hasattr(demo_api, "DEMO_DB")
+    assert demo_api.SOURCE_KINDS == ("postgres",)
+
+
 def test_legacy_anchor_fallback_by_name(tmp_path, monkeypatch):
     path = tmp_path / "old.db"; _fill(path, with_meta=False)
-    monkeypatch.setenv("DEMO_SOURCE", "sqlite")
-    monkeypatch.setattr(demo_api, "DEMO_DB", str(path))
+    _fake_pool(monkeypatch, path)
     conn = demo_api._conn()  # noqa: SLF001
     try:
         assert demo_api._window_end(conn) is None  # noqa: SLF001
@@ -129,13 +147,11 @@ def test_unknown_source_is_an_error_not_a_fallback(monkeypatch):
         demo_api.source_kind()
 
 
-def test_healthz_reports_the_source(sqlite_source, monkeypatch):
+def test_healthz_reports_the_source(pg_source, monkeypatch):
     from fastapi.testclient import TestClient
     client = TestClient(demo_api.app)
     body = client.get("/healthz").json()
-    assert body["source"] == "sqlite" and body["ok"] is True and body["demo_db"] == str(sqlite_source)
-
-    monkeypatch.setenv("DEMO_SOURCE", "postgres")
+    assert body["source"] == "postgres" and body["ok"] is True and "demo_db" not in body
 
     @contextmanager
     def refusing():
@@ -151,24 +167,20 @@ def test_healthz_reports_the_source(sqlite_source, monkeypatch):
 
 
 def test_healthz_counts_api_requests_per_source(pg_source, tmp_path, monkeypatch):
-    """2026-10-19 (relay-4 evidence): /api/ requests are counted under the
-    source that answered them; /healthz itself is not counted; no path or
-    client detail is kept, only the two integers."""
+    """2026-10-19: /api/ requests are counted under the source that answered
+    them; /healthz itself is not counted; no path or client detail is kept.
+    2026-10-20: postgres is the only source, so the only counter."""
     from fastapi.testclient import TestClient
-    monkeypatch.setattr(demo_api, "_REQUESTS", {"sqlite": 0, "postgres": 0})
+    assert set(demo_api._REQUESTS) == {"postgres"}  # noqa: SLF001
+    monkeypatch.setattr(demo_api, "_REQUESTS", {"postgres": 0})
     client = TestClient(demo_api.app)
     monkeypatch.setenv("DEMO_SOURCE", "postgres")
     client.get("/api/v1/demo/readiness"); client.get("/api/v1/demo/readiness")
     client.get("/healthz")
     body = client.get("/healthz").json()
-    assert body["requests"] == {"sqlite": 0, "postgres": 2}
+    assert body["requests"] == {"postgres": 2}
     assert body["source"] == "postgres" and body["ok"] is True
     assert body["started_at"].endswith("Z") and body["uptime_s"] >= 0
-    sovereign = tmp_path / "sovereign.db"; _fill(sovereign)
-    monkeypatch.setattr(demo_api, "DEMO_DB", str(sovereign))
-    monkeypatch.setenv("DEMO_SOURCE", "sqlite")
-    client.get("/api/v1/demo/readiness")
-    assert client.get("/healthz").json()["requests"] == {"sqlite": 1, "postgres": 2}
 
 
 def test_module_never_names_the_production_accessor():

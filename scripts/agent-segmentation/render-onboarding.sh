@@ -35,6 +35,18 @@ case "$LOGIN_MODE" in
 esac
 if [[ "$PRELOADED" == 1 ]]; then PRELOAD_BANNER="> **PRELOADED -- not yet activated.** This account exists but is expired, has no linger and an inactive signer; nothing runs as it until the operator runs \`plan.sh --activate ${NAME}\`. Everything below describes the account AFTER activation."$'\n'
 else PRELOAD_BANNER=""; fi
+# deployment profile (2026-10-20): where/how this account actually runs, made
+# explicit in the pamphlet instead of left implicit in LOGIN_TEXT's wording.
+# A generic default is computed from what render-onboarding.sh already knows
+# (PRELOADED/LOGIN_MODE); a caller that knows more (publish-pamphlet-to-vault.sh,
+# for a cloud identity reached only through the MCP gateway) sets
+# DEPLOYMENT_PROFILE_OVERRIDE in its environment rather than this script
+# guessing cloud-vs-local from the account name.
+if [[ -n "${DEPLOYMENT_PROFILE_OVERRIDE:-}" ]]; then DEPLOYMENT_PROFILE="$DEPLOYMENT_PROFILE_OVERRIDE"
+elif [[ "$PRELOADED" == 1 ]]; then DEPLOYMENT_PROFILE="preloaded -- not yet activated; nothing runs as this account yet"
+elif [[ "$LOGIN_MODE" == none ]]; then DEPLOYMENT_PROFILE="service identity -- no login, no interactive session; reached only through its own integration"
+else DEPLOYMENT_PROFILE="on-box -- interactive \`$LOGIN_MODE\` login on the dispatch Pi; reads this pamphlet from its own home directory"
+fi
 # signer registry = operator's rootless podman; as root, drop to the operator (and
 # never let this lookup abort the render -- it is informational)
 OPERATOR=corporatetraveldc
@@ -58,15 +70,26 @@ if [[ "$KIND" == agent ]]; then SKILLS=$(python3 "$REPO_ROOT/scripts/lib/skill_g
 else SKILLS="_(skills are granted to agent accounts; humans use their own Claude setup)_"; fi
 # glossary appendix (2026-10-19, batch G1): logic rules + platform and agent terms from
 # docs/glossary.yaml via scripts/render-glossary.py --pamphlet (deterministic, no live state)
-GLOSSARY=$(python3 "$REPO_ROOT/scripts/render-glossary.py" --repo "$REPO_ROOT" --pamphlet 2>/dev/null || echo "_(glossary unavailable -- read docs/GLOSSARY.md)_")
+# 2026-10-20: "advanced" pamphlet glossary -- the ctdi-dc-live profile's full
+# scope set (agents, aviation, platform, rail, weather) instead of the plain
+# platform+agents default, so every agent pamphlet carries the same term set
+# an on-box live-dispatch session would. Falls back to the plain default if
+# the profile lookup ever fails, rather than failing the whole render.
+GLOSSARY=$(python3 "$REPO_ROOT/scripts/render-glossary.py" --repo "$REPO_ROOT" --pamphlet --pamphlet-profile ctdi-dc-live 2>/dev/null \
+  || python3 "$REPO_ROOT/scripts/render-glossary.py" --repo "$REPO_ROOT" --pamphlet 2>/dev/null \
+  || echo "_(glossary unavailable -- read docs/GLOSSARY.md)_")
+# 2026-10-20: the deployment profiles themselves (verticals, modules, sources,
+# approvals, live loader consumers), rendered from the profile files.
+PROFILES=$(python3 "$HERE/render-profiles.py" --repo "$REPO_ROOT" 2>/dev/null || echo "_(profiles unavailable -- read docs/deployment-profiles/STAGED.md)_")
 render() {
-python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" "$GLOSSARY" <<'PYEOF'
+python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" "$GLOSSARY" "$DEPLOYMENT_PROFILE" "$PROFILES" <<'PYEOF'
 import sys, datetime
-tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills, glossary = sys.argv[1:16]
+tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills, glossary, deployment_profile, profiles = sys.argv[1:18]
 t = open(tpl).read()
 for k, v in {"NAME": name, "UID": uid, "KIND": kind, "ROLE": role, "GROUPS": groups, "HOME": home,
              "SLICE": slice_, "SUBSET": subset, "REPOS": repos.rstrip("\n"),
              "LOGIN_MODE": login_mode, "LOGIN_TEXT": login_text, "PRELOAD_BANNER": preload_banner, "SKILLS": skills.rstrip("\n"), "GLOSSARY": glossary.rstrip("\n"),
+             "DEPLOYMENT_PROFILE": deployment_profile, "PROFILES": profiles.rstrip("\n"),
              "RENDERED": datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")}.items():
     t = t.replace("{{" + k + "}}", v)
 sys.stdout.write(t)

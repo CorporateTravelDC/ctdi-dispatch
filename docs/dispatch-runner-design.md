@@ -347,3 +347,23 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "$H" -H "$V" http://127.0.0.1:8005/a
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "$H" -H "$V" http://127.0.0.1:8005/api/ask       # 403 (no body needed)
 ```
 Verified 2026-10-13 after `127a2f76`: 401 / 401 / 403. Tests: `tests/runner/test_demo_gate.py`.
+
+## Public = demo, tailnet = live (2026-10-20)
+
+Operator rule: every public caller sees the demo; the live dispatch panel answers only the tailnet (and LAN /
+loopback). Three layers:
+
+1. **Network placement.** The live runner publishes only on loopback and the tailnet IP; every Cloudflare
+   ingress lands on nginx :80, whose only runner vhost proxies the demo runner; the catch-all returns 444.
+2. **App layer, live runner.** `live_trusted_only` (`src/runner/main.py`): with `DEMO_MODE` off, any request
+   `_is_trusted()` rejects gets 404 (only `/healthz` stays open). A routing mistake cannot put the live panel,
+   live ETAs or LADD-listed aircraft in front of a public caller. Test: `tests/runner/test_demo_gate.py`.
+3. **App layer, watch ETAs.** `GET /api/v1/watchlist` carries an ETA only with `include=eta` (tailnet: every
+   flight) or `include=eta_public` (LADD-listed flights withheld, LADD lookup failure withholds all); the
+   runner proxy rewrites `eta` to `eta_public` for any untrusted caller.
+
+The demo runner reads only cleared, sanitized windows scrubbed from production into the separate demo
+database. For LADD-listed aircraft that scrub also buckets every time to 15 minutes after a hidden, rotating
+per-leg offset and ends each leg at the dark point (inner marker, else runway threshold, else wheels-on, else
+fail closed), so the demo never shows when or where a listed aircraft parks. Design and limits:
+`docs/LADD_CUI_HANDLING.md` "Demo timing anti-correlation".

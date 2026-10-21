@@ -62,7 +62,18 @@ def operator_email() -> str:
     return get("OPERATOR_EMAIL", "csexecutiveservices@gmail.com")
 
 def db_path() -> str:
-    return get("DISPATCH_DB", "/var/lib/corporatetraveldc/corporatetraveldc.db")
+    """The SQLite file behind the test-only sqlite backend. ~~Defaulted to
+    /var/lib/corporatetraveldc/corporatetraveldc.db~~ -- 2026-10-20: no
+    default (operator decision 2026-10-19: platform SQLite is retired and
+    that file was destroyed; a default here could only re-create it).
+    DISPATCH_DB must be set explicitly, which only tests do."""
+    p = get("DISPATCH_DB", "").strip()
+    if not p:
+        raise RuntimeError(
+            "DISPATCH_DB is not set and has no default: platform SQLite is retired "
+            "(operator 2026-10-19). Production and the demo run on Postgres "
+            "(DISPATCH_DB_BACKEND=postgres); SQLite is for the test suite only.")
+    return p
 
 def state_dir() -> str:
     return get("DISPATCH_STATE_DIR", "/var/lib/corporatetraveldc")

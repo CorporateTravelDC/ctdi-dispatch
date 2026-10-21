@@ -21,20 +21,22 @@
 >   sqlite pin is honoured by every direct caller, not only `db.conn()`), and
 >   under `DISPATCH_DEMO_ISOLATION=1` refuse any connection whose dbname
 >   **or** user is the production pair, before a socket is opened.
-> - `src/demo/profiles.py`: under a non-postgres backend the password-gate
+> - ~~`src/demo/profiles.py`: under a non-postgres backend the password-gate
 >   store is its own SQLite file in the demo-state volume
 >   (`DEMO_ACCESS_DB`, default `/var/lib/corporatetraveldc-demo-state/
 >   demo_access.db`, the pre-2026-09-20 `profiles` table byte-for-byte, so the
->   file already in that volume works as-is). Postgres `demo_profiles` remains
+>   file already in that volume works as-is).~~ (2026-10-20: removed; the store
+>   is `demo_profiles` on the demo instance only, and anything else is refused,
+>   addendum 2026-10-20.) Postgres `demo_profiles` remains
 >   the shape for a future demo-owned instance.
 > - Quadlets: `corporatetraveldc-demo-api.container` and
 >   `corporatetraveldc-runner-demo.container` no longer mount
 >   `corporatetraveldc-pgsql-sock` and set `Environment=DISPATCH_DEMO_ISOLATION=1`.
->   `config/demo-secrets.env.example` now tracks the live
->   `DISPATCH_DB_BACKEND=sqlite` pin; `config/dispatch.env.example` documents
+>   ~~`config/demo-secrets.env.example` now tracks the live
+>   `DISPATCH_DB_BACKEND=sqlite` pin~~ (removed 2026-10-20); `config/dispatch.env.example` documents
 >   the flag (commented out — it must never be active in the shared file).
 > - Tests: `tests/common/test_db_backend_demo_isolation.py`,
->   `tests/demo/test_profiles_sqlite.py`,
+>   ~~`tests/demo/test_profiles_sqlite.py`~~ (now `tests/demo/test_profiles_store.py`, 2026-10-20),
 >   `tests/scripts/test_demo_quadlets_isolation.py` (no public-demo quadlet
 >   mounts the production socket or `/var/lib/corporatetraveldc`).
 >
@@ -53,10 +55,11 @@
 >   else joins them. (Relay 4 of the split narrows the recorder, addendum below.)
 > - The Postgres `demo_profiles` table may hold profiles created through the
 >   admin API between 2026-10-10 (when the admin token started working) and
->   2026-10-16; the sqlite file holds the 7 rows of 2026-08-02 (4 active). If
+>   2026-10-16; ~~the sqlite file holds the 7 rows of 2026-08-02 (4 active). If
 >   any newer profile matters, export it host-side (read-only) into the sqlite
 >   file; otherwise re-create it through `/admin/demo/profiles` after the
->   restart.
+>   restart.~~ (2026-10-19: the four active rows were carried into the demo
+>   instance by relay 1's `--profiles`; the file is gone.)
 >
 > Claims in the plan below that this supersedes are struck through in place.
 
@@ -92,8 +95,9 @@
 >    demo`; `db_backend.demo_pg_conn()` (own pool, `DEMO_PG_*`) with refusals
 >    both ways and `common.db.conn()` routed by `DISPATCH_ROLE`;
 >    `src/demo/profiles.py` on the demo pool under `DISPATCH_ROLE=demo`,
->    `src/demo/demo_api.py` on it under `DEMO_SOURCE=postgres` (default still
->    the sovereign file; `/healthz` names the source); the scrub rewritten PG ->
+>    `src/demo/demo_api.py` on it under `DEMO_SOURCE=postgres` (~~default still
+>    the sovereign file~~ -- 2026-10-20: postgres is the default and the only
+>    source; `/healthz` names the source); the scrub rewritten PG ->
 >    PG (nine endpoints, >= 24 h floor, LADD gate through the production
 >    filter -- empty or failed = exit 5 -- substitutions, tail/hex sweeps,
 >    fail-closed verify, 52-week prune, one ledger row per run, `--backfill
@@ -147,13 +151,16 @@
 >   2026-08-27 comment claimed it was never set; `dispatch.env` set it).
 >   Neither container mounts `/etc/corporatetraveldc` (so `common.config`'s
 >   import-time load of `dispatch.env` / `dispatch-secrets.env` finds nothing).
-> - `DEMO_SOURCE` and `DISPATCH_DB_BACKEND` are in `demo.env`, NOT `Environment=`
+> - ~~`DEMO_SOURCE` and `DISPATCH_DB_BACKEND` are in `demo.env`, NOT `Environment=`
 >   lines: podman's `-e` beats `--env-file`, and the rollback must not need a
 >   signed edit. **Rollback, one step:** `scripts/demo-env.py source sqlite` (sets
 >   the pair), then restart the two demo containers -- playback from the
 >   sovereign file (still mounted read-only), profiles from `demo_access.db`,
 >   chat in the demo-only mount: exactly the pre-flip state.
->   `scripts/demo-env.py source postgres` undoes it.
+>   `scripts/demo-env.py source postgres` undoes it.~~ (2026-10-20: the rollback
+>   is retired. Both quadlets now set `DISPATCH_DB_BACKEND=postgres`, and demo-api
+>   also `DEMO_SOURCE=postgres`, as signed `Environment=` lines.
+>   `demo-env.py source` refuses; addendum 2026-10-20.)
 > - `demo.env` (example `config/demo.env.example`, 0600, service user) holds the
 >   demo identity, `DEMO_PG_PASSWORD` (moved from `demo-secrets.env`),
 >   `LLAMA_BASE_URL` / `OLLAMA_CHAT_MODEL` copied BY NAME from `dispatch.env`
@@ -195,16 +202,90 @@
 > opens, `TimeoutStartSec=4h`, `OnFailure=corporatetraveldc-unit-failure-notify@`.
 > Production reads go through `readonly_source()` (`SET TRANSACTION READ ONLY`).
 >
-> *Relay 4 -- retire the SQLite files (prepared, not run).*
-> `scripts/demo-sqlite-retire-check.py --hours N` verifies N continuous hours on
+> ~~*Relay 4 -- retire the SQLite files (prepared, not run).*~~ (2026-10-20:
+> overtaken. The files were destroyed by the 2026-10-19 platform-SQLite relay,
+> d5fde567, and the check is retired to `scripts/retired-20261020/`; addendum
+> 2026-10-20.)
+> ~~`scripts/demo-sqlite-retire-check.py --hours N` verifies N continuous hours on
 > Postgres (healthz source/ok/profiles_store/uptime, zero sqlite-answered
 > requests, both containers started >= N h ago with the postgres pair), lists the
 > old demo SQLite files with sizes and open-file holders, writes the guardrail
 > proof **G26** record (sha256, size, mtime per file), and only then prints the
 > exact shred command -- for the operator to run by hand, never from a relay.
 > Removing the sovereign mount and the `DEMO_SOURCE=sqlite` path (a quadlet +
-> code change, not built yet) ends the rollback and must PRECEDE the shred;
+> code change, not built yet) ends the rollback and must PRECEDE the shred;~~
 > narrowing the recorder and archiver is a later relay.
+
+> **Addendum, 2026-10-20 -- the demo is Postgres-only (operator decision
+> 2026-10-19: the only things on the box allowed to touch SQLite are Pi-hole,
+> vnstat and ACARS Hub).** The three demo SQLite dirs
+> (`/var/lib/corporatetraveldc-demo-source`, `-demo-state`, `-demo`) were empty
+> on 2026-10-19 21:26Z, so `demo-env.py source sqlite` rolled back to nothing.
+> This batch removes the rollback and the code behind it:
+>
+> - `corporatetraveldc-demo-api.container`: the two sovereign mounts
+>   (`-demo-source` read-only, `-demo-state`) are removed. Its only volume is the
+>   demo socket. It sets `Environment=DISPATCH_DB_BACKEND=postgres` and
+>   `Environment=DEMO_SOURCE=postgres` (signed; podman's `-e` beats the live
+>   `demo-secrets.env`'s leftover `sqlite` line).
+> - `corporatetraveldc-runner-demo.container`: `Environment=DISPATCH_DB_BACKEND=postgres`.
+>   It keeps `/var/lib/corporatetraveldc-demo` mounted at
+>   `/var/lib/corporatetraveldc`: that dir is `STATE_DIR` for
+>   `runner-layer-config.json` (`src/runner/main.py` `_CONFIG_PATH`, written by
+>   the layer-config POST). It holds no SQLite. Chat history is on the demo
+>   instance (relay 2).
+> - `src/demo/demo_api.py`: `DEMO_SOURCE` must be `postgres` (also the
+>   default). `sqlite` is an error. `DEMO_DB`, the `sqlite3` import, the sqlite
+>   `_conn()` branch, the `/healthz` file check and the four
+>   `except sqlite3.OperationalError` handlers are gone; those handlers never
+>   caught anything on Postgres. `/healthz` counts requests under `postgres`
+>   only.
+> - `src/demo/profiles.py`: `store_kind()` raises `ProfileStoreRefused` unless
+>   the process has `DISPATCH_ROLE=demo` and the postgres backend. There is no
+>   fallback file. `DEFAULT_ACCESS_DB`, `access_db_path()` and `_SQLITE_SCHEMA`
+>   are removed.
+> - `scripts/demo-env.py`: the `source` subcommand refuses (exit 2, nothing
+>   written). `check` requires `DISPATCH_DB_BACKEND=postgres` and refuses any
+>   `DEMO_SOURCE` other than `postgres`; `DEMO_SOURCE` is no longer required.
+>   `config/demo.env.example` drops `DEMO_SOURCE`, and
+>   `config/demo-secrets.env.example` drops `DISPATCH_DB_BACKEND=sqlite`.
+>   Optional operator hand step, no value involved: delete that line from the
+>   live `/etc/corporatetraveldc/demo-secrets.env`, and `DEMO_SOURCE` from
+>   `demo.env`.
+> - Retired to `scripts/retired-20261020/`: `demo-sqlite-retire-check.py` and its
+>   test, and `migrate-demo-to-pg.py`.
+> - Tests: `tests/scripts/test_demo_isolation.py` now requires both sovereign
+>   mounts to be ABSENT (it used to require them PRESENT). Also changed:
+>   `tests/demo/test_demo_api_source.py`, `tests/demo/test_profiles_store.py`
+>   (was `test_profiles_sqlite.py`), `tests/scripts/test_demo_env.py`,
+>   `tests/scripts/test_demo_quadlets_isolation.py`, plus the platform-wide guard
+>   `tests/common/test_no_platform_sqlite.py`.
+> - The empty host dirs `/var/lib/corporatetraveldc-demo-source` and
+>   `-demo-state` can be removed by the operator once the new quadlets are
+>   live. That is a root step, not done here. Keep `/var/lib/corporatetraveldc-demo`
+>   (runner-demo's state dir).
+>
+> **Addendum, 2026-10-20 -- LADD timing anti-correlation in the scrub, and
+> public = demo (operator decisions).** The Q mark hides a listed aircraft's
+> registration but not its timing: someone at an FBO can line up arrivals they
+> saw with the demo's times. The scrub now, for LADD-listed legs only:
+> - buckets every time to 15 minutes after a hidden per-leg offset in
+>   [0, 15 min) (HMAC under the Q-registry key with its own domain label; never
+>   stored or printed), drawn per leg -- legs ordered from SWIM within the
+>   operational day, consecutive legs (same day or across midnight) at least
+>   4 minutes apart; an aircraft-day whose leg order SWIM cannot give is
+>   dropped (fail closed);
+> - ends each leg at the dark point -- inner marker where charted, else runway
+>   threshold, else SWIM wheels-on, else fail closed -- and always removes
+>   arrival-side fields and sentences (landing, ON/IN, gate, terminal, baggage,
+>   FBO, taxi, surface, parking).
+> Full design, constants, limits and audit counts: `docs/LADD_CUI_HANDLING.md`
+> "Demo timing anti-correlation". Public hostnames reach only the demo runner
+> (network placement), and the live runner now also refuses every non-trusted
+> origin at the app layer (`live_trusted_only`, 404 except `/healthz`).
+> **Re-scrub required:** rows promoted before this change carry real times, so
+> the demo's promoted tables are purged and re-backfilled after the sign (relay
+> lines in the 2026-10-20 relay).
 
 Written 2026-08-13. Design/planning document for operator review — **no code
 in this repo changes as part of this doc**. It responds to finding F6 of the
@@ -426,6 +507,8 @@ sovereign file exists but nothing serves it until this sign-off.
 ### Phase 3 — demo_api.py cutover
 
 - `DEMO_DB` default → `/var/lib/corporatetraveldc-demo-source/demo-source.db`.
+  (~~in force~~ removed 2026-10-20: demo_api reads the demo Postgres instance
+  only; addendum 2026-10-20.)
 - The three brief sub-routes (`/brief/weekly`, `/brief/history`,
   `/brief/{ref}`) re-point at the sovereign `brief_archive` table through
   the same `_conn()` read-only path as everything else.
@@ -443,7 +526,8 @@ sovereign file exists but nothing serves it until this sign-off.
   boundary was temporal only; the new one is artifact-based and temporal.
   `DEMO_ANCHOR_OVERRIDE` stays as a curation knob. `profiles.py`'s `DB`
   default moves to the demo-state directory (done 2026-08-26; ~~undone by the
-  2026-09-20 Postgres move~~ restored 2026-10-16 as `DEMO_ACCESS_DB`).
+  2026-09-20 Postgres move~~ ~~restored 2026-10-16 as `DEMO_ACCESS_DB`~~;
+  2026-10-20: removed, the store is the demo instance's `demo_profiles`).
 
 ### Phase 4 — Container mount narrowing (highest-risk step)
 
@@ -455,7 +539,8 @@ still runs the old config:
   plus `…-demo-state:…-demo-state:z` (rw — profile admin writes). (Done
   2026-08-14. ~~The 2026-09-20 Postgres move then added the production socket
   volume `corporatetraveldc-pgsql-sock` to this container~~ — removed
-  2026-10-16, status note.)
+  2026-10-16, status note.) (2026-10-20: ~~both mounts~~ removed as well; the
+  container mounts only the demo instance's socket volume, addendum 2026-10-20.)
 - `corporatetraveldc-runner-demo.container`: first *verify* what its
   live-dir mount is actually for — the runner in demo mode proxies demo-api
   over HTTP and plausibly needs no state mount at all; if so, delete the

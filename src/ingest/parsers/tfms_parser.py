@@ -891,7 +891,17 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
     # even when ooooi is empty, since a FlightTimes message can carry
     # original_departure/original_arrival with no actual OOOI times yet
     # (the schedule is known before the flight moves).
-    if gufi and (ooooi or original_departure or original_arrival):
+    # 2026-10-20 (pg_schema/0083): TFMS's own arrival estimate, the TFMS tier of
+    # common.watch_eta. eta[etaType, timeValue] sits on the airlineData/body
+    # container (same place as flightStatusAndSpec); it was parsed-past, never kept.
+    tfms_eta = tfms_eta_type = None
+    for container in (times_container, body):
+        eta_el = _find_child(container, "eta") if container is not None else None
+        if eta_el is not None and eta_el.get("timeValue"):
+            tfms_eta, tfms_eta_type = eta_el.get("timeValue"), eta_el.get("etaType")
+            break
+
+    if gufi and (ooooi or original_departure or original_arrival or tfms_eta):
         try:
             db.upsert_flight_ooooi(
                 gufi=gufi, callsign=callsign, origin=origin, destination=destination,
@@ -900,7 +910,7 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
                 airline_on_time=ooooi.get("airlineOnTime"),
                 airline_in_time=ooooi.get("airlineInTime"),
                 original_departure=original_departure, original_arrival=original_arrival,
-                flight_status=flight_status,
+                flight_status=flight_status, tfms_eta=tfms_eta, tfms_eta_type=tfms_eta_type,
             )
         except Exception as e:
             log.error("tfms: upsert_flight_ooooi failed for %s (%s): %s", callsign, gufi, e)

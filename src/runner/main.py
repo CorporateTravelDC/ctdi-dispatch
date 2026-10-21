@@ -430,6 +430,24 @@ async def demo_gate(request: Request, call_next):
     return await call_next(request)
 
 
+# 2026-10-20 (operator): public = demo, always; tailnet = live, no delays.
+# The live runner (DEMO_MODE off) answers ONLY trusted (tailnet/LAN/loopback)
+# origins. Network placement already enforces this (published on 127.0.0.1 and
+# the tailnet IP only; every Cloudflare ingress lands on nginx :80, whose only
+# runner vhost proxies the DEMO runner, catch-all 444) -- this is the app-layer
+# second line, so a routing mistake can never put the live panel, live ETAs or
+# LADD-listed aircraft in front of a public caller. 404, not 403: the surface
+# does not exist to them. /healthz stays open for local probes.
+_LIVE_OPEN_PATHS = {"/healthz"}
+
+
+@app.middleware("http")
+async def live_trusted_only(request: Request, call_next):
+    if DEMO_MODE or _is_trusted(request) or _normalized_path(request.url.path) in _LIVE_OPEN_PATHS:
+        return await call_next(request)
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
 @app.get("/api/whoami")
 async def whoami(request: Request):
     """
@@ -2071,6 +2089,14 @@ def _dispatch_proxy_headers(request: Request, path: str) -> dict:
     return headers
 
 
+def _public_include(include: str) -> str:
+    """A non-tailnet caller asking for watch ETAs gets the LADD-filtered form
+    (operator 2026-10-20: public use is LADD-restricted, internal use is not).
+    `eta` becomes `eta_public`; every other token passes through unchanged."""
+    toks = [t.strip() for t in (include or "").split(",") if t.strip()]
+    return ",".join("eta_public" if t == "eta" else t for t in toks)
+
+
 @app.api_route("/api/dispatch/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_dispatch(path: str, request: Request):
     """Transparent proxy to dispatch web API on port 8000.
@@ -2102,6 +2128,8 @@ async def proxy_dispatch(path: str, request: Request):
     url = f"{DISPATCH_BASE}/{path}"
     headers = _dispatch_proxy_headers(request, path)
     params = dict(request.query_params)
+    if "include" in params and not _is_trusted(request):
+        params["include"] = _public_include(params["include"])
     if demo_session_token:
         # Verified above -- overrides any window/speed the browser itself
         # tried to pass, demo_api's own resolver prioritizes session over

@@ -69,6 +69,13 @@ SOURCE_DOMAINS = {
     "govinfo.gov": "US Code and Federal Register, Government Publishing Office (official editions)",
     "nist.gov": "NIST CSRC glossary and FIPS publications",
     "weather.gov": "National Weather Service",
+    # 2026-10-20 (CFO, EA and CoS profiles): US finance and travel authorities
+    "irs.gov": "Internal Revenue Service publications (accounting methods, cost of goods sold)",
+    "investor.gov": "US Securities and Exchange Commission, Office of Investor Education (Investor.gov glossary)",
+    "federalreserve.gov": "Board of Governors of the Federal Reserve System (FedACH)",
+    "gsa.gov": "US General Services Administration (federal travel per diem rates)",
+    "coso.org": "COSO, owner of the Internal Control, Integrated Framework",
+    "openid.net": "OpenID Foundation specifications (OpenID Connect)",
     "aviationweather.gov": "NWS Aviation Weather Center",
     "uscg.gov": "US Coast Guard Navigation Center (AIS, MMSI)",
     # International aviation and its exchange models
@@ -286,12 +293,18 @@ def render_rules(data: dict, scopes: set[str] | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_pamphlet(data: dict) -> str:
-    """Pamphlet appendix: every rule, plus the platform and agent terms. Acronyms stay in docs/GLOSSARY.md."""
+def render_pamphlet(data: dict, scopes: set[str] | None = None) -> str:
+    """Pamphlet appendix: every rule, plus the platform/agent terms (or, with
+    `scopes`, every term in those scopes -- "advanced" pamphlet mode, 2026-10-20:
+    an agent pamphlet can embed a named profile's full scope set, e.g. ctdi-dc-live's
+    agents+aviation+platform+rail+weather, instead of the fixed platform+agents
+    default. Acronyms always stay out-of-line in docs/GLOSSARY.md regardless."""
+    scopes = scopes or {"platform", "agents"}
     out = ["Logic rules (each is held by a test; the tests are listed in `docs/GLOSSARY.md`):", ""]
     out += ["- " + " ".join(e["short"].split()) for e in entries(data, "rules")]
-    out += ["", "Platform and agent terms:", ""]
-    for e in sorted((e for e in entries(data, "platform") if e["scope"] in ("platform", "agents")), key=_sort_key):
+    out += ["", "Platform and agent terms:" if scopes == {"platform", "agents"}
+            else f"Platform and agent terms (advanced: {', '.join(sorted(scopes))}):", ""]
+    for e in sorted((e for e in entries(data, "platform") if e["scope"] in scopes), key=_sort_key):
         out.append(f"- {_name(e)} -- {' '.join(e['definition'].split())}")
     n = len(entries(data, "acronyms"))
     out += ["", f"Acronyms ({n}) and the full list: `docs/GLOSSARY.md`, generated from `docs/glossary.yaml`."]
@@ -390,13 +403,22 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--sources", action="store_true", help="print each term's source, then the terms with none")
     ap.add_argument("--format", choices=("md", "rules", "json"), default="md")
     ap.add_argument("--repo", type=Path, default=REPO)
+    ap.add_argument("--pamphlet-profile",
+                     help="with --pamphlet only: widen the embedded term set to a named profile's full scopes "
+                          "(see --list-profiles) instead of the plain platform+agents default -- the 'advanced' pamphlet")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
     data = load(repo)
     if a.rules:
         sys.stdout.write(render_rules(data)); return 0
     if a.pamphlet:
-        sys.stdout.write(render_pamphlet(data)); return 0
+        scopes = None
+        if a.pamphlet_profile:
+            profiles = discover_profiles(repo)
+            if a.pamphlet_profile not in profiles:
+                raise SystemExit(f"unknown profile {a.pamphlet_profile!r}; known: {', '.join(sorted(profiles))}")
+            scopes = profile_scopes(data, json.loads(profiles[a.pamphlet_profile].read_text(encoding="utf-8")))
+        sys.stdout.write(render_pamphlet(data, scopes)); return 0
     if a.profile:
         sys.stdout.write(render_profile(data, a.profile, a.format, repo)); return 0
     if a.rule_tests:

@@ -291,21 +291,20 @@ def test_tbfm_watchlist_status_includes_runway_eta_estimate(cifp_db, monkeypatch
     import shared.watchlist as wl
     monkeypatch.setattr(wl, "watchlist_event_hit", fake_watchlist_event_hit)
 
+    # 2026-10-20: the parser's sequence dict always carries eta_kind (the live
+    # shape); the label and any runway estimate come from THIS row's own arc
+    # and fix (common.watch_eta.label_tbfm_sequence), not from another row.
     sequences = [{
         "flight_id": "UAL123", "meter_fix": "SWANN", "eta": "2026-09-05T18:00:00Z",
+        "eta_kind": "mfx",
         "apt": "IAD", "facility": "ZDC", "sequence_num": 3, "assigned_speed": 250,
     }]
-    # f91a442 (2026-09-06): the estimate is computed by
-    # cifp_lookup.runway_eta_epoch(flight_id) from the stored tbfm_sequences
-    # row (freshest-first, arc-aware), not from the in-memory sequence --
-    # the same row the parser upserts before calling this. Seed it as the
-    # sibling tests above do.
-    db.upsert_tbfm_sequence("SWANN", "ZDC", "UAL123", "2026-09-05T18:00:00Z", 3, 250,
-                            eta_kind="mfx")
     _check_tbfm_watchlist_hits(sequences)
 
     assert "status" in captured
-    assert "est. runway arrival" in captured["status"]
+    assert "at meter fix SWANN" in captured["status"]
+    assert "estimated from meter fix SWANN" in captured["status"]
+    assert "18:00Z (14:00 ET)" in captured["status"]
 
 
 def test_tbfm_watchlist_status_omits_estimate_for_unresolved_fix(cifp_db, monkeypatch):
@@ -319,13 +318,39 @@ def test_tbfm_watchlist_status_omits_estimate_for_unresolved_fix(cifp_db, monkey
 
     sequences = [{
         "flight_id": "SWA789", "meter_fix": "LUCIT", "eta": "2026-09-05T18:00:00Z",
+        "eta_kind": "mfx",
         "apt": "IAD", "facility": "ZDC", "sequence_num": 1, "assigned_speed": 240,
     }]
     _check_tbfm_watchlist_hits(sequences)
 
     assert "status" in captured
-    assert "est. runway arrival" not in captured["status"]
-    assert "ETA" in captured["status"]  # the meter-fix ETA itself is still present
+    assert "runway" not in captured["status"]
+    assert "ETA 18:00Z (14:00 ET) at meter fix LUCIT" in captured["status"]  # labelled with the fix
+
+
+def test_tbfm_watchlist_interleaved_fixes_push_once_each(cifp_db, monkeypatch, tmp_path):
+    """2026-10-21: centers along the route re-send their own fix for the same
+    flight, interleaved. Each fix fires once; re-sends of any of them do not."""
+    from ingest.parsers import tbfm_parser
+    from common.push_dedup import PushDedup
+    monkeypatch.setattr("common.config.state_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(tbfm_parser, "_TBFM_WATCHLIST_DEDUP", PushDedup("tbfm_watchlist_test", 1800))
+    monkeypatch.setattr(tbfm_parser, "_match_watchlist_flight", lambda fid, **_leg: {"id": "watch-entry-3"})
+    monkeypatch.setattr(db, "update_watchlist_tbfm_status", lambda *a, **k: None)
+    fired = []
+    import shared.watchlist as wl
+    monkeypatch.setattr(wl, "watchlist_event_hit", lambda eid, summary, detail, priority=3: fired.append(detail["meter_fix"]))
+
+    def seq(fix, fac, eta):
+        return {"flight_id": "UAL123", "meter_fix": fix, "eta": eta, "eta_kind": "mfx",
+                "apt": "DCA", "facility": fac, "sequence_num": 1, "assigned_speed": 250}
+
+    rounds = [seq("AIR", "ZID", "2026-09-05T01:54:00Z"), seq("ZDC", "ZOB", "2026-09-05T02:07:00Z"),
+              seq("PLDGE", "ZDC", "2026-09-05T02:14:00Z")]
+    for _ in range(4):
+        for s in rounds:
+            _check_tbfm_watchlist_hits([s])
+    assert fired == ["AIR", "ZDC", "PLDGE"]
 
 
 # ── eta_kind arc handling (v46, 2026-09-05) ──────────────────────────────────

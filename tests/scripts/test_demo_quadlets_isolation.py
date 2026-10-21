@@ -73,7 +73,11 @@ class DemoQuadletsIsolation(unittest.TestCase):
         # never active in the shared file: it would make production refuse itself
         self.assertNotIn("\nDISPATCH_DEMO_ISOLATION=1", dispatch)
         demo = (REPO / "config/demo-secrets.env.example").read_text()
-        self.assertIn("\nDISPATCH_DB_BACKEND=sqlite", demo)
+        # ~~assertIn DISPATCH_DB_BACKEND=sqlite~~ -- 2026-10-20: the sqlite pin is
+        # gone (platform SQLite retired); the quadlets set postgres themselves.
+        self.assertNotIn("\nDISPATCH_DB_BACKEND=sqlite", demo)
+        for name in sorted(DEMO_APP_CONTAINERS):
+            self.assertIn("Environment=DISPATCH_DB_BACKEND=postgres", _active_lines(QUADLETS / f"{name}.container"))
 
 
 if __name__ == "__main__":

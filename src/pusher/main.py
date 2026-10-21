@@ -821,8 +821,10 @@ def push_flight_watchlist_landings() -> int:
         # PERIODIC api by design -- see the _landing_dedup_* comment block.
         if result and _landing_dedup_for(result).should_push_periodic(callsign, content_hash("landed")):
             message = f"✈️ {callsign} has landed."
+            # 2026-10-20 (operator): watch-keyed -- a bellwether lands on bellwether-alerts.
+            from shared.watch_topic import topic_for_entry
             success = send_ntfy(
-                topic="flight-alerts",
+                topic=topic_for_entry(entry, "flight"),
                 message=message,
                 priority=4,
                 title=f"{callsign} — Landed",
@@ -845,6 +847,15 @@ def push_watchlist_retries() -> int:
     if not pending:
         return 0
 
+    # 2026-10-20 (operator): same topic as the original send -- a bellwether
+    # (permanent record alert_topic) retries on bellwether-alerts, no dispatch copy.
+    from shared.watch_topic import sends_dispatch_copy, topic_for_entry
+    try:
+        entries_by_id = {e["id"]: e for e in db.get_watchlist_entries()}
+    except Exception as e:  # noqa: BLE001
+        log.debug("pusher retry: watchlist read failed (per-type topics): %s", e)
+        entries_by_id = {}
+
     retried = 0
     for row in pending:
         etype = row.get("entry_type", "")
@@ -855,15 +866,16 @@ def push_watchlist_retries() -> int:
         # 2026-10-15 (parity audit): vessel retries went to train-alerts with train
         # copy. Same topic as the original send (shared/watchlist.py vessel branch).
         # (operator 2026-10-16): drone retries likewise -- own topic, never train-alerts.
-        topic, prefix, noun = {"flight": ("flight-alerts", "FLT ", "Flight "),
-                               "vessel": ("vessel-alerts", "VSL ", "Vessel "),
-                               "drone": ("drone-alerts", "UAS ", "Drone ")}.get(
-                                   etype, ("train-alerts", "TRN ", "Train "))
+        prefix, noun = {"flight": ("FLT ", "Flight "),
+                        "vessel": ("VSL ", "Vessel "),
+                        "drone": ("UAS ", "Drone ")}.get(etype, ("TRN ", "Train "))
+        topic = topic_for_entry(entries_by_id.get(row.get("entry_id")) or {"entry_type": etype}, etype)
         title = prefix + ident + ": " + summary[:60]
         dispatch_body = noun + ident + ": " + summary
 
         ok1 = send_ntfy(topic, summary, priority=priority, title=title)
-        ok2 = send_ntfy("dispatch", dispatch_body, priority=priority, title=title)
+        ok2 = (send_ntfy("dispatch", dispatch_body, priority=priority, title=title)
+               if sends_dispatch_copy(topic) else False)
         if ok1 or ok2:
             db.mark_watchlist_history_fired(row["id"])
             retried += 1

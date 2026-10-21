@@ -476,10 +476,14 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
         if not _TBFM_ALERT_DEDUP.should_push(dedup_slot, dedup_key):
             continue
 
+        # 2026-10-20: the lead aircraft's time says which arc it is (runway /
+        # at this fix / at a descent or speed fix), same labeller as the watch push.
+        from common import watch_eta
         eta_info = ""
         for s in fix_seqs:
-            if s.get("eta"):
-                eta_info = f" | lead ETA {s['eta']}"
+            lead = watch_eta.label_tbfm_sequence(s) if s.get("eta") else None
+            if lead:
+                eta_info = f" | lead aircraft: {lead}"
                 break
 
         # Representative facility for this fix -- majority vote across its
@@ -565,34 +569,31 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
         fix = s.get("meter_fix") or "?"
         eta = s.get("eta") or ""
         apt = s.get("apt") or "?"
-        status = f"{apt} arrival, meter fix {fix}" + (f", ETA {eta}" if eta else "")
 
-        # Append a runway-arrival estimate when one can be defended.
-        #
-        # 2026-09-05, CORRECTED: this was the THIRD consumer still keyed on
-        # the hardcoded DC_METER_FIXES dict, which matches almost nothing
-        # the live feed publishes (real meter fixes are HVQ/MULRR/CAPKO/
-        # IGGGY/BILIT/CAVLR/KILMR/... -- see fdps_parser's note), so the
-        # estimate was essentially never appended. It also treated the ETA
-        # as a meter-fix ETA unconditionally, double-counting the
-        # fix->runway leg whenever TBFM had actually supplied a runway ETA
-        # (live distribution: rwy 18 / mfx 17, so about half the time).
-        #
-        # Now goes through cifp_lookup.runway_eta_epoch() -- the single
-        # arc-aware implementation shared with fdps_parser.write_flight_event()
-        # and poller/skills/tbfm_arrival_enrichment.py. Three consumers, one
-        # implementation; keeping separate copies is what let them drift.
-        if apt in DC_AREA_APTS:
+        # 2026-10-20 (operator 2026-10-16: a meter-fix time is always labelled
+        # with its fix, never shown as a bare arrival ETA). This read
+        # "meter fix X, ETA t" for every arc, although t is a runway time when
+        # eta_kind is rwy and a descent/speed-fix time for dfx/sfx; it then
+        # appended a runway estimate taken from runway_eta_epoch() over ALL the
+        # flight's sequences, possibly a different fix than the one named.
+        # Now one labeller (common.watch_eta.label_tbfm_sequence) words this
+        # row's own arc, and a runway estimate is added only for an mfx row,
+        # from this row's own fix, and says it was estimated from that fix.
+        from common import watch_eta
+        rwy_est = None
+        if s.get("eta_kind") == "mfx" and apt in DC_AREA_APTS:
             try:
                 from common import cifp_lookup
-                epoch = cifp_lookup.runway_eta_epoch(s.get("flight_id"), "K" + apt)
-                if epoch:
-                    est_iso = datetime.fromtimestamp(
-                        epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    status += f", est. runway arrival {est_iso}"
+
+                def _resolve(name):
+                    f = cifp_lookup.resolve_fix(name)
+                    return (f["lat"], f["lon"]) if f else DC_METER_FIXES.get(name)
+                rwy_est = cifp_lookup.select_arrival_epoch([s], "K" + apt, _resolve)
             except Exception as e:
                 log.debug("tbfm: runway-eta estimate failed for %s: %s",
                           s.get("flight_id"), e)
+        eta_label = watch_eta.label_tbfm_sequence(s, rwy_est)
+        status = f"{apt} arrival, " + (eta_label or f"sequenced at meter fix {fix} (no usable ETA)")
 
         # 2026-09-03 (forward-only push_dedup redesign): the ETA's DATE is
         # folded into the content key as the per-leg episode identity.
@@ -605,8 +606,17 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
         # later day's leg. TBFM's parsed sequence carries no gufi, so the
         # ETA date is the leg discriminator; a cross-midnight ETA roll can
         # cost one extra fire, which is the acceptable direction.
+        #
+        # 2026-10-21: the slot is (entry, fix), not the entry alone. PushDedup
+        # remembers ONE hash per slot, and every center along the route (ZMP,
+        # ZAU, ZID, ZOB, ZDC) keeps re-sending its own fix for the same flight,
+        # so with one slot per entry each interleaved fix overwrote the last
+        # and re-fired: 1,323 pushes for 11 flights on 2026-10-20 (UA2386 alone
+        # 621), the same few fix/ETA lines cycling. Per-fix slots give the
+        # docstring's "once per fix per flight" for real.
+        dedup_slot = f"{entry['id']}:{fix}"
         dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}:{(eta or '')[:10]}")
-        if not _TBFM_WATCHLIST_DEDUP.should_push(entry["id"], dedup_key):
+        if not _TBFM_WATCHLIST_DEDUP.should_push(dedup_slot, dedup_key):
             continue
 
         try:
@@ -620,13 +630,15 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
             watchlist_event_hit(
                 entry["id"], summary,
                 {"watchlist_trigger": "tbfm_sequenced", "meter_fix": fix,
-                 "eta": eta, "airport": apt, "facility": s.get("facility")},
+                 "eta": eta, "eta_kind": s.get("eta_kind"), "eta_fix": fix,
+                 "eta_label": eta_label, "eta_source": "tbfm",
+                 "airport": apt, "facility": s.get("facility")},
                 priority=3,
             )
         except Exception as e:
             log.error("tbfm: watchlist_event_hit failed for %s: %s", entry["id"], e)
 
-        _TBFM_WATCHLIST_DEDUP.record(entry["id"], dedup_key)
+        _TBFM_WATCHLIST_DEDUP.record(dedup_slot, dedup_key)
 
 
 def write_tbfm_sequences(sequences: list[dict]) -> int:

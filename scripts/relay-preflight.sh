@@ -28,7 +28,9 @@ ok "2 drift gate"
 
 cd "$G" || fail guard "no guard worktree"
 if [[ "$QUICK" == "--quick" ]]; then
-    mapfile -t T < <(git diff --cached --name-only | grep -E '^tests/.*\.py$' || true)
+    # --diff-filter=d: a batch that deletes or retires a test file must not hand pytest a missing path
+    # ("no tests ran" = exit 5 = a false FAIL; seen 2026-10-20 on the freeze sweep)
+    mapfile -t T < <(git diff --cached --name-only --diff-filter=d | grep -E '^tests/.*\.py$' | grep -vE '/(conftest|__init__)\.py$' || true)
     [[ ${#T[@]} -gt 0 ]] || T=(tests/scripts)
 else
     T=(tests)
@@ -42,7 +44,9 @@ python3 scripts/scrub-public-tree.py "$tree" >/dev/null 2>/tmp/.preflight-scrub.
   || { grep -E "VERIFICATION|unrecognized|forbidden|live value|registration|LADD" /tmp/.preflight-scrub.$$; rm -f /tmp/.preflight-scrub.$$; fail scrub "fix or allowlist (exact values only) in the guard"; }
 rm -f /tmp/.preflight-scrub.$$; ok "4 public scrub verification on the staged tree"
 
-python3 "$MAIN/scripts/leak-guard/transcript_leak_scan.py" scan >/tmp/.preflight-leak.$$ 2>&1 \
+# 2026-10-20: through the dispatch env with --require-ladd (an unreadable LADD list fails the preflight).
+nice -n 19 "$MAIN/scripts/with-dispatch-env.sh" python3 "$MAIN/scripts/leak-guard/transcript_leak_scan.py" scan --require-ladd \
+  >/tmp/.preflight-leak.$$ 2>&1 \
   || { cat /tmp/.preflight-leak.$$; rm -f /tmp/.preflight-leak.$$; fail transcripts "redact on the box (transcript_leak_scan.py redact)"; }
 rm -f /tmp/.preflight-leak.$$; ok "5 transcript leak scan"
 echo "PREFLIGHT PASS -- the relay may be posted"

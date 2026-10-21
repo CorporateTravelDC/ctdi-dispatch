@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly agent-pamphlet refresh -- Monday 05:10 ET, after the 02:00/03:45/04:30 Monday cluster and before docs-drift-weekly (09:00 UTC)
+
+[Timer]
+OnCalendar=Mon *-*-* 05:10:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

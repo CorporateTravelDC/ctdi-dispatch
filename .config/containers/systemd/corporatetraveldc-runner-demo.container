@@ -71,8 +71,12 @@
 # This container does not need demo.db/demo_access.db directly (confirmed
 # via the pentest's own code read: runner proxies all dispatch data over
 # HTTP to DISPATCH_BASE_URL / the demo-api container on :8004, and opens
-# only dispatch-chat.db + a config JSON locally) -- an empty directory is
-# sufficient, systemd/sqlite create both files on first write.
+# only ~~dispatch-chat.db +~~ a config JSON locally) -- an empty directory is
+# sufficient. 2026-10-20: chat history is chat_messages on the demo Postgres
+# instance (relay 2, 2026-10-19), so the ONLY thing this mount still holds is
+# _CONFIG_PATH = $STATE_DIR/runner-layer-config.json (src/runner/main.py,
+# written by the layer-config POST) -- no SQLite file of any kind. Kept for
+# that; ~~systemd/sqlite create both files on first write~~.
 #
 # 2026-08-24 ~14:40 EDT, same-day follow-up: the demo-only directory was
 # first stood up at /home/corporatetraveldc/corporatetraveldc-demo-state
@@ -135,19 +139,22 @@ Environment=DEMO_MODE=true
 # own independent random per-process secret, so a demo-api-issued session
 # token could never actually verify here).
 EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env
-# 2026-10-19 relay 2: demo identity + rollback switch, loaded last (see
-# corporatetraveldc-demo-api.container for why DEMO_SOURCE and
-# DISPATCH_DB_BACKEND live in the file, not here). Under
-# DISPATCH_DB_BACKEND=postgres the chat history goes to the demo instance's
-# chat_messages; under the sqlite rollback it stays in the demo-only mount.
+# 2026-10-19 relay 2: demo identity, loaded last. The chat history goes to the
+# demo instance's chat_messages. ~~+ rollback switch ... under the sqlite
+# rollback it stays in the demo-only mount~~ -- 2026-10-20: the sqlite
+# rollback is retired; the backend is a signed constant here (podman's -e
+# beats the live demo-secrets.env's leftover sqlite pin).
+Environment=DISPATCH_DB_BACKEND=postgres
 EnvironmentFile=/etc/corporatetraveldc/demo.env
+# The demo-only state dir: runner-layer-config.json only (see the header).
 Volume=/var/lib/corporatetraveldc-demo:/var/lib/corporatetraveldc:z
 # 2026-10-16 (operator rule: the public demo is logically AND physically
 # separated from production): the `Volume=corporatetraveldc-pgsql-sock:
-# /var/run/postgresql` line that stood here is removed. This container
+# /var/run/postgresql` line that stood here is removed. ~~This container
 # has no Postgres code path at all (chat history is a local sqlite file
 # in the demo-only mount above; DISPATCH_DB_BACKEND=sqlite is pinned by
-# demo-secrets.env), yet it mounted the production socket while
+# demo-secrets.env)~~ (stale since relay 2, 2026-10-19: chat history is on
+# the demo instance), yet it mounted the production socket while
 # dispatch.env pointed DISPATCH_PG_DB/USER at the production pair.
 # DISPATCH_DEMO_ISOLATION=1 makes common.db_backend refuse that pair
 # outright should any future code path reach for it.

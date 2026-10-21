@@ -101,9 +101,14 @@ def test_utm_watcher_default_topic_is_drone_alerts(monkeypatch):
 def test_every_vessel_topic_site_also_names_drone():
     """Mirror rule: wherever code picks a topic for vessels it picks one for drones."""
     root = Path(__file__).resolve().parents[2] / "src"
-    for rel in ("shared/watchlist.py", "pusher/main.py"):
+    # 2026-10-20 (bellwether batch): the pusher's retry map moved to the shared
+    # per-entry helper shared/watch_topic.py (TYPE_TOPICS); it is the mirror site now,
+    # and the pusher names neither literal.
+    for rel in ("shared/watchlist.py", "shared/watch_topic.py"):
         text = (root / rel).read_text()
         assert text.count('"drone-alerts"') >= 1, rel
         assert text.count('"vessel-alerts"') == text.count('"drone-alerts"'), rel
+    pusher = (root / "pusher/main.py").read_text()
+    assert pusher.count('"vessel-alerts"') == pusher.count('"drone-alerts"') == 0
     # The web routes have a vessel ADD route and no drone one; the per-type remove map is the mirror site.
     assert '"drone": "drone-alerts"' in (root / "web/routes/watchlist.py").read_text()

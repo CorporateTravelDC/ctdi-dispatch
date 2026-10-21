@@ -47,6 +47,9 @@ Modes (one required):
     --refresh                 promote everything since meta.window_end
     --profiles                one-time copy of demo_profiles production -> demo
     --verify-ledger           walk the target's scrub_ledger chain, exit 1 if broken
+    --purge-promoted          delete every promoted row + window_end before a full
+                              re-backfill (2026-10-20: rows promoted before the LADD
+                              timing rules carry real times); one ledger row
 Options:
     --min-age-hours H         minimum-age floor (default 24)
     --dry-run                 do everything but write nothing (no rows, no meta,
@@ -76,6 +79,7 @@ sys.path.insert(0, str(REPO_DIR / "src"))
 from common import db, db_backend  # noqa: E402
 from demo.db import RETENTION_TIERS  # noqa: E402
 from demo.scrub_rules import scrub_text, verify_scrubbed  # noqa: E402
+from demo.ladd_timing import Charts, LegTimer, Scrubber, SwimLegs  # noqa: E402
 
 # ── Policy constants ────────────────────────────────────────────────────────
 
@@ -329,6 +333,11 @@ class QRegistry:
             f.write(os.urandom(32))
         return cls(path.read_bytes())
 
+    def leg_timer(self) -> LegTimer:
+        """2026-10-20: the LADD per-leg offsets use this same production-only
+        key under their own HMAC domain label (demo.ladd_timing.DOMAIN)."""
+        return LegTimer(self._key)
+
     def mark(self, ident: str) -> str:
         n = int.from_bytes(hmac.new(self._key, ident.strip().upper().encode(), hashlib.sha256).digest()[:8], "big")
         out = []
@@ -394,14 +403,42 @@ def _reason_class(v: str) -> str:
     return v.split(" '")[0].split(": ")[0]
 
 
-def scrub_row_text(text: str, gate: LaddGate, qreg: "QRegistry | None" = None) -> tuple[str | None, Counter, Counter]:
+def _row_dt(at: Any) -> datetime:
+    """A row's captured_at / generated_at as an aware UTC datetime."""
+    if isinstance(at, datetime):
+        return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    s = str(at).strip().replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# 2026-10-20 (operator): LADD timing anti-correlation (demo.ladd_timing):
+# per-leg 15-min bucketing with a rotating hidden offset, and the leg goes dark
+# at the inner marker / threshold / wheels-on. Set once per run in main();
+# forked workers inherit it.
+_TIMING: dict[str, Any] = {}
+
+
+def scrub_row_text(text: str, gate: LaddGate, qreg: "QRegistry | None" = None,
+                   row_at: Any = None, timing: "Scrubber | None" = None) -> tuple[str | None, Counter, Counter]:
     """(scrubbed_text_or_None, drop_reasons, redactions). None = DROP.
     With a Q registry, LADD-listed aircraft are substituted and the row is
-    kept; the substituted text must then pass the gate again or it drops."""
+    kept; the substituted text must then pass the gate again or it drops.
+    With a timing scrubber, LADD legs are then bucketed and cut at the dark
+    point (counts land in redactions under 'ladd timing: ...')."""
     drops: Counter = Counter()
     redactions: Counter = Counter()
     if qreg is not None:
+        listed, listed_hex = gate.listed(text) if timing is not None else (set(), set())
         text, redactions = substitute_ladd(text, gate, qreg)
+        if timing is not None and (listed or listed_hex):
+            before = Counter(timing.counts)
+            idents: dict[str, set[str]] = {}
+            for t in listed:                      # Q mark -> real identifier(s): in-process only, for the SWIM leg order
+                idents.setdefault(qreg.mark(t), set()).add(t)
+            text = timing.apply(text, set(idents), _row_dt(row_at), bool(listed_hex), idents)
+            for k, v in (timing.counts - before).items():
+                redactions["ladd timing: " + k] += v
         for cls in gate.violations(text):
             drops[cls + " (substitution incomplete)"] += 1
     else:
@@ -428,13 +465,14 @@ def decode_payload(payload: bytes, compressed: bool) -> str | None:
 
 
 def scrub_payload_bytes(payload: bytes, compressed: bool, gate: LaddGate,
-                        qreg: "QRegistry | None" = None) -> tuple[bytes | None, Counter, Counter]:
+                        qreg: "QRegistry | None" = None, row_at: Any = None,
+                        timing: "Scrubber | None" = None) -> tuple[bytes | None, Counter, Counter]:
     try:
         raw = zlib.decompress(payload) if compressed else payload
         text = raw.decode("utf-8")
     except Exception as e:  # noqa: BLE001 -- undecodable = drop, class only
         return None, Counter({f"decode failure ({type(e).__name__})": 1}), Counter()
-    clean, drops, red = scrub_row_text(text, gate, qreg)
+    clean, drops, red = scrub_row_text(text, gate, qreg, row_at, timing)
     if clean is None:
         return None, drops, red
     return zlib.compress(clean.encode("utf-8"), 6), drops, red
@@ -508,6 +546,20 @@ class Target:
             a = c.execute("DELETE FROM snapshots WHERE captured_at < ?", (cutoff,)).rowcount
             b = c.execute("DELETE FROM brief_archive WHERE generated_at < ?", (cutoff,)).rowcount
         return int(a or 0) + int(b or 0)
+
+    def purge_promoted(self) -> tuple[int, int]:
+        """2026-10-20: drop every promoted row (snapshots, real and replay-fill,
+        and brief_archive) and clear window_end, so a re-backfill re-scrubs
+        everything under the current rules -- INSERT ... ON CONFLICT DO NOTHING
+        would otherwise keep the old rows. Profiles, chat and the ledger stay."""
+        with self.factory() as c:
+            s = c.execute("SELECT COUNT(*) AS n FROM snapshots").fetchone()["n"]
+            b = c.execute("SELECT COUNT(*) AS n FROM brief_archive").fetchone()["n"]
+            if not self.dry_run:
+                c.execute("DELETE FROM snapshots")
+                c.execute("DELETE FROM brief_archive")
+                c.execute("DELETE FROM meta WHERE key = ?", ("window_end",))
+        return int(s), int(b)
 
     def replay_fill_gaps(self, target_days: int = REPLAY_TARGET_DAYS) -> Counter:
         """2026-08-14 mechanism, carried over: for each endpoint without
@@ -614,6 +666,29 @@ class Target:
 
 # ── Promotion ───────────────────────────────────────────────────────────────
 
+def _timing() -> "Scrubber | None":
+    if "timer" not in _TIMING:
+        return None
+    # SWIM leg order per LADD aircraft-day (flight_events, through the same
+    # read-only production source); one cache per process (forked workers
+    # build their own). No source = every LADD aircraft-day drops (fail closed).
+    src = _TIMING.get("source")
+    if src is not None and "legs" not in _TIMING:
+        _TIMING["legs"] = SwimLegs(src, db.ladd_lookup_keys)
+    return Scrubber(_TIMING["timer"], _TIMING["charts"], _TIMING.get("legs"))
+
+
+def _load_charts() -> Charts:
+    """CIFP geometry for the dark point. Unreadable = empty charts: the
+    threshold step is skipped and the wheels-on / fail-closed steps apply."""
+    try:
+        return Charts.load()
+    except Exception as e:  # noqa: BLE001 -- never fatal, only less precise (still fail closed)
+        print(f"[scrub-demo-source] chart data unavailable ({type(e).__name__}) -- "
+              "LADD dark point falls back to wheels-on / fail closed", flush=True)
+        return Charts()
+
+
 def _chunks(seq: list, n: int) -> Iterable[list]:
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
@@ -634,12 +709,14 @@ def _scrub_page(source_factory: Callable[[], Any], page: list, gate: LaddGate,
     max_at: str | None = None
     out: list[tuple] = []
     gate.prime(t for t in (decode_payload(bytes(x["payload"]), bool(x["compressed"])) for x in rows) if t)
+    timing = _timing()
     for r in rows:
         if r["endpoint"] not in ENDPOINT_ALLOWLIST or r["endpoint"] in ENDPOINT_DENYLIST:
             dropped += 1
             reasons["endpoint not allowlisted"] += 1
             continue
-        clean, drops, red = scrub_payload_bytes(bytes(r["payload"]), bool(r["compressed"]), gate, qreg)
+        clean, drops, red = scrub_payload_bytes(bytes(r["payload"]), bool(r["compressed"]), gate, qreg,
+                                                r["captured_at"], timing)
         redactions.update(red)
         if clean is None:
             dropped += 1
@@ -772,12 +849,13 @@ def promote_briefs(source_factory: Callable[[], Any], target: Target, since: str
     max_at: str | None = None
     out: list[tuple] = []
     gate.prime(r["content"] for r in rows if r["content"])
+    timing = _timing()
     for r in rows:
         if r["brief_type"] not in BRIEF_TYPES:
             dropped += 1
             reasons["brief type not allowlisted"] += 1
             continue
-        clean, drops, red = scrub_row_text(r["content"], gate, qreg)
+        clean, drops, red = scrub_row_text(r["content"], gate, qreg, r["generated_at"], timing)
         redactions.update(red)
         if clean is None:
             dropped += 1
@@ -845,6 +923,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--refresh", action="store_true")
     mode.add_argument("--profiles", action="store_true")
     mode.add_argument("--verify-ledger", action="store_true")
+    mode.add_argument("--purge-promoted", action="store_true",
+                      help="delete every promoted row and window_end (before a full re-backfill); ledger row, counts only")
     parser.add_argument("--days", type=int, default=BACKFILL_DEFAULT_DAYS,
                         help=f"backfill window in days (default {BACKFILL_DEFAULT_DAYS})")
     parser.add_argument("--min-age-hours", type=int, default=MIN_AGE_HOURS_DEFAULT,
@@ -877,6 +957,21 @@ def main(argv: list[str] | None = None, *, source_factory: Callable[[], Any] | N
         print(f"{tag} scrub_ledger: {n} row(s), {'intact' if intact else 'BROKEN'}")
         return 0 if intact else 1
 
+    if args.purge_promoted:
+        s_n, b_n = target.purge_promoted()
+        now = utcnow()
+        entry = target.ledger_append({
+            "run_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "purge",
+            "window_start": "", "window_end": "",
+            "snapshots_promoted": 0, "snapshots_dropped": s_n,
+            "briefs_promoted": 0, "briefs_dropped": b_n,
+            "dropped_by_class": {"purged before re-backfill": s_n + b_n},
+            "synthetic_filled": 0, "pruned": 0, "ladd_count": 0,
+        })
+        print(f"{tag} purge: {s_n} snapshot row(s), {b_n} brief row(s), window_end cleared"
+              + (" (dry run, nothing deleted)" if args.dry_run else f"; scrub_ledger entry: {entry}"))
+        return 0
+
     if args.profiles:
         copied, skipped = copy_profiles(src, target)
         print(f"{tag} demo_profiles: {copied} copied, {skipped} already present"
@@ -903,6 +998,8 @@ def main(argv: list[str] | None = None, *, source_factory: Callable[[], Any] | N
     gate = LaddGate()
     gate.open()
     qreg = QRegistry.load(create=not args.dry_run)
+    _TIMING.update(timer=qreg.leg_timer(), charts=_load_charts(), source=src)
+    _TIMING.pop("legs", None)
     print(f"{tag} LADD gate open through the production filter ({gate.count} identifiers on the list)")
 
     s_prom, s_drop, s_reasons, s_red, s_max = promote_snapshots(src, target, since, until, gate, qreg, workers=max(1, args.workers))
@@ -916,6 +1013,9 @@ def main(argv: list[str] | None = None, *, source_factory: Callable[[], Any] | N
     pruned = target.prune(RETENTION_DAYS)
 
     dropped_by_class = {k: v for k, v in (s_reasons + b_reasons).items()}
+    # LADD timing / dark-point path counts (classes only, never an identifier,
+    # an offset or the key) ride in the same hash-chained field.
+    dropped_by_class.update({k: v for k, v in (s_red + b_red).items() if k.startswith("ladd timing: ")})
     body = {
         "run_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": mode,
         "window_start": since, "window_end": new_window_end,

@@ -29,6 +29,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 QUADLET_DIR = REPO / ".config/containers/systemd"
 LOCK = "/var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock"
+# 2026-10-20 (operator): the briefs that may be promoted to the hot lane on contention.
+# Reports, daily watches and digests stay long-lane only.
+OPERATIONAL_BRIEFS = {"corporatetraveldc-ops-brief", "corporatetraveldc-ep-advance"}
 
 
 def _lock_taking_quadlets() -> list[Path]:
@@ -54,6 +57,16 @@ class LongRunnerLockContract(unittest.TestCase):
                 text = p.read_text()
                 exec_line = _field(text, "Exec")
                 self.assertIsNotNone(exec_line, "no Exec=")
+                if "src/common/brief_lane.py" in exec_line:
+                    # 2026-10-20: operational briefs wait in common/brief_lane.py (long lane,
+                    # hot-lane promotion on contention); same bounded wait, same exit 75.
+                    self.assertIn(p.stem, OPERATIONAL_BRIEFS, "only operational briefs may promote")
+                    self.assertTrue(exec_line.startswith("scripts/verified-exec.sh python3 "),
+                                    "the src/ integrity check must run before the lane wait")
+                    budget = int(float(re.search(r"--budget\s+(\d+(?:\.\d+)?)", exec_line).group(1)))
+                    self.assertGreater(int(_field(text, "TimeoutStartSec")), budget)
+                    self.assertIn("75", (_field(text, "SuccessExitStatus") or "").split())
+                    continue
                 m = re.search(r"flock\b[^;']*?-w\s+(\d+)", exec_line)
                 self.assertIsNotNone(m, f"bare flock (no -w) in Exec=: {exec_line[:120]}")
                 wait = int(m.group(1))

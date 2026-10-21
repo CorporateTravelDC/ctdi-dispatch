@@ -10,6 +10,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts/leak-guard/transcript_le
 
 def load(monkeypatch, extra):
     monkeypatch.setenv("LEAK_GUARD_EXTRA_FILES", str(extra))
+    monkeypatch.setenv("LEAK_GUARD_SOURCES", "")
     spec = importlib.util.spec_from_file_location("tls_extra", SCRIPT)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)

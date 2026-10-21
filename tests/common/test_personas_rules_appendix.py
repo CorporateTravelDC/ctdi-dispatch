@@ -67,11 +67,15 @@ def test_rules_file_is_tracked_where_the_manifest_covers_it():
 def test_pamphlet_template_and_renderer_carry_the_glossary():
     tpl = (REPO / "scripts/agent-segmentation/onboarding-template.md").read_text()
     sh = (REPO / "scripts/agent-segmentation/render-onboarding.sh").read_text()
-    assert tpl.count("{{GLOSSARY}}") == 1
+    for ph in ("GLOSSARY", "DEPLOYMENT_PROFILE", "PROFILES"):
+        assert tpl.count("{{" + ph + "}}") == 1, ph
     assert "render-glossary.py" in sh and '"GLOSSARY": glossary' in sh
+    assert "render-profiles.py" in sh and '"PROFILES": profiles' in sh
     n_args = len(re.search(r'render\(\) \{\npython3 - (.*?) <<', sh).group(1).split())
-    assert n_args == 15, "the template path + 14 values, GLOSSARY last"
-    assert f"sys.argv[1:{n_args + 1}]" in sh                          # the unpack takes every argument
+    names = re.search(r"^(.*?) = sys\.argv\[1:(\d+)\]", sh, re.M)
+    assert names, "the renderer unpacks sys.argv in one statement"
+    assert int(names.group(2)) == n_args + 1                          # the unpack takes every argument
+    assert len(names.group(1).split(",")) == n_args                   # one name per argument, none dropped
 
 
 # ---------------------------------------------------------------- G8 wiring (2026-10-19)

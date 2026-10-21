@@ -29,7 +29,15 @@ EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 #   -E 75    give-up exits EX_TEMPFAIL = clean skip (SuccessExitStatus=75 below);
 #   --verbose  logs the real lock wait on every run.
 # TimeoutStartSec below = 600 (queue wait) + 3600 (run budget, unchanged) + 100.
-Exec=/usr/bin/flock --verbose -w 600 -E 75 /var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock scripts/verified-exec.sh python3 src/poller/skills/ops_brief.py
+# 2026-10-20 (operator: "promote any of the operational briefs to hot lane on hot lock
+# contention"): an OPERATIONAL brief tries the long-runner unit lock
+# (/var/lib/corporatetraveldc/llama-pool/long-runner-unit.lock) for 60 s; on contention it
+# also tries the single-occupant hot-lane unit lock beside it and, holding that, runs with
+# CTDC_LLM_LANE=hot -- llama's second slot beside the running report. Never kills, never a
+# third core. Neither free within 600 s (the old -w 600) = exit 75, the same clean skip.
+# verified-exec.sh now runs first (src/ check), then src/common/brief_lane.py waits for a lane.
+# The flock(1) lines above describe the long lane, which brief_lane.py still takes first.
+Exec=scripts/verified-exec.sh python3 src/common/brief_lane.py --long-first 60 --budget 600 -- src/poller/skills/ops_brief.py
 
 [Service]
 # 2026-08-06: dedicated slice, separate from app.slice (where the

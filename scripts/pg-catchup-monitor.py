@@ -71,7 +71,7 @@ def main() -> int:
                      help="total minutes to run (default 30)")
     args = ap.parse_args()
 
-    conninfo = db_backend._pg_conninfo()  # noqa: SLF001 -- same reuse migrate-sqlite-to-pg.py does
+    conninfo = db_backend._pg_conninfo()  # noqa: SLF001 -- same reuse scripts/retired-20261020/migrate-sqlite-to-pg.py did
     conn = psycopg.connect(conninfo, autocommit=True)
 
     end_time = time.time() + args.duration_min * 60

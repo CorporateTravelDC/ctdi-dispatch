@@ -10,16 +10,16 @@ passwords keeping casual visitors out of a public playback loop, not a
 multi-tenant credential system.
 
 Storage (2026-10-16, operator rule: the public demo is logically AND
-physically separated from production):
+physically separated from production; Postgres-only since 2026-10-20):
 
-  DISPATCH_DB_BACKEND=sqlite (what both public-demo containers pin via
+  ~~DISPATCH_DB_BACKEND=sqlite (what both public-demo containers pin via
   demo-secrets.env) -- its own SQLite file in the demo-state volume,
   DEMO_ACCESS_DB (default /var/lib/corporatetraveldc-demo-state/
-  demo_access.db, table `profiles` -- the exact file and schema this
-  module used before 2026-09-20, so the rows already in that volume keep
-  working). Nothing in this path can reach production: no Postgres
-  socket is mounted, and common.db_backend.pg_conn() refuses under a
-  non-postgres backend anyway.
+  demo_access.db, table `profiles`)~~ -- removed 2026-10-20 (operator
+  decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub touch SQLite; the
+  file and the demo-state mount are gone). store_kind() now REFUSES
+  (ProfileStoreRefused) anything but the demo instance instead of falling
+  back to a file.
 
   DISPATCH_ROLE=demo AND DISPATCH_DB_BACKEND=postgres (the relay-2 shape
   of the 2026-10-16 demo/production split, set by config/demo.env) --
@@ -29,16 +29,18 @@ physically separated from production):
   pg_conn() at all -- tests/demo/test_demo_accessor_boundary.py holds that
   -- so there is no code path from the public demo to production,
   whatever the environment says. ~~DISPATCH_DB_BACKEND=postgres alone used
-  to select pg_conn() (the 2026-09-20 shape)~~ -- removed 2026-10-16: a
-  postgres backend without the demo role falls back to the sqlite file.
+  to select pg_conn() (the 2026-09-20 shape)~~ -- removed 2026-10-16;
+  ~~a postgres backend without the demo role falls back to the sqlite
+  file~~ -- 2026-10-20: it is refused.
 
 History: 2026-09-20 moved this store from demo_access.db onto Postgres
 ("everything live on Postgres"); that put the public demo's only
 database client on the production database (one instance, one db, one
 superuser role) -- demo-api, pinned to sqlite, was still targeting
 production and only failed for lack of a password (verified live
-2026-10-16 12:13Z). The sqlite path is restored so the demo login works
-with no path to production at all.
+2026-10-16 12:13Z). ~~The sqlite path is restored so the demo login works
+with no path to production at all.~~ 2026-10-19: the demo instance took over
+(relay 2); 2026-10-20: the sqlite path is gone.
 
 Same non-negotiable as the main auth module: plaintext passwords are
 never stored. A profile's plaintext is returned to the caller exactly
@@ -56,12 +58,10 @@ import hmac
 import json
 import os
 import secrets
-import sqlite3
 import string
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 
 from common import db_backend
 
@@ -74,74 +74,45 @@ SESSION_TTL_SECONDS = int(os.environ.get("DEMO_SESSION_TTL_SECONDS", str(8 * 360
 
 PBKDF2_ITERATIONS = 200_000
 
-# The demo-state volume (rw, demo-owned, never /var/lib/corporatetraveldc
-# -- see corporatetraveldc-demo-api.container's F6 mount narrowing).
-DEFAULT_ACCESS_DB = "/var/lib/corporatetraveldc-demo-state/demo_access.db"
-
-# Legacy (pre-2026-09-20) shape, kept byte-for-byte so the file already in
-# the volume is read as-is. Booleans are INTEGER 0/1 here, BOOLEAN on
-# Postgres; every caller treats them as truthy, so one SQL text serves
-# both (sqlite >= 3.23 accepts TRUE/FALSE, >= 3.35 RETURNING).
-_SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS profiles (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    label         TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    salt          TEXT NOT NULL,
-    window_days   INTEGER NOT NULL,
-    speed         REAL NOT NULL DEFAULT 1.0,
-    auto_scale    INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT NOT NULL,
-    active        INTEGER NOT NULL DEFAULT 1
-);
-"""
+# ~~DEFAULT_ACCESS_DB = /var/lib/corporatetraveldc-demo-state/demo_access.db~~,
+# ~~_SQLITE_SCHEMA~~ and ~~access_db_path()~~ -- removed 2026-10-20 with the
+# sqlite store (operator decision 2026-10-19).
 
 
-def access_db_path() -> str:
-    """Resolved at call time (not import) so a test or a quadlet can point
-    it elsewhere without reloading the module."""
-    return os.environ.get("DEMO_ACCESS_DB", DEFAULT_ACCESS_DB)
+class ProfileStoreRefused(RuntimeError):
+    """This process is not a demo-role process on the postgres backend, so
+    it has no profile store at all. ~~Fell back to the demo_access.db SQLite
+    file~~ until 2026-10-20; now a refusal, raised before any connection."""
 
 
 def store_kind() -> str:
-    """'postgres' (the demo instance, DISPATCH_ROLE=demo + a postgres
-    backend) or 'sqlite' (everything else). ~~follows DISPATCH_DB_BACKEND
-    exactly~~ -- since 2026-10-16 the backend alone never selects Postgres
-    here: the only Postgres this module may touch is the demo instance,
-    and that is selected by the role."""
+    """'postgres' (the demo instance: DISPATCH_ROLE=demo + the postgres
+    backend), or raise ProfileStoreRefused. ~~'sqlite' (everything
+    else)~~ -- 2026-10-20: there is no fallback store. Since 2026-10-16 the
+    backend alone never selects Postgres here: the only Postgres this
+    module may touch is the demo instance, selected by the role."""
     if db_backend.backend() == "postgres" and db_backend.is_demo_role():
         return "postgres"
-    return "sqlite"
+    raise ProfileStoreRefused(
+        "demo.profiles: the profile store is the demo Postgres instance only "
+        "(DISPATCH_ROLE=demo, DISPATCH_DB_BACKEND=postgres); the sqlite "
+        "fallback was retired 2026-10-20")
 
 
 def _table() -> str:
-    return "demo_profiles" if store_kind() == "postgres" else "profiles"
+    store_kind()
+    return "demo_profiles"
 
 
 @contextmanager
 def _store():
-    """One connection per public function, commit on success / rollback on
-    exception on both backends. Yields a connection whose execute() takes
-    `?` placeholders and whose rows support row["col"] and dict(row)."""
-    if store_kind() == "postgres":
-        with db_backend.demo_pg_conn() as c:
-            yield c
-        return
-    path = Path(access_db_path())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(path), timeout=10)
-    try:
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        c.executescript(_SQLITE_SCHEMA)
-        try:
-            yield c
-            c.commit()
-        except Exception:
-            c.rollback()
-            raise
-    finally:
-        c.close()
+    """One connection per public function on the demo instance, commit on
+    success / rollback on exception. Yields a connection whose execute()
+    takes `?` placeholders and whose rows support row["col"] and dict(row).
+    store_kind() refuses first when this is not a demo-role process."""
+    store_kind()
+    with db_backend.demo_pg_conn() as c:
+        yield c
 
 
 def _hash(password: str, salt: bytes) -> str:

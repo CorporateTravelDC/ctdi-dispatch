@@ -71,11 +71,13 @@ The platform began as a single-operator deployment and was made ready for multip
 | Operational feeds (weather, TFR, NOTAM, ATCSCC, Amtrak, ADS-B/ASDE-X, runsheet) | Rootless Podman containers | Read-only pulls from government/public sources, plus the third-party pulls and outbound receiver feeds listed below | Local Postgres (primary since the ~~2026-09-20~~ 2026-09-18 cutover (corrected 2026-10-15: the write path moved 2026-09-18, `docs/POSTGRES_MIGRATION.md` §5; the last live SQLite stores followed on 2026-09-20)); ~~SQLite remains for some paths and the demo playback file~~ (2026-10-19: platform SQLite files destroyed; SQLite only inside Pi-hole, vnstat and ACARS Hub) |
 | LLM inference | One native llama.cpp server, user unit `corporatetraveldc-llama.service`, bound to the tailnet IP `100.x.x.x:8093` only (`ss -ltn`) | None | Ephemeral |
 | Audit log | `audit_log` table, local Postgres; uvicorn access log in journald | Optional, operator-enabled egress hook (§3); off live | Hash-chained on Postgres (trigger-computed; ~~no code verifies the chain; governance, console, gateway and reader events are outside it~~ verified every 15 min by the integrity sweep, governance events included since 2026-10-07 -- `docs/AGENT_TRUST_MODEL.md` §11; limits found by review 09 and still open on 2026-10-15: concurrent writers can fork the chain, deleting the newest rows is not detected, and a verifier that errors is logged as "unavailable" without a push -- see §3); past the retention horizon rows are archived, signed and moved to the operator's own Nextcloud, never deleted bare (§3) |
-| Public demo | `corporatetraveldc-runner-demo` (:8005) + `demo-api`, reading a separate SQLite file for playback (corrected 2026-10-15: and connected to the shared production Postgres, see below) | Public vhost `dispatch-runner.example.com` (200 on 2026-10-06); app-layer password gate active (`Environment=DEMO_MODE=true` in the quadlet, `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`) | `/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount |
+| Public demo | `corporatetraveldc-runner-demo` (:8005) + `demo-api`, ~~reading a separate SQLite file for playback (corrected 2026-10-15: and connected to the shared production Postgres, see below)~~ reading the separate demo Postgres instance `corporatetraveldc-pgsql-demo` (2026-10-19 relay 2; Postgres-only, with no SQLite rollback, since 2026-10-20) | Public vhost `dispatch-runner.example.com` (200 on 2026-10-06); app-layer password gate active (`Environment=DEMO_MODE=true` in the quadlet, `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`) | ~~`/var/lib/corporatetraveldc-demo-source/demo-source.db`, `:ro` mount~~ the demo instance over its own socket volume (no host directory mounted in demo-api, 2026-10-20) |
 
 **Demo/production isolation.** ~~The demo reads only
 `/var/lib/corporatetraveldc-demo-source/demo-source.db`,~~ The demo's playback
-data comes from `/var/lib/corporatetraveldc-demo-source/demo-source.db`,
+data comes from ~~`/var/lib/corporatetraveldc-demo-source/demo-source.db`~~ the
+demo Postgres instance (2026-10-20: the SQLite file is destroyed and its code
+path and mount removed),
 populated by
 `scripts/scrub-demo-source.py` (host-side, self-verifies against the signed
 manifest, two-layer scrub with fail-closed allowlist from
@@ -133,8 +135,12 @@ the public tree. The boundary, as built in this batch:
 
 Relay 1 changes nothing demo-facing: the demo containers still run as they did
 on 2026-10-16 (sqlite pin, no Postgres socket). Relay 2 flips them to
-`config/demo.env` (`DISPATCH_ROLE=demo`, `DEMO_SOURCE=postgres`); relays 3-4
-retire the sovereign SQLite file and move the recorder. Plan and hand steps:
+`config/demo.env` (`DISPATCH_ROLE=demo`, `DEMO_SOURCE=postgres`); ~~relays 3-4
+retire the sovereign SQLite file and move the recorder~~ (2026-10-20: the
+sovereign SQLite file, its mounts and the sqlite rollback are gone. The two
+demo quadlets set `DISPATCH_DB_BACKEND=postgres` as a signed line, and
+`common.db_backend` refuses `sqlite` outside the test suite. Moving the recorder
+off `/var/lib/corporatetraveldc` is still open). Plan and hand steps:
 `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` (addendum 2026-10-16).
 
 **The demo file is frozen, not refreshed.**
@@ -247,6 +253,44 @@ arrive. It prints only file:line and counts. Confirmed coincidences go in
 `ladd-public-allow.sha256` as hashes, never as values. See
 `docs/LADD_CUI_HANDLING.md`.
 
+**Transcript leak scan: LADD required, every credential file (2026-10-20, next
+relay).** `scripts/leak-guard/transcript_leak_scan.py` (on-box transcripts and
+tool outputs) runs at every push point with the LADD class required:
+`scripts/pre-push` (tracked source; the installed `.git/hooks/pre-push` is
+refreshed by `scripts/install-git-hooks.sh`), `push-public.sh` (exit 6) and
+`relay-preflight.sh` run it through `scripts/with-dispatch-env.sh` with
+`--require-ladd` at `nice -n 19`, so an unreadable LADD list stops the push
+(exit 3) instead of a "not checked" warning. ~~Those callers ran it without the
+dispatch env: the LADD class was reported "not checked" and the push went ahead.~~
+The hourly root unit runs `agent-leak-scan.sh` (installed copy, `Nice=19`):
+redact, then scan, both with `--require-ladd --ladd-stdin`, the list piped out of
+the operator's `corporatetraveldc-pgsql` container as the public tripwire does
+(root's python has no Postgres driver and root never imports the checkout's
+`src/`). "Dispatch env loaded" now means the Postgres settings `common.db.conn()`
+connects with (`DISPATCH_PG_HOST` / `_DB` / `_USER`), ~~`DISPATCH_DB_BACKEND` or
+`DISPATCH_DB`~~ (dropping the retired SQLite name would have switched the class
+off silently).
+
+Values: besides `dispatch-secrets.env` and the healthchecks ping URL, the scan
+(and the public-tree leak gate in `scrub-public-tree.py`, through the same
+loader) now reads every other credential file by path, in-process, never
+printed: the other `/etc/corporatetraveldc/*secrets*.env` files (both Postgres
+superuser passwords, the demo session secret, ntfy, the SDR feeder keys: only
+secret-named keys, so coordinates are not values), `demo.env`'s
+`DEMO_PG_PASSWORD`, `/etc/corporatetraveldc/*.token`, every file in the
+operator's `~/.secrets` (public keys, `*.crt`, the signing fingerprint files and
+the `tailnet-disable` flag skipped) and `~/*.ts.net.key`. A binary key (the demo
+Q-registry key) is matched as hex and base64; a PEM / OpenSSH key by three base64
+body lines. A file the account cannot read is named as "not checked" (names only;
+the root run reads root-only files). Shapes added: private-key blocks (PEM,
+OpenSSH, PGP; header plus base64 body, redacted through the END line), GitHub
+`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` and `github_pat_`, Anthropic `sk-ant-`,
+Tailscale `tskey-` and private node keys, ntfy `tk_`. The git hooks' diff scan
+gains the private-key header and `tskey-`. Not value-matchable: the signing PIN
+file holds public fingerprints (skipped); any value under 12 characters.
+Tests: `tests/scripts/test_transcript_leak_scan_coverage.py` (synthetic values
+built at runtime).
+
 ---
 
 ## 3. Audit logging (as built)
@@ -298,7 +342,8 @@ rows, which are ordinary mutable tables, not chained:
 - On Postgres a `BEFORE INSERT` trigger (`audit_log_chain_trg`) sets
   `prev_hash` and `row_hash = sha256(prev_hash|event_time|action|tier|token_prefix|remote_addr|detail)`
   under an advisory lock. Any edit, insertion or deletion breaks the chain
-  from that point. SQLite gets no trigger (dev/rollback path only).
+  from that point. ~~SQLite gets no trigger (dev/rollback path only).~~ (2026-10-20:
+there is no SQLite path outside the test suite.)
 - There is **no** UPDATE/DELETE-blocking trigger and **no** writer/owner role
   split: the `dispatch` role that writes rows can also rewrite them. The chain
   detects a rewrite only if someone verifies it against a signed checkpoint.

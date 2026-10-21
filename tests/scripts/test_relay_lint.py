@@ -53,7 +53,8 @@ def test_missing_wrapper():
 def test_live_twin_install_must_precede_signing():
     bad = "scripts/sign-manifest.sh; git add -A\ninstall -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\""
     assert any("after sign-manifest" in w for w in lint(bad))
-    good = ("install -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\"\nscripts/sign-manifest.sh; git add -A"
+    good = ("install -m 644 .config/containers/systemd/x.container \"$HOME/.config/containers/systemd/x.container\"\n"
+            "scripts/relay-wait-load.sh\nscripts/sign-manifest.sh; git add -A"
             "\nREBASELINE=1 bash scripts/stack-refresh.sh --tripwire --dry-run --now")
     assert not lint(good)
 
@@ -125,6 +126,35 @@ def test_pg_maintenance_builds_need_load_wait():
     assert not any("load wait" in w for w in lint("bash scripts/pg-maintenance.sh status"))
 
 
+def test_tree_wide_steps_need_load_wait():
+    # 2026-10-20 (cleanup sweep): steps that read every transcript or hash / render the whole tree.
+    for step in ("python3 scripts/leak-guard/transcript_leak_scan.py scan --require-ladd",
+                 "scripts/with-dispatch-env.sh python3 scripts/leak-guard/transcript_leak_scan.py redact",
+                 "scripts/sign-manifest.sh", "bash scripts/verify-manifest.sh",
+                 "python3 scripts/scrub-public-tree.py --verify-only HEAD^{tree}",
+                 "python3 scripts/render-glossary.py --check", "bash scripts/render-onboarding.sh",
+                 "python3 scripts/demo-sqlite-retire-check.py --hours 24"):
+        assert any("load wait" in w for w in lint(step)), step
+        assert not any("load wait" in w for w in lint("scripts/relay-wait-load.sh\n" + step)), step
+        assert not any("load wait" in w for w in lint("scripts/relay-wait-load.sh && " + step)), step
+    # naming the scanner without scan / redact is not a heavy step
+    assert not any("load wait" in w for w in lint("ls -l scripts/leak-guard/transcript_leak_scan.py"))
+
+
+def test_gate_backfill_runs_need_load_wait():
+    # 2026-10-20 (phase D): a real backfill is heavy; a dry run or the G-prefix report is not.
+    for step in ("scripts/with-dispatch-env.sh python3 scripts/gate-backfill-tdes.py",
+                 "scripts/with-dispatch-env.sh python3 scripts/gate-backfill-airframes.py --hours 72",
+                 "systemd-run --user --unit=corporatetraveldc-gate-backfill-tdes --nice=19 --collect "
+                 "scripts/with-dispatch-env.sh python3 scripts/gate-backfill-tdes.py"):
+        assert any("load wait" in w for w in lint(step)), step
+        assert not any("load wait" in w for w in lint("scripts/relay-wait-load.sh\n" + step)), step
+    for step in ("scripts/with-dispatch-env.sh python3 scripts/gate-backfill-tdes.py --dry-run",
+                 "scripts/with-dispatch-env.sh python3 scripts/gate-backfill-tdes.py --g-prefix-report",
+                 "scripts/with-dispatch-env.sh python3 scripts/gate-backfill-airframes.py --dry-run --hours 72"):
+        assert not any("load wait" in w for w in lint(step)), step
+
+
 def test_relay_wait_load_script(tmp_path):
     import subprocess
     f = tmp_path / "loadavg"
@@ -181,3 +211,13 @@ def test_secret_input_helper_refuses_control_characters(tmp_path):
     tty.write_bytes(b"fake\x1b[31mvalue\n")
     r = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
     assert "read-refused 0" in r.stdout and "fake" not in r.stdout + r.stderr
+
+
+# 2026-10-20 (Pi-hole read relay) ------------------------------------------------------------
+
+def test_sqlite_sql_with_double_quoted_literals_is_flagged():
+    why = "double-quoted text inside SQL passed to sqlite3"
+    bad = 'echo "n: $(pihole-FTL sqlite3 -ni /etc/pihole/pihole-FTL.db "SELECT count(*) FROM queries WHERE timestamp > strftime(\\"%s\\",\\"now\\")" 2>&1)"'
+    good = "echo \"n: $(pihole-FTL sqlite3 -ni /etc/pihole/pihole-FTL.db \"SELECT count(*) FROM queries WHERE timestamp > strftime('%s','now','-1 day')\" 2>&1)\""
+    assert any(why in w for w in lint(bad))
+    assert not any(why in w for w in lint(good))

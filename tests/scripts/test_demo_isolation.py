@@ -69,9 +69,11 @@ class DemoQuadlets(unittest.TestCase):
     def test_relay2_flip_both_demo_quadlets(self):
         """2026-10-19 relay 2: both demo app quadlets are demo-role processes on
         the demo instance's own socket volume, load demo-secrets.env then
-        demo.env LAST, and never dispatch.env. DEMO_SOURCE and
+        demo.env LAST, and never dispatch.env. ~~DEMO_SOURCE and
         DISPATCH_DB_BACKEND are NOT Environment= lines (podman -e beats
-        --env-file, so the demo.env rollback switch would be dead)."""
+        --env-file, so the demo.env rollback switch would be dead)~~ --
+        2026-10-20: the sqlite rollback is retired, so the backend (both) and
+        the source (demo-api) ARE signed Environment= lines, postgres only."""
         for name in sorted(DEMO_APP):
             lines = active(QUADLETS / f"{name}.container")
             with self.subTest(unit=name):
@@ -82,15 +84,27 @@ class DemoQuadlets(unittest.TestCase):
                 self.assertEqual(envfiles, ["EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env",
                                             "EnvironmentFile=/etc/corporatetraveldc/demo.env"])
                 self.assertFalse(any("dispatch.env" in l or "dispatch-secrets" in l for l in lines))
-                self.assertFalse(any(l.startswith(("Environment=DEMO_SOURCE", "Environment=DISPATCH_DB_BACKEND",
-                                                   "Environment=DEMO_PG_", "Environment=DISPATCH_PG_")) for l in lines))
+                self.assertFalse(any(l.startswith(("Environment=DEMO_PG_", "Environment=DISPATCH_PG_")) for l in lines))
+                self.assertEqual([l for l in lines if l.startswith("Environment=DISPATCH_DB_BACKEND")],
+                                 ["Environment=DISPATCH_DB_BACKEND=postgres"])
+                self.assertFalse(any(l.startswith("Environment=DEMO_SOURCE") and l != "Environment=DEMO_SOURCE=postgres"
+                                     for l in lines))
                 vols = [l[len("Volume="):].split(":", 1)[0] for l in lines if l.startswith("Volume=")]
                 self.assertFalse(any(v.startswith("/etc/") for v in vols), vols)
                 self.assertTrue(any("corporatetraveldc-pgsql-demo.service" in l for l in lines if l.startswith("After=")))
         api = active(QUADLETS / "corporatetraveldc-demo-api.container")
-        # the rollback path: the sovereign file and demo_access.db stay mounted until relay 4
-        self.assertIn("Volume=/var/lib/corporatetraveldc-demo-source:/var/lib/corporatetraveldc-demo-source:ro,z", api)
-        self.assertIn("Volume=/var/lib/corporatetraveldc-demo-state:/var/lib/corporatetraveldc-demo-state:z", api)
+        self.assertIn("Environment=DEMO_SOURCE=postgres", api)
+        # ~~the rollback path: the sovereign file and demo_access.db stay mounted
+        # until relay 4~~ -- 2026-10-20 (operator decision 2026-10-19, platform
+        # SQLite retired): both sovereign mounts must be ABSENT, and demo-api
+        # mounts no host directory at all (only the demo socket volume).
+        for name in sorted(DEMO_APP):
+            lines = active(QUADLETS / f"{name}.container")
+            with self.subTest(unit=name, check="no sovereign mounts"):
+                self.assertFalse(any("corporatetraveldc-demo-source" in l or "corporatetraveldc-demo-state" in l
+                                     for l in lines if l.startswith("Volume=")), name)
+        self.assertEqual([l for l in api if l.startswith("Volume=")],
+                         [f"Volume={DEMO_SOCK}:/var/run/postgresql-demo"])
 
     def test_no_non_demo_unit_mounts_the_demo_socket(self):
         """The recorder (corporatetraveldc-demo) and every other production
@@ -223,11 +237,14 @@ class Wiring(unittest.TestCase):
     def test_env_examples(self):
         demo = (REPO / "config/demo.env.example").read_text()
         for key in ("DISPATCH_ROLE=demo", "DEMO_PG_HOST=/var/run/postgresql-demo", "DEMO_PG_DB=corporatetraveldc_demo",
-                    "DEMO_PG_USER=demo", "DEMO_SOURCE=postgres", "DISPATCH_DEMO_ISOLATION=1"):
+                    "DEMO_PG_USER=demo", "DISPATCH_DEMO_ISOLATION=1"):
             self.assertIn("\n" + key, demo, key)
         self.assertNotIn("DISPATCH_PG_PASSWORD", demo)
         self.assertNotIn("\nDISPATCH_PG_", demo)
-        # 2026-10-19 relay 2: the demo role's password and the rollback pair live in demo.env
+        # 2026-10-19 relay 2: the demo role's password lives in demo.env; 2026-10-20: the
+        # backend is a postgres constant and the DEMO_SOURCE rollback line is gone
+        self.assertNotIn("\nDEMO_SOURCE=", demo)
+        self.assertNotIn("\nDISPATCH_DB_BACKEND=sqlite", demo)
         for key in ("DEMO_PG_PASSWORD=CHANGE_ME", "DISPATCH_DB_BACKEND=postgres", "LLAMA_BASE_URL=CHANGE_ME",
                     "OLLAMA_CHAT_MODEL=CHANGE_ME"):
             self.assertIn("\n" + key, demo, key)
@@ -236,7 +253,7 @@ class Wiring(unittest.TestCase):
         secrets = (REPO / "config/demo-secrets.env.example").read_text()
         self.assertNotIn("\nDEMO_PG_PASSWORD=", secrets)   # moved to demo.env (relay 2)
         self.assertNotIn("DISPATCH_PG_PASSWORD=", secrets)
-        self.assertIn("\nDISPATCH_DB_BACKEND=sqlite", secrets)   # harmless default under demo.env
+        self.assertNotIn("\nDISPATCH_DB_BACKEND", secrets)   # ~~harmless default under demo.env~~ removed 2026-10-20
         pg = (REPO / "config/pgsql-demo-secrets.env.example").read_text()
         keys = [l.split("=", 1)[0] for l in pg.splitlines() if l and not l.startswith("#")]
         self.assertEqual(keys, ["POSTGRES_PASSWORD"])

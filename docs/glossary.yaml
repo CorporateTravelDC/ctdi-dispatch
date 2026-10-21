@@ -7,7 +7,9 @@
 # `--check` fails when a generated file is stale.
 #
 # Entry fields: term, expansion, definition (one line, plain words), scope
-# (aviation | rail | weather | maritime | platform | agents), optional aliases.
+# (aviation | rail | weather | maritime | platform | agents | finance | governance |
+# scheduling | office; the last four added 2026-10-20 for the CFO, EA and CoS
+# profiles), optional aliases.
 # Rules also carry `short` (the one-line form given to the local models) and
 # `enforced_by` (the test files that hold the rule; each must exist).
 #
@@ -28,7 +30,7 @@
 
 version: 1
 
-scopes: [aviation, rail, weather, maritime, platform, agents]
+scopes: [aviation, rail, weather, maritime, platform, agents, finance, governance, scheduling, office]
 
 # Which scopes a deployment profile receives. Derived from the profile JSON
 # (docs/deployment-profiles/profiles/*.json and private/*.json): every profile
@@ -41,6 +43,25 @@ profile_scopes:
     weather_watch: [weather]
     travel_coordination: [aviation, rail, weather]
     dispatch: [aviation, weather]
+    # 2026-10-20 (operator: CFO, EA and CoS as separate profiles, each with a real slice)
+    budgeting: [finance, office]
+    cash_forecast: [finance]
+    close_checklist: [finance, governance]
+    board_reporting: [finance, governance]
+    variance_analysis: [finance]
+    controls_register: [finance, governance]
+    expense_capture: [finance]
+    reconciliation: [finance]
+    trip_accounting: [finance]
+    calendar_coordination: [scheduling, office]
+    meeting_preparation: [scheduling]
+    follow_up: [scheduling, governance]
+    document_intake: [office]
+    briefings: [governance]
+    decision_register: [governance, office]
+    initiative_tracking: [governance, office]
+    okr_tracking: [governance]
+    operating_cadence: [governance, scheduling]
   sources:
     flight_status: [aviation]
     weather: [weather]
@@ -60,6 +81,16 @@ profile_scopes:
     swim_itws: [weather, aviation]
     swim_aim_fns: [aviation]
     local_ais: [maritime]
+    # 2026-10-20 (CFO, EA and CoS profiles)
+    accounting_ledger: [finance]
+    bank_statement_import: [finance]
+    erp: [finance]
+    tax_software: [finance]
+    calendar: [scheduling]
+    contacts: [scheduling]
+    email: [scheduling]
+    document_repository: [office]
+    task_board: [governance, office]
 
 acronyms:
   - {term: ACARS, expansion: Aircraft Communications Addressing and Reporting System, scope: aviation, definition: "Text datalink between aircraft and airline operations, received locally and from aggregators; a gate and phase hint, never an OOOI authority on its own.", source: {cite: "FAA JO 7340.2 Contractions, ACARS: aircraft communication addressing and reporting system (ICAO contraction); message label conventions are ARINC 618/620, not public", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
@@ -78,6 +109,7 @@ acronyms:
   - {term: ARM, expansion: Advanced RISC Machine, scope: platform, definition: "The processor family of the edge unit; images are built for its 64-bit form.", source: null}
   - {term: ARTCC, expansion: Air Route Traffic Control Center, scope: aviation, definition: "An en-route control center; each has a three-letter code starting with Z.", source: {cite: "FAA Pilot/Controller Glossary, AIR ROUTE TRAFFIC CONTROL CENTER (ARTCC)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIR_ROUTE_TRAFFIC_CONTROL_CENTER_ARTCC"}}
   - {term: ASDE-X, expansion: Airport Surface Detection Equipment Model X, scope: aviation, definition: "Surface surveillance at large airports; its tracks reach the platform through STDDS.", source: {cite: "FAA Pilot/Controller Glossary, AIRPORT SURFACE DETECTION EQUIPMENT (ASDE), ASDE-X", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIRPORT_SURFACE_DETECTION_EQUIPMENT_ASDE"}}
+  - {term: ATC, expansion: Air Traffic Control, scope: aviation, definition: "The FAA service that separates and sequences aircraft; an ATC callsign is the identifier a flight is filed and controlled under, which can differ from its public flight number.", source: {cite: "FAA Pilot/Controller Glossary, AIR TRAFFIC CONTROL", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html"}}
   - {term: ATCSCC, expansion: Air Traffic Control System Command Center, scope: aviation, definition: "The FAA national command center that issues advisories and traffic programs.", source: {cite: "FAA Pilot/Controller Glossary, AIR TRAFFIC CONTROL SYSTEM COMMAND CENTER (ATCSCC)", url: "https://www.faa.gov/air_traffic/publications/atpubs/pcg_html/glossary-a.html#AIR_TRAFFIC_CONTROL_SYSTEM_COMMAND_CENTER_ATCSCC"}}
   - {term: ATFM, expansion: Air Traffic Flow Management, scope: aviation, definition: "The European and ICAO name for traffic flow measures.", source: {cite: "FAA JO 7340.2 Contractions, ATFM: air traffic flow management (ICAO contraction; ICAO Doc 4444 defines it, not freely published)", url: "https://www.faa.gov/air_traffic/publications/atpubs/cnt_html/chap2_section_1.html"}}
   - {term: AWC, expansion: Aviation Weather Center, scope: weather, definition: "The NWS center that publishes METARs, TAFs and SIGMETs.", source: {cite: "NWS Aviation Weather Center, help page", url: "https://aviationweather.gov/help/"}}
@@ -184,6 +216,7 @@ acronyms:
   - {term: SCDS, expansion: SWIM Cloud Distribution Service, scope: aviation, definition: "The FAA cloud service that delivers SWIM feeds to subscribers.", source: {cite: "FAA SWIM, Getting Access to SWIM (SWIFT portal, SWIM Cloud Distribution Service)", url: "https://www.faa.gov/air_traffic/technology/swim/products/get_connected"}}
   - {term: SDR, expansion: Software-Defined Radio, scope: platform, definition: "A radio receiver whose decoding is done in software.", source: null}
   - {term: SFTP, expansion: SSH File Transfer Protocol, scope: platform, definition: "File transfer over SSH.", source: {cite: "IETF draft-ietf-secsh-filexfer-02, SSH File Transfer Protocol (an expired draft; no RFC)", url: "https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-02"}}
+  - {term: HMAC, expansion: keyed-hash message authentication code, scope: platform, definition: "A keyed hash; the demo scrub derives synthetic registrations and per-leg time offsets with it, so neither can be computed without the key.", source: {cite: "NIST FIPS 198-1, The Keyed-Hash Message Authentication Code", url: "https://csrc.nist.gov/pubs/fips/198-1/final"}}
   - {term: SHA-256, expansion: Secure Hash Algorithm 256-bit, scope: platform, definition: "The hash used by the signed manifest and the ledgers.", source: {cite: "NIST FIPS 180-4, Secure Hash Standard", url: "https://csrc.nist.gov/pubs/fips/180-4/upd1/final"}}
   - {term: SIM, expansion: Subscriber Identity Module, scope: platform, definition: "The cellular card of the backup uplink.", source: {cite: "NIST CSRC Glossary, Subscriber Identity Module (SIM)", url: "https://csrc.nist.gov/glossary/term/subscriber_identity_module"}}
   - {term: SMB, expansion: Server Message Block, scope: platform, definition: "The Windows file share protocol; a possible backup target.", source: {cite: "Microsoft Open Specifications, MS-SMB2 Server Message Block Protocol Versions 2 and 3", url: "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5606ad47-5ee0-437a-817e-70c366052962"}}
@@ -220,6 +253,30 @@ acronyms:
   - {term: ZNY, expansion: New York ARTCC, scope: aviation, definition: "The New York en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (New York); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
   - {term: ZOB, expansion: Cleveland ARTCC, scope: aviation, definition: "The Cleveland en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Cleveland); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
   - {term: ZTL, expansion: Atlanta ARTCC, scope: aviation, definition: "The Atlanta en-route center.", source: {cite: "FAA ATO, Air Route Traffic Control Centers list (Atlanta); the Z code is the center's FAA location identifier", url: "https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/artcc"}}
+  - {term: ACH, expansion: "Automated Clearing House", scope: finance, definition: "The US batch network for bank-to-bank payments such as payroll and supplier payments; in the CFO profile a change of bank details is a signed approval.", source: {cite: "Federal Reserve Board, About the FedACH Services", url: "https://www.federalreserve.gov/paymentsystems/fedach_about.htm"}}
+  - {term: AP, expansion: "Accounts Payable", scope: finance, definition: "What the organisation owes its suppliers: bills received and awaiting approval and payment.", source: null}
+  - {term: AR, expansion: "Accounts Receivable", scope: finance, definition: "What customers owe the organisation for work already invoiced.", source: {cite: "IRS Publication 538, Accounting Periods and Methods (accrual method; accounts receivable)", url: "https://www.irs.gov/publications/p538"}}
+  - {term: CalDAV, expansion: "Calendaring Extensions to WebDAV", scope: scheduling, definition: "The standard protocol for reading and writing calendars on a server; Nextcloud Calendar speaks it.", source: {cite: "IETF RFC 4791, Calendaring Extensions to WebDAV (CalDAV)", url: "https://www.rfc-editor.org/rfc/rfc4791"}}
+  - {term: CardDAV, expansion: "vCard Extensions to WebDAV", scope: scheduling, definition: "The standard protocol for address books on a server; Nextcloud Contacts speaks it.", source: {cite: "IETF RFC 6352, CardDAV: vCard Extensions to WebDAV", url: "https://www.rfc-editor.org/rfc/rfc6352"}}
+  - {term: CFO, expansion: "Chief Financial Officer", scope: finance, definition: "The executive who owns an organisation's budgets, cash, controls and financial reporting; one deployment profile.", source: null}
+  - {term: CoS, expansion: "Chief of Staff", scope: governance, definition: "The executive who runs the principal's operating rhythm: initiatives, decisions, briefs and follow-through; a profile of its own, separate from the EA.", source: null}
+  - {term: COGS, expansion: "Cost of Goods Sold", scope: finance, definition: "The direct cost of what was sold; for this platform, the per-trip data and service costs such as paid flight-data calls.", source: {cite: "IRS Publication 334, Tax Guide for Small Business, Cost of Goods Sold", url: "https://www.irs.gov/publications/p334"}}
+  - {term: COSO, expansion: "Committee of Sponsoring Organizations of the Treadway Commission", scope: governance, definition: "The body whose Internal Control, Integrated Framework is the usual reference for designing and assessing internal controls.", source: {cite: "COSO, Guidance on Internal Control (Internal Control, Integrated Framework)", url: "https://www.coso.org/guidance-on-ic"}}
+  - {term: EA, expansion: "Executive Assistant", scope: scheduling, definition: "The person who runs a principal's calendar, travel, correspondence and documents; one deployment profile.", source: null}
+  - {term: ERP, expansion: "Enterprise Resource Planning", scope: finance, definition: "An integrated system for an organisation's finance, purchasing and operations records; a CFO profile source.", source: {cite: "NIST CSRC Glossary, enterprise resource planning", url: "https://csrc.nist.gov/glossary/term/enterprise_resource_planning"}}
+  - {term: GAAP, expansion: "Generally Accepted Accounting Principles", scope: finance, definition: "The US accounting rules financial statements are prepared under.", source: {cite: "SEC Investor.gov glossary, Generally Accepted Accounting Principles (GAAP)", url: "https://www.investor.gov/introduction-investing/investing-basics/glossary/generally-accepted-accounting-principles-gaap"}}
+  - {term: GL, expansion: "General Ledger", scope: finance, definition: "The complete record of an organisation's accounts; every transaction posts to it.", source: null}
+  - {term: ICFR, expansion: "Internal Control over Financial Reporting", scope: finance, definition: "The controls that give reasonable assurance that financial reports are reliable.", source: {cite: "eCFR 17 CFR 240.13a-15(f), definition of internal control over financial reporting", url: "https://www.ecfr.gov/current/title-17/section-240.13a-15"}}
+  - {term: iCalendar, expansion: "Internet Calendaring and Scheduling Core Object Specification", scope: scheduling, aliases: ["ICS"], definition: "The file format for calendar events and invitations, carried by CalDAV.", source: {cite: "IETF RFC 5545, Internet Calendaring and Scheduling Core Object Specification (iCalendar)", url: "https://www.rfc-editor.org/rfc/rfc5545"}}
+  - {term: KPI, expansion: "Key Performance Indicator", scope: governance, definition: "A measure chosen to show whether an objective is being met.", source: {cite: "NIST CSRC Glossary, key performance indicator", url: "https://csrc.nist.gov/glossary/term/key_performance_indicator"}}
+  - {term: OCR, expansion: "Optical Character Recognition", scope: office, definition: "Turning a scanned page into text; Paperless-ngx runs it only when a document has no text layer.", source: null}
+  - {term: OIDC, expansion: "OpenID Connect", scope: office, definition: "An identity layer on top of OAuth; the planned single sign-on for the office apps, with Nextcloud as the provider, not deployed.", source: {cite: "OpenID Foundation, OpenID Connect Core 1.0", url: "https://openid.net/specs/openid-connect-core-1_0.html"}}
+  - {term: OKR, expansion: "Objectives and Key Results", scope: governance, definition: "A goal-setting method: a few objectives, each measured by key results; the CoS profile keeps them in a register.", source: null}
+  - {term: per diem, expansion: "per diem allowance", scope: finance, definition: "The daily allowance for lodging, meals and incidentals on a trip; US federal rates are published by GSA.", source: {cite: "US General Services Administration, Per diem rates", url: "https://www.gsa.gov/travel/plan-book/per-diem-rates"}}
+  - {term: SCRAM, expansion: "Salted Challenge Response Authentication Mechanism", scope: platform, definition: "The password method every database role here uses (SCRAM-SHA-256); the server stores a verifier, never the password.", source: {cite: "IETF RFC 7677, SCRAM-SHA-256 and SCRAM-SHA-256-PLUS", url: "https://www.rfc-editor.org/rfc/rfc7677"}}
+  - {term: SoD, expansion: "Separation of Duties", scope: finance, aliases: ["segregation of duties"], definition: "No one person both starts and approves the same financial action; the CFO profile's payment and bank-detail approvals rest on it.", source: {cite: "NIST CSRC Glossary, separation of duty", url: "https://csrc.nist.gov/glossary/term/separation_of_duty"}}
+  - {term: SOX, expansion: "Sarbanes-Oxley Act of 2002", scope: finance, definition: "The US law that requires public companies to assess and report on internal control over financial reporting.", source: {cite: "GovInfo, Public Law 107-204 (Sarbanes-Oxley Act of 2002)", url: "https://www.govinfo.gov/app/details/PLAW-107publ204"}}
+  - {term: SSO, expansion: "Single Sign-On", scope: office, definition: "One login that opens several applications; for the office apps it would come through OIDC, not deployed.", source: {cite: "NIST CSRC Glossary, single sign-on", url: "https://csrc.nist.gov/glossary/term/single_sign_on"}}
 
 platform:
   - {term: relay, expansion: operator relay, scope: platform, definition: "One reviewed shell block the operator pastes to run a batch: lint, tests, sign, commit, push and roll out.", source: {cite: "Platform term: the relay linter every relay passes", path: "scripts/relay-lint.py"}}
@@ -247,6 +304,12 @@ platform:
   - {term: Q mark, expansion: synthetic Q registration, scope: platform, definition: "A made-up stand-in mark, Q plus five characters, that replaces a protected aircraft identifier in demo and example data.", source: {cite: "Platform term: Q-mark substitution in the demo source scrub", path: "scripts/scrub-demo-source.py"}}
   - {term: assignments, expansion: gate and baggage assignments, scope: aviation, definition: "The resolved gate, terminal and baggage belt per flight leg and side, chosen by source precedence; every value has a status.", source: {cite: "Platform term: gate and baggage assignments", path: "src/common/gate_assignments.py"}}
   - {term: observed, expansion: assignment status observed, scope: aviation, definition: "A confirmed value from a trusted source.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
+  - {term: long lane, expansion: long-runner model lane, scope: platform, definition: "The box-wide lock that serialises long model jobs (reports, watches, digests) on the model server's first slot; one at a time, never killed.", source: {cite: "Platform term: lane promotion for operational briefs", path: "src/common/brief_lane.py"}}
+  - {term: hot lane, expansion: hot model lane, scope: platform, definition: "The model server's second slot, for short urgent calls; a job in it runs beside a long one, never stops it and never adds a model process.", source: {cite: "Platform term: lane promotion for operational briefs", path: "src/common/brief_lane.py"}}
+  - {term: operational brief, expansion: operational brief, scope: platform, definition: "A brief that feeds live decisions (the ops brief and the protection advance brief); the only briefs allowed lane promotion.", source: {cite: "Platform term: lane promotion for operational briefs", path: "src/common/brief_lane.py"}}
+  - {term: lane promotion, expansion: hot-lane promotion, scope: platform, definition: "An operational brief that cannot get the long lane within a minute runs in the hot lane instead, if that single-occupant lane is free; otherwise it falls back as before.", source: {cite: "Platform term: lane promotion for operational briefs", path: "src/common/brief_lane.py"}}
+  - {term: input gate, expansion: model input gate, scope: platform, definition: "Skips a model call when a hash of the data that drives the narrative is unchanged since the last success; noisy live values are banded first.", source: {cite: "Platform term: input gate", path: "src/common/input_gate.py"}}
+  - {term: watch ETA, expansion: watched-flight arrival estimate, scope: aviation, aliases: [destination-center STA], definition: "The one arrival estimate shown for a watched flight: SWIM only, TBFM at the destination center first, then TFMS, then FDPS; a meter-fix or descent/speed-fix time always names its fix and is never shown as an arrival time.", source: {cite: "Platform term: the watch ETA resolver", path: "src/common/watch_eta.py"}}
   - {term: provisional, expansion: assignment status provisional, scope: aviation, definition: "A value from a lower-confidence source, such as airport boards, until a better source confirms it.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
   - {term: superseded, expansion: assignment status superseded, scope: aviation, definition: "A value replaced by a newer or higher-precedence one; kept in history.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
   - {term: conflicting, expansion: assignment status conflicting, scope: aviation, definition: "Sources disagree; nothing is pushed until they agree.", source: {cite: "Platform term: assignment status values", path: "src/common/gate_assignments.py"}}
@@ -254,9 +317,37 @@ platform:
   - {term: compile_seq, expansion: semantic compile sequence, scope: platform, aliases: [semantic-compiled sentinel], definition: "The gapless number of each successful semantic compile; the sentinel file is written after each one commits.", source: {cite: "Platform term: the semantic compile runs ledger (migration 0077)", path: "src/common/pg_schema/0077_semantic_compile_runs.sql"}}
   - {term: second brain, expansion: second brain, scope: platform, definition: "The knowledge system built on the vault; the only authority for decisions and history.", source: {cite: "Platform term: second brain status", path: "docs/SECOND_BRAIN_STATUS.md"}}
   - {term: vault, expansion: knowledge vault, scope: platform, definition: "The note store behind the second brain; agents read it and write only through attributed contributions.", source: {cite: "Platform term: second brain status", path: "docs/SECOND_BRAIN_STATUS.md"}}
+  - {term: runner, expansion: live dispatch panel, scope: platform, aliases: [dispatch panel, runner panel], definition: "The live dispatch panel on production data; it shows an ETA only in answer to a request, and public-origin requests get LADD-listed flights withheld.", source: {cite: "Platform term: dispatch panel parity", path: "docs/DISPATCH_PANEL_PARITY.md"}}
+  - {term: dark point, expansion: LADD leg dark point, scope: platform, definition: "Where a LADD-listed leg ends in the demo: the inner marker where charted, else the runway threshold, else confirmed wheels-on, else fail closed; nothing after it is shown.", source: {cite: "Platform term: demo timing anti-correlation", path: "docs/LADD_CUI_HANDLING.md"}}
+  - {term: demo runner, expansion: demo dispatch panel, scope: platform, aliases: [runner-demo], definition: "The demo panel; it reads only cleared, sanitized windows scrubbed from production into the separate demo database, never live data.", source: {cite: "Platform term: client demo pattern", path: "docs/CLIENT_DEMO_PATTERN.md"}}
+  - {term: Jarvis, expansion: Jarvis / Jarvis's notebook, scope: platform, aliases: ["Jarvis's notebook", "Jarvis notebook"], definition: "The operator's name for the second brain and the vault behind it -- the same system, not a separate persona or a different store.", source: {cite: "Platform term: second brain status (Jarvis naming)", path: "docs/SECOND_BRAIN_STATUS.md"}}
   - {term: casebook, expansion: incident casebook, scope: platform, definition: "The numbered record of things that went wrong and the guardrail each one produced.", source: null}
   - {term: guardrail proof, expansion: guardrail proof entry, scope: platform, definition: "A ledger-backed record showing a new guardrail working on a real day.", source: {cite: "Platform term: guardrail proofs, as used in the agent segmentation design", path: "docs/AGENT_SEGMENTATION.md"}}
   - {term: feature freeze, expansion: feature freeze, scope: platform, definition: "A period when only fixes, tests and documentation land, never new features.", source: null}
+  - {term: office skeletons, expansion: "CFO, EA and CoS office services", scope: office, definition: "The services behind the three executive-office profiles, staged as templates and disabled until after the feature freeze.", source: {cite: "Platform term: the office skeletons overview", path: "docs/deployment-profiles/office-skeletons/README.md"}}
+  - {term: office instance, expansion: "office Postgres instance", scope: office, aliases: ["pgsql-office"], definition: "The third Postgres server, pgsql-office, with one database and one role per office service; separate from production and the demo.", source: {cite: "Platform term: the office instance's client rules", path: "config/pg_hba-office.conf"}}
+  - {term: installed disabled, expansion: "installed but switched off", scope: office, definition: "Present on the box but off: a unit with no install section and no boot, rollout or timer entry, or a Nextcloud app fetched with keep-disabled.", source: {cite: "Platform term: the office skeletons overview", path: "docs/deployment-profiles/office-skeletons/README.md"}}
+  - {term: Firefly III, expansion: "Firefly III ledger", scope: finance, definition: "The open-source ledger the CFO profile uses: budgets, categories and one tag per trip, on its own Postgres database.", source: {cite: "Platform term: the Firefly III secrets example and its header", path: "config/firefly-secrets.env.example"}}
+  - {term: Paperless-ngx, expansion: "Paperless-ngx document store", scope: office, definition: "The document store shared by the EA and the CFO: tickets, itineraries and receipts of record, on its own Postgres database.", source: {cite: "Platform term: the Paperless-ngx secrets example and its header", path: "config/paperless-secrets.env.example"}}
+  - {term: Vikunja, expansion: "Vikunja task and project service", scope: governance, definition: "An optional initiative and project API for the CoS profile, on its own Postgres database.", source: {cite: "Platform term: the Vikunja secrets example and its header", path: "config/vikunja-secrets.env.example"}}
+  - {term: Valkey, expansion: "Valkey broker", scope: office, definition: "The in-memory task broker Paperless-ngx needs; it persists nothing.", source: {cite: "Platform term: the Valkey secrets example and its header", path: "config/valkey-office-secrets.env.example"}}
+  - {term: Nextcloud Calendar, expansion: "Nextcloud Calendar app", scope: scheduling, definition: "The EA's calendar, with appointment booking; installed disabled.", source: {cite: "Platform term: the EA profile's integrations", path: "docs/deployment-profiles/profiles/executive-assistant.json"}}
+  - {term: Nextcloud Contacts, expansion: "Nextcloud Contacts app", scope: scheduling, definition: "The EA's address book; installed disabled.", source: {cite: "Platform term: the EA profile's integrations", path: "docs/deployment-profiles/profiles/executive-assistant.json"}}
+  - {term: Nextcloud Tasks, expansion: "Nextcloud Tasks app", scope: scheduling, definition: "The EA's follow-up list; installed disabled.", source: {cite: "Platform term: the EA profile's integrations", path: "docs/deployment-profiles/profiles/executive-assistant.json"}}
+  - {term: Nextcloud Deck, expansion: "Nextcloud Deck app", scope: governance, definition: "The CoS initiative board, one card per initiative; installed disabled.", source: {cite: "Platform term: the CoS profile's integrations", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: Nextcloud Collectives, expansion: "Nextcloud Collectives app", scope: governance, definition: "The CoS decision log and meeting notes; installed disabled.", source: {cite: "Platform term: the CoS profile's integrations", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: Nextcloud Tables, expansion: "Nextcloud Tables app", scope: governance, definition: "The CoS registers (objectives, decisions) with an API; installed disabled.", source: {cite: "Platform term: the CoS profile's integrations", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: principal, expansion: "the executive served", scope: scheduling, definition: "The executive an EA or CoS works for; acting in the principal's name needs a signed approval.", source: {cite: "Platform term: the EA profile's workflow objects and approvals", path: "docs/deployment-profiles/profiles/executive-assistant.json"}}
+  - {term: trip tag, expansion: "crossover trip tag", scope: office, definition: "The one link key, trip- plus an id, carried by the calendar event, the documents, the ledger lines and the initiative card; no permission is shared.", source: {cite: "Platform term: the executive-office crossover composition", path: "docs/deployment-profiles/compositions/exec-office-crossover.json"}}
+  - {term: crossover composition, expansion: "executive-office crossover", scope: office, definition: "The demo composition: the EA profile as core, the CFO and CoS profiles as disabled overlays, linked by the trip tag.", source: {cite: "Platform term: the executive-office crossover composition", path: "docs/deployment-profiles/compositions/exec-office-crossover.json"}}
+  - {term: decision register, expansion: "decision register", scope: governance, definition: "The CoS record of each decision: what, who, when and why, linked to its initiative.", source: {cite: "Platform term: the CoS profile's modules", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: initiative, expansion: "initiative", scope: governance, definition: "A tracked piece of work with an owner, objectives and a status; the CoS's unit of follow-through.", source: {cite: "Platform term: the CoS profile's workflow objects", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: operating cadence, expansion: "operating cadence", scope: governance, definition: "The fixed rhythm of reviews, briefs and decisions the CoS runs for the principal.", source: {cite: "Platform term: the CoS profile's modules", path: "docs/deployment-profiles/profiles/chief-of-staff.json"}}
+  - {term: close checklist, expansion: "period-end close checklist", scope: finance, definition: "The ordered list of tasks that closes the books for a month or quarter.", source: {cite: "Platform term: the CFO profile's modules", path: "docs/deployment-profiles/profiles/cfo.json"}}
+  - {term: variance analysis, expansion: "budget variance analysis", scope: finance, definition: "Comparing actual spend with the budget, line by line, and explaining the difference.", source: {cite: "Platform term: the CFO profile's modules", path: "docs/deployment-profiles/profiles/cfo.json"}}
+  - {term: cash forecast, expansion: "cash forecast", scope: finance, definition: "The expected cash in and out over the coming weeks, from the ledger and known commitments.", source: {cite: "Platform term: the CFO profile's modules", path: "docs/deployment-profiles/profiles/cfo.json"}}
+  - {term: controls register, expansion: "internal controls register", scope: finance, definition: "The list of financial controls, who owns each, and when each was last tested.", source: {cite: "Platform term: the CFO profile's modules", path: "docs/deployment-profiles/profiles/cfo.json"}}
+  - {term: board reporting, expansion: "board reporting", scope: governance, definition: "The financial and operating report prepared for the board; releasing it is a signed approval.", source: {cite: "Platform term: the CFO profile's modules and approvals", path: "docs/deployment-profiles/profiles/cfo.json"}}
 
 rules:
   - term: FIDS is gate and baggage only
@@ -366,7 +457,7 @@ ignore:
   - reason: "Ordinary English word written in capitals for emphasis, a heading or a status."
     terms: [ACCOUNT, AGENT, AGENTS, ALERTS, ALL, AND, DATA, DEFAULT, DEMO, DONE, DOWN, DRAFT, EDGE, ENABLED, FAIL, FAILED, FIXED, HELD, HOLD, HOME, KEY, LIVE, MODE, NAME, NOT, ONE, ONLY, PARTIAL, POLICY, PROMPT, REAL, REQUEST, RESTORE, RETIRED, SINGLE, SKILL, STARTED, STATUS, SYSTEM, TEXT, UNIT]
   - reason: "SQL, HTTP or Containerfile keyword quoted from code."
-    terms: [COPY, CMD, CREATE, DELETE, DESC, FROM, GET, HEAD, INDEX, LIMIT, "NULL", ORDER, POST, PUT, READ, SELECT, TABLE, UPDATE, WHERE, ATTRS]
+    terms: [CHECK, COPY, CMD, CREATE, DELETE, DESC, FROM, GET, HEAD, INDEX, LIMIT, "NULL", ORDER, POST, PUT, READ, SELECT, TABLE, UPDATE, WHERE, ATTRS]
   - reason: "Name of a file, variable, placeholder or UI label, not a term."
     terms: [README, CLAUDE, CTUID, PGDATA, SLUG, GLOBE, LIVE-ETC]
   - reason: "ICAO airport location code: a place name, not vocabulary."
@@ -377,7 +468,11 @@ ignore:
     terms: [DP-5, NEW-3, R04-GAP, SR-1]
   - reason: "Callsign prefix quoted from a detection rule: an identifier, not vocabulary."
     terms: [CRANE]
+  - reason: "ATC callsign quoted as the example of a public-number lookaside link: an identifier, not vocabulary."
+    terms: [DLH3Y, UAE3MX]
   - reason: "Federal radio program named only in the CUI-handling rules; no definition is published."
     terms: [SHARES]
   - reason: "Business form or currency code."
     terms: [LLC, GBP]
+  - reason: "Part of a product name (Firefly III, the office ledger), not a term of its own."
+    terms: [III]

@@ -15,7 +15,7 @@
 # 2026-09-19 addition: --manifest PATH picks which manifest file gets
 # generated+signed (default manifests/DB_MANIFEST.json, unchanged); any
 # args after -- are passed straight through to snapshot-db-manifest.py
-# (e.g. --tables/--sqlite-db/--sqlite-only/--purpose) so this same signer
+# (e.g. --tables/--purpose; ~~--sqlite-db/--sqlite-only~~ removed 2026-10-20) so this same signer
 # covers the checkpoint-phase snapshots, not just the default dual-hash one.
 #   scripts/sign-db-manifest.sh --agent --manifest manifests/DB_MANIFEST_phase2.json -- --tables cifp_fixes,...
 set -euo pipefail

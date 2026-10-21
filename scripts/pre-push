@@ -133,6 +133,10 @@ while read local_ref local_sha remote_ref remote_sha; do
         "ghp_[A-Za-z0-9]"
         "ghs_[A-Za-z0-9]"
         "Bearer [A-Za-z0-9_\-\.]{20,}"
+        # 2026-10-20 (credential coverage): private-key block headers and Tailscale keys.
+        # [-]{5}, not five literal dashes: a pattern starting with "-" is read as a grep option.
+        "[-]{5}BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?[-]{5}"
+        "tskey-[A-Za-z0-9-]{20,}"
         "taile[0-9a-f]{8}"
     )
 
@@ -249,11 +253,16 @@ fi
 # ── Transcript leak guard (2026-10-09, operator rule) ───────────────────────────
 # A secret that leaked into an on-box transcript or tool output is redacted ON the
 # box before any push leaves it. Names and counts only, never values.
+# 2026-10-20: through scripts/with-dispatch-env.sh with --require-ladd, so the LADD
+# class is checked on every push and an unreadable list (DB down, env unreadable)
+# REJECTS the push instead of a warning; nice -n 19. Installed copy: re-run
+# scripts/install-git-hooks.sh after this file changes (.git/hooks is not tracked).
 _repo_root="$(git rev-parse --show-toplevel)"
 if [[ -f "${_repo_root}/scripts/leak-guard/transcript_leak_scan.py" ]]; then
-    if ! python3 "${_repo_root}/scripts/leak-guard/transcript_leak_scan.py" scan; then
-        echo "[FAIL] pre-push: transcript leak on this box -- run"
-        echo "       scripts/leak-guard/transcript_leak_scan.py redact   then push again"
+    if ! nice -n 19 "${_repo_root}/scripts/with-dispatch-env.sh" \
+            python3 "${_repo_root}/scripts/leak-guard/transcript_leak_scan.py" scan --require-ladd; then
+        echo "[FAIL] pre-push: transcript leak on this box, or the LADD class could not be checked -- run"
+        echo "       scripts/with-dispatch-env.sh python3 scripts/leak-guard/transcript_leak_scan.py redact   then push again"
         exit 1
     fi
 fi

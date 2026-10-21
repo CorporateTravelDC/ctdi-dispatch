@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0",
   "deployment": {
-    "id": "example-executive-assistant-chief-of-staff",
-    "display_name": "Executive Assistant Chief Of Staff Reference",
-    "profile": "executive-assistant-chief-of-staff",
+    "id": "example-executive-assistant",
+    "display_name": "Executive Assistant Reference",
+    "profile": "executive-assistant",
     "environment": "staging",
     "timezone": "UTC",
     "locale": "en-US",
@@ -47,6 +47,7 @@
   "sources": {
     "enabled": [
       "calendar",
+      "contacts",
       "email",
       "document_repository"
     ],
@@ -62,11 +63,10 @@
       "audit",
       "local_knowledge",
       "calendar_coordination",
-      "briefings",
       "meeting_preparation",
       "travel_coordination",
-      "decision_register",
-      "follow_up"
+      "follow_up",
+      "document_intake"
     ],
     "disabled": []
   },
@@ -74,25 +74,25 @@
     "objects": [
       "principal",
       "meeting",
-      "stakeholder",
-      "decision",
-      "action_item",
-      "brief"
+      "trip",
+      "travel_document",
+      "contact",
+      "action_item"
     ],
     "state_machine": [
       "intake",
       "triaged",
       "scheduled",
+      "booked",
       "prepared",
-      "approved",
       "completed",
       "archived"
     ],
     "triggers": [],
     "approvals": [
       "send_on_behalf_of_principal",
-      "share_confidential_brief",
-      "commit_budget"
+      "book_travel",
+      "share_itinerary"
     ],
     "notifications": {
       "channels": [
@@ -119,8 +119,8 @@
     "pii_classes": [
       "calendar",
       "contacts",
-      "confidential_business_strategy",
-      "travel_itinerary"
+      "travel_itinerary",
+      "travel_documents"
     ],
     "audit": {
       "hash_chain": true,
@@ -141,8 +141,48 @@
     "runtime_image_identity_check": true
   },
   "integrations": {
-    "optional": [],
-    "forbidden": []
+    "optional": [
+      {
+        "id": "nextcloud-calendar",
+        "kind": "nextcloud_app",
+        "app": "calendar",
+        "state": "installed_disabled"
+      },
+      {
+        "id": "nextcloud-contacts",
+        "kind": "nextcloud_app",
+        "app": "contacts",
+        "state": "installed_disabled"
+      },
+      {
+        "id": "nextcloud-tasks",
+        "kind": "nextcloud_app",
+        "app": "tasks",
+        "state": "installed_disabled"
+      },
+      {
+        "id": "paperless-ngx",
+        "kind": "container",
+        "unit": "corporatetraveldc-paperless",
+        "state": "disabled",
+        "shared_with": [
+          "cfo"
+        ],
+        "note": "itineraries, e-tickets, receipts"
+      },
+      {
+        "id": "pgsql-office",
+        "kind": "database_instance",
+        "unit": "corporatetraveldc-pgsql-office",
+        "state": "disabled",
+        "note": "office skeletons instance; one database and role per service"
+      }
+    ],
+    "forbidden": [
+      "sqlite_backend",
+      "platform_env_files",
+      "production_database"
+    ]
   },
   "deployment_gate": {
     "requires_operator_review": true,

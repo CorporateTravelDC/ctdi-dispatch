@@ -64,13 +64,24 @@ import csv
 import io
 import logging
 import re
-import sqlite3
 import time
 from typing import Generator
 
 import requests
 
 log = logging.getLogger(__name__)
+
+def _is_transient_lock_error(e: BaseException) -> bool:
+    """A Postgres lock conflict worth retrying a bulk batch on: deadlock,
+    lock_timeout (LockNotAvailable) or a serialization failure. Anything
+    else -- including a missing psycopg -- is not transient."""
+    try:
+        from psycopg import errors as pg_errors
+    except ImportError:
+        return False
+    return isinstance(e, (pg_errors.DeadlockDetected, pg_errors.LockNotAvailable,
+                          pg_errors.SerializationFailure))
+
 
 _OPENSKY_CSV_URL = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
 # 2026-09-02: same bucket the rolling file redirects into (see module
@@ -276,12 +287,18 @@ def fetch_opensky_registry(url: str = _OPENSKY_CSV_URL, quotechar: str = '"') ->
             # the shared connection timeout, which would also slow down
             # unrelated live request-serving code paths) is the properly
             # scoped fix for a bulk job specifically.
+            #
+            # 2026-10-20: ~~except sqlite3.OperationalError "locked"~~ -- the
+            # platform has run on Postgres since 2026-09-19 and that class
+            # never matched there, so the retry was dead. The Postgres
+            # equivalents of a transient lock are a deadlock, a lock_timeout
+            # or a serialization failure (_is_transient_lock_error).
             for attempt in range(5):
                 try:
                     db.opensky_upsert_aircraft(batch)
                     break
-                except sqlite3.OperationalError as e:
-                    if "locked" not in str(e).lower() or attempt == 4:
+                except Exception as e:  # noqa: BLE001 -- re-raised unless transient
+                    if not _is_transient_lock_error(e) or attempt == 4:
                         raise
                     log.warning("opensky registry: batch upsert hit '%s', retrying (attempt %d/5)", e, attempt + 1)
                     time.sleep(2 * (attempt + 1))

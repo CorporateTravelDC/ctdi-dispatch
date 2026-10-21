@@ -82,9 +82,59 @@ def _default_auto_remove_at(scheduled_arrival: Optional[str],
 @router.get("")
 async def list_watchlist_entries(
     tier: Tier = Depends(require_tier(Tier.T1)),
+    include: Optional[str] = Query(None),
 ) -> JSONResponse:
-    """List all active watchlist entries (permanent + transient). Tier 1+."""
+    """List all active watchlist entries (permanent + transient). Tier 1+.
+
+    2026-10-20: with `?include=eta` each flight entry carries `eta` -- the
+    watch ETA from SWIM only (common.watch_eta: TBFM destination-center STA >
+    TFMS > FDPS) with its source, tier, the point the time refers to, the fix
+    for a fix time, and a UTC-with-ET `label`; null when no SWIM source has
+    one. Never FIDS/AeroAPI. Opt-in on purpose (operator 2026-10-20): an ETA
+    goes out only in answer to a request that asks for it -- the runner
+    panel's 60 s background poll never asks, so it never carries one.
+
+    `?include=eta_public` is the same minus every LADD-listed flight (by
+    identifier, registration or hex, through the production filter): those
+    get `eta: null`. A LADD lookup failure withholds every ETA (fail closed).
+    The runner proxy rewrites `eta` to `eta_public` for any request that is
+    not tailnet/LAN-origin; internal use is not LADD-restricted, public use is
+    (operator 2026-10-20)."""
     entries = db.get_watchlist_entries()
+    wanted = {p.strip() for p in (include or "").split(",")}
+    public = "eta_public" in wanted
+    if not public and "eta" not in wanted:
+        return JSONResponse({"entries": entries, "count": len(entries)})
+    from common import watch_eta
+    listed_ids: set[str] = set()
+    listed_hex: set[str] = set()
+    ladd_ok = True
+    if public:
+        flights = [e for e in entries if (e.get("entry_type") or "") == "flight"]
+        try:
+            listed_ids = db.faa_ladd_listed_batch(
+                x for e in flights for x in (e.get("identifier"), e.get("registration")) if x)
+            listed_hex = db.faa_ladd_hex_batch(e.get("hex_id") for e in flights if e.get("hex_id"))
+        except Exception as exc:  # fail closed: no ETA for anyone
+            import logging
+            logging.getLogger(__name__).warning("watch eta LADD check failed, ETAs withheld: %s",
+                                                type(exc).__name__)
+            ladd_ok = False
+    for e in entries:
+        if (e.get("entry_type") or "") != "flight":
+            continue
+        if public and (not ladd_ok
+                       or {str(x).strip().upper() for x in (e.get("identifier"), e.get("registration")) if x} & listed_ids
+                       or (e.get("hex_id") or "").strip().lower() in listed_hex):
+            e["eta"] = None
+            continue
+        try:
+            w = watch_eta.resolve_for_watch(e)
+        except Exception as exc:  # the list must still load; the miss is logged
+            import logging
+            logging.getLogger(__name__).warning("watch eta for %s: %s", e.get("id"), exc)
+            w = None
+        e["eta"] = w.as_dict() if w else None
     return JSONResponse({"entries": entries, "count": len(entries)})
 
 
@@ -417,8 +467,11 @@ async def add_flight_watchlist(
     # phone the moment the watchlist-add push lands, same as the hex tag.
     fdps_tag = " FDPS:Y" if fdps_confirmed else " FDPS:N"
 
+    # 2026-10-20: watch-keyed topic (shared.watch_topic). A transient add is never a
+    # bellwether, so this stays flight-alerts; the helper keeps every site on one rule.
+    from shared.watch_topic import topic_for_entry
     _fire_ntfy_dual(
-        domain_topic="flight-alerts",
+        domain_topic=topic_for_entry(entry, "flight"),
         title=f"Watching {ident}{id_tag} {route}",
         detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}{fdps_tag}",
         dispatch_body=f"Watchlist: {ident}{id_tag} added (transient){fdps_tag}",
@@ -682,8 +735,12 @@ async def remove_watchlist_entry(
     _REMOVE_TOPIC = {"flight": "flight-alerts", "train": "train-alerts",
                      "vessel": "vessel-alerts",
                      "drone": "drone-alerts"}   # (operator 2026-10-16): drone removals went to "dispatch" only
+    # 2026-10-20 (operator): a bellwether's removal goes to bellwether-alerts
+    # (shared.watch_topic; no dispatch copy). Read before the row is gone: the
+    # deleted row returned above still carries tier + alert_topic.
+    from shared.watch_topic import alert_topic_override
     _fire_ntfy_dual(
-        domain_topic=_REMOVE_TOPIC.get(etype, "dispatch"),
+        domain_topic=alert_topic_override(entry) or _REMOVE_TOPIC.get(etype, "dispatch"),
         title=f"Watchlist: {ident} removed",
         detail_body=f"{etype.title()} {ident} removed from watchlist",
         dispatch_body=f"Watchlist: {ident} removed",

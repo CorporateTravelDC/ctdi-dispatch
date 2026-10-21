@@ -26,6 +26,9 @@ Storage/alert routing:
                         outside the DC region is dropped at write time.
   VIP (POTUS/VP/AF1/AF2/Marine One) : always stored + alerted, nationwide,
                         regardless of facility.
+  US Antarctic        : every US Antarctic station is stored (keep class,
+                        never alerted by itself) -- is_us_antarctic(),
+                        operator 2026-10-20.
   Dedup               : forward-only, keyed on notam_id with a full
                         content hash (classification + effective window +
                         text) -- an unchanged NOTAM never re-alerts, an
@@ -124,10 +127,15 @@ _VIP_KEYWORDS = frozenset({
 # 269-Foot"), where prefix-only validation let substrings through and 38,360
 # bad edges had to be purged. Add future SHORT identifiers here, not above;
 # multi-word phrases are safe in the substring set.
-# \d* so a numbered flight matches too: SAM41, MCM47, VENUS 2 all appear in
-# NOTAM/TFR text, and a bare \bSAM\b would miss SAM41 entirely (no word
-# boundary between M and 4).
-_VIP_CALLSIGN_RE = re.compile(r"\b(?:VENUS|SAM|MCM)\d*\b")
+# A NUMBER IS REQUIRED (one optional space): SAM41, MCM47, VENUS 2, SAM 28000.
+# 2026-10-20 (operator): the 09-22 form was `\d*`, so the bare words matched
+# too -- a McMurdo Station helipad NOTAM ("...RADIUS OF MCM HELIPAD...",
+# location NZWD; MCM = McMurdo) was stored and routed as VIP movement on that
+# alone. Same rule as CRANE below: these are callsigns, never words.
+# The number must not be a measurement either ("MCM 1.5NM", "SAM 200FT").
+_VIP_CALLSIGN_RE = re.compile(
+    r"\b(?:VENUS|SAM|MCM) ?\d+\b(?!\s*(?:\.\d|NM\b|FT\b|FEET\b|MSL\b|AGL\b|M\b|KM\b|SM\b))"
+)
 
 # CRANE (2026-10-05, operator: "it should only be for call signs"). CRANE is a
 # CALLSIGN family -- CRANE01 / CRANE 05 / CRANE 50, the non-VIP callsigns of the
@@ -194,6 +202,50 @@ def _artcc_candidates(notam: dict) -> set[str]:
 def _in_dc_region(notam: dict) -> bool:
     """True if this NOTAM is tied to a DC-region ARTCC (must-ingest)."""
     return bool(_artcc_candidates(notam) & DC_REGION_ARTCCS)
+
+
+# ── US Antarctic stations: KEEP class (operator 2026-10-20) ──────────────────
+# Every US Antarctic station's NOTAMs are stored, whatever the watch set says.
+# A keep class only: never VIP, never an alert by itself (an alert still needs
+# one of the existing alert rules). The US Antarctic Program files its NOTAMs
+# through the FAA under New Zealand-prefixed designators in the Auckland
+# Oceanic FIR (NZZO; McMurdo FIR NZCM), so the test is:
+#   designator NZ** (or FIR NZZO/NZCM)  AND  a position south of 60 S.
+# Position, primary: any coordinate in the NOTAM text (both FAA shapes,
+# "S7751.000 E16640.400" and "071756S0722331E" / "7751S16640E").
+# Position, fallback (text has no coordinate): the designators seen live on
+# 2026-10-20 -- NZCM (McMurdo Station), NZWD (Williams Field) and NZFX
+# (Phoenix Airfield). No other designator is listed until it is seen; the
+# latitude rule catches any station whose NOTAM carries a coordinate.
+ANTARCTIC_MAX_LAT = -60.0
+_ANTARCTIC_FIRS = frozenset({"NZZO", "NZCM"})
+_US_ANTARCTIC_DESIGNATORS = frozenset({"NZCM", "NZWD", "NZFX"})
+_COORD_HEMI_FIRST_RE = re.compile(r"\b([NS])(\d{2})(\d{2}(?:\.\d+)?)\s*[EW]\d{3}")
+_COORD_HEMI_AFTER_RE = re.compile(r"\b(\d{2})(\d{2})(\d{2}(?:\.\d+)?)?([NS])\d{5,7}(?:\.\d+)?[EW]\b")
+
+
+def _text_latitudes(text: str) -> list[float]:
+    lats: list[float] = []
+    up = (text or "").upper()
+    for h, d, m in _COORD_HEMI_FIRST_RE.findall(up):
+        lat = int(d) + float(m) / 60
+        lats.append(-lat if h == "S" else lat)
+    for d, m, s, h in _COORD_HEMI_AFTER_RE.findall(up):
+        lat = int(d) + int(m) / 60 + (float(s) / 3600 if s else 0)
+        lats.append(-lat if h == "S" else lat)
+    return lats
+
+
+def is_us_antarctic(notam: dict) -> bool:
+    """True for a NOTAM at a US Antarctic station (keep class, see above)."""
+    desig = {(notam.get(k) or "").upper().strip() for k in ("facility", "location", "icao")} - {""}
+    fir = (notam.get("fir") or "").upper().strip()
+    if not (any(d.startswith("NZ") for d in desig) or fir in _ANTARCTIC_FIRS):
+        return False
+    lats = _text_latitudes(notam.get("text_body", "")) + _text_latitudes(notam.get("raw_text", ""))
+    if lats:
+        return any(lat <= ANTARCTIC_MAX_LAT for lat in lats)
+    return bool(desig & _US_ANTARCTIC_DESIGNATORS)
 
 
 def _get_facility_filter() -> frozenset[str]:
@@ -500,6 +552,12 @@ def _fire_notam_alert(notam: dict) -> None:
         )
 
 
+def notam_year_from_issued(issued: str | None) -> str:
+    """'2026-10-20T19:46:00.000Z' -> '2026'; '' when issued is missing or malformed."""
+    m = re.match(r"\s*(\d{4})-\d{2}-\d{2}", issued or "")
+    return m.group(1) if m else ""
+
+
 def parse_aim_message(xml_bytes: bytes) -> list[dict]:
     """
     Parse an FNS AIM AIXM 5.1 message. Returns list of NOTAM dicts
@@ -541,6 +599,13 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
             fns_class = _txt(ext, "fnse:classification") if ext is not None else "DOM"
 
             number = _normalize_notam_number(number)
+            # 2026-10-20: FNS sends some NOTAMs with an empty <event:year>
+            # (1,786 rows on 10-20, every one with number, location and
+            # issued). Those fell through to the GML id ("Event_1_...") and
+            # the same NOTAM was stored twice once a copy WITH the year
+            # arrived. The year is the issue year, so derive it from issued.
+            if not year:
+                year = notam_year_from_issued(issued)
             notam_id = f"{location}/{year}/{number}" if (location and year and number) else None
             if not notam_id:
                 gml_id = event.get("{http://www.opengis.net/gml/3.2}id", "")
@@ -561,6 +626,7 @@ def parse_aim_message(xml_bytes: bytes) -> list[dict]:
                 "effective_start": _parse_timestamp(eff_start),
                 "effective_end":   _parse_timestamp(eff_end),
                 "text_body":       full_text,
+                "raw_text":        text_body,
                 "raw_json": json.dumps({
                     "notam_id":    notam_id,
                     "number":      number,
@@ -600,6 +666,22 @@ def _maybe_cleanup_expired() -> None:
         log.warning("aim: cleanup_expired_notams failed: %s", e)
 
 
+def _absorb_event_aliases(n: dict) -> None:
+    try:
+        raw = json.loads(n.get("raw_json") or "{}")
+    except (TypeError, ValueError):
+        return
+    number, issued = raw.get("number") or "", raw.get("issued") or ""
+    if not (number and issued and n.get("facility")):
+        return
+    try:
+        removed = db.delete_notam_event_aliases(n["facility"], number, issued)
+        if removed:
+            log.info("aim: %s absorbed %d Event_ alias row(s)", n["notam_id"], removed)
+    except Exception as e:  # never fail the canonical write over the cleanup
+        log.warning("aim: Event_ alias cleanup failed for %s: %s", n["notam_id"], e)
+
+
 def write_aim_notams(notams: list[dict]) -> int:
     """Upsert parsed NOTAMs into the notams table and fire alerts where applicable."""
     if not notams:
@@ -632,7 +714,9 @@ def write_aim_notams(notams: list[dict]) -> int:
         in_watch = facility in watch_set
         in_core  = is_core_airport(facility)
         is_national_sig = is_fdc and _is_national_significant(n.get("text_body", ""))
-        if not (is_vip or in_watch or in_core or in_dc_region or is_national_sig):
+        # 2026-10-20 keep class: every US Antarctic station (stored, not alerted).
+        is_antarctic = is_us_antarctic(n)
+        if not (is_vip or in_watch or in_core or in_dc_region or is_national_sig or is_antarctic):
             log.debug("aim: geo-filtered NOTAM %s facility=%s (not DC-region FDC, watch set, or nationally significant)",
                       n["notam_id"], facility)
             continue
@@ -648,6 +732,10 @@ def write_aim_notams(notams: list[dict]) -> int:
                 text_body=n["text_body"],
             )
             written += 1
+            # A canonical LOC/YEAR/NUMBER arrival absorbs any GML-id ("Event_...")
+            # copy of the same NOTAM stored before the year-from-issued fix.
+            if not n["notam_id"].startswith("Event_"):
+                _absorb_event_aliases(n)
 
             # Alert routing: VIP always; DC-region and watch-set NOTAMs too;
             # and (2026-10-05) every FDC TFR citing a 91.137/141/143/145 or

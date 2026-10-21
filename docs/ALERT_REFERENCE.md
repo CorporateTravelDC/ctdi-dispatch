@@ -83,7 +83,8 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 | `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`~~; by a code bug it also sends vessel and drone retries here, §4~~ (corrected 2026-10-16: train retries only; vessel retries moved to `vessel-alerts` on 2026-10-15 and drone retries to `drone-alerts` on 2026-10-16, `pusher/main.py:641`)) | 2–4 |
 | `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ `:708`); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ `web/routes/watchlist.py:511`, batch map `:600`). No vessel watches and no AIS source live, so silent by design | 2–3 |
 | `drone-alerts` | (added 2026-10-16) `watchlist_event_hit` drone branch (`shared/watchlist.py`, `UAS ` title, "Drone <id>" dispatch copy); web watchlist remove map (`web/routes/watchlist.py`, no drone add route exists); pusher retries (`push_watchlist_retries`); `utm_watcher` Remote ID hits (`NTFY_TOPIC` default, was `flight-alerts`). Until 2026-10-16 drone events fell through to the train branch and reached `train-alerts` with `TRN ` titles. Not in `ntfy_push.TOPIC_CLICK`, the runner's `ntfy_stream` default list or `NtfyFeedView` (neither is `vessel-alerts`), so a tap opens the runner root. No drone watches live | 2–4 |
-| `dispatch` | the concise leg of every `_fire_ntfy_dual`; `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ `:288`, `:321`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
+| `bellwether-alerts` | (added 2026-10-20, operator; next relay) every watch-keyed push for an entry whose permanent record sets `"alert_topic": "bellwether-alerts"` (`watchlists/permanent_flights.json`: BA293 and the bellwether set, 47 entries). One rule, `shared/watch_topic.py` `topic_for_entry` (the file by entry id where it is mounted, else the `watchlist_entries.alert_topic` copy, pg_schema/0082; a transient watch never inherits it): `watchlist_event_hit` flight branch (so OOOI, identity, inbound, tail-change, gate/baggage `gate_assignment`, ACARS `acars_tfr_area` / `acars_diversion`), pusher retries and landings, web watchlist remove. **No `dispatch` copy** (`watch_topic.NO_DISPATCH_TOPICS`, applied in `_fire_ntfy_dual` and the pusher retry). Also the daily route-continuity relink notice (`atc_callsign_relink`, p3, `common/callsign_lookaside.py`, run by the `flight-cleanup` skill). Tap target = `flight-alerts`'s (`ntfy_push.TOPIC_CLICK`). Not in the runner's `ntfy_stream` default list or `NtfyFeedView` | 2–5 |
+| `dispatch` | the concise leg of every `_fire_ntfy_dual` (2026-10-20: except `bellwether-alerts` pushes); `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ `:288`, `:321`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
 | `dispatch-debriefs` / `dispatch-ops` | `send_dual` defaults: `weekly_summary.py:210` (both legs, p3, `email=True`); `ops_brief.py` full leg; `send_run_status()` pings on `dispatch-ops` (p2 ok / p4 fail) from 11 skills: aam daily/weekly, aviation, concierge-travel, executive-protection, gig-economy, trains-yachts daily watches, second-brain daily/weekly, disruption-weather-digest, transport-pattern-digest; ~~`watchdog.sh`~~ (corrected 2026-10-15: the watchdog publishes only to `ops-health` and `hot-alerts`, and its `root-alerts` token can reach nothing else). Bodies over 60,000 bytes are truncated (2026-10-13; two ~46k-character briefs had been rejected) | 2–4 |
 | `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (`:460`); ~~`brief-fallback-monitor.sh`~~ (corrected 2026-10-15: it publishes to `BRIEF_FALLBACK_TOPIC`, default `ops-health`, which neither its unit nor `dispatch.env` overrides) | 3 |
 | `ops-health` | most guards and scripts (§6, §7); thermal guard; `brief-fallback-monitor.sh` (max); `tmp-headroom-guard.sh` (p4); `claude-login-expiry-check.py` (p4); `runner-health-watchdog.sh` (p4/p5); `net-failover-watchdog.sh`; `unit-failure-notify@` (p4); `dependency-audit.py` (p4/p3); `relay-nudge.py` (default p4); the integrity sweep (p5) | 1–5 |
@@ -135,6 +136,28 @@ slot `tbfm:{fix}`, content `content_hash(f"tbfm:{fix}:{bucket_count(n)}")`,
 `_TBFM_ALERT_DEDUP` (300 s, forward-only) → `fire_family_alert("tbfm", …, 2)`.
 Watchlist hits: `_TBFM_WATCHLIST_DEDUP` (1800 s).
 
+**Watch ETA and fix labels (2026-10-20, next relay; operator decision 2026-10-16).**
+The arrival estimate shown for a watched flight comes from SWIM only, resolved
+by `common/watch_eta.py`: TBFM at the destination center first (only for a
+destination TBFM covers here, `DC_AREA_APTS`), then TFMS's own estimate
+(`flight_ooooi_times.tfms_eta`, pg_schema/0083, never an etaType SCHEDULED),
+then FDPS's `flight_events.arrival_time` (a TBFM-derived runway estimate). No
+FIDS, AeroAPI, ADS-B, ACARS or airline schedule time can select it. TBFM's arc
+decides the wording, through one labeller (`watch_eta.label_tbfm_sequence`)
+used by the `tbfm_sequenced` push, the metering alert's lead aircraft and the
+API: `rwy` → "runway ETA … (sequenced at meter fix X)"; `mfx` → "ETA … at
+meter fix X", plus "runway ~… estimated from meter fix X" when CIFP geometry
+allows; `dfx`/`sfx` → "ETA … at a descent/speed fix on the X arrival — not a
+runway time". Times are UTC with ET beside. The `tbfm_sequenced` detail
+carries `eta_kind`, `eta_fix`, `eta_label`, `eta_source`.
+`GET /api/v1/watchlist?include=eta` adds `eta` to each flight entry (`source`, `tier`,
+`point`, `fix`, `facility`, `label`, `eta_utc`, `runway_eta_utc`,
+`runway_from_fix`), null when no SWIM source has one. Opt-in on purpose
+(operator 2026-10-20): an ETA goes out only in answer to a request for it; the
+runner panel's 60 s background poll sends no `include=` and never carries one. Before this the push read
+"meter fix X, ETA t" for every arc and appended a runway estimate computed from
+any of the flight's sequences, not necessarily fix X.
+
 ### TFMS (`tfms_parser.py`)
 
 | Path | Gate | Dedup |
@@ -170,6 +193,32 @@ Routing:
    citing one of these authorities are alerted nationwide.
 3. **Residual** (IAP / ASDE-X / other NOTAM-D) → `nas-alerts` p3 **and**
    `fire_family_alert("aim_fns", …, 3)`.
+
+Changes 2026-10-20 (operator):
+
+- **VIP callsigns need a number.** `_VIP_CALLSIGN_RE` was
+  `\b(?:VENUS|SAM|MCM)\d*\b`; the `\d*` let the bare words match, and a
+  McMurdo Station helipad NOTAM (its text abbreviates McMurdo to the same three letters)
+  was stored and pushed to `hot-alerts` p5 as VIP movement on that alone. Now
+  a number is required (one optional space: `SAM41`, `MCM47`, `VENUS 2`,
+  `SAM 28000`), and a measurement after it (`NM`, `FT`, `MSL`, `AGL`, a
+  decimal) does not count — the same rule as `CRANE`.
+- **US Antarctic stations are a keep class** (`aim_parser.is_us_antarctic`):
+  stored whatever the watch set says, never VIP, never alerted by this rule
+  alone. Test: designator `NZ**` (or FIR `NZZO`/`NZCM`) **and** a position
+  south of 60 S — from any coordinate in the text (both FAA shapes), else
+  from the designators seen live on 2026-10-20 (`NZCM` McMurdo Station,
+  `NZWD` Williams Field, `NZFX` Phoenix Airfield). No designator is listed
+  before it is seen.
+- **Event_ duplicates.** FNS sends some NOTAMs with an empty year; they were
+  keyed by their GML id (`Event_1_…`) and stored again when a copy with the
+  year arrived (1,788 such rows on 2026-10-20). The year now comes from
+  `issued`, and a canonical `LOC/YEAR/NUMBER` write deletes any `Event_` copy
+  with the same facility, number and issued time
+  (`db.delete_notam_event_aliases`). Existing rows: one-off
+  `scripts/notam-event-dedupe.py` (dry run 2026-10-20: delete 1,559, re-key
+  229, leave 0).
+- DoD/military NOTAMs: out of scope (operator decision 2026-10-20).
 
 ### STDDS (`smes_parser.py`)
 
@@ -211,8 +260,8 @@ section 5).
 | `vip_window_corrections` (next relay; once ever, marker `pusher-vip-window-fix-2026-10-15`) | `tfr-alert` + `hot-alerts`, plain ntfy, no Pushover | 4 |
 | `push_cps_update` | `cps` | ~~3~~ (corrected 2026-10-15: 3 / 4 / 5 for GREEN / YELLOW / RED; no Pushover) |
 | `push_wx_change` (METAR primaries KDCA/KIAD/KBWI; ≥ 10 kt or ≥ 45° change, or a routine update at most hourly while any has wind; suppressed if METAR > 1200 s old or 3 failures) | `wx-alerts` p3, or `hot-alerts` via `hot_push` at ≥ 30 kt | 3 / 5 |
-| `push_flight_watchlist_landings` (periodic landing dedup) | `flight-alerts` | 4 |
-| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ ~~(corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`)~~ (corrected 2026-10-16: `flight-alerts` / `vessel-alerts` / `drone-alerts` / `train-alerts` by entry type, same topic, title prefix and noun as the original send, + `dispatch`; `pusher/main.py:641`) | per event |
+| `push_flight_watchlist_landings` (periodic landing dedup) | `flight-alerts` (2026-10-20: `bellwether-alerts` for a bellwether entry, `shared/watch_topic.py`) | 4 |
+| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ ~~(corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`)~~ (corrected 2026-10-16: `flight-alerts` / `vessel-alerts` / `drone-alerts` / `train-alerts` by entry type, same topic, title prefix and noun as the original send, + `dispatch`; `pusher/main.py:641`) (2026-10-20: the topic comes from the row's watch entry through `shared/watch_topic.py`, so a bellwether retry goes to `bellwether-alerts` with no `dispatch` copy) | per event |
 | `send_test_alert` (admin trigger `push_test_alert`, `poller/main.py:436`) | caller-chosen, default `ops-health` | caller-chosen |
 
 **VIP TFRs (2026-10-14).** FAA `type: "VIP"` decides what is VIP. Each VIP
@@ -324,10 +373,24 @@ ADS-B never asserts ON or IN; a source below the lock holder's tier cannot
 overwrite a SWIM-asserted phase while SWIM is live. Tests:
 `tests/poller/test_oooi_writers_gated.py`.)
 
+### Bellwether routing and the ATC-callsign relink (2026-10-20, next relay)
+
+Every trigger in this section goes through `watchlist_event_hit`; for a
+bellwether entry (permanent record `alert_topic`, `shared/watch_topic.py`) it
+reaches `bellwether-alerts` only, never `flight-alerts` or `dispatch`. One new
+trigger, `atc_callsign_relink` (p3, bellwether entries only): the daily
+route-continuity pass (`common/callsign_lookaside.relink_by_route_continuity`,
+run by the poller `flight-cleanup` skill) moved the public number's ATC-callsign
+link -- the old callsign absent on the route 2 consecutive UTC days, exactly one
+new same-carrier callsign in its +/-30 min slot on both days. Dedup: the
+watchlist content hash (old + new callsign). Links learned from FIDS leg matches
+push nothing.
+
 ### Identity and inbound triggers (2026-10-13/14)
 
 These go through `watchlist_event_hit`, so they reach `flight-alerts` +
-`dispatch`. None of them writes an OOOI phase.
+`dispatch` (2026-10-20: `bellwether-alerts` alone for a bellwether entry). None
+of them writes an OOOI phase.
 
 | `watchlist_trigger` | Fires when | Priority | Dedup |
 |---|---|---|---|
@@ -468,7 +531,7 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `threat-initiate.sh` / `threat-resolve.sh` | `hot-alerts` p5 / `ops-health` p3 | `root-alerts` token |
 | `renew-tailscale-cert.sh`, `restart-stack.sh` | p3 | same priority for success and failure; `root-alerts` token |
 | `container-mem-watch.sh`, `scheduled-ingest-restart.sh`, `nextcloud-health-check.sh`, `scheduled-integrity-sweep.sh` (p5: "BUILD PROVENANCE FAILED", "INTEGRITY SWEEP FAILED", "AUDIT CHAIN BROKEN", "ENV QUOTING REGRESSION"; p4: "DEMO ISOLATION CHECK FAILED", added 2026-10-16, see its own row above), `sdr-crashloop-guard.sh`, `claude-md-drift-daily.sh`, `ntfy-topic-count-watchdog.sh` (warn > 140) | variable | (2026-10-19, next relay: same thresholds and alerts; `container-mem-watch` reads the kernel journal from a saved cursor and publishes its one `podman stats` snapshot, which `scheduled-ingest-restart` reads when <= 150 s old -- ~~one `podman stats` per ingest service, 7 per run~~ -- else one `podman stats` per run) |
-| `brief-fallback-monitor.sh` (hourly at :50) | `max`, topic `BRIEF_FALLBACK_TOPIC` (default `ops-health`; not overridden live) | (2026-10-14) fires only when a brief fell back on its LATEST run, with a short narrative: which briefs fell back, each brief's fallbacks over the last 6 runs, and whether the trend is improving, worsening or steady. The old "≥ half the window" rule kept paging for hours after the model recovered (2026-10-19, next relay: same rule and window; each run reads only the entries after a per-unit journal cursor and keeps a small per-unit outcome history, ~~`--since "2 days ago" -n 1000` every hour~~) |
+| `brief-fallback-monitor.sh` (hourly at :50) | `max`, topic `BRIEF_FALLBACK_TOPIC` (default `ops-health`; not overridden live) | (2026-10-14) fires only when a brief fell back on its LATEST run, with a short narrative: which briefs fell back, each brief's fallbacks over the last 6 runs, and whether the trend is improving, worsening or steady. The old "≥ half the window" rule kept paging for hours after the model recovered (2026-10-19, next relay: same rule and window; each run reads only the entries after a per-unit journal cursor and keeps a small per-unit outcome history, ~~`--since "2 days ago" -n 1000` every hour~~). (2026-10-20, next relay) The summary and alert text add `lanes 24h long=N hot=N skipped=N` per brief from `src/common/brief_lane.py`'s one-line lane log: `hot` = promoted to llama's second slot on long-runner contention, `skipped` = no lane within 600 s (exit 75). Skips write no "brief generated" line, so before this they never reached the monitor (the hourly ops-brief skips of 2026-10-20 14:15-19:15Z) |
 | `swim-session-health-watch.sh` (5 min) | p4 "SWIM session health: DEGRADED" | summed keep-alive failures ≥ 15 per sample, sustained 600 s, 1800 s cooldown (2026-10-19, next relay: same thresholds; reads only the journal entries after a saved cursor for the 8 `corporatetraveldc-ingest-*` units by exact name -- ~~`-u 'corporatetraveldc-ingest-*' -S <last run>`~~, which mapped 2.5-4.5 GB of journal per run -- via `scripts/lib/journal-cursor.sh`) |
 | `dependency-audit.py` (daily timer) | p4 vulnerable packages / p3 could not run | |
 | `backup_freshness.py` (6-hourly timer) | through `unit-failure-notify@` (p4) | exits 1 when backups, the off-box sync, a restore test or an agent snapshot is stale |
@@ -495,6 +558,18 @@ counts failed units IN the rollout only (~~any failed user unit~~); every other
 drift kind still holds. SWIM ingest: during a backlog replay a feed pauses while
 load1 >= 30 (`SWIM_REPLAY_MAX_LOAD`), at most 900 s per connection; it logs a
 warning and sends no push.
+
+**Transcript leak scan (2026-10-20, next relay).** No ntfy push of its own,
+before or after this change. The operator-side callers stop the action instead:
+`scripts/pre-push` rejects the push (exit 1), `push-public.sh` exits 6 and
+`relay-preflight.sh` fails step 5, now also when the LADD class could not be
+checked (the scan runs through `scripts/with-dispatch-env.sh` with
+`--require-ladd`; exit 3 = LADD list unreadable). The hourly root unit
+`corporatetraveldc-agent-leak-scan.service` has no `OnFailure=`: a leak it cannot
+redact, or an unreadable LADD list (piped from `corporatetraveldc-pgsql` by
+`agent-leak-scan.sh`), shows only as a failed system unit. A credential file the
+running account cannot read is named in the output as "not checked" and does not
+fail anything (the root run reads root-only files).
 
 ## 8. Push reliability history
 

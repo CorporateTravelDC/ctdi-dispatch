@@ -1,15 +1,14 @@
 """
-Pure unit tests for common.db_backend's SQL translation pipeline and the
-ref_conn() cross-engine guard. No network/DB required for translate_sql()
-itself; ref_conn() tests use a throwaway SQLite file (tmp_path), same as
-the rest of this suite -- never postgres, never the real DB.
+Pure unit tests for common.db_backend's SQL translation pipeline. ~~and the
+ref_conn() cross-engine guard~~ (ref_conn() deleted 2026-10-20). No
+network/DB required for translate_sql() itself -- never postgres, never the
+real DB.
 
 Postgres-pool-backed tests (pg_conn() against the real corporatetraveldc-
 pgsql container, on a scratch database) live in
 test_db_backend_postgres.py and skip themselves if postgres is
 unreachable.
 """
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -145,69 +144,16 @@ def test_ambiguous_percent_formatting_is_detected():
     assert "fake_module.py:2" in violations[0]
 
 
-# ── ref_conn() ────────────────────────────────────────────────────────────────
+# ── ~~ref_conn()~~ ───────────────────────────────────────────────────────────
+#
+# 2026-10-20: ref_conn() and its cross-engine guard are deleted (no callers since
+# the 2026-09-19 reference-table move; it would have re-created the destroyed
+# platform SQLite file -- operator decision 2026-10-19). The five tests that
+# exercised it are replaced by this one, which holds that it stays gone.
 
 
-@pytest.fixture
-def _ref_db(monkeypatch, tmp_path):
-    """Point ref_conn() at a throwaway sqlite file, never the real DB, and
-    make sure no connection leaks into the next test."""
-    db_file = tmp_path / "ref-test.db"
-    monkeypatch.setenv("DISPATCH_DB", str(db_file))
-    db_backend.close_ref_thread_connection()
-    yield db_file
-    db_backend.close_ref_thread_connection()
-
-
-# 2026-09-19: cifp_fixes/cifp_holds/faa_registry_meta moved from
-# REFERENCE_TABLES to PG_TABLES (the 11-reference-table migration --
-# docs/POSTGRES_MIGRATION.md sec2's JOIN exception). REFERENCE_TABLES is
-# now empty; these tests' example tables are updated to gtfs_stops, one
-# of that same doc section's named FUTURE reference-table candidates
-# (GTFS static / UAS registry / MMSI registry) -- still genuinely
-# hypothetical (not in PG_TABLES), so still exercises the same guard
-# behavior these tests were written to prove.
-
-
-def test_ref_conn_reads_and_writes_a_reference_table(_ref_db):
-    with db_backend.ref_conn() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS gtfs_stops (stop_id TEXT PRIMARY KEY, lat REAL)")
-        c.execute("INSERT INTO gtfs_stops (stop_id, lat) VALUES (?, ?)", ("ABC", 38.9))
-    with db_backend.ref_conn() as c:
-        row = c.execute("SELECT * FROM gtfs_stops WHERE stop_id=?", ("ABC",)).fetchone()
-        assert dict(row) == {"stop_id": "ABC", "lat": 38.9}
-
-
-def test_ref_conn_raises_on_write_path_table_reference(_ref_db):
-    with pytest.raises(ValueError, match="flight_events"):
-        with db_backend.ref_conn() as c:
-            c.execute("SELECT * FROM gtfs_stops JOIN flight_events ON 1=1")
-
-
-def test_ref_conn_raises_on_write_path_table_alone(_ref_db):
-    with pytest.raises(ValueError, match="watchlist_entries"):
-        with db_backend.ref_conn() as c:
-            c.execute("SELECT * FROM watchlist_entries")
-
-
-def test_ref_conn_does_not_raise_for_reference_only_statement(_ref_db):
-    with db_backend.ref_conn() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS gtfs_meta (key TEXT PRIMARY KEY, value TEXT)")
-        c.execute(
-            "INSERT OR REPLACE INTO gtfs_meta (key, value) VALUES (?, ?)",
-            ("last_full_import", "2026-09-17T00:00:00Z"),
-        )  # ref_conn() never translates SQL -- this stays plain sqlite3 syntax
-
-
-def test_ref_conn_rollback_on_exception(_ref_db):
-    with db_backend.ref_conn() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS gtfs_routes (id TEXT PRIMARY KEY)")
-    try:
-        with db_backend.ref_conn() as c:
-            c.execute("INSERT INTO gtfs_routes (id) VALUES ('x')")
-            raise RuntimeError("boom")
-    except RuntimeError:
-        pass
-    with db_backend.ref_conn() as c:
-        rows = c.execute("SELECT * FROM gtfs_routes").fetchall()
-    assert rows == []  # the insert was rolled back
+def test_ref_conn_is_gone():
+    for name in ("ref_conn", "_open_ref_connection", "close_ref_thread_connection",
+                 "_guard_cross_engine", "_RefGuardedConnection"):
+        assert not hasattr(db_backend, name), name
+    assert db_backend.REFERENCE_TABLES == frozenset()

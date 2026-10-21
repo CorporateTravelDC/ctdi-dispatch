@@ -9,12 +9,19 @@ database (SELECT-only counts).
 Cut over 2026-09-18 (write path) and finished 2026-09-20 (reference tables,
 second-brain index, chat, demo archive). `DISPATCH_DB_BACKEND=postgres` is
 set in the live `/etc/corporatetraveldc/dispatch.env` and in the tracked
-`config/dispatch.env`. `DISPATCH_DB_BACKEND=sqlite` remains a supported code
-path for tests, dev and rollback; nothing in production runs it.
+`config/dispatch.env`. ~~`DISPATCH_DB_BACKEND=sqlite` remains a supported code
+path for tests, dev and rollback; nothing in production runs it.~~ (2026-10-20,
+operator decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub touch SQLite on
+this box. `postgres` is the default when unset; `sqlite` is honoured only under
+`CTDC_ALLOW_SQLITE_FOR_TESTS=1`, which only `tests/conftest.py` sets, and otherwise
+raises `db_backend.SqliteRetired`. There is no rollback to SQLite: every platform
+SQLite file was destroyed on 2026-10-19 (d5fde567). See §3.7.)
 
 - `src/common/db_backend.py`: `PG_TABLES` lists ~~**102**~~ **104** tables (corrected 2026-10-15);
-  `REFERENCE_TABLES` is an empty frozenset (machinery kept for any future
-  SQLite-only reference set).
+  `REFERENCE_TABLES` is an empty frozenset ~~(machinery kept for any future
+  SQLite-only reference set)~~ (2026-10-20: the machinery, `ref_conn()` and
+  `_guard_cross_engine()`, is deleted; it had no callers and would have re-created
+  the platform SQLite file).
 - `src/common/pg_schema/`: ~~**73** migration files, `0001_bootstrap.sql`
   through `0073_console_and_gateway_switch.sql`, contiguous, defining **122**
   distinct tables~~ (corrected 2026-10-15: **75** migration files, `0001_bootstrap.sql`
@@ -27,22 +34,28 @@ path for tests, dev and rollback; nothing in production runs it.
   database was not queried]`.~~ (verified 2026-10-15: `schema_migrations` has 75
   rows, the newest `0075_surface_event_log.sql`; its columns are `filename`,
   `applied_at`, `checksum`.)
-- The one deliberate SQLite store left: `src/demo/demo_api.py` reads
+- ~~The one deliberate SQLite store left: `src/demo/demo_api.py` reads
   `/var/lib/corporatetraveldc-demo-source/demo-source.db` (1.9 GB), the
   scrubbed public-playback derivative produced by
-  `scripts/scrub-demo-source.py`. ~~Its migration is a separate operator
+  `scripts/scrub-demo-source.py`.~~ ~~Its migration is a separate operator
   decision.~~ (decided 2026-10-16: it moves to a SECOND Postgres instance,
   not into this one -- §3.5 below; relay 1 tracks the instance, relay 2 flips
   demo-api to it, ~~relay 3 retires the file~~ (2026-10-19 renumbered: relay 3
-  enables the nightly refresh, relay 4 retires the file after
-  `scripts/demo-sqlite-retire-check.py` verifies N hours on Postgres; the
-  shred is the operator's, by hand).)
+  enables the nightly refresh, ~~relay 4 retires the file after
+  `scripts/demo-sqlite-retire-check.py` verifies N hours on Postgres~~).)
+  2026-10-20: done. The demo SQLite dirs were already empty; the code path, the
+  two sovereign mounts and the `scripts/demo-env.py source sqlite` rollback are
+  removed, and `demo-sqlite-retire-check.py` is retired
+  (`scripts/retired-20261020/`). The demo runs on the demo instance only.
 
-SQLite files still on disk under `/var/lib/corporatetraveldc/` (18:12Z):
+~~SQLite files still on disk under `/var/lib/corporatetraveldc/` (18:12Z):
 `corporatetraveldc.db` 69 KB (the former 23 GB main file is no longer
 there — `[UNVERIFIED: whether it was archived elsewhere]`), `demo.db`
 4.45 GB (contents migrated to `demo_snapshots` 2026-09-20; file retained),
-`demo_access.db`, `dispatch-chat.db`, and an empty `dispatch.db`.
+`demo_access.db`, `dispatch-chat.db`, and an empty `dispatch.db`.~~ (2026-10-20:
+all destroyed by the 2026-10-19 relay, d5fde567, G26 proof record on-box. Copies
+inside older Borg archives and the Proton mirror are not purged; that is a pending
+operator decision.)
 
 **Decision record (operator, 2026-09-05):** everything written at runtime
 lives in Postgres; a reference table that a write-path query must JOIN is
@@ -98,6 +111,16 @@ because it trades freshness for throughput.
   flight_num)`, 0 scans). Both set `lock_timeout` 10 s so a held table fails the
   migration fast instead of queueing writers. The relay must apply 0076 before
   the rollout: the new code writes the `source` column.
+- 2026-10-20 (bellwether batch, staged, not yet applied): 0082
+  `codeshare_map` lookaside columns -- `relation` (`'codeshare'` default |
+  `'atc_callsign'`, CHECK), `season`, `retired_at`, `superseded_by` (FK to the
+  replacing row; history never deleted) -- the partial index
+  `idx_codeshare_current_atc`, `watchlist_entries.alert_topic`, and the two
+  seed links (EK231 = UAE3MX OMDB-KIAD, LH414 = DLH3Y EDDM-KIAD; IAD FIDS
+  route-unique 2026-10-19, `fids_route_unique`, season `W26-pending`; inserted
+  only if no current link exists). SQLite twin `db.init_db_v51`. `lock_timeout`
+  10 s. The relay must apply 0082 before the rollout: every codeshare reader
+  filters `retired_at`/`relation` and the watchlist upsert writes `alert_topic`.
 - Future reference candidates named in the decision: GTFS static, UAS
   registry, MMSI registry (SQLite reference unless hot-joined).
 
@@ -205,6 +228,62 @@ initdb). Never quote either value.
   (`DB_MANIFEST_checkpoint1_reference.json` and `..._second_brain.json`, each with an
   `.asc`). No timer runs it; it is manual.
 
+### 3.7 Platform SQLite retired (added 2026-10-20)
+
+Operator decision 2026-10-19: the only things on the box allowed to touch SQLite
+are Pi-hole, vnstat and ACARS Hub. The 2026-10-19 relay (d5fde567) destroyed
+every platform SQLite file. The 2026-10-20 batch removed the fallbacks that
+could have re-created one:
+
+- `common.config.db_path()` has no default. `DISPATCH_DB` is gone from
+  `config/dispatch.env` and `config/dispatch.env.example`; the live
+  `/etc/corporatetraveldc/dispatch.env` still carries the line until the
+  operator removes it. It is harmless there: nothing opens the path unless the
+  test flag is set.
+- `common.db_backend.backend()` defaults to `postgres`. `sqlite` runs only under
+  `CTDC_ALLOW_SQLITE_FOR_TESTS=1` (set by `tests/conftest.py` alone); any other
+  value raises `SqliteRetired`. `common.db._open_connection()` and the semantic
+  compiler's explicit `db_path` refuse the same way, before any file is created.
+  `scripts/board-signer-ctl.sh` and `scripts/lib/gov-exec.sh` apply the same rule.
+- Deleted: `db_backend.ref_conn()`, along with its helpers and its tests.
+- Removed: `scripts/snapshot-db-manifest.py --sqlite-db/--sqlite-only` (Postgres
+  only now; the manifest keeps the old keys as null/false).
+- `poller/fetchers/opensky_registry.py`'s bulk-upsert retry caught
+  `sqlite3.OperationalError` "locked", which never matches on Postgres. It now
+  retries on Postgres lock conflicts (deadlock, lock_timeout, serialization).
+- Demo: the playback API, the profile store and `scripts/demo-env.py` are
+  Postgres-only. The sovereign mounts are gone, and both demo quadlets set
+  `DISPATCH_DB_BACKEND=postgres` as a signed `Environment=` line.
+- Retired to `scripts/retired-20261020/`: `migrate-sqlite-to-pg.py`,
+  `migrate-second-brain-to-pg.py`, `migrate-demo-to-pg.py` and
+  `demo-sqlite-retire-check.py`.
+- Guard: `tests/common/test_no_platform_sqlite.py` checks five things. Only the
+  ACARS Hub reader (`common/acars.py`, read-only) and the three test-flag files
+  import `sqlite3`. Every other `sqlite3.connect` sits behind the flag. Nothing
+  outside `tests/` sets the flag. No quadlet mounts a `*-demo-source` or
+  `*-demo-state` dir. No tracked unit or env file pins `sqlite`.
+
+**Remaining code half, for a post-freeze batch** (the operator's freeze from
+2026-10-19 allows only bug fixes and decided items; this is cleanup, so it waits).
+This code is test-only now, and production cannot reach it:
+
+- `src/common/db.py`: the SQLite `SCHEMA`, `init_db()` and the 47
+  `init_db`/`init_db_vNN` twin migrators (v47-v50 were added in the 2026-10-18
+  batches). Also the sqlite branches in `_ensure_pull_path_status`,
+  `_ensure_board`, `_ensure_board_auth`, the watchlist cache key, `init_db_v21`
+  and `surface_event_log`, plus the thread-local SQLite connection.
+- `src/common/db_swim.py`: `init_db_swim_*` (6) and the two
+  `except sqlite3.OperationalError` handlers. The one in the live reader
+  (`acars corroboration`) never catches on Postgres.
+- The `!= "postgres"` bootstrap branches in `src/ingest/main.py`,
+  `src/poller/main.py`, `src/pusher/main.py` and `src/web/main.py`.
+- `src/second_brain/semantic/compile.py`'s explicit-`db_path` test double.
+- The SQLite test fixtures (`tests/conftest.py`'s backend pin and per-test file,
+  and every test that builds an in-memory or tmp SQLite twin). They move to the
+  `postgres_scratch` database or to fakes. After that, the flag, the sqlite
+  branch of `backend()` and `common/db.py`'s `sqlite3` import can go, and
+  `ALLOWED_SQLITE_IMPORTS` in the guard test shrinks to the ACARS Hub reader.
+
 ### 3.6 Index work outside migrations (added 2026-10-18)
 
 `scripts/pg_migrate.py` applies each file in one transaction, and `CREATE INDEX
@@ -226,11 +305,32 @@ an invalid one is dropped `CONCURRENTLY` and rebuilt):
 - `status`: read-only state and size of each.
 
 Relays call the two write subcommands on the line after `scripts/relay-wait-load.sh`
-(relay-lint treats them as heavy steps). A fresh or restored instance gets these
+(relay-lint treats them as heavy steps; 2026-10-20, next relay: so are
+`transcript_leak_scan.py scan|redact`, `sign-manifest.sh`, `verify-manifest.sh`,
+`scrub-public-tree.py`, `render-glossary.py`, `render-onboarding.sh` and
+`demo-sqlite-retire-check.py`, each after a `relay-wait-load.sh` line). A fresh or restored instance gets these
 indexes only from this script, after `pg_migrate`. `CREATE EXTENSION IF NOT EXISTS
 pg_stat_statements` (operator D5, 2026-10-18) is a separate psql step in the same
 relay; until it runs, the preloaded library has no view. EXPLAIN before/after for
 each index: this batch's commit notes (lean-out L1).
+
+### 3.7 Third instance: office skeletons (added 2026-10-20; template, disabled until after the feature freeze)
+
+The CFO, Executive Assistant and Chief of Staff profiles get Firefly III, Paperless-ngx and (optionally) Vikunja
+(`docs/deployment-profiles/office-skeletons/README.md`). Their databases go on a **third server**,
+`corporatetraveldc-pgsql-office`, never on production. The reasons are the same as the demo split: production is
+the SWIM write path and must not share buffers, autovacuum or `max_connections` with PHP and Django apps, and pack
+gate 7 requires financial records to be isolated. The Nextcloud apps keep using `nextcloud-db`.
+
+| | office `corporatetraveldc-pgsql-office` |
+|---|---|
+| Quadlet | `.config/containers/systemd/office-skeletons/corporatetraveldc-pgsql-office.container`: no `[Install]` section, not in `stack-boot-ctl.sh` ORDER or the rollout, no `AutoUpdate` (same image line as production) |
+| Database / roles | `office` / `office_owner` (bootstrap owner); `firefly`, `paperless`, `vikunja`, each owning one database of the same name (`src/common/pg_schema_office/0001_office_roles.sql`, applied on stdin by `scripts/office-skeleton-ctl.py init-db`; no tables of ours, the apps migrate their own) |
+| Network | `office-db.network`, `Internal=true`; no PublishPort, no host TCP; the apps connect by container name |
+| Config | `config/postgresql-office.conf` (64 MB buffers, 40 connections, synchronous commit on), `config/pg_hba-office.conf` (each app role into its own database only; `dispatch`, `demo`, `demo_owner` rejected by name; catch-all reject); production `config/pg_hba.conf` rejects the office roles and databases by name before its catch-alls (takes effect at the production instance's next config reload) |
+| Secrets | `pgsql-office-secrets.env` (`POSTGRES_PASSWORD` = `office_owner`'s), and each app's own `<svc>-secrets.env`; role passwords applied as SCRAM verifiers on stdin (`office-skeleton-ctl.py set-passwords`) |
+| Backup | not dumped yet; must be added to the Borg dump list, with a restore test, on activation (`docs/BACKUP.md`) |
+| Memory | 384m / swap 768m |
 
 ## 4. Access layer (`src/common/db_backend.py`)
 
@@ -239,8 +339,11 @@ each index: this batch's commit notes (lean-out L1).
   `with db.conn() as c:` commits on exit.
 - `?` placeholders are translated to `%s`; `%`-formatted SQL is rejected by
   an import-time guard.
-- `ref_conn()` / `_guard_cross_engine()` remain for SQLite-only reference
-  sets (none today).
+- ~~`ref_conn()` / `_guard_cross_engine()` remain for SQLite-only reference
+  sets (none today).~~ Deleted 2026-10-20 (no callers; §3.7).
+- 2026-10-20: `backend()` defaults to `postgres` and raises `SqliteRetired` on
+  `sqlite` unless `CTDC_ALLOW_SQLITE_FOR_TESTS=1`; `config.db_path()` has no
+  default (`DISPATCH_DB` is removed from `config/dispatch.env` and its example).
 - On Postgres the ingest containers skip the SQLite `init_db_v*` bootstrap
   chain entirely (it crash-looped every ingest container after the cutover).
 - Timestamp conventions kept: REAL epoch (now `DOUBLE PRECISION`) on legacy
@@ -254,13 +357,16 @@ fixed by `0050_widen_real_to_double_precision.sql`;
 
 ## 5. Cutover record (2026-09-18) and rollback
 
-Copy tool: `scripts/migrate-sqlite-to-pg.py` (per-table, batched `COPY`,
+Copy tool: `scripts/migrate-sqlite-to-pg.py` (retired 2026-10-20 to
+`scripts/retired-20261020/`; per-table, batched `COPY`,
 row-count and spot-hash verification, idempotent). Lessons kept for any
 future move: stop **every** unit that touches the database (web too, plus
 every timer-driven skill — 20+ units), mask timers for the window, and gate
 the delta copy on an empty `lsof` of the file, not on the unit list.
-Rollback = set `DISPATCH_DB_BACKEND=sqlite` and restart; PG writes made in
-between are re-derived from the feeds.
+~~Rollback = set `DISPATCH_DB_BACKEND=sqlite` and restart; PG writes made in
+between are re-derived from the feeds.~~ (2026-10-20: no SQLite rollback exists.
+The files are destroyed and the backend refuses `sqlite` outside the test suite.
+Recovery is from the nightly Postgres dump, `docs/BACKUP.md`.)
 
 `scripts/pg-catchup-monitor.py --interval 15 --duration-min 30` watches
 `pg_stat_activity` / `pg_locks` (connections against `max_connections`,

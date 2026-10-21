@@ -38,7 +38,11 @@ def m(monkeypatch, tmp_path):
     env.write_text("")
     monkeypatch.setenv("LEAK_GUARD_SECRETS_ENV", str(env))
     monkeypatch.setenv("LEAK_GUARD_EXTRA_FILES", str(tmp_path / "none"))
-    monkeypatch.setenv("DISPATCH_DB_BACKEND", "postgres")           # "run with the dispatch env"
+    monkeypatch.setenv("LEAK_GUARD_SOURCES", "")
+    # "run with the dispatch env" = the Postgres settings common.db.conn() uses (2026-10-20)
+    monkeypatch.setenv("DISPATCH_PG_HOST", str(tmp_path / "no-socket"))
+    monkeypatch.setenv("DISPATCH_PG_DB", "synthetic")
+    monkeypatch.setenv("DISPATCH_PG_USER", "synthetic")
     spec = importlib.util.spec_from_file_location("tls_ladd", REPO / "scripts/leak-guard/transcript_leak_scan.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -136,8 +140,8 @@ def test_too_few_identifiers_fail_closed(m, tmp_path, monkeypatch, capsys):
 
 
 def test_without_the_dispatch_env_it_warns_and_require_ladd_fails(m, tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("DISPATCH_DB_BACKEND", raising=False)
-    monkeypatch.delenv("DISPATCH_DB", raising=False)
+    for k in m.DISPATCH_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(m, "_ladd_from_db", lambda: pytest.fail("DB read without the dispatch env"))
     root = _root(tmp_path, **{"c.jsonl": "nothing\n"})
     assert m.main(["scan", "--root", str(root)]) == 0

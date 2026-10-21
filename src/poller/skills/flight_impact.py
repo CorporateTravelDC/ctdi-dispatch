@@ -88,7 +88,9 @@ def build_user_message(inputs: dict) -> str:
             eta = dt.strftime("%H:%MZ")
         origin = f["origin"] or "?"
         status = f["status"] or "active"
-        lines.append(f"  {f['flight_id']} from {origin} ETA {eta} | {status}")
+        # flight_events.arrival_time is a runway estimate derived from TBFM
+        # (cifp_lookup.runway_eta_epoch), never a bare "ETA" (2026-10-20).
+        lines.append(f"  {f['flight_id']} from {origin} est. runway arr {eta or 'n/a'} (TBFM-derived) | {status}")
     return "Active flights — DC-area airports:\n" + "\n".join(lines)
 
 

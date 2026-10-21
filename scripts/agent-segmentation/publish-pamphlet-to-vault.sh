@@ -37,7 +37,12 @@ cat >"$tmp" <<EOF
 >   when the operator says it changed.
 
 EOF
-"$HERE/render-onboarding.sh" "$NAME" >>"$tmp"
+# 2026-10-20: this script is the one place that KNOWS an account is reached
+# only through the cloud MCP gateway (that's its whole premise, see header)
+# -- hand that fact to render-onboarding.sh explicitly instead of making it
+# re-guess cloud-vs-on-box from the account name.
+DEPLOYMENT_PROFILE_OVERRIDE="cloud -- reached only through its MCP connector (the agent gateway); never logs in, never reaches its Unix home, never reads this pamphlet from a home directory" \
+  "$HERE/render-onboarding.sh" "$NAME" >>"$tmp"
 DEST="01-Sources/personal-notes/Series/agents/${NAME}/PAMPHLET.md"
 SRC="$tmp" DEST="$DEST" NEXTCLOUD_ADMIN_USER="${NEXTCLOUD_ADMIN_USER:-corporatetraveldc}" \
   "$REPO/scripts/with-dispatch-env.sh" env PYTHONPATH="$REPO/src" python3 - <<'PYEOF'

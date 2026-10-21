@@ -157,8 +157,105 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   down, or fewer than 1,000 identifiers), the scan prints `LADD class
   'ladd-identifier' NOT CHECKED` and exits 3 on both `scan` and `redact`.
   Without the dispatch env it prints the same as a warning and exits 3 only
-  under `--require-ladd`. (Open, 2026-10-19: `push-public.sh` and
-  `relay-preflight.sh` still call the scan without the dispatch env.)
+  under `--require-ladd`. ~~(Open, 2026-10-19: `push-public.sh` and
+  `relay-preflight.sh` still call the scan without the dispatch env.)~~
+- **Required at every push point (2026-10-20, next relay).** `pre-push`,
+  `push-public.sh` and `relay-preflight.sh` run the scan through
+  `scripts/with-dispatch-env.sh` with `--require-ladd`: an unreadable list
+  rejects the push. The hourly root unit (`agent-leak-scan.sh`) pipes the same
+  union out of the `corporatetraveldc-pgsql` container into `--ladd-stdin`
+  (never on disk; fewer than 1,000 identifiers = exit 3, the unit fails), as
+  the public tripwire does. "With the dispatch env" now means
+  `DISPATCH_PG_HOST` / `_DB` / `_USER` are set (the settings `common.db.conn()`
+  connects with), ~~`DISPATCH_DB_BACKEND` or `DISPATCH_DB`~~.
+
+## Demo timing anti-correlation (added 2026-10-20)
+
+Operator decisions, 2026-10-20. Code: `src/demo/ladd_timing.py`, applied by
+`scripts/scrub-demo-source.py` after the Q substitution. Tests:
+`tests/demo/test_ladd_timing.py`, `tests/scripts/test_scrub_demo_source.py`.
+
+- **Threat model.** The Q mark (a synthetic registration, Q followed by five
+  characters, an HMAC of the listed identifier under a production-only key)
+  hides the registration, not the timing. Someone physically at an FBO -- an
+  employee, an onlooker, a stalker -- sees which aircraft arrives when. Watching
+  the demo, they can line up "a jet arrived at a given minute" with "the Q mark
+  that landed at that minute" and learn which real aircraft each Q mark is.
+  Timing is the identifier the Q mark does not hide.
+- **Where the rules apply.** Only to LADD-listed legs (production filter,
+  `faa_ladd_listed_batch` / `faa_ladd_hex_batch`; a lookup failure is fatal,
+  exit 5) and only on the demo path. **Public = demo, always; tailnet = live,
+  no delays and no LADD restriction.** Nothing here changes production data,
+  the live runner, the agents or any tailnet view.
+- **Per-leg bucketing with a rotating hidden offset.** Every time on a LADD leg
+  (ETA, ETD, OOOI, event and position times, ISO timestamps and clock times in
+  prose) becomes `floor((t + offset) / 15 min) * 15 min`. The offset is a whole
+  number of seconds in [0, 15 min), constant within a leg, drawn from an HMAC
+  under the same production-only key as the Q marks with its own domain label.
+  It is never printed, logged or stored, and it cannot be computed without the
+  key. Offsets rotate **per leg**: every leg draws its own offset anywhere in
+  [0, 15 min), and consecutive legs of the same aircraft -- two legs on one
+  operational day, and the last leg of a day against the first of the next --
+  always differ by at least 4 minutes. A reader can never learn "this aircraft
+  is always N minutes behind". Constants: `BUCKET_S = 900`,
+  `ROTATION_MARGIN_S = 240`, `CHAIN_LOOKBACK_DAYS = 7`, `PRE_DEPARTURE_S = 5400`.
+- **Leg identity** is (Q mark, operational day, leg index). The operational day
+  uses the platform's 05:00 America/New_York rollover. The **leg index comes
+  from SWIM**, not from the text: the scrub reads the aircraft's legs that day
+  from `flight_events` (FDPS departure and arrival times, by the real
+  registration or callsign, in-process through the read-only production
+  connection, never logged or stored) and orders them by departure. Each leg
+  owns a time window, split at the midpoint between one leg's arrival and the
+  next leg's departure (without an arrival time: 90 minutes, or half the gap,
+  before the next departure). A reference goes to the leg whose window holds
+  the time it mentions -- a record's departure time, else its earliest time; a
+  sentence's first time; else the row's capture time. The destination is
+  deliberately not used: brief prose often names a flight without one, and the
+  window rule gives a leg's prose and its structured record the same index, so
+  one leg never shows two offsets (two would let a reader intersect two
+  15-minute windows).
+- **Offset chain.** Leg k's offset is the first HMAC draw (domain label, Q mark,
+  day, k, attempt) at least 4 minutes from the previous leg's. The chain starts
+  after the aircraft's most recent operational day with no SWIM leg, at most
+  7 days back, so every scrub of a given day computes the same offsets
+  (idempotent, nothing stored). When the 7-day cap is hit, the day's first leg
+  is checked against the previous day's last leg computed from its own chain;
+  a miss drops that aircraft-day.
+- **Fail closed on leg order.** If the order cannot be determined -- no SWIM leg
+  for the aircraft that operational day, a failed lookup, or a record known
+  only by its redacted hex -- every LADD record and sentence for that
+  aircraft-day is **dropped**, never shown under a coarser rule (counted as
+  `ladd aircraft-day dropped (no SWIM leg order)`).
+- **Dark point.** A LADD leg ends at the dark point; nothing at or after it
+  enters the demo database. Order: the approach's **inner marker** where the
+  chart data has one; else crossing the **runway threshold**; else the
+  confirmed SWIM **wheels-on** time. If none can be determined, the leg fails
+  closed: no track point within 10 nm of the destination (or of any charted
+  airport when the destination is unknown) survives. Whatever the time,
+  arrival-side fields and sentences are always removed for a LADD leg: landing
+  and ON/IN times, gate, terminal, baggage belt/carousel, FBO, taxi, surface
+  movement, parking/ramp. The demo therefore never shows where a listed
+  aircraft parks.
+- **Chart data on this box (2026-10-20):** the loaded CIFP tables carry runway
+  thresholds but **no marker beacons** (fix types: en-route and terminal
+  waypoints, airports, runway thresholds, VOR/DME, NDB). The inner-marker step
+  is coded and tested but cannot fire until a marker type is parsed; the
+  threshold step applies today. The demo itself carries no live tracks (the
+  demo runner's ADS-B and ACARS views are synthetic), so in practice the dark
+  point acts on recorded snapshot and brief content.
+- **Audit.** Counts only: the scrub report and the hash-chained `scrub_ledger`
+  (`dropped_by_class`, keys prefixed `ladd timing:`) record how many legs were
+  timed, how many arrival fields and sentences were dropped, and which
+  dark-point path each leg took (`im`, `threshold`, `wheels_on`,
+  `fail_closed`). Never an identifier, an offset or the key.
+- **Not protected, and why.** An observer who already knows one real time of
+  a leg can bound that leg's offset only; the next leg draws a new one.
+  Aggregate counts (how many listed aircraft were active in a window) are not
+  hidden. A LADD aircraft FDPS does not report (no filed registration or
+  callsign match) is dropped from the demo rather than shown, so the demo
+  under-shows listed traffic by design. FDPS revising a departure time after a
+  scrub can move a reference to the neighbouring window on a later re-scrub;
+  rows already promoted are not rewritten (`ON CONFLICT DO NOTHING`).
 
 ## Storage
 

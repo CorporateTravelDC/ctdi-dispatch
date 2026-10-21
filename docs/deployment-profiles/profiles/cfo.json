@@ -139,8 +139,37 @@
     "runtime_image_identity_check": true
   },
   "integrations": {
-    "optional": [],
-    "forbidden": []
+    "optional": [
+      {
+        "id": "firefly-iii",
+        "kind": "container",
+        "unit": "corporatetraveldc-firefly",
+        "state": "disabled",
+        "note": "ledger: budgets, categories, one tag per trip"
+      },
+      {
+        "id": "paperless-ngx",
+        "kind": "container",
+        "unit": "corporatetraveldc-paperless",
+        "state": "disabled",
+        "shared_with": [
+          "executive-assistant"
+        ],
+        "note": "receipt of record"
+      },
+      {
+        "id": "pgsql-office",
+        "kind": "database_instance",
+        "unit": "corporatetraveldc-pgsql-office",
+        "state": "disabled",
+        "note": "office skeletons instance; one database and role per service"
+      }
+    ],
+    "forbidden": [
+      "sqlite_backend",
+      "platform_env_files",
+      "production_database"
+    ]
   },
   "deployment_gate": {
     "requires_operator_review": true,

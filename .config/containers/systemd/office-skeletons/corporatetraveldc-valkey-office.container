@@ -1,0 +1,47 @@
+# corporatetraveldc-valkey-office -- Valkey, the task broker Paperless-ngx
+# requires. TEMPLATE, disabled until after the feature freeze (operator
+# 2026-10-20). docs/deployment-profiles/office-skeletons/.
+#
+# Valkey, not redis: BSD-3 licence (redis 8 changed its licence). Broker only:
+# nothing persisted (no RDB, no AOF, no volume), 48 MB maxmemory, noeviction
+# (a full broker refuses work instead of dropping queued tasks).
+#
+# Password: VALKEY_PASSWORD from /etc/corporatetraveldc/valkey-office-secrets.env
+# (example: config/valkey-office-secrets.env.example). The image reads no
+# password variable, so the shell below writes it into a config file on a
+# private tmpfs with a shell builtin (printf: no argv, never on a command line,
+# never in `ps`), hands the file to the valkey user and starts the image's own
+# entrypoint (which drops root). `%%` and `$$` are systemd escapes for `%` and
+# `$` (checked with `quadlet -dryrun`: quadlet passes them through unchanged).
+#
+# Disabled: no [Install], not in stack-boot-ctl.sh ORDER or the rollout, no timer.
+# office-db.network only (Internal=true): reachable by the office apps alone.
+[Unit]
+Description=corporatetraveldc -- Valkey (office skeletons broker; template, disabled)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/valkey/valkey:8.1.10-alpine
+ContainerName=corporatetraveldc-valkey-office
+Network=office-db.network
+Environment=TZ=UTC
+EnvironmentFile=/etc/corporatetraveldc/valkey-office-secrets.env
+Tmpfs=/run/valkey:rw,size=1m,mode=0700
+Exec=sh -c 'umask 077 && printf "requirepass %%s\n" "$${VALKEY_PASSWORD}" > /run/valkey/valkey.conf && chown -R valkey:valkey /run/valkey && exec docker-entrypoint.sh valkey-server /run/valkey/valkey.conf --save "" --appendonly no --maxmemory 48mb --maxmemory-policy noeviction --protected-mode yes'
+# The health probe passes the password in valkey-cli's own environment variable
+# (REDISCLI_AUTH), never as `-a` on argv.
+HealthCmd=sh -c 'REDISCLI_AUTH="$${VALKEY_PASSWORD}" valkey-cli ping | grep -q PONG'
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+Memory=64m
+PodmanArgs=--memory-swap=64m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+CPUWeight=30
+CPUQuota=50%
+Restart=on-failure
+RestartSec=10

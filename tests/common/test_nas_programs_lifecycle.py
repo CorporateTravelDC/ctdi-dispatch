@@ -167,3 +167,17 @@ def test_pg_migration_backfill_is_the_same_predicate():
     assert m, "0076 backfill UPDATE not found"
     assert norm(m.group(1)) == norm(db.NAS_REST_SHAPE_SQL.strip()[1:-1])
     assert "ADD COLUMN IF NOT EXISTS source TEXT" in sql
+
+
+def test_tfms_resend_of_ended_program_stays_inactive():
+    """2026-10-21: TFMS re-sends programs after they end; the upsert must not
+    switch an ended one back on. A live re-send still reactivates."""
+    _setup()
+    past, future = time.time() - 3600, time.time() + 3600
+    _tfms("MIT-EWR-ENDED", "MIT", "KEWR", past)
+    _tfms("MIT-LGA-LIVE", "MIT", "KLGA", future)
+    rows = _rows()
+    assert rows["MIT-EWR-ENDED"]["active"] == 0
+    assert rows["MIT-LGA-LIVE"]["active"] == 1
+    _tfms("MIT-EWR-ENDED", "MIT", "KEWR", future)   # extended by a later re-send
+    assert _rows()["MIT-EWR-ENDED"]["active"] == 1

@@ -58,7 +58,7 @@ import requests
 from common import config, db, ntfy_push as _ntfy
 from common.aam_watch import get_aam_watch_section
 from common.sr1_log import log_usage
-from common.input_gate import InputGate, make_key, mask_stamps
+from common.input_gate import InputGate, dc_vip_tfr_ids, make_key, mask_stamps, weather_key
 
 log = logging.getLogger(__name__)
 
@@ -766,6 +766,26 @@ def _cps_section() -> str:
     )
 
 
+def gate_key(tfrs, metars, nws: str, cps_key: str, osint: str, threats: str) -> str:
+    """Input-gate key (lean-out L2 F7; narrowed 2026-10-20). Stable DATA only:
+    - TFRs: the DC-area VIP TFR ids (common.input_gate.dc_vip_tfr_ids) -- not
+      the national VIP ids or the national routine-TFR count the prompt text
+      carries, which moved every hour;
+    - weather: banded (flight category, ceiling/visibility bands, wind band,
+      precip type -- common.input_gate.weather_key) instead of the raw
+      ceiling/visibility/wind numbers that changed with nearly every METAR;
+    - NWS text, CPS score/label, OSINT item lines and threat sites as before.
+    The brief CONTENT still shows the raw values; only the skip decision changed."""
+    return make_key({
+        "tfr": dc_vip_tfr_ids(tfrs),
+        "weather": weather_key(metars),
+        "nws": mask_stamps(nws),
+        "cps": cps_key,
+        "osint": "\n".join(l for l in (osint or "").splitlines() if not l.startswith("=== ACTIVE OSINT FEED")),
+        "threats": threats,
+    })
+
+
 def _cps_key() -> str:
     """CPS stable fields for the input gate: score and label, never its narrative."""
     try:
@@ -1284,14 +1304,8 @@ def main(force: bool = False, run_trend: bool = False) -> None:
         # CPS score/label without its narrative, no route narrative (derived
         # from the TFR/weather inputs already keyed), OSINT item lines without
         # the header count, the static threat-site block as-is.
-        input_key = make_key({
-            "tfr": tfr,
-            "weather": mask_stamps(weather),
-            "nws": mask_stamps(nws),
-            "cps": _cps_key(),
-            "osint": "\n".join(l for l in osint.splitlines() if not l.startswith("=== ACTIVE OSINT FEED")),
-            "threats": threats,
-        })
+        input_key = gate_key(db.get_active_tfrs(), db.get_metar_snapshot(), nws, _cps_key(),
+                             osint, threats)
         gate = InputGate("ep-advance")
         reused = None if force else gate.reusable(input_key)
         result = None

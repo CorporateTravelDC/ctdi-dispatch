@@ -1,0 +1,54 @@
+# corporatetraveldc-vikunja -- Vikunja, the Chief of Staff skeleton's optional
+# initiative / project API (REST + API tokens; Nextcloud Deck is the default
+# board). TEMPLATE, disabled until after the feature freeze (operator
+# 2026-10-20). docs/deployment-profiles/office-skeletons/CHIEF-OF-STAFF.md.
+#
+# Database: PostgreSQL ONLY. Vikunja's default database.type is sqlite, so
+# VIKUNJA_DATABASE_TYPE=postgres is set here, in the tracked quadlet
+# (tests/scripts/test_office_skeletons.py). Database `vikunja`, role
+# `vikunja`, on corporatetraveldc-pgsql-office over office-db.network. No
+# redis (keyvalue in memory), no mailer, no self-registration.
+#
+# Secrets ONLY in /etc/corporatetraveldc/vikunja-secrets.env (example:
+# config/vikunja-secrets.env.example): VIKUNJA_DATABASE_PASSWORD,
+# VIKUNJA_SERVICE_SECRET. Never dispatch.env / dispatch-secrets.env.
+#
+# Disabled: no [Install], not in stack-boot-ctl.sh ORDER or the rollout, no
+# timer. Publish: tailnet address only, port 8103.
+[Unit]
+Description=corporatetraveldc -- Vikunja (CoS skeleton, optional; template, disabled)
+After=corporatetraveldc-pgsql-office.service
+Requires=corporatetraveldc-pgsql-office.service
+
+[Container]
+Image=docker.io/vikunja/vikunja:2.7.0
+ContainerName=corporatetraveldc-vikunja
+Network=office-db.network
+Network=office-web.network
+PublishPort=100.x.x.x:8103:3456
+Environment=VIKUNJA_DATABASE_TYPE=postgres
+Environment=VIKUNJA_DATABASE_HOST=corporatetraveldc-pgsql-office
+Environment=VIKUNJA_DATABASE_DATABASE=vikunja
+Environment=VIKUNJA_DATABASE_USER=vikunja
+Environment=VIKUNJA_DATABASE_SSLMODE=disable
+Environment=VIKUNJA_DATABASE_MAXOPENCONNECTIONS=8
+Environment=VIKUNJA_DATABASE_MAXIDLECONNECTIONS=2
+Environment=VIKUNJA_SERVICE_PUBLICURL=http://100.x.x.x:8103/
+Environment=VIKUNJA_SERVICE_TIMEZONE=UTC
+Environment=VIKUNJA_SERVICE_ENABLEREGISTRATION=false
+Environment=VIKUNJA_SERVICE_ENABLEEMAILREMINDERS=false
+Environment=VIKUNJA_REDIS_ENABLED=false
+Environment=VIKUNJA_MAILER_ENABLED=false
+Environment=TZ=UTC
+EnvironmentFile=/etc/corporatetraveldc/vikunja-secrets.env
+Volume=corporatetraveldc-vikunja-files:/app/vikunja/files
+Memory=192m
+PodmanArgs=--memory-swap=256m
+NoNewPrivileges=true
+
+[Service]
+Slice=production.slice
+CPUWeight=30
+CPUQuota=50%
+Restart=on-failure
+RestartSec=15

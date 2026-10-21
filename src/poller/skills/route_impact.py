@@ -7,6 +7,7 @@ import os
 import argparse, logging, sys, time
 import httpx
 from common import db, ntfy_push as _ntfy
+from common.input_gate import InputGate, dc_nas_key, is_dc_vip_tfr, make_key
 from common.llm import generate as llm_generate
 from common.push_dedup import PushDedup, content_hash
 from common.sr1_log import log_usage
@@ -60,12 +61,22 @@ def _tfr_text(t: dict) -> dict:
 
 
 def _dc_vip(t: dict) -> bool:
-    """2026-10-14 (operator): the route narrative is for DC-area VIP TFRs only."""
-    try:
-        fac = (json.loads(t.get("raw_json") or "{}").get("facility") or "").strip().upper()
-    except (TypeError, ValueError, AttributeError):
-        fac = ""
-    return bool(t.get("is_vip")) and fac in ("ZDC", "KZDC", "PCT")
+    """2026-10-14 (operator): the route narrative is for DC-area VIP TFRs only.
+    2026-10-20: the predicate lives in common.input_gate (shared with ep-advance's key)."""
+    return is_dc_vip_tfr(t)
+
+
+def model_key(inputs: dict) -> str:
+    """2026-10-20: what the VIP route NARRATIVE depends on -- the DC VIP TFRs'
+    id, FAA text and window, and the set of DC-area NAS program types. The SR-2
+    gate below still keys every TFR/NAS row (the deterministic DB summary and
+    its counts refresh every cycle); this key only decides whether the MODEL
+    runs. Before, national churn (~33 of 127 NAS programs per 5 min) made every
+    run a model call and kept llama's second slot permanently busy."""
+    return make_key({
+        "vip": [[t["id"], t.get("text", ""), t.get("window", "")] for t in inputs["tfrs"] if t["vip"]],
+        "nas": dc_nas_key(inputs["nas"]),
+    })
 
 def build_inputs() -> dict:
     tfrs = db.get_active_tfrs()
@@ -93,9 +104,11 @@ def build_user_message(inputs: dict) -> str:
 
 
 def _vip_user_message(inputs: dict) -> str:
-    """Focused prompt with VIP TFRs only — keeps token count low for Pi CPU inference."""
+    """Focused prompt with VIP TFRs only — keeps token count low for Pi CPU inference.
+    2026-10-20: NAS lines are the DC-area program types only (was every national
+    program -- ~127 lines of prompt the DC narrative never used)."""
     vip = [t for t in inputs["tfrs"] if t["vip"]]
-    nas_lines = [f"  {p['type']} at {p['facility']}" for p in inputs["nas"]] or ["  None active"]
+    nas_lines = [f"  {t} at {f}" for t, f in dc_nas_key(inputs["nas"])] or ["  None active at DCA/IAD/BWI/ZDC/PCT"]
     return (
         f"VIP/POTUS TFRs active ({len(vip)}):\n" +
         "\n".join([f"  VIP TFR {t['id']}: {t.get('text') or 'no FAA text'} ({t.get('window') or 'window unknown'})"
@@ -127,6 +140,14 @@ def _call_ollama_vip(inputs: dict) -> str | None:
         # spiked persona-only ref = 281.8s; x1.10 top-up to the 53s locked bound applied;
         # +16s cold-load allowance (hot path skips _preload_model);
         # (53 + 324.6) x 1.25 = 472s -> 480.
+        # 2026-10-20 (abandoned-work fix): kept at 480 rather than raised.
+        # One in-flight call per skill is already enforced (poller SkillLoop's
+        # in-flight guard never re-triggers a running skill), so the cancels
+        # llama logged were a 928+-token prompt (every national NAS program)
+        # outrunning 480 s while the second slot was shared. The prompt now
+        # carries DC-area NAS lines only and model_key() skips unchanged
+        # cycles, so real duration falls back inside the measured bound; a
+        # longer timeout would only delay the VIP push behind a slow call.
         timeout=480,
         # 2026-08-12: belt-and-suspenders close of the Anthropic fallback --
         # priority="hot" only affects the Ollama-side pre-flight/retry
@@ -170,11 +191,22 @@ def main(force: bool = False) -> None:
         vip_ids = [t["id"] for t in inputs["tfrs"] if t["vip"]]
 
         if vip_ids:
-            # VIP path: focused prompt — Ollama call feasible on Pi CPU
-            ollama_result = _call_ollama_vip(inputs)
-            if ollama_result:
+            # VIP path: focused prompt — Ollama call feasible on Pi CPU.
+            # 2026-10-20: skip the model when the DC inputs are unchanged since
+            # the last SUCCESSFUL narrative (InputGate, 6 h reuse cap; --force bypasses).
+            mkey = model_key(inputs)
+            mgate = InputGate(SKILL_NAME)
+            reused = None if force else mgate.reusable(mkey)
+            ollama_result = None if reused else _call_ollama_vip(inputs)
+            if reused:
+                narrative = reused["narrative"]
+                status = "ok"
+                log.info("%s: VIP route narrative reused (DC inputs unchanged -- model call skipped)",
+                         SKILL_NAME)
+            elif ollama_result:
                 narrative = ollama_result
                 status = "ok"
+                mgate.record(mkey, narrative, "")
                 log.info("%s: VIP route narrative via Ollama/%s", SKILL_NAME, OLLAMA_MODEL)
             else:
                 # 2026-08-06: narrow safety net around the fallback ITSELF --

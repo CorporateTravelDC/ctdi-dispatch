@@ -18,19 +18,17 @@ vault index (pg_schema/0055) and cifp_lookup.py wraps it for CIFP data
 (pg_schema/0052).
 
 Deliberately NOT the same table as src/demo/demo_api.py reads.
-demo_api.py's DEMO_DB (default /var/lib/corporatetraveldc-demo-source/
+~~demo_api.py's DEMO_DB (default /var/lib/corporatetraveldc-demo-source/
 demo-source.db) is a separate, still-SQLite, scrubbed/curated file
-populated by scripts/scrub-demo-source.py from a read of THIS table (and
-of corporatetraveldc.db) -- see that script's own docstring and
-scripts/migrate-demo-to-pg.py's module docstring for why that pipeline
-is explicitly out of scope for this migration pass (its writer,
-scrub-demo-source.py, was flagged for the operator's own decision on a
-separate follow-up, not assumed here).
+populated by scripts/scrub-demo-source.py~~ -- 2026-10-20: demo_api.py
+reads the DEMO Postgres instance (corporatetraveldc-pgsql-demo, via
+db_backend.demo_pg_conn()), populated by scripts/scrub-demo-source.py from
+a read of production; the sovereign SQLite file is destroyed and its code
+path removed (operator decision 2026-10-19). ~~scripts/migrate-demo-to-pg.py~~
+is retired (scripts/retired-20261020/).
 
-NOT explicitly out of scope, but genuinely unaffected by this module:
-demo_api.py itself never opens demo.db (confirmed by grep -- its only
-SQLite path is DEMO_DB above), so it needs no code change for this
-migration; its one connection to the tables this module owns is
+Genuinely unaffected by this module: demo_api.py itself never opens
+demo_snapshots; its one connection to the tables this module owns is
 demo.profiles (src/demo/profiles.py), which is migrated separately and
 reached only through that module's existing function interface.
 

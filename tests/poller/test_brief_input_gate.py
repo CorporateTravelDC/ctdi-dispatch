@@ -128,7 +128,11 @@ def ep_env(monkeypatch, tmp_path):
     monkeypatch.setattr(ep, "_cached_venue_section", lambda: "venues")
     monkeypatch.setattr(ep, "get_aam_watch_section", lambda k: "")
     monkeypatch.setattr(ep, "log_usage", lambda *a, **k: None)
+    data["tfrs"] = []
+    data["metars"] = [{"station": "KDCA", "ceiling_ft": 3000, "visibility_sm": 10, "wind_kt": 8}]
     monkeypatch.setattr(ep, "db", types.SimpleNamespace(get_latest_cps=lambda: data["cps"],
+                                                       get_active_tfrs=lambda: data["tfrs"],
+                                                       get_metar_snapshot=lambda: data["metars"],
                                                        archive_brief=lambda *a, **k: None))
     monkeypatch.setattr(ep._ntfy, "send", lambda topic, text, **k: sent.append((topic, text)))
 
@@ -153,6 +157,31 @@ def test_ep_count_or_narrative_only_change_skips(ep_env):
 def test_ep_data_change_calls_model(ep_env):
     data, calls, sent = ep_env
     ep.main()
+    # 2026-10-20: the key follows the DC VIP TFR rows, not the section text
+    data["tfrs"] = [{"tfr_id": "6/0100", "is_vip": 1, "raw_json": '{"facility": "ZDC"}'}]
     data["tfr"] = "VIP TFRs ACTIVE: 6/0100."
     ep.main()
     assert len(calls) == 2
+
+
+# ── 2026-10-20: narrowed keys (route-impact saturating slot 1; ep-advance never skipping) ──
+
+def test_ep_metar_noise_and_national_tfrs_skip(ep_env):
+    data, calls, sent = ep_env
+    ep.main()
+    data["metars"] = [{"station": "KDCA", "ceiling_ft": 4500, "visibility_sm": 9, "wind_kt": 12}]
+    data["tfrs"] = [{"tfr_id": f"6/{i}", "is_vip": i == 3, "raw_json": '{"facility": "ZLA"}'} for i in range(9)]
+    data["tfr"] = "VIP TFRs ACTIVE: 6/3."     # national VIP id in the prompt text: not a DC change
+    ep.main()
+    assert len(calls) == 1
+
+
+def test_ep_weather_category_change_calls_model(ep_env):
+    data, calls, sent = ep_env
+    ep.main()
+    data["metars"] = [{"station": "KDCA", "ceiling_ft": 2500, "visibility_sm": 10, "wind_kt": 8}]   # VFR -> MVFR
+    ep.main()
+    data["metars"] = [{"station": "KDCA", "ceiling_ft": 2500, "visibility_sm": 10, "wind_kt": 8,
+                       "precip_code": "+TSRA"}]
+    ep.main()
+    assert len(calls) == 3
