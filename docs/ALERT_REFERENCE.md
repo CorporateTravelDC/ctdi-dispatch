@@ -873,6 +873,7 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 | ~~Script~~ | ~~Priority~~ | ~~Notes~~ |
 |---|---|---|
 | ~~`scheduled-integrity-sweep.sh`~~ | ~~default 2~~ | ~~✅ "INTEGRITY SWEEP FAILED" — 10 pushes in 12 h. Fires whenever tracked files are edited but not yet re-signed; see CLAUDE.md's manifest note before treating it as an incident~~ |
+| `scheduled-integrity-sweep.sh` (2026-10-23) | p5 first, p4 reminder, p3 cleared | "INTEGRITY SWEEP FAILED" / "BUILD PROVENANCE FAILED" and siblings. The body names the failing check (provenance: each failing image and its reason; manifest: reason, file count, up to 5 paths). Repeats of the same failure collapse: one p5 page, then a "(still failing)" p4 reminder at most every 2 h, then one p3 "CLEARED" on recovery (`scripts/lib/sweep_alerts.sh`, state under the sweep's `alerts/` dir). |
 | ~~`brief-fallback-monitor.sh`~~ | ~~**`max`** (5)~~ | ~~✅ "⛔ BRIEF LLM DOWN: corporatetraveldc-ops-brief" (8) and "…-ep-advance" (2). Topic overridable via `BRIEF_FALLBACK_TOPIC`. One of only a handful of max-priority publishers~~ |
 | <del>~~`ollama-swap-alert.sh`~~</del> | ~~—~~ | ~~**Retired with the 2026-08-27 Ollama → llama.cpp cutover** — the script no longer exists in `scripts/` (verified 2026-09-03)~~ |
 | ~~`sdr-crashloop-guard.sh`~~ | ~~default 4~~ | ~~✅ "SDR stack auto-stopped: ultrafeeder". Like thermal-ingest-guard, this one *stops* things — a stopped SDR stack means no local ADS-B/ACARS alerting~~ |

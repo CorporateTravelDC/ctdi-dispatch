@@ -3123,7 +3123,27 @@ def upsert_flight_event(flight_id: str, airline: str | None,
                         departure_time: float | None, arrival_time: float | None,
                         status: str | None, position_lat: float | None,
                         position_lon: float | None, altitude_ft: int | None,
-                        ground_speed_kt: int | None, raw_json: str) -> None:
+                        ground_speed_kt: int | None, raw_json: str,
+                        message_time: float | None = None) -> None:
+    """Upsert one FDPS flight_events row.
+
+    departure_time (2026-10-23): was COALESCE(existing, new) -- first filing
+    ever stored won. Rows are keyed by callsign when FDPS sends no gufi, so
+    one row is reused across days and departure_time could be days old while
+    the row itself was fresh (updated_at). Now a non-NULL incoming
+    departure_time replaces the stored one when the incoming record is newer
+    than the stored row: always when `message_time` is None (the record is
+    being processed now, and updated_at is stamped now), else only when
+    message_time >= the stored updated_at (an out-of-order/replayed older
+    message cannot roll it back). A NULL incoming value keeps the stored one
+    (the COALESCE behaviour, kept for e.g. TH position messages that carry
+    no departure time)."""
+    if message_time is None:
+        dep_newer = "1=1"
+        extra: tuple = ()
+    else:
+        dep_newer = "? >= COALESCE(flight_events.updated_at, 0)"
+        extra = (float(message_time),)
     with conn() as c:
         c.execute("""
             INSERT INTO flight_events
@@ -3138,7 +3158,11 @@ def upsert_flight_event(flight_id: str, airline: str | None,
                 origin=excluded.origin,
                 destination=excluded.destination,
                 aircraft_type=excluded.aircraft_type,
-                departure_time=COALESCE(flight_events.departure_time, excluded.departure_time),
+                departure_time=CASE
+                    WHEN excluded.departure_time IS NULL THEN flight_events.departure_time
+                    WHEN flight_events.departure_time IS NULL THEN excluded.departure_time
+                    WHEN """ + dep_newer + """ THEN excluded.departure_time
+                    ELSE flight_events.departure_time END,
                 arrival_time=excluded.arrival_time,
                 status=excluded.status,
                 position_lat=excluded.position_lat,
@@ -3150,7 +3174,7 @@ def upsert_flight_event(flight_id: str, airline: str | None,
         """, (flight_id, airline, flight_num, origin, destination,
               aircraft_type, departure_time, arrival_time, status,
               position_lat, position_lon, altitude_ft, ground_speed_kt,
-              raw_json))
+              raw_json) + extra)
 
 
 def enrich_flight_arrival_times(updates: list[tuple[float, str]]) -> int:
@@ -5813,6 +5837,24 @@ def init_db_v52() -> None:
             if cols and col not in cols:
                 c.execute(f"ALTER TABLE flight_ooooi_times ADD COLUMN {col} {typ}")
 
+
+
+def init_db_v53() -> None:
+    """Apply v53 schema -- drone_events and ais_sample_positions (SQLite twin
+    of pg_schema/0084; maritime/drone geometry, second_brain.semantic.compile)."""
+    with conn() as c:
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS drone_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, uas_id TEXT NOT NULL,
+                lat REAL, lon REAL, alt_m REAL, observed_at REAL NOT NULL,
+                source TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_drone_events_uas ON drone_events(uas_id, observed_at);
+            CREATE TABLE IF NOT EXISTS ais_sample_positions (
+                dataset TEXT NOT NULL, mmsi TEXT NOT NULL, observed_at REAL NOT NULL,
+                lat REAL NOT NULL, lon REAL NOT NULL, sog REAL, cog REAL, vessel_type TEXT,
+                PRIMARY KEY (dataset, mmsi, observed_at));
+            CREATE INDEX IF NOT EXISTS idx_ais_sample_mmsi ON ais_sample_positions(mmsi, observed_at);
+        """)
 
 def analyze_flight_number_patterns(min_samples: int = 5, dominance_threshold: float = 0.85) -> dict:
     """Phase 2 mining over flight_events (30-day live window, operating-

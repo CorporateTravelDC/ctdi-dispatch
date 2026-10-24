@@ -1,7 +1,7 @@
 # Base image: the tag is for humans, the digest is the identity (multi-platform
 # index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
 # SUPERSEDED 2026-10-07: FROM python:3.13-slim (a tag can move under us; review 05).
-FROM docker.io/library/python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
+FROM docker.io/library/python:3.13-slim@sha256:27b7c9d4f13ca20bb1170148f02095d50a5dfce1f7f2dabf5ca273727e43b7ea
 
 LABEL org.opencontainers.image.title="corporatetraveldc-amtrak-tracker" \
       org.opencontainers.image.description="Corporate Travel DC — Amtrak NEC push-primary tracker"
@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r
 # the same APT_SNAPSHOT always yields the same package versions. Refresh it
 # deliberately with scripts/build/pin-base-images.py (security updates).
 # SUPERSEDED 2026-10-07: apt-get update against the live mirror (floating).
-ARG APT_SNAPSHOT=20261021T010650Z
+ARG APT_SNAPSHOT=20261022T051934Z
 RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update -qq \
  && apt-get install -y --no-install-recommends gnupg \

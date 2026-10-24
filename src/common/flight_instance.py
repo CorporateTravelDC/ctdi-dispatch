@@ -133,6 +133,35 @@ def utc_date(value) -> str | None:
     return datetime.fromtimestamp(ep, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+_WATCH_ID_TZ = "America/New_York"
+
+
+def watch_id_date(scheduled_departure=None, now_epoch: float | None = None) -> str:
+    """'YYYYMMDD' date part of a deterministic watch id
+    (wl-<type>-<ident>-<YYYYMMDD>).
+
+    2026-10-22: the id used the UTC date of "now", so a watch added at
+    ~19:00 ET and re-added after 20:00 ET (already the next UTC day) got a
+    new id and a duplicate watch for the same leg. The date is now the
+    America/New_York date of the leg's scheduled departure when one is
+    given (a bare YYYY-MM-DD is taken as-is; a naive timestamp is read as
+    UTC, same as to_epoch), else the America/New_York date of now. The
+    format is unchanged, so existing ids keep working (not migrated)."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(_WATCH_ID_TZ)
+    if scheduled_departure not in (None, ""):
+        if isinstance(scheduled_departure, date) and not isinstance(scheduled_departure, datetime):
+            return scheduled_departure.strftime("%Y%m%d")
+        if isinstance(scheduled_departure, str) and re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}", scheduled_departure.strip()):
+            return scheduled_departure.strip().replace("-", "")
+        ep = to_epoch(scheduled_departure)
+        if ep is not None:
+            return datetime.fromtimestamp(ep, tz=tz).strftime("%Y%m%d")
+    ref = time.time() if now_epoch is None else float(now_epoch)
+    return datetime.fromtimestamp(ref, tz=tz).strftime("%Y%m%d")
+
+
 def _fmt_utc(ep: float | None) -> str:
     if ep is None:
         return "?"

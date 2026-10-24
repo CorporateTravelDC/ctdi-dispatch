@@ -1,0 +1,15 @@
+# config/privacy-maritime.list.example -- operator-designated maritime privacy list (2026-10-23).
+# Install as /etc/corporatetraveldc/privacy-maritime.list (root-owned, 0640; the operator
+# account must be able to read it for push-time checks). One entry per line; # comments.
+# Read by scripts/leak-guard/privacy_lists.py: matched only in maritime context, reported as
+# 'maritime-identifier', values never printed. Missing or empty file = "no entries"
+# (reported, never a failure). Real entries never go in this tracked example.
+#
+# mmsi:<9 digits>    an MMSI, matched only next to an mmsi key or in an AIS CSV MMSI column
+# imo:<7 digits>     an IMO number, matched after an imo key, as IMO1234567, or in an IMO column
+# name:<vessel name> matched only after vessel / vessel_name / VesselName / ship / ship_name,
+#                    or in an AIS CSV VesselName / CallSign column
+# Synthetic examples (never real vessels), left commented:
+# mmsi:000000000
+# imo:0000000
+# name:SYNTHETIC VESSEL QQ

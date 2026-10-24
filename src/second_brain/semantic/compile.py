@@ -137,6 +137,30 @@ _CALLSIGN_RE = re.compile(r"\b([A-Z]{3})\s?(\d{1,4}[A-Z]?)\b")
 # train identifiers are not how this codebase actually renders them anywhere.
 _TRAIN_RE = re.compile(r"\btrain\s+(\d{1,4})\b", re.IGNORECASE)
 
+# Vessels: the platform's one written convention, "MMSI <9 digits>"
+# (transport_pattern_digest.py's vessel lines, poller watchlist summaries).
+# Identity by MMSI only, never by name (docs/VESSEL_PARITY_SPEC_2026-09-23.md);
+# AIS identity is self-reported, so a vessel position is evidence, not proof.
+_VESSEL_RE = re.compile(r"\bMMSI\s+(\d{9})\b")
+
+# Drones: "UAS <id>" / "UAS ID <id>" / "UAS: <id>" (utm_watcher's alert title
+# form). The id must carry a digit and be 8-24 chars so ordinary words after
+# "UAS" never match; normalised like utm_watcher.normalize_uas_id().
+_DRONE_RE = re.compile(r"\bUAS(?:\s+ID)?[:\s]+([0-9A-Z][0-9A-Z-]{6,30}[0-9A-Z])\b")
+
+# A consumer that writes format_all_angles_block() into a vault note wraps it
+# in these markers (wrap_all_angles_for_vault()); assign_geometry() skips the
+# wrapped text, or the next compile would read the block's own identifiers as
+# fresh references from that note and feed the graph back into itself.
+ALL_ANGLES_BEGIN = "<!-- all-angles:begin -->"
+ALL_ANGLES_END = "<!-- all-angles:end -->"
+_ALL_ANGLES_SPAN_RE = re.compile(
+    re.escape(ALL_ANGLES_BEGIN) + r".*?(?:" + re.escape(ALL_ANGLES_END) + r"|\Z)", re.DOTALL)
+
+
+def wrap_all_angles_for_vault(block: str) -> str:
+    return f"{ALL_ANGLES_BEGIN}\n{block}\n{ALL_ANGLES_END}"
+
 
 def _create_schema(conn) -> None:
     """2026-09-19: TRUNCATE, not DROP/CREATE, on the real (Postgres) path --
@@ -928,6 +952,45 @@ def _extract_station_codes_in_text(text: str, known: dict[str, tuple[float, floa
 _FLIGHT_INSTANCE_GATE_SECONDS = 6 * 3600
 
 
+def _extract_vessel_refs(text: str) -> set[str]:
+    return set(_VESSEL_RE.findall(text))
+
+
+def _extract_drone_refs(text: str) -> set[str]:
+    out = set()
+    for raw in _DRONE_RE.findall(text):
+        ident = raw.upper().replace("-", "")
+        if any(ch.isdigit() for ch in ident) and 8 <= len(ident) <= 32:
+            out.add(ident)
+    return out
+
+
+def _lookup_vessel_position(conn, mmsi: str, note_epoch: float) -> tuple[float, float, str] | None:
+    """Live vessel_events first, then the labelled NOAA sample. Same instance
+    gate as flights: a position more than _FLIGHT_INSTANCE_GATE_SECONDS from
+    the note's own time is a different voyage, so it is not attached."""
+    for sql, source in (
+            ("SELECT lat, lon, fetched_at AS t FROM vessel_events WHERE mmsi = ? "
+             "AND lat IS NOT NULL AND lon IS NOT NULL "
+             "ORDER BY ABS(fetched_at - ?) ASC LIMIT 1", "vessel_events"),
+            ("SELECT lat, lon, observed_at AS t FROM ais_sample_positions WHERE mmsi = ? "
+             "ORDER BY ABS(observed_at - ?) ASC LIMIT 1", "ais_sample_positions")):
+        row = conn.execute(sql, (mmsi, note_epoch)).fetchone()
+        if row and abs(row["t"] - note_epoch) <= _FLIGHT_INSTANCE_GATE_SECONDS:
+            return row["lat"], row["lon"], source
+    return None
+
+
+def _lookup_drone_position(conn, uas_id: str, note_epoch: float) -> tuple[float, float] | None:
+    row = conn.execute(
+        "SELECT lat, lon, observed_at FROM drone_events WHERE uas_id = ? "
+        "AND lat IS NOT NULL AND lon IS NOT NULL "
+        "ORDER BY ABS(observed_at - ?) ASC LIMIT 1", (uas_id, note_epoch)).fetchone()
+    if not row or abs(row["observed_at"] - note_epoch) > _FLIGHT_INSTANCE_GATE_SECONDS:
+        return None
+    return row["lat"], row["lon"]
+
+
 def _lookup_flight_position(conn, airline: str, flight_num: str,
                              note_epoch: float) -> tuple[float, float] | None:
     row = conn.execute(
@@ -1024,7 +1087,7 @@ def assign_geometry(conn) -> int:
         epoch = dt.timestamp()
         # Bounded read: a pathological single note shouldn't make extraction
         # unbounded; 20k chars comfortably covers any real vault note's body.
-        text = f"{n['title']}\n{n['content'][:20000]}"
+        text = _ALL_ANGLES_SPAN_RE.sub("", f"{n['title']}\n{n['content'][:20000]}")
 
         for airline, num in _extract_flight_refs(text, valid_pairs):
             pos = _lookup_flight_position(conn, airline, num, epoch)
@@ -1044,6 +1107,17 @@ def assign_geometry(conn) -> int:
                 source = "station_coordinates"
             for train_num in train_nums:
                 facts.append((n["path"], "train", train_num, dt, epoch, lat, lon, source, ts_str))
+
+        for mmsi in sorted(_extract_vessel_refs(text)):
+            pos = _lookup_vessel_position(conn, mmsi, epoch)
+            lat, lon, source = pos if pos else (None, None, None)
+            facts.append((n["path"], "vessel", mmsi, dt, epoch, lat, lon, source, ts_str))
+
+        for uas_id in sorted(_extract_drone_refs(text)):
+            pos = _lookup_drone_position(conn, uas_id, epoch)
+            lat, lon = pos if pos else (None, None)
+            source = "drone_events" if pos else None
+            facts.append((n["path"], "drone", uas_id, dt, epoch, lat, lon, source, ts_str))
 
     refs_out = [(path, itype, ident, ts_str, lat, lon, source)
                 for path, itype, ident, _dt, _epoch, lat, lon, source, ts_str in facts]
@@ -1150,7 +1224,8 @@ def assign_causal_associations(conn, window_days: int = CAUSAL_WINDOW_DAYS,
     rather than quietly resolved: §3 says "per entity-type pair (e.g. 'NEC
     Amtrak delay' x 'DCA arrival delay')". This platform has no delay-EVENT
     taxonomy -- semantic_note_instance_refs stores concrete identifiers
-    (flight:DAL8, train:2157), and instance_type is only 'flight'|'train', so a
+    (flight:DAL8, train:2157), and instance_type is only 'flight'|'train'
+    (vessel/drone added 2026-10-22), so a
     literal type-pair reading yields three useless buckets. Associating
     identifier pairs is what the data actually supports, and it is strictly
     more drillable: every edge names the two real entities and carries sample
@@ -1604,7 +1679,215 @@ def assign_clusters(conn, min_size: int = CLUSTER_MIN_SIZE) -> int:
     return len(out)
 
 
-_CHRONOLOGY_EVIDENCE_RE = re.compile(r"^concept=(?P<concept>.+);seq=(?P<seq>\d+);ts=(?P<ts>.*)$")
+# Concept-level association (2026-10-22, operator approval under the freeze).
+# The transit tiers above measure flight/train identifiers that land together
+# in place and time; nothing measured which CONCEPTS land together in notes,
+# which is the ontology-level proximity the investor material describes. Same
+# method, other unit: a note is the co-occurrence window, lift is measured
+# against chance over curated notes, and nothing below the shared min-N floor
+# (CAUSAL_MIN_SAMPLES, the analyze_* convention) is written.
+CONCEPT_ASSOC_FACETS = ("domain", "entity")
+# Clusters join concept edges at or above this lift. Not the transit tier's
+# 1.0: one curated note carries several domains and entities, so concept
+# pairs sit above chance far more often than identifier pairs do, and a 1.0
+# floor risks the one-mega-component failure assign_clusters() measured on
+# 2026-09-22. 2.0 is that function's own "provable" line. Tunable without a
+# code change.
+def _concept_cluster_min_lift() -> float:
+    try:
+        return float(os.getenv("SEMANTIC_CONCEPT_CLUSTER_MIN_LIFT", "2.0"))
+    except ValueError:
+        return 2.0
+
+
+_CONCEPT_EVIDENCE_RE = re.compile(
+    r"^self=concept:(?P<self>[^;]+);target=concept:(?P<target>[^;]+);n=(?P<n>\d+);"
+    r"expected=(?P<expected>[^;]+);lift=(?P<lift>[^;]+);tier=(?P<tier>[^;]+);"
+    r"notes=(?P<notes>\d+);samples=(?P<samples>.*)$"
+)
+
+
+def assign_concept_associations(conn, m: SemanticModel,
+                                min_samples: int = CAUSAL_MIN_SAMPLES) -> int:
+    """`concept_associated` / kind='conceptual': concept pairs that are filed
+    on the same curated notes more (or less) often than chance.
+
+      * Units are notes. N = curated notes filed under both concepts;
+        expected = n_a * n_b / notes; lift = N / expected.
+      * Only DIRECT filings count (rules other than broader_closure), and a
+        pair where one concept is in the other's closure (broader ancestor,
+        or an entity's own domain) is skipped: that pair co-occurs by
+        construction, and measuring it would report the ontology back to
+        itself as a finding.
+      * Raw feed items are excluded (is_curated=0), same as the curated
+        search path: the RSS pool is filed by catalog category, not by what
+        a note says.
+      * Rows go both directions so either concept's side resolves without an
+        OR query; `path` is the most recent note evidencing the pair (real
+        mtime), so --trace and query_all_angles() land on a real note.
+      * Every pair at or above min_samples is written, lift < 1.0 included:
+        evidence of separation is still evidence. Tier: provable at lift >=
+        2.0, plausible at 1.0 <= lift < 2.0, below_chance under 1.0.
+    Associated, never causes."""
+    conn.execute("DELETE FROM semantic_note_derivations WHERE kind='conceptual'")
+
+    facets = set(CONCEPT_ASSOC_FACETS)
+    by_note: dict[str, set[str]] = {}
+    for r in conn.execute(
+            "SELECT path, concept_id, facet FROM semantic_note_concepts "
+            "WHERE is_curated = 1 AND rule != 'broader_closure'").fetchall():
+        if r["facet"] in facets:
+            by_note.setdefault(r["path"], set()).add(r["concept_id"])
+    if not by_note:
+        return 0
+
+    ts_of: dict[str, float] = {}
+    for r in conn.execute("SELECT path, mtime, indexed_at FROM vault_documents").fetchall():
+        if r["path"] in by_note:
+            try:
+                ts_of[r["path"]] = _resolve_note_ts(r["mtime"], r["indexed_at"])[0].timestamp()
+            except (TypeError, ValueError):
+                ts_of[r["path"]] = 0.0
+
+    closure = {c: set(m.closure(c)) for cs in by_note.values() for c in cs}
+    n_notes = len(by_note)
+    n_of: dict[str, int] = {}
+    pair_notes: dict[tuple[str, str], list[str]] = {}
+    for path in sorted(by_note):
+        cs = sorted(by_note[path])
+        for c in cs:
+            n_of[c] = n_of.get(c, 0) + 1
+        for i, a in enumerate(cs):
+            for b in cs[i + 1:]:
+                if b in closure[a] or a in closure[b]:
+                    continue
+                pair_notes.setdefault((a, b), []).append(path)
+
+    out: list[tuple] = []
+    for (a, b), paths in sorted(pair_notes.items()):
+        n = len(paths)
+        if n < min_samples:
+            continue
+        expected = n_of[a] * n_of[b] / n_notes
+        lift = n / expected if expected else 0.0
+        tier = "provable" if lift >= 2.0 else "plausible" if lift >= 1.0 else "below_chance"
+        recent = sorted(paths, key=lambda p: (ts_of.get(p, 0.0), p), reverse=True)
+        anchor = recent[0]
+        samples = "|".join(recent[:3])
+        for x, y in ((a, b), (b, a)):
+            ev = (f"self=concept:{x};target=concept:{y};n={n};expected={expected:.2f};"
+                  f"lift={lift:.2f};tier={tier};notes={n_notes};samples={samples}")
+            out.append((anchor, "concept_associated", f"concept:{y}", ev, "conceptual"))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
+    return len(out)
+
+
+def assign_concept_clusters(conn, min_size: int = CLUSTER_MIN_SIZE,
+                            min_lift: float | None = None) -> int:
+    """`member_of_concept_cluster` / kind='concept_cluster': connected
+    components of size >= min_size over concept_associated edges at or above
+    min_lift (_concept_cluster_min_lift(), default 2.0). Same deterministic
+    components, content-derived ids and tier counts as assign_clusters()."""
+    conn.execute("DELETE FROM semantic_note_derivations WHERE kind='concept_cluster'")
+    min_lift = _concept_cluster_min_lift() if min_lift is None else min_lift
+
+    adj: dict[str, set[str]] = {}
+    lifts: dict[tuple[str, str], float] = {}
+    anchors: dict[str, str] = {}
+    for r in conn.execute(
+            "SELECT path, evidence FROM semantic_note_derivations "
+            "WHERE kind='conceptual'").fetchall():
+        mm = _CONCEPT_EVIDENCE_RE.match(r["evidence"] or "")
+        if not mm:
+            continue
+        lift = float(mm.group("lift"))
+        if lift < min_lift:
+            continue
+        a, b = mm.group("self"), mm.group("target")
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+        lifts[(a, b) if a < b else (b, a)] = lift
+        anchors.setdefault(a, r["path"])
+
+    seen: set[str] = set()
+    out: list[tuple] = []
+    for start in sorted(adj):
+        if start in seen:
+            continue
+        stack, comp = [start], []
+        seen.add(start)
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nxt in adj[cur]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        if len(comp) < min_size:
+            continue
+        comp.sort()
+        members = set(comp)
+        internal = sorted(lv for (x, y), lv in lifts.items() if x in members and y in members)
+        provable = sum(1 for lv in internal if lv >= 2.0)
+        median_lift = internal[len(internal) // 2] if internal else 0.0
+        cluster_id = f"concept_cluster:{comp[0]}"
+        member_str = ",".join(comp[:12]) + (",..." if len(comp) > 12 else "")
+        for c in comp:
+            ev = (f"member=concept:{c};cluster={cluster_id};size={len(comp)};"
+                  f"internal_edges={len(internal)};median_lift={median_lift:.2f};"
+                  f"provable={provable};plausible={len(internal) - provable};"
+                  f"min_lift={min_lift:g};members={member_str}")
+            out.append((anchors.get(c, cluster_id), "member_of_concept_cluster",
+                        cluster_id, ev, "concept_cluster"))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
+    return len(out)
+
+
+def concept_angles(conn, path: str, limit: int = 8) -> dict:
+    """The concept side of query_all_angles(): this note's direct domain and
+    entity concepts, their strongest above-chance associations (lift desc,
+    then N), and the concept clusters they belong to. Read-only."""
+    own = sorted({r["concept_id"] for r in conn.execute(
+        "SELECT concept_id, facet FROM semantic_note_concepts "
+        "WHERE path = ? AND rule != 'broader_closure'", (path,)).fetchall()
+        if r["facet"] in CONCEPT_ASSOC_FACETS})
+    if not own:
+        return {"concepts": [], "associations": [], "clusters": []}
+    assoc: dict[tuple[str, str], dict] = {}
+    clusters: dict[str, dict] = {}
+    for r in conn.execute(
+            "SELECT evidence, kind FROM semantic_note_derivations "
+            "WHERE kind IN ('conceptual', 'concept_cluster')").fetchall():
+        ev = r["evidence"] or ""
+        if r["kind"] == "conceptual":
+            mm = _CONCEPT_EVIDENCE_RE.match(ev)
+            if not mm or mm.group("self") not in own or float(mm.group("lift")) < 1.0:
+                continue
+            key = tuple(sorted((mm.group("self"), mm.group("target"))))
+            assoc.setdefault(key, {
+                "self": mm.group("self"), "target": mm.group("target"),
+                "n": int(mm.group("n")), "expected": float(mm.group("expected")),
+                "lift": float(mm.group("lift")), "tier": mm.group("tier"),
+                "notes": int(mm.group("notes"))})
+        else:
+            parts = dict(p.split("=", 1) for p in ev.split(";") if "=" in p)
+            member = parts.get("member", "").removeprefix("concept:")
+            if member in own:
+                clusters.setdefault(parts["cluster"], {
+                    "cluster": parts["cluster"], "size": int(parts["size"]),
+                    "median_lift": float(parts["median_lift"]),
+                    "provable": int(parts["provable"]), "plausible": int(parts["plausible"]),
+                    "members": parts.get("members", ""), "via": []})["via"].append(member)
+    ranked = sorted(assoc.values(), key=lambda a: (-a["lift"], -a["n"], a["self"], a["target"]))
+    return {"concepts": own, "associations": ranked[:limit],
+            "clusters": sorted(clusters.values(), key=lambda c: c["cluster"])}
+
+
+_CHRONOLOGY_EVIDENCE_RE =re.compile(r"^concept=(?P<concept>.+);seq=(?P<seq>\d+);ts=(?P<ts>.*)$")
 
 
 def concept_history(concept_id: str, limit: int | None = None,
@@ -1775,6 +2058,7 @@ def query_all_angles(entity: str, db_path: str | None = None) -> dict:
             (entity,)
         ).fetchone()["n"]
         candidates_evaluated = own_count * other_count
+        conceptual = concept_angles(conn, entity)
 
         return {
             "entity": entity,
@@ -1789,6 +2073,7 @@ def query_all_angles(entity: str, db_path: str | None = None) -> dict:
             },
             "causal": causal,
             "cluster": cluster,
+            "conceptual": conceptual,
         }
 
 
@@ -1811,21 +2096,20 @@ def format_all_angles_block(result: dict) -> str:
       - plausible-tier (geometric) disclaimer on every render: co-occurrence
         only, no causal relation computed
 
-    Only renders GEOMETRY today. causal/cluster sections are DELIBERATELY
-    omitted, not rendered as an empty/zero section like geometric -- Phase
-    2/3 haven't shipped, so there is genuinely nothing to report yet, a
-    different state from "checked this entity, found none" (which IS what
-    an empty geometric.matches list means, since assign_geometry() already
-    ran against the whole corpus). When assign_causal_associations()/
-    assign_clusters() ship, extend this function with a HISTORICAL PATTERN
-    section following the same explicit-coverage rule, not a separate
-    formatter -- one canonical block stays one function.
-    derivation/chronological are returned by query_all_angles() (the full
-    composite view the design doc's data layer promises) but not rendered
-    into this persona-facing block -- they're note-provenance facts
-    (already separately reachable via trace_causal_chain()/--trace), not
-    the "what's operationally proximate right now" content this block
-    exists to surface.
+    Sections, in this order so a tail trim (ops-brief caps the block) sheds
+    the longitudinal sections before the live one:
+      GEOMETRY            transit, single-instance, plausible tier
+      HISTORICAL PATTERN  transit statistically_associated edges anchored on
+                          this note: N, baseline (expected), lift, direction
+      CLUSTERS            transit member_of_cluster rows for this note
+      CONCEPTS            the note's domain/entity concepts, their strongest
+                          above-chance concept associations (N, baseline,
+                          lift) and the concept clusters they sit in
+    Each longitudinal section states its own coverage, so "none" is never
+    ambiguous with "not computed" (completed 2026-10-22; until then this
+    rendered GEOMETRY only, which the design's §6 example never intended).
+    derivation/chronological stay out: note provenance, reachable via
+    trace_causal_chain()/--trace.
     """
     geo = result["geometric"]
     ts_utc = result["computed_at"]
@@ -1847,7 +2131,60 @@ def format_all_angles_block(result: dict) -> str:
         f"{geo['candidates_evaluated']} candidates evaluated; {len(matches)} within threshold. "
         "Co-occurrence only, no causal relation computed."
     )
+
+    causal = []
+    for c in result.get("causal", []):
+        mm = _CAUSAL_EVIDENCE_RE.match(c.get("evidence") or "")
+        if mm:
+            causal.append(mm.groupdict())
+    causal.sort(key=lambda d: (-float(d["lift"]), -int(d["n"]), d["self"], d["target"]))
+    lines.append(f"HISTORICAL PATTERN (transit, {CAUSAL_WINDOW_DAYS}-day window, "
+                 f"min N={CAUSAL_MIN_SAMPLES})")
+    for i, d in enumerate(causal, start=1):
+        lag = (f"; {d['direction']} by {d['lead_lag_min']}min"
+               if d["direction"] not in ("ambiguous", "") and d["lead_lag_min"] else "")
+        lines.append(f"Assoc {i} — {d['self']} ↔ {d['target']}: N={d['n']}, "
+                     f"baseline {d['expected']}, lift {d['lift']}{lag}.")
+    lines.append(f"{len(causal)} associations anchored on this note. "
+                 "Statistical association, not a confirmed causal mechanism.")
+
+    clusters = []
+    for c in result.get("cluster", []):
+        parts = dict(p.split("=", 1) for p in (c.get("evidence") or "").split(";") if "=" in p)
+        if parts.get("cluster"):
+            clusters.append(parts)
+    lines.append(f"CLUSTERS (transit): {len(clusters)} memberships on this note.")
+    for d in clusters:
+        lines.append(f"{d['member']} in {d['cluster']}: size {d['size']}, "
+                     f"{d['provable']} provable / {d['plausible']} plausible, "
+                     f"median lift {d['median_lift']}.")
+
+    con = result.get("conceptual") or {"concepts": [], "associations": [], "clusters": []}
+    lines.append(f"CONCEPTS ({len(con['concepts'])} filed: "
+                 f"{', '.join(con['concepts']) or 'none'})")
+    for i, a in enumerate(con["associations"], start=1):
+        lines.append(f"Concept assoc {i} — {a['self']} ↔ {a['target']}: N={a['n']} of "
+                     f"{a['notes']} notes, baseline {a['expected']:.2f}, lift {a['lift']:.2f} "
+                     f"({a['tier']}).")
+    for c in con["clusters"]:
+        lines.append(f"{', '.join(sorted(c['via']))} in {c['cluster']}: size {c['size']}, "
+                     f"median lift {c['median_lift']:.2f}.")
+    lines.append(f"{len(con['associations'])} concept associations at or above chance shown; "
+                 f"{len(con['clusters'])} concept clusters. Co-occurrence in notes, not causation.")
     return "\n".join(lines)
+
+
+def all_angles_section() -> str:
+    """One call for a consumer: the canonical block for
+    most_recent_geometry_entity(), or "" when there is no such note or the
+    semantic layer fails. Informational only, so it never raises into the
+    caller (same posture as ops_brief._geometry_section())."""
+    try:
+        entity = most_recent_geometry_entity()
+        return format_all_angles_block(query_all_angles(entity)) if entity else ""
+    except Exception as e:
+        _log.warning("all-angles section unavailable: %s", type(e).__name__)
+        return ""
 
 
 def most_recent_geometry_entity(db_path: str | None = None) -> str | None:
@@ -2019,6 +2356,10 @@ def compile_layer(db_path: str | None = None,
             result["causal_edges"] = assign_causal_associations(conn)
             # Phase 3 consumes Phase 2's output, so it runs last in the chain.
             result["cluster_edges"] = assign_clusters(conn)
+            # Concept level: reads the semantic_note_concepts assign() wrote
+            # above; independent of the transit chain.
+            result["concept_association_edges"] = assign_concept_associations(conn, m)
+            result["concept_cluster_edges"] = assign_concept_clusters(conn)
 
             finished = datetime.now(timezone.utc)
             now = finished.isoformat()
@@ -2054,6 +2395,8 @@ def compile_layer(db_path: str | None = None,
                 "geometry_edges": result.get("geometry_edges"),
                 "causal_edges": result.get("causal_edges"),
                 "cluster_edges": result.get("cluster_edges"),
+                "concept_association_edges": result.get("concept_association_edges"),
+                "concept_cluster_edges": result.get("concept_cluster_edges"),
             })
         except OSError as e:
             _log.warning(

@@ -49,7 +49,13 @@ function buildGlobeUrl(searchResult, loc) {
   if (!searchResult) {
     return `https://globe.airplanes.live/?centerlat=${lat}&centerlon=${lon}&zoom=8&hideSidebar&${site}`
   }
-  return `https://globe.airplanes.live/?${searchResult.param}=${encodeURIComponent(searchResult.value)}&${site}`
+  // 2026-10-22 (operator hard rule): a public map link is keyed by the ICAO hex ONLY -- never a tail or a
+  // callsign. A reg/callsign search is resolved to a hex from this receiver's live list first (handleSearch);
+  // if it cannot be, the map opens on the default view with no identifier in the URL.
+  if (searchResult.param !== 'icao' || !/^[0-9a-f]{6}$/.test(searchResult.value)) {
+    return `https://globe.airplanes.live/?centerlat=${lat}&centerlon=${lon}&zoom=8&hideSidebar&${site}`
+  }
+  return `https://globe.airplanes.live/?icao=${searchResult.value}&${site}`
 }
 
 // ── Marker factories ───────────────────────────────────────────────────────
@@ -246,12 +252,30 @@ function GlobeMap({ liveState }) {
   const tailnet = useTailnet()
   const searchEnabled = tailnet === true
 
-  const handleSearch = useCallback((e) => {
+  const handleSearch = useCallback(async (e) => {
     e.preventDefault()
     if (!searchEnabled) return
     const q = searchInput.trim()
     if (!q) { setSearchResult(null); return }
-    setSearchResult(detectSearchType(q))
+    const found = detectSearchType(q)
+    if (!found || found.param === 'icao') { setSearchResult(found); return }
+    // tail or callsign: resolve to a hex from the local receiver before anything leaves the browser
+    try {
+      const r = await fetch('/api/adsb/live')
+      const data = r.ok ? await r.json() : {}
+      const list = data.aircraft || data.ac || []
+      const want = found.value.replace(/-/g, '')
+      const hit = list.find(ac => found.param === 'reg'
+        ? (ac.r || '').toUpperCase().replace(/-/g, '') === want
+        : (ac.flight || '').trim().toUpperCase() === want)
+      if (hit && /^[0-9a-f]{6}$/i.test(hit.hex || '')) {
+        setSearchResult({ type: 'icao', param: 'icao', value: hit.hex.toLowerCase(), label: `${found.label} → HEX` })
+      } else {
+        setSearchResult({ ...found, param: 'unresolved', label: `${found.label} (not on the local receiver -- hex needed)` })
+      }
+    } catch {
+      setSearchResult({ ...found, param: 'unresolved', label: `${found.label} (lookup failed -- hex needed)` })
+    }
   }, [searchInput, searchEnabled])
 
   const handleClear = useCallback(() => {

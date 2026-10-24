@@ -89,3 +89,60 @@ def test_batch_add_resolves_tail_too(route):
     regs = {e["identifier"]: e["registration"] for e in db.get_watchlist_entries(entry_type="flight")}
     # hex-only add still reverse-resolves; a `tail` is never stored (2026-10-18)
     assert regs["ZZZ4523"] == "N000TS" and regs["ZZZ4524"] is None
+
+
+# ── 2026-10-21: identity is filled only from TODAY's plan ────────────────────
+# Seen live: a regional add with no tail filled hex+registration from a plan
+# four days old (a different airframe). Synthetic identities only.
+
+def _plan(callsign, origin, dest, *, age_s=0.0, departure_time=None):
+    import time
+    raw = ("<MessageCollection><message><flight>"
+           f"<flightIdentification aircraftIdentification=\"{callsign}\"/>"
+           "<aircraftDescription aircraftAddress=\"000001\" registration=\"N000TS\"/>"
+           "</flight></message></MessageCollection>")
+    db.upsert_flight_event(f"G-{callsign}", callsign[:3], callsign[3:], origin, dest, None,
+                           departure_time, None, "active", None, None, None, None, raw)
+    with db.conn() as c:
+        c.execute("UPDATE flight_events SET updated_at = ? WHERE flight_id = ?",
+                  (time.time() - age_s, f"G-{callsign}"))
+
+
+def test_stale_plan_four_days_old_does_not_fill_identity(route):
+    _plan("ZZQ4601", "KDCA", "KORD", age_s=4 * 86400)
+    out = _add(route, identifier="ZZQ4601", origin="DCA", destination="ORD")
+    stored = _stored(out["id"])
+    assert (stored["hex_id"], stored["registration"]) == (None, None)   # stays hex-pending
+
+
+def test_fresh_plan_fills_identity(route):
+    _plan("ZZQ4602", "KDCA", "KORD", age_s=2 * 3600)
+    out = _add(route, identifier="ZZQ4602", origin="DCA", destination="ORD")
+    stored = _stored(out["id"])
+    assert (stored["hex_id"], stored["registration"], stored["hex_source"]) == \
+        ("000001", "N000TS", "fdps")
+
+
+def test_plan_departure_time_far_from_scheduled_departure_does_not_fill(route):
+    import time
+    # plan freshly touched, but its filed departure is 4 days from the leg being added
+    _plan("ZZQ4603", "KDCA", "KORD", departure_time=time.time() - 4 * 86400)
+    out = _add(route, identifier="ZZQ4603", origin="DCA", destination="ORD",
+               scheduled_departure=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    assert _stored(out["id"])["hex_id"] is None
+
+
+def test_plan_departure_time_matching_scheduled_departure_fills(route):
+    import time
+    dep = time.time() + 3 * 3600
+    _plan("ZZQ4604", "KDCA", "KORD", departure_time=dep)
+    out = _add(route, identifier="ZZQ4604", origin="DCA", destination="ORD",
+               scheduled_departure=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dep)))
+    assert _stored(out["id"])["registration"] == "N000TS"
+
+
+def test_fresh_plan_with_contradicting_origin_still_rejected(route):
+    _plan("ZZQ4605", "KEWR", "KORD", age_s=600)
+    out = _add(route, identifier="ZZQ4605", origin="DCA", destination="ORD")
+    stored = _stored(out["id"])
+    assert (stored["hex_id"], stored["registration"]) == (None, None)

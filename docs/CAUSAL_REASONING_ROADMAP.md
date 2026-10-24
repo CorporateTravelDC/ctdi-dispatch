@@ -64,6 +64,12 @@ all computed in `compile_layer()`:
 - `member_of_cluster` / `kind='cluster'` (`assign_clusters()`): groups
   of 3+ entities linked at lift >= 1.0. **0 live**, because it consumes
   the causal tier.
+- 2026-10-22: the parse blocker was fixed 2026-10-16 (`c4df48d9`). Vessels
+  (MMSI) and drones (UAS ID) join flights and trains, and the concept-level
+  tiers `concept_associated` / `kind='conceptual'` and
+  `member_of_concept_cluster` / `kind='concept_cluster'` were added. Spec and
+  status: `docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md`, "Correction,
+  2026-10-22" and "Concept-level association".
 
 Why the causal tier is empty (code finding, not fixed here): the function
 reads `semantic_note_instance_refs.note_ts` with

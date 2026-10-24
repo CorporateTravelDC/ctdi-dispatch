@@ -24,6 +24,7 @@ from common import config, db, db_backend, maintenance_window
 from common.acars import get_latest_phase as _acars_phase
 from ingest import failover
 from shared.watchlist import WatchlistFileWatcher, sweep_expired_transient
+from poller.hot_reload_hold import HoldableWatchlistFileWatcher
 
 log = logging.getLogger(__name__)
 
@@ -2568,8 +2569,11 @@ async def main() -> None:
              POLLER_STARTUP_HOLDOFF_S + POLLER_STARTUP_PUSH_GRACE_S)
 
     # Start permanent watchlist file watcher.
+    # 2026-10-23 (operator): the holdable variant skips the periodic hot-reload while a relay's
+    # hold sentinel exists, so a batch applied to the checkout cannot go live before its rollout
+    # (2026-10-20: 46 watches live before migration 0082). See poller/hot_reload_hold.py.
     watcher_stop = threading.Event()
-    watcher = WatchlistFileWatcher()
+    watcher = HoldableWatchlistFileWatcher()
     watcher.start(watcher_stop)
 
     shutdown = asyncio.Event()

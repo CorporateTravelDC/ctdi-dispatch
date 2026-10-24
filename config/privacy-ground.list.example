@@ -1,0 +1,12 @@
+# config/privacy-ground.list.example -- operator-designated ground privacy list (2026-10-23).
+# Install as /etc/corporatetraveldc/privacy-ground.list (root-owned, 0640; the operator
+# account must be able to read it for push-time checks). One entry per line; # comments.
+# Read by scripts/leak-guard/privacy_lists.py: matched only in ground context, reported as
+# 'ground-identifier', values never printed. Missing or empty file = "no entries"
+# (reported, never a failure). Real entries never go in this tracked example.
+#
+# id:<identifier>    matched only after a ground key (plate, license_plate, vehicle,
+#                    vehicle_id, vin)
+# Synthetic examples, left commented:
+# id:QQ-SYN-0001
+# id:QZZ0000

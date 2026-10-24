@@ -145,6 +145,50 @@ class RolloutListAndDebt(unittest.TestCase):
             self.assertFalse(os.path.exists(debt), "a dry-run must not create or modify the debt file")
 
 
+class BuildOnlyRows(unittest.TestCase):
+    """2026-10-23 (operator): kind "build" rows (docgen) are built, gated,
+    provenance-recorded and promoted, but never restarted, held, post-checked
+    or counted as review debt."""
+    PRE = RolloutListAndDebt.PRE
+    DOCGEN = "localhost/corporatetraveldc-docgen:latest"
+
+    def funcs(self):
+        return self.PRE + bash_funcs("rollout_rows", "rollout_units", "build_rows", "units_for_image",
+                                     "svc_of", "hold_image") + "\n"
+
+    def test_build_row_is_read_but_never_a_unit(self):
+        out = run_bash(self.funcs() + "build_rows; echo ---; rollout_units; echo ---; units_for_image " + self.DOCGEN)
+        build, units, img_units = out.split("---\n")
+        rows = [l.split("|") for l in build.split()]
+        self.assertIn(["image:corporatetraveldc-docgen", "build", self.DOCGEN,
+                       "/opt/corporatetraveldc/private/ctdi-dispatch-internal", "Containerfile.docgen", "0"], rows)
+        self.assertTrue(all(r[1] == "build" for r in rows))
+        self.assertNotIn("docgen", units)
+        self.assertEqual(img_units.strip(), "")
+
+    def test_failed_build_only_image_is_noted_not_held(self):
+        script = self.funcs() + (
+            "declare -A HELD_UNIT=() BUILD_ONLY=([" + self.DOCGEN + "]=1); BUILD_ONLY_FAILED=()\n"
+            'hold_image "' + self.DOCGEN + '" build-failed\n'
+            'hold_image localhost/corporatetraveldc-web:latest gate-failed\n'
+            'echo "held=${!HELD_UNIT[*]}"; echo "noted=${BUILD_ONLY_FAILED[*]}"\n')
+        out = run_bash(script)
+        self.assertIn("held=corporatetraveldc-web\n", out)
+        self.assertIn("noted=docgen(build-failed)", out)
+
+    def test_build_rows_join_the_local_build_loop_only(self):
+        t = REFRESH.read_text()
+        self.assertIn('[[ "$kind" == local || "$kind" == build ]] || continue', t)
+        self.assertIn("done < <(rollout_rows; build_rows)", t)
+        # the build loop (build -> gate -> provenance -> record) iterates LOCAL_IMAGES,
+        # which now includes build-only images; the restart side never sees them
+        self.assertIn('for image in "${LOCAL_IMAGES[@]}"; do\n  svc=$(svc_of "$image"); check=$(check_of "$image")', t)
+        self.assertNotIn("build_rows", t[t.index("LEFT_BEHIND=()"):])
+        guard = t[t.index("PROMOTE_BAD=()"):t.index("PROMOTION CHECK FAILED")]
+        self.assertIn('if [[ -n "${BUILD_ONLY[$image]:-}" ]]; then', guard)
+        self.assertIn("${#BUILD_ONLY_FAILED[@]}", t[t.index("SUMMARY="):])
+
+
 class AuditTrust(unittest.TestCase):
     def test_built_ids_manifest_is_the_only_extra_trust(self):
         text = REFRESH.read_text()
@@ -169,7 +213,10 @@ class HandOffContract(unittest.TestCase):
         i_build = t.index("podman build")
         i_pull = t.index("podman pull")
         self.assertLess(i_from, i_build); self.assertLess(i_from, i_pull)
-        self.assertIn("elif [[ $kind == local ]]; then", t[i_from:i_build])
+        # 2026-10-22: build-only rows (kind "build", e.g. docgen) take the same build branch and,
+        # under FROM_REFRESH, are skipped before it.
+        self.assertIn("elif [[ $kind == local || $kind == build ]]; then", t[i_from:i_build])
+        self.assertIn("if [[ $FROM_REFRESH == 1 && $kind == build ]]; then", t[:i_build])
 
     def test_rollout_skips_postgres_without_canary(self):
         t = ROLLOUT.read_text()

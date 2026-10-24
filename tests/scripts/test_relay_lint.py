@@ -7,11 +7,13 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/relay-lint.py"
 
 
-def lint(body: str):
+def lint(body: str, staged=()):
     spec = importlib.util.spec_from_file_location("relay_lint", SCRIPT)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
-    return [why for _, why, _ in m.lint("bash <<'RELAY'\nset -euo pipefail\n" + body + "\nRELAY_DONE=1\nRELAY\n")]
+    # 2026-10-23: staged= stands in for the guard's staged paths (hermetic; no git call)
+    return [why for _, why, _ in m.lint("bash <<'RELAY'\nset -euo pipefail\n" + body + "\nRELAY_DONE=1\nRELAY\n",
+                                        staged=list(staged))]
 
 
 def test_clean_relay_passes():
@@ -29,7 +31,7 @@ def test_read_without_tty():
 
 def test_sudo_on_user_unit():
     assert any("user unit" in w for w in lint("sudo systemctl disable --now corporatetraveldc-net-failover-watchdog.timer"))
-    assert not lint("sudo systemctl restart tailscaled")
+    assert not lint("sudo systemctl restart tailscaled </dev/null")
 
 
 def test_add_N_and_bans():
@@ -221,3 +223,80 @@ def test_sqlite_sql_with_double_quoted_literals_is_flagged():
     good = "echo \"n: $(pihole-FTL sqlite3 -ni /etc/pihole/pihole-FTL.db \"SELECT count(*) FROM queries WHERE timestamp > strftime('%s','now','-1 day')\" 2>&1)\""
     assert any(why in w for w in lint(bad))
     assert not any(why in w for w in lint(good))
+
+
+# 2026-10-22 (operator): the 2026-10-21 hotfix relay hand-built images without receipts ---------
+
+def test_bare_podman_build_needs_a_provenance_receipt():
+    why = "without a later `provenance.py record`"
+    build = "podman build -t localhost/corporatetraveldc-api:latest -f Containerfile . </dev/null"
+    record = ("python3 scripts/build/provenance.py record --image localhost/corporatetraveldc-api:latest "
+              "--containerfile Containerfile --context .")
+    assert any(why in w for w in lint(build))
+    assert not any(why in w for w in lint(build + "\n" + record))
+    assert any(why in w for w in lint(record + "\n" + build))                    # record must come after
+    other = record.replace("corporatetraveldc-api", "corporatetraveldc-web")
+    assert any(why in w for w in lint(build + "\n" + other))                     # receipt for another image
+    assert not any(why in w for w in lint("scripts/relay-wait-load.sh\nbash scripts/serialized-rollout.sh"))
+    assert not any(why in w for w in lint("echo 'podman build is done by the rollout'"))
+
+
+# 2026-10-23 (operator): sudo stdin, OK ping gated on its checks, hard-coded --on-calendar date,
+# hot-reloaded data applied without a hold.
+
+def test_sudo_must_redirect_stdin():
+    # 2026-10-22: `sudo bash -c '...'` without </dev/null ate the rest of the relay
+    assert any("sudo reads stdin" in w for w in lint("sudo bash -c 'cd /opt/x && bash scripts/install-root-copies.sh'"))
+    assert any("sudo reads stdin" in w for w in lint('x="$(sudo -u pihole pihole-FTL --config k)"'))
+    assert any("sudo reads stdin" in w for w in lint("true && sudo systemctl daemon-reload"))
+    assert not lint("sudo bash -c 'cd /opt/x && bash scripts/install-root-copies.sh' </dev/null")
+    assert not lint("sudo bash -s <<'ROOT'\nsystemctl daemon-reload\nROOT")
+    assert not lint("printf 'x\\n' | sudo tee /etc/x >/dev/null")
+    assert not lint("sudo -v")
+    assert not lint('echo "== 1b. sudo (prompt 1 of 7)"\n# sudo bash -c without redirect, in a comment')
+
+
+TRAP_OK = ("trap 'rc=$?; if [[ $rc == 0 && $RELAY_DONE == 1 ]]; then nudge \"X finished OK\" \"y\"; "
+           "else nudge \"X FAILED rc=$rc\" \"y\"; fi' EXIT\n")
+
+
+def test_ok_ping_must_be_gated_on_final_checks():
+    bad = (TRAP_OK + "echo \"provenance FAILED images: $(scripts/build/provenance.py verify --running </dev/null "
+           "2>&1 | grep -cE '^FAILED' || true) (expect 0)\"\n"
+           "echo \"integrity sweep: $(systemctl --user show -p Result --value x.service)\"\necho done")
+    assert sum("not enforced" in w for w in lint(bad)) == 2
+    good = (TRAP_OK + "pf=$(scripts/build/provenance.py verify --running </dev/null 2>&1 | grep -cE '^FAILED' || true)\n"
+            "echo \"provenance FAILED images: $pf (expect 0)\"\n"
+            "[[ $pf == 0 ]] || { echo 'provenance check failed'; exit 1; }\n"
+            "r=$(systemctl --user show -p Result --value x.service); echo \"integrity sweep: $r\"; "
+            "[[ $r == success ]] || exit 1")
+    assert not any("not enforced" in w for w in lint(good))
+    # no OK-nudge trap: printing a result is just output
+    assert not any("not enforced" in w for w in lint("echo \"integrity sweep: $(cat /tmp/x)\""))
+
+
+def test_hardcoded_on_calendar_date():
+    assert any("hard-coded date" in w for w in lint(
+        'systemd-run --user --unit u --on-calendar "2026-10-22 23:50:00 America/New_York" /bin/true </dev/null'))
+    assert any("hard-coded date" in w for w in lint("systemd-run --user --on-calendar=2026-10-22T23:50 /bin/true"))
+    assert not any("hard-coded date" in w for w in lint(
+        'systemd-run --user --unit u --on-calendar "$(TZ=America/New_York date -d \'23:50\' \'+%Y-%m-%d %H:%M:00\') '
+        'America/New_York" /bin/true'))
+    assert not any("hard-coded date" in w for w in lint('systemd-run --user --on-calendar "*-*-* 23:50:00" /bin/true'))
+
+
+APPLY = 'git -C "$G" diff --cached --binary | git apply --index\n'
+HOLD = "touch /var/lib/corporatetraveldc/hold-hot-reload\n"
+ROLL = "systemctl --user restart corporatetraveldc-poller.service\n"
+RELEASE = "rm -f /var/lib/corporatetraveldc/hold-hot-reload\n"
+
+
+def test_hot_reloaded_data_needs_a_hold_around_the_rollout():
+    staged = ["src/poller/main.py", "watchlists/permanent_flights.json"]
+    assert sum("hot-reload" in w for w in lint(APPLY + ROLL, staged)) == 2
+    assert any("does not hold the reload" in w for w in lint(APPLY + HOLD + ROLL + RELEASE, staged))  # hold too late
+    assert any("never released" in w for w in lint(HOLD + APPLY + RELEASE + ROLL, staged))           # released early
+    assert not any("hot-reload" in w for w in lint(HOLD + APPLY + ROLL + RELEASE, staged))
+    # batch without a hot-reloaded file, or no guard apply: no rule
+    assert not any("hot-reload" in w for w in lint(APPLY + ROLL, ["src/poller/main.py"]))
+    assert not any("hot-reload" in w for w in lint(ROLL, staged))

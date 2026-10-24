@@ -62,6 +62,32 @@ What it looks for
     LADD_MIN_IDENTIFIERS), the class is NOT CHECKED: said loudly, exit 3 on scan
     and redact (never a silent pass). Without the dispatch env it is NOT CHECKED
     with a loud warning, exit 3 only under --require-ladd.
+    2026-10-22 (operator): an identifier WITHOUT the N-prefix (registry form 7QZK,
+    or a letters-only entry) matches only in identifier context (tail / reg /
+    registration / registry / aircraft / callsign / flight / r= / hex / icao, or a
+    JSON value of such a key), and a digits+Z token after '.' or ':' (the fraction
+    of an ISO-8601 timestamp, 13:02:19.536Z) never matches. False positives were
+    timestamps and capitalised prose words. N-forms (N7QZK) and letters-first forms
+    carrying a digit (callsigns QQZ901, marks Q1ZT7) match as before.
+    2026-10-23 (operator, industry aware): the matching lives in privacy_lists.py
+    (shared with the public tripwire). A short form inside a maritime record (an AIS
+    CSV block, a record with an mmsi key) never matches as aviation.
+  * maritime / ground / rail privacy lists (2026-10-23), classes 'maritime-identifier',
+    'ground-identifier', 'rail-identifier': /etc/corporatetraveldc/privacy-<industry>.list,
+    matched only in their own keyed context (privacy_lists.py). Redacted to
+    [<industry>-redacted]. Absent or empty = "no entries", never a failure.
+  * receiver coordinates (2026-10-22, operator), class 'receiver-coords': the feeder
+    receiver's latitude/longitude, read in-process (never printed) from the feeder
+    env files (COORD_SOURCES: ultrafeeder READSB_LAT/READSB_LON and the map centre,
+    piaware / opensky / planefinder / airnavradar LAT/LONG where readable). Matched
+    BY VALUE, not by a generic lat/lon shape: a decimal with 3+ places whose integer
+    part is the receiver's and whose value, rounded or truncated to 3 or 4 places,
+    equals it, with or without sign / leading + / trailing degree sign (--lat x,
+    READSB_LAT=x, +x°, a bare "lat, lon" pair). Redacted to [coords-redacted]. No value
+    readable: the class is NOT CHECKED, said loudly; exit 3 only under --require-coords.
+  * Feeder UUIDs (ultrafeeder UUID, piaware FEEDER_ID) are PUBLIC identifiers, not
+    secrets (operator decision 2026-10-22): NOT_SECRET_KEYS keeps them out of the
+    value set from every env file. Sharing keys, FR24KEY, OPENSKY_SERIAL stay values.
 
 Default roots: ~/.claude/projects and /tmp/claude-<uid> (session transcripts and
 tool outputs). Agent accounts' homes are only readable by root: --agents scans every
@@ -82,6 +108,7 @@ Output names the file, the secret's NAME and a count -- never a value.
   --require-ladd   exit 3 whenever the LADD class could not be checked
   --ladd-stdin     read the LADD list from stdin (one per line) instead of the database
                    (2026-10-20, the root unit; implies --require-ladd)
+  --require-coords exit 3 whenever the receiver-coords class could not be checked
 """
 from __future__ import annotations
 
@@ -128,7 +155,14 @@ SOURCES = [p for p in os.environ.get("LEAK_GUARD_SOURCES", _default_sources()).s
 SOURCE_SKIP = re.compile(r"(?:\.pub|\.pub\.asc|\.crt|signing\.env|signing-pin|tailnet-disable|\.example|\.template|\.bak[-.\w]*)$")
 # In env files other than dispatch-secrets.env only secret-NAMED keys are values (a feeder
 # file's LAT/LONG, demo.env's model name or URLs are configuration).
-SECRET_KEY_NAME = re.compile(r"(?i)(PASS|SECRET|TOKEN|KEY|SHARECODE|FEEDER_ID|UUID|ACCOUNT|SID|VERIFY_SERVICE)")
+SECRET_KEY_NAME = re.compile(r"(?i)(PASS|SECRET|TOKEN|KEY|SHARECODE|SERIAL|ACCOUNT|SID|VERIFY_SERVICE)")
+# 2026-10-22 (operator): feeder UUIDs are PUBLIC identifiers (they appear on the
+# aggregators' public stats pages), never values -- in ANY env file, dispatch-secrets.env
+# included. Exact key names; every other key keeps its treatment.
+NOT_SECRET_KEYS = frozenset({"UUID", "ULTRAFEEDER_UUID", "FEEDER_ID", "PIAWARE_FEEDER_ID"})
+# Secret-named keys whose values are shorter than MIN_LEN but are still passwords: the
+# OpenSky feeder serial is the feeder's credential (11 characters). {name: minimum length}.
+SHORT_SECRET_KEYS = {"OPENSKY_SERIAL": 8}
 KEY_BODY_LINES = 3          # base64 body lines taken per multi-line key file (scan cost stays bounded)
 KEY_BODY_MIN = 32
 NOT_CHECKED: list[str] = []  # source files this account could not read (names only); set by load_secret_values
@@ -168,61 +202,35 @@ TOKEN_PATTERNS = [
 ]
 PLACEHOLDER = re.compile(rb"^(?:0+|[xX]+|REDACTED.*)$")
 
-# ── LADD identifiers (2026-10-19, Gate-1b) ─────────────────────────────────────
-LADD_LABEL = "ladd-identifier"
+# ── LADD identifiers (2026-10-19, Gate-1b) and the other industries (2026-10-23) ──
+# 2026-10-23 (operator: "the LADD / IMO checks should be industry aware"): the matching
+# lives in privacy_lists.py next to this file (shared with the public tripwire; the root
+# unit's installed copy sits beside it in /usr/local/libexec/ctdc). Aviation keeps the
+# 2026-10-22 context rule and adds one veto: a short form inside a maritime record (an
+# AIS CSV block, a record carrying an mmsi key) is not an aircraft. Maritime / ground /
+# rail lists (/etc/corporatetraveldc/privacy-<industry>.list) match only in their own
+# keyed context, report as '<industry>-identifier', and never fail the scan when absent.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import privacy_lists as pl  # noqa: E402
+
+LADD_LABEL = pl.LABELS[pl.AVIATION]
 LADD_REPLACEMENT = b"[ladd-redacted]"
-LADD_MIN_IDENTIFIERS = 1000          # the tripwire's fail-closed floor (push-public.sh)
+LADD_MIN_IDENTIFIERS = pl.AVIATION_MIN_IDENTIFIERS
 LADD_ALLOW = Path(__file__).with_name("ladd-public-allow.sha256")
-LADD_SQL = "SELECT n_number FROM faa_ladd_aircraft UNION SELECT n_number FROM faa_ladd_removals"
-# Matching (C speed: replace / translate / split / set ops; no per-position regex):
-#   1. JSON escapes (backslash n r t b f, backslash-uXXXX) become spaces of the same
-#      length, so "\nN7QZK" is not glued into one token;
-#   2. base64 payloads (>= 200 base64 characters with no other byte: images and
-#      attachments) are blanked -- random upper-case runs there are not identifiers
-#      anyone wrote, and would block every push on noise;
-#   3. every byte outside [A-Za-z0-9-] becomes a space; tokens = split();
-#   4. a token matches if it is listed, or (the tripwire's rule) one of its
-#      hyphen-separated parts is. Case-sensitive, as the tripwire.
-# Offsets are preserved throughout, so the redaction edits the original bytes.
-_ESCAPES = (b"\\n", b"\\r", b"\\t", b"\\b", b"\\f")
-_UESC = re.compile(rb"\\u[0-9a-fA-F]{4}")
-_B64_TABLE = bytes(98 if (chr(b).isascii() and (chr(b).isalnum() or chr(b) in "+/=")) else 32 for b in range(256))
-_TOK_TABLE = bytes(b if (chr(b).isascii() and (chr(b).isalnum() or chr(b) == "-")) else 32 for b in range(256))
-B64_MIN_RUN = 200
+LADD_SQL = pl.LADD_SQL
+B64_MIN_RUN = pl.B64_MIN_RUN
+# keyed industries (maritime, ground, rail): loaded by main(); empty = "no entries"
+KEYED: dict[str, "pl.KeyedList"] = {}
+# 2026-10-23 (operator): suspected identifiers in the fields of a vertical with NO list
+# (privacy_lists.suspects): path -> "suspected-<industry>-identifier" -> count, filled by
+# scan(). Reported loudly by main() as needing review, by path and count only (never a
+# value); not redacted and not an exit status of their own -- the review happens in the
+# public tripwire's --review, and the transcript is not the place to decide it.
+REVIEW: dict[Path, dict[str, int]] = {}
 
 
-def _ladd_text(blob: bytes) -> bytes:
-    """Same length as blob: escapes and base64 runs blanked, separators -> spaces."""
-    t = blob
-    for esc in _ESCAPES:
-        if esc in t:
-            t = t.replace(esc, b"  ")
-    if b"\\u" in t:
-        t = _UESC.sub(b"      ", t)
-    b64 = t.translate(_B64_TABLE)
-    probe = b"b" * B64_MIN_RUN
-    pos = b64.find(probe)
-    if pos >= 0:
-        parts, last = [], 0
-        while pos >= 0:
-            end = b64.find(b" ", pos)
-            end = len(b64) if end < 0 else end
-            parts += [t[last:pos], b" " * (end - pos)]
-            last = end
-            pos = b64.find(probe, end)
-        parts.append(t[last:])
-        t = b"".join(parts)
-    return t.translate(_TOK_TABLE)
-
-
-def _ladd_hit_strings(text: bytes, ladd: frozenset[bytes], allow: set[str]) -> set[bytes]:
-    import hashlib
-    toks = set(text.split())
-    hits = toks & ladd
-    for tok in toks:
-        if b"-" in tok:
-            hits |= ladd.intersection(tok.split(b"-"))
-    return {h for h in hits if hashlib.sha256(h).hexdigest() not in allow}
+def _industry_note(label: str) -> str:
+    return f" [{pl.INDUSTRY_OF_LABEL[label]}]" if label in pl.INDUSTRY_OF_LABEL else ""
 
 
 # 2026-10-20: the settings common.db.conn() / _pg_conninfo() actually connect with
@@ -235,22 +243,7 @@ def _dispatch_env() -> bool:
     return any(os.environ.get(k) for k in DISPATCH_ENV_KEYS)
 
 
-def ladd_forms(identifiers) -> frozenset[bytes]:
-    """Every whole-token form an identifier is matched in (never printed)."""
-    out: set[bytes] = set()
-    for ident in identifiers:
-        raw = (ident or "").strip().upper()
-        if not raw:
-            continue
-        forms = {raw}
-        if len(raw) > 1 and raw[0] == "N" and raw[1].isdigit():
-            forms.add(raw[1:])                      # N7QZK -> registry form 7QZK
-        elif raw[0].isdigit():
-            forms.add("N" + raw)                    # registry form 7QZK -> N7QZK
-        for f in forms:
-            if any(c.isalpha() for c in f):         # all-digit forms would hit every number
-                out.add(f.encode())
-    return frozenset(out)
+ladd_forms = pl.aviation_forms
 
 
 def _ladd_from_db() -> list[str]:
@@ -276,9 +269,7 @@ def load_ladd_identifiers() -> tuple[frozenset[bytes] | None, str]:
 
 
 def _ladd_floor(idents: list[str]) -> tuple[frozenset[bytes] | None, str]:
-    if len(idents) < LADD_MIN_IDENTIFIERS:
-        return None, f"LADD list has {len(idents)} identifier(s) (< {LADD_MIN_IDENTIFIERS}; fail closed)"
-    return ladd_forms(idents), ""
+    return pl.aviation_floor(idents, LADD_MIN_IDENTIFIERS)
 
 
 def load_ladd_from_stream(stream) -> tuple[frozenset[bytes] | None, str]:
@@ -295,48 +286,154 @@ def load_ladd_from_stream(stream) -> tuple[frozenset[bytes] | None, str]:
 
 
 def _ladd_allow() -> set[str]:
-    try:
-        return {l.split()[0].lower() for l in LADD_ALLOW.read_text().splitlines()
-                if l.strip() and not l.startswith("#")}
-    except OSError:
-        return set()
+    return pl.load_allow(LADD_ALLOW)
 
 
 def ladd_spans(blob: bytes, ladd: frozenset[bytes] | None, allow: set[str] | None = None) -> list[tuple[int, int]]:
-    """(start, end) of every listed whole token or hyphen part, sorted, non-overlapping."""
+    """(start, end) of every aviation hit, sorted, non-overlapping (privacy_lists.aviation_spans)."""
     if not ladd:
         return []
-    text = _ladd_text(blob)
-    hits = _ladd_hit_strings(text, ladd, _ladd_allow() if allow is None else allow)
-    if not hits:
-        return []
-    n = len(text)
-    spans = []
-    for h in hits:
-        # a hyphenated entry matches whole tokens only; a plain one, a token or a part
-        stops = (32,) if b"-" in h else (32, 45)
-        pos = text.find(h)
-        while pos >= 0:
-            end = pos + len(h)
-            if (pos == 0 or text[pos - 1] in stops) and (end == n or text[end] in stops):
-                spans.append((pos, end))
-            pos = text.find(h, pos + 1)
-    spans.sort()
-    out, last = [], -1
-    for a, b in spans:
-        if a >= last:
-            out.append((a, b))
-            last = b
+    return pl.aviation_spans(blob, ladd, _ladd_allow() if allow is None else allow)
+
+
+def keyed_spans(blob: bytes, keyed: dict | None = None, allow: set[str] | None = None
+                ) -> dict[str, list[tuple[int, int]]]:
+    """label -> spans for the maritime / ground / rail lists (empty lists: nothing)."""
+    keyed = KEYED if keyed is None else keyed
+    active = [kl for kl in keyed.values() if kl.count]
+    if not active:
+        return {}
+    allow = _ladd_allow() if allow is None else allow
+    text, blocks = pl.token_text(blob), pl.ais_blocks(blob)
+    out = {}
+    for kl in active:
+        s = pl.keyed_spans(blob, kl, allow, text, blocks)
+        if s:
+            out[pl.LABELS[kl.industry]] = s
     return out
 
 
-def redact_ladd(blob: bytes, ladd: frozenset[bytes] | None) -> bytes:
-    spans = ladd_spans(blob, ladd)
+def _replace_spans(blob: bytes, spans: list[tuple[int, int, bytes]]) -> bytes:
+    if not spans:
+        return blob
+    out, last = [], 0
+    for a, b, rep in sorted(spans):
+        if a < last:
+            continue
+        out += [blob[last:a], rep]
+        last = b
+    out.append(blob[last:])
+    return b"".join(out)
+
+
+def redact_ladd(blob: bytes, ladd: frozenset[bytes] | None, keyed: dict | None = None) -> bytes:
+    spans = [(a, b, LADD_REPLACEMENT) for a, b in ladd_spans(blob, ladd)]
+    for label, ss in keyed_spans(blob, keyed).items():
+        rep = f"[{pl.INDUSTRY_OF_LABEL[label]}-redacted]".encode()
+        spans += [(a, b, rep) for a, b in ss]
+    return _replace_spans(blob, spans)
+
+
+# ── Receiver coordinates (2026-10-22, operator) ────────────────────────────────
+COORD_LABEL = "receiver-coords"
+COORD_REPLACEMENT = b"[coords-redacted]"
+COORD_PLACES = (3, 4)          # matched at 3 and 4 decimal places (rounded or truncated)
+_ETC = "/etc/corporatetraveldc"
+# "path|KEY,KEY;path|KEY,KEY". LEAK_GUARD_COORD_SOURCES overrides (tests: synthetic file,
+# or empty = class NOT CHECKED). The first file is the receiver's own (ultrafeeder); the
+# others are the same receiver as each feeder knows it, loaded when readable.
+_COORD_DEFAULT = ";".join((
+    f"{_ETC}/ultrafeeder-secrets.env|READSB_LAT,READSB_LON,TAR1090_DEFAULTCENTERLAT,TAR1090_DEFAULTCENTERLON",
+    f"{_ETC}/piaware-secrets.env|LAT,LONG",
+    f"{_ETC}/opensky-secrets.env|LAT,LONG",
+    f"{_ETC}/planefinder-secrets.env|LAT,LONG",
+    f"{_ETC}/airnavradar-secrets.env|LAT,LONG",
+))
+
+
+def _coord_sources() -> list[tuple[Path, set[str]]]:
+    out = []
+    for item in os.environ.get("LEAK_GUARD_COORD_SOURCES", _COORD_DEFAULT).split(";"):
+        path, _, keys = item.strip().partition("|")
+        if path:
+            out.append((Path(path), {k.strip() for k in keys.split(",") if k.strip()}))
+    return out
+
+
+def _decimal(v: bytes):
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = abs(Decimal(v.decode("ascii").strip().lstrip("+")))
+    except (InvalidOperation, UnicodeDecodeError, ValueError):
+        return None
+    return d if d.is_finite() and d <= 180 else None
+
+
+def _quant(d, places: int):
+    """(rounded half-up, truncated) to places."""
+    from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+    q = Decimal(1).scaleb(-places)
+    return d.quantize(q, ROUND_HALF_UP), d.quantize(q, ROUND_DOWN)
+
+
+def load_receiver_coords():
+    """(frozenset of absolute coordinate Decimals, "") or (None, reason). Never printed;
+    the reason names files and key names only."""
+    vals, unreadable = set(), []
+    for path, keys in _coord_sources():
+        try:
+            raw = path.read_bytes()
+        except OSError as e:
+            unreadable.append(f"{path.name} ({type(e).__name__})")
+            continue
+        for line in raw.splitlines():
+            k, sep, v = line.strip().partition(b"=")
+            if not sep or _env_key(k) not in keys:
+                continue
+            d = _decimal(v.strip().strip(b"'\""))
+            if d is not None and d != 0 and -d.as_tuple().exponent >= 3:
+                vals.add(d)
+    if not vals:
+        why = "no receiver coordinate readable" + (f": {', '.join(unreadable)}" if unreadable
+                                                    else " (no coordinate source configured)")
+        return None, why
+    return frozenset(vals), ""
+
+
+def _coord_regex(coords) -> re.Pattern:
+    ints = sorted({str(int(d)).encode() for d in coords}, key=len, reverse=True)
+    # sign / leading +, the integer part of a receiver coordinate, 3+ places, an optional
+    # degree sign (raw UTF-8, Latin-1 or JSON-escaped). Not glued to a longer number.
+    return re.compile(rb"(?<![0-9.])[+-]?(?:" + b"|".join(re.escape(i) for i in ints)
+                      + rb")\.[0-9]{3,}(?![0-9]|\.[0-9])(?:\xc2\xb0|\xb0|\\u00[bB]0)?")
+
+
+def coord_spans(blob: bytes, coords) -> list[tuple[int, int]]:
+    if not coords:
+        return []
+    targets = {p: set() for p in COORD_PLACES}
+    for d in coords:
+        for p in COORD_PLACES:
+            targets[p].update(_quant(d, p))
+    spans = []
+    for m in _coord_regex(coords).finditer(blob):
+        num = re.match(rb"[+-]?[0-9]+\.[0-9]+", m.group(0)).group(0)
+        t = _decimal(num)
+        if t is None:
+            continue
+        places = len(num.split(b".")[1])
+        if any(p <= places and targets[p].intersection(_quant(t, p)) for p in COORD_PLACES):
+            spans.append(m.span())
+    return spans
+
+
+def redact_coords(blob: bytes, coords) -> bytes:
+    spans = coord_spans(blob, coords)
     if not spans:
         return blob
     out, last = [], 0
     for a, b in spans:
-        out += [blob[last:a], LADD_REPLACEMENT]
+        out += [blob[last:a], COORD_REPLACEMENT]
         last = b
     out.append(blob[last:])
     return b"".join(out)
@@ -355,7 +452,7 @@ def load_secret_values(path: Path = SECRETS_ENV) -> dict[str, list[bytes]]:
             continue
         k, _, v = line.partition(b"=")
         v = v.strip().strip(b"'\"")
-        if len(v) < MIN_LEN or v in NOT_SECRET:
+        if len(v) < MIN_LEN or v in NOT_SECRET or _env_key(k) in NOT_SECRET_KEYS:
             continue
         forms = [v]
         esc = json.dumps(v.decode("utf-8", "replace"))[1:-1].encode()
@@ -424,6 +521,11 @@ def _value_forms(raw: bytes) -> list[bytes]:
     return list(dict.fromkeys(body))
 
 
+def _env_key(k: bytes) -> str:
+    k = k.strip().decode("utf-8", "replace")
+    return k[7:].strip() if k.startswith("export ") else k
+
+
 def _env_values(raw: bytes, label: str):
     for line in raw.splitlines():
         line = line.strip()
@@ -434,8 +536,8 @@ def _env_values(raw: bytes, label: str):
         if k.startswith("export "):
             k = k[7:].strip()
         v = v.strip().strip(b"'\"")
-        if (not SECRET_KEY_NAME.search(k) or len(v) < MIN_LEN or v in NOT_SECRET
-                or PLACEHOLDER.match(v) or v == b"CHANGE_ME"):
+        if (not SECRET_KEY_NAME.search(k) or k in NOT_SECRET_KEYS or len(v) < SHORT_SECRET_KEYS.get(k, MIN_LEN)
+                or v in NOT_SECRET or PLACEHOLDER.match(v) or v == b"CHANGE_ME"):
             continue
         yield f"{label}:{k}", _forms(v)
 
@@ -504,7 +606,8 @@ def iter_files(roots: list[Path]):
                     yield p
 
 
-def find(blob: bytes, secrets: dict[str, list[bytes]], ladd: frozenset[bytes] | None = None) -> dict[str, int]:
+def find(blob: bytes, secrets: dict[str, list[bytes]], ladd: frozenset[bytes] | None = None,
+         coords=None) -> dict[str, int]:
     hits: dict[str, int] = {}
     for name, forms in secrets.items():
         n = sum(blob.count(f) for f in forms)
@@ -514,52 +617,68 @@ def find(blob: bytes, secrets: dict[str, list[bytes]], ladd: frozenset[bytes] | 
         n = sum(1 for m in rx.finditer(blob) if not PLACEHOLDER.match(m.group(0).split(b"_")[-1]))
         if n:
             hits[label] = hits.get(label, 0) + n
+    n = len(coord_spans(blob, coords))
+    if n:
+        hits[COORD_LABEL] = n
     n = len(ladd_spans(blob, ladd))
     if n:
         hits[LADD_LABEL] = n
+    for label, spans in keyed_spans(blob).items():
+        hits[label] = len(spans)
     return hits
 
 
-def redact_blob(blob: bytes, secrets: dict[str, list[bytes]], ladd: frozenset[bytes] | None = None) -> bytes:
+def redact_blob(blob: bytes, secrets: dict[str, list[bytes]], ladd: frozenset[bytes] | None = None,
+                coords=None) -> bytes:
     for name, forms in sorted(secrets.items(), key=lambda kv: -max(len(f) for f in kv[1])):
         for f in forms:
             blob = blob.replace(f, f"[REDACTED:{name}]".encode())
     for label, rx in TOKEN_PATTERNS:
         blob = rx.sub(lambda m: m.group(0) if PLACEHOLDER.match(m.group(0).split(b"_")[-1])
                       else f"[REDACTED:{label}]".encode(), blob)
-    return redact_ladd(blob, ladd)
+    return redact_ladd(redact_coords(blob, coords), ladd)
 
 
 def scan(roots: list[Path], secrets: dict[str, list[bytes]],
-         ladd: frozenset[bytes] | None = None) -> dict[Path, dict[str, int]]:
+         ladd: frozenset[bytes] | None = None, coords=None) -> dict[Path, dict[str, int]]:
     found = {}
+    REVIEW.clear()
+    lists = pl.PrivacyLists(None, "", KEYED)
+    sallow = pl.load_allow(pl.SUSPECT_ALLOW)
     for p in iter_files(roots):
         try:
             if p.stat().st_size > MAX_FILE_BYTES:
                 continue
-            h = find(p.read_bytes(), secrets, ladd)
+            blob = p.read_bytes()
+            h = find(blob, secrets, ladd, coords)
         except OSError:
             continue
         if h:
             found[p] = h
+        sus: dict[str, int] = {}
+        for x in pl.suspects(blob, lists, sallow):
+            k = f"suspected-{x.industry}-identifier"
+            sus[k] = sus.get(k, 0) + 1
+        if sus:
+            REVIEW[p] = sus
     return found
 
 
 def _report(found: dict[Path, dict[str, int]]) -> None:
     for p, h in sorted(found.items()):
-        print(f"  {p}: " + ", ".join(f"{k} x{v}" for k, v in sorted(h.items())))
+        print(f"  {p}: " + ", ".join(f"{k} x{v}{_industry_note(k)}" for k, v in sorted(h.items())))
 
 
 def redact(roots: list[Path], secrets: dict[str, list[bytes]], include_live: bool,
-           ladd: frozenset[bytes] | None = None) -> int:
-    found = scan(roots, secrets, ladd)
+           ladd: frozenset[bytes] | None = None, coords=None) -> int:
+    found = scan(roots, secrets, ladd, coords)
     now, done, skipped = time.time(), 0, []
     for p in found:
         st = p.stat()
         if not include_live and now - st.st_mtime < LIVE_MINUTES * 60:
             skipped.append(p)
             continue
-        new = redact_blob(p.read_bytes(), secrets, ladd)
+        new = redact_blob(p.read_bytes(), secrets, ladd, coords)
         fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".redact-")
         with os.fdopen(fd, "wb") as fh:
             fh.write(new)
@@ -572,7 +691,7 @@ def redact(roots: list[Path], secrets: dict[str, list[bytes]], include_live: boo
     # redacted nor skipped, so the rescan failed the unit on a live session (16:04Z run, 4.5 min under
     # load). The rescan applies the same live rule: such a file joins the skipped list for a later run.
     after = {}
-    for p, h in scan(roots, secrets, ladd).items():
+    for p, h in scan(roots, secrets, ladd, coords).items():
         if p in skipped:
             continue
         if not include_live and time.time() - p.stat().st_mtime < LIVE_MINUTES * 60:
@@ -599,6 +718,8 @@ def main(argv=None) -> int:
                     help="exit 3 whenever the LADD class could not be checked (no dispatch env included)")
     ap.add_argument("--ladd-stdin", action="store_true",
                     help="read the LADD list from stdin, one per line (root unit; implies --require-ladd)")
+    ap.add_argument("--require-coords", action="store_true",
+                    help="exit 3 whenever the receiver-coords class could not be checked")
     a = ap.parse_args(argv)
     roots = a.root or (agent_roots() if a.agents else default_roots())
     secrets = load_secret_values()
@@ -609,17 +730,35 @@ def main(argv=None) -> int:
         print(f"transcript-leak-scan: NOTE {len(NOT_CHECKED)} credential file(s) NOT CHECKED (unreadable to "
               "this account): " + ", ".join(NOT_CHECKED))
     ladd, why = load_ladd_from_stream(sys.stdin) if a.ladd_stdin else load_ladd_identifiers()
+    # 2026-10-23: maritime / ground / rail lists. Absent or empty = "no entries" and an
+    # unreadable one is said loudly; neither ever changes the exit status (only aviation
+    # is fail-closed).
+    KEYED.clear()
+    KEYED.update(pl.load_keyed_lists())
+    print("transcript-leak-scan: privacy lists -- "
+          + "; ".join(f"{ind}: {kl.status}" for ind, kl in KEYED.items()))
     # 3 = the LADD class was not checked where it had to be (dispatch env present,
     # --require-ladd or --ladd-stdin): never a silent pass.
     ladd_rc = 3 if ladd is None and (a.require_ladd or a.ladd_stdin or _dispatch_env()) else 0
     if ladd is None:
         print(f"transcript-leak-scan: {'ERROR' if ladd_rc else 'WARNING'} LADD class '{LADD_LABEL}' NOT CHECKED: {why}")
+    coords, cwhy = load_receiver_coords()
+    coords_rc = 3 if coords is None and a.require_coords else 0
+    if coords is None:
+        print(f"transcript-leak-scan: {'ERROR' if coords_rc else 'WARNING'} class '{COORD_LABEL}' NOT CHECKED: {cwhy}")
+    ladd_rc = ladd_rc or coords_rc
     if a.cmd == "redact":
-        rc = redact(roots, secrets, a.include_live, ladd)
+        rc = redact(roots, secrets, a.include_live, ladd, coords)
         if ladd is None:
             print(f"  LADD class '{LADD_LABEL}' NOT CHECKED in this redact: {why}")
+        if coords is None:
+            print(f"  class '{COORD_LABEL}' NOT CHECKED in this redact: {cwhy}")
         return rc or ladd_rc
-    found = scan(roots, secrets, ladd)
+    found = scan(roots, secrets, ladd, coords)
+    if REVIEW:
+        print(f"transcript-leak-scan: REVIEW {len(REVIEW)} file(s) carry suspected identifier(s) in a vertical "
+              "with no list -- needs review (paths and counts only):")
+        _report(REVIEW)
     now = time.time()
     live = {p: h for p, h in found.items() if now - p.stat().st_mtime < LIVE_MINUTES * 60}
     closed = {p: h for p, h in found.items() if p not in live}
@@ -634,12 +773,16 @@ def main(argv=None) -> int:
         return 1
     if live:
         return ladd_rc
-    if ladd is None:
+    if ladd is None or coords is None:
+        skipped = ([f"LADD class NOT CHECKED: {why}"] if ladd is None else []) + \
+                  ([f"{COORD_LABEL} class NOT CHECKED: {cwhy}"] if coords is None else [])
+        checked = (" + LADD class checked" if ladd is not None else "") + \
+                  (f" + {COORD_LABEL} class checked" if coords is not None else "")
         print(f"transcript-leak-scan: no leak found by the classes checked ({len(secrets)} secret value(s) + "
-              f"{len(TOKEN_PATTERNS)} token shapes) -- LADD class NOT CHECKED: {why}")
+              f"{len(TOKEN_PATTERNS)} token shapes{checked}) -- " + "; ".join(skipped))
         return ladd_rc
     print(f"transcript-leak-scan: clean ({len(secrets)} secret value(s) + {len(TOKEN_PATTERNS)} token shapes "
-          f"+ LADD class checked)")
+          f"+ LADD class checked + {COORD_LABEL} class checked)")
     return 0
 
 

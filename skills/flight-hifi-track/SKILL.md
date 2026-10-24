@@ -19,6 +19,13 @@ Refreshed against HEAD 1491bf5a plus the batch staged for the next relay and the
 3. **airplanes.live is back as a code-side fallback** (operator, 2026-10-08): `src/common/airplanes_live.py`, off unless `AIRPLANES_LIVE_FALLBACK=1`, asked only after every local source has no contact, never sent a LADD-listed identifier, position/identity only, no OOOI authority. Reach it only through `shared.watchlist._remote_ac_by_hex()` / `_remote_ac_by_callsign()`, never with a direct HTTP call. The 2026-08-31 "never call airplanes.live" note above stays right for direct calls.
 4. **The database is Postgres** (`corporatetraveldc-pgsql`, since 2026-09-19/20). Step 1h's SQLite queries are replaced with Postgres ones.
 
+## Corrected 2026-10-22 — read with the 2026-10-15 block
+
+1. **AeroAPI and airplanes.live are FALLBACKS and CROSS-CHECKS only** (operator 2026-10-22). They answer only after local ADS-B, FDPS/SWIM and the registry tables have nothing; in a tail conflict they are a corroborating vote, never the authority (tails come from SWIM). airplanes.live is re-allowed now that this box's feed carries its feeder UUID (the late-September 403s were the anonymous feed); still only through the shared helpers, never a LADD identifier. ADSB.fi is not a source.
+2. **Public links are ICAO-hex only** (operator hard rule 2026-10-22): `https://globe.airplanes.live/?icao=<hex>` or `https://map.opensky-network.org/?icao=<hex>`. Never a tail, flight number or callsign in a URL (e.g. never `airnavradar.com/flight/<ident>`). No hex, no link.
+3. **Watch-add tail fill only from today's leg** (fix in the 2026-10-22 batch): the route no longer copies a tail from an older FDPS plan. Until that build is live, check the 201's tail against today's plan (it filled a prior day's airframe twice on 2026-10-21/22).
+4. **Locking a hex:** take the tail from today's FDPS plan, the registry hex for it, and corroborate with a live position under the same callsign (local ADS-B first, airplanes.live callsign lookup as the cross-check) before re-adding the watch with `hex_id` + `registration`. Watch ids are date-keyed; until the ET-date fix is live, a re-add after 20:00 ET creates a second entry -- delete the stale one (`DELETE /api/v1/watchlist/<entry_id>`).
+
 ## Source priority (in order)
 1. **Local ADS-B** — this box's own ultrafeeder/readsb receiver (range-limited to near the box)
 2. **Local FDPS** — already-ingested FAA SWIM data (NAS-wide, no range limit, but doesn't always carry hex/position). With the TDES-linked plan, TBFM and TFMS, the only sources of an aircraft tail (2026-10-15).

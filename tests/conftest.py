@@ -70,6 +70,9 @@ os.environ["CTDC_ALLOW_SQLITE_FOR_TESTS"] = "1"
 # default (LEAK_GUARD_SOURCES); no test may load a real secret value (a failing
 # test's traceback once printed one). Tests that need sources set their own.
 os.environ["LEAK_GUARD_SOURCES"] = ""
+# 2026-10-22: same for the receiver-coords class (the feeder env files hold the
+# receiver's position). Empty = class NOT CHECKED; tests that need it set a synthetic file.
+os.environ["LEAK_GUARD_COORD_SOURCES"] = ""
 
 import pytest
 

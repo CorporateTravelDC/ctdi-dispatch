@@ -94,6 +94,7 @@ declare -A UNIT_NAME=(
   [piaware]="${UNIT_PREFIX}piaware"
   [fr24feed]="${UNIT_PREFIX}fr24feed"
   [planefinder]="${UNIT_PREFIX}planefinder"
+  [opensky]="${UNIT_PREFIX}opensky"
   [airnavradar]="${UNIT_PREFIX}airnavradar"
 )
 
@@ -140,6 +141,7 @@ ORDER=(
   fr24feed
   planefinder
   airnavradar
+  opensky
   acarsrouter
   protonbridge
   nextcloud-db

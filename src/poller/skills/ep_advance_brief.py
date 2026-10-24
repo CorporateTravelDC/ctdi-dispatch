@@ -922,6 +922,14 @@ def _venue_summary() -> str:
     return "\n".join(lines)
 
 
+def _all_angles_section() -> str:
+    try:
+        from second_brain.semantic import all_angles_section
+    except Exception:
+        return ""
+    return all_angles_section()
+
+
 def _cached_venue_section() -> str:
     """2026-08-31: read ep_advance_venues.py's last output (once-daily +
     manual-trigger, see that skill and personas.py's 'ep-advance' comment
@@ -1367,6 +1375,14 @@ def main(force: bool = False, run_trend: bool = False) -> None:
             log.info("ep-advance: trend section prepended")
 
         full_text = full_text.rstrip() + "\n\n" + _cached_venue_section()
+
+        # Composite retrieval (geometric design Phase 2 rollout, 2026-10-22):
+        # appended after the model, not spliced into the prompt -- this
+        # skill's prompt already fills its num_ctx (see the top of this
+        # file), and the block is deterministic, so it needs no model.
+        all_angles = _all_angles_section()
+        if all_angles:
+            full_text = full_text.rstrip() + "\n\n=== ALL ANGLES (SEMANTIC LAYER) ===\n" + all_angles
 
         # Operator directive 2026-07-23: fold in the weekly AAM (vertiport/
         # eVTOL/Part 108) watch section if a fresh one exists -- last-mile

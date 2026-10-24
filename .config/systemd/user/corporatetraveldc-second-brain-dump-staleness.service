@@ -1,0 +1,10 @@
+# 2026-10-22 (operator): the weekly second-brain dump was skipped silently for a month (2026-09-21 on) because its
+# timer fired outside the maintenance window and an ExecCondition skip is not a failure. This check pages ops-health
+# itself when the newest dump log is older than 9 days; it does NOT use OnFailure, so the page is not doubled.
+[Unit]
+Description=Corporate Travel DC -- page if the weekly second-brain dump has not run in 9 days
+
+[Service]
+Type=oneshot
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/second-brain-dump-staleness.sh
+SuccessExitStatus=1

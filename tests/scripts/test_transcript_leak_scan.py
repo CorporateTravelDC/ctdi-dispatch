@@ -94,11 +94,11 @@ def test_a_file_that_leaks_during_the_run_is_left_as_live_not_failed(monkeypatch
     _old(late)
     real_scan, calls = m.scan, []
 
-    def scan(roots, secrets, ladd=None):                               # the leak lands between the two scans
+    def scan(roots, secrets, ladd=None, coords=None):                  # the leak lands between the two scans
         calls.append(1)
         if len(calls) == 2:
             late.write_text(FAKE)
-        return real_scan(roots, secrets, ladd)
+        return real_scan(roots, secrets, ladd, coords)
     monkeypatch.setattr(m, "scan", scan)
     assert m.main(["redact", "--root", str(root)]) == 0
     out = capsys.readouterr().out

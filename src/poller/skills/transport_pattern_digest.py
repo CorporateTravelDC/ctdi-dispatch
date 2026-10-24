@@ -221,6 +221,19 @@ def build_digest_content() -> tuple[str, dict]:
     return "\n".join(sections), stats
 
 
+def _all_angles_appendix() -> str:
+    try:
+        from second_brain.semantic import all_angles_section, wrap_all_angles_for_vault
+        block = all_angles_section()
+        if not block:
+            return ""
+        gate(block, source=f"{SKILL_NAME}-all-angles")
+        return "## All angles (semantic layer)\n\n" + wrap_all_angles_for_vault(block)
+    except Exception as e:
+        log.warning("%s: all-angles appendix skipped: %s", SKILL_NAME, type(e).__name__)
+        return ""
+
+
 def main() -> None:
     status = "error"
     now = datetime.now(timezone.utc)
@@ -285,6 +298,13 @@ def main() -> None:
             "---\n\n"
         )
         note = frontmatter + f"# Transport Pattern Digest — {stamp}\n\n" + narrative + "\n"
+
+        # Composite retrieval (geometric design Phase 2 rollout, 2026-10-22):
+        # deterministic, appended after the model, scrub-gated like the
+        # narrative, and wrapped so the next compile skips its identifiers.
+        appendix = _all_angles_appendix()
+        if appendix:
+            note = note.rstrip("\n") + "\n\n" + appendix + "\n"
 
         rel_path = f"{webdav_client.BUSINESS_ROOT}/01-Sources/transport-patterns/{stamp}.md"
         webdav_client.put(rel_path, note)

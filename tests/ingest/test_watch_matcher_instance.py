@@ -72,6 +72,8 @@ def test_tfms_matches_codeshare_operating_callsign_on_its_route_only(watches):
 
 def test_tbfm_sequence_for_the_other_leg_is_ignored(watches, monkeypatch):
     from ingest.parsers import tbfm_parser as bp
+    # fixed 2026-10-11 ETAs below; pin "now" before them (past-ETA gate, 2026-10-21)
+    monkeypatch.setattr(bp, "_now_epoch", lambda: 1791676800.0)   # 2026-10-11T00:00Z
     import shared.watchlist as wl
     hits = []
     monkeypatch.setattr(wl, "watchlist_event_hit", lambda eid, s, d, priority=3: hits.append(eid))

@@ -156,19 +156,45 @@ def selected(files: list[str], pats: list[tuple[bool, str]]) -> list[str]:
     return out
 
 
-def ledger(repo: Path, files: list[str]) -> str:
+def _ledger_rows(repo: Path, files: list[str]) -> list[str]:
+    """One row per file: SHA-256 of the bytes, first-commit date, slug. Never any text."""
     rows = []
     for f in sorted(files):
         digest = hashlib.sha256((repo / f).read_bytes()).hexdigest()
         added = subprocess.run(["git", "-C", str(repo), "log", "--diff-filter=A", "--follow", "--format=%aI",
                                 "--", f], capture_output=True, text=True).stdout.split()
         rows.append(f"{digest}  {(added[-1] if added else 'unknown')[:10]}  {Path(f).stem}")
+    return rows
+
+
+def ledger_globs(conf: dict) -> list[str]:
+    """LEDGER_GLOB: one or more whitespace-separated patterns, each its own ledger section."""
+    return conf.get("LEDGER_GLOB", "").split()
+
+
+def ledger_files(conf: dict, files: list[str]) -> list[tuple[str, list[str]]]:
+    return [(g, [f for f in files if fnmatch.fnmatchcase(f, g)]) for g in ledger_globs(conf)]
+
+
+def ledger(repo: Path, groups: list[tuple[str, list[str]]]) -> str:
+    """2026-10-21 (operator): the public ledger carries BOTH articles/ and _md/, hashed only --
+    never text, front matter or excerpt -- so it cannot stand in for the Substack subscription or
+    a members invite. One glob keeps the original single-block layout byte for byte; several
+    globs get one block per source, so an existing block's rows never change."""
     head = ("# Article ledger\n\n"
             "Every Executive Standard article, as SHA-256 of its canonical source, the date it was first\n"
             "committed, and its slug -- without the text. Dates are when the canonical file entered this repository (the 2026-09-08 consolidation for older pieces), not the original Substack publication (the full edition is for members). Signed by the\n"
             "publisher's key (ARTICLE-LEDGER.md.asc). A reader holding an article can check it is the\n"
-            "one that was published, unaltered, and when.\n\n```\n")
-    return head + "\n".join(rows) + "\n```\n"
+            "one that was published, unaltered, and when.\n\n")
+    if len(groups) == 1:
+        return head + "```\n" + "\n".join(_ledger_rows(repo, groups[0][1])) + "\n```\n"
+    head += ("Two sources are listed, each hashed as committed: `articles/` holds the article body,\n"
+             "`_md/` the published source with its front matter. A slug in both hashes differently\n"
+             "by design; check a copy against the block it came from.\n")
+    out = [head]
+    for g, files in groups:
+        out.append(f"\n## `{g}`\n\n```\n" + "\n".join(_ledger_rows(repo, files)) + "\n```\n")
+    return "".join(out)
 
 
 def stage(repo: Path, out: Path) -> int:
@@ -193,9 +219,8 @@ def stage(repo: Path, out: Path) -> int:
         clean = scrub(data, subst)
         bad += gate(f, clean, secrets, emails_ok, ips_ok)
         staged[f] = clean
-    if conf.get("LEDGER_GLOB"):
-        art = [f for f in files if fnmatch.fnmatchcase(f, conf["LEDGER_GLOB"])]
-        staged["ARTICLE-LEDGER.md"] = ledger(repo, art).encode()
+    if ledger_globs(conf):
+        staged["ARTICLE-LEDGER.md"] = ledger(repo, ledger_files(conf, files)).encode()
     if bad:
         print(f"[site-public] REFUSED -- {len(bad)} finding(s); nothing written:", file=sys.stderr)
         for b in bad[:60]:
@@ -211,7 +236,7 @@ def stage(repo: Path, out: Path) -> int:
     changed = sum(1 for f in chosen if (repo / f).read_bytes() != staged[f])
     print(f"[site-public] staged {len(staged)} file(s) of {len(files)} tracked ({binaries} binary, "
           f"{changed} rewritten by the address scrub"
-          f"{', ledger of %d articles' % len([f for f in files if fnmatch.fnmatchcase(f, conf.get('LEDGER_GLOB', '-'))]) if conf.get('LEDGER_GLOB') else ''})",
+          f"{', ledger of %d entries' % sum(len(fs) for _, fs in ledger_files(conf, files)) if ledger_globs(conf) else ''})",
           file=sys.stderr)
     return 0
 

@@ -49,7 +49,15 @@ log() {
     echo "[${ts}] [${level^^}] $*"
 }
 
-ntfy_send() {
+# 2026-10-23 (operator): ntfy_post is the raw sender; ntfy_send / ntfy_clear
+# (scripts/lib/sweep_alerts.sh) de-duplicate on a failure fingerprint: first
+# occurrence at its own priority, a p4 reminder at most every 2 h while it
+# persists, one p3 "CLEARED" on recovery. State lives in ${STATE_DIR}/alerts.
+SWEEP_ALERT_DIR="${STATE_DIR}/alerts"
+# shellcheck source=lib/sweep_alerts.sh
+source "${REPO_DIR}/scripts/lib/sweep_alerts.sh"
+
+ntfy_post() {
     local title="$1" msg="$2" priority="${3:-2}"
     local auth_args=()
     [[ -n "${NTFY_TOKEN}" ]] && authhdr auth_args "${NTFY_TOKEN}"
@@ -60,7 +68,7 @@ ntfy_send() {
         -H "Tags: warning" \
         -d "${msg}" \
         "${NTFY_BASE}/${NTFY_OPS}" >/dev/null 2>&1 \
-        || log "warn" "ntfy_send failed (token_set=$([[ -n \"${NTFY_TOKEN}\" ]] && echo yes || echo no))"
+        || log "warn" "ntfy_post failed (token_set=$([[ -n \"${NTFY_TOKEN}\" ]] && echo yes || echo no))"
 }
 
 if [[ "${1:-}" == "--status" ]]; then
@@ -124,9 +132,15 @@ if [[ ${build_rc} -ne 0 ]]; then
     log "error" "SWEEP FAILED -- build policy / provenance:"
     log "error" "$(grep -v '^ *VERIFIED\|^ *UNVERIFIED\|^ *NOT APPLICABLE' <<<"${build_policy_output}
 ${prov_output}" | head -40)"
+    # 2026-10-23 (operator): name the failing image(s) + reason class (no
+    # receipt / source behind / digest mismatch / ...) and failing policy
+    # checks in the body -- names only. Same body = same fingerprint = no re-page.
+    prov_summary="$(printf '%s\n%s\n' "${build_policy_output}" "${prov_output}" | sweep_prov_summary | head -12)"
     ntfy_send "BUILD PROVENANCE FAILED" \
-        "$(basename "${REPO_DIR}"): a running image does not match its recorded provenance, or the signed tree breaks the build policy. Check ${LOG_FILE}." \
+        "$(basename "${REPO_DIR}"): check build-provenance failed. ${prov_summary:-build policy / provenance returned non-zero with no FAILED row}" \
         5
+else
+    ntfy_clear "BUILD PROVENANCE FAILED"
 fi
 
 # 2026-10-16 (demo/production database split): the LIVE isolation check --
@@ -140,11 +154,14 @@ demo_iso_output="$("${REPO_DIR}/scripts/demo-isolation-check.sh" --quiet 2>&1)" 
 if [[ ${demo_iso_rc} -ne 0 ]]; then
     log "error" "SWEEP FAILED -- demo/production isolation check:"
     log "error" "${demo_iso_output}"
+    # 2026-10-23 (operator): the check prints findings only, never a value.
+    demo_iso_summary="$(grep -o 'FAIL: .*' <<<"${demo_iso_output}" | cut -c7- | head -3 | cut -c1-200 | paste -sd';')"
     ntfy_send "DEMO ISOLATION CHECK FAILED" \
-        "$(basename "${REPO_DIR}"): a running demo container or a Postgres instance crosses the demo/production boundary. Check ${LOG_FILE}." \
+        "$(basename "${REPO_DIR}"): check demo-isolation failed: ${demo_iso_summary:-exit ${demo_iso_rc}}. A running demo container or a Postgres instance crosses the demo/production boundary." \
         4
 else
     log "info" "demo/production isolation: clean"
+    ntfy_clear "DEMO ISOLATION CHECK FAILED"
 fi
 
 if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 && ${demo_iso_rc} -eq 0 ]]; then
@@ -170,18 +187,27 @@ else
         > "${STATE_FILE}"
     if [[ ${rc} -ne 0 ]]; then
         ntfy_send "INTEGRITY SWEEP FAILED" \
-            "$(basename "${REPO_DIR}"): signed-manifest verification failed -- possible tampering or corruption. Check ${LOG_FILE}." \
+            "$(basename "${REPO_DIR}"): check signed-manifest failed: $(sweep_manifest_summary <<<"${output}"). Possible tampering, or tracked files edited but not re-signed." \
             5
     fi
     if [[ ${chain_rc} -ne 0 ]]; then
         ntfy_send "AUDIT CHAIN BROKEN" \
-            "$(basename "${REPO_DIR}"): audit_log hash chain failed verification -- rows edited, removed or reordered. Check ${LOG_FILE}." \
+            "$(basename "${REPO_DIR}"): check audit-chain failed: audit_log hash chain failed verification -- rows edited, removed or reordered." \
             5
     fi
     if [[ ${env_quoting_rc} -ne 0 ]]; then
+        # 2026-10-23 (operator): file names only -- the hit lines carry values.
         ntfy_send "ENV QUOTING REGRESSION" \
-            "$(basename "${REPO_DIR}"): a quoted value was found in an env/secrets file -- this WILL silently corrupt it (podman --env-file never strips quotes). Check ${LOG_FILE}." \
+            "$(basename "${REPO_DIR}"): check env-quoting failed in: $(grep -o 'quoted value(s) in [^:]*' <<<"${env_quoting_output}" | sed 's/^quoted value(s) in //' | LC_ALL=C sort -u | paste -sd' '). A quoted value WILL silently corrupt it (podman --env-file never strips quotes)." \
             5
     fi
+fi
+# 2026-10-23 (operator): one p3 "CLEARED" for each alert that had been firing
+# and now passes. The audit chain clears only on a real intact result, not on
+# "web container unavailable".
+[[ ${rc} -eq 0 ]] && ntfy_clear "INTEGRITY SWEEP FAILED"
+[[ ${chain_rc} -eq 0 && ${chain_exec_rc} -eq 0 ]] && ntfy_clear "AUDIT CHAIN BROKEN"
+[[ ${env_quoting_rc} -eq 0 ]] && ntfy_clear "ENV QUOTING REGRESSION"
+if [[ ${rc} -ne 0 || ${env_quoting_rc} -ne 0 || ${timer_requires_rc} -ne 0 || ${chain_rc} -ne 0 || ${build_rc} -ne 0 || ${demo_iso_rc} -ne 0 ]]; then
     exit 1
 fi

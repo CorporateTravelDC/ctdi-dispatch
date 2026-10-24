@@ -7,6 +7,8 @@ synthetic (Q registry / unassigned hexes).
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from common import airplanes_live as al
@@ -38,6 +40,8 @@ def api(monkeypatch):
     monkeypatch.setattr(al, "MIN_INTERVAL_S", 0.0)
     monkeypatch.setattr(al, "_ladd_listed", lambda ident, kind: False)
     al._cache.clear()
+    monkeypatch.setattr(al, "_backoff_until", 0.0)
+    monkeypatch.setattr(al, "_backoff_s", 0.0)
     monkeypatch.setenv("AIRPLANES_LIVE_FALLBACK", "1")
     return {"calls": calls, "state": state}
 
@@ -107,3 +111,59 @@ def test_a_local_contact_means_the_api_is_never_asked(monkeypatch, api):
     ac = wl.resolve_flight_identity({"id": "wl-test", "hex_id": "0f1e2d", "notes": ""}, "QQQ123")
     assert ac["hex"] == "0f1e2d" and "_source" not in ac
     assert api["calls"] == []
+
+
+# ── 2026-10-23: refusals / outages back off instead of retrying every cycle ──
+
+class _HdrResp(_Resp):
+    def __init__(self, payload, status=200, headers=None):
+        super().__init__(payload, status)
+        self.headers = headers or {}
+
+
+def test_hex_lookup_parses_the_ac_list_like_the_callsign_lookup(api):
+    # 2026-10-22: a callsign answer gave a hex whose own lookup came back None.
+    # Both endpoints answer the same {"ac": [...]} shape; the hex path is
+    # /v2/hex/<lower-case hex> and must find the same aircraft.
+    cs = al.by_callsign("QQQ123")
+    al._cache.clear()
+    hx = al.by_hex(cs["hex"].upper())
+    assert hx is not None and hx["hex"] == cs["hex"] and api["calls"][-1].endswith("/v2/hex/0f1e2d")
+
+
+def test_a_refusal_pauses_lookups_then_they_resume(monkeypatch, api):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(al, "time", SimpleNamespace(monotonic=lambda: clock["t"], sleep=lambda s: None))
+    monkeypatch.setattr(al, "_last_call", 0.0)
+    monkeypatch.setattr(al, "_backoff_until", 0.0)
+    monkeypatch.setattr(al, "_backoff_s", 0.0)
+    good = api["state"]["payload"]
+    resp = {"r": _HdrResp(None, 429, {"Retry-After": "120"})}
+    monkeypatch.setattr(al.requests, "get", lambda url, **k: api["calls"].append(url) or resp["r"])
+
+    assert al.by_hex("0f1e2d") is None
+    assert len(api["calls"]) == 1 and al.backoff_remaining() == pytest.approx(120)
+    assert al.by_hex("0f1e2d") is None and al.by_callsign("QQQ123") is None
+    assert len(api["calls"]) == 1                                   # nothing sent while backing off
+
+    clock["t"] += 121
+    resp["r"] = _HdrResp(good, 200)
+    assert al.by_hex("0f1e2d")["hex"] == "0f1e2d"                   # resumes after the window
+    assert len(api["calls"]) == 2 and al._backoff_s == 0.0
+
+
+def test_connection_errors_back_off_exponentially(monkeypatch, api):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(al, "time", SimpleNamespace(monotonic=lambda: clock["t"], sleep=lambda s: None))
+    monkeypatch.setattr(al, "_last_call", 0.0)
+    monkeypatch.setattr(al, "_backoff_until", 0.0)
+    monkeypatch.setattr(al, "_backoff_s", 0.0)
+
+    def boom(url, **k):
+        api["calls"].append(url)
+        raise al.requests.ConnectionError("down")
+    monkeypatch.setattr(al.requests, "get", boom)
+    assert al.by_hex("0f1e2d") is None and al.backoff_remaining() == pytest.approx(al.BACKOFF_BASE_S)
+    clock["t"] += al.BACKOFF_BASE_S + 1
+    assert al.by_hex("0f1e2d") is None and al.backoff_remaining() == pytest.approx(2 * al.BACKOFF_BASE_S)
+    assert len(api["calls"]) == 2

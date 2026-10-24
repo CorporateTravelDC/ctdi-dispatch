@@ -60,3 +60,21 @@ def test_office_files_are_scanned_through_their_xml(monkeypatch, tmp_path, capsy
     assert run(m, monkeypatch, tmp_path) == 1
     out = capsys.readouterr().out
     assert "deck.pptx!ppt/slides/slide1.xml: line(s) 1" in out and "blob.bin" not in out
+
+
+def test_letters_only_entry_needs_aviation_context_and_hits_name_industry(monkeypatch, tmp_path, capsys):
+    """2026-10-23 (industry aware): a letters-only entry is aviation only after an
+    aviation key; in an AIS CSV VesselName column it is a vessel. Hits name the industry."""
+    m = load()
+    lists = tmp_path.parent / "lists"
+    lists.mkdir(exist_ok=True)
+    (lists / "privacy-maritime.list").write_text("mmsi:" + "000000999\n")   # checked, unrelated
+    monkeypatch.setenv("CTDC_PRIVACY_LIST_DIR", str(lists))
+    (tmp_path / "ais.csv").write_text("MMSI,VesselName\n000000417,QSYNX\n")
+    (tmp_path / "prose.md").write_text("QSYNX in prose\n")
+    assert run(m, monkeypatch, tmp_path, idents=LADD + ["QSYNX"]) == 0
+    (tmp_path / "reg.md").write_text("tail: QSYNX\n")
+    assert run(m, monkeypatch, tmp_path, idents=LADD + ["QSYNX"]) == 1
+    out = capsys.readouterr().out
+    assert "reg.md: line(s) 1 [aviation: ladd-identifier]" in out and "ais.csv" not in out
+    assert "QSYNX" not in out and "maritime: 1 entry" in out

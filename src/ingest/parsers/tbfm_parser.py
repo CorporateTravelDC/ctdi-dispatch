@@ -534,6 +534,31 @@ def _match_watchlist_flight(identifier: str | None, origin: str | None = None,
 
 _TBFM_WATCHLIST_DEDUP = PushDedup("tbfm_watchlist", dedup_secs=1800)
 
+# 2026-10-21: upstream centers keep re-sending sequences for meter fixes the
+# flight has already crossed, so a watch got pushed an ETA that was already in
+# the past. A sequence whose ETA is more than this many seconds behind now is
+# not pushed to the watch (it is still written to tbfm_sequences).
+_PAST_ETA_GRACE_S = 120
+
+
+def _now_epoch() -> float:
+    """Clock for the past-ETA gate; module-level so tests can pin it."""
+    return _time.time()
+
+
+def _eta_is_past(eta: str | None, now_epoch: float) -> bool:
+    """True if `eta` (ISO-8601 UTC) is more than _PAST_ETA_GRACE_S before
+    now. An empty/unparseable ETA is not treated as past."""
+    if not eta:
+        return False
+    try:
+        dt = datetime.fromisoformat(eta.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp() < now_epoch - _PAST_ETA_GRACE_S
+
 
 def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
     """Per-flight TBFM arrival-sequencing update for any watched flight.
@@ -559,9 +584,14 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
     matching _handle_track_information's TFMS-side 30-min approach-alert
     cadence in tfms_parser.py.
     """
-    from datetime import datetime, timezone
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_epoch = _now_epoch()
+    now_iso = datetime.fromtimestamp(now_epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for s in sequences:
+        # 2026-10-21: a fix already crossed (ETA > _PAST_ETA_GRACE_S ago) is a
+        # stale upstream re-send -- no watch push, and checked before the
+        # dedup so it never consumes the (entry, fix) slot.
+        if _eta_is_past(s.get("eta"), now_epoch):
+            continue
         entry = _match_watchlist_flight(s.get("flight_id"), origin=s.get("dap"),
                                         destination=s.get("apt"))
         if entry is None:

@@ -362,6 +362,8 @@ then these ~23 timer-fired jobs will keep failing.
 
 ## 10. Geometric reasoning — ALL FOUR PHASES LIVE
 
+> 2026-10-22 correction: "all four phases live" covered the four functions, not the whole Phasing section. See `docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md`, "Correction, 2026-10-22".
+
 All phases live in `src/second_brain/semantic/compile.py`, per
 `docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md`, retrievable via
 `query_all_angles`. **Edge counts below were re-verified against live Postgres**

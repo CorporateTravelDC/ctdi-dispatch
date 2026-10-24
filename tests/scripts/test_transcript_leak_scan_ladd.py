@@ -70,7 +70,8 @@ def test_forms_n_and_registry_and_callsign_whole_tokens_only(m):
     assert why == "" and ladd
     hit = lambda s: len(m.ladd_spans(s.encode(), ladd, set()))
     assert hit("tail N7QZK seen") == 1 and hit("registry 7QZK") == 1          # N-form + bare form
-    assert hit("as 8QZK and N8QZK") == 2
+    assert hit("registration 8QZK and N8QZK") == 2                          # short form: in context only
+    assert hit("as 8QZK and N8QZK") == 1                                      # 2026-10-22: bare short form not
     assert hit("flight QQZ901 landed") == 1 and hit("mark Q-ZZTQ") == 1
     assert hit("part of foo-Q1ZT7-bar") == 1                                  # the tripwire's part rule
     assert hit("X-Q-ZZTQ") == 0                                               # hyphenated entry: whole token only

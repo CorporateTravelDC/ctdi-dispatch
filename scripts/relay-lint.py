@@ -200,6 +200,39 @@ def podman_reads_stdin(n, line, code, ctx):
                 "end the command with `</dev/null`")
 
 
+@rule
+def sudo_reads_stdin(n, line, code, ctx):
+    # 2026-10-23 (operator): stdin_reader / podman_reads_stdin never covered sudo. On 2026-10-22 a
+    # `sudo bash -c '...'` without </dev/null read the rest of the relay script as its stdin; the
+    # outer bash then ran leftover fragments (`touch '/public.'`). Every sudo line inside a relay
+    # redirects stdin -- unless sudo is fed by a pipe/heredoc, or only validates/drops the ticket
+    # (-v / -k / -K run no command).
+    if line.lstrip().startswith("#"):
+        return None
+    # a `$(sudo ...)` inside a double-quoted string runs too (_code blanks quoted text)
+    m = re.search(r"(?:^|[;&|(!{]\s*|\s)sudo\b", code) or re.search(r"\$\(\s*sudo\b", line)
+    if not m or re.search(r"\bsudo\s+-[vkK]\b", code):
+        return None
+    if "</dev/null" in line or "<<" in line or re.search(r"\|\s*sudo\b", code):
+        return None
+    return ("sudo reads stdin inside a relay (2026-10-22: it ate the rest of the relay script)",
+            "end the sudo command with `</dev/null` (e.g. sudo bash -c '...' </dev/null)")
+
+
+@rule
+def on_calendar_hardcoded_date(n, line, code, ctx):
+    # 2026-10-23 (operator): 2026-10-22 a relay passed `--on-calendar "2026-10-22 23:50 ..."`; by the
+    # time it ran the date had passed midnight UTC, so the timer was scheduled in the past and never
+    # fired. Compute the date at run time instead.
+    if line.lstrip().startswith("#"):
+        return None
+    if re.search(r"(--on-calendar[=\s]+|OnCalendar=)[\"']?\d{4}-\d{2}-\d{2}", line):
+        return ("hard-coded date in --on-calendar / OnCalendar= (a relay run after midnight schedules it in the past)",
+                "compute it at run time, e.g. --on-calendar \"$(TZ=America/New_York date -d '23:50' '+%Y-%m-%d %H:%M:00') "
+                "America/New_York\" (and check the result is in the future)")
+    return None
+
+
 # 2026-10-18: pg-maintenance.sh's CONCURRENTLY builds read whole tables (~5 GB for flight_events);
 # its read-only `status` is not heavy.
 # 2026-10-20 (cleanup sweep): the transcript leak scan (scan | redact reads every transcript on the
@@ -347,7 +380,117 @@ def secret_read_without_control_check(lines: list[str]) -> list[tuple[int, str, 
     return out
 
 
-def lint(text: str) -> list[tuple[int, str, str]]:
+PODMAN_BUILD = re.compile(r"\bpodman\s+(image\s+)?build\b")
+PROVENANCE_RECORD = re.compile(r"provenance\.py\s+record(?!-)\b")
+BUILD_TAG = re.compile(r"(?:\s-t|\s--tag)[=\s]+(\"[^\"]+\"|'[^']+'|\S+)")
+
+
+def build_without_provenance(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-22 (operator): on 2026-10-21 a hotfix relay hand-built images with `podman build` and
+    wrote no provenance receipts; the integrity sweep then failed every 15 min until receipts were
+    recorded. A relay line running `podman build` must be followed (later in the relay) by
+    `scripts/build/provenance.py record` for that image (matched by its -t tag when it has one).
+    Builds through serialized-rollout.sh / stack-refresh.sh record their own receipts and are not
+    bare `podman build` lines, so they never match here."""
+    out = []
+    body = [(n, l) for n, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+    for i, (n, l) in enumerate(body):
+        code = _code(l)
+        if not PODMAN_BUILD.search(code) or re.search(r"serialized-rollout\.sh|stack-refresh\.sh", code):
+            continue
+        m = BUILD_TAG.search(l)
+        tag = m.group(1).strip("'\"") if m else None
+        later = [x for _k, x in body[i + 1:] if PROVENANCE_RECORD.search(x)]
+        if not any(tag is None or tag in x for x in later):
+            what = f" for {tag}" if tag else ""
+            out.append((n, f"`podman build` without a later `provenance.py record`{what} (no receipt -> the "
+                           "integrity sweep fails every 15 min)",
+                        "after the build add: python3 scripts/build/provenance.py record --image REF "
+                        "--containerfile F --context DIR (or build via serialized-rollout.sh)"))
+    return out
+
+
+OK_TRAP = re.compile(r"^\s*trap\s[^\n]*RELAY_DONE[^\n]*\bOK\b")
+# Narrow on purpose: only the printed check results that have actually been reported as "OK" while
+# failing. Add a label here when another one bites.
+CHECK_RESULT = re.compile(r"\b(echo|printf)\b[^\n]*(provenance FAILED|integrity sweep:)")
+CHECK_GATE = re.compile(r"\bexit\s+[1-9]")
+
+
+def ok_ping_ungated_check(lines: list[str]) -> list[tuple[int, str, str]]:
+    """2026-10-23 (operator): on 2026-10-21 a relay's trap sent "finished OK" while its integrity
+    sweep was failing: the relay only PRINTED "integrity sweep: failed" / "provenance FAILED images:
+    N" and carried on to RELAY_DONE=1. When a relay has an OK-nudge trap gated on RELAY_DONE, every
+    printed check result of the kinds in CHECK_RESULT must fail the relay when it is bad: an `exit N`
+    (N>0) on the same line or on one of the next two code lines. Heuristic, text-level, narrow."""
+    if not any(OK_TRAP.search(l) for l in lines):
+        return []
+    out = []
+    for n, l in enumerate(lines, 1):
+        if l.lstrip().startswith("#") or not CHECK_RESULT.search(l):
+            continue
+        nxt = [x for x in lines[n:] if x.strip() and not x.lstrip().startswith("#")][:2]
+        if not any(CHECK_GATE.search(_code(x)) for x in [l] + nxt):
+            out.append((n, "check result printed but not enforced -- the OK nudge fires even when it fails "
+                           "(2026-10-21: OK while the integrity sweep failed)",
+                        "capture it and fail: v=$(...); echo \"... $v (expect 0)\"; [[ $v == 0 ]] || { echo 'check failed'; exit 1; }"))
+    return out
+
+
+# 2026-10-23 (operator): the poller's WatchlistFileWatcher hot-reloads these from the main checkout
+# every ~60 s (src/shared/watchlist.py _FILE_MAP); src/poller/hot_reload_hold.py honours HOLD_SENTINEL.
+HOT_RELOAD_FILES = re.compile(r"^watchlists/permanent_(flights|trains|vessels|drones)\.json$")
+HOLD_SENTINEL = "hold-hot-reload"
+GUARD_APPLY = re.compile(r"(\$\{?G\b|-guard\b)[^\n]*\|\s*git\s+apply\b[^\n]*--index")
+HOLD_SET = re.compile(r"\b(touch|install)\b[^\n]*" + HOLD_SENTINEL + r"|>\s*\S*" + HOLD_SENTINEL)
+HOLD_RELEASE = re.compile(r"\brm\b[^\n]*" + HOLD_SENTINEL)
+ROLLOUT_STEP = re.compile(r"serialized-rollout\.sh|systemctl\s+--user\s+restart\b")
+
+
+def guard_staged_files() -> list[str]:
+    """Paths staged in this script's worktree (the guard, when run as $G/scripts/relay-lint.py from
+    relay-preflight.sh) -- the batch a relay's `git apply --index` step will apply."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(REPO), "diff", "--cached", "--name-only"],
+                           capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def hot_reload_without_hold(lines: list[str], staged: list[str] | None) -> list[tuple[int, str, str]]:
+    """2026-10-23 (operator): 2026-10-20, a relay applied a batch to the main checkout and the
+    poller's 60 s hot-reload made 46 new watches live before migration 0082 was applied. A relay that
+    applies the guard's batch (`git -C "$G" diff --cached --binary | git apply --index`) when that
+    batch touches a hot-reloaded watchlist file (the guard's staged paths, or the relay text naming
+    one) must: touch the hold sentinel (/var/lib/corporatetraveldc/hold-hot-reload) BEFORE the apply,
+    and `rm -f` it AFTER its last rollout step (serialized-rollout.sh / systemctl --user restart)."""
+    body = [(n, l) for n, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+    apply = next((n for n, l in body if GUARD_APPLY.search(l)), None)
+    if apply is None:
+        return []
+    files = guard_staged_files() if staged is None else staged
+    touches = any(HOT_RELOAD_FILES.match(f) for f in files) or any("watchlists/permanent_" in l for _n, l in body)
+    if not touches:
+        return []
+    out = []
+    held = next((n for n, l in body if HOLD_SET.search(l)), None)
+    if held is None or held > apply:
+        out.append((apply, "batch touches a hot-reloaded watchlist file but the relay does not hold the reload "
+                           "before applying it (2026-10-20: 46 watches live before migration 0082)",
+                    "before the apply: mkdir -p /var/lib/corporatetraveldc && touch /var/lib/corporatetraveldc/"
+                    + HOLD_SENTINEL))
+    last_rollout = max((n for n, l in body if ROLLOUT_STEP.search(_code(l))), default=apply)
+    released = [n for n, l in body if HOLD_RELEASE.search(l) and n > last_rollout]
+    if not released:
+        out.append((apply, "hot-reload hold is never released after the rollout (the poller ignores it only "
+                           "after 6 h)",
+                    "after the last rollout/restart step: rm -f /var/lib/corporatetraveldc/" + HOLD_SENTINEL))
+    return out
+
+
+def lint(text: str, staged: list[str] | None = None) -> list[tuple[int, str, str]]:
     out = []
     lines = text.splitlines()
     out += twin_after_sign(lines)
@@ -357,6 +500,9 @@ def lint(text: str) -> list[tuple[int, str, str]]:
     out += heavy_without_load_wait(lines)
     out += leak_scan_redact_before_push(lines)
     out += secret_read_without_control_check(lines)
+    out += build_without_provenance(lines)
+    out += ok_ping_ungated_check(lines)
+    out += hot_reload_without_hold(lines, staged)
     first = next((l for l in lines if l.strip()), "")
     if not re.match(r"\s*bash\s+<<'RELAY'\s*$", first):
         out.append((1, "relay must start with `bash <<'RELAY'` (quoted delimiter: nothing expands at paste)",

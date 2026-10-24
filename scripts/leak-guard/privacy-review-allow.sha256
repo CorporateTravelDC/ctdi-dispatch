@@ -1,0 +1,10 @@
+# scripts/leak-guard/privacy-review-allow.sha256 -- suspected identifiers reviewed as NOT sensitive
+# (2026-10-23). One line per value: "<sha256>  <reason>", the hash of "<vertical>:<normalized value>"
+# exactly as ladd_public_check.py --review prints it. Never the value itself. Real identifiers go in
+# /etc/corporatetraveldc/privacy-<vertical>.list instead (by hand), never here.
+ae032b4b77354e673046699194b83d87d273dfeb6d9767c9a70ea6e641a1da72  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV mmsi column) -- allowlisted 2026-10-23, test data not a real identifier
+5f3b2d2c5a5707ca37002e75a22f412cef38b48d050643881abe26eecaf8689c  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV name column) -- allowlisted 2026-10-23, test data not a real identifier
+3decce69ac98660a763f21e1aa40a018bd3b0341f139d74a28bb0cda17a48f8d  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV name column) -- allowlisted 2026-10-23, test data not a real identifier
+3c8cd6a4163b1d7fba97440cc572e312bd447a2b7ff70b5dad9b90b09c29435d  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV mmsi column) -- allowlisted 2026-10-23, test data not a real identifier
+6b673a5244f3a082a9d444e7de4a4e91b815a2801fe20b68b9e7e091329eb381  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV name column) -- allowlisted 2026-10-23, test data not a real identifier
+e20a4398b370c90f53a560a9d0b7b1c1c2c74a80328f1644ddfbdffd66ee0dbd  synthetic test fixture in tests/web/test_webhooks.py (rail, rail id field) -- allowlisted 2026-10-23, test data not a real identifier

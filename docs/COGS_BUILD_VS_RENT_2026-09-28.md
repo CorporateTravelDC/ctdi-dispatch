@@ -144,6 +144,78 @@ are shown.
 
 **Monthly equivalent: ≈ $5,125 – $11,820 / mo** (live verticals).
 
+### 2.4 Dedicated feeder-only kit — what the antenna earns (added 2026-10-22)
+
+The Air Tiers Analyst Desk note ("The Terminal That Doesn't Stop the Radio", 2026-10-22) argues the receiver is the
+cheapest instrument in the room. This section prices it: a **feeder-only** box — no platform, no SWIM, nothing but a
+1090 MHz receiver feeding the networks — and what that feeding unlocks at list price. A 4 GB Pi 5 is enough for this
+use case (readsb + the feeder clients); the 16 GB unit in §1 is sized for the whole platform, not for feeding.
+
+**Kit (one-time).** Prices checked 2026-10-22.
+
+| Item | MSRP / official store | US street (in stock) | Source |
+|---|---:|---:|---|
+| Raspberry Pi 5, 4 GB | $85 | $110 | MSRP: Tom's Hardware price table, 2026-10-02 (third 2026 increase, memory costs); street: PiShop.us, Seeed Studio |
+| Official 27 W USB-C PSU | $12 | $12–13 | Seeed Studio $12.00; PiShop.us $12.95 |
+| Official case (fan) or Active Cooler | $10 | $10–12 | Raspberry Pi launch price; Micro Center / GigaParts |
+| microSD 32 GB, A1 | ≈ $10 | ≈ $10 | *estimate, not sourced* |
+| FlightAware Pro Stick Plus (SDR + 1090 MHz filter) | $45.99 | $42–46 | flightaware.store |
+| FlightAware 1090 MHz antenna (outdoor) | $49.99 | $49.99 | flightaware.store |
+| N-male → SMA coax jumper | ≈ $20 | ≈ $20 | *estimate, not sourced; length-dependent* |
+| **Kit total** | **≈ $233** | **≈ $259** | |
+
+FlightAware's own FlightFeeder Basic bundle (Pi Zero W, Pro Stick Plus, indoor antenna) is $119.99 — cheaper, but an
+indoor antenna and a Zero W cut range and cannot run several feeder clients at once; the Pi 5 kit above is the
+like-for-like for six networks.
+
+**What feeding unlocks, at list price (per year).**
+
+| Network | Tier given to feeders | List price of that tier | Source / confidence |
+|---|---|---:|---|
+| FlightAware | Enterprise account (while feeding) | $1,199.40 ($99.95/mo, 1 user) | FlightAware multi-user pricing page, prices dated 2023-01-17 — *official but 2023* |
+| FlightAware AeroAPI | Personal tier: first **$10/mo waived** for ADS-B feeders (vs $5 standard) | up to $120 | flightaware.com AeroAPI page, Oct 2026 — *official*. Our use: $0.14/period → $0 actual |
+| Flightradar24 | Business subscription | ≈ $499.99 | third-party FAQ, Sep 2026 — *unofficial; FR24 does not publish it* |
+| AirNav Radar | Business (valid while the station connects at least every 15 days) | $399.50 (web) / $599.99 (iOS in-app) | airnavradar.com/subscribe — *official* |
+| PlaneFinder | premium (feeder) | ≈ $20 | carried from §2.1 row 2 (2026-09-28 snapshot) |
+| airplanes.live | Pro tier | no published price | unlocked 2026-10-22 once the feed carried its feeder ID |
+| OpenSky Network | Active-feeder API tier (≥ 30 % monthly uptime): 8,000 credits/day vs 4,000 registered / 400 anonymous; `/states/own` (own receiver) free and unrestricted; value is visibility into the global sensor network, not an operational dependency | no published price | openskynetwork.github.io/opensky-api REST docs, 2026-10-22 — *official* |
+| Airframes.io (ACARS/VDL2) | Feeder Pro from 2026-10-23 ("earned free" by an active station) = the Pro plan: 50,000 API req/day, 90-day message history, outbound webhooks, station analytics | $144 ($12/mo) | app.airframes.io/pricing, 2026-10-22 — *official*. Business ($39/mo: 250k req/day, 1-yr history, MQTT) is not earned by feeding |
+| ACARS Drama | Jumpseat, complimentary as a "Sky Drama Farmer" (active 2026-10-22): archive search, aircraft lookup, station reports, email alerts and digests, REST API | $79 ($7.99/mo) | Jumpseat billing page, 2026-10-22 — *official* |
+| **Total unlocked, list** | | **≈ $2,462 / yr** | of which ≈ $1,942 from official vendor pages |
+
+AirNav also issues feeders a free On Demand API key (100 credits, monthly) — not counted, it is metered data, not a tier.
+
+**On this platform the kit's marginal cost is $0.** The same two receivers already amortized in §1 (the 2× SDR
+reference RF buildout inside the ≈ $765 hardware line) earn every tier above. One 1090 MHz SDR and antenna feed
+ultrafeeder, which fans its Beast stream out to six networks (airplanes.live directly; FlightAware, Flightradar24,
+PlaneFinder, AirNav Radar and OpenSky through their own client containers); one VHF SDR feeds acarsrouter, which
+forwards ACARS/VDL2 to Airframes.io and ACARS Drama. Eight feeds, two radios, no extra hardware — the box is
+repurposed, not extended. The stand-alone kit above is what a customer or a second site would buy to earn the same
+tiers without the platform.
+
+**Two buyers, two comparisons.** Personal plans are licensed for personal, non-commercial use only (FR24 states this
+for Free/Silver/Gold; AirNav prices Business as the professional tier), so the honest comparison depends on who is
+buying.
+
+| | "Monitor my grid" enthusiast | Protective detail / FBO operator |
+|---|---|---|
+| What they'd otherwise buy | Consumer tiers: FR24 Gold ≈ $35–40/yr + AirNav Pilot $79.50/yr (Pilot already includes ad-free) | The commercial tiers they are licensed to use: FA Enterprise $1,199 + FR24 Business ≈ $500 + AirNav Business $399.50 + Airframes Pro $144 + ACARS Drama Jumpseat $79 (+ AeroAPI headroom $120) |
+| Annual list price avoided | **≈ $115–120** | **≈ $2,442 per seat** |
+| Kit (MSRP → street) | $233 → $259 | $233 → $259 |
+| Payback | ≈ 1.9–2.3 years on consumer tiers alone — but the feeder gets the *business* tiers (≈ $2.5k list) anyway | **≈ 5–5.5 weeks** |
+| Running cost | a few watts continuous (*estimate, not measured*); a few dollars a year at the §1 power basis | same, per receiver |
+| What they also get that no tier sells | their own unfiltered local picture (LADD-listed and blocked aircraft are on their own receiver; the public sites hide them) | the same, plus the counter-surveillance use in the Air Tiers note: the band the principal leaks on is the band the detail listens on |
+
+Every one of these tiers is **feeder-contingent**: they lapse if the station stops feeding (AirNav's 15-day rule is
+the tightest). A dead feeder is therefore a cost event, not just a data gap. Today only ultrafeeder's own outbound links are
+watched (adsb-link-watchdog). The vendors cover most of the rest: FlightAware, Flightradar24 and AirNav Radar
+email the operator after 1–6 h offline, and the airplanes.live app has "notify when offline" on. Uncovered:
+PlaneFinder, OpenSky, Airframes.io and ACARS Drama — the gap a platform-side silence check would close.
+
+Not established here: FR24 Business and PlaneFinder list prices are not published by the vendors (third-party and
+snapshot figures); FlightAware Enterprise list is the 2023 official table. Re-verify all three at the next
+August-rigor COGS refresh.
+
 ---
 
 ## 3. Biggest single line-item deltas

@@ -42,6 +42,9 @@ PG_CANARY_DONE=${PG_CANARY_DONE:-0}
 ROLLOUT_DEADLINE=${ROLLOUT_DEADLINE:-0}
 ROLLOUT_HELD_FILE=${ROLLOUT_HELD_FILE:-}
 BUILT_IDS=/var/lib/corporatetraveldc/reports/stack-refresh-built-ids.json
+# 2026-10-22 (operator): build output used to go to /dev/null, so a failed build (2026-10-21: an
+# expired apt snapshot pin) left nothing to read. Every local build now keeps its log here.
+BUILD_LOG_DIR=${ROLLOUT_BUILD_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/corporatetraveldc/rollout-builds}
 # 2026-10-04 09:35 ET: this script rebuilds local images FROM THE WORKING TREE
 # with no gate of its own. A sanity run overlapped two agents editing src/ and
 # only timing kept a half-edited db.py out of the ingest image. Refuse a dirty
@@ -81,7 +84,13 @@ PYEOF
 SUMMARY=()
 
 # unit | kind | image | build-dir | containerfile | window-seconds
-# kind: local (build) / ext (pull)
+# kind: local (build) / ext (pull) / build (build only, no unit to restart)
+# 2026-10-22 (operator): kind "build" is for an image with no long-running unit (docgen is a
+# one-shot tooling image run on demand by second_brain.doc_generation, no quadlet). It is
+# rebuilt (log + provenance receipt) like a local row and then skipped: there is nothing to
+# restart. Its first field is "image:<name>", not a unit name, so stack-refresh.sh's unit
+# greps (rollout_rows matches only local|ext; the weekly all_units grep wants [a-z0-9-]+|)
+# never treat it as a unit to restart, hold or post-check.
 ROLLOUT=(
   # --- SWIM ingest feeds, lightest first (ingest-feed-ctl.sh LIGHT_ORDER), core last
   "corporatetraveldc-ingest-notam|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|60"
@@ -105,6 +114,8 @@ ROLLOUT=(
   "amtrak-tracker|local|localhost/corporatetraveldc-amtrak-tracker:latest|$REPO|Containerfile.amtrak-tracker|60"
   "corporatetraveldc-acars-watcher|local|localhost/corporatetraveldc-acars-watcher:latest|$REPO/src/acars_watcher|Containerfile|60"
   "csexec-contact|local|localhost/csexec-contact:latest|$WEBSITE/contact-api|Containerfile|60"
+  # --- build-only images (no unit)
+  "image:corporatetraveldc-docgen|build|localhost/corporatetraveldc-docgen:latest|$REPO|Containerfile.docgen|0"
   # --- externals: pull = update check
   "corporatetraveldc-pgsql|ext|docker.io/library/postgres:16-alpine|||60"
   # 2026-10-16: the public-demo Postgres instance (demo/production split); same
@@ -120,6 +131,7 @@ ROLLOUT=(
   "corporatetraveldc-piaware|ext|ghcr.io/sdr-enthusiasts/docker-piaware:latest|||60"
   "corporatetraveldc-fr24feed|ext|ghcr.io/sdr-enthusiasts/docker-flightradar24:latest|||60"
   "corporatetraveldc-planefinder|ext|ghcr.io/sdr-enthusiasts/docker-planefinder:latest|||60"
+  "corporatetraveldc-opensky|ext|ghcr.io/sdr-enthusiasts/docker-opensky-network:latest|||30"
   "corporatetraveldc-airnavradar|ext|ghcr.io/sdr-enthusiasts/docker-airnavradar:latest|||60"
   "corporatetraveldc-dumpvdl2|ext|ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest|||60"
   "corporatetraveldc-acarsrouter|ext|ghcr.io/sdr-enthusiasts/acars_router:latest|||60"
@@ -141,9 +153,11 @@ for row in "${ROLLOUT[@]}"; do
   echo "################ $unit  ($kind: $image) ################"
   base=$(load); echo "$(date +%T)  baseline load $base  ($(guard))"
   changed=yes
-  if [[ $FROM_REFRESH == 1 ]]; then
+  if [[ $FROM_REFRESH == 1 && $kind == build ]]; then
+    echo "$(date +%T)  FROM_REFRESH: build-only row, no unit to restart -- nothing to do"; echo; continue
+  elif [[ $FROM_REFRESH == 1 ]]; then
     echo "$(date +%T)  FROM_REFRESH: restart only (image already pulled/built, gated and promoted by stack-refresh)"
-  elif [[ $kind == local ]]; then
+  elif [[ $kind == local || $kind == build ]]; then
     key="$bdir/$cfile"
     if [[ " $built_dirs " == *" $key "* ]]; then
       echo "$(date +%T)  image already rebuilt this run"
@@ -155,7 +169,10 @@ for row in "${ROLLOUT[@]}"; do
       # (scheduled-podman-prune honours the window). duel H2: :previous is
       # re-pointed only on a REAL change, at the OLD image id, after the build.
       old_id=$(imgid_full "$image")
-      if ( cd "$bdir" && podman build --platform "$BUILD_PLATFORM" -f "$cfile" -t "$image" --label build-date=$D --label "service=$(basename "${image%:*}" | sed 's/^corporatetraveldc-//')" . >/dev/null 2>&1 ); then
+      mkdir -p "$BUILD_LOG_DIR"
+      blog="$BUILD_LOG_DIR/$(basename "${image%:*}")-$(date -u +%Y%m%dT%H%M%SZ).log"
+      echo "$(date +%T)  build log $blog"
+      if ( cd "$bdir" && podman build --platform "$BUILD_PLATFORM" -f "$cfile" -t "$image" --label build-date=$D --label "service=$(basename "${image%:*}" | sed 's/^corporatetraveldc-//')" . >"$blog" 2>&1 </dev/null ); then
         new_id=$(imgid_full "$image")
         if [[ -n "$old_id" && "$old_id" != "$new_id" ]]; then podman tag "$old_id" "${image%:*}:previous" 2>/dev/null || true; fi
         record_built "$image" "$new_id"
@@ -165,8 +182,16 @@ for row in "${ROLLOUT[@]}"; do
         fi
         built_dirs="$built_dirs $key"; echo "$(date +%T)  build ok, load $(load)"
       else
-        echo "$(date +%T)  BUILD FAILED for $image -- stopping here"; exit 1
+        # 2026-10-22 (operator): never swallowed -- show the log, mark the row held (written to
+        # ROLLOUT_HELD_FILE too), and stop: nothing is restarted on the old image after this.
+        echo "$(date +%T)  BUILD FAILED for $image -- log $blog (last 20 lines):"
+        tail -n 20 "$blog" | sed 's/^/    | /'
+        held "$unit" "build-failed"
+        echo "$(date +%T)  stopping the rollout here: $unit and every later row NOT restarted"; exit 1
       fi
+    fi
+    if [[ $kind == build ]]; then
+      echo "$(date +%T)  build-only row: image rebuilt, no unit to restart"; SUMMARY+=("$unit: image rebuilt (build-only, no unit)"); echo; continue
     fi
   else
     before=$(digest "$image"); before_id=$(imgid_full "$image")

@@ -1,0 +1,28 @@
+# OpenSky Network feeder (operator 2026-10-22). Replaces ultrafeeder's "mlat,collector.opensky-network.org,30003"
+# entry, which was never a valid OpenSky feed (OpenSky is not an MLAT server; connection refused on every retry).
+# Username, serial (the feeder's credential) and the receiver coordinates live in the 0600 secrets file only.
+[Unit]
+Description=Corporate Travel DC - OpenSky Network feeder
+After=network-online.target
+After=corporatetraveldc-ultrafeeder.service
+Wants=corporatetraveldc-ultrafeeder.service
+
+[Container]
+Memory=256m
+PodmanArgs=--memory-swap=256m
+Image=ghcr.io/sdr-enthusiasts/docker-opensky-network:latest
+ContainerName=corporatetraveldc-opensky
+EnvironmentFile=/etc/corporatetraveldc/opensky-secrets.env
+Environment=BEASTHOST=host.containers.internal
+Environment=BEASTPORT=30005
+AutoUpdate=registry
+
+[Service]
+Slice=production.slice
+CPUWeight=50
+CPUQuota=50%
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+
+[Install]

@@ -156,6 +156,9 @@ PG_TABLES: frozenset[str] = frozenset({
     "terminal_tracks", "tfms_edct_slots", "tfms_param_delay_stats",
     "tfms_plan_removals", "tfms_reroutes", "tfrs", "train_events",
     "trigger_log", "ustrains_departures", "vessel_events",
+    # 2026-10-22: pg_schema/0084 (semantic vessel/drone geometry) created these two without registering them,
+    # so queries routed by this set would miss Postgres and test_pg_migrate failed on the extra tables.
+    "drone_events", "ais_sample_positions",
     "watchlist_entries", "watchlist_history", "watchlist_sessions",
     "webhook_events", "wpc_discussions",
 })

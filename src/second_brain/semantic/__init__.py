@@ -35,6 +35,7 @@ __all__ = [
     "SemanticModelError", "load", "normalize",
     "compile_layer", "drift_report", "evaluate_metrics", "semantic_search",
     "query_all_angles", "format_all_angles_block", "most_recent_geometry_entity",
+    "wrap_all_angles_for_vault", "all_angles_section",
 ]
 
 
@@ -48,7 +49,8 @@ def __getattr__(name: str):
     """
     if name in ("compile_layer", "drift_report", "evaluate_metrics",
                 "semantic_search", "query_all_angles", "format_all_angles_block",
-                "most_recent_geometry_entity"):
+                "most_recent_geometry_entity", "wrap_all_angles_for_vault",
+                "all_angles_section"):
         from second_brain.semantic import compile as _compile
         return getattr(_compile, name)
     raise AttributeError(name)

@@ -17,7 +17,9 @@
 # the live container.
 #
 # Sequence:
-#   1. pull the new image standalone (never touches the running container)
+#   1. pull the new image standalone (never touches the running container);
+#      if an update exists, wait (bounded) for the semantic / knowledge-graph
+#      compile units to finish -- 2026-10-23 (operator)
 #   2. spin up an isolated canary instance: scratch port, scratch volume,
 #      the SAME tuned postgresql.conf/pg_hba.conf as production
 #   3. load the live schema (pg_dump --schema-only, read-only against live)
@@ -62,6 +64,15 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${PGCONF=${REPO_DIR}/config/postgresql.conf}"
 : "${HBACONF=${REPO_DIR}/config/pg_hba.conf}"
 : "${LIVE_SECRETS:=/etc/corporatetraveldc/pgsql-secrets.env}"
+# 2026-10-23 (operator): the semantic compile (and the knowledge-graph
+# compile) hold AccessExclusive locks for their whole transaction; the live
+# `pg_dump --schema-only` sat in a lock wait 10-20 min behind them. 'test'
+# now waits (bounded, polling) while either unit is active and fails cleanly
+# at the bound; the live pg_dump itself gives up after PG_DUMP_LOCK_WAIT.
+: "${COMPILE_UNITS:=corporatetraveldc-semantic-compile-daily.service corporatetraveldc-knowledge-graph-compile.service}"
+: "${COMPILE_WAIT_MAX:=1800}"
+: "${COMPILE_WAIT_POLL:=30}"
+: "${PG_DUMP_LOCK_WAIT:=120s}"
 
 log() { echo "[safe-pg-image-update] $*"; }
 die() { echo "[safe-pg-image-update] ERROR: $*" >&2; exit 1; }
@@ -78,6 +89,26 @@ cleanup_canary() {
     log "canary container+volume removed"
 }
 
+# 2026-10-23 (operator): returns 0 once no compile unit is active, 1 if one
+# is still active after COMPILE_WAIT_MAX seconds. Logs what it waits on.
+wait_for_compiles() {
+    local waited=0 busy u
+    while :; do
+        busy=""
+        for u in ${COMPILE_UNITS}; do
+            systemctl --user is-active --quiet "${u}" && busy="${busy} ${u}"
+        done
+        [[ -z "${busy}" ]] && { [[ ${waited} -gt 0 ]] && log "compile unit(s) finished after ${waited}s -- proceeding"; return 0; }
+        if [[ ${waited} -ge ${COMPILE_WAIT_MAX} ]]; then
+            log "still active after ${waited}s:${busy}"
+            return 1
+        fi
+        log "waiting for active compile unit(s) to finish (they hold AccessExclusive locks):${busy} (${waited}s/${COMPILE_WAIT_MAX}s)"
+        sleep "${COMPILE_WAIT_POLL}"
+        waited=$((waited + COMPILE_WAIT_POLL))
+    done
+}
+
 cmd_test() {
     log "pulling ${IMAGE}..."
     podman pull "${IMAGE}" || die "pull failed"
@@ -91,6 +122,9 @@ cmd_test() {
         log "no update available -- live container already runs this exact image. Nothing to test."
         exit 0
     fi
+
+    wait_for_compiles \
+        || die "RESULT: FAIL -- a compile unit is still active after ${COMPILE_WAIT_MAX}s; its locks would stall the live schema dump. Re-run 'test' after it finishes. Nothing was started."
 
     log "new version string: $(podman run --rm "${IMAGE}" postgres --version)"
     log "live version string: $(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" postgres --version)"
@@ -145,8 +179,9 @@ cmd_test() {
     # POSTGRES_USER, which is what matters for that question. Real
     # disaster-recovery fidelity is the separate full pg_dump backup, not
     # this script.
-    PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" pg_dump --schema-only --no-owner --no-acl -U "${PG_USER}" -d "${PG_DB}" \
-        > /tmp/pg-canary-schema.sql || die "schema dump failed"
+    PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" pg_dump --schema-only --no-owner --no-acl --lock-wait-timeout="${PG_DUMP_LOCK_WAIT}" -U "${PG_USER}" -d "${PG_DB}" \
+        > /tmp/pg-canary-schema.sql \
+        || die "schema dump failed (incl. a lock wait over ${PG_DUMP_LOCK_WAIT} -- a compile may have started mid-test; re-run 'test', then 'cleanup' if the canary is left)"
     log "schema dump: $(wc -l < /tmp/pg-canary-schema.sql) lines"
 
     log "applying schema to canary..."
@@ -196,16 +231,40 @@ while changed:
             changed = True
 print(' '.join(order))
 ")
+    # 2026-10-22: tables that own a FOREIGN KEY (incl. self-references) are
+    # loaded with RI enforcement off on the canary session only. Each table's
+    # sample is an independent LIMIT, so a child's 500 rows need not point at
+    # the parent's 500 (vault_notes_fulltext.path -> vault_documents), and a
+    # self-referencing FK (codeshare_map.superseded_by) can point outside its
+    # own sample. Those are sampling artefacts, not image defects; the FKs are
+    # still created by the schema apply and row counts stay strict. Scoped to
+    # FK-owning tables so other triggers (audit_log_chain_trg) still run.
+    fk_children=" $(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+        "SELECT DISTINCT c.relname FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+         WHERE k.contype = 'f' AND k.connamespace = 'public'::regnamespace" | tr '\n' ' ') "
     fail=0
     mismatch=0
     err_log_dir="$(mktemp -d)"
     for t in ${tables}; do
+        load_opts=""
+        [[ "${fk_children}" == *" ${t} "* ]] && load_opts="-c session_replication_role=replica"
         live_count=$(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
             "SELECT count(*) FROM (SELECT 1 FROM ${t} LIMIT ${SAMPLE_LIMIT}) s")
+        # 2026-10-22: explicit column list, generated columns excluded.
+        # vault_notes_fulltext.search_vector is GENERATED ALWAYS ... STORED;
+        # `SELECT *` exported it but `\copy t FROM STDIN` (no list) never
+        # accepts generated columns -> "extra data after last expected
+        # column", 0 rows landed, image update skipped. Generic: any table
+        # with a generated column (attgenerated <> '') is handled the same
+        # way; the canary recomputes the value itself on insert.
+        cols=$(PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
+            "SELECT string_agg(quote_ident(attname), ',' ORDER BY attnum) FROM pg_attribute
+             WHERE attrelid = 'public.${t}'::regclass AND attnum > 0
+               AND NOT attisdropped AND attgenerated = ''")
         PGPASSWORD="${LIVE_PW}" podman exec -e PGPASSWORD "${LIVE_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
-            "\copy (SELECT * FROM ${t} LIMIT ${SAMPLE_LIMIT}) TO STDOUT" 2>"${err_log_dir}/${t}.err" \
-            | PGPASSWORD="${canary_pw}" podman exec -i -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
-            "\copy ${t} FROM STDIN" >/dev/null 2>>"${err_log_dir}/${t}.err"
+            "\copy (SELECT ${cols} FROM ${t} LIMIT ${SAMPLE_LIMIT}) TO STDOUT" 2>"${err_log_dir}/${t}.err" \
+            | PGPASSWORD="${canary_pw}" PGOPTIONS="${load_opts}" podman exec -i -e PGPASSWORD -e PGOPTIONS "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -c \
+            "\copy ${t} (${cols}) FROM STDIN" >/dev/null 2>>"${err_log_dir}/${t}.err"
         canary_count=$(PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc \
             "SELECT count(*) FROM ${t}")
         if [[ "${live_count}" != "${canary_count}" ]]; then
@@ -227,7 +286,11 @@ print(' '.join(order))
     # postgres:*-alpine images generally, not something this update
     # introduced -- musl doesn't ship glibc's locale data, so initdb falls
     # back to the "C" locale. Harmless; does not affect data correctness.
-    log_issues=$(podman logs "${CANARY_CONTAINER}" 2>&1 | grep -iE "WARNING|ERROR|FATAL" \
+    # 2026-10-22: match the severity tag only ("ERROR:"), case-sensitive.
+    # The old case-insensitive bare-word grep false-positived on a normal
+    # "LOG:  duration: ... COPY audit_log (..., egress_last_error, ...)"
+    # slow-statement line (a column name, not an error). PANIC added.
+    log_issues=$(podman logs "${CANARY_CONTAINER}" 2>&1 | grep -E "(WARNING|ERROR|FATAL|PANIC): " \
         | grep -v "database system was shut down\|starting PostgreSQL\|listening on\|database system is shutting down\|received fast shutdown request\|aborting any active transactions\|enabling \"trust\" authentication for local connections\|no usable system locales were found" || true)
     if [[ -n "${log_issues}" ]]; then
         log "log issues found:"

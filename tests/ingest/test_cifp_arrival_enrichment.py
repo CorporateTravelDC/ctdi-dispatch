@@ -37,6 +37,7 @@ from ingest.parsers.tbfm_parser import DC_METER_FIXES, _check_tbfm_watchlist_hit
 from poller.skills.faa_cifp_parse import _parse_lines
 
 FIXTURE = Path(__file__).parent.parent / "poller" / "fixtures" / "cifp_kiad_gibbz6_sample.txt"
+_PINNED_NOW = datetime(2026, 9, 5, 0, 0, tzinfo=timezone.utc).timestamp()
 
 
 @pytest.fixture
@@ -45,6 +46,10 @@ def cifp_db(monkeypatch, tmp_path):
     db._db_path automatically even if the test raises."""
     db_path = tmp_path / "test.db"
     monkeypatch.setattr(db, "_db_path", lambda: db_path)
+    # 2026-10-21: _check_tbfm_watchlist_hits skips ETAs already in the past;
+    # these fixtures use fixed 2026-09-05 ETAs, so pin "now" before them.
+    from ingest.parsers import tbfm_parser
+    monkeypatch.setattr(tbfm_parser, "_now_epoch", lambda: _PINNED_NOW)
     db.init_db_all()
     lines = FIXTURE.read_text().splitlines()
     fixes, legs, holds = _parse_lines(lines, "260903")
@@ -410,3 +415,34 @@ def test_runway_eta_epoch_returns_epoch_not_iso(cifp_db):
                             eta_kind="mfx")
     epoch = L.runway_eta_epoch("AAL2205", "KIAD")
     assert isinstance(epoch, float), f"expected float epoch, got {type(epoch)}"
+
+
+def test_tbfm_watchlist_skips_past_eta_but_pushes_future(cifp_db, monkeypatch, tmp_path):
+    """2026-10-21: centers re-send sequences for fixes the flight already
+    crossed. An ETA more than 120 s behind now is not pushed to the watch
+    (and does not consume the (entry, fix) dedup slot); a future one is."""
+    from ingest.parsers import tbfm_parser
+    from common.push_dedup import PushDedup
+    monkeypatch.setattr("common.config.state_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(tbfm_parser, "_TBFM_WATCHLIST_DEDUP", PushDedup("tbfm_watchlist_past", 1800))
+    monkeypatch.setattr(tbfm_parser, "_match_watchlist_flight", lambda fid, **_leg: {"id": "watch-entry-q"})
+    monkeypatch.setattr(db, "update_watchlist_tbfm_status", lambda *a, **k: None)
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(tbfm_parser, "_now_epoch", lambda: now)
+    fired = []
+    import shared.watchlist as wl
+    monkeypatch.setattr(wl, "watchlist_event_hit",
+                        lambda eid, summary, detail, priority=3: fired.append(detail["eta"]))
+
+    def seq(eta):
+        return {"flight_id": "QQQ123", "meter_fix": "SWANN", "eta": eta, "eta_kind": "rwy",
+                "apt": "DCA", "facility": "ZDC", "sequence_num": 1, "assigned_speed": 250}
+
+    _check_tbfm_watchlist_hits([seq("2026-09-05T11:50:00Z")])   # 10 min ago
+    assert fired == []
+    _check_tbfm_watchlist_hits([seq("2026-09-05T11:59:00Z")])   # 60 s ago: within grace
+    assert fired == ["2026-09-05T11:59:00Z"]
+    fired.clear()
+    monkeypatch.setattr(tbfm_parser, "_TBFM_WATCHLIST_DEDUP", PushDedup("tbfm_watchlist_future", 1800))
+    _check_tbfm_watchlist_hits([seq("2026-09-05T12:20:00Z")])   # future
+    assert fired == ["2026-09-05T12:20:00Z"]

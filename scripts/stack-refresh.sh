@@ -154,6 +154,11 @@ WEBSITE_PATH=/opt/corporatetraveldc/private/csexecutiveservices-website
 # rollout rows "unit|kind|image|bdir|cfile|win" -- serialized-rollout.sh is the one list
 rollout_rows() { grep -E '^  "[^"]+\|(local|ext)\|' scripts/serialized-rollout.sh | sed -E 's/^  "//; s/".*$//; s#\$REPO#'"$REPO_PATH"'#; s#\$WEBSITE#'"$WEBSITE_PATH"'#'; }
 rollout_units() { rollout_rows | cut -d'|' -f1; }
+# 2026-10-23 (operator): kind "build" rows (docgen: an image with no unit) --
+# built, gated, provenance-recorded and promoted like a local image, but NEVER
+# part of rollout_rows, so never in the restart/unit lists, holds, left-behind
+# or review-debt checks. Same row format.
+build_rows() { grep -E '^  "[^"]+\|build\|' scripts/serialized-rollout.sh | sed -E 's/^  "//; s/".*$//; s#\$REPO#'"$REPO_PATH"'#; s#\$WEBSITE#'"$WEBSITE_PATH"'#'; }
 units_for_image() { rollout_rows | awk -F'|' -v img="$1" '$3==img{print $1}'; }
 is_pg_unit() { rollout_rows | awk -F'|' -v u="$1" '$1==u && $3 ~ /^docker\.io\/library\/postgres:/{f=1} END{exit !f}'; }
 record_built() {  # record_built <image> <full-id> <svc>
@@ -360,13 +365,15 @@ fi
 # (duel H2: the rollout no longer builds when stack-refresh hands off, so
 # stack-refresh must build ALL of them -- demo, acars-watcher, csexec-contact
 # included -- or they would never be refreshed again).
-declare -A LIMG_DIR=() LIMG_CF=()
-LOCAL_IMAGES=()
+declare -A LIMG_DIR=() LIMG_CF=() BUILD_ONLY=()
+LOCAL_IMAGES=(); BUILD_ONLY_FAILED=()
 while IFS='|' read -r unit kind image bdir cfile win; do
-  [[ "$kind" == local ]] || continue
+  [[ "$kind" == local || "$kind" == build ]] || continue
   [[ -n "${LIMG_DIR[$image]:-}" ]] && continue
   LIMG_DIR[$image]="$bdir"; LIMG_CF[$image]="$cfile"; LOCAL_IMAGES+=("$image")
-done < <(rollout_rows)
+  [[ "$kind" == build ]] && BUILD_ONLY[$image]=1
+done < <(rollout_rows; build_rows)
+
 svc_of() { local b; b=$(basename "${1%:*}"); echo "${b#corporatetraveldc-}"; }
 check_of() { echo "${1%:*}:refresh-check"; }
 
@@ -388,6 +395,9 @@ nextcloud_major_jump() {
 # the held-units step crashed and the script fell through into the rollout.
 declare -A HELD_UNIT=()
 hold_image() {  # hold_image <image> <reason>: hold every rollout unit running it
+  # 2026-10-23 (operator): a build-only image has no unit to hold; its failed
+  # build/gate/receipt is recorded and surfaced in the summary instead.
+  if [[ -n "${BUILD_ONLY[$1]:-}" ]]; then BUILD_ONLY_FAILED+=("$(svc_of "$1")($2)"); return 0; fi
   local u; for u in $(units_for_image "$1"); do HELD_UNIT[$u]="$2"; done; }
 CHANGED_EXT=(); CHANGED_LOCAL=()
 # -- externals: pull (into the real tag; :previous only on a real change)
@@ -474,6 +484,12 @@ done
 # :latest, and it must be the id we just promoted. Anything else -> no rollout.
 PROMOTE_BAD=()
 for image in "${LOCAL_IMAGES[@]}"; do
+  # 2026-10-23 (operator): build-only images are not restarted; a missing one
+  # is reported, it does not block the fleet rollout.
+  if [[ -n "${BUILD_ONLY[$image]:-}" ]]; then
+    podman image exists "$image" || BUILD_ONLY_FAILED+=("$(svc_of "$image")(missing-after-promote)")
+    continue
+  fi
   podman image exists "$image" || PROMOTE_BAD+=("${image} missing")
 done
 if (( ${#PROMOTE_BAD[@]} )); then
@@ -520,11 +536,11 @@ FAILED_ROLLOUT=$(failed_rollout_count)
 "${REPO_ROOT}/scripts/build/provenance.py" record-external --running >/dev/null 2>&1 || log warn "external SBOM snapshot incomplete"
 HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8000/healthz)
 HELD_TXT=$(for u in "${!HELD_UNIT[@]}"; do printf '%s(%s) ' "$u" "${HELD_UNIT[$u]}"; done)
-SUMMARY="head ${HEAD_SHORT}; ext changed ${#CHANGED_EXT[@]}; local changed ${#CHANGED_LOCAL[@]}; restarted ${#RESTARTED_OK[@]}; held ${#HELD_UNIT[@]}${HELD_TXT:+ (${HELD_TXT% })}; pg canary-only ${#PG_EXEMPT[@]}; left behind ${#LEFT_BEHIND[@]}${LEFT_BEHIND:+ (${LEFT_BEHIND[*]})}; rollout rc ${rrc}; failed units ${FAILED} (${FAILED_ROLLOUT} in the rollout)${NOTES:+; reported-only drift ${#NOTES[@]}}; healthz ${HEALTH}; ${DEBT}; log ${LOG##*/}"
+SUMMARY="head ${HEAD_SHORT}; ext changed ${#CHANGED_EXT[@]}; local changed ${#CHANGED_LOCAL[@]}; restarted ${#RESTARTED_OK[@]}; held ${#HELD_UNIT[@]}${HELD_TXT:+ (${HELD_TXT% })}; pg canary-only ${#PG_EXEMPT[@]}; left behind ${#LEFT_BEHIND[@]}${LEFT_BEHIND:+ (${LEFT_BEHIND[*]})}; rollout rc ${rrc}; failed units ${FAILED} (${FAILED_ROLLOUT} in the rollout)${BUILD_ONLY_FAILED:+; build-only failed ${#BUILD_ONLY_FAILED[@]} (${BUILD_ONLY_FAILED[*]})}${NOTES:+; reported-only drift ${#NOTES[@]}}; healthz ${HEALTH}; ${DEBT}; log ${LOG##*/}"
 log info "${SUMMARY}"
 (( ${#LEFT_BEHIND[@]} )) && log error "LEFT BEHIND (not restarted, not held): ${LEFT_BEHIND[*]}"
 [[ "$MODE" == tripwire ]] && mark_tripwire_run
-if (( rrc != 0 || FAILED_ROLLOUT != 0 || ${#LEFT_BEHIND[@]} )) || [[ "$HEALTH" != 200 ]] || (( ${#HELD_UNIT[@]} )); then
+if (( rrc != 0 || FAILED_ROLLOUT != 0 || ${#LEFT_BEHIND[@]} || ${#BUILD_ONLY_FAILED[@]} )) || [[ "$HEALTH" != 200 ]] || (( ${#HELD_UNIT[@]} )); then
   ntfy_send "stack-refresh ${MODE}: ATTENTION" "${SUMMARY}" 4; exit 1
 fi
 ntfy_send "stack-refresh ${MODE}: OK" "${SUMMARY}" 2

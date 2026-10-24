@@ -1,0 +1,12 @@
+# config/privacy-rail.list.example -- operator-designated rail privacy list (2026-10-23).
+# Install as /etc/corporatetraveldc/privacy-rail.list (root-owned, 0640; the operator
+# account must be able to read it for push-time checks). One entry per line; # comments.
+# Read by scripts/leak-guard/privacy_lists.py: matched only in rail context, reported as
+# 'rail-identifier', values never printed. Missing or empty file = "no entries"
+# (reported, never a failure). Real entries never go in this tracked example.
+#
+# id:<identifier>    matched only after a rail key (train, train_id, trainset, consist,
+#                    locomotive, loco, railcar)
+# Synthetic examples, left commented:
+# id:QQSYN0001
+# id:QR-0000

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from auth.auth import Tier, require_admin, require_tier
 from common import db
+from common.flight_instance import watch_id_date
 from shared.watchlist import _fire_ntfy_dual, PERMANENT_WATCHLIST_DIR
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
@@ -37,8 +38,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_id(entry_type: str, identifier: str) -> str:
-    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+def _make_id(entry_type: str, identifier: str,
+             scheduled_departure: Optional[str] = None) -> str:
+    # 2026-10-22: date part = America/New_York date of the leg's scheduled
+    # departure (else of now), not the UTC date -- see watch_id_date.
+    date_str = watch_id_date(scheduled_departure)
     ident_slug = identifier.lower().replace(" ", "-")
     return f"wl-{entry_type}-{ident_slug}-{date_str}"
 
@@ -75,6 +79,43 @@ def _default_auto_remove_at(scheduled_arrival: Optional[str],
         expiry = datetime.now(timezone.utc) + timedelta(hours=fallback_hours)
 
     return expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# 2026-10-21: max distance (seconds) between an FDPS plan's own time and the
+# reference time for that plan to count as TODAY's leg when filling a watch's
+# hex/registration. The plan's time is its filed departure_time when present,
+# else its updated_at; the reference is the caller's scheduled_departure when
+# sent, else now. 18 h covers early filings (~04:00Z for an evening leg) while
+# excluding the previous day's or older plans for the same reused number.
+FDPS_IDENTITY_FRESH_WINDOW_S = 18 * 3600
+
+
+def _fdps_plan_is_current_leg(plan: dict, scheduled_departure: Optional[str],
+                              now_epoch: Optional[float] = None) -> bool:
+    """True only if `plan` plausibly belongs to the leg being added.
+
+    Seen live 2026-10-21: a regional add with no tail filled hex+registration
+    from a plan four days old (a different airframe) because FDPS had not
+    filed today's plan yet and the only check was that the origin did not
+    contradict. A plan with no usable time is not trusted."""
+    plan_t = plan.get("departure_time") or plan.get("updated_at")
+    try:
+        plan_t = float(plan_t)
+    except (TypeError, ValueError):
+        return False
+    ref = None
+    if scheduled_departure:
+        try:
+            ref_dt = datetime.fromisoformat(
+                scheduled_departure.strip().replace("Z", "+00:00"))
+            if ref_dt.tzinfo is None:
+                ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+            ref = ref_dt.timestamp()
+        except ValueError:
+            ref = None
+    if ref is None:
+        ref = time.time() if now_epoch is None else now_epoch
+    return abs(plan_t - ref) <= FDPS_IDENTITY_FRESH_WINDOW_S
 
 
 # ── GET /api/v1/watchlist ─────────────────────────────────────────────────────
@@ -279,7 +320,7 @@ async def add_flight_watchlist(
     if not ident:
         raise HTTPException(400, "identifier is required")
 
-    entry_id = _make_id("flight", ident)
+    entry_id = _make_id("flight", ident, body.scheduled_departure)
     now = _now_iso()
 
     # 2026-07-28: auto-resolve tail -> hex whenever a registration is given
@@ -352,10 +393,16 @@ async def add_flight_watchlist(
     # hex/registration -- the blind flight-number fallback never does), then
     # reverse-resolve a missing tail from the hex. A caller-supplied value
     # is never overwritten.
+    # 2026-10-21: "this leg" also requires the plan to be TODAY's
+    # (_fdps_plan_is_current_leg / FDPS_IDENTITY_FRESH_WINDOW_S) -- a stale
+    # plan for the same number carries a different airframe. No fresh plan
+    # -> leave hex/registration empty (hex-pending; the poller resolves it
+    # later from SWIM). Never filled from FIDS.
     fdps_identity = False
     if fdps_plan and not resolved_hex_id and not resolved_registration:
         from common.flight_instance import airports_agree
         if airports_agree(body.origin, fdps_origin) is not False and \
+                _fdps_plan_is_current_leg(fdps_plan, body.scheduled_departure) and \
                 (fdps_plan.get("hex") or fdps_plan.get("registration")):
             resolved_hex_id = (fdps_plan.get("hex") or "").lower() or None
             resolved_registration = (fdps_plan.get("registration") or "").upper() or None
@@ -538,7 +585,7 @@ async def add_train_watchlist(
     if not ident:
         raise HTTPException(400, "identifier is required")
 
-    entry_id = _make_id("train", ident)
+    entry_id = _make_id("train", ident, body.scheduled_departure)
     now = _now_iso()
     entry = {
         "id": entry_id,
@@ -784,7 +831,7 @@ async def add_flight_watchlist_batch(
         if not ident:
             errors.append("empty identifier skipped")
             continue
-        entry_id = _make_id("flight", ident)
+        entry_id = _make_id("flight", ident, item.scheduled_departure)
         # 2026-10-13: same registration=None gap as the single add --
         # reverse-resolve a hex-only add from the local registries.
         # (2026-10-18: `tail` is no longer accepted as a registration.)
@@ -869,7 +916,7 @@ async def add_train_watchlist_batch(
         if not ident:
             errors.append("empty identifier skipped")
             continue
-        entry_id = _make_id("train", ident)
+        entry_id = _make_id("train", ident, item.scheduled_departure)
         entry = {
             "id": entry_id,
             "entry_type": "train",

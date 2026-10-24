@@ -32,8 +32,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_entry_id(entry_type: str, identifier: str) -> str:
-    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+def _make_entry_id(entry_type: str, identifier: str,
+                   scheduled_departure: Optional[str] = None) -> str:
+    # 2026-10-22: America/New_York date (of the scheduled departure, else
+    # of now), not UTC -- same rule as web.routes.watchlist._make_id.
+    from common.flight_instance import watch_id_date
+    date_str = watch_id_date(scheduled_departure)
     slug = identifier.lower().replace(" ", "-")
     return f"wl-{entry_type}-{slug}-{date_str}"
 
@@ -68,7 +72,8 @@ def _normalise_entry(raw: dict, tier: str, entry_type: str,
     if row_tier not in ("transient", "permanent"):
         row_tier = tier
 
-    entry_id = raw.get("id") or _make_entry_id(entry_type, ident_upper)
+    entry_id = raw.get("id") or _make_entry_id(entry_type, ident_upper,
+                                                  raw.get("scheduled_departure") or None)
 
     return {
         "id": entry_id,

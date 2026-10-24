@@ -441,3 +441,49 @@ def test_purge_promoted_then_rebackfill_rescrubs_old_rows(world):
     assert run(m, src, tgt, "--backfill", "--days", "7") == 0
     eta = json.loads(target_texts(demo)[("route", at)])["vip_flags"][0]["eta"]
     assert datetime.fromisoformat(eta.replace("Z", "+00:00")).minute % 15 == 0
+
+
+def test_purge_promoted_deletes_in_short_batches(world, monkeypatch):
+    """2026-10-22 (operator): the single DELETE hit the demo instance's 30 s statement_timeout on
+    2026-10-20. The purge clears window_end first, then deletes by primary key in batches of
+    PURGE_BATCH, each batch in its own transaction (its own factory() block), until none are left."""
+    m, src, tgt, prod, demo = world
+    with _sqlite(demo) as c:
+        for i in range(7):
+            c.execute("INSERT INTO snapshots (endpoint, captured_at, payload, payload_hash, compressed, synthetic) "
+                      "VALUES ('route', ?, ?, 'h', 1, 0)", (f"2026-10-1{i}T00:00:00Z", blob("{}")))
+        for i in range(3):
+            c.execute("INSERT INTO brief_archive (generated_at, brief_type, content, source) VALUES (?, 'ops', 'x', 'skill')",
+                      (f"2026-10-1{i}T00:00:00Z",))
+        c.execute("INSERT INTO meta (key, value) VALUES ('window_end', '2026-10-17T00:00:00Z')")
+    deletes = []
+
+    class Counting:
+        def __init__(self):
+            self.cm = _sqlite(demo)
+
+        def __enter__(self):
+            c = self.cm.__enter__()
+
+            class Wrap:
+                def execute(self, sql, params=()):
+                    if sql.startswith("DELETE FROM snapshots") or sql.startswith("DELETE FROM brief_archive"):
+                        assert "LIMIT ?" in sql and params == (3,)
+                        deletes.append(sql.split()[2])
+                    return c.execute(sql, params)
+            return Wrap()
+
+        def __exit__(self, *a):
+            return self.cm.__exit__(*a)
+
+    monkeypatch.setattr(m.Target, "PURGE_BATCH", 3)
+    t = m.Target(Counting, dry_run=True)
+    assert t.purge_promoted() == (7, 3) and deletes == []              # dry run: counts only
+    t = m.Target(Counting, dry_run=False)
+    assert t.purge_promoted() == (7, 3)
+    # 7 snapshots: 3 + 3 + 1 + an empty batch; 3 briefs: 3 + an empty batch -- one transaction each
+    assert deletes == ["snapshots"] * 4 + ["brief_archive"] * 2
+    with _sqlite(demo) as c:
+        assert c.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM brief_archive").fetchone()[0] == 0
+        assert c.execute("SELECT value FROM meta WHERE key='window_end'").fetchone() is None

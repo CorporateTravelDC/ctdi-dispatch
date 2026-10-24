@@ -757,8 +757,9 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
     # 2026-10-14 (flight-instance resolver): the filed departure time. Confirmed
     # on live FH (filed plan) messages: departure > runwayPositionAndTime >
     # runwayTime > estimated/@time (the proposed runway departure); no other
-    # departure-time element is carried. Stored once per plan (first filing
-    # wins, db.upsert_flight_event) so FDPS-only instances get a date.
+    # departure-time element is carried. Stored per plan so FDPS-only instances get a date;
+    # 2026-10-23: a newer filing now replaces it (was first-filing-wins, which
+    # left days-old times on callsign-keyed rows reused across days).
     etd_estimated: str | None = None
     if dep_elem is not None and source == "FH":
         etd_el = _find_path_local30(dep_elem, "runwayPositionAndTime", "runwayTime", "estimated")

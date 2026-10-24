@@ -1,6 +1,6 @@
 {
   "$schema_note": "Hand-authored, human-reviewed source of truth for the second-brain semantic layer. Plain JSON on purpose: PyYAML is installed on the host but is NOT a declared dependency of this repo and is not guaranteed inside the skill/web containers, and CLAUDE.md already establishes JSON-not-YAML as house style for declarative registries (watchlists). Rationale that would otherwise be a YAML comment is carried as real `definition` / `scope_note` / `rationale` FIELDS instead, so it survives into every export (SKOS definitions, the LLM context pack) rather than being lost at parse time.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "namespace": "https://example.com/ns/second-brain/",
   "prefix": "sb",
   "governance": {
@@ -24,6 +24,11 @@
         "version": "1.1.0",
         "date": "2026-08-23",
         "change": "Added the derivation facet (leans_on/derives_from/reutilizes) and its assignment rule (compile.py::assign_derivations(), new semantic_note_derivations table). Distinct from the pre-existing provenance facet on purpose: provenance is WHO/WHAT produced a note (authorship/trust); derivation is HOW its claim came to be -- its causal relationship to specific prior material, note-to-note rather than note-to-concept. Operator directive: every second-brain write should now record what it leaned on, what it derived, and what it reutilized, not just its outcome. Additive only, per this file's own change policy -- no existing concept id, pref_label, or facet changed."
+      },
+      {
+        "version": "1.2.0",
+        "date": "2026-10-22",
+        "change": "Added the linkage facet (preceded_by / proximate_to / statistically_associated / member_of_cluster, plus the new concept-level concept_associated / member_of_concept_cluster computed by compile.py::assign_concept_associations()/assign_concept_clusters(), operator approval 2026-10-22 under the freeze) and its six assignment rules, closing docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md Phase 0's \"geometric/cluster/causal schema added to the ontology\", which the 2026-09-20/22 build did not do (it also never declared the earlier chronological kind). Each concept records the edge kind compile.py writes; the three derivation concepts gain edge_table/edge_kind ('evidenced') the same way. Scope notes state that the 25 km / 30 min thresholds are transit-only. Additive only: no existing id, pref_label or facet changed."
       }
     ]
   },
@@ -81,6 +86,13 @@
       "pref_label": "Derivation",
       "definition": "HOW this note's claim came to be -- its causal relationship to specific prior material (another note, a mechanism, a decision) -- as opposed to `provenance`, which is WHO/WHAT produced the note.",
       "scope_note": "Note-to-note (or note-to-mechanism), not note-to-domain. A note can have zero, one, or several derivation relationships, each pointing at a specific prior thing named in a `## Provenance` section of the note body (see compile.py::assign_derivations() for the exact parsed format) -- this is the one facet whose evidence names another note/entity rather than a tag, path, or ingest method.",
+      "polyhierarchy": true
+    },
+    {
+      "id": "linkage",
+      "pref_label": "Linkage",
+      "definition": "Note-to-note and note-to-entity edges the semantic compile COMPUTES from the index, as opposed to `derivation`, whose edges a note's author states in its `## Provenance` section.",
+      "scope_note": "All four relations live in the same semantic_note_derivations table as the derivation edges (one graph, operator precedent 2026-08-24), told apart by `kind`. `preceded_by` covers every note through its concepts. `proximate_to`, `statistically_associated` and `member_of_cluster` cover only notes that name a flight, train, vessel (MMSI) or drone (UAS ID): the place-and-time thresholds (GEO_PROXIMITY_RADIUS_KM, default 25 km; 30 min) are transit thresholds, not a distance over the vault or the ontology. Design: docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md. concept_associated and member_of_concept_cluster are the concept-level counterparts: proximity on the ontology itself, measured by co-filing in notes.",
       "polyhierarchy": true
     }
   ],
@@ -1100,7 +1112,9 @@
       ],
       "observed_as": {
         "note_section": "## Provenance",
-        "line_prefix": "Leaned on:"
+        "line_prefix": "Leaned on:",
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "evidenced"
       }
     },
     {
@@ -1115,7 +1129,9 @@
       ],
       "observed_as": {
         "note_section": "## Provenance",
-        "line_prefix": "Derived:"
+        "line_prefix": "Derived:",
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "evidenced"
       }
     },
     {
@@ -1131,7 +1147,101 @@
       ],
       "observed_as": {
         "note_section": "## Provenance",
-        "line_prefix": "Reutilized:"
+        "line_prefix": "Reutilized:",
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "evidenced"
+      }
+    },
+    {
+      "id": "preceded_by",
+      "facet": "linkage",
+      "pref_label": "Preceded By",
+      "definition": "The most recent OTHER note filed under the same concept, by the note's real modification time; every (note, concept) pair gets one, with its 1-indexed sequence in that concept's history.",
+      "scope_note": "Timestamp-only ordering, never a claim the note used its predecessor. Evidence: concept=<id>;seq=<n>;ts=<timestamp>. This is the concept-based link every note has, transit or not.",
+      "alt_labels": [
+        "preceded by"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "chronological",
+        "computed_by": "compile.py::assign_chronology()"
+      }
+    },
+    {
+      "id": "proximate_to",
+      "facet": "linkage",
+      "pref_label": "Proximate To",
+      "definition": "Two notes name flights, trains, vessels (MMSI) or drones (UAS ID) whose real positions were within GEO_PROXIMITY_RADIUS_KM (default 25 km) of each other, or whose times were within 30 minutes; evidence records matched=both|space_only|time_only with the real distance and time delta.",
+      "scope_note": "Plausible tier: one instance, co-occurrence only, never causation. Transit only: a note with no flight, train, vessel or drone reference gets no edge of this kind.",
+      "alt_labels": [
+        "proximate to"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "geometric",
+        "computed_by": "compile.py::assign_geometry()",
+        "tier": "plausible"
+      }
+    },
+    {
+      "id": "statistically_associated",
+      "facet": "linkage",
+      "pref_label": "Statistically Associated",
+      "definition": "Two transit identifiers (flight, train, vessel, drone) co-occur across proximate_to note pairs more often than the proximity graph's own structure predicts, over a 30-day window with at least 5 note pairs; evidence carries N, expected, lift, direction and lead/lag.",
+      "scope_note": "Provable tier, but associated, never causes: consumer text must say associated. Lift is measured inside the proximity graph (pair units), not over raw note counts. Entity pairs, not concept pairs.",
+      "alt_labels": [
+        "statistically associated"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "causal",
+        "computed_by": "compile.py::assign_causal_associations()",
+        "tier": "provable"
+      }
+    },
+    {
+      "id": "member_of_cluster",
+      "facet": "linkage",
+      "pref_label": "Member Of Cluster",
+      "definition": "An entity belongs to a deterministic connected component of three or more entities over statistically_associated edges at or above chance (lift >= 1.0).",
+      "scope_note": "Each cluster keeps its tiers: provable internal edges (lift >= 2.0) and plausible ones (1.0 <= lift < 2.0) are counted separately, with the median lift. No seed, no tunable resolution.",
+      "alt_labels": [
+        "member of cluster"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "cluster",
+        "computed_by": "compile.py::assign_clusters()"
+      }
+    },
+    {
+      "id": "concept_associated",
+      "facet": "linkage",
+      "pref_label": "Concept Associated",
+      "definition": "Two domain or entity concepts are filed directly on the same curated notes more (or less) often than chance: N notes carry both, expected = n_a x n_b / curated notes, lift = N / expected, written at N >= 5.",
+      "scope_note": "Concept-level proximity: a note is the co-occurrence window and distance is not miles. Raw feed items, broader_closure filings, and pairs related by broader/in_domain (co-occur by construction) are excluded. Tier: provable at lift >= 2.0, plausible 1.0-2.0, below_chance under 1.0. Associated, never causes.",
+      "alt_labels": [
+        "concept associated"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "conceptual",
+        "computed_by": "compile.py::assign_concept_associations()"
+      }
+    },
+    {
+      "id": "member_of_concept_cluster",
+      "facet": "linkage",
+      "pref_label": "Member Of Concept Cluster",
+      "definition": "A concept belongs to a deterministic connected component of three or more concepts over concept_associated edges at or above SEMANTIC_CONCEPT_CLUSTER_MIN_LIFT (default 2.0).",
+      "scope_note": "Default floor is 2.0, not the transit tier's 1.0: one note carries several concepts, so concept pairs clear chance far more easily than identifier pairs. Provable/plausible internal-edge counts and median lift are kept per cluster.",
+      "alt_labels": [
+        "member of concept cluster"
+      ],
+      "observed_as": {
+        "edge_table": "semantic_note_derivations",
+        "edge_kind": "concept_cluster",
+        "computed_by": "compile.py::assign_concept_clusters()"
       }
     }
   ],
@@ -1479,6 +1589,42 @@
         "source": "vault_notes_fts.content",
         "method": "Parse a `## Provenance` heading in the note body; within it, match line-prefixes `Leaned on:` / `Derived:` / `Reutilized:` against the three derivation concepts. Writes to semantic_note_derivations (path, relation, target, evidence), NOT semantic_note_concepts -- this is a note-to-note/note-to-mechanism edge, not a note-to-concept assignment, since the target is whatever the line names (often a [[wikilink]]), not a controlled vocabulary term. Evidence is the literal matched line, same auditability guarantee as every other rule here.",
         "confidence": "high"
+      },
+      {
+        "id": "chronology",
+        "source": "vault_documents.mtime + semantic_note_concepts",
+        "method": "For every (note, concept) pair, link the note to the most recent other note under the same concept (preceded_by, kind='chronological'). Writes semantic_note_derivations, not semantic_note_concepts.",
+        "confidence": "high"
+      },
+      {
+        "id": "geometry_proximity",
+        "source": "vault_notes_fts.title + content, flight_events, station_coordinates, vessel_events, ais_sample_positions, drone_events",
+        "method": "Extract validated flight and train references, MMSI vessel references and UAS ID drone references, resolve real positions gated to the note's own time, link pairs from different notes within GEO_PROXIMITY_RADIUS_KM or 30 minutes (proximate_to, kind='geometric'). Transit only.",
+        "confidence": "plausible"
+      },
+      {
+        "id": "causal_association",
+        "source": "derived",
+        "method": "Aggregate proximate_to note pairs into identifier-pair associations over a 30-day window, min 5 note pairs, lift against the proximity graph's own baseline, direction from preceded_by edges (statistically_associated, kind='causal').",
+        "confidence": "provable"
+      },
+      {
+        "id": "cluster_membership",
+        "source": "derived",
+        "method": "Connected components of size >= 3 over statistically_associated edges with lift >= 1.0 (member_of_cluster, kind='cluster').",
+        "confidence": "inherited"
+      },
+      {
+        "id": "concept_association",
+        "source": "semantic_note_concepts (direct, curated, domain + entity facets)",
+        "method": "Count curated notes per concept and per concept pair; lift against n_a x n_b / notes; min 5 notes; skip pairs in each other's closure (concept_associated, kind='conceptual').",
+        "confidence": "provable"
+      },
+      {
+        "id": "concept_cluster_membership",
+        "source": "derived",
+        "method": "Connected components of size >= 3 over concept_associated edges with lift >= SEMANTIC_CONCEPT_CLUSTER_MIN_LIFT (default 2.0) (member_of_concept_cluster, kind='concept_cluster').",
+        "confidence": "inherited"
       }
     ]
   },

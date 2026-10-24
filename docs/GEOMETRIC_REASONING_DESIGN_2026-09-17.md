@@ -366,3 +366,47 @@ backfilling once multiple sites contribute. See
   (composite retrieval) — matching this doc's Phasing section, not §1's summary
   table order.
 
+
+### Correction, 2026-10-22: what "all four phases live" did not cover
+
+The 2026-09-28 as-built pass checked that the four functions exist and that
+their tables hold rows. It did not check the rest of the Phasing section, and
+several deliverables were not built. All of them were built 2026-10-22
+(operator approval under the feature freeze, as a regression fix: the
+investor material described more than had shipped). They are live only after
+that batch's relay and rollout.
+
+| Spec item | Was | Now |
+|---|---|---|
+| Phase 0: `geometric`/`cluster`/`causal` schema in the ontology | not done | `ontology.json` 1.2.0 `linkage` facet: every computed relation, with the `edge_kind` compile.py writes; tests hold the two to the same set |
+| §6 canonical block: HISTORICAL PATTERN section | `format_all_angles_block()` rendered GEOMETRY only | renders GEOMETRY, HISTORICAL PATTERN (N, baseline, lift, direction), CLUSTERS and CONCEPTS, each with its own coverage line |
+| Phase 2: composite retrieval in `ep-advance` / `disruption-weather-digest` / `transport-digest` | `ops_brief.py` only | all three append the block after the model (ep-advance's prompt already fills its num_ctx, so not spliced into the prompt); vault digests wrap it in `<!-- all-angles:begin/end -->`, which `assign_geometry()` skips so the graph never re-reads its own output |
+| Decision #6: maritime/drone schema, seeded from NOAA Marine Cadastre AIS | not done | `vessel` (MMSI) and `drone` (UAS ID) instance types; migration 0084 adds `drone_events` (no operator id or position, by design) and `ais_sample_positions`; `scripts/seed-ais-sample.py` loads an operator-downloaded daily file, DC box only, never into the live `vessel_events` |
+
+Also: "live" did not hold for the whole period after 09-28. The `causal` and
+`cluster` tiers had 0 rows in every compile from 2026-10-14 to 10-15, and
+1,166 associations on 10-06. Cause: the causal pass parsed RFC 1123 note
+timestamps with `fromisoformat()` (`docs/CAUSAL_REASONING_ROADMAP.md`). Fixed
+2026-10-16 (`c4df48d9`, `_parse_note_ts()`).
+
+### Concept-level association (2026-10-22, beyond this design)
+
+This design was about transit throughout: the 25 km / 30 min thresholds and
+the lift/cluster tiers ran over flight and train identifiers only. The
+ontology-level proximity described in the investor material, where
+concepts sit close because notes keep filing them together, was not in it.
+Added as `assign_concept_associations()` (`concept_associated`,
+kind='conceptual') and `assign_concept_clusters()` (`member_of_concept_cluster`,
+kind='concept_cluster'):
+
+- A note is the co-occurrence window. N = curated notes filed directly under
+  both concepts (domain and entity facets), expected = n_a x n_b / curated
+  notes, lift = N / expected, written at N >= 5 (the analyze_* floor).
+- Excluded: raw feed items, broader_closure filings, and pairs related by
+  broader/in_domain, which co-occur by construction.
+- Clusters: connected components of 3+ over edges at lift >= 2.0
+  (`SEMANTIC_CONCEPT_CLUSTER_MIN_LIFT`). The default is higher than the
+  transit tier's 1.0 because one note carries several concepts. Check the
+  first live counts before quoting them.
+- Deterministic, no embeddings, "associated, never causes", like every
+  other tier.

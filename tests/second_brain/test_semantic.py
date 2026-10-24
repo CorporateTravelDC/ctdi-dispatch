@@ -17,6 +17,7 @@ the live one. They deliberately do NOT touch
 depend on, or mutate, production data. The layer is separately exercised
 against the real index through the CLI.
 """
+import re
 import sqlite3
 import sys
 import tempfile
@@ -30,11 +31,16 @@ from second_brain.semantic import load, normalize  # noqa: E402
 from second_brain.semantic.compile import (  # noqa: E402
     assign,
     assign_chronology,
+    assign_concept_associations,
+    assign_concept_clusters,
     assign_derivations,
+    assign_geometry,
+    concept_angles,
     concept_history,
     _create_schema,
     _write_model,
     drift_report,
+    format_all_angles_block,
     semantic_search,
     trace_causal_chain,
 )
@@ -472,6 +478,65 @@ def test_derivation_concepts_are_declared_in_ontology(model):
     assert ids == {"leans_on", "derives_from", "reutilizes"}
 
 
+_LINKAGE = {
+    "preceded_by": "chronological",
+    "proximate_to": "geometric",
+    "statistically_associated": "causal",
+    "member_of_cluster": "cluster",
+    "concept_associated": "conceptual",
+    "member_of_concept_cluster": "concept_cluster",
+}
+
+
+def test_linkage_concepts_are_declared_in_ontology(model):
+    """Design doc Phase 0 (docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md):
+    the computed relations go into the ontology, not only into compile.py.
+    Each one names the `kind` its edges carry."""
+    got = {c.id: c.observed_as.get("edge_kind") for c in model.concepts(facet="linkage")}
+    assert got == _LINKAGE
+    for c in model.concepts(facet="derivation"):
+        assert c.observed_as.get("edge_kind") == "evidenced"
+
+
+def test_every_compiled_edge_kind_is_declared_in_ontology(model):
+    """Drift guard both ways: the kinds compile.py recomputes (one DELETE
+    per kind before each pass) are exactly the linkage kinds the ontology
+    declares, and each declared relation id appears as a literal the
+    compile writes. A renamed or added kind fails here, not silently."""
+    src = (Path(__file__).parent.parent.parent
+           / "src/second_brain/semantic/compile.py").read_text()
+    computed = set(re.findall(
+        r"DELETE FROM semantic_note_derivations WHERE kind='(\w+)'", src))
+    assert computed == set(_LINKAGE.values())
+    for rel, kind in _LINKAGE.items():
+        assert f'"{rel}"' in src, rel
+        assert f"kind='{kind}'" in src, kind
+
+
+def test_compiled_rows_name_declared_relations(model, synthetic_index):
+    """Every (relation, kind) row a compile pass writes resolves to a
+    declared concept with that edge_kind."""
+    conn, _ = synthetic_index
+    _create_schema(conn)
+    _write_model(conn, model)
+    _insert_note_with_mtime(
+        conn, "corporatetraveldc/01-Sources/manual/linkage-check.md",
+        "Mon, 10 Aug 2026 10:00:00 GMT", tags="aviation",
+        content="## Provenance\nDerived: [[a-prior-note]]\n")
+    assign(conn, model)
+    conn.commit()
+    assign_derivations(conn)
+    assign_chronology(conn)
+    conn.commit()
+    declared = {c.id: c.observed_as.get("edge_kind")
+                for f in ("derivation", "linkage") for c in model.concepts(facet=f)}
+    rows = conn.execute(
+        "SELECT DISTINCT relation, kind FROM semantic_note_derivations").fetchall()
+    assert rows
+    for rel, kind in rows:
+        assert declared.get(rel) == kind, (rel, kind)
+
+
 # ── Regressions, 2026-08-23: two real bugs found by an independent audit ──────
 #
 # 1. _provenance_lines()'s section terminator used to be a literal
@@ -887,3 +952,226 @@ def test_trace_returns_chronology_for_a_note_with_no_provenance_section(model, s
     assert all(e["kind"] == "chronological" for e in result["edges"])
     assert any(e["resolved_path"] == "corporatetraveldc/01-Sources/manual/old-a.md"
               for e in result["edges"])
+
+
+# ── Concept-level association (2026-10-22) ──────────────────────────────────
+
+def _concept_corpus(conn, model, extra=()):
+    """Fresh corpus: 6 curated notes filed under gig_economy + dc_area +
+    corporate_intel, 14 under marketing_intel only, plus `extra` rows
+    (path, tags). 20 curated notes, so each trio pair has N=6, expected
+    6*6/20=1.8, lift 3.33."""
+    conn.execute("DELETE FROM vault_documents")
+    conn.execute("DELETE FROM vault_notes_fulltext")
+    rows = [(f"corporatetraveldc/01-Sources/manual/trio-{i}.md",
+             "gig_economy,dc_area,corporate_intel") for i in range(6)]
+    rows += [(f"corporatetraveldc/01-Sources/manual/solo-{i}.md", "marketing_intel")
+             for i in range(14)]
+    rows += list(extra)
+    for i, (path, tags) in enumerate(rows):
+        _insert_note_with_mtime(conn, path, f"Mon, 10 Aug 2026 10:{i:02d}:00 GMT", tags=tags)
+    _create_schema(conn)
+    _write_model(conn, model)
+    assign(conn, model)
+    conn.commit()
+
+
+def _conceptual_rows(conn):
+    return conn.execute(
+        "SELECT path, relation, target, evidence FROM semantic_note_derivations "
+        "WHERE kind='conceptual' ORDER BY evidence").fetchall()
+
+
+def test_concept_association_lift_against_chance(model, synthetic_index):
+    conn, _ = synthetic_index
+    _concept_corpus(conn, model)
+    n = assign_concept_associations(conn, model)
+    rows = _conceptual_rows(conn)
+    assert n == len(rows) == 6          # 3 pairs x both directions
+    for r in rows:
+        assert r["relation"] == "concept_associated"
+        assert ";n=6;expected=1.80;lift=3.33;tier=provable;notes=20;" in r["evidence"]
+        # anchored on the most recent evidencing note (highest mtime minute)
+        assert r["path"].endswith("trio-5.md")
+    targets = {(r["evidence"].split(";")[0], r["target"]) for r in rows}
+    assert ("self=concept:dc_area", "concept:gig_economy") in targets
+    assert ("self=concept:gig_economy", "concept:dc_area") in targets
+
+
+def test_concept_association_floor_rss_and_closure(model, synthetic_index):
+    """Below min-N nothing is written; raw feed items do not count; a pair
+    that co-occurs by construction (entity and its own domain) is skipped."""
+    conn, _ = synthetic_index
+    extra = [(f"corporatetraveldc/00-Inbox/rss/feed-{i}.md", "travel_trends,dc_area")
+             for i in range(9)]
+    extra += [(f"corporatetraveldc/01-Sources/manual/uber-{i}.md", "Uber,gig_economy")
+              for i in range(5)]
+    extra += [(f"corporatetraveldc/01-Sources/manual/tt-{i}.md", "travel_trends,dc_area")
+              for i in range(4)]
+    _concept_corpus(conn, model, extra)
+    assign_concept_associations(conn, model)
+    pairs = {r["evidence"].split(";")[0] + "|" + r["target"] for r in _conceptual_rows(conn)}
+    assert not any("travel_trends" in p for p in pairs)            # 4 curated < 5; RSS ignored
+    assert "self=concept:entity_uber|concept:gig_economy" not in pairs  # closure pair
+    assert "gig_economy" in model.closure("entity_uber")
+
+
+def test_concept_clusters_respect_min_lift(model, synthetic_index):
+    conn, _ = synthetic_index
+    _concept_corpus(conn, model)
+    assign_concept_associations(conn, model)
+    assert assign_concept_clusters(conn) == 3
+    ev = conn.execute("SELECT evidence FROM semantic_note_derivations "
+                      "WHERE kind='concept_cluster'").fetchall()
+    assert all("cluster=concept_cluster:corporate_intel;size=3;" in r["evidence"] for r in ev)
+    assert all(";provable=3;plausible=0;" in r["evidence"] for r in ev)
+    assert assign_concept_clusters(conn, min_lift=4.0) == 0
+
+
+def test_concept_layer_is_deterministic(model, synthetic_index):
+    conn, _ = synthetic_index
+    _concept_corpus(conn, model)
+    assign_concept_associations(conn, model)
+    assign_concept_clusters(conn)
+    first = conn.execute("SELECT * FROM semantic_note_derivations ORDER BY 1,2,3,4").fetchall()
+    assign_concept_associations(conn, model)
+    assign_concept_clusters(conn)
+    second = conn.execute("SELECT * FROM semantic_note_derivations ORDER BY 1,2,3,4").fetchall()
+    assert [tuple(r) for r in first] == [tuple(r) for r in second]
+
+
+def test_all_angles_block_renders_every_section(model, synthetic_index):
+    """§6: every section states its coverage; geometry first and unchanged."""
+    conn, _ = synthetic_index
+    _concept_corpus(conn, model)
+    assign_concept_associations(conn, model)
+    assign_concept_clusters(conn)
+    con = concept_angles(conn, "corporatetraveldc/01-Sources/manual/trio-0.md")
+    assert con["concepts"] == ["corporate_intel", "dc_area", "gig_economy"]
+    assert len(con["associations"]) == 3 and con["clusters"][0]["size"] == 3
+    result = {
+        "computed_at": "2026-10-22T00:00:00+00:00",
+        "geometric": {"threshold_km": 25, "threshold_min": 30,
+                      "candidates_evaluated": 0, "matches": []},
+        "causal": [], "cluster": [], "conceptual": con,
+    }
+    block = format_all_angles_block(result)
+    lines = block.splitlines()
+    assert lines[0] == "GEOMETRY (computed 2026-10-22T00:00:00+00:00, snapshot; threshold 25km/30min)"
+    assert lines[1] == ("0 candidates evaluated; 0 within threshold. "
+                        "Co-occurrence only, no causal relation computed.")
+    assert "0 associations anchored on this note." in block
+    assert "CLUSTERS (transit): 0 memberships on this note." in block
+    assert "CONCEPTS (3 filed: corporate_intel, dc_area, gig_economy)" in block
+    assert "N=6 of 20 notes, baseline 1.80, lift 3.33 (provable)" in block
+    assert "in concept_cluster:corporate_intel: size 3" in block
+
+
+# ── Vessel / drone geometry and the vault-block guard (2026-10-22) ──────────
+
+def _transit_tables(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS flight_events (airline TEXT, flight_num TEXT,
+            position_lat REAL, position_lon REAL, updated_at REAL);
+        CREATE TABLE IF NOT EXISTS station_coordinates (station_code TEXT, lat REAL, lon REAL);
+        CREATE TABLE IF NOT EXISTS vessel_events (mmsi TEXT, lat REAL, lon REAL, fetched_at REAL);
+        CREATE TABLE IF NOT EXISTS ais_sample_positions (dataset TEXT, mmsi TEXT,
+            observed_at REAL, lat REAL, lon REAL, sog REAL, cog REAL, vessel_type TEXT);
+        CREATE TABLE IF NOT EXISTS drone_events (uas_id TEXT, lat REAL, lon REAL,
+            alt_m REAL, observed_at REAL, source TEXT);
+    """)
+
+
+_T0 = 1786356000.0   # Mon, 10 Aug 2026 10:00:00 GMT
+
+
+def test_vessel_and_drone_refs_become_geometry(model, synthetic_index):
+    """MMSI and UAS ID references resolve positions (live table first, then
+    the labelled sample), within the same instance gate as flights, and pair
+    like any other transit reference."""
+    conn, _ = synthetic_index
+    conn.execute("DELETE FROM vault_documents")
+    conn.execute("DELETE FROM vault_notes_fulltext")
+    _transit_tables(conn)
+    conn.execute("INSERT INTO vessel_events VALUES ('366999001', 38.85, -77.04, ?)", (_T0,))
+    conn.execute("INSERT INTO ais_sample_positions VALUES ('marinecadastre:t', '366999002', ?,"
+                 " 38.86, -77.05, 3.0, 90.0, '60')", (_T0 + 600,))
+    conn.execute("INSERT INTO drone_events VALUES ('1596F1234567', 38.87, -77.03, 50, ?, 'test')",
+                 (_T0,))
+    conn.execute("INSERT INTO vessel_events VALUES ('366999003', 38.85, -77.04, ?)",
+                 (_T0 - 2 * 86400,))          # outside the gate: no position attached
+    _insert_note_with_mtime(conn, "corporatetraveldc/01-Sources/manual/v1.md",
+                            "Mon, 10 Aug 2026 10:00:00 GMT", content="MMSI 366999001 off the Wharf")
+    _insert_note_with_mtime(conn, "corporatetraveldc/01-Sources/manual/v2.md",
+                            "Mon, 10 Aug 2026 10:10:00 GMT",
+                            content="MMSI 366999002 and UAS ID 1596-F123-4567 overhead; MMSI 366999003")
+    _create_schema(conn)
+    _write_model(conn, model)
+    assign_geometry(conn)
+    refs = {(r["instance_type"], r["identifier"]): r["position_source"] for r in conn.execute(
+        "SELECT instance_type, identifier, position_source FROM semantic_note_instance_refs")}
+    assert refs == {("vessel", "366999001"): "vessel_events",
+                    ("vessel", "366999002"): "ais_sample_positions",
+                    ("drone", "1596F1234567"): "drone_events",
+                    ("vessel", "366999003"): None}
+    ev = [r["evidence"] for r in conn.execute(
+        "SELECT evidence FROM semantic_note_derivations WHERE kind='geometric'")]
+    assert any("self=vessel:366999001" in e and "target=vessel:366999002" in e
+               and "matched=both" in e for e in ev)
+
+
+def test_drone_regex_ignores_ordinary_words():
+    from second_brain.semantic.compile import _extract_drone_refs, _extract_vessel_refs
+    assert _extract_drone_refs("UAS operations resumed; UAS: 1581F5BKD225400BL") == {"1581F5BKD225400BL"}
+    assert _extract_drone_refs("UAS ID ABCDEFGHIJ") == set()        # no digit
+    assert _extract_vessel_refs("MMSI 12345678 and MMSI 366999001") == {"366999001"}
+
+
+def test_all_angles_block_in_a_note_is_not_reread_as_references(model, synthetic_index):
+    from second_brain.semantic.compile import wrap_all_angles_for_vault
+    conn, _ = synthetic_index
+    conn.execute("DELETE FROM vault_documents")
+    conn.execute("DELETE FROM vault_notes_fulltext")
+    _transit_tables(conn)
+    block = wrap_all_angles_for_vault("Pair 1 — vessel:366999001 ↔ vessel:366999002\nMMSI 366999001")
+    _insert_note_with_mtime(conn, "corporatetraveldc/01-Sources/transport-patterns/d.md",
+                            "Mon, 10 Aug 2026 10:00:00 GMT", content="digest body\n\n" + block)
+    _create_schema(conn)
+    _write_model(conn, model)
+    assign_geometry(conn)
+    assert conn.execute("SELECT COUNT(*) FROM semantic_note_instance_refs").fetchone()[0] == 0
+
+
+# ── AIS sample loader ────────────────────────────────────────────────────────
+
+def _load_seed_script():
+    import importlib.util
+    path = Path(__file__).parent.parent.parent / "scripts/seed-ais-sample.py"
+    spec = importlib.util.spec_from_file_location("seed_ais_sample", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_ais_seed_parses_zip_keeps_only_the_dc_box(tmp_path):
+    import zipfile
+    seed = _load_seed_script()
+    csv_text = ("MMSI,BaseDateTime,LAT,LON,SOG,COG,Heading,VesselName,VesselType\n"
+                "366999001,2024-01-01T10:00:00,38.85,-77.04,3.1,90.0,511,TEST,60\n"
+                "12345,2024-01-01T10:00:00,38.85,-77.04,1,1,1,PADDED,30\n"
+                "366999002,2024-01-01T10:00:00,25.77,-80.19,3,3,3,SYNTHETICVESSELTWO,70\n"
+                "bad,row\n")
+    zpath = tmp_path / "AIS_2024_01_01.zip"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("AIS_2024_01_01.csv", csv_text)
+    rows = list(seed.parse(str(zpath), "marinecadastre:AIS_2024_01_01"))
+    assert [r[1] for r in rows] == ["366999001", "000012345"]
+    assert rows[0][2] == 1704103200.0 and rows[0][7] == "60"
+
+
+def test_ais_seed_refuses_a_file_without_required_columns(tmp_path):
+    seed = _load_seed_script()
+    p = tmp_path / "x.csv"
+    p.write_text("MMSI,LAT,LON\n366999001,38.8,-77.0\n")
+    with pytest.raises(SystemExit):
+        list(seed.parse(str(p), "marinecadastre:x"))

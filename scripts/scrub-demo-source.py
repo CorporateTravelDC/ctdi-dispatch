@@ -547,19 +547,41 @@ class Target:
             b = c.execute("DELETE FROM brief_archive WHERE generated_at < ?", (cutoff,)).rowcount
         return int(a or 0) + int(b or 0)
 
+    # 2026-10-22 (operator): rows per purge DELETE; each batch is its own short transaction.
+    PURGE_BATCH = 2000
+
     def purge_promoted(self) -> tuple[int, int]:
         """2026-10-20: drop every promoted row (snapshots, real and replay-fill,
         and brief_archive) and clear window_end, so a re-backfill re-scrubs
         everything under the current rules -- INSERT ... ON CONFLICT DO NOTHING
-        would otherwise keep the old rows. Profiles, chat and the ledger stay."""
+        would otherwise keep the old rows. Profiles, chat and the ledger stay.
+        2026-10-22 (operator): the single `DELETE FROM snapshots` hit the demo
+        instance's 30 s statement_timeout on 2026-10-20. Now: window_end is
+        cleared FIRST (an interrupted purge then forces a full re-backfill, never
+        a refresh on top of a half-purged table), then each table is deleted by
+        primary key in batches of PURGE_BATCH, one transaction per batch, until a
+        batch deletes nothing. Returns the counts actually deleted (dry run: the
+        counts that would be)."""
         with self.factory() as c:
             s = c.execute("SELECT COUNT(*) AS n FROM snapshots").fetchone()["n"]
             b = c.execute("SELECT COUNT(*) AS n FROM brief_archive").fetchone()["n"]
-            if not self.dry_run:
-                c.execute("DELETE FROM snapshots")
-                c.execute("DELETE FROM brief_archive")
-                c.execute("DELETE FROM meta WHERE key = ?", ("window_end",))
-        return int(s), int(b)
+        if self.dry_run:
+            return int(s), int(b)
+        with self.factory() as c:
+            c.execute("DELETE FROM meta WHERE key = ?", ("window_end",))
+        return self._purge_table("snapshots"), self._purge_table("brief_archive")
+
+    def _purge_table(self, table: str) -> int:
+        assert table in ("snapshots", "brief_archive")      # fixed names, never caller input
+        total = 0
+        while True:
+            with self.factory() as c:                         # one short transaction per batch
+                n = c.execute(f"DELETE FROM {table} WHERE id IN "
+                              f"(SELECT id FROM {table} ORDER BY id LIMIT ?)", (int(self.PURGE_BATCH),)).rowcount
+            n = int(n or 0)
+            if n <= 0:
+                return total
+            total += n
 
     def replay_fill_gaps(self, target_days: int = REPLAY_TARGET_DAYS) -> Counter:
         """2026-08-14 mechanism, carried over: for each endpoint without

@@ -58,7 +58,7 @@ Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
 # match the OPENSKY_USERNAME identity-tagging pattern already used below --
 # without it mlat-client falls back to a random per-session ID.
 # 2026-10-15 (operator): ADSBHub dropped. Since 10-14 its server accepted then dropped the feed every ~16 s.
-Environment=ULTRAFEEDER_CONFIG=adsb,piaware.flightaware.com,30005,beast_reduce_plus_out,uuid=00000000-0000-0000-0000-000000000000;adsb,data-out.flightradar24.com,10001,beast_reduce_out;adsb,feed.airplanes.live,30004,beast_reduce_out;mlat,collector.opensky-network.org,30003;mlat,feed.airplanes.live,31090,name=corporatetraveldc-kdca
+Environment=ULTRAFEEDER_CONFIG=adsb,feed.airplanes.live,30004,beast_reduce_plus_out;mlat,feed.airplanes.live,31090,name=corporatetraveldc-kdca
 # 2026-08-27 (Opus blind review C-2): tar1090's web UI + /data/aircraft.json
 # used to publish on 0.0.0.0:8080 -- reachable from anything that could
 # route to this host, and also tunneled publicly as
@@ -79,7 +79,7 @@ Environment=OPENSKY_USERNAME=corporatetraveldc
 # 2026-10-03 (operator directive): all feeder/station names follow
 # CS-KDCA-{MODE}, matching the ids airframes.io registered for VDL/ACARS.
 # This is the site name shown by every MLAT/ADS-B aggregator in
-# ULTRAFEEDER_CONFIG (adsb.lol, adsb.fi, airplanes.live, ...). Renaming
+# ULTRAFEEDER_CONFIG (airplanes.live, ...). Renaming
 # registers a NEW site there -- stats/history restart under the new name.
 # Was corporatetraveldc. OPENSKY_USERNAME below is a login, not a name:
 # leave it.
@@ -103,7 +103,10 @@ MemoryLow=512M
 # live, every tick. Only matters when something else (notably Ollama,
 # CPUWeight=500) is actually contending for CPU right now; an idle box
 # still lets this container burst across all cores for free.
-CPUWeight=100
+# 2026-10-22 (operator): top CPU priority. readsb must drain the SDR in real time; at the default weight it
+# dropped 1.4% of samples (2.03 M of 144 M in 60 s, load1 ~19-21), each drop a gap in the receiver clock that
+# MLAT reads as 'clock unstable'. Weight 1000 vs the default 100 lets it win contention with batch work in this slice.
+CPUWeight=1000
 # Hard ceiling regardless of contention -- never more than 3 of the
 # Pi's 4 cores for this container alone. See CLAUDE.md "Container
 # resource limits".

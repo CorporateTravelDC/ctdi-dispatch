@@ -43,3 +43,51 @@ def test_allowlist_last_rule_wins():
     pats = [(True, "contact-api/*"), (False, "contact-api/MANIFEST.sha256*"), (True, "www/*")]
     files = ["contact-api/main.py", "contact-api/MANIFEST.sha256", "articles/x.md", "www/index.html"]
     assert sp.selected(files, pats) == ["contact-api/main.py", "www/index.html"]
+
+
+def _git_repo(tmp_path, files):
+    import subprocess
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    for cmd in (["init", "-q"], ["add", "-A"],
+                ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "t"]):
+        subprocess.run(["git", "-C", str(tmp_path), *cmd], check=True)
+    return sorted(files)
+
+
+BODY = "The paid paragraph only members should read.\n"
+FRONT = '---\ntitle: "Secret Title"\nexcerpt: "member-only dek"\n---\n' + BODY
+
+
+def test_ledger_single_glob_keeps_the_original_layout(tmp_path):
+    files = _git_repo(tmp_path, {"articles/a.md": BODY})
+    out = sp.ledger(tmp_path, sp.ledger_files({"LEDGER_GLOB": "articles/*.md"}, files))
+    assert out.count("```") == 2 and "## `" not in out
+    assert out.rstrip().splitlines()[-2].endswith("  a")
+
+
+def test_ledger_both_sources_hashed_never_text(tmp_path):
+    """2026-10-21 (operator): articles/ AND _md/, hashed only -- no body, title or excerpt,
+    so the public ledger is never a bypass of the subscription or the members invite."""
+    import hashlib
+    files = _git_repo(tmp_path, {"articles/a.md": BODY, "_md/a.md": FRONT, "_md/new-piece.md": FRONT})
+    out = sp.ledger(tmp_path, sp.ledger_files({"LEDGER_GLOB": "articles/*.md _md/*.md"}, files))
+    for leak in ("paid paragraph", "Secret Title", "member-only dek", "title:", "excerpt"):
+        assert leak not in out
+    assert "## `articles/*.md`" in out and "## `_md/*.md`" in out
+    assert hashlib.sha256(BODY.encode()).hexdigest() in out
+    assert hashlib.sha256(FRONT.encode()).hexdigest() in out
+    assert out.count("  new-piece") == 1
+
+
+def test_executive_standard_ledger_covers_the_publish_directory():
+    """The publisher writes _md/<slug>.md; a ledger that does not cover _md/ silently froze on
+    2026-10-06 while every publish re-signed it."""
+    conf = Path("/opt/corporatetraveldc/private/executivestandard-website/PUBLIC.conf")
+    if not conf.exists():
+        import pytest
+        pytest.skip("site repo not on this host")
+    globs = sp.ledger_globs(sp._conf(conf.parent))
+    assert "_md/*.md" in globs and "articles/*.md" in globs
