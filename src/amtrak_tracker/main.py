@@ -100,6 +100,11 @@ def fetch_and_normalize(station: str) -> list[dict]:
                 "estimated_dep": stn.get("dep"),
                 "lat": t.get("lat"),
                 "lon": t.get("lon"),
+                # 2026-10-24 (map parity): the deployed writer; keep amtraker's heading, speed and fix
+                # time so the train map can draw direction and position age (same fields as src/ingest/amtrak.py).
+                "heading": t.get("heading"),
+                "velocity_mph": t.get("velocity"),
+                "position_updated": t.get("lastValTS"),
                 "train_id": t.get("trainID", ""),
             })
 

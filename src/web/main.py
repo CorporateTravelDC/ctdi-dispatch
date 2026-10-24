@@ -66,6 +66,7 @@ from web.routes.agent_gateway import router as agent_gateway_router  # 2026-10-0
 from web.routes.console import router as console_router  # 2026-10-05: operator phone console (tailnet only)
 from web.routes.sectors import router as sectors_router
 from web.routes.remember import router as remember_router
+from web.routes.swim_positions import router as swim_positions_router  # 2026-10-24: aircraft map SWIM layer
 from web.sse import live_events
 
 app = FastAPI(
@@ -111,6 +112,7 @@ app.include_router(sectors_router)
 app.include_router(remember_router)
 app.include_router(agent_gateway_router)
 app.include_router(console_router)
+app.include_router(swim_positions_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 

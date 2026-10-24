@@ -23,6 +23,7 @@ export const DEFAULT_CONFIG = {
     rings:    true,
     localFeed: true,
     tracked:  true,
+    trails:   false,  // 2026-10-24: all-aircraft trails on the aircraft map (selected/tracked always drawn)
     trains:   false,
     marine:   false,
     weather:  false,

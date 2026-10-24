@@ -17,6 +17,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval.js'
+import { OSM_TILE_URL, osmTileOptions } from '../mapTiles.js'
 
 const HAZARD_FILTERS = [
   { key: 'ALL',        label: 'ALL' },
@@ -58,10 +59,7 @@ export default function AirmetHazardMap() {
       zoom: 4,
       zoomControl: true,
     })
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 10,
-    }).addTo(map)
+    L.tileLayer(OSM_TILE_URL, osmTileOptions({ maxZoom: 10 })).addTo(map)
     layerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
     // Flex-container mount can report a zero-height box on first paint;

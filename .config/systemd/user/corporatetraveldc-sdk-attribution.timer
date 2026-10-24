@@ -1,0 +1,20 @@
+[Unit]
+Description=Daily 04:20 ET -- SDK/telemetry host -> app attribution over yesterday's Pi-hole query log
+# 2026-10-24: 04:20 America/New_York sits inside the 23:00-05:00 maintenance
+# window, after gravity (04:00 ET) and before the 04:40 job; the 5-minute
+# random delay keeps it off the exact minute the others use. Persistent=false:
+# a missed night is simply covered by the next run's --days 1 window edge
+# plus the monthly --backfill-days hand run, never replayed at a daytime boot.
+# 2026-09-05: deliberately NO self-referential Requires=/Wants= here --
+# that makes systemd start the service the instant this TIMER starts
+# (i.e. every boot, at timers.target), independent of OnCalendar/
+# Persistent. See docs/BOOT_STORM_TIMER_REQUIRES.md. The timer->service
+# binding is implicit from the filename; the line was never needed.
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 America/New_York
+RandomizedDelaySec=300
+Persistent=false
+
+[Install]
+WantedBy=timers.target

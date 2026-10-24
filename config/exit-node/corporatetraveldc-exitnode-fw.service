@@ -1,0 +1,24 @@
+# config/exit-node/corporatetraveldc-exitnode-fw.service -- TEMPLATE. apply.sh
+# substitutes @NFT_BIN@ / @NFT_FILE@ and installs the result as
+# /etc/systemd/system/corporatetraveldc-exitnode-fw.service (root unit).
+#
+# Loads the rendered exit-node table at boot. The .nft file starts with
+# `table ... / delete table ...`, so a (re)start is an atomic replace; stop
+# deletes only our dedicated table (firewalld's and tailscale's are untouched).
+# It never downloads anything: the DoH IP set elements are embedded in the
+# file by `apply.sh --apply --with-aggressive`, which is the refresh path.
+[Unit]
+Description=CorporateTravelDC exit-node firewall (metered 2 Mbps cap, optional encrypted-DNS-by-IP drops)
+Documentation=file:///opt/corporatetraveldc/private/ctdi-dispatch-internal/config/exit-node/README.md
+After=network-online.target tailscaled.service firewalld.service nftables.service
+Wants=network-online.target
+ConditionPathExists=@NFT_FILE@
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@NFT_BIN@ -f @NFT_FILE@
+ExecStop=@NFT_BIN@ delete table inet ctdc_exitnode
+
+[Install]
+WantedBy=multi-user.target

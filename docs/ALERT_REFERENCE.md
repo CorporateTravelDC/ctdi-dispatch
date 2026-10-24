@@ -538,6 +538,7 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `relay-nudge.py` | default `ops-health` p4 (`--topic`, `--priority`) | used by relays and `uplink_reminder.py` |
 | `governor-watch.py` | p3, p5 on FIX FAILED | |
 | `dns-anomaly-watch.py` | p4, p5 on anomaly / denylist gap | |
+| `sdk-attribution.py` (user timer `corporatetraveldc-sdk-attribution.timer`, daily 04:20 ET; 2026-10-24) | `approval-gate` p3 via `relay-nudge.py` | once per brand-new SDK/telemetry host and once per host whose top attributed app changed with n >= 15 shared bins; first run and `--backfill-days` seed state silently; reports in `/var/lib/corporatetraveldc/sdk-attribution/`; names hosts and apps only, never a client IP |
 | ~~`check-pat-expiry.sh`~~ | ~~`dispatch-alerts` p4/p5~~ | RETIRED 2026-10-14 (`scripts/retired-20261014/`) |
 | `sudo-approval-gate.sh` | `approval-gate` | **Deny-only** push (one `Deny` action button); allowing requires `scripts/approve.sh allow <id>` (SSH signature); `db.resolve_approval_request` refuses an unsigned allow |
 | `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** (re-checked 2026-10-15) |

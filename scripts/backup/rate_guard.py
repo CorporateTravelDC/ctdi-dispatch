@@ -20,6 +20,12 @@ moving (rclone's own idle timeout never fired on the Proton backend), holding th
 turn all night. If rclone's own transferred-bytes counter (rc core/stats, not the interface,
 which carries other traffic) has not grown for --stall-min minutes, the guard asks rclone to
 quit and reports stall=true; ctdi-backup.sh then retries the sync once. Never needs a secret.
+
+Metered uplink (2026-10-23, operator): the failover hotspot (--metered-iface, enu1) may carry the
+Proton upload, but only at 2 Mbps (--metered-soft-mb 0.22 / --metered-hard-mb 0.25 MB/s; the soft
+sits under 0.25 because rclone overshoots ~10%), so SWIM can still ride on it. The default route is
+re-read every sample: a failover or fail-back MID-SYNC switches the caps live (rc core/bwlimit), the
+counted interface and the reduction ladder, and is reported as an "uplink" action.
 """
 from __future__ import annotations
 
@@ -64,10 +70,29 @@ def rclone_bytes(sock: str, rclone: str = "rclone") -> int | None:
         return None
 
 
+def default_iface() -> str | None:
+    try:
+        r = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=5)
+        parts = (r.stdout.splitlines() or [""])[0].split()
+        return parts[parts.index("dev") + 1] if "dev" in parts else None
+    except Exception:
+        return None
+
+
 def guard(pid: int, sock: str, iface: str, soft: float, hard: float, interval: float = 10, window: int = 3,
           counter=None, setter=None, stopper=None, sleeper=time.sleep, is_alive=None,
-          progress=None, stall_s: float = 1200, clock=time.monotonic) -> dict:
-    counter = counter or (lambda: tx_bytes(iface))
+          progress=None, stall_s: float = 1200, clock=time.monotonic,
+          metered: dict | None = None, route=None) -> dict:
+    # metered = {"ifaces": {"enu1"}, "soft": 0.22, "hard": 0.25}; route() -> current default device
+    # --iface/--soft-mb/--hard-mb are always the PRIMARY uplink's caps; a sync that starts on the hotspot
+    # begins on the metered caps (ctdi-backup.sh already started rclone at them).
+    primary = {"soft": soft, "hard": hard}
+    cur = {"iface": iface}
+    if metered and route:
+        dev = route()
+        if dev in metered["ifaces"]:
+            cur["iface"], soft, hard = dev, metered["soft"], metered["hard"]
+    counter = counter or (lambda: tx_bytes(cur["iface"]))
     setter = setter or (lambda mb: set_rate(sock, mb))
     def _stop():
         # ask rclone to quit cleanly over its own socket first; SIGTERM the wrapper as a backstop
@@ -84,6 +109,20 @@ def guard(pid: int, sock: str, iface: str, soft: float, hard: float, interval: f
     last = counter()
     while is_alive():
         sleeper(interval)
+        if metered and route:
+            dev = route()
+            if dev and dev != cur["iface"]:
+                on_m = dev in metered["ifaces"]
+                prof = {"soft": metered["soft"], "hard": metered["hard"]} if on_m else primary
+                cur["iface"], soft, hard = dev, prof["soft"], prof["hard"]
+                steps = [soft, round(soft * 0.8, 3), round(soft * 0.5, 3)]
+                level, calm = 0, 0
+                ok = setter(soft)
+                actions.append({"action": "uplink", "iface": dev, "metered": on_m, "soft_mb_s": soft,
+                                "hard_mb_s": hard, "rc_ok": ok})
+                rates.clear()
+                last = counter()
+                continue
         now = counter()
         rates.append((now - last) / interval / 1_000_000)
         last = now
@@ -133,8 +172,14 @@ def main(argv=None) -> int:
     ap.add_argument("--interval", type=float, default=10)
     ap.add_argument("--window", type=int, default=3)
     ap.add_argument("--stall-min", type=float, default=20)
+    ap.add_argument("--metered-iface", action="append", default=[])
+    ap.add_argument("--metered-soft-mb", type=float, default=0.22)
+    ap.add_argument("--metered-hard-mb", type=float, default=0.25)
     a = ap.parse_args(argv)
-    res = guard(a.pid, a.rc_sock, a.iface, a.soft_mb, a.hard_mb, a.interval, a.window, stall_s=a.stall_min * 60)
+    metered = ({"ifaces": set(a.metered_iface), "soft": a.metered_soft_mb, "hard": a.metered_hard_mb}
+               if a.metered_iface else None)
+    res = guard(a.pid, a.rc_sock, a.iface, a.soft_mb, a.hard_mb, a.interval, a.window, stall_s=a.stall_min * 60,
+                metered=metered, route=default_iface if metered else None)
     print(json.dumps({"soft_mb_s": a.soft_mb, "hard_mb_s": a.hard_mb, **res}, sort_keys=True), flush=True)
     return 4 if res.get("stall") else (3 if res["stopped"] else 0)
 

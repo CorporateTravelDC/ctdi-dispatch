@@ -1,0 +1,28 @@
+# config/exit-node/metered-cap.nft -- POLICY: 2 Mbps cap on driver-phone
+# traffic that this box forwards as a Tailscale exit node over the METERED
+# failover uplink (Google Fi USB tether, 100 GB then 256 kbps, $10/GB).
+#
+# FRAGMENT: apply.sh pastes this inside `table inet ctdc_exitnode { ... }`
+# after substituting the @VARS@ below. It is not a standalone ruleset.
+#
+# Policing, not shaping (see README "How the cap is implemented"): one named
+# limit object shared by both directions of the forwarded path, so the phone
+# gets 2 Mbps TOTAL across the metered uplink and SWIM keeps the rest. Only
+# FORWARDED packets between the tailnet interface and the metered uplink are
+# matched -- never this box's own traffic (input/output hooks are untouched)
+# and never anything on the primary uplink (@PRIMARY_IF@ is not named here).
+#
+# Hook priority filter-10 runs before firewalld's and tailscale's forward
+# chains (priority 0); a drop here is final, an accept is not implied: the
+# surviving packets continue to firewalld's own forward policy as before.
+
+    limit lim_exitnode_metered {
+        comment "ctdc exit-node: @CAP_KBYTES@ kB/s (@CAP_MBPS@ Mbps) total, phone <-> @METERED_IF@"
+        rate over @CAP_KBYTES@ kbytes/second burst @CAP_BURST_KBYTES@ kbytes
+    }
+
+    chain forward_metered_cap {
+        type filter hook forward priority filter - 10; policy accept;
+        iifname "@TAILNET_IF@" oifname "@METERED_IF@" limit name "lim_exitnode_metered" counter drop comment "ctdc exit-node cap: phone upload via metered uplink"
+        iifname "@METERED_IF@" oifname "@TAILNET_IF@" limit name "lim_exitnode_metered" counter drop comment "ctdc exit-node cap: phone download via metered uplink"
+    }

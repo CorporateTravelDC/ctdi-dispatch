@@ -5350,6 +5350,277 @@ def get_flight_plan_by_flight_num(callsign_or_number: str,
         return dict(row) if row else None
 
 
+# ── 2026-10-24: SWIM positions for the aircraft map (map rework, wave 1) ──────
+# The runner's /api/map/aircraft merges this box's local receiver with the
+# SWIM positions already stored here (flight_events from FDPS, terminal_tracks
+# from TAIS). Everything below is additive: the bbox + age filter runs in SQL
+# so a 5 s poll never pulls the whole table, and the hex/registration parse
+# of raw_json (a full FIXM document per row -- see _find_flight_element) is
+# cached per (flight_id, updated_at) so an unchanged row is parsed once, not
+# once per poll.
+
+_SWIM_HEX_REG_CACHE: dict[str, tuple[float | None, tuple[str | None, str | None]]] = {}
+_SWIM_HEX_REG_CACHE_MAX = 4000
+
+
+def _swim_hex_registration_cached(flight_id: str | None, callsign: str | None,
+                                  updated_at: float | None,
+                                  raw_json: str | None) -> tuple[str | None, str | None]:
+    """(hex, registration) for one flight_events row, parsed with the same
+    per-flight-scoped extractor get_flight_plan_by_callsign() uses, memoised
+    by (flight_id, updated_at). updated_at changes on every upsert, so a
+    stale entry can never outlive the row it was parsed from."""
+    key = flight_id or ""
+    hit = _SWIM_HEX_REG_CACHE.get(key)
+    if hit is not None and hit[0] == updated_at:
+        return hit[1]
+    flight = _find_flight_element(raw_json, callsign or key)
+    parsed = _extract_aircraft_hex_registration(flight)
+    if len(_SWIM_HEX_REG_CACHE) >= _SWIM_HEX_REG_CACHE_MAX:
+        # Bounded: drop the oldest-inserted half rather than growing with
+        # every flight_id FDPS has ever sent through the bbox.
+        for k in list(_SWIM_HEX_REG_CACHE)[: _SWIM_HEX_REG_CACHE_MAX // 2]:
+            _SWIM_HEX_REG_CACHE.pop(k, None)
+    _SWIM_HEX_REG_CACHE[key] = (updated_at, parsed)
+    return parsed
+
+
+def _swim_bbox_clause(lat_col: str, lon_col: str,
+                      south: float, west: float, north: float, east: float) -> tuple[str, list]:
+    """SQL fragment + params for a lat/lon box. A box that crosses the
+    antimeridian (west > east) is matched as two lon ranges; nothing stored
+    here is anywhere near it, but a wrong answer there would be silent."""
+    if south > north:
+        south, north = north, south
+    sql = f" AND {lat_col} BETWEEN ? AND ?"
+    params: list = [south, north]
+    if west <= east:
+        sql += f" AND {lon_col} BETWEEN ? AND ?"
+        params += [west, east]
+    else:
+        sql += f" AND ({lon_col} >= ? OR {lon_col} <= ?)"
+        params += [west, east]
+    return sql, params
+
+
+def _swim_position_from_flight_event(row: dict) -> dict:
+    callsign = f"{row.get('airline') or ''}{row.get('flight_num') or ''}" or None
+    hex_id, registration = _swim_hex_registration_cached(
+        row.get("flight_id"), callsign, row.get("updated_at"), row.get("raw_json"))
+    alt = row.get("altitude_ft")
+    gs = row.get("ground_speed_kt")
+    return {
+        "flight_id": row.get("flight_id"),
+        "callsign": callsign,
+        "hex": hex_id.lower() if hex_id else None,
+        "registration": registration,
+        "lat": float(row["position_lat"]),
+        "lon": float(row["position_lon"]),
+        "altitude_ft": int(alt) if alt is not None else None,
+        "ground_speed_kt": int(gs) if gs is not None else None,
+        "track_deg": None,           # flight_events carries no track
+        "updated_at": float(row.get("updated_at") or 0),
+        "origin": row.get("origin"),
+        "destination": row.get("destination"),
+        "aircraft_type": row.get("aircraft_type"),
+        "status": row.get("status"),
+        "source": "fdps",
+    }
+
+
+def _iso_to_epoch(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def get_swim_positions_bbox(south: float, west: float, north: float, east: float,
+                            max_age_s: int = 120, limit: int = 2000) -> dict:
+    """SWIM positions inside the box, newer than max_age_s, newest first.
+
+    Returns {"positions": [...], "truncated": bool}. FDPS (flight_events)
+    first; TAIS terminal_tracks (PCT TRACON radar, callsign + Mode S only,
+    no route) are appended when they are not already represented by an FDPS
+    row with the same hex or callsign -- TAIS last_seen is ISO text
+    (smes_parser._now_iso, "%Y-%m-%dT%H:%M:%SZ"), which compares correctly
+    as text against a cutoff in the same shape. `limit` applies to the
+    combined list; one extra row is fetched to set `truncated` honestly."""
+    max_age_s = max(1, int(max_age_s))
+    limit = max(1, int(limit))
+    cutoff = time.time() - max_age_s
+    bbox_sql, bbox_params = _swim_bbox_clause("position_lat", "position_lon",
+                                              south, west, north, east)
+    positions: list[dict] = []
+    truncated = False
+    with conn() as c:
+        rows = c.execute(
+            "SELECT flight_id, airline, flight_num, origin, destination, aircraft_type, "
+            "status, position_lat, position_lon, altitude_ft, ground_speed_kt, raw_json, updated_at "
+            "FROM flight_events WHERE position_lat IS NOT NULL AND position_lon IS NOT NULL "
+            "AND updated_at > ?" + bbox_sql + " ORDER BY updated_at DESC LIMIT ?",
+            (cutoff, *bbox_params, limit + 1),
+        ).fetchall()
+        if len(rows) > limit:
+            truncated = True
+            rows = rows[:limit]
+        for r in rows:
+            positions.append(_swim_position_from_flight_event(dict(r)))
+        # TAIS merge -- runs even at the limit so `truncated` stays honest.
+        seen_hex = {p["hex"] for p in positions if p["hex"]}
+        seen_cs = {p["callsign"] for p in positions if p["callsign"]}
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        t_bbox_sql, t_bbox_params = _swim_bbox_clause("latitude", "longitude",
+                                                      south, west, north, east)
+        remaining = limit - len(positions)
+        # +1 detects overflow; +25 slack so FDPS-duplicate tracks (skipped
+        # below) do not mask a real extra one. PCT carries O(100) tracks.
+        trows = c.execute(
+            "SELECT track_id, facility, callsign, mode_s, latitude, longitude, altitude_ft, "
+            "ground_speed, last_seen FROM terminal_tracks WHERE latitude IS NOT NULL "
+            "AND longitude IS NOT NULL AND last_seen > ?" + t_bbox_sql +
+            " ORDER BY last_seen DESC LIMIT ?",
+            (cutoff_iso, *t_bbox_params, remaining + 26),
+        ).fetchall()
+        added = 0
+        for tr in trows:
+            t = dict(tr)
+            hex_id = (t.get("mode_s") or "").strip().lower() or None
+            cs = (t.get("callsign") or "").strip().upper() or None
+            if (hex_id and hex_id in seen_hex) or (cs and cs in seen_cs):
+                continue
+            if added >= remaining:
+                truncated = True
+                break
+            alt = t.get("altitude_ft")
+            gs = t.get("ground_speed")
+            positions.append({
+                "flight_id": f"tais:{t.get('facility')}:{t.get('track_id')}",
+                "callsign": cs,
+                "hex": hex_id,
+                "registration": None,
+                "lat": float(t["latitude"]),
+                "lon": float(t["longitude"]),
+                "altitude_ft": int(alt) if alt is not None else None,
+                "ground_speed_kt": int(gs) if gs is not None else None,
+                "track_deg": None,
+                "updated_at": _iso_to_epoch(t.get("last_seen")) or 0.0,
+                "origin": None,
+                "destination": None,
+                "aircraft_type": None,
+                "status": None,
+                "source": "tais",
+            })
+            added += 1
+    return {"positions": positions, "truncated": truncated}
+
+
+def get_swim_last_leg(ident: str, max_age_s: int = 24 * 3600) -> dict | None:
+    """Most recent flight_events row within max_age_s for a callsign or a
+    Mode S hex, in the same shape as get_swim_positions_bbox() entries plus
+    status/departure_time/arrival_time, or None.
+
+    Callsign: airline + flight_num split exactly as get_flight_plan_by_callsign
+    does. Hex: flight_events has no hex column (it lives inside raw_json), so
+    the candidate set is narrowed in SQL with a LIKE on the two FIXM
+    attribute shapes _extract_aircraft_hex_registration knows, over the
+    bounded 24 h window, and confirmed by the real per-flight parse. A row
+    with no position is still a valid "last leg" (origin/destination known)
+    so position fields may be None."""
+    import re as _re
+    raw = (ident or "").strip().upper()
+    if not raw:
+        return None
+    cutoff = time.time() - max(1, int(max_age_s))
+    cols = ("flight_id, airline, flight_num, origin, destination, aircraft_type, status, "
+            "position_lat, position_lon, altitude_ft, ground_speed_kt, raw_json, updated_at, "
+            "departure_time, arrival_time")
+    is_hex = bool(_re.fullmatch(r"[0-9A-F]{6}", raw))
+    with conn() as c:
+        row = None
+        m = _re.match(r"^([A-Z]{2,3})(\d+[A-Z]?)$", raw)
+        if m or (len(raw) > 3 and raw.isalnum() and not is_hex):
+            airline, flight_num = (m.group(1), m.group(2)) if m else (raw[:3], raw[3:])
+            row = c.execute(
+                f"SELECT {cols} FROM flight_events WHERE airline = ? AND flight_num = ? "
+                "AND updated_at > ? ORDER BY (status != 'cancelled') DESC, updated_at DESC LIMIT 1",
+                (airline, flight_num, cutoff),
+            ).fetchone()
+        if row is None and is_hex:
+            cands = c.execute(
+                f"SELECT {cols} FROM flight_events WHERE updated_at > ? "
+                "AND (raw_json LIKE ? OR raw_json LIKE ?) ORDER BY updated_at DESC LIMIT 25",
+                (cutoff, f'%aircraftAddress="{raw}"%', f'%value="-{raw}"%'),
+            ).fetchall()
+            for cand in cands:
+                d = dict(cand)
+                cs = f"{d.get('airline') or ''}{d.get('flight_num') or ''}"
+                hex_id, _reg = _swim_hex_registration_cached(
+                    d.get("flight_id"), cs, d.get("updated_at"), d.get("raw_json"))
+                if hex_id and hex_id.upper() == raw:
+                    row = cand
+                    break
+        if row is None:
+            return None
+        d = dict(row)
+    callsign = f"{d.get('airline') or ''}{d.get('flight_num') or ''}" or None
+    hex_id, registration = _swim_hex_registration_cached(
+        d.get("flight_id"), callsign, d.get("updated_at"), d.get("raw_json"))
+    has_pos = d.get("position_lat") is not None and d.get("position_lon") is not None
+    alt = d.get("altitude_ft")
+    gs = d.get("ground_speed_kt")
+    return {
+        "flight_id": d.get("flight_id"),
+        "callsign": callsign,
+        "hex": hex_id.lower() if hex_id else None,
+        "registration": registration,
+        "lat": float(d["position_lat"]) if has_pos else None,
+        "lon": float(d["position_lon"]) if has_pos else None,
+        "altitude_ft": int(alt) if alt is not None else None,
+        "ground_speed_kt": int(gs) if gs is not None else None,
+        "track_deg": None,
+        "updated_at": float(d.get("updated_at") or 0),
+        "origin": d.get("origin"),
+        "destination": d.get("destination"),
+        "aircraft_type": d.get("aircraft_type"),
+        "status": d.get("status"),
+        "departure_time": d.get("departure_time"),
+        "arrival_time": d.get("arrival_time"),
+        "source": "fdps",
+    }
+
+
+def get_airport_coords(codes: Iterable[str]) -> dict[str, tuple[float, float]]:
+    """{ICAO: (lat, lon)} for the 4-letter codes that resolve from the CIFP
+    reference table (reference_cifp; airport reference points are plain
+    idents there) -- anything that does not resolve is simply absent, never
+    guessed. Used by the map's last-leg line; a missing airport means no
+    line, not a wrong one."""
+    wanted = sorted({(c or "").strip().upper() for c in codes
+                     if c and len((c or "").strip()) == 4 and (c or "").strip().isalnum()})
+    if not wanted:
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    try:
+        with conn() as c:
+            rows = c.execute(
+                "SELECT ident, lat, lon FROM cifp_fixes WHERE ident IN ("
+                + ",".join("?" * len(wanted)) + ")",
+                tuple(wanted),
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001 -- reference table is optional
+        log.debug("get_airport_coords: cifp_fixes unavailable (non-fatal): %s", e)
+        return {}
+    for r in rows:
+        ident = r["ident"]
+        if ident in out:
+            continue
+        out[ident] = (float(r["lat"]), float(r["lon"]))
+    return out
+
+
 # ── v23: dedicated FDPS/FIDS state tracking (fixes 2026-07-27 alert-spam bug) ─
 #
 # last_event_summary is a single shared field written by EVERY watchlist

@@ -100,6 +100,17 @@ SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 # perfectly healthy. That is an accepted gap -- detecting throttling would
 # need real throughput sampling, which is not worth doing on the backup's
 # 60s health check.
+#
+# SUPERSEDED 2026-10-23: the two paragraphs above were right for the
+# Verizon line (unlimited, but shared with other devices on that plan,
+# which caused its own issues). From 2026-10-23 the backup is Google Fi
+# over USB tether -- METERED: 100 GB high-speed, then 256 kbps, overrides
+# $10/GB. Data volume IS now a constraint, enforced outside this script:
+# while the default route is on it, heavy jobs defer
+# (scripts/lib/heavy_lock.sh) and the Proton backup upload is capped at
+# 2 Mbps (scripts/backup/rate_guard.py); SWIM and live operational data
+# ride it freely. This script's job is unchanged: fail over when the
+# primary is dead, fail back as soon as it recovers.
 # 2026-10-06: lowercase is the current, correct profile name (recreated after
 # the hard reset); the old capitalised default left `--status` blank.
 PRIMARY_CON_DEFAULT="jorransgateway"
@@ -152,9 +163,21 @@ PROBE_IPS="$(cfg NET_FAILOVER_PROBE_IPS "${PROBE_IPS_DEFAULT}")"
 FAIL_STRIKES="$(cfg NET_FAILOVER_FAIL_STRIKES "${FAIL_STRIKES_DEFAULT}")"
 RESTORE_STRIKES="$(cfg NET_FAILOVER_RESTORE_STRIKES "${RESTORE_STRIKES_DEFAULT}")"
 FAILOVER_METRIC="$(cfg NET_FAILOVER_METRIC "${FAILOVER_METRIC_DEFAULT}")"
+# 2026-10-24 (operator): the driver phone uses this box as a FORCED Tailscale exit node, so on a
+# failover its traffic rides the metered hotspot -- capped at 2 Mbps by config/exit-node
+# (operator-applied, root). Every failover page says whether that cap is actually installed.
+EXITNODE_CAP_FILE="$(cfg NET_EXITNODE_CAP_FILE /etc/nftables.d/ctdc-exitnode.nft)"
+exitnode_note() {
+    if [[ -r "${EXITNODE_CAP_FILE}" || -e "${EXITNODE_CAP_FILE}" ]]; then
+        echo "Exit-node traffic (driver phone) is CAPPED at 2 Mbps while on ${BACKUP_IF}."
+    else
+        echo "WARNING: exit-node cap NOT installed (${EXITNODE_CAP_FILE} missing) -- the driver phone's exit-node traffic is UNCAPPED on the metered ${BACKUP_IF}."
+    fi
+}
 # Test runs point this at a scratch path so a rehearsal never pollutes the
 # real strike counters or the saved-metric record.
 STATE_FILE="$(cfg NET_FAILOVER_STATE_FILE "${STATE_FILE}")"
+LOG_FILE="$(cfg NET_FAILOVER_LOG_FILE "${LOG_FILE}")"
 
 NTFY_BASE="$(read_env_var NTFY_BASE_URL "${ENV_FILE}")"
 NTFY_BASE="${NTFY_BASE:-http://127.0.0.1:2586}"
@@ -250,10 +273,21 @@ configured_metric() {
 # Reactivating ONLY the backup connection applies its new metric without
 # touching the primary -- the primary's route stays exactly as it is, so
 # a still-working-but-slower primary is never torn down underneath us.
+#
+# 2026-10-23: on FAIL-BACK with the backup device gone (tether unplugged,
+# no carrier) there is nothing to reactivate -- `nmcli connection up`
+# fails, and from 2026-10-15 that failure left failed_over=1 forever,
+# paging FAIL-BACK FAILED every 30 min until the timer was disabled. The
+# saved metric is still written to the profile, so the next activation
+# (autoconnect) comes up below the primary; that counts as restored.
 apply_backup_metric() {
-    local metric="$1"
+    local metric="$1" mode="${2:-}"
     nmcli connection modify "${BACKUP_CON}" ipv4.route-metric "${metric}" 2>&1 \
         || { log "error" "nmcli modify failed for '${BACKUP_CON}'"; return 1; }
+    if [[ "${mode}" == "failback" ]] && ! iface_has_carrier "${BACKUP_IF}"; then
+        log "info" "backup ${BACKUP_IF} has no carrier -- metric ${metric} saved to the profile, nothing to reactivate"
+        return 0
+    fi
     nmcli connection up "${BACKUP_CON}" >/dev/null 2>&1 \
         || { log "error" "nmcli up failed for '${BACKUP_CON}'"; return 1; }
     return 0
@@ -341,7 +375,7 @@ if [[ "${failed_over}" -eq 0 && "${primary_ok}" -eq 0 && "${backup_ok}" -eq 1 ]]
         state_set failed_over 1
         sleep 3
         maybe_alert "NET: failed over to ${BACKUP_IF}" \
-            "Primary uplink ${PRIMARY_IF} (${PRIMARY_CON}) failed ${fail_streak} consecutive upstream probes with carrier $(iface_has_carrier "${PRIMARY_IF}" && echo UP || echo down). Switched default route to ${BACKUP_IF} (${BACKUP_CON}) by setting its metric ${saved} -> ${FAILOVER_METRIC}. Default now via: $(current_default_iface). Will fail back automatically after ${RESTORE_STRIKES} consecutive good primary probes."
+            "Primary uplink ${PRIMARY_IF} (${PRIMARY_CON}) failed ${fail_streak} consecutive upstream probes with carrier $(iface_has_carrier "${PRIMARY_IF}" && echo UP || echo down). Switched default route to ${BACKUP_IF} (${BACKUP_CON}) by setting its metric ${saved} -> ${FAILOVER_METRIC}. Default now via: $(current_default_iface). Will fail back automatically after ${RESTORE_STRIKES} consecutive good primary probes. $(exitnode_note)"
     else
         maybe_alert "NET: FAILOVER FAILED" \
             "Primary ${PRIMARY_IF} is down and backup ${BACKUP_IF} is healthy, but the nmcli metric change on '${BACKUP_CON}' did not apply. Manual intervention needed -- see ${LOG_FILE}."
@@ -357,7 +391,7 @@ if [[ "${failed_over}" -eq 1 && "${primary_ok}" -eq 1 ]]; then
     fi
     saved="$(state_get saved_backup_metric 600)"
     log "info" "primary ${PRIMARY_IF} healthy ${ok_streak}x -- failing back (${BACKUP_CON}: ${FAILOVER_METRIC} -> ${saved})"
-    if apply_backup_metric "${saved}"; then
+    if apply_backup_metric "${saved}" failback; then
         state_set failed_over 0
         sleep 3
         ntfy_send "NET: restored to ${PRIMARY_IF}" \

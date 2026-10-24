@@ -150,3 +150,15 @@ def passes_geo_filter(
     *before* calling this function.
     """
     return in_range(lat, lon) or is_core_airport(airport) or is_core_wfo(wfo)
+
+
+def storage_scope() -> dict:
+    """2026-10-24 (map rework): the storage area this filter accepts, as data,
+    so the dispatch API (/api/v1/swim/scope) and the runner map can derive
+    their extent from the ONE constant set above instead of a second copy.
+    Returns {"center": [lat, lon], "radius_nm": float, "airports": [ICAO...]}."""
+    return {
+        "center": [_DCA_LAT, _DCA_LON],
+        "radius_nm": float(_RADIUS_NM),
+        "airports": sorted(a for a in CORE_AIRPORTS if len(a) == 4),
+    }

@@ -86,23 +86,10 @@ export default function App() {
     })
   }, [])
 
-  // adsbMode: globe (aggregator embed, default) <-> tactical (airspace/TFR map).
-  // Both source aircraft from the airplanes.live aggregator now -- local-feeder
-  // display already has its own dedicated view at adsb.example.com,
-  // so there's no "local" mode here to duplicate it.
-  const ADSB_MODES  = ['globe', 'tactical']
-  const ADSB_LABELS = { globe: 'GLOBE', tactical: 'TACTICAL' }
-  const [adsbMode, setAdsbMode] = useState(() => {
-    const stored = localStorage.getItem('adsbMode')
-    // migrate any legacy 'live'/'local' value to 'globe'
-    return (stored === 'live' || stored === 'local' || !stored) ? 'globe' : stored
-  })
-  const toggleAdsb = useCallback(() => {
-    setAdsbMode(prev => {
-      const next = prev === 'globe' ? 'tactical' : 'globe'
-      localStorage.setItem('adsbMode', next)
-      return next
-    })
+  // 2026-10-24: the ADS-B GLOBE/TACTICAL mode toggle is gone -- there is one aircraft map now
+  // (components/aircraftMap/). Drop the key earlier builds persisted so it does not linger.
+  useEffect(() => {
+    try { localStorage.removeItem('adsbMode') } catch {}
   }, [])
 
   // Demo-mode gate: nothing else renders until this resolves and, if
@@ -190,17 +177,6 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
-            <button
-              className={`adsb-toggle ${adsbMode}`}
-              onClick={toggleAdsb}
-              aria-label={`ADS-B mode: ${ADSB_LABELS[adsbMode]} — click to cycle`}
-              title={
-                adsbMode === 'globe' ? 'globe.airplanes.live embed + watchlist highlighting' :
-                                       'Tactical map — airspace, TFRs, and traffic (airplanes.live)'
-              }
-            >
-              ADS-B:{ADSB_LABELS[adsbMode]}
-            </button>
             <CpsIndicator cps={liveState?.cps} />
             <WakeLockIndicator status={wakeLockStatus} />
             <button
@@ -229,7 +205,7 @@ export default function App() {
         <main className="content" id="main-content" tabIndex="-1">
           <Routes>
             <Route path="/" element={<OverviewView liveState={liveState} />} />
-            <Route path="/map" element={<MapView adsbMode={adsbMode} liveState={liveState} />} />
+            <Route path="/map" element={<MapView liveState={liveState} />} />
             <Route path="/trains" element={<TrainMapView />} />
             <Route path="/ais" element={<AisMapView />} />
             <Route path="/utm" element={<UtmMapView />} />

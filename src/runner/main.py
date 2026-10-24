@@ -139,6 +139,18 @@ DEFAULT_LAT  = float(os.getenv("ULTRAFEEDER_LAT", 39.0000))
 DEFAULT_LON  = float(os.getenv("ULTRAFEEDER_LON", -77.0000))
 DEFAULT_DIST = 250  # nm
 
+# 2026-10-24 (map rework): the local tar1090 UI the map's "Open full receiver
+# map" link targets (?icao=<hex> appended client-side). Empty -> the link is
+# not offered. Handed to trusted (tailnet/LAN) callers of /api/map/scope only
+# -- it names a box-local address.
+TAR1090_URL = os.getenv("TAR1090_URL", "").strip()
+
+# The same safe DC-area placeholder /api/v1/frontend-config has handed
+# untrusted callers since 2026-08-24 (a public airport reference, never the
+# receiver). Named once here so /api/map/scope applies the identical rule.
+_UNTRUSTED_PLACEHOLDER_LAT = 38.8521
+_UNTRUSTED_PLACEHOLDER_LON = -77.0377
+
 # openapi_url=None added 2026-08-26 alongside the same fix in web/main.py
 # (Opus blind review C-12) -- docs_url/redoc_url=None only disable the
 # Swagger/ReDoc UI, not the raw schema route, which FastAPI still serves
@@ -602,6 +614,423 @@ async def adsb_live(
         and _haversine_nm(lat, lon, ac["lat"], ac["lon"]) <= dist
     ]
     return {**raw, "aircraft": aircraft, "source": "local"}
+
+# ── Aircraft map: local receiver + SWIM on ONE map ---------------------------
+# 2026-10-24 (map rework, wave 1, operator-approved spec): the Globe iframe
+# and the GLOBE/TACTICAL + "local only" toggles are gone from the frontend;
+# everything this deployment has is drawn together. /api/adsb/live and
+# /api/adsb/local above are unchanged (other code uses them). These routes:
+#   GET /api/map/aircraft?south=&west=&north=&east=  merged local + SWIM
+#   GET /api/map/scope                               extent + tar1090 link
+#   GET /api/map/focus?ident=<hex|callsign>          live, else last SWIM leg
+# Local = ultrafeeder aircraft.json (as /api/adsb/live). SWIM = dispatch-web's
+# /api/v1/swim/* (stored FDPS/TAIS positions), fetched server-side with the
+# same token injection as the watchlist read (_dispatch_proxy_headers,
+# _TIER1_PATHS). Dispatch unreachable -> local only, swim_available=false;
+# the map never fails because one side is down. DEMO_MODE -> synthetic only
+# for all three (zero network calls -- the demo-never-touches-local-receivers
+# test covers them).
+
+_MAP_SWIM_MAX_AGE_S = 120
+_MAP_SWIM_LIMIT = 2000
+_MAP_SCOPE_TTL_S = 600
+_map_scope_cache: dict = {"at": 0.0, "scope": None}
+_HEX_RE = re.compile(r"^[0-9a-f]{6}$")
+
+
+def _circle_bounds(lat: float, lon: float, radius_nm: float) -> list[list[float]]:
+    """[[south, west], [north, east]] of the box enclosing a great-circle
+    radius: 1 nm = 1/60 deg latitude; longitude widens by 1/cos(lat)."""
+    dlat = radius_nm / 60.0
+    coslat = max(0.05, math.cos(math.radians(lat)))
+    dlon = radius_nm / (60.0 * coslat)
+    return [[max(-90.0, lat - dlat), max(-180.0, lon - dlon)],
+            [min(90.0, lat + dlat), min(180.0, lon + dlon)]]
+
+
+def _union_bounds(*boxes) -> list[list[float]] | None:
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return None
+    return [[min(b[0][0] for b in boxes), min(b[0][1] for b in boxes)],
+            [max(b[1][0] for b in boxes), max(b[1][1] for b in boxes)]]
+
+
+def _norm_callsign(v) -> str | None:
+    s = (str(v) if v is not None else "").strip().upper()
+    return s or None
+
+
+def _norm_reg(v) -> str | None:
+    s = (str(v) if v is not None else "").strip().upper().replace("-", "")
+    return s or None
+
+
+def _norm_hex(v) -> str | None:
+    s = (str(v) if v is not None else "").strip().lower()
+    return s or None
+
+
+def _in_bbox(lat, lon, bbox) -> bool:
+    if bbox is None:
+        return True
+    south, west, north, east = bbox
+    if not (south <= lat <= north):
+        return False
+    if west <= east:
+        return west <= lon <= east
+    return lon >= west or lon <= east       # antimeridian box
+
+
+def _local_to_map(ac: dict) -> dict:
+    """One ultrafeeder aircraft.json entry in the map contract shape."""
+    age = ac.get("seen_pos")
+    if age is None:
+        age = ac.get("seen") or 0.0
+    return {
+        "hex": _norm_hex(ac.get("hex")),
+        "flight": _norm_callsign(ac.get("flight")),
+        "r": (ac.get("r") or "").strip() or None,
+        "t": (ac.get("t") or "").strip() or None,
+        "lat": ac.get("lat"),
+        "lon": ac.get("lon"),
+        "alt_baro": ac.get("alt_baro"),
+        "gs": ac.get("gs"),
+        "track": ac.get("track"),
+        "src": "local",
+        "pos_age_s": round(float(age), 1),
+        "conflict": False,
+        "conflict_note": None,
+        "origin": None,
+        "destination": None,
+    }
+
+
+def _swim_to_map(p: dict, now: float) -> dict:
+    """One /api/v1/swim/positions entry in the map contract shape."""
+    updated = float(p.get("updated_at") or 0)
+    return {
+        "hex": _norm_hex(p.get("hex")),
+        "flight": _norm_callsign(p.get("callsign")),
+        "r": p.get("registration") or None,
+        "t": p.get("aircraft_type") or None,
+        "lat": p.get("lat"),
+        "lon": p.get("lon"),
+        "alt_baro": p.get("altitude_ft"),
+        "gs": p.get("ground_speed_kt"),
+        "track": p.get("track_deg"),
+        "src": "swim",
+        "pos_age_s": round(max(0.0, now - updated), 1) if updated else None,
+        "conflict": False,
+        "conflict_note": None,
+        "origin": p.get("origin"),
+        "destination": p.get("destination"),
+    }
+
+
+def _merge_map_aircraft(local: list, swim: list, now: float) -> tuple[list, dict]:
+    """Pure merge. Hex first, else normalized callsign (strip/upper). A match
+    keeps the LOCAL position (fresher, 1 Hz vs SWIM's stored ping); SWIM
+    fills origin/destination/type and the registration. `conflict` when both
+    sides carry a callsign or a registration and they differ -- SWIM is the
+    tail authority (operator standing rule), so `r` is SWIM's and the note
+    shows both values for the tooltip."""
+    by_hex: dict[str, dict] = {}
+    by_cs: dict[str, dict] = {}
+    for p in swim:
+        if p.get("lat") is None or p.get("lon") is None:
+            continue
+        h = _norm_hex(p.get("hex"))
+        cs = _norm_callsign(p.get("callsign"))
+        if h and h not in by_hex:
+            by_hex[h] = p
+        if cs and cs not in by_cs:
+            by_cs[cs] = p
+    used: set[int] = set()
+    out: list[dict] = []
+    counts = {"matched": 0, "local": 0, "swim": 0, "conflict": 0}
+    for ac in local:
+        if ac.get("lat") is None or ac.get("lon") is None:
+            continue
+        entry = _local_to_map(ac)
+        h, cs = entry["hex"], entry["flight"]
+        p = by_hex.get(h) if h else None
+        if p is None and cs:
+            p = by_cs.get(cs)
+        if p is None or id(p) in used:
+            counts["local"] += 1
+            out.append(entry)
+            continue
+        used.add(id(p))
+        swim_cs = _norm_callsign(p.get("callsign"))
+        swim_reg = (p.get("registration") or "").strip() or None
+        local_reg = entry["r"]
+        notes = []
+        if cs and swim_cs and cs != swim_cs:
+            notes.append(f"callsign local {cs} / swim {swim_cs}")
+        if local_reg and swim_reg and _norm_reg(local_reg) != _norm_reg(swim_reg):
+            notes.append(f"registration local {local_reg} / swim {swim_reg}")
+        entry.update({
+            "src": "matched",
+            "flight": cs or swim_cs,
+            "r": swim_reg or local_reg,
+            "t": entry["t"] or p.get("aircraft_type") or None,
+            "origin": p.get("origin"),
+            "destination": p.get("destination"),
+        })
+        if notes:
+            entry["conflict"] = True
+            entry["conflict_note"] = "; ".join(notes)
+            counts["conflict"] += 1
+        counts["matched"] += 1
+        out.append(entry)
+    for p in swim:
+        if id(p) in used or p.get("lat") is None or p.get("lon") is None:
+            continue
+        out.append(_swim_to_map(p, now))
+        counts["swim"] += 1
+    return out, counts
+
+
+# Synthetic SWIM layer for DEMO_MODE: a few SWIM-only aircraft further out
+# than the circling local set, one matched (same hex + callsign as a local
+# aircraft) and one matched-with-conflict (registration disagrees) so the
+# legend's three source styles and the conflict ring all render in the demo.
+_FAKE_SWIM_HEX_POOL = ["dec0e1", "dec0e2", "dec0e3", "dec0e4"]
+_FAKE_SWIM_ROUTES = [("KBOS", "KDCA"), ("KATL", "KIAD"), ("KORD", "KBWI"), ("KMIA", "KDCA")]
+
+
+def _synthetic_map_snapshot(lat: float, lon: float) -> dict:
+    """Fabricated local + SWIM sets around the given center -- extends
+    _synthetic_adsb_snapshot, never a real source. Returns
+    {"now", "local": [...aircraft.json shape], "swim": [...positions shape]}."""
+    now = time.time()
+    local = _synthetic_adsb_snapshot(lat, lon)["aircraft"]
+    swim: list[dict] = []
+    if local:
+        a = local[0]
+        swim.append({
+            "flight_id": f"demo-swim-{a['flight']}", "callsign": a["flight"], "hex": a["hex"],
+            "registration": a["r"], "lat": round(a["lat"] - 0.02, 4), "lon": round(a["lon"] - 0.02, 4),
+            "altitude_ft": a["alt_baro"], "ground_speed_kt": a["gs"], "track_deg": a["track"],
+            "updated_at": now - 25, "origin": "KBOS", "destination": "KDCA",
+            "aircraft_type": "A320", "source": "fdps",
+        })
+    if len(local) > 1:
+        b = local[1]
+        swim.append({
+            "flight_id": f"demo-swim-{b['flight']}", "callsign": b["flight"], "hex": b["hex"],
+            "registration": _synthetic_tail("demo-swim-conflict"), "lat": round(b["lat"] + 0.02, 4),
+            "lon": round(b["lon"] + 0.02, 4), "altitude_ft": b["alt_baro"], "ground_speed_kt": b["gs"],
+            "track_deg": b["track"], "updated_at": now - 40, "origin": "KATL", "destination": "KIAD",
+            "aircraft_type": "B738", "source": "fdps",
+        })
+    for i, hexcode in enumerate(_FAKE_SWIM_HEX_POOL):
+        angle = (now / 300.0 + i * (360.0 / len(_FAKE_SWIM_HEX_POOL)) + 45.0) % 360.0
+        rad = math.radians(angle)
+        dist = 2.2 + 0.5 * i                # degrees -- well beyond the local circle
+        seed = f"demo-swim-{i}"
+        origin, dest = _FAKE_SWIM_ROUTES[i % len(_FAKE_SWIM_ROUTES)]
+        swim.append({
+            "flight_id": seed, "callsign": _synthetic_flight(seed), "hex": hexcode,
+            "registration": _synthetic_tail(seed),
+            "lat": round(lat + dist * math.sin(rad), 4), "lon": round(lon + dist * math.cos(rad), 4),
+            "altitude_ft": 33000 + i * 1000, "ground_speed_kt": 450 + i * 5,
+            "track_deg": round((angle + 90.0) % 360.0), "updated_at": now - 15 - i * 20,
+            "origin": origin, "destination": dest, "aircraft_type": "A321", "source": "fdps",
+        })
+    return {"now": now, "local": local, "swim": swim, "source": "synthetic"}
+
+
+def _synthetic_swim_scope() -> dict:
+    return {"swim_enabled": True, "center": [_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON],
+            "radius_nm": 250.0, "airports": [], "label": "Demo SWIM scope (synthetic)"}
+
+
+async def _fetch_local_aircraft() -> dict:
+    """Raw ultrafeeder aircraft.json, same fetch as /api/adsb/live. Raises."""
+    async with httpx.AsyncClient() as c:
+        r = await c.get(ULTRAFEEDER_URL, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+
+async def _dispatch_get_json(request: Request, path: str, params: dict, timeout: float = 5.0):
+    """GET one dispatch-web path server-side with the proxy's own header
+    rules (_dispatch_proxy_headers). Returns the parsed JSON, or None on ANY
+    failure (unreachable, non-200, bad JSON) -- callers degrade, never 5xx."""
+    try:
+        headers = _dispatch_proxy_headers(request, path)
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{DISPATCH_BASE}/{path}", params=params, headers=headers, timeout=timeout)
+        if r.status_code != 200:
+            log.debug("map: dispatch %s -> %s", path, r.status_code)
+            return None
+        return r.json()
+    except Exception as e:  # noqa: BLE001
+        log.debug("map: dispatch %s unavailable: %s", path, type(e).__name__)
+        return None
+
+
+async def _swim_scope(request: Request) -> dict | None:
+    """dispatch-web's /api/v1/swim/scope, cached in-process for 10 min (it is
+    a code constant there). Synthetic in DEMO_MODE; None when dispatch has
+    never answered."""
+    if DEMO_MODE:
+        return _synthetic_swim_scope()
+    now = time.time()
+    if _map_scope_cache["scope"] is not None and now - _map_scope_cache["at"] < _MAP_SCOPE_TTL_S:
+        return _map_scope_cache["scope"]
+    scope = await _dispatch_get_json(request, "api/v1/swim/scope", {})
+    if isinstance(scope, dict):
+        _map_scope_cache["scope"] = scope
+        _map_scope_cache["at"] = now
+        return scope
+    return _map_scope_cache["scope"]
+
+
+def _receiver_center(trusted: bool) -> tuple[float, float]:
+    """Same rule as /api/v1/frontend-config: the real receiver only for a
+    trusted caller, the public placeholder otherwise."""
+    return (DEFAULT_LAT, DEFAULT_LON) if trusted else (_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON)
+
+
+def _map_bounds(trusted: bool, swim_scope: dict | None) -> list[list[float]]:
+    """Union of the receiver range circle and the SWIM storage circle, as a
+    lat/lon box (pan limit + server data area)."""
+    rlat, rlon = _receiver_center(trusted)
+    swim_box = None
+    center = (swim_scope or {}).get("center")
+    if center and len(center) == 2 and (swim_scope or {}).get("radius_nm"):
+        swim_box = _circle_bounds(float(center[0]), float(center[1]), float(swim_scope["radius_nm"]))
+    return _union_bounds(_circle_bounds(rlat, rlon, DEFAULT_DIST), swim_box)
+
+
+async def _map_snapshot(request: Request, bbox: tuple | None, max_age_s: int) -> dict:
+    now = time.time()
+    local_available = True
+    swim_available = False
+    swim_truncated = False
+    swim: list = []
+    if DEMO_MODE:
+        snap = _synthetic_map_snapshot(DEFAULT_LAT, DEFAULT_LON)
+        local, swim, swim_available = snap["local"], snap["swim"], True
+    else:
+        try:
+            local = (await _fetch_local_aircraft()).get("aircraft", []) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("map: local receiver unavailable: %s", type(e).__name__)
+            local, local_available = [], False
+        qbox = bbox
+        if qbox is None:
+            b = _map_bounds(_is_trusted(request), await _swim_scope(request))
+            qbox = (b[0][0], b[0][1], b[1][0], b[1][1])
+        data = await _dispatch_get_json(request, "api/v1/swim/positions", {
+            "south": qbox[0], "west": qbox[1], "north": qbox[2], "east": qbox[3],
+            "max_age_s": max_age_s, "limit": _MAP_SWIM_LIMIT,
+        })
+        if isinstance(data, dict) and isinstance(data.get("positions"), list):
+            swim, swim_available = data["positions"], True
+            swim_truncated = bool(data.get("truncated"))
+    if bbox is not None:
+        local = [ac for ac in local if ac.get("lat") is not None and ac.get("lon") is not None
+                 and _in_bbox(ac["lat"], ac["lon"], bbox)]
+        swim = [p for p in swim if p.get("lat") is not None and p.get("lon") is not None
+                and _in_bbox(p["lat"], p["lon"], bbox)]
+    aircraft, counts = _merge_map_aircraft(local, swim, now)
+    return {"generated_at": now, "swim_available": swim_available, "local_available": local_available,
+            "swim_truncated": swim_truncated, "counts": counts, "aircraft": aircraft}
+
+
+@app.get("/api/map/aircraft")
+async def map_aircraft(
+    request: Request,
+    south: Optional[float] = Query(None, ge=-90, le=90),
+    west: Optional[float] = Query(None, ge=-180, le=180),
+    north: Optional[float] = Query(None, ge=-90, le=90),
+    east: Optional[float] = Query(None, ge=-180, le=180),
+    max_age_s: int = Query(_MAP_SWIM_MAX_AGE_S, ge=1, le=600),
+):
+    """Merged local receiver + SWIM aircraft inside the box (all of scope
+    when no box is given). See the section comment above for the rules."""
+    bbox = (south, west, north, east) if None not in (south, west, north, east) else None
+    return await _map_snapshot(request, bbox, max_age_s)
+
+
+@app.get("/api/map/scope")
+async def map_scope(request: Request):
+    """Map extent: receiver circle (real center for trusted callers only, as
+    /api/v1/frontend-config) + dispatch's SWIM scope, their union as bounds,
+    and the tar1090 link (TAR1090_URL, trusted only)."""
+    trusted = _is_trusted(request)
+    swim = await _swim_scope(request)
+    swim_out = None
+    if isinstance(swim, dict):
+        swim_out = dict(swim)
+        if not trusted:
+            swim_out["center"] = None
+    rlat, rlon = _receiver_center(trusted)
+    return {
+        "receiver": {"center": [rlat, rlon], "range_nm": DEFAULT_DIST},
+        "swim": swim_out,
+        "bounds": _map_bounds(trusted, swim),
+        "tar1090_url": (TAR1090_URL or None) if trusted else None,
+    }
+
+
+def _last_leg_to_map(leg: dict, now: float) -> dict:
+    updated = float(leg.get("updated_at") or 0)
+    return {
+        "hex": _norm_hex(leg.get("hex")),
+        "flight": _norm_callsign(leg.get("callsign")),
+        "r": leg.get("registration") or None,
+        "t": leg.get("aircraft_type") or None,
+        "lat": leg.get("lat"),
+        "lon": leg.get("lon"),
+        "alt_baro": leg.get("altitude_ft"),
+        "gs": leg.get("ground_speed_kt"),
+        "track": leg.get("track_deg"),
+        "src": "swim",
+        "pos_age_s": round(max(0.0, now - updated), 1) if updated else None,
+        "origin": leg.get("origin"),
+        "destination": leg.get("destination"),
+        "origin_coords": leg.get("origin_coords"),
+        "destination_coords": leg.get("destination_coords"),
+        "status": leg.get("status"),
+        "departure_time": leg.get("departure_time"),
+        "arrival_time": leg.get("arrival_time"),
+        "updated_at": updated or None,
+    }
+
+
+@app.get("/api/map/focus")
+async def map_focus(request: Request, ident: str = Query(..., min_length=2, max_length=16)):
+    """The aircraft (merged shape) if it is live anywhere in scope --
+    returned as {"live": true, "aircraft": {...}} with the same fields also
+    spread at the top level -- else {"live": false, "last": {...}} from the
+    most recent SWIM leg within 24 h, else 404. ident = hex or callsign;
+    both are tried (a callsign like ABC123 is also a valid hex string)."""
+    key_hex = _norm_hex(ident) if _HEX_RE.match((ident or "").strip().lower()) else None
+    key_cs = _norm_callsign(ident)
+    snap = await _map_snapshot(request, None, _MAP_SWIM_MAX_AGE_S)
+    for ac in snap["aircraft"]:
+        if (key_hex and ac.get("hex") == key_hex) or (key_cs and ac.get("flight") == key_cs):
+            # 2026-10-24: the leg line needs airport coordinates, which only the SWIM last-leg
+            # lookup carries; add them for a live hit when the legs agree (never in demo).
+            if not DEMO_MODE and (ac.get("origin") or ac.get("destination")):
+                leg = await _dispatch_get_json(request, "api/v1/swim/last-leg",
+                                               {"ident": ac.get("flight") or ac.get("hex") or ident})
+                if isinstance(leg, dict) and leg.get("origin") == ac.get("origin") \
+                        and leg.get("destination") == ac.get("destination"):
+                    ac = {**ac, "origin_coords": leg.get("origin_coords"),
+                          "destination_coords": leg.get("destination_coords")}
+            return {**ac, "live": True, "aircraft": ac}
+    if DEMO_MODE:
+        raise HTTPException(status_code=404, detail="not tracked")
+    leg = await _dispatch_get_json(request, "api/v1/swim/last-leg", {"ident": key_cs or ident})
+    if not isinstance(leg, dict) or not leg:
+        raise HTTPException(status_code=404, detail="not tracked")
+    return {"live": False, "last": _last_leg_to_map(leg, time.time())}
 
 # ── Signal proxy helpers -----------------------------------------------------
 
@@ -2013,6 +2442,16 @@ _TIER1_PATHS: frozenset[str] = frozenset({
     # hostname 403s at dispatch-web before the runner's own logic matters.
     "api/v1/watchlist",
     "api/v1/watchlist/history",
+    # 2026-10-24 (map rework): the aircraft map's SWIM layer. /api/map/*
+    # below calls these server-side with _dispatch_proxy_headers(), the
+    # same injection as the watchlist read. On the live runner only trusted
+    # origins ever reach /api/map/* (live_trusted_only middleware); the demo
+    # runner never calls dispatch for them at all (synthetic only), and its
+    # DISPATCH_BASE_URL is the demo-api instance regardless. dispatch-web
+    # itself LADD-filters any Tier-0 caller of these paths (fail closed).
+    "api/v1/swim/positions",
+    "api/v1/swim/scope",
+    "api/v1/swim/last-leg",
 })
 
 # 2026-08-13: second-brain vault content (knowledge-graph viz + raw note
@@ -2286,7 +2725,7 @@ async def frontend_config(request: Request):
     so this closes the production-runner-only exposure without changing
     the demo's already-safe behavior)."""
     trusted = _is_trusted(request)
-    lat, lon = (DEFAULT_LAT, DEFAULT_LON) if trusted else (38.8521, -77.0377)
+    lat, lon = (DEFAULT_LAT, DEFAULT_LON) if trusted else (_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON)
     widget_key = AIS_MT_WIDGET_KEY if trusted else ""
     return {"mt_widget_key": widget_key,
            "receiver_lat": lat, "receiver_lon": lon}

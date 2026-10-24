@@ -735,8 +735,12 @@ def main(argv=None) -> int:
     # is fail-closed).
     KEYED.clear()
     KEYED.update(pl.load_keyed_lists())
+    # 2026-10-23 (operator): aviation was checked but missing from this line (it has its own
+    # fail-closed loader). Shown first, by state only: the LADD set holds several match forms
+    # per aircraft, so a count would overstate the list, and no value is ever printed.
+    aviation = "loaded, fail-closed" if ladd is not None else "NOT CHECKED (see below)"
     print("transcript-leak-scan: privacy lists -- "
-          + "; ".join(f"{ind}: {kl.status}" for ind, kl in KEYED.items()))
+          + "; ".join([f"aviation (LADD): {aviation}"] + [f"{ind}: {kl.status}" for ind, kl in KEYED.items()]))
     # 3 = the LADD class was not checked where it had to be (dispatch env present,
     # --require-ladd or --ladd-stdin): never a silent pass.
     ladd_rc = 3 if ladd is None and (a.require_ladd or a.ladd_stdin or _dispatch_env()) else 0

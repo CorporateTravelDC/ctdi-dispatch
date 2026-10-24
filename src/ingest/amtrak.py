@@ -136,6 +136,11 @@ def parse_feed(raw: bytes, cfg: "AmtrakConfig") -> tuple[list[dict], str]:
                 "estimated_dep":    stn.get("dep"),
                 "lat":              t.get("lat"),
                 "lon":              t.get("lon"),
+                # 2026-10-24 (map parity with aviation): amtraker carries these and we dropped them, so the
+                # train map had to guess direction from successive points and could not show position age.
+                "heading":          t.get("heading"),        # compass letters, e.g. "NE"
+                "velocity_mph":     t.get("velocity"),
+                "position_updated": t.get("lastValTS"),      # ISO time of the last position fix
                 "train_id":         t.get("trainID", ""),
                 "serving_watched":  serving_watched,
                 "is_watchlist":     bool(station_codes & watchlist),

@@ -50,7 +50,7 @@ hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
 |---|---|
 | Frontend | Vite + React SPA; multi-stage build (`node:20-alpine` builder → `python:3.13-slim` runtime, no Node in the final image) |
 | PWA | `vite-plugin-pwa`: `/manifest.webmanifest` and `/sw.js` both return 200 — the dashboard is installable |
-| Maps | Leaflet. Two ADS-B modes (`App.jsx`): **GLOBE** embeds `globe.airplanes.live` in an iframe (third-party, in the browser); **TACTICAL** draws airspace/TFRs plus traffic from `/api/adsb/live`, which is local-receiver-only. The UI labels still say "airplanes.live" for tactical traffic. |
+| Maps | Leaflet. ~~Two ADS-B modes (`App.jsx`): **GLOBE** embeds `globe.airplanes.live` in an iframe (third-party, in the browser); **TACTICAL** draws airspace/TFRs plus traffic from `/api/adsb/live`, which is local-receiver-only. The UI labels still say "airplanes.live" for tactical traffic.~~ (2026-10-24: one aircraft map, `components/aircraftMap/`, no iframe and no GLOBE/TACTICAL toggle; local receiver + SWIM merged by `/api/map/aircraft`, tar1090 altitude colours, source shown by outline. Vessels, trains and drones share `components/mapKit/`; the MarineTraffic embed is gone (external link for the selected vessel only). OSM tiles through `mapTiles.js` with `referrerPolicy: strict-origin`, because OSM blocks Referer-less tile requests and the public domain sends `Referrer-Policy: no-referrer`. `docs/MAP.md`.) |
 | Realtime | FastAPI SSE (`/api/stream`, `SSE_INTERVAL_SEC=30`) + ntfy stream proxy |
 | Backend | FastAPI/uvicorn on 8001 |
 | Chat | llama.cpp via `common.llama_pool` (`http://{llama_pool.HOST}:{port}/v1/chat/completions`); model string `OLLAMA_CHAT_MODEL` (default `corporatetraveldc-pi5-chat:latest`) is only a persona key. Contract: `docs/DISPATCH_PANEL_PARITY.md`. |
@@ -91,6 +91,9 @@ hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
 | GET | `/api/demo/webhook-log` | Demo webhook activity log |
 | GET | `/api/adsb/local` | UltraFeeder `aircraft.json` |
 | GET | `/api/adsb/live` | Local receiver only (the airplanes.live proxy was removed 2026-08-27) |
+| GET | `/api/map/aircraft` | (added 2026-10-24) Local receiver + SWIM merged for a bbox (`south/west/north/east`, `max_age_s`); `src` per aircraft = `matched` / `local` / `swim`, `conflict` flag; `swim_available: false` when dispatch-web is unreachable. SWIM comes from `/api/v1/swim/positions` with the Tier-1 token (`_TIER1_PATHS`) |
+| GET | `/api/map/scope` | (added 2026-10-24) Receiver circle + SWIM storage area (`geo_filter.storage_scope()`), their union as `bounds`, `tar1090_url`. Real receiver centre, SWIM centre and `tar1090_url` for trusted callers only; untrusted get the `/api/v1/frontend-config` placeholder |
+| GET | `/api/map/focus` | (added 2026-10-24) `?ident=<hex or callsign>`: the live aircraft, else the most recent SWIM leg within 24 h (`/api/v1/swim/last-leg`), else 404 |
 | GET | `/api/vdl2/messages` · `/api/acars/messages` · `/api/hfdl/messages` | Decoded message feeds (acarshub; HFDL hardware pending) |
 | GET | `/api/ais/vessels` | AIS vessels (hardware pending; AISHub/Kpler sources) |
 | GET | `/api/utm/drones` | Remote-ID / UAS view (receiver disabled pending hardware) |
@@ -128,10 +131,10 @@ In-memory cache per feed URL, `_RSS_TTL = 900` s, process-scoped.
 | Route | View |
 |---|---|
 | `/` | Overview — CPS, weather, TFR, feed health, local ADS-B count |
-| `/map` | ADS-B map (GLOBE / TACTICAL, above) |
-| `/trains` | NEC trains with watchlist highlighting |
-| `/ais` | AIS map |
-| `/utm` | UAS / Remote-ID map |
+| `/map` | ~~ADS-B map (GLOBE / TACTICAL, above)~~ (2026-10-24: the one aircraft map — receiver + SWIM, altitude fill, source outline, conflict ring, trails, sortable list, click-to-focus from list / watchlist / search, current or last leg, "Open full receiver map" to tar1090 with `?icao=<hex>` when `TAR1090_URL` is set; `docs/MAP.md`) |
+| `/trains` | ~~NEC trains with watchlist highlighting~~ (2026-10-24: a real Leaflet map plus the roster list; marker fill = delay state, trails per train, heading and position age from the feed when the writer passes `heading` / `position_updated`, otherwise derived from successive positions) |
+| `/ais` | AIS map (2026-10-24: Leaflet only; the MarineTraffic embed is gone, an external MarineTraffic link remains for the selected vessel) |
+| `/utm` | UAS / Remote-ID map (2026-10-24: same list / trails / legend / focus pattern via `mapKit/`) |
 | `/status` | Feed freshness / errors |
 | `/wx` | Meteorology |
 | `/tfr`, `/signals` | Signals view (TFRs, NWS alerts) |
@@ -157,6 +160,7 @@ In-memory cache per feed URL, `_RSS_TTL = 900` s, process-scoped.
 | `DEMO_MODE` / `DEMO_SESSION_SECRET` / `DEMO_SANITIZE_SALT` | `false` / `""` / derived | demo instance only |
 | `RUNNER_ENRICHED_TOKEN` | `""` | cert-tier proxy token (scoped `svc/runner.env`) |
 | `SSE_INTERVAL_SEC` | 30 | 30 |
+| `TAR1090_URL` (added 2026-10-24) | `""` (no link) | the local tar1090 UI behind the map's "Open full receiver map" link; returned by `/api/map/scope` to trusted callers only because it names a box-local address; `config/dispatch.env.example` carries it empty |
 
 ## Build / deploy
 
@@ -176,7 +180,7 @@ The runner does not run the signed-manifest check at start (its `CMD` is
 
 - HFDL overlay once the HFDL dongle is acquired
 - AIS and Remote-ID local receive (`ais`, `ais-watcher`, `utm-watcher` ship `.disabled`)
-- Replace the GLOBE mode's third-party iframe with a local view, if fully-local display is required
+- ~~Replace the GLOBE mode's third-party iframe with a local view, if fully-local display is required~~ (done 2026-10-24: the iframe is gone, `docs/MAP.md`)
 - Fix the chat context shape mismatch (`docs/DISPATCH_PANEL_PARITY.md` §2)
 - Persistent RSS cache on disk
 

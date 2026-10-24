@@ -117,6 +117,54 @@ def test_acars_non_demo_still_calls_local_acarshub_first():
     assert result["count"] == 1
 
 
+# ── Aircraft map (2026-10-24 map rework): /api/map/* are synthetic-only too ─
+
+def _map_demo_patches():
+    return (patch.object(runner_main, "DEMO_MODE", True),
+            patch("runner.main.httpx.AsyncClient", side_effect=_boom),
+            patch.object(runner_main, "_fetch_local_aircraft", new=AsyncMock(side_effect=_boom)),
+            patch.object(runner_main, "_dispatch_get_json", new=AsyncMock(side_effect=_boom)))
+
+
+def test_map_aircraft_demo_mode_returns_synthetic_no_network():
+    """Local receiver AND dispatch-web (the SWIM side) must both stay
+    untouched -- the demo draws the synthetic local set plus synthetic
+    SWIM-only/matched aircraft from _synthetic_map_snapshot()."""
+    request = _make_request()
+    a, b, c, d = _map_demo_patches()
+    with a, b, c, d:
+        result = asyncio.run(runner_main.map_aircraft(
+            request, south=None, west=None, north=None, east=None, max_age_s=120))
+    assert result["swim_available"] is True
+    assert result["counts"]["swim"] > 0 and result["counts"]["matched"] > 0
+    assert all(ac["hex"] in runner_main._FAKE_ADSB_HEX_POOL + runner_main._FAKE_SWIM_HEX_POOL
+               for ac in result["aircraft"])
+
+
+def test_map_scope_demo_mode_no_network():
+    request = _make_request()
+    a, b, c, d = _map_demo_patches()
+    with a, b, c, d:
+        result = asyncio.run(runner_main.map_scope(request))
+    assert result["swim"]["label"].lower().startswith("demo")
+    assert result["bounds"] and len(result["bounds"]) == 2
+
+
+def test_map_focus_demo_mode_no_network():
+    request = _make_request()
+    a, b, c, d = _map_demo_patches()
+    with a, b, c, d:
+        result = asyncio.run(runner_main.map_focus(request, ident=runner_main._FAKE_SWIM_HEX_POOL[0]))
+    assert result["live"] is True and result["aircraft"]["src"] == "swim"
+
+
+def test_synthetic_map_snapshot_shape():
+    snap = runner_main._synthetic_map_snapshot(0.5, 0.5)
+    assert snap["source"] == "synthetic" and snap["local"] and snap["swim"]
+    for p in snap["swim"]:
+        assert {"flight_id", "callsign", "hex", "lat", "lon", "updated_at", "origin", "destination"} <= set(p)
+
+
 # ── Synthetic generators themselves ──────────────────────────────────────
 
 def test_synthetic_adsb_snapshot_shape():

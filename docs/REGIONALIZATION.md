@@ -47,7 +47,7 @@ them to the profile one consumer at a time is planned work. Design pack:
 | `src/poller/fetchers/nws.py` | `ALERTS_URL`, zone forecast URLs | `area=DC,MD,VA`; DCZ001, MDZ014, VAZ036 |
 | `src/poller/fetchers/metar.py` | `DC_STATIONS` (also CPS scoring) | KDCA KIAD KBWI KFDK KHEF KJYO KGAI (~~constant~~ corrected 2026-10-15: since 2026-10-09 these are the profile's airports with role `metar`; the list above is the fallback) |
 | `src/ingest/parsers/aim_parser.py` | `_PERMANENT_AIRPORTS` (NOTAM watch set) | same seven |
-| `src/ingest/parsers/geo_filter.py` | 250 NM radius around DCA, `CORE_AIRPORTS` (30) | FDPS storage filter |
+| `src/ingest/parsers/geo_filter.py` | 250 NM radius around DCA, `CORE_AIRPORTS` (30) | FDPS storage filter (2026-10-24: also the SWIM half of the runner map's extent — `storage_scope()` feeds `/api/v1/swim/scope` and `/api/map/scope`, so the map's pan limit and data area follow this constant plus the receiver range circle; a wider or nationwide map means widening this filter, which is a storage and load decision on small hardware. `docs/MAP.md` §6) |
 | `src/ingest/parsers/fdps_parser.py` | `DC_LAT/DC_LON`, `MARINE_ONE_RADIUS_NM` | DCA, 50 NM |
 | `src/ingest/parsers/smes_parser.py` | `_STDDS_REGIONAL_AIRPORTS`, `SMES_AIRPORTS` | KDCA KIAD KBWI |
 | `src/common/db.py` | `_SMES_AIRPORTS` (OOOI: airline times never beat SWIM surface here) | KDCA KIAD KBWI |

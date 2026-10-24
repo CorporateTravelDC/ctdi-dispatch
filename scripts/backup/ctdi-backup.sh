@@ -50,6 +50,11 @@ CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
 # 2026-10-12 (operator): off-box sync caps from the measured uplink ramp -- soft 2.5 MB/s (rclone's own
 # limit), hard 3 MB/s (rate_guard.py lowers rclone live, then stops it, if total upload stays above it).
 BW_SOFT="$(setting BACKUP_BWLIMIT_SOFT_MB 2.5)"; BW_HARD="$(setting BACKUP_BWLIMIT_HARD_MB 3)"; BW_IFACE="$(setting BACKUP_IFACE wld0)"
+# 2026-10-23 (operator): on the METERED failover hotspot the Proton upload still runs (never more than
+# ~24 h without a live off-site backup, grid-down included) but at 2 Mbps -- soft 0.22 / hard 0.25 MB/s --
+# so SWIM can still ride the link. rate_guard.py follows the default route and switches caps live if the
+# uplink changes mid-sync. Every other heavy job defers on the hotspot (scripts/lib/heavy_lock.sh).
+BW_M_SOFT="$(setting BACKUP_METERED_BWLIMIT_SOFT_MB 0.22)"; BW_M_HARD="$(setting BACKUP_METERED_BWLIMIT_HARD_MB 0.25)"
 DISPATCH_PG=corporatetraveldc-pgsql
 NEXTCLOUD_PG=nextcloud-db
 # 2026-10-16 (demo/production database split): the DEMO instance, corporatetraveldc-pgsql-demo,
@@ -163,18 +168,23 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
   for _ in $(seq 1 90); do systemctl --user is-active -q corporatetraveldc-proton-seed.service || break; log "seed upload still running; waiting"; sleep 60; done
   systemctl --user is-active -q corporatetraveldc-proton-seed.service && die "seed upload still running after 90 min; sync skipped"
-  log "sync repository -> ${BACKUP_TARGET} (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
-  soft_k=$(python3 -c "print(int(float('${BW_SOFT}')*1000000/1024))")k
+  log "sync repository -> ${BACKUP_TARGET} (primary soft ${BW_SOFT} / hard ${BW_HARD} MB/s on ${BW_IFACE}; metered soft ${BW_M_SOFT} / hard ${BW_M_HARD} MB/s)"
   # 2026-10-14: a sync the rate guard stops for a STALL (no bytes moved for 20 min) is retried
   # once from scratch -- that also covers Proton's transient "Upload file empty" (2003).
+  metered_args=(); for m in $(uplink_metered_ifaces); do metered_args+=(--metered-iface "$m"); done
   for attempt in 1 2; do
+    # start rclone at the caps of the uplink in use NOW (the retry may start on the other one)
+    start_soft="$BW_SOFT"; uplink_note="primary"
+    if uplink_is_metered; then start_soft="$BW_M_SOFT"; uplink_note="METERED $(uplink_default_iface), 2 Mbps cap"; fi
+    log "sync attempt ${attempt}: starting at ${start_soft} MB/s (${uplink_note})"
+    soft_k=$(python3 -c "print(int(float('${start_soft}')*1000000/1024))")k
     rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
     podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
       --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
       --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
     rpid=$!
     set +e
-    guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" </dev/null); grc=$?
+    guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" "${metered_args[@]}" --metered-soft-mb "$BW_M_SOFT" --metered-hard-mb "$BW_M_HARD" </dev/null); grc=$?
     wait "$rpid"; src=$?; set -e; rm -rf "$rcdir"
     log "rate guard (attempt ${attempt}): ${guard_json:-<no summary>}"
     if (( src == 0 )) || (( grc != 4 )) || (( attempt == 2 )); then break; fi

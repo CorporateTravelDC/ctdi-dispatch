@@ -159,7 +159,12 @@ its profile held no sign-in.
 |---|---|---|
 | `BACKUP_BWLIMIT_SOFT_MB` | 2.5 | rclone's own `--bwlimit` (it overshoots by about 10%) |
 | `BACKUP_BWLIMIT_HARD_MB` | 3 | `rate_guard.py`: total upload on the interface, 30 s average. Over it, rclone's limit is lowered live (80%, then 50% of soft) over a private rc socket; still over after that, the sync is stopped and fails loudly. Restored to soft when calm. |
-| `BACKUP_IFACE` | wld0 | interface the hard cap watches |
+| `BACKUP_IFACE` | wld0 | ~~interface the hard cap watches~~ (2026-10-23: the PRIMARY uplink's interface; the guard follows the default route) |
+| `BACKUP_METERED_BWLIMIT_SOFT_MB` | 0.22 | soft cap on the metered failover hotspot (2026-10-23) |
+| `BACKUP_METERED_BWLIMIT_HARD_MB` | 0.25 | hard cap on the hotspot: 2 Mbps (operator 2026-10-23) |
+| `NET_METERED_IFACES` | enu1 | interfaces treated as metered (`scripts/lib/uplink.sh`) |
+
+- **Metered failover uplink (2026-10-23, operator).** The hotspot (Google Fi over USB tether, `enu1`; 100 GB high-speed, then 256 kbps, overrides $10/GB) carries SWIM and live operational data, plus the Proton upload at **2 Mbps**, so a grid-down failover never leaves the box more than ~24 h without a live off-site backup while SWIM still has room. Each sync attempt starts rclone at the caps of the uplink in use; `rate_guard.py` re-reads the default route every sample and switches caps, the counted interface and the reduction ladder live on a failover or fail-back mid-sync (an `uplink` action in the ledger). A 4-5 GB delta takes ~4.5-5.5 h on the hotspot. Every other heavy job defers there: `heavy_lock_acquire` lets only `nightly backup` and `restore test` (local Borg) take the turn while the default route is metered; rollout, stack refresh and image pulls wait for the primary within their max wait, then stop with `deferred: metered uplink`.
 
 - Each sync's ledger entry carries the guard's summary (highest 30 s average, actions).
 - **Stall stop and one retry (2026-10-14).** If rclone's own transferred-bytes counter has not grown for 20 minutes (`rate_guard.py --stall-min`), the guard asks rclone to quit and reports `stall: true` (exit 4); the backup retries the sync once from scratch, which also covers Proton's transient "Upload file empty" (2003). On 2026-10-14 a hung sync (four uploads at 6%, no bytes moving) held the heavy-job turn from 04:40Z until it was stopped by hand at ~06:40Z.

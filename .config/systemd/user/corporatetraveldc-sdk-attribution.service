@@ -1,0 +1,23 @@
+# corporatetraveldc-sdk-attribution.service -- daily SDK/telemetry host ->
+# app attribution for the driver phone (scripts/sdk-attribution.py).
+#
+# 2026-10-24 (operator 2026-10-23: "do the sdk <> request debug going forward
+# and if possible backfill"). Reads /etc/pihole/pihole-FTL.db READ-ONLY as
+# the corporatetraveldc user (pihole group, same grant dns-anomaly-watch.py
+# uses); writes /var/lib/corporatetraveldc/sdk-attribution/<date>.txt|.json
+# and state.json; alerts ONCE per new SDK host or confident top-app change
+# through scripts/relay-nudge.py (approval-gate, p3). The script parses
+# dispatch.env itself (SDK_ATTRIBUTION_CLIENT_IPS / UBER_WATCH_CLIENT_IP), so
+# no EnvironmentFile= here. A one-day window is ~5k rows: seconds of work,
+# but Nice/idle I/O anyway because it shares the 04:xx slot with gravity
+# and the backup chain.
+[Unit]
+Description=Corporate Travel DC -- daily SDK/telemetry host -> app attribution from the Pi-hole query log (driver phone)
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/sdk-attribution.py --days 1

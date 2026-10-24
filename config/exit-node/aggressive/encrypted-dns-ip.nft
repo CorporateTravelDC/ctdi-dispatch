@@ -1,0 +1,55 @@
+# config/exit-node/aggressive/encrypted-dns-ip.nft -- OPT-IN, a more
+# aggressive measure, NOT default. Included only by `apply.sh --with-aggressive`.
+#
+# FRAGMENT: apply.sh pastes this inside `table inet ctdc_exitnode { ... }`
+# after substituting the @VARS@ and the @DOH_IP4_ELEMENTS@ /
+# @DOH_IP6_ELEMENTS@ blocks (HaGeZi's DoH/DoT resolver IP list, downloaded
+# at apply time -- never committed). Not a standalone ruleset.
+#
+# Scope: packets this box FORWARDS from the tailnet interface (peers using
+# it as their exit node), whichever uplink they leave on. The box's own
+# traffic (input/output hooks) is untouched; nothing arriving on an uplink
+# is matched.
+#
+#   1. DoT / DoQ: TCP+UDP 853 and UDP 8853 (DoQ draft port) -> drop.
+#   2. DoH / DoT to a KNOWN public resolver by IP: TCP/UDP 443 whose daddr
+#      is in the HaGeZi IP set -> drop. Plain DNS (53) is not touched; the
+#      phone's resolver stays Pi-hole via the tailnet.
+#   Every drop is logged (rate-limited) with prefix "ctdc-doh-ip " so the
+#   operator can see in `journalctl -k` which tailnet peer tried.
+#
+# "No-DNS-lookup" detection (443/80 to an address nobody resolved) is NOT
+# implemented: see README -- this Pi-hole's embedded dnsmasq is compiled
+# without nftset support, and faking it is not an option.
+
+    define ctdc_tailnet_peers4 = @TAILNET_PEERS4@
+    define ctdc_tailnet_peers6 = @TAILNET_PEERS6@
+
+    set doh_ip4 {
+        type ipv4_addr
+        flags interval
+        auto-merge
+        comment "HaGeZi DoH/DoT resolver IPs (v4) -- refreshed by apply.sh --with-aggressive"
+@DOH_IP4_ELEMENTS@
+    }
+
+    set doh_ip6 {
+        type ipv6_addr
+        flags interval
+        auto-merge
+        comment "HaGeZi DoH/DoT resolver IPs (v6) -- refreshed by apply.sh --with-aggressive"
+@DOH_IP6_ELEMENTS@
+    }
+
+    chain ctdc_doh_drop {
+        limit rate 10/minute burst 20 packets log prefix "ctdc-doh-ip " level info
+        counter drop
+    }
+
+    chain forward_aggressive_dns_ip {
+        type filter hook forward priority filter - 9; policy accept;
+        iifname "@TAILNET_IF@" meta l4proto { tcp, udp } th dport 853 jump ctdc_doh_drop comment "DoT/DoQ from tailnet peers"
+        iifname "@TAILNET_IF@" udp dport 8853 jump ctdc_doh_drop comment "DoQ draft port from tailnet peers"
+        iifname "@TAILNET_IF@" ip saddr $ctdc_tailnet_peers4 meta l4proto { tcp, udp } th dport 443 ip daddr @doh_ip4 jump ctdc_doh_drop comment "DoH/DoT by IP (v4) from tailnet peers"
+        iifname "@TAILNET_IF@" ip6 saddr $ctdc_tailnet_peers6 meta l4proto { tcp, udp } th dport 443 ip6 daddr @doh_ip6 jump ctdc_doh_drop comment "DoH/DoT by IP (v6) from tailnet peers"
+    }

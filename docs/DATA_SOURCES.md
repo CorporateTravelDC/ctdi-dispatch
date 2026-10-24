@@ -349,6 +349,18 @@ no SLA). Three implementations exist:
 The push writer stamps only `push:amtrak`, not the `amtrak` row, so the
 `amtrak` row's age is the time since the last REST fallback run.
 
+Fields kept (2026-10-24, train map parity): `src/ingest/amtrak.py` now
+passes amtraker's `heading` (compass letters, e.g. `NE`), `velocity`
+(as `velocity_mph`) and `lastValTS` (as `position_updated`, the time of the
+last position fix) into every `trains[]` row alongside `lat` / `lon`; the
+train map (`docs/MAP.md`) uses them for the direction arrow and the
+per-train position age. ~~The deployed `amtrak-tracker` writer does **not**
+pass them, so on this box the map falls back to direction from successive
+positions and has no per-train fix time until that writer is brought level.~~
+(2026-10-24: `src/amtrak_tracker/main.py`, the deployed writer, now passes the
+same three fields. Older records without them still fall back to direction
+from successive positions.)
+
 ### MARC & VRE commuter rail (GTFS-Realtime) — dependency only, no fetcher
 
 `gtfs-realtime-bindings>=1.0.0` is in `requirements.txt` with the endpoint
@@ -448,9 +460,11 @@ after the operator's feeder account was whitelisted. The rules are in
   calls no third party. `[Enabled here per the 2026-10-12 parity audit; the
   live dispatch.env was not read in this pass.]`
 
-Unchanged: `globe.airplanes.live/?icao=<hex>` links in push bodies, the
-runner's globe iframe, and the box feeding the aggregator through ultrafeeder
-(ADS-B to `feed.airplanes.live:30004`, MLAT to `:31090`; see
+Unchanged: `globe.airplanes.live/?icao=<hex>` links in push bodies, ~~the
+runner's globe iframe,~~ (2026-10-24: the runner's globe iframe is gone — the
+aircraft map is Leaflet on local receiver + SWIM data, `docs/MAP.md`; links
+out to an aggregator stay hex-only) and the box feeding the aggregator through
+ultrafeeder (ADS-B to `feed.airplanes.live:30004`, MLAT to `:31090`; see
 `docs/SDR_SERVICES.md`).
 
 ### Local receivers (own ADS-B and VDL2)
@@ -586,6 +600,17 @@ Technical contact: [name, email]
 [For portal-based services: "I submitted the portal request on [date];
 please confirm receipt and the expected review timeline."]
 ```
+
+**SWIM display scope (2026-10-24).** The "not redistributed" line above is a
+commitment, not boilerplate. A standard FAA SWIM data agreement does not
+permit redistribution or public display of the data, so the stored FDPS /
+TAIS positions that now feed the runner's aircraft map
+(`/api/v1/swim/positions`, `docs/MAP.md`) stay on trusted origins. A
+public-facing deployment that wants to display SWIM-fed positions must
+review its subscription's terms and obtain a tier or agreement that allows
+it. Separately, LADD/PIA blocking has a federal-law basis (FAA
+Reauthorization Act of 2024, sec. 803): any Tier-0 caller of the SWIM
+position routes is LADD-filtered fail-closed.
 
 ---
 

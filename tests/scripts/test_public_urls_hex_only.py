@@ -24,7 +24,9 @@ EXCLUDED_HOSTS = re.compile(r"aeroapi\.flightaware\.com")
 BAD_NAME = re.compile(r"(?i)reg|tail|registration|callsign|ident|flight")
 BAD_PATH = re.compile(r"(?i)/flight/|/registration/|[?&](reg|registration|tail|flight|callsign)=")
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs"}
-SKIP_DIRS = {"node_modules", "dist", "build", "__pycache__", ".vite"}
+# 2026-10-24: + "static" -- src/runner/static is the vite build output (gitignored); scanning a 460 KB
+# one-line minified bundle made this test run for an hour and timed out a relay rehearsal.
+SKIP_DIRS = {"node_modules", "dist", "build", "__pycache__", ".vite", "static"}
 
 
 def _names(expr: ast.AST) -> list[str]:

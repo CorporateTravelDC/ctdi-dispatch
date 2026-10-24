@@ -51,8 +51,11 @@ defaults in the three modules above, but:
 
 - distances, the compass-quadrant summary and the map's range rings are
   wrong for your site;
-- the globe.airplanes.live embed's "H"/home key and distance columns are
-  wrong;
+- ~~the globe.airplanes.live embed's "H"/home key and distance columns are
+  wrong;~~ (2026-10-24: the embed is gone; instead the aircraft map's
+  receiver range circle, its pan limit and the merge of receiver and SWIM
+  positions are centred on the wrong point — `/api/map/scope`,
+  `docs/MAP.md`);
 - MLAT accuracy depends on the receiver's site position being correct
   (readsb uses it as a fixed reference);
 - feeder registrations carry the wrong location (ultrafeeder's
@@ -81,15 +84,45 @@ coordinate in a `.jsx`/`.js` file**: the public mirror's
 `scripts/scrub-public-tree.py` substitutes only literals it already knows
 and cannot catch a new one.
 
+## Map scope and the receiver position (2026-10-24)
+
+`GET /api/map/scope` (`src/runner/main.py`) is the aircraft map's second
+consumer of `DEFAULT_LAT` / `DEFAULT_LON`, after `/api/v1/frontend-config`,
+and applies the identical trust rule: a trusted (tailnet / LAN) caller gets
+the real receiver centre with a 250 nm range circle; an untrusted caller gets
+the same public-airport placeholder `frontend-config` has handed out since
+2026-08-24, a null SWIM centre and no `TAR1090_URL`. The map extent is the
+union of that circle and the SWIM storage area from
+`src/ingest/parsers/geo_filter.py`. `docs/MAP.md` §5–§7.
+
+**Public-facing deployments — receiver-location protection.** Anything the
+public can reach must not reveal the exact receiver position, on either
+layer:
+
+- Receiver layer (tar1090 / readsb): `READSB_RX_LOCATION_ACCURACY=0` (or a
+  rounded value), `SiteShow=false`, no heywhatsthat panorama, range outline
+  off, and strip `r_dst` / `r_dir` (distance and bearing from the receiver,
+  which readsb adds per aircraft) from any aircraft JSON served publicly.
+- Application layer: keep the placeholder rule above intact for untrusted
+  callers; never add a route that returns `DEFAULT_LAT` / `DEFAULT_LON`
+  without the `_is_trusted` check. On this deployment the live runner only
+  answers trusted origins at all (`live_trusted_only`, 2026-10-20), so the
+  placeholder is the second line, not the only one.
+
 ## Why the "H" button specifically
 
-tar1090 keys its "H"/home button and distance columns off `SiteLat` /
+~~tar1090 keys its "H"/home button and distance columns off `SiteLat` /
 `SiteLon`, not `centerlat` / `centerlon` (which only move the initial
 camera). Without `SiteLat/SiteLon` it uses whatever browser geolocation it
 cached in that origin's `localStorage`.
 `src/runner/frontend/src/components/MapView.jsx` sends `SiteLat`,
 `SiteLon` and `SiteClear=1` on every embed load. For a local tar1090
-opened directly, append `?SiteClear=1` once to purge a stale cached home.
+opened directly, append `?SiteClear=1` once to purge a stale cached home.~~
+(2026-10-24: `MapView.jsx` no longer builds an embed URL; the globe iframe
+is gone. The tar1090 facts still hold for the local tar1090 itself, which
+the map now links to with `?icao=<hex>` when `TAR1090_URL` is set: if its
+"H" button shows a wrong home despite correct `READSB_LAT/LON`, open it once
+with `?SiteClear=1`.)
 
 ## Incident this codified (2026-08-24)
 

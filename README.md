@@ -527,8 +527,11 @@ authority. An identifier on the FAA LADD list is never sent to it. Requests
 are at least 1.1 s apart, with a 30 s cache. FlightAware AeroAPI code is
 dormant without a key; whether a key is configured was not checked in this
 pass. Since 2026-10-14 watch matching goes by flight instance (the leg), not
-by flight number: `docs/FLIGHT_INSTANCE_RESOLVER.md`.) (The runner's
-GLOBE map view still embeds `globe.airplanes.live` in the browser.)
+by flight number: `docs/FLIGHT_INSTANCE_RESOLVER.md`.) ~~(The runner's
+GLOBE map view still embeds `globe.airplanes.live` in the browser.)~~
+(2026-10-24: the GLOBE iframe mode is gone; the runner draws one Leaflet
+aircraft map from the local receiver plus stored SWIM positions, with hex-only
+`?icao=<hex>` links out. `docs/MAP.md`.)
 
 OOOI phases `pre_departure → out → off → on → in` never revert. Same-phase
 ties resolve by `_OOOI_SOURCE_PRIORITY` in `src/common/db.py`: ACARS (4) >
@@ -717,6 +720,34 @@ run from root-owned installed copies under `/usr/local/libexec/ctdc/`,
 installed by `scripts/install-root-copies.sh` after a manifest check, never
 from the checkout.
 
+### Map
+
+(added 2026-10-24) The runner's `/map` is one Leaflet aircraft map; the
+vessel, train and drone tabs follow the same pattern. Full reference:
+`docs/MAP.md`.
+
+- **Default.** With only `ULTRAFEEDER_URL` and the receiver coordinates set,
+  the map shows your own receiver (readsb / ultrafeeder `aircraft.json`) —
+  a tar1090-style view of your own data, with tar1090's altitude colours.
+- **Extend by configuration.** (A) link out to a public aggregator, hex-only
+  (`?icao=<hex>`); (B) your own FAA SWIM subscriptions (next section) — with
+  SWIM configured you get the same merged receiver + SWIM map this
+  deployment runs internally, drawn from what the storage filter keeps
+  (`src/ingest/parsers/geo_filter.py`: 250 nm around the primary airport
+  plus the core-airport list; nationwide means widening that filter, a
+  load and storage decision on small hardware).
+- **Public-facing deployments.** Do not expose SWIM-fed positions publicly
+  (a standard SWIM data agreement does not permit redistribution or public
+  display; review your subscription's terms), and do not expose the exact
+  receiver location (`READSB_RX_LOCATION_ACCURACY=0` or rounded,
+  `SiteShow=false`, no heywhatsthat panorama, range outline off, strip
+  `r_dst` / `r_dir` from public aircraft JSON). The runner already hands
+  untrusted callers a public-airport placeholder instead of the receiver
+  centre, and dispatch-web LADD-filters any untrusted caller of the SWIM
+  position routes fail-closed.
+- `TAR1090_URL` (`dispatch.env`, optional) adds an "Open full receiver map"
+  link to the local tar1090 for trusted callers only.
+
 ### After any code change
 
 ```bash
@@ -895,6 +926,17 @@ scripts/ingest-feed-ctl.sh restart all --order=lightest-first --stagger=15
 
 Standing convention: a SWIM account in doubt is retired and replaced with a
 fresh email and passwords. New-deployment access: `docs/DATA_SOURCES.md`.
+
+Display scope (2026-10-24): stored FDPS / TAIS positions feed the runner's
+aircraft map (`docs/MAP.md`) through `GET /api/v1/swim/positions`,
+`/swim/scope` and `/swim/last-leg` (`src/web/routes/swim_positions.py`).
+A standard FAA SWIM data agreement does not permit redistribution or public
+display of the data, so SWIM-fed positions stay on trusted (tailnet / LAN)
+origins; a public-facing deployment that wants to show them must hold a tier
+or agreement that allows it. Independently of the agreement, LADD/PIA
+blocking has a federal-law basis (FAA Reauthorization Act of 2024, sec. 803):
+any Tier-0 caller of those routes is LADD-filtered, and a filter failure is a
+503, never an unfiltered list.
 
 ---
 

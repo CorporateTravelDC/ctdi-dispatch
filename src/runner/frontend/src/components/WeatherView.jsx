@@ -147,7 +147,7 @@ export default function WeatherView() {
       </div>
 
       {/*
-        Full-page radar -- mirrors .globe-map-wrap/.map-container's plain
+        Full-page radar -- mirrors .map-container's plain
         width:100%/flex:1 treatment directly, no side panel of any kind.
         Corrected 2026-07-21: an earlier pass added a METAR/alerts side
         panel here; that was wrong -- the operator wants METAR/alerts to live ONLY

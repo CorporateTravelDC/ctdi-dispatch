@@ -215,18 +215,6 @@ body::before {
   transform: rotate(30deg);
 }
 
-/* ── ADS-B toggle ─────────────────────────────────────────────────────────── */
-.adsb-toggle {
-  font-family: var(--font-ui); font-size: 0.62rem; font-weight: 600;
-  letter-spacing: 0.1em;
-  padding: 0.25rem 0.55rem; border-radius: var(--radius); cursor: pointer;
-  border: 1px solid var(--border); background: transparent; color: var(--muted);
-  min-height: 30px;
-  transition: color var(--transition), border-color var(--transition), box-shadow var(--transition);
-}
-.adsb-toggle.local { color: var(--cyan); border-color: var(--cyan); box-shadow: var(--cyan-glow); }
-.adsb-toggle.live  { color: var(--go);   border-color: var(--go);   box-shadow: var(--go-glow); }
-
 /* ── CPS pill ─────────────────────────────────────────────────────────────── */
 .cps-pill {
   font-family: var(--font-ui);
@@ -339,12 +327,7 @@ body::before {
 .map-container { position: relative; width: 100%; flex: 1; min-height: 0; }
 .leaflet-map   { width: 100%; height: 100%; }
 
-/* Globe mode: airplanes.live iframe + local feeder overlay */
-.globe-map-wrap {
-  position: relative; width: 100%; flex: 1; min-height: 0;
-  display: flex; flex-direction: column;
-}
-.globe-iframe-wrap { position: relative; flex: 1; min-height: 0; }
+/* AIS / UTM demo-mode placeholder (the live branches use .mk-stage, see the mapKit section) */
 .ais-demo-placeholder-wrap { display: flex; align-items: center; justify-content: center; overflow: hidden; background: #0a0e14; }
 .ais-demo-placeholder-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -381,94 +364,6 @@ body::before {
   font-family: var(--font-data); font-size: clamp(0.6rem, 2.4vw, 0.68rem); color: var(--text-2);
   margin-top: 0.15rem;
 }
-.globe-iframe {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  border: none; z-index: 1;
-}
-.globe-local-overlay {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  z-index: 2; pointer-events: none; background: transparent;
-}
-/* Allow individual markers to be interactive over the iframe */
-.globe-local-overlay .leaflet-marker-pane { pointer-events: all; }
-.globe-local-overlay .leaflet-tooltip-pane { pointer-events: all; }
-.globe-stats { z-index: 3; }
-.globe-fallback {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  width: 100%; height: 100%; gap: 1rem; color: var(--muted);
-}
-.globe-fallback-link {
-  color: var(--cyan); text-decoration: none; font-family: var(--font-ui); font-size: 0.8rem;
-  border: 1px solid var(--cyan); padding: 0.4rem 1rem; border-radius: var(--radius);
-}
-.globe-fallback-link:hover { background: var(--cyan-dim); }
-
-/* AIS no-data overlay (shown when no feed is configured) */
-.ais-no-data-overlay {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  z-index: 500; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 1.25rem 1.5rem;
-  display: flex; flex-direction: column; align-items: center; gap: 0.6rem;
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  max-width: 320px; text-align: center;
-}
-.ais-no-data-title {
-  font-family: var(--font-ui); font-size: 0.75rem; font-weight: 700;
-  letter-spacing: 0.05em; color: var(--text);
-}
-.ais-no-data-sub {
-  font-family: var(--font-data); font-size: 0.65rem; color: var(--muted);
-  line-height: 1.4;
-}
-.ais-no-data-links {
-  display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center;
-  margin-top: 0.25rem;
-}
-.ais-tracker-link {
-  color: var(--cyan); text-decoration: none; font-family: var(--font-ui);
-  font-size: 0.65rem; border: 1px solid var(--cyan);
-  padding: 0.2rem 0.55rem; border-radius: var(--radius);
-}
-.ais-tracker-link:hover { background: var(--cyan-dim); }
-
-/* Globe search bar — docked above the iframe so airplanes.live top bar stays visible */
-.globe-search-bar {
-  position: relative; z-index: 10; display: flex; align-items: center; gap: 0.35rem;
-  background: var(--panel); border-bottom: 1px solid var(--border-2);
-  padding: 0.3rem 0.6rem; flex-shrink: 0; width: 100%; box-sizing: border-box;
-}
-.globe-search-input {
-  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
-  color: var(--text); font-family: var(--font-data); font-size: 0.72rem;
-  padding: 0.2rem 0.25rem; letter-spacing: 0.04em; text-transform: uppercase;
-}
-.globe-search-input::placeholder { color: var(--muted); text-transform: none; letter-spacing: 0; }
-.globe-search-input::-webkit-search-cancel-button { display: none; }
-.globe-search-btn {
-  background: transparent; border: none; cursor: pointer;
-  color: var(--cyan); font-size: 1rem; padding: 0 0.2rem; line-height: 1;
-  flex-shrink: 0;
-}
-.globe-search-btn:hover { color: var(--text); }
-.globe-search-disabled { opacity: 0.55; }
-.globe-search-disabled .globe-search-input { cursor: not-allowed; }
-.globe-search-disabled .globe-search-btn { cursor: not-allowed; color: var(--muted); }
-.globe-search-disabled .globe-search-btn:hover { color: var(--muted); }
-.globe-search-type-badge {
-  font-family: var(--font-data); font-size: 0.6rem; letter-spacing: 0.06em;
-  color: var(--cyan); border: 1px solid var(--cyan); border-radius: var(--radius);
-  padding: 0.1rem 0.35rem; white-space: nowrap; flex-shrink: 0;
-}
-.globe-search-clear {
-  background: transparent; border: none; cursor: pointer;
-  color: var(--muted); font-size: 0.65rem; padding: 0 0.2rem; line-height: 1; flex-shrink: 0;
-}
-.globe-search-clear:hover { color: var(--nogo); }
-
-.aircraft-marker.local-feed { z-index: 9999; }
-.stat.source-badge.local-feed-stat { color: #39ff14; border-color: rgba(57,255,20,0.3); }
-.local-tooltip b.local-feed-tip { color: #39ff14; font-size: 0.6rem; text-transform: uppercase; }
-
 /* Train map */
 .train-map-view { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; width: 100%; }
 .train-map-subnav {
@@ -487,12 +382,6 @@ body::before {
 }
 .train-mode-btn:hover { border-color: var(--cyan); color: var(--cyan); }
 .train-mode-btn.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
-.train-map-external {
-  margin-left: auto; font-family: var(--font-ui); font-size: 0.7rem;
-  color: var(--muted); text-decoration: none; padding: 0.15rem 0.4rem;
-  border: 1px solid var(--border); border-radius: var(--radius);
-}
-.train-map-external:hover { color: var(--cyan); border-color: var(--cyan); }
 .train-map-wrap { position: relative; flex: 1; }
 
 /* Train search bar (station / city geocode) */
@@ -580,24 +469,6 @@ body::before {
 .train-row-dest-eta {
   font-family: var(--font-data); font-size: 0.6rem; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* Split-screen train page body (added 2026-07-21, replaces the old
-   side-panel + map layout): left column Amtrak, right column MARC/VRE,
-   both plain text -- no map. */
-.train-split-body {
-  display: flex; flex: 1; min-height: 0; overflow: hidden;
-}
-.train-split-col {
-  flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden;
-  border-right: 1px solid var(--border); background: var(--panel);
-  display: flex; flex-direction: column; gap: 0;
-}
-.train-split-col-last { border-right: none; }
-@media (max-width: 720px) {
-  .train-split-body { flex-direction: column; overflow-y: auto; }
-  .train-split-col { border-right: none; border-bottom: 1px solid var(--border); }
-  .train-split-col-last { border-bottom: none; }
 }
 
 /* Map overlay stats */
@@ -1178,7 +1049,6 @@ body::before {
     margin-left: 0; padding: 0 0.5rem;
     height: 40px; gap: 0.3rem; flex-shrink: 0;
   }
-  .adsb-toggle { font-size: 0.57rem; padding: 0.18rem 0.32rem; letter-spacing: 0.04em; }
   .topbar-nav {
     width: 100%; order: 3;
     overflow-x: auto; overflow-y: hidden;
@@ -2226,8 +2096,8 @@ body::before {
   font-weight: 700;
 }
 
-/* ── Watchlist badge — globe view ───────────────────────────────────────── */
-.globe-watchlist-badge {
+/* ── Watchlist badge — aircraft map (chips are focus buttons since 2026-10-24) ── */
+.map-watchlist-badge {
   position: absolute;
   top: 10px;
   left: 62px;
@@ -2245,7 +2115,7 @@ body::before {
   max-width: 240px;
   pointer-events: all;
 }
-.gwb-label {
+.wlb-label {
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -2253,25 +2123,29 @@ body::before {
   text-transform: uppercase;
   margin-right: 2px;
 }
-.gwb-chip {
+.wlb-chip {
+  font-family: var(--font-data);
   font-size: 0.65rem;
   font-weight: 600;
   color: #e0f7ff;
   background: rgba(0,212,255,0.12);
   border: 1px solid rgba(0,212,255,0.4);
   border-radius: 3px;
-  padding: 1px 5px;
+  padding: 1px 7px;
+  min-height: 28px;
   white-space: nowrap;
+  cursor: pointer;
 }
+.wlb-chip:hover, .wlb-chip:focus-visible { background: rgba(0,212,255,0.28); outline: none; }
 
-.gwb-collapse-btn {
-  background: none; border: none; color: rgba(0,212,255,0.5); cursor: pointer;
-  font-size: 0.65rem; padding: 0 2px; margin-left: 4px; line-height: 1;
+.wlb-collapse-btn {
+  background: none; border: none; color: rgba(0,212,255,0.6); cursor: pointer;
+  font-size: 0.9rem; padding: 0 6px; margin-left: 2px; line-height: 1; min-height: 28px;
   flex-shrink: 0; align-self: center;
 }
-.gwb-collapse-btn:hover { color: #00d4ff; }
+.wlb-collapse-btn:hover { color: #00d4ff; }
 
-.gwb-collapsed-pill {
+.wlb-collapsed-pill {
   position: absolute;
   top: 10px;
   left: 62px;
@@ -2282,13 +2156,14 @@ body::before {
   color: #00d4ff;
   font-size: 0.65rem;
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 3px 10px;
+  min-height: 40px;
   cursor: pointer;
   pointer-events: all;
   box-shadow: 0 0 8px rgba(0,212,255,0.2);
   transition: background 0.15s;
 }
-.gwb-collapsed-pill:hover { background: rgba(0,212,255,0.15); }
+.wlb-collapsed-pill:hover { background: rgba(0,212,255,0.15); }
 
 /* ═══════════════════════════════════════════════
    Train panel resize + collapse
@@ -2349,166 +2224,6 @@ body::before {
   background: rgba(0,212,255,0.25);
 }
 
-
-/* ═══════════════════════════════════════════════
-   Step 4 — AIS / Marine view
-   ═══════════════════════════════════════════════ */
-
-/* Mode toggle (MAP / LIVE) */
-.ais-mode-toggle {
-  display: flex;
-  gap: 2px;
-  background: rgba(0,0,0,0.3);
-  border-radius: 5px;
-  padding: 2px;
-}
-.ais-mode-btn {
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 3px 10px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted, #8a9bb0);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.ais-mode-btn.active {
-  background: rgba(74,158,255,0.2);
-  color: #4a9eff;
-  border: 1px solid rgba(74,158,255,0.4);
-}
-.ais-mode-btn:hover:not(.active) {
-  background: rgba(255,255,255,0.05);
-  color: var(--fg, #e2e8f0);
-}
-
-/* Tracker iframe embed */
-.ais-iframe-wrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-}
-.ais-tracker-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #0a1628;
-}
-.ais-iframe-badge {
-  position: absolute;
-  bottom: 6px;
-  left: 8px;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  color: #4a9eff;
-  background: rgba(0,18,40,0.82);
-  border: 1px solid rgba(74,158,255,0.35);
-  border-radius: 4px;
-  padding: 2px 7px;
-  pointer-events: all;
-}
-
-/* No-data overlay */
-.ais-no-data-overlay {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 500;
-  background: rgba(8, 18, 36, 0.93);
-  border: 1px solid rgba(74,158,255,0.35);
-  border-radius: 8px;
-  padding: 20px 24px;
-  max-width: 340px;
-  text-align: center;
-  pointer-events: auto;
-}
-.ais-no-data-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #4a9eff;
-  margin-bottom: 8px;
-}
-.ais-no-data-sub {
-  font-size: 0.72rem;
-  color: var(--muted, #8a9bb0);
-  line-height: 1.45;
-  margin-bottom: 14px;
-}
-.ais-no-data-sub code {
-  font-family: monospace;
-  background: rgba(255,255,255,0.08);
-  border-radius: 3px;
-  padding: 1px 4px;
-  color: #e2e8f0;
-  font-size: 0.68rem;
-}
-.ais-no-data-links {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.ais-tracker-link {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #4a9eff;
-  text-decoration: none;
-  border: 1px solid rgba(74,158,255,0.4);
-  border-radius: 4px;
-  padding: 4px 10px;
-  transition: background 0.15s;
-}
-.ais-tracker-link:hover {
-  background: rgba(74,158,255,0.12);
-}
-
-/* Vessel tracked glow pulse */
-.vessel-tracked svg {
-  filter: drop-shadow(0 0 4px #00d4ff);
-  animation: tracked-pulse 2.5s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .vessel-tracked svg { animation: none; }
-}
-
-/* ── AIS / Train map display mode: iframe bg + transparent Leaflet overlay ── */
-.ais-leaflet-layer {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  z-index: 2;
-}
-/* Transparent overlay mode — sits on top of iframe, no base tiles visible */
-.ais-overlay-mode {
-  pointer-events: none;
-}
-.ais-overlay-mode .leaflet-container {
-  background: transparent !important;
-}
-.ais-overlay-mode .leaflet-tile-pane,
-.ais-overlay-mode .leaflet-shadow-pane {
-  display: none !important;
-}
-/* Re-enable interaction for individual markers/tooltips */
-.ais-overlay-mode .leaflet-marker-pane  { pointer-events: all; }
-.ais-overlay-mode .leaflet-tooltip-pane { pointer-events: all; }
-/* Full local map mode */
-.ais-local-mode {
-  pointer-events: auto;
-}
-.ais-local-mode .leaflet-container { background: #1a2133; }
-
-/* MarineTraffic iframe fallback banner */
-.ais-iframe-fallback-banner {
-  position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
-  z-index: 5; background: var(--panel); border: 1px solid var(--orange);
-  padding: 0.3rem 0.75rem; border-radius: var(--radius);
-  font-size: 0.7rem; color: var(--orange);
-  display: flex; gap: 0.5rem; align-items: center;
-  white-space: nowrap;
-}
 
 
 /* Weather tab — radar image/iframe, now living inside .wx-radar-stage
@@ -2577,7 +2292,7 @@ body::before {
   border-radius: 2px; flex: 0 0 auto;
 }
 
-/* WX tab — full-bleed radar hero (mirrors .globe-map-wrap/.map-container's
+/* WX tab — full-bleed radar hero (mirrors .map-container's
    width:100%/flex:1 treatment) + fixed-width side panel for METAR/alerts,
    replacing the earlier 50/50 split-column layout. 2026-07-21. */
 .wx-body {
@@ -2746,4 +2461,341 @@ body::before {
   border-radius: 3px;
   padding: 0.15rem 0.4rem;
   margin-left: 0.6rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Aircraft map (components/aircraftMap/, 2026-10-24) -- one map, receiver + SWIM.
+   Mobile-first: the runner is used on a phone. Every control >= 40 px tall,
+   legend + list collapse to pills, nothing forces horizontal page scroll.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Marker states layered on the altitude fill (markers.js). Source styles live in the SVG itself. */
+.aircraft-marker { display: block; }
+.aircraft-marker svg { display: block; overflow: visible; }
+.aircraft-marker.selected svg {
+  filter: drop-shadow(0 0 3px #ffffff) drop-shadow(0 0 7px rgba(255,255,255,0.7));
+}
+.aircraft-marker.conflict svg { filter: drop-shadow(0 0 3px rgba(255,48,64,0.8)); }
+.aircraft-marker.tracked.conflict svg {
+  filter: drop-shadow(0 0 4px #00d4ff) drop-shadow(0 0 4px rgba(255,48,64,0.9));
+}
+.aircraft-marker.last-seen svg { filter: drop-shadow(0 0 3px rgba(138,155,176,0.8)); }
+
+/* Tooltip body (all sources) */
+.act { line-height: 1.35; min-width: 120px; }
+.act-name { font-size: 0.8rem; color: var(--text); }
+.act-src { font-size: 0.56rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; }
+.act-src-matched { color: var(--go); }
+.act-src-local   { color: var(--marginal); }
+.act-src-swim    { color: #9c6bff; }
+.act-conflict    { color: var(--nogo); font-weight: 700; }
+.leaflet-tooltip.selected-tooltip { border-color: var(--text) !important; }
+.leaflet-tooltip.last-seen-tooltip { border-color: #8a9bb0 !important; border-style: dashed !important; }
+
+/* Source badge in the stats bar */
+.stat.source-badge.rcv-swim { color: var(--go); border-color: rgba(0,255,136,0.3); }
+.stat.source-badge.rcv-only { color: var(--marginal); border-color: rgba(255,215,0,0.3); }
+.stat.acmap-tar-link { color: var(--cyan); text-decoration: none; }
+.stat.acmap-tar-link:hover { background: var(--cyan-dim); }
+.map-overlay-stats .stat { min-height: 24px; display: inline-flex; align-items: center; }
+
+/* Focus search (top-right over the map) */
+.acmap-search {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  display: flex; align-items: center; gap: 0;
+  background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border); border-radius: var(--radius);
+  max-width: calc(100% - 120px);
+}
+.acmap-search-input {
+  width: 11rem; max-width: 40vw; min-height: 40px; background: transparent; border: none; outline: none;
+  color: var(--text); font-family: var(--font-data); font-size: 0.72rem;
+  padding: 0 0.6rem; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.acmap-search-input::placeholder { color: var(--muted); text-transform: none; letter-spacing: 0; }
+.acmap-search-input::-webkit-search-cancel-button { display: none; }
+.acmap-search-btn, .acmap-search-clear {
+  min-width: 40px; min-height: 40px; background: transparent; border: none; border-left: 1px solid var(--glass-border);
+  cursor: pointer; color: var(--cyan); font-family: var(--font-ui); font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em;
+}
+.acmap-search-clear { color: var(--muted); font-size: 1rem; }
+.acmap-search-btn:hover, .acmap-search-clear:hover { background: var(--cyan-dim); }
+.acmap-search:focus-within { border-color: var(--border-2); }
+.acmap-focus-msg {
+  position: absolute; top: 56px; right: 10px; z-index: 1000;
+  background: var(--panel); border: 1px solid var(--glass-border); border-radius: var(--radius);
+  color: var(--text-2); font-family: var(--font-data); font-size: 0.62rem; padding: 0.3rem 0.55rem;
+  max-width: calc(100% - 80px);
+}
+
+/* Bottom-right stack: list pill + legend */
+.acmap-corner-br {
+  position: absolute; right: 10px; bottom: 1.6rem; z-index: 1000;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+/* Legend */
+.acl-pill {
+  min-height: 40px; padding: 0 0.9rem;
+  background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border); border-radius: 20px; cursor: pointer;
+  color: var(--cyan); font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em;
+}
+.acl-pill:hover { background: var(--cyan-dim); }
+.acl {
+  width: 240px; max-width: 100%; max-height: 60vh; overflow-y: auto;
+  background: var(--panel); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 0.45rem 0.6rem 0.5rem;
+  font-family: var(--font-data); font-size: 0.62rem; color: var(--text-2);
+}
+.acl-head, .acls-head { display: flex; align-items: center; gap: 0.4rem; }
+.acl-title, .acls-title {
+  flex: 1; font-family: var(--font-ui); font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; color: var(--muted);
+}
+.acl-close {
+  min-width: 40px; min-height: 40px; margin: -0.3rem -0.4rem -0.3rem 0;
+  background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer;
+}
+.acl-close:hover { color: var(--text); }
+.acl-sec { margin-top: 0.35rem; }
+.acl-sec-title { font-family: var(--font-ui); font-size: 0.56rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.2rem; }
+.acl-bar { height: 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+/* labels sit at their true position on the (non-linear) ramp */
+.acl-bar-labels { position: relative; height: 0.9rem; font-size: 0.55rem; color: var(--muted); margin: 0.1rem 0 0.2rem; }
+.acl-bar-labels span { position: absolute; top: 0; transform: translateX(-50%); }
+.acl-bar-labels span:first-child { transform: none; }
+.acl-bar-labels span:last-child { transform: translateX(-100%); }
+.acl-row { display: flex; align-items: center; gap: 0.4rem; min-height: 22px; }
+.acl-row b { color: var(--text); font-weight: 600; }
+.acl-glyph { flex-shrink: 0; }
+.acl-swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; flex-shrink: 0; margin: 0 4px; }
+.acl-swatch-tracked { width: 10px; height: 10px; border-radius: 50%; background: #00d4ff; box-shadow: 0 0 6px #00d4ff; }
+.acl-credit { margin-top: 0.4rem; font-size: 0.52rem; color: var(--muted); }
+
+/* Aircraft list panel (right column on desktop, bottom sheet on a phone) */
+.acls {
+  width: 300px; flex-shrink: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  border-left: 1px solid var(--border); background: var(--panel);
+  font-family: var(--font-data);
+}
+.acls-head { padding: 0.35rem 0.4rem 0.35rem 0.65rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.acls-filter {
+  margin: 0.35rem 0.5rem 0.25rem; min-height: 40px; padding: 0 0.6rem;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); outline: none;
+  color: var(--text); font-family: var(--font-data); font-size: 0.7rem; text-transform: uppercase;
+}
+.acls-filter::placeholder { color: var(--muted); text-transform: none; }
+.acls-filter:focus { border-color: var(--cyan); }
+.acls-cols, .acls-row {
+  display: grid; grid-template-columns: 1.5fr 1.1fr 1fr 0.7fr 0.8fr 0.7fr; gap: 0.25rem; align-items: center;
+  padding: 0 0.5rem; width: 100%; box-sizing: border-box; text-align: left;
+}
+.acls-cols { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.acls-col {
+  min-height: 36px; padding: 0; background: none; border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-ui); font-size: 0.54rem; font-weight: 700; letter-spacing: 0.06em; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acls-col.on, .acls-col:hover { color: var(--cyan); }
+.acls-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.acls-row {
+  min-height: 40px; background: none; border: none; border-bottom: 1px solid rgba(0,140,220,0.08);
+  color: var(--text); font-size: 0.66rem; cursor: pointer;
+}
+.acls-row:hover { background: var(--hover, var(--cyan-dim)); }
+.acls-row.sel { background: var(--cyan-dim); box-shadow: inset 3px 0 0 var(--cyan); }
+.acls-row.tracked .callsign { color: #00d4ff; font-weight: 700; }
+.acls-row.stale { color: var(--text-2); }
+.acls-row.conflict .src { color: var(--nogo); font-weight: 700; }
+.acls-c { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acls-c.hex, .acls-c.age { color: var(--text-2); }
+.acls-c.src-matched { color: var(--go); }
+.acls-c.src-local   { color: var(--marginal); }
+.acls-c.src-swim    { color: #9c6bff; }
+.acls-empty { padding: 0.75rem 0.65rem; color: var(--muted); font-size: 0.66rem; }
+
+@media (max-width: 720px) {
+  /* Phone: sidebar | map on the top row (takes what is left), list as a bottom sheet under both.
+     Grid rather than a wrapped flex row so the map row never collapses to the sidebar's intrinsic height. */
+  .acmap {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .acmap .layer-sidebar { grid-row: 1; grid-column: 1; min-height: 0; }
+  .acmap .map-container { grid-row: 1; grid-column: 2; min-height: 0; min-width: 0; }
+  .acls {
+    grid-row: 2; grid-column: 1 / -1; width: 100%; max-height: 42vh; min-height: 0;
+    border-left: none; border-top: 1px solid var(--border);
+  }
+  /* keep the watchlist badge clear of the search box on a 400 px screen (until the user drags it) */
+  .map-watchlist-badge, .wlb-collapsed-pill { top: 58px; }
+  .acls-cols, .acls-row { grid-template-columns: 1.4fr 1fr 0.9fr 0.6fr 0.7fr 0.6fr; gap: 0.2rem; }
+  .acl { width: min(240px, calc(100vw - 20px)); max-height: 45vh; }
+  .acmap-search-input { width: 8.5rem; }
+  .map-overlay-stats { max-width: calc(100% - 7rem); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   mapKit verticals -- AIS / rail / UTM (components/mapKit/, AisMapView, TrainMapView,
+   UtmMapView; 2026-10-24 map rework, parity with the aircraft map above).
+   One map per vertical, list panel (right column / phone bottom sheet), legend, focus.
+   Own mk-* namespace on purpose: the aircraft-map section is not touched by this work.
+   Mobile-first: every control >= 40 px tall, nothing forces horizontal page scroll.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Page frame: subnav + stage (map | list) */
+.mk-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; width: 100%; }
+.mk-subnav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem;
+  padding: 0.3rem 0.75rem; min-height: 44px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.mk-title { font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em; color: var(--muted); margin-right: 0.25rem; }
+.mk-sel-name {
+  font-family: var(--font-data); font-size: 0.72rem; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw;
+}
+.mk-subnav-right { margin-left: auto; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; min-width: 0; }
+.mk-ext-link {
+  display: inline-flex; align-items: center; min-height: 40px; padding: 0 0.6rem;
+  font-family: var(--font-ui); font-size: 0.65rem; font-weight: 600; color: var(--cyan); text-decoration: none;
+  border: 1px solid var(--cyan); border-radius: var(--radius); white-space: nowrap;
+}
+.mk-ext-link:hover { background: var(--cyan-dim); }
+.mk-stage { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
+.mk-map-wrap { position: relative; flex: 1; min-height: 0; min-width: 0; }
+.mk-map { position: absolute; inset: 0; }
+.mk-map .leaflet-container { background: #1a2133; }
+
+/* Over-map controls (top-right toggles, focus status, bottom-right legend/list pill, stats) */
+.mk-tools { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
+.mk-tool-btn {
+  min-height: 40px; min-width: 40px; padding: 0 0.7rem; cursor: pointer;
+  background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border); border-radius: var(--radius);
+  color: var(--text-2); font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;
+}
+.mk-tool-btn:hover { color: var(--cyan); }
+.mk-tool-btn.on { color: var(--cyan); border-color: var(--cyan); background: var(--cyan-dim); }
+.mk-subnav .mk-tool-btn { font-size: 1rem; padding: 0 0.5rem; }
+.mk-focus-msg {
+  position: absolute; top: 56px; right: 10px; z-index: 1000;
+  background: var(--panel); border: 1px solid var(--glass-border); border-radius: var(--radius);
+  color: var(--text-2); font-family: var(--font-data); font-size: 0.62rem; padding: 0.3rem 0.55rem;
+  max-width: calc(100% - 80px);
+}
+.mk-corner-br {
+  position: absolute; right: 10px; bottom: 1.6rem; z-index: 1000;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: calc(100% - 20px);
+}
+.mk-stats { max-width: calc(100% - 2rem); }
+.mk-stats .stat { min-height: 24px; display: inline-flex; align-items: center; }
+.mk-pill {
+  min-height: 40px; padding: 0 0.9rem; cursor: pointer;
+  background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border); border-radius: 20px;
+  color: var(--cyan); font-family: var(--font-ui); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em;
+}
+.mk-pill:hover { background: var(--cyan-dim); }
+.mk-close {
+  min-width: 40px; min-height: 40px; margin: -0.3rem -0.4rem -0.3rem 0;
+  background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer;
+}
+.mk-close:hover { color: var(--text); }
+
+/* Markers: the vertical draws the glyph; tracked / selected add glow + size only */
+.mk-marker { display: block; }
+.mk-marker svg { display: block; overflow: visible; }
+.mk-marker.tracked svg { filter: drop-shadow(0 0 4px #00d4ff); animation: mk-pulse 2.5s ease-in-out infinite; }
+.mk-marker.selected svg { filter: drop-shadow(0 0 3px #ffffff) drop-shadow(0 0 7px rgba(255,255,255,0.7)); }
+.mk-marker.tracked.selected svg { filter: drop-shadow(0 0 4px #00d4ff) drop-shadow(0 0 6px #ffffff); }
+.mk-marker.operator svg { filter: drop-shadow(0 0 3px rgba(255,215,0,0.8)); }
+@keyframes mk-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .mk-marker.tracked svg { animation: none; } }
+.leaflet-tooltip.mk-sel-tooltip { border-color: var(--text) !important; }
+
+/* Legend */
+.mk-legend {
+  width: 250px; max-width: 100%; max-height: 60vh; overflow-y: auto;
+  background: var(--panel); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 0.45rem 0.6rem 0.5rem;
+  font-family: var(--font-data); font-size: 0.62rem; color: var(--text-2);
+}
+.mk-legend-head, .mk-list-head { display: flex; align-items: center; gap: 0.4rem; }
+.mk-legend-title, .mk-list-title { flex: 1; font-family: var(--font-ui); font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; color: var(--muted); }
+.mk-legend-sec { margin-top: 0.35rem; }
+.mk-legend-sec-title { font-family: var(--font-ui); font-size: 0.56rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.2rem; }
+.mk-legend-bar { height: 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+.mk-legend-bar-labels { position: relative; height: 0.9rem; font-size: 0.55rem; color: var(--muted); margin: 0.1rem 0 0.2rem; }
+.mk-legend-bar-labels span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.mk-legend-row { display: flex; align-items: center; gap: 0.4rem; min-height: 22px; }
+.mk-legend-row b { color: var(--text); font-weight: 600; }
+.mk-swatch { flex-shrink: 0; }
+.mk-legend-credit { margin-top: 0.4rem; font-size: 0.52rem; color: var(--muted); }
+
+/* List panel (right column on desktop, bottom sheet on a phone) */
+.mk-list {
+  width: 300px; flex-shrink: 0; min-height: 0; min-width: 0;
+  display: flex; flex-direction: column;
+  border-left: 1px solid var(--border); background: var(--panel); font-family: var(--font-data);
+}
+.mk-list-head { padding: 0.35rem 0.4rem 0.35rem 0.65rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.mk-list-filter {
+  margin: 0.35rem 0.5rem 0.25rem; min-height: 40px; padding: 0 0.6rem;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); outline: none;
+  color: var(--text); font-family: var(--font-data); font-size: 0.7rem; text-transform: uppercase;
+}
+.mk-list-filter::placeholder { color: var(--muted); text-transform: none; }
+.mk-list-filter:focus { border-color: var(--cyan); }
+.mk-list-cols, .mk-row {
+  display: grid; grid-template-columns: var(--mk-cols, repeat(4, 1fr)); gap: 0.25rem; align-items: center;
+  padding: 0 0.5rem; width: 100%; box-sizing: border-box; text-align: left;
+}
+.mk-list-cols { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.mk-list-col {
+  min-height: 36px; padding: 0; background: none; border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-ui); font-size: 0.54rem; font-weight: 700; letter-spacing: 0.06em; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mk-list-col.on, .mk-list-col:hover { color: var(--cyan); }
+.mk-list-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.mk-row {
+  min-height: 40px; background: none; border: none; border-bottom: 1px solid rgba(0,140,220,0.08);
+  color: var(--text); font-size: 0.66rem; cursor: pointer;
+}
+.mk-row:hover { background: var(--hover, var(--cyan-dim)); }
+.mk-row.sel { background: var(--cyan-dim); box-shadow: inset 3px 0 0 var(--cyan); }
+.mk-row.tracked .mk-c-name { color: #00d4ff; font-weight: 700; }
+.mk-row.nofocus { cursor: default; opacity: 0.7; }
+.mk-c { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk-c.dim { color: var(--text-2); }
+.mk-list-empty { padding: 0.75rem 0.65rem; color: var(--muted); font-size: 0.66rem; }
+
+/* Rail list: existing .train-row look, rows are now focus buttons */
+.train-list .train-sort { grid-template-columns: repeat(3, 1fr); }
+.mk-train-row {
+  width: 100%; min-height: 44px; background: none; border: none; border-bottom: 1px solid rgba(0,140,220,0.08);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.mk-train-row.sel { background: var(--cyan-dim); box-shadow: inset 3px 0 0 var(--cyan); }
+.mk-train-row.tracked .train-row-name { color: #00d4ff; }
+.mk-train-row.nofocus { cursor: default; opacity: 0.7; }
+.train-panel-head-note { font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 0.3rem; }
+
+@media (max-width: 720px) {
+  /* Phone: map on top (takes what is left), list as a bottom sheet. Grid so the map row never
+     collapses to an intrinsic height. */
+  .mk-stage { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .mk-map-wrap { grid-row: 1; }
+  .mk-list {
+    grid-row: 2; width: 100%; max-height: 42vh; min-height: 0;
+    border-left: none; border-top: 1px solid var(--border);
+  }
+  .mk-legend { width: min(250px, calc(100vw - 20px)); max-height: 45vh; }
+  .mk-sel-name { max-width: 100%; }
+  .mk-subnav-right { margin-left: 0; width: 100%; }
+  .map-overlay-stats.mk-stats { max-width: calc(100% - 7rem); }
 }

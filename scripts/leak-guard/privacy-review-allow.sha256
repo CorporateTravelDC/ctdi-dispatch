@@ -8,3 +8,4 @@ ae032b4b77354e673046699194b83d87d273dfeb6d9767c9a70ea6e641a1da72  synthetic test
 3c8cd6a4163b1d7fba97440cc572e312bd447a2b7ff70b5dad9b90b09c29435d  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV mmsi column) -- allowlisted 2026-10-23, test data not a real identifier
 6b673a5244f3a082a9d444e7de4a4e91b815a2801fe20b68b9e7e091329eb381  synthetic test fixture in tests/second_brain/test_semantic.py (maritime, AIS CSV name column) -- allowlisted 2026-10-23, test data not a real identifier
 e20a4398b370c90f53a560a9d0b7b1c1c2c74a80328f1644ddfbdffd66ee0dbd  synthetic test fixture in tests/web/test_webhooks.py (rail, rail id field) -- allowlisted 2026-10-23, test data not a real identifier
+7fe36ef1237bb3656e9a0e1d1d8002e513099edaa9e8c0e7028d53482f8d6822  not sensitive: code, not data -- AisMapView.jsx vesselName arrow function (v.name) read as a vessel name field; reviewed 2026-10-24
