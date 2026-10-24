@@ -130,7 +130,7 @@ from datetime import datetime, timezone
 from common import db
 from common.push_dedup import PushDedup, content_hash
 from shared.watchlist import _fire_ntfy_dual
-from ingest.parsers.geo_filter import is_core_airport
+from ingest.parsers.geo_filter import is_core_airport, passes_geo_filter
 
 log = logging.getLogger("ingest.parsers.tfms")
 
@@ -3318,8 +3318,13 @@ def write_tfms_programs(programs: list[dict]) -> int:
         # Pass if: no facility specified (national scope), an AFP (facility
         # is an FCA identifier, not an airport -- see docstring), DC
         # ARTCC/TRACON, or airport is in the 30-airport core set.
+        # 2026-10-24: the airport test goes through passes_geo_filter (airport-
+        # only form == is_core_airport under the default "regional" scope) so
+        # SWIM_STORAGE_SCOPE=national stores every program the TFMS
+        # subscription delivers; TFMS programs are low-volume, so this is the
+        # cheap end of the national setting.
         if (facility and p.get("type") != "AFP"
-                and facility not in _DC_ARTCC and not is_core_airport(facility)):
+                and facility not in _DC_ARTCC and not passes_geo_filter(airport=facility)):
             log.debug("tfms: geo-filtered program %s (facility=%s not in core)",
                       p.get("program_id"), facility)
             continue

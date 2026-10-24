@@ -62,7 +62,7 @@ from common import db
 from common.ntfy_push import send as ntfy_send
 from common.push_dedup import PushDedup, content_hash
 from ingest import config as ingest_config
-from ingest.parsers.geo_filter import is_core_airport
+from ingest.parsers.geo_filter import is_core_airport, passes_geo_filter  # noqa: F401 -- is_core_airport kept for callers/tests
 
 log = logging.getLogger("ingest.parsers.aim")
 
@@ -712,7 +712,13 @@ def write_aim_notams(notams: list[dict]) -> int:
         # DC-region ARTCC or that read as a major event/closure/airshow TFR
         # nationwide.
         in_watch = facility in watch_set
-        in_core  = is_core_airport(facility)
+        # 2026-10-24: passes_geo_filter(airport=...) == is_core_airport under the
+        # default "regional" scope; under SWIM_STORAGE_SCOPE=national it is True
+        # for every NOTAM, so the whole AIM_FNS feed is STORED. The alert gate
+        # below is untouched on purpose: storing nationwide is the setting,
+        # alerting nationwide (every NOTAM-D in the country) is noise nobody
+        # asked for -- alerts stay on the watch set / DC-region / TFR rules.
+        in_core  = passes_geo_filter(airport=facility)
         is_national_sig = is_fdc and _is_national_significant(n.get("text_body", ""))
         # 2026-10-20 keep class: every US Antarctic station (stored, not alerted).
         is_antarctic = is_us_antarctic(n)

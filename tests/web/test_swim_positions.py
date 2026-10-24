@@ -153,6 +153,30 @@ def test_scope_from_geo_filter_constants(seeded, monkeypatch):
     assert json.loads(seeded.swim_scope(tier=Tier.T1).body)["swim_enabled"] is False
 
 
+def test_scope_regional_payload_shape(seeded, monkeypatch):
+    # 2026-10-24: the payload now names its scope and carries bounds (null when regional).
+    monkeypatch.delenv("SWIM_STORAGE_SCOPE", raising=False)
+    internal = json.loads(seeded.swim_scope(tier=Tier.T1).body)
+    assert internal["scope"] == "regional" and internal["bounds"] is None
+    assert internal["label"].startswith("SWIM storage filter: 250 nm around KDCA")
+
+
+def test_scope_national_is_nas_box_for_every_tier(seeded, monkeypatch):
+    """2026-10-24: SWIM_STORAGE_SCOPE=national -> no circle for anyone, the NAS
+    box for everyone (public geography), airports still listed, untrusted
+    centre still null."""
+    monkeypatch.setenv("SWIM_STORAGE_SCOPE", "national")
+    monkeypatch.setattr(db, "get_feed_states", lambda: [{"feed_name": "fdps", "fetched_at": time.time() - 10}])
+    nas = [[17.5, -179.5], [72.0, -60.0]]
+    internal = json.loads(seeded.swim_scope(tier=Tier.T1).body)
+    assert internal["scope"] == "national" and internal["swim_enabled"] is True
+    assert internal["center"] is None and internal["radius_nm"] is None
+    assert internal["bounds"] == nas and internal["label"] == "NAS-wide (FAA SWIM)"
+    assert "KDCA" in internal["airports"] and all(len(a) == 4 for a in internal["airports"])
+    public = json.loads(seeded.swim_scope(tier=Tier.T0).body)
+    assert public["center"] is None and public["radius_nm"] is None and public["bounds"] == nas
+
+
 def test_last_leg_by_callsign_and_hex_with_airport_coords(seeded):
     with db.conn() as c:
         c.execute("INSERT INTO cifp_fixes (ident, icao_region, type, lat, lon, name, parent_airport, cycle) "

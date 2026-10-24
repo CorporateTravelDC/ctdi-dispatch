@@ -29,6 +29,7 @@ Write bare `KEY=value` — `EnvironmentFile=` keeps quote characters.
 | `DISPATCH_LOCAL_TZ` (added 2026-10-15) | Operator-local zone for day-keyed work (`common/optime.py`, `deployment_profile.local_timezone()`) | default `America/New_York` |
 | `DISPATCH_DAY_ROLLOVER` (added 2026-10-15) | Local time at which the operational day rolls over (`common/optime.py`) | default `05:00` |
 | `AIRPLANES_LIVE_FALLBACK` (added 2026-10-15) | Enables the third-party airplanes.live fallback lookup (`DATA_SOURCES.md` §3). Off in the template | on per the 2026-10-12 audit `[UNVERIFIED: live dispatch.env not re-read 2026-10-15]` |
+| `SWIM_STORAGE_SCOPE` (added 2026-10-24) | SWIM storage filter: `regional` (default; 250 NM around the primary airport + `CORE_AIRPORTS`, the §2 constants) or `national` (store every record the FAA SWIM feeds deliver — FDPS, TFMS programs, AIM NOTAMs; the feeds are NAS-scoped either way, so only write/disk load changes, roughly 2-4x FDPS writes). The runner map extent follows it (`MAP.md` §6). Does **not** touch `NWWS_WFO_FILTER`/`is_core_wfo` (weather), nor the per-airport STDDS/TBFM/ITWS constants in §2 (those are sized by the subscription itself). Alert gating is unchanged under both values. | `national` (2026-10-24) |
 
 The `amtrak-tracker` container's station is set in its quadlet
 (`Environment=FILTER_STATION=WAS`).
@@ -47,7 +48,7 @@ them to the profile one consumer at a time is planned work. Design pack:
 | `src/poller/fetchers/nws.py` | `ALERTS_URL`, zone forecast URLs | `area=DC,MD,VA`; DCZ001, MDZ014, VAZ036 |
 | `src/poller/fetchers/metar.py` | `DC_STATIONS` (also CPS scoring) | KDCA KIAD KBWI KFDK KHEF KJYO KGAI (~~constant~~ corrected 2026-10-15: since 2026-10-09 these are the profile's airports with role `metar`; the list above is the fallback) |
 | `src/ingest/parsers/aim_parser.py` | `_PERMANENT_AIRPORTS` (NOTAM watch set) | same seven |
-| `src/ingest/parsers/geo_filter.py` | 250 NM radius around DCA, `CORE_AIRPORTS` (30) | FDPS storage filter (2026-10-24: also the SWIM half of the runner map's extent — `storage_scope()` feeds `/api/v1/swim/scope` and `/api/map/scope`, so the map's pan limit and data area follow this constant plus the receiver range circle; a wider or nationwide map means widening this filter, which is a storage and load decision on small hardware. `docs/MAP.md` §6) |
+| `src/ingest/parsers/geo_filter.py` | 250 NM radius around DCA, `CORE_AIRPORTS` (30) | FDPS storage filter (2026-10-24: also the SWIM half of the runner map's extent — `storage_scope()` feeds `/api/v1/swim/scope` and `/api/map/scope`, so the map's pan limit and data area follow this constant plus the receiver range circle; ~~a wider or nationwide map means widening this filter, which is a storage and load decision on small hardware~~ later 2026-10-24: these constants are the `regional` value of the `SWIM_STORAGE_SCOPE` setting in §1; `national` bypasses them (the NAS box `NAS_BOUNDS` in the same file is the map extent then). `docs/MAP.md` §6) |
 | `src/ingest/parsers/fdps_parser.py` | `DC_LAT/DC_LON`, `MARINE_ONE_RADIUS_NM` | DCA, 50 NM |
 | `src/ingest/parsers/smes_parser.py` | `_STDDS_REGIONAL_AIRPORTS`, `SMES_AIRPORTS` | KDCA KIAD KBWI |
 | `src/common/db.py` | `_SMES_AIRPORTS` (OOOI: airline times never beat SWIM surface here) | KDCA KIAD KBWI |

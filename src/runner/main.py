@@ -636,6 +636,13 @@ _MAP_SWIM_LIMIT = 2000
 _MAP_SCOPE_TTL_S = 600
 _map_scope_cache: dict = {"at": 0.0, "scope": None}
 _HEX_RE = re.compile(r"^[0-9a-f]{6}$")
+# 2026-10-24: fallback NAS box for a "national" scope answer that carries no
+# bounds (a dispatch-web older than this change). Same value as
+# ingest.parsers.geo_filter.NAS_BOUNDS -- the runner image does not import
+# the ingest package and reads the scope over HTTP by design, so the
+# authoritative copy travels in the /api/v1/swim/scope payload and this is
+# only the safety net. CONUS + AK + HI + PR/USVI; see geo_filter for the why.
+_NAS_BOUNDS_FALLBACK = [[17.5, -179.5], [72.0, -60.0]]
 
 
 def _circle_bounds(lat: float, lon: float, radius_nm: float) -> list[list[float]]:
@@ -843,8 +850,11 @@ def _synthetic_map_snapshot(lat: float, lon: float) -> dict:
 
 
 def _synthetic_swim_scope() -> dict:
-    return {"swim_enabled": True, "center": [_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON],
-            "radius_nm": 250.0, "airports": [], "label": "Demo SWIM scope (synthetic)"}
+    # 2026-10-24: "scope"/"bounds" keys added to match the live payload shape; the
+    # demo stays a regional circle around the public placeholder.
+    return {"swim_enabled": True, "scope": "regional",
+            "center": [_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON],
+            "radius_nm": 250.0, "airports": [], "bounds": None, "label": "Demo SWIM scope (synthetic)"}
 
 
 async def _fetch_local_aircraft() -> dict:
@@ -895,15 +905,34 @@ def _receiver_center(trusted: bool) -> tuple[float, float]:
     return (DEFAULT_LAT, DEFAULT_LON) if trusted else (_UNTRUSTED_PLACEHOLDER_LAT, _UNTRUSTED_PLACEHOLDER_LON)
 
 
+def _swim_box(swim_scope: dict | None) -> list[list[float]] | None:
+    """The SWIM half of the map extent as a lat/lon box, or None.
+
+    2026-10-24: a "national" scope (SWIM_STORAGE_SCOPE=national on dispatch)
+    has no circle -- its box is the NAS box dispatch sends as "bounds"
+    (fallback _NAS_BOUNDS_FALLBACK when an older dispatch omits it). Regional
+    keeps the circle -> box conversion. Untrusted callers: nothing here
+    depends on trust -- the national box is public geography and the
+    regional centre is already null in an untrusted scope answer."""
+    sc = swim_scope or {}
+    if sc.get("scope") == "national":
+        b = sc.get("bounds")
+        if (isinstance(b, (list, tuple)) and len(b) == 2
+                and all(isinstance(c, (list, tuple)) and len(c) == 2 for c in b)):
+            return [[float(b[0][0]), float(b[0][1])], [float(b[1][0]), float(b[1][1])]]
+        return [list(_NAS_BOUNDS_FALLBACK[0]), list(_NAS_BOUNDS_FALLBACK[1])]
+    center = sc.get("center")
+    if center and len(center) == 2 and sc.get("radius_nm"):
+        return _circle_bounds(float(center[0]), float(center[1]), float(sc["radius_nm"]))
+    return None
+
+
 def _map_bounds(trusted: bool, swim_scope: dict | None) -> list[list[float]]:
-    """Union of the receiver range circle and the SWIM storage circle, as a
-    lat/lon box (pan limit + server data area)."""
+    """Union of the receiver range circle and the SWIM storage area (circle
+    when regional, the NAS box when national -- 2026-10-24), as a lat/lon
+    box (pan limit + server data area)."""
     rlat, rlon = _receiver_center(trusted)
-    swim_box = None
-    center = (swim_scope or {}).get("center")
-    if center and len(center) == 2 and (swim_scope or {}).get("radius_nm"):
-        swim_box = _circle_bounds(float(center[0]), float(center[1]), float(swim_scope["radius_nm"]))
-    return _union_bounds(_circle_bounds(rlat, rlon, DEFAULT_DIST), swim_box)
+    return _union_bounds(_circle_bounds(rlat, rlon, DEFAULT_DIST), _swim_box(swim_scope))
 
 
 async def _map_snapshot(request: Request, bbox: tuple | None, max_age_s: int) -> dict:

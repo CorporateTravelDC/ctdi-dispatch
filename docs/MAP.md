@@ -155,15 +155,24 @@ separate PIA list in the platform today.
 | `DISPATCH_BASE_URL` + `RUNNER_ENRICHED_TOKEN` | runner env | where the SWIM layer comes from and the token that makes it Tier 1 |
 | `TAR1090_URL` | `dispatch.env` (added 2026-10-24, default empty) | the local tar1090 UI behind "Open full receiver map"; empty means no link; handed to trusted callers only because it names a box-local address |
 | SWIM storage area | `src/ingest/parsers/geo_filter.py` constants (`_RADIUS_NM`, `CORE_AIRPORTS`), exposed by `storage_scope()` | the SWIM half of the map extent — see §7 |
+| `SWIM_STORAGE_SCOPE` (added 2026-10-24) | `dispatch.env` — `regional` (default, the constants above) or `national` (every SWIM record stored; NAS-wide) | under `national`, `storage_scope()` has no circle: `/api/v1/swim/scope` and `/api/map/scope` answer `scope:"national"`, `center`/`radius_nm` null for everyone, `bounds` = the NAS box `[[17.5,-179.5],[72.0,-60.0]]` (CONUS + AK + HI + PR/USVI; far Aleutians and Guam out so the pan limit stays one rectangle). This deployment: `national` since 2026-10-24 |
 | `DEMO_MODE` | runner env | synthetic aircraft only |
 
 Map extent (pan limit, minimum zoom, the area the server will answer for) is
 the union of the receiver range circle (`DEFAULT_DIST`, 250 nm) and the SWIM
-storage area. It is **not** nationwide: FDPS storage is filtered by
+storage area. ~~It is **not** nationwide: FDPS storage is filtered by
 `geo_filter.py` (250 nm around the primary airport plus the core-airport
 list), so only what is stored can be drawn. A deployment that wants a wider
 map widens that storage filter, which is a load and storage decision on small
-hardware, not a map setting.
+hardware, not a map setting.~~ (2026-10-24: the storage filter is now the
+`SWIM_STORAGE_SCOPE` setting. `regional` is the old behaviour; `national`
+stores every record the SWIM feeds deliver and the map extent becomes the
+NAS box above united with the receiver circle. Only what is stored can be
+drawn, so the extent still follows storage — the setting just makes storage
+a one-line decision instead of a code edit. NWWS weather filtering stays
+regional under both values. The SWIM-only marker limit per answer is still
+2000 (`_MAP_SWIM_LIMIT`); the frontend asks for its viewport, so the
+nationwide set is only truncated when the whole box is requested at once.)
 
 ## 7. Public deployment rules
 
@@ -193,8 +202,10 @@ For anyone deploying the public repo:
    callers a public-airport placeholder instead of the receiver centre and
    withholds `tar1090_url`.
 5. **Extent follows storage.** The map covers the deployer's SWIM storage
-   area (`geo_filter.py`) plus receiver range; nationwide means widening the
-   FDPS storage filter first (§6).
+   area (`geo_filter.py`) plus receiver range; ~~nationwide means widening the
+   FDPS storage filter first (§6)~~ nationwide means `SWIM_STORAGE_SCOPE=national`
+   in `dispatch.env` (2026-10-24, §6), with the write-load cost noted in
+   `config/dispatch.env.example`.
 
 ## 8. Known limits
 

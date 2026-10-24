@@ -150,6 +150,48 @@ def test_in_bbox_handles_antimeridian():
     assert rm._in_bbox(0.5, 0.5, None)
 
 
+def test_map_bounds_national_scope_is_the_nas_box_for_trusted_and_untrusted():
+    """2026-10-24: SWIM_STORAGE_SCOPE=national -> dispatch answers scope
+    "national" with the NAS box; the map extent is that box united with the
+    receiver circle (which lies inside it), for trusted and untrusted alike."""
+    nas = [[17.5, -179.5], [72.0, -60.0]]
+    national = {"swim_enabled": True, "scope": "national", "center": None, "radius_nm": None,
+                "airports": ["KDCA"], "bounds": nas, "label": "NAS-wide (FAA SWIM)"}
+    with patch.object(rm, "DEFAULT_LAT", 38.9), patch.object(rm, "DEFAULT_LON", -77.4), \
+         patch.object(rm, "DEFAULT_DIST", 250):
+        assert rm._swim_box(national) == nas
+        assert rm._map_bounds(True, national) == nas
+        assert rm._map_bounds(False, national) == nas
+        # an older dispatch that says "national" without bounds -> the runner's fallback box
+        assert rm._swim_box({"scope": "national"}) == rm._NAS_BOUNDS_FALLBACK == nas
+        # a receiver outside the box still widens the union (never shrinks the NAS box)
+        with patch.object(rm, "DEFAULT_LAT", 13.5), patch.object(rm, "DEFAULT_LON", -100.0):
+            b = rm._map_bounds(True, national)
+            assert b[0][0] < 17.5 and b[0][1] == -179.5 and b[1] == [72.0, -60.0]
+    # regional answers are untouched by the new branch
+    assert rm._swim_box({"scope": "regional", "center": [3.0, 3.0], "radius_nm": 60.0}) == \
+        rm._circle_bounds(3.0, 3.0, 60.0)
+    assert rm._swim_box(None) is None and rm._swim_box({"center": None, "radius_nm": None}) is None
+
+
+def test_map_scope_route_under_national_scope():
+    nas = [[17.5, -179.5], [72.0, -60.0]]
+    national = {"swim_enabled": True, "scope": "national", "center": None, "radius_nm": None,
+                "airports": ["KDCA"], "bounds": nas, "label": "NAS-wide (FAA SWIM)"}
+    with patch.object(rm, "DEMO_MODE", False), \
+         patch.object(rm, "_swim_scope", new=AsyncMock(return_value=national)), \
+         patch.object(rm, "TAR1090_URL", "http://tar1090.test:8080"):
+        with patch.object(rm, "_is_trusted", lambda request: False):
+            out = asyncio.run(rm.map_scope(_request()))
+        assert out["bounds"] == nas and out["swim"]["scope"] == "national"
+        assert out["swim"]["center"] is None and out["swim"]["bounds"] == nas
+        assert out["receiver"]["center"] == [rm._UNTRUSTED_PLACEHOLDER_LAT, rm._UNTRUSTED_PLACEHOLDER_LON]
+        assert out["tar1090_url"] is None                          # untrusted rules unchanged
+        with patch.object(rm, "_is_trusted", lambda request: True):
+            out = asyncio.run(rm.map_scope(_request()))
+        assert out["bounds"] == nas and out["tar1090_url"] == "http://tar1090.test:8080"
+
+
 # -- DEMO_MODE: synthetic only, zero network, all three routes -------------------
 
 @pytest.fixture

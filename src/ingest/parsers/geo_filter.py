@@ -6,6 +6,25 @@ Pass logic (any match = accept):
   2. Airport ICAO/IATA in CORE_AIRPORTS (30 major US airports)
   3. NWS WFO in CORE_WFOS (for NWWS/alert feeds)
 
+2026-10-24 (operator-approved): the SWIM half of this filter is now a
+deployment SETTING, ``SWIM_STORAGE_SCOPE`` (dispatch.env, which every ingest,
+web and runner container loads):
+
+  regional  (default) -- exactly the three rules above; current behaviour.
+  national            -- accept every SWIM record. The FAA SWIM feeds are
+                         already NAS-scoped, so "national" means "store what
+                         the subscription delivers"; nothing is widened on the
+                         wire, only on disk (roughly 2-4x the FDPS write rate
+                         of the regional filter on this hardware).
+
+Only the SWIM rules (1 and 2: ``in_range``, ``passes_geo_filter`` and the
+``storage_scope()`` the map reads) follow the setting. Rule 3 (``is_core_wfo``,
+NWWS weather alerts) stays regional regardless: it gates NWS weather products,
+not SWIM flight data, and NWWS has its own knob (``NWWS_WFO_FILTER``). The
+pure membership predicates ``is_core_airport`` / ``is_core_wfo`` never change
+meaning; parsers that want the scope-aware storage decision call
+``passes_geo_filter``.
+
 Usage::
 
     from ingest.parsers.geo_filter import passes_geo_filter, is_core_airport, is_core_wfo
@@ -16,7 +35,55 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 import math
+import os
+
+log = logging.getLogger(__name__)
+
+# ── Storage scope setting (2026-10-24) ────────────────────────────────────────
+SCOPE_REGIONAL = "regional"
+SCOPE_NATIONAL = "national"
+_SCOPE_ENV = "SWIM_STORAGE_SCOPE"
+_VALID_SCOPES = frozenset({SCOPE_REGIONAL, SCOPE_NATIONAL})
+_warned_bad_scope: set[str] = set()
+
+# 2026-10-24: the NAS box the map uses under "national" -- CONUS plus Alaska,
+# Hawaii, Puerto Rico / USVI and the near-shore oceanic sectors FAA SWIM
+# actually carries. [[south, west], [north, east]]. 17.5 N clears PR/USVI
+# (TJSJ 18.4 N); 72 N clears the North Slope (PABR 71.3 N); -179.5 keeps the
+# box on one side of the antimeridian (the far Aleutians west of 180 are the
+# only US territory left out, a deliberate trade so the map's pan limit stays
+# a single rectangle); -60 E covers ZNY/ZBW oceanic entry fixes east of
+# Nantucket and the PR sector. Guam (ZUA) is out of the box on purpose: a
+# single rectangle spanning 144 E..60 W is the whole Pacific and the map's
+# minimum zoom would collapse to a world view.
+NAS_BOUNDS: tuple[tuple[float, float], tuple[float, float]] = ((17.5, -179.5), (72.0, -60.0))
+NAS_LABEL = "NAS-wide (FAA SWIM)"
+
+
+def swim_storage_scope() -> str:
+    """The configured SWIM storage scope: "regional" (default) or "national".
+
+    2026-10-24: read from the environment on every call (a dict lookup; the
+    ingest containers get dispatch.env as env and there is no reload path, so
+    a cached module constant would only add a restart-ordering trap and
+    defeat test monkeypatching). An unknown value falls back to regional
+    (fail toward LESS storage) and is logged once per distinct bad value.
+    """
+    raw = (os.environ.get(_SCOPE_ENV) or SCOPE_REGIONAL).strip().lower()
+    if raw in _VALID_SCOPES:
+        return raw
+    if raw not in _warned_bad_scope:
+        _warned_bad_scope.add(raw)
+        log.warning("%s=%r is not one of %s; using %s",
+                    _SCOPE_ENV, raw, sorted(_VALID_SCOPES), SCOPE_REGIONAL)
+    return SCOPE_REGIONAL
+
+
+def is_national_scope() -> bool:
+    """True when SWIM_STORAGE_SCOPE=national (every SWIM record is stored)."""
+    return swim_storage_scope() == SCOPE_NATIONAL
 
 # ── DCA reference point ───────────────────────────────────────────────────────
 _DCA_LAT = 38.8522
@@ -104,9 +171,17 @@ def distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 # ── Individual predicate functions ────────────────────────────────────────────
 
 def in_range(lat: float | None, lon: float | None) -> bool:
-    """True if the lat/lon is within 250 NM of DCA."""
+    """True if the lat/lon is within 250 NM of DCA.
+
+    2026-10-24: under SWIM_STORAGE_SCOPE=national a KNOWN position anywhere is
+    in range (the whole NAS is the storage area). A missing position is still
+    False -- "national" widens the area, it does not invent a position, and
+    the airport rule in passes_geo_filter is what carries position-less
+    records (unchanged from regional)."""
     if lat is None or lon is None:
         return False
+    if is_national_scope():
+        return True
     return _haversine_nm(_DCA_LAT, _DCA_LON, lat, lon) <= _RADIUS_NM
 
 
@@ -121,6 +196,12 @@ def is_core_wfo(wfo: str | None) -> bool:
     """
     True if the NWS WFO is in the core WFO list.
     Accepts both 3-letter (LWX) and 4-letter ICAO-style (KLWX) codes.
+
+    2026-10-24: deliberately NOT scope-aware. SWIM_STORAGE_SCOPE widens SWIM
+    flight-data storage; NWWS carries NWS weather alerts for the operator's
+    region, has its own NWWS_WFO_FILTER setting, and a nationwide weather
+    firehose would drown the alert channel. nwws.py calls this directly, so
+    it stays regional under both scopes.
     """
     if not wfo:
         return False
@@ -148,7 +229,15 @@ def passes_geo_filter(
     Call this from every parser's write/upsert function before committing to DB.
     VIP/POTUS overrides are the caller's responsibility and should be checked
     *before* calling this function.
+
+    2026-10-24: under SWIM_STORAGE_SCOPE=national this returns True for every
+    record -- the SWIM feeds are already NAS-scoped, so "national" is "store
+    what the subscription delivers". This is the ONE scope-aware gate; the
+    TFMS and AIM write paths call it (airport-only form) instead of the bare
+    is_core_airport membership test so they follow the setting too.
     """
+    if is_national_scope():
+        return True
     return in_range(lat, lon) or is_core_airport(airport) or is_core_wfo(wfo)
 
 
@@ -156,9 +245,32 @@ def storage_scope() -> dict:
     """2026-10-24 (map rework): the storage area this filter accepts, as data,
     so the dispatch API (/api/v1/swim/scope) and the runner map can derive
     their extent from the ONE constant set above instead of a second copy.
-    Returns {"center": [lat, lon], "radius_nm": float, "airports": [ICAO...]}."""
+
+    Regional (default):
+      {"scope": "regional", "center": [lat, lon], "radius_nm": 250.0,
+       "airports": [ICAO...], "bounds": None, "label": "..."}
+    National (SWIM_STORAGE_SCOPE=national, 2026-10-24): no circle -- center and
+    radius_nm are None, bounds is the NAS box (NAS_BOUNDS) the map should
+    span, and airports is still the core list (the map labels them):
+      {"scope": "national", "center": None, "radius_nm": None,
+       "airports": [ICAO...], "bounds": [[17.5,-179.5],[72.0,-60.0]],
+       "label": "NAS-wide (FAA SWIM)"}
+    """
+    airports = sorted(a for a in CORE_AIRPORTS if len(a) == 4)
+    if is_national_scope():
+        return {
+            "scope": SCOPE_NATIONAL,
+            "center": None,
+            "radius_nm": None,
+            "airports": airports,
+            "bounds": [list(NAS_BOUNDS[0]), list(NAS_BOUNDS[1])],
+            "label": NAS_LABEL,
+        }
     return {
+        "scope": SCOPE_REGIONAL,
         "center": [_DCA_LAT, _DCA_LON],
         "radius_nm": float(_RADIUS_NM),
-        "airports": sorted(a for a in CORE_AIRPORTS if len(a) == 4),
+        "airports": airports,
+        "bounds": None,
+        "label": "SWIM storage filter: %d nm around KDCA + %d core airports" % (int(_RADIUS_NM), len(airports)),
     }

@@ -65,6 +65,10 @@ os.environ["DISPATCH_DB_BACKEND"] = "sqlite"
 # flag is set, and ONLY this file sets it (tests/common/test_no_platform_sqlite.py).
 # Subprocess tests inherit it through os.environ. Also re-set per test below.
 os.environ["CTDC_ALLOW_SQLITE_FOR_TESTS"] = "1"
+# 2026-10-24: pin the SWIM storage scope to the regional default for every test. The live dispatch.env now
+# says SWIM_STORAGE_SCOPE=national and lands in os.environ during a run, which flipped every regional-scope
+# test (the relay caught 5). Tests of the national behaviour set it themselves with monkeypatch.
+os.environ["SWIM_STORAGE_SCOPE"] = "regional"
 
 # 2026-10-20: the transcript leak scan reads every credential file on the box by
 # default (LEAK_GUARD_SOURCES); no test may load a real secret value (a failing

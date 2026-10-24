@@ -45,7 +45,9 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/swim", tags=["swim"])
 
-_SCOPE_LABEL = "SWIM storage filter: %d nm around KDCA + %d core airports"
+# 2026-10-24: ~~_SCOPE_LABEL = "SWIM storage filter: %d nm around KDCA + %d core airports"~~
+# the label now comes from geo_filter.storage_scope() itself, which knows
+# whether the deployment is regional (circle + airports) or national (NAS box).
 _SWIM_FEEDS = ("fdps", "stdds")
 _SWIM_FRESH_S = 3600
 
@@ -152,14 +154,23 @@ def swim_scope_payload(internal: bool) -> dict:
     """The SWIM storage area, derived from ingest.parsers.geo_filter's
     constants (250 nm around KDCA + CORE_AIRPORTS) via its storage_scope()
     accessor -- never new config. The center is only handed to an internal
-    caller (spec: untrusted -> null)."""
+    caller (spec: untrusted -> null).
+
+    2026-10-24: SWIM_STORAGE_SCOPE=national (dispatch.env, loaded by this
+    container too) makes storage_scope() return the NAS form: scope
+    "national", center/radius_nm null for EVERY caller, bounds = the NAS box.
+    The box is public geography (the FAA's own service area), so it is
+    handed to untrusted callers unchanged; the untrusted rule only ever
+    protected the regional circle's centre, and that stays null for them."""
     scope = storage_scope()
     return {
         "swim_enabled": _swim_enabled(),
+        "scope": scope["scope"],
         "center": scope["center"] if internal else None,
         "radius_nm": scope["radius_nm"],
         "airports": scope["airports"],
-        "label": _SCOPE_LABEL % (int(scope["radius_nm"]), len(scope["airports"])),
+        "bounds": scope.get("bounds"),
+        "label": scope["label"],
     }
 
 

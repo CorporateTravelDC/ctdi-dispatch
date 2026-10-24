@@ -217,6 +217,9 @@ MARINE_ONE_RADIUS_NM = 50.0
 # Keep events if: within 250 NM of DCA, OR origin/dest in CORE_AIRPORTS (30
 # major US airports), OR flagged as POTUS/Marine One callsign.
 # Filter logic lives in ingest.parsers.geo_filter (passes_geo_filter).
+# 2026-10-24: SWIM_STORAGE_SCOPE=national (dispatch.env) makes passes_geo_filter
+# accept every record, so _in_dc_area stores the whole NAS feed; "regional"
+# (default) is the three-rule behaviour above. Nothing here needs to branch.
 #
 # DC-area GA/reliever/military airports are within the 250 NM radius and will
 # pass the in_range() check even though they aren't in CORE_AIRPORTS.
@@ -952,6 +955,9 @@ def _in_dc_area(parsed: dict) -> bool:
       • Origin airport is in CORE_AIRPORTS or within 250 NM of DCA
       • Destination airport is in CORE_AIRPORTS
       • Current position is within 250 NM of DCA
+      • 2026-10-24: everything, when SWIM_STORAGE_SCOPE=national (the
+        passes_geo_filter call below short-circuits True; the destination
+        membership test is then redundant but harmless)
     """
     # VIP/POTUS always passes regardless of position or airports.
     cs = (parsed.get("callsign") or "").upper()
