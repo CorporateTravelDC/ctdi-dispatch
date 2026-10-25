@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from auth.auth import Tier, require_admin, require_tier, resolve_tier, resolve_identity
+from common.gate_assignments import ladd_blocked
 from common import config, db, db_backend
 from ingest import failover as _failover
 import secrets as _secrets
@@ -1213,6 +1214,14 @@ async def get_flight_plan(callsign: str) -> JSONResponse:
     message for it.
     """
     plan = db.get_flight_plan_by_callsign(callsign)
+    # 2026-10-25 (adversarial sweep finding): this route is Tier 0 on the
+    # public vhost and had no LADD check, so a LADD-listed aircraft's filed
+    # plan was readable by anyone. A listed callsign, registration or hex --
+    # or a failed LADD lookup (fail closed) -- now answers exactly like a miss,
+    # so the response never reveals that a block happened.
+    if plan and ladd_blocked([callsign.strip().upper(), plan.get("registration")],
+                             [plan.get("hex")]):
+        plan = None
     if not plan:
         return JSONResponse({
             "callsign": callsign.strip().upper(),
