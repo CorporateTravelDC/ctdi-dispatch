@@ -2,7 +2,7 @@ Due-Diligence FAQ — v1.5
 
 CTDI for corporate travel management, executive concierge, and traveler-care teams
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Answers are graded LIVE and VERIFIED, CODE-COMPLETE, or ROADMAP, and every factual figure traces to a live re-verification of the running production system on 2026-08-24, a bounded security re-validation and adversarial re-verification the same day, or a live-recomputed cost analysis. Continuously-drifting counts are timestamped samples. Where something is not built, this document says so plainly — the point of the grading discipline is that diligence should confirm these answers, not contradict them.
 
@@ -53,7 +53,7 @@ What we do not claim: no third-party audit, no SOC 2 or ISO 27001 certification 
 
 You need a commercial license, and this is the answer we are most careful to state accurately rather than favorably. CTDI is under the Business Source License 1.1. The Additional Use Grant makes internal relay/middleware use free for an organization of any size **only when no part of that use serves, supports, or contributes to a fee-based product or service rendered to a third-party client or customer.** Clause (iv) is named the controlling rule for any paid-service scenario, and it is explicit: a commercial license is required for use "in connection with any fee-based service rendered to a third-party client or customer, **including solely as an internal relay or middleware step never surfaced to the client directly, regardless of whether that use is billed as a separate, itemized charge or bundled into an overall fee, retainer, or rate.**"
 
-In plain terms for a travel management company or concierge firm: if you charge clients for your service and CTDI is used to watch those clients' trips — whether the client ever sees CTDI or not, and whether its cost is itemized or folded into your overall fee or retainer — that is fee-based client-service use and requires a commercial license from [operator LLC], LLC. Hosted resale, white-labeling, and absorbing CTDI into your own platform independently require a commercial license as well. The genuinely free production cases are personal self-hosting and purely-internal operational use that never touches a paid client engagement. Each version also converts automatically to GPL v3-or-later four years after first public distribution (current Change Date 2030-08-24). Disclosed: the use-grant language is a working draft under legal review, not yet counsel-confirmed — confirm current terms with [operator LLC], LLC before relying on it.
+In plain terms for a travel management company or concierge firm: if you charge clients for your service and CTDI is used to watch those clients' trips — whether the client ever sees CTDI or not, and whether its cost is itemized or folded into your overall fee or retainer — that is fee-based client-service use and requires a commercial license from CS Executive Services, LLC. Hosted resale, white-labeling, and absorbing CTDI into your own platform independently require a commercial license as well. The genuinely free production cases are personal self-hosting and purely-internal operational use that never touches a paid client engagement. Each version also converts automatically to GPL v3-or-later four years after first public distribution (current Change Date 2030-08-24). Disclosed: the use-grant language is a working draft under legal review, not yet counsel-confirmed — confirm current terms with CS Executive Services, LLC before relying on it.
 
 # 8. What is the data-freshness or availability SLA?
 
@@ -61,7 +61,7 @@ There is no SLA today, and we will not imply one. The platform deliberately shed
 
 # 9. Who built this, and isn't a single developer a fatal risk?
 
-CTDI was built and is operated by the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA), who built it to run his own executive-chauffeur operation — the founder is the user. Bus factor is one: 635 commits, single author, June 7 through August 24, 2026; no CI pipeline. We state this as a real risk, and the funding ask explicitly includes a first engineering hire to retire it. The mitigating context is unusual engineering discipline for a solo build — rootless containers, tiered bearer-only auth, a full admin audit trail, a signed whole-tree integrity chain, and a self-hosted stack with measured-zero cloud dependency for core operations — and a compiled second-brain knowledge layer (6,742 indexed documents) that captures operational memory outside any one person's head.
+CTDI was built and is operated by the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA), who built it to run his own executive-chauffeur operation — the founder is the user. Bus factor is one: 635 commits, single author, June 7 through August 24, 2026; no CI pipeline. We state this as a real risk, and the funding ask explicitly includes a first engineering hire to retire it. The mitigating context is unusual engineering discipline for a solo build — rootless containers, tiered bearer-only auth, a full admin audit trail, a signed whole-tree integrity chain, and a self-hosted stack with measured-zero cloud dependency for core operations — and a compiled second-brain knowledge layer (6,742 indexed documents) that captures operational memory outside any one person's head.
 
 # 10. What does CTDI cost to run, and what is the economic story?
 
@@ -97,4 +97,4 @@ Real data, replayed — not synthetic. The demo is a recorded window of genuine 
 
 # Contact
 
-the operator — Founder, [operator LLC], LLC · operator@example.com · info@example.com.
+the operator — Founder, CS Executive Services, LLC · operator@example.com · info@example.com.

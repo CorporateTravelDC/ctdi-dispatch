@@ -2,13 +2,13 @@ Executive Summary — v1.5
 
 CTDI for corporate travel management, executive concierge, and traveler-care teams
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Every factual claim below was re-derived from a live re-verification of the running production system performed on 2026-08-24 (continuing the v1.1 to 2026-08-09 to 2026-08-24 verification chain), from a bounded security re-validation and adversarial re-verification completed the same day, and from a live-recomputed cost analysis. Counts that drift continuously (rows, containers, commits) are timestamped samples, not fixed facts. Where something is not built, it says so. Capability is graded: LIVE and VERIFIED (personally observed on the production system on 2026-08-24), CODE-COMPLETE (real code reviewed, not exercised end-to-end), or ROADMAP (intent, not capability).
 
 # What CTDI is, for a travel desk
 
-CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted operational dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA). It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — computes a deterministic go/no-go operational risk score, and pushes real-time disruption alerts. It was built to run the founder's own executive-chauffeur operation and is being packaged for adjacent operators, including corporate travel management companies and executive-concierge services.
+CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted operational dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA). It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — computes a deterministic go/no-go operational risk score, and pushes real-time disruption alerts. It was built to run the founder's own executive-chauffeur operation and is being packaged for adjacent operators, including corporate travel management companies and executive-concierge services.
 
 For a travel desk or concierge team, the proposition is proactive traveler care: the moment a booking is created in your reservation system, CTDI can begin watching that traveler's flight and Amtrak train; it knows about the disruption — a delay, a ground stop, a diverted arrival — before the traveler calls to ask; and it pushes the alert to your desk while the recovery options (earlier train, alternate airport, driver re-route) are still open. The platform is designed to sit behind your existing booking and livery software as a relay, not to replace it.
 
@@ -75,14 +75,14 @@ What this is not, stated plainly: founder-run self-assessment using a bounded, n
 
 # Licensing: Business Source License 1.1 — and what it means for a paid concierge service
 
-The platform is licensed under the Business Source License 1.1 (Licensor: [operator LLC], LLC), verified 2026-08-24 as canonical, unmodified BSL text. The relay/middleware framing fits how a concierge team would deploy CTDI — but the fee-based boundary is precise, and this document states it accurately rather than favorably.
+The platform is licensed under the Business Source License 1.1 (Licensor: CS Executive Services, LLC), verified 2026-08-24 as canonical, unmodified BSL text. The relay/middleware framing fits how a concierge team would deploy CTDI — but the fee-based boundary is precise, and this document states it accurately rather than favorably.
 
 - **Free always** for non-production use — evaluation, development, testing.
 - **Free in production** for a personal self-hosted deployment, and for internal relay/middleware use by an organization of any size that retrieves data from or submits data to CTDI for its own internal operational purposes — **provided that use never serves, supports, or contributes to any fee-based product or service rendered to a third-party client or customer.**
-- **A commercial license is required** the moment CTDI is used in connection with a fee-based service to a client — and the license is explicit that this holds **even when CTDI is used solely as an internal relay or middleware step never surfaced to the client directly, and even when its cost is bundled into an overall fee, retainer, or rate rather than billed as a separate line item.** Clause (iv) of the Additional Use Grant is named the controlling rule for any paid-service scenario. For a corporate travel management company or concierge firm that charges clients for its service, using CTDI to watch those clients' trips — visibly or invisibly, itemized or bundled — falls under this clause and requires a commercial license from [operator LLC], LLC. Hosted resale, white-labeling, and platform absorption independently require a commercial license as well.
+- **A commercial license is required** the moment CTDI is used in connection with a fee-based service to a client — and the license is explicit that this holds **even when CTDI is used solely as an internal relay or middleware step never surfaced to the client directly, and even when its cost is bundled into an overall fee, retainer, or rate rather than billed as a separate line item.** Clause (iv) of the Additional Use Grant is named the controlling rule for any paid-service scenario. For a corporate travel management company or concierge firm that charges clients for its service, using CTDI to watch those clients' trips — visibly or invisibly, itemized or bundled — falls under this clause and requires a commercial license from CS Executive Services, LLC. Hosted resale, white-labeling, and platform absorption independently require a commercial license as well.
 - **Becomes open source on a clock:** each version converts automatically to GPL v3-or-later four years after its first public distribution (Change Date for the current version: 2030-08-24).
 
-Disclosed: the Additional Use Grant language is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Contact [operator LLC], LLC to confirm current terms before relying on it.
+Disclosed: the Additional Use Grant language is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Contact CS Executive Services, LLC to confirm current terms before relying on it.
 
 # Honest limitations
 
@@ -111,4 +111,4 @@ Intended commercial architecture: each client operator obtains and holds its own
 
 # Contact
 
-the operator — Founder, [operator LLC], LLC · operator@example.com · info@example.com. Live production read-outs can be arranged for diligence, as was done for the 2026-08-24 verification, pentest, and adversarial re-verification passes behind this document. The demo replay corpus (2.45 GB of recorded operational history) is real; a public demo link is withheld pending a founder gating decision, so demo access is arranged in diligence conversations.
+the operator — Founder, CS Executive Services, LLC · operator@example.com · info@example.com. Live production read-outs can be arranged for diligence, as was done for the 2026-08-24 verification, pentest, and adversarial re-verification passes behind this document. The demo replay corpus (2.45 GB of recorded operational history) is real; a public demo link is withheld pending a founder gating decision, so demo access is arranged in diligence conversations.

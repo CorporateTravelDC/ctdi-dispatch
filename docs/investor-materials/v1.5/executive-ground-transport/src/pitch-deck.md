@@ -2,7 +2,7 @@
 
 - Real-time flight, rail, weather, and airspace intelligence — relayed into the dispatch software you already run
 - A relay/middleware layer by design and by license: CTDI feeds LimoAnywhere-class dispatch platforms, it never replaces them
-- Built and operated by a chauffeur-operation principal — [operator LLC], LLC, Arlington, VA
+- Built and operated by a chauffeur-operation principal — CS Executive Services, LLC, Arlington, VA
 - Investor briefing — executive ground transportation — August 2026
 - Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 

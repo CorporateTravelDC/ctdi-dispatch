@@ -80,7 +80,7 @@ export default function DemoLoginGate({ onSuccess }) {
         </form>
         {error && <p className="demo-gate-error">{error}</p>}
         <p className="demo-gate-footer">
-          [operator LLC], LLC &middot;{' '}
+          CS Executive Services, LLC &middot;{' '}
           <a href="https://example.com" className="demo-gate-link">
             example.com
           </a>

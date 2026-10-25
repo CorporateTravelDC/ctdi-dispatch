@@ -2,7 +2,7 @@
 
 - A 24/7 multi-domain dispatch-intelligence platform: air, rail, weather, airspace
 - Self-hosted on ~$765 of owned edge hardware; zero cloud dependency for core ops
-- Built and operated by a single founder — [operator LLC], LLC, Arlington, VA
+- Built and operated by a single founder — CS Executive Services, LLC, Arlington, VA
 - Investor briefing — platform overview — August 2026
 - Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
@@ -65,7 +65,7 @@
 
 ## Licensing model — BSL 1.1
 
-- Business Source License 1.1 adopted 2026-08-24 — Licensor: [operator LLC], LLC
+- Business Source License 1.1 adopted 2026-08-24 — Licensor: CS Executive Services, LLC
 - Free always for non-production use; free in production for personal self-hosting and internal relay/middleware use
 - Commercial license required the moment CTDI touches any fee-based client service — even invisibly, even bundled into a retainer
 - Hosted resale, white-labeling, and platform absorption always require a commercial license

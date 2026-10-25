@@ -2,7 +2,7 @@ Due-Diligence FAQ — v1.5
 
 Hard questions, answered honestly — executive ground-transportation audience (limo, black-car, and chauffeur dispatch operators and their investors)
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Answers are grounded in a live re-verification of the production system, a bounded security re-validation, and an adversarial re-verification, all performed 2026-08-24, plus the platform's own continuously-maintained internal state documentation. Where a count drifts continuously (rows, containers, commits) it is a timestamped sample. Where the honest answer is "not built" or "needs founder input," it says exactly that. No market sizes, revenue projections, or user counts appear anywhere: none exist in the fact base.
 
@@ -59,14 +59,14 @@ Core operations have none. The entire stack — ingest, scoring, alerting, and a
 
 # Q9. What does the license let us do for free, and when do we owe money?
 
-Business Source License 1.1 (adopted 2026-08-24; Licensor: [operator LLC], LLC). The accurate boundary, because it is easy to oversell:
+Business Source License 1.1 (adopted 2026-08-24; Licensor: CS Executive Services, LLC). The accurate boundary, because it is easy to oversell:
 
 - **Free always:** all non-production use — evaluation, development, testing. You can pilot CTDI against your live dispatch stack, with full source, at no cost.
 - **Free in production:** personal self-hosted use; and internal relay/middleware use by an organization of any size, solely for its own internal operations, where no part of that use serves, supports, or contributes to a fee-based product or service rendered to a third-party client. Example that qualifies: a corporate travel department or family office dispatching cars for its own executives — nobody external is billed.
 - **Commercial license required — clause (iv), the controlling rule:** any use in connection with any fee-based service rendered to a third-party client or customer, even where CTDI is solely an internal relay step never surfaced to the client, and even where its cost is bundled into an overall fee, retainer, or rate. For a for-hire livery operation, production use that informs dispatch of paid client rides is that scenario. This is the deliberate revenue boundary — the license is designed so the free tier funds evaluation and genuinely internal use, and commercial operators license the exact relay use they make. Separately and independently of fees: hosted/managed/white-label/embedded resale, rebranding or redistribution, and absorbing CTDI into your own platform beyond a distinct relay each require a commercial license.
 - **Open source on a clock:** each version converts to GPL v3-or-later four years after first public distribution (current Change Date: 2030-08-24).
 
-Disclosed: the Additional Use Grant is a working draft under legal review — it reflects intended terms but is not yet counsel-confirmed. Confirm current terms with [operator LLC], LLC before relying on it for a production licensing decision. The license text was independently verified 2026-08-24 as canonical, unmodified BSL 1.1 with a correctly-formed parameters block.
+Disclosed: the Additional Use Grant is a working draft under legal review — it reflects intended terms but is not yet counsel-confirmed. Confirm current terms with CS Executive Services, LLC before relying on it for a production licensing decision. The license text was independently verified 2026-08-24 as canonical, unmodified BSL 1.1 with a correctly-formed parameters block.
 
 # Q10. What does it cost to run?
 
@@ -74,7 +74,7 @@ From the live-recomputed cost analysis (2026-08-24; re-derived live 2026-09-03 �
 
 # Q11. Who is behind this? What is the bus factor?
 
-One person. the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA) designed, built, and operates the entire stack — 635 commits, single author, 2026-06-07 through 2026-08-24; 51,070 lines of Python; 102 REST routes; 218 tests (217 passing, 1 known pre-existing failure, tracked). He is also the reference customer: CTDI has run his own executive-chauffeur operation continuously since June 2026, which is exactly why the product is shaped around a dispatcher's actual decisions. Bus factor is 1 and it is the top disclosed risk; the funding ask explicitly includes a first engineering hire. Partial mitigants: fully headless administration, aggressive written-down operational knowledge (incidents, root causes, and open decisions are documented in the repository itself), and a signed-manifest integrity chain that makes the deployed code state verifiable by a successor.
+One person. the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA) designed, built, and operates the entire stack — 635 commits, single author, 2026-06-07 through 2026-08-24; 51,070 lines of Python; 102 REST routes; 218 tests (217 passing, 1 known pre-existing failure, tracked). He is also the reference customer: CTDI has run his own executive-chauffeur operation continuously since June 2026, which is exactly why the product is shaped around a dispatcher's actual decisions. Bus factor is 1 and it is the top disclosed risk; the funding ask explicitly includes a first engineering hire. Partial mitigants: fully headless administration, aggressive written-down operational knowledge (incidents, root causes, and open decisions are documented in the repository itself), and a signed-manifest integrity chain that makes the deployed code state verifiable by a successor.
 
 # Q12. What is not built? What are we not being told?
 

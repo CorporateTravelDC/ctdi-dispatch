@@ -256,7 +256,7 @@ exposure of a widget key; unchanged, low severity.
   intended.
 
 ### Parameters block — all four target values correct
-- **Licensor:** `[operator LLC], LLC` ✓
+- **Licensor:** `CS Executive Services, LLC` ✓
 - **Change Date:** `2030-08-24` ✓
 - **Change License:** "Version 3 or later of the GNU General Public License" =
   **GPL v3-or-later** ✓. Adversarial check against Covenant 1 (which requires the
@@ -293,7 +293,7 @@ non-production free always; personal self-hosted + internal relay/middleware
 (org of any size) free **unless** it serves a fee-based third-party client
 service (with white-label/hosted-resale/platform-absorption carve-outs); other
 production use — including using it "even invisibly" in a fee-based client
-service — requires a commercial license from [operator LLC], LLC; per-
+service — requires a commercial license from CS Executive Services, LLC; per-
 version conversion to GPLv3-or-later four years after first public distribution.
 The **"currently under legal review / working draft / not confirmed by counsel"**
 status note is present. All consistent with `LICENSE`.

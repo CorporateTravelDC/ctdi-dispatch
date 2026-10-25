@@ -16,8 +16,8 @@ set -euo pipefail
 # GitHub links commits to the account via the email, so this address must stay
 # on the CorporateTravelDC account's verified-email list or the commits show
 # as unattributed.
-IDENT_NAME="[operator LLC] LLC"
-IDENT_EMAIL="developer@example.com"
+IDENT_NAME="CS Executive Services LLC"
+IDENT_EMAIL="developer@csexecutiveservices.com"
 
 PRIVATE="/opt/corporatetraveldc/private/ctdi-dispatch-internal"
 PUBLIC="/opt/corporatetraveldc/public/ctdi-dispatch"

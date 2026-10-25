@@ -112,14 +112,14 @@ GPG signature valid. No unsigned drift at audit time.
 
 ### 2.6 Provenance (`git log`)
 **635 commits**, `2026-06-07` → `2026-08-24`, a **single author** across four
-email identities all resolving to the operator / [operator LLC] LLC
+email identities all resolving to the operator / CS Executive Services LLC
 (`owner@example.com`, `owner@example.com`,
-`operator@example.com`, `developer@example.com`).
+`operator@example.com`, `developer@csexecutiveservices.com`).
 This is a solo-built system with ~78 days of continuous history.
 
 ### 2.7 License
 `LICENSE` is a correctly-parameterized **Business Source License 1.1**:
-Licensor `[operator LLC], LLC`; Licensed Work `Corporate Travel
+Licensor `CS Executive Services, LLC`; Licensed Work `Corporate Travel
 Dispatch Intelligence (CTDI), version 2026.08`; Change Date `2030-08-24`;
 Change License `GNU GPL v3 or later`. Not a placeholder — the BSL parameters
 are filled and coherent.

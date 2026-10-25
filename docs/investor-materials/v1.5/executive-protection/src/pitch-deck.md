@@ -2,7 +2,7 @@
 
 - Sovereign advance-work and movement-monitoring intelligence
 - Self-hosted on ~$765 of owned edge hardware the operator controls and can unplug
-- Built and run daily by a single founder — [operator LLC], LLC, Arlington, VA
+- Built and run daily by a single founder — CS Executive Services, LLC, Arlington, VA
 - Investor briefing — executive-protection segment — August 2026
 - Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
@@ -59,7 +59,7 @@
 
 ## Licensing — BSL 1.1
 
-- Business Source License 1.1 adopted 2026-08-24 — Licensor: [operator LLC], LLC
+- Business Source License 1.1 adopted 2026-08-24 — Licensor: CS Executive Services, LLC
 - Free always for non-production use; free in production for personal self-hosting and internal relay/middleware use
 - Commercial license required the moment CTDI touches any fee-based client service — even invisibly, even bundled into a retainer; hosted resale and white-labeling always require one
 - Each version converts to GPL v3-or-later four years after publication (Change Date 2030-08-24) — protected now, credibly open later

@@ -853,7 +853,7 @@ COMPLIANCE_RETRY_LIMIT=5             # attempts before a row is marked failed_pe
 
 ### CTDI Dispatch: On-Premises Architecture & Compliance Datasheet › 4. Alignment with ISO/IEC 42001 (AI Management System Standard)
 
-~~**Status, stated plainly: CTDI is not ISO/IEC 42001 certified.** Certification requires an accredited third-party certification body to run a two-stage audit (documentation review, then an operational-effectiveness evaluation with staff interviews and evidence collection) followed by annual surveillance audits. No such audit has been performed on this platform or on [operator LLC], LLC. Any claim to the contrary would be inaccurate and is not made anywhere in this document.~~
+~~**Status, stated plainly: CTDI is not ISO/IEC 42001 certified.** Certification requires an accredited third-party certification body to run a two-stage audit (documentation review, then an operational-effectiveness evaluation with staff interviews and evidence collection) followed by annual surveillance audits. No such audit has been performed on this platform or on CS Executive Services, LLC. Any claim to the contrary would be inaccurate and is not made anywhere in this document.~~
 
 ~~What *is* true, and is the actual basis for this section: CTDI's core design principles were built around several of the same control areas ISO/IEC 42001's Annex A asks an AI management system to address, independent of and prior to this document being written. That is a genuine architectural fact, not a marketing gloss -- the table below maps specific, existing platform behavior to the relevant control area.~~
 

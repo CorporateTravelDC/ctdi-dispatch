@@ -2,13 +2,13 @@ Due-Diligence FAQ — v1.5
 
 Hard questions, answered honestly — platform audience (investors, acquirers, white-label partners)
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Answers are grounded in a live re-verification of the production system, a bounded security re-validation, and an adversarial re-verification, all performed 2026-08-24, plus the platform's own continuously-maintained internal state documentation. Where a count drifts continuously (rows, containers, commits) it is a timestamped sample. Where the honest answer is "not built" or "needs founder input," it says exactly that. No market sizes, revenue projections, or user counts appear anywhere: none exist in the fact base.
 
 # Q1. Who maintains this platform? What is the bus factor?
 
-One person. the operator (USMC veteran; owner, [operator LLC], LLC) designed, built, and operates the entire stack; git history shows 635 commits from a single author between 2026-06-07 and 2026-08-24. Bus factor is 1. This remains the project's single largest risk, and the funding ask explicitly includes a first engineering hire to retire it. Partial mitigant: administration is fully headless and documented (no physical presence required for normal operation), and the platform's operational knowledge is written down aggressively — the internal state documentation records incidents, root causes, and open decisions in enough detail for a successor to pick up.
+One person. the operator (USMC veteran; owner, CS Executive Services, LLC) designed, built, and operates the entire stack; git history shows 635 commits from a single author between 2026-06-07 and 2026-08-24. Bus factor is 1. This remains the project's single largest risk, and the funding ask explicitly includes a first engineering hire to retire it. Partial mitigant: administration is fully headless and documented (no physical presence required for normal operation), and the platform's operational knowledge is written down aggressively — the internal state documentation records incidents, root causes, and open decisions in enough detail for a successor to pick up.
 
 # Q2. The codebase is under three months old. How mature can it be?
 
@@ -48,13 +48,13 @@ Known, tracked, and stated: (1) all security testing to date is internal self-as
 
 # Q9. What is the license? What does it actually protect?
 
-**Business Source License 1.1**, adopted 2026-08-24 — closing the "no LICENSE file" gap flagged in every prior verification pass. Verified as canonical, unmodified BSL 1.1 text (the same structure used by MariaDB, HashiCorp, and Sentry) with a correctly-formed parameters block: Licensor is [operator LLC], LLC; the Change Date is 2030-08-24; the Change License is GPL v3-or-later, which satisfies the BSL covenants.
+**Business Source License 1.1**, adopted 2026-08-24 — closing the "no LICENSE file" gap flagged in every prior verification pass. Verified as canonical, unmodified BSL 1.1 text (the same structure used by MariaDB, HashiCorp, and Sentry) with a correctly-formed parameters block: Licensor is CS Executive Services, LLC; the Change Date is 2030-08-24; the Change License is GPL v3-or-later, which satisfies the BSL covenants.
 
 What is free: all non-production use (evaluation, development, testing), always; and production use limited to (a) personal self-hosted deployments, or (b) internal relay/middleware use by an organization of any size for its own internal operations — provided no part of that use serves, supports, or contributes to any fee-based product or service rendered to a third-party client or customer.
 
 What requires a commercial license: offering CTDI (or anything substantially derived from it) as a hosted, managed, white-labeled, or embedded service, whether or not for a fee; rebranding or redistributing it as part of another product; absorbing it into a platform beyond a distinct relay; and — the controlling rule — any use in connection with any fee-based client service, even solely as an invisible internal middleware step, and even when bundled into an overall fee, retainer, or rate.
 
-Disclosed plainly, matching the repository's own license notice: the Additional Use Grant is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Prospective commercial licensees should contact [operator LLC], LLC directly.
+Disclosed plainly, matching the repository's own license notice: the Additional Use Grant is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Prospective commercial licensees should contact CS Executive Services, LLC directly.
 
 # Q10. It runs on one Raspberry Pi. Is that a toy?
 

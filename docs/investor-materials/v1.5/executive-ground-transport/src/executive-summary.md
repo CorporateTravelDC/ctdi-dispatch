@@ -2,13 +2,13 @@ Executive Summary — v1.5
 
 CTDI for executive ground transportation — flight and train intelligence, relayed into the dispatch software you already run
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Every factual claim below was re-derived from a live re-verification of the running production system performed on 2026-08-24 (continuing the v1.1 → 2026-08-09 → 2026-08-24 verification chain), from a bounded security re-validation and adversarial re-verification completed the same day, and from a live-recomputed cost analysis. Counts that drift continuously (rows, containers, commits) are timestamped samples, not fixed facts. Where something is not built, it says so.
 
 # What CTDI is — and what it deliberately is not
 
-CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA) to run his own executive-chauffeur operation. It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — watches the specific flights and trains your reservations depend on, and pushes real-time alerts to dispatcher and driver phones the moment an inbound movement changes.
+CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA) to run his own executive-chauffeur operation. It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — watches the specific flights and trains your reservations depend on, and pushes real-time alerts to dispatcher and driver phones the moment an inbound movement changes.
 
 What it deliberately is not: a replacement for your dispatch software. CTDI is architected as a **relay and middleware layer** — it feeds real-time flight/train intelligence to and from LimoAnywhere (and, by the same pattern, any reservation or dispatch platform), and it never absorbs, rebrands, or replaces the system your operation already runs on. Your reservations, clients, billing, and driver assignments stay where they are. CTDI's job is to make sure the dispatcher knows the inbound slipped before the client does. This relay relationship is not just architecture — it is written directly into the product's license (see Licensing below).
 
@@ -69,14 +69,14 @@ What this is not: an external red-team or a compliance certification. No SOC 2 o
 
 # Licensing — Business Source License 1.1, built around exactly this relationship
 
-New as of 2026-08-24: CTDI is licensed under the **Business Source License 1.1** (Licensor: [operator LLC], LLC), and its Additional Use Grant is written directly around the relay/middleware relationship described above. Stated accurately, because the boundary matters:
+New as of 2026-08-24: CTDI is licensed under the **Business Source License 1.1** (Licensor: CS Executive Services, LLC), and its Additional Use Grant is written directly around the relay/middleware relationship described above. Stated accurately, because the boundary matters:
 
 - **Free, always:** all non-production use — evaluation, development, testing. You can stand CTDI up next to your dispatch stack, wire the webhooks, and pilot it end-to-end at no cost and with full source.
 - **Free in production:** personal self-hosted use, and internal relay/middleware use by an organization of any size for its own internal operations — for example, a corporate travel department or family office dispatching for its own executives, with no third-party client being billed.
 - **Commercial license required — the controlling rule (clause iv):** any production use in connection with a fee-based service rendered to a third-party client or customer, even when CTDI is solely an invisible internal relay step never surfaced to the client, and even when its cost is bundled into an overall fee, retainer, or rate. For a for-hire ground-transport operation, that means production use feeding your paid client dispatch is exactly the commercially licensed scenario — that is the deliberate revenue boundary, not a loophole to engineer around. White-labeling, hosted resale, and absorbing CTDI into another platform each independently require a commercial license, fee or no fee.
 - **Open source on a clock:** each version converts automatically to GPL v3-or-later four years after first public distribution (current Change Date: 2030-08-24) — the same BSL structure used by MariaDB, HashiCorp, and Sentry.
 
-Disclosed: the Additional Use Grant language is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Prospective commercial licensees should confirm current terms with [operator LLC], LLC directly.
+Disclosed: the Additional Use Grant language is a working draft currently under legal review; it reflects intended terms but has not yet been confirmed by counsel. Prospective commercial licensees should confirm current terms with CS Executive Services, LLC directly.
 
 # What is not built — stated plainly
 
@@ -84,4 +84,4 @@ No billing, subscription, or entitlement code; no multi-tenancy (one deployment 
 
 # Contact
 
-the operator — Founder and operator, [operator LLC], LLC, Arlington, VA · info@example.com. Live production read-outs can be arranged for diligence, as was done for the 2026-08-24 verification, security, and adversarial re-verification passes behind this document.
+the operator — Founder and operator, CS Executive Services, LLC, Arlington, VA · info@example.com. Live production read-outs can be arranged for diligence, as was done for the 2026-08-24 verification, security, and adversarial re-verification passes behind this document.

@@ -2,13 +2,13 @@ Executive Summary — v1.5
 
 Platform overview for investors, strategic acquirers, and white-label partners
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Every factual claim below was re-derived from a live re-verification of the running production system performed on 2026-08-24 (continuing the v1.1 → 2026-08-09 → 2026-08-24 verification chain), from a bounded security re-validation and adversarial re-verification completed the same day, and from a live-recomputed cost analysis. Counts that drift continuously (rows, containers, commits) are timestamped samples, not fixed facts. Where something is not built, it says so.
 
 # What CTDI is
 
-CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted operational dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA). It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — computes a deterministic go/no-go operational risk score (the CPS, Critical Predictability State), and pushes real-time alerts to operators. It was built to run the founder's own executive-chauffeur operation and is being packaged for white-label use by ground-transportation and executive-services operators.
+CTDI (Corporate Travel Dispatch Intelligence) is a 24/7 self-hosted operational dispatch-intelligence platform built and operated by the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA). It ingests aviation, rail, weather, and airspace data — including all six FAA SWIM data services under real, approved credentials — computes a deterministic go/no-go operational risk score (the CPS, Critical Predictability State), and pushes real-time alerts to operators. It was built to run the founder's own executive-chauffeur operation and is being packaged for white-label use by ground-transportation and executive-services operators.
 
 The whole-stack story, at current scale: a solo founder-operator designed, built, secured, and runs a multi-domain intelligence platform — 51,070 lines of Python, a 27-component React PWA, 102 REST route registrations, 21 dedicated local LLM models, and a compiled semantic knowledge layer — on a single Raspberry Pi 5 at the network edge. 635 commits, June 7 through August 24, 2026, single author. The signed 706-file code manifest was re-verified the morning of this document's fact-check.
 
@@ -69,7 +69,7 @@ What this is not, stated plainly: this is founder-run self-assessment using a bo
 
 # Licensing and IP: Business Source License 1.1
 
-New as of 2026-08-24, closing a gap the prior verification passes flagged repeatedly ("no LICENSE file"): the platform is now licensed under the **Business Source License 1.1** (Licensor: [operator LLC], LLC), verified as canonical, unmodified BSL text with a correctly-formed parameters block.
+New as of 2026-08-24, closing a gap the prior verification passes flagged repeatedly ("no LICENSE file"): the platform is now licensed under the **Business Source License 1.1** (Licensor: CS Executive Services, LLC), verified as canonical, unmodified BSL text with a correctly-formed parameters block.
 
 - **Free always** for non-production use — evaluation, development, testing.
 - **Free in production** for personal self-hosted deployments, and for internal relay/middleware use by an organization of any size — provided that use never serves, supports, or contributes to any fee-based product or service rendered to a third-party client or customer.

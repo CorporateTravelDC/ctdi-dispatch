@@ -18,7 +18,7 @@ Python operational scripts, and a React PWA frontend under `src/runner/frontend/
 
 CTDI ("Corporate Travel Dispatch Intelligence") is a self-hosted, single-box
 aviation/ground-transport dispatch-intelligence platform run on a Raspberry Pi 5
-for [operator LLC], LLC — a boutique DC-metro executive services firm
+for CS Executive Services, LLC — a boutique DC-metro executive services firm
 (executive chauffeur transport, executive protection, brand strategy, IT
 security). Everything runs locally: rootless Podman containers under systemd
 user quadlets, one shared database (Postgres since the 2026-09-20 cutover —

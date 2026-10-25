@@ -3,7 +3,7 @@
 - Know about the disruption before your traveler does
 - A 24/7 self-hosted dispatch-intelligence platform that watches every principal's flight and Amtrak train, scores operational risk, and pushes the alert — built to sit behind your existing booking system
 - For corporate travel management, executive concierge, and traveler-care teams
-- [operator LLC], LLC · Arlington, VA · Investor briefing — August 2026
+- CS Executive Services, LLC · Arlington, VA · Investor briefing — August 2026
 - Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 
 ## The problem — today, the traveler finds out first
@@ -78,7 +78,7 @@
 
 ## Licensing — BSL 1.1, and honest about the paid-service trigger
 
-- Business Source License 1.1, Licensor [operator LLC], LLC — free always for non-production use
+- Business Source License 1.1, Licensor CS Executive Services, LLC — free always for non-production use
 - Free in production for personal self-hosting and purely-internal relay/middleware use by an org of any size
 - The important line for a concierge firm: a commercial license is required the moment CTDI touches a fee-based client service — even solely as an invisible internal relay, even when bundled into an overall fee or retainer (clause iv, the controlling rule)
 - Hosted resale, white-labeling, and platform absorption always require a commercial license — this is the deliberate revenue boundary

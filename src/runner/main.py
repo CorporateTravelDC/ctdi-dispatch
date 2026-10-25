@@ -2422,7 +2422,7 @@ async def ask_dispatch(req: AskRequest, request: Request):
         now     = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
         system_prompt = (
-            "You are the dispatch AI assistant for [operator LLC], LLC — a boutique executive services firm: "
+            "You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: "
             "automotive detailing, brand strategy, executive chauffeur transportation, and IT security. "
             "Operator: the operator (N0CALL Extra, ARES NoVA District XX, Skywarn LXXXX).\n\n"
             "All live operational data below comes from a local dispatch spine running on-premises. "

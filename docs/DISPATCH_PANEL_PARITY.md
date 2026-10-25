@@ -81,7 +81,7 @@ Each line: behaviour → source. Replay these as parity tests.
 - [ ] The LLM is a synthesis layer, never a gatekeeper: every query returns *something* while the dispatch API is reachable.
 
 **System prompt** (`main.py:1697-1716`) — the rebuild must reproduce the *effect*, not the literal:
-- [ ] Identity: "dispatch AI assistant for [operator LLC], LLC" + the four business lines; operator name + ham/ARES/Skywarn identifiers (sourced from config in the rebuild).
+- [ ] Identity: "dispatch AI assistant for CS Executive Services, LLC" + the four business lines; operator name + ham/ARES/Skywarn identifiers (sourced from config in the rebuild).
 - [ ] Authority rule: "All live operational data below comes from a local dispatch spine… It is the authoritative source. Do not speculate beyond it."
 - [ ] Injected `CURRENT DISPATCH STATE (<local timestamp>)` block = `_context_to_str(ctx)` or the literal "No data available from dispatch spine."
 - [ ] Static OPERATOR CONTEXT: location/KDCA, DC FRZ/SFRA + P-56 + 50/100/150/250 nm rings, ground ops partners, emergency affiliations, "Dispatch spine: Pi 5, Tailscale".

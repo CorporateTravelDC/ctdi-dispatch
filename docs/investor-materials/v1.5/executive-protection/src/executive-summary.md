@@ -1,6 +1,6 @@
 ## Executive Summary — Sovereign Advance-Work & Movement-Monitoring Intelligence
 
-[operator LLC], LLC · Arlington, VA · August 2026 · Prepared for executive-protection, secure-transportation, and corporate-GSOC audiences
+CS Executive Services, LLC · Arlington, VA · August 2026 · Prepared for executive-protection, secure-transportation, and corporate-GSOC audiences
 
 *Every factual claim in this document was re-verified live against the running production system on 2026-08-24 (read-only checks: health/REST endpoints, systemd/podman state, read-only SQLite, git history, source inspection, and the full test suite). Numbers that drift continuously — row counts, restart counters, container counts — are timestamped samples, not fixed facts.*
 
@@ -90,7 +90,7 @@ Intended commercial architecture: each client operator obtains and holds its own
 
 ## Licensing
 
-The platform is released under the **Business Source License 1.1** (source-available; not OSI-approved open source). Free always for non-production use; free in production for personal self-hosting and for internal relay/middleware use within an organization of any size, **provided** that use never serves a fee-based product or service to a third-party client. Hosted resale, white-labeling, and platform absorption always require a commercial license from [operator LLC], LLC — as does any use touching a fee-based client service, even invisibly or bundled into a retainer. Each release converts automatically to **GPL v3-or-later four years** after first publication (current Change Date 2030-08-24). *Disclosed: the use-grant language is under legal review and not yet counsel-confirmed.*
+The platform is released under the **Business Source License 1.1** (source-available; not OSI-approved open source). Free always for non-production use; free in production for personal self-hosting and for internal relay/middleware use within an organization of any size, **provided** that use never serves a fee-based product or service to a third-party client. Hosted resale, white-labeling, and platform absorption always require a commercial license from CS Executive Services, LLC — as does any use touching a fee-based client service, even invisibly or bundled into a retainer. Each release converts automatically to **GPL v3-or-later four years** after first publication (current Change Date 2030-08-24). *Disclosed: the use-grant language is under legal review and not yet counsel-confirmed.*
 
 ## Business status and the ask
 

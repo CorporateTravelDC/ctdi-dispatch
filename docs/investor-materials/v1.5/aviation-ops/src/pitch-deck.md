@@ -2,7 +2,7 @@
 
 - A self-hosted ops-desk intelligence layer for Part 135 charter, HEMS programs, FBOs, trip-support desks, and airline ops/dispatch
 - All six FAA SWIM data services as native push feeds — deterministic go/no-go scoring — real airline-reported on-time data — on edge hardware you own
-- Built and operated by a single founder — [operator LLC], LLC, Arlington, VA
+- Built and operated by a single founder — CS Executive Services, LLC, Arlington, VA
 - Investor briefing — aviation-ops overview — August 2026
 - Every claim re-verified live against the production system 2026-08-24; economics re-derived live 2026-09-03
 - DECISION-SUPPORT ONLY. Not an FAA-certified dispatch system; not a substitute for a certificated dispatcher or operational control; no regulatory claim. Part 135.609 minimums used solely as a published threshold reference.
@@ -94,7 +94,7 @@
 
 ## Licensing model — BSL 1.1
 
-- Business Source License 1.1 adopted 2026-08-24 — Licensor: [operator LLC], LLC (same structure as MariaDB, HashiCorp, Sentry)
+- Business Source License 1.1 adopted 2026-08-24 — Licensor: CS Executive Services, LLC (same structure as MariaDB, HashiCorp, Sentry)
 - Free always for non-production use; free in production for personal self-hosting and internal relay/middleware use
 - Commercial license required the moment CTDI touches any fee-based client service — even invisibly, even bundled into a retainer
 - Hosted resale, white-labeling, and platform absorption always require a commercial license
@@ -119,7 +119,7 @@
 
 ## Founder and the ask
 
-- the operator — USMC veteran; owner, [operator LLC], LLC, Arlington, VA — built CTDI to run his own dispatch operation and dispatches on it daily
+- the operator — USMC veteran; owner, CS Executive Services, LLC, Arlington, VA — built CTDI to run his own dispatch operation and dispatches on it daily
 - Security practitioner: the tiered auth, audit trail, signed manifest, and scrub gates are his daily working environment, not a compliance checkbox
 - The ask — pilot partners: Part 135 charter desks, HEMS programs, FBOs, and trip-support providers willing to run CTDI as a decision-support layer beside their existing tools and shape the aviation-ops roadmap
 - The ask — seed conversation: capital to close the honestly-stated gaps (CI, CPS test, backup/DR, tenant isolation, data-rights formalization, a second engineer) and a first third-party security assessment. No valuation or revenue projection is presented — the fact base does not support one, and we will not invent numbers

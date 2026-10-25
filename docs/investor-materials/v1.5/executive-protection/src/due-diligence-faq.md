@@ -1,6 +1,6 @@
 ## Due-Diligence FAQ — Hard Questions, Straight Answers
 
-[operator LLC], LLC · Arlington, VA · August 2026 · Prepared for executive-protection, secure-transportation, and corporate-GSOC diligence
+CS Executive Services, LLC · Arlington, VA · August 2026 · Prepared for executive-protection, secure-transportation, and corporate-GSOC diligence
 
 *Answers derive from live verification of the running production system on 2026-08-24 plus source inspection. Where the evidence is silent, the answer is "Unknown — needs founder input" rather than a guess. No radio frequency, sensitive program value, secret, token, or GPS coordinate appears in this document, by rule and by platform design.*
 
@@ -71,7 +71,7 @@ None are claimed. No SOC 2, no ISO certification (the ISO 42001 document is alig
 
 ## 16. What's the licensing and IP posture?
 
-Now real, and disclosed as a draft. The platform carries a **Business Source License 1.1** (adopted 2026-08-24; Licensor: [operator LLC], LLC): free for all non-production use; free in production for personal self-hosting and internal relay/middleware use within an organization of any size, unless that use serves a fee-based third-party client service — in which case, along with any hosted resale, white-labeling, or platform absorption, a commercial license is required. Each version converts to GPL v3-or-later four years after first publication (Change Date 2030-08-24), so the platform opens over time rather than staying locked indefinitely. **Disclosed: the Additional Use Grant language is a working draft under legal review and not yet counsel-confirmed** — do not treat it as final for a production licensing decision. Formal IP assignment to the LLC: Unknown — needs founder input.
+Now real, and disclosed as a draft. The platform carries a **Business Source License 1.1** (adopted 2026-08-24; Licensor: CS Executive Services, LLC): free for all non-production use; free in production for personal self-hosting and internal relay/middleware use within an organization of any size, unless that use serves a fee-based third-party client service — in which case, along with any hosted resale, white-labeling, or platform absorption, a commercial license is required. Each version converts to GPL v3-or-later four years after first publication (Change Date 2030-08-24), so the platform opens over time rather than staying locked indefinitely. **Disclosed: the Additional Use Grant language is a working draft under legal review and not yet counsel-confirmed** — do not treat it as final for a production licensing decision. Formal IP assignment to the LLC: Unknown — needs founder input.
 
 ## 17. Can it serve multiple clients today? (Multi-tenancy / white-label)
 

@@ -162,6 +162,7 @@ ABD3976FCC006E0F3FE559177286B3118BA4EFB2 — original default key
 
 Further public keys (agent manifest signing, Pi agent signing, break-glass)
 ship under `security/`. `SECURITY.md` at the repo root is the authority.
+Security contact: developer@csexecutiveservices.com (CS Executive Services LLC).
 
 ---
 
@@ -1048,7 +1049,7 @@ in `/opt/corporatetraveldc/watchlists/`.
 ## License
 
 **Business Source License 1.1** (source-available, not OSI open source).
-Licensor [operator LLC], LLC; Licensed Work "CTDI, version 2026.08";
+Licensor CS Executive Services, LLC; Licensed Work "CTDI, version 2026.08";
 Change Date 2030-08-24; Change License GPL v3 or later. Full text and the
 Additional Use Grant: [`LICENSE`](LICENSE). Summary, not a substitute:
 
@@ -1060,7 +1061,7 @@ Additional Use Grant: [`LICENSE`](LICENSE). Summary, not a substitute:
   platform, or use in any fee-based client service needs a commercial license.
 
 > The Additional Use Grant language is a working draft under legal review.
-> Confirm current terms with [operator LLC], LLC before relying on it.
+> Confirm current terms with CS Executive Services, LLC before relying on it.
 
 ---
 
@@ -1662,7 +1663,7 @@ POST /api/v1/watchlist/flights          (admin bearer token)
 
 - ~~Free for non-production use (evaluation, development, testing) always.~~
 - ~~Free for production use as a personal self-hosted deployment, or as an internal relay/middleware layer within an organization of any size, **provided** that use never serves a fee-based product or service rendered to a third-party client or customer (see the Additional Use Grant in `LICENSE` for the exact boundary, including the white-label, hosted-service, and platform-absorption carve-outs).~~
-- ~~Any other production use -- reselling as a hosted/managed service, white-labeling, embedding it as a component of another commercial platform, or using it (even invisibly) in the course of any fee-based service to a client -- requires a commercial license from [operator LLC], LLC.~~
+- ~~Any other production use -- reselling as a hosted/managed service, white-labeling, embedding it as a component of another commercial platform, or using it (even invisibly) in the course of any fee-based service to a client -- requires a commercial license from CS Executive Services, LLC.~~
 - ~~Each release converts automatically to GPL v3-or-later four years after its first public distribution (per-version Change Date; see `LICENSE`), so the platform becomes fully open source over time rather than staying locked up indefinitely.~~
 
-> ~~**Status: the Additional Use Grant language in `LICENSE` is a working draft and is currently under legal review.** It reflects the intended terms but has not yet been confirmed by counsel. Do not treat it as final for a production licensing decision -- contact [operator LLC], LLC directly to confirm current terms before relying on it.~~
+> ~~**Status: the Additional Use Grant language in `LICENSE` is a working draft and is currently under legal review.** It reflects the intended terms but has not yet been confirmed by counsel. Do not treat it as final for a production licensing decision -- contact CS Executive Services, LLC directly to confirm current terms before relying on it.~~

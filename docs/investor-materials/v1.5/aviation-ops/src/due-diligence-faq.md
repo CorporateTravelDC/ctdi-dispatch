@@ -2,7 +2,7 @@ Due-Diligence FAQ — v1.5
 
 Aviation Operations audience — hard questions, answered honestly
 
-[operator LLC], LLC · Arlington, VA · August 2026 · info@example.com
+CS Executive Services, LLC · Arlington, VA · August 2026 · info@example.com
 
 **How to read this document.** Answers are grounded in a live re-verification of the production system, a bounded security re-validation, a pentest re-verification, and an adversarial re-verification — all performed 2026-08-24 — plus the platform's own continuously-maintained internal state documentation. Where a count drifts continuously (event rows, containers, commits) it is a timestamped sample. Where the honest answer is "not built" or "needs founder input," it says exactly that. No market sizes, revenue projections, or user counts appear anywhere: none exist in the fact base.
 
@@ -60,7 +60,7 @@ Stated: (1) all testing to date is internal self-assessment — no external pent
 
 # Q14. What about licensing hygiene?
 
-Now fixed, closing a gap flagged in every prior pass. CTDI adopted Business Source License 1.1 on 2026-08-24 — verified as canonical, unmodified BSL 1.1 text with a correctly-formed parameters block (Licensor: [operator LLC], LLC; Change Date 2030-08-24; Change License GPL v3-or-later, which satisfies the covenants). Free for all non-production use always; free for personal self-hosting and internal relay/middleware use by an organization of any size, provided that use never serves a fee-based third-party client service; commercial license required for hosted/managed/white-label resale, platform absorption, or any use in connection with a fee-based client service (even invisibly, even bundled into a retainer). Disclosed plainly, matching the repository's own notice: the Additional Use Grant is a working draft currently under legal review and not yet counsel-confirmed.
+Now fixed, closing a gap flagged in every prior pass. CTDI adopted Business Source License 1.1 on 2026-08-24 — verified as canonical, unmodified BSL 1.1 text with a correctly-formed parameters block (Licensor: CS Executive Services, LLC; Change Date 2030-08-24; Change License GPL v3-or-later, which satisfies the covenants). Free for all non-production use always; free for personal self-hosting and internal relay/middleware use by an organization of any size, provided that use never serves a fee-based third-party client service; commercial license required for hosted/managed/white-label resale, platform absorption, or any use in connection with a fee-based client service (even invisibly, even bundled into a retainer). Disclosed plainly, matching the repository's own notice: the Additional Use Grant is a working draft currently under legal review and not yet counsel-confirmed.
 
 # Q15. Is there AI/ML in the go/no-go scoring?
 
@@ -88,7 +88,7 @@ Not real yet, stated plainly. Today there is a single SQLite database, single-te
 
 # Q21. Who owns the IP and what is the team provenance?
 
-All 635 commits are by the founder, the operator (USMC veteran; owner, [operator LLC], LLC, Arlington, VA), who designed, built, secured, and operates the entire stack and dispatches on it daily — genuine founder-market fit in a discreet, trust-driven vertical. Formal assignment of the IP into [operator LLC], LLC and the terms of that assignment: needs founder input. No patents are claimed. The security controls (bearer-token auth, audit trail, signed manifest, scrub gates) are the founder's daily working environment, not a compliance checkbox.
+All 635 commits are by the founder, the operator (USMC veteran; owner, CS Executive Services, LLC, Arlington, VA), who designed, built, secured, and operates the entire stack and dispatches on it daily — genuine founder-market fit in a discreet, trust-driven vertical. Formal assignment of the IP into CS Executive Services, LLC and the terms of that assignment: needs founder input. No patents are claimed. The security controls (bearer-token auth, audit trail, signed manifest, scrub gates) are the founder's daily working environment, not a compliance checkbox.
 
 # Q22. What certifications, insurance, or compliance attestations exist?
 

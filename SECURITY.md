@@ -14,7 +14,8 @@ receives fixes.
 
 ## Reporting a vulnerability
 
-Email **developer@example.com** (or **embargo@example.com**
+Email **developer@csexecutiveservices.com** -- the security contact for
+CS Executive Services LLC (or **embargo@example.com**
 for anything embargo/LADD-sensitive). Do not open public issues for security
 reports. Encrypt to a key from `docs/GPG_KEYS_PUBLISHED.md`; the public halves
 are served at `https://www.example.com/keys/`.
@@ -179,7 +180,7 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 
 ### Security Policy › Reporting a vulnerability
 
-~~Email **developer@example.com**. Please do not open public issues for security reports. Encrypt sensitive reports to the current GPG code signing key (public keys ship in-repo, named by full fingerprint):~~
+~~Email **developer@csexecutiveservices.com**. Please do not open public issues for security reports. Encrypt sensitive reports to the current GPG code signing key (public keys ship in-repo, named by full fingerprint):~~
 
 - ~~`419A864CC29A09513039B6E03033FB4D01903159` — default signing key since 2026-07-07 (the `[S]` subkey of the operator's primary key `3B29752DACA3544CEA60D01A7B81F49CD96C1631`; the primary's public half also ships as `security/trusted-signing-key.pub.asc`)~~
 - ~~`ABD3976FCC006E0F3FE559177286B3118BA4EFB2` — previous key, still valid for verification~~

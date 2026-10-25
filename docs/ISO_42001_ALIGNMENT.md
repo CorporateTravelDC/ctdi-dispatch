@@ -14,7 +14,7 @@ in `COMPLIANCE_SECURITY.md` §4.
 ## Status, stated plainly
 
 **CTDI (the corporatetraveldc dispatch platform) is not ISO/IEC 42001
-certified. [operator LLC], LLC has not undergone an accredited
+certified. CS Executive Services, LLC has not undergone an accredited
 ISO/IEC 42001 audit.** No claim of certification is made here or in any
 client-facing material.
 
@@ -98,7 +98,7 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 
 ### ISO/IEC 42001 Alignment: [operator LLC] / CTDI › Status, stated plainly
 
-~~**CTDI (the corporatetraveldc dispatch platform) is not ISO/IEC 42001 certified. [operator LLC], LLC has not undergone an accredited ISO/IEC 42001 audit.** No claim of certification is made anywhere in this document, in the platform's marketing materials, or in any client-facing communication. If that framing ever needs restating in a specific proposal or contract, this is the sentence to reuse.~~
+~~**CTDI (the corporatetraveldc dispatch platform) is not ISO/IEC 42001 certified. CS Executive Services, LLC has not undergone an accredited ISO/IEC 42001 audit.** No claim of certification is made anywhere in this document, in the platform's marketing materials, or in any client-facing communication. If that framing ever needs restating in a specific proposal or contract, this is the sentence to reuse.~~
 
 ~~Certification under ISO/IEC 42001 requires an accredited third-party certification body to complete a two-stage audit -- first a documentation review, then an operational-effectiveness evaluation involving staff interviews and evidence collection -- followed by annual surveillance audits over a three-year certification cycle. That process has not happened here. It is a real, resource-intensive undertaking, and skipping it is not a gap this document tries to paper over.~~
 
