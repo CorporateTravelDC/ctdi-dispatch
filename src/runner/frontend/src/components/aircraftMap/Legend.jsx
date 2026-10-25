@@ -13,6 +13,7 @@ function Glyph({ src, conflict = false, stale = false }) {
   let stroke = 'none', sw = 0, dash = null, op = 0.95
   if (src === 'matched') { stroke = '#ffffff'; sw = 1.2 }
   if (src === 'swim')    { stroke = fill; sw = 1.2; dash = '2.2 1.6'; op = 0.55 }
+  if (src === 'aggregator') { stroke = fill; sw = 1.6; op = 0.12 }   // 2026-10-24: hollow = airplanes.live fallback
   return (
     <svg width="22" height="26" viewBox="-4 -3 22 26" aria-hidden="true" className="acl-glyph">
       {conflict && <circle cx="7" cy="10" r="10" fill="none" stroke="#ff3040" strokeWidth="1.6" />}
@@ -68,6 +69,7 @@ export default function Legend() {
         <div className="acl-row"><Glyph src="matched" /> <span><b>Receiver + SWIM</b> solid, white outline</span></div>
         <div className="acl-row"><Glyph src="local" /> <span><b>Receiver only</b> solid, no outline</span></div>
         <div className="acl-row"><Glyph src="swim" /> <span><b>SWIM only</b> faded, dashed outline</span></div>
+        <div className="acl-row"><Glyph src="aggregator" /> <span><b>via airplanes.live</b> hollow: search fallback when receiver + SWIM have nothing</span></div>
         <div className="acl-row"><Glyph src="matched" conflict /> <span><b>Conflict</b> red ring: callsign/reg disagree</span></div>
         <div className="acl-row"><Glyph src="local" stale /> <span><b>Stale</b> lighter: position &gt; 60 s old</span></div>
         <div className="acl-row"><span className="acl-swatch acl-swatch-tracked" aria-hidden="true" /> <span><b>Watchlist</b> cyan glow, larger</span></div>

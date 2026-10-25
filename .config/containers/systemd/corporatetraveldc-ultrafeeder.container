@@ -23,6 +23,16 @@ ContainerName=corporatetraveldc-ultrafeeder
 AddDevice=/dev/rtl_sdr_adsb:/dev/rtl_sdr_adsb
 Volume=/dev/bus/usb:/dev/bus/usb:ro
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+# 2026-10-24 (operator): graphs1090's collectd RRDs (message rate, range, aircraft history) lived inside the
+# container, so every image rebuild wiped them and the receiver had no long-term baseline to compare against.
+Volume=corporatetraveldc-ultrafeeder-graphs:/var/lib/collectd:Z
+# 2026-10-24 (persistence audit, operator-approved): same reasoning, same pattern for the OTHER history this image
+# keeps inside the container -- readsb/tar1090's /var/globe_history: the daily position traces (YYYY/MM/DD/traces),
+# the heatmap and internal_state (readsb's own restart state, incl. the range outline). podman diff showed ~16 MB of
+# it in the writable layer and nothing on the host, so every quadlet restart (a NEW container) started it from zero.
+# Seed the existing data into the volume BEFORE the first restart on this line (docs/BACKUP.md, 2026-10-24 section);
+# the nightly Borg archive reads this volume and -graphs the way it already reads nextcloud-html.
+Volume=corporatetraveldc-ultrafeeder-history:/var/globe_history:Z
 # 2026-10-19 (operator): dispatch.env no longer loaded. This is a third-party image; it read none of
 # the platform's settings (checked inside the running container), so it gets none of them
 # (tests/scripts/test_third_party_env_scope.py).

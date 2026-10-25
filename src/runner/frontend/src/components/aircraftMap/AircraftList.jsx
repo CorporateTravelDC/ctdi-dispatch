@@ -15,8 +15,8 @@ const COLS = [
   { key: 'src',      label: 'SRC' },
   { key: 'age',      label: 'AGE' },
 ]
-const SRC_SHORT = { matched: 'R+S', local: 'RCV', swim: 'SWM' }
-const SRC_RANK  = { matched: 0, local: 1, swim: 2 }
+const SRC_SHORT = { matched: 'R+S', local: 'RCV', swim: 'SWM', aggregator: 'APL' }
+const SRC_RANK  = { matched: 0, local: 1, swim: 2, aggregator: 3 }
 
 function sortValue(ac, key) {
   switch (key) {

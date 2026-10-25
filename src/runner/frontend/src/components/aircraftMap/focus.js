@@ -8,7 +8,10 @@ import L from 'leaflet'
 
 export const FOCUS_ZOOM = 10
 
-/** GET /api/map/focus?ident=<hex|callsign>. Resolves to one of:
+/** GET /api/map/focus?ident=<hex|flight|registration|serial>. 2026-10-24: the backend normalises an IATA
+ *  flight number (UA919 -> UAL919), follows a codeshare to the operating callsign, and resolves a tail or
+ *  serial (with or without dash) to its hex; when receiver + SWIM have nothing live it may answer with an
+ *  airplanes.live fix (aircraft.src === 'aggregator', aircraft.aggregator = 'airplanes.live'). Resolves to:
  *  { ok: true,  live: true,  aircraft }      -- live anywhere in scope (same shape as /api/map/aircraft)
  *  { ok: true,  live: false, last }          -- most recent SWIM leg
  *  { ok: false, status }                     -- 404 / network / other

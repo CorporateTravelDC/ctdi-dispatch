@@ -158,11 +158,28 @@ cmd_test() {
         >/dev/null || die "canary start failed"
 
     log "waiting for canary to accept connections..."
-    ready=0
-    for _ in $(seq 1 30); do
-        if PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" pg_isready -U "${PG_USER}" -d "${PG_DB}" >/dev/null 2>&1; then
-            ready=1
-            break
+    # 2026-10-24: pg_isready alone answered "ready" against the image entrypoint's TEMPORARY init server
+    # (socket only, mid-initdb), and -d does not check that the database exists. The 2026-10-24 06:24Z canary
+    # then connected while that server was "shutting down", logged "FATAL: database ... does not exist", and
+    # the log scan failed a healthy image (the schema and the 129-table sample had loaded fine). Ready now
+    # means: the entrypoint logged "init process complete" (a fresh scratch volume always inits) AND
+    # SELECT 1 against the target database succeeds twice in a row, 2 s apart -- i.e. the final server.
+    # 2026-10-24 (later the same day): 60 x 2 s was too short under load -- the 21:16Z canary finished its first-boot
+    # init at 21:18:00Z, just after the loop gave up. 300 x 2 s = 10 min; a genuinely broken image never logs
+    # "init process complete", so the longer window cannot pass a bad canary.
+    ready=0; streak=0
+    for _ in $(seq 1 300); do
+        # 2026-10-24 (third fix the same day): `podman logs | grep -q` under `set -o pipefail` reported "not ready"
+        # FOREVER once the log outgrew the pipe buffer -- grep -q exits at the first match, podman logs dies of
+        # SIGPIPE, pipefail fails the pipeline (reproduced 20/20 on a large log). The 23:49Z canary was ready in
+        # seconds and still timed out. Read the whole log first, then match.
+        clog=$(podman logs "${CANARY_CONTAINER}" 2>&1 || true)
+        if [[ "${clog}" == *"init process complete"* ]] \
+           && [[ "$(PGPASSWORD="${canary_pw}" podman exec -e PGPASSWORD "${CANARY_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -tAc 'SELECT 1' 2>/dev/null)" == 1 ]]; then
+            streak=$((streak + 1))
+            if [[ ${streak} -ge 2 ]]; then ready=1; break; fi
+        else
+            streak=0
         fi
         sleep 2
     done

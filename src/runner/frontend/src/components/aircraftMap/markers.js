@@ -6,6 +6,8 @@
 //   swim     -- SWIM only:         fill at ~55% opacity + dashed outline in the altitude colour
 //   conflict -- any source, callsign/registration disagreement: red ring around the glyph
 //   stale    -- pos_age_s > 60: tar1090's lighter/desaturated variant of the same hue
+//   aggregator (2026-10-24) -- airplanes.live FALLBACK, search only: HOLLOW glyph (near-zero fill) with a
+//              solid outline in the altitude colour, so a third-party fix never reads as our own data
 // Watchlist (tracked) and selected states add a CSS glow + size only -- see main.css .aircraft-marker.*
 import L from 'leaflet'
 import { altitudeColor } from './altitudeColor.js'
@@ -40,7 +42,7 @@ export function fmtAlt(alt) {
   return `${Math.round(Number(alt)).toLocaleString()}ft`
 }
 
-export const SRC_LABEL = { matched: 'Receiver + SWIM', local: 'Receiver', swim: 'SWIM' }
+export const SRC_LABEL = { matched: 'Receiver + SWIM', local: 'Receiver', swim: 'SWIM', aggregator: 'airplanes.live' }
 
 /**
  * Build the marker icon.
@@ -59,6 +61,7 @@ export function aircraftIcon(ac, { tracked = false, selected = false } = {}) {
   let stroke = 'none', strokeW = 0, dash = '', fillOp = stale ? 0.85 : 0.95
   if (src === 'matched')   { stroke = '#ffffff'; strokeW = 1.2 }
   else if (src === 'swim') { stroke = fill; strokeW = 1.2; dash = 'stroke-dasharray="2.2 1.6"'; fillOp = 0.55 }
+  else if (src === 'aggregator') { stroke = fill; strokeW = 1.6; fillOp = 0.12 }   // hollow: third-party fix
 
   const big  = tracked || selected
   const w = big ? 18 : 14, h = big ? 26 : 20
@@ -111,7 +114,9 @@ export function tooltipHtml(ac, { tracked = false } = {}) {
   const ident = [ac.hex ? `hex ${esc(ac.hex)}` : null, ac.r ? `reg ${esc(ac.r)}` : null, ac.t ? esc(ac.t) : null].filter(Boolean).join(' &middot; ')
   if (ident) rows.push(ident)
   if (ac.origin || ac.destination) rows.push(`${esc(ac.origin || '????')} &rarr; ${esc(ac.destination || '????')}`)
-  if (ac.src === 'swim' || stale) rows.push(`pos age ${fmtAge(ac.pos_age_s)}`)
+  // 2026-10-24: an aggregator fix says where it came from -- fallback only, never receiver/SWIM data.
+  if (ac.src === 'aggregator') rows.push(`via ${esc(ac.aggregator || 'airplanes.live')} &middot; fallback (not on receiver or SWIM)`)
+  if (ac.src === 'swim' || ac.src === 'aggregator' || stale) rows.push(`pos age ${fmtAge(ac.pos_age_s)}`)
   if (ac.conflict) rows.push(`<span class="act-conflict">CONFLICT: ${esc(ac.conflict_note || 'callsign/registration disagree (SWIM is tail authority)')}</span>`)
 
   if (!tracked) {

@@ -217,3 +217,85 @@ def test_routes_registered_on_the_app(seeded):
     assert r.status_code == 200 and r.json()["count"] == 2
     assert c.get("/api/v1/swim/positions", params={"south": 0}).status_code == 422
     assert c.get("/api/v1/swim/last-leg", params={"ident": "TEST999"}).status_code == 404
+
+
+# -- focus resolver + aggregator fallback (2026-10-24, operator-reported map search bugs)
+
+def test_resolve_iata_flight_to_icao_and_codeshare_operating_callsign(seeded, monkeypatch):
+    monkeypatch.setattr(db, "resolve_operating_callsign", lambda ident: "SKW919" if ident == "UA919" else None)
+    calls = []
+    monkeypatch.setattr(seeded._watchlist, "_local_registry_hex_lookup", lambda i: calls.append(i))
+    out = seeded.resolve_focus_ident("ua919")
+    assert out["callsigns"] == ["UA919", "UAL919", "SKW919"] and out["hex"] is None
+    out = seeded.resolve_focus_ident("UAL919")
+    assert out["callsigns"] == ["UAL919"]                      # already ICAO, no duplicate
+    assert seeded.resolve_focus_ident("ABC125")["hex"] == "abc125"
+    assert "ABC125" not in calls                                # a hex is never sent to the registry
+
+
+def test_resolve_registration_and_serial_via_registry_with_or_without_dash(seeded, monkeypatch):
+    registry = {"N000AA": "ABC123", "2533000": "abc124"}
+    monkeypatch.setattr(seeded._watchlist, "_local_registry_hex_lookup", lambda i: registry.get(i))
+    out = seeded.resolve_focus_ident("n000aa")
+    assert (out["hex"], out["registration"]) == ("abc123", "N000AA")
+    out = seeded.resolve_focus_ident("25-33000")
+    assert (out["hex"], out["registration"]) == ("abc124", "2533000")   # dash-stripped form resolved
+    out = seeded.resolve_focus_ident("N000XX")
+    assert out["hex"] is None and out["registration"] is None and out["callsigns"] == ["N000XX"]
+
+
+def test_resolve_lookups_are_best_effort(seeded, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(db, "resolve_operating_callsign", boom)
+    monkeypatch.setattr(seeded._watchlist, "_local_registry_hex_lookup", boom)
+    assert seeded.resolve_focus_ident("UA919")["callsigns"] == ["UA919", "UAL919"]
+
+
+def test_resolve_and_aggregator_routes_are_internal_only(seeded, monkeypatch):
+    monkeypatch.setattr(seeded._watchlist, "_remote_ac_by_hex", lambda h: {"hex": h, "lat": 0.1, "lon": 0.1})
+    assert seeded.swim_resolve(ident="UA919", tier=Tier.T1).status_code == 200
+    assert seeded.swim_aggregator(hex="abc123", callsigns=None, tier=Tier.T1).status_code == 200
+    for fn in (lambda: seeded.swim_resolve(ident="UA919", tier=Tier.T0),
+               lambda: seeded.swim_aggregator(hex="abc123", callsigns=None, tier=Tier.T0)):
+        with pytest.raises(HTTPException) as ei:
+            fn()
+        assert ei.value.status_code == 404
+
+
+def test_aggregator_hex_first_then_at_most_two_callsigns_via_the_watchlist_helpers(seeded, monkeypatch):
+    calls = []
+    monkeypatch.setattr(seeded._watchlist, "_remote_ac_by_hex", lambda h: calls.append(("hex", h)))
+    monkeypatch.setattr(seeded._watchlist, "_remote_ac_by_callsign",
+                        lambda c: calls.append(("cs", c)) or ({"hex": "abc129", "flight": c, "lat": 0.2, "lon": 0.2,
+                                                               "alt_baro": 1000, "seen_pos": 2.0, "_source": "airplanes_live"}
+                                                              if c == "SKW919" else None))
+    body = json.loads(seeded.swim_aggregator(hex="abc123", callsigns="ual919,skw919,xxx919", tier=Tier.T1).body)
+    assert calls == [("hex", "abc123"), ("cs", "UAL919"), ("cs", "SKW919")]
+    assert body["aggregator"] == "airplanes.live"
+    assert body["aircraft"] == {"hex": "abc129", "r": None, "t": None, "flight": "SKW919", "lat": 0.2, "lon": 0.2,
+                                "alt_baro": 1000, "gs": None, "track": None, "seen_pos": 2.0}
+    with pytest.raises(HTTPException) as ei:
+        seeded.swim_aggregator(hex=None, callsigns="xxx919", tier=Tier.T1)
+    assert ei.value.status_code == 404
+
+
+def test_aggregator_never_sends_a_ladd_listed_identifier(seeded, monkeypatch):
+    """The real chain: shared.watchlist._remote_ac_by_hex -> common.airplanes_live.by_hex,
+    whose LADD gate consults the FAA registry (hex -> N-number) and the LADD list
+    before any HTTP call. Only the network step (_get) is replaced."""
+    import common.airplanes_live as apl
+    with db.conn() as c:
+        for n, h in (("000AA", "ABC123"), ("000BB", "ABC124")):
+            c.execute("INSERT INTO faa_aircraft_registry (n_number, mode_s_hex, updated_at) VALUES (?, ?, ?)",
+                      (n, h, time.time()))
+        c.execute("INSERT INTO faa_ladd_aircraft (n_number, updated_at) VALUES (?, ?)", ("N000AA", time.time()))
+    sent = []
+    monkeypatch.setattr(apl, "enabled", lambda: True)
+    monkeypatch.setattr(apl, "_get", lambda path, key: sent.append(path))
+    with pytest.raises(HTTPException) as ei:
+        seeded.swim_aggregator(hex="abc123", callsigns=None, tier=Tier.T1)
+    assert ei.value.status_code == 404 and sent == []                  # LADD-listed: nothing left the box
+    with pytest.raises(HTTPException):
+        seeded.swim_aggregator(hex="abc124", callsigns=None, tier=Tier.T1)
+    assert sent == ["hex/abc124"]                                       # not listed: the helper did ask

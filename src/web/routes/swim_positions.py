@@ -9,6 +9,8 @@ receiver; the browser never calls dispatch-web directly.
   GET /api/v1/swim/positions?south=&west=&north=&east=&max_age_s=120&limit=2000
   GET /api/v1/swim/scope
   GET /api/v1/swim/last-leg?ident=<callsign|hex>
+  GET /api/v1/swim/resolve?ident=<flight|hex|registration|serial>   (Tier 1+, 2026-10-24)
+  GET /api/v1/swim/aggregator?hex=&callsigns=                        (Tier 1+, 2026-10-24)
 
 Tier / privacy decision (documented here because the spec asked for it):
   * The runner sends RUNNER_ENRICHED_TOKEN (cert tier = Tier.T1) for these
@@ -32,6 +34,7 @@ Tier / privacy decision (documented here because the spec asked for it):
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,7 +42,14 @@ from fastapi.responses import JSONResponse
 
 from auth.auth import Tier, resolve_tier
 from common import db
+from common.airline_codes import to_icao_callsign
 from ingest.parsers.geo_filter import storage_scope
+# 2026-10-24: the focus resolver below reuses the watchlist's own helpers
+# (registry tail -> hex, airplanes.live fallback). dispatch-web already
+# imports shared.watchlist (routes/watchlist.py, routes/webhooks.py); the
+# runner image cannot (no `requests` in its lock), which is why these two
+# routes exist here instead of inside runner/main.py's /api/map/focus.
+from shared import watchlist as _watchlist
 
 log = logging.getLogger(__name__)
 
@@ -210,3 +220,128 @@ def swim_last_leg(
         "destination_coords": list(coords[leg["destination"]]) if leg.get("destination") in coords else None,
     })
     return JSONResponse(body)
+
+
+# ── Focus identity resolution + aggregator fallback (2026-10-24) ─────────────
+# Operator-reported map search bugs: "UA919" 404'd while "UAL919" hit (focus
+# compared the raw input against ICAO callsigns), a tail / serial never
+# resolved at all, and an aircraft outside receiver + SWIM coverage was
+# invisible even when airplanes.live had it. The runner cannot import
+# shared.watchlist / common.airplanes_live (its hash-locked image has no
+# `requests`), so the pieces that need them live here and the runner calls
+# them over the same token-injected path as /positions and /last-leg.
+# Both routes are Tier 1+ only: a Tier-0 (public) caller gets a 404, which
+# keeps every existing LADD rule for untrusted callers exactly as it was --
+# nothing new is exposed publicly, not even a "listed" vs "unknown" signal.
+
+_FOCUS_HEX_RE = re.compile(r"^[0-9A-F]{6}$")
+_FOCUS_CALLSIGN_RE = re.compile(r"^[A-Z0-9]{2,8}$")
+_FOCUS_AGG_MAX_CALLSIGNS = 2
+
+
+def resolve_focus_ident(ident: str) -> dict:
+    """Every identity the platform can derive for a free-text map search:
+      hex          -- the ident itself when it is a Mode S hex, else the
+                      FAA / OpenSky registry hit for it as a registration or
+                      serial (shared.watchlist._local_registry_hex_lookup,
+                      tried as typed and with dashes removed: "25-33000" and
+                      "2533000", "Q8991S").
+      callsigns    -- ordered candidates: raw, the ICAO operating form of an
+                      IATA flight number (UA919 -> UAL919, common.airline_codes),
+                      then the codeshare operating callsign
+                      (db.resolve_operating_callsign, the watchlist's path).
+      registration -- the registration/serial form that resolved, else None.
+    Pure lookups, never raises: every source is best-effort."""
+    raw = (ident or "").strip().upper()
+    out: dict = {"ident": raw, "hex": None, "callsigns": [], "registration": None}
+    if not raw:
+        return out
+    if _FOCUS_HEX_RE.match(raw):
+        out["hex"] = raw.lower()
+    callsigns: list[str] = []
+    compact = raw.replace(" ", "").replace("-", "")
+    if _FOCUS_CALLSIGN_RE.match(compact):
+        callsigns.append(compact)
+    try:
+        icao = to_icao_callsign(compact)
+    except Exception:  # noqa: BLE001
+        icao = None
+    if icao and icao not in callsigns:
+        callsigns.append(icao)
+    try:
+        operating = db.resolve_operating_callsign(compact)
+    except Exception as e:  # noqa: BLE001
+        log.debug("swim resolve: codeshare lookup failed (non-fatal): %s", type(e).__name__)
+        operating = None
+    if operating and operating.upper() not in callsigns:
+        callsigns.append(operating.upper())
+    out["callsigns"] = callsigns
+    if out["hex"] is None:
+        for cand in dict.fromkeys((raw, compact)):
+            try:
+                h = _watchlist._local_registry_hex_lookup(cand)
+            except Exception as e:  # noqa: BLE001
+                log.debug("swim resolve: registry lookup failed (non-fatal): %s", type(e).__name__)
+                h = None
+            if h:
+                out["hex"], out["registration"] = h.lower(), cand
+                break
+    return out
+
+
+@router.get("/resolve")
+def swim_resolve(
+    ident: str = Query(..., min_length=2, max_length=16),
+    tier: Tier = Depends(resolve_tier),
+) -> JSONResponse:
+    """Identity candidates for the runner's /api/map/focus (see
+    resolve_focus_ident). Tier 1+ only; a Tier-0 caller sees a 404."""
+    if not _is_internal(tier):
+        raise HTTPException(status_code=404, detail="not found")
+    return JSONResponse(resolve_focus_ident(ident))
+
+
+def aggregator_lookup(hex_code: str | None, callsigns: list[str]) -> dict | None:
+    """airplanes.live through the watchlist's fallback helpers ONLY
+    (_remote_ac_by_hex / _remote_ac_by_callsign -> common.airplanes_live):
+    they already honour AIRPLANES_LIVE_FALLBACK, the refusal backoff, the
+    30 s cache and never send a LADD-listed identifier. Hex first (the
+    stronger key), then at most _FOCUS_AGG_MAX_CALLSIGNS callsigns -- each
+    miss costs one rate-limited call (MIN_INTERVAL_S), so the caller's
+    timeout stays bounded. Returns the normalized contact or None."""
+    ac = None
+    if hex_code and _FOCUS_HEX_RE.match(hex_code.strip().upper()):
+        ac = _watchlist._remote_ac_by_hex(hex_code.strip().lower())
+    for cs in callsigns[:_FOCUS_AGG_MAX_CALLSIGNS]:
+        if ac:
+            break
+        cs = (cs or "").strip().upper()
+        if cs and _FOCUS_CALLSIGN_RE.match(cs):
+            ac = _watchlist._remote_ac_by_callsign(cs)
+    if not ac or ac.get("lat") is None or ac.get("lon") is None:
+        return None
+    return {k: ac.get(k) for k in ("hex", "r", "t", "flight", "lat", "lon", "alt_baro", "gs", "track", "seen_pos")}
+
+
+@router.get("/aggregator")
+def swim_aggregator(
+    hex: str | None = Query(None, min_length=6, max_length=6),
+    callsigns: str | None = Query(None, min_length=2, max_length=40),
+    tier: Tier = Depends(resolve_tier),
+) -> JSONResponse:
+    """airplanes.live FALLBACK contact for the map focus -- the runner calls
+    this only after the receiver and SWIM both had nothing live (operator
+    standing rule: airplanes.live is fallback / cross-check, never a primary
+    source). `callsigns` is a comma list, ICAO form, tried in order after the
+    hex. 404 when the fallback is off, backed off, LADD-blocked or empty --
+    one answer for all four, so nothing about the LADD list leaks. Tier 1+
+    only. The demo runner never reaches this route (synthetic only)."""
+    if not _is_internal(tier):
+        raise HTTPException(status_code=404, detail="not found")
+    cs_list = [c for c in (callsigns or "").upper().split(",") if c.strip()]
+    if not hex and not cs_list:
+        raise HTTPException(status_code=422, detail="hex or callsigns required")
+    ac = aggregator_lookup(hex, cs_list)
+    if ac is None:
+        raise HTTPException(status_code=404, detail="no aggregator contact")
+    return JSONResponse({"aggregator": "airplanes.live", "aircraft": ac})

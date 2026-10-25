@@ -9,8 +9,9 @@
 #      (sha256, row count, local path) so its state is provable without shipping it.
 #   2. Borg (repokey: AES-256-CTR + HMAC-SHA256, PBKDF2-SHA256 key derivation --
 #      NIST-approved algorithms) archives the dumps, the Nextcloud files, platform
-#      state (models excluded: pinned by digest) and /etc/corporatetraveldc, plus a
-#      copy of the private ledger, into a local repository (fast local restore).
+#      state (models excluded: pinned by digest), /etc/corporatetraveldc, the ntfy and Open WebUI
+#      state dirs and the named volumes in BACKUP_VOLUMES (2026-10-24), plus a copy of the
+#      private ledger, into a local repository (fast local restore).
 #   3. Prune to the retention policy, then rclone-sync the repository to
 #      BACKUP_TARGET: any rclone remote (Proton Drive, SMB, Google Workspace,
 #      Microsoft 365 / OneDrive / SharePoint, S3, SFTP ...) or a mounted path
@@ -120,13 +121,55 @@ ls -1t "$STATE/cui-local"/ladd-*.pgdump 2>/dev/null | tail -n +$((CUI_KEEP + 1))
 dumps_meta=$(python3 "$LEDGER_PY" file "$stage/dispatch.pgdump" "$stage/nextcloud.pgdump")
 cp "${BACKUP_LEDGER:-$STATE/ledger.jsonl}" "$stage/ledger.jsonl"
 
-nc_vol=$(podman volume inspect nextcloud-html --format '{{.Mountpoint}}')
+# 2026-10-24 (persistence audit, operator-approved): every named volume that holds state the operator would lose
+# on an image rebuild rides in the archive, read the way nextcloud-html always was (its mountpoint, under
+# podman unshare, because the files belong to the container's mapped uids):
+#   nextcloud-html                         Nextcloud files
+#   corporatetraveldc-ultrafeeder-graphs   graphs1090 collectd RRDs (receiver message-rate / range / aircraft baseline)
+#   corporatetraveldc-ultrafeeder-history  readsb + tar1090 /var/globe_history (daily traces, heatmap, internal_state)
+#   protonbridge-data                      Proton Bridge identity: vault + keychain (.config, .gnupg, .password-store);
+#                                          losing it means a fresh interactive login and a new bridge password for
+#                                          every SMTP consumer. Its mail cache, logs and updates are excluded below.
+# Postgres data volumes are never read raw: the dispatch and Nextcloud instances are dumped above, the demo
+# instance is rebuildable (BACKUP_EXCLUDED_INSTANCES), the office instance is documented as pending (docs/BACKUP.md).
+# A volume that does not exist yet (the relay that creates it has not run) is logged and skipped, never fatal.
+BACKUP_VOLUMES=(nextcloud-html corporatetraveldc-ultrafeeder-graphs corporatetraveldc-ultrafeeder-history protonbridge-data)
+vol_paths=()
+for v in "${BACKUP_VOLUMES[@]}"; do
+  if mp=$(podman volume inspect "$v" --format '{{.Mountpoint}}' 2>/dev/null) && [[ -n "$mp" ]]; then vol_paths+=("$mp")
+  else log "volume ${v} not present -- skipped (once created it is archived from the next run on)"; fi
+done
 # 2026-10-11: + /var/lib/vnstat (traffic history; unlimited daily retention since 2026-10-11; db is 0644, dir 0755)
-paths=("$stage" "$nc_vol" /var/lib/corporatetraveldc /etc/corporatetraveldc /var/lib/vnstat)
+# 2026-10-24: + /var/lib/ntfy (auth.db: users, ACLs, access tokens; cache.db: message cache) and /var/lib/openwebui
+# (webui.db: accounts, chats, connection settings). Both are host bind mounts that already survived rebuilds but had
+# never been archived, so a disk loss would have taken them. Same operator account owns both (readable here).
+# 2026-10-24 (operator: "just the operational directories in ~/ and /etc"): config a rebuild needs that is not
+# in git or /etc/corporatetraveldc. Missing or unreadable paths are logged and skipped, never fatal. Deliberately
+# NOT included: /etc/NetworkManager/system-connections (root-only profiles holding Wi-Fi/hotspot passwords) and
+# root-only Pi-hole lists. ~/.config/nextcloud and ~/.config/rclone carry credentials -- they are inside the
+# encrypted Borg repository (repokey + passphrase file), same as /etc/corporatetraveldc.
+OP_PATHS=(/etc/ntfy /etc/pihole/pihole.toml /etc/pihole/hosts /etc/nftables.d /etc/nginx/conf.d /etc/fail2ban/jail.d /etc/unbound
+          "${HOME}/.config/nextcloud" "${HOME}/.config/containers/systemd" "${HOME}/.config/systemd/user"
+          "${HOME}/.config/rclone" "${HOME}/demos" "${HOME}/.local/state/corporatetraveldc")
+for _u in /etc/systemd/system/corporatetraveldc-*; do [[ -e "$_u" ]] && OP_PATHS+=("$_u"); done
+op_paths=()
+for _p in "${OP_PATHS[@]}"; do
+  if [[ -r "$_p" ]]; then op_paths+=("$_p"); else log "operational path skipped (missing or unreadable): $_p"; fi
+done
+paths=("$stage" "${vol_paths[@]}" /var/lib/corporatetraveldc /etc/corporatetraveldc /var/lib/vnstat /var/lib/ntfy /var/lib/openwebui "${op_paths[@]}")
 # 2026-10-11: root-only files the operator account cannot read (re-issuable credentials held for
 # root services) are excluded rather than letting Borg warn on them every night.
+# 2026-10-24: Proton Bridge's local mail cache (gluon, ~1.3 GB, re-synced from Proton on login), its logs (~190 MB)
+# and downloaded updates (~200 MB), Open WebUI's derived cache, and tar1090's own git checkout
+# (globe_history/tar1090-update, re-cloned by the image) are not state anyone would lose -- excluded.
 excludes=(--exclude /var/lib/corporatetraveldc/models --exclude 'sh:**/__pycache__' --exclude 'sh:**/*.tmp'
-          --exclude /etc/corporatetraveldc/cf-honeypot.token)
+          --exclude /etc/corporatetraveldc/cf-honeypot.token
+          --exclude 'sh:**/protonbridge-data/_data/.local/share/protonmail/bridge-v3/gluon'
+          --exclude 'sh:**/protonbridge-data/_data/.local/share/protonmail/bridge-v3/logs'
+          --exclude 'sh:**/protonbridge-data/_data/.local/share/protonmail/bridge-v3/updates'
+          --exclude 'sh:**/protonbridge-data/_data/.cache'
+          --exclude /var/lib/openwebui/cache
+          --exclude 'sh:**/corporatetraveldc-ultrafeeder-history/_data/tar1090-update')
 
 
 if [[ ! -d "$BACKUP_REPO" ]]; then

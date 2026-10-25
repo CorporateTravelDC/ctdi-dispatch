@@ -622,7 +622,7 @@ async def adsb_live(
 # /api/adsb/local above are unchanged (other code uses them). These routes:
 #   GET /api/map/aircraft?south=&west=&north=&east=  merged local + SWIM
 #   GET /api/map/scope                               extent + tar1090 link
-#   GET /api/map/focus?ident=<hex|callsign>          live, else last SWIM leg
+#   GET /api/map/focus?ident=<hex|flight|reg|serial>  live, else aggregator, else last SWIM leg
 # Local = ultrafeeder aircraft.json (as /api/adsb/live). SWIM = dispatch-web's
 # /api/v1/swim/* (stored FDPS/TAIS positions), fetched server-side with the
 # same token injection as the watchlist read (_dispatch_proxy_headers,
@@ -1032,34 +1032,117 @@ def _last_leg_to_map(leg: dict, now: float) -> dict:
     }
 
 
+def _focus_icao_callsign(raw: str) -> str | None:
+    """IATA flight number -> ICAO operating callsign (UA919 -> UAL919) from
+    the platform's own prefix table (common.airline_codes, importable in the
+    runner image -- pure Python). None when unknown, never a guess."""
+    try:
+        from common.airline_codes import to_icao_callsign
+        return to_icao_callsign(raw)
+    except Exception as e:  # noqa: BLE001
+        log.debug("map focus: airline code table unavailable: %s", type(e).__name__)
+        return None
+
+
+def _focus_find(aircraft: list, hexes: set, callsigns: list, regs: set) -> dict | None:
+    """First merged-shape aircraft whose hex, callsign or registration (dash
+    and case insensitive -- "25-33000" == "2533000") is in the key sets."""
+    cs_set = {c for c in callsigns if c}
+    for ac in aircraft:
+        if (ac.get("hex") and ac["hex"] in hexes) or (ac.get("flight") and ac["flight"] in cs_set) \
+                or (ac.get("r") and _norm_reg(ac["r"]) in regs):
+            return ac
+    return None
+
+
+def _aggregator_to_map(ac: dict) -> dict:
+    """One airplanes.live contact (dispatch's /api/v1/swim/aggregator shape)
+    in the map contract shape: src "aggregator" + the aggregator name so the
+    frontend draws it as what it is -- a third-party position, not ours."""
+    age = ac.get("seen_pos")
+    out = _local_to_map({**ac, "seen_pos": age if age is not None else 0.0})
+    out.update({"src": "aggregator", "aggregator": "airplanes.live"})
+    return out
+
+
 @app.get("/api/map/focus")
 async def map_focus(request: Request, ident: str = Query(..., min_length=2, max_length=16)):
     """The aircraft (merged shape) if it is live anywhere in scope --
     returned as {"live": true, "aircraft": {...}} with the same fields also
-    spread at the top level -- else {"live": false, "last": {...}} from the
-    most recent SWIM leg within 24 h, else 404. ident = hex or callsign;
-    both are tried (a callsign like ABC123 is also a valid hex string)."""
-    key_hex = _norm_hex(ident) if _HEX_RE.match((ident or "").strip().lower()) else None
-    key_cs = _norm_callsign(ident)
+    spread at the top level -- else a live airplanes.live contact in the same
+    shape with src "aggregator", else {"live": false, "last": {...}} from
+    the most recent SWIM leg within 24 h, else 404.
+
+    ident = hex, callsign (IATA or ICAO form), registration or serial, with
+    or without dashes. 2026-10-24 (operator-reported): "UA919" 404'd while
+    "UAL919" hit because only the raw input was compared against ICAO
+    callsigns, and a tail / serial never resolved. Order now:
+      1. receiver + SWIM snapshot by raw hex / callsign / registration and
+         the ICAO form of an IATA flight number (local table, no call);
+      2. dispatch's /api/v1/swim/resolve adds the codeshare operating
+         callsign and the registry hex for a tail or serial -> snapshot again;
+      3. nothing live anywhere -> airplanes.live through dispatch's
+         /api/v1/swim/aggregator (fallback ONLY: the helper behind it keeps
+         AIRPLANES_LIVE_FALLBACK, backoff and the LADD never-send rule); a
+         live third-party fix beats a stale leg, so it is tried before 4;
+      4. SWIM last leg for each candidate (raw, ICAO, operating, hex).
+    DEMO_MODE: synthetic snapshot only -- steps 2-4 never run, so the demo
+    runner makes zero dispatch / aggregator calls."""
+    raw = (ident or "").strip().upper()
+    hexes = {raw.lower()} if _HEX_RE.match(raw.lower()) else set()
+    callsigns = [raw]
+    icao = _focus_icao_callsign(raw)
+    if icao and icao not in callsigns:
+        callsigns.append(icao)
+    regs = {r for r in (_norm_reg(raw),) if r}
     snap = await _map_snapshot(request, None, _MAP_SWIM_MAX_AGE_S)
-    for ac in snap["aircraft"]:
-        if (key_hex and ac.get("hex") == key_hex) or (key_cs and ac.get("flight") == key_cs):
-            # 2026-10-24: the leg line needs airport coordinates, which only the SWIM last-leg
-            # lookup carries; add them for a live hit when the legs agree (never in demo).
-            if not DEMO_MODE and (ac.get("origin") or ac.get("destination")):
-                leg = await _dispatch_get_json(request, "api/v1/swim/last-leg",
-                                               {"ident": ac.get("flight") or ac.get("hex") or ident})
-                if isinstance(leg, dict) and leg.get("origin") == ac.get("origin") \
-                        and leg.get("destination") == ac.get("destination"):
-                    ac = {**ac, "origin_coords": leg.get("origin_coords"),
-                          "destination_coords": leg.get("destination_coords")}
-            return {**ac, "live": True, "aircraft": ac}
+    ac = _focus_find(snap["aircraft"], hexes, callsigns, regs)
+    if ac is None and not DEMO_MODE:
+        res = await _dispatch_get_json(request, "api/v1/swim/resolve", {"ident": raw})
+        if isinstance(res, dict):
+            if res.get("hex"):
+                hexes.add(_norm_hex(res["hex"]))
+            for cs in res.get("callsigns") or []:
+                cs = _norm_callsign(cs)
+                if cs and cs not in callsigns:
+                    callsigns.append(cs)
+            if res.get("registration"):
+                regs.add(_norm_reg(res["registration"]))
+            ac = _focus_find(snap["aircraft"], hexes, callsigns, regs)
+    if ac is not None:
+        # 2026-10-24: the leg line needs airport coordinates, which only the SWIM last-leg
+        # lookup carries; add them for a live hit when the legs agree (never in demo).
+        if not DEMO_MODE and (ac.get("origin") or ac.get("destination")):
+            leg = await _dispatch_get_json(request, "api/v1/swim/last-leg",
+                                           {"ident": ac.get("flight") or ac.get("hex") or raw})
+            if isinstance(leg, dict) and leg.get("origin") == ac.get("origin") \
+                    and leg.get("destination") == ac.get("destination"):
+                ac = {**ac, "origin_coords": leg.get("origin_coords"),
+                      "destination_coords": leg.get("destination_coords")}
+        return {**ac, "live": True, "aircraft": ac}
     if DEMO_MODE:
         raise HTTPException(status_code=404, detail="not tracked")
-    leg = await _dispatch_get_json(request, "api/v1/swim/last-leg", {"ident": key_cs or ident})
-    if not isinstance(leg, dict) or not leg:
-        raise HTTPException(status_code=404, detail="not tracked")
-    return {"live": False, "last": _last_leg_to_map(leg, time.time())}
+    # Nothing live on the receiver or in SWIM: aggregator fallback. Only ICAO-form
+    # callsigns go out (an IATA "UA919" can never match a transmitted callsign and
+    # would waste a rate-limited call); the raw ident is included only when it is
+    # already ICAO form or has no known translation.
+    agg_cs = [c for c in callsigns if not (icao and c == raw and c != icao)]
+    params = {}
+    if hexes:
+        params["hex"] = sorted(hexes)[0]
+    if agg_cs:
+        params["callsigns"] = ",".join(agg_cs[:2])
+    if params:
+        agg = await _dispatch_get_json(request, "api/v1/swim/aggregator", params, timeout=10.0)
+        if isinstance(agg, dict) and isinstance(agg.get("aircraft"), dict) \
+                and agg["aircraft"].get("lat") is not None and agg["aircraft"].get("lon") is not None:
+            ac = _aggregator_to_map(agg["aircraft"])
+            return {**ac, "live": True, "aircraft": ac}
+    for cand in list(dict.fromkeys(callsigns + sorted(hexes))):
+        leg = await _dispatch_get_json(request, "api/v1/swim/last-leg", {"ident": cand})
+        if isinstance(leg, dict) and leg:
+            return {"live": False, "last": _last_leg_to_map(leg, time.time())}
+    raise HTTPException(status_code=404, detail="not tracked")
 
 # ── Signal proxy helpers -----------------------------------------------------
 
@@ -2481,6 +2564,12 @@ _TIER1_PATHS: frozenset[str] = frozenset({
     "api/v1/swim/positions",
     "api/v1/swim/scope",
     "api/v1/swim/last-leg",
+    # 2026-10-24: /api/map/focus identity resolution (IATA -> ICAO, codeshare,
+    # tail/serial -> hex) and the airplanes.live FALLBACK contact. Both are
+    # Tier 1+ only on dispatch-web (a Tier-0 caller gets 404), so the
+    # injection is what makes them answer at all -- same reasoning as above.
+    "api/v1/swim/resolve",
+    "api/v1/swim/aggregator",
 })
 
 # 2026-08-13: second-brain vault content (knowledge-graph viz + raw note

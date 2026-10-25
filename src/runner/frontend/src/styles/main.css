@@ -2488,9 +2488,12 @@ body::before {
 .act-src-matched { color: var(--go); }
 .act-src-local   { color: var(--marginal); }
 .act-src-swim    { color: #9c6bff; }
+.act-src-aggregator { color: #ff9f43; }   /* 2026-10-24: airplanes.live fallback fix */
 .act-conflict    { color: var(--nogo); font-weight: 700; }
 .leaflet-tooltip.selected-tooltip { border-color: var(--text) !important; }
 .leaflet-tooltip.last-seen-tooltip { border-color: #8a9bb0 !important; border-style: dashed !important; }
+.leaflet-tooltip.aggregator-tooltip { border-color: #ff9f43 !important; }
+.aircraft-marker.src-aggregator svg { filter: drop-shadow(0 0 3px rgba(255,159,67,0.75)); }
 
 /* Source badge in the stats bar */
 .stat.source-badge.rcv-swim { color: var(--go); border-color: rgba(0,255,136,0.3); }
@@ -2508,7 +2511,7 @@ body::before {
   max-width: calc(100% - 120px);
 }
 .acmap-search-input {
-  width: 11rem; max-width: 40vw; min-height: 40px; background: transparent; border: none; outline: none;
+  width: 13rem; max-width: 44vw; min-height: 40px; background: transparent; border: none; outline: none;
   color: var(--text); font-family: var(--font-data); font-size: 0.72rem;
   padding: 0 0.6rem; letter-spacing: 0.04em; text-transform: uppercase;
 }
@@ -2614,6 +2617,7 @@ body::before {
 .acls-c.src-matched { color: var(--go); }
 .acls-c.src-local   { color: var(--marginal); }
 .acls-c.src-swim    { color: #9c6bff; }
+.acls-c.src-aggregator { color: #ff9f43; }
 .acls-empty { padding: 0.75rem 0.65rem; color: var(--muted); font-size: 0.66rem; }
 
 @media (max-width: 720px) {

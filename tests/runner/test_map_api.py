@@ -352,3 +352,158 @@ def test_frontend_config_untrusted_placeholder_unchanged():
         out = asyncio.run(rm.frontend_config(_request()))
     assert (out["receiver_lat"], out["receiver_lon"]) == (rm._UNTRUSTED_PLACEHOLDER_LAT, rm._UNTRUSTED_PLACEHOLDER_LON)
     assert (out["receiver_lat"], out["receiver_lon"]) != (0.5, 0.5)
+
+
+# -- focus search (2026-10-24, operator-reported): IATA -> ICAO, codeshare, tail /
+#    serial -> hex, airplanes.live fallback only when receiver + SWIM are empty,
+#    never in demo. The resolver and aggregator live on dispatch-web and are
+#    mocked through _dispatch_get_json like every other dispatch call here.
+
+def _focus_env(local_aircraft, dispatch):
+    return (patch.object(rm, "DEMO_MODE", False),
+            patch.object(rm, "_fetch_local_aircraft", new=AsyncMock(return_value={"aircraft": local_aircraft})),
+            patch.object(rm, "_dispatch_get_json", new=dispatch),
+            patch.object(rm, "_is_trusted", lambda request: True))
+
+
+def _dispatch_recorder(resolve=None, aggregator=None, last_leg=None, positions=None):
+    calls: list[tuple[str, dict]] = []
+
+    async def fake(request, path, params, timeout=5.0):
+        calls.append((path, dict(params)))
+        if path == "api/v1/swim/positions":
+            return {"positions": positions or [], "truncated": False}
+        if path == "api/v1/swim/resolve":
+            return resolve(params["ident"]) if callable(resolve) else resolve
+        if path == "api/v1/swim/aggregator":
+            return aggregator(params) if callable(aggregator) else aggregator
+        if path == "api/v1/swim/last-leg":
+            return last_leg(params["ident"]) if callable(last_leg) else last_leg
+        return None
+    fake.calls = calls
+    return fake
+
+
+def test_focus_iata_flight_number_matches_icao_callsign_without_a_resolver_call():
+    """UA919 -> UAL919 is the platform's own prefix table, applied in the runner
+    before any dispatch call -- the live hit costs nothing extra."""
+    fake = _dispatch_recorder()
+    a, b, c, d = _focus_env([_local(hex_="abc123", flight="UAL919 ")], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="ua919"))
+    assert out["live"] is True and out["aircraft"]["flight"] == "UAL919" and out["aircraft"]["hex"] == "abc123"
+    assert [p for p, _ in fake.calls if p in ("api/v1/swim/resolve", "api/v1/swim/aggregator")] == []
+
+
+def test_focus_codeshare_operating_callsign_via_resolver():
+    """A marketed flight whose operating callsign only dispatch knows
+    (codeshare_map): the resolver supplies it and the snapshot is searched again."""
+    fake = _dispatch_recorder(resolve={"ident": "UA8366", "hex": None, "registration": None,
+                                       "callsigns": ["UA8366", "UAL8366", "SKW8366"]})
+    a, b, c, d = _focus_env([_local(hex_="abc124", flight="SKW8366")], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="UA8366"))
+    assert out["live"] is True and out["aircraft"]["flight"] == "SKW8366"
+    assert ("api/v1/swim/resolve", {"ident": "UA8366"}) in fake.calls
+    assert not any(p == "api/v1/swim/aggregator" for p, _ in fake.calls)
+
+
+def test_focus_serial_matches_receiver_r_field_with_or_without_dash():
+    fake = _dispatch_recorder()
+    a, b, c, d = _focus_env([_local(hex_="abc125", flight="", r="25-33000")], fake)
+    with a, b, c, d:
+        for ident in ("25-33000", "2533000", "25-33000 "):
+            out = asyncio.run(rm.map_focus(_request(), ident=ident))
+            assert out["live"] is True and out["aircraft"]["hex"] == "abc125" and out["aircraft"]["r"] == "25-33000"
+    assert not any(p == "api/v1/swim/resolve" for p, _ in fake.calls)   # the r field alone was enough
+
+
+def test_focus_registration_resolves_to_hex_via_registry_then_matches_by_hex():
+    """N-number not carried by the receiver's r field (or SWIM): the resolver's
+    registry hex (FAA / OpenSky via shared.watchlist._local_registry_hex_lookup)
+    finds the aircraft by hex."""
+    def resolve(ident):
+        assert ident == "Q8991S"
+        return {"ident": ident, "hex": "ABC126", "registration": "Q8991S", "callsigns": []}
+    fake = _dispatch_recorder(resolve=resolve)
+    a, b, c, d = _focus_env([_local(hex_="abc126", flight="TEST321", r=None)], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="q8991s"))
+    assert out["live"] is True and out["aircraft"]["hex"] == "abc126" and out["aircraft"]["src"] == "local"
+
+
+def test_focus_aggregator_only_when_receiver_and_swim_are_empty():
+    agg_hit = {"aggregator": "airplanes.live",
+               "aircraft": {"hex": "abc127", "r": "N000ZZ", "t": "B738", "flight": "UAL919", "lat": 0.7,
+                            "lon": 0.7, "alt_baro": 35000, "gs": 450, "track": 270.0, "seen_pos": 4.0}}
+    # Live on the receiver -> the aggregator is never asked.
+    fake = _dispatch_recorder(resolve={"ident": "UA919", "hex": None, "registration": None,
+                                       "callsigns": ["UA919", "UAL919"]}, aggregator=agg_hit)
+    a, b, c, d = _focus_env([_local(hex_="abc123", flight="UAL919")], fake)
+    with a, b, c, d:
+        asyncio.run(rm.map_focus(_request(), ident="UA919"))
+    assert not any(p == "api/v1/swim/aggregator" for p, _ in fake.calls)
+
+    # Receiver + SWIM empty -> aggregator contact comes back in the map shape, marked as such.
+    fake = _dispatch_recorder(resolve={"ident": "UA919", "hex": None, "registration": None,
+                                       "callsigns": ["UA919", "UAL919"]}, aggregator=agg_hit)
+    a, b, c, d = _focus_env([], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="UA919"))
+    assert out["live"] is True
+    ac = out["aircraft"]
+    assert ac["src"] == "aggregator" and ac["aggregator"] == "airplanes.live"
+    assert ac["hex"] == "abc127" and ac["flight"] == "UAL919" and ac["r"] == "N000ZZ"
+    assert (ac["lat"], ac["lon"], ac["alt_baro"], ac["pos_age_s"]) == (0.7, 0.7, 35000, 4.0)
+    assert ac["conflict"] is False and ac["origin"] is None
+    assert set(ac) >= {"hex", "flight", "r", "t", "lat", "lon", "alt_baro", "gs", "track", "src", "pos_age_s",
+                       "conflict", "conflict_note", "origin", "destination"}
+    agg_params = [p for path, p in fake.calls if path == "api/v1/swim/aggregator"]
+    assert agg_params == [{"callsigns": "UAL919"}]            # ICAO form only, the IATA input is not sent
+    assert not any(path == "api/v1/swim/last-leg" for path, _ in fake.calls)   # a live fix beat the stale leg
+
+
+def test_focus_aggregator_miss_then_last_leg_tries_icao_candidate_then_404():
+    leg = {"callsign": "UAL919", "hex": "abc123", "lat": 0.3, "lon": 0.3, "updated_at": 500.0,
+           "origin": "KBOS", "destination": "KDCA", "status": "landed"}
+    fake = _dispatch_recorder(resolve=lambda ident: {"ident": ident, "hex": None, "registration": None,
+                                                     "callsigns": [ident] + (["UAL919"] if ident == "UA919" else [])},
+                              aggregator=None, last_leg=lambda ident: leg if ident == "UAL919" else None)
+    a, b, c, d = _focus_env([], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="UA919"))
+        assert out["live"] is False and out["last"]["flight"] == "UAL919" and out["last"]["src"] == "swim"
+        assert [p["ident"] for path, p in fake.calls if path == "api/v1/swim/last-leg"] == ["UA919", "UAL919"]
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(rm.map_focus(_request(), ident="ZZ9999"))
+        assert ei.value.status_code == 404
+
+
+def test_focus_hex_resolved_from_registry_is_sent_to_aggregator_by_hex():
+    fake = _dispatch_recorder(resolve={"ident": "Q8991S", "hex": "abc128", "registration": "Q8991S",
+                                       "callsigns": []},
+                              aggregator=lambda p: {"aggregator": "airplanes.live",
+                                                    "aircraft": {"hex": p["hex"], "lat": 0.1, "lon": 0.1,
+                                                                 "seen_pos": 1.0}})
+    a, b, c, d = _focus_env([], fake)
+    with a, b, c, d:
+        out = asyncio.run(rm.map_focus(_request(), ident="Q8991S"))
+    assert out["aircraft"]["src"] == "aggregator" and out["aircraft"]["hex"] == "abc128"
+    # Hex first (the stronger key); the tail stays as a callsign candidate because a GA
+    # aircraft transmits its N-number as its flight id -- dispatch tries it only after the hex.
+    assert [p for path, p in fake.calls if path == "api/v1/swim/aggregator"] == [{"hex": "abc128", "callsigns": "Q8991S"}]
+
+
+def test_focus_demo_never_resolves_or_calls_the_aggregator(demo_no_network):
+    """DEMO_MODE: the synthetic snapshot is the only source. The fixture makes
+    any dispatch call (resolve, aggregator, last-leg) raise."""
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(rm.map_focus(_request(), ident="UA919"))
+    assert ei.value.status_code == 404
+    with pytest.raises(HTTPException):
+        asyncio.run(rm.map_focus(_request(), ident="Q8991S"))
+
+
+def test_focus_routes_are_tier1_injected():
+    for p in ("api/v1/swim/resolve", "api/v1/swim/aggregator"):
+        assert p in rm._TIER1_PATHS

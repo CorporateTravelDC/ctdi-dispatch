@@ -9,7 +9,9 @@
  * Data: /api/map/scope once (pan limit, min zoom, receiver centre, SWIM area, tar1090 link), then
  * /api/map/aircraft for the current viewport every 5 s while visible and 600 ms after each pan/zoom.
  * Click-to-focus from markers, the list panel, the watchlist badge and the search box all go through
- * focusIdent/focusAircraft; off-screen or landed targets resolve through /api/map/focus.
+ * focusIdent/focusAircraft; off-screen or landed targets resolve through /api/map/focus, which (2026-10-24)
+ * also accepts IATA flight numbers, tails and serials and may answer with an airplanes.live fallback fix
+ * (src 'aggregator') that is drawn on the focus layer because the poll never carries it.
  */
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -275,6 +277,25 @@ export default function AircraftMap({ liveState }) {
       setFocusMsg(res.status === 404 ? `${q.toUpperCase()}: not live and no recent SWIM leg` : `${q.toUpperCase()}: lookup failed`)
       return
     }
+    if (res.live && res.aircraft?.src === 'aggregator') {
+      // 2026-10-24: a third-party (airplanes.live) fix is never in /api/map/aircraft, so the poll will not
+      // draw it -- it gets its own hollow marker on the focus layer (same group as "last seen"), live.
+      const ac = res.aircraft
+      const prev = selectedKeyRef.current
+      selectedKeyRef.current = null
+      setSelectedKey(null); setSelectedAc(null); setLastSeen(ac)
+      const prevRec = prev && markersRef.current.get(prev)
+      if (prevRec) { applyStyle(prev, prevRec); prevRec.marker.closeTooltip() }
+      const g = groups.current
+      g.leg?.clearLayers(); g.lastSeen?.clearLayers()
+      L.marker([Number(ac.lat), Number(ac.lon)], { icon: aircraftIcon(ac, { selected: true }), zIndexOffset: 2500 })
+        .addTo(g.lastSeen)
+        .bindTooltip(tooltipHtml(ac), { className: 'ac-tooltip aggregator-tooltip', permanent: true, direction: 'top' })
+        .openTooltip()
+      flyTo(leafletRef.current, ac.lat, ac.lon)
+      setFocusMsg(`${displayName(ac)}: via ${ac.aggregator || 'airplanes.live'} (fallback -- not on the receiver or SWIM)`)
+      return
+    }
     if (res.live) { focusAircraft(res.aircraft); return }
     // Not airborne anywhere in scope: grey "last seen" marker at its last position + most recent leg.
     const last = res.last
@@ -517,10 +538,11 @@ export default function AircraftMap({ liveState }) {
           <input
             className="acmap-search-input"
             type="search"
-            placeholder="Hex, callsign or tail"
+            placeholder="UA919 / UAL919, hex, tail, serial"
+            title="Flight (UA919 or UAL919), hex, registration or serial (25-33000 or 2533000)"
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
-            aria-label="Focus an aircraft by hex, callsign or tail"
+            aria-label="Focus an aircraft by flight number (UA919 or UAL919), hex, registration or serial"
             autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false}
           />
           <button type="submit" className="acmap-search-btn" aria-label="Focus aircraft">GO</button>

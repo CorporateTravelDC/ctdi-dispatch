@@ -22,6 +22,11 @@ manual one on 2026-10-11 23:23Z (see the schedule table). The Pi 5 rebuild seque
 | Platform state | `/var/lib/corporatetraveldc` | `models/` excluded (pinned by digest, re-pullable) |
 | Configuration | `/etc/corporatetraveldc` | already secret-bearing; the archive is encrypted |
 | Traffic history | `/var/lib/vnstat` | vnStat database (unlimited daily retention since 2026-10-11) |
+| Receiver graph history (added 2026-10-24) | the `corporatetraveldc-ultrafeeder-graphs` volume, read through `podman unshare` | graphs1090's collectd RRDs (message rate, range, aircraft counts); lived inside the ultrafeeder container until 2026-10-24 and was wiped by every rebuild |
+| Receiver traces, heatmap, readsb state (added 2026-10-24) | the `corporatetraveldc-ultrafeeder-history` volume (`/var/globe_history`), read through `podman unshare` | `tar1090-update/` (tar1090's own git checkout, re-cloned by the image) excluded |
+| Proton Bridge identity (added 2026-10-24) | the `protonbridge-data` volume, read through `podman unshare` | vault, keychain, gnupg, password store. Mail cache (`gluon`, ~1.3 GB, re-synced on login), logs and updates excluded |
+| ntfy (added 2026-10-24) | `/var/lib/ntfy` | `auth.db` (users, ACLs, access tokens), `cache.db` (message cache) |
+| Open WebUI (added 2026-10-24) | `/var/lib/openwebui` | `webui.db` (accounts, chats, connection settings); `cache/` excluded |
 | Private ledger | a copy of `ledger.jsonl` inside every archive | |
 
 Repositories are excluded (they live on GitHub, signed).
@@ -181,3 +186,93 @@ its profile held no sign-in.
 - `--dry-run` now exits before any dump, ledger write or LADD rotation (it used to run both dumps and append a
   cui-stamp; the 2026-10-12 22:22Z cui-stamp in the ledger is that dry run, not a backup).
 - The dumps read `</dev/null`: `podman exec -i` used to read the caller's stdin and swallowed the rest of a relay.
+
+## Persistence audit (2026-10-24, operator-approved): what each container writes, and where it lands
+
+Trigger: graphs1090's collectd RRD history lived inside the ultrafeeder container and was wiped by every image
+rebuild. The operator asked for the same logic and mounting for every container, and for the backup to cover it.
+Method: `podman diff` (files changed against the image) on every long-running container, read against each
+quadlet's `Volume=` lines; identity material was traced to its source (env file vs in-container file).
+
+| Container | Writes that must survive a rebuild | Where it lives | In Borg (off-site) |
+|---|---|---|---|
+| ultrafeeder | collectd RRDs (`/var/lib/collectd`) | volume `corporatetraveldc-ultrafeeder-graphs` (operator, 2026-10-24) | yes, from this change |
+| ultrafeeder | traces, heatmap, `internal_state` (`/var/globe_history`) | **was the writable layer, lost on every restart**; volume `corporatetraveldc-ultrafeeder-history` from this change | yes, from this change |
+| acarshub | `messages.db` (+wal/shm) | host bind `/var/lib/corporatetraveldc/acarshub` | yes (already) |
+| piaware / fr24feed / planefinder / airnavradar / opensky | feeder identity (`feeder_id`, `openskyd/conf.d/05-serial.conf`, `rbfeeder.ini`, `fr24feed.ini`) | regenerated at start from `/etc/corporatetraveldc/*-secrets.env` (FEEDER_ID, OPENSKY_SERIAL, SHARECODE, SHARING_KEY, FR24KEY) | the env files are, yes; the in-container copies are ephemeral by design |
+| dumpvdl2 / acarsrouter / acars-watcher | nothing (s6 script bind, `/etc/passwd` user creation) | ephemeral | n/a |
+| Postgres (dispatch, Nextcloud) | data | volumes `corporatetraveldc-pgsql-data`, `nextcloud-db-data` | yes, as `pg_dump` (never the raw volume) |
+| Postgres (demo) | data | volume `corporatetraveldc-pgsql-demo-data` | no, by design (rebuildable; see above) |
+| Nextcloud app | files | volume `nextcloud-html`; `/tmp/sess_*` ephemeral | yes (already) |
+| Proton Bridge | vault, keychain, gnupg, password store | volume `protonbridge-data` | **was not**; yes from this change (mail cache excluded) |
+| ntfy | `auth.db`, `cache.db` | host bind `/var/lib/ntfy` | **was not**; yes from this change |
+| Open WebUI | `webui.db`, `vector_db/`, `uploads/` | host bind `/var/lib/openwebui` | **was not**; yes from this change (`cache/` excluded) |
+| our images (web, poller, pusher, runner, ingest-*, demo, amtrak-tracker) | state | host bind `/var/lib/corporatetraveldc` (runner-demo: `/var/lib/corporatetraveldc-demo`, demo-only, rebuildable) | yes (demo sibling: no, by design) |
+| rss-bridge, csexec-contact, nginx demos | caches, manifests, pid files | ephemeral | n/a |
+
+Still outside the archive, known and deliberate or pending: `~/.config/nextcloud/*.env` (the Nextcloud DB
+credentials a restore needs; operator-only, keep with the passphrase and `borg key export`), `/etc/ntfy/server.yml`
+(root-owned config, in the repo's deployment notes), `~/.config/rclone/rclone.conf` (the off-box session itself),
+`/home/corporatetraveldc/demos` (static demo sites, not a git checkout), the office Postgres instance (pending,
+above).
+
+**Seeding `corporatetraveldc-ultrafeeder-history`.** The quadlet line only takes effect on the next ultrafeeder
+restart, which creates a new container and discards the writable layer. Copy the live data into the volume first:
+
+```
+podman volume create corporatetraveldc-ultrafeeder-history
+podman cp corporatetraveldc-ultrafeeder:/var/globe_history/. /home/corporatetraveldc/.local/share/containers/storage/volumes/corporatetraveldc-ultrafeeder-history/_data/
+podman unshare ls -la /home/corporatetraveldc/.local/share/containers/storage/volumes/corporatetraveldc-ultrafeeder-history/_data/
+```
+
+`protonbridge-data`, `/var/lib/ntfy` and `/var/lib/openwebui` already persist; they only needed adding to the
+archive, no seeding. A volume missing at run time is logged and skipped by `ctdi-backup.sh`, never fatal.
+
+**Offline / parallel off-site copy: none exists (checked 2026-10-24).** One NVMe (data and the Borg repository on
+the same btrfs volume), no removable media, one rclone remote (`proton:`), one target. A second, independent copy
+path (an offline USB Borg repository rotated by hand, or a second remote of a different provider) is not built and
+is not claimed anywhere; the freshness check verifies only the single Proton sync.
+
+## Lockdown readiness (2026-10-24; the "lockdown -- contain" tier itself is post-freeze, not built)
+
+Design constraint recorded for that tier: it will Borg-snapshot every state volume, make the set read-only and
+immutable as root (`chattr +i` or root-locked ownership), `podman rm -f` every container to drop the writable
+layers, then recreate from signed quadlets and reattach the untouched volumes. Consequences applied in this batch:
+MUST-PERSIST data goes in **named volumes** (`corporatetraveldc-<service>-<what>`, one per service and purpose),
+not new host bind paths; state and ephemeral data stay in separate mounts where the image allows it. "Safe to
+freeze read-only" below means: the recreated container still starts and serves with that mount read-only.
+
+| Volume / state dir | Service | Safe to freeze read-only | Why |
+|---|---|---|---|
+| `corporatetraveldc-ultrafeeder-graphs` | ultrafeeder (graphs1090/collectd) | y | collectd's RRD updates fail and log; readsb, tar1090 and every outbound feed keep running. Graphs stop at the freeze point. |
+| `corporatetraveldc-ultrafeeder-history` | ultrafeeder (readsb/tar1090) | partial, verify | readsb's trace/heatmap writes fail non-fatally (decoding and feeding continue). The image also writes its tar1090 git checkout into `tar1090-update/` **inside this volume** at start (mixed state + ephemeral; the image's layout, not ours). Post-freeze: give `tar1090-update` its own ephemeral mount, then this becomes y. |
+| `protonbridge-data` | Proton Bridge | n (today) | identity (`.config`, `.gnupg`, `.password-store`) shares the volume with the mail cache (`gluon`), logs and updates that the bridge writes on every start (mixed mount). Post-freeze: split identity into `corporatetraveldc-protonbridge-identity` and leave cache/logs on an ephemeral mount; identity alone is freeze-safe. |
+| `nextcloud-html` | Nextcloud | n | Nextcloud needs `data/`, `config/` and appdata writable to serve; its own equivalent is maintenance mode, not a read-only root. Snapshot = Borg of the volume + the dump. |
+| `corporatetraveldc-pgsql-data` | dispatch Postgres | n | Postgres writes WAL to start; freeze = stop the instance, keep the `pg_dump`. Never read raw. |
+| `nextcloud-db-data` | Nextcloud Postgres | n | same as above |
+| `corporatetraveldc-pgsql-demo-data` | demo Postgres | n | same; rebuildable anyway (`scrub-demo-source.py --backfill`) |
+| `corporatetraveldc-pgsql-office-data` | office Postgres (disabled) | n | same; empty until the office units are enabled |
+| `corporatetraveldc-pgsql-sock`, `corporatetraveldc-pgsql-demo-sock`, `corporatetraveldc-triggers` | sockets, triggers | not state | runtime only; must stay writable or nothing connects |
+| `/var/lib/ntfy` (host bind) | ntfy | n | SQLite `cache.db` is written on every message, `auth.db` on token use. Migration candidate: `corporatetraveldc-ntfy-data` named volume (post-freeze; a data move, not a config edit). |
+| `/var/lib/openwebui` (host bind) | Open WebUI | n | SQLite `webui.db` written on use. Migration candidate: `corporatetraveldc-openwebui-data` (post-freeze). |
+| `/var/lib/corporatetraveldc` (host bind) | every platform container | n | live platform state, written continuously; frozen only with the stack stopped (that is what the tier does between steps 3 and 4) |
+| `/var/lib/corporatetraveldc/acarshub` (host bind, inside the above) | acarshub | n | SQLite `messages.db`, written per message |
+
+
+
+## Operational config in ~ and /etc (2026-10-24)
+
+Operator: "just the operational directories in ~/ and /etc". `ctdi-backup.sh` OP_PATHS adds, when readable:
+`/etc/ntfy`, `/etc/pihole/pihole.toml`, `/etc/pihole/hosts` (v6 home of custom.list, readable via the pihole group -- no root mirror needed), `/etc/nftables.d` (exit-node firewall), `/etc/nginx/conf.d`,
+`/etc/fail2ban/jail.d`, `/etc/unbound`, `/etc/systemd/system/corporatetraveldc-*`, `~/.config/nextcloud`,
+`~/.config/containers/systemd`, `~/.config/systemd/user`, `~/.config/rclone`, `~/demos`,
+`~/.local/state/corporatetraveldc` (relay progress markers). Missing/unreadable paths are logged and skipped.
+Not included on purpose: `/etc/NetworkManager/system-connections` (root-only, Wi-Fi/hotspot passwords) and
+root-only Pi-hole lists. Credential-bearing paths (`~/.config/nextcloud`, `~/.config/rclone`) sit inside the
+encrypted Borg repository, like `/etc/corporatetraveldc`.
+
+## Second copy (decision 2026-10-24)
+
+Proton Drive (rclone) stays the single off-site copy for now. Planned by end of 2026: the spare Raspberry Pi 5
+(8 GB) as a NAS host holding a second, independent copy of the Borg repository (offline/parallel), so recovery
+no longer depends on one NVMe plus one provider.

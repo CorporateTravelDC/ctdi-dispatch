@@ -119,3 +119,24 @@ def test_wait_fails_at_the_bound_instead_of_hanging(tmp_path):
     r = _run_wait(tmp_path, active_polls=10_000, max_wait=120)
     assert r.returncode == 1
     assert "still active after 120s" in r.stdout
+
+
+def test_canary_readiness_waits_for_the_final_server_and_the_database():
+    # 2026-10-24: pg_isready matched the entrypoint's temporary init server; the canary then logged a FATAL
+    # "database does not exist" and failed a healthy image.
+    src = SCRIPT.read_text()
+    assert "init process complete" in src
+    assert "SELECT 1" in src and "streak" in src
+
+
+def test_canary_readiness_window_survives_a_loaded_box():
+    # 2026-10-24: a 2-minute window timed out a healthy canary under load (init completed just after it).
+    src = SCRIPT.read_text()
+    assert "for _ in $(seq 1 300); do" in src
+
+
+def test_readiness_never_pipes_podman_logs_into_grep_q_under_pipefail():
+    # 2026-10-24: grep -q + pipefail = SIGPIPE false negative once the canary log is large.
+    src = SCRIPT.read_text()
+    assert 'podman logs "${CANARY_CONTAINER}" 2>&1 | grep -q' not in src
+    assert 'clog=$(podman logs "${CANARY_CONTAINER}"' in src
