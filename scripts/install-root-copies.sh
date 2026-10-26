@@ -34,6 +34,12 @@
 #   scripts/tailscale-cert-refresh-nts.sh <- corporatetraveldc-nts-cert-refresh.service (2026-10-05,
 #     was an operator user unit whose deploy needed interactive sudo)
 #
+#   scripts/ctdc-claude-no-agent-hook.py + config/claude-code/managed-settings.json
+#     <- Claude Code's managed policy (2026-10-25, operator): /etc/claude-code/managed-settings.json
+#     (root 0644, overrides every user/project setting) wires the root-owned hook that blocks
+#     Claude and every subagent from the SSH/GPG agents, key material, signing, commit and push;
+#     plus the empty read-only GNUPGHOME it points at. scripts/claude-policy-check.sh verifies it.
+#
 #   --check   report what would be installed and whether installed copies are current
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,13 +51,19 @@ SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-ce
          scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh
          scripts/approved-exec.py scripts/approved-exec.conf
          scripts/backup/agent-home-snapshot.sh
-         scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
+         scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh
+         scripts/ctdc-claude-no-agent-hook.py)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
      fail2ban/jail.d/nginx-honeypot-corporatetraveldc.conf fail2ban/jail.d/nginx-limit-req-corporatetraveldc.conf
      fail2ban/filter.d/nginx-honeypot.conf)
 PYLIB=(src/common/__init__.py src/common/board_sign.py)
+# 2026-10-25: Claude Code managed policy (root-owned; Claude cannot edit it) and the empty,
+# read-only GNUPGHOME it hands every Claude process.
+CLAUDE_POLICY_SRC=config/claude-code/managed-settings.json
+CLAUDE_POLICY_DEST=/etc/claude-code/managed-settings.json
+CLAUDE_EMPTY_GNUPG=/usr/local/share/ctdc/claude-empty-gnupg
 UNITS=(
   "systemd/system/corporatetraveldc-team-liveness.service"
   "systemd/system/corporatetraveldc-team-liveness.timer"
@@ -88,6 +100,8 @@ if (( CHECK )); then
     cmp -s "${REPO}/${f}" "/etc/${f}" && s=current || s="DIFFERS from /etc/${f}"
     printf '%-40s %s\n' "$(basename "$f")" "$s"
   done
+  cmp -s "${REPO}/${CLAUDE_POLICY_SRC}" "${CLAUDE_POLICY_DEST}" && s=current || s="DIFFERS from ${CLAUDE_POLICY_DEST}"
+  printf '%-40s %s\n' "managed-settings.json" "$s"
   for u in "${UNITS[@]}"; do
     n=$(basename "$u"); grep -q "${DEST}/" "/etc/systemd/system/${n}" 2>/dev/null && s=installed-path || s="not using ${DEST}"
     [[ "$n" == *.service ]] && printf '%-40s %s\n' "$n" "$s"
@@ -135,4 +149,13 @@ if (( f2b_changed )); then
   if fail2ban-client -t >/dev/null 2>&1; then systemctl reload-or-restart fail2ban && echo "fail2ban config updated + reloaded"
   else echo "install-root-copies: fail2ban-client -t FAILED on the new config -- fail2ban NOT reloaded; fix before the next restart" >&2; fi
 fi
+# 6. Claude Code managed policy (hash-checked against the manifest like the scripts)
+want=$(manifest_hash "${CLAUDE_POLICY_SRC}"); [[ -n "$want" ]] || { echo "install-root-copies: ${CLAUDE_POLICY_SRC} is not in the manifest -- refusing" >&2; exit 4; }
+install -d -m 0755 -o root -g root /etc/claude-code /usr/local/share/ctdc
+install -d -m 0555 -o root -g root "${CLAUDE_EMPTY_GNUPG}"
+install -m 0644 -o root -g root "${REPO}/${CLAUDE_POLICY_SRC}" "${CLAUDE_POLICY_DEST}.new"
+have=$(sha256sum "${CLAUDE_POLICY_DEST}.new" | cut -d' ' -f1)
+[[ "$have" == "$want" ]] || { rm -f "${CLAUDE_POLICY_DEST}.new"; echo "install-root-copies: ${CLAUDE_POLICY_SRC} changed between verify and copy -- refusing" >&2; exit 5; }
+mv -f "${CLAUDE_POLICY_DEST}.new" "${CLAUDE_POLICY_DEST}"; restorecon "${CLAUDE_POLICY_DEST}" 2>/dev/null || true
+echo "Claude Code managed policy installed (${CLAUDE_POLICY_DEST}); new Claude sessions pick it up at start"
 echo "installed $(wc -l <"${DEST}/.ctdc-installed") file(s) to ${DEST}; units updated -- now: sudo systemctl daemon-reload"

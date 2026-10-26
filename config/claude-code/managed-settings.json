@@ -1,0 +1,48 @@
+{
+  "env": {
+    "SSH_AUTH_SOCK": "",
+    "GPG_AGENT_INFO": "",
+    "GNUPGHOME": "/usr/local/share/ctdc/claude-empty-gnupg",
+    "GIT_SSH_COMMAND": "ssh -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1"
+  },
+  "syncClaudeAiSkills": false,
+  "syncClaudeAiPlugins": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "deny": [
+      "Bash(ssh-add:*)",
+      "Bash(ssh-agent:*)",
+      "Bash(gpg-agent:*)",
+      "Bash(gpgconf:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Read(/home/corporatetraveldc/.ssh/**)",
+      "Read(/home/corporatetraveldc/.gnupg/**)",
+      "Edit(/home/corporatetraveldc/.ssh/**)",
+      "Edit(/home/corporatetraveldc/.gnupg/**)",
+      "Edit(/etc/claude-code/**)",
+      "Edit(/usr/local/libexec/ctdc/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /usr/local/libexec/ctdc/ctdc-claude-no-agent-hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -164,7 +164,26 @@ else
     ntfy_clear "DEMO ISOLATION CHECK FAILED"
 fi
 
-if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 && ${demo_iso_rc} -eq 0 ]]; then
+# 2026-10-25 (operator): the Claude Code managed policy (no SSH/GPG agent, no
+# keys, no sign/commit/push for Claude or any subagent) must be installed,
+# root-owned, equal to the signed copy, behaviourally intact; the Claude Code
+# version must equal its pin and the user settings their signed baseline, so a
+# silent upstream or local change surfaces here. Findings only, never a value.
+claude_rc=0
+claude_output="$("${REPO_DIR}/scripts/claude-policy-check.sh" --quiet 2>&1)" || claude_rc=$?
+if [[ ${claude_rc} -ne 0 ]]; then
+    log "error" "SWEEP FAILED -- Claude Code policy check:"
+    log "error" "${claude_output}"
+    claude_summary="$(grep -o 'FAIL: .*' <<<"${claude_output}" | cut -c7- | head -3 | cut -c1-200 | paste -sd';')"
+    ntfy_send "CLAUDE POLICY DRIFT" \
+        "$(basename "${REPO_DIR}"): check claude-policy failed: ${claude_summary:-exit ${claude_rc}}. Claude's agent/key/sign/push lockout or a pinned setting changed." \
+        4
+else
+    log "info" "Claude Code policy: in force, matches signed copy"
+    ntfy_clear "CLAUDE POLICY DRIFT"
+fi
+
+if [[ ${rc} -eq 0 && ${env_quoting_rc} -eq 0 && ${timer_requires_rc} -eq 0 && ${chain_rc} -eq 0 && ${build_rc} -eq 0 && ${demo_iso_rc} -eq 0 && ${claude_rc} -eq 0 ]]; then
     log "info" "sweep OK: ${output}"
     printf '{"status":"ok","last_run_epoch":%s,"last_run_iso":"%s"}\n' \
         "${now_epoch}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${STATE_FILE}"
@@ -208,6 +227,6 @@ fi
 [[ ${rc} -eq 0 ]] && ntfy_clear "INTEGRITY SWEEP FAILED"
 [[ ${chain_rc} -eq 0 && ${chain_exec_rc} -eq 0 ]] && ntfy_clear "AUDIT CHAIN BROKEN"
 [[ ${env_quoting_rc} -eq 0 ]] && ntfy_clear "ENV QUOTING REGRESSION"
-if [[ ${rc} -ne 0 || ${env_quoting_rc} -ne 0 || ${timer_requires_rc} -ne 0 || ${chain_rc} -ne 0 || ${build_rc} -ne 0 || ${demo_iso_rc} -ne 0 ]]; then
+if [[ ${rc} -ne 0 || ${env_quoting_rc} -ne 0 || ${timer_requires_rc} -ne 0 || ${chain_rc} -ne 0 || ${build_rc} -ne 0 || ${demo_iso_rc} -ne 0 || ${claude_rc} -ne 0 ]]; then
     exit 1
 fi

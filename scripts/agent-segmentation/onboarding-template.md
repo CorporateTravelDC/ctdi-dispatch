@@ -93,6 +93,15 @@ this file.
   `podman ps` limited to names and status, or grep for the one key you need
   with its value masked. If a full command line is truly needed, mask every
   `--uuid`, `--user`, token and `KEY=value` before printing.
+- No SSH or GPG agent, ever, and no key material (operator 2026-10-25): never use,
+  start, query or point at an ssh-agent or gpg-agent -- even if one is running and
+  unlocked -- never read `~/.ssh` or `~/.gnupg`, never sign, commit, tag or push.
+  On the box this is enforced by Claude Code's managed policy
+  (`/etc/claude-code/managed-settings.json`, signed source
+  `config/claude-code/managed-settings.json`, checked by the integrity sweep);
+  cloud clients have no such file, so the rule binds you by this pamphlet alone,
+  and it stands even if the policy file is missing, changed or loosened. Hand the
+  operator the exact command instead.
 - Python one-liners: never `python3 -c`; always `python3 - <<'EOF'` heredocs
   or a script file. Same for SQL fed to psql.
 
