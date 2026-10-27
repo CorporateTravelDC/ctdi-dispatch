@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily documentation drift check, Tuesday-Sunday 09:00 UTC (05:00 EDT / 04:00 EST); Monday is the weekly timer's
+# 2026-10-26 (operator): drift checked every day, not once a week. UTC stated explicitly (2026-10-16 rule).
+# No self-referential Requires=/Wants= -- see docs/BOOT_STORM_TIMER_REQUIRES.md.
+
+[Timer]
+OnCalendar=Tue..Sun *-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

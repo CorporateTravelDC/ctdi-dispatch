@@ -85,3 +85,13 @@ def test_installer_and_sweep_carry_the_policy():
 def test_version_pin_and_baseline_exist():
     assert (ROOT / "config" / "claude-code" / "claude-code.version").read_text().strip()
     json.loads((ROOT / "config" / "claude-code" / "user-settings.baseline.json").read_text())
+
+
+def test_policy_check_finds_claude_without_local_bin_on_path():
+    """2026-10-26: the integrity-sweep unit has no ~/.local/bin on PATH; a bare `claude` found
+    nothing and every sweep since the policy landed failed. The check resolves the binary itself."""
+    src = (ROOT / "scripts" / "claude-policy-check.sh").read_text()
+    assert 'CLAUDE_BIN="${HOME}/.local/bin/claude"' in src
+    assert "${CLAUDE_BIN:-" not in src and "command -v claude" not in src   # no override, no PATH lookup
+    code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any(" claude --version" in ln or "$(claude " in ln or " claude -p" in ln for ln in code)

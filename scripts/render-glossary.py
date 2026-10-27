@@ -98,6 +98,7 @@ SOURCE_DOMAINS = {
     "agent-network-protocol.com": "Agent Network Protocol specification", "postgresql.org": "PostgreSQL documentation",
     "gnupg.org": "GnuPG project", "rpm.org": "RPM Package Manager project", "rssboard.org": "RSS Advisory Board",
     "learn.microsoft.com": "Microsoft Open Specifications (SMB)", "pi-hole.net": "Pi-hole documentation (FTL)",
+    "openstreetmap.org": "OpenStreetMap, the open map data project (operator 2026-10-26)",
     # Vendors, only for their own products
     "flightaware.com": "FlightAware, for AeroAPI only", "flightradar24.com": "Flightradar24, for itself only",
 }

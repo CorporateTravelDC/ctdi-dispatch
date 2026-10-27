@@ -28,6 +28,10 @@ POLICY=/etc/claude-code/managed-settings.json
 HOOK=/usr/local/libexec/ctdc/ctdc-claude-no-agent-hook.py
 EMPTY_GNUPG=/usr/local/share/ctdc/claude-empty-gnupg
 USER_SETTINGS="${CLAUDE_USER_SETTINGS:-${HOME}/.claude/settings.json}"
+# 2026-10-26: the installed binary by its one fixed path -- the integrity-sweep unit's PATH has no
+# ~/.local/bin, so a bare `claude` found nothing and every sweep since 2026-10-25 failed here. No
+# environment override and no PATH lookup: nothing can point this check at a different program.
+CLAUDE_BIN="${HOME}/.local/bin/claude"
 LIVE=0; QUIET=0
 for a in "$@"; do case "$a" in --live) LIVE=1 ;; --quiet) QUIET=1 ;; esac; done
 fails=0
@@ -72,8 +76,8 @@ fi
 
 # 5
 pin=$(tr -d '[:space:]' <"${REPO}/config/claude-code/claude-code.version" 2>/dev/null)
-have=$(claude --version 2>/dev/null | awk '{print $1; exit}')
-if [[ -z "$have" ]]; then fail "claude --version gave nothing"
+have=$("${CLAUDE_BIN}" --version 2>/dev/null | awk '{print $1; exit}')
+if [[ -z "$have" ]]; then fail "claude --version gave nothing (binary: ${CLAUDE_BIN})"
 elif [[ "$have" != "$pin" ]]; then fail "Claude Code is ${have}, pinned ${pin}: review the release notes for permission/auto-mode changes, then bump config/claude-code/claude-code.version in a signed commit"
 else ok "Claude Code ${have} = pin"; fi
 
@@ -93,7 +97,7 @@ else ok "user settings = signed baseline"; fi
 
 # --live
 if (( LIVE )); then
-    out=$(cd /tmp && timeout 180 claude -p --model haiku --max-turns 2 --allowedTools Bash \
+    out=$(cd /tmp && timeout 180 "${CLAUDE_BIN}" -p --model haiku --max-turns 2 --allowedTools Bash \
           "Run exactly this shell command once with the Bash tool and then quote any error text you got back, verbatim: ssh-add -l" </dev/null 2>&1 || true)
     if grep -q 'operator policy' <<<"$out"; then ok "live: a real Claude session was blocked by the managed policy hook"
     else fail "live: no policy block seen from a real Claude session (excerpt: $(tr '\n' ' ' <<<"$out" | tr -cd '[:alnum:] .,:()_-' | cut -c1-160))"; fi

@@ -125,3 +125,18 @@ def test_weekly_service_description_is_honest():
     desc = re.search(r"^Description=(.*)$", svc, re.M).group(1)
     assert "Fable" not in desc and "both repos" not in desc
     assert "one repo" in desc and "optional" in desc
+
+
+def test_daily_doc_drift_runs_the_same_signed_check_every_other_day():
+    """2026-10-26 (operator): the daily doc drift check that was never made. Same script as the
+    weekly job, Tuesday-Sunday 09:00 UTC (Monday is the weekly timer's), no cloud model."""
+    tmr = (UNITS / "corporatetraveldc-docs-drift-daily.timer").read_text()
+    svc = (UNITS / "corporatetraveldc-docs-drift-daily.service").read_text()
+    weekly = (UNITS / "corporatetraveldc-docs-drift-weekly.service").read_text()
+    assert re.search(r"^OnCalendar=Tue\.\.Sun \*-\*-\* 09:00:00 UTC$", tmr, re.M)
+    assert "Persistent=true" in tmr and "WantedBy=timers.target" in tmr
+    exe = re.search(r"^ExecStart=(.*)$", svc, re.M).group(1)
+    assert exe == re.search(r"^ExecStart=(.*)$", weekly, re.M).group(1)
+    assert exe.endswith("/scripts/weekly-doc-drift-check.sh")
+    assert "OnFailure=corporatetraveldc-unit-failure-notify@%n.service" in svc
+    assert not re.search(r"\bclaude\b", re.sub(r"(?m)^#.*$", "", svc))   # no model CLI in the unit

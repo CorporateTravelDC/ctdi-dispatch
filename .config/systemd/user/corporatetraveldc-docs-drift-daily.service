@@ -1,0 +1,16 @@
+[Unit]
+Description=Corporate Travel DC -- daily documentation drift check (one repo; live facts + doc claims checked deterministically, local-model narrative optional)
+# 2026-10-26 (operator): "the daily that was never made". Same signed script as the weekly
+# job (scripts/weekly-doc-drift-check.sh), Tuesday-Sunday; Monday stays with the weekly timer.
+# No cloud model anywhere in the path; detection is deterministic (check-claude-md-drift.sh +
+# doc-claims-check.py), the narrative is the local model's and optional.
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/weekly-doc-drift-check.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target
