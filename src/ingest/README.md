@@ -518,7 +518,7 @@ file (`scripts/service-env/generate.py --write`), then
 
 | Feed | Parser | Status |
 |---|---|---|
-| FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). Added 2026-10-15: since 2026-10-14 watch hits go through the shared flight-instance matcher (`common.flight_instance.match_watch_entry`, by leg rather than number), and the filed departure time (FH departure `runwayTime` estimated, first filing wins) is stored (`docs/FLIGHT_INSTANCE_RESOLVER.md`). FDPS is a tail source; FIDS is not. |
+| FDPS | `fdps_parser.py` | **Live — FIXM 3.0 parser implemented 2026-07-20** (`_parse_fdps_message_fixm30`; version auto-detected by `_detect_fixm_version`, FIXM 4.2 path kept as legacy). Sources handled: `FH` (flight plan), `TH` (track), `CL` (cancel), `HP`/`OH` (handoff), `HZ` (heartbeat), plus `AH`/`BA`/`LH`/`HX` (generic extraction) (corrected 2026-10-25: `_KNOWN_SOURCES_FIXM30`, `fdps_parser.py:155-178`, also holds `HF`, `RH` and `HU`, 13 sources in all). Extracts gufi, callsign, squawk, origin/destination, aircraft type, registration, position, altitude, ground speed, controlling facility, flight status. Marine One / VIP detection (callsigns + squawks, 50 NM of DCA), watchlist matching, 50 NM approach alerts (10-min dedup). Added 2026-10-15: since 2026-10-14 watch hits go through the shared flight-instance matcher (`common.flight_instance.match_watch_entry`, by leg rather than number), and the filed departure time (FH departure `runwayTime` estimated, first filing wins) is stored (`docs/FLIGHT_INSTANCE_RESOLVER.md`). FDPS is a tail source; FIDS is not. |
 | STDDS/SMES | `smes_parser.py` | Live — ASDE-X surface tracks (`asdexMsg` position/mlat/adsb reports) at DCA/IAD/BWI → `surface_tracks`. Added 2026-10-15: surface events at DCA/IAD/BWI are also appended to `surface_event_log` (pg_schema/0075, 120-day prune), which keeps ramp exits. Watch matching is by instance (`match_watch_surface_event`: departure events at the watch's origin, arrival events at its destination, inside the instance window). The TDES departure clearance links by GUFI to the FDPS plan, whose aircraft address gives the tail (operator, 2026-10-14). STDDS also carries RVR, TDES, TDLS and D-ATIS (see the 2026-08-30 notes above). |
 | STDDS/TAIS | `smes_parser.py` | Live — `TATrackAndFlightPlan` terminal radar tracks → `terminal_tracks` |
 | TFMS | `tfms_parser.py` | Live — see message-type table below. FADT EDCT watch hits use the instance matcher since 2026-10-13/14 (added 2026-10-15) |
@@ -528,7 +528,7 @@ file (`scripts/service-env/generate.py --write`), then
 
 ### TFMS message types (`tfms_parser.py`)
 
-Family 1 — `fiOutput > fiMessage[msgType]`, all 9 types implemented:
+Family 1 — `fiOutput > fiMessage[msgType]`, ~~all 9 types implemented~~ (corrected 2026-10-25: 12 types in `_KNOWN_MSG_TYPES`, `tfms_parser.py:200-213`: the 9 below plus `FADT`, `PARAM` and `REROUTE`, added 2026-08-30):
 `TMI_FLIGHT_LIST`, `RSTR` (restrictions/MIT), `APTC` (airport config —
 cached, alerts on rate drops ≥20% / IMC degradation), `GADV` (general
 advisories → nas-alerts), `GDP`, `GS`, `FXA`, `TMI_UPDATE`, and — added
@@ -676,7 +676,9 @@ Staleness thresholds live in `src/web/main.py` (`healthz()` and
 `get_feeds()`): most REST feeds 900 s (`amtrak`, `eurocontrol` and `jasdat`
 3600 s per `/api/v1/feeds` on 2026-10-15), `nws` 2700 s, `atcscc_opsplan` 7200 s,
 `dca_fids`/`iad_fids` **600 s** (raised 2026-08-10 from 180 s, which was
-tighter than the real 300 s poll interval), push heartbeats 300 s — except
+tighter than the real 300 s poll interval), ~~push heartbeats 300 s — except
 `push:tfms`/`push:tbfm`, which have no per-feed entry in that dict and fall
 through to its 3600 s default (`stale_thresholds.get(name, 3600)`), per
-`docs/DATA_SOURCES.md`.
+`docs/DATA_SOURCES.md`.~~ (corrected 2026-10-25: push heartbeats come from
+`failover.push_stale_thresholds()`, merged at `src/web/main.py:914`: 300 s for
+`push:tfms` and `push:tbfm` like the other push feeds, 660 s for `push:amtrak`.)

@@ -8,23 +8,32 @@ converted_to_skill: flight-hifi-track
 FLIGHT HIGH-FIDELITY POSITION TRACKER
 
 [Status 2026-10-15] Superseded by `skills/flight-hifi-track/SKILL.md` (shipped in this repo,
-rewritten 2026-08-31). That skill resolves callsign, hex and registration LOCAL ONLY, adds an
+rewritten 2026-08-31). That skill resolves callsign, hex and registration ~~LOCAL ONLY~~ (corrected
+2026-10-25: local first; when every local source has no contact it may ask airplanes.live, but only
+through the shared fallback named below, per `skills/flight-hifi-track/SKILL.md` source priority 3a
+and its 2026-10-15 and 2026-10-22 blocks), adds an
 OOOI watchlist entry, and pushes to `flight-alerts` and `dispatch-debriefs` through
 `POST /admin/push-alert`. Direct `api.airplanes.live` position/identity lookups, as in STEP 1
 below, have been against the standing "no third-party position/lookup APIs" rule since
 2026-08-27/28; do not run this file's STEP 1 as written. Kept for the design note and the
 history of the conversion.
 The only allowed airplanes.live path is the shared fallback `src/common/airplanes_live.py`
-(reinstated 2026-10-08, off unless `AIRPLANES_LIVE_FALLBACK=1`, runs only after every local
-source has no contact, never sends a LADD-listed identifier).
+(reinstated 2026-10-08, off unless ~~`AIRPLANES_LIVE_FALLBACK=1`~~ (corrected 2026-10-25:
+`AIRPLANES_LIVE_FALLBACK` is `1`, `true`, `yes` or `on`, `src/common/airplanes_live.py:91-92`; it is on
+live), runs only after every local source has no contact, never sends a LADD-listed identifier).
 
-[Re-verified 2026-08-23] Both external calls below still work as written:
+[Re-verified 2026-08-23] Both external calls below still work as written
+(unverified 2026-10-25: this sweep makes no third-party calls, and the calls are not allowed;
+see the status note above):
 `GET https://api.airplanes.live/v2/hex/<hex>` and `/v2/callsign/<callsign>`
 each return 200 with the documented `{"ac":[...]}` shape (empty `ac` when the
 aircraft is not currently on feed — the "not found on feed" case, not an
-error). `/v2/reg/` is NOT used here and should not be substituted: it is the
+error). `/v2/reg/` is NOT used here and should not be substituted: ~~it is the
 flaky endpoint the platform's own identity-resolution chain deliberately
-falls back to last. The `POST /admin/push-test-alert` call is still live but
+falls back to last~~ (corrected 2026-10-25, superseded: true on 2026-08-23, when
+`src/poller/main.py` still called `/v2/reg/`; since d5c4df0d (2026-08-30T03:00Z) no
+platform code uses it, and `src/common/airplanes_live.py` has only `by_hex` and
+`by_callsign`, lines 158-178). The `POST /admin/push-test-alert` call is still live but
 is a **legacy alias** for `/admin/push-alert` and requires an **admin**-tier
 token (a cert/T1 token 403s); it also 400s on a `message` over 200 chars —
 see the endpoint note in this directory's README.md.

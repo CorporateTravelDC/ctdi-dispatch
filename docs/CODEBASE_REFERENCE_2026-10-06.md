@@ -1,8 +1,10 @@
+> Status 2026-10-25: dated snapshot of 2026-10-06 (HEAD 2c3f81b), not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current. Counts and sizes: the signed manifest lists 1,712 files; 1,740 tracked files; src/ is 208 Python files / 85,081 lines; 2,183 tests in 255 files; 83 migrations (0001-0084, no 0080) creating 128 distinct tables; 77 tracked quadlets and 78 tracked user timers; 37 running containers; 135 web routes (new `assignments` and `swim_positions` routers) and 33 runner routes; 155 top-level scripts; most module line counts have grown. SQLite: `corporatetraveldc.db`, `demo-source.db` and the other stale SQLite files are gone, `ref_conn()` is deleted, the code default is postgres (sqlite is refused outside tests), and `DISPATCH_DB` has no default. Units: 52 quadlets load dispatch.env; several timer schedules moved; nms-v240-check, ops-brief-deferred and ops-brief-rebuild-watcher were retired 2026-10-20, and uber-traffic-watch was deleted 2026-10-10; the SDR silence/link watchdogs and demo-source-refresh (03:17 UTC) are enabled; the demo-portal quadlets are installed; ops-brief and ep-advance run through `src/common/brief_lane.py`; transport-pattern-digest uses `flock -w 1200 -E 75`; humans.slice is tracked but not installed; the only live-only units are claude-remote-control.service and the staged docs-drift-daily pair. Other: the two shadowed watchlist routes were removed 2026-10-15; TFMS writes `flight_ooooi_times`, not `flight_events`, and `trends_signal.py` has no caller (both already so when written); SWIM usage counters flush every 60 s; ~~AeroAPI is used only by `src/common/gate_aeroapi.py`~~ (corrected 2026-10-25: AeroAPI is called from `src/common/gate_aeroapi.py` and also from the poller's watchlist flight sweep, `src/poller/main.py:634-639, 831-834`; that second path reads `FLIGHTAWARE_AEROAPI_KEY`, which no live env file sets, so only the gate fallback is live); `maintenance-window-guard.sh --rolling` reads `maintenance_candidates`; 127.0.0.1 also listens on 5433 (pgsql-demo), and the ollama tunnel ingress is gone. The live `unbound-anchor-refresh.service` is not the tracked unit (operator decision pending).
+
 # CTDI Dispatch — Codebase Reference (2026-10-06)
 
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:21Z / 14:21 ET (inspection 18:04Z-18:21Z / 14:04-14:21 ET).
 
-**Status:** CURRENT. Replaces `docs/CODEBASE_REFERENCE_2026-09-28.md` (validated
+**Status:** ~~CURRENT.~~ (corrected 2026-10-25: no longer current; this is a 2026-10-06 snapshot and still the newest codebase reference, but many counts and units below have moved; see the status banner.) Replaces `docs/CODEBASE_REFERENCE_2026-09-28.md` (validated
 against `78660147`, 68 commits ago) and the SQLite-era
 `docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md`. Every count below names the command
 that produced it. Paths are relative to the repo root
@@ -740,7 +742,7 @@ contains `INSERT/UPDATE/DELETE` on a table, the packages that call that accessor
 
 Per feed key `K`, env var NAMES: `SWIM_NMS_HOST_K` (fallback `SWIM_NMS_HOST`, default
 `tcps://ems1.swim.faa.gov:55443`), `SWIM_NMS_VPN_K` (default = `K`), `SWIM_NMS_USER_K`,
-`SWIM_NMS_PASS_K`, `SWIM_NMS_QUEUE_K`. Tracked `config/dispatch.env:40-48` sets `SWIM_NMS_HOST=tcps://ems2.swim.faa.gov:55443` and VPNs `FDPS STDDS TFMS AIM_FNS TBFM ITWS` (live `/etc` copy not read). Global `SWIM_NMS_ENABLED`, `SWIM_NMS_SKIP_FEEDS`,
+`SWIM_NMS_PASS_K`, `SWIM_NMS_QUEUE_K`. Tracked `config/dispatch.env:40-48` sets `SWIM_NMS_HOST=tcps://ems2.swim.faa.gov:55443` and VPNs `FDPS STDDS TFMS AIM_FNS TBFM ITWS` (live `/etc` copy not read) (unverified 2026-10-25). Global `SWIM_NMS_ENABLED`, `SWIM_NMS_SKIP_FEEDS`,
 `SWIM_BACKLOG_STALE_SECONDS` (default 28,800 s). One container per feed: each
 `corporatetraveldc-ingest-<feed>` quadlet sets `SWIM_NMS_SKIP_FEEDS` to the other five,
 `NWWS_ENABLED=false`, `AMTRAK_ENABLED=false`, `LOCAL_AIRSPACE_ENABLED=false`.

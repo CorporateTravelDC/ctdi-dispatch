@@ -55,7 +55,7 @@ own copy; unlisted feeds default to 3600 s).
 | `nas` | `poller/fetchers/nas.py` | 300 s | 900 s | none | age 285 s, pull verified |
 | `nws` | `poller/fetchers/nws.py` | 300 s | 2700 s | `push:nws` (gate 90 s) | age 99,702 s, `push_covered: true` |
 | `notam` | `poller/fetchers/notam.py` | 300 s | 900 s | `push:fns` (gate 90 s) | age 102,455 s, `push_covered: true`, `pull_state: auth_gated` |
-| `amtrak` | `poller/fetchers/amtrak.py` | 300 s | 3600 s (default) | `push:amtrak` (gate 660 s) | age 26,459 s, **`push_covered: false`** — see §8 finding |
+| `amtrak` | `poller/fetchers/amtrak.py` | 300 s | 3600 s (default) | `push:amtrak` (gate 660 s) | ~~age 26,459 s, **`push_covered: false`** — see §8 finding~~ (corrected 2026-10-25: age 23,969 s, `push_covered: true`, `pull_state: verified`; the §8 finding is fixed) |
 | `runsheet` | `poller/fetchers/runsheet.py` | 300 s | 900 s | none | age 253 s |
 | `atcscc_opsplan` | `poller/fetchers/atcscc_opsplan.py` | 3600 s | 7200 s | none | age 850 s |
 | `dca_fids` | `poller/fetchers/dca_fids.py` | 300 s | 600 s | none | age 223 s, pull verified |
@@ -64,12 +64,12 @@ own copy; unlisted feeds default to 3600 s).
 | `jasdat` | `poller/fetchers/jasdat.py` | 900 s | 3600 s | none | `awaiting_credentials`, `pull_state: unconfigured` |
 | `push:fdps` | `ingest-fdps` heartbeat | 30 s heartbeat | 300 s | — | age 9 s |
 | `push:stdds` | `ingest-stdds` heartbeat | 30 s | 300 s | — | age 26 s |
-| `push:tfms` | `ingest-tfms` heartbeat | 30 s | 3600 s (not in the dict) | — | age 8 s |
-| `push:tbfm` | `ingest-tbfm` heartbeat | 30 s | 3600 s (not in the dict) | — | age 23 s |
+| `push:tfms` | `ingest-tfms` heartbeat | 30 s | ~~3600 s (not in the dict)~~ (corrected 2026-10-25: 300 s, from `failover.push_stale_thresholds()`) | — | age 8 s |
+| `push:tbfm` | `ingest-tbfm` heartbeat | 30 s | ~~3600 s (not in the dict)~~ (corrected 2026-10-25: 300 s, from `failover.push_stale_thresholds()`) | — | age 23 s |
 | `push:itws` | `ingest-itws` heartbeat | 30 s | 300 s | — | age 6 s |
 | `push:fns` | `ingest-notam` heartbeat (AIM/FNS) | 30 s | 300 s | — | age 7 s |
 | `push:nws` | `ingest-core` NWWS-OI heartbeat | 30 s | 300 s | — | age 27 s |
-| `push:amtrak` | `amtrak-tracker` container, once per 300 s poll | 300 s | 300 s | — | age 171 s |
+| `push:amtrak` | `amtrak-tracker` container, once per 300 s poll | 300 s | ~~300 s~~ (corrected 2026-10-25: 660 s, live `stale_threshold_seconds`) | — | age 171 s |
 
 Re-check 2026-10-15 00:51Z: the same 20 rows, and `/healthz` `status: ok`.
 Every push heartbeat was under 35 s old (`push:amtrak`, which stamps once
@@ -107,12 +107,12 @@ Poller modules **not** in `FETCH_SCHEDULE`: `faa_registry.py` and
 
 **What it provides:** six Solace PubSub+ sessions on FAA SWIM NMS/SCDS, one
 per feed, each with its own credentials, Message VPN and pre-provisioned
-durable exclusive queue (`src/ingest/swim_client.py`, `src/ingest/config.py`):
+durable ~~exclusive~~ (corrected 2026-10-25: non-exclusive, `Queue.durable_non_exclusive_queue`, ~~`swim_client.py:182-190`~~ `swim_client.py:581` (corrected 2026-10-26)) queue (`src/ingest/swim_client.py`, `src/ingest/config.py`):
 
 | Feed key / heartbeat | Env key suffix | Parser | Main tables / role |
 |---|---|---|---|
 | `fdps` / `push:fdps` | `FDPS` | `ingest/parsers/fdps_parser.py` | `flight_events`, route versions, diversions, Marine One/VIP detection; the filed departure time (first filing wins, 2026-10-14); the plan's aircraft address is a tail source |
-| `stdds` / `push:stdds` | `STDDS` | `ingest/parsers/smes_parser.py` | ASDE-X surface, TAIS (PCT), SafetyLogic, surface-movement events, RVR, TDES, TDLS (PDC/CPDLC), D-ATIS; since 2026-10-14 also the append-only `surface_event_log` for KDCA/KIAD/KBWI (pg_schema/0075, pruned at 120 days by `retention_prune`, keeps the ramp exits the slot table overwrites; 167 rows at 2026-10-15 00:51Z). A TDES departure clearance at DCA/IAD/BWI links by its FAA-internal GUFI to the FDPS plan, and that plan's aircraft address is a tail source |
+| `stdds` / `push:stdds` | `STDDS` | `ingest/parsers/smes_parser.py` | ASDE-X surface, TAIS (PCT), SafetyLogic, surface-movement events, RVR, TDES, TDLS (PDC/CPDLC), D-ATIS; since 2026-10-14 also the append-only `surface_event_log` for KDCA/KIAD/KBWI (pg_schema/0075, pruned at 120 days by `retention_prune`, keeps the ramp exits the slot table overwrites; ~~167 rows at 2026-10-15 00:51Z~~ (superseded 2026-10-25: ~~41,397~~ 47,009 rows at 2026-10-26 21:58Z)). A TDES departure clearance at DCA/IAD/BWI links by its FAA-internal GUFI to the FDPS plan, and that plan's aircraft address is a tail source |
 | `tfms` / `push:tfms` | `TFMS` | `ingest/parsers/tfms_parser.py` | `nas_programs` (GDP/GS/AFP/RSTR), APTC, GADV, per-flight times, reroutes, plan removals |
 | `fns` / `push:fns` | `AIM` | `ingest/parsers/aim_parser.py` | `notams` (AIXM 5.1 digital NOTAMs). Stored by scope (DC watch set, core airports, DC-region FDC, nationally significant FDC, VIP) plus, since 2026-10-20, every US Antarctic station (keep class, not alerted); IDs are `LOC/YEAR/NUMBER`, year from `issued` when FNS leaves it empty (was a duplicate `Event_…` row). DoD/military NOTAMs: out of scope (operator decision 2026-10-20). Details: `ALERT_REFERENCE.md` §AIM / NOTAM |
 | `tbfm` / `push:tbfm` | `TBFM` | `ingest/parsers/tbfm_parser.py` | `tbfm_sequences` (meter-fix sequencing) |
@@ -233,7 +233,7 @@ Credentials: `NMS_API_CLIENT_ID`, `NMS_API_CLIENT_SECRET` (both on the
 Live: `error: null`, last REST fetch 2026-10-05 ~13:37Z / 09:37 ET — the
 synthetic failover test, when `ingest-notam` was stopped and the REST path
 fetched successfully. Since then `push:fns` has been healthy and the REST
-poll is gated off. `FAA_NOTAM_API_KEY`/`FAA_NOTAM_API_SECRET` are read by no code.
+poll is gated off. ~~`FAA_NOTAM_API_KEY`/`FAA_NOTAM_API_SECRET` are read by no code.~~ (corrected 2026-10-25: `FAA_NOTAM_API_KEY` is still read by `src/common/config.py:118` and named by `poller/skills/pull_path_verify.py:82` and two frontend hints; no fetcher consumes it. `FAA_NOTAM_API_SECRET` has no reader.)
 
 ### NWS api.weather.gov (`nws`, REST fallback for `push:nws`)
 
@@ -267,11 +267,11 @@ credentials. One shared client and normalizer, `src/common/airsigmet.py`, used b
 
 - `poller/skills/convective_sigmet_archiver.py`, run every 10 min by
   `corporatetraveldc-convective-sigmet-archiver.timer`. It writes the
-  append-only `convective_sigmet_archive` table (7,511 rows on 2026-10-15) and
+  append-only `convective_sigmet_archive` table (~~7,511 rows on 2026-10-15~~ 8,639 rows on 2026-10-25) and
   never prunes it, by design. It keys each SIGMET on its id plus `valid_from`,
   because AWC series numbers restart.
 - the web map overlay (`web/main.py`), and the public demo's `demo-api`, which
-  calls the same AWC endpoint live (`src/demo/demo_api.py:705`).
+  calls the same AWC endpoint live (~~`src/demo/demo_api.py:705`~~ (corrected 2026-10-26: `src/demo/demo_api.py:787`)).
 
 No `/api/v1/feeds` row.
 
@@ -377,7 +377,7 @@ entry, no feed row, no `TRAIN_PROVIDERS` code. Design:
 (`FAA_REGISTRY_INTERVAL` = 86400 s), HTTP Range resume with a 2400 s
 (40 min) ceiling. Live `GET /api/v1/aircraft-registry/status`: ~~317,240
 records, 310,768 valid, last updated 2026-10-05 20:18Z~~ (2026-10-15 00:51Z:
-317,601 records, 310,830 valid, last updated 2026-10-14 20:41Z). Each registry
+317,601 records, 310,830 valid, last updated 2026-10-14 20:41Z) (superseded 2026-10-25 15:51Z: 318,000 records, 311,218 valid, last updated 2026-10-25 07:30Z). Each registry
 import also appends a hash-chained entry to `reference_import_ledger`
 (5 `faa-registry` entries on 2026-10-15). Lookup:
 `GET /api/v1/aircraft/{identifier}` queries the FAA registry **and** the
@@ -398,7 +398,7 @@ Live LADD data arrives by a manual weekly CUI import
 (`scripts/import-ladd-filter.py` → `faa_ladd_aircraft`, removals persisted in
 `faa_ladd_removals`, migration 0063), and that import is the only writer. Live
 status endpoint reports ~~73,369~~ 73,543 LADD entries (2026-10-15 00:51Z;
-84 recorded removals; the latest import is ledgered at 2026-10-13 15:47Z).
+84 recorded removals; the latest import is ledgered at 2026-10-13 15:47Z) (superseded 2026-10-25: 73,333 entries, 115 removals).
 Handling rules: `docs/LADD_CUI_HANDLING.md`. The ADX/IndustryLADD
 portal path ([adx.faa.gov](https://adx.faa.gov), Login.gov, eligibility for a
 small commercial operator unconfirmed; inquiry address `LADD@faa.gov`) has no
@@ -446,7 +446,7 @@ after the operator's feeder account was whitelisted. The rules are in
 
 - **Fallback only.** It is asked only after every local source (own ADS-B
   receiver, ingested FDPS, local registry) has no contact. It is never first
-  and never a second opinion. Callers: `shared/watchlist.py:352-366` (by hex,
+  and never a second opinion. Callers: ~~`shared/watchlist.py:352-366`~~ (corrected 2026-10-26: `shared/watchlist.py:400,409`) (by hex,
   by callsign) and the poller's flight sweep (`_check_flight_airplanes_live`).
 - **Position and identity only.** Its data is ADS-B, so it has no OOOI
   authority: it never asserts ON or IN.
@@ -480,7 +480,7 @@ The box's own receivers are the primary position source:
   stream on `VDLM2_ROUTER_PORT` (default 15555) and plain ACARS on
   `ACARS_ROUTER_PORT` (default 9080) into `acars_messages`. That table held
   93,190 rows on 2026-10-15, 9,986 of them from the last 24 h, newest
-  00:53Z. This retires the old "zero rows ever" caveat: the 2026-10-03 VDL2
+  00:53Z (superseded 2026-10-25: 180,290 rows). This retires the old "zero rows ever" caveat: the 2026-10-03 VDL2
   reader fixed it.
 
 Both receivers also share their data outward with third parties; the
@@ -501,7 +501,10 @@ and poller (ACARS phase evidence for OOOI). `src/acars_watcher/` runs as
 "Local receivers" above). The watcher's three sources all run, but in
 practice only airframes.io produces watchlist matches (3 `MATCH [AIRFRAMES`
 lines in the watcher's last 24 h of journal; the 2026-10-12 audit counted
-3 airframes, 0 local, 0 Jumpseat over 7 days).
+3 airframes, 0 local, 0 Jumpseat over 7 days) (unverified 2026-10-25: 0
+`MATCH [AIRFRAMES` and 0 `MATCH [JUMPSEAT` lines in the last 24 h, so no source
+produced a match in that window and the "only airframes.io" statement could not
+be re-confirmed).
 2026-10-18 (next relay): the watcher's 0 local matches had a cause:
 `extract_reg_from_msg` read top-level keys only, and dumpvdl2 nests the
 registration at `vdl2.avlc.acars.reg` (with a leading "." pad), so every
@@ -542,7 +545,7 @@ These are built on the box from the sources above, not fetched:
 
 | Data | Built by | Store | Schedule |
 |---|---|---|---|
-| Codeshare map (marketing to operating carrier for wholly-owned regionals; contract regionals are counted, not guessed) | `scripts/seed-dc-codeshare.py` from FDPS traffic at DC-metro airports | `codeshare_map` (684 rows, 2026-10-15) | `corporatetraveldc-codeshare-seed.timer`, daily 04:40 America/New_York (08:40Z while EDT, 09:40Z while EST) |
+| Codeshare map (marketing to operating carrier for wholly-owned regionals; contract regionals are counted, not guessed) | `scripts/seed-dc-codeshare.py` from FDPS traffic at DC-metro airports | `codeshare_map` (~~684 rows, 2026-10-15~~ ~~807 rows, 5 `atc_callsign`, 2026-10-25~~ (superseded 2026-10-26: 844 rows, 7 `relation='atc_callsign'`, 841 not retired, 21:58Z)) | `corporatetraveldc-codeshare-seed.timer`, daily 04:40 America/New_York (08:40Z while EDT, 09:40Z while EST) |
 | (2026-10-20, next relay) Public number -> ATC callsign lookaside (EK231 = UAE3MX, LH414 = DLH3Y; carriers that file alphanumeric callsigns) | seed rows in pg_schema/0082 (IAD FIDS route-unique match 2026-10-19, `fids_route_unique`, season `W26-pending`); `common/callsign_lookaside.py`: FIDS leg matches in the poller gate step (`fids_leg_match` / `fids_route_unique`) and SWIM route continuity (`route_continuity`) | `codeshare_map` rows with `relation = 'atc_callsign'`; new columns `relation` (`codeshare` default, CHECK), `season`, `retired_at`, `superseded_by` (history kept, never deleted); `watchlist_entries.alert_topic` in the same migration | FIDS: every flight sweep, discovery at most every 6 h per watch side; continuity: daily with the poller `flight-cleanup` skill |
 | Airline time fidelity (TFMS airline-reported OOOI vs FDPS, ASDE-X, TDES and TBFM, paired by INSTANCE-v1) | `scripts/research/airline_time_fidelity_collect.py` (read-only, runs in the web container) | `/var/lib/corporatetraveldc/research/airline-time-fidelity/<day>.jsonl` | `corporatetraveldc-airline-time-fidelity.timer`, 00/06/12/18:20Z |
 | TBFM runway arrival time | `poller/skills/tbfm_arrival_enrichment.py` + CIFP | `flight_events.arrival_time` | every 15 min |
@@ -650,19 +653,23 @@ and read by no code. None appear in `/api/v1/feeds`.
 
 ## 8. Known inconsistencies at HEAD (see CHANGES-data.md findings)
 
-- `/api/v1/feeds` hard-codes `push_covers = {"nws": "push:nws", "notam": "push:fns"}`
+- ~~`/api/v1/feeds` hard-codes `push_covers = {"nws": "push:nws", "notam": "push:fns"}`
   and its own 300 s window, while `/healthz` derives coverage from
   `failover.push_covers()`. Result: `amtrak` (age 26,459 s) shows
   `push_covered: false` in `/api/v1/feeds` while `/healthz` correctly treats it
-  as covered.
-- `push:tfms` and `push:tbfm` fall through to the 3600 s default in
+  as covered.~~
+- ~~`push:tfms` and `push:tbfm` fall through to the 3600 s default in
   `/api/v1/feeds`, although `failover.push_stale_thresholds()` defines 300 s
-  for every push feed.
+  for every push feed.~~
 
-Both were re-verified on 2026-10-15 and are still present
+~~Both were re-verified on 2026-10-15 and are still present
 (`src/web/main.py:865-891`; finding OPS-04 in the 2026-10-14 audit). The
 result is a false STALE on the admin and overview dashboards only, because
-the alerting path keys on `error`, not age.
+the alerting path keys on `error`, not age.~~ (corrected 2026-10-25: fixed
+2026-10-15 -- `src/web/main.py:907-914` derives `push_covers` from
+`failover.push_covers()` and merges `failover.push_stale_thresholds()`; live
+`/api/v1/feeds` 15:51Z shows `amtrak` `push_covered: true` and
+`push:tfms`/`push:tbfm` `stale_threshold_seconds: 300`, `push:amtrak` 660.)
 
 ---
 

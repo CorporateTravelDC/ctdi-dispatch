@@ -88,7 +88,7 @@ Only the `Requires=` pull-in explains that. `Persistent=true` remains a
 real but secondary concern (post-outage catch-up bunching) — see
 ~~`docs/NETWORK_FAILOVER.md` "Still open" for the related note.~~
 [`docs/NETWORK_FAILOVER.md`](NETWORK_FAILOVER.md) "Findings for the operator", item 3 (corrected 2026-10-15: the
-"Still open" section is superseded; 12 live platform timers now set `RandomizedDelaySec=` (8 user, 4 `corporatetraveldc-*` system) and 43 live user timers set
+"Still open" section is superseded; ~~12 live platform timers now set `RandomizedDelaySec=` (8 user, 4 `corporatetraveldc-*` system)~~ (corrected 2026-10-25: 13 -- 9 user, 4 `corporatetraveldc-*` system; `grep -l ^RandomizedDelaySec=`) and ~~43~~ (corrected 2026-10-25: 45 at 2026-10-26 21:58Z, `grep -l ^Persistent=true ~/.config/systemd/user/*.timer`; 44 on 2026-10-25, superseded) live user timers set
 `Persistent=true`).
 
 ## Correct timer shape

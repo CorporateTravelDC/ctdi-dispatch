@@ -90,7 +90,7 @@ bypass application**, path-matched to `/webhooks/*` only — everything else
 on that hostname stays gated. Live check 2026-10-06: a `GET` to
 `https://dispatch.example.com/webhooks/3cx/events` returns the
 app's own `405` (it reached the receiver) while `/` returns Access's `302`,
-so the bypass is in place on the reference deployment. [UNVERIFIED: the
+so the bypass is in place on the reference deployment (unverified 2026-10-25: edge not re-probed; the receiver's own GET -> 405 holds by code, `src/web/routes/webhooks.py`). [UNVERIFIED: the
 Access application's exact path pattern is dashboard state, not checked.]
 
 If you're running Cloudflare yourself: create a Cloudflare Access
@@ -200,8 +200,11 @@ means lost data — only lost automation for that one event.
 
 The **extraction contract** — what comes out the other side — is the
 vendor-neutral part: a flight identifier normalized to its real ICAO
-callsign form (e.g. `AAL2773`, never the bare flight number `2773` or the
-IATA form `AA2773`), or a train identifier as a bare number (e.g. `79`,
+callsign form (e.g. `AAL2773`, never the bare flight number `2773` ~~or the
+IATA form `AA2773`~~ (corrected 2026-10-25: the IATA form is mapped to ICAO only
+for carriers in `common.airline_codes.IATA_TO_ICAO`; an unmapped two-letter prefix
+is passed through uppercased, so its IATA form can reach the watchlist add --
+`src/web/routes/webhooks.py:74-91`)), or a train identifier as a bare number (e.g. `79`,
 matching Amtrak's own numbering — no carrier-prefix normalization applies
 to trains).
 
@@ -264,14 +267,21 @@ flight number or an unmapped IATA form can still fail to resolve. `hex_id`/`regi
 reservation-add-time ~~(the platform resolves and locks the aircraft identity
 once the flight is actually airborne and confirmed)~~ rather than guessing.
 (Corrected 2026-10-15: since 2026-10-13, when the caller supplies neither, the
-add takes the hex and tail from the FAA flight plan found for this flight if
-that plan's origin does not contradict the request, recorded as
-`hex_source="fdps"`; a hex without a tail is reverse-resolved from the
+add takes the hex and tail from the FAA flight plan found for this flight ~~if
+that plan's origin does not contradict the request~~ (superseded 2026-10-25: since
+2026-10-21 only if that plan's origin does not contradict the request **and** the plan
+is the current leg -- its departure time within 18 h (`FDPS_IDENTITY_FRESH_WINDOW_S`) of
+the given `scheduled_departure`, else of now; otherwise hex and tail stay empty until
+SWIM supplies them; `src/web/routes/watchlist.py:90,93-119,401-409`), recorded as
+`hex_source="fdps"` (`watchlist.py:472-475`, `db.py:2781-2783`); a hex without a tail is reverse-resolved from the
 registries. Later tail changes are accepted only from FAA SWIM sources (FDPS,
 the TDES departure clearance's plan, TBFM, TFMS), never from airport FIDS. A
-value the caller supplies is never overwritten. `tail` is accepted as an alias
+value the caller supplies is never overwritten. ~~`tail` is accepted as an alias
 of `registration`, on the single and batch adds; `registration` wins if both
-are sent. Source: `src/web/routes/watchlist.py` `add_flight_watchlist`,
+are sent.~~ (superseded 2026-10-25: since the 2026-10-18 gate batch `tail` is
+declared but **not stored** -- a body carrying it is answered with
+`ignored_fields: ["tail"]`, because tails are SWIM-only;
+`src/web/routes/watchlist.py:302-310`.) Source: `src/web/routes/watchlist.py` `add_flight_watchlist`,
 `docs/FLIGHT_INSTANCE_RESOLVER.md`.)
 
 **Send `origin`, `destination` and `scheduled_departure` when you have them**
@@ -279,11 +289,21 @@ are sent. Source: `src/web/routes/watchlist.py` `add_flight_watchlist`,
 follows that one leg: messages for the same number on another leg (the return
 of an out-and-back, a second daily rotation) are ignored. With only an origin,
 or a tail as the identifier, the watch follows every leg the number or
-aircraft flies (next platform update). `scheduled_departure` is what tells two same-direction
+aircraft flies ~~(next platform update)~~ (superseded 2026-10-25: live -- `is_leg_watch()`,
+`src/common/flight_instance.py:637-643`, gates `leg_rejection()` inside
+`match_watch_entry()` (:700-703) and `match_watch_surface_event()` (:755-771), which the
+FDPS, TFMS, TBFM and SMES parsers call; the running ingest image was built from 5f7fca01). `scheduled_departure` is what tells two same-direction
 rotations apart and lets the inbound-aircraft check run (once the watch has
 an aircraft hex); without it the platform
 tries to derive today's departure from FAA data (next platform update) and
-skips those checks if the answer is not unique.
+skips those checks if the answer is not unique. (unverified 2026-10-25: the two
+"next platform update" behaviours -- the every-leg follow for origin-only or
+tail watches and the derived-departure fallback -- were not traced in code;
+the one-leg gate itself is `_fdps_plan_is_current_leg`,
+`src/web/routes/watchlist.py:93-110,405`. Later the same evening: the every-leg
+follow was traced -- see the correction above; the message-side one-leg filter is
+`leg_rejection()` in `common/flight_instance.py`, while `_fdps_plan_is_current_leg`
+is the add-time plan check; the derived-departure fallback is still unverified.)
 `auto_remove_at` defaults to 6 hours past scheduled arrival if omitted, or
 24 hours from add-time if no arrival estimate exists yet.
 

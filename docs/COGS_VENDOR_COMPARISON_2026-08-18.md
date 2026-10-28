@@ -1,3 +1,5 @@
+> Status 2026-10-25: dated record of 2026-08-18, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: ~~NOTAMs cover 2,774 facilities~~ (corrected 2026-10-25: NOTAMs cover about 3,200 distinct facilities, 3,229 in total and 3,208 unexpired at 2026-10-26 22:08Z; the count grows daily) (national scope since 2026-10-24), not 314; the OpenSky registry has 616,676 rows (upstream file of 2025-08-22) and the FAA registry 318,000; the 22 OSINT scopes carry 44 feed URLs; the NOTAM REST fallback (now NMS-API) has credentials but fails with `auth_failed`; `common/guardrails.py` has no caller (dormant), and the scrub gate is caller-invoked, so archives, export analysis, entity notes and graph writes reach the vault without it; 20 skills import `common.llm`, and one (`claude_weekly_llama_fallback`) runs inference without an SR-1 row; ultrafeeder feeds only airplanes.live, FlightAware, FR24, PlaneFinder, AirNav and OpenSky have their own containers, and adsbhub is gone; the tunnel fronts 14 hostnames, with no ollama, adsb or acars ingress; the model endpoint key is `LLAMA_BASE_URL` (`OLLAMA_BASE_URL` is a deprecated alias); SWIM ingest is on the order of 150-200 GB/day, not ~2.7 GB/day.
+
 # CorporateTravelDC — Data-Feed Cost-Avoidance Valuation (Vendor Comparison), 2026-08-18
 
 > **Status (2026-10-15):** dated record from the SQLite/Ollama era. Its §2.7 power and hardware derivation (≈ $23–39/yr, ≈ $765 one-time) is still the sourced figure cited by `docs/COST_STRUCTURE.md`; its totals are superseded by `docs/COGS_BUILD_VS_RENT_2026-09-28.md`, and its "$0 cloud LLM" framing is wrong in scope (a weekly Claude Opus job runs; see `docs/COST_STRUCTURE.md` §1).
@@ -777,7 +779,7 @@ the correct one.
 **One-time hardware actually deployed** (single node, from
 `COST_STRUCTURE.md`'s own line items, lines 31/33/34/61/111):
 Pi 5 16 GB ~$350 + case share ~$45 + PSU share ~$30 + NVMe ~$180 + reference
-RF adder (2 × SDR + modest antennas) ~$160 ⇒ **≈ $765 one-time.**
+RF adder (2 × SDR + modest antennas) ~$160 ⇒ **≈ $765 one-time.** (unverified 2026-10-25)
 
 ### 2.8 What "zero cost beyond hardware" quietly omits
 

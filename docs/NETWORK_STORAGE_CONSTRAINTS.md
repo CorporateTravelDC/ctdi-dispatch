@@ -1,6 +1,6 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
 Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (`findmnt`: still no NFS, CIFS/SMB or rclone
-mount; `/` is btrfs on `nvme0n1p2`, 83% used).
+mount; `/` is btrfs on `nvme0n1p2`, ~~83%~~ used) (superseded 2026-10-25: 80% used, 47G free, `df -h /` 21:20Z; `findmnt -t nfs,nfs4,cifs,fuse.rclone` still empty).
 
 # Network-attached storage — constraints for a future operator
 
@@ -76,7 +76,7 @@ Options 1-3 all stay inside the platform's existing guardrails: local
 fsync semantics preserved, unix-socket-first connection pattern preserved
 where the DB and app share a host, wire-protocol access where they don't.
 None of them require touching `translate_sql()` (confirmed present,
-~~`src/common/db_backend.py:344`~~ `src/common/db_backend.py:348`, corrected 2026-10-15), `db_backend.py`'s connection pooling, or
+~~`src/common/db_backend.py:344`~~ ~~`src/common/db_backend.py:348`~~, corrected 2026-10-15; corrected 2026-10-25: `src/common/db_backend.py:516`), `db_backend.py`'s connection pooling, or
 any application code — purely a storage/ops decision, orthogonal to the
 SQLite→Postgres work.
 

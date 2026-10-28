@@ -1,0 +1,10 @@
+[Unit]
+Description=Agent status snapshot every 5 minutes (agents cannot see the operator's units, containers or journal)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

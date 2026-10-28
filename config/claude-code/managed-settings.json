@@ -42,6 +42,15 @@
             "command": "/usr/bin/python3 /usr/local/libexec/ctdc/ctdc-claude-no-agent-hook.py"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|StructuredOutput",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /usr/local/libexec/ctdc/ctdc-claude-no-registration-hook.py"
+          }
+        ]
       }
     ]
   }

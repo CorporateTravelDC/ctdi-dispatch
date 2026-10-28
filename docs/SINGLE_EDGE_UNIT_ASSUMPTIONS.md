@@ -11,17 +11,29 @@ and one-uplink rows are corrected; rows for the slice envelope, the heavy-job tu
 timeout or scheduling weight in this stack.**
 
 Every performance and resource guardrail here was tuned for one topology:
-the whole stack on a single Raspberry Pi 5 (4× Cortex-A76, 16 GB RAM, **no
-GPU**, one thermal/power envelope, one uplink). (2026-10-15: "one uplink" is
+the whole stack on a single Raspberry Pi 5 (4× Cortex-A76, 16 GB RAM, ~~**no
+GPU**~~ (corrected 2026-10-25: no GPU used for inference -- the SoC's VideoCore
+GPU is present (`v3d` DRM driver) but `corporatetraveldc-llama.service` runs
+llama.cpp CPU-only, with no `-ngl` flag), one thermal/power envelope, ~~one
+uplink~~ (corrected 2026-10-25: one primary uplink, Wi-Fi `wld0`, plus a
+cellular backup, `enu1`)). ~~(2026-10-15: "one uplink" is
 literally true right now. The cellular backup, `enu1`, has had no internet since
-2026-10-06; see `docs/NETWORK_FAILOVER.md`.) The numbers below are the
+2026-10-06; see `docs/NETWORK_FAILOVER.md`.)~~ (corrected 2026-10-25: superseded
+-- `enu1` has probed OK on every failover-watchdog run since 2026-10-24
+12:51:49Z (`/var/lib/corporatetraveldc/net-failover-watch/watch.log`), and the
+box keeps two default routes, `wld0` metric 100 and `enu1` metric 600; see
+`docs/NETWORK_FAILOVER.md`.) The numbers below are the
 result of **shared-resource contention on one box**, not general truths. If
 the topology changes they become wrong or needlessly conservative and must
 be re-derived per node.
 
 The Ollama-era rows this file used to carry (`ollama.service` drop-in,
 `ollama-governor`, `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_LOAD_TIMEOUT`) describe
-units that no longer exist: Ollama was retired 2026-08-27, the three
+units that no longer exist: Ollama was retired 2026-08-27
+(unverified 2026-10-25: no live record reaches back that far -- the journal
+starts 2026-10-05 -- and git dates the cut-over commit `8f728b92` to 2026-08-30
+02:55Z and the removal of the last Ollama units, `28e14c40`, to 2026-08-30
+13:07Z), the three
 llama.cpp tiers were merged into one unit 2026-09-06. They are in git history.
 
 ## The guardrails this applies to (non-exhaustive)
@@ -29,19 +41,19 @@ llama.cpp tiers were merged into one unit 2026-09-06. They are in git history.
 | Guardrail | Current value (where) | Why it's a single-box number |
 |---|---|---|
 | Per-container `Memory=` / `--memory-swap=` | 1536m / 1536m on the first-party template (e.g. `corporatetraveldc-web.container`) | Sized so N containers fit in 16 GB without swap-thrash |
-| Per-container `CPUWeight` | 100 default (25 Quadlets); **9000** web, poller, pusher, ntfy; **7500** the seven ingest containers; 150 nextcloud-app; 50 rss-bridge | Proportional shares of 4 cores: alert path first, ingest second, everything else behind |
+| Per-container `CPUWeight` | ~~100 default (25 Quadlets); **9000** web, poller, pusher, ntfy; **7500** the seven ingest containers; 150 nextcloud-app; 50 rss-bridge~~ (corrected 2026-10-25: of the 77 live Quadlets, 23 set 100 and 38 set none (the systemd default, 100); **9000** web, poller, pusher, ntfy; **7500** the seven ingest containers; 1000 ultrafeeder; 150 nextcloud-app; 50 rss-bridge, pgsql-demo and opensky) | Proportional shares of 4 cores: alert path first, ingest second, everything else behind |
 | Per-container `CPUQuota` | 300% on the template | "Never take the last core" |
 | `nextcloud-app` | `Memory=2048m`, `MemoryLow=682M`, `CPUWeight=150`, `TimeoutStartSec=300` | Carve-out on the same box |
-| llama.cpp unit (`corporatetraveldc-llama.service`) | `CPUQuota=200%`, `-t 2 -tb 2`, two slots (`-np 2 --kv-unified -c 12288`), `MemoryLow=5120M`, `MemoryHigh=7168M`, `MemoryMax=8448M`, `MemorySwapMax=0`, `--cache-ram 0` | Inference is hard-capped at two cores so ingest keeps the other two; hot/chat requests can only preempt a report, never add a third core |
+| llama.cpp unit (`corporatetraveldc-llama.service`) | `CPUQuota=200%`, `-t 2 -tb 2`, two slots (`-np 2 --kv-unified -c 12288`), `MemoryLow=5120M`, `MemoryHigh=7168M`, `MemoryMax=8448M`, `MemorySwapMax=0`, ~~`--cache-ram 0`~~ (corrected 2026-10-25: superseded -- `--cache-ram 1024 --cache-reuse 256` since 2026-10-19, commit `4c422f8e`; the running instance started 2026-10-25 23:55Z from that unit) | Inference is hard-capped at two cores so ingest keeps the other two; hot/chat requests can only preempt a report, never add a third core |
 | llama unit `CPUWeight` | 9000 in the tracked unit file; **10000 live** via a `systemctl --user set-property` drop-in (`~/.config/systemd/user.control/corporatetraveldc-llama.service.d/50-CPUWeight.conf`, plus `IOWeight=10000`) — the repo does not reflect the live value | Same contention reasoning; the drift is a finding, not a design |
 | Long-runner lock (`src/common/llama_pool.py`) | one long-running generation box-wide (`long-runner.lock`), one long-runner container at a time (`long-runner-unit.lock`, Quadlet `flock -w`) | Two concurrent report generations would starve the alert path on two cores |
-| `thermal-ingest-guard.py` | ~~temp ≥ 74 °C sheds `tfms,stdds`; LOCKDOWN at ≥ 79 °C or load1 ≥ 40 sheds everything except web (never llama); restore < 65 °C and load1 < 20 (half the trip) held 300 s~~ (corrected 2026-10-15: a load guard since 2026-10-13. LOCKDOWN only at load1 ≥ 40 (`THERMAL_GUARD_LOAD_LOCKDOWN`), shedding everything except web, never llama; temperature never sheds. After a 300 s dwell, resume is held only while load1 > 30 (`THERMAL_GUARD_HOLD_LOAD`) or the CPU is above 75 °C (`THERMAL_GUARD_HOLD_TEMP_C`, 1 °C hysteresis once above it); the 74/79 °C trips and the 65 °C resume bar are retired.) 600 s observe-only after any restore; LLM-fallback count informational only | load1 bands are calibrated to **4 cores** (40 = 10× core count). On a de-consolidated stack the LOCKDOWN scope (stopping poller/pusher/runner with the SWIM feeds) is wrong |
-| `OLLAMA_PREFLIGHT_COOL_TARGET_C` | 70.0 in `dispatch.env` (code fallback 62.0, `llm.py:463`) | Same thermal envelope |
+| `thermal-ingest-guard.py` | ~~temp ≥ 74 °C sheds `tfms,stdds`; LOCKDOWN at ≥ 79 °C or load1 ≥ 40 sheds everything except web (never llama); restore < 65 °C and load1 < 20 (half the trip) held 300 s~~ (corrected 2026-10-15: a load guard since 2026-10-13. LOCKDOWN only at load1 ≥ 40 (`THERMAL_GUARD_LOAD_LOCKDOWN`), ~~shedding everything except web, never llama~~ (corrected 2026-10-25: stopping the six SWIM ingest units, ingest-core, poller, pusher and runner -- `_lockdown_stop_stack()`, `LOCKDOWN_USER_UNITS`; web, llama and every other container keep running); temperature never sheds. After a 300 s dwell, resume is held only while load1 > 30 (`THERMAL_GUARD_HOLD_LOAD`) or the CPU is above 75 °C (`THERMAL_GUARD_HOLD_TEMP_C`, 1 °C hysteresis once above it); the 74/79 °C trips and the 65 °C resume bar are retired.) 600 s observe-only after any restore; LLM-fallback count informational only | load1 bands are calibrated to **4 cores** (40 = 10× core count). On a de-consolidated stack the LOCKDOWN scope (stopping poller/pusher/runner with the SWIM feeds) is wrong |
+| `OLLAMA_PREFLIGHT_COOL_TARGET_C` | 70.0 in `dispatch.env` (unverified 2026-10-25: the key is present in the live `/etc/corporatetraveldc/dispatch.env`, but env values are not read in this sweep; the tracked `config/dispatch.env:144` says 70.0) (code fallback 62.0, `llm.py:463`) | Same thermal envelope |
 | Pre-flight load gate (`llm.py`) | batch inference waits (bounded, 180 s observed) while load1 is above target (7.00 observed in the 18:05Z ops-brief run), then proceeds | Load is shared with ingest |
-| `OLLAMA_TIMEOUT` (client budget, legacy name) | **240** in `dispatch.env`; code default 900 (`llm.py:366`) | CPU-bound generation time on 2 cores |
+| `OLLAMA_TIMEOUT` (client budget, legacy name) | **240** in `dispatch.env` (unverified 2026-10-25: the key is present live, its value is not read; the tracked `config/dispatch.env:141` says 240); code default 900 (`llm.py:366`) | CPU-bound generation time on 2 cores |
 | Brief/digest container `TimeoutStartSec` | ops-brief 4300, ep-advance 5700, weekly-summary 6500, dispatch-desk-memo 14100, transport-pattern-digest 3300 | Includes the wait for the long-runner lock on a single serial inference budget |
 | DNS / Tailscale `CPUWeight` | 10000 for tailscaled, pihole-FTL, unbound (`/etc/systemd/system.control/*/50-CPUWeight.conf`) | They contend with inference on the same cores |
-| Boot stagger | `scripts/stack-boot-ctl.sh` `ORDER` = 32 units brought up one at a time; default window 60 s (`SERIAL_BRINGUP_MIN_WINDOW_S`), per-unit overrides (`poller:180`, `ingest-fdps:90`, `ingest-core:90`, `web:90`, `runner:90`, `ntfy:30`, `pgsql:30`) | Avoids a boot storm on one RAM/CPU budget |
+| Boot stagger | `scripts/stack-boot-ctl.sh` `ORDER` = ~~32 units~~ (corrected 2026-10-25: superseded -- 34 units: `pgsql-demo:30` joined on 2026-10-17, `b4dd54f5`, and `opensky` on 2026-10-23, `93b6b6b0`) brought up one at a time; default window 60 s (`SERIAL_BRINGUP_MIN_WINDOW_S`), per-unit overrides (`poller:180`, `ingest-fdps:90`, `ingest-core:90`, `web:90`, `runner:90`, `ntfy:30`, `pgsql:30`) | Avoids a boot storm on one RAM/CPU budget |
 | Rolling maintenance windows | 3–4 quiet windows a day drawn from the 30-day load profile (`quiet-window-report`); 9 long-runners start one at a time inside them (`maintenance-dispatch`) | Only one heavy job fits at a time |
 | Systemd hardware watchdog | ~~`RuntimeWatchdogSec=3min` for the diagnostic week; re-derived 2026-10-11 20:00 ET / 2026-10-12 00:00Z as 1.2 × worst observed stall (floor 30 s, cap 180 s)~~ (corrected 2026-10-15: **30 s** live since the 2026-10-12 00:00Z tune; the worst stall in the week was 0.0 s, so the 30 s floor applied. The tracked `config/systemd/system.conf.d/zz-ctdc-watchdog.conf` still says 180 because the tune rewrites only the live file. `corporatetraveldc-stall-monitor` is still running.) | A 14 s watchdog tripped on a load-20 stall on this box (2026-10-04) |
 | `production.slice` envelope (added 2026-10-15) | `MemoryLow=6144M`, `MemoryHigh=13400M`, `MemoryMax=13780M` (`.config/systemd/user/production.slice`, same live) | The production containers' share of one 16 GB box; everything outside the slice lives in the remainder |

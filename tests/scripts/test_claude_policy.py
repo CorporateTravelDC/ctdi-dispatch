@@ -95,3 +95,43 @@ def test_policy_check_finds_claude_without_local_bin_on_path():
     assert "${CLAUDE_BIN:-" not in src and "command -v claude" not in src   # no override, no PATH lookup
     code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
     assert not any(" claude --version" in ln or "$(claude " in ln or " claude -p" in ln for ln in code)
+
+
+REG_HOOK = ROOT / "scripts" / "ctdc-claude-no-registration-hook.py"
+REG = "N" + "12IO"   # FAA never issues I or O, so this can never be a real (or LADD-listed) registration; built at runtime
+
+
+def _reg_rc(payload) -> int:
+    data = payload if isinstance(payload, str) else json.dumps(payload)
+    return subprocess.run([sys.executable, str(REG_HOOK)], input=data, capture_output=True, text=True).returncode
+
+
+@pytest.mark.parametrize("payload", [
+    {"tool_input": {"file_path": "/home/x/register.md", "content": f"| row | {REG} | evidence |"}},
+    {"tool_input": {"file_path": "/home/x/doc.md", "old_string": "a", "new_string": f"tail {REG}"}},
+    {"tool_input": {"defects": [f"stale watch {REG} since 10-24"]}},          # StructuredOutput
+    {"tool_input": {"edits": [{"old_string": "a", "new_string": REG}]}},        # MultiEdit
+    "not json",                                                                # fail closed
+])
+def test_registration_hook_blocks_registrations(payload):
+    assert _reg_rc(payload) == 2
+
+
+@pytest.mark.parametrize("payload", [
+    {"tool_input": {"file_path": "/home/x/a.md", "content": " ".join(["N" + d for d in ("1", "12")]) + " short forms, N" + "0123 illustration"}},
+    {"tool_input": {"defects": ["11 rows (SELECT count) at 13:05Z"]}},
+    {"tool_input": {"file_path": "tests/fixtures/x.md", "content": REG}},
+    {"tool_input": {"file_path": "/opt/x/scripts/leak-guard/privacy_lists.py", "content": REG}},
+])
+def test_registration_hook_allows_counts_and_fixtures(payload):
+    assert _reg_rc(payload) == 0
+
+
+def test_registration_hook_is_wired_and_installed():
+    pre = POLICY["hooks"]["PreToolUse"]
+    reg = [e for e in pre if any("ctdc-claude-no-registration-hook.py" in h["command"] for h in e["hooks"])]
+    assert len(reg) == 1 and set(reg[0]["matcher"].split("|")) >= {"Write", "Edit", "MultiEdit", "NotebookEdit", "StructuredOutput"}
+    assert reg[0]["hooks"][0]["command"].startswith("/usr/bin/python3 /usr/local/libexec/ctdc/")
+    root_copies = (ROOT / "scripts" / "install-root-copies.sh").read_text()
+    assert "scripts/ctdc-claude-no-registration-hook.py" in root_copies.split("SCRIPTS=(", 1)[1].split(")", 1)[0]
+    assert "registration hook" in (ROOT / "scripts" / "claude-policy-check.sh").read_text()

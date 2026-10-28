@@ -10,7 +10,7 @@
 | 3/3 the implementation prompt | `brd-551011e77ad5` |
 | Earlier, related: MCOM emergency-response profile draft (vault contribution) | `brd-68bd0122494a` |
 
-This is the first **composition**: one core profile plus overlays. The eight earlier vertical profiles (`../profiles/`) are single profiles. This spec maps the proposal onto what the repo actually has and defines the smallest core to build first.
+This is the first **composition**: one core profile plus overlays. The ~~eight~~ (corrected 2026-10-25: superseded -- nine since the EA/CoS split; `../profiles/` holds `base.json` plus nine verticals) earlier vertical profiles (`../profiles/`) are single profiles. This spec maps the proposal onto what the repo actually has and defines the smallest core to build first.
 
 ## 1. Crosswalk: proposal vs. repo (verified 2026-10-10)
 
@@ -21,7 +21,7 @@ This is the first **composition**: one core profile plus overlays. The eight ear
 | An FAA ITWS connector | Live via SWIM (`ingest-itws`) | Inherited; terminal **context**, never a public warning |
 | NHC advisories, USGS events | **Absent** (0 references in src) | Proposed-only feed adapters, each a separate approval; not part of the core |
 | HEARS / HEART / SHARES | SHARES is an auth tier (`src/auth/auth.py`, Tier 2). Credentialed radio frequencies ~~live only in `~/.secrets` (`docs/regulated-operator-setup.md`)~~ never enter code, configs, exports, ntfy bodies or the repo; the shipped configs are placeholders (`docs/regulated-operator-setup.md` "CUI / FOUO handling", corrected 2026-10-15). No HEARS/HEART runtime | Preserve as is. The composition may only **reference** tiers and never carry frequencies or credentials |
-| EMCOMM / CERT roles | No runtime concept (CERT hits in src are TLS certificates) | The overlay stays `disabled`. Roles have to be designed (accounts/groups) before any enablement |
+| EMCOMM / CERT roles | No runtime concept ~~(CERT hits in src are TLS certificates)~~ (corrected 2026-10-25: none of the 16 upper-case `CERT` hits in `src` is a TLS certificate or a role: they are the Tier-1 token tier name, FAA registry field names, LLM prompt text that mentions CERT/ARES volunteering, and demo scrub rules for ARES-CERT identifiers) | The overlay stays `disabled`. Roles have to be designed (accounts/groups) before any enablement |
 | MCOM | Not defined anywhere in the repo | The operator defines it before the MCOM draft is mapped |
 | ACARS | Out of scope by the proposal's own terms | Unchanged |
 | Outward delivery, radio TX | ntfy topics and the push-alert API exist; no radio TX | The composition forces `outward_delivery: disabled` and `radio_tx: disabled`. Validation rejects anything else until a separate approval |

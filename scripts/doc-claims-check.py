@@ -49,6 +49,19 @@ STRIKE_DEL = re.compile(r"<del>.*?</del>", re.S)
 PATH_CLAIM = re.compile(r"(?<![\w/.~-])((?:scripts|src|\.config|docs)/[A-Za-z0-9_./@+-]*)")
 UNIT_CLAIM = re.compile(r"(?<![\w/.-])(corporatetraveldc-[A-Za-z0-9_@%.-]*?\.(?:timer|service))(?![\w-])")
 SCHEDULE_CLAIM = re.compile(r"(OnCalendar|OnUnitActiveSec)=([^`|;)\n]+)")
+# 2026-10-26 (operator: catch the drift the docs sweep had to fix by hand): API routes a doc names
+# must exist in the route code; "unit ... enabled|disabled" must match systemctl is-enabled.
+ROUTE_CLAIM = re.compile(r"(?<![\w.:/-])(/api/[A-Za-z0-9_/{}<>.:-]+)")
+ROUTE_SRC = re.compile(r"""["'](/api/[A-Za-z0-9_/{}<>.:-]+)["']""")
+STATE_CLAIM = re.compile(r"\b(enabled|disabled)\b", re.I)
+ROUTER_PREFIX = re.compile(r"""APIRouter\([^)]*prefix\s*=\s*["'](/api/[^"']*)["']""")
+DECORATED_PATH = re.compile(r"""@\w+\.(?:get|post|put|patch|delete|api_route)\(\s*["']([^"']*)["']""")
+
+
+def route_key(r: str) -> str:
+    """Normalise a route for comparison: parameters ({x}, <x>, :x) become *, no trailing slash."""
+    r = r.rstrip(".,;:)`'\"").rstrip("/")
+    return "/".join("*" if re.fullmatch(r"\{[^}]*\}|<[^>]*>|:[A-Za-z_]\w*", s) else s for s in r.split("/"))
 PATH_TRAIL = ".,;:)'\"]}>"
 SKIP_DOCS = {"docs/RETIRED.md"}
 AGENT_UNITS_DIR = "scripts/agent-segmentation/units/"
@@ -102,6 +115,12 @@ def extract_claims(doc: Path, root: Path) -> list[tuple[str, int, str, str]]:
             claims.append(("unit", no, u, rel))
             if u.endswith(".timer"):
                 units_here.append(u)
+        for m in ROUTE_CLAIM.finditer(line):
+            claims.append(("route", no, m.group(1), rel))
+        all_units = [m.group(1) for m in UNIT_CLAIM.finditer(line)]
+        st = STATE_CLAIM.findall(line)
+        if len(all_units) == 1 and len({s.lower() for s in st}) == 1 and "@" not in all_units[0]:
+            claims.append(("state", no, st[0].lower(), f"{rel}\t{all_units[0]}"))
         if len(units_here) == 1:
             for m in SCHEDULE_CLAIM.finditer(line):
                 expr = " ".join(m.group(2).split()).rstrip(PATH_TRAIL + "*").strip()
@@ -124,14 +143,34 @@ class LiveFacts:
     def __init__(self, root: Path, facts_file: Path | None):
         self.root = root
         self._timer_cache: dict[str, dict[str, list[str]]] = {}
+        self.partial = False
+        if facts_file and facts_file.name == "status.json":
+            # 2026-10-26 (operator): an agent account (EA) runs the same check without seeing the
+            # operator's user manager -- units come from the published status snapshot; enabled
+            # state and timer schedules are not in the snapshot, so those claims are skipped.
+            snap = json.loads(facts_file.read_text())
+            self.tracked = set(_run(["git", "ls-files"], cwd=root).split("\n")) - {""}
+            self.units = {u["unit"] for u in snap.get("units", [])} | {t["unit"] for t in snap.get("timers", [])}
+            self.routes = set()
+            facts_file = None
+            self.synthetic = True
+            self.partial = True
+            self.states = {}
+            self._load_routes(root)
+            return
         if facts_file:
             data = json.loads(facts_file.read_text())
             self.tracked = set(data.get("tracked", []))
             self.units = set(data.get("units", []))
             self._timer_cache = {k: {kk: list(vv) for kk, vv in v.items()}
                                  for k, v in data.get("timers", {}).items()}
+            self.routes = {route_key(r) for r in data.get("routes", [])}
+            self.states = dict(data.get("states", {}))
             self.synthetic = True
         else:
+            self.routes = set()
+            self._load_routes(root)
+            self.states = {}
             self.tracked = set(_run(["git", "ls-files"], cwd=root).split("\n")) - {""}
             units: set[str] = set()
             for scope in (["--user"], []):
@@ -154,6 +193,44 @@ class LiveFacts:
             base, _, suffix = u.partition("@")
             return f"{base}@.{suffix.rsplit('.', 1)[-1]}" in self.units
         return False
+
+    def _load_routes(self, root: Path) -> None:
+        for f in (root / "src").rglob("*.py"):
+            try:
+                src = f.read_text(errors="replace")
+            except OSError:
+                continue
+            self.routes |= {route_key(m.group(1)) for m in ROUTE_SRC.finditer(src)}
+            # APIRouter(prefix="/api/v1/x") + @router.get("/y") -> /api/v1/x/y
+            for pre in ROUTER_PREFIX.findall(src):
+                self.routes |= {route_key(pre + p) for p in DECORATED_PATH.findall(src)}
+
+    def route_ok(self, r: str) -> bool:
+        tail = r.split("{", 1)[1] if "{" in r else ""
+        if tail and ("}" not in tail or "," in tail.split("}", 1)[0]):
+            r = r.split("{", 1)[0]                            # doc brace shorthand: /api/x/{a,b} -> /api/x
+        if r.startswith("/api/dispatch/"):
+            r = r[len("/api/dispatch"):]                      # the runner proxies /api/dispatch/<dispatch route>
+            if r.count("/") <= 3 or "<" in r:
+                return True                                   # the proxy itself or a placeholder
+        k = route_key(r)
+        if k in self.routes or any(s.startswith(k + "/") for s in self.routes):
+            return True
+        # a concrete example (/api/v1/fids/DCA/X1) matches a parameterised route (/api/v1/fids/*/*)
+        parts = k.split("/")
+        return any(len(s.split("/")) >= len(parts) and all(a == b or b == "*" for a, b in zip(parts, s.split("/")))
+                   for s in self.routes)
+
+    def state(self, unit: str) -> str:
+        """'enabled' / 'disabled' / '' (static, masked, unknown: never a miss)."""
+        if unit not in self.states and not self.synthetic:
+            out = ""
+            for scope in (["--user"], []):
+                out = _run(["systemctl", *scope, "is-enabled", unit]).strip()
+                if out in ("enabled", "disabled"):
+                    break
+            self.states[unit] = out if out in ("enabled", "disabled") else ""
+        return self.states.get(unit, "")
 
     def timer(self, name: str) -> dict[str, list[str]]:
         if name in self._timer_cache:
@@ -191,9 +268,23 @@ def check(root: Path, facts: LiveFacts) -> tuple[list[str], int, int]:
                     seen.add((rel, value))
                     drift.append(f"[DRIFT] {rel}:{no}: path not tracked: {value}")
             elif kind == "unit":
+                if facts.partial:
+                    continue                                # snapshot lists loaded units only
                 if not facts.unit_ok(value) and (rel, value) not in seen:
                     seen.add((rel, value))
                     drift.append(f"[DRIFT] {rel}:{no}: unit not installed: {value}")
+            elif kind == "route":
+                if not facts.route_ok(value) and (rel, value) not in seen:
+                    seen.add((rel, value))
+                    drift.append(f"[DRIFT] {rel}:{no}: route not in src/: {value}")
+            elif facts.partial:
+                continue                                    # snapshot mode: no enabled state, no schedules
+            elif kind == "state":
+                unit = extra.split("\t")[1]
+                live = facts.state(unit)
+                if live and live != value and (rel, unit + value) not in seen:
+                    seen.add((rel, unit + value))
+                    drift.append(f"[DRIFT] {rel}:{no}: {unit} documented {value}, live {live}")
             else:
                 timer = extra.split("\t")[1]
                 key, _, expr = value.partition("=")

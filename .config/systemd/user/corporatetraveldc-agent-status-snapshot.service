@@ -1,0 +1,8 @@
+[Unit]
+Description=Corporate Travel DC -- scrubbed status snapshot for agent accounts (/srv/ctdc-handoff/status/status.json; states, counts and names only, never command lines, environments or journal text)
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=120
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/agent-status-snapshot.py

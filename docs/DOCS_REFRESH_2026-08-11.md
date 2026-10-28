@@ -1,3 +1,5 @@
+> Status 2026-10-25: record of the 2026-08-11 refresh, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: the Ollama model stack it describes (the dedicated `corporatetraveldc-pi5-*` models, `OLLAMA_KEEP_ALIVE`, the never-built disruption-weather-digest model) is gone, replaced by one llama.cpp model (Qwen3-4B); the web API has 135 route registrations (81 in `main.py`, 54 in sub-routers) and the runner 33 routes; the runner RSS catalog has 11 categories and 32 feeds; TFMS handles 12 fiMessage types; the amendment dedup keys on `tfms:amendment:{entry id}` with the route as a separate content key (since 2026-08-16); the NOTAM REST fetcher needs `NMS_API_CLIENT_ID` and `NMS_API_CLIENT_SECRET` (NMS-API, since 2026-09-02) and currently fails with `auth_failed`; the cloud-inference gate in `llm.py` is `ANTHROPIC_FALLBACK_ENABLED`, default false since 2026-08-25, so the "defaults true" notes below are history; all three scheduled-task skills ship in `skills/` (since 2026-10-04); the pre-commit hook also checks private-key headers and Tailscale keys (since 2026-10-20), which the README table at 5f7fca01 does not list (the rows were added in an uncommitted 2026-10-25 edit of `scripts/pre-commit-README.md`); the thermal CSV duplicate-header bug was fixed 2026-09-21 (the stray rows written before then remain); the `csex-token` remnants were removed 2026-08-15; the mcpo units were retired 2026-10-20.
+
 # Documentation Refresh — 2026-08-11
 
 A from-scratch reverification of this repo's documentation against the actual
@@ -309,7 +311,7 @@ and the LM Studio plan) were never true or long-moot, respectively.
    intended, cleanup spans the tunnel ingress (dashboard-managed), the
    vhost (+ stale `.conf.bak-20260807`), and `webdav_client.py`.
    `cockpit.example.com` by contrast is fully dead (no ingress,
-   no vhost, no DNS answer) and now appears in no doc as live.
+   no vhost, no DNS answer) (unverified 2026-10-25) and now appears in no doc as live.
 4. **`thermal-samples.csv` gets a duplicate header row every 5 minutes**
    (`thermal-sample.sh`'s schema-transition check matches against line 1,
    which is still the old header) — ~130 stray header rows so far.

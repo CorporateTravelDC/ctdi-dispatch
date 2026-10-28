@@ -36,11 +36,11 @@ zero cloud LLM calls.~~ (corrected 2026-10-15: that holds for the platform's
 own runtime inference path (`llm.py`, `llm.py:399` default still `false`), but
 not for the deployment as a whole. One scheduled job calls a cloud model
 outside `llm.py`. `corporatetraveldc-second-brain-weekly-dump.timer` (enabled,
-Sun 02:00Z) runs `claude --model opus -p …`
+Sun ~~02:00Z~~ (corrected 2026-10-26: 02:00 America/New_York, 06:00Z EDT / 07:00Z EST)) runs `claude --model opus -p …`
 (`scripts/second-brain-weekly-dump.sh:139`) and sends it `CLAUDE.md` and
 Claude's memory files. Its local backstop,
 `corporatetraveldc-claude-weekly-llama-fallback`, runs only after a failure;
-see `README.md` "Local LLM" for its known defect. The operator's agents
+~~see `README.md` "Local LLM" for its known defect~~ (superseded 2026-10-26: its default model maps to persona `claude-weekly-fallback`, `src/common/personas.py:807`, since bc6bb0ad). The operator's agents
 (Claude Code and Codex on the box, ChatGPT and Cowork through the agent
 gateway) are vendor-hosted models. They are operator tooling, not the
 platform's inference path, but they are cloud LLM use on this deployment.
@@ -60,7 +60,7 @@ Rules for contributors:
 - **Never** send inference to a remote endpoint by default. Inference targets
   `LLAMA_BASE_URL` (renamed from `OLLAMA_BASE_URL` on 2026-10-05; the old name
   is read only as a fallback). In `generate()` an unset `LLAMA_BASE_URL` skips
-  the local step entirely (`llm.py:924`). Note one exception to "unset means
+  the local step entirely (~~`llm.py:924`~~ `llm.py:941`, 2026-10-25). Note one exception to "unset means
   off": `src/common/llama_pool.py` falls back to the reference host
   `100.x.x.x:8093` when neither `LLAMA_BASE_URL` nor
   `LLAMA_POOL_HOST`/`LLAMA_PORT` is set, and the runner's chat stream uses
@@ -112,7 +112,7 @@ operator queries, cost per token, and add a commercial runtime dependency.
 | Pi-hole + Unbound | Open source | High | DNS |
 | Tailscale | Commercial | Medium — headscale | Network identity; not in the inference path |
 | Cloudflare Tunnel + Access | Commercial | Medium — nginx + DDNS | Public ingress and identity gate; not in the inference path |
-| Anthropic (Claude CLI, Opus) — added 2026-10-15 | Commercial | Medium — local Llama backstop exists but cannot generate as configured | Weekly second-brain dump (scheduled cloud inference, above); also the operator's Claude Code agent sessions. **In** an inference path, outside `llm.py`. |
+| Anthropic (Claude CLI, Opus) — added 2026-10-15 | Commercial | Medium — local Llama backstop exists ~~but cannot generate as configured~~ (superseded 2026-10-26: its default model maps to a persona since bc6bb0ad, `personas.py:807`) | Weekly second-brain dump (scheduled cloud inference, above); also the operator's Claude Code agent sessions. **In** an inference path, outside `llm.py`. |
 | OpenAI (Codex CLI, ChatGPT via the agent gateway) — added 2026-10-15 | Commercial | High — agents are optional | Operator agent tooling; not in the platform's runtime path |
 | airplanes.live — added 2026-10-15 | Community aggregator | High — fallback only, off by default | Position/identity lookup after local sources fail (§3) |
 | Proton Drive (via rclone) — added 2026-10-15 | Commercial | High — the target is a parameter (SMB, S3, SFTP, others) | Off-box backup target since 2026-10-12; receives only Borg-encrypted chunks, LADD rows excluded (`docs/BACKUP.md`) |
@@ -122,7 +122,7 @@ Tailscale and Cloudflare are acceptable because they are outside the
 inference path and have alternatives. A contributor who removes them should
 add the alternative as an opt-in, not a replacement. (Added 2026-10-15: the
 Anthropic row does not meet that test today. It is in an inference path, and
-its only fallback does not work as configured.)
+~~its only fallback does not work as configured~~ (superseded 2026-10-26: its local fallback's model maps to persona `claude-weekly-fallback` since bc6bb0ad).)
 
 ---
 

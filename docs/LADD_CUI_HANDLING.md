@@ -7,10 +7,14 @@ for the next relay, and against the live system at 2026-10-15 ~01:00Z /
 
 The FAA's automated `LADD_Aircraft.zip` download
 (`src/poller/fetchers/faa_registry.py`, `_FAA_LADD_URL`) has redirected to
-an FAA office page since June 2026 and produces nothing (since 2026-10-08
+an FAA office page since June 2026 and produces nothing (unverified 2026-10-25:
+the redirect would need a call to the FAA, which this read-only pass does not make)
+(since 2026-10-08
 the poller no longer calls it at all; see "One source only" below). Current LADD
 (Limiting Aircraft Data Displayed) data comes as files the operator
-downloads manually each week: an "FAA Source" filter, a broader "Industry"
+downloads manually each week (unverified 2026-10-25: the cadence is operator
+practice; `reference_import_ledger` shows `ladd-import` loads on 2026-10-09,
+2026-10-13 and 2026-10-20, SELECT 21:55Z): an "FAA Source" filter, a broader "Industry"
 filter (a strict superset, confirmed 2026-08-31), and a separate "remove"
 list. All are marked CUI SP-PRVCY.
 
@@ -33,7 +37,8 @@ list. All are marked CUI SP-PRVCY.
   3. Only then `shred -u` the source files. The database is the system of record, not
      the intake files. (corrected 2026-10-15: this host's root filesystem is
      btrfs, which is copy-on-write, so `shred` cannot overwrite the old blocks in
-     place and in practice works as a delete. `scripts/backup/ctdi-backup.sh:81-82`
+     place and in practice works as a delete. ~~`scripts/backup/ctdi-backup.sh:81-82`~~
+     (corrected 2026-10-25: `scripts/backup/ctdi-backup.sh:93`)
      says the same. Copies in the container's `/tmp` sit on tmpfs, in RAM. The
      controls that matter are that the files stay in the operator's account,
      that their contents never reach a tracked file, and the import ledger
@@ -69,7 +74,7 @@ list. All are marked CUI SP-PRVCY.
   would have wiped the CUI-sourced list and skipped the recorded removals.
   The CUI import above is now the only writer.
 
-Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). (2026-10-15 00:51Z: `ladd: 73543`, 84 recorded removals. `reference_import_ledger` holds two `ladd-import` entries, 2026-10-09 23:08Z and 2026-10-13 15:47Z.) <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
+Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10-06 Industry + remove import: `ladd: 73479` (60 recorded removals). (2026-10-15 00:51Z: `ladd: 73543`, 84 recorded removals. `reference_import_ledger` holds two `ladd-import` entries, 2026-10-09 23:08Z and 2026-10-13 15:47Z.) (superseded 2026-10-25 21:23Z: `ladd: 73333`, 115 recorded removals; the ledger holds three `ladd-import` and ~~16~~ `faa-registry` entries (superseded 2026-10-26: 17 `faa-registry`, 3 `ladd-import`; `SELECT kind,count(*) FROM reference_import_ledger GROUP BY 1` 22:00Z).) <del>Live `GET /api/v1/aircraft-registry/status` 18:12Z: `ladd: 73369`.</del>
 
 **Import ledger (2026-10-09).** Every import now appends a hash-chained entry to `reference_import_ledger` (migration 0074, `src/common/import_ledger.py`). The entry records each source file's basename, size and SHA-256 with its role (filter or remove), plus the resulting counts. Hashes and counts only, never an identifier. Take the hash before the source files are shredded; the importer does this itself. The 2026-10-06 load predates the ledger. The operator re-supplied both 10-06 files on 2026-10-09, and `import-ladd-filter.py --stamp-only` recorded their hashes after confirming they match the loaded table exactly (+0 / -0). The tables were not changed, and the files were shredded afterwards. `--stamp-only` is the general way to record the source of any earlier load. Each backup's `#` stamp records the ledger head (docs/BACKUP.md). (added 2026-10-15) `import_ledger.verify()` (`src/common/import_ledger.py:86`) checks the chain, but nothing calls it on a schedule: the ledger can be checked, and nothing checks it automatically.
 
@@ -91,10 +96,14 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   2026-10-08) never sends a LADD-listed identifier. For a hex it first maps
   the hex to its registration. If the LADD check fails, the identifier is
   treated as listed and nothing is sent. The query alone would tell a third
-  party which privacy-listed aircraft is being followed. Not covered: the
+  party which privacy-listed aircraft is being followed. ~~Not covered: the
   airframes.io and ACARS Drama REST reads by registration
   (`src/acars_watcher/acars_watcher.py`, `src/common/acars.py`) have no LADD
-  check (2026-10-15, open).
+  check (2026-10-15, open).~~ (superseded 2026-10-25: `src/common/acars.py:170-185`
+  now has `_ladd_listed()`, which treats a lookup failure as listed and skips the
+  external query; `src/acars_watcher/acars_watcher.py` builds its Jumpseat list
+  from `GET /api/v1/watchlist/registrations`, which the dispatch API LADD-filters
+  fail-closed (`acars_watcher.py:17-24,95,307-325`; `web/routes/watchlist.py:138-167`).)
 - **Backups (added 2026-10-15).** The off-box backup carries the LADD table
   schema but not its rows (`docs/BACKUP.md`). Local CUI dumps stay on the box
   (`BACKUP_CUI_LOCAL_KEEP`, default 7), and older ones are removed with
@@ -126,7 +135,7 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   a zip. The public mirror's history was rewritten with it on 2026-10-15
   01:44Z / 21:44 ET 10-14 (6 identifiers; tip tree unchanged; a fresh-clone
   rescan finds 0). The archived public repository `corporatetravel-dispatch-mcp`
-  still has 2 identifiers in its history (open operator item).
+  still has 2 identifiers in its history (open operator item) (unverified 2026-10-25: the archived mirror's history was not rescanned).
 
 ## Transcript leak scan: LADD class (added 2026-10-19, Gate-1b)
 

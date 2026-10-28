@@ -10,6 +10,13 @@
 >   → {"discussions":[],"available":false}
 > ```
 >
+> (superseded 2026-10-25: the store is Postgres since 2026-09-18 and the
+> SQLite file was destroyed 2026-10-19, so the first command no longer
+> applies; re-verified 15:42:01Z with `SELECT count(*) FROM wpc_discussions`
+> in `corporatetraveldc-pgsql` → `0`, and `GET /api/v1/wx/discussion` →
+> `{"discussions":[],"available":false}` at 15:39:58Z. Still zero rows ever;
+> still unverified end-to-end.)
+>
 > Root cause identified 2026-08-22: `parse_wpc_product()` was being called
 > with the AWIPS-id form of the product id (e.g. `PMDSPD`) against a
 > `_WPC_PRODUCTS` table keyed by the WMO bulletin header / `ttaaii` form
@@ -137,7 +144,10 @@ startup via `init_db_v12()`. No manual DB migration is required.
 ## Notes
 
 - WPC discussions can run 3-4KB of text. Storage is capped at 8000 chars per
-  row in `upsert_wpc_discussion()`. This covers all four product types with
+  row ~~in `upsert_wpc_discussion()`~~ (corrected 2026-10-25: the cap is
+  applied by `parse_wpc_product()` in `src/ingest/nwws.py:327`
+  (`body[:8000]`) before `upsert_wpc_discussion()` is called; the upsert
+  itself, `src/common/db.py:4281-4289`, does not truncate). This covers all four product types with
   comfortable margin.
 - `prune_wpc_discussions()` retains the 10 most recent rows per product by
   default. Call it from any scheduled cleanup task to bound table growth.

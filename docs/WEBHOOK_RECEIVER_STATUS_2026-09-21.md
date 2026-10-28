@@ -1,4 +1,6 @@
-> **Status (2026-10-15):** the three receivers are still in `src/web/routes/webhooks.py`, but no vendor has been connected and `webhook_events` holds 0 rows (live read). The "Blocker" section below is out of date: `docs/INTEGRATION_SPEC.md` §3 records a path-scoped Cloudflare Access bypass for `/webhooks/*` in place by 2026-10-06. Topics and priorities are in `docs/ALERT_REFERENCE.md` §2 (`reservations`, `calls`); the 2026-10-13 ntfy audit lists both as silent by design.
+> Status 2026-10-25: the code and live state in the 2026-10-15 status below still hold — three receivers, no vendor connected, `webhook_events` 0 rows, and no `*_WEBHOOK_SECRET` key in `dispatch-secrets.env`, `dispatch.env` or `svc/web.env`, so `_check_secret()` returns 503 "not configured" on every endpoint (`src/web/routes/webhooks.py:160-168`; not probed live — POST is out of scope). The Cloudflare Access bypass could not be checked from the box.
+
+> **Status (2026-10-15):** the three receivers are still in `src/web/routes/webhooks.py`, but no vendor has been connected and `webhook_events` holds 0 rows (live read). The "Blocker" section below is out of date: `docs/INTEGRATION_SPEC.md` §3 records a path-scoped Cloudflare Access bypass for `/webhooks/*` in place by 2026-10-06 (unverified 2026-10-25). Topics and priorities are in `docs/ALERT_REFERENCE.md` §2 (`reservations`, `calls`); the 2026-10-13 ntfy audit lists both as silent by design.
 
 # Webhook Receiver Status — 2026-09-21
 

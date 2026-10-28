@@ -53,6 +53,15 @@ check_root_file() {  # path signed-src mode label
 # 1 + 2
 check_root_file "$POLICY" config/claude-code/managed-settings.json 644 "managed policy"
 check_root_file "$HOOK" scripts/ctdc-claude-no-agent-hook.py 755 "policy hook"
+# 2026-10-26: no aircraft registration in anything Claude writes or returns
+REG_HOOK=/usr/local/libexec/ctdc/ctdc-claude-no-registration-hook.py
+check_root_file "$REG_HOOK" scripts/ctdc-claude-no-registration-hook.py 755 "registration hook"
+if [[ -f "$REG_HOOK" ]]; then
+    reg="N""12IO"   # FAA never issues I or O: never a real registration; built at runtime (public scrub rule)
+    r1=$(printf '{"tool_input":{"file_path":"/tmp/x.md","content":"tail %s"}}' "$reg" | python3 "$REG_HOOK" >/dev/null 2>&1; echo $?)
+    r2=$(printf '{"tool_input":{"content":"11 rows (SELECT count)"}}' | python3 "$REG_HOOK" >/dev/null 2>&1; echo $?)
+    [[ "$r1" == 2 && "$r2" == 0 ]] && ok "registration hook: blocks a registration, allows a count" || fail "registration hook self-test failed (registration rc=${r1}, count rc=${r2})"
+fi
 
 # 3
 if [[ ! -d "$EMPTY_GNUPG" ]]; then fail "empty GNUPGHOME ${EMPTY_GNUPG} is missing"

@@ -1,3 +1,5 @@
+> Status 2026-10-25: the 2026-10-15 status below still holds (the provider guard `_is_amtrak_route` is now at `src/poller/main.py:2144`; §4-§6 and the MARC/VRE fetchers remain unbuilt). As built, `db.update_train_phase` is monotonic and records its source but does not rank source authority (see the §2 correction).
+
 > **Status (2026-10-15):** Build steps 1-2 shipped: the §1 provider guard (`_is_amtrak_route`, `src/poller/main.py:2154`; route list from `TRAIN_PROVIDER_ROUTES_AMTRAK`, default `_AMTRAK_ROUTE_DEFAULT`) and §2/§3 phase + live ETA (`pg_schema/0064_train_phase_eta.sql`, monotonic `db.update_train_phase`). Since 2026-10-13 a train push compares only the current run's events (amtraker `origSchDep`; 16 h fallback). Not built: §4 per-provider topics (no `amtrak-alerts`/`marc-alerts`/`vre-alerts` in code), the rest of §5 (`TRAIN_PROVIDERS`, MARC/VRE route keys), §6 segment metering, and MARC/VRE fetchers. Train skill procedure: [docs/tasks/scheduled/nec-train-hifi-track.md](tasks/scheduled/nec-train-hifi-track.md).
 
 # Train Parity Design — 2026-09-23
@@ -91,9 +93,9 @@ Four phases, deliberately mirroring OOOI:
 | `approaching` | destination is the first station not yet `Departed` | ON |
 | `arrived` | destination `status == Station`, or `trainState == Completed` | IN |
 
-**Monotonic and authority-gated**, reusing the existing
+~~**Monotonic and authority-gated**, reusing the existing
 `update_watchlist_oooi_phase_authoritative` discipline rather than growing a
-second mechanism — a late poll still reporting `Enroute` must not pull a
+second mechanism~~ (corrected 2026-10-25: as built, `db.update_train_phase` (`src/common/db.py:7179-7231`) is a separate function — monotonic through scheduled → departed → approaching → arrived and recording `train_phase_source`, with no source-authority ranking) — a late poll still reporting `Enroute` must not pull a
 train back out of `arrived`.
 
 **Parity: TARGET → AT PARITY on delivery.**

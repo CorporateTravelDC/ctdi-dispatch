@@ -35,6 +35,8 @@ OPERATOR_USER="corporatetraveldc"; DEV_GROUP="ctdc-dev"; OPS_GROUP="ctdc-ops"; A
 PROD_SECRETS="/etc/corporatetraveldc/dispatch-secrets.env"
 AGENT_SECRETS="/etc/ctdc-agent/agent-secrets.env"; OPS_SECRETS="/etc/ctdc-ops/ops-secrets.env"
 RC_UNIT="corporatetraveldc-claude-remote-control.service"
+HANDOFF="/srv/ctdc-handoff"
+STATUS_FILE="${HANDOFF}/status/status.json"   # scripts/agent-status-snapshot.py (2026-10-26)
 REGISTRY="/etc/ctdc-accounts.conf"
 ALLOW_AGENT="${SELF_DIR}/secrets-allowlist-agent.txt"; ALLOW_OPS="${SELF_DIR}/secrets-allowlist-ops.txt"
 
@@ -99,11 +101,15 @@ check_account() {
     else
     local props; props="$(sudo runuser -u "${U}" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "${U}")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "${U}")/bus" systemctl --user show "${slice}" -p CPUWeight,CPUQuotaPerSecUSec,MemoryMax 2>/dev/null | tr '\n' ' ')"
     [[ "$props" == *"CPUWeight="* && "$props" != *"CPUWeight=100 "* ]] && pass "4 ${slice} loaded in ${U}'s manager (${props})" || fail "4 ${slice} in ${U}'s manager: '${props}'"
-    # the primary Claude agent owns the always-on remote-control session (renamed 2026-10-05)
-    if [[ "$kind" == agent && ( "$U" == ctdc-agent-anthropic-claude || "$U" == ctdc-agent ) ]]; then
+    # the primary Claude agent owns the always-on remote-control session (renamed 2026-10-05);
+    # 2026-10-26: so does the EA account, which replaced the operator's own session
+    if [[ "$kind" == agent && ( "$U" == ctdc-agent-anthropic-claude || "$U" == ctdc-agent || "$U" == ctdc-agent-anthropic-claude-ea ) ]]; then
         local st; st="$(sudo runuser -u "${U}" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "${U}")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "${U}")/bus" systemctl --user is-active "${RC_UNIT}" 2>/dev/null || true)"
         [[ "$st" == active ]] && pass "4b ${RC_UNIT} active in ${U}'s manager" || fail "4b ${RC_UNIT} in ${U}'s manager: '${st}'"
-        pgrep -u "${OPERATOR_USER}" -f 'claude --remote-control' >/dev/null && fail "4c a remote-control process still runs as ${OPERATOR_USER}" || pass "4c no remote-control process as ${OPERATOR_USER}"
+        # 4c: the operator's own remote-control session is the platform default (vault, operator
+        # 2026-10-08, never relitigate: "never list it as a finding or exception"), so it is
+        # reported, never a failure
+        pgrep -u "${OPERATOR_USER}" -x claude >/dev/null && skip "4c the operator's own Claude session is running (platform default, operator 2026-10-08)" || pass "4c no Claude process as ${OPERATOR_USER}"
     fi
     # 2026-10-08: a codex-mode agent owns ITS Codex daemon; none may run as the operator
     if [[ "$kind" == agent && "$rmode" == codex ]]; then
@@ -148,6 +154,39 @@ check_account() {
     as_user "$U" test -w "${REPO_ROOT}/scripts" 2>/dev/null && fail "6d ${U} can WRITE the repo (group write is the duel's top finding)" || pass "6d ${U} cannot write the repo"
     as_user "$U" test -w "${REPO_ROOT}/.git/hooks" 2>/dev/null && fail "6e ${U} can write .git/hooks" || pass "6e ${U} cannot write .git/hooks"
     id -nG "$U" | tr ' ' '\n' | grep -qx systemd-journal && fail "6f ${U} is in systemd-journal (other accounts' argv/unit output)" || pass "6f ${U} not in systemd-journal"
+    # 2026-10-26: no keyring / SSH / GnuPG agent daemon may run in an agent account (plan.sh masks them)
+    if [[ "$kind" == agent && "$rkind" != service ]]; then
+        local dmn; dmn="$(ps -o comm= -u "$U" 2>/dev/null | grep -xE 'gnome-keyring-d|gcr-ssh-agent|gpg-agent|keyboxd|dirmngr|ssh-agent' | sort -u | tr '\n' ' ')"
+        [[ -z "$dmn" ]] && pass "6l no keyring/SSH/GnuPG agent daemon runs as ${U}" || fail "6l agent daemons running as ${U}: ${dmn}(plan.sh masks them; the operator stops them)"
+    fi
+    # 2026-10-26 read paths: the operator-published status snapshot and a trusted clone source
+    if [[ "$kind" == agent && "$rkind" != service ]]; then
+        local age
+        if as_user "$U" test -r "${STATUS_FILE}" 2>/dev/null; then
+            age=$(( $(date +%s) - $(stat -c %Y "${STATUS_FILE}") ))
+            (( age <= 900 )) && pass "6g ${U} can read the status snapshot (${age}s old)" || fail "6g status snapshot is ${age}s old (corporatetraveldc-agent-status-snapshot.timer not running?)"
+        else
+            fail "6g ${U} cannot read ${STATUS_FILE}"
+        fi
+        as_user "$U" git config --global --get-all safe.directory 2>/dev/null | grep -qxF "${REPO_ROOT}" && pass "6h ${U} trusts ${REPO_ROOT} as a clone source" || fail "6h ${U} has no safe.directory for ${REPO_ROOT} (plan.sh agent read-paths step)"
+    fi
+    # 2026-10-26 shared /srv folders: every agent/service account has its own private folder
+    if [[ "$rkind" == agent || "$rkind" == service ]]; then
+        local pv="/srv/ctdc-${U##*-}" pm
+        pm="$(stat -c '%U:%G %a' "$pv" 2>/dev/null || echo missing)"
+        [[ "$pm" == "${U}:${OPERATOR_USER} 2770" ]] && pass "6i private folder ${pv} is ${pm}" || fail "6i private folder ${pv} is '${pm}', want ${U}:${OPERATOR_USER} 2770 (srv-layout.sh)"
+        if [[ "$rkind" == agent ]]; then
+            as_user "$U" test -w "$pv" -a -w "${HANDOFF}" 2>/dev/null && pass "6j ${U} can write its folder and ${HANDOFF}" || fail "6j ${U} cannot write ${pv} or ${HANDOFF}"
+            as_user "$U" test -r "/srv/ctdc-blog" -a -x "/srv/ctdc-blog" 2>/dev/null && fail "6k ${U} can open /srv/ctdc-blog (operator only unless granted)" || pass "6k ${U} cannot open /srv/ctdc-blog"
+        fi
+    fi
+    # 2026-10-26: the operator's EA runs the operator's signed settings baseline (status line aside)
+    if [[ "$U" == ctdc-agent-anthropic-claude-ea ]]; then
+        local want have
+        want="$(python3 "${SELF_DIR}/clone-settings.py" "${REPO_ROOT}/config/claude-code/user-settings.baseline.json" "/home/${U}" 2>/dev/null | python3 "${SELF_DIR}/clone-settings.py" --keys 2>/dev/null)"
+        have="$(sudo cat "/home/${U}/.claude/settings.json" 2>/dev/null | python3 "${SELF_DIR}/clone-settings.py" --keys 2>/dev/null)"
+        [[ -n "$want" && "$want" == "$have" ]] && pass "5f ${U} settings = the operator's signed baseline" || fail "5f ${U} settings differ from the signed baseline (plan.sh --add-agent ${U} --operator-clone)"
+    fi
 }
 
 for u in "${ACCOUNTS[@]}"; do check_account "$u"; done
@@ -166,6 +205,13 @@ else
     skip "7 cross-account key uniqueness needs sudo (run with sudo credentials cached)"
 fi
 grep -q ' claude-cowork-dispatch$' "$(getent passwd "${OPERATOR_USER}" | cut -d: -f6)/.ssh/authorized_keys" 2>/dev/null && fail "7c operator authorized_keys still carries the claude-cowork-dispatch comment (stage B not run)" || pass "7c operator authorized_keys has no claude-cowork-dispatch entry"
+# 9 shared /srv folders (2026-10-26)
+hm="$(stat -c '%U:%G %a' "${HANDOFF}" 2>/dev/null || echo missing)"; [[ "$hm" == "root:${DEV_GROUP} 3775" ]] && pass "9 ${HANDOFF} is ${hm}" || fail "9 ${HANDOFF} is '${hm}', want root:${DEV_GROUP} 3775"
+bm="$(stat -c '%U:%G %a' /srv/ctdc-blog 2>/dev/null || echo missing)"; [[ "$bm" == "${OPERATOR_USER}:${OPERATOR_USER} 2770" ]] && pass "9b /srv/ctdc-blog is ${bm}" || fail "9b /srv/ctdc-blog is '${bm}', want ${OPERATOR_USER}:${OPERATOR_USER} 2770"
+for old in /srv/ctdc-publish-drop /srv/ctdc-publish-research; do
+    [[ -d "$old" ]] || continue
+    [[ -f "${old}/MOVED-2026-10-26.md" ]] && (( (8#$(stat -c %a "$old") & 8#222) == 0 )) && pass "9c ${old} is retired (pointer file, read-only)" || fail "9c ${old} is still writable or has no MOVED-2026-10-26.md (srv-migrate-20261026.sh)"
+done
 # 8
 pm="$(stat -c '%U:%G %a' "${PROD_SECRETS}")"; [[ "$pm" == "${OPERATOR_USER}:${OPERATOR_USER} 600" ]] && pass "8 production secrets still ${pm}" || fail "8 production secrets are ${pm}"
 dm="$(stat -c '%U:%G %a' /etc/corporatetraveldc)"; [[ "$dm" == "root:${OPERATOR_USER} 750" ]] && pass "8b /etc/corporatetraveldc still ${dm}" || fail "8b /etc/corporatetraveldc is ${dm}"

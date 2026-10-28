@@ -1,3 +1,5 @@
+> Status 2026-10-25: point-in-time record; Finding 1 (unauthenticated vault read) is closed.
+
 # Live-State Doc Check — 2026-08-12
 
 Post-commit drift check for `d9a9d58` ("Add governor-watch: inference-aware
@@ -330,7 +332,7 @@ fixed, staged, or committed here; this check modified only this file. The
 model-selection in-flight set (CLAUDE.md, README.md, build-models.sh, 16
 Modelfiles, DEDICATED_MODELS_PLAN.md) remains uncommitted, as before.
 
-## Finding 1 — SECURITY: vault note content is publicly readable, unauthenticated, right now
+## Finding 1 — SECURITY: vault note content is publicly readable, unauthenticated, right now (2026-10-25: superseded, closed; unauthenticated GET at 2026-10-26T22:14Z: `/api/v1/vault/research/list` 401, `/api/v1/vault/file` 403)
 
 Not doc drift alone — a live exposure created by this commit landing behind
 a doc claim that turns out to be false. Verified from outside (real HTTPS

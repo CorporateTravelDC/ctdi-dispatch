@@ -14,14 +14,14 @@ resolve.
 
 | Account | sudo | Source |
 |---|---|---|
-| `corporatetraveldc` (operator, uid 1000) | Full sudo **with password** (`wheel`), plus a set of NOPASSWD entries (below) | `id`; `/etc/sudoers.d/` |
-| Team accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-openai-codex`, `ctdc-agent-llama`, `ctdc-agent-dispatch`, `ctdc-agent-anthropic-cowork`, and since 2026-10-08 `ctdc-agent-openai-chatgpt`) | **None.** Not in `wheel`; groups are their own + `ctdc-dev` + `ctdc-agents` (`id -nG`, 2026-10-06). `scripts/agent-segmentation/verify.sh` check 3 fails if any has passwordless sudo or is in wheel/sudo. | `plan.sh` step for each account |
-| Operator -> agent | `/etc/sudoers.d/50-<account>`: `corporatetraveldc ALL=(<account>) NOPASSWD: <repo>/scripts/agent-run.sh` -- the operator can drive an agent; the agent cannot drive anyone. (operator-account `sudo -n -l`, 2026-10-15; not re-verifiable without sudo: only `ctdc-agent-anthropic-claude` has this entry.) | `scripts/agent-segmentation/plan.sh` |
+| `corporatetraveldc` (operator, uid 1000) | Full sudo **with password** (`wheel`), plus a set of NOPASSWD entries (below) (unverified 2026-10-25: `id` confirms uid 1000 in `wheel`; `/etc/sudoers` (0440) and `/etc/sudoers.d/` (0750) are root-only and this sweep runs no `sudo`) | `id`; `/etc/sudoers.d/` |
+| Team accounts (`ctdc-agent-anthropic-claude`, `ctdc-agent-openai-codex`, `ctdc-agent-llama`, `ctdc-agent-dispatch`, `ctdc-agent-anthropic-cowork`, ~~and since 2026-10-08 `ctdc-agent-openai-chatgpt`~~ (corrected 2026-10-25: superseded -- since 2026-10-08 `ctdc-agent-openai-chatgpt`, and since 2026-10-26 03:07Z `ctdc-agent-anthropic-claude-ea`, uid 1007, with the same groups and not in `wheel`, `id -nG` 2026-10-26)) | **None.** Not in `wheel`; groups are their own + `ctdc-dev` + `ctdc-agents` (`id -nG`, 2026-10-06). `scripts/agent-segmentation/verify.sh` check 3 fails if any has passwordless sudo or is in wheel/sudo. | `plan.sh` step for each account |
+| Operator -> agent | `/etc/sudoers.d/50-<account>`: `corporatetraveldc ALL=(<account>) NOPASSWD: <repo>/scripts/agent-run.sh` -- the operator can drive an agent; the agent cannot drive anyone. (operator-account `sudo -n -l`, 2026-10-15; not re-verifiable without sudo: only `ctdc-agent-anthropic-claude` has this entry.) (unverified 2026-10-25: root-only; in source, `plan.sh` writes `50-<account>` only for the first agent and moves it with a rename (`scripts/agent-segmentation/plan.sh:277-280`, `:467`), and later agents get no sudoers entry (`:315`)) | `scripts/agent-segmentation/plan.sh` |
 
 Root-run automation does not use sudo at all: the system units
 (`corporatetraveldc-team-liveness`, `-skill-grants`, `-watchdog`,
 `-tailscale-cert-renew`, `-nts-cert-refresh`, `-stall-monitor`,
-`-watchdog-tune`, and, live by 2026-10-13, `-agent-leak-scan`) execute root-owned installed copies from
+`-watchdog-tune`, ~~and, live by 2026-10-13, `-agent-leak-scan`~~ (corrected 2026-10-25: `-agent-leak-scan`, live by 2026-10-13, and `-agent-home-snapshot`, daily 03:20 UTC, in the repo since 2026-10-11; all nine run copies last installed 2026-10-26 00:57Z)) execute root-owned installed copies from
 `/usr/local/libexec/ctdc/`, put there by `sudo scripts/install-root-copies.sh`
 (an interactive operator step after each sign). `corporatetraveldc-llama-council`
 runs as `User=ctdc-agent-llama` with `NoNewPrivileges=yes`,
@@ -65,7 +65,7 @@ stay passwordless.~~
 
 **Done 2026-10-07 (applied by the deploy relay).** The passwordless rules for
 `dnf remove *`, `dnf autoremove`, `semanage port -a *` and every dead `ollama*`
-rule are ~~removed and~~ replaced by one rule:
+rule are ~~removed and~~ replaced by one rule (unverified 2026-10-25: the live sudoers is root-only; the tracked `config/sudoers.d/zz-ctdc-approved-exec` carries exactly this NOPASSWD line):
 
 ```
 <operator> ALL=(root) NOPASSWD: /usr/local/libexec/ctdc/approved-exec.py
@@ -86,12 +86,12 @@ signature, and a forged database row does not help it. See
 `docs/AGENT_TRUST_MODEL.md` §9.1.
 
 **How it is applied (corrected 2026-10-15; source: operator-account `sudo -n -l`, 2026-10-15; not re-verifiable without sudo, `/etc/sudoers.d` is root-only; the tracked `config/sudoers.d/zz-ctdc-approved-exec` matches the later-PASSWD explanation).** The old NOPASSWD
-lines are **still present**. They are neutralised by a later
+lines are **still present** (unverified 2026-10-25: root-only, no `sudo` run). They are neutralised by a later
 `(root) PASSWD:` entry for `dnf remove *`, `dnf autoremove`, `semanage port -a *`
 (both paths) and every `ollama*` command; sudoers applies the last matching
 entry, so those commands now ask for the operator's password (as review 03
 verified). Deleting the dead lines is still owed. Other NOPASSWD entries that
-remain live and are not approval-gated: `systemctl status argononed/cpupower`,
+remain live and are not approval-gated (unverified 2026-10-25: root-only): `systemctl status argononed/cpupower`,
 `systemctl reload nginx`, `cpupower frequency-set -g schedutil`, two
 `ausearch ... --start today` reads, `systemctl {start,stop,enable,disable,mask,unmask}
 argononed`, `systemctl {enable,disable} cpupower`, and `systemctl restart
@@ -126,7 +126,7 @@ sudo-approval-gate.sh <pattern> "<reason>" -- <command...>
    `sudo-approval-gate.sh dnf-remove "<reason>" -- sudo dnf remove -y <pkg>`.
 
 What the server enforces (`src/common/governance.py::resolve_signed`, tests
-`tests/web/test_signed_approvals.py`, 21 tests):
+`tests/web/test_signed_approvals.py`, ~~21 tests~~ (corrected 2026-10-25: superseded -- 35 test functions at HEAD `5f7fca01`)):
 
 - the signature verifies over ~~`corporatetraveldc-approval v1 / id / action /
   kind / requester / expires_at / command-sha256`~~ `corporatetraveldc-approval
@@ -149,8 +149,13 @@ overrides. A higher priority never lengthens the TTL or defaults to allow.
 
 The same signed-approval mechanism now also gates council/arena convenes
 (`kind=council`, `council-close`), agent-gateway vendor links and holds
-(`connector-link`, `connector-hold`), gateway thaw (`gateway-thaw`) and
-console sign-in (`console-login`). Each kind has its own expiry bounds
+(`connector-link`, `connector-hold`), gateway thaw (`gateway-thaw`) ~~and
+console sign-in (`console-login`).~~ (corrected 2026-10-25: superseded --
+console sign-in (`console-login`), and since then two more kinds: `liveness`,
+2026-10-15 `bcf3df54`, the offline-lockdown authority for `team-liveness.sh`,
+and `board-gate`, 2026-10-16 `bc6bb0ad`, the Cowork board token-gate reply;
+`APPROVAL_KINDS` and `APPROVAL_TTL_POLICY` in `src/common/governance.py:54-57`,
+`:203-213`.) Each kind has its own expiry bounds
 (`governance.APPROVAL_TTL_POLICY`, table in `docs/AGENT_TRUST_MODEL.md` §3).
 Since 2026-10-11 a requester can withdraw its own pending request
 (`POST /api/v1/approvals/{id}/withdraw`, signed, audited as

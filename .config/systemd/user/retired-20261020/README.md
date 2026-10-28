@@ -1,3 +1,5 @@
+> Status 2026-10-25: re-checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box. Nothing below is out of date: none of these units is installed live.
+
 # Retired 2026-10-20 -- dead user units (cleanup sweep)
 
 Nothing here is installed or run. systemd does not read this subdirectory.

@@ -11,28 +11,35 @@ second-brain index, chat, demo archive). `DISPATCH_DB_BACKEND=postgres` is
 set in the live `/etc/corporatetraveldc/dispatch.env` and in the tracked
 `config/dispatch.env`. ~~`DISPATCH_DB_BACKEND=sqlite` remains a supported code
 path for tests, dev and rollback; nothing in production runs it.~~ (2026-10-20,
-operator decision 2026-10-19: only Pi-hole, vnstat and ACARS Hub touch SQLite on
-this box. `postgres` is the default when unset; `sqlite` is honoured only under
+operator decision 2026-10-19: ~~only Pi-hole, vnstat and ACARS Hub touch SQLite on
+this box~~ (corrected 2026-10-25: besides Pi-hole (`/etc/pihole/gravity.db`), vnstat and
+ACARS Hub (`messages.db`), Open WebUI (`/var/lib/openwebui/webui.db`, WAL files present)
+and fail2ban (`/var/lib/fail2ban/fail2ban.sqlite3`) keep SQLite stores on this box;
+`ls` 2026-10-26 02:25Z. NEEDS-OPERATOR-DECISION, see §3.7). `postgres` is the default when unset; `sqlite` is honoured only under
 `CTDC_ALLOW_SQLITE_FOR_TESTS=1`, which only `tests/conftest.py` sets, and otherwise
 raises `db_backend.SqliteRetired`. There is no rollback to SQLite: every platform
 SQLite file was destroyed on 2026-10-19 (d5fde567). See §3.7.)
 
-- `src/common/db_backend.py`: `PG_TABLES` lists ~~**102**~~ **104** tables (corrected 2026-10-15);
+- `src/common/db_backend.py`: `PG_TABLES` lists ~~**102**~~ ~~**104**~~ tables (corrected 2026-10-15; corrected 2026-10-25: **110**, `len(db_backend.PG_TABLES)`);
   `REFERENCE_TABLES` is an empty frozenset ~~(machinery kept for any future
   SQLite-only reference set)~~ (2026-10-20: the machinery, `ref_conn()` and
   `_guard_cross_engine()`, is deleted; it had no callers and would have re-created
   the platform SQLite file).
 - `src/common/pg_schema/`: ~~**73** migration files, `0001_bootstrap.sql`
   through `0073_console_and_gateway_switch.sql`, contiguous, defining **122**
-  distinct tables~~ (corrected 2026-10-15: **75** migration files, `0001_bootstrap.sql`
+  distinct tables~~ (corrected 2026-10-15: ~~**75** migration files, `0001_bootstrap.sql`
   through `0075_surface_event_log.sql`, contiguous; 124 distinct `CREATE TABLE` names
-  across the files, and the live database holds 122 tables) (the `PG_TABLES` set plus the second-brain index, demo and
+  across the files, and the live database holds 122 tables~~) (corrected 2026-10-25: **83** migration files,
+  `0001_bootstrap.sql` through `0084_semantic_vessel_drone_geometry.sql` with no `0080`, so not contiguous;
+  131 distinct `CREATE TABLE` names; the live database holds 129 tables -- `ls src/common/pg_schema`,
+  `SELECT count(*) FROM pg_tables WHERE schemaname='public'` 21:22Z) (the `PG_TABLES` set plus the second-brain index, demo and
   newer governance/gateway tables). Applied in filename order by
   `scripts/pg_migrate.py` (wrapper `scripts/pg-migrate.sh [--dry-run] [--status]`),
   tracked in `schema_migrations`.
   ~~`[UNVERIFIED: which migrations are applied on the live instance — the
-  database was not queried]`.~~ (verified 2026-10-15: `schema_migrations` has 75
-  rows, the newest `0075_surface_event_log.sql`; its columns are `filename`,
+  database was not queried]`.~~ (verified 2026-10-15: `schema_migrations` has ~~75
+  rows, the newest `0075_surface_event_log.sql`~~ (corrected 2026-10-25: 83 rows, newest
+  `0084_semantic_vessel_drone_geometry.sql`, SELECT 21:22Z); its columns are `filename`,
   `applied_at`, `checksum`.)
 - ~~The one deliberate SQLite store left: `src/demo/demo_api.py` reads
   `/var/lib/corporatetraveldc-demo-source/demo-source.db` (1.9 GB), the
@@ -55,7 +62,8 @@ there — `[UNVERIFIED: whether it was archived elsewhere]`), `demo.db`
 `demo_access.db`, `dispatch-chat.db`, and an empty `dispatch.db`.~~ (2026-10-20:
 all destroyed by the 2026-10-19 relay, d5fde567, G26 proof record on-box. Copies
 inside older Borg archives and the Proton mirror are not purged; that is a pending
-operator decision.)
+operator decision. (unverified 2026-10-25: listing archive contents needs the Borg
+passphrase, which this read-only pass does not open.))
 
 **Decision record (operator, 2026-09-05):** everything written at runtime
 lives in Postgres; a reference table that a write-path query must JOIN is
@@ -98,8 +106,8 @@ because it trades freshness for throughput.
   size, SHA-256, resulting row counts); each backup pins its head
   (`docs/BACKUP.md`). 0075 `surface_event_log` (2026-10-14): an append-only log
   of DCA/IAD/BWI surface events that keeps ramp exits for time-fidelity work,
-  pruned at 120 days (280 rows at the 2026-10-15 check).
-- 2026-10-18 (lean-out L1, staged, not yet applied): 0076 `nas_programs.source`
+  pruned at 120 days (280 rows at the 2026-10-15 check; 42,615 on 2026-10-25).
+- 2026-10-18 (lean-out L1, ~~staged, not yet applied~~ (superseded 2026-10-25: 0076 and 0078 are applied -- both rows in `schema_migrations`, `nas_programs.source` present, `idx_flight_events_callsign` absent from `pg_indexes`; SELECT 21:22Z)): 0076 `nas_programs.source`
   (`'rest'` | `'tfms'`, which writer owns the row's lifecycle; backfill stamps
   `'rest'` on the ~450 rows of the REST program_id shape, `db.NAS_REST_SHAPE_SQL`;
   SQLite twin `db.init_db_v47`). The REST fetcher's `deactivate_absent_programs`
@@ -111,7 +119,7 @@ because it trades freshness for throughput.
   flight_num)`, 0 scans). Both set `lock_timeout` 10 s so a held table fails the
   migration fast instead of queueing writers. The relay must apply 0076 before
   the rollout: the new code writes the `source` column.
-- 2026-10-20 (bellwether batch, staged, not yet applied): 0082
+- 2026-10-20 (bellwether batch, ~~staged, not yet applied~~ (superseded 2026-10-25: 0082 is applied -- `codeshare_map.relation/season/retired_at/superseded_by`, `idx_codeshare_current_atc` and `watchlist_entries.alert_topic` all present; SELECT 21:22Z)): 0082
   `codeshare_map` lookaside columns -- `relation` (`'codeshare'` default |
   `'atc_callsign'`, CHECK), `season`, `retired_at`, `superseded_by` (FK to the
   replacing row; history never deleted) -- the partial index
@@ -131,12 +139,12 @@ because it trades freshness for throughput.
 | Server | quadlet `corporatetraveldc-pgsql.container` | `postgres:16-alpine`, `Slice=production.slice`, `Memory=1536m`, `--memory-swap=3072m`, `MemoryLow=512M`, `CPUQuota=200%`; running, healthy at 18:04Z |
 | Config | `config/postgresql.conf`, `config/pg_hba.conf` (bind-mounted `:ro`, signed like code) | §3.2 |
 | Data | volume `corporatetraveldc-pgsql-data` | |
-| Socket | volume `corporatetraveldc-pgsql-sock` → `/var/run/postgresql` | how app containers connect (§3.1); mounted by 55 tracked quadlets |
+| Socket | volume `corporatetraveldc-pgsql-sock` → `/var/run/postgresql` | how app containers connect (§3.1); mounted by ~~55~~ (corrected 2026-10-25: 53) tracked quadlets |
 | TCP | `PublishPort=127.0.0.1:5432:5432` | bare-host tools only |
 | Server secret | `/etc/corporatetraveldc/pgsql-secrets.env` (0600) | `POSTGRES_PASSWORD` only |
 | App secret | `DISPATCH_PG_PASSWORD` | kept in `dispatch-secrets.env`, delivered via the scoped `/etc/corporatetraveldc/svc/<service>.env` files |
 | App config | `DISPATCH_DB_BACKEND`, `DISPATCH_PG_HOST/PORT/DB/USER`, optional `DISPATCH_PG_POOL_MAX` (default 8) | `dispatch.env` |
-| Driver | `psycopg[binary,pool]>=3.2` | `requirements.txt` |
+| Driver | `psycopg[binary,pool]>=3.2` | ~~`requirements.txt`~~ (corrected 2026-10-25: that spec is `requirements.in:28`; the hash-locked `requirements.txt` pins `psycopg==3.3.6`, `psycopg-binary==3.3.6`, `psycopg-pool==3.3.3`, lines 1015-1087) |
 | Disk swap | `scripts/setup-disk-swap.sh` (root, btrfs) | 8 G NOCOW swapfile, priority 10 under zram's 100 |
 | Image updates | `scripts/safe-pg-image-update.sh` | the only sanctioned Postgres image change path |
 
@@ -152,7 +160,7 @@ never two databases on one:
 | Volumes | `corporatetraveldc-pgsql-data`, `-sock` | `corporatetraveldc-pgsql-demo-data`, `-demo-sock` (mounted at `/var/run/postgresql-demo` by the demo containers, relay 2) |
 | TCP (host only) | `127.0.0.1:5432` | `127.0.0.1:5433` (the scrub and `pg_migrate --instance demo`, as `demo_owner`) |
 | Config | `config/postgresql.conf`, `config/pg_hba.conf` (now rejects `demo`, `demo_owner` and `corporatetraveldc_demo` by name before the catch-alls) | `config/postgresql-demo.conf` (128 MB buffers, 30 connections), `config/pg_hba-demo.conf` (`demo` socket-only, `demo_owner` socket + TCP, all else `reject`) |
-| Schema | `src/common/pg_schema/` (75), `scripts/pg_migrate.py` | `src/common/pg_schema_demo/0001_demo_core.sql` (six tables: `snapshots`, `brief_archive`, `meta`, `demo_profiles`, `chat_messages`, `scrub_ledger`), `0002_demo_grants.sql` (2026-10-19 grants re-audit: `demo` SELECT-only on the four playback tables, SELECT/INSERT/UPDATE `demo_profiles`, SELECT/INSERT/DELETE `chat_messages`, nothing else; no sequence, `schema_migrations`, CREATE or TEMP; CONNECTION LIMIT 12; compared live by `demo-isolation-check.sh` §4), `scripts/pg_migrate.py --instance demo` (refuses any role but `demo_owner`; own `schema_migrations`) |
+| Schema | `src/common/pg_schema/` (~~75~~ 83, corrected 2026-10-25), `scripts/pg_migrate.py` | `src/common/pg_schema_demo/0001_demo_core.sql` (six tables: `snapshots`, `brief_archive`, `meta`, `demo_profiles`, `chat_messages`, `scrub_ledger`), `0002_demo_grants.sql` (2026-10-19 grants re-audit: `demo` SELECT-only on the four playback tables, SELECT/INSERT/UPDATE `demo_profiles`, SELECT/INSERT/DELETE `chat_messages`, nothing else; no sequence, `schema_migrations`, CREATE or TEMP; CONNECTION LIMIT 12; compared live by `demo-isolation-check.sh` §4), `scripts/pg_migrate.py --instance demo` (refuses any role but `demo_owner`; own `schema_migrations`) |
 | Secret | `pgsql-secrets.env` (`POSTGRES_PASSWORD`), `DISPATCH_PG_PASSWORD` | `pgsql-demo-secrets.env` (`POSTGRES_PASSWORD` = `demo_owner`'s; must differ), `DEMO_PG_PASSWORD` in ~~`demo-secrets.env`~~ `demo.env` (0600; the `demo` role; moved 2026-10-19, relay 2) |
 | Access layer | `db_backend.pg_conn()` / `_pg_conninfo()` (`DISPATCH_PG_*`); refuses the demo db/roles by name; refuses outright under `DISPATCH_ROLE=demo` | `db_backend.demo_pg_conn()` / `_demo_pg_conninfo()` (`DEMO_PG_*`, own pool); refuses the production db/role by name. `common.db.conn()` routes through `role_conn()` by `DISPATCH_ROLE` |
 | Boot / rollout | `stack-boot-ctl.sh` ORDER `pgsql:30` | ORDER `pgsql-demo:30` right before `demo-api`; `serialized-rollout.sh` external row (same image; postgres canary rule applies to both) |
@@ -176,7 +184,9 @@ podman 5.8's pasta maps `host.containers.internal` to the host's
 default-route address, never loopback, so a loopback-bound Postgres is not
 reachable that way. App containers mount the socket volume and set
 `DISPATCH_PG_HOST=/var/run/postgresql`. Benefits: no network exposure,
-independent of the wld0/enu1 failover, no pasta hop. Directory 3777, socket
+independent of the wld0/enu1 failover, no pasta hop. Directory ~~3777~~
+(corrected 2026-10-25: `drwxrwsr-t`, 3775, as the image ships it;
+`podman exec corporatetraveldc-pgsql ls -ld /var/run/postgresql` 21:48Z), socket
 0777; authentication is still scram-sha-256. Bare-host tools use TCP
 `127.0.0.1:5432`; if `DISPATCH_PG_HOST` is a path that does not exist, the
 layer falls back to TCP. The `host` hba rule is `all` because pasta rewrites
@@ -200,8 +210,9 @@ loopback sources; reachability is enforced by the loopback bind.
 - Guards: `statement_timeout = 60s`, `lock_timeout = 10s`,
   `idle_in_transaction_session_timeout = 60s`.
 - Observability: `pg_stat_statements` preloaded, `track_io_timing = on`,
-  `log_min_duration_statement = 500ms`. (2026-10-18: `CREATE EXTENSION` was
-  never run, so the view does not exist; the L1 relay creates it, §3.6.)
+  `log_min_duration_statement = 500ms`. ~~(2026-10-18: `CREATE EXTENSION` was
+  never run, so the view does not exist; the L1 relay creates it, §3.6.)~~ (superseded 2026-10-25:
+  `pg_stat_statements` is in `pg_extension` and the view exists; SELECT 21:22Z.)
 
 Config edits need `systemctl --user restart corporatetraveldc-pgsql` (the
 files are bind-mounted individually; an editor that replaces the inode
@@ -231,7 +242,10 @@ initdb). Never quote either value.
 ### 3.7 Platform SQLite retired (added 2026-10-20)
 
 Operator decision 2026-10-19: the only things on the box allowed to touch SQLite
-are Pi-hole, vnstat and ACARS Hub. The 2026-10-19 relay (d5fde567) destroyed
+are Pi-hole, vnstat and ACARS Hub. (2026-10-25: live, Open WebUI
+(`/var/lib/openwebui/webui.db`) and fail2ban (`/var/lib/fail2ban/fail2ban.sqlite3`) also
+keep SQLite stores, outside that list; `ls` 2026-10-26 02:25Z. NEEDS-OPERATOR-DECISION:
+extend the list or move them.) The 2026-10-19 relay (d5fde567) destroyed
 every platform SQLite file. The 2026-10-20 batch removed the fallbacks that
 could have re-created one:
 
@@ -257,9 +271,18 @@ could have re-created one:
 - Retired to `scripts/retired-20261020/`: `migrate-sqlite-to-pg.py`,
   `migrate-second-brain-to-pg.py`, `migrate-demo-to-pg.py` and
   `demo-sqlite-retire-check.py`.
-- Guard: `tests/common/test_no_platform_sqlite.py` checks five things. Only the
+- Guard: `tests/common/test_no_platform_sqlite.py` ~~checks five things~~ (corrected
+  2026-10-25: has 15 test functions; besides the five checks below they pin the
+  backend default and refusals, `db_path()` having no default, `ref_conn` staying deleted
+  and the env files carrying no SQLite path; `grep -c 'def test_'`). ~~Only the
   ACARS Hub reader (`common/acars.py`, read-only) and the three test-flag files
-  import `sqlite3`. Every other `sqlite3.connect` sits behind the flag. Nothing
+  import `sqlite3`. Every other `sqlite3.connect` sits behind the flag.~~ (corrected
+  2026-10-26: under `src/` that holds -- the allow-list is `common/acars.py` plus
+  `common/db.py`, `common/db_swim.py`, `second_brain/semantic/compile.py`
+  (`tests/common/test_no_platform_sqlite.py:38-43`). The guard scans `src/` only, and
+  `scripts/sdk-attribution.py:65` also imports `sqlite3` and opens Pi-hole's own
+  FTL database read-only at lines 150 and 171 with no flag; the
+  `scripts/retired-20261020/` migrators import it too. `grep -rln 'import sqlite3' src scripts` at 5f7fca01.) Nothing
   outside `tests/` sets the flag. No quadlet mounts a `*-demo-source` or
   `*-demo-state` dir. No tracked unit or env file pins `sqlite`.
 
@@ -267,7 +290,7 @@ could have re-created one:
 2026-10-19 allows only bug fixes and decided items; this is cleanup, so it waits).
 This code is test-only now, and production cannot reach it:
 
-- `src/common/db.py`: the SQLite `SCHEMA`, `init_db()` and the 47
+- `src/common/db.py`: the SQLite `SCHEMA`, `init_db()` and the ~~47~~ (corrected 2026-10-25: 49, `grep -c 'def init_db_v'`)
   `init_db`/`init_db_vNN` twin migrators (v47-v50 were added in the 2026-10-18
   batches). Also the sqlite branches in `_ensure_pull_path_status`,
   `_ensure_board`, `_ensure_board_auth`, the watchlist cache key, `init_db_v21`
@@ -327,7 +350,7 @@ gate 7 requires financial records to be isolated. The Nextcloud apps keep using 
 | Quadlet | `.config/containers/systemd/office-skeletons/corporatetraveldc-pgsql-office.container`: no `[Install]` section, not in `stack-boot-ctl.sh` ORDER or the rollout, no `AutoUpdate` (same image line as production) |
 | Database / roles | `office` / `office_owner` (bootstrap owner); `firefly`, `paperless`, `vikunja`, each owning one database of the same name (`src/common/pg_schema_office/0001_office_roles.sql`, applied on stdin by `scripts/office-skeleton-ctl.py init-db`; no tables of ours, the apps migrate their own) |
 | Network | `office-db.network`, `Internal=true`; no PublishPort, no host TCP; the apps connect by container name |
-| Config | `config/postgresql-office.conf` (64 MB buffers, 40 connections, synchronous commit on), `config/pg_hba-office.conf` (each app role into its own database only; `dispatch`, `demo`, `demo_owner` rejected by name; catch-all reject); production `config/pg_hba.conf` rejects the office roles and databases by name before its catch-alls (takes effect at the production instance's next config reload) |
+| Config | `config/postgresql-office.conf` (64 MB buffers, 40 connections, synchronous commit on), `config/pg_hba-office.conf` (each app role into its own database only; `dispatch`, `demo`, `demo_owner` rejected by name; catch-all reject); production `config/pg_hba.conf` rejects the office roles and databases by name before its catch-alls ~~(takes effect at the production instance's next config reload)~~ (superseded 2026-10-25: in effect -- `pg_conf_load_time()` 2026-10-25 01:01:37Z is after the file's last change, 6a062254 2026-10-20) |
 | Secrets | `pgsql-office-secrets.env` (`POSTGRES_PASSWORD` = `office_owner`'s), and each app's own `<svc>-secrets.env`; role passwords applied as SCRAM verifiers on stdin (`office-skeleton-ctl.py set-passwords`) |
 | Backup | not dumped yet; must be added to the Borg dump list, with a restore test, on activation (`docs/BACKUP.md`) |
 | Memory | 384m / swap 768m |
@@ -400,10 +423,11 @@ row deletion by poller skills:
   | `osint_items` | 30 days | `osint-monitor` skill (every 900 s), `db.osint_prune_items` |
   | `webhook_events`, `flight_ooooi_times`, `local_airspace_alerts` | 90 days | `retention-prune` |
   | `surface_event_log` | 120 days | `retention-prune` (since 2026-10-14) |
+  | `gate_baggage_*`, `aeroapi_gate_calls` | 120 days | `retention-prune` (`db.prune_gate_baggage`, since 2026-10-18; row added 2026-10-25, `src/poller/skills/retention_prune.py:28`) |
   | `board_messages`, `stdds_safety_status_history` | 180 days | `retention-prune` |
   | session grants, board enrol nonces and tokens | 30 days after expiry (session grants); 7 days after expiry (board enrol nonces and tokens) | `retention-prune` |
   | `audit_log` | never deleted in place | `audit-log-archive` (daily, maintenance window): rows past `AUDIT_ARCHIVE_RETENTION_DAYS` (90) are exported to the Nextcloud vault (which runs on this same box) with a GPG-signed checkpoint and replaced by a signed stub; the old 90-day prune is a refusing stub |
-  | `convective_sigmet_archive` | never pruned, append-only by design | written every 10 min by `corporatetraveldc-convective-sigmet-archiver` (7,518 rows on 2026-10-15) |
+  | `convective_sigmet_archive` | never pruned, append-only by design | written every 10 min by `corporatetraveldc-convective-sigmet-archiver` (7,518 rows on 2026-10-15; 8,661 on 2026-10-25) |
   | `nas_programs` | never pruned | deliberate |
 
 ~~Both 30-day windows are below the 90-day floor the 2026-09-05 decision set.~~
@@ -416,7 +440,7 @@ decision set: `flight_events`, `surface_movement_events`, `train_events`,
 CPU and thermal headroom on the Pi, not the database: every new parser adds
 load that the ~~thermal~~ load guard sheds first (since 2026-10-13
 `thermal-ingest-guard.py` sheds only at load1 ≥ 40; temperature no longer sheds).
-Disk is the other limit now: the root volume is 83% used (2026-10-15), shared by the
+Disk is the other limit now: the root volume is ~~83%~~ used (2026-10-15) (superseded 2026-10-25: 80%, 47G free), shared by the
 Postgres volume and the local Borg repository.
 
 ---

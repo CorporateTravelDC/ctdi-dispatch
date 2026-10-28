@@ -16,8 +16,18 @@ HEAD.
 ## 1. Network -- SWIM ingest is still unscoped
 
 **The finding (2026-07-19, still open):** the FAA SWIM ingest containers pull
-the nationwide feed for each subscribed domain and discard most of it
-client-side. No designed bandwidth guardrail exists; topic-scoping the SWIM
+the nationwide feed for each subscribed domain ~~and discard most of it
+client-side~~ (corrected 2026-10-25: since `ba8a4ebe`, 2026-10-24 18:42Z,
+`SWIM_STORAGE_SCOPE=national` stores FDPS, TFMS programs and AIM NOTAMs
+NAS-wide instead of filtering them to the DC region; only the STDDS, TBFM and
+ITWS parsers stay hard-scoped to the DC airports -- `src/ingest/parsers/geo_filter.py:45-81`,
+truth-set 1 #31-40; live `GET /api/v1/swim/scope` -> `national`, 21:53Z. The
+subscription itself was always nationwide; what changed is that less of it is
+discarded). No designed bandwidth guardrail exists (2026-10-25: the only
+bandwidth-related controls are the DB `bandwidth_priority` override, which
+pauses selected SWIM feeds while NEXRAD or severe-weather traffic has priority,
+`src/ingest/swim_client.py:364-427`, and the metered-uplink caps on backups and
+heavy jobs; neither scopes the subscription); topic-scoping the SWIM
 subscriptions (or gating ingest to use windows) remains the open fix.
 
 **Monthly totals, `vnstat -m` on 2026-10-06:**
@@ -43,7 +53,11 @@ The per-container CPU/memory caps below do not limit bandwidth.
 ## 2. Memory -- per-container `Memory=` caps
 
 ~~73 of 74~~ (corrected 2026-10-15: 76 of 77, `ls ~/.config/containers/systemd/*.container`) live `.container` quadlets set `Memory=`; the core services pair it
-with `PodmanArgs=--memory-swap=<same>` (no swap beyond the RAM cap) and a
+with `PodmanArgs=--memory-swap=<same>` ~~(no swap beyond the RAM cap)~~ (corrected 2026-10-25: ~~true for every
+service in the table below;~~ (corrected again 2026-10-26 22:01Z: not for `demo-portal-client` or `demo-portal-personal`, which set `Memory=` but no `--memory-swap`, grep count 0 each); the two database containers are the exception --
+`corporatetraveldc-pgsql` sets `--memory-swap=3072m` against `Memory=1536m` and
+`corporatetraveldc-pgsql-demo` 1024m against 512m, so each may swap up to one cap beyond RAM;
+`grep` over the 77 live quadlets 21:49Z) and a
 `MemoryLow=` floor. The one quadlet with no `Memory=` is
 `corporatetraveldc-execstandard-verifier`.
 
@@ -79,14 +93,15 @@ cap deliberately and document why; do not uncap.
 | ingest-stdds | 7500 | 140% |
 | ingest-fdps | 7500 | 150% |
 | web, poller, pusher, ntfy | 9000 | 300% |
-| runner, runner-demo, ultrafeeder, acarshub, acars-watcher, openwebui | 100 | 300% |
+| runner, runner-demo, ~~ultrafeeder,~~ acarshub, acars-watcher, openwebui | 100 | 300% |
+| ultrafeeder (corrected 2026-10-25: was listed at weight 100) | 1000 | 300% |
 | demo-api | 100 | 100% |
 | nextcloud-db | 100 | 200% |
 | nextcloud-app | 150 | 300% |
 
 The previous revision listed tbfm 80%, tfms 90%, stdds 120%; those are no
-longer the live values. `CPUQuota=` is absent from ~~36 quadlets~~ (corrected 2026-10-15: 39 live
-quadlets, the execstandard verifier and the two demo portals included), mostly
+longer the live values. `CPUQuota=` is absent from ~~36 quadlets~~ (corrected 2026-10-15: ~~39 live
+quadlets~~, the execstandard verifier and the two demo portals included) (corrected 2026-10-25: 38 of the 77 live quadlets have no `CPUQuota=`, 39 set it; `grep -L '^CPUQuota=' ~/.config/containers/systemd/*.container` 21:22Z), mostly
 timer-driven skill oneshots, and from the execstandard verifier.
 
 web/poller/pusher moved to 9000 on 2026-09-04 after all three were SIGKILLed
@@ -109,7 +124,8 @@ two cores"), `llama-server` bound to `100.x.x.x:8093`:
 | `MemorySwapMax=` | 0 |
 
 A daily `corporatetraveldc-llama-restart.timer` fires at 19:45 ET (23:45Z)
-and skips rather than kill an in-flight run.
+and skips rather than kill an in-flight run (re-checked 2026-10-25: `OnCalendar=*-*-* 19:45:00 America/New_York`,
+so 23:45Z under EDT and 00:45Z under EST from 2026-11-01; next elapse 2026-10-25 23:45Z).
 
 What a cap does not do (2026-07-27 incident): a runaway generation held
 `llama-server` at 95-190% CPU for ~10.5 h, under its quota the whole time.
@@ -136,8 +152,15 @@ User timer `corporatetraveldc-thermal-ingest-guard.timer`, every 2 minutes. **Lo
 - **Hysteresis only above 75 C:** once the CPU has gone above 75 C the temperature hold clears below 74 C
   (`THERMAL_GUARD_RESUME_TEMP_HYSTERESIS_C`, 1.0) and the dwell restarts. Load resets the dwell only when
   clearly past 30 + 3 (`THERMAL_GUARD_RESUME_LOAD_HYSTERESIS`).
-- The 74 C tier-1 and 79 C LOCKDOWN temperature trips are retired; `THERMAL_GUARD_TIER1_TEMP_C`,
-  `TIER2_TEMP_C` and `RESUME_TEMP_C` in `dispatch.env` are ignored.
+- The 74 C tier-1 and 79 C LOCKDOWN temperature trips are retired; ~~`THERMAL_GUARD_TIER1_TEMP_C`,
+  `TIER2_TEMP_C` and `RESUME_TEMP_C` in `dispatch.env` are ignored.~~ (corrected 2026-10-25: the keys are
+  `THERMAL_GUARD_TIER1_TEMP_C`, `THERMAL_GUARD_TIER2_TEMP_C` and `THERMAL_GUARD_RESUME_TEMP_C`; ~~live `dispatch.env`
+  sets only the third of them, and~~ (re-corrected 2026-10-25 21:51Z: all three keys are present in the live
+  `dispatch.env`, together with `THERMAL_GUARD_ENABLED`, `_RESUME_DWELL_S`, `_TIER1_FEEDS` and `_TIER2_FEEDS` --
+  key names only read -- and) none of the three can shed: `temp1_trip`/`temp2_trip` are hard-coded `False`,
+  `scripts/thermal-ingest-guard.py:717-718`; `resume_temp` is read at `:636` but the resume path keys on
+  `THERMAL_GUARD_HOLD_TEMP_C` (75) with its 1.0 hysteresis (`:803`) and on `THERMAL_GUARD_HOLD_LOAD` (30, `:806`),
+  so the three temperature keys ~~and the two `_FEEDS` keys~~ are dead configuration (corrected 2026-10-25, re-checked 2026-10-26: `_TIER1_FEEDS` and `_TIER2_FEEDS` are read at `scripts/thermal-ingest-guard.py:655-656` and passed to `_reconcile_stale_tier` at `:667`; `_TIER1_FEEDS` drives stale-tier reconciliation (`:527`) and the tier-1 restore restart (`:826-827`), while its tier-1 stop at `:774` is unreachable because `temp1_trip` is `False`; `_TIER2_FEEDS` is passed but not used in that function's code).)
 - The full-load rollout's own hold-before-restart gate (`scripts/lib/load_gate.sh`, floor 15) is separate.
 - Tests: `tests/scripts/test_load_guard_design.py`.
 
@@ -211,7 +234,10 @@ is a denial. Details: `docs/SUDO_JUSTIFICATION_PROPOSAL.md`.
 Connector link: 15 min. Connector hold and gateway thaw: 30 min (previously
 24 h and 1 h). Council convene: 10% of the council's own deadline, 30 min to
 4 h. Council close: 25% of the remaining time, 15 min to 2 h. Environment
-overrides are clamped to each kind's bounds. A requester can withdraw its own
+overrides are clamped to each kind's bounds. (2026-10-25: two kinds were added
+after this paragraph was written -- `liveness` (2026-10-15) 30 min, 5 min to 1 h, and
+`board-gate` (2026-10-16) 30 min, 5 min to 2 h; `APPROVAL_TTL_POLICY`,
+`src/common/governance.py:203-212`.) A requester can withdraw its own
 pending request (audited); it still cannot allow or deny it. A council whose
 approval expires, is withdrawn or is denied follows it, instead of staying
 `requested` (the 2026-10-10 stray self-request).

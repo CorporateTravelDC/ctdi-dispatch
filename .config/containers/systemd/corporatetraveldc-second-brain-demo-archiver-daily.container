@@ -2,14 +2,15 @@
 Description=Corporate Travel DC -- daily rolling ingest of demo-archiver recorder data into second brain
 
 [Container]
+# 2026-10-27: 1g -> 1536m (OOM-killed again at the 1G cap, 04:15 ET 10-27; operator: 1.5 GB after the migration).
 # 2026-10-26: 512m -> 1g. Two kernel OOM kills inside the 512m cap at a 548 MB peak (04:15 ET
 # scheduled run and a manual rerun with 6.2 GB free on the box): the rolling archive outgrew it.
-Memory=1g
+Memory=1536m
 # 2026-08-06: previously unguarded -- daily archival pass, no heavy LLM narrative -- lightest tier.
 # Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
 # runaway here gets a clean OOM-kill instead of swap-thrashing the
 # whole box -- same pattern as every other production container.
-PodmanArgs=--memory-swap=1g
+PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest
 Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z

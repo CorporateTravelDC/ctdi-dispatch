@@ -1,5 +1,7 @@
 # ntfy topic audit (2026-10-13)
 
+> Status 2026-10-25: the two code items marked "Open 2026-10-15" (vessel/drone retries on train-alerts; failed `push_test_alert` recorded as success) are fixed in code; see the struck lines below.
+
 Read-only audit of every topic the platform publishes to, after the operator saw several topics with no
 notification in over a month. Question per topic: **silent by design, or broken?**
 
@@ -22,7 +24,7 @@ test publish to a throwaway topic returned HTTP 403 (40301).
 | **stdds-zny/zid/zob/zatl/zhu/zla/zse** | **misnamed** | taxi alerts go to undocumented per-airport topics (stdds-atl, -las, -lax, -sea, -iah); `smes_parser.py` overwrites the zone with the bare airport code (since 752e0e0e, Aug 3) | **fixed 2026-10-13** (operator: both): every tracked airport fires its zone topic (DCA/IAD/BWI now reach stdds-zdc); airport topics only in the priority centers zdc, zny, zatl, zob (stdds-dca/iad/bwi, jfk/lga/ewr, atl, cle/pit/dtw); elsewhere zone only |
 | **dispatch-alerts** | **dead** | `scripts/check-pat-expiry.sh` has no timer, reads two token files that don't exist, and posts with no token and no `-f` | **retired 2026-10-14** with the script (`docs/RETIRED.md`); the PAT was unused and expired |
 | cps | working | 84 changes in 30 days; wind changes go to wx-alerts, not cps (docstring and ALERT_REFERENCE are wrong) | docs: **ALERT_REFERENCE corrected 2026-10-15**; the `push_wx_change` docstring in `src/pusher/main.py` still says cps (code comment, open) |
-| vessel-alerts | silent by design | no vessel watches, no AIS source | latent: `pusher/main.py:528` retries vessel events onto train-alerts. **Open 2026-10-15** (code, not in the staged batch): now `src/pusher/main.py:639`, vessel and drone retries both land on train-alerts |
+| vessel-alerts | silent by design | no vessel watches, no AIS source | latent: `pusher/main.py:528` retries vessel events onto train-alerts. ~~**Open 2026-10-15** (code, not in the staged batch): now `src/pusher/main.py:639`, vessel and drone retries both land on train-alerts~~ (corrected 2026-10-25: SUPERSEDED, fixed; the retry loop at `src/pusher/main.py:860-876` takes its topic from `topic_for_entry` (`src/shared/watch_topic.py:23-24,54-60`), so vessel retries go to vessel-alerts and drone retries to drone-alerts) |
 | reservations / calls | silent by design | the LimoAnywhere / RingCentral / 3CX webhooks were never connected | none (2026-10-15: 0 `webhook_events` rows) |
 | itws-alerts, itws-zdc | silent by design | every ITWS row is severity 0 or 3 ("no storms within 15 nm"); the threshold is 4 | none |
 | ep-briefs | no sender | reserved name only | unsubscribe or wire |
@@ -36,6 +38,6 @@ dispatch 411, dispatch-ops 6, ops-brief 10, ep and ep-advance 11 each, osint-ale
 
 - ~~**Raise `cache-duration`** (e.g. 72h) in `/etc/ntfy/server.yml` (operator):~~ **done 2026-10-14 (72h, live and in the template).** a phone offline for more than 12 h
   currently misses messages, and audits like this one can't count 30 days.
-- `poller/main.py` records `push_test_alert` as success even when the send fails. **Open 2026-10-15** (code, not in the staged batch; `src/poller/main.py:436-446`; `trigger_log` 320 success, 3 failed).
+- ~~`poller/main.py` records `push_test_alert` as success even when the send fails. **Open 2026-10-15** (code, not in the staged batch; `src/poller/main.py:436-446`; `trigger_log` 320 success, 3 failed).~~ (corrected 2026-10-25: SUPERSEDED, fixed; `src/poller/main.py:448-451` resolves the trigger as failed when the send fails.)
 - **Not ntfy (fixed 2026-10-14):** the failover kickover guardrail runs on the host and wrote its triggers to `/run/corporatetraveldc/triggers`, which the poller container never sees (it reads the `corporatetraveldc-triggers` volume); it now writes into the volume. Originally noted: 230 `refresh_feed` triggers have been stuck `in_flight` since the 2026-09-18 Postgres cutover
   (latest 10-13 07:25Z), plus 3 `push_test_alert`. **2026-10-15:** no `trigger_log` row is left unresolved.

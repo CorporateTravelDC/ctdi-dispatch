@@ -1,5 +1,7 @@
 # REST fallback audit -- push feeds (2026-09-06)
 
+> Status 2026-10-25: dated record (2026-09-06). No longer current: temperature no longer sheds anything — the tier-1 `tfms,stdds` shed cannot trip (`temp1_trip`/`temp2_trip` are hard-coded `False` in `scripts/thermal-ingest-guard.py`), so the only shed is the load-triggered LOCKDOWN (load1 ≥ 40), and because it stops the poller and ingest-core too, poller-run sources pause with it; ingest-core runs with `AMTRAK_ENABLED=false`, leaving `amtrak-tracker` as the only `push:amtrak` writer; restore is a serialized, load-gated bring-up run by the guard itself; web `push_covers` now comes from `failover.push_covers()` and includes amtrak (status threshold 660 s). Inline corrections are marked.
+
 Work-order item 1 ("solidify the REST fallbacks"). Scope: every push feed the
 stack ingests, what the poller does when the push side goes quiet, and how
 that interacts with the thermal guard's LOCKDOWN shed / restore and the
@@ -32,14 +34,14 @@ Vocabulary
 |---|---|---|---|---|---|---|
 | nws (NWWS-OI XMPP) | `poller.fetchers.nws` -> api.weather.gov alerts + zone forecasts, every 300 s | `push_feed=nws`, max_age 90 s | `ingest.nwws` stamps every 30 s once `session_start` has really happened (2026-09-05 fix) | ingest-core AND poller are stopped: no push, no REST. Heartbeat ages; nothing polls. | poller restarts; nws slot fires at +165 s. Grace holds REST until +240 s unless the push heartbeat is fresh by then (NWWS normally reconnects inside the hold-off). Guardrail does not count the shed. | api.weather.gov: no published hard limit, requires User-Agent (set). No 429 branch; error -> `upsert_feed(error=...)`, retried next 300 s tick. |
 | fns / NOTAM (SWIM FNS) | `poller.fetchers.notam` -> NMS-API `api-nms.aim.faa.gov/nmsapi/v1/notams`, every 300 s, OAuth2 client-credentials (`NMS_API_CLIENT_ID/SECRET`, 30-min token) | `push_feed=fns`, max_age 90 s | `ingest.swim_client` stamps every 30 s while the JMS session is up | ingest-notam stopped, poller stopped: nothing. | notam slot at +180 s; grace holds REST until +240 s if the stamp is pre-boot. SWIM FNS usually reconnects inside the hold-off, so the common case is "no REST at all". | NMS 429 observed 2026-09-05 after 18 back-to-back forced pulls (bunched `refresh_feed` triggers on restart, now coalesced per pass). No 429 branch in the fetcher; server 30 s cap -> 408; `FETCH_TIMEOUT=25`; 24 h `lastUpdatedDate` window. No documented numeric limit found in repo docs. |
-| amtrak (Amtrak tracker JSON) | `poller.fetchers.amtrak` (existed, was NOT scheduled) -> now in `FETCH_SCHEDULE`, every 300 s | `push_feed=amtrak`, `push_max_age=660` (two missed 300 s polls + slack) | `amtrak-tracker` container (primary) and `ingest.amtrak` (in ingest-core) each stamp once per successful 300 s poll | amtrak-tracker container survives the shed (not in the guard's shed set), so push keeps running. ingest-core copy stops. Poller stopped. | amtrak slot at +195 s; push heartbeat is normally fresh (tracker never stopped) so REST stays idle. | Amtrak tracker endpoint: no documented limit; `FETCH_TIMEOUT=12`; no 429 branch. |
+| amtrak (Amtrak tracker JSON) | `poller.fetchers.amtrak` (existed, was NOT scheduled) -> now in `FETCH_SCHEDULE`, every 300 s | `push_feed=amtrak`, `push_max_age=660` (two missed 300 s polls + slack) | ~~`amtrak-tracker` container (primary) and `ingest.amtrak` (in ingest-core) each stamp once per successful 300 s poll~~ (corrected 2026-10-25: superseded — only `amtrak-tracker` stamps `push:amtrak`, once per successful 300 s poll; ingest-core runs with `AMTRAK_ENABLED=false`) | amtrak-tracker container survives the shed (not in the guard's shed set), so push keeps running. ingest-core copy stops. Poller stopped. | amtrak slot at +195 s; push heartbeat is normally fresh (tracker never stopped) so REST stays idle. | Amtrak tracker endpoint: no documented limit; `FETCH_TIMEOUT=12`; no 429 branch. |
 | tfr (no push twin since 2026-07-23) | `poller.fetchers.tfr` -> tfr.faa.gov `tfrapi/getTfrList`, every 300 s | none -- always polls | n/a | poller stopped: no TFR refresh for the shed duration | tfr is slot 0 -> +120 s | No 429 branch; `FETCH_TIMEOUT=15`. |
 | nas (no push twin since 2026-07-23) | `poller.fetchers.nas` -> nasstatus.faa.gov airport-status-information, every 300 s | none -- always polls | n/a | as tfr | nas slot 2 -> +150 s | No 429 branch; `FETCH_TIMEOUT=10`. |
 | fdps (SWIM FDPS flight data) | NONE | n/a | swim_client 30 s | ingest-fdps stopped; durable-queue backlog accumulates on the broker, drained in a burst on restore (ingest-fdps 40 -> 1336 lines/min observed) | reconnect + backlog drain; no REST | n/a |
 | tbfm (SWIM TBFM metering) | NONE | n/a | swim_client 30 s | as fdps | as fdps | n/a |
 | itws (SWIM ITWS weather) | NONE | n/a | swim_client 30 s | as fdps | as fdps | n/a |
-| stdds (SWIM STDDS surface) | NONE | n/a | swim_client 30 s | tier-1 shed target as well as LOCKDOWN | as fdps | n/a |
-| tfms (SWIM TFMS flow) | NONE | n/a | swim_client 30 s | tier-1 shed target as well as LOCKDOWN | as fdps | n/a |
+| stdds (SWIM STDDS surface) | NONE | n/a | swim_client 30 s | ~~tier-1 shed target as well as LOCKDOWN~~ (corrected 2026-10-25: superseded — LOCKDOWN only; the temperature tier-1 shed can no longer trip, `scripts/thermal-ingest-guard.py:717-718`) | as fdps | n/a |
+| tfms (SWIM TFMS flow) | NONE | n/a | swim_client 30 s | ~~tier-1 shed target as well as LOCKDOWN~~ (corrected 2026-10-25: superseded — LOCKDOWN only, as for stdds) | as fdps | n/a |
 
 tfr and nas deliberately have no push gate: the 2026-07-23 removal fixed
 bogus `push_feed` mappings (stdds/tfms) that silently suppressed real polls.
@@ -82,8 +84,8 @@ ingest-core, poller, pusher, runner. Heartbeats stop; `push_is_healthy`
 goes False after 90 s. Nothing polls (poller down). Guardrail keeps ticking
 on the host but sees `tier=2` and only logs.
 
-Restore: `ingest-feed-ctl.sh restart all` (staggered), core, then
-poller/pusher/runner. Poller: hold-off 120 s, then one loop per 15 s slot.
+Restore: ~~`ingest-feed-ctl.sh restart all` (staggered), core, then
+poller/pusher/runner~~ (corrected 2026-10-25: superseded — the guard restores one unit at a time behind a load gate: ingest notam, itws, tbfm, tfms, stdds, fdps, core, then poller, pusher, runner, `scripts/thermal-ingest-guard.py:254-260,486-493`). Poller: hold-off 120 s, then one loop per 15 s slot.
 Push-gated fetchers: pre-boot stamps ignored until +240 s. Guardrail: inside
 the 600 s restore grace it observes only; after that, REST age counts from
 `restored_at`, so the first possible forced kickover is `restored_at + 20
@@ -110,10 +112,10 @@ is itself wedged.
 - Housekeeping inconsistencies (docs only, not fixed here):
   `docs/DATA_SOURCES.md` still documents `FAA_NOTAM_API_KEY/SECRET` (the
   fetcher uses `NMS_API_CLIENT_ID/SECRET`); `poller/skills/pull_path_verify.py`
-  still lists notam as `active: False, auth_gated`; web `push_covers` has
+  still lists notam as `active: False, auth_gated`; ~~web `push_covers` has
   no amtrak entry (web `stale_thresholds` already has `push:amtrak: 300`,
   which is tighter than the poller's 660 s gate -- harmless, it only
-  colours the status page).
+  colours the status page)~~ (corrected 2026-10-25: superseded — web `push_covers` now comes from `failover.push_covers()` and includes amtrak, and the static `push:amtrak: 300` is overridden to 660 s by `push_stale_thresholds()`, `src/web/main.py:898,913-914`; live `/api/v1/feeds` reports 660 for `push:amtrak`).
 
 ## 5. FDPS / TBFM / ITWS / STDDS / TFMS -- no REST fallback (operator decision)
 
@@ -149,7 +151,7 @@ regardless (no public equivalent exists). Wiring AeroAPI would follow the
 notam pattern exactly: a poller fetcher gated on `push:fdps`, credential
 names in the secrets file, `PUSH_FEEDS` unchanged (fdps is already in it).
 
-Partial substitutes that already run and keep running during a shed:
+Partial substitutes that already run ~~and keep running during a shed~~ (corrected 2026-10-25: superseded — the only shed now is LOCKDOWN, which stops the poller and ingest-core as well as the SWIM units, so FIDS, NAS status, ATCSCC ops-plan, NWS and METAR polling and the local ADS-B/ACARS database writes pause with it; ultrafeeder, the ACARS receiver containers and the convective-SIGMET archiver timer are not in the shed set):
 local ADS-B (ultrafeeder) and ACARS for positions within receiver range;
 DCA/IAD FIDS for gate/arrival status at the home airports; NAS status for
 facility-level delays; ATCSCC ops plan hourly; NWS alerts, convective
@@ -163,7 +165,7 @@ D-1 CLOSED 2026-09-06: no REST fallback for FDPS, TBFM, ITWS, STDDS, TFMS
 (section 5). Revisit when a nationwide flight-plan source is adopted.
 
 D-2 Web `push_covers` entries for amtrak (and a degraded-mode marker for
-itws) -- status-page only, no polling change. Not built; open.
+itws) -- status-page only, no polling change. ~~Not built; open.~~ (corrected 2026-10-25: superseded — the amtrak cover is built, since `push_covers()` derives from `REST_FALLBACKS` (`src/ingest/failover.py:51-55,87-88`); no itws degraded-mode marker exists in `src/web/main.py`.)
 
 D-3 The new knobs ship with defaults that need no env change:
 `POLLER_STARTUP_PUSH_GRACE_S` (default = `POLLER_STARTUP_HOLDOFF_S`),

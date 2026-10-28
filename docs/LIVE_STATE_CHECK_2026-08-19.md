@@ -1,5 +1,7 @@
 # Live State Check — 2026-08-19
 
+> Status 2026-10-25: Point-in-time record; its counts and service states are not current. As of 2026-10-26 22:10 UTC: `scripts/verify-manifest.sh` exits 1 (not OK), `MANIFEST.sha256` has 1712 entries, 205 `corporatetraveldc-*` user units are loaded, 40 containers are up, and no `ollama` binary is on PATH. `scripts/weekly-doc-drift-check.sh:116-121` diffs against the newest earlier LIVE_STATE_CHECK report, not a fixed benchmark file. `corporatetraveldc-research-board-mirror.service` has since run (main-process exit timestamp dated 2026-10-26).
+
 Written ~05:33–05:40 EDT against HEAD `f3ad588` (`main`, 05:31:53,
 "Reconcile CLAUDE.md; wire drift-checker into sign-manifest.sh + daily
 backstop" — 7 files, +440/−50: `CLAUDE.md`, `scripts/sign-manifest.sh`,

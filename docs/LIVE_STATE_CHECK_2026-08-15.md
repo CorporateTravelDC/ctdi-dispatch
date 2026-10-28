@@ -1,3 +1,5 @@
+> Status 2026-10-25: point-in-time record; the 117-unit / 28-container counts (now 205 units) and observation 3 (demo-source-refresh timer, now enabled) are no longer current.
+
 # Live State Check — 2026-08-15
 
 Written ~01:30 EDT, immediately after `2ff1fbb` landed as HEAD (01:19 EDT).
@@ -23,7 +25,7 @@ staged or committed.
 
 - Box rebooted 2026-08-14 08:41 EDT (uptime ~16.7 h at check time).
 - 117 `corporatetraveldc-*` user units loaded (140 on 08-14; the 28 prewarm
-  units are now `masked` → `/dev/null` symlinks live). 28 containers up.
+  units are now `masked` → `/dev/null` symlinks live). 28 containers up. (2026-10-25: superseded unit count, 205 at 2026-10-26T22:14Z; container count unverified 2026-10-25)
 - `ollama.service`: live `MemoryLow=4850M / MemoryHigh=6050M / MemoryMax=7250M /
   MemorySwapMax=0 / CPUWeight=500`, `LLAMA_ARG_CACHE_RAM=0` in its environment;
   `/etc/systemd/system/ollama.service.d/20-resource-limits.conf` is
@@ -80,7 +82,7 @@ not live either (the token IS in the container env via the uncommitted
 `corporatetraveldc-demo.container` EnvironmentFile edit already applied
 live — see observation 4).
 
-### 3. `corporatetraveldc-demo-source-refresh.timer` is disabled and has never run
+### 3. `corporatetraveldc-demo-source-refresh.timer` is disabled and has never run (2026-10-25: superseded; the timer is enabled, `systemctl --user list-unit-files` 2026-10-26T22:10Z)
 
 `docs/INFRA_MAP.md:100`, `docs/COMPLIANCE_SECURITY.md:50` and
 `docs/PENTEST_CLEARANCE_CHECK_2026-08-13.md:298` all say it runs nightly

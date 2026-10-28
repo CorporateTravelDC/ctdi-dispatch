@@ -1,5 +1,7 @@
 # Thermal Baseline — 2026-07-26 (Argon ONE case, pre-DIY-case-revert)
 
+> Status 2026-10-25: dated record (2026-07-26). No longer current: the guard's temperature tiers are retired — temperature never sheds, and the only shed is LOCKDOWN at load1 ≥ 40, which stops all six SWIM units, ingest-core, poller, pusher and runner; Ollama and its governor are retired. Still in place: the `schedutil` CPU governor and the stale-tier reconcile described at the end (`_reconcile_stale_tier`).
+
 Captured before the operator reverts to the DIY case tonight, for direct
 comparison once the DIY case is back in with all the same software fixes
 (thermal-ingest-guard, CPU governor=schedutil, argonone-cli aggressive fan
@@ -54,7 +56,7 @@ Window: 2026-07-26 18:50:59 -> 20:05:29 EDT, from
 
 - 40 readings, 2-min interval
 - **min 66.1C / max 83.7C / avg 74.07C**
-- Guard state: tier 2 (all 5 SWIM feeds shed) for 23/40 readings (57.5%),
+- Guard state: tier 2 (~~all 5 SWIM feeds shed~~ (corrected 2026-10-25: superseded — tier 2 is now LOCKDOWN: all six SWIM units plus ingest-core, poller, pusher and runner, tripped only by load1 ≥ 40, `scripts/thermal-ingest-guard.py:480-483,717-718`)) for 23/40 readings (57.5%),
   tier 1 for 16/40, tier 0 (normal) for only 1/40
 - This is WITH: CPU governor=schedutil, argonone fan pinned at rated max
   (5000 RPM, confirmed via `sensors`), thermal-ingest-guard actively

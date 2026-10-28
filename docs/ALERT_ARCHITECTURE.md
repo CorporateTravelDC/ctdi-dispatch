@@ -240,9 +240,14 @@ per-subscriber server-side muting (Layer 1 is global). Future work only.
   TDLS also feed watchlist events (`tdes_departure`, `tdls_clearance`), and
   since 1491bf5a the TDES departure clearance drives the TDES tail check
   for watches departing DCA/IAD/BWI). None of them uses a family topic.
-- Code bugs found by the 2026-10-13 ntfy audit, still open: the poller
+- ~~Code bugs found by the 2026-10-13 ntfy audit, still open: the poller
   resolves `push_test_alert` as success whatever the send returns, and the
-  pusher's retry path sends vessel (and drone) retries to `train-alerts`.
+  pusher's retry path sends vessel (and drone) retries to `train-alerts`.~~
+  (corrected 2026-10-25: both fixed -- `poller/main.py:447-451` resolves the
+  trigger `failed` ("ntfy and Pushover both failed") when the send returns
+  false (2026-10-15); `pusher/main.py:852-872` routes every retry by entry
+  type through `watch_topic.topic_for_entry` (vessel 2026-10-15, drone
+  2026-10-16).)
 
 ---
 

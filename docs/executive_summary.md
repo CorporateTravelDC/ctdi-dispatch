@@ -3,7 +3,8 @@
 _v1.3.0 — Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET._
 
 _Corrections in place 2026-10-15 01:00Z / 2026-10-14 21:00 ET (main `1491bf5a` plus the
-batch staged for the next relay). This is not a new version; v1.4.0 is still to be cut. Three
+batch staged for the next relay). This is not a new version; v1.4.0 is still to be cut (unverified 2026-10-25:
+release tags could not be listed in this pass). Three
 v1.3.0 statements had stopped being true (flight lookup, load protection, VIP airspace
 alerts). They are struck through below with the correction beside them, and "Since v1.3.0"
 lists what changed._
@@ -54,9 +55,16 @@ that answer never decides a takeoff or landing time.)
 ### Since v1.3.0 (added 2026-10-15, not yet a release)
 
 - **Encrypted off-site backups.** The platform is backed up every night,
-  encrypted before it leaves the box, to an off-site store (live since
-  2026-10-12). A weekly restore test (first run 2026-10-18 05:30Z) will restore a backup to prove it can be read. Privacy-listed aircraft data
-  stays on the box.
+  encrypted before it leaves the box, to an off-site store ~~(live since
+  2026-10-12)~~ (corrected 2026-10-25: nightly encrypted backups since 2026-10-12; the first off-site copy
+  arrived 2026-10-13 05:30Z, and one has followed every night since, the latest 2026-10-26 05:18Z). ~~A weekly
+  restore test (first run 2026-10-18 05:30Z) will restore a backup to prove it can be read.~~ (corrected
+  2026-10-25: a weekly restore test runs on Sundays at 05:30 UTC and passed on 2026-10-18 and 2026-10-25. It takes
+  the database copies out of the newest backup, checks them against their recorded fingerprints and reads their
+  table of contents; it does not load them into a database.) ~~Privacy-listed aircraft data
+  stays on the box.~~ (corrected 2026-10-25: the FAA privacy list itself stays on the box: its two tables are left
+  out of the off-site copy and kept in a local-only file. Flight records of listed aircraft are in the encrypted
+  off-site copy, like every other flight.)
 - **The right flight, not just the right number.** A watched flight is now
   matched by its specific trip (date, origin and destination), not only by
   its flight number. Today's leg is no longer confused with another leg that
@@ -64,9 +72,11 @@ that answer never decides a takeoff or landing time.)
 - **One alert per presidential/VIP airspace restriction.** Each VIP
   restriction alerts once, with the FAA's own text and its active window in
   UTC and Eastern time, and again only if the FAA changes it.
-- **Tail numbers come only from FAA data.** The tail number on a flight
-  is taken only from FAA SWIM data, never from airport arrival boards. The
-  boards supply gate and baggage information.
+- ~~**Tail numbers come only from FAA data.** The tail number on a flight
+  is taken only from FAA SWIM data, never from airport arrival boards.~~ (corrected 2026-10-25: **A change of tail
+  number is accepted only from FAA data.** Once a watched flight has a tail, only FAA SWIM data can change it, and
+  airport arrival boards never supply one; the first tail a watch locks on to can also come from the airplanes.live
+  fallback described above.) The boards supply gate and baggage information.
 
 ---
 
@@ -112,7 +122,11 @@ exists in the repository. They describe design intent, not a measured result.]
 
 The platform protects itself under heavy load: ~~when the hardware runs hot
 or overloaded it pauses some data streams~~ (corrected 2026-10-15: since
-2026-10-13 only processing overload pauses data streams; temperature alone
+2026-10-13 ~~only processing overload pauses data streams~~ (corrected 2026-10-25: processing overload is the
+only automatic trigger of this protection; separately, a bandwidth-priority setting can pause streams: `weather`
+pauses ground movement, arrival sequencing, terminal weather and NOTAMs, set by the operator or automatically
+for a Severe or Extreme NWS alert while the polled NWS fallback is the active weather path, and `nexrad` pauses
+flight plans; neither was active at 2026-10-26 04:48Z); temperature alone
 no longer pauses anything, it only delays the restart while the processor
 is very hot) and restarts them automatically once conditions recover.
 During those pauses the affected streams are not monitored.
@@ -135,8 +149,14 @@ Manassas, Leesburg, Gaithersburg).
 
 ## How alerts are delivered
 
-Push notifications go to the coordinator's devices. Every event produces two
-alerts: a detailed version and a one-line dispatch version. An unchanged
+Push notifications go to the coordinator's devices. ~~Every event produces two
+alerts: a detailed version and a one-line dispatch version.~~ (corrected 2026-10-25: an event on a watched
+flight or train produces two alerts, a detailed one on its own channel and a one-line copy on the dispatch
+channel, except for the bellwether flights (47 of the 60 recurring flights), which alert once on their own
+channel. Airspace, weather and go/no-go alerts are single alerts on their own channels; a top-priority VIP
+restriction goes to two channels. An emergency phone alert through Pushover is also attempted for it, but Pushover
+refused every attempt in the pusher's retained log, ~~38 from 2026-10-22 13:31Z to 2026-10-26 10:50Z~~ (corrected 2026-10-25, superseded by log rotation: 34 in the log as retained at 2026-10-26 22:04Z, which starts 2026-10-22 19:43Z; first refusal 2026-10-23 01:14Z, last 2026-10-26 10:50Z; no successes), with HTTP 400.)
+An unchanged
 event is not re-sent; only a real change produces a new alert.
 
 ---
@@ -146,9 +166,10 @@ event is not re-sent; only a real change produces a new alert.
 **Recurring** — flights and trains monitored every operating day,
 configured once.
 
-**Per-trip** — added when a trip is booked (by API, or automatically from
-a reservation-system webhook), and removed automatically a few hours after
-scheduled arrival.
+**Per-trip** — added when a trip is booked (by API~~, or automatically from
+a reservation-system webhook~~ (corrected 2026-10-25: the reservation-system webhook is built but not switched on
+in production; its shared secret is not in the web service's settings, so it refuses deliveries)), and removed
+automatically a few hours after scheduled arrival.
 
 ---
 
@@ -156,21 +177,28 @@ scheduled arrival.
 
 > **Update 2026-10-15:** still true as written. The six FAA streams, the NWS
 > feed, Amtrak, METAR, TFR, NAS status and the arrival boards were all fresh at
-> 00:55Z. The public demo still replays data recorded before 2026-08-14, and
-> its refresh job is still off. Also live now: encrypted off-site backups
-> (since 2026-10-12).
+> 00:55Z. ~~The public demo still replays data recorded before 2026-08-14, and
+> its refresh job is still off.~~ (corrected 2026-10-25, superseded: since the demo/production split (2026-10-17
+> 00:28Z, commit b4dd54f5) the demo reads its own database, which a scrub refreshes every day at 03:17 UTC with
+> cleaned production data at least 24 hours old; latest run 2026-10-26 03:35:57Z.) Also live now: encrypted off-site backups
+> ~~(since 2026-10-12)~~ (corrected 2026-10-25: first off-site copy 2026-10-13 05:30Z).
 
 - **Live:** all six FAA SWIM streams, the NWS push feed, Amtrak, METAR,
   TFR, NAS status and airport arrival boards; the coordinator dashboard
   (private network only); push alerts; the agent gateway.
-- **Live but stale:** the password-protected public demo is reachable, but
+- ~~**Live but stale:** the password-protected public demo is reachable, but
   it replays a two-week window recorded before **2026-08-14**; the job that
   refreshes it is switched off. Offer the demo as a product walkthrough, not
-  as recent operating data.
+  as recent operating data.~~ (corrected 2026-10-25: **Live, delayed:** the password-protected public demo
+  replays a two-week window of real operating data copied into its own database after cleaning (privacy-listed
+  aircraft removed or blurred), refreshed every day at 03:17 UTC with nothing younger than 24 hours; latest
+  refresh 2026-10-26 03:35:57Z. It is recent, but never live. Reachability from the public internet was not
+  probed in this pass (unverified 2026-10-25).)
 - **Not yet switched on:** European (EUROCONTROL) and Japanese (JASDAT) flow
-  data are coded but awaiting credentials. Automatic booking-system intake is
+  data are coded but awaiting credentials. ~~Automatic booking-system intake is
   built; whether its shared secrets are configured on the production
-  deployment was not checked in this pass.
+  deployment was not checked in this pass.~~ (corrected 2026-10-25: automatic booking-system intake is built but
+  not switched on: none of its three shared secrets is in the web service's settings, so it refuses deliveries.)
 
 ---
 

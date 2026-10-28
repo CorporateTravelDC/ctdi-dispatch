@@ -19,7 +19,8 @@ this file exists so the next run doesn't have to re-derive the same
 findings and gotchas from scratch.
 
 **This is personal-side, not dispatch-business.** It lives under
-`.Codex/skills/` rather than `skills/` (the dispatch-domain skill
+~~`.Codex/skills/`~~ `.agents/skills/` (corrected 2026-10-25: no `.Codex/`
+directory exists in the repo; this file is `.agents/skills/personal-export-analysis/SKILL.md`) rather than `skills/` (the dispatch-domain skill
 directory, e.g. `flight-hifi-track`) deliberately -- matching this
 session's own established rule that personal content and business
 content never share a location. Never write this skill's output into
@@ -29,7 +30,9 @@ content never share a location. Never write this skill's output into
 
 The MCP bridges that used to expose tools like these to a live MCP client
 (`mcpo`/`mcpo-public`) were retired 2026-08-18 -- see this repo's own
-AGENTS.md. The toolkit's code is still real and current; it just isn't
+AGENTS.md (unverified 2026-10-25: `AGENTS.md` is excluded from blind
+verification; the retirement itself holds: their units sit in
+`.config/systemd/user/retired-20261020/`). The toolkit's code is still real and current; it just isn't
 reachable via the MCP protocol on this box anymore. So: import its Python
 modules directly and call the underlying functions, rather than standing
 the bridge back up for one-off analysis.
@@ -63,10 +66,13 @@ copies lying around after the task ends.
 ## Step 2 -- known export-format gotchas (fixed once, 2026-08-24)
 
 Both fixes below are already applied in the toolkit repo as of this
-writing (present in the working tree, unstaged and uncommitted --
+writing ~~(present in the working tree, unstaged and uncommitted --
 verified 2026-08-24, `git status` there shows ` M` on both files; the
 operator commits toolkit changes himself, same rule as every other
-repo). **Before trusting either "fix"
+repo)~~ (superseded 2026-10-25: both files are committed, `fde2510`
+2026-10-08T17:15:00Z "Fix Uber newer-export column mapping and LinkedIn
+full-timestamp date parsing", and clean in `git status`; the operator
+commits toolkit changes himself, same rule as every other repo). **Before trusting either "fix"
 is still sufficient, diff the export's actual CSV headers against
 `_PLATFORM_MAPS["uber"]` in `gig_mobility/gig_analysis.py`** -- export
 schemas drift, and this fix was scoped to one real Uber export snapshot,
@@ -107,7 +113,11 @@ does not carry forward to a new one. Ask explicitly:
   Nominatim (openstreetmap.org) over the network to derive neighborhood/
   postcode -- real trip-coordinate data leaving the box to a third party.
   Default recommendation: skip it (revenue/time-pattern analysis needs no
-  geo call at all). If the operator wants geo-clustering, confirm the
+  geo call at all). (corrected 2026-10-25: `gig_normalize_export` has no
+  geocoding switch -- it calls `reverse_geocode()` for every record whose
+  dropoff lat/lon resolve, `gig_analysis.py:192-198,264-270`; skipping means
+  not running it on an export with dropoff coordinates, or removing those
+  columns first.) If the operator wants geo-clustering, confirm the
   Maidenhead precision (`gig_normalize_export`'s own guardrail: >= 8
   chars requires explicit `own_data=True` + `pre_sanitized=True`
   attestation; default 6 is neighborhood-level, ~4.6km x 2.3km).
@@ -167,7 +177,11 @@ board.**
    profile (sibling to the existing `04-Syntheses/entity-tracking/`
    pattern -- its own clearly-named subfolder, deliberately NOT
    `04-Syntheses/daily/` or `weekly/`, since `second_brain_weekly.py`'s
-   scan is hardcoded to only those two paths and a standing reference
+   scan is hardcoded to ~~only those two paths~~ `01-Sources/daily/`,
+   `04-Syntheses/daily/` and `01-Sources/transport-patterns/` as input and
+   `04-Syntheses/weekly/` as output (corrected 2026-10-25,
+   ~~`src/poller/skills/second_brain_weekly.py:3-24`~~ `src/poller/skills/second_brain_weekly.py:127-131,143-144` (inputs) and `:241` (output) (citation corrected 2026-10-25, the docstring is not evidence); the point stands: a
+   `personal-voice-profile/` note is outside that scan) and a standing reference
    doc shouldn't get swept into a weekly digest). Either way, run the
    note through `second_brain.scrub_gate.gate()` first (Tier-0-adjacent
    surface, same as every vault write), via
@@ -185,8 +199,11 @@ board.**
 2. **Then, always, announce it on the Cowork board** -- this is the step
    that actually makes it "available to Cowork," not the folder choice.
    Mirror `second_brain_research_board_mirror.py`'s exact real precedent:
-   `db.board_insert("dispatch", "cowork", "research", subject, body,
-   refs=[rel_path])`, `thread="research"` (an established real thread
+   ~~`db.board_insert("dispatch", "cowork", "research", subject, body,
+   refs=[rel_path])`~~ `db.board_insert("dispatch", "cowork", "research",
+   subject, body)` (corrected 2026-10-25: the mirror passes no `refs=`
+   kwarg; it puts the vault path in the body,
+   `src/poller/skills/second_brain_research_board_mirror.py:176-179`), `thread="research"` (an established real thread
    name, not invented here), body = a short excerpt (truncate if long)
    plus the vault path, matching how that mirror skill announces its own
    posts. Do this for every note this skill writes that the operator
@@ -194,8 +211,9 @@ board.**
    defaults to all of them unless told otherwise.
 
 **Why quoting verbatim text is an intentional, documented exception
-here, not an oversight**: `export_analysis.py`'s own standing policy
-(item 5, its module docstring) is "never quote long runs of comment/
+here, not an oversight**: `export_analysis.py`'s (`src/common/export_analysis.py`,
+path added 2026-10-25) own standing policy
+(item 5, its module docstring, `:37-39`) is "never quote long runs of comment/
 share text verbatim -- reference by topic + date instead," written for
 its own automated topic-extraction digest. A voice profile is
 structurally different -- it is USELESS for ghostwriting without real
@@ -208,7 +226,8 @@ for every export-analysis digest going forward.
 
 **Never** `source` `dispatch-secrets.env`/`dispatch.env` directly in
 bash to get `NEXTCLOUD_ADMIN_USER` or anything else -- see AGENTS.md's
-quoting-gotcha entry; export the one variable directly instead.
+quoting-gotcha entry (unverified 2026-10-25: `AGENTS.md` is excluded from
+blind verification); export the one variable directly instead.
 
 ## Step 5 -- output as a private Artifact
 
@@ -237,4 +256,7 @@ requested and run.
 - No automated trigger wiring exists (this is a manually-invoked Codex
   Code skill, not a poller timer skill under `src/poller/skills/`) -- by
   design, since personal export uploads are occasional and operator-
-  initiated, not a scheduled job.
+  initiated, not a scheduled job. (Added 2026-10-25: a separate scheduled
+  poller skill does exist, `src/poller/skills/personal_export_watch.py`,
+  run by `corporatetraveldc-personal-export-watch.{container,timer}`; it is
+  not this skill and does not invoke it.)

@@ -16,7 +16,8 @@ scripts remain present for reference and will skip all steps cleanly if run.
 | `wpc_forecast_discussions/`   | WPC national forecast discussions via NWWS-OI        | Code applied, **no data flowing** — see its README |
 
 ⚠️ "Applied" here means the code changes are merged into the main tree, not
-that the capability is producing data. As of 2026-08-23 the WPC addendum's
+that the capability is producing data. As of 2026-08-23 (re-verified
+2026-10-25 15:42Z against Postgres and the live route) the WPC addendum's
 `wpc_discussions` table has **zero rows ever** and
 `GET /api/v1/wx/discussion` returns `{"available": false}`, despite the
 `ttaaii`-key fix being deployed. Read

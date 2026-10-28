@@ -1,3 +1,5 @@
+> Status 2026-10-25: dated record of 2026-09-28, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: 37 containers were running at this check (the count varies with one-shot jobs); the tunnel serves 14 hostnames, not 9; ntfy carries 26 topic names in code plus per-family and per-zone topics, not a 14-topic catalog; SWIM ingest is on the order of 150-200 GB/day (about 9.1 GB across the six feeds in about 70 minutes), not ~2.7 GB/day; ~~NOTAMs cover 2,774 facilities~~ (corrected 2026-10-25: NOTAMs cover about 3,200 distinct facilities, 3,229 in total and 3,208 unexpired at 2026-10-26 22:08Z; the count grows daily) (national scope since 2026-10-24), not 314; OSINT has 22 scopes and about 466 distinct outlets in the last 30 days; Postgres has 83 migrations, and 17 running containers used the production socket at 2026-10-26 22:08Z (16 at 21:39Z; the count varies with one-shot jobs); the semantic compile runs four times a day plus on manual-note writes, not nightly; the section 5 "current integrity hazard" was resolved by the 2026-09-28 re-sign (struck in place). The vendor-tier lines marked unverified cannot be checked from the box.
+
 # CTDI Dispatch — COGS (self-hosted) vs. Subscription-Only Replacement Cost, 2026-09-28
 
 > **Status (2026-10-15):** dated record, not re-derived. Read these before quoting it: (1) the "cloud-LLM spend is a measured $0" claims (§0, §1 line "Cloud LLM inference") are wrong in scope: a weekly Claude Opus job runs via the Claude CLI and the agents run on vendor plans, and the SR-1 log records configured model labels, not inference (see `docs/COST_STRUCTURE.md` §1 correction); (2) Column 1 has no line for the Proton Drive off-box backup, live since 2026-10-12 (`docs/BACKUP.md`); (3) the internal totals disagree: the "Monthly equivalent ≈ $5,125 – $11,820 / mo" line and the two later "$61.5k–$141.8k" figures disagree with the §0/§2 headline range ($61,529 – $334,955/yr; $5,127 – $27,913/mo); (4) live inputs have moved (38–40 running containers on 2026-10-15, varies with oneshot jobs; not 35). The current cost picture and its open [UNVERIFIED] lines are in `docs/COST_STRUCTURE.md`.
@@ -173,14 +175,14 @@ like-for-like for six networks.
 | Network | Tier given to feeders | List price of that tier | Source / confidence |
 |---|---|---:|---|
 | FlightAware | Enterprise account (while feeding) | $1,199.40 ($99.95/mo, 1 user) | FlightAware multi-user pricing page, prices dated 2023-01-17 — *official but 2023* |
-| FlightAware AeroAPI | Personal tier: first **$10/mo waived** for ADS-B feeders (vs $5 standard) | up to $120 | flightaware.com AeroAPI page, Oct 2026 — *official*. Our use: $0.14/period → $0 actual |
+| FlightAware AeroAPI | Personal tier: first **$10/mo waived** for ADS-B feeders (vs $5 standard) | up to $120 | flightaware.com AeroAPI page, Oct 2026 — *official*. Our use: $0.14/period → $0 actual (unverified 2026-10-25) |
 | Flightradar24 | Business subscription | ≈ $499.99 | third-party FAQ, Sep 2026 — *unofficial; FR24 does not publish it* |
 | AirNav Radar | Business (valid while the station connects at least every 15 days) | $399.50 (web) / $599.99 (iOS in-app) | airnavradar.com/subscribe — *official* |
 | PlaneFinder | premium (feeder) | ≈ $20 | carried from §2.1 row 2 (2026-09-28 snapshot) |
-| airplanes.live | Pro tier | no published price | unlocked 2026-10-22 once the feed carried its feeder ID |
+| airplanes.live | Pro tier | no published price | unlocked 2026-10-22 once the feed carried its feeder ID (unverified 2026-10-25) |
 | OpenSky Network | Active-feeder API tier (≥ 30 % monthly uptime): 8,000 credits/day vs 4,000 registered / 400 anonymous; `/states/own` (own receiver) free and unrestricted; value is visibility into the global sensor network, not an operational dependency | no published price | openskynetwork.github.io/opensky-api REST docs, 2026-10-22 — *official* |
-| Airframes.io (ACARS/VDL2) | Feeder Pro from 2026-10-23 ("earned free" by an active station) = the Pro plan: 50,000 API req/day, 90-day message history, outbound webhooks, station analytics | $144 ($12/mo) | app.airframes.io/pricing, 2026-10-22 — *official*. Business ($39/mo: 250k req/day, 1-yr history, MQTT) is not earned by feeding |
-| ACARS Drama | Jumpseat, complimentary as a "Sky Drama Farmer" (active 2026-10-22): archive search, aircraft lookup, station reports, email alerts and digests, REST API | $79 ($7.99/mo) | Jumpseat billing page, 2026-10-22 — *official* |
+| Airframes.io (ACARS/VDL2) | Feeder Pro from 2026-10-23 ("earned free" by an active station) = the Pro plan: 50,000 API req/day, 90-day message history, outbound webhooks, station analytics (unverified 2026-10-25) | $144 ($12/mo) | app.airframes.io/pricing, 2026-10-22 — *official*. Business ($39/mo: 250k req/day, 1-yr history, MQTT) is not earned by feeding |
+| ACARS Drama | Jumpseat, complimentary as a "Sky Drama Farmer" (active 2026-10-22): archive search, aircraft lookup, station reports, email alerts and digests, REST API (unverified 2026-10-25) | $79 ($7.99/mo) | Jumpseat billing page, 2026-10-22 — *official* |
 | **Total unlocked, list** | | **≈ $2,462 / yr** | of which ≈ $1,942 from official vendor pages |
 
 AirNav also issues feeders a free On Demand API key (100 credits, monthly) — not counted, it is metered data, not a tier.
@@ -209,7 +211,7 @@ buying.
 Every one of these tiers is **feeder-contingent**: they lapse if the station stops feeding (AirNav's 15-day rule is
 the tightest). A dead feeder is therefore a cost event, not just a data gap. Today only ultrafeeder's own outbound links are
 watched (adsb-link-watchdog). The vendors cover most of the rest: FlightAware, Flightradar24 and AirNav Radar
-email the operator after 1–6 h offline, and the airplanes.live app has "notify when offline" on. Uncovered:
+email the operator after 1–6 h offline, and the airplanes.live app has "notify when offline" on (unverified 2026-10-25). Uncovered:
 PlaneFinder, OpenSky, Airframes.io and ACARS Drama — the gap a platform-side silence check would close.
 
 Not established here: FR24 Business and PlaneFinder list prices are not published by the vendors (third-party and
@@ -285,10 +287,7 @@ $61.5k–$141.8k rent figure buys a strictly *thinner* platform:
 
 This is a **replacement-cost** model, not a valuation and not a revenue claim.
 The productization gaps, the deterministic-fallback rate, and the thin runsheet
-noted in `COGS_VENDOR_COMPARISON_2026-08-18.md` §3/§4 still apply, as does the
-**current integrity hazard** (`CODEBASE_REFERENCE_2026-09-28.md` §9.2: the
-signed manifest is stale and ~23 verified-exec units are failing until re-signed
-+ redeployed). The defensible claim is narrow and holds: **the recurring cost
+noted in `COGS_VENDOR_COMPARISON_2026-08-18.md` §3/§4 still apply~~, as does the **current integrity hazard** (`CODEBASE_REFERENCE_2026-09-28.md` §9.2: the signed manifest is stale and ~23 verified-exec units are failing until re-signed + redeployed)~~ (corrected 2026-10-25: that hazard was resolved by the manifest re-sign of 2026-09-28; at this check no verified-exec unit is failing, and the integrity sweep fails for a different reason: two staged, unsigned unit files and its Claude Code policy check). The defensible claim is narrow and holds: **the recurring cost
 base is near zero (~$16–$25/mo self-hosted) while the commercial replacement
 cost is ~$61.5k–$141.8k/yr, and the platform's most valuable capabilities are
 not purchasable at any price.**

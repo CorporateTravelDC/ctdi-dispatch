@@ -1,6 +1,12 @@
 # Pi-hole profile: aggressive encrypted-DNS / ECH hardening
 
-**OPT-IN -- a more aggressive measure. Not applied by default.**
+**OPT-IN -- a more aggressive measure. ~~Not applied by default.~~** (corrected
+2026-10-25: not applied by default in the public repo
+(`config/dispatch.env.example` ships `CTDC_AGGRESSIVE_PRIVACY=0`); on this
+deployment the value is `1` and the profile is applied live: the HaGeZi
+`adblock/doh.txt` adlist row is enabled with 3,284 gravity entries and
+`misc.dnsmasq_lines` carries `filter-rr=HTTPS` (`gravity.db` read-only
+query and `/etc/pihole/pihole.toml:1441-1442`, 15:41:59Z).)
 
 Operator 2026-10-23: stage the encrypted-DNS/ECH hardening "as a feature
 branch or a foldered setting that highlights it's a more aggressive measure".

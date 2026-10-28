@@ -27,12 +27,12 @@ a pointer here.
 
 | Quadlet | Role | Notes |
 |---|---|---|
-| `corporatetraveldc-ultrafeeder` | ADS-B 1090 MHz decode + tar1090 (:8080), feeds FlightAware/FR24/airplanes.live/OpenSky MLAT (ADSBHub dropped 2026-10-15) | running (2026-10-15: tar1090 on `100.x.x.x:8080` and `:8081`; Beast `30005` published on all interfaces; SBS `127.0.0.1:30003`. Full feed list under "Outbound sharing") |
+| `corporatetraveldc-ultrafeeder` | ADS-B 1090 MHz decode + tar1090 (:8080), ~~feeds FlightAware/FR24/airplanes.live/OpenSky MLAT~~ (corrected 2026-10-25: its own feed list sends only to airplanes.live, ADS-B and MLAT; FlightAware, FR24, OpenSky, PlaneFinder and AirNav Radar are fed by their own containers, which read its Beast output) (ADSBHub dropped 2026-10-15) | running (2026-10-15: tar1090 on `100.x.x.x:8080` and `:8081`; Beast `30005` published on all interfaces; SBS `127.0.0.1:30003`. Full feed list under "Outbound sharing") |
 | `corporatetraveldc-acarsrouter` | ACARS/VDL2 message router (:9080) | running (2026-10-15: serves plain ACARS on TCP `9080` and VDL2 on TCP `15555`, both published on all interfaces; receives VDL2 from dumpvdl2 over ZMQ `45555`) |
 | `corporatetraveldc-dumpvdl2` | VDL Mode 2 decoder — shares the `ACARS0130` dongle (`Environment=RTL_SERIAL=ACARS0130`, ~~whole-bus `AddDevice=/dev/bus/usb`, not the `/dev/rtl_sdr_acars` symlink~~ (corrected 2026-10-15: `AddDevice=/dev/rtl_sdr_acars` plus a read-only `/dev/bus/usb` volume, scoped since 2026-08-26; the image's start script is overlaid with the tracked `containers/dumpvdl2/launch.sh`), `FEED_ID` set in the quadlet) | running |
 | `corporatetraveldc-acarshub` | ACARS web UI (~~127.0.0.1:9081~~ `100.x.x.x:8092`, tailnet only; corrected 2026-10-15 from the quadlet's `PublishPort`) | running |
-| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST. ~~The Jumpseat poller queries ACARS Drama by registration for every watched registration from `GET /api/v1/watchlist`~~ (2026-10-16, operator: keep the LADD list for Jumpseat -- the Jumpseat poller's list is ONLY `GET /api/v1/watchlist/registrations`, the flight-watch identifiers with every LADD-listed one removed by the dispatch API's production LADD filter (`common.db.faa_is_ladd` / `faa_lookup_by_hex`; the container has no database); a lookup error is 503 and the thread polls nothing, with a warning, rather than fall back to the full set; the local UDP and airframes.io threads keep the full set; filtered registrations are counted, never returned or logged) | custom local image, running. (2026-10-15: all three sources exist in code, but in practice only airframes.io produces watchlist matches: 3 `MATCH [AIRFRAMES` in the last 24 h; the 2026-10-12 audit counted 3 airframes, 0 local, 0 Jumpseat over 7 days. The router sends only VDL2 to UDP 5005, and the watcher does not parse the registration nested inside a VDL2 message, so local VDL2 rarely matches a watched registration) |
-| `corporatetraveldc-piaware` / `-fr24feed` / `-planefinder` / `-airnavradar` | Aggregator feeders (FlightAware / FR24 / PlaneFinder / RadarBox) | running |
+| `corporatetraveldc-acars-watcher` | Triple-source watcher — local UDP 5005 + airframes.io REST + ACARS Drama Jumpseat REST. ~~The Jumpseat poller queries ACARS Drama by registration for every watched registration from `GET /api/v1/watchlist`~~ (2026-10-16, operator: keep the LADD list for Jumpseat -- the Jumpseat poller's list is ONLY `GET /api/v1/watchlist/registrations`, the flight-watch identifiers with every LADD-listed one removed by the dispatch API's production LADD filter (`common.db.faa_is_ladd` / `faa_lookup_by_hex`; the container has no database); a lookup error is 503 and the thread polls nothing, with a warning, rather than fall back to the full set; the local UDP and airframes.io threads keep the full set; filtered registrations are counted, never returned or logged) | custom local image, running. (2026-10-15: all three sources exist in code, but in practice only airframes.io produces watchlist matches: 3 `MATCH [AIRFRAMES` in the last 24 h; the 2026-10-12 audit counted 3 airframes, 0 local, 0 Jumpseat over 7 days. The router sends only VDL2 to UDP 5005, ~~and the watcher does not parse the registration nested inside a VDL2 message, so local VDL2 rarely matches a watched registration~~ (superseded; corrected 2026-10-25: since 2026-10-18 the watcher reads the registration nested in a dumpvdl2 message, `vdl2.avlc.acars.reg`, `src/acars_watcher/acars_watcher.py:194-201`; the journal shows no `MATCH` line from any source in the 24 h to 2026-10-26 02:36Z)) |
+| `corporatetraveldc-piaware` / `-fr24feed` / `-planefinder` / `-airnavradar` | Aggregator feeders (FlightAware / FR24 / PlaneFinder / RadarBox) | running (2026-10-25: so is a fifth, `corporatetraveldc-opensky`, the OpenSky Network feeder; all five read Beast from the aggregator) |
 | `corporatetraveldc-sdr-crashloop-guard.timer` | Every 5 min — checks ultrafeeder/dumpvdl2 for lost USB device or restart-loop, auto-stops either | active (its `.service` is `inactive dead` between runs, as expected for a oneshot) |
 
 The local VDL2 messages also reach the database by a second path that does
@@ -86,7 +86,8 @@ ACARS0130 dongle -> dumpvdl2 --ZMQ 45555--> acarsrouter
 ```
 
 `acars_messages` held 93,190 rows on 2026-10-15, 9,986 of them from the last
-24 h. ACARS phase evidence is read by `common/acars.py` (Jumpseat, then
+24 h (2026-10-25: about 185,300 live rows on 2026-10-26 02:19Z, the
+`pg_stat_user_tables` estimate). ACARS phase evidence is read by `common/acars.py` (Jumpseat, then
 airframes.io, then local) for the pusher and poller OOOI logic. ADS-B never
 asserts ON or IN. The watcher's own Jumpseat polling is LADD-filtered since
 2026-10-16 (`GET /api/v1/watchlist/registrations`, row above); `common/acars.py`
@@ -102,13 +103,13 @@ Credentials and feeder keys live in per-feeder files under
 
 | From | Destination | What |
 |---|---|---|
-| ultrafeeder | `piaware.flightaware.com:30005` | ADS-B (Beast reduced) |
-| ultrafeeder | `data-out.flightradar24.com:10001` | ADS-B |
+| ~~ultrafeeder~~ (corrected 2026-10-25: not the aggregator; FlightAware gets ADS-B from the `piaware` container, whose own endpoint was not read) | ~~`piaware.flightaware.com:30005`~~ | ADS-B (Beast reduced) |
+| ~~ultrafeeder~~ (corrected 2026-10-25: not the aggregator; FR24 gets ADS-B from the `fr24feed` container, whose own endpoint was not read) | ~~`data-out.flightradar24.com:10001`~~ | ADS-B |
 | ~~ultrafeeder~~ | ~~`data.adsbhub.org:5002`~~ | ~~ADS-B~~ (removed 2026-10-15: operator dropped ADSBHub; its server had dropped the feed every ~16 s since 10-14) |
 | ultrafeeder | `feed.airplanes.live:30004` | ADS-B |
-| ultrafeeder | `collector.opensky-network.org:30003` | MLAT (receiver position) |
+| ~~ultrafeeder~~ (corrected 2026-10-25: not in the aggregator's feed list; OpenSky is fed by the `opensky` container, whose own endpoint was not read) | ~~`collector.opensky-network.org:30003`~~ | ~~MLAT (receiver position)~~ |
 | ultrafeeder | `feed.airplanes.live:31090` | MLAT (receiver position) |
-| piaware, fr24feed, planefinder, airnavradar containers | FlightAware, FR24, PlaneFinder, AirNav Radar | their own feeder clients |
+| piaware, fr24feed, planefinder, airnavradar containers (2026-10-25: and the `opensky` container) | FlightAware, FR24, PlaneFinder, AirNav Radar (2026-10-25: and OpenSky Network) | their own feeder clients |
 | acarsrouter | `feed.airframes.io:5553` (TCP) | VDL2 |
 | acarsrouter | `feedthe.acarsdrama.com:5555` (UDP) | VDL2 |
 | acarsrouter | `feedthe.acarsdrama.com:5550`, `feed.airframes.io:5550` (UDP) | plain ACARS (none produced today) |
@@ -118,12 +119,15 @@ Credentials and feeder keys live in per-feeder files under
 | Timer | State 2026-10-15 |
 |---|---|
 | `corporatetraveldc-sdr-crashloop-guard.timer` | enabled, active |
-| `corporatetraveldc-adsb-feed-silence-watchdog.timer` | **disabled** |
-| `corporatetraveldc-acars-feed-silence-watchdog.timer` | **disabled** |
-| `corporatetraveldc-adsb-link-watchdog.timer` | **disabled** |
+| `corporatetraveldc-adsb-feed-silence-watchdog.timer` | ~~**disabled**~~ (superseded; corrected 2026-10-25: enabled, active, every 5 min at :01, 2026-10-26 02:15Z) |
+| `corporatetraveldc-acars-feed-silence-watchdog.timer` | ~~**disabled**~~ (superseded; corrected 2026-10-25: enabled, active, every 5 min, 2026-10-26 02:15Z) |
+| `corporatetraveldc-adsb-link-watchdog.timer` | ~~**disabled**~~ (superseded; corrected 2026-10-25: enabled, active, every 5 min, 2026-10-26 02:15Z) |
 
-Only the crash-loop guard runs. A receiver that stays up but goes quiet
-(antenna, cable, feed silence) raises no alert today.
+~~Only the crash-loop guard runs. A receiver that stays up but goes quiet
+(antenna, cable, feed silence) raises no alert today.~~ (superseded; corrected
+2026-10-25: all four run. The two feed-silence watchdogs and the link
+watchdog page `ops-health` when a receiver stays up but goes quiet or its
+link flaps.)
 
 ## Host setup (added 2026-10-15)
 
@@ -214,7 +218,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
   set today — re-confirmed live 2026-10-06
   (`grep -c '^AIS_STATIC_MMSI=\|^ACARS_STATIC_REGS=' /etc/corporatetraveldc/dispatch.env`
   → `0`; names only, values never read). Both default to the empty string
-  in code (`src/acars_watcher/acars_watcher.py:49`,
+  in code (~~`src/acars_watcher/acars_watcher.py:49`~~ (corrected 2026-10-25:
+  `src/acars_watcher/acars_watcher.py:76` at 5f7fca01),
   `src/ais_watcher/ais_watcher.py:32`).
 
 ---

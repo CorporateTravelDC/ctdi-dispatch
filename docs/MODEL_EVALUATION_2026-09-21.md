@@ -81,9 +81,11 @@ evaluated-but-not-chosen Qwen2.5-3B GGUFs are kept on disk (not deleted) as
 the historical record of this evaluation — not loaded, not referenced by
 anything live.
 
-**Known follow-up, not yet done:** the model file currently lives at
+~~**Known follow-up, not yet done:** the model file currently lives at
 `/home/corporatetraveldc/model-downloads/qwen3-4b-instruct-2507-q4_0.gguf`
-rather than the established `/var/lib/corporatetraveldc/models/` convention,
+rather than the established `/var/lib/corporatetraveldc/models/` convention,~~
+(corrected 2026-10-25: SUPERSEDED, done; the model file is in `/var/lib/corporatetraveldc/models/`, not in `~/model-downloads/`, and the llama unit loads it from there.)
+
 because that directory is root:root 755 and placing a file there needs the
 operator's own `sudo`. Functionally identical either way; the exact move
 commands are in `corporatetraveldc-llama.service`'s own comment block.

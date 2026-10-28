@@ -1,13 +1,15 @@
 # Live State Check — 2026-08-23
 
+> Status 2026-10-25: Point-in-time record; its counts and service states are not current. As of 2026-10-26 22:10 UTC: `scripts/verify-manifest.sh` exits 1 (not OK), `MANIFEST.sha256` has 1712 entries, 205 `corporatetraveldc-*` user units are loaded, 40 containers are up, and no `ollama` binary is on PATH. `scripts/weekly-doc-drift-check.sh:116-121` diffs against the newest earlier LIVE_STATE_CHECK report, not a fixed benchmark file. This file is no longer a designated drift benchmark.
+
 Written ~09:55–10:00 EDT against HEAD `447dd4a` ("Sync repo with live
 state: research-board-mirror + 3 opsplan/freshness/summary timers;
 re-sign manifest" — the operator's own commit, made mid-session), with a
 further 74-file staged-but-uncommitted changeset on top of it representing
-this session's documentation reconciliation work (see below). This is the
+this session's documentation reconciliation work (see below). ~~This is the
 **designated drift benchmark state** — the reference point future drift
 checks (automated or agent-driven) should diff against, not a passive
-historical record only. Produced by three sequential independent Fable
+historical record only.~~ (corrected 2026-10-25: superseded; the drift check at `scripts/weekly-doc-drift-check.sh:116-121` uses the newest earlier LIVE_STATE_CHECK report, and no code references this file.) Produced by three sequential independent Fable
 passes over the course of the overnight 2026-08-22/23 session: (1) a
 live-system-first sweep across ~29 repo doc files, (2) an independent
 re-verification of that sweep against live state, (3) a cross-consistency
@@ -105,7 +107,8 @@ own re-query-don't-trust convention for that counter.
 
 ## How to use this file as a benchmark
 
-A future drift check — scripted or agent-driven — should read this file
+~~A future drift check — scripted or agent-driven — should read this file
+first~~ (corrected 2026-10-25: superseded; no drift check reads this file, see `scripts/weekly-doc-drift-check.sh:116-121`.) A drift check could read this file
 first and diff *specific claims* against current live state, rather
 than starting from zero: does `verify-manifest.sh` still say `OK`? Does
 `SCHEMA_V36` still lead `src/common/db.py`, or has it moved further? Are

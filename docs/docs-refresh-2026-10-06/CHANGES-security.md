@@ -1,5 +1,7 @@
 # CHANGES -- security & governance docs
 
+> Status 2026-10-25: dated change log (2026-10-06). No longer current: the demo-source row, operator findings 3 (verifier part), 6, 11 and 12 (docstring, ollama and token_prefix parts); findings 2, 4 and 9 are unverified.
+
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 14 docs rewritten. No sudo was run; root-only files (`/etc/sudoers.d/*`,
 `/var/log/fail2ban.log`, `/var/log/nginx/honeypot.log`, audit log) and the
@@ -31,7 +33,7 @@ Postgres tables were not read. No secret values were read or written.
 | LLM: "per-tier `llama-server` units ... 100.x.x.x:8093/8094/8095", llama-hot `CPUWeight=9000`, `MemoryMax=4608M` | `systemctl --user list-units 'corporatetraveldc-llama*'` -> one `corporatetraveldc-llama.service`; `show` -> CPUQuota 200%, MemoryMax 8448M; `ss -ltn` -> only :8093 | single server documented |
 | Quadlet counts 68 files / 64 `.container`, 26 with `--map-gw` | `ls *.container \| wc -l` -> 74; map-gw -> 29; named network -> 6 | updated |
 | Demo three-way disagreement + crash-loop narrative (marked SUPERSEDED) | runner-demo `active/running`, `NRestarts=0`, `DEMO_MODE=true` in quadlet, `:8005/healthz` ok | history cut; current state stated |
-| demo-source refresh timer disabled, never fired, file frozen 2026-08-14 | `is-enabled` -> disabled; `LastTriggerUSec=` empty; mtime 2026-08-14 14:21Z | kept (still true) |
+| demo-source refresh timer disabled, never fired, file frozen 2026-08-14 | `is-enabled` -> disabled; `LastTriggerUSec=` empty; mtime 2026-08-14 14:21Z | ~~kept (still true)~~ (corrected 2026-10-25: superseded -- timer enabled/active and `demo-source.db` absent, 22:19Z) |
 | Thermal caps paragraph: `PARAMETER num_thread 2` limits Ollama; `ollama.service.d` drop-in | 21 Modelfiles still say it; Ollama retired | stated as vestigial |
 | `selinux/...fail2ban-lockdown.te` edits `ollama.service.d/10-binding.conf` | `scripts/lockdown.sh:13` "Ollama bind-revert step ... removed" (2026-08-30) | dropped |
 | CF Access app list "re-confirmed 2026-08-23" (8 apps) | not re-listable; `curl` on 2026-10-06: dispatch host 302 to Access for `/api/v1/tfr`, `/console`, `POST /api/v1/approvals/*/resolve`; 200 `/robots.txt`, `/api/v1/board/health`; 404 (app) on `/admin/approval-requests/*/resolve` | replaced with observed behaviour, list [UNVERIFIED] |
@@ -192,21 +194,21 @@ Postgres tables were not read. No secret values were read or written.
 2. **NOPASSWD `dnf remove *` / `semanage port -a *` (if still installed)
    bypass the approval gate.** The gate is a convention for these; any
    operator-uid process (including agent sessions the operator starts) can
-   run them unattended. The ollama/governor NOPASSWD entries point at units
+   run them unattended. (unverified 2026-10-25: sudoers is root-only, not read) The ollama/governor NOPASSWD entries point at units
    that no longer exist. Run `sudo -n -l` and prune.
-3. **Audit chain has no verifier, no role split, no UPDATE/DELETE guard.**
+3. ~~**Audit chain has no verifier,~~ (corrected 2026-10-25: superseded -- `src/common/audit_chain.py:42` defines `verify()`, run by `scripts/scheduled-integrity-sweep.sh:110`; role split and UPDATE/DELETE guard not re-checked) no role split, no UPDATE/DELETE guard.**
    The `dispatch` role can rewrite `audit_log` and recompute hashes; detection
    depends on signed checkpoints that (by date) have not been produced yet,
-   and nothing in the repo reads `row_hash` back. Governance events
+   ~~and nothing in the repo reads `row_hash` back.~~ (corrected 2026-10-25: superseded -- `audit_chain.py` reads `row_hash` (11 references)) Governance events
    (approvals, gateway, invites, console) are not in `audit_log` at all.
 4. **Operator's admin board key is passphrase-less**
    (`~/.ssh/corporatetraveldc_ed25519 -> cowork_ed25519`): any operator-uid
    process can sign as the admin signer (cosign, single-handed kill orders).
    Approvals are protected by the separate approval key; board admin actions
-   are not. `cosign`/`high` tiers are unused at HEAD.
+   are not. (unverified 2026-10-25: key not inspected) `cosign`/`high` tiers are unused at HEAD.
 5. **Long-running containers still start without a manifest check** (open
    operator decision since 2026-08-19).
-6. **Integrity sweep failing right now** (`corporatetraveldc-integrity-sweep.service`
+6. ~~**Integrity sweep failing right now**~~ (corrected 2026-10-25: superseded -- `corporatetraveldc-integrity-sweep.service` inactive, not failed, at 22:19Z; no skill-grants unit is installed live) (`corporatetraveldc-integrity-sweep.service`
    failed 18:05Z): working-tree change to `scripts/stack-refresh.sh` not in
    the signed manifest; `corporatetraveldc-skill-grants` is holding for the
    same reason. Expected while another session edits; clears on sign.
@@ -217,21 +219,21 @@ Postgres tables were not read. No secret values were read or written.
    `dispatch-runner.`) have no trap include.
 9. **Blog-hosted GPG keys are no longer public** (302 to `/welcome`);
    `docs/GPG_KEYS_PUBLISHED.md` and any external pointers to the blog `/keys/`
-   URLs should use www.
+   URLs should use www. (unverified 2026-10-25: public host not probed)
 10. **`ntfy` config comment and Twilio placement drift:** `/etc/ntfy/server.yml`
     lines 25-28 say Twilio creds come from `dispatch-secrets.env`, which the
     ntfy container no longer reads.
-11. **Network usage back at ~240 GiB/day** (Sep 4.97 TiB); the SWIM scoping
+11. ~~**Network usage back at ~240 GiB/day**~~ (corrected 2026-10-25: superseded -- `vnstat -d` daily totals 183-205 GiB for 2026-10-23..26, 22:19Z) (Sep 4.97 TiB); the SWIM scoping
     fix is still the only designed answer. Relevant to COGS.
-12. **Minor code/comment drift:** `require_admin` docstring
-    (`src/auth/auth.py`) still says the prune skill deletes rows after 90 days;
+12. **Minor code/comment drift:** ~~`require_admin` docstring
+    (`src/auth/auth.py`) still says the prune skill deletes rows after 90 days;~~ (corrected 2026-10-25: superseded -- `require_admin` docstring (`src/auth/auth.py:228-233`) now describes the archive skill;)
     `verify-manifest.sh`/`verified-exec.sh` cite a "Signed Manifest Integrity"
-    section that does not exist; `cloudflared/config.yml` still routes
-    `ollama.example.com` (falls to the 444 catch-all);
+    section that does not exist; ~~`cloudflared/config.yml` still routes
+    `ollama.example.com` (falls to the 444 catch-all);~~ (corrected 2026-10-25: superseded -- the ingress is commented out at `cloudflared/config.yml:50-51`;)
     `tailscale/policy.hujson` still lists `tcp:11434` (Ollama);
-    `/api/v1/cui/status` audit writes the first 12 raw characters of the
+    ~~`/api/v1/cui/status` audit writes the first 12 raw characters of the
     bearer token as `token_prefix` (`main.py:2153`), one character past the
-    `ctdc_admin_` prefix for admin tokens.
+    `ctdc_admin_` prefix for admin tokens.~~ (corrected 2026-10-25: superseded -- the audit actor is the stored `token_prefix` from the identity, `src/web/main.py:2163`)
 13. **`execstandard-verifier` has no `Memory=`/`CPUQuota=`** (the only
     quadlet without a memory cap).
 14. **Board replay cache resets on web restart** (in-process); a signature

@@ -1,3 +1,5 @@
+> Status 2026-10-25: superseded in part — branch list, watchlist/webhooks line numbers, the sqlite path and the 'still open' items (arrival_time, sr2_gate, osint/feed auth, terminate_watchlist) are no longer current; struck inline. Checked 2026-10-26T22:10Z.
+
 # Code Drift / Validity Audit — 2026-08-16
 
 Branch: `drift-audit-2026-08-16` (off `main`).
@@ -6,12 +8,12 @@ Branch: `drift-audit-2026-08-16` (off `main`).
 > The original text below said "Not committed … review the working tree via
 > `git diff main...drift-audit-2026-08-16` and commit/adopt selectively.
 > `main` was never touched." All three statements are now out of date: the
-> branch no longer exists (`git branch -a` lists only `main`, `ops/session`,
-> `semantic-layer-2026-08-18` plus remotes), so that `git diff` command now
+> branch no longer exists (~~`git branch -a` lists only `main`, `ops/session`,
+> `semantic-layer-2026-08-18` plus remotes~~ (corrected 2026-10-25: superseded; `git branch -a` at 2026-10-26T22:10Z lists 13 entries, no local `ops/session` and no `semantic-layer-2026-08-18`; `drift-audit-2026-08-16` still absent)), so that `git diff` command now
 > errors, and **all 8 fixes below are on `main`.** Spot-verified 2026-08-19:
 > `flock` present in `src/common/push_dedup.py`; `@router.delete("/batch")`
-> at `src/web/routes/watchlist.py:446` now precedes `"/{entry_id}"` at
-> `:490`; `secrets.compare_digest` at `src/web/routes/webhooks.py:58`; the
+> at ~~`src/web/routes/watchlist.py:446` now precedes `"/{entry_id}"` at
+> `:490`~~ (corrected 2026-10-25: superseded line numbers; order holds, now `:715` before `:759`); `secrets.compare_digest` at ~~`src/web/routes/webhooks.py:58`~~ (corrected 2026-10-25: now `src/web/routes/webhooks.py:169,171`); the
 > double-decode vault guard in `src/web/main.py`; and all four new tests
 > present (`tests/common/test_push_dedup_hot.py`,
 > `tests/web/test_watchlist_route_order.py`,
@@ -22,7 +24,7 @@ Branch: `drift-audit-2026-08-16` (off `main`).
 > signing is unavailable to the audit agent and commits are the operator's."*
 
 Verification: every finding checked against live data (sqlite at
-`/var/lib/corporatetraveldc/corporatetraveldc.db`, `podman logs`, live WebDAV)
+`/var/lib/corporatetraveldc/corporatetraveldc.db` (2026-10-25: superseded, file absent at 2026-10-26T22:10Z), `podman logs`, live WebDAV)
 before fixing. No MCP used. Not a pentest. Full vault write-ups under
 `Docs/code-drift-audit-2026-08-16/` in the second brain.
 
@@ -58,13 +60,13 @@ New tests added by this branch (all green): `tests/common/test_push_dedup_hot.py
 
 ## Documented, not auto-fixed (operator decision / larger change)
 
-> **Re-checked 2026-08-19: every item in this section is still open.** Two
+> ~~**Re-checked 2026-08-19: every item in this section is still open.**~~ (corrected 2026-10-25: superseded; the arrival_time, sr2_gate, osint/feed and terminate_watchlist items below are closed in code at HEAD 5f7fca01) Two
 > were re-verified directly and remain exactly as described —
-> `write_flight_event` still hardcodes `arrival_time=None` (the dead-tier
+> ~~`write_flight_event` still hardcodes `arrival_time=None` (the dead-tier
 > explanation is still in `src/common/flight_resolver.py:343-350`), and
 > `/api/v1/osint/feed` (`src/web/main.py:1379`) still carries **no auth
 > dependency** while its sibling `/api/v1/osint/scopes` is `require_tier(T1)`
-> at `:1634`.
+> at `:1634`.~~ (corrected 2026-10-25: superseded; `write_flight_event` (`src/ingest/parsers/fdps_parser.py:1598`) now enriches `arrival_time` (`:1702-1721`), `flight_resolver.py` is 206 lines; `/api/v1/osint/feed` (`src/web/main.py:1734`) is `require_tier(Tier.T1)`, as is `osint/scopes` at `:2020`. The operator decision below is resolved by that gate.)
 >
 > **NEEDS OPERATOR DECISION:** the OSINT feed endpoint is genuinely
 > anonymous over the public tunnel, not merely tailnet-reachable — the
@@ -74,22 +76,22 @@ New tests added by this branch (all green): `tests/common/test_push_dedup_hot.py
 > that confirmation never happened. Decide: tier-gate it to match
 > `osint/scopes`, or record explicitly that public EP-scope narratives are
 > intended.
-- **flight_resolver SWIM tier permanently dead** — `write_flight_event`
-  hardcodes `arrival_time=None`; tier-1 query can never match; DCA/IAD/BWI
+- **flight_resolver SWIM tier permanently dead** — ~~`write_flight_event`
+  hardcodes `arrival_time=None`~~ (corrected 2026-10-25: superseded, enrichment at `src/ingest/parsers/fdps_parser.py:1702-1721`); tier-1 query can never match; DCA/IAD/BWI
   run on paid AeroAPI. Query-time tbfm-eta enrichment verified viable
   against live data (needs a `tbfm_sequences(flight_id,last_seen)` index +
   live perf check). See vault note 03.
 - **sr2_gate hash poisoning** — `hash_gate` records the input hash at check
   time, before the caller succeeds; a hard failure suppresses retry until
   inputs change. Narrow (skills have internal fallbacks). Fix = two-phase
-  check/commit across 5 callers.
+  check/commit across 5 callers. (2026-10-25: superseded, fixed; `check_gate` `src/common/sr2_gate.py:15` / `commit_gate` `:48`, 6 caller files each.)
 - **pusher landing `notified` set before send confirmed** — same shape as
   sr2_gate; a failed ntfy send loses the landing push until restart.
-- **/api/v1/osint/feed** unauthenticated on the tunnel vhost while the
+- ~~**/api/v1/osint/feed** unauthenticated on the tunnel vhost~~ (2026-10-25: superseded, now `require_tier(Tier.T1)` at `src/web/main.py:1734`) while the
   sibling `osint/scopes` was Tier-1-locked by a prior pentest — confirm
   intent for EP-scope item narratives.
-- **terminate_watchlist** shadowed by the router's `/{entry_id}`
-  (admin-or-stricter on both; functional-only).
+- ~~**terminate_watchlist** shadowed by the router's `/{entry_id}`
+  (admin-or-stricter on both; functional-only).~~ (2026-10-25: superseded, handler removed; no terminate route under `src/web`, removal recorded at `src/web/main.py:1663-1665`)
 - entity_tracking E1 (demoted entities auto-re-promote), E3 (same-category
   lost-update race); watchlist W2 (permanent-removal lost across restart),
   W4 (`_load_file` TOCTOU on mtime-after-read).

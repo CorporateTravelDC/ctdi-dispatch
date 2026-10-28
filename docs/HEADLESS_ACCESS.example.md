@@ -55,7 +55,7 @@ the admin console changes, so the two can be diffed. Reference rule:
   entry is harmless but confusing -- either use it or drop it.
 
 **LAN path, separately.** OpenSSH may also listen on `0.0.0.0:22` with the
-host firewall opening ssh on the LAN zone only. That path uses
+host firewall opening ssh on the LAN zone only (unverified 2026-10-25: in the reference deployment the `0.0.0.0:22` listener is confirmed by `ss`, the firewalld zone state is root-only). That path uses
 `authorized_keys`, not the tailnet policy. Rule for a segmented team: each
 account holds exactly one key whose comment names the account
 (`<account>@<node>`), no key is shared between accounts, and a verifier
@@ -125,7 +125,7 @@ and never describe it as part of the policy-scoped access story.
 ## 3. Last resort: UART serial console (physical)
 
 A 3.3 V USB-serial adapter on the board's debug header gives a console
-independent of all networking. Physical possession is the trust model.
+independent of all networking -- only if a serial console is enabled (corrected 2026-10-25: on the reference box `serial-getty@ttyAMA0` is masked and the kernel command line has one `console=`, `tty1`, checked 2026-10-26 22:01Z, so there is no UART console there today). Physical possession is the trust model.
 
 ## Design rules this spec encodes
 

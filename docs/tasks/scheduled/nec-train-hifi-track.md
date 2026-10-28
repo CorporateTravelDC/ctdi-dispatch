@@ -29,7 +29,9 @@ is unscheduled dead code, so there is no automatic failover if that one loop sto
 (Corrected 2026-10-15: the live push writer is the `amtrak-tracker` container
 (`src/amtrak_tracker/main.py`, stamps `push:amtrak`); `src/ingest/amtrak.py` is switched off in
 every ingest container (`AMTRAK_ENABLED=false`). `poller/fetchers/amtrak.py` has been the scheduled
-REST fallback since 2026-09-06 (`FETCH_SCHEDULE` entry `amtrak`, `failover.REST_FALLBACKS`), so there
+REST fallback since 2026-09-06 (unverified 2026-10-25: git first shows the `amtrak` REST fallback in
+3e6d59c9, 2026-09-17T01:48Z / 2026-09-16 21:48 ET; the 2026-09-06 date rests only on a code comment)
+(`FETCH_SCHEDULE` entry `amtrak`, `failover.REST_FALLBACKS`), so there
 is a failover. Live 01:31Z: `/api/v1/amtrak` available, 30 trains.)
 
 STEP 1 — Fetch Amtrak data:
@@ -49,7 +51,7 @@ STEP 2 — Build summary:
 - Note any on-time trains
 
 STEP 3 — Always fire ntfy alert:
-POST http://100.x.x.x:8000/admin/push-test-alert   (legacy alias of /admin/push-alert, src/web/main.py:2636; the skill uses /admin/push-alert)
+POST http://100.x.x.x:8000/admin/push-test-alert   (legacy alias of /admin/push-alert, ~~src/web/main.py:2636~~ (corrected 2026-10-25, superseded line reference: `src/web/main.py:2638` in commit 5f7fca01); the skill uses /admin/push-alert)
 Authorization: Bearer <DISPATCH_ADMIN_TOKEN from /etc/corporatetraveldc/svc env, never written here>
 Content-Type: application/json
 Body: {"message": "NEC HIFI: [N] trains tracked, [D] delayed. Worst: [train#] +[min]min. [on-time count] on time."}

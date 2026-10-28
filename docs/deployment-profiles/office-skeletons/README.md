@@ -2,7 +2,10 @@
 
 > **Template, disabled until after the feature freeze.** Staged 2026-10-20 (UTC) on the operator's decisions of
 > 2026-10-20. Nothing here is started at boot, by a timer, by the rollout or by `stack-boot-ctl.sh`. The relay
-> fetches the images, creates the secrets files and the databases, and installs the Nextcloud apps **disabled**.
+> fetches the images, creates the secrets files and the databases (unverified 2026-10-25: the office instance is
+> stopped, so its databases cannot be listed; its data and socket volumes exist), and ~~installs the Nextcloud
+> apps **disabled**~~ (corrected 2026-10-25: installs the Nextcloud apps; five are disabled, but `calendar` is
+> enabled live, see Services below).
 > Turning any of it on is a separate operator decision after the freeze.
 
 ## What the three profiles are
@@ -11,7 +14,7 @@ The operator split the old combined `executive-assistant-chief-of-staff` profile
 Assistant and a Chief of Staff are separate executive-suite positions. There are now three profiles, each its own
 JSON in the pack format (`../profiles/`):
 
-| Profile | Page | Modules beyond `base` | Sources | Services (all disabled) |
+| Profile | Page | Modules beyond `base` | Sources | Services ~~(all disabled)~~ (corrected 2026-10-25: all disabled except Nextcloud Calendar, enabled live) |
 |---|---|---|---|---|
 | `cfo` | [CFO.md](CFO.md) | budgeting, cash forecast, close checklist, board reporting, variance analysis, controls register | accounting ledger, bank statement import, ERP | Firefly III (ledger), Paperless-ngx (shared, receipts) |
 | `executive-assistant` | [EXECUTIVE-ASSISTANT.md](EXECUTIVE-ASSISTANT.md) | calendar coordination, meeting preparation, travel coordination, follow-up, document intake | calendar, contacts, email, document repository | Nextcloud Calendar, Contacts, Tasks; Paperless-ngx (shared) |
@@ -23,7 +26,9 @@ the travel, dispatch watches the flight, the CFO sees the cost line and the CoS 
 
 Each profile gets its own glossary slice: `scripts/render-glossary.py --profile cfo` (or `executive-assistant`,
 `chief-of-staff`). The 2026-10-20 glossary added the `finance`, `scheduling`, `governance` and `office` scopes and
-mapped every module and source above to them (`docs/glossary.yaml` `profile_scopes`).
+~~mapped every module and source above to them~~ (corrected 2026-10-25: mapped every module and source above to them
+except travel coordination, which keeps its existing `aviation`, `rail` and `weather` scopes) (`docs/glossary.yaml`
+`profile_scopes`).
 
 ## Services
 
@@ -40,8 +45,11 @@ plus one optional; everything else is a Nextcloud app on the existing instance.
 | `corporatetraveldc-vikunja` (optional) | `docker.io/vikunja/vikunja:2.7.0` | 192m | office-db + office-web | tailnet :8103 |
 
 Nextcloud apps (on the existing `nextcloud-app`, its own database): `calendar`, `contacts`, `tasks`, `deck`,
-`collectives`, `tables`. They are installed with `occ app:install --keep-disabled` and stay off until the operator
-runs `occ app:enable` after the freeze.
+`collectives`, `tables`. ~~They are installed with `occ app:install --keep-disabled` and stay off until the operator
+runs `occ app:enable` after the freeze.~~ (corrected 2026-10-25: all six are installed. `contacts`, `tasks`, `deck`,
+`collectives` and `tables` are disabled, but `calendar` is **enabled** -- `occ config:app:get calendar enabled` =
+`yes`, installed version 6.6.2, 2026-10-26 04:27Z. The five disabled apps stay off until the operator runs
+`occ app:enable` after the freeze.)
 
 ### Rules every skeleton unit follows (held by `tests/scripts/test_office_skeletons.py`)
 
@@ -54,8 +62,8 @@ runs `occ app:enable` after the freeze.
 - **Own secrets file each**, `/etc/corporatetraveldc/<svc>-secrets.env` (examples in `config/*-secrets.env.example`),
   never `dispatch.env` or `dispatch-secrets.env` (also `tests/scripts/test_third_party_env_scope.py`).
 - **Non-secret settings are `Environment=` lines in the tracked quadlet.** Podman applies `--env` after
-  `--env-file`, so a secrets file cannot override them, and the check tool refuses an engine or connection name in
-  a secrets file.
+  `--env-file`, so a secrets file cannot override them (unverified 2026-10-25: podman's precedence was not tested
+  here), and the check tool refuses an engine or connection name in a secrets file.
 - **No SQLite.** Paperless-ngx and Vikunja default to SQLite and Firefly III to MySQL, so the quadlets pin the
   engine: `PAPERLESS_DBENGINE=postgresql`, `VIKUNJA_DATABASE_TYPE=postgres` and `DB_CONNECTION=pgsql`. Valkey
   persists nothing.
@@ -93,14 +101,15 @@ sets `security.backup.restore_test_required` ([docs/BACKUP.md](../../BACKUP.md))
 
 The relay installs the files and pulls the images. It runs `sudo install` for the five secrets files, `fill`,
 starts `corporatetraveldc-pgsql-office` once for `init-db` and `set-passwords`, then stops it. It runs
-`occ app:install --keep-disabled` for the six Nextcloud apps. It never enables a unit and never starts an app.
-The batch's relay notes hold the exact block.
+`occ app:install --keep-disabled` for the six Nextcloud apps. It never enables a unit and never starts an app
+(unverified 2026-10-25: the relay block is not in the repo; live, no office unit is enabled, and `calendar` is the
+one office app that is enabled). The batch's relay notes hold the exact block.
 
 ## Activation, after the freeze (not now)
 
 1. Operator decision to lift the freeze for these units.
 2. Add `corporatetraveldc-pgsql-office` to the Borg dump list and run a restore test.
-3. Add the units to `stack-boot-ctl.sh` ORDER, after `pgsql-office`; that is the only place that starts long-running units.
+3. Add the units to `stack-boot-ctl.sh` ORDER, after `pgsql-office`; ~~that is the only place that starts long-running units.~~ (corrected 2026-10-25: it is the main boot starter but not the only one -- `corporatetraveldc-boot-stagger.service` runs `scripts/ingest-feed-ctl.sh start all`, `corporatetraveldc-demo-portals-boot.service` starts the two demo portals, the `corporatetraveldc-ccw-demo`, `-ccw-preview1` and `-execstandard-verifier` quadlets carry `WantedBy=default.target`, and the `corporatetraveldc-llama` and `cloudflared` user units are enabled with `WantedBy=default.target`.)
 4. Create the first human logins: Firefly registration, `manage.py createsuperuser` for Paperless, and a Vikunja user created from the command line, since self-registration is off. Single sign-on through Nextcloud as OIDC provider is not deployed.
 5. `occ app:enable` for the Nextcloud apps the demo needs.
 6. Seed synthetic data only (the crossover story).

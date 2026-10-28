@@ -39,12 +39,12 @@ Agents that rewrite docs read the truth set and the doc they are rewriting, noth
 
 ## Evidence rules
 
-- Evidence is a command run in this session on the live box (`systemctl --user`, `systemctl`, `podman ps`, `git log`, `ls`, read-only API GETs, SELECT-only SQL via `podman exec corporatetraveldc-pgsql psql -At`), or source read in this session with `file:line`. Nothing else counts. Docstrings and comments are not evidence.
+- Evidence is a command run in this session on the live box (`systemctl --user`, `systemctl`, `podman ps`, `git log`, `ls`, read-only API GETs, SELECT-only SQL via ~~`podman exec corporatetraveldc-pgsql psql -At`~~ (corrected 2026-10-25: that bare form fails, because `config/pg_hba.conf:53` requires `scram-sha-256` on the local socket. Pass the container's own credentials: `podman exec corporatetraveldc-pgsql sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SET statement_timeout=30000;" -c "<SELECT>"'`)), or source read in this session with `file:line`. Nothing else counts. Docstrings and comments are not evidence.
 - Read-only: no writes to the DB, no restarts, no pushes, no `sudo`, 1-2 requests per endpoint, no retries, no fuzzing.
 - Never print or copy a secret value, token, ping URL, LADD-listed tail, hex, the ultrafeeder config line, or a process command line. Counts only for LADD. Mask tails and hexes.
 - Every count is printed with the command that produced it and the UTC time (vault `20260824T011337Z`).
 - Times are UTC, or UTC + ET; never ET alone.
-- "Committed is not running": before the truth-gathering stage, confirm that the running containers were built from the signed tree (`scripts/scheduled-integrity-sweep.sh` provenance, or `podman inspect` labels). If not, stop and ask the operator for a full-load rollout first.
+- "Committed is not running": before the truth-gathering stage, confirm that the running containers were built from the signed tree (`scripts/scheduled-integrity-sweep.sh` provenance~~, or `podman inspect` labels~~ (corrected 2026-10-25: the image labels carry no source commit. The first-party images have only `build-date`, `service`, `io.buildah.version`, the OCI title and description, and on stack-refresh builds `stack-refresh`; one image (acars-watcher) also carries `org.opencontainers.image.version`, which is not a commit; there is no `org.opencontainers.image.revision` (re-checked 2026-10-26 22:05Z). Only the provenance receipts that `scripts/build/provenance.py verify --running` checks tie a running image to the signed commit)). If not, stop and ask the operator for a full-load rollout first.
 
 ## Verdict labels
 
@@ -93,7 +93,7 @@ Reads the rewritten docs only and lists contradictions between docs (the 08-23 t
 
 ### 7. Hand-off
 
-- Operator session: changes sit in the guard worktree. Run `scripts/relay-preflight.sh <relay>` (lint, drift gate, tests, public scrub of the staged tree, transcript leak scan). Post the relay only on PASS. Public-scrub failures are fixed by defanging values or quoting allowlisted ones, never by weakening the scrub.
+- Operator session: changes sit in the guard worktree. Run `scripts/relay-preflight.sh <relay>` ~~(lint, drift gate, tests, public scrub of the staged tree, transcript leak scan)~~ (corrected 2026-10-25: eight checks in order: relay lint, drift gate, dependency audit, APT snapshot pin age, tests, public scrub of the staged tree, transcript leak scan, and a heavy-lock queue check that only warns; `scripts/relay-preflight.sh:25-94`). Post the relay only on PASS. Public-scrub failures are fixed by defanging values or quoting allowlisted ones, never by weakening the scrub.
 - Agent account: write the rewritten docs, the register and the defence sheets as a workspace contribution (`scripts/workspace-contribute.sh` or the gateway's `workspace_contribute`). Agents draft; they never publish, commit, sign or approve.
 - Record the run in the vault (`second-brain-remember`, or the operator's `remember_text`) with the commit, the counts and the open decisions. Append the drift-job reports after the next scheduled run and confirm they come back clean.
 

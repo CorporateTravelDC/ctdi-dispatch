@@ -1,6 +1,6 @@
 ---
 name: "corporatetraveldc-dispatch-ops"
-description: "Operate and interpret the corporatetraveldc dispatch platform. Use when checking dispatch health, feed status, CPS score, TFR alerts, VIP/flight watchlist, daily brief, or triggering manual skills. Also trigger for \"is the dispatcher healthy\", \"what's the CPS state\", \"check feed health\", \"I got an ntfy alert\". Default base URL is Tailscale: http://100.x.x.x:8000 — use for ALL calls including /healthz. The Cloudflare Tunnel (dispatch.example.com) strips auth tokens by design and will 530/1033 on token-gated routes; use only as a last-resort non-token fallback. Prefer direct HTTP calls over relay mode."
+description: "Operate and interpret the corporatetraveldc dispatch platform. Use when checking dispatch health, feed status, CPS score, TFR alerts, VIP/flight watchlist, daily brief, or triggering manual skills. Also trigger for \"is the dispatcher healthy\", \"what's the CPS state\", \"check feed health\", \"I got an ntfy alert\". Default base URL is Tailscale: http://100.x.x.x:8000 — use for ALL calls including /healthz. The Cloudflare Tunnel (dispatch.example.com) ~~strips auth tokens by design and will 530/1033 on token-gated routes~~ (corrected 2026-10-25: ignores tokens by design -- nginx marks every request there as public, so token-gated routes answer 403); use only as a last-resort non-token fallback. Prefer direct HTTP calls over relay mode."
 ---
 
 # corporatetraveldc-dispatch-ops
@@ -16,14 +16,14 @@ Default (preferred):  http://100.x.x.x:8000   (Tailscale)
 Fallback (Tier 0 only): https://dispatch.example.com   (Cloudflare Tunnel)
 ```
 
-Tailscale is the default base URL for all dispatch calls, including `/healthz`. The Cloudflare Tunnel strips the auth token in transit — any token-gated endpoint will 530/1033 over CF Tunnel even on routes that look like they shouldn't need auth. That's expected behavior, not an outage. Only use CF Tunnel for a quick public-reachability check when Tailscale is confirmed unreachable.
+Tailscale is the default base URL for all dispatch calls, including `/healthz`. ~~The Cloudflare Tunnel strips the auth token in transit — any token-gated endpoint will 530/1033 over CF Tunnel even on routes that look like they shouldn't need auth.~~ (corrected 2026-10-25: the token is ignored, not stripped. The tunnel lands on nginx, whose public vhost stamps `X-CTDI-Public: 1` (`/etc/nginx/conf.d/dispatch.example.com.conf:36`), and `resolve_tier` returns Tier 0 on that header before any token lookup (`src/auth/auth.py:69-70`), so a token-gated route answers 403 over the tunnel, not 530/1033. Live through the public vhost 2026-10-26 14:26Z: `/api/v1/runsheet` → 403.) That's expected behavior, not an outage. Only use CF Tunnel for a quick public-reachability check when Tailscale is confirmed unreachable.
 
 | Tier | Auth | What's accessible | Reachable via |
 |---|---|---|---|
-| Tier 0 | None | `/api/v1/*` data routes — feeds, TFR, weather, CPS, route, amtrak, runsheet, opsplan, brief | Tailscale (preferred) or CF Tunnel |
+| Tier 0 | None | `/api/v1/*` data routes — feeds, TFR, weather, CPS, route, amtrak, ~~runsheet,~~ opsplan, brief (corrected 2026-10-25: runsheet is Tier 1, `src/web/main.py:1578`; no-token GET → 403 2026-10-26 14:26Z) | Tailscale (preferred) or CF Tunnel |
 | Tier 1 | ~~Tailscale identity~~ `cert`-tier bearer token (corrected 2026-10-15: network origin grants no tier, `src/auth/auth.py::resolve_tier`, `docs/auth-token-proxy-pattern.md`) | Radio reference, CUI-adjacent data, `GET /api/v1/runsheet`, `/api/v1/vault/file`, `/api/v1/knowledge-graph/*` | Tailscale only |
 | Tier 2 (added 2026-10-15) | `shares`-tier bearer token | `/api/v1/cui/status` | Tailscale only |
-| Admin | Bearer token | `/admin/*` — full admin surface | Tailscale only — CF Tunnel unreliable for token routes |
+| Admin | Bearer token | `/admin/*` — full admin surface | Tailscale only — ~~CF Tunnel unreliable for token routes~~ (corrected 2026-10-25: never over the CF Tunnel, where every request is Tier 0) |
 
 **The live API has no `/dispatch/` prefix.** Data routes are `/api/v1/*`, admin routes are `/admin/*`. Never call `/dispatch/api/v1/...` — that path doesn't exist.
 
@@ -36,7 +36,7 @@ There are **three different names** floating around for what is functionally the
 | `ctdc_<user>_<32-char-random>` | **The real token format.** Confirmed live: `$CTDC_ADMIN_TOKEN` | Use this format when reasoning about a token string |
 | `DISPATCH_ADMIN_TOKEN` | The env var name actually set in `/etc/corporatetraveldc/dispatch-secrets.env` on the Pi | Real, deployed, correct (2026-10-15: `auth_tokens` id 24, active; id 20 was revoked 2026-10-05) |
 | `DISPATCH_TOKEN` | The env var name the `corporatetravel-dispatch` **MCP server** (`dispatch_mcp/config.py`) reads via `os.environ.get("DISPATCH_TOKEN", "")` | (2026-10-15: that MCP server was archived 2026-08-17, so this row is history only.) **Not set anywhere** — this is why `mcp__corporatetravel-dispatch__dispatch_watchlist_add` and similar admin MCP tools 403 with "DISPATCH_TOKEN not configured." The MCP server is looking for a var that doesn't exist under that name; the real value lives under `DISPATCH_ADMIN_TOKEN` instead. |
-| `CSEX_DISPATCH_TOKEN` | What `csex-token create` prints as a *suggested* env var name for humans saving the token to their own shell/unit file | Cosmetic only — not read by any running code path found on this platform |
+| `CSEX_DISPATCH_TOKEN` | ~~What `csex-token create` prints as a *suggested* env var name for humans saving the token to their own shell/unit file~~ (corrected 2026-10-25: superseded — nothing prints it now; the token CLI `src/ctdc_token/cli.py create` suggests `DISPATCH_TOKEN=` instead, `cli.py:60-61`, and `CSEX_DISPATCH_TOKEN` appears nowhere in `src/` or `scripts/`) | Cosmetic only — not read by any running code path found on this platform |
 
 ~~**Practical takeaway:** until the MCP server's env config is pointed at the right variable (or `DISPATCH_TOKEN` is set alongside `DISPATCH_ADMIN_TOKEN` wherever the MCP server process launches — that's a Cowork-side MCP config, not Pi-side), admin MCP tools will keep 403ing. Workaround, same pattern `flight-hifi-track` already uses: call the REST API directly over Tailscale with the literal bearer token, bypassing the MCP relay entirely.~~ (corrected 2026-10-15: the MCP server is archived; call the REST API directly over Tailscale, with the token resolved as in "Token resolution" below.)
 
@@ -44,7 +44,7 @@ There are **three different names** floating around for what is functionally the
 Authorization: Bearer $CTDC_ADMIN_TOKEN
 ```
 
-Reach: `http://100.x.x.x:8000` only. CF Tunnel strips this header.
+Reach: `http://100.x.x.x:8000` only. ~~CF Tunnel strips this header.~~ (corrected 2026-10-25: over the CF Tunnel the header is ignored, every request there resolves to Tier 0; see "Base URL and access model".)
 
 Issue a new token on the Pi when needed:
 ```bash
@@ -59,8 +59,9 @@ Subcommands: `create`, `list`, `revoke`, `show-cost`. `create` takes `--user`, `
 - Before minting anything, check whether you already have a token: ~~the active admin credential is `~/.secrets/remote-admin-agentic.token` (`auth_tokens` id 23, `remote-admin` tier, created 2026-09-20).~~ (corrected 2026-10-15: id 23 was revoked 2026-10-05; see "Token resolution" below.) Read it at call time, never echo it, and treat empty/missing as fail-closed. Minting a second token because the first was not looked for is how stale credentials accumulate.
 - `auth_tokens` columns are `user_label` (not `user_name`), and `created_at`/`revoked_at` are **epoch floats**, so they need `to_timestamp()` before any date function will work on them.
 
-If a request returns **401** → token missing, expired, or revoked. Ask for a fresh one; do not retry.
-If a request returns **403** → token authenticated but wrong tier, or (see table above) the MCP server never got a token at all.
+~~If a request returns **401** → token missing, expired, or revoked. Ask for a fresh one; do not retry.
+If a request returns **403** → token authenticated but wrong tier, or (see table above) the MCP server never got a token at all.~~
+(corrected 2026-10-25: dispatch-web answers **403** in every one of those cases. `resolve_tier` never raises: a missing, unknown, expired or revoked token resolves to Tier 0 (`src/auth/auth.py:61-84`; `lookup_token` skips revoked and expired rows, `src/common/db.py:1696-1703`), and a gated route then answers 403 — `This endpoint requires tier tier1` or `Admin tier required` (`auth.py:126-137,203-283`). Live, no token, 2026-10-26 14:26Z: `/api/v1/runsheet` and `/admin/healthz` → 403. A 403 is therefore either a wrong tier or a token that does not resolve: check `auth_tokens.revoked_at` and `expires_at`, ask for a fresh token, do not retry. dispatch-web answers 401 only on its keyed routes — board/vault/approval `X-Board-Key` or signature checks, board enrollment, the webhooks (`src/web/main.py:248-416,697,729`, `src/web/routes/webhooks.py:172`) — and on the MCP gateway's own bearer check (`src/common/agent_gateway.py` `authenticate`).)
 
 ## Quick health check
 
@@ -82,8 +83,8 @@ No auth required — this is a Tier 0 route, not token-gated (correcting prior v
 | `POST /admin/refresh-feed/{feed_name}` | Manual feed refresh — one of `metar, nws, tfr, notam, amtrak, atcscc_opsplan, runsheet` (2026-10-15: `nas` is accepted too, `src/web/main.py:2553`) |
 | `POST /admin/force-recompute-cps` | Force CPS recalculation |
 | `POST /admin/force-opsplan-snapshot` | Force ATCSCC ops plan snapshot |
-| `POST /admin/push-alert` | Fire an ntfy push. Body: `{title, message, topic, priority}`. Writes a trigger file, ~30s to fire — **not idempotent, do not retry automatically** |
-| `GET/POST/DELETE /admin/vip` | VIP watchlist management |
+| `POST /admin/push-alert` | Fire an ntfy push. Body: `{title, message, topic, priority}`. Writes a trigger file, ~~\~30s to fire~~ (corrected 2026-10-25: the poller picks it up on its next 10-second tick, `src/poller/main.py:2592-2607`; over the 7 days to 2026-10-26 14:37Z, 62 pushes took a median 42 s from queue to done, p90 about 16 min, max about 52 min — a trigger waits whenever the poller is down, e.g. during a thermal-guard LOCKDOWN) — **not idempotent, do not retry automatically** |
+| ~~`GET/POST/DELETE /admin/vip`~~ (corrected 2026-10-25: `GET /admin/vip`, `POST /admin/vip`, `DELETE /admin/vip/{entry}`; `src/web/main.py:2684-2719`) | VIP watchlist management (of `vip_watchlist.txt`; see "State paths" for what reads it) |
 | `POST /admin/push-test-alert` | Legacy alias of `/admin/push-alert` (added 2026-10-15) |
 | `POST /admin/force-osint-scrape` | Force an OSINT sweep (added 2026-10-15) |
 | `POST/DELETE /admin/bandwidth-priority` | Set/clear bandwidth priority (added 2026-10-15; the read is `GET /api/v1/bandwidth-priority`) |
@@ -111,13 +112,13 @@ Two mechanisms run LLM-backed skills on this platform. Neither matches the prior
 | `corporatetraveldc-weekly-summary` | Mon 03:45 ET | Weekly operational summary |
 | `corporatetraveldc-aam-weekly-watch` | Mon 02:00 ET | AAM/eVTOL weekly watch |
 | `corporatetraveldc-dispatch-desk-memo` | Mon 03:00 ET | "Dispatch Desk" week-in-review memo |
-| `corporatetraveldc-second-brain-daily` | Daily 23:45 ET + every 120 min, skipped outside maintenance windows | Second-brain daily digest → Nextcloud vault |
-| `corporatetraveldc-second-brain-weekly` | Mon 04:30 ET | Second-brain weekly compile (last run 2026-10-12 08:58Z, success) |
+| `corporatetraveldc-second-brain-daily` | Daily 23:45 ET ~~+ every 120 min, skipped outside maintenance windows~~ (corrected 2026-10-25: a single `OnCalendar=*-*-* 23:45:00 America/New_York`, `Persistent=true`; nothing schedules it every 120 min. Its container keeps an `ExecCondition` maintenance-window guard, `scripts/maintenance-window-guard.sh`) | Second-brain daily digest → Nextcloud vault |
+| `corporatetraveldc-second-brain-weekly` | Mon 04:30 ET | Second-brain weekly compile ~~(last run 2026-10-12 08:58Z, success)~~ (corrected 2026-10-25: superseded — last run triggered 2026-10-26 08:30Z, exited 09:26:17Z, status 0) |
 | `corporatetraveldc-second-brain-index-scan` | Daily 04:00 ET | Vault file-inventory scan |
 | `corporatetraveldc-second-brain-demo-archiver-daily` | Daily 04:15 ET | Demo-archiver ingest into second brain |
 | `corporatetraveldc-second-brain-rss` | Every 2 h at :10 ET | RSS poller |
 | `corporatetraveldc-brief-fallback-monitor` | Hourly :50 (UTC) | Alerts when a brief fell back on its latest run |
-| `corporatetraveldc-claude-md-drift-daily` | Daily 05:15 ET | `scripts/check-claude-md-drift.sh` |
+| `corporatetraveldc-claude-md-drift-daily` | ~~Daily 05:15 ET~~ (corrected 2026-10-25: daily 09:15 UTC, `OnCalendar=*-*-* 09:15:00 UTC` — 05:15 ET only while EDT lasts, 04:15 ET from 2026-11-01) | `scripts/check-claude-md-drift.sh` |
 | `corporatetraveldc-docs-drift-weekly` | Mon 09:00 (UTC) | Weekly docs drift report (deterministic facts + local model) |
 
 The full second-brain list is in `docs/SECOND_BRAIN_STATUS.md` §3 and an index of every poller skill is in its §7. `transport-pattern-digest` no longer has a timer: it is a long-runner started by `maintenance-dispatch` inside the quiet windows (`scripts/lib/maintenance-queue.txt`).
@@ -140,7 +141,7 @@ Superseded 2026-08-02 table (struck 2026-10-15; the schedules moved to Monday an
 | ~~`corporatetraveldc-second-brain-rss`~~ | ~~Every 2h~~ | ~~RSS poller~~ |
 | ~~`corporatetraveldc-transport-pattern-digest`~~ | ~~Every 12h~~ | ~~Codeshare/route-lock/drift mining across flights, trains, vessels~~ |
 
-Timers are staggered on purpose (see each timer's own description) so ~~Ollama~~ model jobs never stack — don't move these without checking the offset logic. (2026-10-15: Ollama was retired at the 2026-08-27 llama.cpp cutover; LLM jobs share the one llama.cpp server, and the long-runners also serialize on a `flock` lock.)
+Timers are staggered on purpose (see each timer's own description) so ~~Ollama~~ model jobs never stack — don't move these without checking the offset logic. (2026-10-15: Ollama was retired at the ~~2026-08-27~~ (corrected 2026-10-25: the cutover commit is 8f728b92, 2026-08-30 02:55Z / 2026-08-29 22:55 ET; no Ollama unit or container exists) llama.cpp cutover; LLM jobs share the one llama.cpp server, and the long-runners also serialize on a `flock` lock.)
 
 **Poller-internal loops** (run inside `corporatetraveldc-poller.service`, not separate systemd units — check `journalctl --user -u corporatetraveldc-poller` for these, not `systemctl list-timers`):
 
@@ -153,7 +154,7 @@ Timers are staggered on purpose (see each timer's own description) so ~~Ollama~~
 | `train-impact`, `flight-impact` (added 2026-10-15) | 900s, 300s while a train/flight watch is active |
 | `flight-cleanup`, `surface-cleanup`, `audit-log-archive`, `retention-prune` (added 2026-10-15) | daily; `surface-cleanup` and `audit-log-archive` in maintenance windows only |
 
-**Mechanical ingest (no LLM):** SWIM FDPS/STDDS/TFMS/TBFM/ITWS/AIM-FNS run as seven separate containers (`corporatetraveldc-ingest-{fdps,stdds,tfms,tbfm,itws,notam}`, plus `corporatetraveldc-ingest-core` for NWWS-OI + Amtrak + local airspace) — broker-pushed, not polled. (2026-10-15: all seven are running. Amtrak status now comes from the separate `amtrak-tracker` container (`src/amtrak_tracker/main.py`, WAS-filtered, every 5 min): every `amtrak_status` row in the last 24 h has its schema, none has ingest-core's. TDES departure clearances arrive on the STDDS feed.)
+**Mechanical ingest (no LLM):** SWIM FDPS/STDDS/TFMS/TBFM/ITWS/AIM-FNS run as seven separate containers (`corporatetraveldc-ingest-{fdps,stdds,tfms,tbfm,itws,notam}`, plus `corporatetraveldc-ingest-core` for NWWS-OI ~~+ Amtrak~~ + local airspace (corrected 2026-10-25: superseded — ingest-core's Amtrak module is off, `AMTRAK_ENABLED=false` in its quadlet as in all seven; Amtrak comes from `amtrak-tracker`, below)) — broker-pushed, not polled. (2026-10-15: all seven are running. Amtrak status now comes from the separate `amtrak-tracker` container (`src/amtrak_tracker/main.py`, WAS-filtered, every 5 min): every `amtrak_status` row in the last 24 h has its schema, none has ingest-core's. TDES departure clearances arrive on the STDDS feed.)
 
 There is no manual-trigger Pro/Opus tier (`anomaly-investigate`, `codeplug-author`, `historical-query`) anywhere on this platform. If that capability is ever wanted, it needs to be built — it was never real.
 
@@ -168,28 +169,30 @@ Trigger dir:  /run/corporatetraveldc/triggers/   (inside the web/poller containe
 
 DB (corrected 2026-10-15): the live database is **Postgres** in the
 `corporatetraveldc-pgsql` container (cutover 2026-09-19/20). The SQLite file
-`/var/lib/corporatetraveldc/corporatetraveldc.db` still exists (about 68 KB,
-last written 2026-10-05) but is not the live store. Read-only queries go
+`/var/lib/corporatetraveldc/corporatetraveldc.db` ~~still exists (about 68 KB,
+last written 2026-10-05) but is not the live store~~ (corrected 2026-10-25:
+superseded — it is gone; no `*.db` file is left in `/var/lib/corporatetraveldc`,
+`ls`/`find` 2026-10-26 14:27Z). Read-only queries go
 through the container's own credentials, SELECT only, e.g.
 `podman exec corporatetraveldc-pgsql sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*) FROM flight_events;"' </dev/null`.
 Epoch columns (`updated_at`, `created_at`, `revoked_at`) are floats: wrap them
 in `to_timestamp()`.
 
-The DB-backed watchlist (`watchlist_entries` table, `POST/GET/DELETE /api/v1/watchlist/flights`) is the current, preferred way to track flights and trains — see `flight-hifi-track` and `nec-train-hifi-track` skills. The flat `vip_watchlist.txt` file still exists and is still read by the ingest poller on its next cycle if hand-edited, but prefer the REST/DB path from Claude chat.
+The DB-backed watchlist (`watchlist_entries` table, ~~`POST/GET/DELETE /api/v1/watchlist/flights`~~ (corrected 2026-10-25: add with `POST /api/v1/watchlist/flights` (admin), list with `GET /api/v1/watchlist` (Tier 1), remove with `DELETE /api/v1/watchlist/{entry_id}` (admin); there is no GET or DELETE on `/flights`, `src/web/routes/watchlist.py:123,313,759`)) is the current, preferred way to track flights and trains — see `flight-hifi-track` and `nec-train-hifi-track` skills. The flat `vip_watchlist.txt` file still exists ~~and is still read by the ingest poller on its next cycle if hand-edited~~ (corrected 2026-10-25: superseded — only dispatch-web's `/admin/vip` routes read or write it, `src/web/main.py:2667-2719`; no ingest, poller or pusher code refers to it (grep of `src/`), so hand-editing it changes only what `/admin/vip` returns), but prefer the REST/DB path from Claude chat.
 
 ## CPS score interpretation
 
 | Score | Label | Meaning |
 |---|---|---|
 | 🟢 Green | GO | All factors within Part 135.609 minimums |
-| 🟡 Yellow | ~~CAUTION~~ MARGINAL (corrected 2026-10-15, `cps_recompute.py:449`) | One or more factors approaching limits |
+| 🟡 Yellow | ~~CAUTION~~ MARGINAL (corrected 2026-10-15, ~~`cps_recompute.py:449`~~ (corrected 2026-10-25: `cps_recompute.py:459` at 5f7fca01)) | One or more factors approaching limits |
 | 🔴 Red | NO-GO | One or more factors outside minimums |
 
-Inputs: ceiling, visibility, wind, precip, airspace restriction, GDP. (2026-10-15: also ground stops (RED), ITWS hazard rows, and per-runway STDDS RVR on ITWS runways, converted through a hand-copied 14 CFR 91.175(h) table whose operator sign-off is not recorded anywhere, `cps_recompute.py:64-145`.) Report current state only — do not speculate about forecasts. `/healthz` carries the current `cps.score`/`cps.label`.
+Inputs: ceiling, visibility, wind, precip, ~~airspace restriction,~~ GDP (corrected 2026-10-25: `airspace` is a factor slot nothing ever degrades — `cps_recompute.py:310` is its only reference — so TFRs and other airspace restrictions never move the score). (2026-10-15: also ground stops (RED), ITWS hazard rows, and per-runway STDDS RVR on ITWS runways, converted through a hand-copied 14 CFR 91.175(h) table whose operator sign-off is not recorded anywhere (unverified 2026-10-25: an absence that no command can prove), ~~`cps_recompute.py:64-145`~~ (corrected 2026-10-25: `cps_recompute.py:64-150`, the table itself at `:103`).) Report current state only — do not speculate about forecasts. `/healthz` carries the current `cps.score`/`cps.label`.
 
 ## Reference material
 
-Only `ACARS-addendum.md` (in this skill's directory) exists and is current — covers airframes.io ACARS querying, route/OOOI parsing from message text, and source-type labeling. The prior version referenced `references/api-reference.md` and `references/troubleshooting.md` — neither has ever existed on this platform. Don't point the operator at them.
+Only `ACARS-addendum.md` (in this skill's directory) exists ~~and is current~~ (corrected 2026-10-25: several of its statements were out of date and are corrected in place) — covers airframes.io ACARS querying, route/OOOI parsing from message text, and source-type labeling. The prior version referenced `references/api-reference.md` and `references/troubleshooting.md` — neither has ever existed on this platform. Don't point the operator at them.
 
 ## CUI rules — absolute, never negotiable
 
@@ -219,7 +222,8 @@ Resolve `$CTDC_ADMIN_TOKEN` at call time:
   `cowork`, expires 2027-09-20.~~ (corrected 2026-10-15: `auth_tokens` id 23
   was **revoked 2026-10-05 19:41Z** (live row, and
   `docs/CREDENTIALS_REGISTER.md`). The file still exists but holds that
-  revoked token, so reading it gets a 401/403. Do not use it.)
+  revoked token, so ~~reading it gets a 401/403~~ (corrected 2026-10-25:
+  sending it gets a 403, see the 401/403 note above). Do not use it.)
 - **Shell on the Pi, now (2026-10-15):** the platform's own admin callers get
   `DISPATCH_ADMIN_TOKEN` (`auth_tokens` id 24, active) from
   `scripts/with-dispatch-env.sh` (run from the repo root), which loads the env

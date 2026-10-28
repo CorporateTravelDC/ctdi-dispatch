@@ -1,12 +1,14 @@
 # Live State Check — 2026-08-24
 
+> Status 2026-10-25: Point-in-time record; its counts and service states are not current. As of 2026-10-26 22:10 UTC: `scripts/verify-manifest.sh` exits 1 (not OK), `MANIFEST.sha256` has 1712 entries, 205 `corporatetraveldc-*` user units are loaded, 40 containers are up, and no `ollama` binary is on PATH. `scripts/weekly-doc-drift-check.sh:116-121` diffs against the newest earlier LIVE_STATE_CHECK report, not a fixed benchmark file. This file is no longer a designated drift benchmark.
+
 Written ~06:58–07:15 EDT against HEAD `447dd4a` plus the large
 still-unstaged working-tree changeset from the 2026-08-23/24 overnight
 session (GPS/receiver-location fix, visibility-aware polling intervals,
 `remember --dest-subdir`, the delay-extension deploy, chronology
-unification). This is the **designated drift benchmark state**,
+unification). ~~This is the **designated drift benchmark state**,
 superseding `docs/LIVE_STATE_CHECK_2026-08-23.md` per CLAUDE.md's
-pointer convention. Produced by a single independent live-system-first
+pointer convention.~~ (corrected 2026-10-25: superseded; the drift check at `scripts/weekly-doc-drift-check.sh:116-121` uses the newest earlier LIVE_STATE_CHECK report, and no code references this file.) Produced by a single independent live-system-first
 audit pass (Pass 1: verify the overnight change batch end-to-end against
 the live system; Pass 2: re-verify CLAUDE.md and the docs tree against
 live state), same methodology as the 08-12…08-23 checks. Every number

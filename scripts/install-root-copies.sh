@@ -40,6 +40,10 @@
 #     Claude and every subagent from the SSH/GPG agents, key material, signing, commit and push;
 #     plus the empty read-only GNUPGHOME it points at. scripts/claude-policy-check.sh verifies it.
 #
+#   scripts/agent-segmentation/srv-access.sh <- run by the operator with sudo (2026-10-26): the only
+#     way an account other than the owner and the operator gets into a private /srv/ctdc-* folder
+#     (operator or convened-council directive, logged to /var/log/ctdc-srv-access.log)
+#
 #   --check   report what would be installed and whether installed copies are current
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,7 +56,8 @@ SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-ce
          scripts/approved-exec.py scripts/approved-exec.conf
          scripts/backup/agent-home-snapshot.sh
          scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh
-         scripts/ctdc-claude-no-agent-hook.py)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
+         scripts/ctdc-claude-no-agent-hook.py scripts/ctdc-claude-no-registration-hook.py
+         scripts/agent-segmentation/srv-access.sh)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf

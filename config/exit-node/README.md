@@ -4,7 +4,10 @@ Operator 2026-10-24 ~00:00 ET: the driver phone now runs Tailscale always-on
 with a FORCED exit node = this Raspberry Pi. Everything the phone sends to
 the internet is forwarded by this box, out of whichever uplink is active:
 `wld0` (Wi-Fi, primary) or `enu1` (Google Fi USB tether, metered failover:
-100 GB fast, then 256 kbps, $10/GB override).
+100 GB fast, then 256 kbps, $10/GB override) (unverified 2026-10-25: the
+carrier and plan are not checkable read-only; the live NetworkManager
+profile on `enu1` is named `Verizon Hotspot`, metric 600, connected, `nmcli`
+15:45:56Z).
 
 This folder holds one dedicated nftables table, `inet ctdc_exitnode`, that
 only ever matches packets this box FORWARDS between `tailscale0` and an
@@ -18,7 +21,7 @@ Two parts, one installer:
 | part | file | status |
 |---|---|---|
 | A. metered 2 Mbps cap | `metered-cap.nft` | **POLICY -- always rendered** |
-| B. encrypted-DNS-by-IP drops | `aggressive/encrypted-dns-ip.nft` | **OPT-IN -- only with `--with-aggressive`** |
+| B. encrypted-DNS-by-IP drops | `aggressive/encrypted-dns-ip.nft` | **OPT-IN -- ~~only with `--with-aggressive`~~** (corrected 2026-10-25: rendered when `CTDC_AGGRESSIVE_PRIVACY=1` in `dispatch.env` or with `--with-aggressive`, see "Default vs opt-in"; on this deployment the value is `1`, so it is rendered by default and the installed `/etc/nftables.d/ctdc-exitnode.nft` carries the `forward_aggressive_dns_ip` chain and `doh_ip4` set) |
 
 Companion (DNS-side, same OPT-IN stance):
 [`config/pihole/profiles/aggressive-encrypted-dns/`](../pihole/profiles/aggressive-encrypted-dns/README.md)
@@ -78,9 +81,14 @@ step; the nft cap stays as the backstop either way.
 
 ## Aggressive add-on: encrypted-DNS-by-IP drops
 
-**OPT-IN -- a more aggressive measure. Not applied by default.**
+**OPT-IN -- a more aggressive measure. ~~Not applied by default.~~** (corrected
+2026-10-25: not applied by default in the public repo, where
+`config/dispatch.env.example` ships `CTDC_AGGRESSIVE_PRIVACY=0`; on this
+deployment `dispatch.env` sets `1`, so `apply.sh` renders it by default and
+it is applied live, see "Default vs opt-in".)
 
-Rendered only with `--with-aggressive`, into the same table, for packets
+Rendered ~~only with `--with-aggressive`~~ when `CTDC_AGGRESSIVE_PRIVACY=1` or
+with `--with-aggressive` (corrected 2026-10-25, `apply.sh:61-81`), into the same table, for packets
 forwarded **from** `tailscale0` (tailnet peers using the exit node), whichever
 uplink they leave on:
 
@@ -166,9 +174,12 @@ pretends otherwise.
   firewalld.service nftables.service`, `ConditionPathExists=` the file).
   `ExecStart=nft -f /etc/nftables.d/ctdc-exitnode.nft`, `ExecStop=nft delete
   table inet ctdc_exitnode`.
-- **No include line is added to `/etc/sysconfig/nftables.conf`.** On this
+- **No include line is added to `/etc/sysconfig/nftables.conf`** (unverified
+  2026-10-25: that file is root-only readable; `apply.sh` has no code path
+  that writes it). On this
   Fedora box the firewall manager is firewalld (`/etc/firewalld` present,
-  `firewalld.service` enabled); `nftables.service` is not enabled, and its
+  `firewalld.service` enabled); `nftables.service` is not enabled (re-checked
+  2026-10-25: `disabled` / `enabled`), and its
   `ExecReload`/`ExecStop` flush the *whole* ruleset. Enabling it just to
   carry an include would be worse than the unit above. apply.sh detects both
   by reading the `multi-user.target.wants` symlinks and warns if

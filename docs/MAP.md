@@ -4,6 +4,8 @@ Written 2026-10-24 against the operator-approved map rework (aviation wave 1,
 spec: one aircraft map, local receiver and SWIM drawn together) and the same
 pattern applied to vessels, trains and drones. Facts below were read from the
 code named in each section on 2026-10-24, not from a running instance.
+(2026-10-25: the runner and dispatch-web endpoints in §5 were also probed live
+on this box; corrections are dated inline.)
 
 ## 1. What the map is
 
@@ -19,8 +21,12 @@ One Leaflet map per domain in the runner SPA (`src/runner/frontend/src/`):
 The aircraft map replaces the earlier two-mode view: the **GLOBE** mode (a
 `globe.airplanes.live` iframe) and the GLOBE / TACTICAL toggle are gone, and
 so is any "local only" toggle. Everything the deployment has is drawn on the
-one map. The vessel map no longer embeds MarineTraffic; the only MarineTraffic
-reference left is an external link for the selected vessel (`AisMapView.jsx`).
+one map. The vessel map no longer embeds MarineTraffic; ~~the only MarineTraffic
+reference left is an external link for the selected vessel (`AisMapView.jsx`).~~
+(corrected 2026-10-26: no iframe remains; besides the "Open in MarineTraffic" link for
+the selected vessel (`AisMapView.jsx:271-293`), MarineTraffic is still named as a source
+label (`AisMapView.jsx:143`, `SignalsView.jsx:254`) and in the AIS fallback text
+(`SignalsView.jsx:376,632`); `grep -rni marinetraffic src/runner/frontend/src` at 5f7fca01.)
 The trains tab, list-only since 2026-07-21, is a real map again.
 
 The shared, non-aviation parts (marker layer, trails, list panel, legend,
@@ -88,7 +94,8 @@ tar1090's lighter, desaturated variant of the same hue.
 Watchlist (tracked) and selected aircraft get a CSS glow and a larger glyph;
 these do not change fill or outline.
 
-**Trails** are built client-side from successive polls (`trailsStore.js`): one
+**Trails** are built client-side from successive polls (`aircraftMap/trailsStore.js`,
+`TRAIL_KEEP_MS` / `TRAIL_EXPIRE_MS`): one
 ring buffer per aircraft, about 10 minutes deep, dropped 5 minutes after the
 aircraft is last seen, segments coloured by altitude with the same ramp.
 The runner API is a snapshot; there is no server-side history behind trails.
@@ -129,7 +136,7 @@ Dispatch web API (`src/web/routes/swim_positions.py`, port 8000):
 | Path | Returns |
 |---|---|
 | `GET /api/v1/swim/positions?south=&west=&north=&east=&max_age_s=120&limit=2000` | stored FDPS / TAIS positions inside the box, newer than `max_age_s` (bbox and age filter run in SQL) |
-| `GET /api/v1/swim/scope` | `swim_enabled` (a SWIM push feed reported within the last hour), `center`, `radius_nm`, `airports`, `label` |
+| `GET /api/v1/swim/scope` | `swim_enabled` (~~a SWIM push feed reported within the last hour~~ (corrected 2026-10-25: the check compares `feed_state.feed_name` against the bare names `fdps`/`stdds` while the ingest stamps `push:fdps`/`push:stdds`, so it is always `false` -- live `false` at 21:48Z with both heartbeats seconds old; `swim_positions.py:61-62,156`, `ingest/swim_client.py:1009`. NEEDS-OPERATOR-DECISION.)), `center`, `radius_nm`, `airports`, `label` |
 | `GET /api/v1/swim/last-leg?ident=` | most recent `flight_events` row within 24 h, with origin / destination coordinates when the airport table resolves them |
 
 Tier and privacy rule (documented in that module's docstring): the runner
@@ -153,7 +160,7 @@ separate PIA list in the platform today.
 | `ULTRAFEEDER_URL` | runner env | the local receiver's `aircraft.json` (the local source) |
 | `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON` | secrets file, scoped env (`docs/GPS_COORDINATE_CONFIGURATION.md`) | receiver centre for the range circle, range rings and distances |
 | `DISPATCH_BASE_URL` + `RUNNER_ENRICHED_TOKEN` | runner env | where the SWIM layer comes from and the token that makes it Tier 1 |
-| `TAR1090_URL` | `dispatch.env` (added 2026-10-24, default empty) | the local tar1090 UI behind "Open full receiver map"; empty means no link; handed to trusted callers only because it names a box-local address |
+| `TAR1090_URL` | `dispatch.env` (added 2026-10-24, default empty; 2026-10-25: the key appears only in `config/dispatch.env.example:61` -- neither the tracked `config/dispatch.env` nor the live file sets it, so the live `/api/map/scope` returns `tar1090_url: null` even to trusted callers, 21:48Z) | the local tar1090 UI behind "Open full receiver map"; empty means no link; handed to trusted callers only because it names a box-local address |
 | SWIM storage area | `src/ingest/parsers/geo_filter.py` constants (`_RADIUS_NM`, `CORE_AIRPORTS`), exposed by `storage_scope()` | the SWIM half of the map extent — see §7 |
 | `SWIM_STORAGE_SCOPE` (added 2026-10-24) | `dispatch.env` — `regional` (default, the constants above) or `national` (every SWIM record stored; NAS-wide) | under `national`, `storage_scope()` has no circle: `/api/v1/swim/scope` and `/api/map/scope` answer `scope:"national"`, `center`/`radius_nm` null for everyone, `bounds` = the NAS box `[[17.5,-179.5],[72.0,-60.0]]` (CONUS + AK + HI + PR/USVI; far Aleutians and Guam out so the pan limit stays one rectangle). This deployment: `national` since 2026-10-24 |
 | `DEMO_MODE` | runner env | synthetic aircraft only |
@@ -173,6 +180,11 @@ a one-line decision instead of a code edit. NWWS weather filtering stays
 regional under both values. The SWIM-only marker limit per answer is still
 2000 (`_MAP_SWIM_LIMIT`); the frontend asks for its viewport, so the
 nationwide set is only truncated when the whole box is requested at once.)
+(2026-10-25: a whole-box request also outruns the runner's 5 s dispatch
+timeout -- the full-NAS `/api/v1/swim/positions` query measured 22.49 s and a
+no-bbox `/api/map/aircraft` call came back `swim_available: false` with 0 SWIM
+aircraft while a DC-bbox call seconds later carried 11; `src/runner/main.py:868-880`;
+truth-set 3 D7/F2. NEEDS-OPERATOR-DECISION.)
 
 ## 7. Public deployment rules
 

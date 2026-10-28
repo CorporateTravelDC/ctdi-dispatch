@@ -49,7 +49,13 @@ Thanks to the Airplanes.live community as a whole.
 
 Programs whose public data this platform depends on.
 
-`ADX` · `SWIM` · `LADD` · `NSSR` · `NASR`
+`ADX` · `SWIM` · `LADD` · `NSSR` · `NASR` (2026-10-25, `grep -rlw` over
+`src/` and `scripts/`: `SWIM` and `LADD` are live code paths
+(`src/ingest/swim_client.py`, `src/poller/fetchers/faa_registry.py`); `ADX`
+is named in `src/poller/fetchers/faa_registry.py` and
+`src/poller/skills/faa_cifp_pull.py`, `NASR` in
+`src/ingest/parsers/tbfm_parser.py`; `NSSR` is named in no source file --
+unverified as a dependency)
 
 ---
 

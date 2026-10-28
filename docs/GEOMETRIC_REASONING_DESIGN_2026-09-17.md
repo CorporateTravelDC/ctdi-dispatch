@@ -1,4 +1,4 @@
-> **Status (2026-10-15):** shipped (see the AS-BUILT section at the bottom), but the live causal and cluster tiers are empty: every compile seen 2026-10-14/15 reports 0 `statistically_associated` and 0 `member_of_cluster` edges, so the AS-BUILT counts of 1,380 and 56 no longer hold. Current state and the cause: `docs/CAUSAL_REASONING_ROADMAP.md` and `docs/SECOND_BRAIN_STATUS.md` §5.
+> **Status (2026-10-15):** shipped (see the AS-BUILT section at the bottom), but the live causal and cluster tiers are empty: every compile seen 2026-10-14/15 reports 0 `statistically_associated` and 0 `member_of_cluster` edges, so the AS-BUILT counts of 1,380 and 56 no longer hold (unverified 2026-10-25: live edge counts not re-queried in this pass). Current state and the cause: `docs/CAUSAL_REASONING_ROADMAP.md` and `docs/SECOND_BRAIN_STATUS.md` §5.
 
 # Geometric Reasoning + Second Brain Rework — Design Proposal
 
@@ -306,25 +306,25 @@ The code labels its own phases in the function docstrings. Mapping (validated):
 
 | phase | function | relation / kind | tier |
 |---|---|---|---|
-| Phase 0 | `assign_geometry()` (`compile.py:881`) | `proximate_to` / `geometric` | plausible (single-instance) |
-| Phase 1 | `query_all_angles()` (`compile.py:1593`) | composite retrieval (all kinds, one call) | — |
-| Phase 2 | `assign_causal_associations()` (`compile.py:1050`) | `statistically_associated` / `causal` | provable (longitudinal) |
-| Phase 3 | `assign_clusters()` (`compile.py:1441`) | `member_of_cluster` / `cluster` | 3+ mutually-linked entities |
+| Phase 0 | `assign_geometry()` (~~`compile.py:881`~~ (corrected 2026-10-25: `compile.py:1010`)) | `proximate_to` / `geometric` | plausible (single-instance) |
+| Phase 1 | `query_all_angles()` (~~`compile.py:1593`~~ (corrected 2026-10-25: `compile.py:1939`)) | composite retrieval (all kinds, one call) | — |
+| Phase 2 | `assign_causal_associations()` (~~`compile.py:1050`~~ (corrected 2026-10-25: `compile.py:1190`)) | `statistically_associated` / `causal` | provable (longitudinal) |
+| Phase 3 | `assign_clusters()` (~~`compile.py:1441`~~ (corrected 2026-10-25: `compile.py:1579`)) | `member_of_cluster` / `cluster` | 3+ mutually-linked entities |
 
-- **`query_all_angles(entity)`** (`compile.py:1593`) is the "multi-angular,
+- **`query_all_angles(entity)`** (~~`compile.py:1593`~~ (corrected 2026-10-25: `compile.py:1939`)) is the "multi-angular,
   simultaneous" fix from §5 — every relational `kind` for one vault note path in
   ONE read over the same `semantic_note_derivations` table. Read-only. Returns
   `{entity, computed_at, derivation, chronological, geometric{threshold_km,
   threshold_min, candidates_evaluated, matches}, causal, cluster}`.
-- **`assign_causal_associations()`** (`compile.py:1050`) — Phase 2 provable
+- **`assign_causal_associations()`** (~~`compile.py:1050`~~ (corrected 2026-10-25: `compile.py:1190`)) — Phase 2 provable
   tier, aggregating Phase 0's per-instance `proximate_to` edges into
   per-entity-pair statistical associations. Honest labelling ("associated," not
   "causes") per the design.
-- **`assign_clusters()`** (`compile.py:1441`) — Phase 3, deterministic
+- **`assign_clusters()`** (~~`compile.py:1441`~~ (corrected 2026-10-25: `compile.py:1579`)) — Phase 3, deterministic
   connected-components over associations at/above chance (**lift ≥ 1.0**;
   measured live 2026-09-22, 1,044 of 1,466 association edges sat at/below chance,
   so including them collapsed everything into one mega-component —
-  `compile.py:1452-1460`). Tier preservation per §4: each cluster records
+  ~~`compile.py:1452-1460`~~ (corrected 2026-10-25: superseded; function now starts at `compile.py:1579`, range not re-located (unverified 2026-10-25))). Tier preservation per §4: each cluster records
   provable (lift ≥ 2.0) vs plausible (1.0 ≤ lift < 2.0) internal-edge counts +
   median lift.
 

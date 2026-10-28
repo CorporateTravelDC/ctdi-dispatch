@@ -8,7 +8,7 @@ RSS) and operational debugging / auto-selfheal. This file is the standing
 roadmap; update it as phases complete.
 
 Code: `src/second_brain/semantic/` (`compile.py`, `__main__.py`,
-`ontology.json` v1.1.0). Storage: the vault index tables, including
+`ontology.json` ~~v1.1.0~~ (corrected 2026-10-25: v1.2.0)). Storage: the vault index tables, including
 `semantic_note_derivations`, live in Postgres
 (`src/common/pg_schema/0055_second_brain_index.sql`, moved 2026-09-19).
 
@@ -45,7 +45,9 @@ code was built.
 
 Live 2026-10-14 22:13Z compile (added 2026-10-15): 130 authored edges
 (`leans_on` 50, `derives_from` 42, `reutilizes` 38) and 60,783
-`preceded_by` edges.
+`preceded_by` edges. (superseded 2026-10-25 15:49Z, SELECT on
+`semantic_note_derivations`: 139 authored edges -- `leans_on` 54,
+`derives_from` 45, `reutilizes` 40 -- and 65,621 `preceded_by`.)
 
 ## Geometric reasoning tiers — SHIPPED 2026-09-22/28; causal tier empty live (added 2026-10-15)
 
@@ -55,15 +57,17 @@ added three more relations to the same `semantic_note_derivations` table,
 all computed in `compile_layer()`:
 
 - `proximate_to` / `kind='geometric'` (`assign_geometry()`): flights and
-  trains named in notes, paired by place and time. 1,212,120 edges live.
+  trains named in notes, paired by place and time. ~~1,212,120~~ (superseded 2026-10-25: 1,457,398) edges live.
 - `statistically_associated` / `kind='causal'`
   (`assign_causal_associations()`): entity pairs that co-occur above
   chance over a 30-day window, with lift and N; labelled "associated",
-  never "causes". **0 edges in every compile seen 2026-10-14/15**
-  (1,166 on 2026-10-06).
+  never "causes". ~~**0 edges in every compile seen 2026-10-14/15**~~
+  (corrected 2026-10-25: 1,330 live edges; the parse blocker was fixed
+  2026-10-16, see below) (1,166 on 2026-10-06).
 - `member_of_cluster` / `kind='cluster'` (`assign_clusters()`): groups
-  of 3+ entities linked at lift >= 1.0. **0 live**, because it consumes
-  the causal tier.
+  of 3+ entities linked at lift >= 1.0. ~~**0 live**, because it consumes
+  the causal tier.~~ (corrected 2026-10-25: 87 live edges; plus 14
+  `concept_associated` and 4 `member_of_concept_cluster`.)
 - 2026-10-22: the parse blocker was fixed 2026-10-16 (`c4df48d9`). Vessels
   (MMSI) and drones (UAS ID) join flights and trains, and the concept-level
   tiers `concept_associated` / `kind='conceptual'` and
@@ -71,7 +75,7 @@ all computed in `compile_layer()`:
   status: `docs/GEOMETRIC_REASONING_DESIGN_2026-09-17.md`, "Correction,
   2026-10-22" and "Concept-level association".
 
-Why the causal tier is empty (code finding, not fixed here): the function
+~~Why the causal tier is empty (code finding, not fixed here): the function
 reads `semantic_note_instance_refs.note_ts` with
 `datetime.fromisoformat()` (`compile.py:1130`), and every stored value
 (2,959 rows) is an RFC 1123 WebDAV mtime such as
@@ -80,7 +84,11 @@ enters the window. The rest of the module parses the same strings with
 `email.utils.parsedate_to_datetime()` (`_resolve_note_ts()`). Parsed as dates,
 the newest instance ref is 2026-10-13 22:13Z and 784 of the 2,959 rows
 are inside the 30-day window, so the parse is the only blocker. Until fixed, `--trace` returns derivation, chronological and
-geometric edges only.
+geometric edges only.~~ (superseded 2026-10-25: fixed 2026-10-16 in
+`c4df48d9` -- `compile.py:704-740` parses `note_ts` with
+`email.utils.parsedate_to_datetime()` first and falls back to
+`fromisoformat()`; the causal and cluster tiers are populated, see the
+counts above.)
 
 ## Phase 2 — NOT STARTED (still true 2026-10-15). Register operational components as entities.
 

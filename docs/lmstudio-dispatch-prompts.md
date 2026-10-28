@@ -1,5 +1,10 @@
 # [RETIRED] LM Studio — Dispatch AI Prompts for Raspberry Pi 5
 
+> Status 2026-10-25: still retired, and still accurate except one count: `src/common/personas.py` now holds 23
+> personas, not 22 (`claude-weekly-fallback` was added after the 2026-10-15 re-check). Nothing listens on `:1234`,
+> no code reads `LOCAL_AI_*`, the `cps_recompute.py` imports are unchanged, and the llama server, model, two-core
+> cap and `MemoryMax` are as described (re-checked at 5f7fca01 and on the live box, 2026-10-26 04:36Z).
+
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 Re-checked 2026-10-15 ~01:45Z against main 1491bf5a plus the staged next-relay batch and the live box: every statement below still holds (`ss -ltn` shows nothing on `:1234`; `grep -rn LOCAL_AI_ src/ scripts/` has no hits; `cps_recompute.py` imports unchanged; 22 personas).
 
@@ -12,14 +17,14 @@ Written 2026-06-05 from a read of `src/poller/skills/`, it planned replacing per
 ## What happened instead
 
 - LM Studio was never installed; nothing listens on `:1234` (`ss -ltn`, 2026-10-06), and no code reads any `LOCAL_AI_*` variable (`grep -rn LOCAL_AI_ src/ scripts/`: no hits).
-- The migration off Anthropic did happen, by another route: Ollama with one dedicated model per task (2026-08), then llama.cpp (cutover 2026-08-27), consolidated on 2026-09-06 into one server, `corporatetraveldc-llama.service` on `100.x.x.x:8093`, serving Qwen3-4B-Instruct-2507 q4_0 since 2026-09-21. Per-skill prompts live as personas in `src/common/personas.py`. Cloud fallback is off (`ANTHROPIC_FALLBACK_ENABLED=false`). (Scope, added 2026-10-15: that is the skill inference path; separately, the weekly second-brain dump calls Claude Opus through the Claude CLI, see `docs/DEDICATED_MODELS_PLAN.md` §1.)
+- The migration off Anthropic did happen, by another route: Ollama with one dedicated model per task (2026-08), then llama.cpp (cutover 2026-08-27), consolidated on 2026-09-06 into one server, `corporatetraveldc-llama.service` on `100.x.x.x:8093`, serving Qwen3-4B-Instruct-2507 q4_0 since 2026-09-21. Per-skill prompts live as personas in `src/common/personas.py`. Cloud fallback is off (`ANTHROPIC_FALLBACK_ENABLED=false`) (unverified 2026-10-25: the code default is off, `src/common/llm.py:399`, but `dispatch.env` sets the key and its live value was not read). (Scope, added 2026-10-15: that is the skill inference path; separately, the weekly second-brain dump calls Claude Opus through the Claude CLI, see `docs/DEDICATED_MODELS_PLAN.md` §1.)
 - The JSON-schema prompt this file gave for CPS was never needed: `src/poller/skills/cps_recompute.py` makes no LLM call; CPS is deterministic Python against Part 135.609 thresholds (imports: `argparse`, `logging`, `sys`, `datetime`, `common.db`, `common.sr1_log`, `common.sr2_gate`).
 - No record in the repo shows the 7B recommendation being tried here; the platform settled on a ~2.4 GB 4B model hard-capped at two cores and `MemoryMax=8448M`.
 
 ## Where to look now
 
 - Architecture, personas, slot discipline and what was abandoned: `docs/DEDICATED_MODELS_PLAN.md`.
-- The prompts actually in use: `src/common/personas.py` (22 personas).
+- The prompts actually in use: `src/common/personas.py` ~~(22 personas)~~ (corrected 2026-10-25: 23 personas).
 - The inference path: `src/common/llm.py`, `src/common/llama_pool.py`; address `LLAMA_BASE_URL`.
 
 The 2026-06-05 per-skill prompt text is preserved in git history (`git log -- docs/lmstudio-dispatch-prompts.md`) for anyone who needs it as a record; it is deliberately not reproduced here.

@@ -26,9 +26,9 @@ rationale sections remain current.~~_
 > archived task files below call are both still live, with one caveat
 > each:
 >
-> - `GET /api/v1/amtrak` (`src/web/main.py:766`; at `:1159` on 2026-10-15) — **Tier 0**, no
+> - `GET /api/v1/amtrak` (`src/web/main.py:766`; ~~at `:1159` on 2026-10-15~~ (corrected 2026-10-25, superseded line reference: at `:1184` in commit 5f7fca01)) — **Tier 0**, no
 >   `Authorization` header needed, exactly as the task files use it.
-> - `POST /admin/push-test-alert` (`src/web/main.py:2201`; at `:2636` on 2026-10-15, still the legacy alias with the 200-char limit) — still works,
+> - `POST /admin/push-test-alert` (`src/web/main.py:2201`; ~~at `:2636` on 2026-10-15~~ (corrected 2026-10-25, superseded line reference: at `:2638`, stacked under `POST /admin/push-alert` at `:2637`, commit 5f7fca01), still the legacy alias with the 200-char limit) — still works,
 >   but it is explicitly a **legacy alias**; the canonical route is
 >   `POST /admin/push-alert` (same handler, stacked decorators). It
 >   requires **admin tier** (`Depends(require_admin("admin.alert.push"))`),
@@ -42,25 +42,29 @@ rationale sections remain current.~~_
 > corrected note in that file.
 
 These tasks were originally Cowork scheduled tasks (2-min cron) and have been converted to
-on-demand **skills**. The scheduled tasks are now disabled; invoke the skills by trigger phrase.
+on-demand **skills**. The scheduled tasks are now disabled (unverified 2026-10-25: nothing on this box schedules them, since no user or system timer, quadlet or crontab entry matches; the Cowork-side task state cannot be read from here); invoke the skills by trigger phrase.
 
 ## Skills
 
 | Skill | Trigger phrases | Purpose |
 |-------|----------------|---------|
-| `overwater-adsb-handoff-track` | overwater track, adsb handoff, adsc to adsb | ADS-C → ADS-B handoff tracker. Fires ntfy only on confirmed ground ADS-B acquisition. Silent while still on satellite. |
-| `flight-hifi-track` | hifi, high-fidelity, demo track, overwater track | Continuous 2-min position telemetry. Fires ntfy every cycle regardless of signal type. |
+| `overwater-adsb-handoff-track` | overwater track, adsb handoff, adsc to adsb | ADS-C → ADS-B handoff tracker. ~~Fires ntfy only on confirmed ground ADS-B acquisition.~~ (corrected 2026-10-25: fires `flight-alerts` on confirmed ground ADS-B acquisition and also when the aircraft is not found on feed ("landed or feed lost"), `skills/overwater-adsb-handoff-track/SKILL.md` Step 3.) Silent while still on satellite. |
+| `flight-hifi-track` | hifi, high-fidelity, demo track, overwater track | ~~Continuous 2-min position telemetry. Fires ntfy every cycle regardless of signal type.~~ (corrected 2026-10-25: one snapshot per flight query, not a 2-min loop. It resolves position and identity locally first, adds the flight to the transient OOOI watchlist (the poller then tracks OOOI), and fires a short `flight-alerts` push and a `dispatch-debriefs` debrief, plus a baggage-claim push on approach or landed; `skills/flight-hifi-track/SKILL.md` Steps 1-5.) |
 | `nec-train-hifi-track` | train track, nec track, acela track, hifi trains | NEC corridor Acela + NE Regional tracker to WAS. Polls dispatch Amtrak endpoint. |
 
 ## Design Rationale — Hex ID / Primary Key Queries
 
 ### Aircraft — ICAO Hex vs Callsign
 
-All aircraft tasks query by **ICAO hex** (`/v2/hex/<hex>`) rather than callsign.
+~~All aircraft tasks query by **ICAO hex** (`/v2/hex/<hex>`) rather than callsign.~~
+(corrected 2026-10-25: no current aircraft skill calls airplanes.live itself. The platform's
+shared fallback asks it by hex or by callsign, and only after the local sources have no
+contact: `src/common/airplanes_live.py:158-178`, `src/shared/watchlist.py:504,540,568`.)
 This bypasses two issues:
 
 1. **Callsign caching** — aggregators like airplanes.live cache callsign lookups and may serve
    stale positions for minutes. Hex queries go to the raw ADS-B record directly.
+   (unverified 2026-10-25: third-party cache behaviour; no third-party call was made.)
 
 2. ~~**Privacy filters** — FlightAware, FlightRadar24, and similar services apply privacy blocks
    based on tail number or callsign. Unfiltered aggregators (airplanes.live) expose the hex ID

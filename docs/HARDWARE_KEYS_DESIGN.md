@@ -1,13 +1,16 @@
 # Hardware-backed signing: design (proposal, not wired) -- 2026-10-13, operator decisions recorded
 
-> **Status (2026-10-15):** still a proposal. No code references a key class, attestation or `verify-required`, and no hardware key is enrolled; every approval today is a software passphrase-key SSH signature (`docs/AGENT_TRUST_MODEL.md` §3). Tooling versions in §1 re-checked: OpenSSH 10.2p1, libfido2 1.16.0, OpenSC 0.27.1, GnuPG 2.4.9.
+> **Status (2026-10-15):** still a proposal. No code references a key class, attestation or `verify-required`, and no hardware key is enrolled; every approval today is a software passphrase-key SSH signature (`docs/AGENT_TRUST_MODEL.md` §3). Tooling versions in §1 re-checked: OpenSSH 10.2p1, libfido2 1.16.0, OpenSC 0.27.1, GnuPG 2.4.9. (Re-checked 2026-10-25 21:53Z: unchanged -- same four versions; `approval_signers` has columns `account, pubkey, key_comment, active, registered_at, deactivated_at, note`, no key-class column, and one active signer whose key type is `ssh-ed25519`; `grep -rn` for `verify-required`, `attestation` or a key class in `src/` and `scripts/` ~~finds only the unrelated board-presence attestation in `src/common/db.py`~~ (corrected 2026-10-25, re-checked 2026-10-26 22:00Z: `grep -rln` over `src/` and `scripts/` matches 11 files, all for the unrelated board-presence attestation; none for a key class or hardware `verify-required`).)
 
 Operator request 2026-10-13. Goal: high-leverage actions (commits, pushes, approvals, lockdown thaw) can
 require a **physical key plus a secret the operator knows**, without locking anyone into one vendor or one
 key model. YubiKey 5C is the operator's default; the design must also work with older YubiKeys and other
 vendors' keys. Builds on the existing approval system (SSH signatures over a canonical request,
 `scripts/approve.sh`, `common/governance.py`) and the lockdown cadence. Respects the standing rule: **no
-ssh-agent or any passphrase-caching agent** -- every option below works without one.
+ssh-agent or any passphrase-caching agent** (corrected 2026-10-25 for precision: no ssh-agent is enabled --
+`ssh-agent.service` is `indirect`, `gpg-agent.socket` disabled, `SSH_AUTH_SOCK` unset in the operator session --
+but GnuPG's own `gpg-agent` runs for signing with its cache cut to one second (`default-cache-ttl 1`,
+`max-cache-ttl 1`) and `enable-ssh-support` present in `~/.gnupg/gpg-agent.conf`) -- every option below works without one.
 
 ## 1. Standards, not models
 
@@ -144,5 +147,8 @@ on Proton, vault, phone push).
      PIN). With no hardware enrolled, both are passphrase-key signatures.
    - The same person can never count twice (two keys of one account are one person), and the requester can
      never be one of the two (the existing requester-is-not-approver rule).
-   - This extends today's kill-order quorum (one admin, or two non-admins) to every high-risk action, with
+   - This extends today's kill-order quorum (~~one admin, or two non-admins~~ (corrected 2026-10-25: for a
+     member, service or agent target one admin issuer or two distinct non-admin issuers; for an admin target
+     two distinct issuers of any role, `QUORUM_FOR_ADMIN` 2, operator may set 3 -- ~~`scripts/kill-order.sh:16-18`,
+     `scripts/team-liveness.sh:492-498`~~ (corrected 2026-10-25: enforced at `scripts/team-liveness.sh:115-116` and `:611-614`))) to every high-risk action, with
      the hardware condition added.

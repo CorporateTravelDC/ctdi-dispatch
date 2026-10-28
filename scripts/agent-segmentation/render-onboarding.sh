@@ -92,6 +92,8 @@ for k, v in {"NAME": name, "UID": uid, "KIND": kind, "ROLE": role, "GROUPS": gro
              "DEPLOYMENT_PROFILE": deployment_profile, "PROFILES": profiles.rstrip("\n"),
              "RENDERED": datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")}.items():
     t = t.replace("{{" + k + "}}", v)
+# 2026-10-26: the account's private folder, same rule as srv-layout.sh (last part of the name)
+t = t.replace("{{SRV_PRIVATE}}", "/srv/ctdc-" + name.rsplit("-", 1)[-1])
 sys.stdout.write(t)
 PYEOF
 }

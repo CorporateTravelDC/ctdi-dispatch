@@ -24,7 +24,7 @@ Content-Type: application/json
 }
 ```
 
-Optional fields (added 2026-10-15, `src/web/routes/remember.py`): `author_kind`
+Optional fields (~~added 2026-10-15~~ (corrected 2026-10-25: first added in commit 9fe919bf on 2026-08-24), `src/web/routes/remember.py`): `author_kind`
 (defaults to `"agent"`, which becomes the `agent-authored` tag; send `"human"`
 only when the operator wrote the text) and `author_name`. The route needs an
 admin token with the `vault.remember` action.
@@ -49,8 +49,8 @@ admin token with the `vault.remember` action.
 ## Token resolution (added 2026-09-22) — `$CTDC_ADMIN_TOKEN`
 
 This skill no longer carries a plaintext token. The old inline
-`ctdc_cowork_…` literal was **revoked 2026-08-16** (auth_tokens id 3, cowork
-downgraded admin -> shares), so every admin call here had been 403-ing for
+`ctdc_cowork_…` literal was **revoked 2026-08-16** (auth_tokens id 3, ~~cowork
+downgraded admin -> shares~~ (corrected 2026-10-25: the row is revoked and its tier still reads admin; it was not downgraded to shares)), so every admin call here had been 403-ing for
 five weeks before anyone noticed.
 
 Resolve `$CTDC_ADMIN_TOKEN` at call time:

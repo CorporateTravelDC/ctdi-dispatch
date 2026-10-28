@@ -12,7 +12,9 @@ OVERWATER / INTERNATIONAL FLIGHT — ADS-C TO ADS-B HANDOFF TRACKER
 below; where this file and the skill differ, the skill wins. The airplanes.live calls were not
 re-tested on 2026-10-15. Do not run the direct `api.airplanes.live` calls below. The skill
 resolves position and identity locally first and reaches airplanes.live only through the shared
-fallback `src/common/airplanes_live.py` (off unless `AIRPLANES_LIVE_FALLBACK=1`), which never
+fallback `src/common/airplanes_live.py` (off unless ~~`AIRPLANES_LIVE_FALLBACK=1`~~ (corrected 2026-10-25:
+`AIRPLANES_LIVE_FALLBACK` is `1`, `true`, `yes` or `on`, `src/common/airplanes_live.py:91-92`; it is on
+live, with 188 fallback lines in the poller journal 2026-10-26 02:37-04:37Z)), which never
 sends a LADD-listed identifier.
 
 [Re-verified 2026-08-23, history only] ~~Both external calls below still work as written:~~

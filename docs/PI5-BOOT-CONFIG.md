@@ -1,5 +1,5 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
-Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (last boot 2026-10-06 10:17Z): disk use,
+Re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box (last boot ~~2026-10-06 10:17Z~~ (corrected 2026-10-25: last boot 2026-10-22 07:15:53Z, `uptime -s`)): disk use,
 `/tmp`, kernel command line, watchdog and the recovery sequence updated below.
 
 # Raspberry Pi 5 — Boot Configuration Reference (Fedora ARM)
@@ -20,14 +20,14 @@ Re-derived with `cat /etc/os-release`, `uname -a`, `lsblk`, `df -h`, and
 
 | Item | Value |
 |---|---|
-| OS | Fedora Linux 44 (Workstation Edition), aarch64 — kernel `6.18.50-1.rpi5.fc44.aarch64` (**changed** from the 2026-08-23 `6.18.36` baseline — a kernel update has landed since) |
+| OS | Fedora Linux 44 (Workstation Edition), aarch64 — kernel ~~`6.18.50-1.rpi5.fc44.aarch64`~~ (corrected 2026-10-25: `6.18.57-1.rpi5.fc44.aarch64`, `uname -r`; booted 2026-10-22) (**changed** from the 2026-08-23 `6.18.36` baseline — a kernel update has landed since) |
 | Boot device | NVMe (`nvme0n1`, 238.5 GB) — no SD card present or used |
-| `/boot` | `nvme0n1p1` (488 MB, **vfat**), 70% used — contains `config.txt` directly; there is no `/boot/firmware/` |
-| Root / home | `nvme0n1p2` (238 GB, **btrfs**) — one partition, two subvolumes: `subvol=/root` → `/`, `subvol=/home` → `/home` (same device shows twice in `df`), ~~now **65% used** (146G/238G) — up from the 48% recorded 2026-08-11; grown with ~2 months of ingest/vault data~~ (corrected 2026-10-15: **83% used**, 188G of 238G, 39G free, per `df -h /`; it was 77% at the 2026-10-12 audit. The local Borg backup repository, 27 GB, lives on this volume; see `docs/BACKUP.md`) |
+| `/boot` | `nvme0n1p1` (488 MB, **vfat**), ~~70%~~ (2026-10-25: 74%) used — contains `config.txt` directly; there is no `/boot/firmware/` |
+| Root / home | `nvme0n1p2` (238 GB, **btrfs**) — one partition, two subvolumes: `subvol=/root` → `/`, `subvol=/home` → `/home` (same device shows twice in `df`), ~~now **65% used** (146G/238G) — up from the 48% recorded 2026-08-11; grown with ~2 months of ingest/vault data~~ (corrected 2026-10-15: ~~**83% used**, 188G of 238G, 39G free~~ (superseded 2026-10-25: 80% used, 179G of 238G, 47G free, `df -h /` 21:20Z), per `df -h /`; it was 77% at the 2026-10-12 audit. The local Borg backup repository, ~~27 GB~~ (superseded 2026-10-25: 53 GB, `du -sh ~/.local/state/ctdc-backup/borg` 2026-10-26 ~02:25Z), lives on this volume; see `docs/BACKUP.md`) |
 | Swap | `zram0` (8 GiB compressed RAM swap) **plus** a disk-backed swap file `/var/swap/nvme-overflow.swap` (8 GiB, priority 10) on the NVMe. By design (operator, 2026-10-06): an OOM safety margin so zram + swap file = 16 GiB of swap. zram (higher priority) absorbs normal pressure; the NVMe file is only touched once zram is full, so a runaway build or model load pages out instead of tripping the OOM killer. |
 | Firmware config | `/boot/config.txt` (uses `os_prefix=/efi/`) |
-| `/tmp` | **tmpfs**, 8 GB (32% used at the 2026-10-15 check). On 2026-10-14 ~23:15Z it filled to 100% with 6,005 leaked test databases, which broke GPG signature checks in the integrity sweep. Since then `corporatetraveldc-tmp-headroom-guard.timer` (user, every 5 min) keeps at least 10% free, reclaiming only this user's stale test databases, old pytest directories and 24 h-old `mktemp` entries, and sends one ops-health alert if it is still under the floor (`scripts/tmp-headroom-guard.sh`) |
-| Kernel command line | `serial-getty@ttyAMA0.service` is masked (2026-10-12; it was in a restart loop). The persisted command line `/boot/efi/cmdline.txt` (unchanged since 2026-07-11) still carries `console=serial0,115200 console=tty1`. The firmware maps serial0 to ttyAMA0, so the running kernel shows `console=ttyAMA0,115200` in `/proc/cmdline` and will keep doing so after a reboot. Removing the kernel console from the UART means editing `serial0,115200` out of `/boot/efi/cmdline.txt` (operator, root); as of 2026-10-15 no file under /boot has changed since 2026-10-11. |
+| `/tmp` | **tmpfs**, 8 GB (~~32%~~ used at the 2026-10-15 check; 7% on 2026-10-25). On 2026-10-14 ~23:15Z it filled to 100% with 6,005 leaked test databases, which broke GPG signature checks in the integrity sweep. Since then `corporatetraveldc-tmp-headroom-guard.timer` (user, every 5 min) keeps at least 10% free, reclaiming only this user's stale test databases, old pytest directories and 24 h-old `mktemp` entries, and sends one ops-health alert if it is still under the floor (`scripts/tmp-headroom-guard.sh`) |
+| Kernel command line | `serial-getty@ttyAMA0.service` is masked (2026-10-12; it was in a restart loop). ~~The persisted command line `/boot/efi/cmdline.txt` (unchanged since 2026-07-11) still carries `console=serial0,115200 console=tty1`. The firmware maps serial0 to ttyAMA0, so the running kernel shows `console=ttyAMA0,115200` in `/proc/cmdline` and will keep doing so after a reboot. Removing the kernel console from the UART means editing `serial0,115200` out of `/boot/efi/cmdline.txt` (operator, root); as of 2026-10-15 no file under /boot has changed since 2026-10-11.~~ (corrected 2026-10-25: `/boot/efi/cmdline.txt` now carries only `console=tty1` and `/proc/cmdline` shows `console=tty1`, so the kernel console is off the UART; `/boot` has changed since 2026-10-11 -- ~~484~~ 489 files newer (2026-10-26 02:21Z), the 6.18.57 kernel among them; `cat`, `find /boot -newermt 2026-10-11` 21:20Z.) |
 
 Because the whole system lives on NVMe, "what survives an SD card
 failure" doesn't apply. The failure domain is the NVMe drive itself;
@@ -146,6 +146,9 @@ tooling.
 
 > **Status (2026-10-15):** this sequence has never been run end to end. The weekly restore test checks the
 > dumps inside the newest archive (hashes, `pg_restore --list`); it does not restore onto new hardware.
+> (unverified 2026-10-25: whether the sequence was ever run is history no command on the box can show; the
+> restore-test description holds -- `scripts/backup/backup-restore-test.sh:17-41`; last run 2026-10-25
+> 05:30Z, `Result=success`, `systemctl --user show` 2026-10-26 02:23Z.)
 
 1. Flash Fedora Workstation/Server for aarch64 (Raspberry Pi) to a new NVMe
    drive or temporary SD card.

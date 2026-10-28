@@ -27,8 +27,8 @@ Re-checked 2026-10-15 ~01:40Z against main 1491bf5a plus the staged next-relay b
 > rationale.
 >
 > **What actually runs (live, 2026-10-15).** One node: a Raspberry Pi 5
-> Model B Rev 1.1, 16 GB RAM (`MemTotal` 16,599,696 kB), 4 cores, one
-> 238 GB NVMe root volume (83% used, 39 GB free, `df -h /`). The tiers
+> Model B Rev 1.1, 16 GB RAM (`MemTotal` ~~16,599,696~~ 16,599,504 kB (corrected 2026-10-26, `/proc/meminfo`)), 4 cores, one
+> 238 GB NVMe root volume (~~83% used, 39 GB free~~ (superseded 2026-10-25: ~~80% used, 48 GB free~~ 81% used, 45 GB free at 2026-10-26 21:58Z), `df -h /`). The tiers
 > below all include the unbuilt offload Pi in their floor, so none of them
 > is the price of the box that runs today. The sourced figure for the actual
 > single node is **≈ $765 one-time** (Pi 5 16 GB + NVMe + case/PSU + the
@@ -170,7 +170,9 @@ invocation on this box. Across **73,284 logged invocations spanning
 > (2026-10-15 sample: 84,744 data rows, 2026-06-27 00:00Z → 2026-10-15
 > 01:38Z; `deterministic` 26,169, ~31%; cloud-model name matches 0; token
 > columns still sum to 0. The ratios describe labels, not inference; see the
-> correction above.)
+> correction above.) (2026-10-25 sample: 97,826 data rows, 2026-06-27 00:00Z →
+> 2026-10-25 15:49Z; `deterministic` 30,954, ~32%; `none` 521; token columns
+> still sum to 0.)
 
 - ~~**Zero cloud calls, still.**~~ (corrected 2026-10-15: zero *skill rows
   labelled with a cloud model*; the Claude Opus weekly job and the agent
@@ -182,7 +184,7 @@ invocation on this box. Across **73,284 logged invocations spanning
   carry a `corporatetraveldc-pi5-*` label and 26,179 `deterministic`; 424
   are `none` (entity-tracking-digest, semantic-compile-daily, still being
   written as of 2026-10-14) and 146 are a malformed `csexec-osint` label
-  with an inline comment, all from 2026-07-09. None names a cloud model.)
+  with an inline comment, all from 2026-07-09. None names a cloud model.) (superseded 2026-10-25: 66,205 `corporatetraveldc-pi5-*`, 30,954 `deterministic`, 521 `none`, 146 `csexec-osint`; still no cloud-model name.)
 - **Correction from the 2026-08-23 revision of this doc:** those local
   models are no longer served by Ollama. Ollama was retired at the
   2026-08-27 cutover; the model column still reads `corporatetraveldc-pi5-*`
@@ -212,7 +214,7 @@ dump, `scripts/second-brain-weekly-dump.sh`, has been scheduled since
 2026-08-25, before this 2026-10-06 re-derivation. What is true: **skill inference** runs on
 the local llama.cpp server and costs only power. The platform also runs a
 scheduled cloud job: `corporatetraveldc-second-brain-weekly-dump.timer`
-(enabled, Sunday 02:00Z, behind the `maintenance-window-guard.sh`
+(enabled, Sunday ~~02:00Z~~ (corrected 2026-10-26: 02:00 America/New_York, 06:00Z EDT / 07:00Z EST), behind the `maintenance-window-guard.sh`
 ExecCondition, which skipped the 2026-10-11 run) calls
 `claude --model opus` (`scripts/second-brain-weekly-dump.sh:139`) on the
 operator's Claude plan, and the agents run on vendor plans. Their cost is
@@ -252,7 +254,7 @@ permanent ownership) than a recurring single-feed rental.
 
 | Operating cost | Annual | Attributable to the platform? |
 |---|---|---|
-| **Power** | ~~about $50–$100/year~~ (corrected 2026-10-15: **≈ $23–$39/year**, 10.5–17.6 W continuous at $0.2540/kWh, EIA Table 5.6.A DC residential May 2026, derived in `docs/COGS_VENDOR_COMPARISON_2026-08-18.md` §2.7; the $50–100 figure was an unsourced placeholder) | **Yes** |
+| **Power** | ~~about $50–$100/year~~ (corrected 2026-10-15: **≈ $23–$39/year**, 10.5–17.6 W continuous at $0.2540/kWh, EIA Table 5.6.A DC residential May 2026, derived in `docs/COGS_VENDOR_COMPARISON_2026-08-18.md` §2.7; the $50–100 figure was an unsourced placeholder) (unverified 2026-10-25: a derived estimate, not observable from code or live state) | **Yes** |
 | **Internet** (business fiber) | up to ~$5,000–$6,000/year at the high end | **Generally no** — pre-existing business expense independent of this platform |
 
 ### Recurring lines beyond power (added 2026-10-15)
@@ -266,7 +268,7 @@ guessed.
 | **Proton mail relay** | `corporatetraveldc-protonbridge` (running). Bridge needs a paid Proton plan; whether it is the same plan as the Drive storage is not recorded. | [UNVERIFIED as of 2026-10-15] | Shared business cost |
 | **Scheduled cloud LLM** | Weekly Claude Opus second-brain dump (see §1 correction). | [UNVERIFIED as of 2026-10-15] — rides on the operator's Claude plan | Partly |
 | **Agent vendor plans** | Claude Code, Codex and ChatGPT/Cowork agents used to build and operate the platform. | [UNVERIFIED as of 2026-10-15] | Development and operations, not runtime |
-| **Backup uplink** | `enu1`, a Verizon phone hotspot, has had no internet service since 2026-10-06 over pricing; a prepaid SIM is planned (`docs/NETWORK_FAILOVER.md`). | $0 today; prepaid SIM cost [UNVERIFIED as of 2026-10-15] | **Yes** once restored |
+| **Backup uplink** | `enu1`, a Verizon phone hotspot, ~~has had no internet service since 2026-10-06 over pricing; a prepaid SIM is planned (`docs/NETWORK_FAILOVER.md`)~~ (corrected 2026-10-25: `enu1` is up with carrier and probe-reachable -- net-failover watchdog `backup=enu1:ok`, `ip -br link`; the NetworkManager profile is still named `Verizon Hotspot`; the plan behind it is not observable from code or live state (unverified 2026-10-25), see BACKUP.md §metered uplink). | $0 today; prepaid SIM cost [UNVERIFIED as of 2026-10-15] | **Yes** once restored |
 | **Domain** | `.com` renewal shared across the public hostnames | ~$10–15 [EST, carried from `docs/COGS_BUILD_VS_RENT_2026-09-28.md` §1; registrar not recorded] | Shared |
 
 The primary uplink is the Wi-Fi gateway on `wld0` (`docs/NETWORK_FAILOVER.md`);

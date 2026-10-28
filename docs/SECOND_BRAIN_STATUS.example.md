@@ -15,14 +15,19 @@ number the time it was read, and every timer its time zone._
 
 ## 1. Where the vault lives (reference layout)
 
-- **Nextcloud**, under a dedicated **non-admin** account, with all business
+- **Nextcloud**, under a dedicated ~~**non-admin**~~ account (corrected
+  2026-10-25: in the reference deployment the vault account is a member of
+  Nextcloud's `admin` group, user-group table read 2026-10-26 02:31Z), with all business
   content under one project root folder (`<project>/`), separate from any
   personal files on the same server. A personal account, if any, is separate
   and feeds the vault one way only (§3).
 - Two hostnames in front of it:
   - `dav.example.com` — interactive (web UI, WebDAV/CalDAV/CardDAV, mobile).
   - `cloud.example.com` — automation-only vhost exposing the vault WebDAV
-    path and nothing else (`/` is 404). External auth through it is refused.
+    path ~~and nothing else~~ (corrected 2026-10-25: plus the bare DAV root,
+    `status.php` and the CalDAV/CardDAV well-known redirects) (`/` is 404).
+    External auth through it is refused (unverified 2026-10-25: testing it
+    needs a request through the public hostname).
 - Containers reach Nextcloud with a narrow network opt-in
   (`Network=pasta:--map-gw` and `NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files`,
   i.e. the existing nginx vhost in front of the loopback-bound app); host
@@ -38,13 +43,13 @@ number the time it was read, and every timer its time zone._
 
 | Module | Role |
 |---|---|
-| `webdav_client.py` | The one WebDAV client: `mkcol`, `mkdirs`, `put`, `put_create_only` (`If-None-Match: *`), `get`, `delete`, `list_files`. No `move` (GET + PUT + DELETE at the call site). Collections are always requested with a trailing `/` and redirects are never followed (a redirect can drop credentials). |
+| `webdav_client.py` | The ~~one~~ (corrected 2026-10-25: shared; the index scan, the graph builder, the personal-notes import and the research-board mirror also send their own PROPFIND requests) WebDAV client: `mkcol`, `mkdirs`, `put`, `put_create_only` (`If-None-Match: *`), `get`, `delete`, `list_files`. No `move` (GET + PUT + DELETE at the call site). ~~Collections are always requested with a trailing `/`~~ (corrected 2026-10-25: collection listings, `list_files` and the index scan, are requested with a trailing `/`; `mkcol`, and so `mkdirs`, send the path without one) and ~~redirects are never followed~~ (corrected 2026-10-25: the directory listing, `list_files`, and the index scan's PROPFIND refuse redirects; `mkcol`, `put`, `put_create_only`, `get` and `delete` use the HTTP library's default, which follows them) (a redirect can drop credentials). |
 | `scrub_gate.py` | CUI/PII **block** gate: raises, never redacts. First-pass regex heuristics (e.g. SSN-shaped tokens; regulated-information markers co-occurring with frequency-shaped tokens); not exhaustive. |
 | `remember.py` | Manual capture: gate → `01-Sources/<subdir>/<UTC stamp>.md` with frontmatter (`human-authored` / `agent-authored` tag) → index. A write to `manual/` touches a trigger file watched by `.path` units. Shared by a CLI and an admin-tier `POST /api/v1/remember`. |
 | `index_db.py` | Vault index in Postgres: `scan_vault()` (WebDAV inventory), `index_note()`, `search_notes()` (tsvector), `[[wikilink]]` links/backlinks. Exits non-zero on any PROPFIND failure. |
 | `client_entity_ingest.py` | One-shot contact/entity ingest; no live CRM source. |
 | `doc_generation.py` | Markdown → `.docx` / `.pptx` / PDF (LibreOffice headless). |
-| `semantic/` | Ontology (faceted: domain, genre, lifecycle, provenance, derivation; entities from the lexicon), deterministic compiler (concepts, derivations, chronology, geometry, causal associations, clusters), exporters. **Never LLM-classified**; imports neither the WebDAV client nor the LLM client. |
+| `semantic/` | Ontology (faceted: ~~domain, genre, lifecycle, provenance, derivation;~~ (superseded; corrected 2026-10-25: domain, genre, lifecycle, provenance, derivation, linkage;) entities from the lexicon), deterministic compiler (concepts, derivations, chronology, geometry, causal associations, clusters; 2026-10-25: also concept-level associations and clusters), exporters. **Never LLM-classified**; imports neither the WebDAV client nor the LLM client. |
 | `knowledge_graph/` | Entity lexicon, idempotent link retrofit (entity hubs + a marked auto-wikilink footer), read-only graph builder (`graph.json` + an HTML view), served at `/api/v1/knowledge-graph/{html,meta}` (Tier 1). |
 
 **Storage**: Postgres (same database as the platform) since 2026-09-19/20 —
@@ -59,16 +64,16 @@ explicitly; the host clock is UTC.
 
 | Job | Schedule (reference) | What it does |
 |---|---|---|
-| Vault daily | 23:45 ET (03:45Z during EDT), then every 2 h; maintenance-window exec condition; shared long-runner lock | daily digest → scrub gate → local LLM narrative (deterministic fallback) → `01-Sources/daily/<operational day>.md` (day rolls at 05:00 local) |
+| Vault daily | 23:45 ET (03:45Z during EDT), ~~then every 2 h~~ (superseded; corrected 2026-10-25: the 2-hour re-run was removed 2026-10-19, so the timer fires once a day); maintenance-window exec condition; shared long-runner lock | daily digest → scrub gate → local LLM narrative (deterministic fallback) → `01-Sources/daily/<operational day>.md` (day rolls at 05:00 local) |
 | Vault weekly | Mon 04:30 ET (08:30Z during EDT) | past week's daily sources, transport patterns and daily syntheses → `04-Syntheses/weekly/<YYYY-Www>.md` |
 | Index scan | daily 04:00 ET | `python3 -m second_brain.index_db --scan` |
 | Demo archiver | daily 04:15 ET | last ~30 h of recorded demo snapshots (Postgres) → `01-Sources/demo-archive/<date>.md` |
-| RSS | every 2 h | RSS/Atom → `00-Inbox/rss/` (feed list from an env var; separate from the dashboard's broader RSS catalog) |
-| Semantic compile (+ `.path`) | every 6 h, `Persistent=true`, and on every `manual/` note | recompile the semantic tables; no LLM |
-| Knowledge-graph compile (+ `.path`) | 6-hour timer + `.path` trigger | rebuild the graph |
-| Link retrofit | 6-hour timer | add entity hubs and auto-wikilink footers |
+| RSS | every 2 h | RSS/Atom → `00-Inbox/rss/` (~~feed list from an env var; separate from the dashboard's broader RSS catalog~~ (corrected 2026-10-25: the feed list is the dashboard's RSS catalog plus user-added feeds, with an env var for optional extras)) |
+| Semantic compile (+ `.path`) | ~~every 6 h~~ (corrected 2026-10-25: four times a day, at 02:52, 06:02, 12:02 and 18:02 local), `Persistent=true`, and on every `manual/` note | recompile the semantic tables; no LLM |
+| Knowledge-graph compile (+ `.path`) | ~~6-hour timer +~~ `.path` trigger (corrected 2026-10-25: the tracked 6-hour timer is disabled in the reference deployment, so only the `.path` trigger runs) | rebuild the graph |
+| Link retrofit | ~~6-hour timer~~ (corrected 2026-10-25: tracked as a 6-hour timer but disabled in the reference deployment; the retrofit has no recorded run) | add entity hubs and auto-wikilink footers |
 | Entity-tracking digest | every 6 h | consolidate entity findings from the daily watches → `04-Syntheses/entity-tracking/`; no LLM |
-| Personal-notes import | every 2 min | one-way copy of the operator's personal notes app into `01-Sources/personal-notes/`, routed by category; never deletes |
+| Personal-notes import | every 2 min | one-way copy of the operator's personal notes app ~~into `01-Sources/personal-notes/`~~ (corrected 2026-10-25: into `01-Sources/personal-notes/`, except research-prefixed categories, which go to a per-category research folder under `00-Inbox/`), routed by category; never deletes |
 | Research-board mirror | every 15 min | one-way, scrub-gated, idempotent mirror of research items to the coordination board |
 | Personal-export watch | weekly | process new personal data exports |
 | Agent-memory dump (host script) | weekly | dump the agent's scratchpad + persistent memory into one vault note, then reset them |

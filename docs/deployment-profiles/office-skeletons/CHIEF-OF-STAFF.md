@@ -29,5 +29,8 @@ briefs and follow-through. It is a separate profile from the Executive Assistant
 | Nextcloud Tables | OKR register and decision register with an API |
 | Vikunja (`corporatetraveldc-vikunja`, optional) | A stand-alone initiative/project API, if Deck is not enough; PostgreSQL `vikunja` database on the office instance, `VIKUNJA_DATABASE_TYPE=postgres` pinned (its default is SQLite) |
 
-The daily ops brief and the second-brain vault already in Nextcloud supply the narrative for briefings. Nothing
+~~The daily ops brief and the second-brain vault already in Nextcloud supply the narrative for briefings.~~
+(corrected 2026-10-25: the second-brain vault in Nextcloud supplies the narrative for briefings; the ops brief
+itself is stored in Postgres `brief_archive` (`src/poller/skills/ops_brief.py:1248`), and only its latest excerpt
+reaches Nextcloud, inside each daily vault note (`src/poller/skills/second_brain_daily.py:250`).) Nothing
 reads them for this profile yet.

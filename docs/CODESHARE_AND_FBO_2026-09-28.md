@@ -1,4 +1,6 @@
-> **Status (2026-10-15):** Sections 1-3 and 5 still hold (seeder daily on `corporatetraveldc-codeshare-seed.timer`; FBO/ramp predictor not built). (1) Section 4 step 2 is replaced: route-filtered `operating_identities` since 2026-10-13 (TFMS, TBFM, poller) and 2026-10-14 (FDPS, SMES). (2) The decay sweep in section 2 is wired: `poller/skills/transport_pattern_digest.py` runs it (since 2026-07-28), dispatched by the maintenance queue (`scripts/lib/maintenance-queue.txt`), not by its own timer; no run in the 24 h before 2026-10-15 02:10Z. Line numbers are stale; current behaviour: [FLIGHT_INSTANCE_RESOLVER.md](FLIGHT_INSTANCE_RESOLVER.md).
+> Status 2026-10-25: dated record of 2026-09-28, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: `codeshare_map` gained the `relation`, `season`, `retired_at` and `superseded_by` columns; the seeder no longer writes equal flight numbers for Jazz (JZA n is marketed as AC 8000+n since 2026-10-05), and it also seeds codeshares from the DCA/IAD FIDS boards. The 2026-10-15 status note below is corrected in place.
+
+> **Status (2026-10-15):** ~~Sections 1-3 and 5 still hold~~ (corrected 2026-10-25: section 5 still holds; section 2's table has since gained the `relation`, `season`, `retired_at` and `superseded_by` columns; section 3's equal-number rule no longer covers Jazz (JZA n is marketed as AC 8000+n since 2026-10-05), and the seeder also seeds codeshares from the DCA/IAD FIDS boards; section 1's premise that FDPS files only the operating callsign is unverified) (seeder daily on `corporatetraveldc-codeshare-seed.timer`; FBO/ramp predictor not built). (1) Section 4 step 2 is replaced: route-filtered `operating_identities` since 2026-10-13 (TFMS, TBFM, poller) and 2026-10-14 (FDPS, SMES). (2) The decay sweep in section 2 is wired: `poller/skills/transport_pattern_digest.py` runs it (since 2026-07-28), dispatched by the maintenance queue (`scripts/lib/maintenance-queue.txt`), not by its own timer; no run in the 24 h before 2026-10-15 02:10Z. Line numbers are stale; current behaviour: [FLIGHT_INSTANCE_RESOLVER.md](FLIGHT_INSTANCE_RESOLVER.md).
 
 # Codeshare Resolution + FBO / Private-Jet Lane
 
@@ -16,7 +18,7 @@ related-but-distinct subsystems that both grew out of the operator directive of
 FAA FDPS (SWIM/SFDPS filed flight plans) files a flight under its **operating**
 callsign only — e.g. `EDV5134` (Endeavor), never the marketing/codeshare
 `DAL5134` (Delta Connection) that a rider actually books and searches under.
-The marketing identifier never appears in FDPS at all. This is stated verbatim
+The marketing identifier never appears in FDPS at all (unverified 2026-10-25). This is stated verbatim
 in `scripts/seed-dc-codeshare.py:6-12` and again at
 `src/poller/main.py:1514-1516`.
 

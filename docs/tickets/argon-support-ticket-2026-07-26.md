@@ -1,5 +1,7 @@
 # Argon 40 Support Ticket — Draft
 
+> Status 2026-10-25: dated ticket draft. No longer current: argononed is not installed and `argonone-cli` is not on PATH; the fan is driven by the kernel `pwmfan` hwmon.
+
 **[Fill in before sending: order number, exact case model/SKU — referred to
 generically below as "Argon ONE" since two units were tested and neither
 model number is in hand here. Attach a photo of the case label if you have
@@ -25,7 +27,7 @@ fan-curve or driver related.
 **Hardware / OS:**
 - Raspberry Pi 5 Model B Rev 1.1
 - Fedora Linux 44 (Workstation Edition), aarch64
-- Argon ONE case (fan + heatsink), argononed v0.4.1, controlled via `argonone-cli`
+- Argon ONE case (fan + heatsink), ~~argononed v0.4.1, controlled via `argonone-cli`~~ (corrected 2026-10-25: superseded -- `rpm -q argononed` not installed and `argonone-cli` absent at 22:18Z; fan chip is `pwmfan` in /sys/class/hwmon)
 - Two separate physical Argon ONE units tested, same result on both
 
 **What I tried before filing this:**

@@ -3,7 +3,8 @@
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET
 (`src/runner/main.py`, 2,883 lines; `src/runner/frontend/`; the two runner
 Quadlets; nginx and cloudflared config). Rechecked 2026-10-15 01:40Z against
-1491bf5a (`main.py` now 2,915 lines, still 30 route decorators): both instances
+1491bf5a ~~(`main.py` now 2,915 lines, still 30 route decorators)~~ (corrected 2026-10-25, superseded: at
+5f7fca01 `main.py` is 3,647 lines with 33 route decorators): both instances
 up, `:8005/healthz` 200, `/manifest.webmanifest` and `/sw.js` 200 on :8001;
 corrections marked inline.
 
@@ -18,31 +19,32 @@ the dispatch web API.
 | Instance | Unit | Host port | Exposure |
 |---|---|---|---|
 | Live ops dashboard | `corporatetraveldc-runner.service` | 8001 on 127.0.0.1 and 100.x.x.x | **Tailnet-only**: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). No public hostname. `DISPATCH_BASE_URL=http://100.x.x.x:8000`. |
-| Public demo | `corporatetraveldc-runner-demo.service` | 8005 → 8001 on 127.0.0.1 and 100.x.x.x | `https://dispatch-runner.example.com` (tunnel → nginx → :8005) returns 200; `:8005/healthz` 200. `DEMO_MODE=true` in the Quadlet; `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`. Reads the demo API (`DISPATCH_BASE_URL=http://100.x.x.x:8004`), whose data file has not been refreshed since 2026-08-14 14:21Z. Its nginx vhost exists only on the host. |
+| Public demo | `corporatetraveldc-runner-demo.service` | 8005 → 8001 on 127.0.0.1 and 100.x.x.x | `https://dispatch-runner.example.com` (tunnel → nginx → :8005) returns 200 (unverified 2026-10-25: the public edge was not probed; the tunnel ingress to nginx :80 and the vhost's proxy to 127.0.0.1:8005 are in the live config); `:8005/healthz` 200 (unverified 2026-10-25: port 8005 was not probed in this pass; the unit has been active since 2026-10-25 08:39:31Z). `DEMO_MODE=true` in the Quadlet; `DEMO_SESSION_SECRET` from `/etc/corporatetraveldc/demo-secrets.env`. Reads the demo API (`DISPATCH_BASE_URL=http://100.x.x.x:8004`), ~~whose data file has not been refreshed since 2026-08-14 14:21Z~~ (corrected 2026-10-25: which serves the separate demo Postgres instance; `corporatetraveldc-demo-source-refresh` scrubs and promotes production data at least 24 h old into it daily at 03:17 UTC -- the 2026-10-26 03:35:57Z run promoted 1,130 snapshots and 40 briefs, new window_end 2026-10-25 03:15:44Z). Its nginx vhost exists only on the host. |
 
 **Trust model.** `_is_trusted()` is purely IP-based: ~~client IP from
 `CF-Connecting-IP` exclusively when present,~~ (corrected 2026-10-15; not true
 when written either: since the 2026-08-25 fix `CF-Connecting-IP` is honoured
 only when `Host` is in `_CLOUDFLARE_FRONTED_HOSTNAMES`, today just
-`dispatch-runner.example.com`, `main.py:357`; on any other host the
+`dispatch-runner.example.com`, ~~`main.py:357`~~ (corrected 2026-10-25: `main.py:369`); on any other host the
 header is ignored) client IP from `CF-Connecting-IP` on the Cloudflare-fronted
 host, else the socket peer / first `X-Forwarded-For` hop; trusted nets are Tailscale CGNAT `100.64.0.0/10`,
-loopback and RFC1918 (`_TRUSTED_NETS`, `main.py:188`). It never reads
-`X-CTDI-Public`, and no Cloudflare Access policy fronts the demo hostname.
+loopback and RFC1918 (`_TRUSTED_NETS`, ~~`main.py:188`~~ (corrected 2026-10-25: `main.py:200`)). It never reads
+`X-CTDI-Public`, and no Cloudflare Access policy fronts the demo hostname (unverified 2026-10-25: Cloudflare
+Access is edge configuration, not readable from the box).
 App-layer gates regardless of `DEMO_MODE`: `PUT /api/v1/config` (404
 untrusted), `GET /api/v1/frontend-config` (untrusted callers get a
 placeholder coordinate and empty widget key), `GET`/`DELETE /api/chat/history`
 (404 untrusted). ~~`proxy_dispatch()`'s `DEMO_MODE` + session-cookie check is
 the only hostname-wide gate, and it is active on the demo instance.~~
 (corrected 2026-10-15: since 2026-10-13 (127a2f76, 03:38Z) the hostname-wide
-gate is the `demo_gate` middleware, `main.py:415`, which fronts every `/api/*`
+gate is the `demo_gate` middleware, ~~`main.py:415`~~ (corrected 2026-10-25: `main.py:427`), which fronts every `/api/*`
 route and `/healthz` for untrusted visitors on the demo instance (open with no
 login: `/healthz`, `/api/whoami`, `/api/demo/status`, POST `/api/demo/login`;
-`main.py:410`); see "Demo gate" at the
+~~`main.py:410`~~ (corrected 2026-10-25: `_DEMO_OPEN_PATHS`, `main.py:422`)); see "Demo gate" at the
 end. `proxy_dispatch()`'s own check still runs behind it.)
 
 **Retired:** `ops.example.com` (2026-08-02) — hard-404 by
-hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
+hostname via `_RETIRED_HOSTNAMES` (~~`main.py:349`~~ (corrected 2026-10-25: `main.py:361`)); no vhost, no ingress.
 
 ## Stack
 
@@ -59,42 +61,45 @@ hostname via `_RETIRED_HOSTNAMES` (`main.py:349`); no vhost, no ingress.
 ## Auth model
 
 1. **Trusted-origin check** (`_is_trusted()`, above). The `tailscale_gate`
-   middleware (`main.py:382`) returns 404 (not 403) to an untrusted origin on
+   middleware (~~`main.py:382`~~ (corrected 2026-10-25: `main.py:394`)) returns 404 (not 403) to an untrusted origin on
    the admin proxy prefix and on any non-GET to `/api/dispatch/api/v1/*`.
 2. **Demo gate** (demo instance): `DEMO_MODE=true` + untrusted origin ⇒ the
    `ctdc_demo_session` cookie is required (since 2026-10-13 (127a2f76, 03:38Z) for every `/api/*`
    read except the open paths, 401 without it; writes and `/api/ask` 403 even
-   with it; `demo_gate`, `main.py:415`) — HMAC-SHA256 keyed with
+   with it; `demo_gate`, ~~`main.py:415`~~ (corrected 2026-10-25: `main.py:427`)) — HMAC-SHA256 keyed with
    `DEMO_SESSION_SECRET`, minted by `POST /api/demo/login` (password checked
    by the demo backend; cookie `httponly`, `secure`, `samesite=lax`, default
    8 h). Signals are sanitized server-side.
-3. **Tier-1 token injection**: for `_TIER1_PATHS` (~~`main.py:1803`~~ `main.py:1835` as of 2026-10-15; 5 paths:
-   `tfr-enriched`, `radio`, `cui/status`, `watchlist`, `watchlist/history`)
+3. **Tier-1 token injection**: for `_TIER1_PATHS` (~~`main.py:1803`~~ ~~`main.py:1835` as of 2026-10-15; 5 paths:
+   `tfr-enriched`, `radio`, `cui/status`, `watchlist`, `watchlist/history`~~ (corrected 2026-10-25: `main.py:2541`,
+   10 paths -- those five plus `swim/positions`, `swim/scope`, `swim/last-leg`, `swim/resolve` and
+   `swim/aggregator`, added 2026-10-24 for the map))
    the proxy injects the runner's cert-tier `RUNNER_ENRICHED_TOKEN`
-   unconditionally; for `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY` (~~`main.py:1833`~~ `main.py:1865`;
+   unconditionally; for `_TIER1_PATHS_TRUSTED_ORIGIN_ONLY` (~~`main.py:1833`~~ ~~`main.py:1865`~~ (corrected 2026-10-25: `main.py:2587`);
    4 paths: `knowledge-graph/html`, `knowledge-graph/meta`, `vault/file`,
    `osint/scopes`) only for trusted origins. A client `Authorization` header
    always wins. Watchlist **reads** are injected on purpose (Ops sees the real
    watchlist read-only); mutations are blocked by `tailscale_gate` before the
    proxy runs. Note `cui/status` is Tier 2 on the web API, so the injected
    Tier-1 token does not satisfy it. Authoritative list:
-   `docs/auth-token-proxy-pattern.md` §4.
+   `docs/auth-token-proxy-pattern.md` ~~§4~~ (corrected 2026-10-25: section "The two allowlists"; that doc has no
+   numbered §4).
 
-## Backend API routes (30 decorators, 32 method+path pairs)
+## Backend API routes (~~30 decorators, 32 method+path pairs~~ corrected 2026-10-25: 33 decorators, 35 method+path pairs)
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok","service":"dispatch-runner","version":"1.1"}` |
 | GET | `/api/whoami` | Caller trust/identity |
 | POST | `/api/demo/login` | Demo password → session cookie (404 unless `DEMO_MODE`) |
-| GET | `/api/demo/status` | `{demo_mode, authenticated, trusted_origin}` |
+| GET | `/api/demo/status` | ~~`{demo_mode, authenticated, trusted_origin}`~~ (corrected 2026-10-25: `{demo_mode, authenticated}`; on the demo instance a trusted caller or a valid session also gets `trusted_origin`, and a valid session also `label`, `window_days`, `speed` -- `main.py:518-537`; live :8001 2026-10-26 04:29Z and 14:35Z returned `{"demo_mode":false,"authenticated":true}`) |
 | GET | `/api/demo/webhook-log` | Demo webhook activity log |
 | GET | `/api/adsb/local` | UltraFeeder `aircraft.json` |
 | GET | `/api/adsb/live` | Local receiver only (the airplanes.live proxy was removed 2026-08-27) |
-| GET | `/api/map/aircraft` | (added 2026-10-24) Local receiver + SWIM merged for a bbox (`south/west/north/east`, `max_age_s`); `src` per aircraft = `matched` / `local` / `swim`, `conflict` flag; `swim_available: false` when dispatch-web is unreachable. SWIM comes from `/api/v1/swim/positions` with the Tier-1 token (`_TIER1_PATHS`) |
+| GET | `/api/map/aircraft` | (added 2026-10-24) Local receiver + SWIM merged for a bbox (`south/west/north/east`, `max_age_s`); `src` per aircraft = `matched` / `local` / `swim`, `conflict` flag; `swim_available: false` ~~when dispatch-web is unreachable~~ (corrected 2026-10-25: whenever the SWIM query fails, answers non-200 or takes longer than 5 s, `main.py:866-880`). SWIM comes from `/api/v1/swim/positions` with the Tier-1 token (`_TIER1_PATHS`) |
 | GET | `/api/map/scope` | (added 2026-10-24) Receiver circle + SWIM storage area (`geo_filter.storage_scope()`), their union as `bounds`, `tar1090_url`. Real receiver centre, SWIM centre and `tar1090_url` for trusted callers only; untrusted get the `/api/v1/frontend-config` placeholder |
-| GET | `/api/map/focus` | (added 2026-10-24) `?ident=<hex or callsign>`: the live aircraft, else the most recent SWIM leg within 24 h (`/api/v1/swim/last-leg`), else 404 |
-| GET | `/api/vdl2/messages` · `/api/acars/messages` · `/api/hfdl/messages` | Decoded message feeds (acarshub; HFDL hardware pending) |
+| GET | `/api/map/focus` | (added 2026-10-24) ~~`?ident=<hex or callsign>`: the live aircraft, else the most recent SWIM leg within 24 h (`/api/v1/swim/last-leg`), else 404~~ (corrected 2026-10-25: `?ident=` hex, callsign in IATA or ICAO form, registration or serial. Order: the receiver + SWIM snapshot; then `/api/v1/swim/resolve` (codeshare callsign, registry hex) and the snapshot again; then the airplanes.live fallback through `/api/v1/swim/aggregator`; then the most recent SWIM leg within 24 h (`/api/v1/swim/last-leg`); else 404. The demo instance stops after the snapshot -- `main.py:1068-1145`) |
+| GET | `/api/vdl2/messages` · `/api/acars/messages` · `/api/hfdl/messages` | Decoded message feeds ~~(acarshub; HFDL hardware pending)~~ (corrected 2026-10-25: not from acarshub -- the local step, `_acarshub_messages`, always raises because acarshub serves its data over WebSocket only, so the messages come from the ACARS Drama Jumpseat REST API, then airframes.io; there is no local HFDL decoder -- `main.py:1544-1700`) |
 | GET | `/api/ais/vessels` | AIS vessels (hardware pending; AISHub/Kpler sources) |
 | GET | `/api/utm/drones` | Remote-ID / UAS view (receiver disabled pending hardware) |
 | POST | `/api/ask` | Dispatch Drawer chat (SSE); 2026-10-18: 404 unless `_is_trusted` (tailnet/LAN), same gate as `/api/chat/history` |
@@ -152,12 +157,12 @@ In-memory cache per feed URL, `_RSS_TTL = 900` s, process-scoped.
 | `DISPATCH_BASE_URL` | `http://127.0.0.1:8000` | `http://100.x.x.x:8000` (demo: `:8004`) |
 | `ULTRAFEEDER_URL` | `http://127.0.0.1:8080/data/aircraft.json` | `http://100.x.x.x:8080/data/aircraft.json` |
 | `ACARSHUB_URL` | `http://127.0.0.1:9081` | `http://100.x.x.x:8092` |
-| `NTFY_URL` | `http://host.containers.internal:2586` | same (dispatch.env) |
+| `NTFY_URL` | `http://host.containers.internal:2586` | same (dispatch.env) (unverified 2026-10-25: the live value was not read; the key is in dispatch.env, and the tracked `config/dispatch.env:41` carries the default) |
 | `AIS_CATCHER_URL` | `http://127.0.0.1:8110` | unset (hardware pending) |
-| `LLAMA_BASE_URL` (fallback `OLLAMA_BASE_URL`) | `""` | `http://100.x.x.x:8093` |
-| `OLLAMA_CHAT_MODEL` | `corporatetraveldc-pi5-chat:latest` | default |
+| `LLAMA_BASE_URL` (fallback `OLLAMA_BASE_URL`) | `""` | `http://100.x.x.x:8093` (unverified 2026-10-25: the live value was not read; the key is in dispatch.env, and the llama server listens only on 100.x.x.x:8093) |
+| `OLLAMA_CHAT_MODEL` | `corporatetraveldc-pi5-chat:latest` | ~~default~~ (corrected 2026-10-25: set in dispatch.env, live value not read; the tracked `config/dispatch.env:129` has `corporatetraveldc-pi5-chat`, the same `chat` persona) |
 | `OPENWEBUI_URL` / `OPENWEBUI_API_KEY` | `""` | read but unused by the chat path |
-| `DEMO_MODE` / `DEMO_SESSION_SECRET` / `DEMO_SANITIZE_SALT` | `false` / `""` / derived | demo instance only |
+| `DEMO_MODE` / `DEMO_SESSION_SECRET` / `DEMO_SANITIZE_SALT` | `false` / `""` / derived | ~~demo instance only~~ (corrected 2026-10-25: `DEMO_MODE=true` on the demo instance only; `DEMO_SESSION_SECRET` reaches both runners, the live one through `svc/runner.env` and the demo one through `demo-secrets.env`; `DEMO_SANITIZE_SALT` is set on neither, so it is derived) |
 | `RUNNER_ENRICHED_TOKEN` | `""` | cert-tier proxy token (scoped `svc/runner.env`) |
 | `SSE_INTERVAL_SEC` | 30 | 30 |
 | `TAR1090_URL` (added 2026-10-24) | `""` (no link) | the local tar1090 UI behind the map's "Open full receiver map" link; returned by `/api/map/scope` to trusted callers only because it names a box-local address; `config/dispatch.env.example` carries it empty |
@@ -170,8 +175,14 @@ bash build-images.sh runner
 systemctl --user restart corporatetraveldc-runner corporatetraveldc-runner-demo
 ```
 
+(corrected 2026-10-25: ~~`bash build-images.sh runner`~~ builds more than the runner -- `build-images.sh` takes no
+target argument and rebuilds six images, web, poller, pusher, ingest, amtrak-tracker and runner
+(`build-images.sh:53,76`), so the word `runner` has no effect.)
+
 Quadlet resources: `Memory=1536m`, swap = memory, `CPUWeight=100`,
-`CPUQuota=300%`, `Slice=production.slice`, `After=corporatetraveldc-web.service`;
+`CPUQuota=300%`, `Slice=production.slice`, ~~`After=corporatetraveldc-web.service`~~ (corrected 2026-10-25: the
+live runner has `After=` and `Wants=corporatetraveldc-web.service`; the demo runner is ordered after
+`corporatetraveldc-demo-api` and `corporatetraveldc-pgsql-demo` instead);
 no `WantedBy=` — startup is owned by `corporatetraveldc-stack-boot-stagger`.
 The runner does not run the signed-manifest check at start (its `CMD` is
 `uvicorn main:app`); the integrity sweep covers it.
@@ -181,7 +192,7 @@ The runner does not run the signed-manifest check at start (its `CMD` is
 - HFDL overlay once the HFDL dongle is acquired
 - AIS and Remote-ID local receive (`ais`, `ais-watcher`, `utm-watcher` ship `.disabled`)
 - ~~Replace the GLOBE mode's third-party iframe with a local view, if fully-local display is required~~ (done 2026-10-24: the iframe is gone, `docs/MAP.md`)
-- Fix the chat context shape mismatch (`docs/DISPATCH_PANEL_PARITY.md` §2)
+- Fix the chat context shape mismatch (`docs/DISPATCH_PANEL_PARITY.md` §2) (unverified 2026-10-25: whether it is still open was not checked)
 - Persistent RSS cache on disk
 
 ---

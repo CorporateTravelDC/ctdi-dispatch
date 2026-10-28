@@ -71,8 +71,8 @@ pre-track bookkeeping the gate itself relies on.
 ## FIDS and TFMS are enrichment-only for phase assertion
 
 - **FIDS** is hard-denied from asserting *any* OOOI phase
-  (`_oooi_authority_check`, `db.py:5865-5866`): `if source == "fids": return
-  False`. Belt-and-suspenders — the sole caller that ever passed `source="fids"`
+  (`_oooi_authority_check`, `db.py:5865-5866`): ~~`if source == "fids": return
+  False`~~ (corrected 2026-10-25: SUPERSEDED; since 2026-10-18 the deny matches any source name containing `fids`, case-insensitive, `src/common/db.py:7051-7052`). Belt-and-suspenders — the sole caller that ever passed `source="fids"`
   (`poller._check_flight_fids`) has had its phase-promotion removed; the deny
   here stops any future caller reintroducing the false-early-landing path an
   airport display created. FIDS remains a **gate/baggage enrichment** source
@@ -104,7 +104,7 @@ The fix lives in the **parser**, not the gate — `_handle_flight_times()`,
   line 938). A future time is a schedule estimate and asserts nothing about
   `oooi_phase`.
 - Only then does it call `db.update_watchlist_oooi_phase_authoritative(...,
-  source="tfms", ...)` (`tfms_parser.py:943-946`).
+  source="tfms", ...)` (`tfms_parser.py:943-946`). (corrected 2026-10-25: SUPERSEDED; since 2026-10-05 it passes `source="tfms_airline"`, `src/ingest/parsers/tfms_parser.py:992-993`.)
 
 ---
 
@@ -113,7 +113,7 @@ The fix lives in the **parser**, not the gate — `_handle_flight_times()`,
 1. **TFMS asserting a future `airlineInTime`** — closed in the parser by the
    `<= now` achieved-milestone filter (`tfms_parser.py:909-940`). Root cause:
    the gate can't reject a future timestamp and TFMS is never outranked.
-2. **FIDS asserting landed** — closed by the hard `source == "fids"` deny in the
+2. **FIDS asserting landed** — closed by the hard ~~`source == "fids"`~~ (corrected 2026-10-25: any source containing `fids`, `src/common/db.py:7051`) deny in the
    gate (`db.py:5865-5866`) plus removal of the poller's FIDS phase-promotion.
    Root cause: an MWAA airport display, not a sensor, known wrong on timing.
 
@@ -128,7 +128,7 @@ while SWIM disagreed) are closed by the tier + lock machinery below.
 `db.py:5850-5900`. Decision order:
 
 1. Ungated phase (not off/on/in) → allow (`db.py:5857-5858`).
-2. `source == "fids"` → **deny** (`db.py:5865-5866`).
+2. ~~`source == "fids"`~~ (corrected 2026-10-25: source name contains `fids`, case-insensitive, `src/common/db.py:7051`) → **deny** (`db.py:5865-5866`).
 3. tier ≤ 0 (inference) → **deny**, no outage or lock state unlocks it
    (`db.py:5871-5872`).
 4. Local receiver → deny unless **both** `swim_is_live()` is false **and** a

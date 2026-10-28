@@ -25,7 +25,7 @@ the acarshub quadlet, item 3):
    `config/ultrafeeder-secrets.env.example`), loaded only by
    `.config/containers/systemd/corporatetraveldc-ultrafeeder.container`.
 3. **acarshub map** (added 2026-10-15; never listed before) —
-   `.config/containers/systemd/corporatetraveldc-acarshub.container:48-49`
+   `.config/containers/systemd/corporatetraveldc-acarshub.container:`~~`48-49`~~ (corrected 2026-10-25: lines 50-51)
    sets `ADSB_LAT` / `ADSB_LON` as literal values in the tracked quadlet, for
    acarshub's own ADS-B map. This is a third place the receiver position
    lives. It does not follow the secrets-file rule above and has to be kept in
@@ -58,9 +58,14 @@ defaults in the three modules above, but:
   `docs/MAP.md`);
 - MLAT accuracy depends on the receiver's site position being correct
   (readsb uses it as a fixed reference);
-- feeder registrations carry the wrong location (ultrafeeder's
+- feeder registrations carry the wrong location (~~ultrafeeder's
   `ULTRAFEEDER_CONFIG` feeds FlightAware, FR24, ADSBHub, airplanes.live and
-  OpenSky MLAT; PlaneFinder and AirNav Radar run as their own containers).
+  OpenSky MLAT; PlaneFinder and AirNav Radar run as their own containers~~
+  (corrected 2026-10-25: `ULTRAFEEDER_CONFIG` carries only the airplanes.live
+  ADS-B + MLAT entries; FlightAware (`piaware`), Flightradar24 (`fr24feed`),
+  PlaneFinder, AirNav Radar and OpenSky (`corporatetraveldc-opensky`, added
+  2026-10-23) each run as their own feeder container reading the local readsb;
+  nothing feeds ADSBHub -- truth-set 8 #25-26 03:42Z, `podman ps` 21:22Z)).
   (2026-10-15: airplanes.live also receives MLAT, on `feed.airplanes.live:31090`.
   The full list of outbound feeds is in `docs/SDR_SERVICES.md`.)
 
@@ -122,7 +127,10 @@ opened directly, append `?SiteClear=1` once to purge a stale cached home.~~
 is gone. The tar1090 facts still hold for the local tar1090 itself, which
 the map now links to with `?icao=<hex>` when `TAR1090_URL` is set: if its
 "H" button shows a wrong home despite correct `READSB_LAT/LON`, open it once
-with `?SiteClear=1`.)
+with `?SiteClear=1`.) (2026-10-25: the link is built by `tar1090Link()` in
+`src/runner/frontend/src/components/aircraftMap/AircraftMap.jsx:56-62` from
+`/api/map/scope`'s `tar1090_url`, which is `null` on this deployment because
+`TAR1090_URL` is unset -- truth-set 3 F3, 03:46Z.)
 
 ## Incident this codified (2026-08-24)
 

@@ -1,5 +1,7 @@
 # Phase 4 Validation — 2026-08-16 (independent cold-start audit)
 
+> Status 2026-10-25: dated record (2026-08-16). No longer current: Ollama, its 21 live models, `ollama-governor.service` and `scripts/ollama-wedged-detector.sh` (deleted 2026-08-30) are gone — inference is one llama.cpp server (`corporatetraveldc-llama.service`, Qwen3-4B) with persona prompts from `src/common/personas.py`; there are 23 Modelfiles (persona text, not built); `generate()` makes one attempt with no `max_retries`/`OLLAMA_MAX_RETRIES`; five per-call timeouts and every `TimeoutStartSec` budget have since changed. Call-site line numbers are as of the record's tree and have moved. Inline corrections are marked.
+
 Adversarial re-verification of the 2026-08-15 Phase-4 claim: "21 Modelfiles
 rebuilt, 21 Python timeouts measured and wired, 17 systemd TimeoutStartSec
 reconciled — fully complete, awaiting manifest re-sign." Read-only; nothing
@@ -46,15 +48,15 @@ Everything else below is confirmatory detail or minor.
 
 ## 1. The 21 Modelfiles — PASS (with one claim-accuracy caveat)
 
-All 21 present at repo root; `FROM phi3:mini` in every one (line 13);
+~~All 21 present at repo root; `FROM phi3:mini` in every one (line 13);
 identical `num_thread 2` / `top_p 0.9` everywhere; per-skill num_ctx
 (4096, 6144 for the three big-prompt skills: dispatch-desk-memo,
-ep-advance, secondbrain-weekly), num_predict matching each call site's
+ep-advance, secondbrain-weekly)~~ (corrected 2026-10-25: superseded — 23 Modelfiles now; `FROM phi3:mini` sits at line 16 in 20 of them (10, 11 and 36 in the other three); `num_thread 2`/`top_p 0.9` are still in all 23; num_ctx is 4096 except dispatch-desk-memo 8192 and ep-advance, secondbrain-weekly and claude-weekly-fallback 6144; the files are persona text and are not built into models), num_predict matching each call site's
 max_tokens exactly (verified all 21 pairs), temperatures 0.15-0.4 scaled
 sensibly to task determinism.
 
-Shared persona: the 28-line core (identity + rules block, lines 22-48) is
-**byte-identical across all 21** (md5 `0bd7b7c3...` on all 21). Caveat:
+Shared persona: the 28-line core (identity + rules block, ~~lines 22-48) is
+**byte-identical across all 21** (md5 `0bd7b7c3...` on all 21)~~ (corrected 2026-10-25: superseded — the 28 lines after `SYSTEM """` are byte-identical across all 23 current Modelfiles; `SYSTEM` is at line 24 in 16 of them, so the block has moved)). Caveat:
 three files — dispatch-desk-memo, disruption-weather-digest,
 transport-digest — append a 4-line "Exception for this skill only:
 markdown output" paragraph (their line 50-52), so the full persona block is
@@ -86,26 +88,26 @@ up`. All 21 reproduce to within rounding of the stated intermediates:
 
 | call site | timeout | check |
 |---|---|---|
-| aam_daily_watch.py:141 | 1890 | (53+1457.8)x1.25=1888.5 ✓ |
+| aam_daily_watch.py:141 | ~~1890~~ (corrected 2026-10-25: superseded — now `timeout=1200`, `aam_daily_watch.py:181`) | (53+1457.8)x1.25=1888.5 ✓ |
 | aam_weekly_watch.py:275 | 2250 | 2249.6 ✓ |
 | aviation_daily_watch.py:156 | 1380 | calc 1355, rounded to match sibling 1380s ✓ |
 | concierge_travel:142 | 1470 | 1460.1 ✓ |
 | dispatch_desk_memo.py:223 | 4770 | 4749.75 ✓ |
 | disruption_weather:154 | 810 | 789.4 ✓ |
-| ep_advance main (const:70) | 2220 | 2204.4 ✓ |
+| ep_advance main (const:70) | ~~2220~~ (corrected 2026-10-25: superseded — `OLLAMA_TIMEOUT = 3600`, `ep_advance_brief.py:119`) | 2204.4 ✓ |
 | ep_advance trend (const:71) | 540 | 536.6 ✓ |
 | exec_protection:145 | 1560 | 1552.4 ✓ |
 | gig_economy:151 | 1380 | 1355.75 ✓ |
-| ops_brief main (const:74) | 1200 | 1181.0 ✓ |
+| ops_brief main (const:74) | ~~1200~~ (corrected 2026-10-25: superseded — `OLLAMA_TIMEOUT = 2000`, `ops_brief.py:105`) | 1181.0 ✓ |
 | ops_brief trend (const:75) | 510 | 508.9 ✓ |
 | osint_monitor:428 | 300 | 292.4 ✓ (but see model bug, finding #1) |
 | route_impact.py:96 | 480 | 472.0 ✓ (incl. +16s cold-load, hot path) |
 | second_brain_daily:235 | 870 | 848.1 ✓ |
-| second_brain_weekly:150 | 2340 | 2322.1 ✓ |
+| second_brain_weekly:150 | ~~2340~~ (corrected 2026-10-25: superseded — now `timeout=2940`, `second_brain_weekly.py:198`) | 2322.1 ✓ |
 | tfr_enrichment.py:132 | 540 | 526.25 ✓ |
 | trains_yachts:142 | 1380 | 1351.4 ✓ |
 | transport_pattern:197 | 600 | 576.75 ✓ |
-| weekly_summary.py:153 | 990 | 963.25 ✓ |
+| weekly_summary.py:153 | ~~990~~ (corrected 2026-10-25: superseded — now `timeout=1530`, `weekly_summary.py:163`) | 963.25 ✓ |
 | entity_tracking extraction (:141) | 1740 | 1725.9 ✓; domain guess (:142) 150 | 140.25 ✓ |
 | runner chat (main.py:1290) | read=110 | deliberate fail-fast under nginx proxy_read_timeout=120s (both conf files verified at 120s) ✓ |
 
@@ -115,9 +117,9 @@ two shapes ride the osint-monitor model.)
 Cosmetic inconsistencies only:
 - tfr_enrichment comment states 0.79 tok/s but 266.2s at 220 tokens implies
   0.826 tok/s — ~12s discrepancy, absorbed by the 1.25 margin.
-- aam_daily_watch.py:146-148 retry comment still says "3x240=720s still
+- ~~aam_daily_watch.py:146-148 retry comment still says "3x240=720s still
   fits TimeoutStartSec=950" — stale numbers from the pre-reset era (real:
-  3x1890 vs 8600, which still fits, so harmless but should be updated).
+  3x1890 vs 8600, which still fits, so harmless but should be updated).~~ (corrected 2026-10-25: superseded — that comment is gone; `aam_daily_watch.py` has no retry comment at 5f7fca01.)
 
 One marginal real issue: **dispatch-desk-memo worst case slightly exceeds
 its context window** — measured 5092-token prompt + 1100-token cap = 6192
@@ -133,15 +135,15 @@ Exactly 17 `.container` units modified, matching the 17 skills that run as
 oneshot containers. Every budget comment recomputed and every assumption
 checked against code:
 
-- Formula: 800s fixed overhead + (attempts x per-call timeout) [+ 1740s
+- ~~Formula: 800s fixed overhead + (attempts x per-call timeout) [+ 1740s
   extraction + 2x150s domain guesses where the skill uses entity
-  tracking], rounded up. All 17 sums are arithmetically correct.
-- Attempt counts verified against code: max_retries=2 → 3 attempts
+  tracking], rounded up. All 17 sums are arithmetically correct.~~ (corrected 2026-10-25: superseded — current budgets no longer follow this formula, e.g. transport-pattern-digest 3300 against 800 + 1x600, dispatch-desk-memo 14100, aam-daily-watch 12300 against a 1200 s call; the units also wait up to 300-3600 s on the long-runner `flock` before the skill starts.)
+- ~~Attempt counts verified against code: max_retries=2 → 3 attempts
   (6 daily watches + aam-weekly), max_retries=0 → 1 (ops-brief x2,
   ep-advance x2, disruption, transport), default → 2 (desk-memo,
   sb-daily, sb-weekly, weekly-summary; default confirmed =
   OLLAMA_MAX_RETRIES env-default "1" at llm.py:295, not overridden in
-  dispatch.env).
+  dispatch.env).~~ (corrected 2026-10-25: superseded — `generate()` (`src/common/llm.py:817-826`) has no `max_retries` and `OLLAMA_MAX_RETRIES` survives only in comments; every call makes a single llama.cpp attempt.)
 - Entity-extraction inclusion verified: exactly the 6 daily watches import
   entity_tracking; aam-weekly correctly excludes it;
   personal-export-watch's inclusion is legitimate via
@@ -156,8 +158,8 @@ checked against code:
   worst cases with room, and the manual-trigger path (line 309) now reuses
   the constant; osint-monitor's documented can-exceed case is an accepted,
   self-healing loss of one sweep. Chat: 110s < nginx 120s ✓.
-- No unreconciled LLM unit exists: the 18 files importing common.llm map
-  exactly onto the 17 containers + the 3 poller-scheduled skills.
+- No unreconciled LLM unit exists: ~~the 18 files importing common.llm map
+  exactly onto the 17 containers + the 3 poller-scheduled skills~~ (corrected 2026-10-25: 21 files import `common.llm` at 5f7fca01 — 17 skills with their own oneshot containers, the 3 poller-scheduled skills osint-monitor, route-impact and tfr-enrichment, and `common/entity_tracking.py`).
 
 The ep-advance class of failure (Python timeout > systemd cap) is closed
 everywhere I could construct it.
@@ -180,23 +182,23 @@ everywhere I could construct it.
   inference and in-container the env's OLLAMA_OSINT_MODEL resolves first,
   so this is cosmetic, but the defaults should be cleaned.
 - Design note, not a bug: the chat path (`/api/ask`) always sends its own
-  system message (runner/main.py:1367-1383 → _llm_stream payload), which
+  system message (runner/main.py:1367-1383 → _llm_stream payload), ~~which
   overrides the pi5-chat Modelfile's baked SYSTEM in Ollama's chat API.
-  The baked persona applies only to direct Ollama/OpenWebUI use. The
+  The baked persona applies only to direct Ollama/OpenWebUI use.~~ (corrected 2026-10-25: superseded — no Modelfile SYSTEM is loaded anywhere now; `_llm_stream()` sends `system or build_system_prompt(persona)` to llama.cpp (`src/runner/main.py:2259-2292`), so `/api/ask`'s own prompt takes the place of the `chat` persona prompt in `src/common/personas.py`.) The
   110s measurement used the runner prompt, so the timeout is still valid.
 
 ## 5. Scope check — three items beyond the stated scope, flag to operator
 
 In-scope and clean: 22 .py files, 17 .container files, build-models.sh
-(21-model map matches disk 1:1), dispatch.env model-var comments, staged
+(~~21-model map matches disk 1:1~~ (corrected 2026-10-25: superseded — the map now has 23 entries matching the 23 tracked Modelfiles; the script builds nothing)), dispatch.env model-var comments, staged
 deletions of the 6 old model/persona/template files.
 
 Outside "Modelfiles + timeouts + systemd", all uncommitted in the same
 tree:
-1. `scripts/ollama-wedged-detector.sh` — full redesign: 65/80/110/120s
+1. `scripts/ollama-wedged-detector.sh` — ~~full redesign: 65/80/110/120s
    escalation ladder, ntfy alerting, TIER1/TIER2 feed-shedding, and an
    approval-gated SIGKILL stage. Derived from the same 53s baseline;
-   coherent, but a new automated-mitigation surface.
+   coherent, but a new automated-mitigation surface.~~ (corrected 2026-10-25: superseded — the script was deleted in `28e14c40` (2026-08-30) and is absent at 5f7fca01.)
 2. `scripts/sudo-approval-gate.sh` — auto-promotes any `kill`/
    `ollama-governor`/DR-flagged request to ntfy priority 5.
 3. `docs/SUDO_JUSTIFICATION_PROPOSAL.md` — **softens the
@@ -221,7 +223,7 @@ tree:
 - `ollama ps`: empty — nothing loaded/running.
 - No synthetic load processes (no stress/dd/openssl burners in ps); load
   avg ~5 is the normal ingest working set (SWIM ingest.main containers +
-  readsb/rbfeeder), CPU temp 58.4C, ollama-governor.service active.
+  readsb/rbfeeder), CPU temp 58.4C, ~~ollama-governor.service active~~ (corrected 2026-10-25: superseded — no `ollama*` unit exists in user or system scope).
 - `corporatetraveldc-thermal-ingest-guard.timer` **active/waiting** (user
   scope) — the guard paused for spike testing was properly resumed; the
   thermal-sample and sdr-crashloop timers are also active.

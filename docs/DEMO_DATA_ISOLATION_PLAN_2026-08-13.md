@@ -1,3 +1,5 @@
+> Status 2026-10-25: checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box. The isolation described below holds. No longer current: `DEMO_PG_PASSWORD` is in `config/demo.env.example`, not `config/demo-secrets.env.example` (moved 2026-10-19; struck in place), and the demo-source-refresh timer is enabled (daily 03:17 UTC), so relay 1's "timer still disabled" is history. The demo instance's profile count was not checked (marked unverified).
+
 # Demo Data Isolation — Sovereign Scrubbed Source Plan
 
 > **Status note, 2026-10-16 (code + quadlets; verified against the live box
@@ -107,8 +109,8 @@
 >    `tests/scripts/test_pg_schema_demo.py`, `tests/scripts/test_scrub_demo_source.py`,
 >    a relay-lint rule, and the live `scripts/demo-isolation-check.sh` in the
 >    15-minute sweep (`ops-health` p4); examples `config/demo.env.example`,
->    `config/pgsql-demo-secrets.env.example`, `DEMO_PG_PASSWORD` in
->    `config/demo-secrets.env.example`; the nightly backup excludes the instance.
+>    `config/pgsql-demo-secrets.env.example`, ~~`DEMO_PG_PASSWORD` in
+>    `config/demo-secrets.env.example`~~ (corrected 2026-10-25: `DEMO_PG_PASSWORD` is in `config/demo.env.example` since 2026-10-19); the nightly backup excludes the instance.
 > 2. **Relay 2 (flip).** Install `/etc/corporatetraveldc/demo.env`
 >    (`DISPATCH_ROLE=demo`, `DISPATCH_DB_BACKEND=postgres`, `DEMO_PG_*`,
 >    `DEMO_SOURCE=postgres`) and `DEMO_PG_PASSWORD` in ~~`demo-secrets.env`~~
@@ -190,7 +192,7 @@
 >   carries no `DISPATCH_PG_*` name and sees no `dispatch.env`.
 > - Profiles: all four active rows of `demo_access.db` already exist in the
 >   instance (relay 1's `--profiles`; checked 2026-10-19 by hashed key, counts
->   only: 5 in the instance, 7 in the file, the 2 file-only rows inactive).
+>   only: 5 in the instance, 7 in the file, the 2 file-only rows inactive) (unverified 2026-10-25).
 > - demo-api `/healthz` adds `started_at`, `uptime_s`, `requests` (per source,
 >   since start) and `profiles_store`.
 >

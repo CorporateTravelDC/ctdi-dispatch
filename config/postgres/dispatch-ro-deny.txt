@@ -1,0 +1,48 @@
+# config/postgres/dispatch-ro-deny.txt -- tables the read-only role dispatch_ro
+# may NOT read (scripts/pg-ro-role.py). One name or glob per line; everything
+# else in schema public gets SELECT and nothing more. A table created later is
+# NOT granted until pg-ro-role.py runs again (fail closed). Operator decision
+# 2026-10-26: start conservative, loosen by removing a line in a signed commit.
+
+# credentials, sessions, tokens, grants
+auth_tokens
+board_tokens
+board_enroll_nonces
+board_refresh_grace
+board_signers
+oauth_*
+console_sessions
+session_grants
+workspace_grants
+agent_connections
+agent_connectors
+agent_gateway_settings
+exec_standard_*
+es_*
+
+# the approval gate's internals
+approval_requests
+approval_signers
+
+# raw inbound payloads (may carry upstream credentials or personal data)
+webhook_events
+
+# LADD-listed aircraft (never shown to agents)
+faa_ladd_*
+
+# clients, people and personal notes
+watchlist_*
+runsheet
+brief_archive
+chat_messages
+osint_*
+vault_*
+semantic_note_*
+
+# audit trail
+audit_log
+audit_archive_stubs
+audit_checkpoints
+
+# query text with literals
+pg_stat_statements*

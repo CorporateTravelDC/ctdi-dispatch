@@ -29,6 +29,17 @@ rm -f /tmp/.preflight-lint.$$; ok "1 relay-lint"
   || { ( cd "$MAIN" && bash scripts/check-claude-md-drift.sh 2>&1 | grep -E '^\[(DRIFT|FAIL)\]' ) || true; fail drift "reconcile, then re-run"; }
 ok "2 drift gate"
 
+# 2026-10-26 (operator: "catch this shit"): a batch may not ADD doc-claim misses (paths, units, timer
+# schedules, API routes, enabled/disabled state) -- the guard's own checker on both trees, compared.
+dc_misses() { python3 "$G/scripts/doc-claims-check.py" --claims-only "$1" 2>/dev/null | sed -n 's/^\[SUMMARY\].*misses=\([0-9]*\).*/\1/p'; }
+# a unit whose file THIS batch adds is pending install (the operator installs it after the relay), not drift
+dc_pending() { python3 "$G/scripts/doc-claims-check.py" --claims-only "$G" 2>/dev/null | sed -n 's/.*unit not installed: \(.*\)$/\1/p' | sort -u | while read -r u; do
+    git -C "$G" diff --cached --name-only --diff-filter=A | grep -qE "(^|/)${u//./\\.}\$" && echo "$u"; done | wc -l; }
+before=$(dc_misses "$MAIN"); after=$(( $(dc_misses "$G") - $(dc_pending) ))
+[[ -n "$before" && -n "$after" ]] || fail doc-claims "doc-claims-check.py did not run"
+(( after <= before )) || { python3 "$G/scripts/doc-claims-check.py" --claims-only "$G" 2>/dev/null | grep '^\[DRIFT\]' | sed -n '1,15p'; fail doc-claims "the batch adds $((after - before)) doc-claim miss(es) ($before -> $after): fix the docs it touches"; }
+ok "2b doc claims: ${after} miss(es), none added (main ${before})"
+
 cd "$G" || fail guard "no guard worktree"
 
 # 2026-10-22 (operator): the dependency audit, invoked exactly as scripts/pre-push does, so a relay

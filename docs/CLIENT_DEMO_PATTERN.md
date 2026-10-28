@@ -9,9 +9,12 @@ prospective/current client's AI-rewritten static site. Generalized
 second one-off (v1 of the same site, built 2026-09-06) both run today as
 their own Quadlets, `corporatetraveldc-ccw-demo.container` (:8085) and
 `corporatetraveldc-ccw-preview1.container` (:8086), both now tracked in
-`.config/containers/systemd/`. Their shared webdev-credential expiry timer
+`.config/containers/systemd/`. ~~Their shared webdev-credential expiry timer
 (`corporatetraveldc-ccw-demo-webdev-expiry.timer`, live-only, untracked)
-fired 2026-08-25 04:10Z.
+fired 2026-08-25 04:10Z.~~ (corrected 2026-10-25: no
+`corporatetraveldc-ccw-demo-webdev-expiry.timer` exists live; the only expiry
+units are the tracked `corporatetraveldc-client-demo-webdev-expiry@.{service,timer}`
+template, with no instance.)
 
 **Current state of this pattern:** the template and expiry units are
 installed, but **no instance of it exists** — no
@@ -19,9 +22,13 @@ installed, but **no instance of it exists** — no
 fixed-hostname successor, the "demo portals"
 (`corporatetraveldc-demo-portal-{client,personal}.container`, ports 8088 and
 8087, swapped with `scripts/demo-portal.sh`), is tracked since 2026-09-18 ~~but
-not installed,~~ (corrected 2026-10-15: installed 2026-10-12 and both
+not installed,~~ ~~(corrected 2026-10-15: installed 2026-10-12 and both
 `corporatetraveldc-demo-portal-client` and `-personal` are active, bound to
-127.0.0.1 and the Tailscale address only) has no tunnel ingress (no 8087/8088
+127.0.0.1 and the Tailscale address only)~~ (corrected 2026-10-25: the two
+quadlets are installed (`generated`) but both `corporatetraveldc-demo-portal-client`
+and `-personal` are inactive and nothing listens on 8087/8088;
+`corporatetraveldc-demo-portals-boot.service` is enabled but inactive --
+NEEDS-OPERATOR-DECISION, see the sweep register) has no tunnel ingress (no 8087/8088
 route in the tracked `cloudflared/` or `nginx/` config), and its header points at a
 `docs/DEMO_PORTALS.md` that does not exist (still missing 2026-10-15).
 
@@ -38,7 +45,10 @@ serialized rollout; `WantedBy=default.target`) starts both portals with
 Rechecked 2026-10-15 01:45Z: still no `corporatetraveldc-client-demo@<slug>`
 instance; `corporatetraveldc-ccw-demo` and `corporatetraveldc-ccw-preview1` are
 active; the `corporatetraveldc-ccw-demo-webdev-expiry.timer` last fired
-2026-08-25 04:10Z and has no next run.
+2026-08-25 04:10Z and has no next run. (Superseded 2026-10-25: no
+`corporatetraveldc-ccw-demo-webdev-expiry` unit exists any more; only the
+`corporatetraveldc-client-demo-webdev-expiry@` service/timer templates are
+installed, with 0 instances in `systemctl --user list-timers --all`, 2026-10-26 21:58Z.)
 
 ## The pieces
 

@@ -10,8 +10,8 @@ Two tiers share one monitoring/alert pipeline:
   survive reboots, never auto-expire.
 - **Transient** — added via REST API, auto-expire after a flight/train leg.
 
-Three entry types: **`flight`** (identifier = callsign), **`train`**
-(identifier = Amtrak train number), **`vessel`** (identifier = 9-digit MMSI).
+~~Three~~ Four entry types (corrected 2026-10-25: `drone` added, `src/shared/watchlist.py:48`): **`flight`** (identifier = callsign), **`train`**
+(identifier = Amtrak train number), **`vessel`** (identifier = 9-digit MMSI), **`drone`** (identifier = Remote ID UAS ID).
 
 ---
 
@@ -26,8 +26,9 @@ picked up within ~65 seconds, no restart needed (`_FILE_MAP` in
 | `permanent_flights.json` | `flight` |
 | `permanent_trains.json` | `train` |
 | `permanent_vessels.json` | `vessel` (yachts/cruise ships, identifier = MMSI) |
+| `permanent_drones.json` | `drone` (added 2026-10-25 to this table: `src/shared/watchlist.py:1226-1234`) |
 
-All three use the same wrapper: `{"watchlist": [ ... ]}`.
+~~All three use~~ (corrected 2026-10-25: all four files are in `_FILE_MAP`; whether `permanent_drones.json` uses the same wrapper is unverified 2026-10-25) All three use the same wrapper: `{"watchlist": [ ... ]}`.
 
 **Flight entry** (`PermanentFlightItem`):
 
@@ -211,7 +212,8 @@ watch. Links are learned from FIDS leg matches and SWIM route continuity
 > prefix). The follow-on cleanup that revision flagged is **also done** —
 > verified 2026-08-23, `src/shared/watchlist.py:39` now reads
 > `EntryType = Literal["flight", "train", "vessel"]`, so the annotation
-> matches the three types the code actually handles.
+> matches the three types the code actually handles. (Superseded 2026-10-25:
+> `EntryType` is now at `src/shared/watchlist.py:48` and has four types, `drone` added.)
 
 **Deduplication:** forward-only as of the 2026-09-03 `common/push_dedup.py`
 redesign (`_watchlist_dedup.should_push()`). The slot key is
@@ -235,9 +237,12 @@ false-positive protections: hex-authoritative-once-known, callsign-only
 during bootstrap, local FAA/OpenSky registry tables for tail→hex). Since
 2026-08-27 resolution is LOCAL-ONLY (operator directive, "everything is
 meant to be local"): live contact comes from this box's own ADS-B receiver
-first, then already-ingested FDPS SWIM data — the airplanes.live API
+first, then already-ingested FDPS SWIM data — ~~the airplanes.live API
 (previously the primary live source, with its flaky `/v2/reg/` fallback)
-is no longer queried at all. Only the `globe.airplanes.live/?icao=`
+is no longer queried at all.~~ (corrected 2026-10-25: `resolve_flight_identity`
+falls back to `_remote_ac_by_hex`/`_remote_ac_by_callsign`, `src/shared/watchlist.py:504,540,568`,
+which query airplanes.live through `src/common/airplanes_live.py` when
+`AIRPLANES_LIVE_FALLBACK=1`, off by default; whether it is set live is unverified 2026-10-25.) Only the `globe.airplanes.live/?icao=`
 click-through URL in notifications survives, as a phone convenience link,
 not a lookup this box performs. Two callers:
 

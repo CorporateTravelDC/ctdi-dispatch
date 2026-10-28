@@ -1,10 +1,13 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:10Z / 14:10 ET.
-Re-checked 2026-10-15 ~01:15Z against main 1491bf5a (plus the staged batch) and the live box: the backup uplink is
-still down (see the status updates); the mechanism below is unchanged.
+Re-checked 2026-10-15 ~01:15Z against main 1491bf5a (plus the staged batch) and the live box: ~~the backup uplink is
+still down~~ (superseded 2026-10-26: the backup `enu1` is up -- `backup=enu1:ok` on 10 of 10 watchdog cycles,
+`journalctl --user -u corporatetraveldc-net-failover-watchdog --since -10min` 22:00Z; see the status updates); the mechanism below is unchanged.
 
 # Uplink failover — how it actually works on this box
 
-**There is no bond.** `/proc/net/bonding/` is empty (re-confirmed live).
+**There is no bond.** ~~`/proc/net/bonding/` is empty (re-confirmed live).~~
+(corrected 2026-10-25: the directory does not exist at all -- the bonding
+module is not loaded; `ls /proc/net/bonding/` 21:48Z.)
 Anything that calls this setup "bonded" is wrong — that misconception is
 why the 2026-09-05 outage was expected to self-heal when it structurally
 could not.
@@ -15,7 +18,7 @@ could not.
 |---|---|---|---|
 | `wld0` (WiFi) | `jorransgateway` | 10.x.x.x via 10.x.x.x | **primary**, `ipv4.route-metric=100` |
 | `enu1` (USB Ethernet) | `Verizon Hotspot` | 192.168.x.x via 192.168.x.x | **backup**, `ipv4.route-metric=600` |
-| `end0` (built-in) | `Wired connection 1` | — | DOWN / NO-CARRIER, unused |
+| `end0` (built-in) | ~~`Wired connection 1`~~ (superseded 2026-10-25: no NM profile exists for it now; `nmcli con show` lists `jorransgateway`, `Verizon Hotspot`, `tailscale0`, `lo`, `corporatetravel`, `Corporate Traveler WiFi`, 2026-10-26 02:19Z) | — | DOWN / NO-CARRIER, unused |
 
 The WiFi address has changed since the connection was last documented
 (previously 10.x.x.x, now 10.x.x.x — same subnet, DHCP re-lease, not a
@@ -27,7 +30,7 @@ Two independent NetworkManager connections on different subnets with
 different gateways. The *only* thing selecting between them is the
 per-connection `ipv4.route-metric`, both explicitly set.
 
-## Current live status (2026-10-06 18:10Z / 14:10 ET) — backup is down right now
+## Current live status (2026-10-06 18:10Z / 14:10 ET) — ~~backup is down right now~~ (superseded 2026-10-26: backup `enu1:ok` on 10 of 10 watchdog cycles, 22:00Z; this section is the 2026-10-06 record)
 
 `scripts/net-failover-watchdog.sh --status`:
 
@@ -42,7 +45,7 @@ Direct probe replication (same method the watchdog uses — ICMP then
 TCP:443, by interface):
 
 - `wld0` → 1.1.1.1: **reachable**, 29ms.
-- `enu1` → 1.1.1.1 / 8.8.8.8 / 9.9.9.9: **100% packet loss on all three**,
+- (superseded 2026-10-25: `enu1` probes succeed again -- see the 2026-10-25 note under the status update below.) `enu1` → 1.1.1.1 / 8.8.8.8 / 9.9.9.9: **100% packet loss on all three**,
   and the TCP:443 fallback via `curl --interface enu1` also failed
   (`http_code=000` on all). The watchdog's own log confirms this has been
   continuous for at least the visible window (`backup=enu1:DOWN` on every
@@ -58,9 +61,12 @@ TCP:443, by interface):
   over to it (both-down branch would be the one to fire if the primary
   also failed right now — see below).
 
-This means: **if the primary (`wld0`) were to fail right now, this box has
+~~This means: **if the primary (`wld0`) were to fail right now, this box has
 no working failover path.** The backup connection exists, has carrier, and
-looks "up" to a casual check, but is not actually reaching the internet.
+looks "up" to a casual check, but is not actually reaching the internet.~~
+(superseded 2026-10-26: the backup reaches the internet again -- `backup=enu1:ok` on 10 of 10
+watchdog cycles, 22:00Z -- so a primary failure would take the failover branch, not
+"both down"; failover has not been exercised end to end (unverified 2026-10-26).)
 See Findings for the operator.
 
 **Context — 2026-10-06 06:01 ET incident (operator-reported):** the
@@ -78,18 +84,27 @@ sitting on cellular is throttling, which is why fail-back exists.
 
 ## Status update 2026-10-13 -- still down, by decision; weekly reminder
 
-- The backup link (enu1, a Verizon-backed phone hotspot) has had no internet since 2026-10-06 over a
+- ~~The backup link (enu1, a Verizon-backed phone hotspot) has had no internet since 2026-10-06 over a
   pricing issue. The operator plans a prepaid SIM before winter. Until then failover has nothing to fail
-  over to.
+  over to.~~ (corrected 2026-10-25: `enu1` reaches the internet again. `net-failover-watchdog.sh --status` 21:20Z:
+  `default via: wld0`, `failed_over: 0`, `ok_streak: 1951`; the log reads `primary=wld0:ok backup=enu1:ok` on
+  every minute cycle; `~/.local/state/ctdc-uplink/state.json` = `down_since 2026-10-06, last_check 2026-10-25,
+  ~~up_days 2, announced_stable false`, so the "back and stable" push fires after the third good daily check.~~
+  (superseded 2026-10-26: `state.json` read 22:00Z shows `up_days` 3 and `announced_stable` true, so the
+  "back and stable" push has already fired.)
+  The NM profile is still named `Verizon Hotspot` (metric 600, autoconnect yes). Failover has not been
+  exercised end to end since the link returned.)
 - `corporatetraveldc-uplink-reminder.timer` (user, daily 14:07 UTC) runs `scripts/uplink_reminder.py`: an
   IPv4 HTTPS probe bound to enu1 (link state alone reads "connected" with no service). While the link has
   no internet it pushes a reminder on Mondays; after 3 consecutive good daily checks it pushes once
   ("back and stable") and goes quiet; if the link drops again the weekly reminders restart. State:
   `~/.local/state/ctdc-uplink/state.json`. Tests: `tests/scripts/test_uplink_reminder.py`.
-- **Re-check 2026-10-15 01:14Z:** the watchdog still logs `primary=wld0:ok backup=enu1:DOWN default_via=wld0
-  failed_over=0` every minute. Each run now takes about 22 s because every enu1 probe waits out its timeout. The
-  reminder timer is enabled (last run 2026-10-14 14:07Z). A primary failure today still lands in the "both down,
-  alert only" branch. The nightly Proton sync (`docs/BACKUP.md`) runs over wld0 only (`BACKUP_IFACE=wld0`).
+- **Re-check 2026-10-15 01:14Z:** the watchdog ~~still logs `primary=wld0:ok backup=enu1:DOWN default_via=wld0
+  failed_over=0` every minute~~ (superseded 2026-10-25: logs `primary=wld0:ok backup=enu1:ok default_via=wld0 failed_over=0`, 21:20Z). ~~Each run now takes about 22 s because every enu1 probe waits out its timeout.~~
+  (superseded 2026-10-25: a run takes about 2 s, `ExecMainStartTimestamp` 21:48:00Z to `ExecMainExitTimestamp` 21:48:02Z.) The
+  reminder timer is enabled (last run 2026-10-14 14:07Z). ~~A primary failure today still lands in the "both down,
+  alert only" branch.~~ (superseded 2026-10-25: with `backup=enu1:ok` a primary failure would take the failover
+  branch; not exercised end to end since the link returned.) The nightly Proton sync (`docs/BACKUP.md`) runs over wld0 only (`BACKUP_IFACE=wld0`).
 - When the new SIM is in: validate failover end to end (pull the primary, confirm SWIM and the tunnel move
   over and back), keep IPv6 off on that link (the 2026-09-02 hotspot IPv6 throttle), keep bulk traffic
   (the nightly off-box sync, image pulls) off it by default, and add it to vnStat tracking.
@@ -101,15 +116,16 @@ disappears** — i.e. on carrier loss. The kernel then falls through to the
 next-lowest default automatically. It does **nothing** for "carrier up,
 link fine, upstream unreachable" — the kernel keeps sending everything out
 the dead metric-100 default indefinitely. That is the 2026-09-05 failure
-mode (primary), and it is what the backup is currently exhibiting too
-(see above) — the mechanism doesn't care which side degrades this way,
+mode (primary), and it is what the backup ~~is currently exhibiting too~~
+exhibited from 2026-10-06 until it recovered (by 2026-10-25) (superseded 2026-10-26: `backup=enu1:ok` on 10 of 10 watchdog cycles, 22:00Z) — the mechanism doesn't care which side degrades this way,
 it just can't see it without an active prober on that side.
 
 ## Why NetworkManager could not save us
 
 NM's connectivity probe is disabled box-wide on purpose:
 `/etc/NetworkManager/conf.d/no-connectivity-check.conf` (re-confirmed live,
-`[connectivity] enabled=false`), applied by `harden-wifi.sh` and marked
+`[connectivity] enabled=false`), applied by `harden-wifi.sh` (in the
+`pihole-unbound-selinux-internal` repo's `scripts/`, not this one) and marked
 *"do not remove"* — the probe fired before Unbound was ready, marked
 connections "limited", and made browsers show offline.
 
@@ -151,8 +167,10 @@ LOCKDOWN sheds services, never routes.
 ## DNS needs no special handling
 
 `/etc/resolv.conf` is `nameserver 127.0.0.1` (re-confirmed live), and the
-local Unbound is a full **recursive** resolver with no `forward-zone`
-(re-confirmed live: `grep -c forward-zone /etc/unbound/unbound.conf` → `0`).
+local Unbound is a full **recursive** resolver ~~with no `forward-zone`
+(re-confirmed live: `grep -c forward-zone /etc/unbound/unbound.conf` → `0`)~~ (corrected 2026-10-25: one
+`forward-zone`, `ts.net.` → `100.100.100.100` (Tailscale MagicDNS) in
+`/etc/unbound/conf.d/60-tailscale-magicdns.conf`; every other name recurses; `grep -rn forward-zone /etc/unbound` 21:20Z).
 It recurses out over whatever the current default route is, so flipping
 the route fixes resolution automatically.
 
@@ -169,22 +187,25 @@ the route fixes resolution automatically.
 
 ## Findings for the operator
 
-1. **Backup uplink (`enu1`/Verizon Hotspot) passes no traffic** (operator 2026-10-06: acceptable for now while the hotspot stays associated/bonded)
+1. ~~**Backup uplink (`enu1`/Verizon Hotspot) passes no traffic** (operator 2026-10-06: acceptable for now while the hotspot stays associated/bonded)
    despite showing carrier-up and a valid DHCP lease — 100% ICMP loss and
    failed TCP:443 on all three probe IPs, continuously for at least the
    12.5 hours of watchdog log visible at review time. The documented
    failover protection is not actually available right now: a primary
    failure at this moment would hit the "both down, alert only" branch,
    not a real failover. This is consistent with the reported 2026-10-06
-   06:01 ET incident and suggests the backup has not recovered since.
+   06:01 ET incident and suggests the backup has not recovered since.~~
+   (superseded 2026-10-25: `enu1` passes traffic again -- `backup=enu1:ok` on
+   every minute cycle, `ok_streak 1979` at 21:48Z; the end-to-end failover
+   validation is still due.)
 2. (fixed 2026-10-06) `PRIMARY_CON_DEFAULT` now matches the live lowercase profile `jorransgateway`.
 3. ~~`RandomizedDelaySec=` is set on only two timers fleet-wide, and most
    timers carry `Persistent=true`; see `docs/BOOT_STORM_TIMER_REQUIRES.md`
    for the related, more serious finding about two root timers still
    carrying a self-referential `Requires=`.~~ (corrected 2026-10-15:
-   `RandomizedDelaySec=` is now on 12 live timers, 8 of 78 user timers and
-   4 of 9 `corporatetraveldc-*` system timers; 43 live user timers carry
-   `Persistent=true`, so post-outage catch-up can still bunch. The two root
+   `RandomizedDelaySec=` is now on ~~12~~ live timers, ~~8~~ of ~~78~~ (corrected 2026-10-26: 79; `ls ~/.config/systemd/user/*.timer` 22:36Z) user timers and
+   4 of 9 `corporatetraveldc-*` system timers; ~~43~~ live user timers carry
+   `Persistent=true` (corrected 2026-10-25: 13 timers, 9 user + 4 system; ~~44 user timers~~ `Persistent=true`; `grep -l` over the unit files 21:22Z) (corrected 2026-10-26: 45 of 79 user `.timer` files carry `Persistent=true`; `grep -l '^Persistent=true' ~/.config/systemd/user/*.timer`, `ls`, 22:00Z), so post-outage catch-up can still bunch. The two root
    timers' self-referential `Requires=` lines were removed on 2026-10-06 and
    no live timer carries one now; see
    [`docs/BOOT_STORM_TIMER_REQUIRES.md`](BOOT_STORM_TIMER_REQUIRES.md).)

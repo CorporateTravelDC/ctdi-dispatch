@@ -59,7 +59,7 @@ operating carrier (ICAO) + flight number + origin + destination + scheduled date
 
 Messages that carry no airports still match on identity, as before.
 
-**Which watches get leg checks** (next relay, swarm audit NB-02). `is_leg_watch(entry)` is True only for a flight-number identifier whose watch has both an origin and a destination. Every other watch (a tail or aircraft identifier, or a permanent watch with only a home origin) skips `leg_rejection` and the SMES side rules and matches on identity alone, as before 2026-10-13, so it follows the aircraft or number on every leg. On 2026-10-15 01:30Z the live table held 16 flight watches, all with an origin and only 4 with a destination, so most watches are not leg watches.
+**Which watches get leg checks** (next relay, swarm audit NB-02). `is_leg_watch(entry)` is True only for a flight-number identifier whose watch has both an origin and a destination. Every other watch (a tail or aircraft identifier, or a permanent watch with only a home origin) skips `leg_rejection` and the SMES side rules and matches on identity alone, as before 2026-10-13, so it follows the aircraft or number on every leg. On 2026-10-15 01:30Z the live table held 16 flight watches, all with an origin and only 4 with a destination, ~~so most watches are not leg watches~~ (superseded 2026-10-25 15:49Z: 60 permanent flight watches and 0 transient, all with an origin and 47 with a destination, so most permanent watches are now leg watches).
 
 **Diversions without a schedule** (next relay, NB-03). `leg_rejection(..., diversion_without_sched=True)` also accepts a different destination when the origin agrees and the schedule is unknown. FDPS (`check_fdps_watchlist`) passes it, because FDPS plans carry no scheduled time to compare; SMES passes it for arrival events on the message's own route. TFMS and TBFM stay strict: without the time proof a different destination does not match.
 
@@ -91,7 +91,7 @@ The codeshare aliases are cached for 5 minutes per (identifier, route), so the n
 
   The caller can satisfy (c) instead by passing `on_ground_at_origin=True` as positive evidence. If the previous leg is unknown, the change is rejected. The rule is "show it gets there", not "assume it does".
 
-  **(c) does not run today** (2026-10-15). Since the 2026-10-13 decision, (c) is skipped whenever a SWIM source shows the tail, and since 2026-10-14 every accepted source is SWIM (`AUTHORITATIVE_TAIL_SOURCES` and `SWIM_TAIL_SOURCES` are the same set, `fdps`/`tdes`/`tbfm`/`tfms`, flight_instance.py:914 and :920). The previous-leg branch and `on_ground_at_origin` (no caller passes it) are unreachable and kept only for a future non-SWIM source. Accepting a change today needs (a) and (b) only.
+  **(c) does not run today** (2026-10-15). Since the 2026-10-13 decision, (c) is skipped whenever a SWIM source shows the tail, and since 2026-10-14 every accepted source is SWIM (`AUTHORITATIVE_TAIL_SOURCES` and `SWIM_TAIL_SOURCES` are the same set, `fdps`/`tdes`/`tbfm`/`tfms`, ~~flight_instance.py:914 and :920~~ flight_instance.py:1021 and :1027 (2026-10-25)). The previous-leg branch and `on_ground_at_origin` (no caller passes it) are unreachable and kept only for a future non-SWIM source. Accepting a change today needs (a) and (b) only.
 
 Outcomes:
 
@@ -128,7 +128,7 @@ Wiring in `poller.main._check_flight_fdps_cache`, the only existing hex-repoint 
 
 The key is the instance key above. The separate read-only time-fidelity analysis documents its own pairing rule. Compare the two before choosing a single rule.
 
-### 4. Inbound-aircraft tracker ("where's my inbound"): ~~implemented, not wired~~ wired (corrected 2026-10-15: wired in 1491bf5a, `poller.main._check_flight_inbound`, called from the flight sweep at main.py:642)
+### 4. Inbound-aircraft tracker ("where's my inbound"): ~~implemented, not wired~~ wired (corrected 2026-10-15: wired in 1491bf5a, `poller.main._check_flight_inbound`, called from the flight sweep at ~~main.py:642~~ main.py:650 (2026-10-25))
 
 `assess_inbound(watched, inbound, min_turn_min=, aircraft_class=)` is a pure function:
 
@@ -149,7 +149,7 @@ Minimum turn defaults are 35 min for narrowbody, 30 for regional and 75 for wide
 
 - OOOI authority: nothing here writes a phase. The tracker only reads airline/SWIM times. Any future OOOI writer must use `db.update_watchlist_oooi_phase_authoritative`. FIDS remains enrichment-only. ~~A FIDS tail is valid input to the guard because it is identity, not an OOOI phase.~~ (corrected 2026-10-15: FIDS is not a tail source either, operator 2026-10-14; the guard rejects it as not authoritative.)
 - OOOI phase writers, as of 2026-10-15 (inventory requested by the 10-12 docs audit, DP-A11):
-  - Gated (`db.update_watchlist_oooi_phase_authoritative`): TFMS achieved milestones (`tfms_parser.py:982`, source `tfms`), SMES surface events (`smes_parser.py:1245`, `smes`), the overdue-OFF check (`poller/main.py:1474`, `acars`/`fdps`/`tfms_airline`), the add-time TFMS seed (`shared/watchlist.py:1345`, `tfms_airline`).
+  - Gated (`db.update_watchlist_oooi_phase_authoritative`): TFMS achieved milestones (`tfms_parser.py:982`, source `tfms`), SMES surface events (`smes_parser.py:1245`, `smes`), the overdue-OFF check (`poller/main.py:1474`, `acars`/`fdps`/`tfms_airline`), the add-time TFMS seed (`shared/watchlist.py:1345`, `tfms_airline`). (2026-10-25: the `update_watchlist_oooi_phase_authoritative` call sites are now ~~`tfms_parser.py:936,992`~~ (corrected 2026-10-26: `tfms_parser.py:992`, one call; :936 is a comment), `smes_parser.py:1234,1258`, `poller/main.py:1215,1446`, `shared/watchlist.py:947,1428`; the four line numbers in this bullet are as of 1491bf5a.)
   - ~~Ungated (plain `db.update_watchlist_oooi_phase`, last write wins): the airplanes.live/ACARS phase step (`poller/main.py:1211`), the schedule-inferred IN, which needs ACARS confirmation and never FIDS (`poller/main.py:1423`), and the expiry sweep's ACARS rescue (`shared/watchlist.py:884`).~~ (corrected 2026-10-16: no ungated writer remains. The airplanes.live/ACARS phase step (`poller/main.py`, source `acars` or `fdps`, fires only if the gate accepted) and the expiry sweep's ACARS rescue (`shared/watchlist.py`, source `acars`) go through `update_watchlist_oooi_phase_authoritative`; the schedule-inferred IN no longer writes a phase at all (a `watchlist_history` row `oooi_in_inferred` with `asserted=false`, once per entry); `db.update_watchlist_oooi_phase` requires a `source` and delegates to the gate. `tests/poller/test_oooi_writers_gated.py`.)
 - Tests use only synthetic identities: hex `000001`/`000002`, tails `N000TS`/`N001TS`, flights `ZZZ…`, plus the operator's own example flight numbers.
 
@@ -173,7 +173,7 @@ The live entry had already expired before this was investigated, and the request
 ## Done 2026-10-14 (was "What remains")
 
 - **SMES matcher.** `smes_parser._match_watchlist_flight` now uses `match_watch_surface_event`: identifier or route-filtered codeshare, then `surface_leg_rejection`. A departure event (spotout/off) must be at the watch's origin and an arrival event (on/runwayout/spotin) at its destination. With a scheduled departure on the watch, a departure event must fall in [sched - 2 h, sched + 6 h] and an arrival event in [sched - 2 h, sched + 20 h]. The message's own route (enhancedData), when present, must not contradict the watch. The afternoon leg of an out-and-back no longer advances the morning watch. From the next relay these rules apply only to leg watches (`is_leg_watch`, rule 1), and an arrival event at an airport other than the watch's destination is accepted when the message's own route starts at the watch's origin (a diversion, NB-03).
-  - **Known broken (2026-10-15, code bug, not fixed in the staged batch):** 1491bf5a changed `_match_watchlist_flight` to take the whole record, but the TDES departure and TDLS branches of `smes_parser.handle_tdes_apds_record` (lines 1698 and 1750) still pass `rec.get("callsign")`. Each such record raises `'str' object has no attribute 'get'` before it is stored. Live: no `tdes_departure_events` row after 00:01Z and no `tdls_messages` row after 00:03Z on 10-15, while `corporatetraveldc-ingest-stdds` (restarted 00:04:30Z) logged 1,440 of these errors in 2 h. Until it is fixed the TDES tail source below has no new clearances to read.
+  - ~~**Known broken (2026-10-15, code bug, not fixed in the staged batch):**~~ (superseded 2026-10-25: fixed -- `handle_tdes_apds_record` (`smes_parser.py:1676`) no longer passes `rec.get("callsign")` to the matcher, and live `tdes_departure_events` has rows to 2026-10-25 15:40:56Z, `tdls_messages` to 15:48:14Z; the rest of this bullet is the 2026-10-15 record.) 1491bf5a changed `_match_watchlist_flight` to take the whole record, but the TDES departure and TDLS branches of `smes_parser.handle_tdes_apds_record` (lines 1698 and 1750) still pass `rec.get("callsign")`. Each such record raises `'str' object has no attribute 'get'` before it is stored. Live: no `tdes_departure_events` row after 00:01Z and no `tdls_messages` row after 00:03Z on 10-15, while `corporatetraveldc-ingest-stdds` (restarted 00:04:30Z) logged 1,440 of these errors in 2 h. Until it is fixed the TDES tail source below has no new clearances to read.
 - **Other identifier-only lookups.** `fdps_parser.check_fdps_watchlist` and the TFMS FADT slot loop now use `match_watch_entry` (identifier or route-filtered codeshare, airports must agree). An EDCT or a filed plan for the other leg no longer hits the watch.
 - **Departure clearance (TDES) as a tail source** (operator 2026-10-14). For every watched flight departing DCA, IAD or BWI, `_check_flight_tdes_tail` takes the TDES departure clearance within 3 h of the scheduled departure (the watch's own, or the derived one, see below). It links by the FAA-internal GUFI (`sfdps_gufi`, carried in the FDPS plan's `FDPS_GUFI`) to the FDPS plan, whose aircraft address is the tail (`fi.tdes_clearance_plan`). More than one linked plan means no answer. The plan's destination must not contradict the watch. `tdes` is a SWIM source: rule (b) applies, rule (c) does not. It runs before takeoff only, at most every 10 minutes per watch, and (next relay) skips the guard when the clearance yields the same candidate hex and plan as last time (`_TDES_LAST_CANDIDATE`). On 10-14, 12 of 21 recent DCA clearances linked to a stored plan; the rest had none on file.
 - **Scheduled departure when the watch has none** (next relay, NB-04). Most watches carry no `scheduled_departure` (3 of 16 flight rows live on 10-15), which left the inbound tracker and the TDES check inert. `poller.main._watch_sched_dep` uses the watch's own value when present; otherwise it takes `resolve()` for the watch's flight and route and keeps instances from the watch's origin scheduled in [now - 6 h, now + 24 h]. Exactly one distinct scheduled departure is used; zero or several give None, and the check does not run. The inbound tracker, the TDES check and `_guarded_tail_change` use it. The FDPS repoint keeps its own fallback (the watch's value, else the plan's `departure_time`).
@@ -212,7 +212,7 @@ pairs through `flight_instance.v1_pair_instance` / `v1_pair_surface`, which foll
 a time-bounded, instance-keyed TBFM lookup.~~ (corrected 2026-10-15: done in 1491bf5a. `surface_event_log`
 (`src/common/pg_schema/0075_surface_event_log.sql`, writer `db.append_surface_event_log`) stores `track_id`,
 `departure_airport` and `destination_airport` per event, append-only, for KDCA/KIAD/KBWI and the events
-spotout/runwayin/runwayout/off/on/spotin, pruned at 120 days by `retention_prune`; 320 rows live on 10-15. The
+spotout/runwayin/runwayout/off/on/spotin, pruned at 120 days by `retention_prune`; ~~320 rows live on 10-15~~ (superseded 2026-10-25: ~~41,397~~ 47,009 rows at 2026-10-26 21:58Z). The
 collector's TBFM lookup is bounded to the arrival window.)
 
 ## Decided 2026-10-13 (operator)
@@ -225,8 +225,10 @@ collector's TBFM lookup is bounded to the arrival window.)
   acceptance. ~~Today only the FDPS path passes a tail;~~ (corrected 2026-10-15: the FDPS repoint and the
   TDES check, which counts as SWIM since 2026-10-14, pass a tail;) TBFM/TFMS count as soon as a caller
   supplies one.
-- Code text still out of step (2026-10-15, reported, not changed here): the guard's not-authoritative
+- Code text still out of step (2026-10-15, reported, not changed here): ~~the guard's not-authoritative
   rejection text (flight_instance.py:1031-1032) still offers "or the destination FIDS tail", the comment at
-  flight_instance.py:919 says "A FIDS-only change still needs (c)", and the `_fdps_tail_change_decision`
-  docstring (main.py:1501-1506) still says an outside-DC watch is rejected by rule (c).
+  flight_instance.py:919 says "A FIDS-only change still needs (c)",~~ (superseded 2026-10-25: both strings are gone
+  from `flight_instance.py`; its remaining FIDS mentions, `:1017-1019`, say FIDS is NOT a tail source) and the
+  ~~`_fdps_tail_change_decision` docstring (main.py:1501-1506) still says an outside-DC watch is rejected by rule (c)
+  (re-checked 2026-10-25: the docstring still mentions FIDS and rule (c)).~~ (corrected 2026-10-26: the function is at `poller/main.py:1470`; its docstring now says rule (c) does not apply to SWIM sources.)
 

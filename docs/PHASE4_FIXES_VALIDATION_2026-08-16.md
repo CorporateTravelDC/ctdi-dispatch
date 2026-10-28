@@ -1,5 +1,7 @@
 # Phase 4 Fixes Validation — 2026-08-16 (second independent cold-start audit)
 
+> Status 2026-10-25: dated record (2026-08-16). No longer current: Ollama is retired — there is no `ollama list`, no `ollama.service` or governor, and inference runs on one llama.cpp server (`corporatetraveldc-llama.service`, Qwen3-4B) with persona prompts from `src/common/personas.py`; there are now 23 Modelfiles (persona text, not built) and the public scrub drops them by the `corporatetraveldc.` name prefix rather than a `DROP_FILES` list; `generate()` has no `max_retries`; every `TimeoutStartSec` cited here has since been raised. Line references are as of the record's tree and several have moved. Inline corrections are marked.
+
 Scope: ONLY the 5 fixes applied in response to
 `docs/PHASE4_VALIDATION_2026-08-16.md`, checked fresh with no prior
 context. Read-only; nothing changed except this report (one transient
@@ -28,8 +30,8 @@ one style inconsistency) recorded below; none functional.
   override the narrative shape entirely. The dual-use design is coherent
   as written, not just one-sided.
 - Dead-name sweep of `src/`: `corporatetraveldc-pi5-chat` is NOT dead —
-  it is one of the 21 live models (Modelfile `corporatetraveldc.chat`
-  at repo root), so `src/runner/main.py:101`'s default is correct.
+  ~~it is one of the 21 live models (Modelfile `corporatetraveldc.chat`
+  at repo root)~~ (corrected 2026-10-25: superseded — there are no Ollama models; the name is a persona label that `persona_key_for()` maps to the `chat` persona on the single llama.cpp server, and `corporatetraveldc.chat` is one of 23 persona-text Modelfiles), so `src/runner/main.py:101`'s default is correct.
   `corporatetraveldc-pi5-brief:latest` survives only in:
   - executable-looking but inert defaults: `freshness_audit.py:28`,
     `train_impact.py:34`, `flight_impact.py:36` — verified these three
@@ -45,7 +47,7 @@ one style inconsistency) recorded below; none functional.
 
 ## Fix 2 — scrub-public-tree.py DROP_FILES: PASS
 
-- All 21 Modelfile basenames present at `scripts/scrub-public-tree.py:66-86`.
+- ~~All 21 Modelfile basenames present at `scripts/scrub-public-tree.py:66-86`.~~ (corrected 2026-10-25: superseded — Modelfiles are no longer listed in `DROP_FILES`; `scrub_tree()` drops every blob whose name starts with `corporatetraveldc.` (`scripts/scrub-public-tree.py:879`), which covers all 23 current Modelfiles.)
   Verified programmatically (parsed `DROP_FILES` via `ast`, set-diffed
   against `ls corporatetraveldc.*`): 21 on disk, 21 in the set, zero
   mismatches in either direction. Stale `dispatch-persona` entry removed.
@@ -76,7 +78,7 @@ one style inconsistency) recorded below; none functional.
 ## Fix 3 — orphaned baseline-test model removal: PASS
 
 - `ollama list` no longer shows `corporatetraveldc-dispatcher-baseline-test`
-  (22 entries: the 21 pi5 models + `phi3:mini`, 1:1 with build-models.sh).
+  ~~(22 entries: the 21 pi5 models + `phi3:mini`, 1:1 with build-models.sh)~~ (corrected 2026-10-25: superseded — Ollama is retired: no `ollama*` unit exists in user or system scope and nothing listens on :11434; `build-models.sh` now maps 23 names and builds nothing).
 - Repo-wide grep (`*.py`, `*.sh`, `*.container`, `*.env*`): zero
   references to the name anywhere, code or comments.
 
@@ -92,8 +94,8 @@ one style inconsistency) recorded below; none functional.
   1100 (predict) = 6192 vs 8192 → 2000 tokens (~32%) headroom. Even if
   the 4-chars/token trim heuristic underestimates somewhat worse than
   the observed ~2.3x on a future worst week, the gap absorbs it.
-- Resource check: the KV cache lives in host `ollama.service`
-  (MemoryHigh/MemoryMax = infinity), NOT in the skill container — the
+- Resource check: ~~the KV cache lives in host `ollama.service`
+  (MemoryHigh/MemoryMax = infinity)~~ (corrected 2026-10-25: superseded — the KV cache now lives in `corporatetraveldc-llama.service`: MemoryLow 5 GiB, MemoryHigh 7 GiB, MemoryMax 8.25 GiB, MemorySwapMax 0, CPU quota 200%), NOT in the skill container — the
   unit's `Memory=1536m`/`--memory-swap=1536m` bound only the Python
   client and are unaffected by num_ctx. phi3:mini f16 KV is roughly
   0.4 MB/token → ~3.1 GB at 8192 vs ~2.4 GB at 6144, a ~0.8 GB increase;
@@ -110,17 +112,17 @@ one style inconsistency) recorded below; none functional.
 
 ## Fix 5 — transport-pattern-digest TimeoutStartSec 1400 → 1600: PASS
 
-- Applied: `.config/containers/systemd/corporatetraveldc-transport-pattern-digest.container:48`
-  = `TimeoutStartSec=1600`, with an updated comment that keeps the
+- Applied: ~~`.config/containers/systemd/corporatetraveldc-transport-pattern-digest.container:48`
+  = `TimeoutStartSec=1600`~~ (corrected 2026-10-25: superseded — now `TimeoutStartSec=3300` at line 104, repo and live copies), with an updated comment that keeps the
   original 800+600 formula visible and dates the change.
 - Relationship to the Python timeout (600s at
-  `transport_pattern_digest.py`, max_retries=0) unchanged and sound:
+  `transport_pattern_digest.py`, ~~max_retries=0~~ (corrected 2026-10-25: superseded — the call still passes `timeout=600` (line 258), but `generate()` no longer takes `max_retries`; each call makes one llama.cpp attempt)) unchanged and sound:
   worst case 1400, cushion now 200s.
 - Consistency vs the other 16 reconciled units (all margins recomputed
   from each unit's own stated formula): the sibling convention is a
-  round-up cushion of 20-90s absolute (~1-6% relative) — e.g. aam-daily
+  round-up cushion of 20-90s absolute (~1-6% relative) — e.g. ~~aam-daily
   8510→8600, desk-memo 10340→10400, ops-brief 2510→2600, sb-weekly
-  5480→5500. Transport's 200s (~14%) is now the LARGEST cushion in the
+  5480→5500~~ (corrected 2026-10-25: superseded — current values are aam-daily-watch 12300, dispatch-desk-memo 14100, ops-brief 4300, second-brain-weekly 9200 and transport-pattern-digest 3300). Transport's 200s (~14%) is now the LARGEST cushion in the
   set, where the first pass's suggestion (1500) would have matched the
   round-up style exactly. This errs in the safe direction — a
   TimeoutStartSec backstop that is 100s more generous only delays the

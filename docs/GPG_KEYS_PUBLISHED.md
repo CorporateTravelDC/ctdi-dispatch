@@ -10,8 +10,8 @@ copy under `www/keys/` in the website repo.
 
 | Host | URL | State on 2026-10-06 |
 |---|---|---|
-| Main site | `https://www.example.com/keys/<name>.pub` | **200**; all five files byte-identical to this repo (sha256 compared). 2026-10-15: the website repo's `www/keys/` copies are still byte-identical to this repo's (local compare; the live URL was not fetched) |
-| Blog | `https://executivestandard.example.com/keys/<name>.pub` | **302 to `/welcome`** -- behind the Executive Standard reader gate, so not publicly fetchable [UNVERIFIED: since when]. Point readers at the main-site URLs. Only the main site serves the keys publicly. |
+| Main site | `https://www.example.com/keys/<name>.pub` | **200**; all five files byte-identical to this repo (sha256 compared). 2026-10-15: the website repo's `www/keys/` copies are still byte-identical to this repo's (local compare; the live URL was not fetched) (unverified 2026-10-25: live URL again not fetched; the five repo files' fingerprints re-checked with `gpg --show-keys` 21:28Z and match this table) |
+| Blog | `https://executivestandard.example.com/keys/<name>.pub` | **302 to `/welcome`** -- behind the Executive Standard reader gate, so not publicly fetchable [UNVERIFIED: since when]. Point readers at the main-site URLs. Only the main site serves the keys publicly. (unverified 2026-10-25: edge not re-fetched) |
 
 | File | Fingerprint | UID | Purpose |
 |---|---|---|---|

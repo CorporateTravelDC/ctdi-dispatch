@@ -4,7 +4,11 @@ Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
 Re-verified 2026-10-15 ~01:35Z against the guard worktree (HEAD 1491bf5a plus
 the batch staged for the next relay) and the live system. Changes are marked
 "(corrected 2026-10-15: ...)"; behaviour that exists only in the staged batch
-is marked "(next relay)".
+is marked "(next relay)". (Superseded 2026-10-25: that batch has since been relayed; checked live 2026-10-26 21:58Z:
+`watchlist_history` has 231 `gate_assignment` rows since 2026-10-19, the schema has `tfrs.vip_push_reason`,
+`acars_messages.acars_flags`, `gate_baggage_observations` and `aeroapi_gate_calls`, and the runner-health and
+failover-guardrail timers run at `*:02/5` and `*:01/5`. Read "(next relay)" below as "added in that batch, now live";
+items not individually re-checked are not asserted either way.)
 
 Catalog of ntfy publishers: what fires, which topic, what priority, what
 stops repeats. Design rationale is in `ALERT_ARCHITECTURE.md`. This catalog
@@ -22,8 +26,8 @@ every batch); re-derive with `grep -n`.
 |---|---|---|---|
 | `shared/watchlist.py::_fire_ntfy_dual(domain_topic, title, detail, dispatch, priority)` — full body to the domain topic, one-liner to `dispatch` | ingest parsers (also via `fire_family_alert`), web webhooks/watchlist routes, `watchlist_event_hit`, `poller/tools/watchlist_import.py` | 3 attempts, exponential backoff; since 2026-10-13 a 401/403 gets one delayed retry and is then logged as NOT delivered | none |
 | `common/ntfy_push.py::send()` / `send_dual()` (defaults `dispatch-debriefs` + `dispatch-ops`) / `send_run_status()` | poller skills, pusher, `aim_parser` direct sends | 3 attempts; ~~ambiguous 401/403 guard~~ (corrected 2026-10-15: since 2026-10-13 a 401/403 gets one retry after `_AUTH_RETRY_DELAY_SECS` (2 s) and is then a failure. The old guard logged it as "known false-negative, treating as delivered"; 3 of 3 such messages checked had never been stored by ntfy). Bodies are capped at 60,000 bytes (`_MAX_BODY_BYTES`) with a truncation note | `NTFY_FALLBACK_URL` — **not set** in the live `dispatch.env` (re-checked 2026-10-15); the ntfy quadlet publishes only `2586:2586` |
-| `src/pusher/main.py::hot_push()` | ~~pusher priority-5 events~~ (corrected 2026-10-15: the VIP TFR push and the wind ≥ 30 kt alert only; CPS RED is p5 through plain `send_ntfy()`, with no Pushover) | via `send()` | co-fires **Pushover Emergency** (`common/pushover.py`, `PUSHOVER_TOKEN`/`PUSHOVER_USER_KEY` on the pusher allowlist) — the only out-of-band channel in code. `push_vip_tfrs` calls `hot_push` once per topic (`tfr-alert`, then `hot-alerts`), so each VIP TFR fires two Pushover Emergencies. `[UNVERIFIED: whether the Pushover keys have values]` |
-| Hand-rolled Python: `ingest/local_airspace.py::_fire_ntfy` (~~`:123`~~ `:136`), `acars_watcher`, `ais_watcher`, `scripts/thermal-ingest-guard.py`, `governor-watch.py`, `dns-anomaly-watch.py`, `failover-kickover-guardrail.py`, `dependency-audit.py`, `relay-nudge.py` | — | none | none |
+| `src/pusher/main.py::hot_push()` | ~~pusher priority-5 events~~ (corrected 2026-10-15: the VIP TFR push and the wind ≥ 30 kt alert only; CPS RED is p5 through plain `send_ntfy()`, with no Pushover) | via `send()` | co-fires **Pushover Emergency** (`common/pushover.py`, `PUSHOVER_TOKEN`/`PUSHOVER_USER_KEY` on the pusher allowlist) — the only out-of-band channel in code. `push_vip_tfrs` calls `hot_push` once per topic (`tfr-alert`, then `hot-alerts`), so each VIP TFR fires two Pushover Emergencies. ~~`[UNVERIFIED: whether the Pushover keys have values]`~~ (2026-10-25: all five `PUSHOVER_*` keys are non-empty in `svc/poller.env` and `svc/pusher.env`, but every Pushover call in the prior 24 h failed with HTTP 400 -- 8 `common.pushover ERROR` lines in the pusher journal, paired per hot push -- so the out-of-band channel is not delivering; NEEDS-OPERATOR-DECISION, see the sweep register) |
+| Hand-rolled Python: `ingest/local_airspace.py::_fire_ntfy` (~~`:123`~~ ~~`:136`~~ `:267`, 2026-10-25), `acars_watcher`, `ais_watcher`, `scripts/thermal-ingest-guard.py`, `governor-watch.py`, `dns-anomaly-watch.py`, `failover-kickover-guardrail.py`, `dependency-audit.py`, `relay-nudge.py` | — | none | none |
 | Standalone shell scripts (§7) | each defines its own `ntfy_send` | none (most `|| true`) | none |
 
 Since the 2026-10-05 argv sweep, scripts pass the ntfy token on a private fd
@@ -46,8 +50,9 @@ renew-tailscale-cert) carry the change (checked 2026-10-15).
 `cache-duration: "72h"` (2026-10-14; it was the 12 h default, so a phone
 offline overnight missed messages) and `message-size-limit: "65536"`.
 
-`ntfy-container-alert.service`, named by `ntfy.container`'s
-`OnFailure=`, does not exist (re-checked 2026-10-15) — if ntfy itself dies
+~~`ntfy-container-alert.service`, named by `ntfy.container`'s
+`OnFailure=`, does not exist (re-checked 2026-10-15)~~ (corrected 2026-10-25: `ntfy.container`, tracked and live, has no
+`OnFailure=` directive -- only a comment at `:6` saying it was removed -- and no `ntfy-container-alert` unit exists) — if ntfy itself dies
 nothing alerts (only the pusher's Pushover co-fire for `hot_push` events is
 independent of ntfy).
 
@@ -71,22 +76,22 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 |---|---|---|
 | `hot-alerts` | `aim_parser` VIP NOTAM (p5); pusher VIP TFR (`hot_push`, p5) and wind ≥ 30 kt CPS NO-GO (`hot_push`, p5); pusher VIP window correction (p4, once, no Pushover; next relay); `route_impact.py` (DC-area VIP TFRs, p5, once per VIP set); ~~`tfr_enrichment.py` (VIP TFR, p5)~~ (corrected 2026-10-15: no VIP push since 2026-10-14, see §6); `board_sweep.py`; `lockdown.sh` (p4); `threat-initiate.sh` (p5); `watchdog.sh` (p5 "System Restart Needed (manual run required)", once per distinct problem; p4 "Full Stack Restart" on a manual `--allow-system-restart` run); ~~`runner-health-watchdog.sh` (p4/p5, also `X-Email`); `net-failover-watchdog.sh`~~ (corrected 2026-10-15: both publish to `ops-health` only; the runner watchdog moved off `hot-alerts` on 2026-09-05) | 4–5 |
 | `tfr-alert` | `fdps_parser` Marine One / VIP callsign (p5, title "POTUS MOVEMENT"); pusher ~~VIP TFR~~ VIP-class TFR (2026-10-18, next relay, tiered: type VIP, or type SECURITY with presidential language, at a protected residence, or in ZDC -- p5, with `hot-alerts`; type SECURITY outside ZDC with only the 49 USC 40103(b)(3) / 14 CFR 99.7 basis -- **p3, `tfr-alert` only**, no `hot-alerts`, no Pushover; title "VIP TFR: <id>" or "SECURITY TFR: <id>"); pusher VIP window correction (p4, next relay); pusher 6/0100 widening correction (p4, once, marker `tfr-security-widen-2026-10-18`, next relay); ~~`tfr_enrichment.py`~~ (corrected 2026-10-15: no longer publishes) | 4–5 |
-| `nas-alerts` | `aim_parser` residual NOTAMs only (p3, `aim_parser.py:482`) | 3 |
+| `nas-alerts` | `aim_parser` residual NOTAMs only (p3, ~~`aim_parser.py:482`~~ `aim_parser.py:534`, 2026-10-25) | 3 |
 | `wx-alerts` | `itws_parser` (p4, `:772`); pusher METAR wind/direction change (p3) and a routine update at most hourly while any primary station has wind | 3–4 |
-| `tbfm-alerts` / `tbfm-<zone>` | `tbfm_parser` via `fire_family_alert` (`:497`) | 2 (+1 escalating) |
-| `tfms-alerts` / `tfms-<zone>` | `tfms_parser` (~~`:603`~~ `:633` RSTR/GDP/GS, ~~`:1501`~~ `:1538` APTC, ~~`:1600`~~ `:1637` GADV) | 3 (+1) |
-| `fdps-alerts` / `fdps-<zone>` | `fdps_parser` (~~`:1841`~~ `:1857` watchlist/proximity; ~~`:1184`~~ `:1200` alt saturation; ~~`:1391`~~ `:1407` diversion continuation); `aim_parser` flight restrictions (`:472`). Since 2026-10-13 K-prefixed center codes (`KZDC`) normalise, so ZDC restriction NOTAMs reach `fdps-zdc` | 3–5 |
+| `tbfm-alerts` / `tbfm-<zone>` | `tbfm_parser` via `fire_family_alert` (~~`:497`~~ `:428`, `:501`, 2026-10-25) | 2 (+1 escalating) |
+| `tfms-alerts` / `tfms-<zone>` | `tfms_parser` (~~`:603`~~ `:633` RSTR/GDP/GS, ~~`:1501`~~ ~~`:1538`~~ `:1548` APTC, ~~`:1600`~~ ~~`:1637`~~ `:1647` GADV; also `:559`; 2026-10-25) | 3 (+1) |
+| `fdps-alerts` / `fdps-<zone>` | `fdps_parser` (~~`:1841`~~ ~~`:1857`~~ `:1889` watchlist/proximity; ~~`:1184`~~ ~~`:1200`~~ `:1207` alt saturation; ~~`:1391`~~ ~~`:1407`~~ `:1414` diversion continuation; 2026-10-25); `aim_parser` flight restrictions (~~`:472`~~ `:524`, 2026-10-25). Since 2026-10-13 K-prefixed center codes (`KZDC`) normalise, so ZDC restriction NOTAMs reach `fdps-zdc` | 3–5 |
 | `itws-alerts` / `itws-<zone>` | `itws_parser` (`:778`) | 4 (+1) |
-| `aim_fns-alerts` / `aim_fns-<zone>` | `aim_parser` residual (`:490`) | 3 (+1) |
-| `stdds-alerts`, ~~`stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>`~~ (corrected 2026-10-15: since 2026-10-13 every tracked airport fires its zone topic `stdds-<zone>`, so DCA/IAD/BWI now reach `stdds-zdc`; per-airport topics exist only in the priority zones zdc, zny, zatl, zob: `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`, `-atl`, `-cle`/`-pit`/`-dtw`) | `smes_parser` (`:407` PCT, ~~`:607`~~ `:623` surface, ~~`:1031`~~ `:1048` safety — silenced, ~~`:1283`~~ `:1310` taxi) | 1–3 |
+| `aim_fns-alerts` / `aim_fns-<zone>` | `aim_parser` residual (~~`:490`~~ `:542`, 2026-10-25) | 3 (+1) |
+| `stdds-alerts`, ~~`stdds-dca`/`-iad`/`-bwi`, `stdds-<zone>`~~ (corrected 2026-10-15: since 2026-10-13 every tracked airport fires its zone topic `stdds-<zone>`, so DCA/IAD/BWI now reach `stdds-zdc`; per-airport topics exist only in the priority zones zdc, zny, zatl, zob: `stdds-dca`/`-iad`/`-bwi`, `-jfk`/`-lga`/`-ewr`, `-atl`, `-cle`/`-pit`/`-dtw`) | `smes_parser` (`:407` PCT, ~~`:607`~~ `:623` surface, ~~`:1031`~~ `:1048` safety — silenced, ~~`:1283`~~ ~~`:1310`~~ `:1323` taxi; 2026-10-25) | 1–3 |
 | `flight-alerts` | `watchlist_event_hit` (flight entries, incl. `identity_resolved`, OOOI, `departure_overdue`, inbound tracker `inbound_*`, `fdps_tail_change` / `tdes_tail_change` and their `_rejected` notes; §5); web watchlist add/remove; pusher landings (p4); `local_airspace` proximity; `acars_watcher` and `ais_watcher` (`NTFY_TOPIC` default `flight-alerts`; 2026-10-16: `acars_watcher`'s ACARS Drama Jumpseat thread polls only the LADD-filtered list from `GET /api/v1/watchlist/registrations` -- ~~every watched registration from `GET /api/v1/watchlist`~~ -- and polls nothing when that route is unavailable; local UDP and airframes.io matching keep the full set); ingest ACARS flag pushes `acars_tfr_area` / `acars_diversion` for watched flights (2026-10-18, next relay; p4, p5 when VIP-listed; §5) | ~~2–4~~ 2–5 |
-| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`~~; by a code bug it also sends vessel and drone retries here, §4~~ (corrected 2026-10-16: train retries only; vessel retries moved to `vessel-alerts` on 2026-10-15 and drone retries to `drone-alerts` on 2026-10-16, `pusher/main.py:641`)) | 2–4 |
-| `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ `:708`); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ `web/routes/watchlist.py:511`, batch map `:600`). No vessel watches and no AIS source live, so silent by design | 2–3 |
+| `train-alerts` | `watchlist_event_hit` (train entries); web watchlist add/remove; pusher retries (`push_watchlist_retries`~~; by a code bug it also sends vessel and drone retries here, §4~~ (corrected 2026-10-16: train retries only; vessel retries moved to `vessel-alerts` on 2026-10-15 and drone retries to `drone-alerts` on 2026-10-16, ~~`pusher/main.py:641`~~ `pusher/main.py:839-887` (2026-10-25))) | 2–4 |
+| `vessel-alerts` | `watchlist_event_hit` vessel branch (~~`shared/watchlist.py:665`~~ ~~`:708`~~ (corrected 2026-10-25: `:758`)); web watchlist add/remove (~~`web/routes/watchlist.py:469`, batch `:558`~~ ~~`web/routes/watchlist.py:511`, batch map `:600`~~ (corrected 2026-10-25: `web/routes/watchlist.py:694`, batch map `:783`)). No vessel watches and no AIS source live, so silent by design | 2–3 |
 | `drone-alerts` | (added 2026-10-16) `watchlist_event_hit` drone branch (`shared/watchlist.py`, `UAS ` title, "Drone <id>" dispatch copy); web watchlist remove map (`web/routes/watchlist.py`, no drone add route exists); pusher retries (`push_watchlist_retries`); `utm_watcher` Remote ID hits (`NTFY_TOPIC` default, was `flight-alerts`). Until 2026-10-16 drone events fell through to the train branch and reached `train-alerts` with `TRN ` titles. Not in `ntfy_push.TOPIC_CLICK`, the runner's `ntfy_stream` default list or `NtfyFeedView` (neither is `vessel-alerts`), so a tap opens the runner root. No drone watches live | 2–4 |
 | `bellwether-alerts` | (added 2026-10-20, operator; next relay) every watch-keyed push for an entry whose permanent record sets `"alert_topic": "bellwether-alerts"` (`watchlists/permanent_flights.json`: BA293 and the bellwether set, 47 entries). One rule, `shared/watch_topic.py` `topic_for_entry` (the file by entry id where it is mounted, else the `watchlist_entries.alert_topic` copy, pg_schema/0082; a transient watch never inherits it): `watchlist_event_hit` flight branch (so OOOI, identity, inbound, tail-change, gate/baggage `gate_assignment`, ACARS `acars_tfr_area` / `acars_diversion`), pusher retries and landings, web watchlist remove. **No `dispatch` copy** (`watch_topic.NO_DISPATCH_TOPICS`, applied in `_fire_ntfy_dual` and the pusher retry). Also the daily route-continuity relink notice (`atc_callsign_relink`, p3, `common/callsign_lookaside.py`, run by the `flight-cleanup` skill). Tap target = `flight-alerts`'s (`ntfy_push.TOPIC_CLICK`). Not in the runner's `ntfy_stream` default list or `NtfyFeedView` | 2–5 |
-| `dispatch` | the concise leg of every `_fire_ntfy_dual` (2026-10-20: except `bellwether-alerts` pushes); `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ `:288`, `:321`); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
+| `dispatch` | the concise leg of every `_fire_ntfy_dual` (2026-10-20: except `bellwether-alerts` pushes); `local_airspace` Marine One / emergency squawk (`dispatch` only, ~~`:272`, `:305`~~ ~~`:288`, `:321`~~ (corrected 2026-10-25: `:419`, `:452`)); `dispatch_desk_memo.py` (p2); `board_sweep.py`; `watchlist_import.py`; pusher retries (second leg) | matches pair |
 | `dispatch-debriefs` / `dispatch-ops` | `send_dual` defaults: `weekly_summary.py:210` (both legs, p3, `email=True`); `ops_brief.py` full leg; `send_run_status()` pings on `dispatch-ops` (p2 ok / p4 fail) from 11 skills: aam daily/weekly, aviation, concierge-travel, executive-protection, gig-economy, trains-yachts daily watches, second-brain daily/weekly, disruption-weather-digest, transport-pattern-digest; ~~`watchdog.sh`~~ (corrected 2026-10-15: the watchdog publishes only to `ops-health` and `hot-alerts`, and its `root-alerts` token can reach nothing else). Bodies over 60,000 bytes are truncated (2026-10-13; two ~46k-character briefs had been rejected) | 2–4 |
-| `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (`:460`); ~~`brief-fallback-monitor.sh`~~ (corrected 2026-10-15: it publishes to `BRIEF_FALLBACK_TOPIC`, default `ops-health`, which neither its unit nor `dispatch.env` overrides) | 3 |
+| `ops-brief` | `ops_brief.py` concise leg (`:866`, p3, `email=True`) and deferral notice (~~`:460`~~ (corrected 2026-10-25: `:461`)); ~~`brief-fallback-monitor.sh`~~ (corrected 2026-10-15: it publishes to `BRIEF_FALLBACK_TOPIC`, default `ops-health`, which neither its unit nor `dispatch.env` overrides) | 3 |
 | `ops-health` | most guards and scripts (§6, §7); thermal guard; `brief-fallback-monitor.sh` (max); `tmp-headroom-guard.sh` (p4); `claude-login-expiry-check.py` (p4); `runner-health-watchdog.sh` (p4/p5); `net-failover-watchdog.sh`; `unit-failure-notify@` (p4); `dependency-audit.py` (p4/p3); `relay-nudge.py` (default p4); the integrity sweep (p5) | 1–5 |
 | `ep` / `ep-advance` | `ep_advance_brief.py` (`ep` p3 concise, `ep-advance` p4 full); `ep_advance_venues.py` (`ep-advance`) | 3–4 |
 | `cps` | pusher on CPS score change ~~(p3) and wind change ≥ 10 kt / ≥ 45° (p3)~~ (corrected 2026-10-15: priority by score, GREEN 3 / YELLOW 4 / RED 5, plain ntfy with no Pushover. Wind changes never go to `cps`: they go to `wx-alerts`, or `hot-alerts` at ≥ 30 kt. The `push_wx_change` docstring still says "cps") | 3–5 |
@@ -103,7 +108,7 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 
 ### FDPS (`ingest/parsers/fdps_parser.py`)
 
-- **Marine One / VIP** (`check_marine_one` → `_fire_marine_one_ntfy`, ~~`:1792`~~ `:1798`):
+- **Marine One / VIP** (`check_marine_one` → `_fire_marine_one_ntfy`, ~~`:1792`~~ ~~`:1798`~~ `:1830`, 2026-10-25):
   `is_marine_one()` = callsign in `MARINE_ONE_CALLSIGNS`, or matching
   `^CRANE\d{2}$` (AF1/AF2 training callsigns, 2026-10-05), or squawk
   7700/5000/5001. Source `FH` alerts on callsign alone; `TH` must be within
@@ -227,7 +232,7 @@ Changes 2026-10-20 (operator):
 | `:407` PCT track-count trend | `stdds` | `stdds-alerts` only (`zone_split=False`) | escalating | 2 | `_STDDS_PCT_DEDUP` 300 s |
 | ~~`:607`~~ `:623` ASDE-X surface congestion | `stdds_surface` | + zone topic, + airport topic in zdc/zny/zatl/zob | escalating | 2 | `_STDDS_SURFACE_DEDUP` 300 s |
 | ~~`:1031`~~ `:1048` SafetyLogic hold-bar | `stdds_safety` | + zone topic, + airport topic in zdc/zny/zatl/zob | first occurrence/change | 3 | none — `check_incursion_alert` returns early on an unchanged bitmask (~~`:982`~~ `:1000`) |
-| ~~`:1283`~~ `:1310` surface-movement taxi | `stdds_taxi` | + zone topic, + airport topic in zdc/zny/zatl/zob | escalating | 2 | `_STDDS_TAXI_DEDUP` 300 s |
+| ~~`:1283`~~ ~~`:1310`~~ (corrected 2026-10-25: `:1323`) surface-movement taxi | `stdds_taxi` | + zone topic, + airport topic in zdc/zny/zatl/zob | escalating | 2 | `_STDDS_TAXI_DEDUP` 300 s |
 
 ~~Topics "+ per-airport/zone"~~ (corrected 2026-10-15: since 2026-10-13 the
 zone comes from `_stdds_sector_for()` (DCA/IAD/BWI → `zdc`) and the airport
@@ -261,8 +266,8 @@ section 5).
 | `push_cps_update` | `cps` | ~~3~~ (corrected 2026-10-15: 3 / 4 / 5 for GREEN / YELLOW / RED; no Pushover) |
 | `push_wx_change` (METAR primaries KDCA/KIAD/KBWI; ≥ 10 kt or ≥ 45° change, or a routine update at most hourly while any has wind; suppressed if METAR > 1200 s old or 3 failures) | `wx-alerts` p3, or `hot-alerts` via `hot_push` at ≥ 30 kt | 3 / 5 |
 | `push_flight_watchlist_landings` (periodic landing dedup) | `flight-alerts` (2026-10-20: `bellwether-alerts` for a bellwether entry, `shared/watch_topic.py`) | 4 |
-| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ ~~(corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`)~~ (corrected 2026-10-16: `flight-alerts` / `vessel-alerts` / `drone-alerts` / `train-alerts` by entry type, same topic, title prefix and noun as the original send, + `dispatch`; `pusher/main.py:641`) (2026-10-20: the topic comes from the row's watch entry through `shared/watch_topic.py`, so a bellwether retry goes to `bellwether-alerts` with no `dispatch` copy) | per event |
-| `send_test_alert` (admin trigger `push_test_alert`, `poller/main.py:436`) | caller-chosen, default `ops-health` | caller-chosen |
+| `push_watchlist_retries` (unfired `watchlist_history` rows < 15 min old) | ~~`flight-alerts`/`train-alerts` + `dispatch`~~ ~~(corrected 2026-10-15: `flight-alerts` for flights, `train-alerts` for every other entry type, vessel and drone included, + `dispatch`; the vessel case is a code bug, `:639`)~~ (corrected 2026-10-16: `flight-alerts` / `vessel-alerts` / `drone-alerts` / `train-alerts` by entry type, same topic, title prefix and noun as the original send, + `dispatch`; ~~`pusher/main.py:641`~~ `pusher/main.py:839-887` (2026-10-25)) (2026-10-20: the topic comes from the row's watch entry through `shared/watch_topic.py`, so a bellwether retry goes to `bellwether-alerts` with no `dispatch` copy) | per event |
+| `send_test_alert` (admin trigger `push_test_alert`, ~~`poller/main.py:436`~~ (corrected 2026-10-25: `:437`)) | caller-chosen, default `ops-health` | caller-chosen |
 
 **VIP TFRs (2026-10-14).** FAA `type: "VIP"` decides what is VIP. Each VIP
 TFR alerts once, with its own FAA text and its active window (UTC + ET), and
@@ -320,10 +325,13 @@ whose 10-14 text is unchanged), the UTC + ET window, and each area window when
 there is more than one or the one differs from the overall window. Dedup
 unchanged: TFR id + FAA text + FAA mod time.
 
-**Test alerts.** `poller/main.py:436-446` resolves the `push_test_alert`
+**Test alerts.** ~~`poller/main.py:436-446` resolves the `push_test_alert`
 trigger as `success` whatever `send_test_alert` returns, so a failed send is
 recorded as a success (code bug, open; live `trigger_log`: 320 success,
-3 failed).
+3 failed).~~ (corrected 2026-10-25: fixed 2026-10-15 -- `poller/main.py:447-451`
+resolves the trigger `failed` ("ntfy and Pushover both failed") when
+`send_test_alert` returns false; live `trigger_log` 2026-10-25 15:51Z:
+397 success, 3 failed.)
 
 ## 5. Watchlist OOOI events (poller, `src/poller/main.py`)
 
@@ -343,7 +351,7 @@ assertive phases `off`/`on`/`in`:
   within 900 s) and the same receiver already held a track on the entry.
 
 Push labels: `pre_departure → off` seen from ADS-B is labelled
-"first seen airborne (takeoff not observed)", p4 (~~`:1094`~~ `:1098`).
+"first seen airborne (takeoff not observed)", p4 (~~`:1094`~~ ~~`:1098`~~ (corrected 2026-10-25: `poller/main.py:1106`)).
 **Departure overdue (db64018, deployed — poller image built 17:46Z):** at
 scheduled departure + 90 min with the entry still `pre_departure`,
 `_departure_overdue_check` asks ACARS, then FDPS, then TFMS airline times;
@@ -423,7 +431,7 @@ reroute, flight_route, flight_create, flight_schedule_activate,
 flight_plan_cancellation, oceanic_report, track_approach), `acars_<type>` (2026-10-18, next relay: its detail carries `acars_flags`, see the next paragraph),
 `watchlist_proximity`, `train_sweep`, `vessel_position`.
 
-**Gate / baggage assignments (2026-10-18, next relay; operator decisions).**
+**Gate / baggage assignments (2026-10-18, next relay -- superseded 2026-10-25: live, 231 `gate_assignment` rows; operator decisions).**
 Trigger `gate_assignment`, p3, `flight-alerts` + `dispatch` through
 `watchlist_event_hit`. Evidence from SWIM TDES (`parkingGate`, departure; ingest),
 ACARS (airframes.io, Jumpseat, local -- the acars-watcher forwards parsed gate
@@ -541,8 +549,8 @@ root scripts named in §1 publish with the `root-alerts` token.
 | `sdk-attribution.py` (user timer `corporatetraveldc-sdk-attribution.timer`, daily 04:20 ET; 2026-10-24) | `approval-gate` p3 via `relay-nudge.py` | once per brand-new SDK/telemetry host and once per host whose top attributed app changed with n >= 15 shared bins; first run and `--backfill-days` seed state silently; reports in `/var/lib/corporatetraveldc/sdk-attribution/`; names hosts and apps only, never a client IP |
 | ~~`check-pat-expiry.sh`~~ | ~~`dispatch-alerts` p4/p5~~ | RETIRED 2026-10-14 (`scripts/retired-20261014/`) |
 | `sudo-approval-gate.sh` | `approval-gate` | **Deny-only** push (one `Deny` action button); allowing requires `scripts/approve.sh allow <id>` (SSH signature); `db.resolve_approval_request` refuses an unsigned allow |
-| `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | — | timers **disabled** (re-checked 2026-10-15) |
-| Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (~~`hot-alerts` +~~ `ops-health` only; p5 alerts, p3 "restored"), `stack-refresh.sh`, `maintenance-dispatch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`ops-health` p4, title "<unit> failed"; `OnFailure=` handler on ~~7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed~~ (corrected 2026-10-15: 11 units, tracked and installed: agent-timecard, backup, backup-freshness, backup-restore-test, codeshare-seed, dependency-audit, docs-drift-weekly, quiet-window-report, second-brain-weekly-dump, stack-refresh-tripwire, weekly-external-image-update; tbfm-arrival-enrichment no longer has it)), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |
+| `acars-feed-silence-watchdog.sh`, `adsb-feed-silence-watchdog.sh`, `adsb-link-watchdog.sh` | `ops-health` | ~~timers **disabled** (re-checked 2026-10-15)~~ (corrected 2026-10-25: all three user timers are enabled and active -- `acars-feed-silence-watchdog` `*:0/5`, `adsb-feed-silence-watchdog` `*:1/5`, `adsb-link-watchdog` `*:0/5`; `systemctl --user is-enabled/is-active` 15:50Z) |
+| Not previously catalogued, priorities not reviewed: `net-failover-watchdog.sh` (~~`hot-alerts` +~~ `ops-health` only; p5 alerts, p3 "restored"), `stack-refresh.sh`, `maintenance-dispatch.sh`, `team-liveness.sh`, `skill-grants.sh`, `scheduled-dns-restart.sh`, `scheduled-podman-prune.sh`, `scheduled-llama-restart.sh`, `weekly-external-image-update.sh`, `watchdog-tune.sh`, `second-brain-weekly-dump.sh`, `gui-window.sh`, `cowork-coord-7d-check.sh`, `cowork-coord-24h-check.sh`, `unit-failure-notify.sh` (`ops-health` p4, title "<unit> failed"; `OnFailure=` handler on ~~7 units: tbfm-arrival-enrichment, docs-drift-weekly, weekly-external-image-update, stack-refresh-tripwire, second-brain-weekly-dump, quiet-window-report, codeshare-seed~~ ~~(corrected 2026-10-15: 11 units, tracked and installed: agent-timecard, backup, backup-freshness, backup-restore-test, codeshare-seed, dependency-audit, docs-drift-weekly, quiet-window-report, second-brain-weekly-dump, stack-refresh-tripwire, weekly-external-image-update; tbfm-arrival-enrichment no longer has it)~~ (corrected 2026-10-25: 16 live user units/quadlets carry it: agent-pamphlet-weekly-refresh, agent-timecard, backup, backup-freshness, backup-restore-test, claude-weekly-llama-fallback, codeshare-seed, demo-source-refresh, dependency-audit, docs-drift-weekly, quiet-window-report, second-brain-weekly-dump, semantic-compile-daily, stack-refresh-tripwire, tbfm-arrival-enrichment, weekly-external-image-update; `grep -l OnFailure=corporatetraveldc-unit-failure-notify@` over `~/.config/systemd/user/*.service` and `~/.config/containers/systemd/*.container`)), `rotate-credential.sh`, `serialized-rollout.sh`, `sign-manifest.sh` (`approval-gate`) | | `[UNVERIFIED: per-script priorities]` |
 
 **Schedule and verdict changes (2026-10-19, lean-out L2, next relay).** Same
 alerts, thresholds and priorities; only the start minute moves (off the shared

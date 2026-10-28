@@ -1,6 +1,8 @@
+> Status 2026-10-25: dated snapshot of 2026-09-28, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: the counts (src/ is 208 Python files / 85,081 lines; 83 migrations, 0001-0084 with no 0080; 77 live quadlets; 79 user timers; 37 running containers; 174 entries in scripts/; 48 skill modules and 16 fetchers); there is no SQLite rollback path (the backend refuses sqlite outside the test suite since 2026-10-20), and `second_brain_index.db` and `demo-source.db` are gone (the demo store is the Postgres instance `corporatetraveldc-pgsql-demo`); ingest-core does not run Amtrak (`AMTRAK_ENABLED=false` since 2026-09-25, so already untrue when written; amtrak-tracker is the Amtrak push source); SWIM storage scope is national since 2026-10-24, so the 250 NM filter is dormant; in the OOOI authority lock TFMS is SWIM-tier and only FIDS is enrichment-only, and the local-receiver escape hatch has no caller; the agent-signing ntfy push offers Deny only (Allow needs a human SSH signature); the semantic layer is v1.2.0 with larger edge and derivation counts; `seed-dc-codeshare.py` is 9,467 B; several line references have moved.
+
 # CTDI Dispatch — Codebase Reference (2026-09-28)
 
-**Status:** CURRENT, code-validated. This document replaces the stale
+**Status:** ~~CURRENT, code-validated.~~ (corrected 2026-10-25: no longer current; code-validated as of 2026-09-28 only, and the later snapshot is `docs/CODEBASE_REFERENCE_2026-10-06.md`; see the status banner.) This document replaces the stale
 `docs/CODEBASE_REFERENCE_DRAFT_2026-09-03.md` (which described the SQLite-era
 codebase). Every quantitative and structural claim below was re-verified this
 session against live code, `git`, running containers, and the Postgres database.
@@ -427,7 +429,7 @@ so derived-edge origin need not be backfilled.
 
 ---
 
-## 12. Known rough edges / hazards (current)
+## 12. Known rough edges / hazards ~~(current)~~ (corrected 2026-10-25: as of 2026-09-28; item 1 was resolved by the same-day re-sign, and the SQLite files in items 2 and 6 are gone)
 
 1. **[HAZARD] Signed-manifest is stale → ~23 units failing** (§9.2). Highest-
    priority operational gap. Re-sign + redeploy.
@@ -451,6 +453,6 @@ so derived-edge origin need not be backfilled.
 
 ---
 
-*Validated 2026-09-28 against HEAD `78660147`. This document is the current
-platform reference; `CODEBASE_REFERENCE_DRAFT_2026-09-03.md` is superseded and
+*Validated 2026-09-28 against HEAD `78660147`. ~~This document is the current
+platform reference;~~ (corrected 2026-10-25: no longer the current reference; the later snapshot is `docs/CODEBASE_REFERENCE_2026-10-06.md`.) `CODEBASE_REFERENCE_DRAFT_2026-09-03.md` is superseded and
 should be treated as historical (SQLite-era).*

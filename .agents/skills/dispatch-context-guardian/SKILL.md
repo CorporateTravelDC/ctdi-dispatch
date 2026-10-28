@@ -16,6 +16,15 @@ version: 1.0.0
 > (so it always read 0). Neither is true of the re-synced scripts. If
 > `scripts/` here ever differs from the `.claude` copy, do not run it;
 > ask the operator to re-sync.
+>
+> (corrected 2026-10-25: this copy no longer matches the maintained copy.
+> `context_hook.py` and `save_dispatch_state.py` are byte-identical to the
+> `.claude` copies, but `restore_dispatch_state.py` differs: the `.claude`
+> copy gained `_idle_by_design()` on 2026-10-20 (push-covered / optional /
+> awaiting-credentials feeds shown as idle, not failing) and this copy did
+> not (`cmp`, 15:41:56Z). Per the rule above, do not run this copy; the
+> re-sync is an operator decision recorded in the sweep register. Neither
+> copy generates an SSH key or edits `authorized_keys`.)
 
 ## What this is
 
@@ -61,7 +70,7 @@ The hook does NOT compact -- no hook can run `/compact`.
 endpoints (`/healthz`, `/api/v1/feeds`, `/api/v1/tfr`, `/api/v1/weather`,
 `/api/v1/alerts`, `/api/v1/cps`, `/api/v1/amtrak`) plus the Tier-1
 `/api/v1/runsheet` (needs a Tier-1 token such as `DISPATCH_ADMIN_TOKEN` in
-the environment; it warns and skips if absent rather than failing the
+the environment; ~~it warns and skips if absent~~ (corrected 2026-10-25: the Tier-1 GET is always sent, without an `Authorization` header when no token is set; the route then answers 403, `fetch()` prints a WARN, stores `null` for `runsheet` and carries on, `save_dispatch_state.py:76-80,112-117`) rather than failing the
 whole snapshot), and writes the result to
 ~~`~/.config/Codex/dispatch_state_snapshot.json`~~
 `~/.config/Claude/dispatch_state_snapshot.json` (corrected 2026-10-15: the
@@ -115,11 +124,14 @@ default is a tailnet address.
 > `http://100.x.x.x:8000`
 > (`scripts/save_dispatch_state.py:34`), and the public mirror does not
 > rewrite it to any `ops.example.com` placeholder --
-> ~~`scripts/scrub-public-tree.py:140`~~ `scripts/scrub-public-tree.py:279`
-> (line corrected 2026-10-15) substitutes the literal `100.x.x.x` to
+> ~~`scripts/scrub-public-tree.py:140`~~ ~~`scripts/scrub-public-tree.py:279`
+> (line corrected 2026-10-15)~~ `scripts/scrub-public-tree.py:306` (line
+> corrected 2026-10-25; a regex sweep at `:449` covers the whole
+> `100.x.x.x/24` shape) substitutes the literal `100.x.x.x` to
 > `100.x.x.x`, so the public copy reads `http://100.x.x.x:8000`.
 > Separately, `ops.example.com` was **retired 2026-08-02** and
-> is hard-404'd by hostname in `src/runner/main.py`'s `_RETIRED_HOSTNAMES`,
+> is hard-404'd by hostname in `src/runner/main.py`'s `_RETIRED_HOSTNAMES`
+> (`:361`, re-checked 2026-10-25),
 > so an `ops.`-shaped default would be pointing at a dead name regardless
 > of scrubbing. Nothing needs configuring on this box; the default already
 > resolves correctly here.

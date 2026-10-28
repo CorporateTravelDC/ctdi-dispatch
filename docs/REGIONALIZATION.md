@@ -19,17 +19,17 @@ Write bare `KEY=value` — `EnvironmentFile=` keeps quote characters.
 
 | Variable | Purpose | This deployment |
 |---|---|---|
-| `NWWS_WFO_FILTER` | NWS forecast offices for NWWS-OI. Bare 3-letter codes (`LWX`); the leading `K` of the feed's `cccc` is stripped before comparison (fixed 2026-08-22). Empty = no filter. | set |
+| `NWWS_WFO_FILTER` | NWS forecast offices for NWWS-OI. Bare 3-letter codes (`LWX`); the leading `K` of the feed's `cccc` is stripped before comparison (fixed 2026-08-22). ~~Empty = no filter.~~ (corrected 2026-10-25: empty = the built-in core set `CORE_WFOS`, 23 offices in `src/ingest/parsers/geo_filter.py:115`, applies; products from any other office are dropped, `src/ingest/nwws.py:413-418`) | set |
 | `NOTAM_HOME_ARTCCS` | Home ARTCC(s): 14 CFR 91.137 / 91.145 TFRs alert at p5 here. **No code default.** | `ZDC` |
 | `NOTAM_MONITOR_ARTCCS` | Monitor ARTCCs: 91.137 / 91.145 at p4 (elsewhere p3). No default. | `ZNY,ZID,ZOB,ZLA,ZTL` |
 | `NOTAM_FACILITY_FILTER` | Extra NOTAM facilities beyond the permanent set | — |
 | `AMTRAK_PRIMARY_STATION`, `AMTRAK_REGIONAL_STATIONS`, `AMTRAK_WATCHLIST_STATIONS`, `AMTRAK_CORE_ROUTES` | Rail hub and routes | `AMTRAK_PRIMARY_STATION=WAS` in the template |
-| `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON`, `ULTRAFEEDER_SCAN_RADIUS_NM` | Receiver location (see `GPS_COORDINATE_CONFIGURATION.md`) | in the secrets file |
-| `DISPATCH_PROFILE` (added 2026-10-15; live since 2026-10-09) | Path to a deployment profile JSON. Unset = the bundled reference profile `src/common/profiles/ctdi-reference.json`, which reproduces the DC behaviour. Precedence everywhere: an explicit environment setting, then the profile, then the reference. | unset (reference profile) `[UNVERIFIED: live dispatch.env not re-read]` |
+| `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON`, `ULTRAFEEDER_SCAN_RADIUS_NM` | Receiver location (see `GPS_COORDINATE_CONFIGURATION.md`) | ~~in the secrets file~~ (corrected 2026-10-25: `ULTRAFEEDER_LAT` / `ULTRAFEEDER_LON` in the secrets file; `ULTRAFEEDER_SCAN_RADIUS_NM` in `dispatch.env`, key names read 2026-10-26 02:13Z) |
+| `DISPATCH_PROFILE` (added 2026-10-15; live since 2026-10-09) | Path to a deployment profile JSON. Unset = the bundled reference profile `src/common/profiles/ctdi-reference.json`, which reproduces the DC behaviour. Precedence everywhere: an explicit environment setting, then the profile, then the reference. | unset (reference profile) ~~`[UNVERIFIED: live dispatch.env not re-read]`~~ (corrected 2026-10-25: verified, no `DISPATCH_PROFILE` key in the live `dispatch.env` or the secrets file, 2026-10-26 02:13Z) |
 | `DISPATCH_LOCAL_TZ` (added 2026-10-15) | Operator-local zone for day-keyed work (`common/optime.py`, `deployment_profile.local_timezone()`) | default `America/New_York` |
 | `DISPATCH_DAY_ROLLOVER` (added 2026-10-15) | Local time at which the operational day rolls over (`common/optime.py`) | default `05:00` |
-| `AIRPLANES_LIVE_FALLBACK` (added 2026-10-15) | Enables the third-party airplanes.live fallback lookup (`DATA_SOURCES.md` §3). Off in the template | on per the 2026-10-12 audit `[UNVERIFIED: live dispatch.env not re-read 2026-10-15]` |
-| `SWIM_STORAGE_SCOPE` (added 2026-10-24) | SWIM storage filter: `regional` (default; 250 NM around the primary airport + `CORE_AIRPORTS`, the §2 constants) or `national` (store every record the FAA SWIM feeds deliver — FDPS, TFMS programs, AIM NOTAMs; the feeds are NAS-scoped either way, so only write/disk load changes, roughly 2-4x FDPS writes). The runner map extent follows it (`MAP.md` §6). Does **not** touch `NWWS_WFO_FILTER`/`is_core_wfo` (weather), nor the per-airport STDDS/TBFM/ITWS constants in §2 (those are sized by the subscription itself). Alert gating is unchanged under both values. | `national` (2026-10-24) |
+| `AIRPLANES_LIVE_FALLBACK` (added 2026-10-15) | Enables the third-party airplanes.live fallback lookup (`DATA_SOURCES.md` §3). Off in the template | on per the 2026-10-12 audit ~~`[UNVERIFIED: live dispatch.env not re-read 2026-10-15]`~~ (corrected 2026-10-25: verified on, the live key is truthy, checked without printing its value 2026-10-26 02:13Z) |
+| `SWIM_STORAGE_SCOPE` (added 2026-10-24) | SWIM storage filter: `regional` (default; 250 NM around the primary airport + `CORE_AIRPORTS`, the §2 constants) or `national` (store every record the FAA SWIM feeds deliver — FDPS, TFMS programs, AIM NOTAMs; the feeds are NAS-scoped either way, so only write/disk load changes, roughly 2-4x FDPS writes). The runner map extent follows it (`MAP.md` §6). Does **not** touch `NWWS_WFO_FILTER`/`is_core_wfo` (weather), nor the per-airport STDDS/TBFM/ITWS constants in §2 (those are sized by the subscription itself). Alert gating is unchanged under both values (unverified 2026-10-25: not every alert path that reads stored SWIM records was traced). | `national` (2026-10-24) |
 
 The `amtrak-tracker` container's station is set in its quadlet
 (`Environment=FILTER_STATION=WAS`).
@@ -60,15 +60,26 @@ them to the profile one consumer at a time is planned work. Design pack:
 | `src/poller/skills/faa_cifp_parse.py` | `_AIRPORTS` (21) and bounding box | DC/Baltimore terminal area |
 | `src/geo/dc_airspace.py` | P-56A/B, DC FRZ, DC SFRA polygons, served at `GET /api/v1/airspace` | DC |
 | `src/common/personas.py` | `ops-brief` persona section labels | LEAD, DC METRO, NAS PROGRAMS, ATCSCC FORECAST, TFRs, NWS ALERTS, AMTRAK NEC, BOTTOM LINE |
-| `src/poller/skills/route_impact.py` (added 2026-10-15) | `_dc_vip()`: the VIP TFR ground-route narrative runs only for TFRs whose facility is ZDC/KZDC/PCT | ZDC, PCT |
+| `src/poller/skills/route_impact.py` (added 2026-10-15) | `_dc_vip()`: the VIP TFR ground-route narrative runs only for TFRs whose facility is ZDC/KZDC/PCT (superseded; corrected 2026-10-25: since 2026-10-20 `_dc_vip()` only delegates to `is_dc_vip_tfr()` in `src/common/input_gate.py`; the facility set to edit is `DC_VIP_FACILITIES`, `input_gate.py:78`) | ZDC, PCT |
 | `src/common/personas.py` (added 2026-10-15) | route-impact persona: corridor roads and timing rules, Andrews movements holding DCA, Camp David (I-270/US-15/MD-77), Mount Weather (VA-7/VA-601) | DC region |
 
-The VIP TFR alert itself is not regional. Every VIP TFR nationwide alerts
-once, at p5 on `tfr-alert` and `hot-alerts` plus Pushover, and again only if
+The VIP TFR alert itself is not regional. ~~Every VIP TFR nationwide alerts
+once, at p5 on `tfr-alert` and `hot-alerts` plus Pushover,~~ (corrected
+2026-10-25: every VIP-class TFR nationwide alerts once; the hot tier, reasons
+`vip_type`, `vip_text`, `security_presidential`, `security_residence` and
+`security_zdc` (`src/pusher/main.py:126-127`), goes out at p5 on `tfr-alert`
+and `hot-alerts` plus a Pushover emergency, while a VIP-class TFR whose only
+signal is its security legal basis goes out at p3 on `tfr-alert` alone, no
+Pushover; live: every Pushover emergency attempt in the 48 h to 2026-10-26
+02:32Z failed with HTTP 400, 28 errors) and again only if
 the FAA changes it (`pusher/main.py::push_vip_tfrs`). Only the ground-route
 narrative is DC-specific.
 
-Persona edits take effect on the next request (no rebuild);
+~~Persona edits take effect on the next request (no rebuild);~~ (corrected
+2026-10-25: persona edits reach the containerised skills only after the
+poller image is rebuilt from the signed tree: the image copies `src/`
+(`Containerfile.poller:44`) and no Quadlet mounts the source; host-side
+callers that import from the checkout see them on their next run;)
 `personas.py` is manifest-covered, so re-sign.
 
 ## 3. Regional airport reference

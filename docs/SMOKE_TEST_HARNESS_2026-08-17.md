@@ -1,5 +1,7 @@
 # Full-platform smoke-test harness — 2026-08-17
 
+> Status 2026-10-25: dated record (2026-08-17). No longer current: the smoke script now probes llama.cpp on :8093 instead of Ollama and counts zero ACARS rows in 6 h as a failing category (no `KNOWN-FAIL` carve-out), and `acars_messages` is a growing table (about 192k rows at 2026-10-26T22:19Z); `scripts/sign-manifest.sh` also has an agent-key mode gated by a session grant or an approval-gate approval; 5 of the 7 unparsed STDDS message types now have parsers; the test failures root-caused here were repaired (`init_db_all()`, `_dispatch_proxy_headers` exists again); the source tree and test suite are far larger; no cron or timer runs `~/bin/dispatch-stack-guardian.sh`. Inline corrections are marked.
+
 Branch: `smoke-test-harness-2026-08-17` (off `main`, un-pushed, uncommitted — GPG
 signing/commit authority is the operator's per standing rule, not mine).
 
@@ -44,8 +46,8 @@ for hours before I touched anything today).
 grepping each unit's journal for `INTEGRITY FAILURE`). The other 2 are
 unrelated (see Finding 2 and the boot-stagger note below).
 
-**This was completely invisible to `~/bin/dispatch-stack-guardian.sh`**, the
-tool the operator has been running on a ~20-minute cron all day — it only
+**This was completely invisible to `~/bin/dispatch-stack-guardian.sh`**, ~~the
+tool the operator has been running on a \~20-minute cron all day~~ (corrected 2026-10-25: superseded — no crontab or user timer runs it now, and it still probes the same four endpoints, including the retired Ollama `:11434/api/tags`) — it only
 checks 4 HTTP endpoints (`dispatch-web`, `dispatch-runner`, `ntfy`,
 `ollama`), all of which stayed healthy throughout, because the outage was
 in the scheduled-skill layer, not the always-on web/API layer. Every
@@ -53,15 +55,15 @@ in the scheduled-skill layer, not the always-on web/API layer. Every
 this.
 
 **Not fixed by me, by design**: `scripts/sign-manifest.sh`'s own docstring
-states this is "a DELIBERATE, human-run step... using your own GPG
-passphrase" — same posture as this repo's signed commits. I did not attempt
+states this is ~~"a DELIBERATE, human-run step... using your own GPG
+passphrase"~~ (corrected 2026-10-25: superseded — the script also has an `--agent` mode that signs with the agent signing subkey without a passphrase, gated by an active session grant or a one-off approval through `scripts/sudo-approval-gate.sh` (that the approval is signed: unverified 2026-10-25), `scripts/sign-manifest.sh:164-195`; `approval_requests` holds 183 allowed `sign-manifest:agent-key` requests) — same posture as this repo's signed commits. I did not attempt
 to work around this. **The operator needs to run `scripts/sign-manifest.sh`
 themselves** to restore all 18 skills.
 
 **What I did build**: `scripts/smoke-test-platform.sh` — closes the actual
 visibility gap. Checks (1) any failed systemd --user unit, (2) manifest
-integrity via `scripts/verify-manifest.sh` directly, (3) the same 4 HTTP
-endpoints the existing guardian checks, (4) ACARS ingest freshness (see
+integrity via `scripts/verify-manifest.sh` directly, ~~(3) the same 4 HTTP
+endpoints the existing guardian checks~~ (corrected 2026-10-25: superseded — check 3 now probes dispatch-web, dispatch-runner, ntfy and llama.cpp `:8093/health` instead of Ollama, `scripts/smoke-test-platform.sh:63-66`), (4) ACARS ingest freshness (see
 Finding 6). Exit 0 always, human-readable + a final PASS/FAIL summary line,
 safe to run from a cron the same way the endpoint guardian is. **This does
 not replace `dispatch-stack-guardian.sh`** — it's a new, separate script;
@@ -132,8 +134,8 @@ names by construction could never meaningfully perform.
 Swept all 131 real captured STDDS/SMES samples
 (`smes_debug/`, `smes_debug_priority/`) through all four real parser
 functions (`parse_smes_message`, `parse_tais_message`,
-`parse_safety_logic_message`, `parse_surface_movement_event_message` — the
-same four `swim_client.py` actually calls on every payload). 59/131 (45%)
+`parse_safety_logic_message`, `parse_surface_movement_event_message` — ~~the
+same four `swim_client.py` actually calls on every payload~~ (corrected 2026-10-25: superseded — `_handle_stdds_message` tries these four in order, first match wins, then `parse_tdes_apds_message`, `src/ingest/swim_client.py:843-895`)). 59/131 (45%)
 were handled by at least one. Of the 72 unhandled, most are legitimate
 service-status/heartbeat messages with no actionable payload
 (`AirportDataServiceStatus`, `STDDSStatus`,
@@ -141,7 +143,7 @@ service-status/heartbeat messages with no actionable payload
 `TowerDepartureEventServiceStatus`, `SurfaceMovementEventServiceStatus`,
 `TAStatus` — 25 samples, clearly not a gap).
 
-**But 7 real message types with actual payload data have no parser at all**,
+**But 7 real message types with actual payload data ~~have no parser at all~~** (corrected 2026-10-25: superseded — five now have parsers: `TATrackAndFlightPlan` in `parse_tais_message`, and `RVRDataUpdateMessage`, `TowerDepartureEventMessage`, `TDLSCSPMessage` and `DATISData` in `parse_tdes_apds_message`, `src/ingest/parsers/smes_parser.py:703-715,1550-1655`; `AssetMessage`/`AssetMonitorMessage` still have none),
 39 real samples total: `TATrackAndFlightPlan` (5), `TowerDepartureEventMessage`
 (5), `DATISData` (5), `AssetMessage` (5), `AssetMonitorMessage` (5),
 `TDLSCSPMessage` (5), `RVRDataUpdateMessage` (9). Unlike the ITWS gaps (see
@@ -168,8 +170,8 @@ corrected, verified sweep against genuinely DC-area-relevant real traffic.
 Already found earlier in this session (`acars_messages` table: 0 rows
 ever, despite `acars-watcher`/`acarsrouter`/`acarshub` all showing
 "active"). Re-confirmed still true. Added as check #4 in
-`scripts/smoke-test-platform.sh`, explicitly carved out of the pass/fail
-count (labeled `KNOWN-FAIL`) since it's already a tracked, known issue, not
+`scripts/smoke-test-platform.sh`, ~~explicitly carved out of the pass/fail
+count (labeled `KNOWN-FAIL`)~~ (corrected 2026-10-25: superseded — check #4 now counts `acars_messages` rows from the last 6 h and a zero counts as a failing category, `scripts/smoke-test-platform.sh:79-95`; live the table is growing, about 192k rows at 2026-10-26T22:19Z, 2,537 of them in the 6 h before 2026-10-26T15:30Z) since it's already a tracked, known issue, not
 a new smoke-test finding — but now it'll show up on every future run
 instead of requiring someone to remember to check.
 
@@ -224,20 +226,20 @@ Root-caused, not just re-labeled "stale":
 
 - **11 of 17** (`tests/shared/test_watchlist.py` — 9, `tests/web/test_watchlist_batch.py`
   — 2) fail with `sqlite3.OperationalError: table watchlist_entries has no
-  column named hex_id`. Cause: the test setUp manually calls
-  `_db.init_db()`, `init_db_v2()` through `init_db_v5()` only.
-  `hex_id` was added in schema **v18**. The real schema is currently at
+  column named hex_id`. Cause: ~~the test setUp manually calls
+  `_db.init_db()`, `init_db_v2()` through `init_db_v5()` only.~~
+  `hex_id` was added in schema **v18**. ~~The real schema is currently at
   **v33** (`grep '^def init_db_v' src/common/db.py` — 33 migration
   functions exist). The test DB init chain is **28 schema versions behind
-  production**. This is test-infrastructure drift, not a production bug —
+  production**.~~ (corrected 2026-10-25: superseded — both test files now call `_db.init_db_all()` (`tests/shared/test_watchlist.py:106`, `tests/web/test_watchlist_batch.py:35`), and `src/common/db.py` defines 49 `init_db_v*` functions.) This is test-infrastructure drift, not a production bug —
   confirmed production's real `watchlist_entries` table does have
   `hex_id` (queried directly against the live DB earlier this session).
 - **5 of 17** (`tests/runner/test_proxy_dispatch.py`) fail with
   `AttributeError: module 'runner.main' has no attribute
-  '_dispatch_proxy_headers'` — that function no longer exists anywhere in
+  '_dispatch_proxy_headers'` — ~~that function no longer exists anywhere in
   `src/runner/main.py` (confirmed via grep, no similarly-named replacement
   found either). Whatever proxy-header logic exists now, these 5 tests are
-  fully orphaned against it.
+  fully orphaned against it.~~ (corrected 2026-10-25: superseded — `_dispatch_proxy_headers` exists again at `src/runner/main.py:2610` and the test file targets it.)
 - **1 of 17** (`test_marine_one_detection.py::test_smes_parser_basic`) —
   not individually root-caused (likely shares the same schema-drift DB
   helper as the watchlist tests; not confirmed).
@@ -249,14 +251,14 @@ not one-liners.
 
 ## Coverage survey (not deep-tested, documented as a gap)
 
-123 source files under `src/`, 16 pre-existing test files (now 17). Most
+~~123 source files under `src/`, 16 pre-existing test files (now 17). Most
 strikingly: **`src/poller/skills/` (37 files — the actual brief-generation
 logic behind every scheduled skill: `ep_advance_brief.py`, `ops_brief.py`,
-`second_brain_daily.py`, etc.) has zero test files.** Also untested:
-`common/db.py` (the entire ~4,300-line schema/query layer),
+`second_brain_daily.py`, etc.) has zero test files.**~~ (corrected 2026-10-25: superseded — at 5f7fca01 there are 208 tracked `.py` files under `src/` and 255 `test_*.py` files with 2,182 test functions; 25 test files exercise `poller.skills`, which has 49 `.py` files.) Also untested:
+~~`common/db.py` (the entire \~4,300-line schema/query layer),
 `common/flight_resolver.py` (the file the 2026-08-16 drift audit flagged
 as having a permanently-dead SWIM tier — still no test would have caught
-that regression or would catch a recurrence), `common/guardrails.py`
+that regression or would catch a recurrence),~~ (corrected 2026-10-25: superseded — `common/db.py` is now 8,978 lines and 3 test files reference `flight_resolver`; no test references the module below) `common/guardrails.py`
 (SR1/SR2 safety-rail logic). Not deep-tested in this pass — flagged
 honestly rather than silently left uncovered.
 

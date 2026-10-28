@@ -10,10 +10,17 @@
 > team on 2026-10-06 is five accounts: `ctdc-agent-anthropic-claude` (agent, live),
 > `ctdc-agent-anthropic-cowork` (service, live), `ctdc-agent-llama` (service, live),
 > `ctdc-agent-openai-codex` (agent, preloaded/inert) and `ctdc-agent-dispatch` (service,
-> preloaded/inert).~~ (corrected 2026-10-15: the live team is six accounts:
+> preloaded/inert).~~ ~~(corrected 2026-10-15: the live team is six accounts:
 > `ctdc-agent-anthropic-claude` (agent, claude mode, live), `ctdc-agent-openai-codex` (agent,
 > codex mode, activated 2026-10-08, live), `ctdc-agent-anthropic-cowork`, `ctdc-agent-llama` and
 > `ctdc-agent-openai-chatgpt` (services, live), and `ctdc-agent-dispatch` (service,
+> preloaded/inert).)~~ (corrected 2026-10-25: superseded -- the team on 2026-10-26 04:00Z is
+> seven accounts: `ctdc-agent-anthropic-claude` (agent, claude mode, live),
+> `ctdc-agent-anthropic-claude-ea` (agent, claude mode, uid 1007, created 2026-10-26 03:07Z,
+> live inside the 3-day new-account grace), `ctdc-agent-anthropic-cowork`, `ctdc-agent-llama`
+> and `ctdc-agent-openai-chatgpt` (services, live), `ctdc-agent-openai-codex` (agent, codex
+> mode, **inert** since 2026-10-22 07:18Z: its login looked fresh but neither its remote-control
+> unit nor a codex process ran; signer inactive) and `ctdc-agent-dispatch` (service,
 > preloaded/inert).) No human teammate account exists yet. Current design and runbook:
 > `docs/AGENT_SEGMENTATION.md`.
 
@@ -66,7 +73,7 @@ is the root of trust and is never a kill-order target.
 | Account | personal, `--add-human <name>` | one per agent, `--add-agent <name>` (cloud agents and the local model: `--add-service <name>`, nologin) | existing |
 | Groups | `ctdc-dev` + `ctdc-ops` | `ctdc-dev` + `ctdc-agents` | `ctdc-dev` (+ wheel) |
 | Slice | `humans.slice` (weight 50, 1.5 cores, 2.5-3.5 G) | `agents.slice` (weight 25, 1 core, 3-4 G); services have none | production / app |
-| Secrets | `/etc/ctdc-ops/ops-secrets.env` (ops allowlist: connection facts + an optional personal ntfy token) | `/etc/ctdc-agent/agent-secrets.env` (agent allowlist: connection facts + an optional scoped ntfy token; no admin, board, vault or feed credential) | the production files |
+| Secrets | `/etc/ctdc-ops/ops-secrets.env` (ops allowlist: ~~connection facts + an optional personal ntfy token~~ (corrected 2026-10-25: connection facts, an optional personal ntfy token and an optional read-only database login, `DISPATCH_PG_RO_USER?` / `DISPATCH_PG_RO_PASSWORD?`, `secrets-allowlist-ops.txt`)) | `/etc/ctdc-agent/agent-secrets.env` (agent allowlist: ~~connection facts + an optional scoped ntfy token~~ (corrected 2026-10-25: connection facts, an optional scoped ntfy token and an optional read-only database login, `DISPATCH_PG_RO_USER?` / `DISPATCH_PG_RO_PASSWORD?`, in `secrets-allowlist-agent.txt` since 2026-10-04); no admin, board, vault or feed credential) | the production files |
 | SSH | their **own** key, comment `name@device` | its **own** key, comment `name@corporatetraveldc-dispatch` | own keys |
 | Repo | **read** via `ctdc-dev` (setgid, group write removed 2026-10-04 after the adversarial duel, `sharedRepository=false`) | same | owner, only writer |
 | Commit signing / manifest | **no** | **no** | **only signer** |
@@ -94,7 +101,7 @@ account as author while signing stays operator-only.
 
 | Factor | Checked how | Killed by |
 |---|---|---|
-| (a) **login** | claude-mode agent: credentials file + refresh token valid + access token refreshed within 7 d, and its remote-control unit active; ssh-mode agent: SSH login within 7 d; service: no login factor; human: shell / one key / not locked / not expired / login within 14 d (3 d grace for new accounts) | `usermod -L`, `chage -E 0`, shell -> nologin, key removed, or just going stale |
+| (a) **login** | ~~claude-mode agent: credentials file + refresh token valid + access token refreshed within 7 d, and its remote-control unit active;~~ (corrected 2026-10-25: claude-mode agent: credentials file + refresh token valid + access token refreshed within 7 d, and its remote-control unit active or a `claude` process running as the account (with no unit installed, the credentials alone); codex-mode agent (since 2026-10-08): Codex login refreshed within 14 d and its remote-control unit or a `codex` process running; `scripts/team-liveness.sh:108-112`, `:285-390`); ssh-mode agent: SSH login within 7 d; service: no login factor; human: shell / one key / not locked / not expired / login within 14 d (3 d grace for new accounts) | `usermod -L`, `chage -E 0`, shell -> nologin, key removed, or just going stale |
 | (b) **key** | `board_signers.active = true` for the account | `board-signer-ctl.sh deactivate <name>` -- immediate on the next request |
 | (c) **token** | none of the account's minted tokens revoked in the last 24 h | any single revocation |
 | (d) **order** | no executable kill order | `scripts/kill-order.sh issue <name> "<reason>"` by an admin, or by a quorum |
@@ -103,12 +110,18 @@ Any one failing -> **inert**: sessions terminated, user manager stopped,
 linger off, account locked + expired, signer deactivated, all minted tokens
 revoked, marker written, ntfy. Reactivation is explicit
 (`team-liveness.sh --reactivate <name> --i-am-the-operator`) and restores
-login/linger/signer only; tokens are never restored.
+login/linger/signer only; tokens are never restored. (added 2026-10-25: since
+2026-10-15, `bcf3df54`, both the inert action and `--reactivate` act only when
+an HTTPS probe to login.tailscale.com or api.github.com succeeds, or during a
+network lockdown with a signed `liveness` approval; otherwise they are held,
+`scripts/team-liveness.sh:142-183`.)
 
 ### Three kill switches, tiered impact, quorum
 
 Three independent switches per principal -- revoke the login, revoke the key,
-revoke a token -- and any one collapses the whole chain within the hour
+revoke a token -- and any one collapses the whole chain ~~within the hour~~
+(corrected 2026-10-25: at the next liveness run -- the root timer fires hourly
+with up to 20 min randomized delay, so runs are 40 to 80 min apart)
 (within minutes for an order, via the `.path` unit).
 
 | Tier | Requires |
@@ -127,7 +140,11 @@ revoke a token -- and any one collapses the whole chain within the hour
 ### The pamphlet
 
 Each account's home directory is its desk, and the first thing on it is a
-root-owned, read-only `CLAUDE.md` rendered from
+~~root-owned, read-only `CLAUDE.md`~~ (corrected 2026-10-25: root-owned,
+read-only pamphlet: `render-onboarding.sh --install` writes the same rendering
+as `~/CLAUDE.md` and `~/AGENTS.md`, plus `~/.codex/AGENTS.md` for a Codex
+account, each 0444 `root:<account>`, `scripts/agent-segmentation/render-onboarding.sh:98-107`;
+unverified 2026-10-25 which homes carry it -- the homes are 0700) rendered from
 `scripts/agent-segmentation/onboarding-template.md`: who the account is,
 which repositories it may enter and whether read-only (discovered from the account's group and mode bits), where its
 secrets subset is and how to load it, what it must never do, the liveness

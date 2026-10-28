@@ -1,10 +1,12 @@
+> Status 2026-10-25: dated draft of 2026-09-03, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: the platform runs on Postgres only (SQLite is refused outside the test suite), with 129 production tables, not ~75; FIDS is no longer an OOOI source (denied since 2026-09-27); the SWIM backlog staleness default is 8 h, not 2 h, and SWIM usage counters flush every 60 s, not 5 s; amtrak also has a push twin (REST fallbacks: nws, notam, amtrak); the pusher's hourly VIP re-push is gone, and `should_push_periodic()` now serves landing alerts; the STDDS parser (`smes_parser`) also feeds the sector escalation.
+
 # CTDI Dispatch — Codebase Reference Draft (2026-09-03)
 
 **Status:** DRAFT, written from a fresh read of the code as it stands on 2026-09-03.
 This document describes what the code actually does today — not what any earlier
-doc claims about it. It is intended as the source-of-truth input for reconciling
+doc claims about it. ~~It is intended as the source-of-truth input for reconciling
 the repo's living docs (README.md, docs/INFRA_MAP.md, docs/COMPLIANCE_SECURITY.md,
-etc.). Where something was inferred rather than directly confirmed by reading
+etc.).~~ (corrected 2026-10-25: no longer a source of truth for current code; it describes the code of 2026-09-03, and the later snapshots are `docs/CODEBASE_REFERENCE_2026-09-28.md` and `docs/CODEBASE_REFERENCE_2026-10-06.md`.) Where something was inferred rather than directly confirmed by reading
 code, that is said explicitly. File paths are relative to the repo root
 (`/opt/corporatetraveldc/private/ctdi-dispatch-internal`) unless noted.
 

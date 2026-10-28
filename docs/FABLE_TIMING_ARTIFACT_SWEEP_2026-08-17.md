@@ -1,6 +1,8 @@
+> Status 2026-10-25: point-in-time record; the working branch it names no longer exists.
+
 # Fable Timing / Artifact Sweep — 2026-08-17
 
-Branch: `fable-timing-artifact-sweep-2026-08-17` (all changes staged/uncommitted
+Branch: `fable-timing-artifact-sweep-2026-08-17` (2026-10-25: superseded; the branch no longer exists, `git branch -a` 2026-10-26T22:10Z) (all changes staged/uncommitted
 — commit authority is the operator's). Written during the sweep, ~14:45–19:00
 EDT, on the live box under genuine production contention (no synthetic load,
 no idle measurements). Follow-on to the Phase-3/4 timing baseline (plan

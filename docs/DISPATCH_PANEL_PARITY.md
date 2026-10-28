@@ -25,6 +25,12 @@ history 1813/1822, `_build_context_rich` 1345, `_local_answer` 1448, `_TOPIC_RX`
 1690, history helpers 2039-2063. References below 414 (`:98-101`, `:188`, `:382`)
 are unchanged. The behaviour described is unchanged except where marked.
 
+**Line shift (2026-10-25, HEAD 5f7fca01), superseding the 1491bf5a numbers above and every `main.py:NNNN` below:**
+`/api/ask` 2370, `AskRequest` 1928, `_TOPIC_RX` 1937, `_build_context_rich` 2059, `_context_to_str` 2098,
+`_local_answer` 2161, `_llm_stream` 2259 (read timeout 110 s at 2308), `has_llm` 2395, `X-Dispatch-Model` 2499,
+history routes 2519/2528, history helpers 2755-2798, `_DEMO_NEVER` 423, `demo_gate` 427, `_TRUSTED_NETS` 200;
+`:98-101` unchanged. `_signed`-style behaviour unchanged.
+
 Nothing in this document is a secret or PII; env vars are named, never
 valued. Known defects in the current panel are marked **DO NOT REPLICATE**.
 
@@ -43,8 +49,8 @@ valued. Known defects in the current panel are marked **DO NOT REPLICATE**.
 | Local resolver | `_local_answer()` — `main.py:1416`; topic regexes `_TOPIC_RX` — `main.py:1301` | zero-LLM structured answers |
 | LLM client | `_llm_stream()` — `main.py:1537` → `http://{llama_pool.HOST}:{port}/v1/chat/completions` | OpenAI-compatible streaming to llama-server |
 | Pool facts | `src/common/llama_pool.py:53-67` | `HOST` = `LLAMA_POOL_HOST`, else the host of `LLAMA_BASE_URL`, else the Tailscale address; `LLAMA_PORT` likewise, default 8093; HOT/CHAT/REPORT all resolve to it (changed 2026-10-05) |
-| Persona table | `src/common/personas.py:87` (`PERSONAS`), `build_system_prompt()` :924, `persona_key_for()` :943 | 22 personas; `chat` tier=chat temp 0.3 top_p (see table) num_predict 350 |
-| Model serving | `~/.config/systemd/user/corporatetraveldc-llama.service` (tracked copy in `.config/systemd/user/`) | `llama-server -m qwen3-4b-instruct-2507-q4_0.gguf --host <tailscale> --port 8093 -np 2 --kv-unified -c 12288 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 2 --cache-ram 0 --no-webui`, `Slice=production.slice`, `CPUQuota=200%`, `MemoryMax=8448M` |
+| Persona table | `src/common/personas.py:87` (`PERSONAS`), `build_system_prompt()` ~~:924~~ :1000, `persona_key_for()` ~~:943~~ :1026 (2026-10-25) | ~~22~~ 23 (2026-10-25) personas; `chat` tier=chat temp 0.3 top_p (see table) num_predict 350 |
+| Model serving | `~/.config/systemd/user/corporatetraveldc-llama.service` (tracked copy in `.config/systemd/user/`) | `llama-server -m qwen3-4b-instruct-2507-q4_0.gguf --host <tailscale> --port 8093 -np 2 --kv-unified -c 12288 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 2 ~~--cache-ram 0~~ (corrected 2026-10-26: `--cache-ram 1024 --cache-reuse 256`, unit `ExecStart` via `systemctl --user show`) --no-webui`, `Slice=production.slice`, `CPUQuota=200%`, `MemoryMax=8448M` |
 | Persistence | `chat_messages` table — `src/common/pg_schema/0056_dispatch_chat.sql`; helpers `main.py:2007-2031` | Postgres via `common.db.conn()`; **0 rows as of 2026-10-04** ~~[UNVERIFIED 2026-10-06: table not re-queried]~~ (re-queried 2026-10-15 01:40Z: still 0 rows) |
 | Front proxy | `nginx/conf.d/tailscale-dispatch-runner.conf` | `limit_req zone=corporatetraveldc_lr burst=20 nodelay` (zone `10r/s`, `nginx/conf.d/00-rate-limit-corporatetraveldc.conf:34`), `proxy_read_timeout 120s` |
 | Audit trail | none on `/api/ask` | `audit_log` is written by admin/approval paths only; chat writes `chat_messages` only |
@@ -152,7 +158,7 @@ Headers: `X-Dispatch-Model`.
 | tfr | `/api/v1/tfr` | `{tfrs:[{tfr_id, is_vip, effective_start, effective_end}], count}` |
 | feeds | `/api/v1/feeds` | `{feeds:[{feed_name, fetched_at, age_seconds, stale_threshold_seconds, push_covered, error, pull_error, …}]}` |
 | alerts | `/api/v1/alerts` | `{alerts:[{alert_id, event_type, area_desc, severity, certainty, effective, expires, headline}], count}` |
-| notam | `/api/v1/notams` | `{notams:[{notam_id, facility, classification, effective_start, effective_end, text_body}], count}` (~6,000 rows — do not inject raw) |
+| notam | `/api/v1/notams` | `{notams:[{notam_id, facility, classification, effective_start, effective_end, text_body}], count}` (~~~6,000~~ ~~10,027 rows on 2026-10-25~~ (superseded 2026-10-26: `count` 19,476 at 21:58Z) — do not inject raw) |
 | amtrak | `/api/v1/amtrak` | `{available, summary, fetched_at, trains:[{train_num, route, origin, destination, status, delay_minutes, …}]}` |
 | brief | `/api/v1/brief` | **not JSON** (`text/plain`, ~96 KB on 2026-10-18) — ~~current code's `r.json()` raises and the topic is silently dropped~~ (fixed 2026-10-18: kept as text, first 600 chars injected) |
 
@@ -180,14 +186,14 @@ Headers: `X-Dispatch-Model`.
 ### 5.1 Corpora on this box (read-only inventory, 2026-10-04; repo rows re-counted 2026-10-06, database row counts not re-queried)
 | Corpus | Location | Size | Suitability |
 |---|---|---|---|
-| Platform source | repo `src/` (72,091 Python lines in 180 tracked `.py` files at 2c3f81b), 1,273 tracked files, 21.5 MB | code + docstrings carry the operational vocabulary; already secret-free by policy and gate | fine-tune (code/ops Q&A), RAG |
-| Docs | `docs/*.md` 139 tracked files, 46,794 lines (2c3f81b) | design rationale, incident narratives | RAG first; fine-tune after scrub |
-| Skills | `skills/` + `.claude/skills/` 12 tracked SKILL.md files (2c3f81b) | procedures the agents follow | RAG; the panel should *not* learn agent-tooling procedures as user-facing behaviour |
-| Personas | `src/common/personas.py` 46.8 KB (22 personas, preamble + task text) | the house voice; the single best fine-tune seed for tone | fine-tune |
-| Second-brain vault (Nextcloud) | `vault_documents` 13,609 docs; `vault_notes_fulltext` 13,367 rows / 44 MB; local backup `/var/lib/corporatetraveldc/second-brain-vault-backup-2026-08-11` 411 MB (stale) | daily digests, watches, close-out notes, research | RAG primary; fine-tune only the agent-authored notes after PII scrub |
-| Semantic layer | `semantic_note_derivations` ~1.05 M rows / 794 MB; `semantic_note_concepts` 107 k; `semantic_note_chronology` 26 k; `semantic_concepts` 99; `semantic_labels` 565; `semantic_relations` 74; `semantic_unmapped_tags` 475 | already-derived concept/relation graph over the vault | RAG index source / graph-RAG |
+| Platform source | repo `src/` (72,091 Python lines in 180 tracked `.py` files at 2c3f81b), 1,273 tracked files, 21.5 MB (superseded 2026-10-25 at 5f7fca01: 85,081 lines in 208 `.py` files; 1,740 tracked files) | code + docstrings carry the operational vocabulary; already secret-free by policy and gate | fine-tune (code/ops Q&A), RAG |
+| Docs | `docs/*.md` 139 tracked files, 46,794 lines (2c3f81b) (superseded 2026-10-25: 119 files, 48,172 lines) | design rationale, incident narratives | RAG first; fine-tune after scrub |
+| Skills | `skills/` + `.claude/skills/` 12 tracked SKILL.md files (2c3f81b) (superseded 2026-10-25: 24 tracked `SKILL.md`, including `.agents/skills/`) | procedures the agents follow | RAG; the panel should *not* learn agent-tooling procedures as user-facing behaviour |
+| Personas | `src/common/personas.py` 46.8 KB (22 personas, preamble + task text) (superseded 2026-10-25: 51.2 KB, 23 personas) | the house voice; the single best fine-tune seed for tone | fine-tune |
+| Second-brain vault (Nextcloud) | `vault_documents` 13,609 docs; `vault_notes_fulltext` 13,367 rows / 44 MB (superseded 2026-10-25: 18,878 / 16,184 rows); local backup `/var/lib/corporatetraveldc/second-brain-vault-backup-2026-08-11` 411 MB (stale) | daily digests, watches, close-out notes, research | RAG primary; fine-tune only the agent-authored notes after PII scrub |
+| Semantic layer | `semantic_note_derivations` ~1.05 M rows / 794 MB; `semantic_note_concepts` 107 k; `semantic_note_chronology` 26 k; `semantic_concepts` 99; `semantic_labels` 565; `semantic_relations` 74; `semantic_unmapped_tags` 475 (superseded 2026-10-25: derivations 1,524,455; concepts 127,642; chronology 26,171; `semantic_concepts` 105; labels 583; relations 74; unmapped 541) | already-derived concept/relation graph over the vault | RAG index source / graph-RAG |
 | Knowledge graph | `docs/SECOND_BRAIN_GRAPH_AUTOMATION_PROMPT.md` (draft, not scheduled); `knowledge-graph-compile.timer` disabled by config | not yet a corpus | decision needed |
-| Live ops stream | `hot_alerts` 40 k rows / 270 MB (route narratives, 5-min cadence); `osint_items` 1,840; `board_messages` 126 | the situational language the panel must speak | fine-tune Q→A pairs synthesised from (state block, local-resolver answer) |
+| Live ops stream | `hot_alerts` 40 k rows / 270 MB (route narratives, 5-min cadence); `osint_items` 1,840; `board_messages` 126 (superseded 2026-10-25: `hot_alerts` 56,196; `osint_items` 1,570; `board_messages` 381) | the situational language the panel must speak | fine-tune Q→A pairs synthesised from (state block, local-resolver answer) |
 | Chat history | `chat_messages` **0 rows** | no real usage to learn from | goldens must be synthesised (5.4) |
 | Vocabulary / topical stores | none exist as separate stores today; vocabulary lives in `personas.py`, `_TOPIC_RX`, feed/skill code, and the vault tag set (`semantic_unmapped_tags`) | — | build one as a first deliverable |
 

@@ -14,7 +14,9 @@ the Chief of Staff are distinct executive-suite positions; the CoS half is now
 - **Modules:** `calendar_coordination`, `meeting_preparation`, `travel_coordination`, `follow_up` and
   `document_intake`.
 - **Sources:** `calendar`, `contacts`, `email` and `document_repository`.
-- **Glossary scopes:** `scheduling` and `office`. `travel_coordination` keeps its existing `aviation`, `rail` and
+- **Glossary scopes:** ~~`scheduling` and `office`.~~ (corrected 2026-10-25: `scheduling`, `office` and
+  `governance`, the last from `follow_up`; the full EA slice is agents, aviation, governance, office, platform,
+  rail, scheduling and weather -- `render-glossary.py --list-profiles` at 5f7fca01.) `travel_coordination` keeps its existing `aviation`, `rail` and
   `weather` scopes, because the EA is the profile that touches dispatch. Rendered with
   `scripts/render-glossary.py --profile executive-assistant`.
 
@@ -27,14 +29,18 @@ the Chief of Staff are distinct executive-suite positions; the CoS half is now
 
 | Service | Role in the profile |
 |---|---|
-| Nextcloud Calendar (with its Appointments booking), Contacts, Tasks | The principal's calendar (CalDAV), address book (CardDAV) and the follow-up list; installed with `--keep-disabled` |
+| Nextcloud Calendar (with its Appointments booking), Contacts, Tasks | The principal's calendar (CalDAV), address book (CardDAV) and the follow-up list; ~~installed with `--keep-disabled`~~ (corrected 2026-10-25: all three are installed; Contacts and Tasks are disabled, but Calendar is **enabled** live -- `occ config:app:get calendar enabled` = `yes`, 2026-10-26 04:27Z) |
 | Paperless-ngx (shared with the CFO) | E-tickets, itineraries, receipts; tagged with the trip tag |
 
 ## Where it meets dispatch
 
 A travel event that holds a flight number becomes a watchlist entry through the existing
-`POST /api/v1/watchlist`, so the LADD filter, flight-alerts and the gate/baggage assignments
-(`/api/v1/flights/{ident}/assignments`) apply unchanged. The event holds a flight number, never a tail: tails
-come from SWIM only. Ground legs go to the runsheet and opsplan, and venue meetings to the EP advance. The
+~~`POST /api/v1/watchlist`~~ (corrected 2026-10-25: `POST /api/v1/watchlist/flights`, admin action
+`watchlist.flight.add`, `src/web/routes/watchlist.py:313-316`; `POST /api/v1/watchlist` starts a runsheet-day watch
+session, not a watchlist entry, `src/web/main.py:1618`), so the LADD filter, flight-alerts and the gate/baggage assignments
+(`/api/v1/flights/{ident}/assignments`) apply unchanged. The event holds a flight number, never a tail: ~~tails
+come from SWIM only~~ (corrected 2026-10-25: a change of tail on a watch is accepted only from SWIM -- FDPS, the FDPS
+plan behind a TDES clearance, TBFM or TFMS, `src/common/flight_instance.py:1021,1136` -- but a watch's first identity
+lock can also take the tail from the airplanes.live fallback's record, `src/shared/watchlist.py:568-590`). Ground legs go to the runsheet and opsplan, and venue meetings to the EP advance. The
 CalDAV adapter that would read the calendar is **not built**. It would be read-only, use an app password and be
 disabled by default, and it needs its own operator decision after the freeze.

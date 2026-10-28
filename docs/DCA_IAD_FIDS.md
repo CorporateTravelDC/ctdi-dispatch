@@ -75,8 +75,10 @@ Fields used (2026-10-18: `status`, `actualtime`, `mwaaTime`, the tail and
 leg): `IATA`, `flightnumber`, ~~`status` (Scheduled, InAir, InGate,
 Landed, OutGate, Delayed, Cancelled, Departed, In Customs),~~ `gate` /
 `mod_gate` (override wins), `arr_terminal`, `baggage`/`claim`/`claim1-3`,
-`publishedTime`, `actualtime`, `mwaaTime` (override wins),
-`aircraftInfo.tail_number` (display only, see Role), `arrivalInfo[0].remaining_time`.
+`publishedTime` (leg match only)~~, `actualtime`, `mwaaTime` (override wins),
+`aircraftInfo.tail_number` (display only, see Role), `arrivalInfo[0].remaining_time`~~
+(corrected 2026-10-25: those four are no longer read -- ~~`airport_fids.py:213,290`~~ (corrected 2026-10-26: the lookup return dicts at `airport_fids.py:316,389`)
+return no status/scheduled/tail/remaining fields, as the sentence above says).
 
 IAD carousel remap: MWAA's template maps carousels 16–21 and single-letter
 values to 15; `airport_fids._iad_remap()` replicates it.

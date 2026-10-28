@@ -18,7 +18,7 @@ is closed on the LAN interfaces (firewalld zone `FedoraWorkstation` on `enu1`,
 `wld0` opens 80/tcp but not 443; `tailscale0` is in the `trusted` zone), and
 the LAN-reachable port-80 server block for the tailnet name only redirects
 to https. (Re-checked 2026-10-15: zone `FedoraWorkstation` holds `enu1`, `enu1c2` and `wld0` and lists
-port 80/tcp; `tailscale0` is still `trusted`.) The public vhost has `location ^~ /console { return 404; }`; in
+port 80/tcp; `tailscale0` is still `trusted`.) (unverified 2026-10-25: firewalld zone state is root-only; `ss` 21:20Z shows nginx bound to `0.0.0.0:443`, so the LAN closure rests on the firewall.) The public vhost has `location ^~ /console { return 404; }`; in
 practice Cloudflare Access answers first (302 to its login, observed
 2026-10-06). The app itself returns 404 to any `Host` not in `CONSOLE_HOSTS`
 (default: the tailnet name). Processes on the host itself (loopback, the
@@ -97,13 +97,21 @@ with one secret name).
 
 - **Invite host** `invite.executivestandard.example.com`
   (Cloudflare tunnel ingress; nginx vhost tracked in the Executive Standard
-  repo; not behind Cloudflare Access; 200 on 2026-10-06). Exposes `/`, `/p`,
+  repo; not behind Cloudflare Access; 200 on 2026-10-06) (unverified 2026-10-25: edge not re-probed). Exposes `/`, `/p`,
   `/i/<code>`; its access log maps `/i/<code>` to `/i/-`, so the code is never
   logged. Carries the honeypot snippet.
 - **Members host** `members.executivestandard.example.com`: not
   signed in -> 302 to the invite host (observed 2026-10-06). Sign-in is
-  `/redeem?x=<hand-off>`. Ungated paths: `/manifest.json`, `/icons/`,
-  `/sw.js` only.
+  `/redeem?x=<hand-off>`. ~~Ungated paths: `/manifest.json`, `/icons/`,
+  `/sw.js` only.~~ (corrected 2026-10-25: `auth_request off` also covers
+  `/.well-known/`, `/subscribe`, `/subscribe/`, `/feed`, `/feed.xml`,
+  `/index.xml`, `/rss`, `/rss.xml` and the `/redeem` hand-off, besides
+  `/manifest.json`, `/icons/` and `/sw.js`; live
+  `/etc/nginx/conf.d/members.executivestandard.example.com.conf:48-74`, 21:54Z.)
+  (2026-10-25 addendum: the vhost also includes the private RSS feed location from
+  `/etc/nginx/executivestandard-rss-location.conf` -- root 0600, its token path is the
+  credential -- at line 66; (unverified 2026-10-25: that file is root-only, so whether
+  its location is ungated could not be read).)
 - **Flow:** link or code -> a page with one button (GETs spend nothing, so
   link previews cannot burn an invite) -> POST mints a single-use hand-off
   valid 120 s (`EXCHANGE_TTL_S`) -> the members host swaps it for a session
@@ -162,7 +170,7 @@ vendor dormancy 7 days, holds <= 90 days): `docs/AGENT_SEGMENTATION.md`
 (`src/poller/skills/board_sweep.py`), which marks quiet sessions dormant after
 `DORMANT_AFTER_S` (7 days, `src/common/agent_gateway.py`) and pushes an ops-health
 notice; the account itself stays live. Tests: `tests/web/test_agent_gateway.py`
-(~~15~~ 18 test functions on 2026-10-15).
+(~~15~~ ~~18~~ test functions on 2026-10-15; 24 on 2026-10-25, `grep -c 'def test_'`).
 
 ---
 

@@ -38,14 +38,14 @@ cache-creation tokens; output tokens are not context,
 
 The hook does NOT compact -- no hook can run `/compact`. Claude Code's own
 auto-compact does, at the auto-compact window. On a 1M-window model the
-default window is ~967k, so set it to 900k in user settings (see Install);
+default window is ~967k (unverified 2026-10-25: Claude Code's built-in default cannot be checked from this box; only `context_hook.py` text states it), so set it to 900k in user settings (see Install);
 the hook's message flags a missing window or disabled auto-compact.
 
 `scripts/save_dispatch_state.py` polls the dispatch platform's Tier-0 GET
 endpoints (`/healthz`, `/api/v1/feeds`, `/api/v1/tfr`, `/api/v1/weather`,
 `/api/v1/alerts`, `/api/v1/cps`, `/api/v1/amtrak`) plus the Tier-1
-`/api/v1/runsheet` (requires `DISPATCH_ADMIN_TOKEN` in the environment, or any cert-tier token, since the route is Tier 1, warns
-and skips if absent rather than failing the whole snapshot), and writes the
+`/api/v1/runsheet` (requires `DISPATCH_ADMIN_TOKEN` in the environment, or any cert-tier token, since the route is Tier 1, ~~warns
+and skips if absent~~ (corrected 2026-10-25: the Tier-1 GET is always sent, without an `Authorization` header when no token is set; the route then answers 403, `fetch()` prints a WARN, stores `null` for `runsheet` and carries on, `save_dispatch_state.py:76-80,112-117`) rather than failing the whole snapshot), and writes the
 result to `~/.config/Claude/dispatch_state_snapshot.json`. It also snapshots
 the ~~`~/.ssh/cowork_ed25519.pub`~~ `~/.ssh/<login user>_ed25519.pub` (corrected 2026-10-15, `save_dispatch_state.py:121`) public key if present, so the restore step
 can detect and flag a key change/regeneration across a compact.
@@ -56,8 +56,10 @@ TFRs, NWS alerts, weather, Amtrak, runsheet, and the SSH-key check. A
 `SessionStart` hook with matcher `compact|resume` runs it automatically
 after every compaction. (2026-10-15, this box: both hooks are registered in
 user-scope `~/.claude/settings.json`, pointing at the private checkout's copy
-of these scripts, and `autoCompactWindow` is 900000. The last snapshot was
-written 2026-10-14 22:42Z.)
+of these scripts, and `autoCompactWindow` is 900000. ~~The last snapshot was
+written 2026-10-14 22:42Z.~~ (superseded 2026-10-25: hooks and window
+re-checked the same; the last snapshot was written 2026-10-25 03:25:28Z and
+the log is 98 KB, under the 200 KB rotation, `ls -l --time-style` 15:41:53Z.))
 
 ## Install
 
@@ -108,11 +110,11 @@ default is a tailnet address.
 > `http://100.x.x.x:8000`
 > (`scripts/save_dispatch_state.py:34`), and the public mirror does not
 > rewrite it to any `ops.example.com` placeholder --
-> ~~`scripts/scrub-public-tree.py:140`~~ `scripts/scrub-public-tree.py:279` (line corrected 2026-10-15) substitutes the literal
+> ~~`scripts/scrub-public-tree.py:140`~~ ~~`scripts/scrub-public-tree.py:279` (line corrected 2026-10-15)~~ `scripts/scrub-public-tree.py:306` (line corrected 2026-10-25; regex sweep at `:449`) substitutes the literal
 > `100.x.x.x` to `100.x.x.x`, so the public copy reads
 > `http://100.x.x.x:8000`. Separately, `ops.example.com` was
 > **retired 2026-08-02** and is hard-404'd by hostname in
-> `src/runner/main.py`'s `_RETIRED_HOSTNAMES`, so an `ops.`-shaped default
+> `src/runner/main.py`'s `_RETIRED_HOSTNAMES` (`:361`), so an `ops.`-shaped default
 > would be pointing at a dead name regardless of scrubbing. Nothing needs
 > configuring on this box; the default already resolves correctly here.
 
@@ -127,16 +129,22 @@ default is a tailnet address.
 > text, and `fmt_amtrak` reads `summary` and `trains`. The table is kept as
 > the record of what was wrong.
 
-- `restore_dispatch_state.py`'s display formatters assume field names that
+- ~~`restore_dispatch_state.py`'s display formatters assume field names that
   don't match this platform's actual `/api/v1/*` JSON response shapes -- the
   raw snapshot file has correct data, but the formatted printout shows
   placeholder `?` values instead of real ones. The snapshot JSON itself is
-  reliable; only the pretty-print step needs a field-mapping fix.
+  reliable; only the pretty-print step needs a field-mapping fix.~~
+  (superseded 2026-10-25: the formatters now read the live field names --
+  `restore_dispatch_state.py:32-33` `score`/`label`, `:70-80` `feed_name` and
+  age vs threshold, `:102-103` `tfr_id`/`is_vip`, `:140-146` `station` plus
+  parsed fields, `:171-172` `summary`/`trains`; live `/api/v1/cps` carries
+  `label` and `score`. Everything below is the historical record of the
+  2026-08-23 state.)
 
   **Re-verified and widened 2026-08-23** by diffing each formatter against
   the live endpoints' real payloads (`curl` against
   `http://127.0.0.1:8000/api/v1/*`). The problem is broader than the three
-  formatters this list originally named -- `fmt_cps` and `fmt_amtrak` are
+  formatters this list originally named -- `fmt_cps` and `fmt_amtrak` ~~are~~ were
   affected too, which matters because CPS is the headline line of the
   restore brief:
 
@@ -145,7 +153,7 @@ default is a tailnet address.
   | `fmt_cps` | `state`, `go_no_go` | `label` (no `state`, no `go_no_go`) | headline renders `? (score=GREEN, state=?)` -- `score` is the only field that works |
   | `fmt_feeds` | `name`, `healthy`/`ok` | `feed_name`; no health boolean at all (derive from `age_seconds` vs `stale_threshold_seconds` plus `error`) | every feed prints `✗ ?`; only `age_seconds` resolves |
   | `fmt_tfr` | `notam_id`/`id`, `type` | `tfr_id`, `is_vip` | every TFR prints `• ? [?]` |
-  | `fmt_weather` | `station_id`/`icao`, `raw_text`/`metar` | `station`, and **no raw METAR text at all** (parsed only: `ceiling_ft`, `visibility_sm`, `wind_kt`, `precip_code`) | prints `?:` with an empty observation; a raw-text remap is impossible, this one needs reformatting against the parsed fields |
+  | `fmt_weather` | `station_id`/`icao`, `raw_text`/`metar` | `station`, and **no raw METAR text at all** (parsed only: `ceiling_ft`, `visibility_sm`, `wind_kt`, `precip_code`) | prints `?:` with an empty observation; a raw-text remap is impossible, this one ~~needs~~ needed reformatting against the parsed fields (done, `:144-146`) |
   | `fmt_amtrak` | `status`/`board_status` | `available`, `summary`, `trains` | prints `?` (`summary` is the field wanted) |
 
   `fmt_alerts` could not be confirmed either way -- `/api/v1/alerts` returned

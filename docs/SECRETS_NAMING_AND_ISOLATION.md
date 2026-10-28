@@ -56,20 +56,28 @@ credential's type. Module: `selinux/corporatetraveldc-secrets-isolation.te`.
 
 ## Registry: `~/.secrets/` (operator home, dir `0700`, labelled `ctdc_secrets_dir_t`)
 
-Every regular file is `0600 corporatetraveldc`. Status: **isolated** = own
+~~Every regular file is `0600 corporatetraveldc`.~~ (corrected 2026-10-25: every
+regular file is owned by `corporatetraveldc` and all but one are 0600;
+`airnavradar_api.token` is 0644, listing 2026-10-26 02:22Z.) Status: **isolated** = own
 type + allow rule; **pending** = consumer runs unconfined, label would buy
 nothing yet.
 
+(2026-10-25: three files present live are not in this registry, so by its
+own rule they are not governed: `airnavradar_api.token` (0644),
+`demo-q-registry.key` (0600) and `healthchecks_ping.url` (0600), all three
+labelled `ctdc_secrets_dir_t`, the directory's type, rather than
+`user_home_t` or a type of their own.)
+
 | File | Source | Consumer | SELinux type (target) | Live label | Status |
 | --- | --- | --- | --- | --- | --- |
-| `cf-honeypot.token` | Cloudflare | **none since 2026-10-03** -- the operator's copy; fail2ban now reads `/etc/corporatetraveldc/cf-honeypot.token` (below) | `ctdc_secret_cf_honeypot_t` | `ctdc_secret_cf_honeypot_t` | isolated, but on the copy no one reads (see Findings) |
+| `cf-honeypot.token` | Cloudflare | ~~**none since 2026-10-03**~~ (corrected 2026-10-25: a fallback only: `scripts/cf-honeypot-ban.sh:119-121` reads this copy when the `/etc` file is empty or missing) -- the operator's copy; fail2ban now reads `/etc/corporatetraveldc/cf-honeypot.token` (below) | `ctdc_secret_cf_honeypot_t` | `ctdc_secret_cf_honeypot_t` | isolated, but on ~~the copy no one reads~~ (corrected 2026-10-25: the fallback copy) (see Findings) |
 | `cf_management_api.token` | Cloudflare | CF Access / DNS management scripts (account-scoped) | `ctdc_secret_cf_management_t` | `user_home_t` | pending |
 | `airframes.token` | airframes.io | ACARS ingest | `ctdc_secret_afio_ingest_t` | `user_home_t` | pending |
 | `aim_fns.token` | FAA | SWIM AIM-FNS feed | `ctdc_secret_faa_fns_t` | `user_home_t` | pending |
 | `nwws-oi.token` | NWS | NWWS-OI ingest | `ctdc_secret_nws_ingest_t` | `user_home_t` | pending |
 | `ntfy-fcm.token` | ntfy | push delivery (FCM) | `ctdc_secret_ntfy_fcm_t` | `user_home_t` | pending |
 | `remote-admin-agentic.token` | CTDI | skills -- dispatch admin API | `ctdc_secret_ctdi_skills_t` | `user_home_t` | pending |
-| ~~`github_pat.token`~~ | ~~GitHub~~ | ~~git push / `gh`~~ | ~~`ctdc_secret_gh_push_t`~~ | ~~`user_home_t`~~ | RETIRED 2026-10-14: unused (git pushes over SSH; `gh` uses its own OAuth login), expired 2026-09-13; deleted on GitHub; local file kept empty (value shredded) as a placeholder |
+| ~~`github_pat.token`~~ | ~~GitHub~~ | ~~git push / `gh`~~ | ~~`ctdc_secret_gh_push_t`~~ | ~~`user_home_t`~~ | RETIRED 2026-10-14: unused (git pushes over SSH; `gh` uses its own OAuth login), expired 2026-09-13; deleted on GitHub (unverified 2026-10-25: the GitHub side was not queried; the local file is 0 bytes and every remote is an SSH URL); local file kept empty (value shredded) as a placeholder |
 | `board.key` | CTDI | `scripts/populate-secrets.sh` (board master key source) | `ctdc_secret_ctdi_board_t` | `user_home_t` | pending |
 | `protonmailbridge_smtp_ntfy_dispatch.token` | ProtonMail Bridge | ntfy -> SMTP, dispatch topics | `ctdc_secret_pmb_ntfy_dispatch_t` | `user_home_t` | pending |
 | `protonmailbridge_smtp_ntfy_health.token` | ProtonMail Bridge | ntfy -> SMTP, health topics | `ctdc_secret_pmb_ntfy_health_t` | `user_home_t` | pending |
@@ -95,8 +103,11 @@ nothing yet.
 
 The 2026-09-23 cross-reference of the two device credentials to `auth_tokens`
 (ids 21 and 6; id 6 with no expiry) is kept as history. Both are "effectively
-rotated" (operator decision 2026-10-14, `docs/CREDENTIALS_REGISTER.md`). [UNVERIFIED: current
-`auth_tokens` rows; `/healthz` reports 6 active tokens on 2026-10-06.]
+rotated" (operator decision 2026-10-14, `docs/CREDENTIALS_REGISTER.md`). ~~[UNVERIFIED: current
+`auth_tokens` rows; `/healthz` reports 6 active tokens on 2026-10-06.]~~ (corrected
+2026-10-25: verified. At 2026-10-26 02:27Z rows 6 and 21 are both admin-tier
+and not revoked; row 6 has no expiry and row 21 expires 2027-08-29; 6 tokens
+are active in total. Token values were not read.)
 
 ## Registry: `/etc/corporatetraveldc/` (dir `root:corporatetraveldc 0750`)
 
@@ -109,22 +120,26 @@ every host importer gets every master secret; scoping it is an open decision.)
 
 | File | Owner / mode | Consumer |
 | --- | --- | --- |
-| `dispatch-secrets.env` | corporatetraveldc 0600 | the **master** secret file. Read by operator scripts (`scripts/rotate-credential.sh` rewrites it in place; it rotates four names: `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD`), by `scripts/service-env/generate.py`, by `scripts/relay-nudge.py` (parses, never sources; added 2026-10-15), by the transcript leak guard (to know what to look for, `scripts/leak-guard/transcript_leak_scan.py`), and by any host process importing `src/common/config.py`. No running container reads it since 2026-10-05 (five dormant tracked `.container.disabled` quadlets still name it, see `docs/AGENT_SEGMENTATION.md`, 2026-10-15). |
+| `dispatch-secrets.env` | corporatetraveldc 0600 | the **master** secret file. Read by operator scripts (`scripts/rotate-credential.sh` rewrites it in place; it rotates four names: `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD`), by `scripts/service-env/generate.py`, by `scripts/relay-nudge.py` (parses, never sources; added 2026-10-15), by the transcript leak guard (to know what to look for, `scripts/leak-guard/transcript_leak_scan.py`), and by any host process importing `src/common/config.py`. No running container reads it since 2026-10-05 (five dormant tracked `.container.disabled` quadlets still name it, see `docs/AGENT_SEGMENTATION.md`, 2026-10-15). (2026-10-25: two host user units also load it through `EnvironmentFile=`: `corporatetraveldc-demo-source-refresh.service` and `corporatetraveldc-failover-kickover-guardrail.service`.) |
 | `svc/<svc>.env` (`acars-watcher`, `amtrak-tracker`, `demo`, `execstandard-verifier`, `ingest`, `poller`, `pusher`, `runner`, `web`) | root:corporatetraveldc 0640, dir 0750 | per-service scoped secrets generated from the allowlists in `scripts/service-env/<svc>.allowlist` (names per service: ~~poller 52, ingest 40, web 21, runner 18, demo 15, amtrak-tracker 12, pusher 12, acars-watcher 4, execstandard-verifier 1~~; re-counted 2026-10-15 as non-comment lines: poller 51, ingest 40, web 20, runner 18, demo 14, amtrak-tracker 12, pusher 12, acars-watcher 4, execstandard-verifier 1). Files root:corporatetraveldc 0640 (re-checked 2026-10-15). |
-| `dispatch.env` | corporatetraveldc 0640 | non-secret config, read by ~~63~~ 64 tracked quadlets (re-counted 2026-10-15) |
+| `dispatch.env` | corporatetraveldc 0640 | non-secret config, read by ~~63~~ ~~64~~ tracked quadlets (re-counted 2026-10-15) (corrected 2026-10-25: 52 of the 77 tracked top-level quadlets, identical to the live set, 2026-10-26 02:23Z) |
 | `cf-honeypot.token` | root:root 0600 | fail2ban's Cloudflare edge-ban action (`CFTOKEN_FILE`) |
-| `ntfy-root.token` (added 2026-10-15; live since 2026-10-14) | root:root 0600 | the publish-only `root-alerts` ntfy token used by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert), passed on a private fd; path override `NTFY_ROOT_TOKEN_FILE` |
+| `ntfy-root.token` (added 2026-10-15; live since 2026-10-14) | root:root 0600 | the publish-only `root-alerts` ntfy token used by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert), passed on a private fd; path override `NTFY_ROOT_TOKEN_FILE` (2026-10-25: the ntfy user `root-alerts` has write-only access to `hot-alerts` and `ops-health` and nothing else, `ntfy access` 2026-10-26 03:34Z; unverified 2026-10-25 that this root-only file holds that user's token) |
 | `approval-allowed-signers` (added 2026-10-15; since 2026-10-07) | root:root 0644 | the root-owned approval-key pin that `approved-exec.py` verifies every signature against (public keys, not a secret; `docs/AGENT_TRUST_MODEL.md` §9.1) |
 | `backup/borg-passphrase` (added 2026-10-15) | dir corporatetraveldc 0700, file 0600 | the Borg repository key passphrase, read from the file by `scripts/backup/ctdi-backup.sh` (`BACKUP_PASSPHRASE_FILE`); no passphrase agent |
 | `signing-pin` | root:root 0644 | GPG fingerprint pin for `verify-manifest.sh` (not a secret) |
-| `pgsql-secrets.env`, `ntfy-secrets.env`, `demo-secrets.env`, `ultrafeeder-secrets.env`, `piaware-secrets.env`, `fr24feed-secrets.env`, `planefinder-secrets.env`, `airnavradar-secrets.env` | corporatetraveldc 0600 | one container each via `EnvironmentFile=` (pgsql, ntfy, ultrafeeder, piaware, fr24feed, planefinder, airnavradar), except `demo-secrets.env`, read by both `demo-api` and `runner-demo`. Since 2026-10-10 (b2a97645) `DEMO_ADMIN_TOKEN` is demo-api's own value, no longer a copy of the live admin token (name only; `src/demo/demo_api.py:90`) |
+| `pgsql-secrets.env`, `ntfy-secrets.env`, `demo-secrets.env`, `ultrafeeder-secrets.env`, `piaware-secrets.env`, `fr24feed-secrets.env`, `planefinder-secrets.env`, `airnavradar-secrets.env` | corporatetraveldc 0600 | one container each via `EnvironmentFile=` (pgsql, ntfy, ultrafeeder, piaware, fr24feed, planefinder, airnavradar), except `demo-secrets.env`, read by both `demo-api` and `runner-demo`. Since 2026-10-10 (b2a97645) `DEMO_ADMIN_TOKEN` is demo-api's own value, no longer a copy of the live admin token (name only; ~~`src/demo/demo_api.py:90`~~ (corrected 2026-10-25: read at `src/demo/demo_api.py:117` at 5f7fca01; that the value differs from the live admin token is unverified 2026-10-25, values are out of scope)) |
+| (2026-10-25: present live, not in this registry) `opensky-secrets.env`, `pgsql-demo-secrets.env`, `firefly-secrets.env`, `paperless-secrets.env`, `pgsql-office-secrets.env`, `valkey-office-secrets.env`, `vikunja-secrets.env`, `demo.env` | corporatetraveldc 0600 | the OpenSky feeder; the demo Postgres instance (and the demo promote job); the five disabled office skeletons; `demo.env` read with `demo-secrets.env` by `demo-api` and `runner-demo` (listing and quadlet `EnvironmentFile=` lines, 2026-10-26 02:23Z) |
 | `contact.env` | corporatetraveldc 0640 | `csexec-contact` container |
 | `dispatch.env.bak-20261004`, `PORTS.md` | 0640 / 0644 | backup; port notes |
 
 Outside `/etc/corporatetraveldc` (added 2026-10-15): `~/.config/rclone/rclone.conf`
 (operator, 0600) is the backup off-box target's rclone configuration
-(`BACKUP_RCLONE_CONFIG`). Its contents were not read; whether the Proton remote
-is configured yet is tracked in `docs/BACKUP.md`.
+(`BACKUP_RCLONE_CONFIG`). Its contents were not read; ~~whether the Proton remote
+is configured yet is tracked in `docs/BACKUP.md`~~ (superseded; corrected
+2026-10-25: the Proton remote is configured, section `[proton]`, type
+`protondrive`, and the backup ledger's last off-site sync, 2026-10-25 05:16:15Z
+to `proton:ctdi-backup`, is `ok`).
 
 Team-group subsets: `/etc/ctdc-agent/` (root:ctdc-agents 0750) and
 `/etc/ctdc-ops/` (root:ctdc-ops 0750), written by
@@ -137,11 +152,19 @@ no admin token, no board key, no Nextcloud credential, no feed credential.
 ## Why "pending" is the right state
 
 Every pending consumer runs unconfined (`unconfined_service_t` or the
-operator's unconfined session), where SELinux makes no access decision.
+operator's unconfined session), where SELinux makes no access decision
+(unverified 2026-10-25: the reader of each file was not traced one by one;
+tailscaled is `unconfined_service_t` and the operator session `unconfined_t`).
 **The label follows the confinement**: when a service is confined, its
 credential gets its type and allow rule in the same change. fail2ban was the
-first because it is the only confined host consumer. (The 2026-09-24 count of
-"31 active host services, all unconfined" was not re-derived. [UNVERIFIED])
+first because it is the only confined host consumer. ~~(The 2026-09-24 count of
+"31 active host services, all unconfined" was not re-derived. [UNVERIFIED])~~
+(corrected 2026-10-25: re-derived 2026-10-26 02:23Z and 03:32Z. Of the
+running system services, 38 run in confined domains, among them fail2ban,
+nginx, Unbound, Pi-hole and chronyd; 3 run as `unconfined_service_t`
+(tailscaled, the stall monitor, uresourced); the rest are per-user managers,
+`user@<uid>.service`, running as `unconfined_t`: 3 at 02:23Z (44 services in
+all) and 4 at 03:32Z (45).)
 
 ## Adding a credential -- checklist
 
@@ -163,9 +186,19 @@ first because it is the only confined host consumer. (The 2026-09-24 count of
   (root:root 0600, `container_file_t`); `ctdc_secret_cf_honeypot_t` labels only
   the operator's `~/.secrets` copy. Either relabel the `/etc` file with the
   isolated type (and add the fcontext rule for that path) or record that the
-  `/etc` copy is protected by DAC alone. Whether `fail2ban_t` can read
+  `/etc` copy is protected by DAC alone. ~~Whether `fail2ban_t` can read
   `container_file_t` at all -- i.e. whether edge bans currently work -- is
-  [UNVERIFIED] (see `docs/HONEYPOT_FAIL2BAN.md`).
+  [UNVERIFIED]~~ (corrected 2026-10-25: it can. The loaded policy grants
+  `fail2ban_t` `{ map open read watch }` on files of the `logfile` attribute,
+  which `container_file_t` carries (`sesearch`/`seinfo`, 2026-10-26 02:24Z),
+  and the isolation module's rules for `ctdc_secret_cf_honeypot_t` are loaded
+  too. Whether a ban then reaches the vendor API is unverified 2026-10-25.)
+  (see `docs/HONEYPOT_FAIL2BAN.md`). (2026-10-25: the same `logfile` rule,
+  with `search` on `logfile` directories, lets `fail2ban_t` read every file in
+  `/etc/corporatetraveldc`, `dispatch-secrets.env` included, since the whole
+  tree is `container_file_t`; so the isolation rule above holds only for the
+  `~/.secrets` copy, and since fail2ban runs as root, DAC does not stop it
+  either. Recorded for the operator.)
 
 ---
 

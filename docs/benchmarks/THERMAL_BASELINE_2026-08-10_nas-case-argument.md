@@ -1,5 +1,7 @@
 # Case Argument — 52Pi NAS Case vs. Current DIY Case (2026-08-10)
 
+> Status 2026-10-25: dated record (2026-08-10). No longer current: the guard's 74 °C tier-1 shed is retired (temperature never sheds; only load1 ≥ 40 trips LOCKDOWN) and the Ollama governor is gone; the dead `gpio_fan` hwmon entry has cleared (only `pwmfan` remains); the `/boot` config backup on disk is `config.txt.bak-20260811`. `argononed.service` is still installed and disabled.
+
 Follow-on to `THERMAL_BASELINE_2026-07-26.md` (Argon ONE vs. DIY case). That
 doc's conclusion was narrow and honest: DIY didn't run cooler at the peak
 than Argon, but it recovered from thermal trips faster (6-15min gaps vs.
@@ -34,8 +36,8 @@ journal/CSV history, 16:00-16:24 EDT window):
 | thermal-ingest-guard | ~2 min | 62.8, 63.9, 65.55, 67.2, 65.55, 63.9, 65.55, 63.9, 64.45, 66.1, 63.9, 65.55 |
 | thermal-sample | 5 min | 65.0, 63.9, 65.0, 64.5, 64.5, 63.4 |
 
-**Peak: 67.2°C.** That's 7-8°C below `thermal-ingest-guard`'s own Tier-1
-shed threshold (74°C) and Ollama governor's SIGSTOP threshold (75°C) —
+**Peak: 67.2°C.** That's 7-8°C below ~~`thermal-ingest-guard`'s own Tier-1
+shed threshold (74°C) and Ollama governor's SIGSTOP threshold (75°C)~~ (corrected 2026-10-25: superseded — neither threshold exists now: the guard's temperature trips are hard-coded off, `scripts/thermal-ingest-guard.py:717-718`, and a CPU above 75 °C only holds a LOCKDOWN resume; no Ollama governor unit exists) —
 neither system had to intervene at all. Zero governor ALERT entries, zero
 kernel throttle messages, for the entire window.
 
@@ -122,5 +124,5 @@ more defensible:
   silently started reading the wrong sensor (or nothing) the moment that
   reboot happens.
 - `/boot/config.txt`: `dtoverlay=gpio-fan,temp=65000` commented out
-  (backup at `/boot/config.txt.bak-20260810`). Requires a reboot to fully
+  (~~backup at `/boot/config.txt.bak-20260810`~~ (corrected 2026-10-25: no `config.txt.bak-20260810` exists; the backups in `/boot` are `config.txt.bak-20260811` and `config.txt.backup`, and the overlay line is commented at `config.txt:17`)). Requires a reboot to fully
   clear the `gpio_fan` hwmon entry; not yet rebooted as of this writing.

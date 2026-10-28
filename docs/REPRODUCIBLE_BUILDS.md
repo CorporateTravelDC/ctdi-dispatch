@@ -37,12 +37,12 @@ Out of scope: an attacker with the operator's Unix account. That account can reb
 |---|---|---|---|
 | Python resolution is fixed | **ENFORCED** | `pip install --require-hashes --no-deps --only-binary=:all: -r <lock>` in every Containerfile; `build-policy.py` python-install check | adversarial tests 01, 06; `pip check` clean in all 11 trial images |
 | Python artifact hashes | **ENFORCED** | the same install flags; pip refuses any file whose sha256 is not in the lock | test 02 (real pip, offline: a substituted file fails, the real one installs) |
-| Lock is current with its intent | **ENFORCED** ~~at sign and sweep~~ (corrected 2026-10-15: at the sweep only, which runs `build-policy.py --quiet` every 15 min, `scheduled-integrity-sweep.sh:120`; `sign-manifest.sh` does not run the build policy, so a stale lock can be signed and is flagged at the next sweep) | `# input-digest:` in each lock vs the `.in` closure; `build-policy.py` locks check; the integrity sweep | tests 01, 01b |
+| Lock is current with its intent | **ENFORCED** ~~at sign and sweep~~ (corrected 2026-10-15: at the sweep only, which runs `build-policy.py --quiet` every 15 min, ~~`scheduled-integrity-sweep.sh:120`~~ (corrected 2026-10-25: `scheduled-integrity-sweep.sh:128` at 5f7fca01); `sign-manifest.sh` does not run the build policy, so a stale lock can be signed and is flagged at the next sweep) | `# input-digest:` in each lock vs the `.in` closure; `build-policy.py` locks check; the integrity sweep | tests 01, 01b |
 | Node dependency lock | **ENFORCED** | `npm ci` against the committed `package-lock.json` in a builder stage; the runtime image carries only the built static files | test 05 (real `npm ci` refuses a desynced pair) |
 | Base-image identity | **ENFORCED** | fully qualified `FROM name:tag@sha256:<index>`; `build-policy.py` base-images check; `pin-base-images.py --verify-remote` | tests 03, 04, 04b, 04c; three indexes verified to carry arm64 and amd64 |
 | Build architecture | **ENFORCED** (since 2026-10-08) for the three build scripts the policy names | every `podman build` in ~~the build scripts~~ (corrected 2026-10-15: `build-images.sh`, `scripts/stack-refresh.sh` and `scripts/serialized-rollout.sh`, the `BUILD_SCRIPTS` list at `build-policy.py:32`; two other tracked paths, `scripts/deploy-acars-stack.sh:46` and the runner heredoc in `scripts/session-restore.sh:137`, run `podman build` with no `--platform` and no receipt. Both are dormant: the acars script's inputs do not exist and the heredoc branch never fires in the current tree. Open, NEW-3) passes `--platform linux/<host arch>`; `provenance.py record` refuses an image whose architecture is not the host's, so it is held like a failed build; `build-policy.py` build-commands check | `Review06Incident` tests. Added after the 2026-10-08 incident: a digest names an index, and podman resolves it to whatever member is cached locally, so a cached amd64 copy produced amd64 production images (review 06) |
 | OS-package reconstruction | **PARTIAL** | `APT::Snapshot` set from `ARG APT_SNAPSHOT` before `apt-get update`; `build-policy.py` os-packages check | test 07c/07d; trial builds installed gnupg 2.4.7-21+deb13u1 from `snapshot.debian.org/…/20261007T000000Z`. Partial because the snapshot service is external and not mirrored here |
-| External binary / model verification | **PARTIAL** | `corporatetraveldc-llama.service` `ExecStartPre=sha256sum --strict --check config/llama/artifacts.sha256` (binary, its 18 libraries, the model) | test `test_llama_artifacts_are_checked_before_start`; digests match today. Partial: the files' upstream origin was never recorded, so the digests prove "unchanged since 2026-10-07", not "matches the vendor" |
+| External binary / model verification | **PARTIAL** | `corporatetraveldc-llama.service` `ExecStartPre=sha256sum --strict --check config/llama/artifacts.sha256` (~~binary, its 18 libraries, the model~~ (corrected 2026-10-25: 20 digests: the `llama-server` binary, the `llama-quantize` tool, 17 shared libraries and the model)) | test `test_llama_artifacts_are_checked_before_start`; digests match today. Partial: the files' upstream origin was never recorded, so the digests prove "unchanged since 2026-10-07", not "matches the vendor" |
 | Runtime executable downloads | **NONE FOUND in first-party code**; third-party exceptions listed | inventory below; `build-policy.py` downloads check for build paths | repository search, review 05 |
 | SBOM | **ENFORCED for locally built images** (generated from the built image) | `provenance.py record` in stack-refresh, serialized-rollout and build-images.sh; failure holds the image | trial: 168 components for web, re-derived identical; test 08 |
 | Image provenance receipt | **ENFORCED for locally built images built after this change** | same call sites. `build-images.sh` recorded no receipt for its runner build until 2026-10-08; every build command must now be followed by a record (`build-policy.py`) | tests 09, 09b, 12, `SourceBinding`, `Review06Incident` |
@@ -80,8 +80,8 @@ Every `FROM` is `docker.io/library/<image>:<tag>@sha256:<digest>`:
 
 | Image | Index digest (2026-10-07) | Platforms in the index |
 |---|---|---|
-| `python:3.13-slim` | `sha256:bf44cdfcb76c…` | 386, amd64, arm, arm64, ppc64le, riscv64, s390x |
-| `python:3.12-slim` | `sha256:05cda9777409…` | same |
+| `python:3.13-slim` | ~~`sha256:bf44cdfcb76c…`~~ (superseded; corrected 2026-10-25: `sha256:27b7c9d4f13c…` since the 2026-10-22 rebase, commit 7bdb1290) | 386, amd64, arm, arm64, ppc64le, riscv64, s390x |
+| `python:3.12-slim` | ~~`sha256:05cda9777409…`~~ (superseded; corrected 2026-10-25: `sha256:cb33f7f771ec…` since the same rebase) | same |
 | `node:20-alpine` | `sha256:fb4cd12c85ee…` | amd64, arm, arm64, ppc64le, s390x |
 
 Refreshing is a deliberate event: `scripts/build/pin-base-images.py --refresh [name:tag]` rewrites the pins and prints what moved; review, test, sign, rebuild.
@@ -95,7 +95,7 @@ Refreshing is a deliberate event: `scripts/build/pin-base-images.py --refresh [n
 | docgen | `gnupg`, `libreoffice-writer`, `libreoffice-impress` | the gate; document → PDF | yes |
 | runner, watchers | none | — | — |
 
-**Mechanism:** each image runs `printf 'APT::Snapshot "%s";' "$APT_SNAPSHOT" > /etc/apt/apt.conf.d/50snapshot` before `apt-get update`, with `ARG APT_SNAPSHOT=20261007T000000Z`. apt then reads `snapshot.debian.org/archive/debian/<timestamp>` (and `debian-security`), whose signed Release files apt verifies with the base image's Debian keyring. The same base digest plus the same snapshot should yield the same package versions: a snapshot is the archive as it was at that instant, and apt verifies its signed Release files. This is a property of the snapshot service that this deployment relies on, not one it re-checks. The SBOM records what was actually installed. Versions are not pinned by hand, because the snapshot fixes them all consistently, dependencies included.
+**Mechanism:** each image runs `printf 'APT::Snapshot "%s";' "$APT_SNAPSHOT" > /etc/apt/apt.conf.d/50snapshot` before `apt-get update`, with ~~`ARG APT_SNAPSHOT=20261007T000000Z`~~ (superseded; corrected 2026-10-25: `ARG APT_SNAPSHOT=20261022T051934Z` in all seven Debian-based Containerfiles since the 2026-10-22 rebase, commit 7bdb1290). apt then reads `snapshot.debian.org/archive/debian/<timestamp>` (and `debian-security`), whose signed Release files apt verifies with the base image's Debian keyring. The same base digest plus the same snapshot should yield the same package versions: a snapshot is the archive as it was at that instant, and apt verifies its signed Release files. This is a property of the snapshot service that this deployment relies on, not one it re-checks. The SBOM records what was actually installed. Versions are not pinned by hand, because the snapshot fixes them all consistently, dependencies included.
 
 **Security updates:** move the snapshot with `pin-base-images.py --apt-snapshot now`, review, sign, rebuild. Updates are therefore deliberate events. They are not slower: stack-refresh's weekly rebuild no longer picks them up implicitly, and the refresh is one command.
 
@@ -107,11 +107,11 @@ Refreshing is a deliberate event: `scripts/build/pin-base-images.py --refresh [n
 
 | Artifact | Upstream | Version | Digest recorded | Verified where | Update |
 |---|---|---|---|---|---|
-| `llama-server` + 18 libraries (`/usr/local/lib/ollama/`) | llama.cpp, installed with the former Ollama bundle on 2026-08-13 | `version: 1 (0b1bad14f)`, Clang 21.1.8, aarch64 | yes, `config/llama/artifacts.sha256` | the llama unit's `ExecStartPre`, every start: a mismatch means no start | replace deliberately, regenerate the digest file, review, sign |
+| `llama-server` + ~~18 libraries~~ (corrected 2026-10-25: 17 shared libraries and the `llama-quantize` tool) (`/usr/local/lib/ollama/`) | llama.cpp, installed with the former Ollama bundle on 2026-08-13 | `version: 1 (0b1bad14f)`, Clang 21.1.8, aarch64 | yes, `config/llama/artifacts.sha256` | the llama unit's `ExecStartPre`, every start: a mismatch means no start | replace deliberately, regenerate the digest file, review, sign |
 | `qwen3-4b-instruct-2507-q4_0.gguf` | **origin not recorded** (installed 2026-09-21) | Qwen3-4B-Instruct-2507, q4_0 | yes, same file | same | same |
 | Codex CLI (codex-mode agent accounts) | OpenAI's Codex standalone installer, via the operator's install | 0.160.0, aarch64-unknown-linux-musl | yes, `config/codex/artifacts.sha256` | `plan.sh` checks it before copying into the account; no download on that path | install the new version as the operator, review, update the digest file, sign, re-run the activation step |
 | `phi3-mini-q4_0.gguf` | not recorded | — | no: no unit loads it | — | candidate for removal |
-| Debian packages | snapshot.debian.org | snapshot `20261007T000000Z` | via apt's signed Release files | at build | `--apt-snapshot` |
+| Debian packages | snapshot.debian.org | snapshot ~~`20261007T000000Z`~~ (superseded; corrected 2026-10-25: `20261022T051934Z`) | via apt's signed Release files | at build | `--apt-snapshot` |
 | PyPI files | pypi.org | per lock | sha256 per file in the lock | at build (pip) | `lock-python.py` |
 | npm packages | registry.npmjs.org | `package-lock.json` | sha512 integrity per package | at build (`npm ci`) | `npm install` locally, review the lock diff |
 
@@ -131,7 +131,7 @@ First-party code (`src/`, `scripts/`) installs nothing and executes nothing it d
 | Open WebUI tools/functions (can pip-install at runtime inside its container) | SECURITY EXCEPTION, third-party container |
 | Nextcloud app store updates | SECURITY EXCEPTION, third-party container |
 | Claude Code CLI self-update (operator and agent accounts) | OPERATOR-MANAGED; host tooling, not a runtime image |
-| Codex daemon self-update under `~/.codex/packages/` (codex-mode agent accounts) | SECURITY EXCEPTION, host tooling: the CLI installed into the account is pinned (`config/codex/artifacts.sha256`), but the running daemon downloads its own updates. Observed 2026-10-08: CLI 0.160.0, daemon 0.161.0 |
+| Codex daemon self-update under `~/.codex/packages/` (codex-mode agent accounts) | SECURITY EXCEPTION, host tooling: the CLI installed into the account is pinned (`config/codex/artifacts.sha256`), but the running daemon downloads its own updates. Observed 2026-10-08: CLI 0.160.0, daemon 0.161.0 (unverified 2026-10-25: the pin file still names 0.160.0, but the agent account's home is not readable from the operator account, so the installed and daemon versions were not re-read) |
 
 ## SBOM
 
@@ -235,7 +235,7 @@ Statuses are VERIFIED, FAILED, UNVERIFIED and NOT APPLICABLE:
 - **FAILED** exits 1.
 - **UNVERIFIED** is printed as UNVERIFIED and never as success. It covers an image built before provenance existed, or one built from an older signed commit. An older commit is normal between a docs-only commit and the next weekly rebuild. (Added 2026-10-15, open R09-8: a receipt whose `source_commit` is null or not in the repository is also only UNVERIFIED, and nothing alerts on UNVERIFIED. `load_receipt` and `known_names` have no per-file error handling, so one malformed receipt or `by-name/*.json` ends the whole run with a traceback; that fails closed, rc 1.)
 
-The integrity sweep (every 15 minutes) runs both. FAILED fails the sweep with a priority-5 push; the UNVERIFIED count is logged each run. Live 2026-10-15 01:05Z: `18 verified, 0 unverified, 0 failed`.
+The integrity sweep (every 15 minutes) runs both. FAILED fails the sweep with a priority-5 push; the UNVERIFIED count is logged each run. Live 2026-10-15 01:05Z: `18 verified, 0 unverified, 0 failed`. (2026-10-25: the 2026-10-26 02:21Z sweep logged `2 verified, 16 unverified, 0 failed`; the running images were built 2026-10-25 around 01:05Z from an older signed commit than the live checkout's current HEAD, which the verifier reports as UNVERIFIED. The same sweep run ended FAILED for a separate reason, a Claude Code policy check added after 5f7fca01.)
 
 ## Deployment identity
 
@@ -260,7 +260,7 @@ discover (dependency-audit, Dependabot, upstream notice)
   → sweep verifies the running ids
 ```
 
-Security fixes are not delayed by locking: a lock refresh is one command plus review, and the daily dependency audit and Dependabot alerts flag when one is needed. What locking removes is the *unreviewed* update. A rebuild never picks up a new version on its own.
+Security fixes are not delayed by locking: a lock refresh is one command plus review, and the daily dependency audit and Dependabot alerts flag when one is needed (unverified 2026-10-25 for Dependabot: the repository has no `.github/` configuration and the hosted alert settings were not read; the daily audit timer runs at 09:20 UTC). What locking removes is the *unreviewed* update. A rebuild never picks up a new version on its own.
 
 ## Supported architectures
 
@@ -291,9 +291,9 @@ Production keeps compiling bytecode, because skipping it moves compilation to ev
 
 ## Third-party images
 
-~~16 images (nginx ×5 units, Postgres ×2, Nextcloud, ntfy, Open WebUI, Proton Mail Bridge, RSS-Bridge, nine SDR-feeder images)~~ (corrected 2026-10-15 from the live quadlets: 15 distinct third-party images across 20 units: nginx ×5 units, Postgres ×2, Nextcloud, ntfy (pinned `v2.25.0`), Open WebUI, Proton Mail Bridge, RSS-Bridge, and eight SDR-feeder images) run from tags:
+~~16 images (nginx ×5 units, Postgres ×2, Nextcloud, ntfy, Open WebUI, Proton Mail Bridge, RSS-Bridge, nine SDR-feeder images)~~ ~~(corrected 2026-10-15 from the live quadlets: 15 distinct third-party images across 20 units: nginx ×5 units, Postgres ×2, Nextcloud, ntfy (pinned `v2.25.0`), Open WebUI, Proton Mail Bridge, RSS-Bridge, and eight SDR-feeder images)~~ (corrected 2026-10-25 from the live top-level quadlets, 2026-10-26 02:07Z: 16 distinct third-party images across 22 units: nginx ×5 units, Postgres ×3 (platform, demo, Nextcloud), Nextcloud, ntfy (pinned `v2.25.0`), Open WebUI, Proton Mail Bridge, RSS-Bridge, and nine SDR images: the ADS-B aggregator, five feeders, the VDL2 decoder, the ACARS router and the ACARS hub; the disabled office skeletons pin four more) run from tags:
 
-- 13 are `AutoUpdate=registry` (re-checked live 2026-10-15).
+- ~~13~~ (corrected 2026-10-25: 15) are `AutoUpdate=registry` (re-checked live 2026-10-15; re-counted 2026-10-26 02:07Z).
 - stack-refresh pulls them weekly, deliberately, for upstream security fixes.
 - Postgres changes only through `safe-pg-image-update.sh`.
 - A Nextcloud major-version jump is held.
@@ -333,7 +333,7 @@ Image names come from the deployment's own rollout lists, and the llama artifact
 - **Receipts are not signed.** Their integrity rests on the image id (a content address) and on the signed commit they name. The operator account, or anything running as it, can write a matching receipt for an image it built. That is the same trust boundary as the signing key (`docs/AGENT_TRUST_MODEL.md` §0). Signing receipts with the approval key is the next step.
 - The Debian snapshot service and the registries are external. Their unavailability fails builds closed.
 - **Model and binary origin was never recorded.** Integrity from today on is enforced; authenticity is not.
-- ~~**Images already running were built before this change.** They report UNVERIFIED until stack-refresh or the rollout rebuilds them.~~ (corrected 2026-10-15: every running local image has since been rebuilt with a receipt; the 01:05Z sweep reported 0 unverified.)
+- ~~**Images already running were built before this change.** They report UNVERIFIED until stack-refresh or the rollout rebuilds them.~~ (corrected 2026-10-15: every running local image has since been rebuilt with a receipt; ~~the 01:05Z sweep reported 0 unverified.~~) (superseded; corrected 2026-10-25: every running local image still has a receipt, 0 failed, but the 2026-10-26 02:21Z sweep reported 16 of 18 UNVERIFIED because they were built from an older signed commit than the live checkout's HEAD; that clears at the next rebuild.)
 - **Open verifier defects:** D-01, R09-5, R09-6, R09-7, R09-8, NEW-3 and R04-GAP, listed under "Threat model". Until fixed, read VERIFIED as "matches a receipt this account wrote", with those exceptions.
 - **Third-party images:** see above.
 - <del>The **[operator LLC abbreviation]utive contact API** image (website repository) still uses `python:3.12-slim` by tag and exact pins without hashes. It gets a receipt, because its build goes through stack-refresh, but its Containerfile is not under this policy yet.</del> SUPERSEDED 2026-10-08: the contact API image is now under the same policy (its own `build/policy.toml`, a hashed lock, base by digest, apt snapshot), checked with `build-policy.py --root <website repo>`.

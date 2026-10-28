@@ -58,7 +58,7 @@ IF type is `adsb_icao` AND seen < 30 AND rssi is present (2026-10-15: i.e. the h
   Authorization: Bearer $CTDC_ADMIN_TOKEN
   Content-Type: application/json
   Body: {"topic": "flight-alerts", "title": "<LABEL> ADS-B", "message": "<LABEL> ADS-B acquired (ground): [lat]N [lon]W [alt_baro]ft [gs]kts RSSI:[rssi]dBm"}
-  (corrected 2026-10-15: the body as first written had no `topic`, and `/admin/push-alert` then defaults to `ops-health`, `src/web/main.py:2594`. Keep `message` at 200 characters or less.)
+  (corrected 2026-10-15: the body as first written had no `topic`, and `/admin/push-alert` then defaults to `ops-health`, ~~`src/web/main.py:2594`~~ (corrected 2026-10-25: `src/web/main.py:2596`). Keep `message` at 200 characters or less.)
   Report: "ADS-B GROUND ACQUIRED — alert fired."
 
 IF still ADS-C/MLAT or stale:
@@ -112,8 +112,8 @@ The FAA registry / airplanes.live callsign endpoint can carry stale day-old asso
 ## Token resolution (added 2026-09-22) — `$CTDC_ADMIN_TOKEN`
 
 This skill no longer carries a plaintext token. The old inline
-`ctdc_cowork_…` literal was **revoked 2026-08-16** (auth_tokens id 3, cowork
-downgraded admin -> shares), so every admin call here had been 403-ing for
+`ctdc_cowork_…` literal was **revoked 2026-08-16** (auth_tokens id 3, ~~cowork
+downgraded admin -> shares~~ (corrected 2026-10-25: the row is revoked and its tier still reads admin; it was not downgraded to shares)), so every admin call here had been 403-ing for
 five weeks before anyone noticed.
 
 Resolve `$CTDC_ADMIN_TOKEN` at call time:

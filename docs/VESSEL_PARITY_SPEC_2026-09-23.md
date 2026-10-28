@@ -1,3 +1,5 @@
+> Status 2026-10-25: the 2026-10-15 and 2026-09-28 statuses still hold (no AIS/UTM quadlet installed or running; 0 `vessel_events` rows; 0 vessel watchlist rows; the `NTFY_TOPIC` default in `ais_watcher.py` is still `flight-alerts`). No longer current: the llama unit runs at `CPUWeight=10000`, and identity-mismatch alerting lives in the poller watchlist sweep rather than the `flight-hifi-track` skill (inline corrections in §2 and §3).
+
 > **Status (2026-10-15):** The 2026-09-28 status below still holds: the four AIS/UTM Quadlets are still `.disabled`, none is installed or running, and `vessel_events` and vessel watchlist rows are both 0.
 
 # Vessel Parity Spec — 2026-09-23
@@ -91,7 +93,7 @@ rather than a generic "identity changed":
 
 **Parity: AT PARITY by construction** — this mirrors the aviation side's
 existing tail-change detection (`fdps_diversion_continuations`) and
-IDENTITY MISMATCH / `hex_mismatch` alerting in `flight-hifi-track`.
+~~IDENTITY MISMATCH / `hex_mismatch` alerting in `flight-hifi-track`~~ (corrected 2026-10-25: superseded — identity-mismatch alerting is the poller watchlist sweep's `identity_mismatch`/`identity_mismatch_reg` triggers, `src/poller/main.py:1076-1090`, and `hex_mismatch` is a field of `/api/v1/aircraft/{identifier}`, `src/web/main.py:2390`; `skills/flight-hifi-track/SKILL.md` no longer mentions either).
 
 ### Charter state as derived signal
 
@@ -131,8 +133,8 @@ network tier; it is not just local coverage.
 `docs/SDR_SERVICES.md` already reserves udev serial `AIS0162` for an RTL-SDR
 on 161–162 MHz, so the RTL-SDR path is the existing plan. A dedicated
 receiver (e.g. dAISy HAT) would move decode off the CPU entirely, which is a
-real consideration on a box with a hard 2-core cap and an llama unit at
-CPUWeight 9000 — but it is a **change of plan**, not a correction, and the
+real consideration on a box with a hard 2-core cap and ~~an llama unit at
+CPUWeight 9000~~ (corrected 2026-10-25: superseded — `corporatetraveldc-llama.service` runs at `CPUWeight=10000` and `IOWeight=10000`, CPU quota 200%) — but it is a **change of plan**, not a correction, and the
 existing design is coherent. Recorded as a trade-off, not a recommendation to
 override what is already designed.
 

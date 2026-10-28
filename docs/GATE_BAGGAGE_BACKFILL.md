@@ -28,7 +28,7 @@ an ACARS message may precede departure by 3 h (`bind_acars`), so D2 takes
 messages at least 27 h old. Newer legs were recorded live: `record_tdes` has run
 in the STDDS ingest since 2026-10-18 23:17Z (first `swim_tdes` observation;
 8 gated TDES rows since then have no observation -- consistent with the live
-path's LADD drop or an ingest restart, not checked row by row), and the watcher's gate forwarder covers ACARS.
+path's LADD drop or an ingest restart, not checked row by row), and the watcher's gate forwarder covers ACARS. (superseded 2026-10-25: the TDES backfill has since run -- `gate_baggage_observations` holds ~~34,498~~ 35,420 (superseded 2026-10-26: count at 21:58Z, growing) `swim_tdes` rows with the earliest `observed_at` 2026-08-30 16:51Z, so "first observation 2026-10-18" no longer describes the table; the 8-row gap was not re-checked (unverified 2026-10-25).)
 
 ## D1 -- SWIM TDES departure gates (`scripts/gate-backfill-tdes.py`)
 

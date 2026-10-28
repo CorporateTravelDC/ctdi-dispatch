@@ -65,13 +65,18 @@ RC_UNIT="corporatetraveldc-claude-remote-control.service"
 CODEX_RC_UNIT="corporatetraveldc-codex-remote-control.service"
 CODEX_UNIT_SRC="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/scripts/agent-segmentation/units/${CODEX_RC_UNIT}"
 CODEX_ARTIFACTS="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/config/codex/artifacts.sha256"
+HANDOFF_DIR="/srv/ctdc-handoff"        # the one shared drop (srv-layout.sh, 2026-10-26)
+# 2026-10-26: user units masked in every agent account (keyring, SSH and GnuPG agents, keyboxd, dirmngr)
+AGENT_DAEMON_UNITS="gnome-keyring-daemon.service gnome-keyring-daemon.socket gcr-ssh-agent.service gcr-ssh-agent.socket gpg-agent.service gpg-agent.socket gpg-agent-ssh.socket gpg-agent-extra.socket gpg-agent-browser.socket keyboxd.service keyboxd.socket dirmngr.service dirmngr.socket"
+CLAUDE_BASELINE="${REPO_ROOT}/config/claude-code/user-settings.baseline.json"   # --operator-clone
+CLAUDE_STATUSLINE="${REPO_ROOT}/config/claude-code/statusline-command.sh"
 REGISTRY="/etc/ctdc-accounts.conf"   # name kind login_mode preloaded(0|1); NOT under /etc/ctdc-agent (0750 root:ctdc-agents -- the operator and ctdc-ops could not read it there)
 AGENTS_SLICE_SRC="${REPO_ROOT}/.config/systemd/user/agents.slice"
 HUMANS_SLICE_SRC="${REPO_ROOT}/.config/systemd/user/humans.slice"
 
 MODE="dry-run"; OPERATOR_FLAG=0; ONLY=""
 ADD_AGENT=""; ADD_HUMAN=""; ADD_SERVICE=""; SSH_PUBKEY_FILE=""
-LOGIN_MODE=""; PRELOAD=0; ACTIVATE=""; REHOME_FROM=""; REHOME_TO=""; RENAME_FROM=""; RENAME_TO=""; TO_SERVICE=""
+LOGIN_MODE=""; PRELOAD=0; OPERATOR_CLONE=0; ACTIVATE=""; REHOME_FROM=""; REHOME_TO=""; RENAME_FROM=""; RENAME_TO=""; TO_SERVICE=""
 prev=""; prev2=""
 for a in "$@"; do
     case "$a" in
@@ -79,6 +84,7 @@ for a in "$@"; do
         --execute) MODE="execute" ;;
         --i-am-the-operator) OPERATOR_FLAG=1 ;;
         --preload) PRELOAD=1 ;;
+        --operator-clone) OPERATOR_CLONE=1 ;;   # 2026-10-26: the operator's own agent, minus keys (EA)
         --only=*) ONLY="${a#--only=}" ;;
         --add-agent=*) ADD_AGENT="${a#--add-agent=}" ;;
         --add-human=*) ADD_HUMAN="${a#--add-human=}" ;;
@@ -120,6 +126,7 @@ case "$LOGIN_MODE" in ""|claude|ssh|codex) ;; *) echo "refusing: --login-mode mu
 [[ "$LOGIN_MODE" == ssh && -n "$ACTIVATE" ]] && { echo "refusing: switching to ssh mode at activation is not supported (needs an inbound key: use --add-agent)" >&2; exit 2; }
 [[ -n "$ADD_AGENT" && -z "$LOGIN_MODE" ]] && LOGIN_MODE=claude
 [[ "$LOGIN_MODE" == ssh && -z "$SSH_PUBKEY_FILE" && -n "$ADD_AGENT" ]] && { echo "refusing: --login-mode ssh needs --ssh-pubkey-file (the client's public key, e.g. ~/.ssh/cowork_ed25519.pub)" >&2; exit 2; }
+(( OPERATOR_CLONE )) && [[ -z "$ADD_AGENT" || "$LOGIN_MODE" != claude ]] && { echo "refusing: --operator-clone applies to --add-agent in claude mode" >&2; exit 2; }
 (( PRELOAD )) && [[ -z "$ADD_AGENT$ADD_SERVICE" ]] && { echo "refusing: --preload applies to --add-agent / --add-service" >&2; exit 2; }
 if [[ "$MODE" == "execute" ]]; then
     [[ "$OPERATOR_FLAG" -eq 1 ]] || { echo "refusing: --execute requires --i-am-the-operator" >&2; exit 3; }
@@ -206,6 +213,10 @@ run "python3 ${SELF_DIR}/secrets-subset.py --profile ops --check"
 run "python3 ${SELF_DIR}/secrets-subset.py --profile ops"
 note "production dispatch-secrets.env is never modified (rollback stays trivial); re-run this step after any rotation"
 
+step "shared /srv folders: ctdc-handoff (everyone), ctdc-blog (operator), one private ctdc-<name> per ctdc-dev account" "'Shared /srv folders'"
+run "${SELF_DIR}/srv-layout.sh --execute"
+note "preview without changing anything: ${SELF_DIR}/srv-layout.sh (dry run). Access to a private folder for anyone else: sudo /usr/local/libexec/ctdc/srv-access.sh grant ACCOUNT FOLDER --council council-<id> | --operator \"<reason>\""
+
 # ------------------------------------------------------------ agent account --
 if [[ -n "$ADD_AGENT" ]]; then
     U="$ADD_AGENT"; H="/home/${U}"
@@ -221,8 +232,26 @@ if [[ -n "$ADD_AGENT" ]]; then
     registry_set "${U}" agent "${LOGIN_MODE}" "${PRELOAD}"
 
     step "agent home ${H}: CLI state, agents.slice, skills by grant" "'Agent home' / 'Skills: grants and clawback'"
-    run "install -d -m 0700 -o ${U} -g ${U} ${H}/.claude ${H}/.config/systemd/user ${H}/.local/bin"
+    # every parent listed explicitly (2026-10-26): install -d gives -o/-g only to the LAST path
+    # component, so ~/.config, ~/.config/systemd and ~/.local were created root-owned and the
+    # Claude installer could not write ~/.local/share (the EA account hit this). Listing them
+    # also repairs an account created before the fix.
+    run "install -d -m 0700 -o ${U} -g ${U} ${H}/.claude ${H}/.config ${H}/.config/systemd ${H}/.config/systemd/user ${H}/.local ${H}/.local/bin"
     run "install -m 0644 -o ${U} -g ${U} ${AGENTS_SLICE_SRC} ${H}/.config/systemd/user/agents.slice"
+    if (( OPERATOR_CLONE )); then
+        # 2026-10-26 (operator): EA is the operator's own agent without SSH/GPG -- same signed
+        # settings baseline, status line from the signed copy (it cannot read the operator's home)
+        run "[ ! -f ${H}/.claude/settings.json ] || cp -a ${H}/.claude/settings.json ${H}/.claude/settings.json.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+        run "python3 ${SELF_DIR}/clone-settings.py ${CLAUDE_BASELINE} ${H} > ${H}/.claude/settings.json.new && install -m 0600 -o ${U} -g ${U} ${H}/.claude/settings.json.new ${H}/.claude/settings.json && rm -f ${H}/.claude/settings.json.new"
+        run "install -m 0700 -o ${U} -g ${U} ${CLAUDE_STATUSLINE} ${H}/.claude/statusline-command.sh"
+        note "the managed policy (/etc/claude-code) still overrides these settings: no SSH/GPG agent, keys, signing, commit or push for ${U}"
+    fi
+    # 2026-10-26 (operator: "no SSH or GPG agent, ever"; mask unless there is a non-signing use):
+    # an interactive login started the keyring and GnuPG daemons in the EA account's user manager.
+    # Masked for every agent account. Manifest VERIFICATION is the one non-signing use and is
+    # unaffected: verify-manifest.sh runs gpg in a throwaway keyring that starts and stops its own
+    # daemons without these units. Claude keeps its login in ~/.claude/.credentials.json, not a keyring.
+    run "runuser -u ${U} -- env XDG_RUNTIME_DIR=/run/user/$(id -u ${U} 2>/dev/null || echo UID) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ${U} 2>/dev/null || echo UID)/bus systemctl --user mask --now ${AGENT_DAEMON_UNITS} || true"
     run "${REPO_ROOT}/scripts/skill-grants.sh grant ${U} '*'"
     run "${REPO_ROOT}/scripts/skill-grants.sh apply --execute"
     note "2026-10-04: skills are GRANTED, not copied by the account -- every tracked + pinned vendor skill by default (grant ${U} *); claw back with: sudo scripts/skill-grants.sh deny ${U} <skill> [--task ID] [--until ISO+offset]. apply also merges the context-guardian hooks into ${H}/.claude/settings.json (as ${U}). The hourly corporatetraveldc-skill-grants.timer keeps it reconciled. (2026-10-16: copies land in ~/.claude/skills for claude mode, ~/.agents/skills for codex mode; the settings.json hook merge is claude-mode only)"
@@ -235,6 +264,15 @@ if [[ -n "$ADD_AGENT" ]]; then
     else
         note "login-mode ssh: no Claude CLI, no credentials file; the client (e.g. the Cowork desktop app) SSHes in as ${U} with the inbound key below and the liveness switch counts its last SSH login (<= 7d)"
     fi
+
+    step "agent read paths: private /srv folder, repo clone trust, hand-off convention" "'Shared /srv folders' / 'Hand-off and read-only visibility'"
+    # 2026-10-26: the account's private /srv/ctdc-<name> (the shared step ran before this
+    # account was in the registry, so run the idempotent layout again)
+    run "${SELF_DIR}/srv-layout.sh --execute"
+    # agents work in their OWN clone of the read-only checkout; git refuses a repo owned by
+    # another user without this (read-only use; the checkout stays group read-only)
+    run "sudo -u ${U} git config --global --get-all safe.directory | grep -qxF '${REPO_ROOT}' || sudo -u ${U} git config --global --add safe.directory '${REPO_ROOT}'"
+    note "hand-off: ${U} writes patches with scripts/handoff-put.sh into ${HANDOFF_DIR}/<name>-from-${U}/ and reports the sha256; the operator applies them with scripts/handoff-apply.sh ${U} <patch> <sha256> (pinned hash, fresh worktree, never commits). Status of the operator's units/containers: ${HANDOFF_DIR}/status/status.json"
 
     step "agent env: the subset, never the production file" "'Secrets: two allowlists'"
     run "printf '%s\n' 'export WITH_DISPATCH_ENV_FILES=${AGENT_SECRETS}' > ${H}/.config/ctdc-env.sh && chown ${U}:${U} ${H}/.config/ctdc-env.sh"
@@ -370,7 +408,7 @@ codex_setup() {   # <user> <home>
     step "Codex CLI for ${U}: verified copy of the ${ver} standalone package (no download)" "'Account kinds' (codex)"
     run "echo '${sum}  ${src}' | sha256sum --check --strict --quiet"
     run "(cd ${rel} && grep -v '^#' ${man} | sha256sum --check --strict --quiet)"
-    run "install -d -m 0700 -o ${U} -g ${U} ${H}/.local/bin ${H}/.codex ${H}/.codex/packages ${pk} ${pk}/releases ${H}/.config/systemd/user"
+    run "install -d -m 0700 -o ${U} -g ${U} ${H}/.local ${H}/.local/bin ${H}/.codex ${H}/.codex/packages ${pk} ${pk}/releases ${H}/.config ${H}/.config/systemd ${H}/.config/systemd/user"
     run "cp -a --no-preserve=ownership ${rel} ${pk}/releases/ && chown -R ${U}:${U} ${H}/.codex/packages"
     run "diff -r ${rel} ${pk}/releases/${ver}"
     run "ln -sfn ${pk}/releases/${ver} ${pk}/current && ln -sfn ${pk}/current/bin/codex ${H}/.local/bin/codex && chown -h ${U}:${U} ${pk}/current ${H}/.local/bin/codex"

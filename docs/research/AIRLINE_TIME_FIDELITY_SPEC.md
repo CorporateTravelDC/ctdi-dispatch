@@ -1,5 +1,11 @@
 # Airline time fidelity — research spec and rolling monitor (opened 2026-10-08)
 
+> Status 2026-10-25: the monitor still runs as described in section 6 (read-only, no alerts; last run 2026-10-26
+> 12:28Z). No longer current in the sources table: FDPS rows were stored only for the DC region and for flights to
+> or from the 30 core airports until the 2026-10-24 storage-scope change (commit ba8a4ebe, 18:42Z), and `flight_events` and
+> `surface_movement_events` now keep about 30 days, so nothing from 2026-09-08 remains in either; TDES now covers 72
+> towers, not 70.
+
 Status: **rolling monitor, running indefinitely** (operator, 2026-10-08), rebuilt like the 30-day facility disruption baseline. Monday 2026-10-12 is the first review checkpoint, not an end date. Nothing here alerts, and nothing writes to the database.
 
 Checkpoint 1 was run on 2026-10-13: [AIRLINE_TIME_FIDELITY_CHECKPOINT_2026-10-13.md](AIRLINE_TIME_FIDELITY_CHECKPOINT_2026-10-13.md). Its next steps 1-2 shipped 2026-10-14 (1491bf5a): per-flight pairing by INSTANCE-v1 and the append-only surface event log (sections 2, 6, 7). Pairing rule: [FLIGHT_INSTANCE_RESOLVER.md](../FLIGHT_INSTANCE_RESOLVER.md#pairing-rule-for-time-fidelity-instance-v1-agreed-2026-10-13).
@@ -19,10 +25,10 @@ Bellwethers: two operator-chosen commercial flights into Dulles on which the rep
 | Source | Table | What it gives | Coverage |
 |---|---|---|---|
 | Airline-reported OOOI (TFMS `flightTimeData`) | `flight_ooooi_times` | OUT, OFF, ON, IN as reported; filed departure/arrival | NAS-wide, **effectively from 2026-09-23** |
-| FDPS (ERAM) | `flight_events.raw_json` | departure/arrival runway times, positions | NAS-wide from 2026-09-08; latest message per flight |
-| ASDE-X surface (STDDS SMES) | `surface_movement_events` | ramp exit, takeoff, landing, ramp entry, runway entries/exits | 43 airports; about 4,095 rows kept per airport (DC airports back to 09-08, hubs about two weeks); sampled |
-| ASDE-X surface log (STDDS SMES) | `surface_event_log` | the same events, append-only, with track and route; keeps the ramp exit the slot table overwrites | KDCA, KIAD, KBWI only; from 2026-10-14; pruned at 120 days |
-| TDES (STDDS) | `tdes_departure_events` | clearance delivery time, parking gate | 70 towers, since 08-30 |
+| FDPS (ERAM) | `flight_events.raw_json` | departure/arrival runway times, positions | ~~NAS-wide from 2026-09-08~~ (corrected 2026-10-25: NAS-wide only since the 2026-10-24 storage-scope change, commit ba8a4ebe, 18:42Z; before that the DC region and flights to or from the 30 core airports; about 30 days kept, ~~the oldest row 2026-09-25 18:34Z~~ (corrected 2026-10-25, superseded by the rolling cleanup: the oldest row 2026-09-26 04:18Z at 2026-10-26 22:04Z)); latest message per flight |
+| ASDE-X surface (STDDS SMES) | `surface_movement_events` | ramp exit, takeoff, landing, ramp entry, runway entries/exits | 43 airports; about 4,095 rows kept per airport (~~DC airports back to 09-08~~ (corrected 2026-10-25, superseded: DC airports back to 2026-09-26, after the 30-day surface cleanup), hubs about two weeks); sampled |
+| ASDE-X surface log (STDDS SMES) | `surface_event_log` | the same events, append-only, with track and route; keeps the ramp exit the slot table overwrites | KDCA, KIAD, KBWI only; ~~from 2026-10-14~~ (corrected 2026-10-25: from 2026-10-15 00:04Z, the first logged row); pruned at 120 days |
+| TDES (STDDS) | `tdes_departure_events` | clearance delivery time, parking gate | ~~70 towers~~ (corrected 2026-10-25, superseded: 72 towers), since 08-30 |
 | TBFM | `tbfm_sequences` | meter-fix ETAs | TBFM facilities |
 | Our watches | `watchlist_entries`, `watchlist_history` | OOOI lock and authority decision for watched flights | watched flights |
 

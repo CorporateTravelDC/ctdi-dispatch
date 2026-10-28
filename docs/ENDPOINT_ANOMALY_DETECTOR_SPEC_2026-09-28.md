@@ -1,6 +1,8 @@
+> Status 2026-10-25: the rename shipped as `scripts/dns-anomaly-watch.py`; `uber-traffic-watch.py` and the pcap helper scripts are absent; the approved interim allowlist is not in the code. Checked 2026-10-26T22:14Z.
+
 # Endpoint-Anomaly Detector — Spec (2026-09-28)
 
-Supersedes the Uber-specific `scripts/uber-traffic-watch.py`. This is the
+Supersedes the Uber-specific `scripts/uber-traffic-watch.py` (2026-10-25: that file is absent; the live watch unit runs `scripts/dns-anomaly-watch.py`). This is the
 generalized, app-agnostic "sibling anomaly" monitor. It is the concrete
 build for backlog item **#8 "DNS-anomaly rename"**, expanded with shape math
 and the calibration learned from the 2026-09-28 phone-telemetry captures
@@ -12,7 +14,7 @@ blindness at the DNS layer is a **defined break**; the Tier-2 flow tap is the
 **target-parity** closer.
 
 ## Rename
-- `scripts/uber-traffic-watch.py` -> `scripts/endpoint-anomaly-watch.py`
+- ~~`scripts/uber-traffic-watch.py` -> `scripts/endpoint-anomaly-watch.py`~~ (corrected 2026-10-25: superseded; the rename landed as `scripts/dns-anomaly-watch.py`, referenced by 2 user service units)
 - unit files, `STATE_FILE` (migrate `uber_traffic_watch_state.json`, keep old
   path readable on first run), env `UBER_WATCH_CLIENT_IP` -> `ANOMALY_WATCH_CLIENT_IP`
   (old as fallback), fn `classify_uber_domain` -> `classify_domain`,
@@ -58,7 +60,7 @@ permanent for the driver phone:
 - **Exit-node-through-Pi (temporary):** phone sets the Pi as Tailscale exit node
   for a capture window; a scoped `tcpdump host <phone> and tcp port 443` (root,
   drop-priv with `-Z`) yields a pcap. Analyze with the pure-python
-  `pcap_flows.py` / `pcap_labeled.py` (no tshark on the box): per-dest bytes by
+  `pcap_flows.py` / `pcap_labeled.py` (2026-10-25: neither file present in the repo or home, `find` 2026-10-26T22:14Z) (no tshark on the box): per-dest bytes by
   direction, joined to the phone's resolved domains in-window (SNI is
   ECH-wrapped, so DNS-correlation is the attribution path). Validated
   2026-09-28.
@@ -68,6 +70,6 @@ permanent for the driver phone:
   (latency + single point of failure for a live-dispatch device).
 
 ## Interim (approved 2026-09-28): allowlist download-shape, alert only on fan-out
-Until the rebuild lands, the existing watch keeps firing on the 1:1 fan-out
+(2026-10-25: not implemented; `scripts/dns-anomaly-watch.py` has 0 non-docstring download-shape/cluster allowlist matches, grep 2026-10-26T22:15Z; see NEEDS-OPERATOR-DECISION in the sweep register.) Until the rebuild lands, the existing watch keeps firing on the 1:1 fan-out
 anomaly but treats the few-clusters/many-mirrors download shape as known-good,
 to cut nuisance alerts on legitimate Google downloads.

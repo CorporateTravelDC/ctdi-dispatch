@@ -1,3 +1,5 @@
+> Status 2026-10-25: point-in-time record; unit and container counts are superseded (205 units at 2026-10-26T22:14Z).
+
 # Live State Check — 2026-08-14
 
 Written ~01:25 EDT, immediately after `9436f67` landed as HEAD (01:17 EDT —
@@ -12,7 +14,7 @@ was staged or committed.
 
 - `GET /healthz` → `{"status":"ok", … "cps":{"score":"GREEN","label":"GO"}}`.
 - 140 `corporatetraveldc-*` user units loaded, 23 containers up (CLAUDE.md
-  correctly says don't hardcode these counts).
+  correctly says don't hardcode these counts). (2026-10-25: superseded; 205 units at 2026-10-26T22:14Z; container count unverified 2026-10-25)
 - web :8000 and runner :8001 listening on 127.0.0.1 + 100.x.x.x as
   documented. Ollama listens on **100.x.x.x:11434 only** (matches
   `OLLAMA_BASE_URL` in dispatch.env; not on localhost).

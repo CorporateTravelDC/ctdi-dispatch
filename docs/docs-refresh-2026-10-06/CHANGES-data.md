@@ -1,5 +1,7 @@
 # CHANGES — data domain
 
+> Status 2026-10-25: dated change log (2026-10-06). No longer current: operator findings 1, 3 (the OnFailure line), 6 and 8.
+
 Verified against HEAD db64018 and live state on 2026-10-06 18:12Z / 14:12 ET.
 Live evidence: `curl -s http://127.0.0.1:8000/healthz` (18:04Z, `status: ok`),
 `curl -s http://127.0.0.1:8000/api/v1/feeds` (18:05Z, 20 feeds), `podman ps`,
@@ -194,8 +196,8 @@ have values; `acars_messages` row count.
 ## Findings for the operator
 
 1. **`/api/v1/feeds` push-cover logic diverges from `/healthz`.**
-   `src/web/main.py:885` hard-codes `push_covers = {"nws","notam"}` and a
-   300 s window; `/healthz` (`:783`) uses `failover.push_covers()`. Live
+   ~~`src/web/main.py:885` hard-codes `push_covers = {"nws","notam"}` and a
+   300 s window~~ (corrected 2026-10-25: superseded -- `src/web/main.py:804` uses `_failover.push_covers()`; the amtrak row is push-covered, 22:19Z); `/healthz` (`:783`) uses `failover.push_covers()`. Live
    18:05Z: `amtrak` age 26,459 s vs 3600 s threshold, `push_covered: false`
    in `/api/v1/feeds` while `push:amtrak` is 171 s old — the dashboards show
    a healthy feed as stale. Same handler leaves `push:tfms`/`push:tbfm` on
@@ -204,7 +206,7 @@ have values; `acars_messages` row count.
    `freshness_audit.py:10` and `daily_brief.py:11` docstrings claim ntfy
    pushes; neither file calls ntfy. The freshness audit timer is enabled
    (daily 06:00 America/New_York, 10:00Z while EDT). Unchanged since the 2026-08-19 finding.
-3. **No alert if ntfy dies.** `ntfy.container:6` `OnFailure=ntfy-container-alert.service`;
+3. **No alert if ntfy dies.** ~~`ntfy.container:6` `OnFailure=ntfy-container-alert.service`;~~ (corrected 2026-10-25: superseded -- `ntfy.container` carries no `OnFailure=` line (count 0), 22:21Z)
    that unit does not exist (`systemctl --user list-unit-files`).
    `NTFY_FALLBACK_URL` unset; ntfy publishes only 2586. Only the pusher's
    Pushover co-fire for p5 events is independent of ntfy.
@@ -217,15 +219,15 @@ have values; `acars_messages` row count.
    `db.prune_train_events`), against the 90-day floor decided 2026-09-05;
    no partitioned tables exist.
 6. **Schedule-inferred IN bypasses the OOOI authority gate.**
-   `poller/main.py` (`_check_flight_schedule_inference`) writes `in` via
-   `db.update_watchlist_oooi_phase`, not `update_watchlist_oooi_phase_authoritative`.
+   `poller/main.py` (`_check_flight_schedule_inference`) ~~writes `in` via
+   `db.update_watchlist_oooi_phase`, not `update_watchlist_oooi_phase_authoritative`.~~ (corrected 2026-10-25: superseded -- schedule inference writes no phase; it records an `oooi_in_inferred` history event with `asserted: False`, `src/poller/main.py:1384-1396`)
    It does require ACARS `on`/`in` first, so it matches the stated rule, but
    the write is not recorded through `_oooi_authority_check`.
 7. **`/admin/watchdog/status` is permanently `available: false`** —
    `watchdog-last-run.json` is never written (file absent 18:12Z).
 8. **Tracked file carries a feeder UUID literal.**
    `.config/containers/systemd/corporatetraveldc-ultrafeeder.container:58`
-   `ULTRAFEEDER_CONFIG=…uuid=<literal>…`, while the comment at `:30-34` says
+   ~~`ULTRAFEEDER_CONFIG=…uuid=<literal>…`~~ (corrected 2026-10-25: superseded -- `grep -c 'uuid='` on that tracked file returns 0, 22:19Z), while the comment at `:30-34` says
    the UUID comes only from `ultrafeeder-secrets.env`. Check whether it
    should be scrubbed from the public mirror.
 9. **Dead code / stale comments (low):** `poller/fetchers/ops_plan.py` has

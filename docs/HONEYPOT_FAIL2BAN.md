@@ -43,7 +43,7 @@ A tripwire across the nginx-fronted stack, aimed at two kinds of client:
 | `fail2ban/action.d/corporatetraveldc-lockdown.conf` | this repo | installed but **used by no jail** since the limit-req fix |
 | `nginx/conf.d/00-rate-limit-corporatetraveldc.conf` (added 2026-10-15) | this repo | the `limit_req_zone` definitions the rate-limit jail depends on (`corporatetraveldc_lr` 10 r/s, `corporatetraveldc_demo_login` 1 r/s) |
 | `nginx/conf.d/00-log-format-cfreal.conf` (added 2026-10-15) | this repo | access-log format that records the real client address behind the Cloudflare tunnel (2026-10-05) |
-| `/etc/fail2ban/jail.local` | live only (root 0600) | `[DEFAULT] cfzone = <zone id>` only |
+| `/etc/fail2ban/jail.local` | live only (root 0600) | `[DEFAULT] cfzone = <zone id>` only (unverified 2026-10-25: mode `-rw------- root root` confirmed by `ls -l`; the content is root-only) |
 | `/etc/corporatetraveldc/cf-honeypot.token` | live only (root:root 0600) | the zone-scoped Cloudflare token |
 
 Live copies of the tracked nginx files (`00-honeypot.conf`,
@@ -51,7 +51,7 @@ Live copies of the tracked nginx files (`00-honeypot.conf`,
 byte-identical to HEAD (`cmp`, 2026-10-06; re-checked 2026-10-15, together with
 the mcp, ntfy, openwebui, pihole and tailscale-dispatch-runner vhosts, all
 identical), and the live
-`honeypot-website.conf` is identical to the website repo's copy (not re-checked 2026-10-15).
+`honeypot-website.conf` is identical to the website repo's copy (not re-checked 2026-10-15; re-checked 2026-10-25 21:53Z: all 13 tracked `nginx/conf.d/*.conf`, `snippets/honeypot.conf` and the website repo's `honeypot-website.conf` are byte-identical to their live copies, `cmp`).
 
 ## Vhost coverage (live `/etc/nginx/conf.d`, 2026-10-06; unchanged 2026-10-15)
 
@@ -103,9 +103,9 @@ The installed copies in `/usr/local/libexec/ctdc/` (`cf-honeypot-ban.sh`,
 `cf-honeypot-notes.sh`, `lockdown.sh`, `restore-network.sh`,
 `installed-check.sh`) ~~and the live `/etc/fail2ban/{action.d,jail.d}` files
 were all written 2026-10-06 17:43Z~~ (corrected 2026-10-15: were last written
-by `install-root-copies.sh` on 2026-10-14 22:18Z; the `/etc/fail2ban` files are
+by `install-root-copies.sh` on ~~2026-10-14 22:18Z~~ (superseded 2026-10-25: ~~2026-10-24 12:26Z, `ls -l /usr/local/libexec/ctdc` 21:20Z~~ (superseded again 2026-10-25 21:53Z: ~~every installed script in `/usr/local/libexec/ctdc/` now carries mtime 2026-10-25 21:36Z -- a root `install-root-copies.sh` run between 21:20Z and 21:53Z~~ (superseded 2026-10-26 22:01Z: 21 of 22 entries in `/usr/local/libexec/ctdc/` are dated 2026-10-26 00:57Z-01:04Z, a later root install run; one subdirectory is dated 2026-10-05); `TZ=UTC ls -l --time-style`); the five `/etc/fail2ban` jail/action/filter copies are byte-identical to the repo); the `/etc/fail2ban` files are
 root-only and their dates were not re-read). `fail2ban.service` is active since
-2026-10-06 10:17Z (unchanged 2026-10-15; `install-root-copies.sh` reloads, it
+~~2026-10-06 10:17Z~~ (superseded 2026-10-25: since the 2026-10-22 07:16Z boot) (unchanged 2026-10-15; `install-root-copies.sh` reloads, it
 does not restart, see postmortem 1 below).
 
 nginx files are still copied by hand (`sudo cp` + `sudo nginx -t && sudo
@@ -182,7 +182,7 @@ sudo tail -1 /var/log/nginx/honeypot.log
 sudo fail2ban-regex /var/log/nginx/honeypot.log /etc/fail2ban/filter.d/nginx-honeypot.conf
 sudo fail2ban-client status nginx-honeypot-corporatetraveldc
 sudo fail2ban-client get nginx-honeypot-corporatetraveldc actions   # both actions listed
-curl -s https://dispatch.example.com/robots.txt          # 200 through Cloudflare Access (2026-10-06)
+curl -s https://dispatch.example.com/robots.txt          # 200 through Cloudflare Access (2026-10-06) (unverified 2026-10-25: edge not re-fetched)
 ```
 
 Test from an address in `ignoreip` or you ban yourself.

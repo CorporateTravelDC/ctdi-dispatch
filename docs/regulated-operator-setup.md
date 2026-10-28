@@ -57,8 +57,11 @@ with `NTFY_SMTP_SENDER_PASS=<api key>` in the ntfy env file.
 
 ## 2. Phone call notifications (Twilio)
 
-**Not enabled on this instance.** `server.yml` has only a comment block about
-Twilio (lines 25-28), and `journalctl --user -u ntfy` since 2026-10-03 has no
+~~**Not enabled on this instance.** `server.yml` has only a comment block about
+Twilio (lines 25-28), and~~ (corrected 2026-10-25: **Enabled on this instance.** ntfy's own `/config.js` reports
+`enable_calls: true` (2026-10-26 04:38Z and 14:32Z), and `ntfy-secrets.env` carries the four `NTFY_TWILIO_*` keys (values
+not read). `server.yml` still has only a comment block about Twilio, now lines 26-29, and)
+`journalctl --user -u ntfy` since 2026-10-03 has no
 Twilio lines. The comment says the credentials come from
 `dispatch-secrets.env`; that is out of date -- the ntfy container no longer
 reads `dispatch-secrets.env` (since the 2026-10-05 scoped-env change no
@@ -66,7 +69,8 @@ container does), only `ntfy-secrets.env`.
 
 To enable: create a Twilio account, buy a voice-capable number, create a
 Verify service, then add to **`/etc/corporatetraveldc/ntfy-secrets.env`**
-(bare values, no quotes -- `EnvironmentFile=` does not strip shell quoting):
+(bare values, no quotes -- `EnvironmentFile=` does not strip shell quoting (unverified 2026-10-25: podman
+`--env-file` behaviour, not tested here; the generated ntfy unit passes this file as `--env-file`)):
 
 ```env
 NTFY_TWILIO_ACCOUNT=...
@@ -77,7 +81,8 @@ NTFY_TWILIO_VERIFY_SERVICE=...
 
 ntfy reads `NTFY_TWILIO_*` from the environment without a `server.yml` block.
 Restart ntfy, then verify your number in the ntfy app. When disabling, delete
-the lines rather than blanking them. Calls fire only at priority 5.
+the lines rather than blanking them. Calls fire only at priority 5 (unverified 2026-10-25: ntfy's call rule was
+not checked; no code in `src/` or `scripts/` sends the `X-Call` header ntfy uses to request a call).
 
 ---
 
@@ -90,10 +95,15 @@ the lines rather than blanking them. Calls fire only at priority 5.
 | ntfy SMTP password, Twilio credentials | `/etc/corporatetraveldc/ntfy-secrets.env` (0600) | injected only into the ntfy container |
 | Platform secrets (admin token, board key, ntfy publish token, Nextcloud app password, feed credentials) | master: `/etc/corporatetraveldc/dispatch-secrets.env` (0600); per service: `/etc/corporatetraveldc/svc/<svc>.env` (root:corporatetraveldc 0640) | each first-party container gets only the names in `scripts/service-env/<svc>.allowlist`; `scripts/rotate-credential.sh` rotates `BOARD_KEY`, `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_APP_PASSWORD` without printing values |
 | API bearer tokens | SHA-256 hashes in `auth_tokens` | `ctdc-token` (`src/ctdc_token/cli.py`): `create` (default expiry 365 days), `list`, `revoke --prefix`; no `rotate` subcommand. Admin tokens can be scoped to named actions (`scripts/mint-agent-api-token.sh`) |
-| Demo API admin token (`DEMO_ADMIN_TOKEN`, added 2026-10-15) | `/etc/corporatetraveldc/demo-secrets.env`, read only by the `corporatetraveldc-demo-api` container (its own `EnvironmentFile=`; not in any `scripts/service-env/*.allowlist`) | separate from `DISPATCH_ADMIN_TOKEN`; gates the demo profile admin routes in `src/demo/demo_api.py`. `rotate-credential.sh` does not cover it |
-| Root alert token (added 2026-10-15) | `/etc/corporatetraveldc/ntfy-root.token` (root:root 0600) | a publish-only ntfy token for the `root-alerts` user, used since 2026-10-14 by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert) through a private fd, never argv. Before that every root send was refused (403) and hidden by `\|\| true` |
+| Demo API admin token (`DEMO_ADMIN_TOKEN`, added 2026-10-15) | `/etc/corporatetraveldc/demo-secrets.env`, ~~read only by the `corporatetraveldc-demo-api` container (its own `EnvironmentFile=`; not in any `scripts/service-env/*.allowlist`)~~ (corrected 2026-10-25: read only by `src/demo/demo_api.py`, but the file is loaded by two containers, `corporatetraveldc-demo-api` and the public demo runner `corporatetraveldc-runner-demo` (its `EnvironmentFile=` at line 141), so the token is in both environments; it is in no `scripts/service-env/*.allowlist`) | separate from `DISPATCH_ADMIN_TOKEN`; gates the demo profile admin routes in `src/demo/demo_api.py`. `rotate-credential.sh` does not cover it |
+| Root alert token (added 2026-10-15) | `/etc/corporatetraveldc/ntfy-root.token` (root:root 0600) | a publish-only ntfy token for the `root-alerts` user (unverified 2026-10-25: ntfy's user database was not read, so the user's rights were not checked), used since 2026-10-14 by the seven root scripts (watchdog, lockdown, restore-network, threat-initiate/resolve, restart-stack, renew-tailscale-cert) through a private fd, never argv. Before that every root send was refused (403) and hidden by `\|\| true` |
 | Backup passphrase and off-box login (added 2026-10-15) | Borg passphrase file `BACKUP_PASSPHRASE_FILE` (default `/etc/corporatetraveldc/backup/borg-passphrase`, operator-only 0600/0400); rclone's Proton session in `~/.config/rclone/rclone.conf` (0600) | read by Borg through `BORG_PASSCOMMAND`, no agent or cache. The rclone file holds a Proton session (access/refresh tokens) and the salted key passphrase that unlocks the account's keys, not the account password or an OTP seed. Treat it as a full account credential. Keep an offline copy of the passphrase and of `borg key export`; see `docs/BACKUP.md` |
 | ~~GitHub PAT~~ | ~~`~/.secrets/github_pat.token` (0600)~~ | RETIRED 2026-10-14: nothing used it (git over SSH keys, `gh` on its own login token); expired 2026-09-13; the file is kept empty (value shredded) as a placeholder; see `docs/RETIRED.md` |
+
+(Added 2026-10-25: ntfy keeps its own user database at `/var/lib/ntfy/auth.db`, whose `user_token` table has a
+`token` column, and 72 hours of message bodies at `/var/lib/ntfy/cache.db`. Both files are mode 0644 in a 0755
+directory under `/var/lib`, so by file mode any local account can read them; the 0600 and 0640 modes in the table
+above do not cover these copies. SELinux labelling of the two files was not checked.)
 
 Naming and SELinux labelling of host-side secrets:
 `docs/SECRETS_NAMING_AND_ISOLATION.md`.
@@ -108,12 +118,15 @@ workspace pass the CUI/PII scrub gate.
 
 ### Audit log
 
-The `audit_log` table in the local Postgres database (SQLite on the
-dev/rollback path). It records admin API calls (allowed and denied) with the
+The `audit_log` table in the local Postgres database ~~(SQLite on the
+dev/rollback path)~~ (corrected 2026-10-25: platform SQLite is retired; `common.db_backend` refuses it outside the
+test flag). It records admin API calls (allowed and denied) with the
 calling token's prefix, including VIP watchlist changes (`admin.vip.*`),
 watchlist mutations (`watchlist.*`) and operator-initiated pushes
 (`admin.alert.push`); automatic alert fan-out from the pusher is **not**
-audited per message. On Postgres every row is hash-chained (migration 0062).
+audited per message. ~~On Postgres every row is hash-chained (migration 0062).~~ (corrected 2026-10-25: rows written
+since migration 0062 are hash-chained; 12,250 of the 14,227 rows predate it and are unchained, SELECT
+2026-10-26 14:34Z.)
 Retention: rows past `AUDIT_ARCHIVE_RETENTION_DAYS` (default 90) are archived
 to the operator's Nextcloud with a GPG-signed checkpoint and a signed on-box
 stub (`poller/skills/audit_log_archive.py`), never deleted bare; the old
@@ -121,24 +134,30 @@ stub (`poller/skills/audit_log_archive.py`), never deleted bare; the old
 
 ### Network isolation
 
-- Every application service runs in rootless Podman.
+- ~~Every application service runs in rootless Podman.~~ (corrected 2026-10-25: the platform's containers run in
+  rootless Podman, but the llama.cpp model server (`corporatetraveldc-llama.service`) and the Cloudflare tunnel
+  (`cloudflared.service`) run directly on the host as the operator's user units, and nginx, Pi-hole and Unbound
+  are system services.)
 - Public HTTPS arrives only through the Cloudflare Tunnel (nginx on
   127.0.0.1:80); `dispatch.example.com` is additionally behind
-  Cloudflare Access.
+  Cloudflare Access (unverified 2026-10-25: Cloudflare Access is edge configuration, not readable from the box).
 - On the LAN interfaces firewalld (zone `FedoraWorkstation`) opens ssh, mdns,
   samba-client, dhcpv6-client and 80/tcp; port 443 and the service ports are
-  not open there. (Re-checked 2026-10-15: the zone holds `enu1`, `enu1c2` and
-  `wld0`; its only port is 80/tcp. The `enu1` backup uplink has had no internet
-  since 2026-10-06, see `docs/NETWORK_FAILOVER.md`.)
-- `tailscale0` is a trusted zone; admin surfaces (runner `:8001`, console,
-  llama `:8093`, Bridge `:1025`) bind the tailnet IP or loopback.
+  not open there (unverified 2026-10-25: the firewalld configuration is root-only, and no `enu1c2` interface
+  exists live). (Re-checked 2026-10-15: the zone holds `enu1`, `enu1c2` and
+  `wld0`; its only port is 80/tcp. ~~The `enu1` backup uplink has had no internet
+  since 2026-10-06~~ (corrected 2026-10-25, superseded: the failover watchdog has probed `enu1` as working since
+  2026-10-24 12:51Z; `backup=enu1:ok` at 2026-10-26 04:51Z), see `docs/NETWORK_FAILOVER.md`.)
+- `tailscale0` is a trusted zone (unverified 2026-10-25: the firewalld zone assignment is root-only); admin
+  surfaces (runner `:8001`, console, llama `:8093`, Bridge `:1025`) bind the tailnet IP or loopback.
 
 ### For ARES/CERT/EMS operators
 
 - Radio frequency data is populated locally from authorized sources; the
   platform ships placeholders only.
-- Push alerts carry operational state (go/no-go, TFR, weather), never raw
-  frequencies.
+- Push alerts carry operational state (go/no-go, TFR, weather), ~~never raw
+  frequencies~~ (corrected 2026-10-25: never the credentialed radio frequencies; the ACARS watcher's alerts do name
+  the public aviation datalink frequency a message arrived on, `src/acars_watcher/acars_watcher.py:248-249`).
 - For ICS integration, `GET /api/v1/cps` returns machine-readable go/no-go
   state (Tier 0).
 

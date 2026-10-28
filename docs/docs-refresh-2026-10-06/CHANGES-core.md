@@ -1,5 +1,7 @@
 # CHANGES — core domain
 
+> Status 2026-10-25: dated change log (2026-10-06). No longer current: operator findings 1, 2 (except pull-path-verify), 4, 5 (Nextcloud/blog/ccw/ultrafeeder parts), 6, 7, 9, 11 (install part), 12 (growth), 14, 15; finding 16 is unverified.
+
 Verified against HEAD 2c3f81b and live state on 2026-10-06 18:25Z / 14:25 ET.
 (Work began at HEAD db64018; 2c3f81b landed at 18:10Z and touched only
 `scripts/stack-refresh.sh` and the manifest, so no claim below depends on the
@@ -257,22 +259,22 @@ route decorators in `src/web/main.py`, `src/web/routes/*.py`, `src/runner/main.p
 
 ## Findings for the operator
 
-1. **Public demo serves 2026-08-14 data.** `demo-source.db` mtime 2026-08-14T14:21:42Z; `corporatetraveldc-demo-source-refresh.timer` disabled, never fired. The executive summary previously told investors it replays a recent window.
-2. **Host TZ change shifted un-zoned timers by 4 h** (host is UTC since today): `docs-drift-weekly` (`OnCalendar=Mon *-*-* 09:00:00`), `pull-path-verify` (`06,18:00:00`), `second-brain-weekly-dump` (`Sun 02:00:00`). Decide whether to add `America/New_York`.
+1. **Public demo serves 2026-08-14 data.** `demo-source.db` mtime 2026-08-14T14:21:42Z; ~~`corporatetraveldc-demo-source-refresh.timer` disabled, never fired.~~ (corrected 2026-10-25: superseded -- the refresh timer is enabled/active and `demo-source.db` no longer exists, 22:19Z) The executive summary previously told investors it replays a recent window.
+2. **Host TZ change shifted un-zoned timers by 4 h** (host is UTC since today): ~~`docs-drift-weekly` (`OnCalendar=Mon *-*-* 09:00:00`), `pull-path-verify` (`06,18:00:00`), `second-brain-weekly-dump` (`Sun 02:00:00`)~~ (corrected 2026-10-25: superseded -- docs-drift-weekly now zoned `UTC` and second-brain-weekly-dump `America/New_York`; only pull-path-verify is still un-zoned, 22:18Z). Decide whether to add `America/New_York`.
 3. **Integrity sweep failed 17:35Z and 18:05Z** on an unsigned `scripts/stack-refresh.sh` edit; cleared 18:20Z by signed commit 2c3f81b. (Shows a 30-minute window where a tracked edit sat unsigned while the tree was live.)
-4. **Legacy SQLite file reappeared**: `/var/lib/corporatetraveldc/corporatetraveldc.db`, 69,632 bytes, 2026-10-05 23:21Z (CLI smoke-test incident). Not read; decide whether to remove it.
-5. **Untracked live config** (no DR source): nginx `000-default-catchall.conf`, `dispatch-runner.example.com.conf` (the public demo), `acars.` and `adsb.` vhosts; `nextcloud-net.network` (both Nextcloud Quadlets reference it); `blog-substack-reminder.timer`; `corporatetraveldc-ccw-demo-webdev-expiry.{service,timer}`; two `ultrafeeder.container.bak-*`.
-6. **Stale `ollama.example.com` tunnel ingress** with no nginx vhost (edge 302 to Access; local catch-all drops). And the `mcp.` nginx vhost still present (repo + live).
-7. **SDR silence watchdogs disabled**: `adsb-feed-silence-watchdog`, `acars-feed-silence-watchdog`, `adsb-link-watchdog` timers `disabled` (unit files installed). Older docs credited the ADS-B one with catching the 2026-08-10 outage.
+4. ~~**Legacy SQLite file reappeared**: `/var/lib/corporatetraveldc/corporatetraveldc.db`, 69,632 bytes, 2026-10-05 23:21Z~~ (corrected 2026-10-25: superseded -- the file is absent at 22:19Z) (CLI smoke-test incident). Not read; decide whether to remove it.
+5. **Untracked live config** (no DR source): nginx `000-default-catchall.conf`, `dispatch-runner.example.com.conf` (the public demo), `acars.` and `adsb.` vhosts; ~~`nextcloud-net.network` (both Nextcloud Quadlets reference it); `blog-substack-reminder.timer`; `corporatetraveldc-ccw-demo-webdev-expiry.{service,timer}`; two `ultrafeeder.container.bak-*`.~~ (corrected 2026-10-25: superseded -- nextcloud-net.network is now tracked; the blog and ccw units are absent live; 0 ultrafeeder `.bak` files live, 22:21Z; the nginx part was not re-checked)
+6. ~~**Stale `ollama.example.com` tunnel ingress**~~ (corrected 2026-10-25: superseded -- the ingress entry is commented out at `cloudflared/config.yml:50-51`) with no nginx vhost (edge 302 to Access; local catch-all drops). And the `mcp.` nginx vhost still present (repo + live).
+7. ~~**SDR silence watchdogs disabled**~~ (corrected 2026-10-25: superseded -- all three timers are enabled/active (3/3), 22:19Z): `adsb-feed-silence-watchdog`, `acars-feed-silence-watchdog`, `adsb-link-watchdog` timers `disabled` (unit files installed). Older docs credited the ADS-B one with catching the 2026-08-10 outage.
 8. **llama CPUWeight drift**: tracked unit 9000, live 10000 via a set-property drop-in outside the repo.
-9. **Runner chat context defect still live**: `_context_to_str` reads pre-cutover shapes; model told "TFRS: none active" with 87 active (`main.py:1346-1414`).
+9. ~~**Runner chat context defect still live**: `_context_to_str` reads pre-cutover shapes; model told "TFRS: none active" with 87 active~~ (corrected 2026-10-25: superseded -- `_context_to_str` (`src/runner/main.py:2098`) reads list or dict payloads via `_ctx_items` (`:1968-1980`) and reports the TFR count (`:2113-2122`)) (`main.py:1346-1414`).
 10. **Webhook `auto_tracked` can report a track that failed** (best-effort add, response unchanged).
-11. **Dangling reference**: demo-portal Quadlets cite `docs/DEMO_PORTALS.md`, which does not exist; those two Quadlets are tracked but not installed.
-12. **`thermal-samples.csv`**: 11,846 of 30,064 lines are header rows (39 %), growing one per sample.
+11. **Dangling reference**: demo-portal Quadlets cite `docs/DEMO_PORTALS.md`, which does not exist; ~~those two Quadlets are tracked but not installed~~ (corrected 2026-10-25: superseded -- both demo-portal quadlets are installed live (2), 22:19Z; `docs/DEMO_PORTALS.md` is still missing).
+12. **`thermal-samples.csv`**: 11,846 of 30,064 lines are header rows (39 %), ~~growing one per sample~~ (corrected 2026-10-25: superseded -- the header-row count is 11,846 of 35,874 lines at 22:19Z, unchanged since 2026-10-06, so it is no longer growing).
 13. **`~/.config/Claude/claude_desktop_config.json`** still references the pre-archive MCP wrapper path and contains a `FLIGHTAWARE_API_KEY` entry (counted with `grep -c`; value not read).
-14. **`/api/v1/feeds` shows the `amtrak` REST row 26,630 s old against a 3,600 s threshold with `push_covered: false`**, while `push:amtrak` is 41 s old. `/healthz` reports `ok`, so this is display-only, but the feeds view will read Amtrak as stale.
-15. **Runner GLOBE map embeds `globe.airplanes.live`** in the browser, and the TACTICAL layer is labelled "airplanes.live" though its data is local — at odds with the local-only directive's wording.
-16. **`OLLAMA_TIMEOUT=240`** in `dispatch.env` while older docs and the 2026-08-13 design said 3600; confirm 240 is intended (code default 900).
+14. **`/api/v1/feeds` shows the `amtrak` REST row 26,630 s old against a 3,600 s threshold ~~with `push_covered: false`~~ (corrected 2026-10-25: superseded -- the `amtrak` row reports `push_covered: true`, GET :8000/api/v1/feeds 22:19Z)**, while `push:amtrak` is 41 s old. `/healthz` reports `ok`, so this is display-only, but the feeds view will read Amtrak as stale.
+15. ~~**Runner GLOBE map embeds `globe.airplanes.live`**~~ (corrected 2026-10-25: superseded -- 0 files under `src/runner/frontend/src` reference it, 22:19Z) in the browser, and the TACTICAL layer is labelled "airplanes.live" though its data is local — at odds with the local-only directive's wording.
+16. **`OLLAMA_TIMEOUT=240`** in `dispatch.env` (unverified 2026-10-25: the key is present, value not read) while older docs and the 2026-08-13 design said 3600; confirm 240 is intended (code default 900).
 
 ## Totals
 

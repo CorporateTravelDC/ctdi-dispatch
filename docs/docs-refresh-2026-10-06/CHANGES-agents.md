@@ -1,5 +1,7 @@
 # CHANGES — agents, second brain, models domain
 
+> Status 2026-10-25: dated change log (verified 2026-10-06 against db64018). No longer current: the account, quadlet, test, `/usr/local/libexec/ctdc` and persona counts; the Codex registry row; the `semantic-compile-daily` and `second-brain-weekly-dump` timer schedules; the stale-exports and missing-`put_create_only` findings; the pamphlet board-token text; the Ollama `:11434` pointer in `config/dispatch.env.example` and the `ollama-swap-alert` unit; the remote-control unit state. Inline corrections give current values.
+
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET. Read-only; no tracked file touched. Evidence commands were run as the operator account without sudo.
 
 Docs rewritten (9): `AGENTS.md`, `CONTRIBUTORS.md`, `docs/AGENT_SEGMENTATION.md`, `docs/TEAM_SEGMENTATION_SHOWCASE.md`, `docs/SECOND_BRAIN_STATUS.md`, `docs/SECOND_BRAIN_STATUS.example.md`, `docs/SECOND_BRAIN_GRAPH_AUTOMATION_PROMPT.md`, `docs/DEDICATED_MODELS_PLAN.md`, `docs/lmstudio-dispatch-prompts.md`.
@@ -13,7 +15,7 @@ Claims corrected: 80 (one per table row below).
 | claim as written | evidence | fix |
 |---|---|---|
 | "Last dumped to second brain: 2026-09-27" implied an automatic dump | `grep AGENTS.md scripts/second-brain-weekly-dump.sh` → no hit; dump handles CLAUDE.md + memory only | stated the dump does not touch this file |
-| (silent) Codex runs here | `ls ~/.codex` (last write 10-04), `which codex` → operator `~/.local/bin/codex`; `pgrep codex` → none; registry `ctdc-agent-openai-codex agent claude 1` | added current Codex status |
+| (silent) Codex runs here | `ls ~/.codex` (last write 10-04), `which codex` → operator `~/.local/bin/codex`; `pgrep codex` → none; ~~registry `ctdc-agent-openai-codex agent claude 1`~~ (corrected 2026-10-25: superseded — the registry row is now `ctdc-agent-openai-codex agent codex 0`; `~/.local/bin/codex` is still there, now a symlink into `~/.codex/packages`) | added current Codex status |
 
 ## CONTRIBUTORS.md
 
@@ -27,13 +29,13 @@ Other entries are acknowledgements, not checkable claims; FAA program list confi
 
 | claim as written | evidence | fix |
 |---|---|---|
-| "privilege separation designed ... not executed -- no team account exists yet" | `cat /etc/ctdc-accounts.conf` (5 lines); `getent group ctdc-agents` (5 members) | status table with the five live accounts, uids, kinds |
+| "privilege separation designed ... not executed -- no team account exists yet" | `cat /etc/ctdc-accounts.conf` ~~(5 lines)~~; `getent group ctdc-agents` ~~(5 members)~~ (corrected 2026-10-25: superseded — 7 registry rows and 7 `ctdc-agents` members at 2026-10-26T15:37Z, adding `ctdc-agent-openai-chatgpt` and `ctdc-agent-anthropic-claude-ea`) | status table with the five live accounts, uids, kinds |
 | Agent subset carries `DISPATCH_ADMIN_TOKEN`, `NTFY_TOKEN`, `NEXTCLOUD_ADMIN_USER/APP_PASSWORD`, `BOARD_KEY` | `secrets-allowlist-agent.txt`: all marked REMOVED 2026-10-04; live names = `NTFY_AGENT_TOKEN?`, `LLAMA_BASE_URL?`, `OLLAMA_BASE_URL?`, `DISPATCH_PG_HOST/PORT/DB`, `DISPATCH_PG_RO_*?` | rewrote the allowlist section from the files |
 | Ops subset carries `NTFY_TOKEN` | `secrets-allowlist-ops.txt`: NTFY_TOKEN REMOVED, `NTFY_OPS_TOKEN?` | fixed |
-| "Containers keep reading the production file via EnvironmentFile= (59 Quadlets)" / split into `agent-secrets.env root:ctdc-agent` | `grep -l 'EnvironmentFile=/etc/corporatetraveldc/svc/' .config/containers/systemd/*.container \| wc -l` → 53; `... dispatch-secrets.env` → 0; `ls /etc/corporatetraveldc/svc` → 9 files | replaced with scoped-env facts |
-| "52 quadlets moved off" | same grep → 53 | 53 |
+| "Containers keep reading the production file via EnvironmentFile= (59 Quadlets)" / split into `agent-secrets.env root:ctdc-agent` | `grep -l 'EnvironmentFile=/etc/corporatetraveldc/svc/' .config/containers/systemd/*.container \| wc -l` ~~→ 53~~ (corrected 2026-10-25: superseded — 52 at 5f7fca01, repo and live); `... dispatch-secrets.env` → 0; `ls /etc/corporatetraveldc/svc` → 9 files | replaced with scoped-env facts |
+| "52 quadlets moved off" | same grep ~~→ 53~~ (corrected 2026-10-25: superseded — 52 at 5f7fca01) | 53 |
 | "/etc/corporatetraveldc/dispatch-secrets.env (0600, 62 keys)" | `stat` → corporatetraveldc:corporatetraveldc 600; key count not re-read (rule) | dropped the count |
-| Known-agents table: Claude Code remote-control in operator's `~/.config/systemd/user`, Slice=agents.slice; Codex daemons from SSH; Cowork via scoped board token | `systemctl --user show corporatetraveldc-claude-remote-control` → inactive/disabled; `pgrep -u ctdc-agent-anthropic-claude -fa remote-control` → `(CTDC-AGENT-ANTHROPIC-CLAUDE) ...`; no codex process; Cowork = service account + gateway | replaced by the account table |
+| Known-agents table: Claude Code remote-control in operator's `~/.config/systemd/user`, Slice=agents.slice; Codex daemons from SSH; Cowork via scoped board token | `systemctl --user show corporatetraveldc-claude-remote-control` → ~~inactive/disabled~~ (corrected 2026-10-25: superseded — at 2026-10-26T15:37Z the unit was active/running since 2026-10-26 02:57:58Z, still disabled, `Slice=agents.slice`); `pgrep -u ctdc-agent-anthropic-claude -fa remote-control` → `(CTDC-AGENT-ANTHROPIC-CLAUDE) ...`; no codex process; Cowork = service account + gateway | replaced by the account table |
 | Operator-side agent sessions are covered | `cat /proc/self/cgroup` → `user-1000.slice/session-c8.scope`; `pgrep -u corporatetraveldc -fa claude` → 2× `claude --resume` | added "Known gap" paragraph |
 | Phased migration steps 1-7 ("Create ctdc-agent", "--add-agent ctdc-codex") | accounts exist under new names; `ctdc-codex` never existed | removed; history pointer to showcase |
 | Stage A/B/C runbook with `ctdc-agent` | `getent passwd ctdc-agent` → none; plan.sh 235/266 `ctdc-agent` branches only match the old name | removed; noted branches are dead bootstrap |
@@ -43,14 +45,14 @@ Other entries are acknowledgements, not checkable claims; FAA program list confi
 | Locked = `passwd -S` | team-liveness.sh l.160-165 comment: shadow `!` + real hash since 2026-10-05 | fixed |
 | Install block (`sudo cp systemd/system/...`, `register corporatetraveldc ~/.ssh/cowork_ed25519.pub`) | units installed and active (`systemctl list-units`) | removed install recipe, stated live state |
 | "Inert ... deactivate its board signer ... when that hook exists" | hook exists (`board-signer-ctl.sh deactivate`) | fixed |
-| Impact tiers: `high` = "high-impact actions" | `BOARD_AUTH_POLICY` main.py:271-285 → no route uses `high` or `cosign`; `signed` tier exists (council, close, workspace) | table with routes; `signed` added; high/cosign "none yet" |
-| Tests "27 tests" skill grants | `grep -c 'def test_' tests/scripts/test_skill_grants.py` → 28 | 28 |
-| (no count) liveness tests | → 63; board_signer 22; signed_approvals 21; agent_gateway 15 | added counts |
+| Impact tiers: `high` = "high-impact actions" | ~~`BOARD_AUTH_POLICY` main.py:271-285 → no route uses `high` or `cosign`; `signed` tier exists (council, close, workspace)~~ (corrected 2026-10-25: superseded — `BOARD_AUTH_POLICY` is at `src/web/main.py:279-295`; still no route uses `high` or `cosign`; `signed` now covers council, council/close, approvals/withdraw and workspace/contribute) | table with routes; `signed` added; high/cosign "none yet" |
+| Tests "27 tests" skill grants | `grep -c 'def test_' tests/scripts/test_skill_grants.py` ~~→ 28~~ (corrected 2026-10-25: superseded — 36) | 28 |
+| (no count) liveness tests | ~~→ 63; board_signer 22; signed_approvals 21; agent_gateway 15~~ (corrected 2026-10-25: superseded — team_liveness 77, board_signer 23, signed_approvals 35, agent_gateway 24 in `tests/web/test_agent_gateway.py` plus 3 in `tests/scripts/test_agent_gateway_link.py`) | added counts |
 | Skill grant examples use `ctdc-agent`, `ctdc-agent-cowork` | renamed | current names |
-| Root installed copies list: team-liveness, watchdog, renew-tailscale-cert | `ls /usr/local/libexec/ctdc` → 13 entries | full list |
+| Root installed copies list: team-liveness, watchdog, renew-tailscale-cert | `ls /usr/local/libexec/ctdc` ~~→ 13 entries~~ (corrected 2026-10-25: superseded — 23 entries, counting `lib/`, `__pycache__/` and `.ctdc-installed`) | full list |
 | "skills synced from the repo" agent home | plan.sh l.219-220 grants via skill-grants.sh | fixed |
 | Gateway: "one remote-MCP endpoint per agent identity" | only add-connector mechanism exists; per-agent slugs requested 10-05, not verified as created | marked UNVERIFIED |
-| Gateway tests (no count); migration only 0071 | 15 tests; `agent_gateway_settings` in 0073 | added |
+| Gateway tests (no count); migration only 0071 | ~~15 tests~~ (corrected 2026-10-25: superseded — 24 in `tests/web/test_agent_gateway.py`); `agent_gateway_settings` in 0073 | added |
 | Gateway: pending/code TTLs, loopback redirects not documented | agent_gateway.py:48-49, 194-216 | added |
 | Open question: Cowork `ctdc_cowork_*` HTTP key stays; SSH arrival = `ctdc-agent-cowork` | cowork converted to service; reaches platform via gateway | removed; replaced |
 | Open question: `gui-window.sh` as agent | out of scope / not current | removed |
@@ -79,25 +81,25 @@ Rewritten from a 1,065-line dated log to a current-state doc; superseded history
 
 | claim | evidence | fix |
 |---|---|---|
-| semantic-compile-daily daily 03:47 ET | `systemctl --user cat ...timer` → `00,06,12,18:02 America/New_York` + `.path` | fixed |
+| semantic-compile-daily daily 03:47 ET | `systemctl --user cat ...timer` → ~~`00,06,12,18:02 America/New_York`~~ (corrected 2026-10-25: superseded — `02:52` and `06,12,18:02` America/New_York, i.e. 06:52 and 10/16/22:02 UTC under EDT, an hour later under EST) + `.path` | fixed |
 | entity-tracking-digest "every 6 h" (unspecified) | `00,06,12,18:12` ET | fixed |
 | second-brain-weekly Sun 18:15 ET | timer → `Mon 04:30 America/New_York` | fixed |
-| daily 23:45 + 2-hourly refresh | confirmed; plus `ExecCondition=maintenance-window-guard.sh`, flock; day file = ET operational day (common.optime) | added |
+| daily 23:45 + 2-hourly refresh | ~~confirmed~~ (corrected 2026-10-25: superseded — the daily timer fires only at 23:45 America/New_York, i.e. 03:45 UTC under EDT and 04:45 UTC under EST; the only 2-hourly second-brain timer is `second-brain-rss`); plus `ExecCondition=maintenance-window-guard.sh`, flock; day file = ET operational day (common.optime) | added |
 | index-scan 04:00, demo-archiver 04:15, rss 0/2:10 | confirmed | kept |
 | semantic numbers (40,253 assignments, 79/100 tags, coverage 0.42) | journal 16:12Z: 109,454; 115/605 mapped; 490 unmapped | current numbers |
 | 983-row PK defect "NEEDS OPERATOR DECISION" | 0055: PK `(path, concept_id, rule, evidence)` and `(path, relation, target, evidence)` | resolved |
 | Provenance h3 bleed open | compile.py:450 "FIXED ... level-aware" | resolved |
-| Exports land in `/var/lib/corporatetraveldc/semantic/` (implied current) | `ls -la` → all dated Aug 18 | finding |
-| `remember.py` path only; webdav surface lacks `put_create_only` | `grep '^def ' webdav_client.py` | added |
-| `doc_generation.py` not mentioned | file exists (750 lines) | added |
+| Exports land in `/var/lib/corporatetraveldc/semantic/` (implied current) | `ls -la` → ~~all dated Aug 18~~ (corrected 2026-10-25: superseded — the three exports are dated 2026-10-22T19:13:34Z) | finding |
+| `remember.py` path only; webdav surface ~~lacks `put_create_only`~~ (corrected 2026-10-25: superseded — `put_create_only()` exists, `src/second_brain/webdav_client.py:180`) | `grep '^def ' webdav_client.py` | added |
+| `doc_generation.py` not mentioned | file exists ~~(750 lines)~~ (corrected 2026-10-25: superseded — 787 lines) | added |
 | `index_db --scan` healthy | journal 2026-10-06 08:00Z: PROPFIND 401 | finding |
 | knowledge-graph "not scheduled" | `knowledge-graph-compile.{container,timer,path}` tracked; timer disabled, path active; live graph 10:58Z | fixed + finding |
 | graph meta 545 curated notes | live `/var/lib/corporatetraveldc/knowledge_graph/graph.json` → 2,959 / 3,058 nodes / 11,425 edges | current |
 | RSS catalog 32 feeds / 11 keys | re-counted → 11 / 32 | kept |
 | 15 tables in 0055 | 15 distinct + `semantic_note_instance_refs` in 0059 | stated |
-| semantic tests "31/31" | `grep -c def test_` → 43 | 43 |
+| semantic tests "31/31" | `grep -c def test_` ~~→ 43~~ (corrected 2026-10-25: superseded — 56 in `tests/second_brain/test_semantic.py`) | 43 |
 | research-board-mirror, personal-notes-import, personal-export-watch, maintenance-queue enrolment absent | timers/queue file | added |
-| Gate-2 dump timing | timer `Sun 02:00:00` no TZ; next 2026-10-11 02:00Z | finding |
+| Gate-2 dump timing | timer ~~`Sun 02:00:00` no TZ; next 2026-10-11 02:00Z~~ (corrected 2026-10-25: superseded — `Sun *-*-* 02:00:00 America/New_York`, i.e. Sun 06:00 UTC under EDT and 07:00 UTC under EST) | finding |
 | "Ollama narrative" | llama.cpp via common.llm | fixed |
 
 ## docs/SECOND_BRAIN_STATUS.example.md
@@ -122,7 +124,7 @@ Rewritten as current state + abandoned + unbuilt.
 
 | claim | evidence | fix |
 |---|---|---|
-| ~23 personas | `grep -cE "^    '[a-z0-9-]+': *\{" personas.py` → 22 (chat 1, hot 2, report 19) | 22 |
+| ~23 personas | `grep -cE "^    '[a-z0-9-]+': *\{" personas.py` ~~→ 22 (chat 1, hot 2, report 19)~~ (corrected 2026-10-25: superseded — 23: chat 1, hot 2, report 20) | 22 |
 | `CPUWeight=9000` | unit drop-in `CPUWeight=10000`; also `IOWeight=10000`, `MemoryLow/High`, `MemorySwapMax=0` | full table |
 | Ollama per-task models, smoke/promote gate, `_abandon_ollama_generation`, host governance | no Ollama, `ss -ltn` only :8093 | moved to abandoned table |
 | Model transfer workflow via `ollama create` | no Ollama; one resident model | rewritten for llama.cpp |
@@ -157,12 +159,12 @@ Rewritten as current state + abandoned + unbuilt.
 2. **Skill grants have HELD every hour since at least 13:07Z** on 2026-10-06: "checkout does not verify against the signed manifest" — the working tree carries an uncommitted `scripts/stack-refresh.sh` edit. Grants/clawbacks are not being applied while the tree is dirty.
 3. **`second-brain-index-scan` PROPFIND 401** at 2026-10-06 08:00Z, unit exit 0 (silent failure; `vault_documents` not refreshed).
 4. **`knowledge-graph-compile.timer` and `retrofit-links.timer` are disabled** live while tracked with a 6-hour grid; the graph rebuilds only on manual notes and the retrofit never runs.
-5. **Semantic exports stale since 2026-08-18** (`/var/lib/corporatetraveldc/semantic/*`); the scheduled compile only refreshes Postgres.
-6. **Timers without a timezone now follow UTC** (host clock UTC since 2026-10-06 ~17:15Z): `second-brain-weekly-dump` (`Sun 02:00`, next 2026-10-11 02:00Z = Sat 22:00 ET, was 02:00 ET), `docs-drift-weekly` (`Mon 09:00`, now 09:00Z = 05:00 ET), `pull-path-verify` (06,18:00). Others in the list are interval-style and unaffected.
+5. **Semantic exports stale ~~since 2026-08-18~~** (corrected 2026-10-25: superseded — last written 2026-10-22T19:13:34Z) (`/var/lib/corporatetraveldc/semantic/*`); the scheduled compile only refreshes Postgres.
+6. **Timers without a timezone now follow UTC** (host clock UTC since 2026-10-06 ~17:15Z): ~~`second-brain-weekly-dump` (`Sun 02:00`, next 2026-10-11 02:00Z = Sat 22:00 ET, was 02:00 ET), `docs-drift-weekly` (`Mon 09:00`, now 09:00Z = 05:00 ET),~~ (corrected 2026-10-25: superseded — `second-brain-weekly-dump` is now pinned to `America/New_York` and `docs-drift-weekly` to `Mon 09:00:00 UTC`; the host timezone is still UTC) `pull-path-verify` (06,18:00). Others in the list are interval-style and unaffected.
 7. **llama council participant effectively never runs**: 30 of 31 runs in 3 days skipped at load1 >= 12 (observed 17-19).
 8. **Preload grace counts from account creation**: `ctdc-agent-openai-codex` (created 2026-10-05) loses its 3-day grace after 2026-10-08; activating it later without same-sitting login + signer activate makes it inert at the next hourly run.
-9. **Cloud pamphlet text is stale for Cowork**: `publish-pamphlet-to-vault.sh` prepends "your only credential is the board token ... X-Board-Key ... refresh every 12 h"; Cowork now uses the gateway connector (its board token lapsed 2026-09-29 per the session scratchpad).
+9. ~~**Cloud pamphlet text is stale for Cowork**: `publish-pamphlet-to-vault.sh` prepends "your only credential is the board token ... X-Board-Key ... refresh every 12 h"~~ (corrected 2026-10-25: superseded — the preamble now tells cloud agents to reach the platform only through their MCP connector and never to use an `X-Board-Key` board token, `scripts/agent-segmentation/publish-pamphlet-to-vault.sh:27-29`); Cowork now uses the gateway connector (its board token lapsed 2026-09-29 per the session scratchpad).
 10. **Leftover kill-order dirs for retired names**: `/var/lib/corporatetraveldc/team-liveness/orders/ctdc-agent` and `.../ctdc-agent-cowork` (root-owned, harmless, but plan.sh `--rename-account` moves `/var/lib/ctdc-liveness/orders/<F>`, which is not where order dirs live, so renames leave these behind).
 11. **No route uses the `high` or `cosign` board tiers**; they are implemented and tested but protect nothing yet.
-12. **Stale code references to dead models/ports**: `corporatetraveldc-pi5-brief` in 3 label chains and 5 docstrings; `personas.py` tier comment (ports 8094/8095-9005); `config/dispatch.env.example` lines 93-96 still point deployers at Ollama `:11434`; `config/dispatch.env` `OLLAMA_OSINT_MODEL=corporatetraveldc-pi5-osint` maps to no persona; disabled `corporatetraveldc-ollama-swap-alert.service` still installed.
+12. **Stale code references to dead models/ports**: `corporatetraveldc-pi5-brief` in 3 label chains and 5 docstrings; `personas.py` tier comment (ports 8094/8095-9005); ~~`config/dispatch.env.example` lines 93-96 still point deployers at Ollama `:11434`~~ (corrected 2026-10-25: superseded — the example now sets `LLAMA_BASE_URL` on `:8093` and marks the Ollama text superseded, `config/dispatch.env.example:106-118`); `config/dispatch.env` `OLLAMA_OSINT_MODEL=corporatetraveldc-pi5-osint` maps to no persona; ~~disabled `corporatetraveldc-ollama-swap-alert.service` still installed~~ (corrected 2026-10-25: superseded — no `ollama-swap-alert` unit is installed in user or system scope).
 13. **Read-only Postgres role** (`DISPATCH_PG_RO_*`) still not created; agents have no DB read path.

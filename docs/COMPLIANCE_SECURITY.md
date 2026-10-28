@@ -85,19 +85,23 @@ manifest, two-layer scrub with fail-closed allowlist from
 live tree (`/var/lib/corporatetraveldc`). Design: `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md`.
 
 (corrected 2026-10-15) The "reads only" part has not been true since
-2026-09-20. Both public-demo containers mount the shared production Postgres
+2026-09-20. ~~Both public-demo containers mount the shared production Postgres
 socket (`Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql`:
 `corporatetraveldc-demo-api.container:52`,
-`corporatetraveldc-runner-demo.container:133`). Both also load the non-secret
+`corporatetraveldc-runner-demo.container:133`).~~ (superseded 2026-10-25:
+since 2026-10-20 neither mounts `corporatetraveldc-pgsql-sock`; both mount
+only `corporatetraveldc-pgsql-demo-sock` -- `demo-api.container:76`,
+`runner-demo.container:165` -- and `demo-isolation-check.sh` enforces that
+every 15 min; see the 2026-10-20 paragraphs below.) Both also load the non-secret
 `/etc/corporatetraveldc/dispatch.env` plus the scoped `demo-secrets.env`.
 `demo-api` keeps its password-gate table `demo_profiles` (pg_schema/0057) in
 that database through `db_backend.pg_conn()` (`src/demo/profiles.py`).
 `runner-demo` runs the runner code, and that code opens `common.db.conn()`
-(`src/runner/main.py:2029-2065`). With `DEMO_MODE=true` the runner fabricates
+(~~`src/runner/main.py:2029-2065`~~ (corrected 2026-10-26: `src/runner/main.py:2761` import, `db.conn()` at :2773)). With `DEMO_MODE=true` the runner fabricates
 or sanitizes ADS-B, datalink and alert output for untrusted callers (gated
-throughout `src/runner/main.py`). The process can still reach the production
-database. `demo-api` also calls AWC's airsigmet API live
-(`src/demo/demo_api.py:705`). `[UNVERIFIED: which database role the demo
+throughout `src/runner/main.py`). ~~The process can still reach the production
+database.~~ (superseded 2026-10-25, see above.) `demo-api` also calls AWC's airsigmet API live
+(~~`src/demo/demo_api.py:705`~~ (corrected 2026-10-26: `src/demo/demo_api.py:787`)). `[UNVERIFIED: which database role the demo
 containers connect as; their environment was not inspected.]` The isolation
 boundary is therefore the application code, not the mount layout.
 
@@ -144,13 +148,17 @@ off `/var/lib/corporatetraveldc` is still open). Plan and hand steps:
 `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` (addendum 2026-10-16).
 
 **The demo file is frozen, not refreshed.**
-`corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never
+~~`corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never
 fired (`LastTriggerUSec` empty); the file's mtime is still
 2026-08-14 14:21Z. It changes only when someone runs
 `scripts/scrub-demo-source.py` by hand. This errs on the safe side for
 sovereignty (nothing newer than 2026-08-14 can be in it) and is a freshness
 defect, not a containment one. (Re-checked 2026-10-15: timer still `disabled`,
-file mtime still 2026-08-14 14:21Z.)
+file mtime still 2026-08-14 14:21Z.)~~ (corrected 2026-10-25:
+`corporatetraveldc-demo-source-refresh.timer` is enabled and active,
+`OnCalendar=*-*-* 03:17:00 UTC`, last fired 2026-10-25 03:17Z; the SQLite
+demo file no longer exists (destroyed 2026-10-19, see above) and the demo
+instance is the Postgres `corporatetraveldc-pgsql-demo`.)
 
 ### Third parties this deployment contacts (added 2026-10-15)
 
@@ -160,7 +168,7 @@ box:
 
 | Party | What goes out | Path | Live state 2026-10-15 |
 |---|---|---|---|
-| Anthropic | An agentic Claude Code session (Bash/Read/Write/Edit tools, acceptEdits) reads the full CLAUDE.md and the Claude Code memory files and writes the vault note; whatever its tools read, including command output, goes to Anthropic. Weekly consolidation into the second brain | `scripts/second-brain-weekly-dump.sh:139` (`claude --model opus -p`), `corporatetraveldc-second-brain-weekly-dump.timer`, Sun 02:00Z | timer enabled; last run 2026-10-11 02:00Z. If it fails, `corporatetraveldc-claude-weekly-llama-fallback.timer` (every 6 h) redoes it on the local model |
+| Anthropic | An agentic Claude Code session (Bash/Read/Write/Edit tools, acceptEdits) reads the full CLAUDE.md and the Claude Code memory files and writes the vault note; whatever its tools read, including command output, goes to Anthropic. Weekly consolidation into the second brain | `scripts/second-brain-weekly-dump.sh:139` (`claude --model opus -p`), `corporatetraveldc-second-brain-weekly-dump.timer`, Sun ~~02:00Z~~ (corrected 2026-10-26: 02:00 America/New_York, 06:00Z EDT / 07:00Z EST) | timer enabled; last run 2026-10-11 02:00Z. If it fails, `corporatetraveldc-claude-weekly-llama-fallback.timer` (every 6 h) redoes it on the local model |
 | Anthropic | Whatever the operator or agent works on interactively: repository files, command output | Claude Code CLI (`claude`) used by the operator account and `ctdc-agent-anthropic-claude`; Cowork through the agent gateway (`ctdc-agent-anthropic-cowork`) | in use |
 | Anthropic | Skill prompts, only if both gates open | `src/common/llm.py` fallback (Haiku) | closed (`ANTHROPIC_FALLBACK_ENABLED` defaults to false; live value `false` per the 2026-10-06 check) |
 | OpenAI | Same as interactive Claude use | Codex CLI (`ctdc-agent-openai-codex`, pinned package in `config/codex/`); ChatGPT through the agent gateway (`ctdc-agent-openai-chatgpt`) | accounts present |
@@ -183,11 +191,11 @@ are not third parties.
 
 | Mechanism | Kind | Scope |
 |---|---|---|
-| `scripts/verified-exec.sh` as the `Exec=` wrapper | Prevention (refuses to start) | ~~39~~ 40 (corrected 2026-10-15, live count) live skill/fetcher quadlets (`grep -l verified-exec ~/.config/containers/systemd/*.container \| wc -l`). Scoped check: `src/`, `scripts/verify-manifest.sh`, `scripts/verified-exec.sh`, `security/trusted-signing-key.pub.asc`. |
+| `scripts/verified-exec.sh` as the `Exec=` wrapper | Prevention (refuses to start) | ~~39~~ ~~40 (corrected 2026-10-15, live count)~~ 38 (corrected 2026-10-25, live count) live skill/fetcher quadlets (`grep -l verified-exec ~/.config/containers/systemd/*.container \| wc -l`). Scoped check: `src/`, `scripts/verify-manifest.sh`, `scripts/verified-exec.sh`, `security/trusted-signing-key.pub.asc`. |
 | `src/common/llm.py::_verify_before_inference()` | Prevention | Every inference call. |
 | Root-run installed copies (`scripts/install-root-copies.sh`) | Prevention | Root executes only `/usr/local/libexec/ctdc/*`; installation refuses unless the checkout verifies and each file matches its manifest hash; fail2ban actions call `installed-check.sh` (hash vs the root-owned `.ctdc-installed`) before each run. |
 | `corporatetraveldc-integrity-sweep.timer` | Detection (15 min) | Whole tree. |
-| `scripts/stack-refresh.sh` adversarial audit | Detection + gate | On each weekly/tripwire run: every running local container must run the signed `:latest` (or `:previous`/a recorded build) and pass `verified-exec.sh true` inside the running container; tracked-vs-live quadlets/units/skills; authorized_keys/sudoers/listening-port fingerprints. Any finding: ntfy p5, exit 2, nothing applied. |
+| `scripts/stack-refresh.sh` adversarial audit | Detection + gate | On each weekly/tripwire run: every running local container must run the signed `:latest` (or `:previous`/a recorded build) and pass `verified-exec.sh true` inside the running container; tracked-vs-live quadlets/units/skills; authorized_keys/sudoers/listening-port fingerprints. ~~Any finding: ntfy p5, exit 2, nothing applied.~~ (corrected 2026-10-25: a manifest/`verified-exec` failure is p5 + exit 2 + nothing applied (`stack-refresh.sh:28,354`); a failed unit outside the rollout list is reported-only (`:290,539`), and the end-of-run verdict is p4 "ATTENTION" + exit 1 counting only failures inside the rollout (`:544`).) |
 
 **Not prevented: the long-running core containers.** `web`, `poller`,
 `pusher`, `ingest-*` and `runner` launch their application from a bare `CMD`
@@ -241,7 +249,7 @@ sha256sum README.md; printf 'README.md' | sha256sum   # look up the second hash 
 On the first build (2026-10-03) 785 of 1,028 public files were byte-identical
 to signed private entries. ~~[UNVERIFIED: whether a public push has run since;
 not checked against the remote.]~~ (2026-10-15: public pushes have run since;
-the local tracking ref `public/main` was last updated 2026-10-14 22:41Z (reflog of public/main; commit 81e0f56b, 22:38Z). Not
+~~the local tracking ref `public/main` was last updated 2026-10-14 22:41Z (reflog of public/main; commit 81e0f56b, 22:38Z).~~ (superseded 2026-10-26: `git reflog refs/remotes/public/main` last update 2026-10-26 00:44Z, a newer tip.) Not
 re-checked against the remote itself.)
 
 **LADD tripwire on every public push (since 2026-10-09).** `push-public.sh`
@@ -299,12 +307,12 @@ built at runtime).
 
 | Source | Actions | Where |
 |---|---|---|
-| `require_admin(action)` dependency factory | One hand-named action per admin route; **37** call sites: `src/web/main.py` 23, `routes/watchlist.py` 8, `routes/sectors.py` 5, `routes/remember.py` 1 (`grep -c 'require_admin("'`). Allowed calls write the redacted request body as `detail`; **denied** calls are audited too (`{"result": "denied"}`, since 2026-08-25), including a token used outside its `allowed_actions` scope (migration 0070). | `src/auth/auth.py` |
+| `require_admin(action)` dependency factory | One hand-named action per admin route; ~~**37** call sites: `src/web/main.py` 23, `routes/watchlist.py` 8, `routes/sectors.py` 5, `routes/remember.py` 1~~ (corrected 2026-10-25: **39** -- `src/web/main.py` 24, `routes/watchlist.py` 8, `routes/sectors.py` 5, `routes/remember.py` 1, `routes/assignments.py` 1) (`grep -c 'require_admin('`). Allowed calls write the redacted request body as `detail`; **denied** calls are audited too (`{"result": "denied"}`, since 2026-08-25), including a token used outside its `allowed_actions` scope (migration 0070). | `src/auth/auth.py` |
 | CUI status read | `cui_status_read` (the only direct `db.audit()` call in the web layer) | `src/web/main.py`, `/api/v1/cui/status` |
 | Board tokens | `board_refresh`, `board_mint_read_token`, `board_revoke_token`, `board_revoke_all_for_account` | `src/common/db.py` |
 | ~~Guardrails~~ | ~~`SR1_ALLOWED`, `SR1_INTERCEPT`, `SR2_ROUTE`, `SR2_BLOCK`~~ | ~~`src/common/guardrails.py`~~ (corrected 2026-10-15: no live writer. Outside tests nothing imports `common.guardrails`; the 5 `SR*` rows in `audit_log` all date from 2026-08-17 or earlier.) |
 | Session grants / agent manifest signing | `session_grant_created`, `session_grant_revoked`, `agent_sign_manifest` | `src/common/db.py`, `scripts/sign-manifest.sh` |
-| Governance (since 2026-10-07) | `approval.requested`, `approval.resolved` (signature or deny link), `approval.expired`, `approval.withdrawn`; `council.status`; `console.login`, `console.login.retap`, `console.logout`, `console.action`; `agent.link.approved`, `agent.link.revoked`, `agent.connector.disabled/enabled`, `agent.tool.call`, `gateway.killed`, `gateway.reopened`; `board.signed.request` (`src/web/main.py:415`); `reader.*` (added 2026-10-15: the withdraw, council, retap, tool-call and board actions were missing from this list) | `src/common/governance.py` (`audit`), `src/common/db.py` (`_audit_quiet`), `src/web/routes/console.py`, `src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`, `src/web/main.py`, `src/common/es_invites.py` -- written after the state change commits, never able to change an authorization result |
+| Governance (since 2026-10-07) | `approval.requested`, `approval.resolved` (signature or deny link), `approval.expired`, `approval.withdrawn`; `council.status`; `console.login`, `console.login.retap`, `console.logout`, `console.action`; `agent.link.approved`, `agent.link.revoked`, `agent.connector.disabled/enabled`, `agent.tool.call`, `gateway.killed`, `gateway.reopened`; `board.signed.request` (~~`src/web/main.py:415`~~ (corrected 2026-10-26: `src/web/main.py:423`)); `reader.*` (added 2026-10-15: the withdraw, council, retap, tool-call and board actions were missing from this list) | `src/common/governance.py` (`audit`), `src/common/db.py` (`_audit_quiet`), `src/web/routes/console.py`, `src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`, `src/web/main.py`, `src/common/es_invites.py` -- written after the state change commits, never able to change an authorization result |
 
 The full admin action-name list: `admin.{healthz, feeds.list, audit.list,
 tokens.list, version, triggers.list, feed.refresh, cps.force_recompute,
@@ -448,11 +456,11 @@ because of the cloud-model paths listed in §2.)
 ~~73 of 74~~ 76 of 77 (corrected 2026-10-15, live count) live `.container` quadlets carry `Memory=` (with an equal
 `--memory-swap` on the core services); the exception is
 `corporatetraveldc-execstandard-verifier` (no `Memory=`, no `CPUQuota=`).
-`CPUQuota=` is on the long-running services but absent from ~~36~~ 39 quadlets, most
+`CPUQuota=` is on the long-running services but absent from ~~36~~ ~~39~~ 38 (2026-10-25) quadlets, most
 of them timer-driven skill oneshots (values in
 `docs/GUARDRAILS_JUSTIFICATION.md`). The llama.cpp server is capped by its own
 unit: `CPUQuota=200%`, `MemoryHigh=7168M`, `MemoryMax=8448M`,
-`MemorySwapMax=0`. The 21 `corporatetraveldc.*` Modelfiles still say
+`MemorySwapMax=0`. The ~~21~~ 23 (corrected 2026-10-25: one per `personas.py` key) `corporatetraveldc.*` Modelfiles still say
 `PARAMETER num_thread 2`; they are not live configuration (manifest-verified
 persona text for `src/common/personas.py`).
 
@@ -487,7 +495,7 @@ Rootless pasta networking cannot reach host-bound services unless a container
 opts in. Live counts (2026-10-06): 74 `.container` quadlets; 29 carry
 `Network=pasta:--map-gw` (including web and pusher); 6 use a named bridge
 network; none uses `Network=host` (the runner's quadlet mentions it only in a
-comment recording its removal). (2026-10-15 recount: 77 quadlets, 27 with
+comment recording its removal). (2026-10-15 recount: 77 quadlets, ~~27~~ 28 (2026-10-25) with
 `pasta:--map-gw`, 6 on a named bridge (`acars-net` 4, `nextcloud-net` 2),
 none `Network=host`.) The bridge-mode opt-in is host-wide
 (`pasta_options = ["--map-gw"]` in `~/.config/containers/containers.conf`).
@@ -496,7 +504,7 @@ The scoped-opt-in rule stands: no `Network=` line by default;
 `Network=host` only with a written justification.
 
 No container mounts `/etc/corporatetraveldc`; secrets arrive through
-`EnvironmentFile=` (~~63~~ 64 (2026-10-15) quadlets read the non-secret `dispatch.env`; the
+`EnvironmentFile=` (~~63~~ ~~64 (2026-10-15)~~ 52 (corrected 2026-10-25; `grep -l '^EnvironmentFile=/etc/corporatetraveldc/dispatch.env'`) quadlets read the non-secret `dispatch.env`; the
 first-party services read only their `/etc/corporatetraveldc/svc/<svc>.env`;
 none reads `dispatch-secrets.env`). Third-party feeder containers read their
 own scoped files (`piaware-`, `fr24feed-`, `planefinder-`, `airnavradar-`,
@@ -532,11 +540,11 @@ Two independent layers; neither covers the other's path.
 **Network layer: Tailscale.** Ports bound to `100.x.x.x` are reachable
 only from the tailnet; `tailscale0` sits in firewalld's `trusted` zone, while
 the LAN zone (`enu1`, `wld0`) opens only ssh, mdns, samba-client,
-dhcpv6-client and 80/tcp. The admin runner (`:8001`) and the operator console
+dhcpv6-client and 80/tcp (unverified 2026-10-25: firewalld zone contents are root-only). The admin runner (`:8001`) and the operator console
 (`/console`) are served only by `nginx/conf.d/tailscale-dispatch-runner.conf`
 (server name `corporatetraveldc-dispatch.tailxxxxxxx.ts.net`, 443 closed on the
 LAN). [UNVERIFIED: the live tailnet ACL; the tracked
-`tailscale/policy.hujson` was last changed 2026-08-05 and does not contain
+`tailscale/policy.hujson` was last changed ~~2026-08-05~~ (corrected 2026-10-25: 2026-10-07, `git log -1 -- tailscale/policy.hujson`) and still does not contain
 `tag:headless-admin`, which the node advertises.]
 
 **Edge layer: Cloudflare Access.** On 2026-10-06 the public

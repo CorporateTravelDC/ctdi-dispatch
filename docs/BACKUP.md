@@ -7,8 +7,10 @@ written on the box (`~/.local/state/ctdc-backup/borg`, on the same NVMe btrfs vo
 Proton Drive (`proton:ctdi-backup`; last good syncs 2026-10-13 05:30Z and 2026-10-14 06:41Z, the latter after the
 stall described under "Sync caps"). `backup-freshness` reported OK on its 2026-10-14 13:15Z and 19:15Z runs. This is
 an off-box **copy**, not a tested disaster-recovery path: the only restore test so far is a check of the dumps
-(`pg_restore --list`, hashes), not a restore into a database or onto new hardware, and the only restore-test run is a
-manual one on 2026-10-11 23:23Z (see the schedule table). The Pi 5 rebuild sequence is in `docs/PI5-BOOT-CONFIG.md`.
+(`pg_restore --list`, hashes), not a restore into a database or onto new hardware, and ~~the only restore-test run is a
+manual one on 2026-10-11 23:23Z~~ (superseded 2026-10-25: the ledger has 3 `restore-test` entries -- the manual
+2026-10-11 23:23Z run plus scheduled runs 2026-10-18 and 2026-10-25; the timer last fired Sun 2026-10-25 05:30 UTC,
+next Sun 2026-11-01 05:30 UTC; `grep -c restore-test ledger.jsonl` and `systemctl --user list-timers`, 2026-10-26 21:58Z) (see the schedule table). The Pi 5 rebuild sequence is in `docs/PI5-BOOT-CONFIG.md`.
 
 ## What is backed up
 
@@ -43,7 +45,7 @@ Borg reads the passphrase at run time from `BACKUP_PASSPHRASE_FILE` (operator-on
 The FAA LADD tables (`faa_ladd_aircraft`, `faa_ladd_removals`) are CUI. By default their **data never leaves the box**:
 
 - The off-box dump carries the LADD schema but not its rows (`--exclude-table-data`).
-- Each run writes a **local-only** LADD dump to `~/.local/state/ctdc-backup/cui-local/` (0600). The newest `BACKUP_CUI_LOCAL_KEEP` (default 7) dumps are kept and ~~older ones are shredded~~ (corrected 2026-10-15: older ones are deleted with `shred -fu` (`ctdi-backup.sh:107`), but on btrfs, which is copy-on-write, the overwrite does not reach the original blocks, so this is a plain delete in effect. The real controls are the 0600 mode, the dumps never leaving the box, and physical custody of the box. The stage directory and the restore test already use plain `rm` for this reason (`ctdi-backup.sh:81-83`, `backup-restore-test.sh:24`).)
+- Each run writes a **local-only** LADD dump to `~/.local/state/ctdc-backup/cui-local/` (0600). The newest `BACKUP_CUI_LOCAL_KEEP` (default 7) dumps are kept and ~~older ones are shredded~~ (corrected 2026-10-15: older ones are deleted with `shred -fu` (~~`ctdi-backup.sh:107`~~ `ctdi-backup.sh:119`, 2026-10-25), but on btrfs, which is copy-on-write, the overwrite does not reach the original blocks, so this is a plain delete in effect. The real controls are the 0600 mode, the dumps never leaving the box, and physical custody of the box. The stage directory and the restore test already use plain `rm` for this reason (~~`ctdi-backup.sh:81-83`~~ `ctdi-backup.sh:95`, `backup-restore-test.sh:24`; 2026-10-25).)
 - Each run appends a **`#` stamp** (`kind: cui-stamp`, `"stamp": "#"`) to the private ledger. It records:
   - the **SHA-256** of that local dump;
   - its size and local path;
@@ -80,9 +82,9 @@ rclone keeps its own config (`BACKUP_RCLONE_CONFIG`, operator-only). Its credent
 ## Sizing (measured 2026-10-09)
 
 > **Re-measured 2026-10-15:** each nightly archive now covers about 20.5 GB before deduplication and compression
-> (ledger `original_size` of the 2026-10-14 archive; 19.6 GB on 10-12 and 10-13). The Borg repository is 27 GB on disk
-> (`du -sh`), and the 2026-10-12 Proton seed was 19 GB. The root volume is 83% used
-> (188 G of 238 G, 39 G free; `df -h /`), so the local repository is now a material share of the free space. The
+> (ledger `original_size` of the 2026-10-14 archive; 19.6 GB on 10-12 and 10-13). The Borg repository ~~is 27 GB~~ (superseded 2026-10-25: 53 GB) on disk
+> (`du -sh`), and the 2026-10-12 Proton seed was 19 GB. The root volume ~~is 83% used
+> (188 G of 238 G, 39 G free; `df -h /`)~~ (superseded 2026-10-25: 80% used, 178 G of 238 G, 48 G free; `df -h /`), so the local repository is now a material share of the free space. The
 > figures below are the 2026-10-09 estimate, kept for the record.
 
 The first full archive is about 10–14 GB before deduplication and compression:
@@ -91,14 +93,14 @@ The first full archive is about 10–14 GB before deduplication and compression:
 - Nextcloud: 5.3 GB of files and 135 MB of database;
 - platform state: 5.2 GB once models are excluded.
 
-~~Daily increments are expected to be small, mostly the dispatch dump.~~ (corrected 2026-10-15: they are not small. Borg's `deduplicated_size` was 4.5 GB, 5.0 GB and 4.2 GB for the 10-12, 10-13 and 10-14 archives. The compressed dispatch dump changes almost entirely every night, so it barely deduplicates, and each nightly sync uploads several GB, roughly 30 min or more at the 2.5 MB/s soft cap.) This still fits in the 2 TB Proton allotment.
+~~Daily increments are expected to be small, mostly the dispatch dump.~~ (corrected 2026-10-15: they are not small. Borg's `deduplicated_size` was 4.5 GB, 5.0 GB and 4.2 GB for the 10-12, 10-13 and 10-14 archives (superseded 2026-10-25: 2.9, 2.5, 3.1, 2.2 and 2.1 GB for the 10-21 to 10-25 archives, `original_size` 18.0-20.0 GB; ledger `backup` entries). The compressed dispatch dump changes almost entirely every night, so it barely deduplicates, and each nightly sync uploads several GB, roughly 30 min or more at the 2.5 MB/s soft cap.) This still fits in the 2 TB Proton allotment.
 
 ## Schedule, restore test and freshness (2026-10-11)
 
 | Unit | When | What |
 |---|---|---|
 | `corporatetraveldc-backup.timer` | daily ~~03:40 UTC (±10 min)~~ 03:40-03:50 UTC (corrected 2026-10-15: `RandomizedDelaySec=10m` only delays, it never starts early) | `ctdi-backup.sh`: dumps, LADD `#` stamp, Borg archive, prune and compact, sync to `BACKUP_TARGET` |
-| `corporatetraveldc-backup-restore-test.timer` | Sundays 05:30 UTC (as of 2026-10-15 the timer has not fired yet: it was enabled 2026-10-11 23:23Z, after that Sunday's 05:30Z slot, so no scheduled slot has come up. The only `restore-test` ledger entry is the manual run of 2026-10-11 23:23Z. The first scheduled run is Sun 2026-10-18 05:30Z, ahead of the 8-day freshness limit at 2026-10-19 23:23Z.) | `backup-restore-test.sh`: extracts the newest archive's dumps, matches their SHA-256 against the ledger, runs `pg_restore --list` on each (read-only, inside the Postgres container), checks the local LADD dump against its `#` stamp, writes a `restore-test` ledger entry. Nothing is restored into a live database. |
+| `corporatetraveldc-backup-restore-test.timer` | Sundays 05:30 UTC (as of 2026-10-15 the timer has not fired yet: it was enabled 2026-10-11 23:23Z, after that Sunday's 05:30Z slot, so no scheduled slot has come up. The only `restore-test` ledger entry is the manual run of 2026-10-11 23:23Z. The first scheduled run is Sun 2026-10-18 05:30Z, ahead of the 8-day freshness limit at 2026-10-19 23:23Z. Superseded 2026-10-25: the timer has fired on schedule 2026-10-18 and 2026-10-25, 3 ledger entries in all, 2026-10-26 21:58Z.) | `backup-restore-test.sh`: extracts the newest archive's dumps, matches their SHA-256 against the ledger, runs `pg_restore --list` on each (read-only, inside the Postgres container), checks the local LADD dump against its `#` stamp, writes a `restore-test` ledger entry. Nothing is restored into a live database. |
 | `corporatetraveldc-backup-freshness.timer` | every 6 h (01:15, 07:15, 13:15, 19:15 UTC) | `backup_freshness.py` fails and pages when the last backup is older than 36 h, the last successful off-box sync is older than 36 h (when a target is set), no target is set while `BACKUP_REQUIRE_OFFBOX=1` (the default since the 2026-10-13 security batch (127a2f76): on-box only is a standing failure, not a quiet state), any agent snapshot is older than 36 h, the restore test is older than 8 days or failed, or the ledger chain breaks. |
 
 All three page through `corporatetraveldc-unit-failure-notify@` on failure.
@@ -142,7 +144,7 @@ its profile held no sign-in.
   one fresh code restores it.
 - **rclone is pinned:** `/usr/local/bin/rclone` v1.75.2 (root-owned; the official arm64 build, its `SHA256SUMS`
   verified against the rclone release key `FBF7 37EC E9F8 AB18 604B D2AC 9393 5E02 FF3B 54FA` and the zip hash
-  pinned). Fedora's package (1.74.3) is left installed; `/usr/local/bin` comes first in every PATH here. Why:
+  pinned). Fedora's package (~~1.74.3~~ (corrected 2026-10-25: `rclone-1.75.2-1.fc44`, now the same version as the pin; `rpm -q rclone`)) is left installed; `/usr/local/bin` comes first in every PATH here. Why:
   rclone < 1.75.0 cannot read some Proton accounts' keys (`gopenpgp: user ID signature with wrong type`,
   rclone issue #9434). Retire the pinned copy when Fedora ships 1.75 or later.
 - **Interrupted uploads leave Proton "drafts"** that block the next sync of that file ("a draft exist", 5 files
@@ -169,7 +171,7 @@ its profile held no sign-in.
 | `BACKUP_METERED_BWLIMIT_HARD_MB` | 0.25 | hard cap on the hotspot: 2 Mbps (operator 2026-10-23) |
 | `NET_METERED_IFACES` | enu1 | interfaces treated as metered (`scripts/lib/uplink.sh`) |
 
-- **Metered failover uplink (2026-10-23, operator).** The hotspot (Google Fi over USB tether, `enu1`; 100 GB high-speed, then 256 kbps, overrides $10/GB) carries SWIM and live operational data, plus the Proton upload at **2 Mbps**, so a grid-down failover never leaves the box more than ~24 h without a live off-site backup while SWIM still has room. Each sync attempt starts rclone at the caps of the uplink in use; `rate_guard.py` re-reads the default route every sample and switches caps, the counted interface and the reduction ladder live on a failover or fail-back mid-sync (an `uplink` action in the ledger). A 4-5 GB delta takes ~4.5-5.5 h on the hotspot. Every other heavy job defers there: `heavy_lock_acquire` lets only `nightly backup` and `restore test` (local Borg) take the turn while the default route is metered; rollout, stack refresh and image pulls wait for the primary within their max wait, then stop with `deferred: metered uplink`.
+- **Metered failover uplink (2026-10-23, operator).** The hotspot (Google Fi over USB tether (unverified 2026-10-25: the carrier is not observable from code or live state; the NetworkManager profile on `enu1` is still named `Verizon Hotspot`, and `enu1` is up and probe-reachable per the net-failover watchdog), `enu1`; 100 GB high-speed, then 256 kbps, overrides $10/GB) carries SWIM and live operational data, plus the Proton upload at **2 Mbps**, so a grid-down failover never leaves the box more than ~24 h without a live off-site backup while SWIM still has room. Each sync attempt starts rclone at the caps of the uplink in use; `rate_guard.py` re-reads the default route every sample and switches caps, the counted interface and the reduction ladder live on a failover or fail-back mid-sync (an `uplink` action in the ledger). A 4-5 GB delta takes ~4.5-5.5 h on the hotspot. Every other heavy job defers there: `heavy_lock_acquire` lets only `nightly backup` and `restore test` (local Borg) take the turn while the default route is metered; rollout, stack refresh and image pulls wait for the primary within their max wait, then stop with `deferred: metered uplink`.
 
 - Each sync's ledger entry carries the guard's summary (highest 30 s average, actions).
 - **Stall stop and one retry (2026-10-14).** If rclone's own transferred-bytes counter has not grown for 20 minutes (`rate_guard.py --stall-min`), the guard asks rclone to quit and reports `stall: true` (exit 4); the backup retries the sync once from scratch, which also covers Proton's transient "Upload file empty" (2003). On 2026-10-14 a hung sync (four uploads at 6%, no bytes moving) held the heavy-job turn from 04:40Z until it was stopped by hand at ~06:40Z.
@@ -210,11 +212,14 @@ quadlet's `Volume=` lines; identity material was traced to its source (env file 
 | our images (web, poller, pusher, runner, ingest-*, demo, amtrak-tracker) | state | host bind `/var/lib/corporatetraveldc` (runner-demo: `/var/lib/corporatetraveldc-demo`, demo-only, rebuildable) | yes (demo sibling: no, by design) |
 | rss-bridge, csexec-contact, nginx demos | caches, manifests, pid files | ephemeral | n/a |
 
-Still outside the archive, known and deliberate or pending: `~/.config/nextcloud/*.env` (the Nextcloud DB
+Still outside the archive, known and deliberate or pending: ~~`~/.config/nextcloud/*.env` (the Nextcloud DB
 credentials a restore needs; operator-only, keep with the passphrase and `borg key export`), `/etc/ntfy/server.yml`
 (root-owned config, in the repo's deployment notes), `~/.config/rclone/rclone.conf` (the off-box session itself),
-`/home/corporatetraveldc/demos` (static demo sites, not a git checkout), the office Postgres instance (pending,
-above).
+`/home/corporatetraveldc/demos` (static demo sites, not a git checkout),~~ (corrected 2026-10-25: `~/.config/nextcloud`,
+`/etc/ntfy`, `~/.config/rclone` and `~/demos` are all in `OP_PATHS` (`ctdi-backup.sh:151-158`, §9 below) and ride in
+every archive when readable, so the Nextcloud env files, the ntfy config and the rclone session ARE in the Borg
+repository; the operator-only copies are still the restore path for the passphrase and `borg key export`) the office
+Postgres instance (pending, above).
 
 **Seeding `corporatetraveldc-ultrafeeder-history`.** The quadlet line only takes effect on the next ultrafeeder
 restart, which creates a new container and discards the writable layer. Copy the live data into the volume first:
@@ -273,6 +278,6 @@ encrypted Borg repository, like `/etc/corporatetraveldc`.
 
 ## Second copy (decision 2026-10-24)
 
-Proton Drive (rclone) stays the single off-site copy for now. Planned by end of 2026: the spare Raspberry Pi 5
+Proton Drive (rclone) stays the single off-site copy for now. Planned by end of 2026 (unverified 2026-10-25: a plan, not observable from code or live state): the spare Raspberry Pi 5
 (8 GB) as a NAS host holding a second, independent copy of the Borg repository (offline/parallel), so recovery
 no longer depends on one NVMe plus one provider.

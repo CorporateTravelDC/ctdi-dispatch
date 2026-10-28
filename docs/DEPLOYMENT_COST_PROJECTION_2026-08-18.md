@@ -1,3 +1,5 @@
+> Status 2026-10-25: dated record of 2026-08-18 (with its 2026-08-19 review notes), not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). This sweep re-checked two statements: the out-of-tree MCP server source still exists and is still not deployed, and `git log --format='%an' | sort -u` now returns 3 distinct author strings, not 4. Every other count below is a 2026-08-18/19 figure, not a current one.
+
 # CorporateTravelDC — Cost-of-Goods / Sale-Price Valuation of the Dispatch Platform (2026-08-18)
 
 > **Internal planning estimate — NOT investor materials, NOT a vendor

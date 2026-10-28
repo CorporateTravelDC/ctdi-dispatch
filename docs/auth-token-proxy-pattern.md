@@ -18,7 +18,7 @@ Tier 0.
 | Tier 0 | none | `/api/v1/tfr`, `/api/v1/weather` |
 | Tier 1 | `cert` | `/api/v1/tfr-enriched`, `/api/v1/radio`, `GET /api/v1/watchlist`, `/api/v1/knowledge-graph/*`, `/api/v1/vault/file` |
 | Tier 2 | `shares` | `/api/v1/cui/status` (audited as `cui_status_read`) |
-| Admin | `admin` (optionally narrowed by `allowed_actions`) | `/admin/*`, watchlist and sector mutations, `/api/v1/remember` -- all through `require_admin(action)` |
+| Admin | `admin` (optionally narrowed by `allowed_actions`) | `/admin/*`, watchlist and sector mutations, `/api/v1/remember` ~~-- all through `require_admin(action)`~~ (corrected 2026-10-25: through `require_admin(action)`, except the Tier-0, deny-key-keyed `GET /admin/approval-requests/{id}/resolve`, `src/web/main.py:2823`) |
 
 The runner's frontend is a React SPA; a token in the browser bundle or
 localStorage is readable by anyone with DevTools. The runner process can hold
@@ -28,19 +28,30 @@ a secret, so it injects one server-side.
 
 | Instance | Container / port | Front door | Upstream (`DISPATCH_BASE_URL`) |
 |---|---|---|---|
-| Production runner | `corporatetraveldc-runner`, published on `127.0.0.1:8001` and `100.x.x.x:8001` | tailnet only: `nginx/conf.d/tailscale-dispatch-runner.conf` (443 closed on the LAN) | dispatch-web `:8000` |
+| Production runner | `corporatetraveldc-runner`, published on `127.0.0.1:8001` and `100.x.x.x:8001` | tailnet only: `nginx/conf.d/tailscale-dispatch-runner.conf` (443 closed on the LAN) (unverified 2026-10-25: nginx listens on `0.0.0.0:443`, so closing it on the LAN is firewalld's job, and the firewalld zones are root-only) | dispatch-web `:8000` |
 | Public demo runner | `corporatetraveldc-runner-demo`, `127.0.0.1:8005` / `100.x.x.x:8005` | public `dispatch-runner.example.com` (live-only nginx vhost -> `127.0.0.1:8005`), `DEMO_MODE=true` session gate | **`demo-api` at `http://100.x.x.x:8004`**, not production web |
 
 So the public hostname never proxies to production dispatch-web, with or
-without a token. The production runner is reachable only from the tailnet,
+without a token. The production runner is reachable only from the tailnet
+(unverified 2026-10-25 for the LAN path through nginx `:443`, see the note
+above; its own ports bind only `127.0.0.1` and `100.x.x.x`),
 where `_is_trusted()` is true for every caller. The two allowlists below
 therefore differ in practice only if the production runner is ever exposed
 off-tailnet -- which is exactly the case they exist to make safe.
 
-`_is_trusted()` is an IP classifier (CF-Connecting-IP if present, else the
-client / X-Forwarded-For) against Tailscale CGNAT `100.64.0.0/10`, RFC1918 and
-loopback. It is an injection decision, not an access gate; reachability is
-the network layer's job.
+`_is_trusted()` is an IP classifier ~~(CF-Connecting-IP if present, else the
+client / X-Forwarded-For)~~ (corrected 2026-10-25: `CF-Connecting-IP` only when
+the `Host` is in `_CLOUDFLARE_FRONTED_HOSTNAMES`, i.e.
+`dispatch-runner.example.com`, since 2026-08-25; otherwise the
+direct client address or the `X-Forwarded-For` address, either one in range
+being enough; `src/runner/main.py:209-234`, `:369`) against Tailscale CGNAT `100.64.0.0/10`, RFC1918 and
+loopback. ~~It is an injection decision, not an access gate; reachability is
+the network layer's job.~~ (corrected 2026-10-25: it is also an access gate:
+`tailscale_gate` returns 404 to an untrusted request for `/admin*`,
+`/api/dispatch/admin*` or a non-GET `/api/dispatch/api/v1/*`, and since
+2026-10-20, `6a062254`, `live_trusted_only` returns 404 to every untrusted
+request to the production runner except `/healthz`; `src/runner/main.py:394-460`.
+Who can connect at all is still the network layer's job.)
 
 ---
 
@@ -80,10 +91,18 @@ elif (RUNNER_ENRICHED_TOKEN and path in _TIER1_PATHS_TRUSTED_ORIGIN_ONLY
 `X-CTDI-Public` is not forwarded upstream. Unit tests:
 `tests/runner/test_proxy_dispatch.py` (10).
 
-Two gates run before the proxy: the `tailscale_gate` middleware returns 404
+~~Two gates run before the proxy: the `tailscale_gate` middleware returns 404
 for `/admin*` paths and for any non-GET `/api/v1/*` from an untrusted origin;
 with `DEMO_MODE=true` an untrusted request without a valid demo session
-cookie is rejected.
+cookie is rejected.~~ (corrected 2026-10-25: three middlewares run before the
+proxy, all keyed on `_is_trusted()`: `tailscale_gate` returns 404 for
+`/admin*`, `/api/dispatch/admin*` and any non-GET `/api/dispatch/api/v1/*` from
+an untrusted origin; with `DEMO_MODE=true`, `demo_gate` answers an untrusted
+`/api/*` write or `/api/ask` with 403 and an untrusted `/api/*` read without a
+valid demo session cookie with 401 (`/healthz`, `/api/whoami`,
+`/api/demo/status` and `POST /api/demo/login` stay open); with `DEMO_MODE`
+off, `live_trusted_only` (since 2026-10-20) returns 404 to every untrusted
+request except `/healthz`; `src/runner/main.py:394-460`.)
 
 ### The two allowlists
 
@@ -93,6 +112,12 @@ cookie is rejected.
 "api/v1/tfr-enriched", "api/v1/radio", "api/v1/cui/status",
 "api/v1/watchlist", "api/v1/watchlist/history",
 ```
+
+(corrected 2026-10-25: superseded -- the block above is the set as it stood
+before 2026-10-24 and is kept as written; since `c5cddddb` the set has ten
+entries: the five above plus
+`api/v1/swim/positions`, `api/v1/swim/scope`, `api/v1/swim/last-leg`,
+`api/v1/swim/resolve` and `api/v1/swim/aggregator`; `src/runner/main.py:2541-2573`.)
 
 **`api/v1/cui/status` is a no-op here:** dispatch-web requires Tier 2
 (`require_tier(Tier.T2)`) for it and the runner token is cert/Tier 1, so an
@@ -126,18 +151,26 @@ would still 403; they are deliberately not listed.
 | Token never in git or the public mirror | value only in `/etc/corporatetraveldc/` (outside the repo); `push-public.sh` scrubs and the pre-commit hook blocks credential patterns |
 | Token not in other containers | only `runner.allowlist` names it among the generated service files |
 | Client token wins | `if auth:` is evaluated first |
-| Blast radius of a compromised runner | the cert-tier token: Tier 0 + Tier 1 reads; no Tier 2, no admin |
+| Blast radius of a compromised runner | the cert-tier token: ~~Tier 0 + Tier 1 reads~~ (corrected 2026-10-25: Tier 0 + Tier 1, which is reads plus one write: the legacy `POST /api/v1/watchlist` creates a watchlist session and pushes `flight-alerts`, `src/web/main.py:1618-1656`, and `api/v1/watchlist` is in `_TIER1_PATHS`); no Tier 2, no admin |
 
 **An operator-supplied admin token does live in the browser (added 2026-10-15).**
 The runner's Settings panel has an optional "sync" field
 (`src/runner/frontend/src/components/SettingsPanel.jsx:19`,
-`src/runner/frontend/src/hooks/useLayerConfig.js:50`): a token pasted there is
+~~`src/runner/frontend/src/hooks/useLayerConfig.js:50`~~ (corrected 2026-10-25:
+`src/runner/frontend/src/hooks/useLayerConfig.js:51` for the key, `:75` and
+`:92` for the calls)): a token pasted there is
 stored in the browser's `localStorage` under `ctdc_admin_token` and sent as
 `Authorization: Bearer` on `/api/dispatch/api/v1/config` calls, where the
 client token wins over injection. Anything with script access to that origin,
 or DevTools on that device, can read it. It is opt-in and per device; leaving
 the field empty keeps the browser token-free. Whether to keep it is an open
-decision.
+decision. (added 2026-10-25: those calls reach no config store. The frontend
+sends `PUT` and `GET` to `/api/dispatch/api/v1/config`; the runner proxy
+accepts only GET/POST/DELETE (`src/runner/main.py:2657`), so the PUT is
+refused, and dispatch-web has no `/api/v1/config`, so the GET answers 404
+(live `GET :8001/api/dispatch/api/v1/config` -> 404, 2026-10-26 03:55Z). The
+runner's own store is `/api/v1/config`, `src/runner/main.py:2852-2875`.
+Recorded for an operator decision.)
 
 **`GET /api/v1/whoami-token` (added 2026-10-15).** Dispatch-web resolves a
 presented bearer token to `{tier, user_label, department, token_prefix}`
@@ -145,7 +178,8 @@ presented bearer token to `{tier, user_label, department, token_prefix}`
 to learn the operator identity behind a forwarded `Authorization` header
 (`_resolve_operator_identity`) without its own database access. It is
 rate-limited (60 calls per 60 s, in memory) because it would otherwise be a
-token-guessing oracle (`src/web/main.py:184`).
+token-guessing oracle (~~`src/web/main.py:184`~~ (corrected 2026-10-25:
+`src/web/main.py:189` for the clock, `:213-214` for the 60-per-60 s check)).
 
 ---
 

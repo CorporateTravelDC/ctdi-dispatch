@@ -3,6 +3,8 @@
 Verified against HEAD db64018 and live state on 2026-10-06 18:15Z / 14:15 ET.
 Partly re-checked 2026-10-15 01:00Z (main `1491bf5a` plus the staged batch): the manifest signer, the
 verified-exec count, and the review 09 (2026-10-08) limits added under "Integrity guarantees".
+Re-verified 2026-10-25 15:39–15:50Z / 11:39–11:50 ET against HEAD `5f7fca01` and live state (docs-first
+revalidated sweep, stage 3); corrections are dated in place.
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -27,7 +29,7 @@ Fingerprints re-derived 2026-10-06 with `gpg --show-keys security/*.asc` and
 
 | Fingerprint | File | Covers |
 |---|---|---|
-| `3B29752DACA3544CEA60D01A7B81F49CD96C1631` (primary), signing subkey `419A864CC29A09513039B6E03033FB4D01903159` | `security/trusted-signing-key.pub.asc` (first key block) | Git commit signing (`commit.gpgsign=true`, `user.signingkey` = the primary) **and the signed tree manifest at HEAD**: `MANIFEST.sha256.asc` at db64018 was made by subkey `419A86…3159` (2026-10-06 17:42Z); at `1491bf5a` it is again that subkey (signature dated 2026-10-14; re-checked 2026-10-15 with `gpg --list-packets`). |
+| `3B29752DACA3544CEA60D01A7B81F49CD96C1631` (primary), signing subkey `419A864CC29A09513039B6E03033FB4D01903159` | `security/trusted-signing-key.pub.asc` (first key block) | Git commit signing (`commit.gpgsign=true`, `user.signingkey` = the primary) **and the signed tree manifest at HEAD**: `MANIFEST.sha256.asc` at db64018 was made by subkey `419A86…3159` (2026-10-06 17:42Z); at `1491bf5a` it is again that subkey (signature dated 2026-10-14; re-checked 2026-10-15 with `gpg --list-packets`); at `5f7fca01` it is again that subkey (signature made 2026-10-25T00:24:30Z, `scripts/verify-manifest.sh` "OK -- signature valid, all 1712 files match" at 15:36:18Z). |
 | `CC1509BD9278086F113EAF24E10F126919390B37` | `security/trusted-signing-key.pub.asc` (second, independent key block) | The agent delegate key used by `scripts/sign-manifest.sh --agent` and by `poller/skills/audit_log_archive.py` for audit checkpoints. Pinned as `AGENT_SIGNING_KEY_FINGERPRINT`; `verify-manifest.sh` accepts a manifest signed by either pinned key. |
 | `C0E92095063C7AE670E590563A0E7B60576BBF22` | `security/pi-agent-signing-key.pub.asc` | Routine automated rotation signing only; not valid for break-glass. |
 | `5DA4A5A13949643EB7BF93A40B0744999425A548` | `security/breakglass-authorization-key.pub.asc` | Break-glass authorization. |
@@ -38,7 +40,8 @@ the repo root as `ABD3976FCC006E0F3FE559177286B3118BA4EFB2.gpg` and
 `CorporateTravelDC.gpg` (both tracked), alongside
 `419A864CC29A09513039B6E03033FB4D01903159.gpg` (the current key). It is kept
 for verifying older commits; no current control pins it, and it is not in the
-published `/keys/` set.
+published `/keys/` set (unverified 2026-10-25: the published set is off-box
+and was not fetched).
 
 SSH keys are a separate system (see `docs/BOARD_SIGNING.md`): each team account
 has its own ed25519 board/kill-order signing key, and humans hold a separate,
@@ -60,10 +63,13 @@ An agent running **as the human operator's own account** is a designed fallback 
   then checks every hash and full coverage.
 - **Prevention, at start:** the ~~39 live timer-triggered skill quadlets run
   through `scripts/verified-exec.sh` (`grep -l verified-exec
-  ~/.config/containers/systemd/*.container | wc -l` = 39)~~ (corrected
+  ~/.config/containers/systemd/*.container | wc -l` = 39)~~ ~~(corrected
   2026-10-15: 40 live quadlets, the 39 timer-triggered oneshots plus
   `demo-api`, run through `scripts/verified-exec.sh`; the same `grep` now
-  returns 40), and
+  returns 40)~~ (corrected 2026-10-25: 38 live quadlets, the 37
+  timer-triggered oneshots plus `demo-api`, after the 2026-10-20 retirement
+  of `ops-brief-deferred` and `nms-v240-check`; the same `grep` returned 38
+  at 15:39:53Z), and
   `src/common/llm.py::_verify_before_inference()` runs before every inference.
 - **Detection, after the fact:** the long-running containers (web, poller,
   pusher, ingest-*, runner) start straight from `CMD` with no verifying
@@ -94,7 +100,8 @@ An agent running **as the human operator's own account** is a designed fallback 
   **Known limits (added 2026-10-15, from security review 09,
   `docs/security-reviews/2026-10-08-09-adversarial-validation.md`; open, not fixed):**
   the application database role is a Postgres superuser and owns
-  `audit_log` (R09-3). Anyone with that role, for example code running in a
+  `audit_log` (R09-3; re-checked 2026-10-25 15:42:01Z: `pg_roles` shows
+  `dispatch` with `rolsuper = t` and `pg_tables.tableowner = dispatch`). Anyone with that role, for example code running in a
   container that holds the database password, can rewrite and re-hash the
   whole chain or disable the trigger. Nothing persists the last verified head,
   so deleting the newest rows is not detected (R09-2). Concurrent writers can
@@ -130,8 +137,10 @@ read-only repo access (see `docs/AGENT_SEGMENTATION.md`).
 - **Dependency vulnerabilities** (since 2026-10-07): every push of the platform
   and website repos runs `scripts/dependency-audit.py` first. It blocks on npm
   high/critical or a fixable Python advisory, with an operator override that is
-  journaled. A daily run also audits what is installed in every running image.
-  GitHub Dependabot alerts are on for every repository as a second layer. Dormant
+  journaled. A daily run also audits what is installed in every running image
+  (`corporatetraveldc-dependency-audit.timer`, 09:20Z).
+  GitHub Dependabot alerts are on for every repository as a second layer
+  (unverified 2026-10-25: a GitHub-side setting, not checkable from the box). Dormant
   image tags, rollback targets and worktrees are audited like running code:
   disabled or not deployed is never a reason to keep a known-vulnerable pin
   (`docs/security-reviews/2026-10-07-04-dependency-scanning.md`).
@@ -151,7 +160,12 @@ read-only repo access (see `docs/AGENT_SEGMENTATION.md`).
   receipt is looked up by image id only, so a tag re-pointed at another
   service's image passes (R09-5). A missing source commit is reported
   UNVERIFIED, not failed, and one malformed receipt aborts the whole run
-  (R09-8).
+  (R09-8). (Re-read 2026-10-25 against `scripts/build/provenance.py`: still
+  open. R09-6 `sig in ("G", "U")` at `:338`; D-01 `check_deploy` fails only on
+  `receipt` / `image id` / `sbom digest` / `image` and not on `sbom` file
+  missing, `:420-432`; R09-7 base images checked for a digest being present,
+  `:359`; R09-8 missing commit returns UNVERIFIED, `:327-335`, and
+  `load_receipt` parses JSON unguarded, `:273-276`.)
 
 ## CUI handling
 

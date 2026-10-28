@@ -1,3 +1,5 @@
+> Status 2026-10-25: point-in-time record; D2 (demo down), D10 (stdds/tfms shed), D9 unit count (117, now 205) and G2 (detector script, now absent) are no longer current. Checked 2026-10-26T22:14Z.
+
 # Drift & Gaps Report — 2026-08-15 (~02:10–02:30 EDT)
 
 Independent cold-start audit: live system (`systemctl --user`, `podman`,
@@ -45,7 +47,7 @@ be958ac naming sweep 08-15) — most drift below traces to those.
   be958ac/be79c47/b0a5c86/2ff1fbb; `journalctl --user -u
   corporatetraveldc-integrity-sweep`.
 
-### D2 — Public demo documented "Live"; it is down (crash loop, day 2)
+### D2 — Public demo documented "Live"; it is down (crash loop, day 2) (2026-10-25: superseded; `corporatetraveldc-runner-demo.service` active at 2026-10-26T22:14Z)
 - **Docs say:** README.md:49 ("Public demo … **Live** at
   `https://dispatch-runner.example.com`"), README.md:100,
   README.md §Demo Mode ("The demo-playback stack is **live and public**"),
@@ -151,12 +153,12 @@ be958ac naming sweep 08-15) — most drift below traces to those.
 ### D9 — Unit-count snapshots stale (self-caveated, minor)
 - **Docs say:** README.md:14 / CLAUDE.md:17 "145 loaded units at this
   snapshot" (2026-08-11).
-- **Live:** 117 `corporatetraveldc-*` units loaded (28 prewarm units gone).
+- **Live:** 117 `corporatetraveldc-*` units loaded (28 prewarm units gone). (2026-10-25: superseded; 205 at 2026-10-26T22:14Z, `systemctl --user list-units 'corporatetraveldc-*' --all`)
   Both files explicitly say not to trust the number and give the command, so
   this is minor — but the snapshot number no longer matches.
 - **Checked:** `systemctl --user list-units 'corporatetraveldc-*' --all | wc -l`.
 
-### D10 — CLAUDE.md/README describe SWIM ingest as continuously live; two feeds are load-shed right now (by design, but undocumented behavior in those files)
+### D10 — CLAUDE.md/README describe SWIM ingest as continuously live; two feeds are load-shed right now (2026-10-25: superseded; `ingest-stdds` and `ingest-tfms` both active at 2026-10-26T22:14Z) (by design, but undocumented behavior in those files)
 - **Docs say:** README status table "All 6 live"; nothing in README/CLAUDE.md
   mentions that the thermal/load guard deliberately stops feeds.
 - **Live:** `ingest-stdds` and `ingest-tfms` are `inactive` —
@@ -193,7 +195,7 @@ TimeoutStartSec/LLM-budget interaction; the in-code comments cite
 as an open question in tonight's live-state check; now answered — the raised
 budgets did not help.)
 
-### G2 — `scripts/ollama-wedged-detector.sh` committed but unwired and undocumented
+### G2 — `scripts/ollama-wedged-detector.sh` committed but unwired and undocumented (2026-10-25: superseded; the file is absent at HEAD 5f7fca01)
 Landed in `be958ac` ("D-state/CPU-tick hang detector, built for the
 OLLAMA_TIMEOUT-raised observation window"). No systemd unit references it
 (grep of `~/.config/systemd/user/` — nothing), no doc mentions it outside

@@ -22,7 +22,9 @@ a tiered REST API, an OAuth 2.1 remote-MCP gateway for AI agents, and
 
 Runs on a single host as rootless Podman containers under systemd `--user`
 Quadlets, owned by one unprivileged operator account. Reference host: a
-Raspberry Pi 5 (16 GB, 4 cores, no GPU, `aarch64`), Fedora 44, SELinux
+Raspberry Pi 5 (16 GB, 4 cores, ~~no GPU~~ (corrected 2026-10-25: no discrete
+GPU; the SoC's integrated GPU is present, and the llama.cpp unit sets no GPU
+offload, so inference is CPU-only), `aarch64`), Fedora 44, SELinux
 enforcing, NVMe boot. Host clock is **UTC**; units that need wall-clock
 semantics say `America/New_York` explicitly (§4.7).
 
@@ -52,23 +54,38 @@ substitutes placeholders and drops operator-only files.
 
 - **Uplink**: Wi-Fi primary plus a cellular USB-Ethernet backup, selected by
   route metric and an active failover watchdog (§3.1). There is no bond.
-  (Added 2026-10-15: in the reference deployment the cellular backup has been
+  ~~(Added 2026-10-15: in the reference deployment the cellular backup has been
   out of service since 2026-10-06, so there is currently no working second
-  path. The watchdog still runs, but it only alerts.)
+  path. The watchdog still runs, but it only alerts.)~~ (superseded; corrected
+  2026-10-25: the backup uplink is back in service. The watchdog's probes
+  through it passed in all 1,440 runs of the 24 h to 2026-10-26 02:42Z, and
+  its log records no backup failure after 2026-10-15 15:09Z, so a failover
+  now has a working second path.)
 - **Public ingress**: a Cloudflare Tunnel (`cloudflared` as a **user** unit,
   `--protocol http2`, config file tracked in the repo and diffed against the
-  live copy) to nginx on the host. Every public hostname routes to nginx
-  `127.0.0.1:80`; the catch-all is `http_status:404`. Identity-aware access
-  sits in front of the API hostname with narrow path-scoped bypasses. No
+  live copy) to nginx on the host. ~~Every public hostname routes to nginx
+  `127.0.0.1:80`~~ (corrected 2026-10-25: every public hostname except the
+  retired MCP host routes to nginx `127.0.0.1:80`; the tunnel answers the MCP
+  host itself with `http_status:404`, §6); the
+  catch-all is `http_status:404`. Identity-aware access
+  sits in front of the API hostname with narrow path-scoped bypasses
+  (unverified 2026-10-25: the access policy lives at the vendor and was not
+  read from the box). No
   tunnel or access setting is managed in the vendor dashboard by hand: all
-  changes go through local scripts.
-- **Host DNS**: Pi-hole FTL (DNS :53, web UI on a local port) → Unbound
-  (127.0.0.1:5335, recursive, DNSSEC, no forwarders). Pi-hole, Unbound and
+  changes go through local scripts (unverified 2026-10-25: a working rule;
+  the vendor-side change history was not inspected).
+- **Host DNS**: Pi-hole FTL (DNS :53, ~~web UI on a local port~~ (corrected
+  2026-10-25: web UI on all interfaces, plain HTTP)) → Unbound
+  (127.0.0.1:5335, recursive, DNSSEC, ~~no forwarders~~ (corrected 2026-10-25:
+  no upstream forwarders except one forward-zone: the tailnet's `ts.net.` zone
+  goes to Tailscale MagicDNS)). Pi-hole, Unbound and
   `tailscaled` get top CPU weight.
 - **Time**: chronyd serves NTS (:4460) with a tailnet-issued certificate,
   refreshed by a root timer.
 - **Overlay network**: Tailscale (Tailscale SSH, Tailnet Lock enabled; the
-  node is also the tailnet DNS resolver). Private access to the ops dashboard
+  node is also the tailnet DNS resolver (2026-10-25: the first of five
+  resolvers the coordination server pushes; the other four are public
+  resolvers used as fallbacks)). Private access to the ops dashboard
   and the operator console. Network origin alone grants no API tier. Access
   model: `docs/HEADLESS_ACCESS.example.md`.
 - **LLM**: one llama.cpp `llama-server` as a host user unit, bound to the
@@ -106,20 +123,29 @@ Nothing is live.
 
 Reference figures: ~~35 containers running; 76 tracked `.container` Quadlets
 (38 long-running, 38 oneshot)~~ (corrected 2026-10-15: 37 long-running
-containers plus any oneshots mid-run; 77 tracked `.container` Quadlets, 38
-long-running and 39 oneshot). Ports below bind to `127.0.0.1` unless noted;
+containers plus any oneshots mid-run; 77 tracked `.container` Quadlets, ~~38
+long-running and 39 oneshot~~ (corrected 2026-10-25: 39 long-running
+definitions, of which the two demo-portal units were stopped at 2026-10-26
+02:02Z, 37 `Type=oneshot` jobs and one template)). ~~Ports below bind to
+`127.0.0.1` unless noted;~~ (corrected 2026-10-25: ports below bind to
+`127.0.0.1` unless noted, except these unmarked ones, which bind all
+interfaces: ~~ntfy :2586, Open WebUI :3000, the ACARS router :9080/:15555,
+Beast :30005 and the ACARS watcher's UDP 5005~~ (corrected 2026-10-26: ntfy
+:2586, Open WebUI :3000, the ACARS router :9080/:15555, Beast :30005, the
+fr24feed web UI :8754 and the ACARS watcher's UDP 5005); Pi-hole's DNS :53
+and web UI do too;)
 "tailnet" means the node's tailnet address (e.g. `192.0.2.10`).
 
 **Core spine**
 
 | Service | Port(s) | Role |
 |---|---|---|
-| `web` | 127.0.0.1 + tailnet :8000 | FastAPI tiered REST API (about 128 routes; ~~about 126~~ before 2026-10-15), agent gateway, operator console. One uvicorn worker. |
+| `web` | 127.0.0.1 + tailnet :8000 | FastAPI tiered REST API (~~about 128 routes~~ (corrected 2026-10-25: 135 route handlers at 5f7fca01); ~~about 126~~ before 2026-10-15), agent gateway, operator console. One uvicorn worker. |
 | `poller` | — | Async scheduler: 12 REST fetchers, in-process skills, watchlist sweeps, admin trigger directory |
 | `pusher` | — | ntfy sender; polls the DB every 30 s for unnotified events |
 | `ingest-core` | — | NWS push (NWWS-OI) + local airspace from own RF receivers |
 | `ingest-{fdps,stdds,tfms,tbfm,itws,notam}` | — | One SWIM push feed per container (`notam` = AIM/FNS). Any one restarts without dropping the rest. Load-shed under pressure (§4.1). |
-| `pgsql` | 127.0.0.1:5432 + shared socket volume | PostgreSQL 16, the live database (~~73~~ 75 numbered migrations, corrected 2026-10-15) |
+| `pgsql` | 127.0.0.1:5432 + shared socket volume | PostgreSQL 16, the live database (~~73~~ ~~75~~ numbered migrations, corrected 2026-10-15; corrected 2026-10-25: 83 at 5f7fca01, `0001` to `0084` with no `0080`, all 83 applied live) |
 
 **Feeds / members gate / runner / demo**
 
@@ -131,7 +157,7 @@ long-running and 39 oneshot). Ports below bind to `127.0.0.1` unless noted;
 | `runner-demo` | 127.0.0.1 + tailnet :8005 → 8001 | Public demo runner; `DEMO_MODE` (off by default) enables an app-layer password gate |
 | `demo` | — | Recorder → Postgres `demo_snapshots` every 300 s |
 | `demo-api` | 127.0.0.1 + tailnet :8004 | Playback API over ~~a scrubbed, promoted SQLite copy~~ a separate, demo-only Postgres instance that holds scrubbed, promoted data (§4.3; Postgres-only since 2026-10-20, no SQLite rollback). ~~Added 2026-10-15: it and `runner-demo` also mount the Postgres socket, for the password-gate profiles only.~~ (2026-10-16/19: they mount only the demo instance's socket; the password-gate profiles live there too.) |
-| demo portals (added 2026-10-15) | 127.0.0.1 + tailnet, one port each | Two static `nginx` containers that serve password-gated client-preview sites. Not exposed through the tunnel in the reference deployment. |
+| demo portals (added 2026-10-15) | 127.0.0.1 + tailnet, one port each | ~~Two static `nginx` containers~~ (corrected 2026-10-25: four static `nginx` Quadlets; two were running at 2026-10-26 02:03Z and the two demo-portal units were installed but stopped) that serve password-gated client-preview sites. Not exposed through the tunnel in the reference deployment. |
 
 **Office skeletons (templates, disabled; added 2026-10-20)**
 
@@ -144,15 +170,22 @@ long-running and 39 oneshot). Ports below bind to `127.0.0.1` unless noted;
 | `vikunja` (optional) | tailnet :8103 | Initiative and project API for the Chief of Staff profile |
 
 None has an install section, a boot-order entry, a rollout row or a timer; each has its own secrets file and a
-pinned image, and every one is configured for PostgreSQL explicitly (no SQLite). The Nextcloud apps for the three
-profiles (Calendar, Contacts, Tasks, Deck, Collectives, Tables) are installed disabled. See
+pinned image, and every one is configured for PostgreSQL explicitly (no SQLite). (2026-10-25: the five files and
+their two networks sit in an `office-skeletons/` subfolder of the live Quadlet directory, so the generator does
+create their units; none was enabled or running at 2026-10-26 02:07Z. The office database network and its two
+volumes already exist; no running container uses them.) The Nextcloud apps for the three
+profiles (Calendar, Contacts, Tasks, Deck, Collectives, Tables) ~~are installed disabled~~ (corrected 2026-10-25:
+are all installed; Calendar is enabled and the other five are disabled, Nextcloud app config read 2026-10-26
+02:17Z). See
 `docs/deployment-profiles/office-skeletons/README.md`.
 
 **SDR / RF (optional, hardware-dependent)**: an ADS-B aggregator
 (`ultrafeeder`: tailnet :8080/:8081, Beast :30005, SBS on localhost :30003),
 an ACARS/VDL router (:9080, :15555) and hub (tailnet :8092), `dumpvdl2`, an
-ACARS watcher (UDP 5005; local + two network ACARS sources), and four
-third-party feeder clients (each with its own `*-secrets.env`). Further
+ACARS watcher (UDP 5005; local + two network ACARS sources), and ~~four~~
+(corrected 2026-10-25: five: FlightAware, FR24, PlaneFinder, AirNav Radar
+and OpenSky, each reading Beast from the aggregator) third-party feeder
+clients (each with its own `*-secrets.env`). Further
 decoders (`acarsdec`, `dumphfdl`, AIS, UTM) ship as `*.container.disabled`
 until the hardware exists.
 
@@ -160,9 +193,12 @@ until the hardware exists.
 dedicated podman network (its `.network` Quadlet tracked since 2026-10-20); Open WebUI (:3000) pointed at llama.cpp's
 OpenAI-compatible API.
 
-**Comms / misc**: `ntfy` (:2586); a local IMAP mail bridge (tailnet :1025);
+**Comms / misc**: `ntfy` (:2586); ~~a local IMAP mail bridge (tailnet :1025)~~
+(corrected 2026-10-25: a local mail bridge whose SMTP port is published on
+tailnet :1025; its IMAP port is not published);
 outbound mail from ntfy and the website contact API goes through a provider's
-SMTP submission port (587); website contact API (127.0.0.1:8002); RSS-Bridge
+SMTP submission port (587) (unverified 2026-10-25 for the contact API: its
+settings file is out of scope; ntfy's sender is the provider on 587); website contact API (127.0.0.1:8002); RSS-Bridge
 (tailnet :3001); small nginx containers for client previews.
 
 **Host-level (not containers)**: nginx (80/443, system unit), cloudflared
@@ -205,7 +241,11 @@ your own measured busy-but-healthy load.
 
 Two consequences:
 
-- A shed unit exits 0, not failed — invisible to "any unit failed?" checks;
+- ~~A shed unit exits 0, not failed — invisible to "any unit failed?" checks;~~
+  (corrected 2026-10-25: the SWIM feeds and the pusher stop cleanly and stay
+  invisible to "any unit failed?" checks, but in the 2026-10-25 03:22Z
+  lockdown the poller was killed at its stop timeout (status 137) and its
+  unit was marked failed until the restore;)
   restarting it by hand gets it shed again.
 - The health endpoint can report `degraded` with stale push feeds during a
   shed. Check the guard's JSON state file and journal before suspecting
@@ -213,16 +253,20 @@ Two consequences:
 
 ### 4.2 Signed-manifest gate
 
-Every tracked file is listed in a GPG-signed manifest
-(`MANIFEST.sha256{,.asc}`); the trust pin is a root-owned file under `/etc`
+~~Every tracked file is listed in a GPG-signed manifest
+(`MANIFEST.sha256{,.asc}`)~~ (corrected 2026-10-25: every tracked file except
+the manifest pair itself and the generated `docs/LIVE_STATE_CHECK_*.md` and
+`docs/CLAUDE_MD_DRIFT_REPORT.md` reports, 26 files at 5f7fca01, is listed in
+the GPG-signed manifest (`MANIFEST.sha256{,.asc}`); untracked files that git
+does not ignore are included); the trust pin is a root-owned file under `/etc`
 that is parsed, never sourced, and takes precedence over the in-repo pin.
 
 | Surface | When checked |
 |---|---|
-| Oneshot Quadlets (+ `demo-api`; 40 in the reference deployment, 2026-10-15) started via `Exec=scripts/verified-exec.sh …` | each start |
+| Oneshot Quadlets (+ `demo-api`; ~~40~~ in the reference deployment, 2026-10-15; corrected 2026-10-25: 38, the 37 oneshots plus `demo-api`) started via `Exec=scripts/verified-exec.sh …` | each start |
 | `src/common/llm.py` | before inference (refuses if the verifier is missing) |
-| Integrity sweep timer | every 15 min, whole tree (about 1,440 files; ~~about 1,250~~ before 2026-10-15) |
-| Long-running app containers (web, poller, pusher, ingest, runner, …) | at build: images are built only from a signed, clean tree and pass an in-image gate; the sweep covers the rest |
+| Integrity sweep timer | every 15 min, whole tree (~~about 1,440 files~~ (corrected 2026-10-25: 1,712 manifest entries at 5f7fca01); ~~about 1,250~~ before 2026-10-15) |
+| Long-running app containers (web, poller, pusher, ingest, runner, …) | at build: images are built only from a signed, clean tree ~~and pass an in-image gate~~ (corrected 2026-10-25: and images that carry the in-image verifier must pass it; the runner, ACARS-watcher and website contact-API images carry none and pass through unchecked, `scripts/stack-refresh.sh:436-441`); the sweep covers the rest |
 
 Any tracked edit left unsigned fails the sweep within 15 minutes. Deploy
 order is always **sign → build → restart** (and for root-run scripts, sign →
@@ -264,10 +308,12 @@ never from the operator's checkout.
 - **Postgres** is primary (`DISPATCH_DB_BACKEND=postgres`). Containers reach
   it through a shared socket volume mounted at `/var/run/postgresql`; host
   processes use `127.0.0.1:5432`. Schema = numbered, additive migrations
-  under `src/common/pg_schema/` (~~73~~ 75 at this revision, corrected 2026-10-15). ~~SQLite remains as a
+  under `src/common/pg_schema/` (~~73~~ ~~75~~ at this revision, corrected 2026-10-15; corrected
+  2026-10-25: 83 at 5f7fca01). ~~SQLite remains as a
   rollback selector and for the demo playback copy.~~ (2026-10-19: every platform SQLite file was
-  destroyed once Postgres served production and the demo; SQLite remains only inside Pi-hole, vnstat
-  and ACARS Hub's own UI store. ~~The code's SQLite backend and twin migrations are still in the tree.~~
+  destroyed once Postgres served production and the demo; ~~SQLite remains only inside Pi-hole, vnstat
+  and ACARS Hub's own UI store.~~ (corrected 2026-10-25: SQLite also remains inside other third-party
+  stores: ntfy's cache and auth databases and Open WebUI's `webui.db`.) ~~The code's SQLite backend and twin migrations are still in the tree.~~
   2026-10-20: the SQLite backend is refused outside the test suite: `postgres` is the default, and
   `sqlite` raises unless a test-only flag is set. The SQLite fallbacks (default file path, unused
   reference-table handle, demo rollback) are removed. The twin migrations remain as test-only code
@@ -287,20 +333,31 @@ never from the operator's checkout.
 
 ### 4.6 Scoped secrets
 
-First-party Quadlets each read a per-service file
-`/etc/<prefix>/svc/<svc>.env` (oneshot jobs on the poller image share one
+~~First-party Quadlets each read a per-service file
+`/etc/<prefix>/svc/<svc>.env`~~ (corrected 2026-10-25: first-party Quadlets
+read a per-service file `/etc/<prefix>/svc/<svc>.env`, except the demo
+playback API and the public demo runner, which read the demo's own
+`demo.env` + `demo-secrets.env`, and the website contact API, which reads
+its own `contact.env`) (oneshot jobs on the poller image share one
 file, the ingest family shares one; web, runner, pusher, demo, rail tracker,
 ACARS watcher and the members verifier each have their own). A generator
-(`scripts/service-env/generate.py`) writes them from one root-only master file
-against per-service allowlists = reviewed names ∪ the import closure of the
-service's code. No Quadlet reads the master file. Third-party containers
-have their own `*-secrets.env`. Scripts never put tokens or passwords on argv
+(`scripts/service-env/generate.py`) writes them from ~~one root-only master file~~
+(corrected 2026-10-25: one master file owned by the operator account, mode
+0600) against per-service allowlists = reviewed names ∪ the import closure of the
+service's code. No Quadlet reads the master file (2026-10-25: two host user
+units still load it: the demo promote job and the failover kick-over
+guardrail). ~~Third-party containers
+have their own `*-secrets.env`.~~ (corrected 2026-10-25: third-party
+containers that take credentials have their own `*-secrets.env`; Nextcloud's
+sit in the operator's config directory, and the ACARS router and hub, the
+VDL2 decoder, the mail bridge, Open WebUI, RSS-Bridge and the static
+previews take no env file.) Scripts never put tokens or passwords on argv
 (world-readable via `/proc`): headers go through private file descriptors and
 env passthrough, enforced by a contract test.
 
 ### 4.7 Scheduling
 
-~~63~~ 67 (corrected 2026-10-15) active `<prefix>-*` user timers in the reference deployment, in these groups:
+~~63~~ ~~67~~ (corrected 2026-10-15; corrected 2026-10-25: 74 at 2026-10-26 02:19Z) active `<prefix>-*` user timers in the reference deployment, in these groups:
 
 | Group | Pattern |
 |---|---|
@@ -308,7 +365,7 @@ env passthrough, enforced by a contract test.
 | Rolling maintenance | a dispatcher every 20 min (+ random offset) starts enrolled long-runners (daily topic watches, digests) **one at a time** inside the day's drawn quiet windows; enrolled jobs have no timer of their own. A daily report builds a 30-day load profile and draws 3–4 two-hour windows per day (≥ 4 h apart, one overnight); a missing/stale profile falls back to a fixed overnight window. The operational day rolls at 05:00 local. |
 | Weekly | Monday weeklies (watches, desk memo, summary, vault weekly) |
 | Daily | usage snapshot, DNS restart, vault index scan, demo archiver, codeshare seed, freshness audit, ops plan, image prune, LLM restart, vault daily digest; added 2026-10-15: backup, agent time card, dependency audit, uplink reminder |
-| Several per day | entity-tracking digest and semantic compile (every 6 h), RSS (2 h), pull-path verify; added 2026-10-15: backup freshness (6 h), airline time-fidelity collector (6 h), weekly-LLM-job backstop check (6 h) |
+| Several per day | entity-tracking digest ~~and semantic compile~~ (every 6 h) (corrected 2026-10-25: the semantic compile runs four times a day, at 02:52, 06:02, 12:02 and 18:02 local, not on an even 6 h grid), RSS (2 h), pull-path verify; added 2026-10-15: backup freshness (6 h), airline time-fidelity collector (6 h), weekly-LLM-job backstop check (6 h) |
 | Every few minutes | thermal guard, memory watch, ingest restart, failover watchdog (60 s), SDR crash-loop guard, egress compliance push, Nextcloud and SWIM-session health, board sweep, integrity sweeps (platform and website), feed DB integrity check; added 2026-10-15: Nextcloud cron (5 min), `/tmp` headroom guard (5 min), … |
 | Image lifecycle | weekly refresh (Sunday) + an **adversarial tripwire** (below) |
 | Weekly, added 2026-10-15 | backup restore test (Sunday); a weekly vault dump run by a cloud LLM CLI (Sunday) |
@@ -339,12 +396,18 @@ only through a dedicated safe-update script; `:previous` tags allow rollback.
   `<prefix>-ops` (humans), `<prefix>-agents` (agent runtimes), with separate
   systemd slices and CPU weights for humans and agents.
 - **Account kinds** (registry file under `/etc`): *agent* (login mode
-  `claude` = vendor CLI credentials, or `ssh`), *service* (no login shell,
+  `claude` = vendor CLI credentials, ~~or `ssh`~~ (corrected 2026-10-25:
+  `codex`, or `ssh`; the live registry uses `claude` and `codex`)), *service* (no login shell,
   no inbound key; e.g. the local-LLM participant, a cloud-hosted agent whose
-  only credential is a scoped, labelled token), *preloaded* (created, not yet
-  active). Naming convention `<prefix>-agent-<vendor>-<product>`.
+  only credential is a scoped, labelled token), ~~*preloaded* (created, not yet
+  active)~~ (corrected 2026-10-25: *preloaded* is not a third kind but a flag
+  on an account, `preloaded=1`: created, not yet active). Naming convention
+  `<prefix>-agent-<vendor>-<product>` (2026-10-25: two service accounts are
+  named `<prefix>-agent-<name>` with no vendor part).
 - **One identity per account**: one inbound SSH key and one signing key,
-  comment `account@node`, never shared; git author = the account.
+  comment `account@node`, never shared; git author = the account
+  (unverified 2026-10-25: agent homes are not readable from the operator
+  account).
 - **Liveness is an AND**: login factor live (credentials refreshed / recent
   SSH login, per kind) AND active board signer AND no token revocation in
   24 h AND no executable kill order. Any factor fails → the account goes
@@ -353,7 +416,8 @@ only through a dedicated safe-update script; `:previous` tags allow rollback.
   grace period; registry unavailable = hold, never kill.
 - **Kill orders**: SSH-signed JSON orders; a member/agent/service target
   needs one admin or two distinct non-admins; an admin target needs a
-  configurable quorum (2 or 3). The operator account is never a target.
+  configurable quorum ~~(2 or 3)~~ (corrected 2026-10-25: default 2 distinct
+  issuers, set by `QUORUM_FOR_ADMIN`). The operator account is never a target.
 - **Signed approvals**: state-changing approvals (sudo gate, council,
   workspace grants, console login, agent-gateway consent) are allowed only
   by a human SSH signature, from a separate passphrase-protected approval
@@ -368,7 +432,7 @@ only through a dedicated safe-update script; `:previous` tags allow rollback.
   deny wins; grants can expire or be scoped to a task; unsanctioned skills
   are quarantined.
 - **Repo**: the operator's checkout is not group-writable; agents work from
-  their own clones. Signing and sudo stay operator-only.
+  their own clones (unverified 2026-10-25: agent homes are not readable). Signing and sudo stay operator-only.
 
 Detail: `docs/AGENT_SEGMENTATION.md`, `docs/BOARD_SIGNING.md`.
 
@@ -405,15 +469,20 @@ STDDS, TFMS, TBFM and ITWS have no public REST equivalent.
 |---|---|---|
 | API | `dispatch.example.com` | Behind identity-aware access (302 to login); narrow bypasses (`/robots.txt`, the board read, webhooks) reach the app. nginx → web :8000 and stamps `X-CTDI-Public: 1`, which pins the request to Tier 0. |
 | Public demo | `dispatch-runner.example.com` | No access proxy; nginx → `runner-demo` :8005 with its app-layer password gate |
-| Agent gateway | `agents.example.com` | nginx → web :8000, gateway paths only (`/` 404, OAuth metadata 200, `/mcp/*` 401 without a token). **Must not** sit behind the access proxy (vendor OAuth clients cannot complete an interactive login). |
+| Agent gateway | `agents.example.com` | nginx → web :8000, gateway paths only (`/` 404, OAuth metadata 200, ~~`/mcp/*` 401 without a token~~ (corrected 2026-10-25: a `GET /mcp/<slug>` answers 405, POST only; a POST without a token gets 401)). **Must not** sit behind the access proxy (vendor OAuth clients cannot complete an interactive login). |
 | Members gate | `members.<publication>.example.com` | nginx static docroot + `auth_request` to the verifier :8787; not signed in → 302 to the invite host |
 | Invites | `invite.<publication>.example.com` | nginx → verifier `/_invite` paths. Not behind the access proxy; logs never record the invite code. Invites are personal (revocable by the publisher) or short-lived capped promo codes; redemption is a 2-minute single-use hand-off to a `__Host-` session cookie; hashes only; per-member device cap. Routing is by proxied **path**, never by a header. |
 | Website | `www.example.com` + apex | nginx static site + contact API |
 | Vault (interactive) | `dav.example.com` | nginx → Nextcloud :8090 (web UI, WebDAV/CalDAV/CardDAV) |
-| Vault (automation) | `cloud.example.com` | nginx → Nextcloud, vault WebDAV path only (`/` 404 by design) |
+| Vault (automation) | `cloud.example.com` | nginx → Nextcloud, ~~vault WebDAV path only~~ (`/` 404 by design) (corrected 2026-10-25: the vault's WebDAV subtree plus the bare DAV root, `status.php` and the CalDAV/CardDAV well-known redirects; everything else 404) |
 | Other services | `ntfy.`, `openwebui.`, `pihole.` `example.com` | nginx → services |
 | Retired MCP host | `mcp.example.com` | tunnel ingress `http_status:404` |
 | **Tailnet-only** | `<node>.<tailnet>.ts.net` | nginx 443 (tailnet cert) → runner :8001; `/console` → web :8000 (the public API vhost 404s `/console`; the app 404s it on any other Host). Not resolvable or reachable from the internet. |
+
+(unverified 2026-10-25: the access-proxy statements in this table, which
+hostnames sit behind the vendor's identity-aware access and which paths
+bypass it; that policy lives at the vendor and was not read. The nginx and
+tunnel halves of each row were checked against the live files.)
 
 **Operator console** (`/console`, tailnet name only): sign-in is an
 SSH-signed approval bound to a browser-only nonce (completes on reload, so it
@@ -427,8 +496,13 @@ only; it must never trigger a stack-wide lockdown (anyone could repeat it). Chan
 **restart**: a reload silently keeps the old config, and `nginx -t` passing
 does not mean the reload applied. A honeypot path feeds fail2ban.
 
-**Repo vs live**: nginx vhosts and the tunnel config are tracked and diffed
-against live; every live vhost should be tracked in some repo.
+**Repo vs live**: ~~nginx vhosts and the tunnel config are tracked and diffed
+against live~~ (corrected 2026-10-25: the tunnel config and most vhosts are
+tracked, but only the tunnel config is diffed against live automatically, by
+the daily drift check; the
+tracked vhosts matched live byte-for-byte on 2026-10-26 02:00Z, no script
+compares them, and four live vhosts, the default catch-all, two receiver
+vhosts and the public demo vhost, are tracked in no repo); every live vhost should be tracked in some repo.
 
 ---
 
@@ -457,15 +531,21 @@ operator's push, and can only deny.
 - **Transient** entries: default expiry 6 h after arrival for
   flights/vessels, 3 h for trains, 24 h if no arrival is known; expiry sweep
   every 60 s, flights every 120 s, trains/vessels every 300 s.
-- Every event fires two ntfy pushes: a domain topic and a concise `dispatch`
-  summary. Dedup is forward-only by content hash.
+- ~~Every event fires two ntfy pushes: a domain topic and a concise `dispatch`
+  summary.~~ (corrected 2026-10-25: every event fires two ntfy pushes, a
+  domain topic and a concise `dispatch` summary, except permanent entries
+  whose record routes them to the `bellwether-alerts` override topic; those
+  fire that topic only, with no `dispatch` copy.) Dedup is forward-only by content hash.
 - Flight tracking is local-first: own ADS-B receiver, SWIM flight data,
   locally imported registries, ~~airport FIDS,~~ schedule inference. OOOI phases
   never revert; same-phase source precedence ACARS > SWIM surface > SWIM
   traffic-flow (incl. airline-reported) > TBFM > ADS-B > FIDS. ADS-B never
   asserts landing/in-gate; SWIM beats airline-posted times. Marketing vs
-  operating flight numbers resolve through a codeshare map. An optional
-  FlightAware AeroAPI tier is dormant without a key.
+  operating flight numbers resolve through a codeshare map. ~~An optional
+  FlightAware AeroAPI tier is dormant without a key.~~ (corrected 2026-10-25:
+  the optional AeroAPI watchlist position tier is dormant because its key is
+  unset, but a separate, budgeted AeroAPI gate and baggage fallback is keyed
+  and active: 49 ledgered calls, the latest at 2026-10-26 02:17Z.)
   (corrected 2026-10-15: airport FIDS is gate and baggage enrichment only. It
   is never an identity or tail source, and the OOOI authority gate denies
   every FIDS phase claim; the FIDS rank above only breaks ties. Tail sources
@@ -478,17 +558,24 @@ operator's push, and can only deny.
   and it has no OOOI authority.)
 - Escalating per-family, per-ARTCC topics (`tfms-*`, `tbfm-*`, `fdps-*`,
   `itws-*`, `aim_fns-*` × centre) with per-topic throttle/enable/sanitize via
-  admin routes.
+  admin routes (corrected 2026-10-25: also `stdds-*`, whose surface and
+  safety alerts additionally fire per-airport topics; the zones are eight
+  ARTCC groups).
 
 | Topic | Content | Priority |
 |---|---|---|
-| `tfr-alert` / `hot-alerts` | VIP/high-priority TFR, severe ops events (2026-10-15: each VIP TFR alerts once, with its own FAA text and active window, and again only if the FAA changes it) | 5 |
+| `tfr-alert` / `hot-alerts` | VIP/high-priority TFR, severe ops events (2026-10-15: each VIP TFR alerts once, with its own FAA text and active window, and again only if the FAA changes it) | ~~5~~ (corrected 2026-10-25: `hot-alerts` is 5; `tfr-alert` is 5 for the hot VIP tier, 3 for a VIP-class TFR whose only signal is its security legal basis, and 4 for corrections) |
 | `flight-alerts` / `train-alerts` / `vessel-alerts` | Watchlist events | 2–5 |
 | `dispatch` | Concise bottom line, all events | mirrors source |
 | `cps` | Critical Predictability State changes | 3–5 |
 | `wx-alerts` / `nas-alerts` | Weather / NAS program alerts | 2–5 |
 | `ops-brief` / `ep` / `ep-advance` | Hourly briefs | 2–4 |
 | `ops-health` | Freshness audit, watchdogs, thermal guard | 1–5 |
+
+(unverified 2026-10-25: the priority ranges of the watchlist, `dispatch`,
+weather/NAS and `ops-health` rows were not re-derived; the `cps` 3–5 range
+and the advance-brief topics' 3 (`ep`) and 4 (`ep-advance`) were checked in
+the code.)
 
 Catalog: `docs/ALERT_REFERENCE.md`; rationale: `docs/ALERT_ARCHITECTURE.md`.
 
@@ -508,7 +595,9 @@ revocation or a kill order ends the chain; an operator dead-man (14 days)
 refuses without revoking; a signed hold (≤ 90 days) keeps a grant alive.
 Kill switches: per account, plus one command
 (`scripts/agent-gateway.sh kill-all`) that revokes every connection,
-disables every connector and takes the gateway hostname down; `thaw` is
+disables every connector and ~~takes the gateway hostname down~~ (corrected
+2026-10-25: freezes the gateway, so every OAuth and MCP endpoint answers
+503; the hostname itself stays up); `thaw` is
 signature-gated.
 
 The earlier arrangement — `corporatetravel-dispatch-mcp` behind two OpenAPI
@@ -522,14 +611,18 @@ directory into a dated `retired-20261020/` folder, indexed in `docs/RETIRED.md`.
 ## 10. Second-brain vault & multi-agent coordination (optional layer)
 
 Not required for the platform. A WebDAV (Nextcloud) vault, PARA-organised,
-under a dedicated non-admin account, with ~~every write path running through a
+under a dedicated ~~non-admin~~ account (corrected 2026-10-25: in the reference
+deployment the vault account is a member of Nextcloud's `admin` group,
+user-group table read 2026-10-26 02:31Z), with ~~every write path running through a
 CUI/PII **block** gate~~ (corrected 2026-10-15: a CUI/PII **block** gate that
 each writer calls itself. The WebDAV client's `put()` does not enforce it,
 and some writers in the reference deployment, such as the archival/cleanup
 skills, export analysis and skill snapshots, do not call it) (refuse and
 surface, never silently redact). The vault
-index, semantic layer and knowledge-graph tables live in the platform's
-PostgreSQL. Agents read a scoped set of folders through the API or the
+index, semantic layer ~~and knowledge-graph tables~~ live in the platform's
+PostgreSQL (corrected 2026-10-25: the index and the semantic layer are
+tables; the knowledge graph is a pair of files, `graph.json` and its HTML
+view, under `/var/lib/<prefix>/knowledge_graph/`). Agents read a scoped set of folders through the API or the
 gateway and write only through the signed, create-only workspace route; no
 agent holds vault credentials. Living status: `docs/SECOND_BRAIN_STATUS.example.md`.
 

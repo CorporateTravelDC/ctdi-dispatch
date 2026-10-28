@@ -103,10 +103,10 @@ this isn't a solved problem.
 ## CPU frequency governor (documented 2026-10-15)
 
 The governor is `schedutil` (live check). Two things hold it there:
-`cpupower.service` sets it at boot (`/etc/cpupower-service.conf`), and
+`cpupower.service` sets it at boot (`/etc/cpupower-service.conf`; re-checked 2026-10-25 21:51Z: `GOVERNOR=schedutil`, unit enabled -- a oneshot, so it reads `inactive` after boot), and
 `corporatetraveldc-governor-watch.timer` (user, every 6 h,
 `scripts/governor-watch.py`) puts it back if it drifts, using a pinned
-passwordless `cpupower frequency-set -g schedutil` sudo entry and waiting
+passwordless `cpupower frequency-set -g schedutil` sudo entry (unverified 2026-10-25: sudoers is root-only) and waiting
 for any running inference to finish first. tuned is running, but the active
 profile is the stock `throughput-performance`. The tracked
 `config/tuned/throughput-performance-schedutil` profile is **not** active.
@@ -152,7 +152,7 @@ exactly as the standing caveat below predicts:
 
 | Device | Identifier | Protocol / freq | Bus path (live 2026-10-06) | Symlink |
 |---|---|---|---|---|
-| RTL-SDR dongle | serial `ACARS0130` | VDL-M / ACARS (dumpvdl2, 136.650–136.975 MHz) | `1-2` | `/dev/rtl_sdr_acars` → `bus/usb/001/003` |
+| RTL-SDR dongle | serial `ACARS0130` | VDL-M / ACARS (dumpvdl2, 136.650–136.975 MHz) | `1-2` | `/dev/rtl_sdr_acars` → ~~`bus/usb/001/003`~~ (superseded 2026-10-25: `bus/usb/001/002` after the 2026-10-22 boot; `ls -l /dev/rtl_sdr_*` 21:51Z -- bus path `1-2`, serial and symlink name unchanged) |
 | RTL-SDR dongle | serial `ADSB1090` | ADS-B (ultrafeeder/readsb, 1090 MHz) | `3-2` | `/dev/rtl_sdr_adsb` → `bus/usb/003/002` |
 | Multifunction Composite Gadget (GCT Semiconductor, `1076:a005`) | no serial | USB-tethered cellular modem (Verizon hotspot backup uplink, see `docs/NETWORK_FAILOVER.md`) | `1-1` | — |
 
@@ -194,12 +194,18 @@ bugs but are actually link-layer congestion. See `docs/NETWORK_FAILOVER.md`
 for the current primary/backup uplink topology and the active
 failover watchdog — ~~as of 2026-10-06 this box runs on two independent
 uplinks (Wi-Fi primary, cellular-over-USB backup), not a single link.~~
-(corrected 2026-10-15: the cellular backup uplink, `enu1`, has had no
+~~(corrected 2026-10-15: the cellular backup uplink, `enu1`, has had no
 internet since 2026-10-06 over a pricing issue. It still shows carrier and a
 DHCP lease, but the watchdog probes fail. In practice the box runs on **one**
 working uplink, Wi-Fi, until the operator's planned prepaid SIM is in; a
 primary failure today means no failover. The USB map above still lists the
-hotspot device because it is still plugged in.)
+hotspot device because it is still plugged in.)~~ (corrected 2026-10-25: `enu1`
+reaches the internet again -- the failover watchdog logs `backup=enu1:ok` on
+every minute cycle (`watch.log` 21:20Z, `ok_streak` 1951) and
+`~/.local/state/ctdc-uplink/state.json` shows two consecutive good daily
+checks (~~`up_days: 2`, `announced_stable: false`~~ (superseded 2026-10-25: `up_days` 3, `announced_stable` true at 2026-10-26 22:01Z; `backup=enu1:ok` in 30 of 30 journal cycles over the prior 30 min)). The box is back on two
+working uplinks; an end-to-end failover test since the link returned has not
+been run.)
 
 ---
 

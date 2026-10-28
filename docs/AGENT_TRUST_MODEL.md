@@ -1,6 +1,6 @@
 # Agent and operator trust model
 
-Verified against the code at HEAD and the running system on 2026-10-07 12:00Z–13:30Z / 08:00–09:30 ET; hardening pass applied the same day (status changes are marked inline, the earlier status struck through). Refreshed 2026-10-15 ~01:20Z (UTC; 2026-10-14 21:20 ET) against HEAD 1491bf5a plus the staged next-relay batch and the live database: the approval TTL table (§3), withdraw (§3, §4), live connectors (§7), the audit catalog and the review 09 audit-chain findings (§11, §12, §13), and the superuser database role (§9.7). Review 09 findings R09-1 to R09-4 are **open defects**, not fixed.
+Verified against the code at HEAD and the running system on 2026-10-07 12:00Z–13:30Z / 08:00–09:30 ET; hardening pass applied the same day (status changes are marked inline, the earlier status struck through). Refreshed 2026-10-15 ~01:20Z (UTC; 2026-10-14 21:20 ET) against HEAD 1491bf5a plus the staged next-relay batch and the live database: the approval TTL table (§3), withdraw (§3, §4), live connectors (§7), the audit catalog and the review 09 audit-chain findings (§11, §12, §13), and the superuser database role (§9.7). Review 09 findings R09-1 to R09-4 are **open defects**, not fixed (re-verified 2026-10-25: `pg_schema/0062_audit_tamper_evidence.sql:45-47` still locks then reads `ORDER BY id DESC`, `scheduled-integrity-sweep.sh:112-116` still treats only rc 1 + `"intact": false` as failure, `dispatch` still has `rolsuper = t` and owns `audit_log`, `audit_checkpoints` still 0 rows).
 
 > Review trail: how this document reached its current state, pass by pass, is recorded in `docs/security-reviews/` (start at its `README.md`).
 
@@ -36,7 +36,7 @@ One fallback from the single-operator origin is kept **by design**: an agent ope
 
 **Recommended rollout for anything beyond a single operator:** run every agent in a **confined, organizationally managed agent account** (`<prefix>-agent-<vendor>-<product>`: no sudo, no operator keyrings, no database credentials, its own signing key, liveness-switched) or through the agent gateway. **Agents running in a personal account are not recommended, and in a larger deployment they are not allowed as an organizational policy.** The operator-as-agent fallback exists for the single-operator case only.
 
-**Platform default (operator decision, 2026-10-08; settled, not reopened by reviews).** The operator runs **one remote-control session as themselves, with owner access, serving both Claude and ChatGPT**. Everything beyond that session is **delegated** to confined agent accounts and gateway connectors as above. A separate Claude Code session for Claude may run alongside it. Reviews record this session as the default, not as a finding. <del>It is an **exception**, not part of the model</del> (superseded 2026-10-08 by this paragraph for the owner session; the hygiene points above still apply to it).
+**Platform default (operator decision, 2026-10-08; settled, not reopened by reviews).** The operator runs **one remote-control session as themselves, with owner access, serving both Claude and ChatGPT**. Everything beyond that session is **delegated** to confined agent accounts and gateway connectors as above. A separate Claude Code session for Claude may run alongside it. Reviews record this session as the default, not as a finding. (unverified 2026-10-25: the operator's session arrangement is not observable from code or live state.) <del>It is an **exception**, not part of the model</del> (superseded 2026-10-08 by this paragraph for the owner session; the hygiene points above still apply to it).
 
 ## 1. The one fact that frames everything: the Unix account is the root of trust
 
@@ -45,7 +45,7 @@ Mechanical human authority holds against **every principal that is not running a
 - the team agent accounts (`<prefix>-agent-<vendor>-<product>`): separate Unix users with no sudo, no access to the operator's keyrings, no database credentials, and their own SSH signing key each;
 - cloud agents reaching the platform through the agent gateway (OAuth 2.1 + MCP).
 
-It does **not** hold against code running **as the operator account**. A process running as the operator — including the operator's own interactive agent session, which runs outside `agents.slice` as a designed exception (`docs/AGENT_SEGMENTATION.md`) — can read:
+It does **not** hold against code running **as the operator account**. A process running as the operator — including the operator's own interactive agent session, which runs outside `agents.slice` as a designed exception (`docs/AGENT_SEGMENTATION.md`; unverified 2026-10-25: slice placement of the interactive session not observable here) — can read:
 
 - the database password, the admin API token, and the operator's board signing key, which has no passphrase. (Added 2026-10-15: the application database role is a Postgres **superuser** and owns `audit_log`, so the database password is full database authority, including rewriting the audit chain and disabling its trigger; §9.7, open R09-3);
 - the agent manifest-signing GPG key, which has no passphrase by design;
@@ -159,7 +159,7 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | `council-close` | ~~24 h~~ (corrected 2026-10-15) 25% of the remaining time, bounds 900-7200 s (15 min to 2 h) | `governance.approval_ttl("council-close", remaining_s=...)` |
 | `board-gate` (Cowork board token-gate reply) | ~~kind `sudo`, TTL = the whole time to the gate deadline minus 10 min~~ (corrected 2026-10-16: that TTL exceeded the 600 s sudo cap on every 12 h lead, so `create_approval` refused it and the gate never fired) 10% of the remaining time to the deadline minus the 10 min buffer, default 1800 s, bounds 300-7200 s (5 min to 2 h) | `poller/skills/board_sweep.py` → `governance.approval_ttl("board-gate", remaining_s=...)`; `scripts/approve.sh` template |
 
-~~`governance.COUNCIL_APPROVAL_TTL_S`~~ (24 h) is still defined at `governance.py:57` but nothing in `src/` uses it (2026-10-15).
+~~`governance.COUNCIL_APPROVAL_TTL_S`~~ (24 h) is still defined at ~~`governance.py:57`~~ (corrected 2026-10-25: `governance.py:59`) but nothing in `src/` uses it (2026-10-15; re-checked 2026-10-25, 0 references outside its definition).
 
 **Withdraw (since 2026-10-11).** The requester may withdraw its own **pending** request: `POST /api/v1/approvals/{id}/withdraw`, board-signed by the requester (`governance.withdraw_approval`). It moves `pending` to `withdrawn` only, is power-reducing (needs no approver signature), and is audited (`approval.withdrawn`). A requester still cannot allow or deny its own request. A council whose approval is expired, withdrawn or denied follows it to that status instead of staying `requested` (`governance._reconcile_councils`, audited as `council.status`).
 
@@ -194,8 +194,8 @@ The signature is an SSH signature (`ssh-keygen -Y sign`) in the namespace `corpo
 | Path | Result | Evidence |
 |---|---|---|
 | Public internet via the tunnel | **no route** | every tunnel ingress targets the local reverse proxy by public hostname; the public dispatch vhost has `location ^~ /console { return 404; }`; the tunnel cannot present the overlay hostname |
-| LAN | **blocked** | the reverse proxy listens on all interfaces, but the LAN firewall zone admits only ssh, mdns, samba-client, dhcpv6 and port 80; port 80 for the console host only redirects to HTTPS on the overlay name |
-| Overlay VPN (currently Tailscale) | **reachable** | the overlay interface sits in a trusted firewall zone; the overlay vhost proxies `/console`; the app also listens on the overlay address |
+| LAN | **blocked** | the reverse proxy listens on all interfaces, but the LAN firewall zone admits only ssh, mdns, samba-client, dhcpv6 and port 80; port 80 for the console host only redirects to HTTPS on the overlay name (unverified 2026-10-25: firewalld zone contents are root-only; `/console` on the public vhost returns nginx 404 and the tailnet vhost serves it, verified live) |
+| Overlay VPN (currently Tailscale) | **reachable** | the overlay interface sits in a trusted firewall zone (unverified 2026-10-25: root-only); the overlay vhost proxies `/console`; the app also listens on the overlay address |
 | Processes on the host itself | **reachable** | loopback and the host's own addresses are not filtered; this includes the team agent accounts |
 | App Host check (`CONSOLE_HOSTS`) | defence in depth only | other Host headers get 404, but Host is client-controlled, so this is **not** a network control |
 
@@ -251,7 +251,7 @@ Namespaces are distinct (`board`, `approval`, `kill`), so a signature cannot be 
 
 ## 7. Agent connectors and the gateway (F, G, H)
 
-`src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`. One MCP endpoint per agent identity, `/mcp/<slug>`, each mapped to its own team account (live today: ~~`cowork` and `claude-code`, each a distinct account~~ (corrected 2026-10-15 from `agent_connectors`: four enabled connectors, `chatgpt`, `claude-code`, `codex` and `cowork`, mapped to four distinct accounts; `chatgpt`, `codex` and `cowork` each have one active connection, `claude-code`'s connection is dormant (`agent_connections`, 2026-10-15))).
+`src/common/agent_gateway.py`, `src/web/routes/agent_gateway.py`. One MCP endpoint per agent identity, `/mcp/<slug>`, each mapped to its own team account (live today: ~~`cowork` and `claude-code`, each a distinct account~~ (corrected 2026-10-15 from `agent_connectors`: four enabled connectors, `chatgpt`, `claude-code`, `codex` and `cowork`, mapped to four distinct accounts; ~~`chatgpt`, `codex` and `cowork` each have one active connection, `claude-code`'s connection is dormant (`agent_connections`, 2026-10-15)~~ (corrected 2026-10-25 from `agent_connections`: `chatgpt`, `claude-code` and `cowork` each have one active connection; `cowork` also carries one dormant and one revoked row; `codex` has two revoked connections and none active; all four connectors remain enabled))).
 
 ### 7.1 Identity separation (F)
 
@@ -440,7 +440,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 
 - **Deleting the newest rows is not detected (R09-2).** The remaining rows still verify, and nothing compares the head with an earlier one: the sweep only *logs* `head_hash` to the journal and never reads it back. "Journaled head hashes are the current anchor" is therefore an after-the-fact manual reconstruction aid, not an automatic check. `audit_checkpoints` has 0 rows live (its only writer, the audit-log-archive skill, inserts one only when it archives rows older than 90 days; the oldest row is from 2026-08-16), so no signed anchor exists (R02 open item).
 - **Concurrent writers can fork the chain (R09-1).** The trigger (`src/common/pg_schema/0062_audit_tamper_evidence.sql:45-48`) takes its advisory lock *after* the row's id is assigned and then chains to `ORDER BY id DESC LIMIT 1`; the verifier walks rows in id order. Two concurrent inserts can therefore chain out of id order and the sweep would report a break with no tampering. Review 09 reproduced it in 5 of 5 runs with 20 concurrent writers; the 96 sweeps of the last 24 h reported intact.
-- **A verifier error is reported as healthy (R09-4).** `scheduled-integrity-sweep.sh:104-108` treats only rc 1 *with* `"intact": false` in the output as a failure. Any other non-zero result, including a verifier exception (rc 1 with a traceback) or a down web container, logs "audit chain check unavailable" as a warning, the sweep stays OK and nothing is pushed.
+- **A verifier error is reported as healthy (R09-4).** ~~`scheduled-integrity-sweep.sh:104-108`~~ (corrected 2026-10-25: `scripts/scheduled-integrity-sweep.sh:111-117`) treats only rc 1 *with* `"intact": false` in the output as a failure. Any other non-zero result, including a verifier exception (rc 1 with a traceback) or a down web container, logs "audit chain check unavailable" as a warning, the sweep stays OK and nothing is pushed.
 - **The application role is a superuser and owns `audit_log` (R09-3)**, §9.7: anyone with the database password can rewrite and re-hash the whole chain or disable the trigger.
 - **Field delimiter (low).** The trigger joins the hashed fields with a bare `|` (no length prefix or escaping), so text could be moved between free-text fields (`remote_addr`, `detail`) by someone with UPDATE access without breaking the chain.
 
@@ -454,7 +454,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | 4 | Identity separation: human and agent keys differ in meaning | **ENFORCED** | separate keys, namespaces and registries; `tests/scripts/test_signing_identities_distinct.py` |
 | 5 | Connector separation | **ENFORCED** | `authenticate()` slug check |
 | 6 | Network separation: no console on the public surface | **ENFORCED** | §5.1 |
-| 7 | Least privilege | **PARTIAL** | connectors have seven bounded tools; console sessions carry full console authority for 8 h; sudo grants are pattern-scoped |
+| 7 | Least privilege | **PARTIAL** | connectors have ~~seven~~ (corrected 2026-10-25: eight, §7.2) bounded tools; console sessions carry full console authority for 8 h; sudo grants are pattern-scoped |
 | 8 | Revocability: agent and reader access revocable independently | **ENFORCED** | separate planes, per-connection and per-grant revocation |
 | 9 | Emergency containment: global controls fail closed | **ENFORCED** | gateway freeze refuses every endpoint; reader freeze refuses every sign-in path |
 | 10 | Explicit reopening | **ENFORCED** for the agent gateway (signed thaw); **NOT ENFORCED** for reader sign-ins (resume needs a session, no signature) | §7.3, §8 |
@@ -482,7 +482,7 @@ Since 2026-10-07 the governance events below are written to the hash-chained `au
 | Agent after kill-all; a link signed after kill-all | refused | `test_kill_all_freezes_everything_and_thaw_needs_a_signature`, `test_a_link_signed_after_kill_all_never_becomes_a_token` |
 | Re-open the gateway without a signature | impossible | thaw is applied only by the `gateway-thaw` approval hook |
 | Console via the public tunnel / LAN | 404 / firewall-blocked | proxy and firewall inspection, safe GETs (§5.1) |
-| Direct invocation bypassing the sudo gate | ~~possible for NOPASSWD patterns~~ **refused (verified live, review 03)**: the only passwordless rule is the root executor, which re-verifies the signature | `sudo -n -l` after the deploy relay; `tests/scripts/test_approved_exec.py` |
+| Direct invocation bypassing the sudo gate | ~~possible for NOPASSWD patterns~~ **refused (verified live, review 03)**: the only passwordless rule is the root executor, which re-verifies the signature | `sudo -n -l` after the deploy relay (unverified 2026-10-25: not re-run; `/etc/sudoers.d` is root-only, the rule is stated from `scripts/approved-exec.py:8-9`); `tests/scripts/test_approved_exec.py` |
 | Agent GPG key used without a grant | **possible for operator-account processes** — the designed exception (§0); not possible for managed agent accounts | key protection and script inspection (§10) |
 | Forged approval row (database write) used to run a root command | refused: the signature must verify against the root-owned pin | `test_a_valid_signature_verifies_and_a_forged_row_does_not` |
 | Approval executed twice; late execution | refused: root ledger with `O_EXCL`; 5-minute window | `test_each_approval_executes_at_most_once`, `test_row_state_and_timing`. (Added 2026-10-15: unit tests only. The live end-to-end run as root, review 09 §E.1, has never been done; the executor's ledger directory `/var/lib/ctdc-approved-exec` does not exist, so it has never consumed an approval. Open, R09-E1.) |

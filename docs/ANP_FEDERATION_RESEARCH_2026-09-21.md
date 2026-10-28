@@ -1,3 +1,5 @@
+> Status 2026-10-25: research record, not rewritten (checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box). No longer current: Tier 1 comes only from a cert-tier bearer token, and tailnet origin grants nothing (already so when this was written); `auth_tokens` also has `department` and `allowed_actions`; there are 39 `require_admin` call sites, not 32; `audit_log.token_prefix` holds the `ctdc_<user>_` prefix, and the table now also has `egress_*` columns and a hash chain (`prev_hash`/`row_hash`, migration 0062, checked every 15 minutes by the integrity sweep); retention is the daily `audit-log-archive` job (90-day horizon, archived to the vault, then deleted), and `db.prune_audit_log()` now raises; the signed manifest covers 1,712 files, and entry-time verification wraps 38 verified-exec units (one-shot skills and demo-api) plus LLM calls, not the long-running web, poller, pusher, runner or ingest containers; MCP is deployed again as the built-in agent gateway (OAuth 2.1, `/mcp/<slug>`), and only the old bridge stays retired.
+
 # ANP Federation — Research and Gap Analysis
 
 **Date:** 2026-09-21
@@ -206,7 +208,7 @@ Grounded in the real code, not the abstract.
 
 **Transport:** Tailscale tailnet for internal/T1 reach; Cloudflare Tunnel
 for narrow public surfaces, with narrowly-scoped CF Access bypass apps for
-specific paths.
+specific paths (unverified 2026-10-25).
 
 **MCP:** retired from deployment 2026-08-18 (checkout archived), repo
 still exists standalone. Architecturally it was a **thin HTTP client over

@@ -34,21 +34,23 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 3)
+        self.assertEqual(len(s), 4)  # 2026-10-26: + shared /srv step
         self.assertIn("groups: ctdc-dev", s[0]); self.assertIn("ctdc-ops", s[0]); self.assertIn("ctdc-agents", s[0])
         self.assertIn("repo: group READ only", s[1])
         self.assertIn("secrets subsets", s[2]); self.assertIn("--profile ops", out); self.assertIn("--profile agent", out)
+        self.assertIn("shared /srv folders", s[3])  # 2026-10-26
         self.assertIn("(dry-run: nothing was executed)", out)
 
     def test_add_agent_ctdc_agent_full_hand_over(self):
         rc, out, err = run(PLAN, "--dry-run", "--add-agent", "ctdc-agent")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 11)
-        self.assertIn("agent account ctdc-agent", s[3])
-        self.assertIn("agents.slice", s[4]); self.assertIn("skill-grants.sh grant ctdc-agent '*'", out); self.assertIn("skill-grants.sh apply --execute", out)
+        self.assertEqual(len(s), 13)  # 2026-10-26: + shared /srv step + agent read-paths step
+        self.assertIn("agent account ctdc-agent", s[4])
+        self.assertIn("agents.slice", s[5]); self.assertIn("skill-grants.sh grant ctdc-agent '*'", out); self.assertIn("skill-grants.sh apply --execute", out)
+        self.assertIn("agent read paths", s[6])  # 2026-10-26: private /srv folder + safe.directory
         self.assertNotIn("SKILLS_LIVE_ROOT", out)   # 2026-10-04: skills are granted (root-owned), never copied by the account
-        self.assertIn("attribution", s[6])
+        self.assertIn("attribution", s[8])
         # the cowork key becomes ctdc-agent's: comment rewritten, removed from the operator, no keygen
         self.assertIn('ctdc-agent@corporatetraveldc-dispatch', out)
         self.assertIn("claude-cowork-dispatch$/d", out)
@@ -57,14 +59,14 @@ class PlanDryRun(unittest.TestCase):
         self.assertIn("ssh-keygen -q -t ed25519 -N '' -C 'ctdc-agent@corporatetraveldc-dispatch' -f /home/ctdc-agent/.ssh/ctdc-agent_ed25519", out)
         self.assertIn("register the SIGNING key", out)
         self.assertIn("git config --global user.name 'ctdc-agent'", out)
-        self.assertIn("sudoers", s[7]); self.assertIn("remote-control", s[8]); self.assertIn("rotate", s[10])
+        self.assertIn("sudoers", s[9]); self.assertIn("remote-control", s[10]); self.assertIn("rotate", s[12])
         self.assertIn("ctdc-agents", out); self.assertIn("useradd", out)
 
     def test_add_second_agent_generates_its_own_key(self):
         rc, out, err = run(PLAN, "--dry-run", "--add-agent", "ctdc-codex")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 8)
+        self.assertEqual(len(s), 10)  # 2026-10-26: + shared /srv step + agent read-paths step
         self.assertIn("ssh-keygen -q -t ed25519 -N '' -C 'ctdc-codex@corporatetraveldc-dispatch'", out)
         self.assertIn("/home/ctdc-codex/.ssh/ctdc-codex_ed25519.pub /home/ctdc-codex/.ssh/authorized_keys", out)
         self.assertNotIn("cowork_ed25519", out)          # never a copy of another account's key
@@ -76,12 +78,12 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run", "--add-human", "alice", "--ssh-pubkey-file", "/tmp/alice.pub")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 6)
-        self.assertIn("human account alice", s[3]); self.assertIn("ctdc-ops", out)
+        self.assertEqual(len(s), 7)  # 2026-10-26: + shared /srv step
+        self.assertIn("human account alice", s[4]); self.assertIn("ctdc-ops", out)
         self.assertIn("/tmp/alice.pub /home/alice/.ssh/authorized_keys", out)
         cmds = "\n".join(l for l in out.splitlines() if l.startswith("   $ "))   # commands only, not titles
         self.assertNotIn("cowork", cmds); self.assertNotIn("ssh-keygen", cmds)
-        self.assertIn("humans.slice", s[5]); self.assertIn("WITH_DISPATCH_ENV_FILES=/etc/ctdc-ops/ops-secrets.env", out)
+        self.assertIn("humans.slice", s[6]); self.assertIn("WITH_DISPATCH_ENV_FILES=/etc/ctdc-ops/ops-secrets.env", out)
         self.assertNotIn("sudoers", out); self.assertNotIn("remote-control", "".join(s))
 
     # ---- account kinds (2026-10-04 17:00 ET): ssh-mode agents, preload, services, activate, rehome
@@ -89,16 +91,16 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run", "--add-agent", "ctdc-agent-cowork", "--login-mode", "ssh", "--ssh-pubkey-file", "/tmp/cowork.pub")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 8)
-        self.assertIn("agent account ctdc-agent-cowork (login-mode ssh)", s[3])
-        self.assertNotIn("PRELOADED", s[3])
+        self.assertEqual(len(s), 10)  # 2026-10-26: + shared /srv step + agent read-paths step
+        self.assertIn("agent account ctdc-agent-cowork (login-mode ssh)", s[4])
+        self.assertNotIn("PRELOADED", s[4])
         # registry line: name kind login_mode preloaded
         self.assertIn("printf '%s %s %s %s\\n' 'ctdc-agent-cowork' 'agent' 'ssh' '0' >> /etc/ctdc-accounts.conf", out)
         self.assertIn("chmod 0644 /etc/ctdc-accounts.conf", out)
         # the client's pubkey becomes the single inbound key, comment rewritten to the account; signing key still generated
         self.assertIn("""awk '{$NF="ctdc-agent-cowork@corporatetraveldc-dispatch"; print}' /tmp/cowork.pub > /home/ctdc-agent-cowork/.ssh/authorized_keys""", out)
         self.assertIn("ssh-keygen -q -t ed25519 -N '' -C 'ctdc-agent-cowork@corporatetraveldc-dispatch' -f /home/ctdc-agent-cowork/.ssh/ctdc-agent-cowork_ed25519", out)
-        self.assertIn("no remote-control unit, the client connects over SSH", s[7])
+        self.assertIn("no remote-control unit, the client connects over SSH", s[9])
         self.assertNotIn("corporatetraveldc-claude-remote-control.service", out)
         self.assertIn("loginctl enable-linger ctdc-agent-cowork", out)
 
@@ -106,8 +108,8 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run", "--add-agent", "ctdc-agent-codex", "--preload")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 8)
-        self.assertIn("login-mode claude, PRELOADED", s[3])
+        self.assertEqual(len(s), 10)  # 2026-10-26: + shared /srv step + agent read-paths step
+        self.assertIn("login-mode claude, PRELOADED", s[4])
         self.assertIn("chage -E 0 ctdc-agent-codex", out)
         self.assertNotIn("loginctl enable-linger ctdc-agent-codex", out)
         self.assertIn("'ctdc-agent-codex' 'agent' 'claude' '1' >> /etc/ctdc-accounts.conf", out)
@@ -121,8 +123,8 @@ class PlanDryRun(unittest.TestCase):
             rc, out, err = run(PLAN, *args)
             self.assertEqual(rc, 0, err)
             s = steps(out)
-            self.assertEqual(len(s), 6, name)
-            self.assertIn(f"service account {name} (kind service, login-mode none", s[3])
+            self.assertEqual(len(s), 7, name)  # 2026-10-26: + shared /srv step
+            self.assertIn(f"service account {name} (kind service, login-mode none", s[4])
             self.assertIn(f"--shell /usr/sbin/nologin --groups ctdc-dev,ctdc-agents --comment 'service identity, never logs in, no sudo' {name}", out)
             self.assertIn(f"'{name}' 'service' 'none' '{1 if preload else 0}' >> /etc/ctdc-accounts.conf", out)
             self.assertIn(f"rm -f /home/{name}/.ssh/authorized_keys", out)          # no inbound key
@@ -132,9 +134,9 @@ class PlanDryRun(unittest.TestCase):
             self.assertNotIn("loginctl enable-linger", out)
             self.assertNotIn("agents.slice", out); self.assertNotIn("remote-control", "".join(s)); self.assertNotIn("sudoers", "".join(s))
             if preload:
-                self.assertIn("PRELOADED", s[3]); self.assertIn(f"chage -E 0 {name}", out); self.assertIn(f"deactivate {name} preloaded", out)
+                self.assertIn("PRELOADED", s[4]); self.assertIn(f"chage -E 0 {name}", out); self.assertIn(f"deactivate {name} preloaded", out)
             else:
-                self.assertNotIn("PRELOADED", s[3]); self.assertNotIn("chage -E 0", out); self.assertNotIn("deactivate", out)
+                self.assertNotIn("PRELOADED", s[4]); self.assertNotIn("chage -E 0", out); self.assertNotIn("deactivate", out)
 
     def test_activate_switching_to_codex_mode(self):
         """2026-10-08: --activate NAME --login-mode codex flips the registry, installs the
@@ -166,8 +168,8 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run", "--activate", "ctdc-agent-codex")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 4)
-        self.assertIn("activate preloaded account ctdc-agent-codex", s[3])
+        self.assertEqual(len(s), 5)  # 2026-10-26: + shared /srv step
+        self.assertIn("activate preloaded account ctdc-agent-codex", s[4])
         self.assertIn("chage -E -1 ctdc-agent-codex", out)
         self.assertIn("usermod -U ctdc-agent-codex 2>/dev/null || usermod -p '*' ctdc-agent-codex", out)
         self.assertIn("loginctl enable-linger ctdc-agent-codex", out)
@@ -179,8 +181,8 @@ class PlanDryRun(unittest.TestCase):
         rc, out, err = run(PLAN, "--dry-run", "--rehome-inbound-key", "ctdc-agent", "ctdc-agent-cowork")
         self.assertEqual(rc, 0, err)
         s = steps(out)
-        self.assertEqual(len(s), 4)
-        self.assertIn("rehome inbound key", s[3])
+        self.assertEqual(len(s), 5)  # 2026-10-26: + shared /srv step
+        self.assertIn("rehome inbound key", s[4])
         self.assertIn("""awk '{$NF="ctdc-agent-cowork@corporatetraveldc-dispatch"; print}' /home/ctdc-agent/.ssh/authorized_keys > /home/ctdc-agent-cowork/.ssh/authorized_keys""", out)
         self.assertIn("install -m 0600 -o ctdc-agent -g ctdc-agent /home/ctdc-agent/.ssh/ctdc-agent_ed25519.pub /home/ctdc-agent/.ssh/authorized_keys", out)
         self.assertNotIn("userdel", out); self.assertNotIn("useradd", out)

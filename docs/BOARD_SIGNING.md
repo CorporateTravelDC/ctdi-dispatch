@@ -93,9 +93,16 @@ scripts/board-signer-ctl.sh register corporatetraveldc ~/.ssh/corporatetraveldc_
 2026-10-06 17:18Z liveness run reported `key=active` for
 `ctdc-agent-anthropic-claude`, `ctdc-agent-llama` and
 `ctdc-agent-anthropic-cowork`.]~~ (corrected 2026-10-15, counts from
-`board_signers`: one active `human`/`admin` (the operator), three active
+`board_signers`: one active `human`/`admin` (the operator), ~~three active
 `agent`/`member`, two active `service`/`service`, and one inactive
-`service`/`service` (the preloaded `ctdc-agent-dispatch`). `approval_signers`
+`service`/`service` (the preloaded `ctdc-agent-dispatch`).~~ (corrected
+2026-10-25 from `board_signers`: three active `agent`/`member`
+(anthropic-claude, anthropic-cowork, openai-chatgpt), one active
+`service`/`service` (llama), and two inactive rows -- `ctdc-agent-dispatch`
+(`service`/`service`, preloaded) and `ctdc-agent-openai-codex`
+(`agent`/`member`, made inert by the liveness switch 2026-10-22).) (Superseded 2026-10-25: a fourth active
+`agent`/`member`, `ctdc-agent-anthropic-claude-ea`, was registered 2026-10-26; live 2026-10-26 21:59Z: 4 active and
+1 inactive `agent`/`member`, 1 active `human`/`admin`, 1 active and 1 inactive `service`/`service`.) `approval_signers`
 has one row. The 01:05Z liveness run reported `key=active` for every account
 except the preloaded one.)
 
@@ -121,11 +128,15 @@ thread. For each message it parses a deadline, and 12 h before it
 (`_GATE_LEAD_HOURS`) creates a `sudo`-kind approval request whose TTL runs to
 10 min before the deadline, pushes it, and posts `GATE: APPROVED/DENIED` back
 to the thread once it is resolved or expired: the one write in an otherwise
-read-only sweep. It authorises nothing the server enforces. **Known conflict
+read-only sweep. It authorises nothing the server enforces. ~~**Known conflict
 (open, code):** a 12 h lead gives a TTL of about 42,600 s, but `sudo` requests
 are capped at 600 s (`governance.APPROVAL_TTL_POLICY`), so `create_approval`
 refuses it; only a message with no parsable deadline (TTL 60 s) or one first
-seen within ~20 min of its deadline (TTL <= 600 s) still produces a request.
+seen within ~20 min of its deadline (TTL <= 600 s) still produces a request.~~
+(superseded 2026-10-25: resolved 2026-10-16 -- `board_sweep.py:226-232` now
+creates kind `board-gate` with `governance.approval_ttl("board-gate",
+remaining_s=...)`, policy `(1800, 300, 7200)` at `governance.py:212`, so the
+`sudo` cap no longer applies; see AGENT_TRUST_MODEL §3.)
 
 The liveness switch treats any one of them as a kill: an inactive signer, a
 token revocation within the last 24 h, a failed login factor, or an
@@ -163,7 +174,7 @@ list
 
 Schema: `src/common/pg_schema/0066_board_signers.sql`,
 `0067_board_authz_tiers.sql` (sqlite twin `db._ensure_board_auth`). Tests:
-`tests/web/test_board_signer.py` (22), `tests/web/test_board_thread_gating.py`.
+`tests/web/test_board_signer.py` (~~22~~ 23, 2026-10-25), `tests/web/test_board_thread_gating.py`.
 
 ---
 

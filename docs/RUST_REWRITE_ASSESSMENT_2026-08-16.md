@@ -1,12 +1,14 @@
 # Full Rust Rewrite Assessment — ctdi-dispatch-internal
 
+> Status 2026-10-25: dated assessment (2026-08-16, premise note 2026-09-20); no Rust rewrite has started. No longer current: platform SQLite is retired — `DISPATCH_DB_BACKEND=sqlite` now raises `SqliteRetired` outside the test suite; Ollama is retired (inference is one llama.cpp server, Qwen3-4B); the poller has 16 fetcher modules and 48 skill modules; the GUFI-vs-callsign TBFM join cited in §3 is not present in current code. Inline corrections are marked.
+
 **Premise update, 2026-09-20 (still an open, unscheduled exploratory
 assessment — no rewrite has started):** this document was written when the
 persistence layer was SQLite. The write path, the 11 reference tables, the
 second-brain vault index, and the last two live app-level SQLite stores
 (`dispatch-chat.db`, `demo.db`/`demo_access.db`) have since moved to
 Postgres (`docs/POSTGRES_MIGRATION.md`); `DISPATCH_DB_BACKEND=sqlite`
-survives only as a dev/rollback path. Every "the SQLite layer"/`rusqlite`
+~~survives only as a dev/rollback path~~ (corrected 2026-10-25: superseded — it now raises `SqliteRetired` unless `CTDC_ALLOW_SQLITE_FOR_TESTS=1`, `src/common/db_backend.py:173-207`). Every "the SQLite layer"/`rusqlite`
 reference below describes what a Rust port would have needed to target in
 August; a port undertaken today would target the Postgres access layer
 (`common/db_backend.py`, `psycopg[binary,pool]`) instead — a different,
@@ -24,8 +26,8 @@ Target hardware unchanged: a single Raspberry Pi 5 (aarch64, **16 GB** —
 15 GiB usable; corrected 2026-08-23, this line originally said 8 GB, which
 was never this deployment's board and does not match live `free -h` or
 `docs/HARDWARE_GUIDANCE.md` §RAM), podman,
-SQLite (Postgres since the 2026-09-20 cutover — see the note above), local
-Ollama, Nextcloud/WebDAV, ntfy, Pushover, Cloudflare tunnel.
+SQLite (Postgres since the 2026-09-20 cutover — see the note above), ~~local
+Ollama~~ (corrected 2026-10-25: superseded — a local llama.cpp server, `corporatetraveldc-llama.service`; Ollama is retired), Nextcloud/WebDAV, ntfy, Pushover, Cloudflare tunnel.
 
 Bottom line up front: the ingest layer (SWIM Solace + XML parsing + geo
 filter + dedup) is where Rust pays for itself — it is long-running, native,
@@ -56,7 +58,7 @@ Python `common/config.py`, `common/db.py`/`common/db_backend.py`, and
 `common/sr1_log.py` equivalents land.
 
 **Stage 1 — the poller fetchers (`ctdc-poller`).**
-Lowest risk, highest surface: ~30 HTTP fetchers (metar, notam, nws, tfr,
+Lowest risk, highest surface: ~~\~30 HTTP fetchers~~ (corrected 2026-10-25: `src/poller/fetchers/` holds 16 fetcher modules at 5f7fca01) (metar, notam, nws, tfr,
 fids, amtrak, faa_registry, eurocontrol, jasdat, opensky, ...). Each is a
 pure `reqwest` GET + parse + DB upsert. No shared mutable state, no
 lifetimes to fight. Port fetcher-by-fetcher; run the Rust poller against a
@@ -65,7 +67,7 @@ scratch DB and diff its writes against the Python poller's for a week.
 
 **Stage 2 — the SWIM ingest layer (`ctdc-ingest`).** The main event; see §2.
 Per-feed binaries (fdps/tfms/tbfm/stdds/itws/notam/aim) sharing one crate,
-matching today's 7-container split. This is where Rust's guarantees matter.
+~~matching today's 7-container split~~ (corrected 2026-10-25: today's 7 ingest containers are ingest-core plus fdps, stdds, tfms, tbfm, itws and notam — the notam unit carries the AIM/FNS feed — all on one image, split by environment). This is where Rust's guarantees matter.
 
 **Stage 3 — pusher + shared dedup/throttle (`ctdc-pusher`, `ctdc-dedup`).**
 Port `push_dedup.py` (now flock+mtime-merge — trivial and *more natural* in
@@ -80,7 +82,7 @@ Straightforward but voluminous; the auth model (X-CTDI-Public → Tier 0
 before token lookup) ports cleanly and becomes a typed middleware.
 
 **Stage 5 — skills, LLM, second-brain (`ctdc-skills`).**
-The hardest to justify (see §5 cons): ~40 skills that are mostly "pull rows,
+The hardest to justify (see §5 cons): ~~\~40 skills~~ (corrected 2026-10-25: superseded — `src/poller/skills/` holds 48 skill modules at 5f7fca01) that are mostly "pull rows,
 build a prompt, call Ollama, write a narrative + fire ntfy." Rust's win here
 is near zero (the work is I/O and string templating) and its cost is real
 (no Jinja-ish ergonomics, more ceremony per skill). Port last, or never —
@@ -111,7 +113,7 @@ A Rust port changes the failure surface:
 - **XML.** `quick-xml` (streaming, pull-based) or `serde-xml-rs`/`yaserde`
   (derive structs). The pragmatic choice for these FAA schemas is `quick-xml`
   in streaming mode with hand-written matchers, because the messages are
-  large, batched (a single asdexMsg carries up to ~51 positionReports), and
+  large, batched (a single asdexMsg carries up to ~51 positionReports (unverified 2026-10-25)), and
   namespace-noisy — deriving exhaustive structs for FDPS/TFMS/TBFM/STDDS is
   more work than the streaming state machine and less tolerant of the "same
   msgType, two document shapes" reality (fiOutput vs fltdOutput). Streaming
@@ -159,8 +161,8 @@ runtime-hope to compile-time-guarantee.
   error. Every one of the 6 collapsed call sites would have failed to
   compile. This single pattern justifies the newtype discipline platform-wide
   (TfrId, Callsign, Hex, FacilityId, Gufi — today all bare `str`, freely and
-  wrongly interchangeable; recall flight_events.flight_id is a GUFI but is
-  matched against tbfm callsigns elsewhere).
+  wrongly interchangeable; recall flight_events.flight_id is a GUFI ~~but is
+  matched against tbfm callsigns elsewhere~~ (corrected 2026-10-25: superseded — `flight_id` is still a GUFI (513 of 513 sampled rows UUID-shaped), but no current `tbfm_sequences` read keys on it: the arrival enrichment joins on `airline || flight_num`, `src/poller/skills/tbfm_arrival_enrichment.py:71-78`, and the other readers pass callsigns)).
 - **The `hot=True` bypass.** A `bool` positional flag that silently disables
   the whole mechanism. In Rust model it as `enum Urgency { Normal, Hot }` (or
   don't give the function the flag at all and expose a separate `force_push`)
@@ -231,11 +233,11 @@ runtime-hope to compile-time-guarantee.
 
 ## 4. Reimplementing the guardrails
 
-The platform's guarantees must survive the port. All four already write to
+The platform's guarantees must survive the port. ~~All four already write to
 the same audit trail (SQLite when this was written; Postgres's `audit_log`
 table since the 2026-09-20 cutover — see the premise note at the top of this
 doc), which stays the shared contract between Rust and any not-yet-ported
-Python during the staged migration.
+Python during the staged migration.~~ (corrected 2026-10-25: only the audit writer (`db.audit()` callers) and the dormant SR1/SR2 functions (`src/common/guardrails.py:66-169`) write the Postgres `audit_log` table; `src/second_brain/scrub_gate.py` and `src/common/push_dedup.py` contain no `audit_log` writes.)
 
 - **Scrub gate (CUI/PII block-not-redact).** `second_brain/scrub_gate.py`'s
   `gate()` is pattern matching over text that BLOCKS (raises) on CUI radio
