@@ -262,6 +262,11 @@ curl -s -o /dev/null -w 'anon research %{http_code}\n' 'http://127.0.0.1:8000/ap
 # so it goes through the same request-and-approve flow rather than a
 # static passwordless sudoers line -- see scripts/sudo-approval-gate.sh.
 # FROM_REFRESH (unattended stack-refresh) never raises an approval request
+# Both delivery channels are part of a successful deployment, including unattended refresh.
+if ! "$REPO/scripts/agent-pamphlet-refresh.sh"; then
+  echo "pamphlet delivery failed; deployment acceptance incomplete" >&2
+  exit 1
+fi
 if [[ $FROM_REFRESH == 1 ]]; then echo "$(date +%T)  final load $(load)  ($(guard))"; exit 0; fi
 # 2026-10-05: no approval at all -- this script runs as the operator, who OWNS
 # dispatch-secrets.env (0600), so `sudo` was never needed; the gate turned a

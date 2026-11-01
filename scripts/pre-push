@@ -23,6 +23,9 @@ set -euo pipefail
 unalias grep 2>/dev/null || true
 unset -f grep 2>/dev/null || true
 
+# Common all-origin skill catalog is mandatory before release.
+python3 -B "$(git rev-parse --show-toplevel)/scripts/skills-catalog.py" || exit 1
+
 remote="${1:-}"
 remote_url="${2:-}"
 
@@ -165,7 +168,10 @@ while read local_ref local_sha remote_ref remote_sha; do
                     [[ -z "$cand_line" ]] && continue
                     window=$(echo "$cand_line" | grep -oE ".{0,20}(${pattern}).{0,20}" | head -1)
                     [[ -z "$window" ]] && window="$cand_line"
-                    if ! echo "$window" | grep -qE "CHANGE_ME|YOUR_|example|placeholder|REDACTED|<[^>]*>|\.\.\."; then
+            # 2026-11-01: an all-x value right after the prefix (ghp_xxx in a vendor
+            # doc example) is a placeholder; any letter or digit after the x run
+            # still matches, so a real token beginning with xxx is not exempted.
+                    if ! echo "$window" | grep -qE "CHANGE_ME|YOUR_|example|placeholder|REDACTED|<[^>]*>|\.\.\.|_x{3,}([^A-Za-z0-9]|$)"; then
                         if ! echo "$window" | grep -qi "deadbeef"; then
                             matches="${matches}${cand_line}"$'\n'
                         fi

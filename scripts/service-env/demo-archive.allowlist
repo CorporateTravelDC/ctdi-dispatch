@@ -1,0 +1,7 @@
+# Promoted-demo reader keys only, from /etc/corporatetraveldc/demo.env.
+# No DISPATCH_ROLE/isolation override and no demo admin/session credential.
+DEMO_PG_HOST
+DEMO_PG_PORT
+DEMO_PG_DB
+DEMO_PG_USER
+DEMO_PG_PASSWORD

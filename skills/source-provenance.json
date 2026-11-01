@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "version_controlled_author": "CorporateTravelDC",
+  "captured_utc": "2026-10-29T12:08:49.041361+00:00",
+  "openai_imports": [],
+  "anthropic_followup": "All 16 pinned vendor trees reproduced from this agent's granted copies and migrated into the common signed catalog. Native Claude reconciliation remains a delivery mechanism; rollout not executed.",
+  "common_catalog": "skills/catalog.json"
+}

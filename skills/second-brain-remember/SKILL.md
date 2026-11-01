@@ -7,6 +7,20 @@ description: "Capture a quick fact, quote, or note into the corporatetraveldc se
 
 Writes a manual note into the corporatetraveldc second-brain vault (Nextcloud, `corporatetraveldc/01-Sources/manual/`), through the same CUI/PII scrub gate and index pipeline as the automated ingest paths (daily digest, weekly compile, RSS poller).
 
+## Segmented agents (2026-10-29 correction)
+
+For a segmented agent account, capture through your OWN connector's
+`workspace_contribute` (task, title, content). This route is live, create-only
+and attributed; read back the returned path with `research_read` to confirm.
+The operator can promote the contribution to the canonical casebook or other
+vault location. Never overwrite that canonical note yourself.
+
+The `/api/v1/remember`, CLI and shared-token examples below describe operator
+paths, not agent fallbacks. Do not seek `DISPATCH_ADMIN_TOKEN`, raw WebDAV or
+another account's connector. If your own workspace route is unavailable,
+prepare a local draft for the operator and report it as unsaved to the vault.
+Do not run signing helpers while the no-signing/key-access rule applies.
+
 ## Trigger
 
 Any request to capture a standalone fact, quote, decision, or observation for later reference — "remember this", "add to the second brain", "note that...", "save this for the vault". Not for structured operational data (flights, TFRs, briefs) — those have their own automated ingest paths. This is for the ad hoc stuff that would otherwise only live in chat.
@@ -29,7 +43,7 @@ Optional fields (~~added 2026-10-15~~ (corrected 2026-10-25: first added in comm
 only when the operator wrote the text) and `author_name`. The route needs an
 admin token with the `vault.remember` action.
 
-`tags` is optional — defaults to `manual,high-priority` server-side if omitted. Always use the Tailscale base URL (`http://100.x.x.x:8000`); the Cloudflare Tunnel strips auth tokens on token-gated routes.
+`tags` is optional — defaults to `manual,high-priority` server-side if omitted. Always use the Tailscale base URL (`http://100.x.x.x:8000`); the public proxy resolves requests as public, so gated routes deny them.
 
 ## Response
 

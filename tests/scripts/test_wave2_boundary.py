@@ -113,7 +113,7 @@ def test_verify_fails_an_account_that_can_write_the_repo():
 # -- drift check / approvals / pamphlet ---------------------------------------------
 
 def test_drift_check_reports_failed_system_units():
-    d = read("scripts/check-claude-md-drift.sh")
+    d = read("scripts/check-platform-drift.sh")
     assert re.search(r"systemctl list-units [^\n]*--state=failed", d)
     assert "SYSTEM unit" in d
 

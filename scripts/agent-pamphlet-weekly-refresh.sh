@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/agent-pamphlet-weekly-refresh.sh
 #
-# Re-renders and re-publishes every cloud agent account's vault PAMPHLET.md
+# Re-renders and re-publishes every activated agent/service account's vault PAMPHLET.md
 # from the CURRENT, already-committed scripts/agent-segmentation/
 # onboarding-template.md + docs/glossary.yaml. This job does not edit any
 # tracked file -- a template or glossary content change is still a
@@ -12,24 +12,32 @@
 # session -- there is no cache to bust) without anyone having to remember
 # to re-run the publish step by hand after a template/glossary commit.
 #
-# On-box accounts (Claude Code, Codex, llama) are NOT covered here:
-# `render-onboarding.sh <account> --install` needs root, and this unit runs
-# as the operator user, not root. Those three still need a periodic,
-# operator-run (or a separate root-run unit, not built here) re-install.
+# This leaf publishes vault editions. The deployment/weekly entrypoint is
+# agent-pamphlet-refresh.sh, which also requests and verifies the installed
+# root-managed local delivery service. It never gives the publisher root.
 #
 # Usage: scripts/agent-pamphlet-weekly-refresh.sh   # called by the timer
 set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 
-CLOUD_ACCOUNTS=(ctdc-agent-anthropic-cowork ctdc-agent-openai-codex ctdc-agent-openai-chatgpt)
-ON_BOX_ACCOUNTS=(ctdc-agent-anthropic-claude ctdc-agent-llama)
+# Read the registry each run: Codex is on-box; service identities do not
+# necessarily run in Anthropic's cloud. No account list is hard-coded here.
+REGISTRY="${CTDC_ACCOUNTS_FILE:-/etc/ctdc-accounts.conf}"
+[[ -r "$REGISTRY" ]] || { echo "account registry unreadable; nothing published" >&2; exit 66; }
+mapfile -t ACCOUNTS < <(awk '$1 !~ /^#/ && ($2=="agent" || $2=="service") && $4==0 {print $1}' "$REGISTRY")
+(( ${#ACCOUNTS[@]} )) || { echo "no active registry accounts; nothing published" >&2; exit 65; }
+ON_BOX_ACCOUNTS=()
+while read -r acct kind login preload extra; do
+    [[ "$acct" =~ ^ctdc-[a-z0-9-]+$ && "$kind" == agent && "$preload" == 0 ]] || continue
+    case "$login" in claude|codex|ssh) ON_BOX_ACCOUNTS+=("$acct") ;; esac
+done <"$REGISTRY"
 
 echo "[agent-pamphlet-weekly-refresh] $(date -u '+%Y-%m-%dT%H:%M:%SZ') start"
 
 fail=0
-for acct in "${CLOUD_ACCOUNTS[@]}"; do
-    if scripts/with-dispatch-env.sh env PYTHONPATH="${REPO_DIR}/src" bash \
+for acct in "${ACCOUNTS[@]}"; do
+    if scripts/with-dispatch-env.sh env CTDC_ACCOUNTS_FILE="$REGISTRY" PYTHONPATH="${REPO_DIR}/src" bash \
         scripts/agent-segmentation/publish-pamphlet-to-vault.sh "${acct}"; then
         :
     else
@@ -38,10 +46,7 @@ for acct in "${CLOUD_ACCOUNTS[@]}"; do
     fi
 done
 
-echo "[agent-pamphlet-weekly-refresh] on-box accounts (${ON_BOX_ACCOUNTS[*]}) are not installed by this job -- it has no root. Run, as the operator, for each:"
-for acct in "${ON_BOX_ACCOUNTS[@]}"; do
-    echo "    sudo scripts/agent-segmentation/render-onboarding.sh ${acct} --install"
-done
+echo "[agent-pamphlet-weekly-refresh] local accounts (${ON_BOX_ACCOUNTS[*]}) are delivered by corporatetraveldc-agent-pamphlet-install.service; use agent-pamphlet-refresh.sh for both channels"
 
 echo "[agent-pamphlet-weekly-refresh] $(date -u '+%Y-%m-%dT%H:%M:%SZ') done (exit ${fail})"
 exit "${fail}"

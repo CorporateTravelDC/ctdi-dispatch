@@ -16,10 +16,12 @@ IP on a vendor's infrastructure.
 
 ## Where skills live now
 
+Retired 2026-11-01 (operator): the OpenAI skill imports prepared 2026-10-29 were removed before landing; no OpenAI-origin skill ships in this tree.
+
 | Location | What | Integrity |
 |---|---|---|
 | `skills/<name>/` in this repo (~~8~~ (corrected 2026-10-25: superseded -- 14 since 2026-10-16, when `c4df48d9` added `adversarial-doc-refresh`, `adversarial-pentest`, `adversarial-sweep`, `adversarial-sweep-docs-first`, `adversarial-sweep-docs-first-revalidated` and `adversarial-sweep-pentest-first-revalidated`; the operator's live copies still match: `skills-sync.sh check` from the clean main tree on 2026-10-26 reports 15 tracked, 0 divergent, 0 missing-live) -- the original 8: `corporatetraveldc-dispatch-ops`, `flight-hifi-track`, `hub-arrivals-lookup`, `linkedin-export-analyzer`, `morning`, `nec-train-hifi-track`, `overwater-adsb-handoff-track`, `second-brain-remember`) | the operator's own skills | covered by the signed tree manifest; the operator's `~/.claude/skills/` copies were byte-identical on 2026-10-06 (and again on 2026-10-15, `diff -rq` per skill). The twin gate is `scripts/skills-sync.sh` (`check` exits 1 on any divergence or missing live copy; `apply --i-am-the-operator` copies repo to live; vendor dirs listed in `scripts/lib/skills-vendor-ignore.txt` are never touched); it runs in stack-refresh's audit and in `check-claude-md-drift.sh`. Provenance and licence of `morning` are not recorded (open) |
-| `skills/vendor-pins.txt` | 16 vendor skills pinned by tree hash (`built-in-browser`, `chrome-browser`, `computer-use`, `deep-research`, `doc-coauthoring`, `docs`, `docx`, `google-workspace`, `import-memory`, `internal-comms`, `mcp-builder`, `pdf`, `pptx`, `skill-creator`, `web-artifacts-builder`, `xlsx`) | the pin file is signed; the vendor bytes are **not** committed (several are proprietary-licensed) |
+| `skills/vendor-pins.txt` | 9 vendor skills pinned by tree hash (`chrome-browser`, `docs`, `docx`, `mcp-builder`, `pdf`, `pptx`, `skill-creator`, `web-artifacts-builder`, `xlsx`; seven unused ones removed 2026-11-01) | the pin file is signed; the vendor bytes are **not** committed (several are proprietary-licensed) |
 | `.claude/skills/` in this repo (`dispatch-context-guardian`, `personal-export-analysis`) | project skills | signed with the tree |
 | `.agents/skills/` in this repo (~~same two names~~ (corrected 2026-10-25: superseded -- 8 directories since 2026-10-16, `c4df48d9`: the same two names plus the six `adversarial-*` skills); added 2026-10-15) | the copy Codex reads | signed with the tree, but a **diverged, stale fork**: ~~every file of both skills differs from `.claude/skills/` (2026-10-15 `diff -rq`)~~ (corrected 2026-10-25: superseded -- at HEAD `5f7fca01` three of the five files differ from `.claude/skills/` (`dispatch-context-guardian/SKILL.md`, its `scripts/restore_dispatch_state.py`, `personal-export-analysis/SKILL.md`) while `context_hook.py` and `save_dispatch_state.py` are identical; of the six `adversarial-*` copies, `adversarial-doc-refresh/SKILL.md` differs from `skills/`), it is not in the grant catalog, and `skills-sync.sh` does not compare it. Open: regenerate it from `.claude/skills/` or mark it unmaintained |
 | `~/.claude/skills/` (operator) | the operator's working set (~~27 entries with `synced` and `.trash`, re-counted 2026-10-15; 25 skills~~ (corrected 2026-10-25: superseded -- 33 entries on 2026-10-26: 31 skills, i.e. the 14 signed, `dispatch-context-guardian` and the 16 pinned vendor skills, plus `synced` and `.trash`)) | not signed in place; snapshotted (below) |
@@ -202,3 +204,13 @@ Text removed or replaced by the 2026-10-06 verification pass against the live sy
 - ~~Token parameterization (unblocks repo-inclusion, broader vault scope, publish-out).~~
 - ~~Restore/pull script for multi-site install.~~
 - ~~Phase 2 publish-out packaging.~~
+
+
+## Prepared agent-neutral migration, 2026-10-29
+
+The earlier hash-only vendor posture above describes the deployed baseline.
+The prepared unified checkout supersedes it with complete pinned vendor source
+in canonical skills/ packages, one common gateway reader and provenance/needs
+metadata for all packages. See AGENT_NEUTRAL_SKILL_CATALOG.md. Client copies
+are delivery mirrors, not separate authorities. Original notices remain.
+Human signing, managed installation and runtime validation are separate gates.

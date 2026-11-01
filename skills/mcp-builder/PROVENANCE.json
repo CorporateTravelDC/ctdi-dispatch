@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "name": "mcp-builder",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "local file I/O; registering an MCP server = operator-only",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "a8978dd810d2452739f7a28c291dd4dae6854c3f10eb8280f34bfc22407f3286",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "bytes": 11357
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "0f4592dcb53cf2b5d6b7febee6b4152018b565551a1c29e3c612f57b218ab295",
+      "bytes": 9092
+    },
+    {
+      "path": "reference/evaluation.md",
+      "sha256": "8c99479f8a2d22a636c38e274537aac3610879e26f34e0709825077c4576f427",
+      "bytes": 21663
+    },
+    {
+      "path": "reference/mcp_best_practices.md",
+      "sha256": "80fb4369a349447cf18ecdd7494fe7938b6065377e9f08c077cec411093a3007",
+      "bytes": 7330
+    },
+    {
+      "path": "reference/node_mcp_server.md",
+      "sha256": "c3ba35a4f599dd53be9c6555ae72c19a7bf412cd5426576c2c08d42755482c66",
+      "bytes": 28550
+    },
+    {
+      "path": "reference/python_mcp_server.md",
+      "sha256": "2da52f77e675191014ca2e146a4b95aa04d0ca7dd7e2b100322df15ade685e80",
+      "bytes": 25099
+    },
+    {
+      "path": "scripts/connections.py",
+      "sha256": "9403668a2041568772082a8b334122c1f88daf0541fb393af4522d0094a47a6e",
+      "bytes": 4875
+    },
+    {
+      "path": "scripts/evaluation.py",
+      "sha256": "49ed1d17cdce5da101b210197740713f49b935c29d4f339542a14b132658e6f7",
+      "bytes": 12579
+    },
+    {
+      "path": "scripts/example_evaluation.xml",
+      "sha256": "9272b348ddcc4b06ba562367ccd0770e018158c0068ac5116d5e34aaeff8777a",
+      "bytes": 1194
+    },
+    {
+      "path": "scripts/requirements.txt",
+      "sha256": "d5d7558b2368ecea9dfeed7d1fbc71ee9e0750bebd1282faa527d528a344c3c7",
+      "bytes": 29
+    }
+  ],
+  "prior_vendor_pin_sha256": "a8978dd810d2452739f7a28c291dd4dae6854c3f10eb8280f34bfc22407f3286",
+  "public_tree_sha256": "a8978dd810d2452739f7a28c291dd4dae6854c3f10eb8280f34bfc22407f3286",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

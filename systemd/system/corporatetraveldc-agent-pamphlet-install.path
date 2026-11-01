@@ -1,0 +1,13 @@
+[Unit]
+Description=Deliver local agent pamphlets when signed source or account grants change
+
+[Path]
+PathChanged=/opt/corporatetraveldc/private/ctdi-dispatch-internal/MANIFEST.sha256.asc
+PathChanged=/etc/ctdc-accounts.conf
+PathChanged=/etc/ctdc-skill-grants.conf
+PathChanged=/etc/ctdc-pamphlet-local-services.conf
+PathChanged=/var/lib/ctdc-agent-pamphlets/refresh-request
+Unit=corporatetraveldc-agent-pamphlet-install.service
+
+[Install]
+WantedBy=multi-user.target

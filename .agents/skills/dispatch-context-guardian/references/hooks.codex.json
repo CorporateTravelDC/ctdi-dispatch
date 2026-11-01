@@ -1,0 +1,30 @@
+{
+  "description": "CorporateTravelDC guardian; merge and review/trust after signed release",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B ~/.agents/skills/dispatch-context-guardian/scripts/context_hook.py --client codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B ~/.agents/skills/dispatch-context-guardian/scripts/context_hook.py --client codex",
+            "timeout": 15,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,3 +1,5 @@
+> Prepared 2026-10-29, pending signed rollout: the private Second Brain archiver is being changed to read all cleared promoted demo snapshots (scrubbed plus synthetic replay fill), not the production recorder's raw snapshots. It retains production access only for the existing vault index/usage path and serves nothing publicly. See [the exact input boundary and deployment requirements](SECOND_BRAIN_DEMO_ARCHIVE_BOUNDARY_2026-10-29.md). Historical descriptions below of its raw-recorder input describe the prior implementation, not the prepared replacement.
+
 > Status 2026-10-25: checked 2026-10-26 UTC against HEAD 5f7fca01 and the live box. The isolation described below holds. No longer current: `DEMO_PG_PASSWORD` is in `config/demo.env.example`, not `config/demo-secrets.env.example` (moved 2026-10-19; struck in place), and the demo-source-refresh timer is enabled (daily 03:17 UTC), so relay 1's "timer still disabled" is history. The demo instance's profile count was not checked (marked unverified).
 
 # Demo Data Isolation — Sovereign Scrubbed Source Plan

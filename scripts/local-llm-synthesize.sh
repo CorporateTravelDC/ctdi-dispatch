@@ -12,7 +12,7 @@
 # quietly depending on frontier credits is the opposite of that.
 #
 # This is the SYNTHESIS half of a hybrid split: callers gather facts
-# deterministically (scripts/check-claude-md-drift.sh, systemctl, podman, git)
+# deterministically (scripts/check-platform-drift.sh, systemctl, podman, git)
 # and pass them here purely to be written up. That division matters -- the
 # local 4B model is measurably good at turning already-gathered structured
 # facts into prose (that is exactly what the 2026-09-21 model bake-off

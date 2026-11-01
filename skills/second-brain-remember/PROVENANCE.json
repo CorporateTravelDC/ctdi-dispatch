@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "original_source": "CorporateTravelDC",
+  "original_source_status": "operator-attributed-local",
+  "version_controlled_author": "CorporateTravelDC",
+  "source_kind": "local-platform",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "name": "second-brain-remember",
+  "needs": "vault WRITE through own connector workspace_contribute or an authorized workspace route (create-only, attributed); no remember.py, raw WebDAV or shared admin token for agents"
+}

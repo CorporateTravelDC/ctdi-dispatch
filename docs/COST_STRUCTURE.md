@@ -276,6 +276,12 @@ its plan type and price are not recorded on the box [UNVERIFIED as of 2026-10-15
 
 *(Same HOLD-for-investor-promotion status as the rest of §2.)*
 
+### Agent segmentation and personal API authority — included in scope 2026-10-29
+
+The replacement-capability inventory now explicitly includes separate human/agent accounts, group-scoped configuration, skill grants/clawback, registry-derived pamphlets, own-account connector attribution, operator-minted personal API tokens with named mutation actions, lifecycle revocation and the request-time credential workflow. The token/scoping mechanism existed in code since 2026-10-05; the 2026-10-29 watch add verified one working path. The instruction/client/delivery corrections prepared on 2026-10-29 remain staged until operator release.
+
+[The governance COGS inventory](COGS_AGENT_GOVERNANCE_2026-10-29.md) separates deployed capability, prepared improvements, recurring operating cost, one-time engineering and replacement scope. These are included as explicit unpriced scope, not assigned a made-up subscription equivalent. Existing dated dollar totals have not been recalculated and must not be represented as the complete replacement cost of this expanded scope. Reuse of existing infrastructure does not establish zero administrative, maintenance, vendor-plan or CPU cost. Token credentials are unrelated to model-token billing.
+
 ### See also (added 2026-10-15)
 
 - `docs/COGS_BUILD_VS_RENT_2026-09-28.md` — the most recent two-column COGS

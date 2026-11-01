@@ -212,6 +212,12 @@ for old in /srv/ctdc-publish-drop /srv/ctdc-publish-research; do
     [[ -d "$old" ]] || continue
     [[ -f "${old}/MOVED-2026-10-26.md" ]] && (( (8#$(stat -c %a "$old") & 8#222) == 0 )) && pass "9c ${old} is retired (pointer file, read-only)" || fail "9c ${old} is still writable or has no MOVED-2026-10-26.md (srv-migrate-20261026.sh)"
 done
+# 9d development relay (operator 2026-10-29); metadata only, no Git or keys.
+for spec in "ctdc-dev:root:2750" "ctdc-dev/submissions:root:3770" "ctdc-dev/relays:root:3770" "ctdc-dev/checkouts:${OPERATOR_USER}:2750"; do
+    IFS=: read -r rel owner mode <<<"$spec"
+    got="$(stat -c '%U:%G %a' "/srv/${rel}" 2>/dev/null || echo missing)"
+    [[ ! -L "/srv/${rel}" && "$got" == "${owner}:${DEV_GROUP} ${mode}" ]] && pass "9d /srv/${rel} is ${got}" || fail "9d /srv/${rel} is '${got}', want ${owner}:${DEV_GROUP} ${mode}"
+done
 # 8
 pm="$(stat -c '%U:%G %a' "${PROD_SECRETS}")"; [[ "$pm" == "${OPERATOR_USER}:${OPERATOR_USER} 600" ]] && pass "8 production secrets still ${pm}" || fail "8 production secrets are ${pm}"
 dm="$(stat -c '%U:%G %a' /etc/corporatetraveldc)"; [[ "$dm" == "root:${OPERATOR_USER} 750" ]] && pass "8b /etc/corporatetraveldc still ${dm}" || fail "8b /etc/corporatetraveldc is ${dm}"

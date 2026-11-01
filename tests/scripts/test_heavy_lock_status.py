@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import time
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,18 +49,22 @@ def test_busy_when_heavy_timer_due_within_window(tmp_path):
 def test_busy_when_lock_held_and_never_takes_it(tmp_path):
     env = dict(os.environ, HEAVY_LOCK_DIR=str(tmp_path / "lk"))
     env.pop("CTDC_HEAVY_LOCK_HELD", None)
-    holder = subprocess.Popen(["bash", "-c", f"source {LIB}; heavy_lock_acquire 'nightly backup' 5 >/dev/null; sleep 4"],
-                              env=env)
+    holder = subprocess.Popen(["bash", "-c", f"source {LIB}; heavy_lock_acquire 'nightly backup' 5 >/dev/null; read -r release"],
+                              env=env, stdin=subprocess.PIPE)
     try:
         for _ in range(50):
             if (tmp_path / "lk" / "holder").exists():
                 break
             time.sleep(0.1)
+        st = (tmp_path / "lk" / "lock").stat()
+        inode_key = f"{os.major(st.st_dev):02x}:{os.minor(st.st_dev):02x}:{st.st_ino}"
+        if inode_key not in Path("/proc/locks").read_text():
+            pytest.skip("held fixture flock is hidden by this process namespace; needs operator runtime")
         r = run(tmp_path, [])
         assert r.returncode == 1, r.stdout + r.stderr
         assert "HELD by nightly backup" in r.stdout
     finally:
-        holder.wait()
+        holder.communicate(input=b"release\n", timeout=10)
     # the status check left the holder file as it was (it never takes the lock)
     assert (tmp_path / "lk" / "holder").read_text().startswith("nightly backup")
     r = run(tmp_path, [])

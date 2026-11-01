@@ -1,8 +1,8 @@
 [Unit]
-Description=Corporate Travel DC -- weekly agent-pamphlet refresh (glossary, Jarvis/vault references, deployment profiles, drop folders -> every cloud agent's vault PAMPHLET.md)
+Description=Corporate Travel DC -- weekly agent-pamphlet refresh (glossary, Jarvis/vault references, deployment profiles, drop folders -> vault editions and verified local account delivery)
 OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/agent-pamphlet-weekly-refresh.sh
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/agent-pamphlet-refresh.sh
 TimeoutStartSec=300

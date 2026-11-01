@@ -1930,6 +1930,18 @@ async def vault_research_read(request: Request, path: str = Query(...)) -> JSONR
     invalid X-Board-Key; 404 -> not found; 422 -> blocked by CUI/PII scrub
     gate; 429 -> rate limited."""
     _reader = await _board_auth(request, "GET /api/v1/vault/research", db.BOARD_SCOPE_READ, body=b"")  # read-only: board-read token or a registered signer
+    # One fixed shared resource, authenticated by the existing board-read gate.
+    # No caller-supplied filesystem path is accepted and no vault copy is made.
+    from common.platform_context import RESOURCE, ContextUnavailable, read_context
+    if path == RESOURCE:
+        try:
+            out = read_context(require_source=False)
+            _scrub_gate(out["content"], source="shared-platform-context")
+        except ContextUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except _ScrubGateBlocked as exc:
+            raise HTTPException(status_code=422, detail=f"blocked by CUI/PII scrub gate: {exc}")
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
     if not _vault_path_is_safe(path):
         raise HTTPException(status_code=400, detail="invalid path")
     from common import governance as _gov

@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore eligible agent remote-control enablement after drift
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=corporatetraveldc-agent-remote-control-boot.service
+
+[Install]
+WantedBy=timers.target

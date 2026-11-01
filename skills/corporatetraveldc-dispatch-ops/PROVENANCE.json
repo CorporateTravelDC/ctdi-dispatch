@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "original_source": "CorporateTravelDC",
+  "original_source_status": "operator-attributed-local",
+  "version_controlled_author": "CorporateTravelDC",
+  "source_kind": "local-platform",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "name": "corporatetraveldc-dispatch-ops",
+  "needs": "dispatch API reads by their route tier; mutations require a separately operator-issued personal action-scoped token (~/.config/ctdc/api-token), never shared DISPATCH_ADMIN_TOKEN; connector instructions do not add tools"
+}

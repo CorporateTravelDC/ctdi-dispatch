@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "version_controlled_author": "CorporateTravelDC",
+  "gateway_tool": "skill_read",
+  "skills": [
+    {
+      "name": "adversarial-doc-refresh",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "repo + live read-only checks on the box (systemctl/podman/git/SELECT-only psql); output = guard worktree (operator) or workspace contribution (agents); agents never commit, sign or publish"
+    },
+    {
+      "name": "adversarial-pentest",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "read-mostly probes of this box's own endpoints and config (1-2 requests, no writes); output = security-review record draft; agents never fix, publish or approve"
+    },
+    {
+      "name": "adversarial-sweep",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "everything the two base skills need; multi-stage, operator checkpoints between stages"
+    },
+    {
+      "name": "adversarial-sweep-docs-first",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "everything the two base skills need; multi-stage, operator checkpoints between stages"
+    },
+    {
+      "name": "adversarial-sweep-docs-first-revalidated",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "everything the two base skills need; multi-stage, operator checkpoints between stages; re-validation waits for signed rollouts"
+    },
+    {
+      "name": "adversarial-sweep-pentest-first-revalidated",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "everything the two base skills need; multi-stage, operator checkpoints between stages; re-validation waits for signed rollouts"
+    },
+    {
+      "name": "chrome-browser",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "a browser surface on the client; none on this box"
+    },
+    {
+      "name": "corporatetraveldc-dispatch-ops",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch API reads by their route tier; mutations require a separately operator-issued personal action-scoped token (~/.config/ctdc/api-token), never shared DISPATCH_ADMIN_TOKEN; connector instructions do not add tools"
+    },
+    {
+      "name": "dispatch-context-guardian",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "preserved-upstream-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "summary-only public GETs for local snapshots; Codex/Claude hook trust is operator-controlled; cloud clients use their own status/research/workspace tools"
+    },
+    {
+      "name": "docs",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "a docs connector on the client"
+    },
+    {
+      "name": "docx",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O only"
+    },
+    {
+      "name": "flight-hifi-track",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch reads; watch add requires personal admin-tier token scoped to watchlist.flight.add; pushes require separate authorization, otherwise report; see docs/PER_AGENT_API_ACTIONS.md"
+    },
+    {
+      "name": "hub-arrivals-lookup",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch API reads"
+    },
+    {
+      "name": "linkedin-export-analyzer",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "an export the operator hands you; output goes to the operator, never the vault directly"
+    },
+    {
+      "name": "mcp-builder",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O; registering an MCP server = operator-only"
+    },
+    {
+      "name": "morning",
+      "original_source": "UNVERIFIED",
+      "original_source_status": "unverified-earliest-origin",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch API reads; scheduling a recurring task = operator-only"
+    },
+    {
+      "name": "nec-train-hifi-track",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch API reads; ntfy pushes operator-only (see flight-hifi-track)"
+    },
+    {
+      "name": "overwater-adsb-handoff-track",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "dispatch API reads; ntfy pushes operator-only"
+    },
+    {
+      "name": "pdf",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O only"
+    },
+    {
+      "name": "personal-export-analysis",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "local-project-history",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-project",
+      "needs": "vault reads via the research route; raw WebDAV/Nextcloud admin = operator-only"
+    },
+    {
+      "name": "platform-skill-runtime",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "granted skill_read metadata/source; execution needs the skill-specific tools and account permissions"
+    },
+    {
+      "name": "pptx",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O only"
+    },
+    {
+      "name": "second-brain-remember",
+      "original_source": "CorporateTravelDC",
+      "original_source_status": "operator-attributed-local",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "local-platform",
+      "needs": "vault WRITE through own connector workspace_contribute or an authorized workspace route (create-only, attributed); no remember.py, raw WebDAV or shared admin token for agents"
+    },
+    {
+      "name": "skill-creator",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "drafts a skill in your home; it becomes grantable only after the operator tracks + signs it"
+    },
+    {
+      "name": "web-artifacts-builder",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O only"
+    },
+    {
+      "name": "xlsx",
+      "original_source": "Anthropic",
+      "original_source_status": "operator-attributed-vendor-distribution",
+      "version_controlled_author": "CorporateTravelDC",
+      "source_kind": "pinned-claude-vendor-distribution",
+      "needs": "local file I/O only"
+    }
+  ]
+}

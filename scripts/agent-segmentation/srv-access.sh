@@ -27,7 +27,7 @@ die() { echo "srv-access: $*" >&2; exit 2; }
 
 folder_path() {
     [[ "$1" =~ ^ctdc-[a-z0-9]{2,24}$ ]] || die "folder must look like ctdc-<name>"
-    [[ "$1" != ctdc-handoff ]] || die "ctdc-handoff is shared with every account already"
+    [[ "$1" != ctdc-handoff && "$1" != ctdc-dev ]] || die "$1 is a shared tree; private-folder ACL grants are refused"
     [[ "$1" != ctdc-publish-drop && "$1" != ctdc-publish-research ]] || die "$1 is retired"
     local p="${SRV}/$1"
     [[ -d "$p" && ! -L "$p" ]] || die "${p} does not exist"

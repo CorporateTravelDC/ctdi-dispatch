@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "web-artifacts-builder",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "local file I/O only",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "847e88e5fba0b8d5051ff0106d4ea69dfa4786dd5f428c3267fa81bf7afe81ea",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "bytes": 11357
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "81c5002c6643b0de7b8710b00e7a9038daa6fb9b68d59870ee6adb12da8d10f8",
+      "bytes": 3087
+    },
+    {
+      "path": "scripts/bundle-artifact.sh",
+      "sha256": "abf0e480bf6585b56fab8526a407dfb7dc740812bddd70c636e1e8f3df5f9618",
+      "bytes": 1517
+    },
+    {
+      "path": "scripts/init-artifact.sh",
+      "sha256": "355e5dd4382aaaee91f01f1627eaeab30b2676ffa8d9b3ec328a1ae450ebccaa",
+      "bytes": 9924
+    },
+    {
+      "path": "scripts/shadcn-components.tar.gz",
+      "sha256": "1296f069e825de7933de7e8ac63672495cacce3f88f2dc45554dbcddbcbca60f",
+      "bytes": 19967
+    }
+  ],
+  "prior_vendor_pin_sha256": "847e88e5fba0b8d5051ff0106d4ea69dfa4786dd5f428c3267fa81bf7afe81ea",
+  "public_tree_sha256": "e626592b6114800e93e21ea9530ef47aee30725036eabf5c39a5d4a21dfd910b",
+  "public_omitted_files": [
+    "scripts/shadcn-components.tar.gz"
+  ],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

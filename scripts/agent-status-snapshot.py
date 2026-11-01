@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -35,7 +36,12 @@ from datetime import datetime, timezone
 
 OUT = "/srv/ctdc-handoff/status/status.json"
 PREFIX = "corporatetraveldc-"
-SAFE_UNIT_PROPS = ("Result", "NRestarts", "ExecMainStatus", "ActiveEnterTimestamp")
+SAFE_UNIT_PROPS = ("Result", "NRestarts", "ExecMainStatus", "ActiveEnterTimestamp",
+                   "Type", "ConditionResult", "UnitFileState", "ExecMainCode",
+                   "ExecMainStartTimestamp", "ExecMainExitTimestamp",
+                   "ExecMainStartTimestampMonotonic", "InvocationID",
+                   "MemoryPeak", "MemoryCurrent", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemorySwapCurrent")
+SAFE_UNIT_NAME = re.compile(r"corporatetraveldc-[a-zA-Z0-9_.@:-]+\.(?:service|timer|path)")
 CONTAINER_FIELDS = {"State": "state", "Status": "status", "ExitCode": "exit_code", "Restarts": "restarts"}
 DESC_MAX = 160
 
@@ -85,28 +91,64 @@ def host() -> dict:
 def units() -> list[dict]:
     rows = json.loads(_run(["systemctl", "--user", "list-units", "--all", "--type=service",
                             "--output=json", PREFIX + "*"]) or "[]")
+    rows = [r for r in rows if SAFE_UNIT_NAME.fullmatch(r.get("unit", ""))]
+    # One bounded show call covers completed and condition-skipped oneshots
+    # too. Trigger times and an inactive state cannot establish execution.
+    details = {}
+    if rows:
+        try:
+            text = _run(["systemctl", "--user", "show", *(r["unit"] for r in rows),
+                         "-p", ",".join(("Id", *SAFE_UNIT_PROPS))])
+            for block in text.strip().split("\n\n"):
+                props = {}
+                for line in block.splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key in ("Id", *SAFE_UNIT_PROPS):
+                        props[key] = value
+                name = props.pop("Id", None)
+                if name:
+                    details[name] = props
+        except (subprocess.SubprocessError, OSError):
+            pass
     out = []
     for r in rows:
         u = {"unit": r["unit"], "load": r.get("load"), "active": r.get("active"), "sub": r.get("sub"),
              "description": (r.get("description") or "")[:DESC_MAX]}
-        if r.get("active") in ("failed", "activating") or r.get("sub") in ("auto-restart",):
-            try:
-                props = _run(["systemctl", "--user", "show", r["unit"], "-p", ",".join(SAFE_UNIT_PROPS)])
-                for line in props.splitlines():
-                    k, _, v = line.partition("=")
-                    if k in SAFE_UNIT_PROPS:
-                        u[k] = v
-            except (subprocess.SubprocessError, OSError):
-                u["detail"] = "unavailable"
+        if r["unit"] in details:
+            u.update(details[r["unit"]])
+        else:
+            u["detail"] = "unavailable"
         out.append(u)
     return out
 
 
+def unit_files() -> list[dict]:
+    """Expose timer/path masks and disabled entries even when never loaded."""
+    rows = json.loads(_run(["systemctl", "--user", "list-unit-files", "--output=json", PREFIX + "*"]) or "[]")
+    return [{"unit": r["unit_file"], "state": r.get("state"), "preset": r.get("preset")}
+            for r in rows if SAFE_UNIT_NAME.fullmatch(r.get("unit_file", ""))]
+
+
+def paths() -> list[dict]:
+    rows = json.loads(_run(["systemctl", "--user", "list-units", "--all", "--type=path",
+                            "--output=json", PREFIX + "*"]) or "[]")
+    return [{k: r.get(k) for k in ("unit", "load", "active", "sub")}
+            for r in rows if SAFE_UNIT_NAME.fullmatch(r.get("unit", ""))]
+
+
 def timers() -> list[dict]:
     rows = json.loads(_run(["systemctl", "--user", "list-timers", "--all", "--output=json", PREFIX + "*"]) or "[]")
-    return [{"unit": r["unit"], "activates": r.get("activates"),
-             "next_utc": _utc((r.get("next") or 0) / 1e6), "last_utc": _utc((r.get("last") or 0) / 1e6)}
-            for r in rows]
+    out = {r["unit"]: {"unit": r["unit"], "activates": r.get("activates"),
+                      "next_utc": _utc((r.get("next") or 0) / 1e6),
+                      "last_utc": _utc((r.get("last") or 0) / 1e6)}
+           for r in rows if SAFE_UNIT_NAME.fullmatch(r.get("unit", ""))}
+    states = json.loads(_run(["systemctl", "--user", "list-units", "--all", "--type=timer",
+                              "--output=json", PREFIX + "*"]) or "[]")
+    for row in states:
+        if SAFE_UNIT_NAME.fullmatch(row.get("unit", "")):
+            entry = out.setdefault(row["unit"], {"unit": row["unit"]})
+            entry.update({k: row.get(k) for k in ("load", "active", "sub")})
+    return list(out.values())
 
 
 def containers() -> list[dict]:
@@ -141,13 +183,35 @@ def failed_system_units() -> list[str]:
     return sorted(r["unit"] for r in rows)
 
 
+def heavy_jobs() -> dict:
+    # Publish aggregate pool state only; never copy the private state,
+    # receipts, errors, paths or arbitrary keys into the shared snapshot.
+    with open('/var/lib/corporatetraveldc/heavy-job-policy/state.json') as f:
+        raw=f.read(1024*1024+1)
+    if len(raw)>1024*1024:raise ValueError('bounded state exceeded')
+    state=json.loads(raw)
+    active=[]
+    for unit,lease in state.get('leases',{}).items():
+        if not SAFE_UNIT_NAME.fullmatch(unit):continue
+        values={key:lease[key] for key in ('budget','reserve')
+                if isinstance(lease.get(key),int) and 0<=lease[key]<=4*1024**3}
+        active.append({'unit':unit,'swap_allowance_bytes':values.get('budget'),
+                       'reserved_swap_bytes':values.get('reserve'),'controller_fault':lease.get('fault') is True})
+    queue=sorted(u for u in state.get('queue',{}) if SAFE_UNIT_NAME.fullmatch(u))
+    return {'max_parallel':2,'active':sorted(active,key=lambda row:row['unit']),
+            'queued':queue,'host_swap_over_budget':state.get('host_swap_over_budget') is True}
+
+
 COLLECTORS = {
     "host": host,
     "units": units,
     "timers": timers,
+    "unit_files": unit_files,
+    "paths": paths,
     "containers": containers,
     "journal_errors_60m": journal_error_counts,
     "failed_system_units": failed_system_units,
+    "heavy_jobs": heavy_jobs,
 }
 
 

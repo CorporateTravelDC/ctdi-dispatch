@@ -15,7 +15,7 @@ Volume=/home/corporatetraveldc/.claude/projects/-opt-corporatetraveldc-private-c
 # llama-server (for both fallback paths' generate() calls) -- no change to
 # either service's publish scope.
 Network=pasta:--map-gw
-Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+Environment=NEXTCLOUD_WEBDAV_BASE=http://100.x.x.x:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-10-10: scoped secrets (svc/<service>.env, 2026-10-05 convention) instead of the whole secrets file
 EnvironmentFile=/etc/corporatetraveldc/svc/poller.env

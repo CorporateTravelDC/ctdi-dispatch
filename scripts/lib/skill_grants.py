@@ -57,6 +57,16 @@ SKIP_NAMES = {"__pycache__", ".DS_Store", MARKER}
 SKILL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 ACCT_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 GUARDIAN = ".claude/skills/dispatch-context-guardian/scripts"
+# 2026-11-01 (operator): CTDC_SKILLS_DISABLED turns skills off for every managed
+# account without editing the grants file -- the skill analogue of the DISABLE_*
+# env overrides in config/claude-code/managed-settings.json. Comma/space list of
+# names; the process environment wins, else the line in dispatch.env (parsed, never
+# sourced). A disabled skill is denied (never installed, an installed copy is
+# clawed back) AND gets skillOverrides "off" in the account's settings.json, so a
+# copy the client bundles or reinstalls itself (Claude Code's own vendor skills)
+# stays inert in place even though it is not in this catalog.
+DISABLED_ENV = "CTDC_SKILLS_DISABLED"
+DISPATCH_ENV = "/etc/corporatetraveldc/dispatch.env"
 # 2026-10-16: per login mode, (directory under the home that holds "skills/",
 # directory whose presence means the account is provisioned for that CLI).
 # Until this, every mode got ~/.claude/skills, so a codex-mode account's Codex
@@ -205,6 +215,23 @@ def read_needs(repo: str) -> dict[str, str]:
     return needs
 
 
+def disabled_skills(environ=None, env_file: str = DISPATCH_ENV) -> frozenset[str]:
+    """Names in CTDC_SKILLS_DISABLED; invalid names are ignored, never fatal."""
+    environ = os.environ if environ is None else environ
+    raw = environ.get(DISABLED_ENV)
+    if raw is None:
+        raw = ""
+        try:
+            with open(env_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(DISABLED_ENV + "="):
+                        raw = line.split("=", 1)[1]
+        except OSError:
+            pass
+    return frozenset(n for n in re.split(r"[\s,]+", raw.strip()) if n and SKILL_RE.match(n))
+
+
 def catalog(repo: str, vendor_root: str) -> dict[str, dict]:
     cat = {}
     sd = os.path.join(repo, "skills")
@@ -222,8 +249,8 @@ def catalog(repo: str, vendor_root: str) -> dict[str, dict]:
 
 
 # ----------------------------------------------------------------- resolution
-def resolve(rules, account, cat, now=None):
-    """-> ({skill: grant-info}, denied set, warnings)"""
+def resolve(rules, account, cat, now=None, disabled=frozenset()):
+    """-> ({skill: grant-info}, denied set, warnings); disabled names are always denied"""
     now = now or dt.datetime.now(dt.timezone.utc)
     granted, denied, warn = {}, set(), []
     for r in rules:
@@ -242,6 +269,7 @@ def resolve(rules, account, cat, now=None):
                 # a permanent grant outranks a timed one; else keep the latest expiry
                 if cur is None or (cur["until"] and (info["until"] is None or info["until"] > cur["until"])):
                     granted[n] = info
+    denied |= set(disabled)
     eff = {n: v for n, v in granted.items() if n not in denied}
     return eff, denied & set(cat), warn
 
@@ -495,7 +523,7 @@ class Applier:
         return f"~/{base}/{QUARANTINE}/{dest} ({why})"
 
     def apply_account(self, acct, mode, rules, cat):
-        eff, denied, _ = resolve(rules, acct, cat)
+        eff, denied, _ = resolve(rules, acct, cat, disabled=getattr(self.a, "disabled", frozenset()))
         home = self.home_of(acct)
         uid, gid = self.owner(acct)
         base, provisioned = skill_base(mode)
@@ -527,7 +555,7 @@ class Applier:
             try:
                 self._apply_skills(acct, eff, cat, cfd, gid, base)
                 if mode == "claude":
-                    self._apply_settings(acct, denied, cat, cfd, uid, gid)
+                    self._apply_settings(acct, set(cat) - set(eff), cat, cfd, uid, gid)
             finally:
                 os.close(cfd)
         finally:
@@ -595,7 +623,10 @@ class Applier:
             os.close(rfd)
 
     def _apply_settings(self, acct, denied, cat, cfd, uid, gid):
-        project_denied = sorted(n for n in denied if cat[n]["source"] == "project")
+        # Promotion to the signed catalog must not lose project discovery clawback.
+        project_denied = sorted({n for n in denied if cat[n]["source"] == "project"
+                                 or os.path.isfile(os.path.join(self.a.repo, ".claude", "skills", n, "SKILL.md"))}
+                                | set(getattr(self.a, "disabled", frozenset())))
         hooks = self.guardian_hooks()
         if not self.mutate:
             self.note(f"{acct}: would set skillOverrides off for {project_denied or 'nothing'} + guardian hooks")
@@ -714,6 +745,8 @@ def cmd_apply(a) -> int:
         return 0
     cat = catalog(a.repo, a.vendor_root)
     ap = Applier(a)
+    if a.disabled:
+        ap.note(f"{DISABLED_ENV}: {', '.join(sorted(a.disabled))} (denied + skillOverrides off)")
     for w in resolve(rules, "", cat)[2]:
         ap.find(w)
     for acct, mode in accounts:
@@ -733,7 +766,7 @@ def cmd_list(a) -> int:
     cat = catalog(a.repo, a.vendor_root)
     accts = [a.account] if a.account else [n for n, _ in agent_accounts(a.registry)]
     for acct in accts:
-        eff, denied, warn = resolve(rules, acct, cat)
+        eff, denied, warn = resolve(rules, acct, cat, disabled=getattr(a, "disabled", frozenset()))
         print(f"{acct}:")
         for n in sorted(cat):
             if n in eff:
@@ -755,7 +788,7 @@ def cmd_render(a) -> int:
     except (OSError, ValueError) as e:
         print(f"_(grants file unavailable: {e} -- ask the operator which skills you hold)_")
         return 0
-    eff, denied, _ = resolve(rules, a.account, cat)
+    eff, denied, _ = resolve(rules, a.account, cat, disabled=getattr(a, "disabled", frozenset()))
     if not eff:
         print("_(none granted -- request one with a signed board post; see below)_")
     else:
@@ -854,6 +887,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("pin-vendor"); p.add_argument("names", nargs="+")
     p = sub.add_parser("tree-hash"); p.add_argument("dir")
     a = ap.parse_args(argv)
+    a.disabled = disabled_skills(env_file=os.path.join(fake, "dispatch.env") if fake else DISPATCH_ENV)
     if a.cmd == "apply":
         return cmd_apply(a)
     if a.cmd == "list":

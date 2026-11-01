@@ -87,12 +87,15 @@ def _default_webdav_base() -> str:
     env = os.environ.get("NEXTCLOUD_WEBDAV_BASE")
     if env:
         return env
+    # 2026-10-29: the Podman host alias timed out following uplink failure.
+    # Tailnet nginx was verified from inside the web container. Host callers
+    # retain loopback, and an explicit deployment override still wins.
     # /run/.containerenv is podman's own marker; /.dockerenv covers the
     # docker-compatible case. Checking the filesystem rather than trying to
     # resolve a hostname keeps this free and side-effect-less at import time.
     in_container = os.path.exists("/run/.containerenv") or os.path.exists("/.dockerenv")
     if in_container:
-        return "http://host.containers.internal:80/remote.php/dav/files"
+        return "http://100.x.x.x:80/remote.php/dav/files"
     return "http://127.0.0.1:8090/remote.php/dav/files"
 
 

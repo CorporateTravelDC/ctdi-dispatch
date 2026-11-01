@@ -1,57 +1,19 @@
-"""
-second_brain_demo_archiver_daily -- daily rolling ingest of raw operational
-history from the demo-archiver recorder into the second brain.
+"""Archive only cleared data already promoted into the isolated demo store.
 
-Operator directive 2026-07-23: "let's make a daily timer that actually
-scrapes the last, say, 24 to 36 hours of data from the demo archiver and
-dumps that into a rolling ingest in second brain (so that it has more data
-than just the ops process plan and the [operator LLC abbreviation]s' predictive and retroactive
-look backs on the briefs)."
-
-Source: reads DIRECTLY from the demo_snapshots table (the recorder's raw
-snapshot table, src/demo/db.py, pg_schema/0057_demo.sql), NOT the
-demo-api playback service on :8004. This is a deliberate distinction --
-the playback API is designed to never reflect real/current data
-(privacy-safe looping replay off a fixed anchor, see
-demo_archiver_linkage_done memory / demo_api.py's own docstring). This
-skill wants the opposite: genuine recent operational history. Reading
-the recorder's own table directly is correct and safe here -- it's the
-same platform, same trust boundary, no new exposure, and it's exactly
-the data source second_brain_daily.py already draws its own brief
-content from one layer up.
-
-2026-09-20 Postgres cutover (operator directive -- see src/demo/db.py's
-module docstring): this used to open /var/lib/corporatetraveldc/demo.db
-directly via its own read-only sqlite3 URI connection. Now goes through
-src/demo/db.py's fetch_window() (imported here as demo_db), the same
-shared accessor demo.recorder and src/web/main.py's readiness route use.
-
-Format decision: the recorder dedups on payload hash at write time, so
-rows already represent real changes, not every 5-min poll -- but a 24-36h
-window is still ~1,100 rows across 7-9 endpoints (2026-07-23 sample: 354
-amtrak, 322 notams, 178 weather, 168 route, 33 opsplan, 32 cps, 21
-brief). Dumping every row's full payload would make the daily note
-enormous and mostly redundant (amtrak/notams flutter in small status
-deltas). Instead, per endpoint: change count + first/last capture time
-+ the single latest full payload (current state) as the representative
-snapshot. This gives real breadth (raw feed data, not just brief
-narrative) while keeping the note a bounded, readable size. If finer
-granularity turns out to matter (e.g. wanting every distinct TFR change,
-not just the latest), that's a follow-up tuning pass, not a rebuild.
-
-SR-1: log_usage() in finally block.
-SR-2: Exempt -- time-bounded input (rolling window), inputs always new.
+Operator clarification 2026-10-29: include both scrubbed promoted snapshots and
+synthetic replay fill. Never read raw production demo_snapshots or fall back
+to it. The input window is the last 30 hours of completed promoted history,
+not the last 30 hours of live operations. The output is explicitly demo-only.
+Memory stays bounded: counts plus one capped representative payload per endpoint.
 """
 import json
 import logging
-import pathlib
 import zlib
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from common import config
 from common import optime
 from common.sr1_log import log_usage
-from demo import db as demo_db
+from demo import promoted_archive as demo_db
 from second_brain import webdav_client
 from second_brain.index_db import get_conn, index_note
 from second_brain.scrub_gate import ScrubGateBlocked, gate
@@ -67,51 +29,52 @@ LOOKBACK_HOURS = 30  # midpoint of operator's "24 to 36 hours" ask
 _MAX_PAYLOAD_CHARS = 2000
 
 
-def _fetch_window() -> dict[str, list[tuple[str, bytes, bool]]]:
-    """Query demo_snapshots for rows in the lookback window. Returns
-    {endpoint: [(captured_at, payload, compressed), ...]} ordered
-    oldest-to-newest per endpoint. Read-only -- this skill never writes to
-    demo_snapshots, only to the vault."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)).isoformat()
-    rows = demo_db.fetch_window(cutoff)
+def _fetch_window() -> demo_db.PromotionWindow:
+    """Read a completed promoted-demo window; no production-data fallback."""
+    return demo_db.fetch_window_summary(LOOKBACK_HOURS)
 
-    by_endpoint: dict[str, list[tuple[str, bytes, bool]]] = {}
-    for endpoint, captured_at, payload, compressed in rows:
-        by_endpoint.setdefault(endpoint, []).append((captured_at, payload, compressed))
-    return by_endpoint
+
+# Bound decompression before JSON parsing, not only the final rendered note.
+# Very large snapshots still contribute their counts and a labelled prefix.
+_MAX_DECODE_BYTES = 65536
 
 
 def _decode(payload: bytes, compressed: bool) -> str:
-    raw = zlib.decompress(payload) if compressed else payload
+    if compressed:
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(payload, _MAX_DECODE_BYTES + 1)
+        truncated = len(raw) > _MAX_DECODE_BYTES
+        if not truncated and not decoder.eof:
+            raise zlib.error("incomplete compressed payload")
+    else:
+        raw = payload[:_MAX_DECODE_BYTES + 1]
+        truncated = len(raw) > _MAX_DECODE_BYTES
+    if truncated:
+        return ("[truncated before JSON formatting: payload exceeds "
+                f"{_MAX_DECODE_BYTES} decoded bytes]\n" +
+                raw[:_MAX_DECODE_BYTES].decode("utf-8", errors="replace"))
     try:
-        # Pretty-print if it's JSON -- more readable in the note than a
-        # single dense line, and still round-trips fine either way.
         return json.dumps(json.loads(raw), indent=2, sort_keys=True)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return raw.decode("utf-8", errors="replace")
 
 
-def _render_endpoint_section(endpoint: str, rows: list[tuple[str, bytes, int]]) -> str:
-    first_at = rows[0][0]
-    last_at = rows[-1][0]
-    change_count = len(rows)
-    latest_captured_at, latest_payload, latest_compressed = rows[-1]
-
+def _render_endpoint_section(summary: demo_db.WindowSummary) -> str:
     try:
-        latest_text = _decode(latest_payload, latest_compressed)
+        latest_text = _decode(summary.payload, summary.compressed)
     except Exception as e:
-        latest_text = f"(payload decode failed: {e})"
+        latest_text = f"(payload decode failed: {type(e).__name__})"
 
     truncated_note = ""
     if len(latest_text) > _MAX_PAYLOAD_CHARS:
         latest_text = latest_text[:_MAX_PAYLOAD_CHARS]
-        truncated_note = f"\n... [truncated, {change_count} total changes this window]"
+        truncated_note = f"\n... [truncated, {summary.change_count} total changes this window]"
 
     return (
-        f"## {endpoint}\n\n"
-        f"Changes in window: {change_count}  "
-        f"(first: {first_at}, last: {last_at})\n\n"
-        f"Latest snapshot (as of {latest_captured_at}):\n\n"
+        f"## {summary.endpoint}\n\n"
+        f"Changes in window: {summary.change_count} (synthetic replay fill: {summary.synthetic_count})  "
+        f"(first: {summary.first_at}, last: {summary.last_at})\n\n"
+        f"Latest snapshot (as of {summary.last_at}):\n\n"
         f"```json\n{latest_text}{truncated_note}\n```\n"
     )
 
@@ -123,24 +86,27 @@ def main() -> None:
     today = optime.op_today()
 
     try:
-        by_endpoint = _fetch_window()
+        promotion = _fetch_window()
+        by_endpoint = promotion.summaries
         if not by_endpoint:
-            log.info("%s: no snapshots in the last %dh window -- recorder may be down, "
+            log.info("%s: no cleared snapshots in the promoted %dh window, "
                       "skipping vault write", SKILL_NAME, LOOKBACK_HOURS)
             status = "empty"
             return
 
-        total_rows = sum(len(v) for v in by_endpoint.values())
+        total_rows = sum(summary.change_count for summary in by_endpoint)
         sections = [
-            _render_endpoint_section(ep, rows)
-            for ep, rows in sorted(by_endpoint.items())
+            _render_endpoint_section(summary)
+            for summary in sorted(by_endpoint, key=lambda summary: summary.endpoint)
         ]
         body = (
-            f"Rolling {LOOKBACK_HOURS}h ingest from the demo-archiver recorder "
-            f"({total_rows} total changed snapshots across {len(by_endpoint)} endpoints). "
-            "Raw operational feed history, not brief narrative -- see module "
-            "docstring for why this reads the recorder's own snapshot table "
-            "directly rather than the demo-api playback service.\n\n"
+            f"Cleared promoted demo history ({total_rows} snapshots across "
+            f"{len(by_endpoint)} endpoints, including synthetic replay fill). "
+            "Demonstration data only; not evidence of live operations. "
+            f"Window: {promotion.window_start} through {promotion.window_end}; "
+            f"promotion sequence {promotion.promotion_seq}. "
+            "Source: isolated demo snapshots/meta/scrub_ledger, never raw "
+            "production recorder snapshots.\n\n"
             + "\n".join(sections)
         )
 
@@ -155,6 +121,11 @@ def main() -> None:
             "---\n"
             f"date: {today.isoformat()}\n"
             "ingest_method: demo-archiver-daily\n"
+            "data_class: cleared_promoted_demo\n"
+            "authority: demonstration_only\n"
+            f"promotion_seq: {promotion.promotion_seq}\n"
+            f"promotion_hash: {promotion.promotion_hash}\n"
+            f"promoted_at: {promotion.promoted_at}\n"
             f"generated_at: {generated_at}\n"
             f"endpoints: {len(by_endpoint)}\n"
             f"total_changes: {total_rows}\n"
@@ -168,7 +139,7 @@ def main() -> None:
         with get_conn() as conn:
             index_note(
                 conn, rel_path, title=f"Demo-archiver ingest — {today.isoformat()}",
-                content=note, tags="daily,demo-archiver,raw-feed,auto",
+                content=note, tags="daily,demo-archiver,promoted-demo,demonstration-only,auto",
                 ingest_method="demo-archiver-daily",
             )
         log.info("%s: wrote %s (%d endpoints, %d total changes, status=%s)",
@@ -176,10 +147,11 @@ def main() -> None:
 
     except ScrubGateBlocked as e:
         status = "blocked"
-        log.error("%s: BLOCKED by scrub gate: %s", SKILL_NAME, e)
+        log.error("%s: BLOCKED by scrub gate: %s", SKILL_NAME, type(e).__name__)
+        raise
     except Exception as e:
         status = "error"
-        log.error("%s: failed: %s", SKILL_NAME, e)
+        log.error("%s: failed: %s", SKILL_NAME, type(e).__name__)
         raise
     finally:
         log_usage(SKILL_NAME, "deterministic", 0, 0, status, "new")

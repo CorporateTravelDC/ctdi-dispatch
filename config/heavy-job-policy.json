@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "max_parallel": 2,
+  "host_swap_percent": 60,
+  "soft_bytes": 2147483648,
+  "ram_bytes": 2684354560,
+  "initial_swap_bytes": 1073741824,
+  "swap_step_bytes": 268435456,
+  "max_swap_bytes": 4294967296,
+  "free_swap_reserve_bytes": 536870912,
+  "members": {
+    "corporatetraveldc-aam-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 12300,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-aam-weekly-watch.service": {
+      "kind": "container",
+      "timeout_s": 11300,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    },
+    "corporatetraveldc-aviation-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 10700,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-claude-weekly-llama-fallback.service": {
+      "kind": "container",
+      "timeout_s": 5600,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-concierge-travel-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 11000,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-dispatch-desk-memo.service": {
+      "kind": "container",
+      "timeout_s": 14100,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    },
+    "corporatetraveldc-disruption-weather-digest.service": {
+      "kind": "container",
+      "timeout_s": 6700,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-entity-tracking-digest.service": {
+      "kind": "container",
+      "timeout_s": 300,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-ep-advance-venues.service": {
+      "kind": "container",
+      "timeout_s": 8900,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-executive-protection-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 11300,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-gig-economy-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 10700,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-knowledge-graph-compile.service": {
+      "kind": "container",
+      "timeout_s": 1800,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-personal-export-watch.service": {
+      "kind": "container",
+      "timeout_s": 2900,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-personal-notes-import.service": {
+      "kind": "container",
+      "timeout_s": 300,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-research-board-mirror.service": {
+      "kind": "container",
+      "timeout_s": 300,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-retrofit-links.service": {
+      "kind": "container",
+      "timeout_s": 1800,
+      "maintenance": false,
+      "held_timer": true,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-second-brain-daily.service": {
+      "kind": "container",
+      "timeout_s": 6300,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    },
+    "corporatetraveldc-second-brain-demo-archiver-daily.service": {
+      "kind": "container",
+      "timeout_s": 120,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-second-brain-index-scan.service": {
+      "kind": "container",
+      "timeout_s": 300,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-second-brain-rss.service": {
+      "kind": "container",
+      "timeout_s": 900,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-second-brain-weekly-dump.service": {
+      "kind": "host",
+      "timeout_s": 1800,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    },
+    "corporatetraveldc-second-brain-weekly.service": {
+      "kind": "container",
+      "timeout_s": 9200,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    },
+    "corporatetraveldc-semantic-compile-daily.service": {
+      "kind": "container",
+      "timeout_s": 1800,
+      "maintenance": false,
+      "held_timer": false,
+      "maintenance_mode": "none"
+    },
+    "corporatetraveldc-trains-yachts-daily-watch.service": {
+      "kind": "container",
+      "timeout_s": 10700,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-transport-pattern-digest.service": {
+      "kind": "container",
+      "timeout_s": 3300,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "rolling"
+    },
+    "corporatetraveldc-weekly-summary.service": {
+      "kind": "container",
+      "timeout_s": 6500,
+      "maintenance": true,
+      "held_timer": false,
+      "maintenance_mode": "fixed"
+    }
+  },
+  "legacy_hashes": {
+    ".config/systemd/user/corporatetraveldc-brain-swap-guard.service": [
+      "cf4e6b8df926012f554ec935418044bf06c6fe848a518f8f20666337673c0c20"
+    ],
+    ".config/containers/systemd/corporatetraveldc-semantic-compile-daily.container.d/70-brain-swap-guard.conf": [
+      "85016ca4af9b5a10c133b24c2af4c5e13049636e01de53359f4fd383c622b050"
+    ],
+    ".config/containers/systemd/corporatetraveldc-semantic-compile-daily.container.d/60-brain-capacity-policy.conf": [
+      "6fbd91e0ac48313edbb4e7e3614e43dc75e3fb1f5784acfd48472d11b4981eb9",
+      "106668962b2f8b5fe165223b8aa34294f5f2e58709a1da3db6d5237e9c02ccb2"
+    ],
+    ".config/systemd/user/corporatetraveldc-brain-capacity-review.service": [
+      "9b70e2f08451cac2534b435699f991805b342b6039fea2311985ea850658bb1d"
+    ],
+    ".config/systemd/user/corporatetraveldc-brain-capacity-review.timer": [
+      "9adf6be95bb1d8da12ad87d2f7ddeb67914b6d054b9002e1f5a010b53601f8d0"
+    ]
+  }
+}

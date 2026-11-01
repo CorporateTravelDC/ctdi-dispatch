@@ -1,0 +1,15 @@
+[Unit]
+Description=Enforce boot enablement of provisioned local agent remote controls
+Wants=systemd-logind.service
+After=local-fs.target systemd-logind.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/agent-remote-control-boot.py
+ExecStart=/usr/local/libexec/ctdc/agent-remote-control-boot.py
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0077
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

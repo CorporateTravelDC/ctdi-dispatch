@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "docs",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "a docs connector on the client",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "076d1f9af1e665164c7a0ab99f5be8f09342349213b1a7c0cf7001bbe0d284b6",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "SKILL.md",
+      "sha256": "a8ada0a3a3978536d2177fbc2bea71aa06f28818d2adb3980dd6e434488835be",
+      "bytes": 1227
+    }
+  ],
+  "prior_vendor_pin_sha256": "076d1f9af1e665164c7a0ab99f5be8f09342349213b1a7c0cf7001bbe0d284b6",
+  "public_tree_sha256": "076d1f9af1e665164c7a0ab99f5be8f09342349213b1a7c0cf7001bbe0d284b6",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

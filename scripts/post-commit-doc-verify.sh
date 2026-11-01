@@ -86,7 +86,7 @@ fi
 
         echo
         echo "## Deterministic drift checks"
-        bash scripts/check-claude-md-drift.sh 2>&1 || true
+        bash scripts/check-platform-drift.sh 2>&1 || true
 
         echo
         echo "## Failed / crash-looping units"

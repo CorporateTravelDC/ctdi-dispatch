@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "name": "skill-creator",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "drafts a skill in your home; it becomes grantable only after the operator tracks + signs it",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "282963c6de4fedc2a984b946838146d893a72026a1767bc376a88d0965979b93",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "bytes": 11357
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "42765c880e446a83c85f7852fc77b43ecd46c76ca219d68051799ac7425e6943",
+      "bytes": 33351
+    },
+    {
+      "path": "agents/analyzer.md",
+      "sha256": "bf68f4cac5a56c673a928c2e6d619586c5b93ea364026ab37547772cb45a663a",
+      "bytes": 10376
+    },
+    {
+      "path": "agents/comparator.md",
+      "sha256": "fe1fc9787c495d864c5d6eada47396478572325fde1b33a96d78bf4b849b7a3e",
+      "bytes": 7287
+    },
+    {
+      "path": "agents/grader.md",
+      "sha256": "57134da0c1a4eea33fbd74a1c9c44aa814f07d6bc64de303edb586f941e5d21a",
+      "bytes": 9049
+    },
+    {
+      "path": "assets/eval_review.html",
+      "sha256": "ce477dcc74dc1c0d1d3352646a79167b5a63634e936b1019160025065974e452",
+      "bytes": 7058
+    },
+    {
+      "path": "eval-viewer/generate_review.py",
+      "sha256": "fc9d1b9243fe5ab6012ebd579bd76d0035de1b79fd3b969de114defab26478fb",
+      "bytes": 16365
+    },
+    {
+      "path": "eval-viewer/viewer.html",
+      "sha256": "a53213426ee1100441d701a3a0d49cda7a842f992d2c36463f4d3cc0258575fa",
+      "bytes": 44998
+    },
+    {
+      "path": "references/schemas.md",
+      "sha256": "8e8876180a8989b406a4d3edddf875b04cdfd5805cc8616686d552b11ce4455f",
+      "bytes": 12061
+    },
+    {
+      "path": "scripts/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "scripts/aggregate_benchmark.py",
+      "sha256": "123ef128ea5ccc01a4b1ac212ef5567f21e9c13d3d240609780beeb3200c49aa",
+      "bytes": 14386
+    },
+    {
+      "path": "scripts/generate_report.py",
+      "sha256": "13df7118a3c50c83c4c3250a606d5f2b20b25a3d44cbc392b3d669ec75281453",
+      "bytes": 12847
+    },
+    {
+      "path": "scripts/improve_description.py",
+      "sha256": "87d864570220b699fac52da309d2d6efdb060647bfebc74f768128e646accf80",
+      "bytes": 11116
+    },
+    {
+      "path": "scripts/package_skill.py",
+      "sha256": "1a33059b0db1ef73375d46d513e5ea81369d2e8838c970597b0d52ddef8d1c0f",
+      "bytes": 4234
+    },
+    {
+      "path": "scripts/quick_validate.py",
+      "sha256": "f65315971b2a723349234947062de2ffae76cad98884b7f441e453e6dbe01892",
+      "bytes": 6021
+    },
+    {
+      "path": "scripts/run_eval.py",
+      "sha256": "43e3b8f80dbf69c343967ba77e268fae991d9fa3ed68b32a0ff02532cd48657f",
+      "bytes": 11464
+    },
+    {
+      "path": "scripts/run_loop.py",
+      "sha256": "7bd6f674203168520517eec94c55f493c0d154339b061b4d7c0f0dad187d0f21",
+      "bytes": 13605
+    },
+    {
+      "path": "scripts/utils.py",
+      "sha256": "3af8ae62c40c73ab712207436a0d9a981e845f25c5a7040229eb189cc8e45bb1",
+      "bytes": 1661
+    }
+  ],
+  "prior_vendor_pin_sha256": "282963c6de4fedc2a984b946838146d893a72026a1767bc376a88d0965979b93",
+  "public_tree_sha256": "282963c6de4fedc2a984b946838146d893a72026a1767bc376a88d0965979b93",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

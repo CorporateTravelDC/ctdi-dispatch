@@ -5,6 +5,10 @@
 #                                                     own entries, nobody deletes another's (sticky)
 #     research-intake/           root:ctdc-dev 3775   the operator's research drops; agents watch it
 #     status/                    operator:ctdc-dev 2750  scripts/agent-status-snapshot.py writes here
+#   /srv/ctdc-dev                root:ctdc-dev 2750   code-relay root; submissions/ is sticky shared
+#     submissions/              root:ctdc-dev 3770   account-owned hash-pinned patches
+#     relays/                   root:ctdc-dev 3770   account-owned review records and drafts
+#     checkouts/                operator:ctdc-dev 2750 operator-only write; agents read
 #   /srv/ctdc-blog               operator:operator 2770  Executive Standard / Substack material
 #   /srv/ctdc-<name>             <account>:operator 2770 one PRIVATE folder per agent or service
 #                                                     account in ctdc-dev (box or cloud); <name> is
@@ -26,7 +30,7 @@ SRV="${SRV_ROOT:-/srv}"
 REGISTRY="${CTDC_REGISTRY:-/etc/ctdc-accounts.conf}"
 OPERATOR="${CTDC_OPERATOR:-corporatetraveldc}"
 DEV_GROUP="${CTDC_DEV_GROUP:-ctdc-dev}"
-RESERVED="handoff blog status publish-drop publish-research"
+RESERVED="handoff blog dev status publish-drop publish-research"
 EXECUTE=0; [[ "${1:-}" == --execute ]] && EXECUTE=1
 if (( EXECUTE )) && [[ -z "${SRV_ROOT:-}" ]]; then
     (( EUID == 0 )) || { echo "srv-layout: --execute needs root" >&2; exit 77; }
@@ -48,11 +52,31 @@ private() {  # path owner -- owner + operator only, defaults so each can read wh
     run setfacl -m "u::rwx,g::rwx,o::---,d:u::rwx,d:g::rwx,d:o::---,d:u:${OPERATOR}:rwx,d:u:$2:rwx" "$1"
 }
 
+# Validate the new development tree before any layout mutation. Its root is not
+# group-writable, so submissions cannot replace the operator checkout parent.
+[[ ! -L "$SRV" && ( ! -e "$SRV" || -d "$SRV" ) ]] || { echo "srv-layout: unsafe SRV root" >&2; exit 1; }
+for suffix in ctdc-dev ctdc-dev/submissions ctdc-dev/relays ctdc-dev/checkouts; do
+    path="${SRV}/${suffix}"
+    [[ ! -L "$path" ]] && { [[ ! -e "$path" ]] || [[ -d "$path" ]]; } || {
+        echo "srv-layout: unsafe development path ${path}" >&2; exit 1;
+    }
+    if [[ -e "$path" ]]; then
+        expected=root; [[ "$suffix" == ctdc-dev/checkouts ]] && expected="$OPERATOR"
+        [[ "$(stat -c %U "$path")" == "$expected" ]] || {
+            echo "srv-layout: unexpected owner on ${path}; operator must inspect" >&2; exit 1;
+        }
+    fi
+done
+
 echo "== shared folders under ${SRV}"
 dir "${SRV}/ctdc-handoff" root "$DEV_GROUP" 3775
 dir "${SRV}/ctdc-handoff/research-intake" root "$DEV_GROUP" 3775
 dir "${SRV}/ctdc-handoff/status" "$OPERATOR" "$DEV_GROUP" 2750
 private "${SRV}/ctdc-blog" "$OPERATOR"
+dir "${SRV}/ctdc-dev" root "$DEV_GROUP" 2750
+dir "${SRV}/ctdc-dev/submissions" root "$DEV_GROUP" 3770
+dir "${SRV}/ctdc-dev/relays" root "$DEV_GROUP" 3770
+dir "${SRV}/ctdc-dev/checkouts" "$OPERATOR" "$DEV_GROUP" 2750
 
 echo "== one private folder per account in ${DEV_GROUP}"
 members=" $(getent group "$DEV_GROUP" | cut -d: -f4 | tr ',' ' ') "

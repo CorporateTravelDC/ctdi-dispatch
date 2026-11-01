@@ -68,6 +68,7 @@ import os
 import bisect
 import re
 import time
+from itertools import count, islice
 import sqlite3  # only for isinstance() in _create_schema()'s test-double branch -- see its docstring
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -293,6 +294,46 @@ def _apply_batch_timeouts(conn) -> list[str]:
     return issued
 
 
+# Stream server-side on Postgres: fetchmany() on an unnamed psycopg cursor
+# still buffers the complete result in libpq. Named cursors bound the read
+# independently of corpus/edge count. The SQLite path is an isolated test twin.
+_STREAM_CURSOR_IDS = count()
+_COMPILE_BATCH_ROWS = 1000
+
+
+def _iter_rows(conn, sql: str, params=()):
+    if isinstance(conn, sqlite3.Connection):
+        cur = conn.cursor()
+    else:
+        cur = conn.cursor(name=f"semantic_compile_{next(_STREAM_CURSOR_IDS)}")
+        cur.itersize = _COMPILE_BATCH_ROWS
+    try:
+        cur.execute(sql, params)
+        yield from cur
+    finally:
+        cur.close()
+
+
+def _write_batches(conn, sql: str, rows) -> int:
+    """Write every row within the caller's transaction, with bounded buffers.
+
+    Use the cursor API directly. The connection compatibility shim requests
+    returning=True and retains per-statement results until its cursor closes;
+    a million-edge write must not keep a million empty result objects alive.
+    Neither this helper nor its callers commit independently.
+    """
+    rows = iter(rows)
+    cur = conn.cursor()
+    total = 0
+    try:
+        while batch := list(islice(rows, _COMPILE_BATCH_ROWS)):
+            cur.executemany(sql, batch)
+            total += len(batch)
+    finally:
+        cur.close()
+    return total
+
+
 def _write_model(conn, m: SemanticModel) -> None:
     for f in m.facets():
         conn.execute(
@@ -489,10 +530,10 @@ def assign(conn, m: SemanticModel) -> dict:
         for anc in m.closure(cid)[1:]:
             add(path, anc, "broader_closure", cid)
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_concepts VALUES (?,?,?,?,?,?)",
         sorted(rows))
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR REPLACE INTO semantic_unmapped_tags(tag, occurrences) VALUES (?,?)",
         sorted(unmapped.items()))
 
@@ -565,7 +606,7 @@ def assign_derivations(conn) -> int:
     ingest-method rules. See assign_chronology() below for the other kind
     of row this table holds."""
     rows: set[tuple[str, str, str, str, str]] = set()
-    for row in conn.execute("SELECT path, content FROM vault_notes_fulltext"):
+    for row in _iter_rows(conn, "SELECT path, content FROM vault_notes_fulltext"):
         path, content = row["path"], row["content"]
         for raw_line in _provenance_lines(content or ""):
             m = _PROVENANCE_LINE_RE.match(raw_line.strip())
@@ -581,7 +622,7 @@ def assign_derivations(conn) -> int:
             elif rest:
                 rows.add((path, relation, rest, evidence, "evidenced"))
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)",
         sorted(rows))
     return len(rows)
@@ -826,7 +867,7 @@ def assign_chronology(conn) -> int:
         out.append((path, "preceded_by", predecessor, evidence, "chronological"))
         prev_path[concept_id] = path
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
     return len(out)
 
@@ -1073,12 +1114,13 @@ def assign_geometry(conn) -> int:
 
     conn.execute("DELETE FROM semantic_note_derivations WHERE kind='geometric'")
 
-    notes = conn.execute("""
+    notes = _iter_rows(conn, """
         SELECT vd.path, vd.mtime, vd.indexed_at,
-               COALESCE(nf.title, '') AS title, COALESCE(nf.content, '') AS content
+               COALESCE(nf.title, '') AS title,
+               substr(COALESCE(nf.content, ''), 1, 20000) AS content
         FROM vault_documents vd
         LEFT JOIN vault_notes_fulltext nf ON nf.path = vd.path
-    """).fetchall()
+    """)
 
     # (path, instance_type, identifier, dt, epoch, lat, lon, source)
     facts: list[tuple] = []
@@ -1119,48 +1161,47 @@ def assign_geometry(conn) -> int:
             source = "drone_events" if pos else None
             facts.append((n["path"], "drone", uas_id, dt, epoch, lat, lon, source, ts_str))
 
-    refs_out = [(path, itype, ident, ts_str, lat, lon, source)
-                for path, itype, ident, _dt, _epoch, lat, lon, source, ts_str in facts]
-    conn.executemany(
+    refs_out = ((path, itype, ident, ts_str, lat, lon, source)
+                for path, itype, ident, _dt, _epoch, lat, lon, source, ts_str in facts)
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_instance_refs VALUES (?,?,?,?,?,?,?)", refs_out)
 
-    out: list[tuple] = []
-    n = len(facts)
-    for i in range(n):
-        path_i, type_i, id_i, dt_i, _epoch_i, lat_i, lon_i, _src_i, _ts_i = facts[i]
-        for j in range(i + 1, n):
-            path_j, type_j, id_j, dt_j, _epoch_j, lat_j, lon_j, _src_j, _ts_j = facts[j]
-            if path_i == path_j:
-                continue
-            if type_i == type_j and id_i == id_j:
-                continue  # same real-world instance -- concept co-occurrence, not geometry
+    def edge_rows():
+        n = len(facts)
+        for i in range(n):
+            path_i, type_i, id_i, dt_i, _epoch_i, lat_i, lon_i, _src_i, _ts_i = facts[i]
+            for j in range(i + 1, n):
+                path_j, type_j, id_j, dt_j, _epoch_j, lat_j, lon_j, _src_j, _ts_j = facts[j]
+                if path_i == path_j:
+                    continue
+                if type_i == type_j and id_i == id_j:
+                    continue  # same real-world instance -- concept co-occurrence, not geometry
 
-            time_delta_min = abs((dt_i - dt_j).total_seconds()) / 60.0
-            time_ok = time_delta_min <= GEO_TIME_WINDOW_MIN
+                time_delta_min = abs((dt_i - dt_j).total_seconds()) / 60.0
+                time_ok = time_delta_min <= GEO_TIME_WINDOW_MIN
 
-            distance_km = None
-            space_ok = False
-            if lat_i is not None and lat_j is not None:
-                distance_km = _haversine_km(lat_i, lon_i, lat_j, lon_j)
-                space_ok = distance_km <= radius_km
+                distance_km = None
+                space_ok = False
+                if lat_i is not None and lat_j is not None:
+                    distance_km = _haversine_km(lat_i, lon_i, lat_j, lon_j)
+                    space_ok = distance_km <= radius_km
 
-            if not time_ok and not space_ok:
-                continue
-            matched = "both" if (time_ok and space_ok) else ("space_only" if space_ok else "time_only")
-            dist_str = f"{distance_km:.2f}" if distance_km is not None else ""
+                if not time_ok and not space_ok:
+                    continue
+                matched = "both" if (time_ok and space_ok) else ("space_only" if space_ok else "time_only")
+                dist_str = f"{distance_km:.2f}" if distance_km is not None else ""
 
-            ev_fwd = (f"self={type_i}:{id_i};target={type_j}:{id_j};"
-                      f"distance_km={dist_str};time_delta_min={time_delta_min:.1f};"
-                      f"method=haversine;matched={matched}")
-            ev_rev = (f"self={type_j}:{id_j};target={type_i}:{id_i};"
-                      f"distance_km={dist_str};time_delta_min={time_delta_min:.1f};"
-                      f"method=haversine;matched={matched}")
-            out.append((path_i, "proximate_to", path_j, ev_fwd, "geometric"))
-            out.append((path_j, "proximate_to", path_i, ev_rev, "geometric"))
+                ev_fwd = (f"self={type_i}:{id_i};target={type_j}:{id_j};"
+                          f"distance_km={dist_str};time_delta_min={time_delta_min:.1f};"
+                          f"method=haversine;matched={matched}")
+                ev_rev = (f"self={type_j}:{id_j};target={type_i}:{id_i};"
+                          f"distance_km={dist_str};time_delta_min={time_delta_min:.1f};"
+                          f"method=haversine;matched={matched}")
+                yield (path_i, "proximate_to", path_j, ev_fwd, "geometric")
+                yield (path_j, "proximate_to", path_i, ev_rev, "geometric")
 
-    conn.executemany(
-        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
-    return len(out)
+    return _write_batches(conn,
+        "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", edge_rows())
 
 
 # Geometric reasoning Phase 2 (design doc §3, "provable tier"). Both numbers
@@ -1304,30 +1345,25 @@ def assign_causal_associations(conn, window_days: int = CAUSAL_WINDOW_DAYS,
     pair_notes: dict[tuple[str, str], set[int]] = {}
     npair_id: dict[tuple[str, str], int] = {}
     npair_of: list[tuple[str, str]] = []
-    cur = conn.execute(
-        "SELECT path, target, evidence FROM semantic_note_derivations "
-        "WHERE kind='geometric'")
-    while True:
-        chunk = cur.fetchmany(20000)
-        if not chunk:
-            break
-        for r in chunk:
-            m = _GEOMETRY_EVIDENCE_RE.match(r["evidence"] or "")
-            if not m:
-                continue
-            a, b = m.group("self"), m.group("target")
-            if a == b:
-                continue
-            pa, pb = r["path"], r["target"]
-            if pa not in note_ts or pb not in note_ts:
-                continue  # outside the rolling window
-            npair = (pa, pb) if pa < pb else (pb, pa)
-            nid = npair_id.get(npair)
-            if nid is None:
-                nid = npair_id[npair] = len(npair_of)
-                npair_of.append(npair)
-            key = (a, b) if a < b else (b, a)
-            pair_notes.setdefault(key, set()).add(nid)
+    for r in _iter_rows(conn,
+            "SELECT path, target, evidence FROM semantic_note_derivations "
+            "WHERE kind='geometric'"):
+        m = _GEOMETRY_EVIDENCE_RE.match(r["evidence"] or "")
+        if not m:
+            continue
+        a, b = m.group("self"), m.group("target")
+        if a == b:
+            continue
+        pa, pb = r["path"], r["target"]
+        if pa not in note_ts or pb not in note_ts:
+            continue  # outside the rolling window
+        npair = (pa, pb) if pa < pb else (pb, pa)
+        nid = npair_id.get(npair)
+        if nid is None:
+            nid = npair_id[npair] = len(npair_of)
+            npair_of.append(npair)
+        key = (a, b) if a < b else (b, a)
+        pair_notes.setdefault(key, set()).add(nid)
 
     # Chronological order between note pairs, read from the edges Phase 1.5
     # already wrote. Deliberately not recomputed from timestamps: preceded_by
@@ -1433,7 +1469,7 @@ def assign_causal_associations(conn, window_days: int = CAUSAL_WINDOW_DAYS,
                   f"window_days={window_days};samples={sample}")
             out.append((anchor, "statistically_associated", other_ent, ev, "causal"))
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
     return len(out)
 
@@ -1674,7 +1710,7 @@ def assign_clusters(conn, min_size: int = CLUSTER_MIN_SIZE) -> int:
             out.append((anchors.get(ent, cluster_id), "member_of_cluster",
                         cluster_id, ev, "cluster"))
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
     return len(out)
 
@@ -1779,7 +1815,7 @@ def assign_concept_associations(conn, m: SemanticModel,
                   f"lift={lift:.2f};tier={tier};notes={n_notes};samples={samples}")
             out.append((anchor, "concept_associated", f"concept:{y}", ev, "conceptual"))
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
     return len(out)
 
@@ -1842,7 +1878,7 @@ def assign_concept_clusters(conn, min_size: int = CLUSTER_MIN_SIZE,
             out.append((anchors.get(c, cluster_id), "member_of_concept_cluster",
                         cluster_id, ev, "concept_cluster"))
 
-    conn.executemany(
+    _write_batches(conn,
         "INSERT OR IGNORE INTO semantic_note_derivations VALUES (?,?,?,?,?)", out)
     return len(out)
 
@@ -2347,14 +2383,20 @@ def compile_layer(db_path: str | None = None,
             _create_schema(conn)
             _write_model(conn, m)
             result = assign(conn, m)
+            _log.info("semantic compile: phase=derivations started")
             result["derivations"] = assign_derivations(conn)
             result["chronology_edges"] = assign_chronology(conn)
+            _log.info("semantic compile: phase=geometry started")
             result["geometry_edges"] = assign_geometry(conn)
             # Phase 2 runs AFTER assign_geometry in the same pass, by necessity:
             # it aggregates the proximate_to edges that call just wrote. Running it
             # against a stale graph would measure the previous compile's geometry.
+            _log.info("semantic compile: phase=causal started; geometry_edges=%d",
+                      result["geometry_edges"])
             result["causal_edges"] = assign_causal_associations(conn)
             # Phase 3 consumes Phase 2's output, so it runs last in the chain.
+            _log.info("semantic compile: phase=clusters started; causal_edges=%d",
+                      result["causal_edges"])
             result["cluster_edges"] = assign_clusters(conn)
             # Concept level: reads the semantic_note_concepts assign() wrote
             # above; independent of the transit chain.

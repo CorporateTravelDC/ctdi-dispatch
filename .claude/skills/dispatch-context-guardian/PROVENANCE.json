@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "original_source": "CorporateTravelDC",
+  "version_controlled_author": "CorporateTravelDC",
+  "version": "2.0.0",
+  "changes": "Client-neutral summary core; Claude/Codex adapters; connector workflow; no keys/transcripts/raw responses",
+  "status": "prepared; not installed or deployed",
+  "name": "dispatch-context-guardian",
+  "needs": "summary-only public GETs for local snapshots; Codex/Claude hook trust is operator-controlled; cloud clients use their own status/research/workspace tools",
+  "original_source_status": "preserved-upstream-distribution",
+  "source_kind": "local-platform"
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=Review shared heavy-job capacity and committed semantic evidence when 15 days are due
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=oneshot
+Slice=production.slice
+Nice=15
+MemoryMax=192M
+MemorySwapMax=0
+TimeoutStartSec=180
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/usr/bin/python3 -B /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/brain-capacity-review.py

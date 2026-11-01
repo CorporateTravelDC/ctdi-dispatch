@@ -1,3 +1,7 @@
+# Opt-in deployment template (operator clarification 2026-10-28): for human
+# teammate accounts in a multi-human/multi-agent deployment, including public
+# installations. The sole operator account on this Pi does not install or use
+# this slice. Absence in the operator's manager is intentional, not drift.
 [Unit]
 Description=CTDI Dispatch -- human teammate sessions (ctdc-ops accounts), resource-isolated from production and from agents
 Documentation=man:systemd.slice(5) docs/AGENT_SEGMENTATION.md

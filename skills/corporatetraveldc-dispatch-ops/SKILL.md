@@ -9,6 +9,12 @@ Rewritten 2026-08-02 against live, verified state (prior version was stale since
 
 **Refreshed 2026-10-15** against HEAD 1491bf5a plus the batch staged for the next relay and the live Pi (~01:45Z / 2026-10-14 21:45 ET). Corrections are struck through with the date; nothing below was re-verified unless it says so.
 
+## Segmented agent authentication (2026-10-29 correction)
+
+This account boundary takes precedence over operator/service-token examples below. A skill grant does not grant an API action. Use only your own authenticated connector for an operation it actually exposes; the current eight-tool gateway has no watchlist action. With an on-box session, use only your operator-issued `~/.config/ctdc/api-token`, read inside the request process after checking owner, regular-file status, no group/other permissions, no symlink and nonempty content. The env wrapper does not load that file and the agent subset deliberately excludes `DISPATCH_ADMIN_TOKEN`. Never seek production env files or another account's credential.
+
+Flight watch creation requires an admin-tier personal token explicitly scoped to `watchlist.flight.add`; `added_by` should identify your account. A 201 confirms added/refreshed, not milestone or push delivery. Pushes require separate authorization. Missing/denied capability means report it to the operator; never self-mint, widen scope or substitute a shared token. A 403 cannot distinguish expiry/revocation from a tier/scope problem. Do not blindly retry a write with an uncertain outcome. Operator provisioning and the complete fallback are in `docs/PER_AGENT_API_ACTIONS.md` in the repository. Operator examples below remain operator-only.
+
 ## Base URL and access model
 
 ```

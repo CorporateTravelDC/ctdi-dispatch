@@ -1,0 +1,18 @@
+[Unit]
+Description=Bounded SDIO recovery after verified backup failover
+After=NetworkManager.service network-online.target
+ConditionPathExists=/etc/ctdc-wifi-sdio-recovery.conf
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/wifi-sdio-recover.py config/network/wifi-sdio-recovery.conf
+ExecStart=/usr/local/libexec/ctdc/wifi-sdio-recover.py
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+StateDirectory=ctdc-wifi-recovery
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=90
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ctdc-wifi-recovery

@@ -54,6 +54,11 @@ def test_public_demo_modules_never_name_the_production_accessor():
         assert "pg_conn" not in used, f"{rel} names pg_conn"
 
 
+def test_promoted_archive_uses_only_the_demo_accessor():
+    used = names_used(REPO / "src/demo/promoted_archive.py")
+    assert used == {"demo_pg_conn"}
+
+
 def test_only_the_bridge_and_the_definer_name_both_accessors():
     both = [p for p in python_files() if ACCESSORS <= names_used(p) and p != DEFINER]
     assert both == [BRIDGE], [str(p.relative_to(REPO)) for p in both]

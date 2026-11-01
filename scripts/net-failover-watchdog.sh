@@ -29,11 +29,9 @@
 #      and made browsers show offline). Across the entire outage NM
 #      logged nothing but a routine DHCP renew: no carrier change, no
 #      state change, so no failover was ever even attempted.
-#      Re-enabling that probe would NOT have fixed this anyway -- NM's
-#      connectivity check only reports a state, it never demotes a
-#      default route or switches interfaces. Hence an external, active
-#      checker: this script. (Operator decision 2026-09-05: leave the NM
-#      probe disabled, do the health checking here.)
+#      2026-10-29 correction: NM connectivity checking can add a route
+#      penalty to failing devices. The operator requested it enabled in
+#      addition to this explicit failover watchdog. Neither repairs SDIO.
 #
 # DNS needs no special handling: /etc/resolv.conf is just `nameserver
 # 127.0.0.1` and the local Unbound is a full RECURSIVE resolver with no
@@ -75,7 +73,7 @@ authhdr() { local -n _ah="$1"; [[ -n "${_AUTHHDR_FD:-}" ]] && exec {_AUTHHDR_FD}
 STATE_DIR="/var/lib/corporatetraveldc/net-failover-watch"
 STATE_FILE="${STATE_DIR}/state"
 LOG_FILE="${STATE_DIR}/watch.log"
-LOCK_FILE="/run/user/$(id -u)/net-failover-watchdog.lock"
+LOCK_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/net-failover-watchdog.lock"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 
@@ -257,41 +255,7 @@ probe_iface() {
     return 1
 }
 
-iface_has_carrier() {
-    local ifc="$1"
-    [[ "$(cat "/sys/class/net/${ifc}/operstate" 2>/dev/null)" == "up" ]]
-}
-
-current_default_iface() {
-    ip route show default 2>/dev/null | awk 'NR==1{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}'
-}
-
-configured_metric() {
-    nmcli -g ipv4.route-metric connection show "$1" 2>/dev/null
-}
-
-# Reactivating ONLY the backup connection applies its new metric without
-# touching the primary -- the primary's route stays exactly as it is, so
-# a still-working-but-slower primary is never torn down underneath us.
-#
-# 2026-10-23: on FAIL-BACK with the backup device gone (tether unplugged,
-# no carrier) there is nothing to reactivate -- `nmcli connection up`
-# fails, and from 2026-10-15 that failure left failed_over=1 forever,
-# paging FAIL-BACK FAILED every 30 min until the timer was disabled. The
-# saved metric is still written to the profile, so the next activation
-# (autoconnect) comes up below the primary; that counts as restored.
-apply_backup_metric() {
-    local metric="$1" mode="${2:-}"
-    nmcli connection modify "${BACKUP_CON}" ipv4.route-metric "${metric}" 2>&1 \
-        || { log "error" "nmcli modify failed for '${BACKUP_CON}'"; return 1; }
-    if [[ "${mode}" == "failback" ]] && ! iface_has_carrier "${BACKUP_IF}"; then
-        log "info" "backup ${BACKUP_IF} has no carrier -- metric ${metric} saved to the profile, nothing to reactivate"
-        return 0
-    fi
-    nmcli connection up "${BACKUP_CON}" >/dev/null 2>&1 \
-        || { log "error" "nmcli up failed for '${BACKUP_CON}'"; return 1; }
-    return 0
-}
+source "$(dirname "${BASH_SOURCE[0]}")/lib/net_failover_routes.sh"
 
 maybe_alert() {
     local title="$1" msg="$2" now last
@@ -313,6 +277,7 @@ print_status() {
     echo "fail_streak:  $(state_get fail_streak 0)"
     echo "ok_streak:    $(state_get ok_streak 0)"
     echo "saved_backup_metric: $(state_get saved_backup_metric '(unset)')"
+    echo "parked:       $(cfg NET_FAILOVER_PARKED false)"
 }
 
 if [[ "${1:-}" == "--status" ]]; then
@@ -322,13 +287,37 @@ fi
 
 # Single instance -- a 60s timer must never stack runs while an nmcli
 # reactivation is in flight.
-exec 9>"${LOCK_FILE}"
+if ! { exec 9>"${LOCK_FILE}"; }; then
+    log "error" "cannot open the single-instance lock"
+    exit 1
+fi
 if ! flock -n 9; then
     log "info" "another run holds the lock; skipping this cycle"
     exit 0
 fi
 
 failed_over="$(state_get failed_over 0)"
+
+# --- parked ------------------------------------------------------------
+# 2026-11-01 (operator): the failover SIM failed, so there is no backup
+# uplink for now. NET_FAILOVER_PARKED=true in dispatch.env stops all
+# probing and route changes (a dead enu1 otherwise costs every 60s cycle
+# its full probe timeouts). A park that lands while failed over restores
+# the backup's saved metric once, so the primary carries the default route
+# again. Remove the key, or set it to false, to resume failover.
+if [[ "$(cfg NET_FAILOVER_PARKED false)" == "true" ]]; then
+    if [[ "${failed_over}" -eq 1 ]]; then
+        saved="$(state_get saved_backup_metric 600)"
+        log "warn" "failover parked while failed over -- restoring ${BACKUP_CON} metric ${FAILOVER_METRIC} -> ${saved}"
+        if apply_backup_metric "${saved}" failback; then
+            state_set failed_over 0
+        else
+            maybe_alert "NET: PARK RESTORE FAILED" \
+                "Failover is parked, but restoring '${BACKUP_CON}' to metric ${saved} did not apply -- the box may still route via ${BACKUP_IF}. See ${LOG_FILE}."
+        fi
+    fi
+    exit 0
+fi
 
 primary_ok=1
 probe_iface "${PRIMARY_IF}" || primary_ok=0

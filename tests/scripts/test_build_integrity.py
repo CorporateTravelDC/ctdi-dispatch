@@ -230,6 +230,8 @@ class NpmLockDivergence(unittest.TestCase):
             (d / "package.json").write_text(json.dumps(pj))
             r = subprocess.run(["npm", "ci", "--offline", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
                                cwd=d, capture_output=True, text=True, timeout=180)
+            if "ENOTCACHED" in r.stderr:
+                self.skipTest("npm offline cache lacks the deliberate mismatch dependency; rerun with a populated cache")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("in sync", r.stderr + r.stdout)
 

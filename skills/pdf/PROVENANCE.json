@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "name": "pdf",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "local file I/O only",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "f3cf190fe5d7dd3ac2382c6636c64a950aeeace461282216609c1ee324d89ef3",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "FORMS.md",
+      "sha256": "9530b3f57034792e0242a3abfe8b3c296466329551916f2ff6c5a70db78f7e44",
+      "bytes": 11854
+    },
+    {
+      "path": "LICENSE.txt",
+      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "bytes": 1467
+    },
+    {
+      "path": "REFERENCE.md",
+      "sha256": "03a5f964f8abecbbe156f363356e927e864d7ee964f1012c84ee1bfc8acbeb95",
+      "bytes": 16692
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "9f78b8359fbd4943ad260a7a1e436e5a96503406d6c34e99f69223d647d85b9c",
+      "bytes": 8072
+    },
+    {
+      "path": "scripts/check_bounding_boxes.py",
+      "sha256": "0ced522402dd7b3c82a0be9518cf4e485fa9cc0467d7beab6ddb04cb36fcc3e1",
+      "bytes": 2774
+    },
+    {
+      "path": "scripts/check_fillable_fields.py",
+      "sha256": "1fe10b9980a5493c9bbec8c20630c603eaa475b45403751c08f26738736647b8",
+      "bytes": 268
+    },
+    {
+      "path": "scripts/convert_pdf_to_images.py",
+      "sha256": "7f58e292a67e18a8ff000d30bad2469389546731f7e8a698cc1d0aed001ea15d",
+      "bytes": 1008
+    },
+    {
+      "path": "scripts/create_validation_image.py",
+      "sha256": "8fa9fd7962c9f940045b81cf6b991e7c1057c1838e3f9cc6d305007a222ffebf",
+      "bytes": 1258
+    },
+    {
+      "path": "scripts/extract_form_field_info.py",
+      "sha256": "bb235b36f497bbb1c7c6821cecf527bbba7213520de11219da99f7b13a38c109",
+      "bytes": 4300
+    },
+    {
+      "path": "scripts/extract_form_structure.py",
+      "sha256": "6814e3fe8f78c2b16d766c132b5a727ff7a31b71d76a7d46bd6e40fe50bc97c5",
+      "bytes": 3945
+    },
+    {
+      "path": "scripts/fill_fillable_fields.py",
+      "sha256": "d140872c2e92e41b1e05370ae8d270c5b7f5ebdf55d9905f03bc974a9c708ff5",
+      "bytes": 3819
+    },
+    {
+      "path": "scripts/fill_pdf_form_with_annotations.py",
+      "sha256": "8a56e063a49ed53c0b0e1d312ecf8023af76816ed139486ec3b539873de202fd",
+      "bytes": 3235
+    }
+  ],
+  "prior_vendor_pin_sha256": "f3cf190fe5d7dd3ac2382c6636c64a950aeeace461282216609c1ee324d89ef3",
+  "public_tree_sha256": "f3cf190fe5d7dd3ac2382c6636c64a950aeeace461282216609c1ee324d89ef3",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

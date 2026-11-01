@@ -15,7 +15,10 @@ scoped file instead of dispatch-secrets.env.
 
   generate.py [--check]              default: report present/missing NAMES only
   generate.py --write [svc ...]      root only; all services when none given
-Never prints a value.
+Never prints a value. The demo-archive profile is the deliberate exception to
+SECRETS: it reads only allowlisted DEMO_PG_* keys from demo.env. An explicit
+SERVICE_ENV_SOURCE overrides this selection for fixtures/operator tooling;
+using a source without the demo reader keys fails before any profile is written.
 """
 from __future__ import annotations
 
@@ -31,6 +34,9 @@ sys.path.insert(0, str(HERE.parent / "lib"))
 from with_dispatch_env import load  # noqa: E402
 
 SECRETS = os.environ.get("SERVICE_ENV_SOURCE", "/etc/corporatetraveldc/dispatch-secrets.env")
+# This reader needs the existing demo role, not the production role or demo
+# admin/session secrets. Keep its source separate when generating ALL profiles.
+SERVICE_SOURCES = {"demo-archive": "/etc/corporatetraveldc/demo.env"}
 OUT_DIR = Path(os.environ.get("SERVICE_ENV_OUT", "/etc/corporatetraveldc/svc"))
 OUT_GROUP = os.environ.get("SERVICE_ENV_GROUP", "corporatetraveldc")
 
@@ -81,15 +87,29 @@ def main(argv=None) -> int:
     ap.add_argument("--check", action="store_true")
     ap.add_argument("services", nargs="*")
     a = ap.parse_args(argv)
-    if not os.access(SECRETS, os.R_OK):
-        print(f"generate: cannot read {SECRETS}", file=sys.stderr)
-        return 66
-    source = load([SECRETS], {})
+    selected = services(a.services)
+    sources = {}
+    # Resolve/read every required source before writing any output profile.
+    for al in selected:
+        path = os.environ.get("SERVICE_ENV_SOURCE") or SERVICE_SOURCES.get(al.stem, SECRETS)
+        if not os.access(path, os.R_OK):
+            print(f"generate: {al.stem}: configured source unreadable; nothing written", file=sys.stderr)
+            return 66
+        sources[al.stem] = load([path], {})
+        if al.stem == "demo-archive":
+            needed = read_allowlist(al)
+            values = sources[al.stem]
+            if (any(not values.get(k) for k in needed)
+                    or values.get("DEMO_PG_USER") != "demo"
+                    or values.get("DEMO_PG_DB") != "corporatetraveldc_demo"):
+                print("generate: demo-archive: incomplete or non-reader demo configuration; nothing written", file=sys.stderr)
+                return 66
     if a.write and os.geteuid() != 0:
         print("generate: --write needs root (sudo)", file=sys.stderr)
         return 77
     rc = 0
-    for al in services(a.services):
+    for al in selected:
+        source = sources[al.stem]
         names = read_allowlist(al)
         present, missing = scoped(source, names)
         print(f"{al.stem:24s} names={len(names):3d} present={len(present):3d} missing={len(missing)}"
@@ -99,7 +119,7 @@ def main(argv=None) -> int:
             print(f"  wrote {OUT_DIR / (al.stem + '.env')} (root:{OUT_GROUP} 0640)")
         if missing:
             rc = 1
-    print(f"(source has {len(source)} secret names; nothing above is a value)")
+    print("(configured sources read; nothing above is a value)")
     return rc
 
 

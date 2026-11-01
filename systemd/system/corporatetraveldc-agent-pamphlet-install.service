@@ -1,0 +1,13 @@
+[Unit]
+Description=Install signed-source pamphlets for activated local agent accounts
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/agent-pamphlet-install.py
+ExecStart=/usr/local/libexec/ctdc/agent-pamphlet-install.py
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0027
+TimeoutStartSec=600
+PrivateTmp=true
+# Home writes are deliberate; source rendering runs as the operator, not root.

@@ -23,6 +23,7 @@ signed, manifest-verified skill the account is granted, scrub-gated.
 from __future__ import annotations
 
 import html
+import hashlib
 import importlib.util
 import json
 import os
@@ -191,7 +192,7 @@ TOOLS = [
                      "required": ["to", "thread", "subject", "body"]}},
     {"name": "research_list", "description": "List files in the second-brain research scope (Series/, 04-Syntheses/, ...).",
      "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
-    {"name": "research_read", "description": "Read one file in the second-brain research scope.",
+    {"name": "research_read", "description": "Read one file in the second-brain research scope, or the shared platform-context resource.",
      "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
      "annotations": {"readOnlyHint": True}},
     {"name": "workspace_contribute", "description": "Add a draft to the shared workspace (create-only, attributed; you never publish).",
@@ -203,9 +204,13 @@ TOOLS = [
                                                        "participants": {"type": "array", "items": {"type": "object"}},
                                                        "deadline_hours": {"type": "number"}},
                      "required": ["mode", "subject", "participants"]}},
-    {"name": "skill_read", "description": "Read the SKILL.md of a signed skill you are granted (instructions only; "
-                                          "you run nothing here). No name, or '*', lists the names you are granted.",
-     "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
+    {"name": "skill_read", "description": "Read a granted signed skill or a supporting UTF-8 package file "
+                                          "(instructions only; nothing runs). No name or '*' lists granted skills. "
+                                          "Default path is SKILL.md; path '*' lists verified package files. Name '*' with path '*' returns verified granted metadata; all agents use the same catalog.",
+     "inputSchema": {"type": "object", "properties": {
+         "name": {"type": "string"},
+         "path": {"type": "string", "description": "Package-relative UTF-8 file; '*' lists files; default SKILL.md"}}},
+     "annotations": {"readOnlyHint": True}},
 ]
 
 
@@ -227,42 +232,82 @@ def _skill_grants():
     return _SKILL_GRANTS_MOD
 
 
-def _skill_read(name: str | None, account: str):
-    """2026-10-16: the READ side of the skill grants for connectors. Returns the
-    SKILL.md text of skill `name` when (a) the name is well-formed, (b) the
-    skill is in the SIGNED catalog and every file matches MANIFEST.sha256,
-    (c) the grants file grants it to this account (deny wins; a service
-    account such as ctdc-agent-anthropic-cowork is a valid grant target for
-    reading -- apply still installs files for kind=agent rows only), and (d)
-    the text passes the scrub gate. No name / '*' -> the granted names only.
-    Every refusal is a generic string: no paths, no reasons that enumerate."""
+def _skill_read(name: str | None, account: str, path: str = "SKILL.md"):
+    """Read one granted, manifest-verified package; never execute its helpers.
+
+    Existing no-name/star calls still list signed skill names. A named package
+    accepts a relative text path or '*' for its verified file list. All files
+    in the package must verify, even when only one reference is requested.
+    Refusals expose no filesystem paths or ungranted package contents.
+    """
     sg = _skill_grants()
     try:
         rules = sg.load_rules(SKILL_GRANTS_CONF)
         cat = sg.catalog(SKILLS_REPO, sg.VENDOR_ROOT)
-    except (OSError, ValueError):                 # unreadable / bad grants file = HOLD, like apply
+    except (OSError, ValueError):
         raise ValueError("skills unavailable") from None
     granted = sg.resolve(rules, account, cat)[0]
     readable = sorted(n for n in granted if cat[n]["source"] == "signed")
     name = (name or "").strip()
     if name in ("", "*"):
+        if path == "*":
+            metadata = []
+            for selected in readable:
+                record = json.loads(_skill_read(selected, account, "PROVENANCE.json"))
+                metadata.append({key: record[key] for key in (
+                    "name", "original_source", "original_source_status",
+                    "version_controlled_author", "source_kind", "needs")})
+            return metadata
+        if path != "SKILL.md":
+            raise ValueError("invalid catalog path")
         return readable
     if not sg.SKILL_RE.match(name):
         raise ValueError("invalid skill name")
     if name not in readable:
         raise ValueError("skill not granted")
+    if (not isinstance(path, str) or not path or len(path) > 512
+            or "\\" in path or "%" in path
+            or any(ord(c) < 32 or ord(c) == 127 for c in path)
+            or path.startswith("/") or ":" in path
+            or any(p in ("", ".", "..") for p in path.split("/"))):
+        raise ValueError("invalid skill path")
     try:
-        files, _ = sg.verify_source(name, cat[name], sg.load_manifest(SKILLS_REPO))
+        manifest = sg.load_manifest(SKILLS_REPO)
+        files, _ = sg.verify_source(name, cat[name], manifest)
     except (OSError, ValueError):
         raise ValueError("skill failed manifest verification") from None
-    path = next((p for rel, p, _ in files if rel == "SKILL.md"), None)
-    if path is None:
-        raise ValueError("skill unavailable")
+    if path == "*":
+        from web import main as wm
+        listing = sorted(rel for rel, _, _ in files)
+        wm._scrub_gate(json.dumps(listing), source="agent-gateway-skill-read")
+        return listing
+    if path not in {rel for rel, _, _ in files}:
+        raise ValueError("skill file unavailable")
+    # Open each component without following links. Recheck the exact returned
+    # bytes against the same manifest, closing the verify/read replacement gap.
+    parent = None
     try:
-        with open(path, "rb") as f:
-            text = f.read(1 << 20).decode("utf-8", "replace")
-    except OSError:
-        raise ValueError("skill unavailable") from None
+        parent = os.open(cat[name]["path"], sg.O_DIR)
+        parts = path.split("/")
+        for part in parts[:-1]:
+            nxt = sg.open_dir(part, parent)
+            os.close(parent)
+            parent = nxt
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(fd, "rb") as f:
+            raw = f.read((1 << 20) + 1)
+        if len(raw) > (1 << 20):
+            raise ValueError("skill file unavailable")
+        if hashlib.sha256(raw).hexdigest() != manifest.get(f"skills/{name}/{path}"):
+            raise ValueError("skill failed manifest verification")
+        text = raw.decode("utf-8")
+        if "\x00" in text:
+            raise ValueError("skill file unavailable")
+    except (OSError, UnicodeError):
+        raise ValueError("skill file unavailable") from None
+    finally:
+        if parent is not None:
+            os.close(parent)
     from web import main as wm
     wm._scrub_gate(text, source="agent-gateway-skill-read")
     return text
@@ -300,6 +345,12 @@ def _call(name: str, args: dict, cx: dict):
         wm._scrub_gate(text, source="agent-gateway-board-post")
         return db.board_insert(acct, str(args["to"])[:64], str(args["thread"])[:64],
                                str(args["subject"])[:300], str(args["body"])[:20000])
+    if name == "research_read" and args.get("path") == "platform-context":
+        from common.platform_context import read_context
+        from web import main as wm
+        out = read_context(require_source=False)
+        wm._scrub_gate(out["content"], source="agent-gateway-shared-context")
+        return out
     if name in ("research_list", "research_read"):
         from second_brain import webdav_client
         from web import main as wm
@@ -331,7 +382,7 @@ def _call(name: str, args: dict, cx: dict):
                                          args.get("participants") or [], float(args.get("deadline_hours") or 48))
     if name == "skill_read":
         skill = args.get("name")
-        return _skill_read(str(skill) if skill is not None else None, acct)
+        return _skill_read(str(skill) if skill is not None else None, acct, args.get("path", "SKILL.md"))
     raise KeyError(name)
 
 
@@ -374,7 +425,9 @@ async def mcp_post(slug: str, request: Request):
             "serverInfo": {"name": "ctdi-dispatch-agent-gateway", "version": "1"},
             "instructions": (f"You are {cx['account']} on the CTDI dispatch platform. Read your pamphlet first: "
                              f"research_read 01-Sources/personal-notes/Series/agents/{cx['account']}/PAMPHLET.md. "
-                             "You draft; you never publish; you never approve anything.")}))
+                             "You draft; you never publish; you never approve anything. "
+                             "Skills share one catalog: discover with skill_read, inspect provenance and requirements, "
+                             "and use only tools actually granted to your identity.")}))
     if method == "ping":
         return JSONResponse(_rpc_result(mid, {}))
     if method == "tools/list":

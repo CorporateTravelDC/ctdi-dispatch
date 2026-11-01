@@ -122,17 +122,33 @@ it just can't see it without an active prober on that side.
 
 ## Why NetworkManager could not save us
 
-NM's connectivity probe is disabled box-wide on purpose:
-`/etc/NetworkManager/conf.d/no-connectivity-check.conf` (re-confirmed live,
-`[connectivity] enabled=false`), applied by `harden-wifi.sh` (in the
-`pihole-unbound-selinux-internal` repo's `scripts/`, not this one) and marked
-*"do not remove"* — the probe fired before Unbound was ready, marked
-connections "limited", and made browsers show offline.
+The earlier installation deliberately disabled NM connectivity checking after
+local DNS startup produced false limited/offline reports. The operator requested
+it re-enabled after the 2026-10-29 SDIO incident. The signed override is
+`config/network/zz-ctdc-connectivity.conf`; the combined operator relay installs
+it and reloads NM configuration without disconnecting interfaces. The original
+vendor URI/response/300-second interval are retained. Preparation alone does not
+prove the installed or D-Bus enabled state; the relay verifies both.
 
-Re-enabling that probe would not help regardless: NM's connectivity check
-only reports a state (`nmcli networking connectivity`); it never demotes a
-default route or switches interfaces. Operator decision 2026-09-05: leave
-the probe disabled, health-check externally.
+Correction to the earlier explanation: NetworkManager's connectivity check can
+penalize a failing device's default-route metric by 20000; it is not merely a
+status flag. See the upstream [connectivity section](https://www.networkmanager.dev/docs/api/latest/NetworkManager.conf.html).
+The external 60-second probe/watchdog remains useful and verifies the route
+actually selected after changing the backup metric. Active connections use
+`nmcli device reapply` rather than a disruptive connection restart. A profile
+write alone never confirms failover/fail-back. Carrier is read from the actual
+carrier file with connected NM state as corroboration, not operstate alone.
+
+The separate root-managed `corporatetraveldc-wifi-sdio-recovery.timer` checks for
+a recent current-boot brcmfmac SDIO halt. The installed helper verifies the
+primary driver, failed primary probes, a healthy backup and the actual backup
+route before reloading only brcmfmac. It rechecks the backup immediately before
+removal, reserves attempts before any action, and defaults to a 30-minute
+cooldown and at most two attempts per boot. It never reboots the host or grants
+an agent arbitrary modprobe/sudo access. A driver reload is not a claim that
+connectivity recovered; the existing watchdog must observe recovery and verify
+fail-back. Missing or invalid evidence withholds the reload. No live driver
+reload was performed to test this prepared repair.
 
 ## The actual mechanism: `scripts/net-failover-watchdog.sh`
 

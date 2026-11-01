@@ -11,7 +11,7 @@
 # part of the same review/commit pass, using your own GPG passphrase.
 #
 # 2026-08-20: --agent mode. A second, no-passphrase GPG key exists
-# specifically for agent-driven signing (see CLAUDE.md "Agent signing" and
+# specifically for agent-driven signing (see config/platform-context.md "Agent signing" and
 # docs/COMPLIANCE_SECURITY.md) -- deliberately a SEPARATE key from the
 # operator's own, so a signature's key ID is itself an honest audit trail
 # of who/what produced it, instead of both being indistinguishable
@@ -33,6 +33,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${REPO_DIR}"
 
+# Common all-origin skill catalog is mandatory before release.
+python3 -B "$(git rev-parse --show-toplevel)/scripts/skills-catalog.py" || exit 1
+
 AGENT_MODE=0
 if [[ "${1:-}" == "--agent" ]]; then
     AGENT_MODE=1
@@ -53,41 +56,25 @@ if [[ "${SIGNING_KEY_FINGERPRINT}" == "0000000000000000000000000000000000000000"
 fi
 
 if [[ "${AGENT_MODE}" -eq 1 ]]; then
-    : "${AGENT_SIGNING_KEY_FINGERPRINT:?AGENT_SIGNING_KEY_FINGERPRINT not set in ${ENV_FILE} -- add it (see CLAUDE.md 'Agent signing')}"
+    : "${AGENT_SIGNING_KEY_FINGERPRINT:?AGENT_SIGNING_KEY_FINGERPRINT not set in ${ENV_FILE} -- add it (see config/platform-context.md 'Agent signing')}"
 fi
 
-# CLAUDE.md drift gate (2026-08-19) -- a change pass cannot complete with
-# CLAUDE.md stale. --pre-sign skips the checker's manifest-vs-signature
+# platform context drift gate (2026-08-19) -- a change pass cannot complete with
+# config/platform-context.md stale. --pre-sign skips the checker's manifest-vs-signature
 # check (check 8): that check would otherwise flag the exact stale-signature
 # state this script exists to fix, before it's had a chance to fix it. Runs
 # before anything below is generated or signed, so a blocked run leaves no
 # partial manifest.
-DRIFT_CHECKER="scripts/check-claude-md-drift.sh"
+DRIFT_CHECKER="scripts/check-platform-drift.sh"
 if [[ -n "${SKIP_DRIFT_CHECK:-}" ]]; then
-    echo "############################################################" >&2
-    echo "## SKIP_DRIFT_CHECK=1 -- CLAUDE.md drift gate bypassed.    ##" >&2
-    echo "## Whatever ${DRIFT_CHECKER} would have found was NOT      ##" >&2
-    echo "## checked. This is not the default; unset it to restore  ##" >&2
-    echo "## the gate. Signing will proceed against possibly-stale   ##" >&2
-    echo "## documentation.                                          ##" >&2
-    echo "############################################################" >&2
+    echo "XX Drift bypass requested -- signing BLOCKED; reconcile the shared context instead." >&2
+    exit 1
 elif [[ ! -x "${DRIFT_CHECKER}" ]]; then
-    echo "!! ${DRIFT_CHECKER} missing or not executable -- CLAUDE.md drift gate" >&2
-    echo "   cannot run, continuing without it. Install it (see CLAUDE.md's" >&2
-    echo "   header) so signing passes stop skipping doc-drift verification." >&2
-else
-    set +e
-    DRIFT_OUTPUT="$("${DRIFT_CHECKER}" --pre-sign 2>&1)"
-    DRIFT_RC=$?
-    set -e
-    if [[ ${DRIFT_RC} -ne 0 ]]; then
-        echo "${DRIFT_OUTPUT}" >&2
-        echo "XX CLAUDE.md drift found (above) -- signing pass BLOCKED." >&2
-        echo "   Reconcile CLAUDE.md against live state, or re-run with" >&2
-        echo "   SKIP_DRIFT_CHECK=1 to sign anyway (not recommended)." >&2
-        exit 3
-    fi
-    echo "[sign-manifest] [OK] ${DRIFT_CHECKER} --pre-sign: no drift."
+    echo "XX ${DRIFT_CHECKER} missing or not executable -- signing BLOCKED." >&2
+    exit 1
+elif ! "${DRIFT_CHECKER}" --pre-sign; then
+    echo "XX Shared platform context drift found -- signing BLOCKED." >&2
+    exit 1
 fi
 
 MANIFEST="MANIFEST.sha256"
@@ -120,7 +107,7 @@ echo "[sign-manifest] Hashing every tracked AND untracked-but-not-ignored file (
 # belong in the integrity baseline at all -- same reasoning as excluding
 # MANIFEST.sha256/.asc from their own hash list.
 #
-# 2026-08-19: docs/CLAUDE_MD_DRIFT_REPORT.md excluded for the identical
+# 2026-08-19: docs/PLATFORM_CONTEXT_DRIFT_REPORT.md excluded for the identical
 # reason -- corporatetraveldc-claude-md-drift-daily overwrites it every
 # 05:15 ET run, so it would otherwise show as manifest drift after every
 # single day's backstop, same class of noise as LIVE_STATE_CHECK above.
@@ -138,7 +125,7 @@ TMP_MANIFEST="$(mktemp "${MANIFEST}.XXXXXX")"
 # live to exactly this: MANIFEST.sha256's mtime was ~6.5h newer than
 # MANIFEST.sha256.asc's, both from this same session's sign-manifest.sh
 # testing, which cascaded into 13 unrelated-looking skill-timer failures
-# simultaneously (see CLAUDE.md Known bad). Both files now only ever
+# simultaneously (see config/platform-context.md Known bad). Both files now only ever
 # change together, atomically, on a fully successful run -- clean up the
 # trap below fires on any early exit and leaves the real MANIFEST/
 # SIGNATURE pair exactly as they were.
@@ -154,7 +141,7 @@ trap 'rm -f "${TMP_MANIFEST}" "${TMP_SIGNATURE:-}"' EXIT
 # file that was never a real part of the repo. Caught live the first time
 # --agent produced a real signed manifest this session.
 git ls-files --cached --others --exclude-standard -z \
-    | grep -zvE "^(MANIFEST\.sha256(\..*)?|docs/LIVE_STATE_CHECK_[0-9-]+\.md|docs/CLAUDE_MD_DRIFT_REPORT\.md)\$" \
+    | grep -zvE "^(MANIFEST\.sha256(\..*)?|docs/LIVE_STATE_CHECK_[0-9-]+\.md|docs/PLATFORM_CONTEXT_DRIFT_REPORT\.md)\$" \
     | xargs -0 sha256sum \
     | sort -k2 \
     > "${TMP_MANIFEST}"

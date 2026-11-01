@@ -7,12 +7,10 @@ corporatetraveldc-runner-demo both mounted `corporatetraveldc-pgsql-sock`
 (the production instance's socket; one instance, one db, one superuser
 role) while loading dispatch.env's production DISPATCH_PG_DB/USER.
 
-The two trusted-side PRODUCERS (the recorder corporatetraveldc-demo and
-corporatetraveldc-second-brain-demo-archiver-daily) write the private
-staging archive demo_snapshots to Postgres and serve nothing publicly; they
-keep the socket for now and are the documented follow-up (a demo-owned
-Postgres instance and role, operator decision) -- listed explicitly so a
-new demo-named quadlet cannot quietly join them.
+The private recorder writes production demo_snapshots. The private archiver
+reads only promoted demo snapshots and retains its production connection for
+vault indexing/usage bookkeeping. Neither serves publicly; their explicit
+exception must not let a new public-demo quadlet gain the production mount.
 """
 from __future__ import annotations
 
@@ -34,6 +32,13 @@ def _active_lines(p: Path) -> list[str]:
 
 
 class DemoQuadletsIsolation(unittest.TestCase):
+    def test_private_archive_has_separate_demo_reader_profile_and_socket(self):
+        lines = _active_lines(QUADLETS / "corporatetraveldc-second-brain-demo-archiver-daily.container")
+        self.assertTrue("EnvironmentFile=/etc/corporatetraveldc/svc/demo-archive.env" in lines)
+        self.assertTrue("Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo:ro" in lines)
+        self.assertFalse(any(line in {"EnvironmentFile=/etc/corporatetraveldc/demo.env",
+                                     "EnvironmentFile=/etc/corporatetraveldc/demo-secrets.env"} for line in lines))
+
     def test_demo_quadlets_exist(self):
         names = {p.stem for p in QUADLETS.glob("*demo*.container")}
         self.assertTrue(DEMO_APP_CONTAINERS <= names, names)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Shared two-job admission queue and adaptive heavy-job swap controller
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=simple
+Slice=production.slice
+MemoryMax=128M
+MemorySwapMax=0
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+ExecStart=/usr/bin/python3 -B /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/heavy-job-policy.py manage
+
+[Install]
+WantedBy=default.target

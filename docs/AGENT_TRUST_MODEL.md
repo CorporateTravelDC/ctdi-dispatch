@@ -38,6 +38,14 @@ One fallback from the single-operator origin is kept **by design**: an agent ope
 
 **Platform default (operator decision, 2026-10-08; settled, not reopened by reviews).** The operator runs **one remote-control session as themselves, with owner access, serving both Claude and ChatGPT**. Everything beyond that session is **delegated** to confined agent accounts and gateway connectors as above. A separate Claude Code session for Claude may run alongside it. Reviews record this session as the default, not as a finding. (unverified 2026-10-25: the operator's session arrangement is not observable from code or live state.) <del>It is an **exception**, not part of the model</del> (superseded 2026-10-08 by this paragraph for the owner session; the hygiene points above still apply to it).
 
+## Personal API actions after segmentation — 2026-10-29 clarification
+
+The operator can separately mint a team account's own API token with explicit named actions (`scripts/mint-agent-api-token.sh`), delivered to its own `~/.config/ctdc/api-token`. This is distinct from the shared admin credential removed from agent subsets, a skill grant, gateway OAuth, a short-lived board token and a human-signed approval. One account's watch-add request and permitted API reads were executed successfully; this is functional evidence, not a revocation/replay/security certification.
+
+`require_admin(action)` checks the named action allowlist; tier-only reads use `require_tier`/`resolve_tier` and do not apply that allowlist. An admin-tier personal token scoped to one mutation can therefore still read routes permitted to that tier. Empty action scopes retain legacy unrestricted behavior. The mint helper does not pass an expiry to `generate_token`, whose default is no expiry; do not describe these personal tokens as automatically short-lived. Exact approval binding, expiry/revocation behavior, legacy/wildcard scopes and delivery parity belong in the later test.
+
+The canonical mechanism, evidence limits and pre-test scope register are in [Per-agent API actions](PER_AGENT_API_ACTIONS.md). Cost/replacement-scope treatment is in [the governance COGS inventory](COGS_AGENT_GOVERNANCE_2026-10-29.md). Prepared instruction/client changes still require signed operator release and runtime verification; this paragraph does not declare them deployed.
+
 ## 1. The one fact that frames everything: the Unix account is the root of trust
 
 Mechanical human authority holds against **every principal that is not running as the operator's Unix account**:

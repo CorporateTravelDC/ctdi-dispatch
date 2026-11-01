@@ -7,6 +7,7 @@ Description=Corporate Travel DC — poller + skill scheduler
 After=network-online.target
 
 [Container]
+Environment=NTFY_URL=http://100.x.x.x:2586
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.

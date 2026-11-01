@@ -171,7 +171,7 @@ d.append({"id": iid, "image": image, "svc": svc, "head": head, "ts": int(time.ti
 json.dump(d[-200:], open(path, "w"), indent=1)
 PYEOF
 }
-# classify_drift: stdin = check-claude-md-drift.sh output; one line per [DRIFT]
+# classify_drift: stdin = check-platform-drift.sh output; one line per [DRIFT]
 # item: "NOTE <line>" for a failed/crash-looping unit outside rollout_units
 # (incl. every SYSTEM unit -- this refresh restarts user units only), else
 # "AUDIT <line>" (blocks the refresh, as before).
@@ -291,7 +291,7 @@ check_fp team_authorized_keys "$(fp_team_keys)" "$(fp_team_keys_raw)"
 # the end-of-run verdict failed on ANY failed user unit. Failed-unit drift is
 # now scoped to the rollout's own units: outside them it is reported (log +
 # the ntfy summary) and the run continues; every other drift kind still holds.
-drift_out=$(scripts/check-claude-md-drift.sh 2>&1)
+drift_out=$(scripts/check-platform-drift.sh 2>&1)
 DRIFT_AUDIT=0; NOTES=()
 while IFS= read -r c; do
   case "$c" in
@@ -299,7 +299,7 @@ while IFS= read -r c; do
     "NOTE "*)  NOTES+=("${c#NOTE \[DRIFT\] }") ;;
   esac
 done < <(printf '%s\n' "$drift_out" | classify_drift)
-(( DRIFT_AUDIT )) && AUDIT+=("tracked-vs-live drift: ${DRIFT_AUDIT} item(s) -- see check-claude-md-drift.sh")
+(( DRIFT_AUDIT )) && AUDIT+=("tracked-vs-live drift: ${DRIFT_AUDIT} item(s) -- see check-platform-drift.sh")
 if (( ${#NOTES[@]} )); then
   log warn "drift outside the units this refresh touches (reported, not blocking): ${#NOTES[@]}"
   for n_ in "${NOTES[@]}"; do log warn "  - ${n_}"; done
@@ -374,6 +374,15 @@ while IFS='|' read -r unit kind image bdir cfile win; do
   [[ "$kind" == build ]] && BUILD_ONLY[$image]=1
 done < <(rollout_rows; build_rows)
 
+# Gate every image pull/build, bounded by the overall refresh deadline.
+# A deferred image stays held; it must not be restarted as if refreshed.
+wait_image_headroom() {
+  local remaining=$(( DEADLINE - $(date +%s) ))
+  (( remaining > 0 )) || return 1
+  (( remaining > 3600 )) && remaining=3600
+  RELAY_LOAD_WAIT_MAX_S="$remaining" bash "${REPO_ROOT}/scripts/relay-wait-load.sh"
+}
+
 svc_of() { local b; b=$(basename "${1%:*}"); echo "${b#corporatetraveldc-}"; }
 check_of() { echo "${1%:*}:refresh-check"; }
 
@@ -407,6 +416,7 @@ for img in "${EXTERNALS[@]}"; do
   if (( DRY )); then
     log info "would pull ${img} (running digest ${before:7:12})"; continue
   fi
+  if ! wait_image_headroom; then log warn "load/deadline defers ${img}"; hold_image "$img" "load-deferred"; continue; fi
   before_id=$(imgid "$img")
   if ! podman pull -q "$img" >/dev/null 2>&1; then log warn "pull failed for ${img} -- keeping local"; continue; fi
   after=$(digest "$img")
@@ -430,6 +440,7 @@ for image in "${LOCAL_IMAGES[@]}"; do
   svc=$(svc_of "$image"); check=$(check_of "$image"); bdir="${LIMG_DIR[$image]}"; cfile="${LIMG_CF[$image]}"
   if (( DRY )); then log info "would build ${svc} from ${bdir}/${cfile} (running ${image} = $(imgid "$image"))"; continue; fi
   if [[ ! -f "${bdir}/${cfile}" ]]; then log warn "no build context ${bdir}/${cfile} for ${image} -- not rebuilt (restart only)"; continue; fi
+  if ! wait_image_headroom; then log warn "load/deadline defers ${svc}"; hold_image "$image" "load-deferred"; continue; fi
   if ! ( cd "$bdir" && nice -n 10 podman build -q --platform "$BUILD_PLATFORM" -f "$cfile" -t "$check" --label "build-date=$(date -u +%Y%m%dT%H%M%SZ)" --label "service=${svc}" --label "stack-refresh=${MODE}" . >/dev/null 2>&1 ); then
     log error "build FAILED for ${svc}"; hold_image "$image" "build-failed"; continue
   fi

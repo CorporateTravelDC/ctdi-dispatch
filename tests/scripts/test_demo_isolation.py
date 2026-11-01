@@ -107,10 +107,18 @@ class DemoQuadlets(unittest.TestCase):
                          [f"Volume={DEMO_SOCK}:/var/run/postgresql-demo"])
 
     def test_no_non_demo_unit_mounts_the_demo_socket(self):
-        """The recorder (corporatetraveldc-demo) and every other production
-        unit stay off the demo instance: the only writer is the host-side
-        scrub, which is not a container."""
-        demo = {p.stem for p in demo_quadlets()} | {"corporatetraveldc-pgsql-demo"}
+        """Only playback, its database and the trusted promoted-window archiver
+        mount the demo socket. The production recorder stays separate.
+        The archiver's bounded reader uses an explicit read-only transaction;
+        it does not expose a production accessor to public demo applications.
+        """
+        archiver = "corporatetraveldc-second-brain-demo-archiver-daily"
+        archive_lines = active(QUADLETS / f"{archiver}.container")
+        self.assertTrue(f"Volume={DEMO_SOCK}:/var/run/postgresql-demo:ro" in archive_lines, "archive reader needs its read-only demo socket mount")
+        reader = (REPO / "src/demo/promoted_archive.py").read_text()
+        self.assertIn("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", reader)
+        self.assertIn("db_backend.demo_pg_conn()", reader)
+        demo = {p.stem for p in demo_quadlets()} | {"corporatetraveldc-pgsql-demo", archiver}
         for p in sorted(QUADLETS.glob("*.container")):
             if p.stem in demo:
                 continue

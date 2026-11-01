@@ -124,12 +124,13 @@ def test_failback_with_the_hotspot_gone_clears_failed_over(tmp_path):
     calls = tmp_path / "nmcli.calls"
     stub(b, "ping", 'for a in "$@"; do [[ "$a" == "wld0" ]] && exit 0; done; exit 1')
     stub(b, "curl", "exit 1")
+    stub(b, "ip", 'echo "default via 192.0.2.1 dev wld0 metric 50"')
     stub(b, "nmcli", f'echo "$*" >> {calls}; [[ "$1 $2" == "connection up" ]] && exit 4; echo 600; exit 0')
     state = tmp_path / "wd-state"
     state.write_text("failed_over=1\nsaved_backup_metric=600\nok_streak=5\nlast_alert_epoch=0\n")
     e = dict(os.environ, PATH=f"{b}:{os.environ['PATH']}", NET_FAILOVER_STATE_FILE=str(state),
              NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_BACKUP_IF="nosuchdev0",
-             NET_FAILOVER_PRIMARY_IF="wld0", CTDC_CONFIG_FILE="/nonexistent")
+             NET_FAILOVER_PRIMARY_IF="wld0", NET_FAILOVER_PARKED="false", CTDC_CONFIG_FILE="/nonexistent")
     r = subprocess.run(["bash", str(WATCHDOG)], env=e, capture_output=True, text=True, timeout=60)
     assert "failed_over=0" in state.read_text(), r.stdout + r.stderr
     made = calls.read_text()
@@ -153,7 +154,8 @@ def _failover_run(tmp_path, cap_present):
         cap.write_text("table inet ctdc_exitnode {}\n")
     e = dict(os.environ, PATH=f"{b}:{os.environ['PATH']}", NET_FAILOVER_STATE_FILE=str(state),
              NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_BACKUP_IF="enu1",
-             NET_FAILOVER_PRIMARY_IF="wld0", NET_EXITNODE_CAP_FILE=str(cap), CTDC_CONFIG_FILE="/nonexistent")
+             NET_FAILOVER_PRIMARY_IF="wld0", NET_EXITNODE_CAP_FILE=str(cap), NET_FAILOVER_PARKED="false",
+             CTDC_CONFIG_FILE="/nonexistent")
     subprocess.run(["bash", str(WATCHDOG)], env=e, capture_output=True, text=True, timeout=60)
     return sent.read_text() if sent.exists() else ""
 

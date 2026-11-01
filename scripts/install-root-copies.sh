@@ -52,9 +52,11 @@ CHECK=0; [[ "${1:-}" == --check ]] && CHECK=1
 
 SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-cert.sh scripts/stall-monitor.py scripts/watchdog-tune.sh scripts/skill-grants.sh scripts/lib/skill_grants.py
          scripts/tailscale-cert-refresh-nts.sh
+         scripts/wifi-sdio-recover.py scripts/agent-pamphlet-install.py
          scripts/installed-check.sh scripts/cf-honeypot-ban.sh scripts/cf-honeypot-notes.sh scripts/lockdown.sh scripts/restore-network.sh
          scripts/approved-exec.py scripts/approved-exec.conf
          scripts/backup/agent-home-snapshot.sh
+         scripts/agent-remote-control-boot.py
          scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh
          scripts/ctdc-claude-no-agent-hook.py scripts/ctdc-claude-no-registration-hook.py
          scripts/agent-segmentation/srv-access.sh)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
@@ -64,12 +66,18 @@ F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d
      fail2ban/jail.d/nginx-honeypot-corporatetraveldc.conf fail2ban/jail.d/nginx-limit-req-corporatetraveldc.conf
      fail2ban/filter.d/nginx-honeypot.conf)
 PYLIB=(src/common/__init__.py src/common/board_sign.py)
+ROOTCFG=(config/network/zz-ctdc-connectivity.conf config/network/wifi-sdio-recovery.conf)
 # 2026-10-25: Claude Code managed policy (root-owned; Claude cannot edit it) and the empty,
 # read-only GNUPGHOME it hands every Claude process.
 CLAUDE_POLICY_SRC=config/claude-code/managed-settings.json
 CLAUDE_POLICY_DEST=/etc/claude-code/managed-settings.json
 CLAUDE_EMPTY_GNUPG=/usr/local/share/ctdc/claude-empty-gnupg
 UNITS=(
+  "systemd/system/corporatetraveldc-wifi-sdio-recovery.service"
+  "systemd/system/corporatetraveldc-wifi-sdio-recovery.timer"
+  "systemd/system/corporatetraveldc-agent-pamphlet-install.service"
+  "systemd/system/corporatetraveldc-agent-pamphlet-install.path"
+  "systemd/system/corporatetraveldc-agent-pamphlet-install.timer"
   "systemd/system/corporatetraveldc-team-liveness.service"
   "systemd/system/corporatetraveldc-team-liveness.timer"
   "systemd/system/corporatetraveldc-team-liveness-orders.path"
@@ -90,13 +98,15 @@ UNITS=(
   "systemd/system/corporatetraveldc-agent-home-snapshot.timer"
   "systemd/system/corporatetraveldc-agent-leak-scan.service"
   "systemd/system/corporatetraveldc-agent-leak-scan.timer"
+  "systemd/system/corporatetraveldc-agent-remote-control-boot.service"
+  "systemd/system/corporatetraveldc-agent-remote-control-boot.timer"
 )
 
 manifest_hash() { awk -v p="$1" '$2==p || $2=="*"p {print $1; exit}' "${REPO}/MANIFEST.sha256"; }
-dest_of() { case "$1" in scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
+dest_of() { case "$1" in config/network/zz-ctdc-connectivity.conf) echo /etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) echo /etc/ctdc-wifi-sdio-recovery.conf ;; scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
 
 if (( CHECK )); then
-  for f in "${SCRIPTS[@]}" "${PYLIB[@]}"; do
+  for f in "${SCRIPTS[@]}" "${PYLIB[@]}" "${ROOTCFG[@]}"; do
     d=$(dest_of "$f"); want=$(manifest_hash "$f")
     have=$( [[ -f "$d" ]] && sha256sum "$d" | cut -d' ' -f1 || echo missing)
     printf '%-40s %s\n' "$f" "$( [[ "$have" == "$want" ]] && echo current || echo "STALE (installed ${have:0:12}, signed ${want:0:12})")"
@@ -124,7 +134,7 @@ fi
 # 2+3. copy each file, then confirm its installed hash equals the signed one
 install -d -m 0755 -o root -g root "${DEST}" "${DEST}/lib" "${DEST}/lib/common"
 rec=$(mktemp); trap 'rm -f "$rec"' EXIT
-for f in "${SCRIPTS[@]}" "${PYLIB[@]}"; do
+for f in "${SCRIPTS[@]}" "${PYLIB[@]}" "${ROOTCFG[@]}"; do
   want=$(manifest_hash "$f"); [[ -n "$want" ]] || { echo "install-root-copies: ${f} is not in the manifest -- refusing" >&2; exit 4; }
   d=$(dest_of "$f"); mode=0644; [[ "$f" == scripts/*.sh || "$f" == scripts/*.py ]] && mode=0755
   install -m "$mode" -o root -g root "${REPO}/${f}" "${d}.new"
@@ -133,6 +143,20 @@ for f in "${SCRIPTS[@]}" "${PYLIB[@]}"; do
   mv -f "${d}.new" "$d"; printf '%s  %s\n' "$have" "$f" >>"$rec"
 done
 install -m 0644 -o root -g root "$rec" "${DEST}/.ctdc-installed"
+
+# The local-service location policy is operator configuration, like the registry.
+# Seed its signed default only once; never erase later explicit service entries.
+policy_src=config/agent-pamphlet-local-services.conf
+policy_dest=/etc/ctdc-pamphlet-local-services.conf
+if [[ ! -e "$policy_dest" && ! -L "$policy_dest" ]]; then
+  want=$(manifest_hash "$policy_src")
+  [[ -n "$want" ]] || { echo "local-service policy default missing from signed manifest" >&2; exit 4; }
+  install -m 0644 -o root -g root "${REPO}/${policy_src}" "${policy_dest}.new"
+  have=$(sha256sum "${policy_dest}.new" | cut -d' ' -f1)
+  [[ "$have" == "$want" ]] || { echo "local-service policy source changed while copying" >&2; exit 5; }
+  ln "${policy_dest}.new" "$policy_dest"
+  rm -f "${policy_dest}.new"
+fi
 
 # 4. units: ExecStart rewritten from the checkout path to the installed copy
 for u in "${UNITS[@]}"; do

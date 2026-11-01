@@ -23,13 +23,11 @@ static channel, and can be regenerated on a timer -- same rationale as the
 demo-archiver giving visual/longitudinal lookup over otherwise
 event-by-event-buried data.
 
-Location decision: code AND outputs live in the repo at
-src/second_brain/knowledge_graph/ (not in the vault) because (a) the
-builder must be re-runnable/diffable/reviewable like any other second-brain
-module, (b) the HTML is a build artifact of repo code, and (c)
-webdav_client has no delete, so iterating on generated files inside the
-vault would strand stale copies. Pushing a rendered copy into the vault is
-a one-line webdav_client.put() if wanted -- deliberately not automatic.
+Code lives in src/second_brain/knowledge_graph/. Generated files default
+to /var/lib/corporatetraveldc/knowledge_graph/, the directory served by
+the web API. Source files remain untouched. --out selects an alternate
+destination without changing the live graph. Publishing a rendered copy
+into the vault remains an explicit --push-vault action.
 
 Access pattern (corrected 2026-09-03, see enumerate_vault()'s own comment
 for the full root-cause): this module was only ever run by hand before
@@ -60,7 +58,7 @@ in the graph), and .internal-backups/.
 Usage (env comes from dispatch.env/dispatch-secrets.env as usual):
     python3 -m second_brain.knowledge_graph.build_graph [--out DIR] [--json-only]
 
-Outputs (default DIR = this package's directory):
+Outputs (default DIR = the live-served shared directory):
     graph.json        nodes/edges/meta as structured data
     vault-graph.html  self-contained interactive viz (template + inline data)
 """
@@ -70,6 +68,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -86,6 +85,7 @@ log = logging.getLogger(__name__)
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _TEMPLATE = os.path.join(_PKG_DIR, "viz_template.html")
+_LIVE_DIR = "/var/lib/corporatetraveldc/knowledge_graph"
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 MARKER = "<!-- auto-wikilinks"
@@ -172,7 +172,7 @@ def fetch_all(sess: requests.Session, rel_paths: list[str]) -> dict[str, str]:
 
     base = f"{webdav_client._base_url()}/{webdav_client.BUSINESS_ROOT}"
 
-    def _one(p: str) -> tuple[str, str]:
+    def _one(p: str) -> tuple[str, str | None]:
         last_exc: Exception | None = None
         for attempt in range(_FETCH_MAX_RETRIES + 1):
             try:
@@ -187,16 +187,16 @@ def fetch_all(sess: requests.Session, rel_paths: list[str]) -> dict[str, str]:
                     "just this file (%s: %s)",
                     p, _FETCH_MAX_RETRIES + 1, type(last_exc).__name__, last_exc,
                 )
-                return p, ""
+                return p, None
             if r.status_code != 200:
-                return p, ""
+                return p, None
             return p, r.content.decode("utf-8", "replace")
-        return p, ""  # unreachable, satisfies type checkers
+        return p, None  # unreachable, satisfies type checkers
 
     out: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=8) as ex:
         for p, text in ex.map(_one, rel_paths):
-            if text:
+            if text is not None:
                 out[p] = text
     return out
 
@@ -230,20 +230,27 @@ def _norm_target(raw: str) -> str:
 # graph, not two disconnected ones. Read-only (sqlite3 + second_brain.semantic
 # .model.load()); does not touch the semantic layer's own compiled artifacts.
 
-def _load_semantic(existing_note_ids: set[str]) -> tuple[dict[str, dict], list[dict]]:
+def _load_semantic(existing_note_ids: set[str], *, required: bool = False,
+                   snapshot: dict | None = None) -> tuple[dict[str, dict], list[dict]]:
     """Returns (concept_nodes, concept_edges) to merge into build()'s graph.
     concept_nodes keyed like nodes (concept:<id>); concept_edges include both
     concept-to-concept (broader/related) and note-to-concept (tagged) edges.
     Silently returns (empty) if the semantic layer isn't available/compiled
-    yet -- this overlay is additive, never required for the base graph."""
+    yet when required=False. The scheduled compiler requires the overlay:
+    a database failure must preserve the prior served graph and fail the
+    job, rather than publishing a graph stripped of semantic links."""
     try:
         from second_brain.semantic.model import load as load_semantic
     except ImportError:
+        if required:
+            raise
         return {}, []
 
     try:
         model = load_semantic()
     except Exception:
+        if required:
+            raise
         return {}, []
 
     concept_nodes: dict[str, dict] = {}
@@ -271,39 +278,48 @@ def _load_semantic(existing_note_ids: set[str]) -> tuple[dict[str, dict], list[d
                 "type": "in_domain", "origin": "semantic", "weight": 1,
             })
 
-    # note -> concept assignments, restricted to notes already present as
-    # graph nodes from the wikilink pass (keeps one consistent node universe
-    # -- same excluded-path posture as SKIP_PREFIXES above).
-    try:
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT path, concept_id, facet, rule FROM semantic_note_concepts"
-            ).fetchall()
-    except psycopg.Error:
-        rows = []
-
+    # Note assignments and compile metadata come from one read-only snapshot.
+    # Stream the assignments instead of buffering the whole result in libpq.
     prefix = f"{webdav_client.BUSINESS_ROOT}/"
     tag_acc: dict[tuple, dict] = {}
-    for row in rows:
-        path, concept_id, facet, rule = row["path"], row["concept_id"], row["facet"], row["rule"]
-        if not path.startswith(prefix):
-            continue
-        note_id = f"note:{path[len(prefix):]}"
-        if note_id not in existing_note_ids:
-            continue
-        cid = f"concept:{concept_id}"
-        if cid not in concept_nodes:
-            continue  # concept referenced by an assignment but not in the
-            # current ontology (e.g. stale/backlog tag) -- skip rather than
-            # invent a node for it.
-        key = (note_id, cid)
-        if key in tag_acc:
-            tag_acc[key]["weight"] += 1
-        else:
-            tag_acc[key] = {
-                "source": note_id, "target": cid, "type": "concept_tag",
-                "origin": "semantic", "facet": facet, "rule": rule, "weight": 1,
-            }
+    try:
+        with get_conn() as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            meta = {r["key"]: r["value"] for r in conn.execute(
+                "SELECT key,value FROM semantic_meta WHERE key IN ('compiled_at','compile_seq')").fetchall()}
+            if required and not all(meta.get(key) for key in ('compiled_at', 'compile_seq')):
+                raise RuntimeError("semantic layer has no successful compile metadata")
+            cur = conn.cursor(name="knowledge_graph_concepts")
+            cur.itersize = 1000
+            try:
+                cur.execute("SELECT path, concept_id, facet, rule FROM semantic_note_concepts")
+                for row in cur:
+                    path = row["path"]
+                    relative = path[len(prefix):] if path.startswith(prefix) else path
+                    note_id = f"note:{relative}"
+                    cid = f"concept:{row['concept_id']}"
+                    if note_id not in existing_note_ids or cid not in concept_nodes:
+                        continue
+                    key = (note_id, cid)
+                    if key in tag_acc:
+                        tag_acc[key]["weight"] += 1
+                    else:
+                        tag_acc[key] = {"source": note_id, "target": cid,
+                                        "type": "concept_tag", "origin": "semantic",
+                                        "facet": row["facet"], "rule": row["rule"], "weight": 1}
+            finally:
+                cur.close()
+            if snapshot is not None and meta.get('compiled_at') and meta.get('compile_seq'):
+                snapshot.update(semantic_compiled_at=meta['compiled_at'],
+                                semantic_compile_seq=int(meta['compile_seq']))
+    except psycopg.Error:
+        if required:
+            raise
+        tag_acc.clear()
+
+    if required and existing_note_ids and not tag_acc:
+        raise RuntimeError("no semantic note links matched the curated graph; previous output preserved")
+
     concept_edges.extend(tag_acc.values())
 
     return concept_nodes, concept_edges
@@ -311,7 +327,8 @@ def _load_semantic(existing_note_ids: set[str]) -> tuple[dict[str, dict], list[d
 
 # ── Graph assembly: nodes = notes, edges = real wikilinks ─────────────────────
 
-def build(paths: list[str], contents: dict[str, str]) -> dict:
+def build(paths: list[str], contents: dict[str, str], *,
+          require_semantic: bool = False) -> dict:
     curated = [p for p in paths if p.endswith(MD_EXT)
                and not p.startswith(SKIP_PREFIXES)]
 
@@ -370,7 +387,9 @@ def build(paths: list[str], contents: dict[str, str]) -> dict:
     edges = list(edge_acc.values())
 
     # semantic layer overlay: concept nodes + concept/note edges, additive
-    concept_nodes, concept_edges = _load_semantic(set(nodes.keys()))
+    semantic_snapshot: dict = {}
+    concept_nodes, concept_edges = _load_semantic(
+        set(nodes.keys()), required=require_semantic, snapshot=semantic_snapshot)
     nodes.update(concept_nodes)
     edges.extend(concept_edges)
 
@@ -387,6 +406,8 @@ def build(paths: list[str], contents: dict[str, str]) -> dict:
             "vault_root": webdav_client.BUSINESS_ROOT,
             "semantic_concept_nodes": len(concept_nodes),
             "semantic_concept_edges": len(concept_edges),
+            "semantic_note_links": sum(e["type"] == "concept_tag" for e in concept_edges),
+            **semantic_snapshot,
             # 2026-08-12: base for the "Open in Nextcloud" deep-link on each
             # node in the viz -- always the public web vhost (not whatever
             # NEXTCLOUD_WEBDAV_BASE happens to be pointed at for this build
@@ -451,10 +472,57 @@ def render_html(graph: dict, out_path: str) -> None:
         f.write(html)
 
 
+def publish_graph(graph: dict, out_dir: str, *, json_only: bool = False) -> None:
+    """Finish every render before replacing a served file.
+
+    Each replacement is atomic on the destination filesystem; the two files
+    are not a multi-file transaction. JSON is published last so metadata does
+    not claim a completed generation before its HTML replacement succeeds.
+    Failures propagate to systemd rather than silently serving stale output
+    behind a successful unit result. No writes to the source package tree.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    staged: list[tuple[str, str]] = []
+    try:
+        def temporary(name: str) -> str:
+            fd, path = tempfile.mkstemp(prefix=f".{name}.", dir=out_dir)
+            os.close(fd)
+            staged.append((path, os.path.join(out_dir, name)))
+            return path
+
+        json_path = temporary("graph.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(graph, f, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        if not json_only:
+            html_path = temporary("vault-graph.html")
+            render_html(graph, html_path)
+            with open(html_path, "rb") as f:
+                os.fsync(f.fileno())
+        # Preserve the prior access mode; initial installation matches the
+        # regular artifact convention (0644 filtered by the caller's umask).
+        for path, destination in staged:
+            if os.path.exists(destination):
+                os.chmod(path, os.stat(destination).st_mode & 0o777)
+            else:
+                current_umask = os.umask(0)
+                os.umask(current_umask)
+                os.chmod(path, 0o644 & ~current_umask)
+        for path, destination in reversed(staged):
+            os.replace(path, destination)
+    finally:
+        for path, _ in staged:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=_PKG_DIR,
-                        help="output directory (default: this package dir)")
+    parser.add_argument("--out", default=_LIVE_DIR,
+                        help="output directory (default: the live-served shared directory)")
     parser.add_argument("--json-only", action="store_true",
                         help="skip the HTML render")
     parser.add_argument("--push-vault", action="store_true",
@@ -470,16 +538,22 @@ def main() -> int:
     paths = enumerate_vault(sess)
     md = [p for p in paths if p.endswith(MD_EXT)
           and not p.startswith(SKIP_PREFIXES)]
+    if not md:
+        print("knowledge-graph: no curated notes enumerated; previous output preserved",
+              file=sys.stderr)
+        return 1
     print(f"vault: {len(paths)} files, fetching {len(md)} curated markdown",
           flush=True)
     contents = fetch_all(sess, md)
     print(f"fetched {len(contents)} readable notes", flush=True)
+    missing = len(set(md) - contents.keys())
+    if missing:
+        print(f"knowledge-graph: incomplete fetch ({missing} of {len(md)} notes missing); "
+              "previous output preserved", file=sys.stderr)
+        return 1
 
-    graph = build(paths, contents)
-    os.makedirs(args.out, exist_ok=True)
-    json_path = os.path.join(args.out, "graph.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(graph, f, indent=1)
+    graph = build(paths, contents, require_semantic=True)
+    publish_graph(graph, args.out, json_only=args.json_only)
     m = graph["meta"]
     print(f"graph.json: {m['node_count']} nodes, {m['edge_count']} edges "
           f"(links: {m['organic_links']} organic, "
@@ -488,28 +562,7 @@ def main() -> int:
 
     if not args.json_only:
         html_path = os.path.join(args.out, "vault-graph.html")
-        render_html(graph, html_path)
         print(f"wrote {html_path}")
-
-        # 2026-08-12: also write to the shared data volume every
-        # dispatch container already mounts (/var/lib/corporatetraveldc)
-        # -- the repo-path copy above is baked into container images at
-        # BUILD time (Containerfile.web's `COPY src/ src/`), which would
-        # go stale between rebuilds. web/main.py's GET
-        # /api/v1/knowledge-graph/html serves from this path instead, so
-        # a fresh build here shows up in the PWA immediately, no
-        # container rebuild needed.
-        try:
-            live_dir = "/var/lib/corporatetraveldc/knowledge_graph"
-            os.makedirs(live_dir, exist_ok=True)
-            with open(os.path.join(live_dir, "vault-graph.html"), "w", encoding="utf-8") as f:
-                with open(html_path, encoding="utf-8") as src:
-                    f.write(src.read())
-            with open(os.path.join(live_dir, "graph.json"), "w", encoding="utf-8") as f:
-                json.dump(graph, f, indent=1)
-            print(f"wrote {live_dir}/ (live-served copy)")
-        except OSError as e:
-            print(f"could not write live-served copy (non-fatal): {e}")
 
         if args.push_vault:
             # webdav_client.put() always writes through NEXTCLOUD_WEBDAV_BASE

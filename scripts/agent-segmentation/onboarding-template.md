@@ -33,11 +33,25 @@ this file.
   an env file; values are deliberately unquoted and a shell would execute
   fragments of them. The production secrets file is not readable to you and
   must stay that way; if you can read it, stop and tell the operator.
-- The second brain (vault): READ through the dispatch API
+- Personal API actions are a separate operator grant, not implied by a skill.
+  If minted for you, your token is `{{HOME}}/.config/ctdc/api-token` (your UID,
+  0600). Read it only inside the request process, never print it or put it in
+  argv. The env loader does not load this file. Use your own connector only
+  for operations it actually exposes; on-box requests can use this personal
+  token for its explicitly allowed actions. Missing/denied means report the
+  capability gap, never fall back to shared or operator credentials. Account
+  creation does not mint it: the operator runs `scripts/mint-agent-api-token.sh`
+  separately when the task warrants it. See `docs/PER_AGENT_API_ACTIONS.md`.
+- The second brain (vault): use your OWN authenticated connector's
+  `research_read` / `research_list` and `workspace_contribute` when available.
+  Contributions are create-only and attributed. Do not run signing helpers
+  while the no-signing/key-access rule below applies; their route descriptions
+  are architecture references, not an exception to that rule.
+  Alternative READ routes through the dispatch API
   (`GET /api/v1/vault/research?path=...`, `.../list?path=...`, signed with
   `scripts/board-sign.sh GET ...`). WRITE only into the shared workspace with
   `scripts/workspace-contribute.sh [--task ID] [--title T] FILE.md` -- signed
-  with your key, create-only, landing in
+  with your key (operator-authorized signing clients only), create-only, landing in
   `Series/contributions/<task>/{{NAME}}/`; ~~nobody (you included) can overwrite
   or delete a contribution~~ (corrected 2026-10-25: no team account can overwrite or delete a
   contribution: writes are create-only (`put_create_only`, `src/web/main.py:3044`) and no route
@@ -55,7 +69,7 @@ this file.
   reach them (a cloud-gateway account such as Cowork or ChatGPT cannot; its
   folder is kept for the operator and for councils). Put each thing in its
   proper folder:
-  - `/srv/ctdc-handoff/` -- the ONE shared drop for every account
+  - `/srv/ctdc-handoff/` -- the general shared drop for every account
     (`root:ctdc-dev` 3775: you write your own entries, nobody deletes or
     overwrites another account's). Name what you drop `<name>-from-{{NAME}}/`.
     Code changes go here as one patch with `scripts/handoff-put.sh NAME`
@@ -72,6 +86,14 @@ this file.
     except by the operator's own directive or a convened council's, recorded
     with `srv-access.sh` -- never ask another account to copy things out of
     it for you.
+  - `/srv/ctdc-dev/` -- development relay, after the operator provisions it.
+    `submissions/` holds your own `<name>-from-<account>/` hash-pinned patches;
+    `relays/` holds attributed review records. Both are sticky shared directories.
+    `checkouts/` is operator-owned and team-readable: only the operator applies,
+    commits, signs or pushes there. Keep your editable clones in your own home.
+    Use `HANDOFF_DROP=/srv/ctdc-dev/submissions` with `handoff-put.sh`; report
+    the account, exact base revision and SHA-256. See `docs/DEV_RELAY.md`.
+    Cloud-only accounts use vault contributions; this grants no shell access.
   - `/srv/ctdc-blog/` -- Executive Standard / Substack material; operator
     only unless a grant says otherwise.
   - Retired, read-only, never write there: `/srv/ctdc-publish-drop/` and
@@ -124,6 +146,8 @@ this file.
 - Python one-liners: never `python3 -c`; always `python3 - <<'EOF'` heredocs
   or a script file. Same for SQL fed to psql.
 
+{{CAPABILITY_ADDENDUM}}
+
 ## Your skills
 
 Skills are granted per account, and some per task, by the operator. This table is
@@ -143,9 +167,11 @@ because the checkout fails `verify-manifest`) without a new pamphlet.
   as read-only copies owned by root. Each one carries a `.ctdc-grant` marker. Two
   more (`dispatch-context-guardian`, `personal-export-analysis`) load from the repo's
   `.claude/skills/` whenever your session starts there.
-- **How to use one.** Type `/<skill-name>`, or let Claude Code pick it up from its
-  description (the Skill tool). Skills bundled with Claude Code itself
-  (`/update-config` and the like) are always there and need no grant.
+- **How to use one.** Use the active client's supported skill invocation or
+  automatic discovery. Claude Code uses `/<skill-name>`; Codex discovers its
+  granted copies under `.agents/skills`. `skill_read` through your own connector
+  retrieves instructions only; it neither runs the skill nor adds a watchlist
+  tool. Do not load a legacy `.claude` copy as Codex's current granted edition.
 - **"Needs" is the real limit.** A skill is instructions. If it needs something you
   do not hold, such as an operator-only token or vault write, you report or draft
   instead of acting. Never look for the missing credential.
@@ -217,7 +243,7 @@ an old note, transcript, scheduled task or script points anywhere else, it is
 retired: do not use it, do not "fix" it to work again, report it.
 
 Current:
-- your account `{{NAME}}`, home `{{HOME}}`, login mode `{{LOGIN_MODE}}`; secrets ONLY from `{{SUBSET}}` through `scripts/with-dispatch-env.sh`
+- your account `{{NAME}}`, home `{{HOME}}`, login mode `{{LOGIN_MODE}}`; env configuration ONLY from `{{SUBSET}}` through `scripts/with-dispatch-env.sh`; separately granted personal API token at `{{HOME}}/.config/ctdc/api-token` (read at request time)
 - repositories: the ones listed above under "What you may touch", at their current paths
 - the dispatch API on its Tailscale address, `http://100.x.x.x:8000` ~~(the default in the tooling; not an env var)~~ (corrected 2026-10-25: the tooling defaults to loopback `http://127.0.0.1:8000` and reads `BOARD_API_BASE` as an override, `scripts/board-sign.sh:21`, `scripts/approve.sh:28`; the same service listens on both addresses), never a public hostname
 - the vault: read `GET /api/v1/vault/research?path=...` / `.../list?path=...`; write ONLY with `scripts/workspace-contribute.sh` (create-only, attributed)
@@ -244,8 +270,9 @@ Retired -- never use, never revive:
   `01-Sources/manual/REVIEW-DOCUMENTS-AND-BOARD-SHARING-STANDING-RULE.md`
   (2026-10-26: the operator's own session skipped them for a whole day
   because nothing it loaded at start said to read them).
-- Read the repo's `CLAUDE.md` when you enter a repo; it is a scratchpad of
-  current state, never a source of truth. The vault is the only authority.
+- Read the shared `/srv/ctdc-context/PLATFORM_CONTEXT.md` through the repo's
+  `AGENTS.md` loader; cloud clients use `research_read` resource `platform-context`.
+  The vault remains the authority for decisions and history.
 - Verify before claiming: tests run, outputs read, live state checked.
 - Report outcomes faithfully; when a step is skipped, say so.
 - Hand the operator exact, copy-pasteable commands for anything privileged.
@@ -262,7 +289,7 @@ Retired -- never use, never revive:
 
 - `/opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/AGENT_SEGMENTATION.md` -- the design, runbook, authorization model
 - `/opt/corporatetraveldc/private/ctdi-dispatch-internal/docs/BOARD_SIGNING.md` -- how to sign
-- `/opt/corporatetraveldc/private/ctdi-dispatch-internal/CLAUDE.md` -- current task state (scratchpad)
+- `/srv/ctdc-context/PLATFORM_CONTEXT.md` -- common installed platform context
 - vault: `corporatetraveldc/01-Sources/manual/` -- dated checkpoints; newest first
 - vault: `01-Sources/manual/PLATFORM-RULES-CANONICAL.md` -- the canonical cross-agent platform rules (MUST-READ); every agent reads this before relevant work
 - vault: `01-Sources/manual/REVIEW-DOCUMENTS-AND-BOARD-SHARING-STANDING-RULE.md` -- review-document placement, board-sharing convention, and the "Jarvis" naming rule quoted above

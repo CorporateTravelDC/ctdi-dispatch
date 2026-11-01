@@ -1,0 +1,11 @@
+[Unit]
+Description=Catch up local agent pamphlet delivery after boot or missed changes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+AccuracySec=30s
+Unit=corporatetraveldc-agent-pamphlet-install.service
+
+[Install]
+WantedBy=timers.target

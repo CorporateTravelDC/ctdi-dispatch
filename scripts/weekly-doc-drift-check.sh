@@ -13,7 +13,7 @@
 #
 # The split now is deliberate:
 #   FACTS     gathered deterministically, no model involved. Mechanical
-#             drift is better checked mechanically -- scripts/check-claude-md-drift.sh
+#             drift is better checked mechanically -- scripts/check-platform-drift.sh
 #             already does 11 such checks and is rigorous enough to block
 #             manifest signing, which is a far stronger guarantee than asking
 #             a model to notice something.
@@ -28,7 +28,7 @@
 #
 # 2026-10-16 (operator): the 09-21 rewrite dropped the one thing the weekly
 # job was for -- PROSE docs against the live system; it only re-ran the
-# CLAUDE.md checker and listed units/containers. The "Doc claims" section
+# config/platform-context.md checker and listed units/containers. The "Doc claims" section
 # below is deterministic: scripts/doc-claims-check.py extracts every repo
 # path, unit name and documented timer schedule from README.md, docs/*.md
 # (non-dated) and skills/*/SKILL.md and verifies each against git ls-files,
@@ -89,10 +89,10 @@ CLAIM_MISSES="$(grep -c '^\[DRIFT\]' "${CLAIMS_FILE}" || true)"
 CLAIM_SUMMARY="$(grep '^\[SUMMARY\]' "${CLAIMS_FILE}" || echo '[SUMMARY] doc-claims-check did not run')"
 
 {
-    echo "## Deterministic drift checks (scripts/check-claude-md-drift.sh)"
+    echo "## Deterministic drift checks (scripts/check-platform-drift.sh)"
     # Not --pre-sign: that mode suppresses [OK] lines and skips the
     # manifest-vs-signature check, both of which we want recorded here.
-    bash scripts/check-claude-md-drift.sh 2>&1 || true
+    bash scripts/check-platform-drift.sh 2>&1 || true
 
     echo
     echo "## Doc claims vs live system (scripts/doc-claims-check.py)"
@@ -177,11 +177,11 @@ echo "${CLAIM_SUMMARY}"
 
 # ntfy summary (ops-health, p3 with misses, p2 clean): the miss count is the
 # headline; the report path is where the [DRIFT] lines are.
-CLAUDE_MD_DRIFT="$(grep -c '^\[DRIFT\]' "${FACTS_FILE}" || true)"
-CLAUDE_MD_DRIFT=$(( CLAUDE_MD_DRIFT - CLAIM_MISSES ))
-if [[ "${CLAIM_MISSES}" -gt 0 || "${CLAUDE_MD_DRIFT}" -gt 0 ]]; then
+PLATFORM_CONTEXT_DRIFT="$(grep -c '^\[DRIFT\]' "${FACTS_FILE}" || true)"
+PLATFORM_CONTEXT_DRIFT=$(( PLATFORM_CONTEXT_DRIFT - CLAIM_MISSES ))
+if [[ "${CLAIM_MISSES}" -gt 0 || "${PLATFORM_CONTEXT_DRIFT}" -gt 0 ]]; then
     ntfy_send "Weekly doc drift: ${CLAIM_MISSES} doc-claim miss(es)" \
-        "${CLAIM_SUMMARY#\[SUMMARY\] }; CLAUDE.md drift lines: ${CLAUDE_MD_DRIFT} -- see ${REPORT}" 3
+        "${CLAIM_SUMMARY#\[SUMMARY\] }; platform context drift lines: ${PLATFORM_CONTEXT_DRIFT} -- see ${REPORT}" 3
 else
     ntfy_send "Weekly doc drift: clean" "${CLAIM_SUMMARY#\[SUMMARY\] } -- ${REPORT}" 2
 fi

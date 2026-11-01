@@ -1,0 +1,13 @@
+[Unit]
+Description=Persistent daily due check for the 15-day heavy-job capacity review
+
+[Timer]
+# A monotonic 15d timer loses its elapsed interval across reboots. This
+# calendar wakeup catches up after downtime; the persisted review timestamp
+# enforces 15 elapsed days. First installation reviews immediately when run.
+OnCalendar=*-*-* 10:43:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

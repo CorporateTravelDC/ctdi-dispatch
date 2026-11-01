@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "original_source": "CorporateTravelDC",
+  "original_source_status": "operator-attributed-local",
+  "version_controlled_author": "CorporateTravelDC",
+  "source_kind": "local-platform",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "name": "adversarial-sweep-docs-first-revalidated",
+  "needs": "everything the two base skills need; multi-stage, operator checkpoints between stages; re-validation waits for signed rollouts"
+}

@@ -137,7 +137,7 @@ cmd_test() {
     run_args=(-d --name "${CANARY_CONTAINER}"
         -e POSTGRES_DB="${PG_DB}"
         -e POSTGRES_USER="${PG_USER}"
-        -e POSTGRES_PASSWORD="${canary_pw}"
+        -e POSTGRES_PASSWORD
         -e PGDATA=/var/lib/postgresql/data/pgdata
         -e TZ=UTC
         -v "${CANARY_VOLUME}:/var/lib/postgresql/data"
@@ -154,7 +154,7 @@ cmd_test() {
                     -v "${HBACONF}:/etc/postgresql/pg_hba.conf:ro,Z")
         exec_args+=(postgres -c config_file=/etc/postgresql/postgresql.conf)
     fi
-    podman run "${run_args[@]}" "${IMAGE}" "${exec_args[@]}" \
+    POSTGRES_PASSWORD="${canary_pw}" podman run "${run_args[@]}" "${IMAGE}" "${exec_args[@]}" \
         >/dev/null || die "canary start failed"
 
     log "waiting for canary to accept connections..."

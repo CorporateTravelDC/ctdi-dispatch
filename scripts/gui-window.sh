@@ -31,7 +31,7 @@
 #     actually gets scheduled.
 #   - state lives in /run/user/<uid> (tmpfs): a reboot is also a teardown.
 #   - teardown SWEEPS for leftovers (autostart entries, new user units,
-#     generator output) and runs the CLAUDE.md drift check, reporting rather
+#     generator output) and runs the platform context drift check, reporting rather
 #     than deleting -- a leftover is an operator decision, but it is never
 #     silent.
 #
@@ -273,8 +273,8 @@ if [[ "${ACTION}" == "off" ]]; then
     if systemctl --user is-active --quiet xdg-desktop-autostart.target 2>/dev/null; then
         say "  LEFTOVER xdg-desktop-autostart.target is ACTIVE"; leftovers=$((leftovers+1))
     fi
-    if [[ -x "${REPO_ROOT}/scripts/check-claude-md-drift.sh" ]]; then
-        drift_out="$("${REPO_ROOT}/scripts/check-claude-md-drift.sh" 2>&1 | grep -E '^\[(DRIFT|FAIL|WARN)\]' || true)"
+    if [[ -x "${REPO_ROOT}/scripts/check-platform-drift.sh" ]]; then
+        drift_out="$("${REPO_ROOT}/scripts/check-platform-drift.sh" 2>&1 | grep -E '^\[(DRIFT|FAIL|WARN)\]' || true)"
         [[ -n "${drift_out}" ]] && { say "  drift check:"; echo "${drift_out}" | sed 's/^/    /' | tee -a "${LOG_FILE}"; }
     fi
     say "leftovers flagged: ${leftovers} (reported only -- nothing deleted; the generator-made app-*@autostart units are pre-existing GNOME ones unless they are new)"

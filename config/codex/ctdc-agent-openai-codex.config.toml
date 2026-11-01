@@ -1,0 +1,4 @@
+# Operator-review draft for this account only; not installed by the agent.
+# Unix account restrictions and operator-only release rules remain authoritative.
+sandbox_mode = "danger-full-access"
+approval_policy = "on-request"

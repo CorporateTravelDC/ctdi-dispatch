@@ -277,6 +277,27 @@ class Apply(Base):
         self.assertTrue((self.f.skills() / "alpha").exists())
         self.assertFalse((self.f.skills() / "old").exists())
 
+    def test_promoted_project_keeps_discovery_clawback(self):
+        canonical=self.f.repo/"skills/proj"
+        canonical.mkdir();(canonical/"SKILL.md").write_text("project skill\n")
+        self.f.sign()
+        self.f.grants("grant * *\ndeny bot1 proj\n")
+        rc,out=self.f.run("apply","--execute")
+        self.assertEqual(rc,0,out)
+        self.assertEqual(self.f.settings()["skillOverrides"]["proj"],"off")
+        self.assertFalse((self.f.skills()/"proj").exists())
+        self.f.grants("grant * *\n")
+        rc,out=self.f.run("apply","--execute")
+        self.assertEqual(rc,0,out)
+        self.assertNotIn("proj",self.f.settings().get("skillOverrides",{}))
+        self.assertTrue((self.f.skills()/"proj").is_dir())
+
+    def test_ungranted_project_is_not_autoenabled(self):
+        self.f.grants("grant bot1 alpha\n")
+        rc,out=self.f.run("apply","--execute")
+        self.assertEqual(rc,0,out)
+        self.assertEqual(self.f.settings()["skillOverrides"]["proj"],"off")
+
     def test_settings_keys_preserved_and_override_tamper_reset(self):
         p = self.f.root / "home/bot1/.claude/settings.json"
         p.write_text(json.dumps({"theme": "dark", "skillOverrides": {"mine": "name-only"}}))
@@ -465,9 +486,13 @@ class RealRepo(unittest.TestCase):
         needs = sg.read_needs(str(REPO))
         self.assertEqual(sorted(set(cat) - set(needs)), [])
 
-    def test_vendor_pins_are_not_redistributed(self):
-        for n in sg.read_pins(str(REPO)):
-            self.assertFalse((REPO / "skills" / n).exists(), f"vendor skill {n} must not be committed")
+    def test_vendor_pins_are_preserved_in_canonical_sources(self):
+        for name,pin in sg.read_pins(str(REPO)).items():
+            root=REPO/"skills"/name
+            provenance=json.loads((root/"PROVENANCE.json").read_text())
+            self.assertEqual(provenance["prior_vendor_pin_sha256"],pin)
+            self.assertEqual(sg.tree_hash(str(root/"upstream")),pin)
+            self.assertEqual(sg.catalog(str(REPO),"/nonexistent")[name]["source"],"signed")
 
 
 class HoldNotifiesOnChangeOnly(unittest.TestCase):
@@ -500,3 +525,40 @@ class HoldNotifiesOnChangeOnly(unittest.TestCase):
             self.assertIn("PUSH:skill-grants: hold cleared", cleared)
             self.assertIn("REACHED_APPLY", cleared)
             self.assertNotIn("PUSH:", self._run(state, True))
+
+
+class DisabledByEnvironment(Base):
+    """2026-11-01: CTDC_SKILLS_DISABLED turns skills off for every managed account."""
+
+    def test_parsing_prefers_the_process_environment(self):
+        envf = self.f.root / "dispatch.env"
+        envf.write_text("OTHER=1\nCTDC_SKILLS_DISABLED=beta, vend\n")
+        self.assertEqual(sg.disabled_skills({}, str(envf)), {"beta", "vend"})
+        self.assertEqual(sg.disabled_skills({"CTDC_SKILLS_DISABLED": "alpha"}, str(envf)), {"alpha"})
+        self.assertEqual(sg.disabled_skills({}, str(self.f.root / "missing.env")), frozenset())
+        self.assertEqual(sg.disabled_skills({"CTDC_SKILLS_DISABLED": "ok,../bad,  two"}, "/nonexistent"), {"ok", "two"})
+
+    def test_disabled_skill_is_clawed_back_and_bundled_copy_goes_inert(self):
+        self.f.grants("grant * *\n")
+        self.f.run("apply", "--execute")
+        self.assertTrue((self.f.skills() / "beta").exists())
+        (self.f.root / "dispatch.env").write_text("CTDC_SKILLS_DISABLED=beta,client-bundled\n")
+        rc, out = self.f.run("apply", "--execute")
+        self.assertEqual(rc, 0, out)
+        self.assertFalse((self.f.skills() / "beta").exists())
+        self.assertFalse((self.f.skills("bot2") / "beta").exists())        # every account, not one
+        ov = self.f.settings()["skillOverrides"]
+        self.assertEqual(ov.get("beta"), "off")
+        self.assertEqual(ov.get("client-bundled"), "off")                  # not in the catalog, still inert
+        (self.f.root / "dispatch.env").write_text("")
+        self.f.run("apply", "--execute")
+        self.assertTrue((self.f.skills() / "beta").exists())
+        self.assertNotIn("skillOverrides", self.f.settings())
+
+    def test_render_lists_disabled_skill_as_clawed_back_without_noise(self):
+        self.f.grants("grant * *\n")
+        (self.f.root / "dispatch.env").write_text("CTDC_SKILLS_DISABLED=beta\n")
+        rc, out = self.f.run("render", "bot1")
+        self.assertNotIn("| `beta` |", out)
+        self.assertIn("`beta`", out)
+        self.assertNotIn("[info]", out)

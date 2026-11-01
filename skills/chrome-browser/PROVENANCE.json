@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "name": "chrome-browser",
+  "original_source": "Anthropic",
+  "original_source_status": "operator-attributed-vendor-distribution",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "pinned-claude-vendor-distribution",
+  "needs": "a browser surface on the client; none on this box",
+  "source_location": "own granted copy matched to signed vendor pin",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "e5ace16e6ba541506ab43f544fbbef5fad73b5c0b5c23aa049010a685d0ff068",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "bytes": 1467
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "c8b0afeee246f333529be3c73c49efaf7d9d10a46d8948b4b736cc758cb4e885",
+      "bytes": 5881
+    }
+  ],
+  "prior_vendor_pin_sha256": "e5ace16e6ba541506ab43f544fbbef5fad73b5c0b5c23aa049010a685d0ff068",
+  "public_tree_sha256": "e5ace16e6ba541506ab43f544fbbef5fad73b5c0b5c23aa049010a685d0ff068",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}

@@ -12,7 +12,7 @@ Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
 # host.containers.internal cannot reach the loopback-only WebDAV port directly.
 # See docs/COMPLIANCE_SECURITY.md, "Container Network Isolation".
 Network=pasta:--map-gw
-Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+Environment=NEXTCLOUD_WEBDAV_BASE=http://100.x.x.x:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
 # (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env

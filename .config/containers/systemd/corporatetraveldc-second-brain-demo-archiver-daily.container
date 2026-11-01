@@ -15,16 +15,20 @@ Image=localhost/corporatetraveldc-poller:latest
 Environment=CORPORATETRAVELDC_UNIT=%N
 Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
 Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+# Promoted demo input only; production socket above remains for the vault index.
+Volume=corporatetraveldc-pgsql-demo-sock:/var/run/postgresql-demo:ro
 # Same WebDAV reach pattern as the other second-brain Quadlets -- see
 # docs/COMPLIANCE_SECURITY.md, "Container Network Isolation". Reads
 # demo.db directly off the shared volume (no network needed for that
 # part); the pasta opt-in here is only for the vault write.
 Network=pasta:--map-gw
-Environment=NEXTCLOUD_WEBDAV_BASE=http://host.containers.internal:80/remote.php/dav/files
+Environment=NEXTCLOUD_WEBDAV_BASE=http://100.x.x.x:80/remote.php/dav/files
 EnvironmentFile=/etc/corporatetraveldc/dispatch.env
 # 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the poller image reads
 # (scripts/service-env/poller.allowlist -> generate.py --write), not dispatch-secrets.env
 EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
+# Only DEMO_PG_* connection keys, generated from demo.env; no demo admin/session token.
+EnvironmentFile=/etc/corporatetraveldc/svc/demo-archive.env
 Exec=scripts/verified-exec.sh python3 src/poller/skills/second_brain_demo_archiver_daily.py
 
 [Service]

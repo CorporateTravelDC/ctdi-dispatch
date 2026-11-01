@@ -25,8 +25,8 @@ ok() { echo "  ok  $1"; }
 python3 "$G/scripts/relay-lint.py" "$RELAY" >/tmp/.preflight-lint.$$ 2>&1 || { cat /tmp/.preflight-lint.$$; rm -f /tmp/.preflight-lint.$$; fail lint "fix the relay text"; }
 rm -f /tmp/.preflight-lint.$$; ok "1 relay-lint"
 
-( cd "$MAIN" && bash scripts/check-claude-md-drift.sh >/dev/null 2>&1 ) \
-  || { ( cd "$MAIN" && bash scripts/check-claude-md-drift.sh 2>&1 | grep -E '^\[(DRIFT|FAIL)\]' ) || true; fail drift "reconcile, then re-run"; }
+( cd "$MAIN" && bash scripts/check-platform-drift.sh >/dev/null 2>&1 ) \
+  || { ( cd "$MAIN" && bash scripts/check-platform-drift.sh 2>&1 | grep -E '^\[(DRIFT|FAIL)\]' ) || true; fail drift "reconcile, then re-run"; }
 ok "2 drift gate"
 
 # 2026-10-26 (operator: "catch this shit"): a batch may not ADD doc-claim misses (paths, units, timer

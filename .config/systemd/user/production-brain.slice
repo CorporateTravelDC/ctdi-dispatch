@@ -1,0 +1,8 @@
+[Unit]
+Description=Shared heavy Second Brain, RSS, graph and research workload pool
+
+[Slice]
+MemoryAccounting=yes
+# Two jobs, each with at most 4 GiB swap. The manager also reserves against
+# whole-host 60% usage, including consumers outside this slice.
+MemorySwapMax=8G

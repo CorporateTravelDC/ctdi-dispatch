@@ -21,7 +21,7 @@ elif id -nG "$NAME" | tr ' ' '\n' | grep -qx ctdc-ops; then KIND=human; SLICE=hu
 else KIND=unknown; SLICE="(none)"; SUBSET="(none)"; LOGIN_MODE=none; fi
 # the registry (/etc/ctdc-accounts.conf: name kind login_mode preloaded)
 # refines the group: service accounts, ssh-mode agents, preloaded accounts
-PRELOADED=0; REGISTRY=/etc/ctdc-accounts.conf
+PRELOADED=0; REGISTRY="${CTDC_ACCOUNTS_FILE:-/etc/ctdc-accounts.conf}"
 if [[ -r "$REGISTRY" ]]; then
   read -r rk rm rp < <(awk -v n="$NAME" '$1==n {print $2, $3, $4}' "$REGISTRY" | tail -1) || true
   [[ -n "${rk:-}" ]] && { KIND="$rk"; LOGIN_MODE="$rm"; PRELOADED="${rp:-0}"; }
@@ -81,15 +81,19 @@ GLOSSARY=$(python3 "$REPO_ROOT/scripts/render-glossary.py" --repo "$REPO_ROOT" -
 # 2026-10-20: the deployment profiles themselves (verticals, modules, sources,
 # approvals, live loader consumers), rendered from the profile files.
 PROFILES=$(python3 "$HERE/render-profiles.py" --repo "$REPO_ROOT" 2>/dev/null || echo "_(profiles unavailable -- read docs/deployment-profiles/STAGED.md)_")
+CAPABILITY_ADDENDUM=""
+if [[ "$KIND" == agent || "$KIND" == service ]]; then
+  CAPABILITY_ADDENDUM=$(python3 "$HERE/render-agent-capabilities.py" --account "$NAME" --registry "$REGISTRY")
+fi
 render() {
-python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" "$GLOSSARY" "$DEPLOYMENT_PROFILE" "$PROFILES" <<'PYEOF'
+python3 - "$TPL" "$NAME" "$UIDN" "$KIND" "$ROLE" "$GROUPS_CSV" "$HOME_DIR" "$SLICE" "$SUBSET" "$REPOS" "$LOGIN_MODE" "$LOGIN_TEXT" "$PRELOAD_BANNER" "$SKILLS" "$GLOSSARY" "$DEPLOYMENT_PROFILE" "$PROFILES" "$CAPABILITY_ADDENDUM" <<'PYEOF'
 import sys, datetime
-tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills, glossary, deployment_profile, profiles = sys.argv[1:18]
+tpl, name, uid, kind, role, groups, home, slice_, subset, repos, login_mode, login_text, preload_banner, skills, glossary, deployment_profile, profiles, capability_addendum = sys.argv[1:19]
 t = open(tpl).read()
 for k, v in {"NAME": name, "UID": uid, "KIND": kind, "ROLE": role, "GROUPS": groups, "HOME": home,
              "SLICE": slice_, "SUBSET": subset, "REPOS": repos.rstrip("\n"),
              "LOGIN_MODE": login_mode, "LOGIN_TEXT": login_text, "PRELOAD_BANNER": preload_banner, "SKILLS": skills.rstrip("\n"), "GLOSSARY": glossary.rstrip("\n"),
-             "DEPLOYMENT_PROFILE": deployment_profile, "PROFILES": profiles.rstrip("\n"),
+             "DEPLOYMENT_PROFILE": deployment_profile, "PROFILES": profiles.rstrip("\n"), "CAPABILITY_ADDENDUM": capability_addendum,
              "RENDERED": datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")}.items():
     t = t.replace("{{" + k + "}}", v)
 # 2026-10-26: the account's private folder, same rule as srv-layout.sh (last part of the name)

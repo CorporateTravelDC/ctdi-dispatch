@@ -18,7 +18,7 @@ REC="${SELF_DIR}/.ctdc-installed"
 (( $# )) || { echo "usage: $0 scripts/NAME [...]" >&2; exit 64; }
 rc=0
 for rel in "$@"; do
-  case "$rel" in scripts/*) f="${SELF_DIR}/$(basename "$rel")" ;; src/*) f="${SELF_DIR}/lib/${rel#src/}" ;; *) echo "installed-check: ${rel}: not a root-run path" >&2; rc=1; continue ;; esac
+  case "$rel" in config/network/zz-ctdc-connectivity.conf) f=/etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) f=/etc/ctdc-wifi-sdio-recovery.conf ;; scripts/*) f="${SELF_DIR}/$(basename "$rel")" ;; src/*) f="${SELF_DIR}/lib/${rel#src/}" ;; *) echo "installed-check: ${rel}: not a root-run path" >&2; rc=1; continue ;; esac
   want=$(awk -v p="$rel" '$2==p {print $1; exit}' "$REC")
   if [[ -z "$want" || ! -f "$f" || -L "$f" ]]; then echo "installed-check: ${rel} is not installed" >&2; rc=1; continue; fi
   [[ "$(stat -c %u "$f")" == 0 ]] || { echo "installed-check: ${f} is not root-owned" >&2; rc=1; continue; }

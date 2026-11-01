@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "personal-export-analysis",
+  "original_source": "CorporateTravelDC",
+  "original_source_status": "local-project-history",
+  "version_controlled_author": "CorporateTravelDC",
+  "adapter_author": "CorporateTravelDC",
+  "source_kind": "local-project",
+  "needs": "vault reads via the research route; raw WebDAV/Nextcloud admin = operator-only",
+  "source_location": ".claude/skills/personal-export-analysis",
+  "source_revision": "c5711d0a2f10c53cadc9a19ae01620c1b30ac07c",
+  "captured_utc": "2026-10-29T14:16:48.156423+00:00",
+  "upstream_version": null,
+  "upstream_license": "Original notices and terms retained under upstream; no relicensing assertion",
+  "upstream_tree_sha256": "95f3bb2811f5fc0c0ccd7176b72bcba20bdca349f463730bb079b08063fcf4a7",
+  "upstream_entrypoints": [
+    "SKILL.md"
+  ],
+  "upstream_files": [
+    {
+      "path": "SKILL.md",
+      "sha256": "e7c32a1177c17734479131f935ab92a564322ae84c35dd359804574fa1dea648",
+      "bytes": 17491
+    }
+  ],
+  "public_tree_sha256": "95f3bb2811f5fc0c0ccd7176b72bcba20bdca349f463730bb079b08063fcf4a7",
+  "public_omitted_files": [],
+  "public_scrub_note": "Original vendor bytes and hashes remain complete privately. Public derivatives use the full privacy scrub; explicitly listed binary omissions follow the existing binary-drop policy. Public hashes cover the exact remaining upstream inventory."
+}
