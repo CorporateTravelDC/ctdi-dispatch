@@ -1,0 +1,15 @@
+# config/firewall/corporatetraveldc-block-wsdd.service -- load config/firewall/ctdc-block-wsdd.nft at
+# boot (operator 2026-11-02). Installed by the operator as a system unit; see the file's header.
+[Unit]
+Description=CorporateTravelDC: block WS-Discovery (udp/3702, tcp/5357) in and out
+After=network-pre.target firewalld.service nftables.service
+ConditionPathExists=/etc/nftables.d/ctdc-block-wsdd.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/ctdc-block-wsdd.nft
+ExecStop=/usr/sbin/nft delete table inet ctdc_block_wsdd
+
+[Install]
+WantedBy=multi-user.target

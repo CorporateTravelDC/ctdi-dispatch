@@ -21,8 +21,11 @@ from web.routes import watchlist as wl  # noqa: E402
 
 
 def _main_routes(method: str, path: str):
+    """Routes for (method, path) whose handler is defined in web/main.py itself (2026-11-02: the
+    router's own GET "" is also at /api/v1/watchlist, so the path alone cannot tell them apart)."""
     return [r for r in web_main.app.routes
-            if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or set())]
+            if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or set())
+            and getattr(getattr(r, "endpoint", None), "__module__", "") == web_main.__name__]
 
 
 def test_no_main_duplicates_of_router_watchlist_routes():

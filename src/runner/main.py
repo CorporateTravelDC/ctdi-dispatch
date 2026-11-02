@@ -470,7 +470,101 @@ async def whoami(request: Request):
     showing it disabled/broken -- matches the tailscale_gate enforcement
     above, using the same _is_trusted check for consistency.
     """
-    return {"tailnet": _is_trusted(request)}
+    return {"tailnet": _is_trusted(request), "withheld_pass": bool(_withheld_pass(request))}
+
+
+# ── Withheld pass / master token (2026-11-02) ----------------------------------
+# The operator runs `scripts/withheld.sh issue DEVICE ...` (or `master DEVICE`) over
+# SSH, signs, and gets a one-time pairing code (10 minutes). On the device they open
+# /api/withheld/pair and enter it; the runner exchanges it with dispatch-web and keeps
+# the pass only in an httponly cookie. Live runner, trusted origin only (the
+# live_trusted_only middleware already 404s everyone else); the demo has none.
+
+_WITHHELD_PAIR_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Withheld pass</title>
+<style>body{font:16px system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;color:#14202b;background:#f6f8fa}
+input,button{font:inherit;padding:.6rem .8rem;width:100%;box-sizing:border-box;margin-top:.5rem}
+button{background:#14202b;color:#fff;border:0;border-radius:4px}#m{margin-top:1rem}</style>
+<h1>Withheld pass</h1>
+<p>Enter the pairing code from <code>withheld.sh issue</code> or <code>withheld.sh master</code>. It works once, within 10 minutes of signing.</p>
+<input id="code" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Pairing code">
+<button id="go">Pair this device</button>
+<button id="forget" style="background:#8a1c1c">Remove the pass from this device</button>
+<p id="m" role="status"></p>
+<script>
+const m = document.getElementById('m');
+async function post(path, body) {
+  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                               body: JSON.stringify(body || {})});
+  const j = await r.json().catch(() => ({}));
+  return [r.ok, j.detail || j.status || ''];
+}
+document.getElementById('go').onclick = async () => {
+  const [ok, msg] = await post('/api/withheld/pair', {code: document.getElementById('code').value.trim()});
+  m.textContent = ok ? 'Paired. ' + msg : 'Not paired: ' + msg;
+};
+document.getElementById('forget').onclick = async () => {
+  const [ok] = await post('/api/withheld/forget');
+  m.textContent = ok ? 'The pass is revoked and removed from this device.' : 'Could not reach the server.';
+};
+</script>"""
+
+
+def _withheld_same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    return not origin or origin.split("://", 1)[-1] == request.headers.get("host", "")
+
+
+@app.get("/api/withheld/pair")
+async def withheld_pair_page():
+    if DEMO_MODE:
+        raise HTTPException(404, "Not found")
+    return HTMLResponse(_WITHHELD_PAIR_PAGE, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/withheld/pair")
+async def withheld_pair(request: Request):
+    if DEMO_MODE or not _is_trusted(request) or not _withheld_same_origin(request):
+        raise HTTPException(404, "Not found")
+    try:
+        code = str((await request.json()).get("code") or "")[:64]
+    except Exception:  # noqa: BLE001
+        code = ""
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{DISPATCH_BASE}/api/v1/withheld/pair", json={"code": code}, timeout=10,
+                             headers={"Authorization": f"Bearer {RUNNER_ENRICHED_TOKEN}"})
+    except Exception as e:  # noqa: BLE001
+        log.warning("withheld pair: dispatch unreachable: %s", type(e).__name__)
+        return JSONResponse(status_code=502, content={"detail": "dispatch unreachable"})
+    if r.status_code != 200:
+        return JSONResponse(status_code=r.status_code, content={"detail": (r.json() or {}).get("detail", "refused")
+                            if r.headers.get("content-type", "").startswith("application/json") else "refused"})
+    data = r.json()
+    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    resp = JSONResponse({"status": f"{'MASTER token' if data.get('master') else 'pass'} for {data.get('device')} until "
+                         + datetime.datetime.fromtimestamp(data["expires_at"], datetime.timezone.utc)
+                         .strftime("%Y-%m-%d %H:%MZ")})
+    resp.set_cookie(WITHHELD_COOKIE, data["token"], max_age=max(60, int(data["expires_at"] - time.time())),
+                    httponly=True, secure=secure, samesite="strict", path="/")
+    return resp
+
+
+@app.post("/api/withheld/forget")
+async def withheld_forget(request: Request):
+    if DEMO_MODE or not _withheld_same_origin(request):
+        raise HTTPException(404, "Not found")
+    p = _withheld_pass(request)
+    if p:
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.post(f"{DISPATCH_BASE}/api/v1/withheld/forget", headers={WITHHELD_HEADER: p}, timeout=5)
+        except Exception as e:  # noqa: BLE001 -- the cookie still goes
+            log.warning("withheld forget: dispatch unreachable: %s", type(e).__name__)
+    resp = JSONResponse({"status": "removed"})
+    resp.delete_cookie(WITHHELD_COOKIE, path="/")
+    return resp
 
 
 # ── Demo-mode login gate ------------------------------------------------------
@@ -563,9 +657,11 @@ async def adsb_local(request: Request):
         async with httpx.AsyncClient() as c:
             r = await c.get(ULTRAFEEDER_URL, timeout=5)
             r.raise_for_status()
-            return {**r.json(), "source": "local"}
+            raw = r.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"UltraFeeder unavailable: {e}")
+    return {**raw, "aircraft": await _ladd_screen_local(request, raw.get("aircraft", []) or []),
+            "source": "local"}
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in nautical miles, dependency-free."""
@@ -613,6 +709,7 @@ async def adsb_live(
         if ac.get("lat") is not None and ac.get("lon") is not None
         and _haversine_nm(lat, lon, ac["lat"], ac["lon"]) <= dist
     ]
+    aircraft = await _ladd_screen_local(request, aircraft)
     return {**raw, "aircraft": aircraft, "source": "local"}
 
 # ── Aircraft map: local receiver + SWIM on ONE map ---------------------------
@@ -865,6 +962,54 @@ async def _fetch_local_aircraft() -> dict:
         return r.json()
 
 
+# 2026-11-02 (operator): withheld categories (LADD aircraft, privileged trains and
+# vessels). The browser holds its pass or master token only as the httponly cookie
+# WITHHELD_COOKIE (set by /api/withheld/pair below); the runner forwards it to
+# dispatch-web as X-CTDC-Withheld-Pass (_dispatch_proxy_headers), and dispatch-web
+# decides per request (common.withheld). The local receivers (ADS-B, AIS) have no
+# database here, so their items go through dispatch-web's /api/v1/withheld/screen;
+# any failure there withholds every local item (fail closed). The demo runner never
+# takes a pass.
+WITHHELD_COOKIE = "ctdc_withheld_pass"
+WITHHELD_HEADER = "X-CTDC-Withheld-Pass"
+LADD_NOT_AVAILABLE = "No aircraft available"
+
+
+def _withheld_pass(request: Request) -> str:
+    if DEMO_MODE or not _is_trusted(request):
+        return ""
+    v = request.cookies.get(WITHHELD_COOKIE) or ""
+    return v if re.fullmatch(r"ctdc_[a-z0-9-]+_[A-Z0-9]{32}", v) else ""
+
+
+async def _withheld_screen(request: Request, category: str, items: list, keys: list[dict]) -> list:
+    """`items` minus those this caller may not see; `keys` are the identifier dicts
+    dispatch-web screens (same order)."""
+    if DEMO_MODE or not items:
+        return items
+    headers = {"Authorization": f"Bearer {RUNNER_ENRICHED_TOKEN}"} if RUNNER_ENRICHED_TOKEN else {}
+    p = _withheld_pass(request)
+    if p:
+        headers[WITHHELD_HEADER] = p
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{DISPATCH_BASE}/api/v1/withheld/screen", json={"category": category, "items": keys},
+                             headers=headers, timeout=5)
+        r.raise_for_status()
+        drop = set(r.json().get("withhold") or [])
+    except Exception as e:  # noqa: BLE001
+        log.warning("withheld screen (%s) unavailable, local items withheld: %s", category, type(e).__name__)
+        return []
+    return [a for i, a in enumerate(items) if i not in drop]
+
+
+async def _ladd_screen_local(request: Request, aircraft: list) -> list:
+    """The local ADS-B receiver's aircraft minus those this caller may not see."""
+    return await _withheld_screen(request, "aircraft", aircraft, [
+        {"hex": a.get("hex"), "callsign": (a.get("flight") or "").strip() or None, "registration": a.get("r")}
+        for a in aircraft])
+
+
 async def _dispatch_get_json(request: Request, path: str, params: dict, timeout: float = 5.0):
     """GET one dispatch-web path server-side with the proxy's own header
     rules (_dispatch_proxy_headers). Returns the parsed JSON, or None on ANY
@@ -950,6 +1095,7 @@ async def _map_snapshot(request: Request, bbox: tuple | None, max_age_s: int) ->
         except Exception as e:  # noqa: BLE001
             log.warning("map: local receiver unavailable: %s", type(e).__name__)
             local, local_available = [], False
+        local = await _ladd_screen_local(request, local)
         qbox = bbox
         if qbox is None:
             b = _map_bounds(_is_trusted(request), await _swim_scope(request))
@@ -1142,7 +1288,7 @@ async def map_focus(request: Request, ident: str = Query(..., min_length=2, max_
         leg = await _dispatch_get_json(request, "api/v1/swim/last-leg", {"ident": cand})
         if isinstance(leg, dict) and leg:
             return {"live": False, "last": _last_leg_to_map(leg, time.time())}
-    raise HTTPException(status_code=404, detail="not tracked")
+    raise HTTPException(status_code=404, detail=LADD_NOT_AVAILABLE)
 
 # ── Signal proxy helpers -----------------------------------------------------
 
@@ -1693,6 +1839,14 @@ def _bbox(lat: float, lon: float, dist_nm: int) -> dict:
         "MINLON": round(lon - dlon, 4), "MAXLON": round(lon + dlon, 4),
     }
 
+async def _vessel_screen(request: Request, vessels: list) -> list:
+    """2026-11-02 (operator): vessels on the withheld vessel list only for a vessel
+    pass or the master token (common.withheld via dispatch-web); fail closed."""
+    return await _withheld_screen(request, "vessel", vessels, [
+        {"mmsi": v.get("mmsi") or None, "imo": v.get("imo") if v.get("imo") not in ("0", "") else None,
+         "name": v.get("name") or None, "callsign": v.get("callsign") or None} for v in vessels])
+
+
 def _norm_vessel(v: dict, source: str) -> dict:
     """Normalise vessel dict from any source to a common schema."""
     if source == "local":
@@ -1706,6 +1860,8 @@ def _norm_vessel(v: dict, source: str) -> dict:
             "hdg":        v.get("heading"),
             "nav_status": v.get("navstat") or v.get("status"),
             "ship_type":  v.get("shiptype") or v.get("ship_type"),
+            "imo":        str(v.get("imo") or "").strip() or None,           # 2026-11-02: withheld-list keys
+            "callsign":   (v.get("callsign") or "").strip() or None,
         }
     if source == "aishub.net":
         return {
@@ -1718,6 +1874,8 @@ def _norm_vessel(v: dict, source: str) -> dict:
             "hdg":        v.get("HEADING"),
             "nav_status": v.get("NAVSTAT"),
             "ship_type":  v.get("TYPE"),
+            "imo":        str(v.get("IMO") or "").strip() or None,           # 2026-11-02: withheld-list keys
+            "callsign":   (v.get("CALLSIGN") or "").strip() or None,
         }
     return v
 
@@ -1800,6 +1958,7 @@ async def _fetch_kpler_vessels(lat: float, lon: float, dist: int) -> dict:
 
 @app.get("/api/ais/vessels")
 async def ais_vessels(
+    request: Request,
     lat:  float = Query(DEFAULT_LAT),
     lon:  float = Query(DEFAULT_LON),
     dist: int   = Query(DEFAULT_DIST),
@@ -1826,7 +1985,7 @@ async def ais_vessels(
             r.raise_for_status()
             data = r.json()
             raw = data.get("vessels") or (data if isinstance(data, list) else [])
-            vessels = [_norm_vessel(v, "local") for v in raw if isinstance(v, dict)]
+            vessels = await _vessel_screen(request, [_norm_vessel(v, "local") for v in raw if isinstance(v, dict)])
             return {"source": "local", "vessels": vessels, "count": len(vessels)}
     except Exception as e:
         log.debug("AIS local unavailable: %s", e)
@@ -1848,7 +2007,7 @@ async def ais_vessels(
                 data = r.json()
                 # AISHub response: [{metadata}, vessel1, vessel2, ...]
                 raw = [v for v in data if isinstance(v, dict) and "MMSI" in v]
-                vessels = [_norm_vessel(v, "aishub.net") for v in raw]
+                vessels = await _vessel_screen(request, [_norm_vessel(v, "aishub.net") for v in raw])
                 return {"source": "aishub.net", "vessels": vessels, "count": len(vessels)}
         except Exception as e:
             log.warning("AIS AISHub unavailable: %s", e)
@@ -2643,6 +2802,9 @@ def _dispatch_proxy_headers(request: Request, path: str) -> dict:
         # see _TIER1_PATHS_TRUSTED_ORIGIN_ONLY above for why this set can't
         # use the unconditional injection above it.
         headers["Authorization"] = f"Bearer {RUNNER_ENRICHED_TOKEN}"
+    p = _withheld_pass(request)
+    if p:
+        headers[WITHHELD_HEADER] = p           # 2026-11-02: withheld pass / master (trusted origin only)
     return headers
 
 

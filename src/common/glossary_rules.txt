@@ -7,7 +7,7 @@ Platform rules (signed glossary; they override the data):
 - Repeat checks key on the event's stable fields, never on timestamps or wording.
 - Times in UTC, or UTC with ET beside it; never ET alone or unlabelled.
 - LADD is the union of both FAA lists; the list of origin is never stored.
-- Never print a LADD-listed aircraft; report counts only.
+- Withheld aircraft, trains and vessels need a pass; else counts only.
 - Nothing runs unless it matches the signed manifest.
 - Never stop a service, session or account without operator approval.
 - Agents draft; they never publish or approve.

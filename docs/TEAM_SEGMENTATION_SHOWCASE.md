@@ -209,7 +209,7 @@ design -- never live state -- and the account cannot rewrite it.
 
 ![The session the operator had labelled as the agent reports uid 1000 -- the operator account. The identity self-check, not the label, is what tells you who you are talking to.](images/segmentation/14-mislabelled-session-identity-check.png)
 
-*Exhibit 14: a session labelled `(CTDC-AGENT-CLAUDE)` answers `uid 1000 (corporatetraveldc)`. A stray `claude --remote-control` had been started in the operator's own shell and renamed; the real agent instance was still parked on a trust dialog. Labels are decoration; `id` is identity. The account email in the reply is redacted with `scripts/redact-screenshot.py` -- the region is overwritten with random noise and then mosaicked, so there is no filter to remove.*
+*Exhibit 14: a session labelled `(CTDC-AGENT-CLAUDE)` answers `uid 1000 (corporatetraveldc)`. A stray `claude --remote-control` had been started in the operator's own shell and renamed; the real agent instance was still parked on a trust dialog. Labels are decoration; `id` is identity. The account email in the reply is redacted ~~with `scripts/redact-screenshot.py` -- the region is overwritten with random noise and then mosaicked, so there is no filter to remove~~ (corrected 2026-11-02, publication review: with a solid black box. A mosaic can still leak an address's length and colouring; a solid fill leaves nothing to recover).*
 
 *With provenance confirmed (the operator generated the key and the registry holds its fingerprint), the agent sends the post: HTTP 201, board id assigned, signed with its own key under its own name -- the attribution chain working end to end.*
 

@@ -146,6 +146,9 @@ SKILL_SCHEDULE: list[dict] = [
     # failure mode as flight-cleanup/audit-log-prune above -- see
     # retention_prune.py's module docstring.
     {"name": "retention-prune", "script": "poller/skills/retention_prune.py", "interval": 86400},
+    # 2026-11-02 (operator): FAA JO 7340.2 monitor -- keeps the withheld PIA call-sign
+    # prefixes current (daily index check; full re-check on a new edition and monthly).
+    {"name": "pia-designator-watch", "script": "poller/skills/pia_designator_watch.py", "interval": 86400},
 ]
 
 # Daily/weekly skills are handled by systemd timers, not this scheduler.

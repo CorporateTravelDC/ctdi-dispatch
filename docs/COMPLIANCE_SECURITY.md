@@ -115,7 +115,7 @@ the public tree. The boundary, as built in this batch:
   `config/postgresql-demo.conf` + `config/pg_hba-demo.conf`: the `demo` role on
   the socket only, `demo_owner` on socket + `127.0.0.1:5433`, everything else
   rejected). Its whole schema is the six demo tables
-  (`src/common/pg_schema_demo/0001`); no flight, watchlist, auth, token, audit
+  (`src/common/pg_schema_demo/0001_demo_core.sql`); no flight, watchlist, auth, token, audit
   or LADD table can exist there (`tests/scripts/test_pg_schema_demo.py`).
 - The production `config/pg_hba.conf` rejects the demo roles and the demo
   database BY NAME before its catch-alls.
@@ -394,7 +394,7 @@ there is no SQLite path outside the test suite.)
   - *Tail deletion (R09-2).* The sweep journals the head hash, but nothing
     stores the last verified head or reads it back. Deleting the newest rows
     leaves a chain that still verifies.
-  - *Verifier error reported as healthy (R09-4).* `scheduled-integrity-sweep.sh:104-108`
+  - *Verifier error reported as healthy (R09-4).* ~~`scheduled-integrity-sweep.sh:104-108`~~ (corrected 2026-11-02: `scheduled-integrity-sweep.sh:112-116`)
     flags a broken chain only when the output says `"intact": false`. Any
     other non-zero exit, such as a database error, is logged as "audit chain
     check unavailable" with no push.
@@ -541,9 +541,16 @@ Two independent layers; neither covers the other's path.
 only from the tailnet; `tailscale0` sits in firewalld's `trusted` zone, while
 the LAN zone (`enu1`, `wld0`) opens only ssh, mdns, samba-client,
 dhcpv6-client and 80/tcp (unverified 2026-10-25: firewalld zone contents are root-only). The admin runner (`:8001`) and the operator console
-(`/console`) are served only by `nginx/conf.d/tailscale-dispatch-runner.conf`
+(`/console`) are served ~~only~~ by `nginx/conf.d/tailscale-dispatch-runner.conf`
 (server name `corporatetraveldc-dispatch.tailxxxxxxx.ts.net`, 443 closed on the
-LAN). [UNVERIFIED: the live tailnet ACL; the tracked
+LAN). (corrected 2026-11-02, pre-pentest docs parity, `ss -ltnu` on the box: nginx is not the only
+path. The API (`:8000`) and the runner (`:8001`) also listen directly on `100.x.x.x`, so any
+tailnet peer the ACL admits reaches them without nginx; the app-layer gates (`_is_trusted`, token
+tiers, `X-CTDI-Public`) still apply. Bound to every interface (`0.0.0.0`/`[::]`): ntfy `:2586`,
+Open WebUI `:3000`, ultrafeeder Beast `:30005`, acarsrouter `:9080`/`:15555`, fr24 `:8754`, the
+Pi-hole web UI `:8091` and chrony NTS-KE `:4460`; on the LAN these are limited only by the firewalld zone above.
+Also listening: chrony (udp/123, NTS-KE tcp/4460), intentional, as the box's NTP/NTS server. Found and removed in the same pass: wsdd (udp/3702 on the LAN and tailnet, GNOME gvfs network discovery; package removed, discovery disabled, udp/3702 and tcp/5357 dropped in and out by `config/firewall/ctdc-block-wsdd.nft`) and CUPS (`127.0.0.1:631`, no printing use; disabled and masked).)
+[UNVERIFIED: the live tailnet ACL; the tracked
 `tailscale/policy.hujson` was last changed ~~2026-08-05~~ (corrected 2026-10-25: 2026-10-07, `git log -1 -- tailscale/policy.hujson`) and still does not contain
 `tag:headless-admin`, which the node advertises.]
 

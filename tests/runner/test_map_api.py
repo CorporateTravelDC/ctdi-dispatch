@@ -21,6 +21,15 @@ from starlette.requests import Request  # noqa: E402
 from runner import main as rm  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _ladd_screen_passthrough(monkeypatch):
+    """2026-11-02: the local receiver's LADD screen is a dispatch-web call, tested in
+    tests/runner/test_ladd_pass_runner.py; these tests are about the merge."""
+    async def passthrough(request, aircraft):
+        return aircraft
+    monkeypatch.setattr(rm, "_ladd_screen_local", passthrough)
+
+
 def _request(headers: dict | None = None, client=("127.0.0.1", 12345)) -> Request:
     encoded = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     return Request({"type": "http", "headers": encoded, "method": "GET",

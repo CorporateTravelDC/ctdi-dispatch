@@ -23,3 +23,5 @@ PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
 PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
 PUSHOVER_TOKEN  # src/common/pushover.py:28
 PUSHOVER_USER_KEY  # src/common/pushover.py:29
+# 2026-11-02: withheld-category audit key (HMAC-SHA-512); without it no pass or master token is honoured
+WITHHELD_AUDIT_KEY  # src/common/withheld.py

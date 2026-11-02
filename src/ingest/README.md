@@ -457,7 +457,7 @@ file (`scripts/service-env/generate.py --write`), then
 >   store nothing, NWWS is WFO-filtered (LWX/AKQ/CTP/PHI) so AWC KKCI
 >   convective SIGMETs never arrive, `international_aviation_feed` has 0
 >   rows, and ITWS is terminal-scale. Legwork for a future pass: a small
->   poller fetcher on AWC's `/api/data/airsigmet` (hazard=CONV) + an
+>   poller fetcher on AWC's `/api/data/airsigmet` (hazard=CONV) + an <!-- not-a-claim -->
 >   append-only polygon archive table; `tfms_reroutes` (archiving since
 >   this afternoon, with declared origin/destin scope lists) is the
 >   document-preferred scope-based attribution source once it has depth.
@@ -487,7 +487,7 @@ file (`scripts/service-env/generate.py --write`), then
 > - (2026-10-15: deployed; the timer runs every 10 min and the table held 7,511 rows.) **Convective SIGMET fetcher + archive**
 >   (`poller/skills/convective_sigmet_archiver.py`, 10-min quadlet
 >   timer `corporatetraveldc-convective-sigmet-archiver.{container,timer}`):
->   independent fetch of AWC's `/api/data/airsigmet` JSON (the same
+>   independent fetch of AWC's `/api/data/airsigmet` JSON (the same <!-- not-a-claim -->
 >   unblocked Data API the web overlay uses; live-verified this pass --
 >   16 convective SIGMETs active nationwide at test time), filtered to
 >   `hazard == CONVECTIVE`, archived append-only to

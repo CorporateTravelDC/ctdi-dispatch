@@ -30,6 +30,13 @@ Tier / privacy decision (documented here because the spec asked for it):
     not in the FAA registry, so the hex filter cannot recognise them; their
     third-party callsign is checked against the LADD list like any other
     identifier -- there is no separate PIA list in this platform today.
+  * 2026-11-02 (operator) SUPERSEDES the two points above for LADD: tier no
+    longer decides it. /positions and /last-leg show LADD-listed aircraft only
+    to a caller holding an aircraft pass or the master token (common.withheld:
+    a token with the explicit ladd.view grant, forwarded by the runner in
+    X-CTDC-Withheld-Pass);
+    every other caller, Tier 1 included, has them withheld, and /last-leg
+    answers "No aircraft available" exactly as for a miss.
 """
 from __future__ import annotations
 
@@ -40,8 +47,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from auth.auth import Tier, resolve_tier
-from common import db
+from auth.auth import Tier, resolve_tier, resolve_withheld
+from common import db, withheld
 from common.airline_codes import to_icao_callsign
 from ingest.parsers.geo_filter import storage_scope
 # 2026-10-24: the focus resolver below reuses the watchlist's own helpers
@@ -125,6 +132,7 @@ def swim_positions(
     max_age_s: int = Query(120, ge=1, le=3600),
     limit: int = Query(2000, ge=1, le=5000),
     tier: Tier = Depends(resolve_tier),
+    held=Depends(resolve_withheld),
 ) -> JSONResponse:
     """Stored SWIM positions (FDPS flight_events, TAIS terminal_tracks) in
     the box, newer than max_age_s. bbox + age filter run in SQL."""
@@ -134,9 +142,14 @@ def swim_positions(
     except Exception as e:  # noqa: BLE001
         log.warning("swim positions query failed: %s", type(e).__name__)
         raise HTTPException(status_code=503, detail="swim positions unavailable")
-    positions = res["positions"]
-    if not _is_internal(tier):
-        positions = _ladd_filter(positions)
+    # 2026-11-02 (operator): LADD-listed aircraft only with an aircraft pass or the
+    # master token, whatever the tier (common.withheld). A lookup failure is a 503,
+    # never an unfiltered list.
+    try:
+        positions, _ = withheld.screen(held, "aircraft", res["positions"])
+    except withheld.WithheldUnavailable:
+        log.warning("swim positions: LADD filter unavailable (fail closed)")
+        raise HTTPException(status_code=503, detail="privacy filter unavailable")
     body = [_public_position(p) for p in positions]
     return JSONResponse({
         "generated_at": time.time(),
@@ -193,6 +206,7 @@ def swim_scope(tier: Tier = Depends(resolve_tier)) -> JSONResponse:
 def swim_last_leg(
     ident: str = Query(..., min_length=2, max_length=16),
     tier: Tier = Depends(resolve_tier),
+    held=Depends(resolve_withheld),
 ) -> JSONResponse:
     """Most recent flight_events row within 24 h for a callsign or hex, with
     origin/destination coordinates when the CIFP reference table resolves
@@ -203,10 +217,9 @@ def swim_last_leg(
     except Exception as e:  # noqa: BLE001
         log.warning("swim last-leg query failed: %s", type(e).__name__)
         raise HTTPException(status_code=503, detail="swim last-leg unavailable")
-    if not leg:
-        raise HTTPException(status_code=404, detail="no recent leg")
-    if not _is_internal(tier) and not _ladd_filter([leg]):
-        raise HTTPException(status_code=404, detail="no recent leg")
+    # 2026-11-02: a miss and a LADD-withheld leg give the same answer.
+    if not leg or not withheld.visible_one(held, "aircraft", leg):
+        raise HTTPException(status_code=404, detail=withheld.NOT_AVAILABLE)
     coords: dict = {}
     try:
         coords = db.get_airport_coords([leg.get("origin"), leg.get("destination")])

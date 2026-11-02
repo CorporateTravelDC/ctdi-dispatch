@@ -83,7 +83,7 @@ export default function WatchlistBadge({ entries, onFocus }) {
           onMouseDown={ev => ev.stopPropagation()}
           onTouchStart={ev => ev.stopPropagation()}
           onClick={() => { if (!moved.current) onFocus?.(e.identifier) }}>
-          {e.identifier}
+          {e.identifier}{e.availability ? ` · ${e.availability}` : ''}
         </button>
       ))}
       <button className="wlb-collapse-btn" onClick={(e) => { e.stopPropagation(); toggle() }}

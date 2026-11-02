@@ -399,10 +399,15 @@ Live LADD data arrives by a manual weekly CUI import
 `faa_ladd_removals`, migration 0063), and that import is the only writer. Live
 status endpoint reports ~~73,369~~ 73,543 LADD entries (2026-10-15 00:51Z;
 84 recorded removals; the latest import is ledgered at 2026-10-13 15:47Z) (superseded 2026-10-25: 73,333 entries, 115 removals).
-Handling rules: `docs/LADD_CUI_HANDLING.md`. The ADX/IndustryLADD
+Handling rules: `docs/LADD_CUI_HANDLING.md`. ~~The ADX/IndustryLADD
 portal path ([adx.faa.gov](https://adx.faa.gov), Login.gov, eligibility for a
 small commercial operator unconfirmed; inquiry address `LADD@faa.gov`) has no
-code.
+code.~~ (corrected 2026-11-02, operator: this deployment's operator is a member of
+the LADD data provider on the FAA Aeronautical Data Exchange (adx.faa.gov, shown
+under Memberships). The LADD Program Office (`LADD@faa.gov`) emails each FAA Industry
+filter and Remove filter file update, for example the 2026-10-27 update, and those
+files are what `scripts/import-ladd-filter.py` imports. The ADX portal itself still
+has no code: the import stays manual.)
 
 ### OpenSky aircraft database (international registry fallback)
 
@@ -614,6 +619,69 @@ review its subscription's terms and obtain a tier or agreement that allows
 it. Separately, LADD/PIA blocking has a federal-law basis (FAA
 Reauthorization Act of 2024, sec. 803): any Tier-0 caller of the SWIM
 position routes is LADD-filtered fail-closed.
+
+### 5a. Data access + privacy-list request, one per agency (global parity, added 2026-11-02)
+
+Outside the US no authority distributes a LADD- or PIA-style list. One email per
+agency combines the data access we want from it with the question of whether it holds
+a display-restriction list or flag that a self-hosted platform may honor (drafted for
+EUROCONTROL, JCAB/JASDAT, NAV CANADA, Airservices Australia, UK CAA, CAA NZ, UAE GCAA,
+Network Rail and FlightAware; Brazil ANAC is self-service open data). The platform applies each country's own default on its own
+(`src/common/privacy_jurisdictions.py`), so a "no" changes nothing. Research and
+sources: the global privacy-parity research note. Fill in brackets; send only what the
+deployment really does.
+
+```
+To: nmb2bsupport@eurocontrol.int               (EUROCONTROL NM B2B; also the web access form)
+    jasdat@mlit.go.jp                           (JCAB / JASDAT)
+    aircraft.reg@caa.co.uk                      (UK CAA, G-INFO data products, form SRG1860)
+    service@navcanada.ca                        (NAV CANADA data sales)
+    Airservices contact form; cc privacy@airservicesaustralia.com (NAIPS; WebTrak exclusions)
+    aircraftregistrar@caa.govt.nz               (CAA New Zealand)
+    [GCAA customer care -- confirm on gcaa.gov.ae] (UAE)
+    Network Rail open-data account              (no published address)
+    FlightAware commercial contact              (no specific address)
+Subject: Data access and privacy-restriction request: self-hosted, need-to-know dispatch platform
+
+Dear [team],
+
+[Organization] operates a self-hosted dispatch-intelligence platform. It is not a
+public flight tracker. It runs on the operator's own hardware and is used only by
+vetted professionals with a documented need to know: [corporate travel managers,
+executive assistants, corporate travel departments, chauffeur firms working under
+contract].
+
+We are writing with two requests.
+
+1. Data access. [The data wanted from this agency: products, feeds, register extract
+   (registration, type and ICAO address only), with eligibility, terms and timeline.]
+
+2. Privacy restrictions. [Does <body> hold a list or flag of <aircraft / call signs /
+   vessels / trains> whose identity should not be displayed, and may a third party
+   receive it under agreement?]
+
+What the platform already does to protect privacy:
+- [Is a member of the FAA's LADD program (FAA Aeronautical Data Exchange) and applies
+  every FAA Industry and Remove filter-file update,] and withholds every FAA privacy
+  ICAO address (PIA) third-party call sign, kept current against FAA Order JO 7340.2.
+- Follows each country's own default for private aircraft, and never shows an owner's
+  name where that country does not publish it.
+- Honors individual opt-out requests from owners in any country.
+- Withholds a listed aircraft, vessel or train from anyone without a signed,
+  short-lived pass for that category; without one it answers as if it had no data.
+- Records every reveal only as a keyed fingerprint and can revoke every pass at once.
+- Keeps all data on its own system; nothing is redistributed, resold or published.
+
+Any data you provide stays on our own system and is used only by those vetted users.
+It is never redistributed, resold or published. We would use any privacy list or flag
+only to withhold identities from display. We are glad to sign a data-use or
+confidentiality agreement and to meet any security conditions you set.
+
+Regards,
+[Name], [Title]
+[Organization]
+[Phone] | [Email]
+```
 
 ---
 

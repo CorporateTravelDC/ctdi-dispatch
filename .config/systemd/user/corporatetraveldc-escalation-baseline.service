@@ -1,0 +1,15 @@
+[Unit]
+Description=Rebuild the time-of-day escalation baselines (TBFM fix queues, ASDE-X movements, airport arrivals) from history, read-only (2026-11-01)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=oneshot
+Slice=production.slice
+Nice=15
+MemoryMax=1G
+MemorySwapMax=0
+TimeoutStartSec=1800
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+# Waits for load headroom first; the build reads about 1.3M rows with SELECT only.
+ExecStartPre=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/relay-wait-load.sh
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/with-dispatch-env.sh python3 -B /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/build-escalation-baseline.py

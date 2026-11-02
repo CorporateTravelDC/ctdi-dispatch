@@ -249,6 +249,9 @@
       "connector-link",
       "connector-hold",
       "gateway-thaw",
+      "withheld-pass",
+      "withheld-master",
+      "withheld-thaw",
       "console-login"
     ],
     "notifications": {
@@ -272,6 +275,9 @@
       "connector-link",
       "connector-hold",
       "gateway-thaw",
+      "withheld-pass",
+      "withheld-master",
+      "withheld-thaw",
       "console-login"
     ],
     "agent_scopes": {},

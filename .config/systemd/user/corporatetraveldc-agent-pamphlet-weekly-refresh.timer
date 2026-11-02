@@ -1,8 +1,11 @@
 [Unit]
-Description=Weekly agent-pamphlet refresh -- Monday 05:10 ET, after the 02:00/03:45/04:30 Monday cluster and before docs-drift-weekly (09:00 UTC)
+Description=Agent-pamphlet refresh -- daily 05:10 ET (weekly until 2026-11-02), after the 02:00/03:45/04:30 Monday cluster and before docs-drift-weekly (09:00 UTC)
 
 [Timer]
-OnCalendar=Mon *-*-* 05:10:00 America/New_York
+# 2026-11-02 (operator, pre-pentest docs parity): daily, so an agent pamphlet is never more than
+# 24 h behind a grant change, a skill clawback or a rule edit. The unit name keeps "weekly" so
+# installed links and the refresh script's own name do not have to move.
+OnCalendar=*-*-* 05:10:00 America/New_York
 Persistent=true
 
 [Install]

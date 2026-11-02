@@ -1,4 +1,6 @@
 [Unit]
+# 2026-11-02 (pre-pentest docs parity): a failed run now pages, like the other drift jobs.
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 Description=Corporate Travel DC -- daily shared platform context drift backstop (scripts/check-platform-drift.sh, full set, catches drift from outside a signing pass -- this is how mcpo got deployed and crash-looped unnoticed)
 
 [Service]

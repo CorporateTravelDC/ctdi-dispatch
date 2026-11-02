@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import sqlite3
 import threading
@@ -3340,6 +3341,20 @@ def upsert_tbfm_sequence(meter_fix: str, facility: str, flight_id: str,
               now, eta_kind, _heartbeat_cutoff_iso()))
 
 
+def get_surface_movement_count(airport: str, max_age_seconds: float = 3600) -> int:
+    """STDDS/ASDE-X surface movement events at `airport` in the last max_age_seconds (2026-11-01).
+    The live measure behind the asdex_movements_hour escalation baseline
+    (scripts/build-escalation-baseline.py counts the same events per hour). event_time is ISO
+    8601 UTC, so a plain string comparison against an ISO cutoff is correct."""
+    cutoff = (datetime.utcnow() - timedelta(seconds=max_age_seconds)).strftime("%Y-%m-%dT%H:%M:%S")
+    with conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM surface_movement_events WHERE airport=? AND event_time > ?",
+            (airport, cutoff),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
 def get_active_tbfm_sequence_count(meter_fix: str, max_age_seconds: float = 1800) -> int:
     """Count of flights CURRENTLY sequenced at meter_fix -- last_seen within
     max_age_seconds (default 1800s/30min, matching the queue-dwell
@@ -4128,6 +4143,46 @@ def ladd_lookup_keys(identifier: str) -> list[str]:
 
 _LADD_BATCH_CHUNK = 500
 
+# 2026-11-02 (operator): FAA Privacy ICAO Address (PIA) aircraft broadcast a temporary
+# hex that is not in the registry and fly under a third-party call sign. The FAA allows
+# four providers (faa.gov/air_traffic/technology/equipadsb/privacy; NBAA ADS-B Privacy
+# FAQ): FltPlan.com DCM ("DOTCOM"), ForeFlight FFL, FlightAware FWR, ARINCDirect XAA
+# ("ROCKFISH"). There is no published PIA list, so a call sign of that shape (designator
+# + 1-4 character flight number, the ICAO 7-character maximum) is treated as LADD-listed
+# everywhere this function is the gate: the live filters, the withheld categories, the
+# third-party lookup guard, ACARS, gate records and the demo scrub. Over-withholding a
+# non-PIA flight under one of these privacy-only call signs is the intended direction.
+PIA_CALLSIGN_PREFIXES = ("DCM", "FFL", "FWR", "XAA")
+_PIA_CALLSIGN_RE = re.compile(r"^(?:%s)[0-9][0-9A-Z]{0,3}$" % "|".join(PIA_CALLSIGN_PREFIXES))
+
+
+# Prefixes added later by poller/skills/pia_designator_watch.py (a provider newly named
+# on the FAA privacy page) live in pia_callsign_prefixes; they are added to the code
+# floor above, re-read at most every 10 minutes. A read failure keeps the floor.
+_pia_cache: dict = {"at": 0.0, "re": _PIA_CALLSIGN_RE}
+_PIA_REFRESH_S = 600
+
+
+def _pia_re():
+    now = time.time()
+    if now - _pia_cache["at"] >= _PIA_REFRESH_S:
+        _pia_cache["at"] = now
+        extra: set[str] = set()
+        try:
+            with conn() as c:
+                rows = c.execute("SELECT prefix FROM pia_callsign_prefixes").fetchall()
+            extra = {str(r["prefix"]).upper() for r in rows if re.fullmatch(r"[A-Za-z]{3}", str(r["prefix"] or ""))}
+        except Exception:  # noqa: BLE001 -- table absent or unreadable: the code floor applies
+            extra = set()
+        prefixes = sorted(set(PIA_CALLSIGN_PREFIXES) | extra)
+        _pia_cache["re"] = re.compile(r"^(?:%s)[0-9][0-9A-Z]{0,3}$" % "|".join(prefixes))
+    return _pia_cache["re"]
+
+
+def is_pia_callsign(identifier: str | None) -> bool:
+    """True for a third-party PIA call sign shape (a PIA prefix followed by digits)."""
+    return bool(_pia_re().match((identifier or "").strip().upper()))
+
 
 def faa_ladd_listed_batch(identifiers: Iterable[str]) -> set[str]:
     """The subset of `identifiers` (registrations in either form, foreign
@@ -4142,16 +4197,19 @@ def faa_ladd_listed_batch(identifiers: Iterable[str]) -> set[str]:
     on any database error -- the scrub treats that as fatal (fail closed);
     the live callers already treat a lookup failure as "listed"."""
     wanted: dict[str, str] = {}
+    hits: set[str] = set()
     for ident in identifiers:
         raw = (ident or "").strip().upper()
         if not raw:
             continue
+        if is_pia_callsign(raw):                     # 2026-11-02: PIA third-party call signs
+            hits.add(raw)
+            continue
         for k in ladd_lookup_keys(raw):
             wanted.setdefault(k, raw)
     if not wanted:
-        return set()
+        return hits
     keys = list(wanted)
-    hits: set[str] = set()
     with conn() as c:
         for i in range(0, len(keys), _LADD_BATCH_CHUNK):
             chunk = keys[i:i + _LADD_BATCH_CHUNK]

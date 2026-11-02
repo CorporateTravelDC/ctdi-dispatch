@@ -57,7 +57,7 @@ ingress:
   # coordinates, and every tracked ACARS/VDL2 message to the raw internet.
   # Operator directive: lock down to Tailscale-only instead of CF Access
   # gating or removing outright -- both UIs are now reachable ONLY via the
-  # tailnet, at 100.x.x.x:8081 (adsb/tar1090) and :8091 (acars/acarshub),
+  # tailnet, at 100.x.x.x:8081 (adsb/tar1090) and :8092 (acars/acarshub; corrected 2026-11-02: :8091 is the Pi-hole web UI),
   # or the corresponding corporatetraveldc-dispatch.tailxxxxxxx.ts.net names.
   # No tunnel route means no public path to either exists at all.
 

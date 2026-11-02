@@ -191,6 +191,9 @@ class PublicIdentityAllowlist20261024(unittest.TestCase):
     def _verify(self, content: str):
         """Run verify_scrubbed() over a one-file tree in a throwaway repo."""
         m = _load_scrubber()
+        # 2026-11-02: verify_scrubbed() also scans for the live secrets file's values, which only the
+        # operator can read; these tests are about the identity allowlist, so the secret scan sees none.
+        m._load_live_secret_values = lambda *a, **k: {}
         with tempfile.TemporaryDirectory() as d:
             subprocess.run(["git", "init", "-q", d], check=True)
             Path(d, "SECURITY.md").write_text(content)

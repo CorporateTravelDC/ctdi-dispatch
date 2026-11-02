@@ -51,8 +51,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from auth.auth import Tier, require_admin, require_tier, resolve_tier, resolve_identity
+from auth.auth import Tier, require_admin, require_tier, resolve_tier, resolve_identity, resolve_withheld
 from common.gate_assignments import ladd_blocked
+from common import withheld  # 2026-11-02: withheld categories
 from common import config, db, db_backend
 from ingest import failover as _failover
 import secrets as _secrets
@@ -68,6 +69,7 @@ from web.routes.console import router as console_router  # 2026-10-05: operator 
 from web.routes.sectors import router as sectors_router
 from web.routes.remember import router as remember_router
 from web.routes.swim_positions import router as swim_positions_router  # 2026-10-24: aircraft map SWIM layer
+from web.routes.withheld import router as withheld_router  # 2026-11-02: withheld categories
 from web.sse import live_events
 
 app = FastAPI(
@@ -114,6 +116,7 @@ app.include_router(remember_router)
 app.include_router(agent_gateway_router)
 app.include_router(console_router)
 app.include_router(swim_positions_router)
+app.include_router(withheld_router)
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -1183,8 +1186,13 @@ async def get_notams() -> JSONResponse:
 
 
 @app.get("/api/v1/amtrak")
-async def get_amtrak() -> JSONResponse:
-    """Latest Amtrak DC-area status — Tier 0."""
+async def get_amtrak(held=Depends(resolve_withheld)) -> JSONResponse:
+    """Latest Amtrak DC-area status — Tier 0.
+
+    2026-11-02 (operator): trains on the operator's withheld rail list are shown
+    only to a rail pass or master holder; for everyone else they are removed and the
+    summary (which names delayed trains) is rebuilt from counts. A list lookup
+    failure withholds every train (fail closed)."""
     status = db.get_latest_amtrak_status()
     if not status:
         return JSONResponse({"available": False, "summary": "No data yet", "trains": []})
@@ -1195,16 +1203,24 @@ async def get_amtrak() -> JSONResponse:
             trains = json.loads(raw)
         except Exception:
             trains = []
+    summary = status["delay_summary"]
+    try:
+        trains, n_held = withheld.screen(held, "rail", [t for t in trains if isinstance(t, dict)])
+    except withheld.WithheldUnavailable:
+        trains, n_held = [], 1
+    if n_held:
+        delayed = sum(1 for t in trains if (t.get("delay_minutes") or 0) > 5)
+        summary = f"{delayed} of {len(trains)} trains delayed."
     return JSONResponse({
         "available": True,
-        "summary": status["delay_summary"],
+        "summary": summary,
         "fetched_at": status["fetched_at"],
         "trains": trains,
     })
 
 
 @app.get("/api/v1/flightplan/{callsign}")
-async def get_flight_plan(callsign: str) -> JSONResponse:
+async def get_flight_plan(callsign: str, held=Depends(resolve_withheld)) -> JSONResponse:
     """Confirmed flight-plan details from FAA FDPS (SWIM/SFDPS FIXM feed) —
     Tier 0. Filed origin/destination/aircraft type/status, straight from the
     FAA's own flight plan message for this callsign -- not inferred from
@@ -1219,8 +1235,11 @@ async def get_flight_plan(callsign: str) -> JSONResponse:
     # plan was readable by anyone. A listed callsign, registration or hex --
     # or a failed LADD lookup (fail closed) -- now answers exactly like a miss,
     # so the response never reveals that a block happened.
-    if plan and ladd_blocked([callsign.strip().upper(), plan.get("registration")],
-                             [plan.get("hex")]):
+    # 2026-11-02 (operator): an aircraft pass / master holder sees it (audited); a
+    # lookup failure still withholds.
+    if plan and not withheld.visible_one(held, "aircraft", {"callsign": callsign.strip().upper(),
+                                                 "registration": plan.get("registration"),
+                                                 "hex": plan.get("hex")}):
         plan = None
     if not plan:
         return JSONResponse({
@@ -2328,7 +2347,8 @@ def get_adsb_live(
 # ── FAA Aircraft Registry — Tier 0 ────────────────────────────────────────────
 
 @app.get("/api/v1/aircraft/{identifier}")
-async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> JSONResponse:
+async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier),
+                       held=Depends(resolve_withheld)) -> JSONResponse:
     """Look up an aircraft by N-number/tail or ICAO hex, cross-referencing
     the local FAA registry cache AND OpenSky's registry (added 2026-07-23,
     operator directive: flight numbers resolve to a tail number, then that
@@ -2393,7 +2413,13 @@ async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> J
     # sensitive and stay Tier-0; only the ladd flag is gated, to avoid a
     # Tier-0 caller distinguishing "not LADD" from "info withheld" -- always
     # emit False below that tier rather than omitting the field.
-    ladd_visible = tier != Tier.T0
+    # 2026-11-02 (operator): the flag needs an aircraft pass or the master token.
+    ladd_visible = withheld.view_of(held).allowed("aircraft")
+    if ladd_visible and faa_record and faa_record.get("ladd"):
+        try:
+            withheld.audit_reveal(withheld.view_of(held), "aircraft", [{"registration": identifier}])
+        except Exception:  # noqa: BLE001 -- unaudited = not shown
+            ladd_visible = False
 
     faa_hex = (faa_record.get("mode_s_hex") or "").lower() if faa_record else None
     osky_hex = (osky_record.get("icao24") or "").lower() if osky_record else None
@@ -2420,6 +2446,14 @@ async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> J
         source = "opensky"
         hex_mismatch = False
         authoritative_hex = osky_hex
+
+    # 2026-11-02 (operator): a non-US owner name is returned only where that country
+    # publishes owner names itself (common.privacy_jurisdictions); the FAA record is the
+    # US public register and is unchanged.
+    from common import privacy_jurisdictions as _pj
+    osky_owner = None
+    if osky_record and _pj.owner_public(osky_record.get("registration"), osky_record.get("icao24")):
+        osky_owner = osky_record.get("owner")
 
     return JSONResponse({
         "identifier":      ident,
@@ -2451,7 +2485,7 @@ async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> J
             "model":             osky_record.get("model"),
             "typecode":          osky_record.get("typecode"),
             "operator":          osky_record.get("operator"),
-            "owner":             osky_record.get("owner"),
+            "owner":             osky_owner,
             "registered":        osky_record.get("registered"),
             "built":             osky_record.get("built"),
         } if osky_record else None),
@@ -2459,7 +2493,7 @@ async def get_aircraft(identifier: str, tier: Tier = Depends(resolve_tier)) -> J
         # pre-2026-07-23 flat FAA-only shape directly.
         "n_number":        faa_record.get("n_number") if faa_record else None,
         "mode_s_hex":      authoritative_hex,
-        "registrant_name": faa_record.get("registrant_name") if faa_record else osky_record.get("owner"),
+        "registrant_name": faa_record.get("registrant_name") if faa_record else osky_owner,
         "ladd":            (faa_record.get("ladd", False) if faa_record else False) if ladd_visible else False,
     })
 

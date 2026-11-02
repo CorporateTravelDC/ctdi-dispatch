@@ -150,6 +150,14 @@ def kill_all(actor: str, reason: str = "gateway kill-all") -> int:
     _q("UPDATE agent_connectors SET disabled_at = ? WHERE disabled_at IS NULL", (time.time(),))
     governance.audit("gateway.killed", {"actor": actor, "connections_revoked": len(rows), "reason": reason[:200]})
     _notify("agent gateway KILLED", f"{actor}: {len(rows)} connection(s) revoked, every connector disabled, gateway frozen.")
+    # 2026-11-02 (operator): a full-compromise kill also freezes every withheld
+    # category, revokes every pass and wipes the master token.
+    try:
+        from common import withheld
+        withheld.kill_all(actor, f"gateway kill-all: {reason}"[:200])
+    except Exception:  # noqa: BLE001 -- the gateway kill must complete regardless
+        import logging
+        logging.getLogger(__name__).exception("gateway kill-all: withheld freeze failed")
     return len(rows)
 
 

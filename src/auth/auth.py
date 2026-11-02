@@ -191,6 +191,20 @@ def _redact_audit_detail(detail):
     return {k: _redact_audit_value(k, v) for k, v in detail.items()}
 
 
+def resolve_withheld(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """2026-11-02: the withheld-category view for this request (common.withheld:
+    LADD aircraft, privileged trains and vessels). Never raises; anything short of a
+    valid, explicitly granted, unfrozen pass or master token is the withheld view."""
+    from common import withheld
+    try:
+        return withheld.resolve(request, credentials)
+    except Exception:  # noqa: BLE001 -- fail closed
+        return withheld.ANON
+
+
 def action_allowed(allowed_actions: str | None, action: str) -> bool:
     """None/empty = unrestricted (every token minted before 0070); otherwise
     `action` must match one of the comma-separated fnmatch patterns."""

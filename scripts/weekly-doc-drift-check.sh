@@ -84,8 +84,18 @@ trap 'rm -f "${FACTS_FILE}" "${CLAIMS_FILE}"' EXIT
 # Doc claims vs live system (2026-10-16): deterministic, stdlib python.
 # Captured to its own file first so the miss count can go into the ntfy
 # summary; exit 1 = misses found, which is a finding, not a failure.
-python3 scripts/doc-claims-check.py >"${CLAIMS_FILE}" 2>&1 || true
+# 2026-11-02 (pre-pentest docs parity): a miss is only drift if it lasts. The first-seen ledger keys
+# each miss on its doc and claim (never the line number) and prints [AGED] for any open longer than
+# 24 h; the public mirror (local ref public/main, never fetched here) is compared too.
+CLAIMS_LEDGER="${CTDC_DOC_CLAIMS_LEDGER:-${LOG_DIR}/claims-ledger.json}"
+PUBLIC_ARGS=()
+git rev-parse --verify --quiet 'public/main^{commit}' >/dev/null 2>&1 && PUBLIC_ARGS=(--public-ref public/main)
+# 20, not 24: the runs are 24 h apart to the second, so "> 24 h" would only trip on the THIRD sighting.
+# A miss still there at the next daily run has outlived its 24 h, and that run pages p4.
+python3 scripts/doc-claims-check.py --age-ledger "${CLAIMS_LEDGER}" --max-age-hours 20 "${PUBLIC_ARGS[@]}" \
+    >"${CLAIMS_FILE}" 2>&1 || true
 CLAIM_MISSES="$(grep -c '^\[DRIFT\]' "${CLAIMS_FILE}" || true)"
+CLAIM_AGED="$(grep -c '^\[AGED\]' "${CLAIMS_FILE}" || true)"
 CLAIM_SUMMARY="$(grep '^\[SUMMARY\]' "${CLAIMS_FILE}" || echo '[SUMMARY] doc-claims-check did not run')"
 
 {
@@ -96,7 +106,8 @@ CLAIM_SUMMARY="$(grep '^\[SUMMARY\]' "${CLAIMS_FILE}" || echo '[SUMMARY] doc-cla
 
     echo
     echo "## Doc claims vs live system (scripts/doc-claims-check.py)"
-    echo "README.md, docs/*.md (non-dated), skills/*/SKILL.md: repo paths vs git ls-files,"
+    echo "README.md, SECURITY.md, undated docs/**/*.md, skills + .agents/skills SKILL.md, pamphlet template,"
+    echo "src READMEs (tracked only): repo paths vs git ls-files, routes vs src/,"
     echo "unit names vs systemctl list-unit-files, documented timer schedules vs the installed"
     echo "timer's OnCalendar/OnUnitActiveSec. Struck text is skipped. One [DRIFT] line per miss."
     cat "${CLAIMS_FILE}"
@@ -179,7 +190,11 @@ echo "${CLAIM_SUMMARY}"
 # headline; the report path is where the [DRIFT] lines are.
 PLATFORM_CONTEXT_DRIFT="$(grep -c '^\[DRIFT\]' "${FACTS_FILE}" || true)"
 PLATFORM_CONTEXT_DRIFT=$(( PLATFORM_CONTEXT_DRIFT - CLAIM_MISSES ))
-if [[ "${CLAIM_MISSES}" -gt 0 || "${PLATFORM_CONTEXT_DRIFT}" -gt 0 ]]; then
+if [[ "${CLAIM_AGED}" -gt 0 ]]; then
+    # Past the 24-hour bound: p4, and the headline says so, so it is not the same p3 as every morning.
+    ntfy_send "Doc drift over 24h: ${CLAIM_AGED} miss(es)" \
+        "${CLAIM_SUMMARY#\[SUMMARY\] }; ${CLAIM_AGED} open longer than 24 h ([AGED] lines) -- see ${REPORT}" 4
+elif [[ "${CLAIM_MISSES}" -gt 0 || "${PLATFORM_CONTEXT_DRIFT}" -gt 0 ]]; then
     ntfy_send "Weekly doc drift: ${CLAIM_MISSES} doc-claim miss(es)" \
         "${CLAIM_SUMMARY#\[SUMMARY\] }; platform context drift lines: ${PLATFORM_CONTEXT_DRIFT} -- see ${REPORT}" 3
 else

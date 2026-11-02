@@ -86,7 +86,7 @@ This is the first **composition**: one core profile plus overlays. The ~~eight~~
 
 ## 4. Later slices (each needs its own approval)
 
-1. Template inventory (proposal Phase 0): `docs/deployment-template-inventory.md`, covering the 8 verticals, the base and the reference, all with `loaded ≠ deployed` shown.
+1. Template inventory (proposal Phase 0): `docs/deployment-template-inventory.md`, covering the 8 verticals, the base and the reference, all with `loaded ≠ deployed` shown. <!-- not-a-claim -->
 2. Correlation and normalization in shadow, against recorded NWWS/ITWS traffic (no-send).
 3. Activation records plus the signed state machine.
 4. NHC and USGS adapters: separate proposals.

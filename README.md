@@ -65,11 +65,11 @@ long-running baseline.
 > use `corporatetraveldc`, the original deployment name. New deployments can
 > substitute any username; only env config and Quadlet paths need to change.
 
-- **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)**
+- **Platform Compatibility Reference (PDF) (`docs/platform-compatibility.pdf`, private repository)**
 - **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral.
 - **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC.
 - **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — signup portals and policy links for every feed.
-- **[Internal Infra Map](docs/INFRA_MAP.md)** — private service/host/domain map (private repo only).
+- **Internal Infra Map (`docs/INFRA_MAP.md`, private repository)** — private service/host/domain map (private repo only).
 - **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail here is tuned for one Pi 5 under shared-resource contention.
 - **[Backups](docs/BACKUP.md)** — encrypted Borg backups, nightly, synced to an off-box target; freshness check and weekly restore test (added 2026-10-15).
 - **[Retired code index](docs/RETIRED.md)** — everything taken out of service, by folder (added 2026-10-15).
@@ -81,7 +81,7 @@ Living documents. Each describes the platform as it is now and keeps changed
 statements struck through with the date. Files marked *(private)* are dropped
 from the public mirror.
 
-- **Architecture and infra:** [INFRA_MAP](docs/INFRA_MAP.md) *(private)*,
+- **Architecture and infra:** INFRA_MAP (`docs/INFRA_MAP.md`, private repository) *(private)*,
   [REFERENCE_INFRA](docs/REFERENCE_INFRA.md) (the public counterpart),
   [SINGLE_EDGE_UNIT_ASSUMPTIONS](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md),
   [HARDWARE_GUIDANCE](docs/HARDWARE_GUIDANCE.md),
@@ -104,9 +104,9 @@ from the public mirror.
   [ALERT_ARCHITECTURE](docs/ALERT_ARCHITECTURE.md).
 - **Operations:** [BACKUP](docs/BACKUP.md), [RETIRED](docs/RETIRED.md),
   [OPERATOR_CONSOLE](docs/OPERATOR_CONSOLE.md),
-  [HEADLESS_ACCESS](docs/HEADLESS_ACCESS.md) *(private;
+  HEADLESS_ACCESS (`docs/HEADLESS_ACCESS.md`, private repository) *(private;
   public: [example](docs/HEADLESS_ACCESS.example.md))*,
-  [TAILNET_MIGRATION_INVENTORY](docs/TAILNET_MIGRATION_INVENTORY.md) *(private;
+  TAILNET_MIGRATION_INVENTORY (`docs/TAILNET_MIGRATION_INVENTORY.md`, private repository) *(private;
   public: [example](docs/TAILNET_MIGRATION_INVENTORY.example.md))*,
   [scheduled-task skills](docs/tasks/scheduled/README.md).
 - **Runner, demo and integration:** [dispatch-runner-design](docs/dispatch-runner-design.md),
@@ -119,14 +119,14 @@ from the public mirror.
   [BOARD_SIGNING](docs/BOARD_SIGNING.md),
   [TEAM_SEGMENTATION_SHOWCASE](docs/TEAM_SEGMENTATION_SHOWCASE.md),
   [SOVEREIGN_SKILL_SUPPLY_CHAIN](docs/SOVEREIGN_SKILL_SUPPLY_CHAIN.md),
-  [AGENTS.md](AGENTS.md), [skills/](skills/).
+  `AGENTS.md` (private repository), [skills/](skills/).
 - **Security and compliance:** [SECURITY.md](SECURITY.md),
   [COMPLIANCE_SECURITY](docs/COMPLIANCE_SECURITY.md),
   [GUARDRAILS_PROVEN](docs/GUARDRAILS_PROVEN.md),
   [GUARDRAILS_JUSTIFICATION](docs/GUARDRAILS_JUSTIFICATION.md),
   [REPRODUCIBLE_BUILDS](docs/REPRODUCIBLE_BUILDS.md),
   [SECRETS_NAMING_AND_ISOLATION](docs/SECRETS_NAMING_AND_ISOLATION.md),
-  [CREDENTIALS_REGISTER](docs/CREDENTIALS_REGISTER.md) *(private)*,
+  CREDENTIALS_REGISTER (`docs/CREDENTIALS_REGISTER.md`, private repository) *(private)*,
   [SUDO_JUSTIFICATION_PROPOSAL](docs/SUDO_JUSTIFICATION_PROPOSAL.md),
   [LADD_CUI_HANDLING](docs/LADD_CUI_HANDLING.md),
   [HONEYPOT_FAIL2BAN](docs/HONEYPOT_FAIL2BAN.md),
@@ -136,7 +136,7 @@ from the public mirror.
   [regulated-operator-setup](docs/regulated-operator-setup.md),
   [security-reviews](docs/security-reviews/README.md).
 - **Models and second brain:** [DEDICATED_MODELS_PLAN](docs/DEDICATED_MODELS_PLAN.md),
-  [SECOND_BRAIN_STATUS](docs/SECOND_BRAIN_STATUS.md) *(private; public:
+  SECOND_BRAIN_STATUS (`docs/SECOND_BRAIN_STATUS.md`, private repository) *(private; public:
   [example](docs/SECOND_BRAIN_STATUS.example.md))*,
   [SECOND_BRAIN_GRAPH_AUTOMATION_PROMPT](docs/SECOND_BRAIN_GRAPH_AUTOMATION_PROMPT.md),
   [CAUSAL_REASONING_ROADMAP](docs/CAUSAL_REASONING_ROADMAP.md),
@@ -180,7 +180,7 @@ Security contact: developer@csexecutiveservices.com (CS Executive Services LLC).
 | Database | **Postgres** (`corporatetraveldc-pgsql`, `postgres:16-alpine`), `DISPATCH_DB_BACKEND=postgres` in `/etc/corporatetraveldc/dispatch.env`. Containers reach it over the unix socket in the shared `corporatetraveldc-pgsql-sock` volume mounted at `/var/run/postgresql`; the host reaches it on `127.0.0.1:5432`. Cutover 2026-09-18 (reference/chat/demo tables 09-19/09-20). ~~73~~ ~~75 (corrected 2026-10-15)~~ 83 (corrected 2026-10-25, numbered to `0084`) additive migrations in `src/common/pg_schema/`. `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset; `sqlite` survives only as a rollback backend selector. See `docs/POSTGRES_MIGRATION.md`. |
 | Ops dashboard (runner) | Tailnet-only: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). `ops.example.com` was retired 2026-08-02 and is hard-404'd by `_RETIRED_HOSTNAMES` in `src/runner/main.py`. |
 | Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. **The data it replays is stale:** demo-api serves `/var/lib/corporatetraveldc-demo-source/demo-source.db`, last written 2026-08-14 14:21Z; the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never fired. Re-checked 2026-10-15 00:55Z: all still true (`:8005/healthz` ok, public hostname 200, file unchanged since 2026-08-14 14:21:42Z, timer disabled). Added 2026-10-15: runner-demo and demo-api also mount the shared Postgres socket and load `dispatch.env`, because the demo password-gate profiles (`demo_profiles`, migration 0057) moved to Postgres on 2026-09-20. Playback data still comes only from `demo-source.db`. (2026-10-20: superseded. Since relay 2 (2026-10-19), playback and profiles come from the demo Postgres instance `corporatetraveldc-pgsql-demo`, and the refresh timer runs nightly at 03:17 UTC. `demo-source.db` is destroyed, and the sqlite rollback and both sovereign mounts are removed: `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` addendum 2026-10-20.) |
-| Demo portals (added 2026-10-15) | `corporatetraveldc-demo-portal-client` (:8088) and `-personal` (:8087): `nginx:alpine` containers serving `/home/corporatetraveldc/demos` read-only, bound to 127.0.0.1 and the tailnet IP. ~~Installed and active since 2026-10-12.~~ (corrected 2026-10-25 15:39:55Z: both units are `inactive (dead)` and nothing listens on :8087/:8088; `corporatetraveldc-demo-portals-boot.service` is enabled but also inactive. Whether they should be running is an operator decision; see the sweep register.) They have no tunnel ingress (none in `cloudflared/config.yml`). Swapped with `scripts/demo-portal.sh`. Their Quadlet headers cite `docs/DEMO_PORTALS.md`, which does not exist; `docs/CLIENT_DEMO_PATTERN.md` describes the pattern. |
+| Demo portals (added 2026-10-15) | `corporatetraveldc-demo-portal-client` (:8088) and `-personal` (:8087): `nginx:alpine` containers serving `/home/corporatetraveldc/demos` read-only, bound to 127.0.0.1 and the tailnet IP. ~~Installed and active since 2026-10-12.~~ (corrected 2026-10-25 15:39:55Z: both units are `inactive (dead)` and nothing listens on :8087/:8088; `corporatetraveldc-demo-portals-boot.service` is enabled but also inactive. Whether they should be running is an operator decision; see the sweep register.) They have no tunnel ingress (none in `cloudflared/config.yml`). Swapped with `scripts/demo-portal.sh`. Their Quadlet headers cite `docs/DEMO_PORTALS.md`, which does not exist; `docs/CLIENT_DEMO_PATTERN.md` describes the pattern. | <!-- not-a-claim -->
 | Backups (added 2026-10-15) | `corporatetraveldc-backup.timer` (daily 03:40Z): an encrypted Borg archive, synced to the off-box Proton Drive target (live since 2026-10-12). LADD table data stays on the box. `backup-freshness` runs every 6 h and `backup-restore-test` Sun 05:30Z; root `agent-home-snapshot` runs 03:20Z. See `docs/BACKUP.md`. |
 | Backup uplink (added 2026-10-15) | ~~The cellular backup uplink has been down since 2026-10-06, so failover has no working second path.~~ (superseded 2026-10-25 15:45:56Z: `enu1` is connected (NetworkManager profile `Verizon Hotspot`, metric 600) and the failover watchdog reports `primary=wld0:ok backup=enu1:ok`, `failed_over=0`; the second path is back.) See `docs/NETWORK_FAILOVER.md`. |
 | Web API | Public: `https://dispatch.example.com` (Cloudflare Access; nginx stamps `X-CTDI-Public: 1`, which pins every request to Tier 0 regardless of token). Path-scoped Access bypasses reach the app without login for at least `/robots.txt`, `/api/v1/board` and `/webhooks/*` (probed: 200, 200, 405-for-GET) (2026-10-25 15:45:56Z: the same codes reproduce on the loopback nginx vhost with the `Host` header; `/robots.txt` is answered by the honeypot snippet in nginx, not the app; the Cloudflare Access policy itself is unverified from the box). Tailnet: `http://100.x.x.x:8000`. |
@@ -191,8 +191,8 @@ Security contact: developer@csexecutiveservices.com (CS Executive Services LLC).
 | FAA SWIM push feeds | All six (FDPS, STDDS, TFMS, TBFM, ITWS, AIM/FNS) connected: every `push:*` heartbeat was 15–29 s old at verification (2026-10-15 00:55Z: 5–31 s; 2026-10-25 15:39:58Z: 13–30 s, `push:amtrak` 32–242 s on its 300 s cycle). Load-shed by `scripts/thermal-ingest-guard.py` under pressure (see below), so "connected" is not "always running". |
 | Local LLM | One user unit, `corporatetraveldc-llama.service`: `llama-server` bound to `100.x.x.x:8093`, model `qwen3-4b-instruct-2507-q4_0.gguf`, `-np 2 --kv-unified -c 12288`, `-t 2 -tb 2`, `CPUQuota=200%`. Ollama is gone (nothing on :11434). Added 2026-10-15: `corporatetraveldc-claude-weekly-llama-fallback` (Quadlet + timer, 00/06/12/18Z) is meant to use this server to stand in for the weekly Claude dump when that run fails. ~~Its model name has no persona mapping, so it cannot generate as configured (see "Local LLM").~~ (superseded 2026-10-25: the persona `claude-weekly-fallback` exists in `src/common/personas.py:807` and `persona_key_for("corporatetraveldc-pi5-claude-weekly-fallback:latest")` resolves to it; see "Local LLM".) |
 | ADS-B / ACARS / VDL2 receive | Up: ultrafeeder, acarsrouter, acarshub, dumpvdl2, acars-watcher and ~~four~~ five (corrected 2026-10-25: `corporatetraveldc-opensky` added since 2026-10-20) aggregator feeders all running. |
-| Signed-manifest integrity sweep | ~~2026-10-08 12:10Z: **failing** on one unsigned staged file (this batch); clears at the next sign. The sweep now also checks build provenance of running local images: 2 verified, 16 unverified (built one commit before HEAD), 0 failed. Unverified clears when the images are rebuilt from signed HEAD.~~ ~~(corrected 2026-10-15 00:50Z: passing: "signature valid, all 1442 files match"; build provenance 18 verified, 0 unverified, 0 failed. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.)~~ (superseded 2026-10-25 15:36:18Z, `scheduled-integrity-sweep.sh --status` + `sweep.log`: status ok, "signature valid, all 1712 files match"; build provenance 2 verified, 16 unverified, 0 failed, the 16 being the running local images built 08:17–08:21Z from `5f7fca0`, one commit behind the main checkout's HEAD `8017f02`; it clears at the next rollout from signed HEAD. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.) |
-| Team accounts (`/etc/ctdc-accounts.conf`) | 2026-10-08: agents `ctdc-agent-anthropic-claude` (login mode claude) and `ctdc-agent-openai-codex` (codex); services `ctdc-agent-anthropic-cowork`, `ctdc-agent-openai-chatgpt`, `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded). Liveness is an AND of login, signer key, no token revocation and no kill order (`scripts/team-liveness.sh`). See `docs/AGENT_SEGMENTATION.md`, `docs/AGENT_TRUST_MODEL.md`. |
+| Signed-manifest integrity sweep | ~~2026-10-08 12:10Z: **failing** on one unsigned staged file (this batch); clears at the next sign. The sweep now also checks build provenance of running local images: 2 verified, 16 unverified (built one commit before HEAD), 0 failed. Unverified clears when the images are rebuilt from signed HEAD.~~ ~~(corrected 2026-10-15 00:50Z: passing: "signature valid, all 1442 files match"; build provenance 18 verified, 0 unverified, 0 failed. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.)~~ (superseded 2026-10-25 15:36:18Z, `scheduled-integrity-sweep.sh --status` + `sweep.log`: status ok, "signature valid, all 1712 files match"; build provenance 2 verified, 16 unverified, 0 failed, the 16 being the running local images built 08:17–08:21Z from `5f7fca0`, one commit behind the main checkout's HEAD `8017f02`; it clears at the next rollout from signed HEAD. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.) (2026-11-02 16:26Z, pre-pentest docs parity: **failing** live; `MANIFEST.sha256` now has 2,128 lines. Expected to clear when the 2026-11-02 release is signed and the root copies are reinstalled; if it does not, the sweep journal names the file.) |
+| Team accounts (`/etc/ctdc-accounts.conf`) | 2026-10-08: agents `ctdc-agent-anthropic-claude` (login mode claude) and `ctdc-agent-openai-codex` (codex); services `ctdc-agent-anthropic-cowork`, `ctdc-agent-openai-chatgpt`, `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded). Liveness is an AND of login, signer key, no token revocation and no kill order (`scripts/team-liveness.sh`). See `docs/AGENT_SEGMENTATION.md`, `docs/AGENT_TRUST_MODEL.md`. (2026-11-02: seven accounts; `ctdc-agent-anthropic-claude-ea` (uid 1007, login mode claude, the operator's executive-assistant agent) is the one this row omitted. The two `ctdc-agent-openai-*` accounts are being retired.) |
 | Build integrity | Every local image: hash-locked Python (`requirements*.in` → `requirements*.txt`), base images by digest, apt from a dated snapshot, `--platform` pinned to the host, SBOM + provenance receipt per build. Levels 1–3 of `docs/REPRODUCIBLE_BUILDS.md`; bit-for-bit (Level 4) not claimed. |
 
 ---
@@ -278,7 +278,7 @@ from `FETCH_SCHEDULE` (`src/poller/main.py`):
 
 | Feed | Source | Interval | State at verification |
 |---|---|---|---|
-| `metar` | aviationweather.gov `/api/data/metar`, 7 stations (KDCA KIAD KBWI KFDK KHEF KJYO KGAI); since 2026-10-09 read from the deployment profile (airports with role `metar`), with that list as the fallback | 300 s | fresh |
+| `metar` | aviationweather.gov `/api/data/metar`, 7 stations (KDCA KIAD KBWI KFDK KHEF KJYO KGAI); since 2026-10-09 read from the deployment profile (airports with role `metar`), with that list as the fallback | 300 s | fresh | <!-- not-a-claim -->
 | `nws` | api.weather.gov `/alerts/active` | 300 s | REST skipped while `push:nws` is fresh (push-covered) |
 | `atcscc_opsplan` | ATCSCC | 3600 s | fresh |
 | `runsheet` | local file | 300 s | fresh |
@@ -287,8 +287,8 @@ from `FETCH_SCHEDULE` (`src/poller/main.py`):
 | `notam` | FAA NMS API (`api-nms.aim.faa.gov`); needs `NMS_API_CLIENT_ID` + `NMS_API_CLIENT_SECRET`, else `awaiting_credentials` | 300 s | REST skipped while `push:fns` is fresh |
 | `dca_fids` / `iad_fids` | MWAA JSON endpoints | 300 s | fresh (600 s staleness threshold) |
 | `amtrak` | api.amtraker.com (REST fallback for `push:amtrak`, wired 2026-09-06) | 300 s | REST row 7.4 h old because push owns the data |
-| `eurocontrol` | EUROCONTROL NM B2B | 900 s | `awaiting_credentials` |
-| `jasdat` | JCAB/MLIT | 900 s | `awaiting_credentials` |
+| `eurocontrol` | EUROCONTROL NM B2B | 900 s | ~~`awaiting_credentials`~~ (corrected 2026-11-02: live `pull_state` `unconfigured`, credentials not set) |
+| `jasdat` | JCAB/MLIT | 900 s | ~~`awaiting_credentials`~~ (corrected 2026-11-02: live `pull_state` `unconfigured`, credentials not set) |
 | `push:fdps` `push:stdds` `push:tfms` `push:tbfm` `push:itws` `push:fns` | FAA SWIM NMS (Solace), ingest containers | push | heartbeats 15–29 s old |
 | `push:nws` | NWWS-OI (XMPP), ingest-core | push | 18 s old |
 | `push:amtrak` | amtrak-tracker container | push | 41 s old |
@@ -511,7 +511,7 @@ Network origin grants no tier; the old `Tailscale-User-Login`/XFF trust was
 removed as spoofable (`src/auth/auth.py`).
 
 **One `/admin/*` route has no bearer dependency:**
-`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2823`; was ~~`:2804`~~, ~~`:2821`~~, line corrected 2026-10-15 and 2026-10-25).
+`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2878`; was ~~`:2804`~~, ~~`:2821`~~, ~~`:2823`~~ (corrected 2026-11-02), line corrected 2026-10-15 and 2026-10-25).
 It requires the per-action key `k` carried only in the operator's push
 (wrong or missing key = 403), and since 2026-10-04 it can only **deny**:
 `action=allow` always returns 403. Allowing takes a human SSH signature over
@@ -657,7 +657,7 @@ or gate it.
   tunnel ingress. ~~They are active since 2026-10-12.~~ (corrected 2026-10-25
   15:39:55Z: both units `inactive (dead)`, nothing listening on :8087/:8088;
   see Status.) See
-  `docs/CLIENT_DEMO_PATTERN.md`; the `docs/DEMO_PORTALS.md` their Quadlets
+  `docs/CLIENT_DEMO_PATTERN.md`; the `docs/DEMO_PORTALS.md` their Quadlets <!-- not-a-claim -->
   cite does not exist.
 - Public hostname `https://dispatch-runner.example.com`; no
   Cloudflare Access policy fronts it. Its nginx vhost exists only on the host
@@ -670,7 +670,7 @@ readiness.
 
 ## Supported platforms
 
-> Detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)**.
+> Detail in **`docs/platform-compatibility.pdf` (private repository)**.
 > [UNVERIFIED: only the Linux aarch64 reference deployment was inspected in
 > this pass; the other rows restate the install scripts' targets.]
 
@@ -1151,7 +1151,7 @@ ls .config/containers/systemd/*.container | wc -l
 
 > ~~**Repository note:** The system user, container prefix, and filesystem paths use `corporatetraveldc` — the original deployment name, preserved for backward compatibility. New deployments can substitute any username; only env config and Quadlet paths need to reflect it.~~
 
-~~📄 **[Platform Compatibility Reference (PDF)](docs/platform-compatibility.pdf)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS. 📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral. Read before contributing. 🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC. 📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — signup portals, email templates, and policy links for every integrated feed. 🗺️ **[Internal Infra Map](docs/INFRA_MAP.md)** — full private service/host/domain map (private repo only). ⚠️ **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail in this stack is tuned for **one Raspberry Pi 5 under shared-resource contention**. Read before de-consolidating or reusing values.~~
+~~📄 **Platform Compatibility Reference (PDF) (`docs/platform-compatibility.pdf`, private repository)** — what works (and what doesn't) on Linux, macOS, Windows, Android, and iOS. 📐 **[Design Principles](docs/DESIGN-PRINCIPLES.md)** — local-first, offline-capable, vendor-neutral. Read before contributing. 🌍 **[Regionalization Guide](docs/REGIONALIZATION.md)** — deploying outside DC. 📡 **[Data Sources & Access Guide](docs/DATA_SOURCES.md)** — signup portals, email templates, and policy links for every integrated feed. 🗺️ **Internal Infra Map (`docs/INFRA_MAP.md`, private repository)** — full private service/host/domain map (private repo only). ⚠️ **[Single-Edge-Unit Assumptions](docs/SINGLE_EDGE_UNIT_ASSUMPTIONS.md)** — every resource guardrail in this stack is tuned for **one Raspberry Pi 5 under shared-resource contention**. Read before de-consolidating or reusing values.~~
 
 ~~All public releases are GPG signed:~~
 
@@ -1469,7 +1469,7 @@ Admin  → bearer token tier=admin (all /admin/* endpoints except one
 
 ### Corporate Travel Dispatch Intelligence (CTDI) › Supported Platforms
 
-> ~~Full detail in **[docs/platform-compatibility.pdf](docs/platform-compatibility.pdf)**.~~
+> ~~Full detail in **`docs/platform-compatibility.pdf` (private repository)**.~~
 
 | ~~Platform~~ | ~~Server stack~~ | ~~Containers~~ | ~~Local LLM (llama.cpp)~~ | ~~Install script~~ |
 |---|---|---|---|---|

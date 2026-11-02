@@ -226,8 +226,10 @@ def test_apply_takes_ctdc_team_accounts_only(world):
     (world["clone"] / "README.md").write_text("x\n")
     _put(world)
     p = _patch(world)
-    r = _apply(world, ME, p, _sha(p))   # the operator's own account is not a team account
-    assert r.returncode != 0 and "unknown account" in r.stderr
+    r = _apply(world, ME, p, _sha(p))   # the runner's own account: never a valid applicant
+    # 2026-11-02: run by the operator this is "unknown account"; run by a team account (an agent
+    # testing its own clone) handoff-apply refuses earlier with "cannot apply its own hand-off".
+    assert r.returncode != 0 and ("unknown account" in r.stderr or "cannot apply its own hand-off" in r.stderr)
     r = _apply(world, "ctdc-no-such-account", p, _sha(p))
     assert r.returncode != 0 and "unknown account" in r.stderr
 
@@ -348,7 +350,8 @@ def test_access_needs_a_directive_never_follows_symlinks_and_logs(tmp_path):
     acct = "ctdc-agent-llama"
 
     assert "needs --council" in _access(srv, reg, log, "grant", acct, "ctdc-ea").stderr
-    assert "shared with every account" in _access(srv, reg, log, "grant", acct, "ctdc-handoff", "--operator", "x").stderr
+    # 2026-11-02: srv-access.sh refuses with "... is a shared tree; private-folder ACL grants are refused"
+    assert "is a shared tree" in _access(srv, reg, log, "grant", acct, "ctdc-handoff", "--operator", "x").stderr
     assert "not a registered" in _access(srv, reg, log, "grant", "ctdc-nobody", "ctdc-ea", "--operator", "x").stderr
     assert "council-<id>" in _access(srv, reg, log, "grant", acct, "ctdc-ea", "--council", "bogus").stderr
 
@@ -395,12 +398,18 @@ def test_snapshot_publishes_states_and_counts_only(tmp_path, monkeypatch):
         if "list-timers" in cmd:
             return json.dumps(timers)
         if "show" in cmd:
-            return "Result=exit-code\nNRestarts=3\nExecStart={ path=/bin/x ; argv[]=/bin/x --token=abc }\n"
+            # 2026-11-02: units() matches show blocks by Id= (since 2026-11-01)
+            return ("Id=corporatetraveldc-x.service\nResult=exit-code\nNRestarts=3\n"
+                    "ExecStart={ path=/bin/x ; argv[]=/bin/x --token=abc }\n")
         if "--failed" in cmd:
             return "[]"
         return json.dumps(units)
 
     monkeypatch.setattr(snap, "_run", run)
+    # 2026-11-02: heavy_jobs (added 2026-11-01) reads the root-owned heavy-job state file, which
+    # a test runner cannot rely on; the stub keeps the same shape.
+    monkeypatch.setitem(snap.COLLECTORS, "heavy_jobs", lambda: {"max_parallel": 2, "active": [], "queued": [],
+                                                                 "host_swap_over_budget": False})
     s = snap.snapshot()
     assert s["unavailable"] == []
     blob = json.dumps(s)

@@ -132,6 +132,29 @@ say "--------------------------------------"
 
 (( DRY_RUN )) && say "[DRY-RUN MODE -- no changes will be made]"
 
+# 2026-11-02 (operator): every lockdown also freezes every withheld category (LADD
+# aircraft, privileged trains and vessels), revokes every pass and WIPES the master
+# token (common/withheld.kill_all, the SIGNED image's code inside the web container,
+# run as the operator, never as root). Runs before the idempotency check so a repeat
+# trigger re-freezes. Thawing needs the operator's signature (withheld.sh on), and
+# the master token must be minted again; restore-network.sh does neither.
+say "Freezing withheld categories (passes revoked, master token wiped)..."
+if [[ -n "${CTDC_UID}" ]]; then
+    if (( DRY_RUN )); then
+        say "  [DRY-RUN] withheld.kill_all('lockdown', reason)"
+    else
+        sudo -u "${CTDC_USER}" XDG_RUNTIME_DIR="${XDG_USER_DIR}" \
+            podman exec -i systemd-corporatetraveldc-web python3 - "lockdown: ${REASON:0:150}" <<'PYEOF' \
+            || say "  WARN: withheld freeze failed -- run: scripts/withheld.sh off"
+import sys
+from common import withheld
+print(f"  withheld categories frozen; {withheld.kill_all('lockdown', sys.argv[1])} token(s) revoked or wiped")
+PYEOF
+    fi
+else
+    say "  WARN: cannot resolve UID for ${CTDC_USER}; withheld categories NOT frozen -- run: scripts/withheld.sh off"
+fi
+
 if [[ -f "${STATE_FILE}" ]]; then
     say "[SKIP] Already locked down since $(cat "${STATE_FILE}" 2>/dev/null) -- idempotent no-op"
     exit 0

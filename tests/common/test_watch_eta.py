@@ -111,6 +111,8 @@ def test_watchlist_api_entry_carries_labelled_eta(monkeypatch):
         {"id": "wl-2", "entry_type": "train", "identifier": "66"}])
     fake = we.WatchEta(T(1800), "meter_fix", "tbfm", 1, "ETA x at meter fix CAVLR (TBFM ZDC)", "CAVLR", "ZDC")
     monkeypatch.setattr(we, "resolve_for_watch", lambda e: fake)
+    monkeypatch.setattr(db, "faa_ladd_listed_batch", lambda xs: set())
+    monkeypatch.setattr(db, "faa_ladd_hex_batch", lambda hs: set())
     body = asyncio.run(route.list_watchlist_entries(tier=None, include="eta")).body
     import json
     entries = {e["id"]: e for e in json.loads(body)["entries"]}
@@ -135,7 +137,7 @@ def test_watchlist_api_carries_no_eta_unless_asked(monkeypatch):
         assert "eta" not in json.loads(body)["entries"][0], inc
 
 
-def _route_entries(monkeypatch, include, listed_ids=(), listed_hex=(), fail=False):
+def _route_entries(monkeypatch, include, listed_ids=(), listed_hex=(), fail=False, ladd=None):
     import asyncio, json
     from common import db
     from web.routes import watchlist as route
@@ -151,7 +153,8 @@ def _route_entries(monkeypatch, include, listed_ids=(), listed_hex=(), fail=Fals
     monkeypatch.setattr(db, "faa_ladd_hex_batch", lambda hs: {h.lower() for h in hs} & set(listed_hex))
     fake = we.WatchEta(T(1800), "runway", "tfms", 2, "ETA x", None, None)
     monkeypatch.setattr(we, "resolve_for_watch", lambda e: fake)
-    body = asyncio.run(route.list_watchlist_entries(tier=None, include=include)).body
+    kw = {"held": ladd} if ladd is not None else {}
+    body = asyncio.run(route.list_watchlist_entries(tier=None, include=include, **kw)).body
     return {e["id"]: e for e in json.loads(body)["entries"]}
 
 
@@ -168,9 +171,21 @@ def test_public_eta_fails_closed_on_ladd_lookup_error(monkeypatch):
     assert all(e["eta"] is None for e in got.values())
 
 
-def test_internal_eta_is_not_ladd_restricted(monkeypatch):
+def test_internal_eta_needs_an_aircraft_pass(monkeypatch):
+    """2026-11-02 (operator) supersedes 2026-10-20's "internal use is not LADD-
+    restricted": the tailnet panel without an aircraft pass gets a listed watch's
+    identity and ETA withheld and "No aircraft available"; a pass holder sees it."""
+    from common import withheld
     got = _route_entries(monkeypatch, "eta", listed_ids={"QTST01"}, listed_hex={"abc123"})
-    assert all(e["eta"] is not None for e in got.values())
+    assert got["wl-1"]["eta"] is not None and "availability" not in got["wl-1"]
+    for k in ("wl-2", "wl-3"):
+        assert got[k]["eta"] is None and got[k].get("registration") is None and got[k].get("hex_id") is None
+        assert got[k]["availability"] == withheld.NOT_AVAILABLE
+    monkeypatch.setenv(withheld.KEY_ENV, "k" * 64)
+    holder = withheld.WithheldView(grants=frozenset({"aircraft"}), user="op", device="tablet", path="/api/v1/watchlist")
+    got = _route_entries(monkeypatch, "eta", listed_ids={"QTST01"}, listed_hex={"abc123"}, ladd=holder)
+    assert all(e["eta"] is not None and "availability" not in e for e in got.values())
+    assert got["wl-2"]["registration"] == "QTST01"
 
 
 def test_runner_rewrites_eta_for_public_callers():

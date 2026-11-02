@@ -50,7 +50,7 @@ around them:
 
 - `ollama.service` and `ollama-governor.service` no longer exist (retired
   2026-08-27), so the ollama and governor entries, if still present, grant
-  nothing. `scripts/ollama-wedged-detector.sh`, their caller, is no longer in
+  nothing. `scripts/ollama-wedged-detector.sh`, their caller, is no longer in <!-- not-a-claim -->
   the repo.
 - `dnf remove *` / `dnf autoremove` and `semanage port -a *` are real,
   general-purpose root actions. **The approval gate is a convention for

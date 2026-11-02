@@ -104,6 +104,26 @@ re-fire of 10-13/14 came from hashing a narrative that starts with a fresh
 `ep-briefs` is reserved; nothing publishes to it. `osint-marketing` is retired
 (merged into `osint-alerts` with a `[MKT]` prefix).
 
+### Escalation: what "[ESCALATING]" means (2026-11-01)
+
+Family alerts (`fire_family_alert`, escalating-only on tbfm/tfms/stdds) used to tag every push
+`[ESCALATING/<sector>]`, because the non-escalating events were dropped before the tag was
+applied, so the tag was on 100% of what reached the phone. Now:
+
+- **Time-of-day baseline.** TBFM passes the meter fix's live queue size and ASDE-X surface
+  alerts pass surface movements in the last hour (`activity=`). Each is judged against its
+  own baseline cell in `/var/lib/corporatetraveldc/escalation-baseline.json`: weekday/weekend
+  by local (America/New_York) hour, switching a cell to day of week by hour once it holds 20
+  weeks. Escalating = above that slot's p90; surge = at least 2x the floor, 2x p90 and above
+  p99. Built weekly by `corporatetraveldc-escalation-baseline.timer`
+  (`scripts/build-escalation-baseline.py`, read-only). Module: `src/shared/escalation_baseline.py`.
+- **Rolling fallback.** Without a usable cell (TFMS programs, PCT tracks, a new fix), the
+  15-minute comparison applies, against the higher of the prior window and the mean of the
+  four windows before it.
+- **`[ESCALATING/<sector>]` and +1 priority mean a surge only.** Other alerts that pass the gate
+  carry a plain `[<sector>]` tag. Every push's detail ends with the numbers behind it, e.g.
+  "(14 now; typical 6, high 9 for weekday 17:00)".
+
 ## 3. Ingest parsers
 
 ### FDPS (`ingest/parsers/fdps_parser.py`)

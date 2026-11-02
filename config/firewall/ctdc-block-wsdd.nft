@@ -1,0 +1,22 @@
+# config/firewall/ctdc-block-wsdd.nft -- block WS-Discovery both ways (operator 2026-11-02).
+# wsdd (Web Services Dynamic Discovery) advertises the host to Windows machines and browses for
+# their shares. Nothing on this box uses it. The package is removed and GNOME's gvfs discovery is
+# disabled; this table drops the protocol in and out anyway, so nothing can reach or use it:
+# udp/3702 (WS-Discovery multicast and unicast) and tcp/5357 (the WSD HTTP endpoint).
+# A separate table: firewalld and the exit-node table are untouched; a drop in any table wins.
+table inet ctdc_block_wsdd
+delete table inet ctdc_block_wsdd
+table inet ctdc_block_wsdd {
+  chain input {
+    type filter hook input priority -10; policy accept;
+    udp dport 3702 counter drop
+    udp sport 3702 counter drop
+    tcp dport 5357 counter drop
+  }
+  chain output {
+    type filter hook output priority -10; policy accept;
+    udp dport 3702 counter drop
+    udp sport 3702 counter drop
+    tcp dport 5357 counter drop
+  }
+}

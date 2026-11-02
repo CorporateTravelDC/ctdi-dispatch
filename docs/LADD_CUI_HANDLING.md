@@ -86,11 +86,14 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
 - **Demo and public-mirror surfaces** — any LADD-listed identifier found in
   recorded snapshot or brief text is dropped at promotion time by
   `scripts/scrub-demo-source.py` via `src/demo/scrub_rules.py`, fail-closed.
-- **Internal, authenticated use** is not restricted by LADD (as with ATC,
+- ~~**Internal, authenticated use** is not restricted by LADD (as with ATC,
   FBOs and authorized dispatch in the real ecosystem). Any internal
   history feature built on this data must stay loopback + tailnet
   authenticated, never on a publicly reachable port (operator directive
-  2026-08-31).
+  2026-08-31).~~ (superseded 2026-11-02 by the withheld categories below: internal
+  use is still allowed by the FAA terms, but "internal" is now a verified
+  pass holder, not a network address. The tailnet without a pass gets LADD
+  aircraft withheld.)
 - **Third-party lookups (added 2026-10-15).** The airplanes.live fallback
   (`src/common/airplanes_live.py`, enabled on this deployment since
   2026-10-08) never sends a LADD-listed identifier. For a hex it first maps
@@ -103,11 +106,103 @@ Live `GET /api/v1/aircraft-registry/status` 2026-10-08 01:2xZ, after the 2026-10
   now has `_ladd_listed()`, which treats a lookup failure as listed and skips the
   external query; `src/acars_watcher/acars_watcher.py` builds its Jumpseat list
   from `GET /api/v1/watchlist/registrations`, which the dispatch API LADD-filters
-  fail-closed (`acars_watcher.py:17-24,95,307-325`; `web/routes/watchlist.py:138-167`).)
+  fail-closed (`acars_watcher.py:17-24,95,307-325`; ~~`web/routes/watchlist.py:138-167`~~ (corrected 2026-11-02: `web/routes/watchlist.py:239-297`)).)
 - **Backups (added 2026-10-15).** The off-box backup carries the LADD table
   schema but not its rows (`docs/BACKUP.md`). Local CUI dumps stay on the box
   (`BACKUP_CUI_LOCAL_KEEP`, default 7), and older ones are removed with
   `shred -fu`, which on btrfs is a delete (see step 3 above).
+
+## Withheld categories and passes (added 2026-11-02, operator directive)
+
+LADD is one of three withheld categories: `aircraft` (the FAA LADD import), `rail` and
+`vessel` (operator-kept lists in `withheld_identifiers`). Each is revealed only to a
+bearer token naming its own grant (`ladd.view`, `rail.view`, `vessel.view`), human or
+agent account alike, or to the master token. Admin tier, a cert service token or a
+tailnet address alone is not enough. Everyone else has those items withheld, and a
+direct lookup answers "No aircraft / train / vessel available", exactly like
+something the platform has no data for. The public demo stays fully scrubbed.
+Code: `src/common/withheld.py` (a new category is one more `CATEGORIES` entry);
+routes: `src/web/routes/withheld.py`; panel: `src/runner/main.py` (`/api/withheld/pair`).
+
+| Surface | Without the pass |
+|---|---|
+| `GET /api/v1/swim/positions` | listed aircraft removed |
+| `GET /api/v1/swim/last-leg` | 404 "No aircraft available" |
+| `GET /api/v1/watchlist` (incl. `?include=eta`) | a withheld flight, train or vessel watch keeps what the operator typed; identity, OOOI, status, notes and ETA nulled; `availability` = "No ... available" |
+| `GET /api/v1/flightplan/{callsign}` | reads as "no plan on file" |
+| `GET /api/v1/flights/{ident}/assignments` | everything `unknown` |
+| `GET /api/v1/aircraft/{identifier}` | `ladd: false` |
+| `GET /api/v1/amtrak` | withheld trains removed; the summary rebuilt from counts |
+| runner `/api/adsb/*`, `/api/map/*` (local receiver), `/api/ais/vessels` | screened through `POST /api/v1/withheld/screen`; any failure withholds every local item |
+
+Not covered yet: the full tar1090 receiver page (port 8080/8081 on the tailnet) and the
+raw Beast output on port 30005 serve the receiver unfiltered; server-side briefs and
+digests that read Amtrak or AIS upstream directly do not consult the rail and vessel
+lists.
+
+**PIA call signs.** There is no published Privacy ICAO Address (PIA) list, and a PIA
+aircraft's temporary hex is not in the registry. Its third-party call sign is what
+identifies it, so `db.faa_ladd_listed_batch` (the one LADD gate for the live filters,
+the withheld categories, the third-party lookup guard, ACARS, gate records and the demo
+scrub) treats every call sign from the four FAA-approved providers as listed:
+FltPlan.com `DCM` ("DOTCOM"), ForeFlight `FFL`, FlightAware `FWR` and ARINCDirect `XAA`
+("ROCKFISH"), each a designator plus a 1-4 character flight number
+(`db.PIA_CALLSIGN_PREFIXES`). Sources: the FAA ADS-B Privacy page and the NBAA ADS-B privacy questions page.
+A lesser-known or new provider is added to that tuple; a privately held list goes into
+the operator-kept lists.
+
+**Non-US aircraft: each country's own default** (`src/common/privacy_jurisdictions.py`).
+No non-US authority distributes a LADD- or PIA-style list. So a non-US aircraft follows
+its own country's default, taken from the registration mark or, failing that, the ICAO
+24-bit address block.
+- *Private* means it is not flying under an ICAO operator designator.
+- Europe (EU/EEA, Switzerland, the UK and Crown dependencies, Monaco) and the UAE:
+  private aircraft are withheld.
+- Canada, Australia, New Zealand, Japan and Brazil: shown. LADD, PIA and opt-outs
+  still apply.
+- A non-US owner name from the OpenSky registry is returned only where that country
+  publishes owner names itself. That excludes Germany, the UAE, New Zealand, Brazil
+  and every country not in the table.
+- An owner's opt-out request, from any country, goes into the operator-kept aircraft
+  list (`withheld.sh list-add aircraft reg|callsign|hex`) and is withheld like LADD.
+
+The basis for each country is recorded in the table itself. The European default
+mirrors tracker practice (FlightAware); no EASA or EUROCONTROL rule behind it was found.
+
+**Passes.** `scripts/withheld.sh issue <device> --categories aircraft,rail,vessel [--hours N]`
+(N <= 12) creates a `withheld-pass` approval over the device, categories, lifetime and
+the sha256 of a one-time pairing code, signs it with `approve.sh`, then prints the
+code. On the device, `/api/withheld/pair` exchanges it (once, within 10 minutes) for a
+token that lives only in an httponly, SameSite=Strict cookie. Agents get a grant only
+through `scripts/mint-agent-api-token.sh ACCOUNT --actions ...,rail.view`.
+
+**Master token.** `scripts/withheld.sh master <device> [--hours N]` reveals every
+category, present and future. It is honoured only while all of these hold:
+- it was minted by that command, so it has a `withheld_masters` row (a plain token
+  mint naming `withheld.master` does nothing);
+- its request carries a GPG signature by the operator primary key pinned in
+  `security/signing.env` (the agent delegate key is refused), checked in an isolated
+  keyring inside the web container, plus the operator's SSH approval signature;
+- its holder is still an active human board signer with role admin.
+Any kill or lockdown deletes master tokens outright, and a thaw never restores one.
+
+**Kill switch.** `scripts/withheld.sh off [reason]` freezes every category, revokes
+every pass (a mixed-scope agent token is revoked whole) and wipes the master token.
+`off --category C` freezes one category. `lockdown.sh` and `agent-gateway.sh kill-all`
+run the full kill. `withheld.sh revoke <device>` ends one device's tokens. Re-opening is
+`withheld.sh on`, which needs the operator's signature (`withheld-thaw`).
+
+**Lists.** `withheld.sh list-add rail train` / `list-add vessel mmsi|imo|name|callsign`
+read the value at a hidden prompt; `status` shows counts only.
+
+**Audit** (`withheld_audit`, no identifier stored). Every reveal is one row per
+identifier per user per minute, with digest HMAC-SHA-512(key,
+`minute|user|category:kind:value`). While frozen, every request that touched a
+withheld item is one row per identifier with digest HMAC-SHA-512(key,
+`category:kind:value`). The key is `WITHHELD_AUDIT_KEY` in the production secrets file
+(at least 32 characters; without it nothing is revealed). The hash is keyed because
+registrations, train numbers and MMSIs are few enough to reverse an unkeyed SHA-512
+by enumeration. To test a suspected leak, run `withheld.sh audit-check [--since HOURS]`.
 
 ## Push-time tripwire and history scan (added 2026-10-15)
 

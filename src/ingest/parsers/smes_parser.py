@@ -620,10 +620,15 @@ def check_surface_alerts(tracks: list[dict]) -> None:
         detail = f"{airport}: {track_count} surface tracks in this update"
         dispatch = f"{airport}: {track_count} ground tracks"
         try:
+            # 2026-11-01: escalation is judged on surface movements in the last hour against
+            # this airport's time-of-day baseline (shared.escalation_baseline); the per-update
+            # track count stays the alert's own gate and band dedup.
+            movements = db.get_surface_movement_count(airport, 3600)
             result = fire_family_alert(
                 "stdds", "stdds_surface", airport, title, detail, dispatch,
                 base_priority=_stdds_priority(airport, 2), sector_override=sector,
                 extra_topics=_stdds_airport_topics(airport, sector),
+                activity=("asdex_movements_hour", airport, movements),
             )
             _STDDS_SURFACE_DEDUP.record(airport, dedup_key)
             log.info(

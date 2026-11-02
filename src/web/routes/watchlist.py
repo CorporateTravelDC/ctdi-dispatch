@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from auth.auth import Tier, require_admin, require_tier
+from auth.auth import Tier, require_admin, require_tier, resolve_withheld
 from common import db
 from common.flight_instance import watch_id_date
 from shared.watchlist import _fire_ntfy_dual, PERMANENT_WATCHLIST_DIR
@@ -120,10 +120,20 @@ def _fdps_plan_is_current_leg(plan: dict, scheduled_departure: Optional[str],
 
 # ── GET /api/v1/watchlist ─────────────────────────────────────────────────────
 
+# 2026-11-02: watch entry type -> withheld category (common.withheld).
+_WATCH_CATEGORY = {"flight": "aircraft", "train": "rail", "vessel": "vessel"}
+# 2026-11-02: what a withheld watch keeps -- what the operator typed
+# when adding it and the panel's layout flags; every tracking-derived field
+# (identity, OOOI, SWIM/FIDS status, event summaries, notes) is nulled.
+_WITHHELD_KEEP = {"id", "entry_type", "tier", "identifier", "origin", "destination", "route_name",
+                  "scheduled_departure", "scheduled_arrival", "auto_remove_at", "added_at", "added_by",
+                  "subsection", "show_national", "show_regional", "days_active"}
+
 @router.get("")
 async def list_watchlist_entries(
     tier: Tier = Depends(require_tier(Tier.T1)),
     include: Optional[str] = Query(None),
+    held=Depends(resolve_withheld),
 ) -> JSONResponse:
     """List all active watchlist entries (permanent + transient). Tier 1+.
 
@@ -140,33 +150,48 @@ async def list_watchlist_entries(
     get `eta: null`. A LADD lookup failure withholds every ETA (fail closed).
     The runner proxy rewrites `eta` to `eta_public` for any request that is
     not tailnet/LAN-origin; internal use is not LADD-restricted, public use is
-    (operator 2026-10-20)."""
+    (operator 2026-10-20).
+
+    2026-11-02 (operator) SUPERSEDES the internal/public split above: a watch whose
+    flight, train or vessel is on a withheld list (common.withheld: LADD aircraft,
+    privileged trains and vessels) shows its tracking fields and ETA only to that
+    category's pass or the master token. Everyone else -- the tailnet panel
+    included -- gets those fields nulled and `availability` = "No aircraft / train /
+    vessel available"; `eta_public` always withholds. A list lookup failure
+    withholds every entry of that type (fail closed)."""
+    from common import withheld
     entries = db.get_watchlist_entries()
     wanted = {p.strip() for p in (include or "").split(",")}
     public = "eta_public" in wanted
+    view = withheld.ANON if public else withheld.view_of(held)
+    withheld_ids: set[int] = set()
+    for etype, cat_name in _WATCH_CATEGORY.items():
+        group = [e for e in entries if (e.get("entry_type") or "") == etype]
+        if not group:
+            continue
+        items = [{"identifier": e.get("identifier"), "registration": e.get("registration") if etype == "flight" else None,
+                  "hex_id": e.get("hex_id") if etype == "flight" else None, "_id": id(e)} for e in group]
+        try:
+            kept, _ = withheld.screen(view, cat_name, items)
+            shown = {k["_id"] for k in kept}
+        except withheld.WithheldUnavailable:
+            import logging
+            logging.getLogger(__name__).warning("watchlist %s list check failed, identities withheld", cat_name)
+            shown = set()
+        for e in group:
+            if id(e) not in shown:
+                withheld_ids.add(id(e))
+                for k in list(e):
+                    if k not in _WITHHELD_KEEP:
+                        e[k] = None
+                e["availability"] = withheld.category(cat_name).not_available
     if not public and "eta" not in wanted:
         return JSONResponse({"entries": entries, "count": len(entries)})
     from common import watch_eta
-    listed_ids: set[str] = set()
-    listed_hex: set[str] = set()
-    ladd_ok = True
-    if public:
-        flights = [e for e in entries if (e.get("entry_type") or "") == "flight"]
-        try:
-            listed_ids = db.faa_ladd_listed_batch(
-                x for e in flights for x in (e.get("identifier"), e.get("registration")) if x)
-            listed_hex = db.faa_ladd_hex_batch(e.get("hex_id") for e in flights if e.get("hex_id"))
-        except Exception as exc:  # fail closed: no ETA for anyone
-            import logging
-            logging.getLogger(__name__).warning("watch eta LADD check failed, ETAs withheld: %s",
-                                                type(exc).__name__)
-            ladd_ok = False
     for e in entries:
         if (e.get("entry_type") or "") != "flight":
             continue
-        if public and (not ladd_ok
-                       or {str(x).strip().upper() for x in (e.get("identifier"), e.get("registration")) if x} & listed_ids
-                       or (e.get("hex_id") or "").strip().lower() in listed_hex):
+        if id(e) in withheld_ids:
             e["eta"] = None
             continue
         try:

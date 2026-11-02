@@ -13,7 +13,7 @@ This skill analyzes that export and produces a structured report. The analysis i
 
 This skill is written for a chat sandbox (`/mnt/user-data/outputs/`, `/home/claude/linkedin-report/`, `show_widget`). In this repo:
 
-- Only this `SKILL.md` is tracked; the bundled `scripts/analyze.py` it calls is **not** in the repo or in the installed copy under `~/.claude/skills/linkedin-export-analyzer/`, so Step 2 cannot run here as written. Step 3's inline Python is self-contained.
+- Only this `SKILL.md` is tracked; the bundled `scripts/analyze.py` it calls is **not** in the repo or in the installed copy under `~/.claude/skills/linkedin-export-analyzer/`, so Step 2 cannot run here as written. Step 3's inline Python is self-contained. <!-- not-a-claim -->
 - The Pi's own LinkedIn path is separate: `corporatetraveldc-personal-export-watch` (Sat 10:00 ET) runs `src/common/export_analysis.py` on exports dropped in `/var/lib/corporatetraveldc/personal-exports/incoming`. It opens only `Shares_*`, `Comments_*` and `Reactions_*` (never `messages.csv` or `Connections.csv`) and writes a topic digest to the business vault, `04-Syntheses/daily/export-analysis-linkedin-<date>.md`. That placement conflicts with the personal-export-analysis skill's rule that personal exports never enter the business vault; it is an open operator decision (`docs/SECOND_BRAIN_STATUS.md` §5).
 
 ## When to use
@@ -233,7 +233,7 @@ Use `show_widget` for all charts. Keep it conversational — surface patterns th
 
 **Comment and post topics** — classified from free prose using regex patterns with word boundaries. Comments can match multiple topics at once (enabling co-occurrence analysis). "General / Other" is excluded from co-occurrence pairs.
 
-Both classifiers are in `scripts/analyze.py` and the inline Python above. They can be extended for specialized networks.
+Both classifiers are in the inline Python above (the bundled `scripts/analyze.py` is not in this repo). <!-- not-a-claim --> They can be extended for specialized networks.
 
 ## Files in the LinkedIn export worth knowing about
 

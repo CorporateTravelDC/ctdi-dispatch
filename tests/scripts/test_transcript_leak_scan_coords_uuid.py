@@ -83,6 +83,16 @@ def test_feeder_uuids_are_not_values_but_keys_and_serial_are(monkeypatch, tmp_pa
     assert uf_uuid.encode() in out and pa_id.encode() in out and fr24.encode() not in out
 
 
+def test_read_only_role_name_is_not_a_value_but_its_password_is(monkeypatch, tmp_path):
+    role, pw = "dispatch_ro", rnd(24)
+    (tmp_path / "dispatch-secrets.env").write_text(
+        f"DISPATCH_PG_RO_USER={role}\nDISPATCH_PG_RO_PASSWORD={pw}\n")
+    m = load(monkeypatch, tmp_path, str(tmp_path / "none"))
+    flat = {f for forms in m.load_secret_values(tmp_path / "dispatch-secrets.env").values() for f in forms}
+    assert role.encode() not in flat
+    assert pw.encode() in flat
+
+
 # ── 2. receiver coordinates ───────────────────────────────────────────────────
 
 def _coords_file(tmp_path, text=f"READSB_LAT={LAT}\nREADSB_LON={LON}\nUUID=x\n"):

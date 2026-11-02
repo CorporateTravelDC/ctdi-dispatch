@@ -35,11 +35,11 @@ Enforcement points:
 
 ![redaction proof](images/guardrails/01-redaction-proof.png)
 
-**1. Redaction.** The first full run against ~~every transcript and tool output on the box~~ (corrected 2026-10-15: the operator account's Claude transcripts and tool outputs; agent accounts and Codex logs were added later through the hourly root run, see above) redacted 41 closed files and the rescan found 0 hits. It skipped one file: the running session's own transcript. A file that's still being written can't be rewritten safely, so the scanner left it, named it, and listed what it carries.
+**1. Redaction.** The first full run against ~~every transcript and tool output on the box~~ (corrected 2026-10-15: the operator account's Claude transcripts and tool outputs; agent accounts and Codex logs were added later through the hourly root run, see above) redacted 41 closed files and the rescan found 0 hits. It skipped one file: the running session's own transcript. A file that's still being written can't be rewritten safely, so the scanner left it, named it, and listed what it carries. (2026-11-02, publication review: in the published screenshot each secret name is cut back to its suffix, such as `_KEY`, `_TOKEN` or `_ID`, and names that end in a system name are covered whole; the hit counts are unchanged.)
 
 ![push blocked](images/guardrails/02-push-blocked-on-transcript-leak.png)
 
-**2. The block.** About two hours later the session sat idle for more than 15 minutes during a long relay. The guard then classed its transcript as closed. The next private push ran the dependency audit (clean), then the transcript check, which refused the push. The failure names the fix.
+**2. The block.** About two hours later the session sat idle for more than 15 minutes during a long relay. The guard then classed its transcript as closed. The next private push ran the dependency audit (clean), then the transcript check, which refused the push. The failure names the fix. (2026-11-02, publication review: in the published screenshot each secret name is cut back to its suffix, such as `_KEY`, `_TOKEN` or `_ID`, and names that end in a system name are covered whole; the hit counts are unchanged.)
 
 ![clean push](images/guardrails/03-clean-push-private-then-public.png)
 

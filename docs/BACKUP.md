@@ -2,6 +2,8 @@
 
 `scripts/backup/ctdi-backup.sh`: encrypted, deduplicated, ledgered backups of the platform, synced to one parameterized off-box target.
 
+**Current state, 2026-11-02 (pre-pentest docs parity):** the nightly `corporatetraveldc-backup.service` run **failed** at 03:42Z (status snapshot; the cause is in the operator's journal and was not visible to the audit). A backlog relay moves the Borg repository to the USB backup volume (`/srv/ctdc-backup-usb/borg`, `BACKUP_REPO`); re-check after it and after the next nightly run. The 2026-10-15 description below is kept for the record.
+
 **Current state (re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box).** Nightly Borg archives are
 written on the box (`~/.local/state/ctdc-backup/borg`, on the same NVMe btrfs volume as the data) and synced to
 Proton Drive (`proton:ctdi-backup`; last good syncs 2026-10-13 05:30Z and 2026-10-14 06:41Z, the latter after the

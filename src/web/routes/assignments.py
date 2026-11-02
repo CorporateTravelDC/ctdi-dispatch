@@ -25,7 +25,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from auth.auth import Tier, require_admin, require_tier
+from auth.auth import Tier, require_admin, require_tier, resolve_withheld
+from common import withheld
 from common import flight_instance as fi
 from common import gate_assignments as ga
 
@@ -35,7 +36,7 @@ _DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
 def _answer(ident: str, origin: Optional[str], destination: Optional[str],
-            date: Optional[str]) -> dict:
+            date: Optional[str], held=None) -> dict:
     now = time.time()
     ident_u = (ident or "").strip().upper()
     out: dict[str, Any] = {
@@ -49,7 +50,9 @@ def _answer(ident: str, origin: Optional[str], destination: Optional[str],
     parsed = fi.parse_flight_ident(ident_u)
     blocked = True
     if parsed:
-        blocked = ga.ladd_blocked([ident_u, f"{parsed[0]}{parsed[1]}"])
+        # 2026-11-02 (operator): an aircraft pass / master holder gets the answer (audited).
+        blocked = not withheld.visible_one(held, "aircraft",
+                                           {"callsign": ident_u, "identifier": f"{parsed[0]}{parsed[1]}"})
     legs = [] if (blocked or not parsed) else ga.legs_for(ident_u, origin, destination, date, now)
     for leg in legs:
         out["legs"].append({
@@ -76,8 +79,9 @@ def flight_assignments(
     destination: Optional[str] = Query(default=None, max_length=4),
     date: Optional[str] = Query(default=None, pattern=_DATE, description="scheduled departure date (UTC)"),
     tier: Tier = Depends(require_tier(Tier.T1)),
+    held=Depends(resolve_withheld),
 ) -> JSONResponse:
-    return JSONResponse(_answer(ident, origin, destination, date))
+    return JSONResponse(_answer(ident, origin, destination, date, held))
 
 
 @router.get("/api/v1/flights/{ident}/{date}/assignments")
@@ -87,14 +91,15 @@ def flight_leg_assignments(
     origin: Optional[str] = Query(default=None, max_length=4),
     destination: Optional[str] = Query(default=None, max_length=4),
     tier: Tier = Depends(require_tier(Tier.T1)),
+    held=Depends(resolve_withheld),
 ) -> JSONResponse:
     import re
     if not re.match(_DATE, date or ""):
-        out = _answer(ident, origin, destination, None)
+        out = _answer(ident, origin, destination, None, held)
         out["legs"], out["fields"] = [], ga.unknown_fields()
         out["note"] = "date must be YYYY-MM-DD (UTC scheduled departure)"
         return JSONResponse(out)
-    return JSONResponse(_answer(ident, origin, destination, date))
+    return JSONResponse(_answer(ident, origin, destination, date, held))
 
 
 class AcarsGateItem(BaseModel):

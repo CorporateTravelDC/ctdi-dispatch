@@ -95,7 +95,8 @@ def test_clean_docs_exit_zero(tmp_path):
 def test_checker_is_stdlib_only():
     src = CHECK.read_text()
     imports = set(re.findall(r"^(?:import|from)\s+([A-Za-z_][\w.]*)", src, re.M))
-    assert imports <= {"argparse", "json", "os", "re", "subprocess", "sys", "pathlib", "__future__"}, imports
+    assert imports <= {"argparse", "json", "os", "posixpath", "re", "subprocess", "sys", "time", "pathlib",
+                       "__future__"}, imports   # 2026-11-02: posixpath, time (public parity, age ledger)
 
 
 def test_weekly_script_runs_the_claims_check_and_reports_the_count():

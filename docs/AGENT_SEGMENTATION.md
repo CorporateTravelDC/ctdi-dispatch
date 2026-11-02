@@ -412,9 +412,9 @@ not a gap:
 | `/srv/ctdc-handoff/` | `root:ctdc-dev` 3775 | every account: the general shared drop; each writes its own `<name>-from-<account>/`, nobody deletes another's (sticky) |
 | `/srv/ctdc-handoff/research-intake/` | `root:ctdc-dev` 3775 | the operator's research drops; agents watch it |
 | `/srv/ctdc-handoff/status/` | `corporatetraveldc:ctdc-dev` 2750 | written only by `corporatetraveldc-agent-status-snapshot.timer` |
-| `/srv/ctdc-dev/` | `root:ctdc-dev` 2750 | development relay root; see `DEV_RELAY.md` |
-| `/srv/ctdc-dev/submissions/`, `/srv/ctdc-dev/relays/` | `root:ctdc-dev` 3770 | account-owned patches and review records; sticky, team-readable |
-| `/srv/ctdc-dev/checkouts/` | `corporatetraveldc:ctdc-dev` 2750 | operator writes Git checkouts; agents read |
+| `/srv/ctdc-dev/` | `root:ctdc-dev` 2750 | development relay root; see `DEV_RELAY.md` (2026-11-02: planned, not created on the box; patches go through `/srv/ctdc-handoff/` today) |
+| `/srv/ctdc-dev/submissions/`, `/srv/ctdc-dev/relays/` | `root:ctdc-dev` 3770 | account-owned patches and review records; sticky, team-readable (2026-11-02: planned, not created on the box; patches go through `/srv/ctdc-handoff/` today) |
+| `/srv/ctdc-dev/checkouts/` | `corporatetraveldc:ctdc-dev` 2750 | operator writes Git checkouts; agents read (2026-11-02: planned, not created on the box; patches go through `/srv/ctdc-handoff/` today) |
 | `/srv/ctdc-blog/` | `corporatetraveldc:corporatetraveldc` 2770 | Executive Standard / Substack material; operator only |
 | `/srv/ctdc-<name>/` | `<account>:corporatetraveldc` 2770 | one private folder per agent or service account in `ctdc-dev`, on the box or in the cloud; `<name>` is the last part of the account name (`ctdc-agent-anthropic-claude-ea` -> `ctdc-ea`) |
 

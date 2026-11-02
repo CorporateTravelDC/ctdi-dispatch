@@ -159,7 +159,11 @@ SECRET_KEY_NAME = re.compile(r"(?i)(PASS|SECRET|TOKEN|KEY|SHARECODE|SERIAL|ACCOU
 # 2026-10-22 (operator): feeder UUIDs are PUBLIC identifiers (they appear on the
 # aggregators' public stats pages), never values -- in ANY env file, dispatch-secrets.env
 # included. Exact key names; every other key keeps its treatment.
-NOT_SECRET_KEYS = frozenset({"UUID", "ULTRAFEEDER_UUID", "FEEDER_ID", "PIAWARE_FEEDER_ID"})
+# 2026-11-02: DISPATCH_PG_RO_USER is the read-only Postgres ROLE NAME that scripts/pg-ro-role.py
+# hardcodes and writes into dispatch-secrets.env; the repo, the docs and every agent that reads
+# them carry it, so it flagged every transcript. Its password (DISPATCH_PG_RO_PASSWORD) stays a value.
+NOT_SECRET_KEYS = frozenset({"UUID", "ULTRAFEEDER_UUID", "FEEDER_ID", "PIAWARE_FEEDER_ID",
+                             "DISPATCH_PG_RO_USER"})
 # Secret-named keys whose values are shorter than MIN_LEN but are still passwords: the
 # OpenSky feeder serial is the feeder's credential (11 characters). {name: minimum length}.
 SHORT_SECRET_KEYS = {"OPENSKY_SERIAL": 8}

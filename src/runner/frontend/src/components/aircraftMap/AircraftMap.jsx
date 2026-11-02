@@ -274,7 +274,8 @@ export default function AircraftMap({ liveState }) {
     setFocusMsg(`Looking up ${q.toUpperCase()}...`)
     const res = await fetchFocus(q)
     if (!res.ok) {
-      setFocusMsg(res.status === 404 ? `${q.toUpperCase()}: not live and no recent SWIM leg` : `${q.toUpperCase()}: lookup failed`)
+      // 2026-11-02 (operator): a miss and a LADD-withheld aircraft read the same, FlightAware style.
+      setFocusMsg(res.status === 404 ? `${q.toUpperCase()}: No aircraft available` : `${q.toUpperCase()}: lookup failed`)
       return
     }
     if (res.live && res.aircraft?.src === 'aggregator') {

@@ -49,7 +49,7 @@ SQLite file was destroyed on 2026-10-19 (d5fde567). See §3.7.)
   not into this one -- §3.5 below; relay 1 tracks the instance, relay 2 flips
   demo-api to it, ~~relay 3 retires the file~~ (2026-10-19 renumbered: relay 3
   enables the nightly refresh, ~~relay 4 retires the file after
-  `scripts/demo-sqlite-retire-check.py` verifies N hours on Postgres~~).)
+  `scripts/demo-sqlite-retire-check.py` verifies N hours on Postgres~~).) <!-- not-a-claim -->
   2026-10-20: done. The demo SQLite dirs were already empty; the code path, the
   two sovereign mounts and the `scripts/demo-env.py source sqlite` rollback are
   removed, and `demo-sqlite-retire-check.py` is retired
@@ -380,7 +380,7 @@ fixed by `0050_widen_real_to_double_precision.sql`;
 
 ## 5. Cutover record (2026-09-18) and rollback
 
-Copy tool: `scripts/migrate-sqlite-to-pg.py` (retired 2026-10-20 to
+Copy tool: `scripts/migrate-sqlite-to-pg.py` (retired 2026-10-20 to <!-- not-a-claim -->
 `scripts/retired-20261020/`; per-table, batched `COPY`,
 row-count and spot-hash verification, idempotent). Lessons kept for any
 future move: stop **every** unit that touches the database (web too, plus

@@ -45,6 +45,10 @@
 // to restrict or preserve: 631 (cups), 5335 (unbound), 8002 (www
 // contact-form backend), 8082 (mcpo), 8091 (Pi-hole admin, reachable
 // via the public vhost's 80/443 instead), 9081 (acarshub, same). If any
+// (corrected 2026-11-02, `ss`: 8091 is NOT loopback-only -- pihole-FTL binds
+// it on 0.0.0.0 and [::]. Not granting it here still keeps tailnet peers off it;
+// LAN reach depends on the firewalld zone. Either bind it to 127.0.0.1 or
+// accept and document the LAN exposure.)
 // of these is meant to go tailnet-direct, add its row to PORTS.md and
 // its port here in the same change.
 {

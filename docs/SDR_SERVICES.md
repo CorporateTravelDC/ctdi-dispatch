@@ -60,7 +60,7 @@ None of the above exists in the live `~/.config/containers/systemd/`
 (re-confirmed 2026-10-06: no `*.disabled` file there) — "disabled" means
 "staged in the repo, never installed," not "installed and switched off."
 ~~A new, unrelated `.disabled` file now also exists at
-`.config/containers/systemd/amtrak-tracker.container.disabled` — out of
+`.config/containers/systemd/amtrak-tracker.container.disabled` — out of <!-- not-a-claim -->
 scope for this doc (not an SDR service); not otherwise investigated here.~~
 (2026-10-20: that stale 2026-07 amtrak draft is retired to
 `.config/containers/systemd/retired-20261020/`; the live unit is `amtrak-tracker.container`.)

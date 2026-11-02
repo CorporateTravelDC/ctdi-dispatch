@@ -149,7 +149,7 @@ function TrainsPanel({ amtrak }) {
 
   const liveByNum = {}
   trains.forEach(t => {
-    const num = t.train_number || t.id
+    const num = t.train_number || t.train_num || t.id || t.train_id
     if (num) liveByNum[num] = t
   })
 
@@ -172,7 +172,7 @@ function TrainsPanel({ amtrak }) {
         <div className="fp-delayed-list">
           {delayed.slice(0, 3).map((t, i) => (
             <span key={i} className="fp-delay-chip">
-              {t.train_number || t.id}: +{t.delay_minutes}m
+              {t.train_number || t.train_num || t.id || t.train_id}: +{t.delay_minutes}m
             </span>
           ))}
         </div>
@@ -201,7 +201,7 @@ function TrainsPanel({ amtrak }) {
           { key: 'delay', label: 'Status'  },
         ]}
         rows={trains.slice(0, 10).map(t => ({
-          num:   t.train_number || t.id || '—',
+          num:   t.train_number || t.train_num || t.id || t.train_id || '—',
           route: t.route_name  || '—',
           delay: t.delay_minutes > 0 ? `+${t.delay_minutes}m` : 'On time',
         }))}
@@ -443,7 +443,7 @@ export default function OverviewView({ liveState }) {
           value={trains.length === 0 ? 'N/A' : delayedTrains.length > 0 ? `${delayedTrains.length} delayed` : 'On time'}
           status={delayedTrains.length > 0 ? 'warn' : trains.length > 0 ? 'go' : null}
           sub={delayedTrains.length > 0
-            ? delayedTrains.slice(0,2).map(t => `${t.train_number || t.id}: +${t.delay_minutes}m`).join(' · ')
+            ? delayedTrains.slice(0,2).map(t => `${t.train_number || t.train_num || t.id || t.train_id}: +${t.delay_minutes}m`).join(' · ')
             : `${trains.length} trains tracked`}
           href="/trains"
         />

@@ -123,20 +123,24 @@ def test_tier0_is_ladd_filtered_fail_closed(seeded, monkeypatch):
         c.execute("INSERT INTO faa_aircraft_registry (n_number, mode_s_hex, updated_at) VALUES (?, ?, ?)",
                   ("000LH", "ABC127", 0))
         c.execute("INSERT INTO faa_ladd_aircraft (n_number, updated_at) VALUES (?, ?)", ("N000LH", time.time()))
-    # internal (Tier 1): unfiltered operational display
-    _, internal = _positions(seeded, tier=Tier.T1)
-    assert {p["callsign"] for p in internal["positions"]} == {"TEST123", "TAIS01"}
-    # public (Tier 0): listed by registration (TEST123) and by hex->registry (TAIS01) both removed
-    status, public = _positions(seeded, tier=Tier.T0)
-    assert status == 200 and public["positions"] == [] and public["count"] == 0
-    assert "N000AA" not in json.dumps(public) and "abc127" not in json.dumps(public)
-    # filter error -> 503, never an unfiltered list
+    # 2026-11-02 (operator): tier no longer decides LADD -- only an aircraft pass or the master token does.
+    from common import withheld
+    monkeypatch.setenv(withheld.KEY_ENV, "k" * 64)
+    holder = withheld.WithheldView(grants=frozenset({"aircraft"}), user="op", device="tablet", path="/api/v1/swim/positions")
+    _, shown = _positions(seeded, tier=Tier.T1, held=holder)
+    assert {p["callsign"] for p in shown["positions"]} == {"TEST123", "TAIS01"}
+    # Tier 1 without a pass and Tier 0 alike: listed by registration (TEST123) and by
+    # hex->registry (TAIS01) both removed
+    for tier in (Tier.T1, Tier.T0):
+        status, out = _positions(seeded, tier=tier)
+        assert status == 200 and out["positions"] == [] and out["count"] == 0
+        assert "N000AA" not in json.dumps(out) and "abc127" not in json.dumps(out)
+    # filter error -> 503, never an unfiltered list -- for a pass holder too
     monkeypatch.setattr(db, "faa_ladd_listed_batch", lambda idents: (_ for _ in ()).throw(RuntimeError("down")))
-    with pytest.raises(HTTPException) as ei:
-        _positions(seeded, tier=Tier.T0)
-    assert ei.value.status_code == 503 and "N000AA" not in str(ei.value.detail)
-    _, still = _positions(seeded, tier=Tier.T1)                # internal path does not consult the filter
-    assert still["count"] == 2
+    for kw in ({"tier": Tier.T0}, {"tier": Tier.T1, "held": holder}):
+        with pytest.raises(HTTPException) as ei:
+            _positions(seeded, **kw)
+        assert ei.value.status_code == 503 and "N000AA" not in str(ei.value.detail)
 
 
 def test_scope_from_geo_filter_constants(seeded, monkeypatch):
@@ -196,13 +200,20 @@ def test_last_leg_by_callsign_and_hex_with_airport_coords(seeded):
         seeded.swim_last_leg(ident="TEST123", tier=Tier.T1)    # older than 24 h -> 404
 
 
-def test_last_leg_tier0_hides_ladd_listed(seeded):
+def test_last_leg_hides_ladd_listed_without_a_pass(seeded, monkeypatch):
+    from common import withheld
     with db.conn() as c:
         c.execute("INSERT INTO faa_ladd_aircraft (n_number, updated_at) VALUES (?, ?)", ("N000AA", time.time()))
-    assert seeded.swim_last_leg(ident="TEST123", tier=Tier.T1).status_code == 200
-    with pytest.raises(HTTPException) as ei:
-        seeded.swim_last_leg(ident="TEST123", tier=Tier.T0)
-    assert ei.value.status_code == 404
+    monkeypatch.setenv(withheld.KEY_ENV, "k" * 64)
+    holder = withheld.WithheldView(grants=frozenset({"aircraft"}), user="op", device="tablet", path="/api/v1/swim/last-leg")
+    assert seeded.swim_last_leg(ident="TEST123", tier=Tier.T1, held=holder).status_code == 200
+    for tier in (Tier.T1, Tier.T0):
+        with pytest.raises(HTTPException) as ei:
+            seeded.swim_last_leg(ident="TEST123", tier=tier)
+        assert ei.value.status_code == 404 and ei.value.detail == "No aircraft available"
+    with pytest.raises(HTTPException) as miss:                 # a plain miss reads the same
+        seeded.swim_last_leg(ident="NOPE99", tier=Tier.T1, held=holder)
+    assert miss.value.detail == "No aircraft available"
 
 
 def test_routes_registered_on_the_app(seeded):

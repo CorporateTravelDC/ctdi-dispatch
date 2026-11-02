@@ -94,8 +94,8 @@ def test_route_is_tier1_like_the_watchlist_list(route):
 
     def minimum_tier(route_obj):
         from auth.auth import Tier
-        (dep,) = route_obj.dependant.dependencies
-        cells = [c.cell_contents for c in dep.call.__closure__ or ()]
+        cells = [c.cell_contents for dep in route_obj.dependant.dependencies  # 2026-11-02: + resolve_ladd
+                 for c in (getattr(dep.call, "__closure__", None) or ())]
         return [c for c in cells if isinstance(c, Tier)]
 
     listing = [r for r in router.routes if getattr(r, "path", "") == "/api/v1/watchlist"][0]

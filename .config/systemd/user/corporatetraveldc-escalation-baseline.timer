@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly rebuild of the time-of-day escalation baselines
+
+[Timer]
+# Monday early morning Eastern, inside the quiet window; Persistent catches a missed week.
+OnCalendar=Mon *-*-* 09:20:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

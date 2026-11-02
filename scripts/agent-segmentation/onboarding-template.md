@@ -259,7 +259,7 @@ Retired -- never use, never revive:
 - `source`/`.` of any `/etc/corporatetraveldc/*.env` file; `python3 -c` one-liners
 - third-party position lookups (`api.airplanes.live` and the like -- ~~removed 2026-08-29~~ (corrected 2026-10-25, superseded: removed 2026-08-29 in d5c4df0d, but the platform's own shared fallback `src/common/airplanes_live.py` returned 2026-10-08 and is on live. What stays retired is any direct `api.airplanes.live` call; the only allowed path is `shared.watchlist._remote_ac_by_*`)); the legacy Federal NOTAM REST API (retired 2026-04-18; unverified 2026-10-25: the date is FAA-side, though no code path calls that API); `ops.example.com` or any public hostname as the API base
 - the old station ids (`corporatetraveldc-kdca-*`, `N0CALL`); the old multi-port Ollama layout (hot/chat/report) -- there is one llama service now
-- the old account names `ctdc-agent` and `ctdc-agent-cowork` (renamed 2026-10-05 to `ctdc-agent-anthropic-claude` / `ctdc-agent-anthropic-cowork`); Ollama's port 11434 and `/api/generate` (nothing listens there)
+- the old account names `ctdc-agent` and `ctdc-agent-cowork` (renamed 2026-10-05 to `ctdc-agent-anthropic-claude` / `ctdc-agent-anthropic-cowork`); Ollama's port 11434 and `/api/generate` (nothing listens there) <!-- not-a-claim -->
 - vault folders or files that are not reachable through the research route, and any "latest" you have to find by timestamp instead of a `CURRENT.md`
 - anything a retired checkpoint says to run that this pamphlet does not list
 

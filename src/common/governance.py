@@ -53,6 +53,7 @@ from common import board_sign, db
 NAMESPACE_APPROVAL = "corporatetraveldc-approval"
 APPROVAL_KINDS = ("sudo", "council", "council-close", "connector-link", "connector-hold",   # common/agent_gateway.py
                   "gateway-thaw", "console-login",                                    # gateway kill switch; web/routes/console.py
+                  "withheld-pass", "withheld-master", "withheld-thaw",                # common/withheld.py (2026-11-02)
                   "liveness",   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
                   "board-gate")   # (operator 2026-10-16): Cowork board token-gate reply, poller/skills/board_sweep.py
 COUNCIL_MODES = ("council", "arena")
@@ -203,6 +204,7 @@ def approval_canonical(row: dict, action: str) -> bytes:
 APPROVAL_TTL_POLICY = {
     "sudo": (600, 60, 600), "console-login": (600, 60, 600), "connector-link": (900, 300, 900),
     "connector-hold": (1800, 300, 3600), "gateway-thaw": (1800, 300, 3600),
+    "withheld-pass": (600, 120, 600), "withheld-master": (600, 120, 600), "withheld-thaw": (1800, 300, 3600),
     "council": (14400, 1800, 14400), "council-close": (3600, 900, 7200),
     "liveness": (1800, 300, 3600),
     # (operator 2026-10-16): the Cowork board token gate. board_sweep used kind "sudo" with a TTL
@@ -449,6 +451,10 @@ def _on_resolved(row: dict) -> None:
     if kind in ("connector-link", "connector-hold", "gateway-thaw"):
         from common import agent_gateway
         agent_gateway.on_approval_resolved(row)
+        return
+    if kind in ("withheld-pass", "withheld-master", "withheld-thaw"):
+        from common import withheld
+        withheld.on_approval_resolved(row)
         return
     if kind not in ("council", "council-close"):
         return

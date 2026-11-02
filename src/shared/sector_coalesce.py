@@ -82,6 +82,19 @@ _STATE_FILE = os.environ.get(
 _WINDOW_SECS = 900          # 15-minute rolling window
 _ESCALATE_MULTIPLIER = 3.0  # current window >= this x prior window -> escalating
 _ESCALATE_FLOOR = 3         # minimum current-window count to ever escalate off an empty prior window
+# 2026-11-01 (operator: "everything is escalating" on tbfm/tfms/asde-x). Every caller that uses
+# escalating_only=True drops the non-escalating events, so the old "[ESCALATING]" tag sat on
+# 100% of what reached the phone and carried no information. Now:
+#  - a caller that passes `activity` (signal, key, measured value) is judged against the
+#    time-of-day baseline in shared.escalation_baseline (weekday/weekend x local hour, day of
+#    week x hour once a cell has 20 weeks): escalating = above that slot's p90; surge = well
+#    beyond it. No usable cell -> the rolling comparison below.
+#  - the rolling comparison's reference is the higher of the prior window and the mean of the
+#    _BASELINE_WINDOWS windows before the current one, so a quiet 15 minutes after a busy
+#    hour no longer makes routine traffic look like a spike.
+#  - the ESCALATING tag and +1 priority mean a SURGE only; every push carries the numbers.
+_BASELINE_WINDOWS = 4       # windows before the current one averaged for the rolling reference
+_SURGE_FACTOR = 2.0
 
 # Cold-start guard (2026-09-20, operator-confirmed root cause): captured once
 # at import. record_event()/get_sector_summary() both refuse to report
@@ -564,12 +577,13 @@ def set_feed_silence(feed_name: str, silenced: bool) -> None:
 
 
 def _prune(events: list[float], now: float) -> None:
-    cutoff = now - (2 * _WINDOW_SECS)
+    cutoff = now - ((_BASELINE_WINDOWS + 1) * _WINDOW_SECS)
     while events and events[0] < cutoff:
         events.pop(0)
 
 
-def record_event(sector: str, feed_name: str, isolate: bool = False) -> dict:
+def record_event(sector: str, feed_name: str, isolate: bool = False,
+                 activity: tuple[str, str, float] | None = None) -> dict:
     """
     Record one event for (sector, feed_name) and return the current
     classification:
@@ -625,20 +639,58 @@ def record_event(sector: str, feed_name: str, isolate: bool = False) -> dict:
         # Cold-start guard -- see _PROCESS_START above for why. Only this
         # boolean is gated; window_count/prior_count/silenced flags below
         # still report their real values either way.
+        lived = max(1, min(_BASELINE_WINDOWS, int((now - _PROCESS_START) // _WINDOW_SECS) - 1))
+        base_events = sum(1 for t in count_source
+                          if now - (lived + 1) * _WINDOW_SECS <= t < now - _WINDOW_SECS)
+        rolling_baseline = base_events / lived
+        reference = max(prior_count, rolling_baseline, 0.5)
         escalating = (
             now - _PROCESS_START >= 2 * _WINDOW_SECS
             and window_count >= floor
-            and window_count >= multiplier * max(prior_count, 0.5)
+            and window_count >= multiplier * reference
         )
-
-        return {
+        surge = bool(escalating and window_count >= _SURGE_FACTOR * floor
+                     and window_count >= _SURGE_FACTOR * multiplier * reference)
+        result = {
             "sector": sector,
             "window_count": window_count,
             "prior_count": prior_count,
             "escalating": escalating,
+            "surge": surge,
+            "baseline_source": "rolling",
+            "rolling_baseline": round(rolling_baseline, 2),
             "sector_silenced": sector in _silenced_sectors,
             "feed_silenced": feed_name in _silenced_feeds,
         }
+        if activity is not None:
+            from shared import escalation_baseline
+            signal, key, value = activity
+            cell = escalation_baseline.lookup(signal, key, now)
+            if cell is not None:
+                esc, srg = escalation_baseline.classify(value, cell, floor)
+                result.update(escalating=esc, surge=srg, baseline_source="time_of_day",
+                              activity_value=value, baseline_slot=cell["slot"],
+                              baseline_p50=cell.get("p50"), baseline_p90=cell.get("p90"))
+        return result
+
+
+def _presentation(classification: dict, sector: str, title: str, detail: str,
+                  base_priority: int) -> tuple[str, str, int]:
+    """Tag, detail and priority for one push. ESCALATING (+1 priority) only on a surge; the
+    numbers behind the decision always ride along in the detail."""
+    if classification.get("baseline_source") == "time_of_day":
+        from shared.escalation_baseline import slot_label
+        note = (f"{classification.get('activity_value', 0):g} now; typical "
+                f"{classification.get('baseline_p50', 0):g}, high {classification.get('baseline_p90', 0):g} "
+                f"for {slot_label(classification['baseline_slot'])}")
+    else:
+        note = (f"{classification.get('window_count', 0)} in the last 15 min; typical "
+                f"{classification.get('rolling_baseline', 0):g}, prior window "
+                f"{classification.get('prior_count', 0)}")
+    detail = f"{detail}\n({note})" if detail else f"({note})"
+    if classification.get("surge"):
+        return f"[ESCALATING/{sector}] {title}", detail, min(5, base_priority + 1)
+    return f"[{sector}] {title}", detail, base_priority
 
 
 def maybe_fire_coalesced_alert(
@@ -684,14 +736,8 @@ def maybe_fire_coalesced_alert(
     if not _throttle_allows(ntfy_topic):
         return classification
 
-    priority = base_priority
-    display_title = title
-    push_detail = detail
-    if classification["escalating"]:
-        priority = min(5, base_priority + 1)
-        display_title = f"[ESCALATING/{sector}] {title}"
-    else:
-        display_title = f"[{sector}] {title}"
+    display_title, push_detail, priority = _presentation(classification, sector, title, detail,
+                                                         base_priority)
     if is_topic_sanitize(ntfy_topic):
         display_title = _sanitize_text(display_title)
         push_detail = _sanitize_text(push_detail)
@@ -721,6 +767,7 @@ def fire_family_alert(
     zone_split: bool = True,
     sector_override: str | None = None,
     extra_topics: tuple[str, ...] = (),
+    activity: tuple[str, str, float] | None = None,
 ) -> dict:
     """
     Convenience wrapper standardizing the "{family}-alerts / {family}-<zone>"
@@ -787,7 +834,7 @@ def fire_family_alert(
     feeds are wired in.
     """
     sector = sector_override if sector_override else resolve_sector(facility_or_center)
-    classification = record_event(sector, feed_name, isolate=isolate)
+    classification = record_event(sector, feed_name, isolate=isolate, activity=activity)
     classification["fired"] = False
     classification["zone_fired"] = False
 
@@ -796,12 +843,8 @@ def fire_family_alert(
     if escalating_only and not classification["escalating"]:
         return classification
 
-    if classification["escalating"]:
-        priority = min(5, base_priority + 1)
-        display_title = f"[ESCALATING/{sector}] {title}"
-    else:
-        priority = base_priority
-        display_title = f"[{sector}] {title}"
+    display_title, detail, priority = _presentation(classification, sector, title, detail,
+                                                    base_priority)
 
     aggregate_topic = f"{family}-alerts"
     if _throttle_allows(aggregate_topic):
@@ -874,10 +917,14 @@ def get_sector_summary() -> dict:
             prior_count = sum(1 for t in events if now - 2 * _WINDOW_SECS <= t < now - _WINDOW_SECS)
             # Same cold-start guard as record_event() -- keep these two
             # formulas identical (see _PROCESS_START above for why).
+            lived = max(1, min(_BASELINE_WINDOWS, int((now - _PROCESS_START) // _WINDOW_SECS) - 1))
+            base_events = sum(1 for t in events
+                              if now - (lived + 1) * _WINDOW_SECS <= t < now - _WINDOW_SECS)
+            reference = max(prior_count, base_events / lived, 0.5)
             escalating = (
                 now - _PROCESS_START >= 2 * _WINDOW_SECS
                 and window_count >= _ESCALATE_FLOOR
-                and window_count >= _ESCALATE_MULTIPLIER * max(prior_count, 0.5)
+                and window_count >= _ESCALATE_MULTIPLIER * reference
             )
             contributing_feeds = sorted(
                 feed for feed, sectors in _feed_sector_events.items()

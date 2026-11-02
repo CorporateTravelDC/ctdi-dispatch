@@ -30,7 +30,7 @@ and `-personal` are inactive and nothing listens on 8087/8088;
 `corporatetraveldc-demo-portals-boot.service` is enabled but inactive --
 NEEDS-OPERATOR-DECISION, see the sweep register) has no tunnel ingress (no 8087/8088
 route in the tracked `cloudflared/` or `nginx/` config), and its header points at a
-`docs/DEMO_PORTALS.md` that does not exist (still missing 2026-10-15).
+`docs/DEMO_PORTALS.md` that does not exist (still missing 2026-10-15). <!-- not-a-claim -->
 
 2026-10-16: the two portal quadlets carry no `WantedBy=` (anti-boot-storm
 rule) and their headers claimed `stack-boot-ctl.sh`'s ORDER would start them

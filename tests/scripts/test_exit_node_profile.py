@@ -96,7 +96,7 @@ def test_syntax_banners_and_cross_links():
     assert subprocess.run(["bash", "-n", str(APPLY)], capture_output=True).returncode == 0
     readme = (FOLDER / "README.md").read_text()
     assert "## POLICY (required when the phone uses this box as its exit node)" in readme
-    assert "**OPT-IN -- a more aggressive measure. Not applied by default.**" in readme
+    assert "**OPT-IN -- a more aggressive measure." in readme   # 2026-11-02: "not applied by default" struck 2026-10-25 (applied here)
     assert IPLIST_URL in readme and NFT_FILE_LIVE in readme
     assert "NOT implemented" in readme and "no-nftset" in readme   # honest write-up, not a fake
     pihole_readme = (REPO / "config/pihole/profiles/aggressive-encrypted-dns/README.md").read_text()

@@ -135,7 +135,9 @@ def psql(sql: str) -> str:
     """Run SQL as the database owner inside the container; SQL goes on stdin, never argv."""
     p = subprocess.run(
         ["podman", "exec", "-i", CONTAINER, "sh", "-c",
-         'exec psql -X -q -At -F "|" -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f -'],
+         # 2026-11-01: pg_hba requires scram even on the container's local socket; pass the owner
+         # password the same way the backup and maintenance scripts do.
+         'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -q -At -F "|" -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f -'],
         input=sql, capture_output=True, text=True, timeout=120)
     if p.returncode:
         # psql errors can echo statement text; ours never contains a password, only a verifier

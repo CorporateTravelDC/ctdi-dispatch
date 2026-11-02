@@ -498,7 +498,9 @@ def check_tbfm_alerts(sequences: list[dict]) -> None:
         detail = f"{fix}: {seq_count} aircraft in sequence{eta_info}"
         dispatch = f"{fix}: {seq_count} in sequence"
         try:
-            result = fire_family_alert("tbfm", "tbfm", facility, title, detail, dispatch, base_priority=2)
+            # 2026-11-01: judged against this fix's time-of-day baseline (shared.escalation_baseline).
+            result = fire_family_alert("tbfm", "tbfm", facility, title, detail, dispatch, base_priority=2,
+                                       activity=("tbfm_fix_queue", fix, seq_count))
             _TBFM_ALERT_DEDUP.record(dedup_slot, dedup_key)
             log.info("tbfm: fire_family_alert for fix %s (%d in seq, facility=%s, sector=%s, "
                       "escalating=%s, aggregate_fired=%s, zone_fired=%s)",

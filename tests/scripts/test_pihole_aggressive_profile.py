@@ -69,7 +69,8 @@ def calls(log: Path) -> list[str]:
 def test_syntax_and_readme_opt_in_banner():
     assert subprocess.run(["bash", "-n", str(APPLY)], capture_output=True).returncode == 0
     readme = (PROFILE / "README.md").read_text().splitlines()
-    assert "**OPT-IN -- a more aggressive measure. Not applied by default.**" in readme[:3]
+    # 2026-11-02: "Not applied by default" was struck 2026-10-25 (the profile is applied on this deployment)
+    assert any(ln.startswith("**OPT-IN -- a more aggressive measure.") for ln in readme[:3])
     assert URL in (PROFILE / "README.md").read_text()
 
 

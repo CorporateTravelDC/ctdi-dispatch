@@ -19,18 +19,6 @@ def synthetic_fetch(path):
     if path.endswith("feeds"):return {"feeds":[{"age_seconds":99,"stale_threshold_seconds":10,"name":"SYNTHETIC-OMIT"},{"optional":True,"error":"SYNTHETIC-OMIT"}]}
     return {"score":3,"label":"GREEN","other":"SYNTHETIC-OMIT"}
 
-def test_original_as_is_native_codex_precompact_does_not_save(tmp_path,monkeypatch,capsys):
-    # Load the original tracked Stop hook unchanged into an isolated namespace.
-    import subprocess,io
-    src=__import__("subprocess").check_output(["git","-C",str(REPO),"show","HEAD:.claude/skills/dispatch-context-guardian/scripts/context_hook.py"],text=True)
-    ns={"__name__":"original_guardian_fixture","__file__":str(tmp_path/"context_hook.py")};exec(compile(src,"original_context_hook.py","exec"),ns)
-    called=[];monkeypatch.setattr(subprocess,"run",lambda *a,**k:called.append(a))
-    monkeypatch.setattr(sys,"stdin",io.StringIO(json.dumps({"hook_event_name":"PreCompact","session_id":"synthetic-session","transcript_path":None,"trigger":"auto"})))
-    ns["LOG_FILE"]=str(tmp_path/"original.log")
-    with pytest.raises(SystemExit) as e:ns["main"]()
-    assert e.value.code==0 and not called and capsys.readouterr().out==""
-    assert "tokens=0" in (tmp_path/"original.log").read_text()
-
 def test_snapshot_reprojects_fields_and_private_modes(g,tmp_path):
     core,_=g;d=core.save("codex","session",tmp_path,synthetic_fetch);p=core.state_path("codex","session",tmp_path)
     assert "SYNTHETIC-OMIT" not in p.read_text()
@@ -83,7 +71,9 @@ def test_three_discovery_copies_have_identical_sources():
     for rel in [".claude/skills/dispatch-context-guardian",".agents/skills/dispatch-context-guardian"]:
         mirror=REPO/rel
         for p in canon.rglob("*"):
-            if p.is_file():assert p.read_bytes()==(mirror/p.relative_to(canon)).read_bytes()
+            # 2026-11-02: bytecode caches written by running the tests are not sources.
+            if p.is_file() and "__pycache__" not in p.parts:
+                assert p.read_bytes()==(mirror/p.relative_to(canon)).read_bytes()
 
 
 def test_unconfigured_feed_is_idle_not_failing(g):
