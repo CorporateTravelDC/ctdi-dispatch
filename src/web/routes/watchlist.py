@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from auth.auth import Tier, require_admin, require_tier, resolve_withheld
 from common import db
-from common.flight_instance import watch_id_date
+from common.flight_instance import FDPS_OCCURRENCE_WINDOW_H, watch_id_date
 from shared.watchlist import _fire_ntfy_dual, PERMANENT_WATCHLIST_DIR
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
@@ -85,9 +85,12 @@ def _default_auto_remove_at(scheduled_arrival: Optional[str],
 # reference time for that plan to count as TODAY's leg when filling a watch's
 # hex/registration. The plan's time is its filed departure_time when present,
 # else its updated_at; the reference is the caller's scheduled_departure when
-# sent, else now. 18 h covers early filings (~04:00Z for an evening leg) while
-# excluding the previous day's or older plans for the same reused number.
-FDPS_IDENTITY_FRESH_WINDOW_S = 18 * 3600
+# sent, else now.
+# 2026-11-04 operator: 3 h, was 18 h (flight_instance.FDPS_OCCURRENCE_WINDOW_H).
+# 18 h let yesterday afternoon's plan bind an early add for the same number;
+# an early filing outside 3 h leaves the watch hex-pending until the poller
+# sees a plan inside the window.
+FDPS_IDENTITY_FRESH_WINDOW_S = int(FDPS_OCCURRENCE_WINDOW_H * 3600)
 
 
 def _fdps_plan_is_current_leg(plan: dict, scheduled_departure: Optional[str],
@@ -423,11 +426,17 @@ async def add_flight_watchlist(
     # plan for the same number carries a different airframe. No fresh plan
     # -> leave hex/registration empty (hex-pending; the poller resolves it
     # later from SWIM). Never filled from FIDS.
+    # 2026-11-04: the +/-18 h window alone let an EARLY add with no schedule
+    # take yesterday afternoon's plan; the plan must also fit the watch's
+    # dated occurrence (flight_instance.fdps_plan_occurrence_rejection).
     fdps_identity = False
     if fdps_plan and not resolved_hex_id and not resolved_registration:
         from common.flight_instance import airports_agree
+        from common.flight_instance import fdps_plan_occurrence_rejection as fi_occurrence_rejection
         if airports_agree(body.origin, fdps_origin) is not False and \
                 _fdps_plan_is_current_leg(fdps_plan, body.scheduled_departure) and \
+                fi_occurrence_rejection({"id": entry_id, "scheduled_departure": body.scheduled_departure},
+                                        fdps_plan) is None and \
                 (fdps_plan.get("hex") or fdps_plan.get("registration")):
             resolved_hex_id = (fdps_plan.get("hex") or "").lower() or None
             resolved_registration = (fdps_plan.get("registration") or "").upper() or None

@@ -1617,6 +1617,16 @@ def _check_flight_fdps_cache(entry: dict, ident: str) -> None:
                       ident, plan.get("flight_id"), plan.get("origin"), plan.get("destination"),
                       entry.get("origin"), entry.get("destination"))
             return
+        # 2026-11-04 (ASH4067): the same number on ANOTHER DAY is not this
+        # watch either -- until today's plan is filed, the newest row is the
+        # previous occurrence, and its airframe, status and destination
+        # belong to that flight (fi.fdps_plan_occurrence_rejection).
+        from common import flight_instance as fi
+        why = fi.fdps_plan_occurrence_rejection(entry, plan, sched=_watch_sched_dep(entry, ident))
+        if why:
+            log.debug("fdps cache %s: plan %s is another occurrence (%s) -- ignored",
+                      ident, plan.get("flight_id"), why)
+            return
         status = (plan.get("status") or "").lower()
         dest = plan.get("destination")
         last_status = (entry.get("last_fdps_status") or "").lower()

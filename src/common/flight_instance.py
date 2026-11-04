@@ -787,6 +787,64 @@ def match_watch_surface_event(entries: Iterable[dict], callsign: str | None, *, 
 
 # ── Time-fidelity pairing ────────────────────────────────────────────────────
 
+# 2026-11-04 operator: an FDPS plan binds a watch's airframe only within 3 h
+# (was 18 h at add time). One constant for every FDPS identity window; a leg
+# delayed past it stays hex-pending until a fresher plan arrives (fail closed).
+FDPS_OCCURRENCE_WINDOW_H = 3.0
+_FDPS_DEP_BEFORE_H = FDPS_OCCURRENCE_WINDOW_H   # a plan departing this long before the schedule is an earlier leg
+_FDPS_DEP_AFTER_H = FDPS_OCCURRENCE_WINDOW_H    # ... this long after it, a later one
+_FDPS_UNTIMED_MAX_H = FDPS_OCCURRENCE_WINDOW_H  # an untimed plan not updated within this before the schedule
+_WATCH_ID_DATE_RE = re.compile(r"-(\d{8})$")
+
+
+def watch_day_start(entry: dict, now_epoch: float | None = None) -> float:
+    """Epoch of 00:00 America/New_York on the watch's own date: the id's
+    YYYYMMDD (watch_id_date), else its scheduled departure, else today."""
+    from zoneinfo import ZoneInfo
+    m = _WATCH_ID_DATE_RE.search(str(entry.get("id") or ""))
+    d = m.group(1) if m else watch_id_date(entry.get("scheduled_departure"), now_epoch)
+    return datetime.strptime(d, "%Y%m%d").replace(tzinfo=ZoneInfo(_WATCH_ID_TZ)).timestamp()
+
+
+def fdps_plan_occurrence_rejection(entry: dict, plan: dict, sched=None,
+                                   now_epoch: float | None = None) -> str | None:
+    """Why an FDPS plan for the watch's callsign is ANOTHER DAY's flight, or None.
+
+    2026-11-04 (ASH4067 KSDF-KIAD): the newest FDPS row for a reused number
+    was yesterday's leg (arrived 11-03 20:22Z) because today's plan was not
+    filed yet. The poller's tick checked only the origin, so it repointed the
+    11-04 watch to yesterday's airframe and stamped it corroborated; the
+    add-time gate (2026-10-21) had the same gap whenever the request came
+    early with no schedule. A plan is this watch's leg only if its own times
+    fit the watch's occurrence:
+      - with a schedule: departure within FDPS_OCCURRENCE_WINDOW_H (3 h) of
+        it; arrival not before sched - 1 h and not after sched + 20 h (leg
+        length, not freshness); an untimed plan updated within 3 h before it;
+      - without one: nothing in the plan (departure, arrival, else last
+        update) before 00:00 ET on the watch's date.
+    A plan with no usable time at all is rejected (fail closed: the watch
+    stays hex-pending rather than borrowing an airframe)."""
+    s = to_epoch(sched if sched not in (None, "") else entry.get("scheduled_departure"))
+    dep, arr = to_epoch(plan.get("departure_time")), to_epoch(plan.get("arrival_time"))
+    upd = to_epoch(plan.get("updated_at"))
+    if dep is None and arr is None and upd is None:
+        return "plan_has_no_time"
+    if s is not None:
+        if dep is not None and not (s - _FDPS_DEP_BEFORE_H * 3600 <= dep <= s + _FDPS_DEP_AFTER_H * 3600):
+            return "departure_outside_instance_window"
+        if arr is not None and not (s - 3600 <= arr <= s + _SURFACE_ARRIVAL_MAX_H * 3600):
+            return "arrival_outside_instance_window"
+        if dep is None and arr is None and upd < s - _FDPS_UNTIMED_MAX_H * 3600:
+            return "untimed_plan_older_than_instance"
+        return None
+    day0 = watch_day_start(entry, now_epoch)
+    if (dep is not None and dep < day0) or (arr is not None and arr < day0):
+        return "prior_day_occurrence"
+    if dep is None and arr is None and upd < day0:
+        return "untimed_plan_not_updated_on_watch_date"
+    return None
+
+
 def event_key(event: dict) -> FlightInstanceKey | None:
     """Instance key of a time-fidelity event dict: identifier|callsign,
     origin, destination, sched_dep|scheduled_departure."""
