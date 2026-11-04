@@ -50,6 +50,13 @@ up to 7 days if OSM errors; `RUNNER_TILE_CACHE_DIR`, `RUNNER_TILE_CACHE_MAX_FILE
 valid tile coordinates are ever fetched. The viewer's browser no longer contacts OSM at all.
 Tests: `tests/runner/test_osm_tile_cache.py`.
 
+Build note (2026-11-04): the runner frontend's PWA build pulls `deepmerge` through `vite-plugin-pwa` →
+`workbox-build` → `@rollup/plugin-node-resolve`. Upstream 4.3.1 (the latest release) is affected by
+GHSA-gcqx-w48m-w2h4, so the repo vendors 4.3.1 with that hole closed at
+`src/runner/frontend/vendor/deepmerge/` (`package.json` devDependency `file:./vendor/deepmerge`, npm
+override `"$deepmerge"`; `Containerfile.runner` copies `vendor/` before `npm ci`). `npm audit` reports 0.
+Drop the vendored copy when upstream ships a fixed release. Tests: `tests/runner/test_vendored_deepmerge.py`.
+
 tar1090 on the receiver (`:8080`) defaults to OpenFreeMap Positron
 (`TAR1090_CONFIGJS_APPEND` in the ultrafeeder quadlet): no key, no Referer rule, commercial use
 allowed. A layer a viewer already picked stays remembered in that browser.

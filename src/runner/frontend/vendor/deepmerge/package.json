@@ -1,0 +1,13 @@
+{
+  "name": "deepmerge",
+  "version": "4.3.1-ctdc.1",
+  "description": "deepmerge 4.3.1 with GHSA-gcqx-w48m-w2h4 closed; vendored by ctdi-dispatch-internal (see dist/cjs.js header)",
+  "main": "dist/cjs.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "files": [
+    "dist/cjs.js",
+    "index.d.ts",
+    "license.txt"
+  ]
+}
