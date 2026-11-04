@@ -92,7 +92,9 @@ with db.conn() as c:
     recorded_rm = {r["n_number"] for r in c.execute("SELECT n_number FROM faa_ladd_removals").fetchall()}
     table = {r["n_number"] for r in c.execute("SELECT n_number FROM faa_ladd_aircraft").fetchall()}
 removed = recorded_rm | supplied_rm
-expected = listed - removed
+# a removal covers every stored form of an identifier (N01AB / 01AB), exactly as the import deletes them
+removed_forms = {k for r in removed for k in db.ladd_lookup_keys(r)}
+expected = {x for x in listed if not any(k in removed_forms for k in db.ladd_lookup_keys(x))}
 missing, extra = len(expected - table), len(table - expected)
 print(f"set equality: expected {len(expected)}, table {len(table)}, missing {missing}, extra {extra}")
 t0 = time.time(); bad = 0

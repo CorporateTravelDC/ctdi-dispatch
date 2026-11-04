@@ -71,10 +71,17 @@ def _apply_removals(conn) -> tuple[int, int]:
     removals = [r["n_number"] for r in rows]
     if not removals:
         return 0, 0
-    cur = conn.execute(
-        "DELETE FROM faa_ladd_aircraft WHERE n_number IN "
-        "(SELECT n_number FROM faa_ladd_removals)")
-    return len(removals), cur.rowcount
+    # 2026-11-04: delete EVERY stored form of each removal (db.ladd_lookup_keys: "N01AB" and "01AB").
+    # An exact-string delete left 2 removed aircraft withheld when the remove file and the filter file
+    # listed them in different forms; the exhaustive check through db.faa_is_ladd() caught it.
+    keys = sorted({k for r in removals for k in db.ladd_lookup_keys(r)})
+    deleted = 0
+    for i in range(0, len(keys), 500):
+        chunk = keys[i:i + 500]
+        cur = conn.execute("DELETE FROM faa_ladd_aircraft WHERE n_number IN ("
+                           + ",".join("?" * len(chunk)) + ")", tuple(chunk))
+        deleted += cur.rowcount
+    return len(removals), deleted
 
 
 def _record_removals(conn, path: Path) -> tuple[int, int]:
@@ -148,7 +155,9 @@ def main() -> None:
         removed = {r["n_number"] for r in c.execute("SELECT n_number FROM faa_ladd_removals").fetchall()}
     for rp in remove_paths:
         removed |= _load_idents(rp)
-    effective = combined - removed
+    # 2026-11-04: a removal matches every stored form of an identifier (N01AB / 01AB), as _apply_removals deletes
+    removed_forms = {k for r in removed for k in db.ladd_lookup_keys(r)}
+    effective = {x for x in combined if not any(k in removed_forms for k in db.ladd_lookup_keys(x))}
     diff = {"would_add": len(effective - loaded), "would_drop": len(loaded - effective)}
     identical = bool(combined) and diff["would_add"] == 0 and diff["would_drop"] == 0
     print(f"[import-ladd-filter] vs loaded table: +{diff['would_add']} / -{diff['would_drop']} "

@@ -36,6 +36,12 @@ below it are the earlier procedure, kept for the record.
   the method and the import seq. Multi-pass overwriting is not used: on flash behind btrfs copy-on-write
   it cannot reach the old cells (NIST SP 800-88 Rev.1). For files that ever touched disk, `fstrim -av`
   asks the NVMe to discard the freed blocks (best effort; the USB stick does not support discard).
+- A removal covers every stored form of an identifier (2026-11-04): `_apply_removals` deletes each
+  removal's `db.ladd_lookup_keys()` forms (`N<number>` and `<number>`), and the dry-run diff and the
+  exhaustive check compare the same way. Before the fix an exact-string delete left 2 removed aircraft
+  withheld (the remove file and the filter listed them in different forms); the first exhaustive check
+  caught it (removals 166/168). Failure direction was over-withholding, never exposure.
+  Test: `tests/scripts/test_ladd_removal_forms.py`.
 - A run done the old way is replaced, never removed: `--supersede SEQ,SEQ --reason TEXT` adds a
   `ladd-supersede` entry naming the earlier seqs and the run that replaces them; they stay in the chain.
 - Still open (tracked): keyed-hash (HMAC) storage so the table holds no readable identifier, encrypted
