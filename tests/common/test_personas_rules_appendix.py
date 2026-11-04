@@ -6,7 +6,8 @@ glossary appendix.
 
 G8 (operator 2026-10-19, "Let's add to personas"): the flag is on in production through one place,
 the poller image (Containerfile.poller ENV); every quadlet whose code can reach a persona call runs
-that image, except the runner, which always passes its own system prompt and carries no verifier.
+that image, except the runner, which carries its own verifier (2026-11-03) and asks for the rules
+explicitly in /api/ask (rules_appendix=True) instead of through the flag.
 Nothing else sets it (no quadlet, no dispatch.env, no user unit), and build-models.sh compares
 Modelfiles with the appendix off, so the flag never reads as DRIFT."""
 from __future__ import annotations
@@ -147,16 +148,33 @@ def test_every_quadlet_that_can_reach_a_persona_call_runs_the_poller_image():
         if image != POLLER_IMAGE:
             reached.append((q.name, image))
     assert checked >= 20
-    # the runner image is the one exception: see test_the_runner_never_builds_a_persona_prompt
+    # the runner image is the one exception: see test_the_runner_verifies_the_rules_it_puts_in_ask
     assert {img for _, img in reached} <= {"localhost/corporatetraveldc-runner:latest"}, reached
 
 
-def test_the_runner_never_builds_a_persona_prompt():
+def test_the_runner_verifies_the_rules_it_puts_in_ask():
+    # 2026-11-03 (Ask rebuild P0, operator option 1): the runner no longer passes its own literal
+    # prompt. /api/ask uses build_system_prompt(..., rules_appendix=True), so the runner image must
+    # carry the verifier, its pinned key and fingerprints, the signed manifest and the rules file at
+    # the root that common/llm.py and verify-manifest.sh both resolve to ("/").
     src = (REPO / "src/runner/main.py").read_text()
     calls = re.findall(r"(?<!def )\b_llm_stream\((\w+),", src)
-    assert calls == ["system_prompt"], calls                 # the single caller passes its own prompt
-    assert re.search(r"^\s+system_prompt = \($", src, re.M)  # a literal, never empty
+    assert calls == ["system_prompt"], calls
+    assert "system_prompt = _ask_system_prompt(effective_model, ctx_str, now)" in src
+    assert "build_system_prompt(persona_key, rules_appendix=True)" in src
     assert "effective_system = system or build_system_prompt(persona_key)" in src
+    cf = (REPO / "Containerfile.runner").read_text()
+    for line in ("COPY scripts/verify-manifest.sh /scripts/verify-manifest.sh",
+                 "COPY security/trusted-signing-key.pub.asc /security/trusted-signing-key.pub.asc",
+                 "COPY security/signing.env /security/signing.env",
+                 "COPY MANIFEST.sha256 MANIFEST.sha256.asc /",
+                 "COPY src/common/glossary_rules.txt /src/common/glossary_rules.txt",
+                 "COPY src/common/ ./common/"):
+        assert line in cf, line
+    assert "install -y --no-install-recommends gnupg" in cf
+    # the layout assumption: /app/common/llm.py -> parents[2] == "/"
+    from pathlib import PurePosixPath
+    assert PurePosixPath("/app/common/llm.py").parents[2] == PurePosixPath("/")
 
 
 def test_build_models_compares_modelfiles_with_the_appendix_off():

@@ -30,6 +30,13 @@
 #   BACKUP_INCLUDE_CUI       [0]  1 = LADD table data goes in the off-box set too
 #   BACKUP_KEEP_DAILY/WEEKLY/MONTHLY  [30 / 12 / 12]
 #   BACKUP_CUI_LOCAL_KEEP    [7]  local-only LADD dumps kept
+#   BACKUP_WORK_DIR          [~/.local/state/ctdc-backup]  the bulky working files: the ~7 GB dump stage,
+#                            the local-only LADD dumps (cui-local/) and the Borg cache (borg-cache/).
+#                            2026-11-03 (operator): all backup data lives on the USB backup filesystem;
+#                            the NVMe keeps only the small ledgers and the lock.
+#   BACKUP_REQUIRE_MOUNT     ['']  a mount point that must be MOUNTED before anything is written; unset
+#                            = no check. When the USB drops, its mount point is an empty directory on the
+#                            NVMe and a backup would silently fill the root filesystem (2026-11-03).
 #
 # Usage: ctdi-backup.sh [--no-sync] [--dry-run]
 set -euo pipefail
@@ -48,6 +55,12 @@ RCLONE_CONFIG="$(setting BACKUP_RCLONE_CONFIG "${HOME}/.config/rclone/rclone.con
 INCLUDE_CUI="$(setting BACKUP_INCLUDE_CUI 0)"
 KEEP_D="$(setting BACKUP_KEEP_DAILY 30)"; KEEP_W="$(setting BACKUP_KEEP_WEEKLY 12)"; KEEP_M="$(setting BACKUP_KEEP_MONTHLY 12)"
 CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
+# 2026-11-03: Proton drops connections under parallel uploads (2003 "Upload file empty", closed
+# connections, 502/422); rclone's default 4 transfers turned a few GB into hours of whole-segment
+# retries, while the same upload one file at a time finished clean in ~20 min the same day.
+RCLONE_TRANSFERS="$(setting BACKUP_RCLONE_TRANSFERS 1)"
+WORK="$(setting BACKUP_WORK_DIR "$STATE")"
+REQUIRE_MOUNT="$(setting BACKUP_REQUIRE_MOUNT '')"
 # 2026-10-12 (operator): off-box sync caps from the measured uplink ramp -- soft 2.5 MB/s (rclone's own
 # limit), hard 3 MB/s (rate_guard.py lowers rclone live, then stops it, if total upload stays above it).
 BW_SOFT="$(setting BACKUP_BWLIMIT_SOFT_MB 2.5)"; BW_HARD="$(setting BACKUP_BWLIMIT_HARD_MB 3)"; BW_IFACE="$(setting BACKUP_IFACE wld0)"
@@ -74,8 +87,12 @@ die() { log "ERROR: $*"; python3 "$LEDGER_PY" append note --json "{\"error\": \"
 command -v borg >/dev/null || die "borg is not installed (dnf install borgbackup)"
 [[ -r "$PASSFILE" ]] || die "Borg passphrase file $PASSFILE is missing or unreadable"
 [[ "$(stat -c %a "$PASSFILE")" =~ ^[46]00$ ]] || die "$PASSFILE must be mode 0600 or 0400"
+if [[ -n "$REQUIRE_MOUNT" ]] && ! mountpoint -q "$REQUIRE_MOUNT"; then
+  die "backup storage $REQUIRE_MOUNT is not mounted; refusing to write to the disk underneath it"
+fi
 export BORG_PASSCOMMAND="cat ${PASSFILE}" BORG_REPO="$BACKUP_REPO" BORG_RELOCATED_REPO_ACCESS_IS_OK=no
-mkdir -p -m 0700 "$STATE" "$STATE/cui-local"
+mkdir -p -m 0700 "$STATE" "$WORK" "$WORK/cui-local" "$WORK/borg-cache"
+export BORG_CACHE_DIR="$WORK/borg-cache"
 exec 9>"${STATE}/.lock"; flock -n 9 || die "another backup is running"
 
 # 2026-10-12: a dry run exits HERE -- before any dump, ledger write or CUI rotation. It used to run both
@@ -89,26 +106,50 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/heavy_lock.sh"
 heavy_lock_acquire "nightly backup" 7200 || die "heavy-work turn still taken after 2 h (holder: $(heavy_lock_holder)); backup skipped"
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
-stage=$(mktemp -d "${STATE}/stage.${ts}.XXXX"); chmod 700 "$stage"
+stage=$(mktemp -d "${WORK}/stage.${ts}.XXXX"); chmod 700 "$stage"
 # 2026-10-11: plain removal. shred cannot overwrite in place on btrfs (copy-on-write), so it only cost
 # ~15 min per run on ~7 GB of dumps; the stage dir is 0700 and its contents are in the encrypted archive.
-cleanup() { rm -rf "$stage"; }
+# 2026-11-03 (operator): a progress line every BACKUP_HEARTBEAT_MIN minutes, so a long dump, archive
+# or sync never looks hung -- phase, elapsed, the stage's size on disk, upload rate on the uplink.
+# Sizes and rates only; no file names, no values. BACKUP_HEARTBEAT_MIN=0 turns it off.
+HEARTBEAT_MIN="$(setting BACKUP_HEARTBEAT_MIN 5)"
+phase_file="$stage/.phase"; t0=$(date +%s)
+phase() { printf '%s' "$1" > "$phase_file"; }
+heartbeat() {
+  local a b
+  while sleep "$(( HEARTBEAT_MIN * 60 ))"; do
+    a=$(awk -v i="${BW_IFACE}:" '$1 == i {print $10}' /proc/net/dev); sleep 10
+    b=$(awk -v i="${BW_IFACE}:" '$1 == i {print $10}' /proc/net/dev)
+    log "progress: $(cat "$phase_file" 2>/dev/null || echo '?'); $(( ($(date +%s) - t0) / 60 )) min in; stage $(du -sh "$stage" 2>/dev/null | cut -f1); upload $(( (${b:-0} - ${a:-0}) / 10240 )) KiB/s"
+  done
+}
+hb_pid=""
+if (( HEARTBEAT_MIN > 0 )); then heartbeat & hb_pid=$!; fi
+cleanup() { [[ -n "$hb_pid" ]] && kill "$hb_pid" 2>/dev/null; rm -rf "$stage"; }
 trap cleanup EXIT
 
-pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell)
-  local c="$1" out="$2" extra="${3:-}"
-  podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z 6 ${extra}" > "$out" </dev/null
+# 2026-11-03 (operator: dedupe in place, uncompressed): the dumps that go INTO Borg are written
+# uncompressed (-Z 0, DUMP_Z). A pg_dump -Z 6 stream changes almost entirely every night, so Borg could
+# not deduplicate it (2-5 GB a night, docs/BACKUP.md); uncompressed, Borg's content-defined chunks match
+# the unchanged tables and Borg's own zstd compresses what is new. The local-only LADD dump never enters
+# Borg, so it stays compressed (-Z 6). The stage lives on the USB (BACKUP_WORK_DIR).
+DUMP_Z="$(setting BACKUP_DUMP_COMPRESS 0)"
+pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell), [level]
+  local c="$1" out="$2" extra="${3:-}" z="${4:-$DUMP_Z}"
+  podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z ${z} ${extra}" > "$out" </dev/null
 }
 
+phase "1/4 dump: dispatch Postgres"
 log "dump: dispatch Postgres (LADD data $( [[ "$INCLUDE_CUI" == 1 ]] && echo included || echo 'excluded -> local-only'))"
 if [[ "$INCLUDE_CUI" == 1 ]]; then pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump"
 else pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump" "$(printf -- '--exclude-table-data=%s ' "${LADD_TABLES[@]}")"; fi
+phase "1/4 dump: Nextcloud"
 log "dump: Nextcloud database"
 pg_dump_in "$NEXTCLOUD_PG" "$stage/nextcloud.pgdump"
 
 # CUI "#" stamp: local-only LADD dump + its hash in the ledger
-cui_file="$STATE/cui-local/ladd-${ts}.pgdump"
-pg_dump_in "$DISPATCH_PG" "$cui_file" "--data-only $(printf -- '--table=%s ' "${LADD_TABLES[@]}")"
+cui_file="$WORK/cui-local/ladd-${ts}.pgdump"
+pg_dump_in "$DISPATCH_PG" "$cui_file" "--data-only $(printf -- '--table=%s ' "${LADD_TABLES[@]}")" 6
 chmod 600 "$cui_file"
 count_sql=$(printf "SELECT json_build_object(%s)" "$(printf "'%s', (SELECT count(*) FROM %s)," $(for t in "${LADD_TABLES[@]}"; do echo "$t $t"; done) | sed 's/,$//')")
 ladd_rows=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"${count_sql}\"" </dev/null)
@@ -116,7 +157,7 @@ cui_meta=$(python3 "$LEDGER_PY" file "$cui_file")
 # head of the in-database reference-import ledger (pg_schema/0074): pins WHICH LADD/registry source files are loaded
 import_head=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"SELECT json_build_object('seq', seq, 'entry_hash', entry_hash) FROM reference_import_ledger ORDER BY seq DESC LIMIT 1\"" </dev/null 2>/dev/null || true)
 python3 "$LEDGER_PY" append cui-stamp --json "{\"stamp\": \"#\", \"rows\": ${ladd_rows:-null}, \"off_box\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"local_dump\": ${cui_meta}, \"import_ledger_head\": ${import_head:-null}}" >/dev/null
-ls -1t "$STATE/cui-local"/ladd-*.pgdump 2>/dev/null | tail -n +$((CUI_KEEP + 1)) | while read -r old; do shred -fu "$old"; done
+ls -1t "$WORK/cui-local"/ladd-*.pgdump 2>/dev/null | tail -n +$((CUI_KEEP + 1)) | while read -r old; do shred -fu "$old"; done
 
 dumps_meta=$(python3 "$LEDGER_PY" file "$stage/dispatch.pgdump" "$stage/nextcloud.pgdump")
 cp "${BACKUP_LEDGER:-$STATE/ledger.jsonl}" "$stage/ledger.jsonl"
@@ -179,6 +220,7 @@ if [[ ! -d "$BACKUP_REPO" ]]; then
 fi
 
 archive="ctdi-${ts}"
+phase "2/4 borg create (archive on ${BACKUP_REPO})"
 log "borg create ::${archive}"
 # podman unshare: the Nextcloud volume belongs to the container's mapped uids
 # Borg exit codes: 0 ok, 1 WARNING (archive written; e.g. an unreadable file), >=2 error.
@@ -200,6 +242,7 @@ print(json.dumps({"id": a.get("id"), "name": a.get("name"), "original_size": a.g
                   "deduplicated_size": a.get("stats", {}).get("deduplicated_size"), "nfiles": a.get("stats", {}).get("nfiles")}))
 PY
 )
+phase "3/4 prune + compact"
 podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" \
   borg prune --keep-daily "$KEEP_D" --keep-weekly "$KEEP_W" --keep-monthly "$KEEP_M" --glob-archives 'ctdi-*'
 podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" borg compact
@@ -211,6 +254,7 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
   for _ in $(seq 1 90); do systemctl --user is-active -q corporatetraveldc-proton-seed.service || break; log "seed upload still running; waiting"; sleep 60; done
   systemctl --user is-active -q corporatetraveldc-proton-seed.service && die "seed upload still running after 90 min; sync skipped"
+  phase "4/4 sync to ${BACKUP_TARGET}"
   log "sync repository -> ${BACKUP_TARGET} (primary soft ${BW_SOFT} / hard ${BW_HARD} MB/s on ${BW_IFACE}; metered soft ${BW_M_SOFT} / hard ${BW_M_HARD} MB/s)"
   # 2026-10-14: a sync the rate guard stops for a STALL (no bytes moved for 20 min) is retried
   # once from scratch -- that also covers Proton's transient "Upload file empty" (2003).
@@ -224,6 +268,7 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
     rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
     podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
       --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
+      --transfers "$RCLONE_TRANSFERS" --checkers 2 \
       --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
     rpid=$!
     set +e

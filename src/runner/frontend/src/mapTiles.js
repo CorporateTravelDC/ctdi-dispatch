@@ -9,7 +9,11 @@
 //
 // Also: the {s}.tile.openstreetmap.org subdomains are deprecated; tile.openstreetmap.org is the
 // one host. Attribution is required by the policy and stays on every layer.
-export const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+// 2026-11-03 (operator: hard fix): tiles come from the runner's own origin. The runner caches OSM
+// server-side with an identifying User-Agent (runner/main.py osm_tile), so a browser that trims or
+// drops cross-site referrers (Vanadium, Brave Shields) still gets real tiles, and the viewer's browser
+// never contacts OSM. The referrer policy below is kept for any third-party layer.
+export const OSM_TILE_URL = '/tiles/osm/{z}/{x}/{y}.png'
 export const OSM_ATTRIBUTION = '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
 
 // Options every third-party tile layer gets (Leaflet >= 1.9 sets referrerpolicy on each tile <img>).

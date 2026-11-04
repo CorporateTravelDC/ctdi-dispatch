@@ -1,0 +1,10 @@
+[Unit]
+Description=Bilateral handoff mirror every 15 min, off the quarter-hour grid
+
+[Timer]
+OnCalendar=*:08/15
+Persistent=true
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

@@ -40,6 +40,20 @@ a request with no Referer with a blocked-placeholder tile, and the public
 runner domain sends `Referrer-Policy: no-referrer` from nginx (kept for
 everything else). OSM sees the site origin only, never a path or query.
 
+~~That was not enough:~~ (2026-11-03, operator: hard fix) browsers that trim or drop cross-site
+referrers (Vanadium on GrapheneOS, Brave Shields) still got the blocked tile. Tiles now come from
+the runner's own origin, `/tiles/osm/{z}/{x}/{y}.png` (`runner/main.py` `osm_tile`): the runner
+fetches a miss from `tile.openstreetmap.org` with an identifying User-Agent (OSM's rule for
+server-side use, contact `developer@csexecutiveservices.com`, no Referer needed), at most 2
+upstream connections, and caches it on disk for the upstream max-age (at least a day; served stale
+up to 7 days if OSM errors; `RUNNER_TILE_CACHE_DIR`, `RUNNER_TILE_CACHE_MAX_FILES` = 20000). Only
+valid tile coordinates are ever fetched. The viewer's browser no longer contacts OSM at all.
+Tests: `tests/runner/test_osm_tile_cache.py`.
+
+tar1090 on the receiver (`:8080`) defaults to OpenFreeMap Positron
+(`TAR1090_CONFIGJS_APPEND` in the ultrafeeder quadlet): no key, no Referer rule, commercial use
+allowed. A layer a viewer already picked stays remembered in that browser.
+
 ## 2. Sources and how they are told apart (aircraft)
 
 The runner merges two sources in `/api/map/aircraft` (`src/runner/main.py`,

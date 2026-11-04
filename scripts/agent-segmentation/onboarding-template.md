@@ -76,8 +76,19 @@ this file.
     from your own clone; tell the operator the name and the sha256 it prints
     -- they apply it with `scripts/handoff-apply.sh`, which refuses any byte
     that does not match that hash.
-    - `/srv/ctdc-handoff/research-intake/` -- the operator's research drops;
-      treat it as a WATCH folder (poll it; nothing pushes a notification).
+    - `/srv/ctdc-handoff/research-intake/` -- the operator's research drops
+      and the one BILATERAL folder (2026-11-03); treat it as a WATCH folder
+      (poll it; nothing pushes a notification). `research-intake/from-vault/`
+      holds the cloud agents' vault contributions, mirrored in, with a
+      `CURRENT.md` pointer.
+    - Handoff mirror (standing rule, 2026-11-03): text drafts (.md/.txt) you
+      drop in `<name>-from-{{NAME}}/` or `research-intake/` are mirrored by
+      `corporatetraveldc-handoff-mirror` every 15 min into the vault at
+      `01-Sources/personal-notes/Series/handoff/from-box/<date>/` (scrub-gated,
+      create-only, `CURRENT.md` names the newest folder), so a cloud agent
+      reads them through the research route. Patches and binaries stay on the
+      box, listed by sha256. A cloud agent never assumes /srv is reachable; it
+      reads the mirror, and asks on the board if something is missing.
     - `/srv/ctdc-handoff/status/status.json` -- what you may see of the
       operator's units, timers, containers and journal (states and counts
       only), refreshed every 5 minutes.

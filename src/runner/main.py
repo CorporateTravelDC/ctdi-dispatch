@@ -91,10 +91,10 @@ RUNNER_ENRICHED_TOKEN = os.getenv("RUNNER_ENRICHED_TOKEN", "")
 # These local inference endpoints are also exposed as portable MCP tools.
 # MCP server: https://github.com/CorporateTravelDC/corporatetravel-dispatch-mcp
 # Use with Claude Code, Cline, Cursor, Zed, Windsurf, or Open WebUI via mcpo.
-# Resolution order: local data → Open WebUI proxy → Ollama direct fallback.
-# corporatetraveldc-pi5-chat is a Modelfile wrapper on phi3:mini (Phase 4
-# rebuild 2026-08-15, persona + chat layer baked into its SYSTEM).
-# llama3.2:3b removed. Operator may override per-request via "/model <name> <query>".
+# Resolution order: local data, then the one llama.cpp service (common/llama_pool.py).
+# The default "corporatetraveldc-pi5-chat" resolves to the signed "chat" persona
+# (common/personas.py). Operator may override per-request via "/model <name> <query>";
+# the name must map to a persona (persona_key_for), anything else gets the local answer.
 LLAMA_BASE_URL     = os.getenv("LLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "")  # 2026-10-05 rename; the llama.cpp server, e.g. http://100.x.x.x:8093
 OPENWEBUI_URL      = os.getenv("OPENWEBUI_URL",     "")              # e.g. http://127.0.0.1:3000
 OPENWEBUI_API_KEY  = os.getenv("OPENWEBUI_API_KEY", "")              # sk-... bearer token
@@ -2526,6 +2526,21 @@ def _ask_allowed(request: Request) -> bool:
     return _is_trusted(request)
 
 
+def _ask_system_prompt(model: str | None, ctx_str: str, now_utc: str) -> str:
+    """System message for /api/ask: signed persona + signed glossary rules + live data."""
+    from common.personas import build_system_prompt, persona_key_for
+    persona_key = persona_key_for(model or OLLAMA_CHAT_MODEL) or "chat"
+    return (
+        build_system_prompt(persona_key, rules_appendix=True)
+        + f"\n\nCURRENT DISPATCH STATE ({now_utc}), from the local dispatch spine -- the only "
+        "authority; do not speculate beyond it:\n"
+        + (ctx_str or "No data available from the dispatch spine.")
+        + "\n\nASK RULES: answer in plain text, no markdown, brief and tactical unless asked for "
+        "more. State a time in UTC with ET beside it. If the data above does not hold the answer, "
+        "say so plainly instead of guessing. For HEMS go/no-go, cite the CPS score and narrative."
+    )
+
+
 @app.post("/api/ask")
 async def ask_dispatch(req: AskRequest, request: Request):
     """
@@ -2535,8 +2550,8 @@ async def ask_dispatch(req: AskRequest, request: Request):
     2. Run local resolver: if the query matches a known topic (CPS, weather,
        TFRs, Amtrak, NOTAMs, alerts, feeds, brief), build a structured
        answer directly from the data — zero LLM, zero external dependency.
-    3. If an LLM is configured (Ollama preferred, Anthropic fallback),
-       synthesize a natural-language response using the full data as context.
+    3. The local llama.cpp service (common/llama_pool.py) synthesizes a plain-text answer
+       with the signed persona + glossary rules and the data as context (_ask_system_prompt).
     4. If no LLM is available, stream the local structured answer directly.
 
     The LLM is a synthesis layer, not a gatekeeper. Every query returns
@@ -2580,23 +2595,12 @@ async def ask_dispatch(req: AskRequest, request: Request):
         # 2026-10-18: UTC, labelled (host and containers are UTC; never a bare time).
         now     = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
-        system_prompt = (
-            "You are the dispatch AI assistant for CS Executive Services, LLC — a boutique executive services firm: "
-            "automotive detailing, brand strategy, executive chauffeur transportation, and IT security. "
-            "Operator: the operator (N0CALL Extra, ARES NoVA District XX, Skywarn LXXXX).\n\n"
-            "All live operational data below comes from a local dispatch spine running on-premises. "
-            "It is the authoritative source. Do not speculate beyond it.\n\n"
-            f"CURRENT DISPATCH STATE ({now}):\n"
-            f"{ctx_str if ctx_str else 'No data available from dispatch spine.'}\n\n"
-            "OPERATOR CONTEXT:\n"
-            "- Location: [operator county], [state] / KDCA (15 min)\n"
-            "- Airspace: DC FRZ/SFRA, P-56A/B, concentric rings 50/100/150/250nm\n"
-            "- Ground ops: [chauffeur partner] + Uber Black\n"
-            "- Emergency: ARES NoVA, CERT County+County, Skywarn LWX (LXXXX), GMRS WRXXXXX\n"
-            "- Dispatch spine: Pi 5, Tailscale (example.ts.net)\n\n"
-            "Respond in plain text. No markdown. Brief and tactical unless elaboration requested. "
-            "For HEMS go/no-go, always cite CPS score and narrative."
-        )
+        # 2026-11-03 (Ask rebuild P0): the signed persona for the model in use (default "chat")
+        # plus the signed glossary rules block, ALWAYS on for Ask -- the old inline prompt
+        # replaced both, so none of the logic rules (SWIM-only tails/OOOI, UTC with ET, no
+        # LADD identifiers, ETA only on request) reached Ask answers. The live data and a
+        # short Ask appendix follow; nothing operator-identifying is restated here.
+        system_prompt = _ask_system_prompt(effective_model, ctx_str, now)
 
         # Accumulate assistant text for DB persistence.
         assistant_parts: list[str] = []
@@ -3781,6 +3785,93 @@ class StaticCacheMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(StaticCacheMiddleware)
+
+# ── Map tiles: same-origin OSM cache (2026-11-03, operator: hard fix) ───────────────────────────
+# Browsers that trim or drop cross-site referrers (Vanadium, Brave Shields) got OSM's "Access
+# blocked" placeholder: OSM answers a browser tile request without a Referer with that image. The
+# runner now serves every basemap tile from its own origin, /tiles/osm/{z}/{x}/{y}.png, and fetches
+# misses itself with an identifying User-Agent (OSM's policy for server-side use; no Referer needed),
+# at most 2 upstream connections, cached on disk for the upstream max-age (>= 1 day, served stale
+# up to 7 days if OSM errors). The viewer's browser never contacts OSM, so OSM never sees what is
+# viewed or from where. Tile coordinates are validated; nothing else is ever fetched.
+from fastapi.responses import Response
+_TILE_CACHE_DIR = os.getenv("RUNNER_TILE_CACHE_DIR", "/tmp/ctdc-tile-cache")
+_TILE_UPSTREAM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+_TILE_UA = os.getenv("RUNNER_TILE_USER_AGENT",
+                     "CTDI-dispatch-runner/1.0 (tile cache; contact developer@csexecutiveservices.com)")
+_TILE_MAX_FILES = int(os.getenv("RUNNER_TILE_CACHE_MAX_FILES", "20000"))
+_TILE_MIN_AGE_S = 86400
+_TILE_STALE_S = 7 * 86400
+_tile_sem = asyncio.Semaphore(2)
+_tile_writes = 0
+
+
+def _tile_path(z: int, x: int, y: int) -> str:
+    return os.path.join(_TILE_CACHE_DIR, str(z), str(x), f"{y}.png")
+
+
+def _tile_prune() -> None:
+    """Keep the cache under _TILE_MAX_FILES by deleting the least recently written tiles."""
+    files = []
+    for root, _dirs, names in os.walk(_TILE_CACHE_DIR):
+        for n in names:
+            fp = os.path.join(root, n)
+            try:
+                files.append((os.path.getmtime(fp), fp))
+            except OSError:
+                pass
+    if len(files) <= _TILE_MAX_FILES:
+        return
+    files.sort()
+    for _m, fp in files[: len(files) - _TILE_MAX_FILES]:
+        try:
+            os.remove(fp)
+        except OSError:
+            pass
+
+
+def _tile_max_age(cache_control: str) -> int:
+    m = re.search(r"max-age=(\d+)", cache_control or "")
+    return max(_TILE_MIN_AGE_S, int(m.group(1))) if m else _TILE_MIN_AGE_S
+
+
+@app.get("/tiles/osm/{z}/{x}/{y}.png", include_in_schema=False)
+async def osm_tile(z: int, x: int, y: int):
+    global _tile_writes
+    if not (0 <= z <= 19 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(status_code=404, detail="Not Found")
+    fp = _tile_path(z, x, y)
+    meta = fp + ".exp"
+    now = time.time()
+    try:
+        fresh_until = float(open(meta).read().strip())
+    except (OSError, ValueError):
+        fresh_until = 0.0
+    if os.path.isfile(fp) and now < fresh_until:
+        return FileResponse(fp, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    async with _tile_sem:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), follow_redirects=False) as c:
+                r = await c.get(_TILE_UPSTREAM.format(z=z, x=x, y=y), headers={"User-Agent": _TILE_UA})
+        except httpx.HTTPError:
+            r = None
+    if r is not None and r.status_code == 200 and r.headers.get("content-type", "").startswith("image/png"):
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        tmp = fp + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(r.content)
+        os.replace(tmp, fp)
+        with open(meta + ".tmp", "w") as f:
+            f.write(str(now + _tile_max_age(r.headers.get("cache-control", ""))))
+        os.replace(meta + ".tmp", meta)
+        _tile_writes += 1
+        if _tile_writes % 500 == 0:
+            await asyncio.to_thread(_tile_prune)
+        return Response(content=r.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    if os.path.isfile(fp) and now < fresh_until + _TILE_STALE_S:
+        return FileResponse(fp, media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+    raise HTTPException(status_code=502, detail="tile unavailable")
+
 
 # SPA catch-all: serve index.html for any path that isn't an API route or
 # an actual static file.  This enables direct-linking and page-refresh on

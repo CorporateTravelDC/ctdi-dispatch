@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
-// Default model — must match OLLAMA_CHAT_MODEL in dispatch.env
-const DEFAULT_MODEL = 'llama3.2:3b'
+// Default persona model — matches OLLAMA_CHAT_MODEL's default in runner/main.py; it resolves to the
+// signed "chat" persona on the one llama.cpp service (2026-11-03: the Ollama-era names are retired)
+const DEFAULT_MODEL = 'corporatetraveldc-pi5-chat'
 
-// Known models for the quick-select menu
-const KNOWN_MODELS = ['llama3.2:3b', 'mistral', 'llama3.1:8b']
+// Quick-select menu: persona models the server can resolve (common/personas.py persona_key_for).
+// chat = default; route-impact = the short hot-lane persona; ops-brief = a long-lane report persona
+// (slower: the whole answer arrives at once).
+const KNOWN_MODELS = ['corporatetraveldc-pi5-chat', 'corporatetraveldc-pi5-route-impact', 'corporatetraveldc-pi5-ops-brief']
 
 function Message({ msg }) {
   return (
@@ -282,8 +285,8 @@ export default function DispatchDrawer({ liveState, open, setOpen }) {
         <div className="dd-log">
           {history.length === 0 && !streaming && (
             <div className="dd-empty">
-              Ask anything — weather, TFRs, HEMS go/no-go, flight status,
-              Amtrak at WAS, route impact, NOTAMs, ADS-B.
+              Ask about weather, TFRs, NOTAMs, HEMS go/no-go (CPS), alerts,
+              Amtrak at WAS, feed health or the daily brief.
               <br />
               <span className="dd-empty-hint">
                 Type /model &lt;name&gt; to override the LLM for this session.

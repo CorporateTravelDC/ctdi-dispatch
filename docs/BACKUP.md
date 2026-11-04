@@ -4,6 +4,40 @@
 
 **Current state, 2026-11-02 (pre-pentest docs parity):** the nightly `corporatetraveldc-backup.service` run **failed** at 03:42Z (status snapshot; the cause is in the operator's journal and was not visible to the audit). A backlog relay moves the Borg repository to the USB backup volume (`/srv/ctdc-backup-usb/borg`, `BACKUP_REPO`); re-check after it and after the next nightly run. The 2026-10-15 description below is kept for the record.
 
+**Storage, 2026-11-03 (operator: all backup data on the USB):** the Borg repository is
+`/srv/ctdc-backup-usb/borg` (`BACKUP_REPO`), and the bulky working files follow it through
+`BACKUP_WORK_DIR=/srv/ctdc-backup-usb/work`: the dump stage (~7 GB a run), the local-only LADD dumps
+(`work/cui-local/`), the Borg cache (`work/borg-cache/`) and the restore-test scratch.
+`BACKUP_REQUIRE_MOUNT=/srv/ctdc-backup-usb` makes a run stop before writing anything when the stick
+is not mounted (an unmounted mount point is an empty directory on the NVMe; the first USB run on
+2026-11-03 filled the NVMe from the old stage path). Only the small hash-chained ledgers and the lock
+stay in `~/.local/state/ctdc-backup`. Paths in the 2026-10-15 description below are the old defaults.
+
+**USB layout, 2026-11-03 (operator):** the whole SanDisk stick is one btrfs filesystem
+(label `ctdc-backup`, the original partition 1 plus the former swap and storage partitions added
+with `btrfs device add`, no data moved). It is mounted twice: the top level at
+`/srv/ctdc-backup-usb` (Borg repository, `work/`) and the `storage` subvolume at `/srv/ctdc-storage`.
+There is no swap on the stick any more (flash wear, and a dropped stick left a dead swap entry);
+swap is zram plus the NVMe overflow file. Both mounts are `nofail`: with the stick absent the
+backup stops at the mount guard and nothing else depends on it.
+
+**Progress lines, 2026-11-03 (operator):** every `BACKUP_HEARTBEAT_MIN` minutes (default 5, 0 = off)
+the run logs `progress: <phase>; <N> min in; stage <size>; upload <KiB/s>` -- phases `1/4 dump`,
+`2/4 borg create`, `3/4 prune + compact`, `4/4 sync`. Sizes and rates only. Watch a run with
+`journalctl --user -fu corporatetraveldc-backup.service`.
+
+**One upload at a time, 2026-11-03:** the Proton sync runs with `--transfers 1 --checkers 2`
+(`BACKUP_RCLONE_TRANSFERS`, default 1). With rclone's default of 4, Proton dropped connections
+mid-upload (2003 "Upload file empty", closed connections, 502/422) and each failure restarted a whole
+Borg segment; the same upload one file at a time finished cleanly the same day.
+
+**Uncompressed dumps, 2026-11-03 (operator):** the dispatch and Nextcloud dumps that go into Borg are
+written with `pg_dump -Fc -Z 0` (`BACKUP_DUMP_COMPRESS`, default 0) so Borg deduplicates them in
+place and compresses with its own zstd; the earlier `-Z 6` (from the first backup commit, 2026-10-09,
+no recorded reason) made every night's dump almost entirely new. The local-only LADD dump never enters
+Borg and stays at `-Z 6`. Expect a larger stage (on the USB) and a much smaller nightly delta; measure
+it from the ledger's `deduplicated_size` after the first two nights.
+
 **Current state (re-checked 2026-10-15 ~01:20Z against main 1491bf5a and the live box).** Nightly Borg archives are
 written on the box (`~/.local/state/ctdc-backup/borg`, on the same NVMe btrfs volume as the data) and synced to
 Proton Drive (`proton:ctdi-backup`; last good syncs 2026-10-13 05:30Z and 2026-10-14 06:41Z, the latter after the

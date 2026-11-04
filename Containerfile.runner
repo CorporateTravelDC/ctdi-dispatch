@@ -24,6 +24,17 @@ LABEL org.opencontainers.image.description="Corporate Travel DC Dispatch -- runn
 LABEL service="runner"
 
 WORKDIR /app
+
+# 2026-11-03 (Ask rebuild P0, operator option 1): the runner now verifies the signed glossary rules
+# block before /api/ask uses it, the same way the poller image does. gnupg is needed at runtime by
+# scripts/verify-manifest.sh. Same dated Debian snapshot pattern as Containerfile.poller; refresh with
+# scripts/build/pin-base-images.py.
+ARG APT_SNAPSHOT=20261030T010607Z
+RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
+ && apt-get update -qq \
+ && apt-get install -y --no-install-recommends gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY src/runner/requirements.txt .
 # Python: install ONLY the hash-locked src/runner/requirements.txt (scripts/build/lock-python.py);
 # a file whose hash is not in the lock fails the build. pip itself is the
@@ -40,6 +51,16 @@ COPY src/shared/ ./shared/
 # until runner was rebuilt for the first time since that change:
 # `ModuleNotFoundError: No module named 'common'` at container start.
 COPY src/common/ ./common/
+# 2026-11-03: the verification root. common/llm.py resolves the repo root as parents[2] of
+# /app/common/llm.py, i.e. "/", and verify-manifest.sh resolves its own as <script dir>/.., also "/".
+# So the verifier, its pinned key and fingerprints, the signed manifest and the one file the runner
+# verifies sit at their repo-relative paths under /. Only public material: GPG fingerprints and the
+# public key, no private key or passphrase (same as Containerfile.poller).
+COPY scripts/verify-manifest.sh /scripts/verify-manifest.sh
+COPY security/trusted-signing-key.pub.asc /security/trusted-signing-key.pub.asc
+COPY security/signing.env /security/signing.env
+COPY MANIFEST.sha256 MANIFEST.sha256.asc /
+COPY src/common/glossary_rules.txt /src/common/glossary_rules.txt
 COPY --from=frontend-builder /static ./static
 
 ENV PYTHONDONTWRITEBYTECODE=1

@@ -50,6 +50,10 @@ Environment=READSB_NET_ENABLE=true
 Environment=READSB_NET_ONLY=false
 Environment=TAR1090_DEFAULTRANGE=80
 Environment=TAR1090_PAGETITLE=corporatetraveldc-kdca
+# 2026-11-03 (operator: hard fix): default basemap OpenFreeMap (no key, no Referer rule, commercial use
+# allowed) instead of OSM raster, which answers referrer-trimming browsers (Vanadium) with a blocked tile.
+# Appended to tar1090's config.js; a layer the viewer picked before stays remembered in that browser.
+Environment="TAR1090_CONFIGJS_APPEND=MapType_tar1090 = 'OpenFreeMapPositron';"
 # 2026-08-03: this line had drifted from the live deployed copy (which was
 # re-enabled 2026-07-28 without a matching commit) -- resynced here. Keeps
 # a literal FEEDER_ID rather than untested ${UUID} systemd expansion on an

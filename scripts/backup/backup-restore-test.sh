@@ -21,7 +21,8 @@ log() { printf '[%s] [restore-test] %s\n' "$(date -u +%FT%TZ)" "$*"; }
 fail() { log "FAIL: $*"; python3 "$LEDGER_PY" append restore-test --json "{\"ok\": false, \"reason\": \"$(echo "$*" | tr -d '"\\' | head -c 200)\"}" >/dev/null 2>&1 || true; exit 1; }
 archive=$(podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$REPO" borg list --short --last 1 --glob-archives 'ctdi-*') || fail "cannot list archives"
 [[ -n "$archive" ]] || fail "no archives yet"
-t=$(mktemp -d "$STATE/restore.XXXX"); chmod 700 "$t"; trap 'rm -rf "$t"' EXIT   # 2026-10-11: rm, not shred (btrfs is copy-on-write; shred only cost time)
+WORK="${BACKUP_WORK_DIR:-$(read_env BACKUP_WORK_DIR)}"; WORK="${WORK:-$STATE}"   # 2026-11-03: scratch on the USB
+t=$(mktemp -d "$WORK/restore.XXXX"); chmod 700 "$t"; trap 'rm -rf "$t"' EXIT   # 2026-10-11: rm, not shred (btrfs is copy-on-write; shred only cost time)
 log "extracting dumps from ::$archive"
 ( cd "$t" && podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$REPO" borg extract "::$archive" --pattern '+ sh:**/*.pgdump' --pattern '+ sh:**/ledger.jsonl' --pattern '- *' ) || fail "extract failed"
 want=$(python3 "$LEDGER_PY" last backup)

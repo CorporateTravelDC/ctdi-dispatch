@@ -1,0 +1,14 @@
+[Unit]
+Description=Bilateral handoff mirror: /srv/ctdc-handoff text drafts -> vault Series/handoff/from-box, cloud-agent contributions -> research-intake/from-vault (2026-11-03)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+
+[Service]
+Type=oneshot
+Slice=production.slice
+Nice=15
+MemoryMax=512M
+MemorySwapMax=0
+TimeoutStartSec=600
+WorkingDirectory=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+# light job; skips itself at load1 >= 24 (HANDOFF_MIRROR_LOAD_MAX), so no wait-load hold here
+ExecStart=/opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/with-dispatch-env.sh python3 -B /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/handoff-mirror.py
