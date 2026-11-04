@@ -17,7 +17,14 @@ import json
 import time
 from pathlib import Path
 
-KINDS = ("ladd-import", "faa-registry", "baseline")   # baseline: pre-ledger state, counts only
+# baseline: pre-ledger state, counts only.
+# ladd-source-deleted (2026-11-04, operator): the CUI source files' own deletion, as its own chained
+# entry -- each deleted file's name, size and sha256 (the same values the ladd-import entry recorded),
+# confirmation that the path no longer exists, and the seq of the import it belonged to. Proves the
+# private data left the box, not just that an import ran. Never a value from the files.
+# ladd-supersede (2026-11-04): an earlier import run is replaced by a later one -- the earlier entries
+# stay in the chain; this entry names them, the run that replaces them and why. Nothing is ever deleted.
+KINDS = ("ladd-import", "faa-registry", "baseline", "ladd-source-deleted", "ladd-supersede")
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS reference_import_ledger (

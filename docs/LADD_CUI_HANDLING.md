@@ -20,6 +20,28 @@ list. All are marked CUI SP-PRVCY.
 
 ## Handling rules
 
+**Procedure since 2026-11-04 (operator): `scripts/ladd-import.sh`, crypto-erase intake.** The steps
+below it are the earlier procedure, kept for the record.
+- Copy the FAA files straight into `/run/user/<uid>/ladd-intake/` (tmpfs, RAM), never into the home
+  folder. The script encrypts them at once with a fresh per-run AES-256 key that exists only in its
+  process, and removes the plaintext.
+- The decrypted files are streamed into the poller container's `/dev/shm` (tmpfs). ~~Copies in the
+  container's /tmp sit on tmpfs~~ (corrected 2026-11-04: the poller quadlet mounts no tmpfs on /tmp; the
+  container's /tmp is overlay storage on the NVMe, so earlier runs wrote their copies to disk).
+- Exhaustive check, not a sample: the table must equal every filter identifier minus every recorded or
+  supplied removal (set equality), every entry is queried through `db.faa_is_ladd()`, and every removal
+  must report not LADD. Counts only.
+- Crypto-erase (NIST SP 800-88 Rev.1 cryptographic erase): the key is destroyed and the ciphertext and
+  container copies removed; ledger kind `ladd-source-deleted` records each file's name, size, sha256,
+  the method and the import seq. Multi-pass overwriting is not used: on flash behind btrfs copy-on-write
+  it cannot reach the old cells (NIST SP 800-88 Rev.1). For files that ever touched disk, `fstrim -av`
+  asks the NVMe to discard the freed blocks (best effort; the USB stick does not support discard).
+- A run done the old way is replaced, never removed: `--supersede SEQ,SEQ --reason TEXT` adds a
+  `ladd-supersede` entry naming the earlier seqs and the run that replaces them; they stay in the chain.
+- Still open (tracked): keyed-hash (HMAC) storage so the table holds no readable identifier, encrypted
+  local LADD dumps (today they are compressed `pg_dump` files, recoverable, mode 0600, on-box only), an
+  external anchor for the ledger head, and a human co-signature on delegated runs.
+
 - **Never commit these files, or any value from them, to any repo.** They
   must never reach a public mirror. `scripts/scrub-public-tree.py` treats
   them like any other real identifier.
@@ -34,7 +56,12 @@ list. All are marked CUI SP-PRVCY.
      plus recorded removals, and query them through the real consumer path
      (`db.faa_is_ladd()` / the registry lookups), not just a row count. Every sampled
      entry must report LADD; every removal must not. Report counts only, never identifiers.
-  3. Only then `shred -u` the source files. The database is the system of record, not
+  3. Only then `shred -u` the source files, and record the deletion in the ledger (2026-11-04):
+     a `ladd-source-deleted` entry, chained after the import, carries each deleted file's name, size
+     and sha256 (the same values the `ladd-import` entry recorded), `absent_after_delete: true` and
+     the import's seq. The ledger then proves the private data left the box, not only that an import
+     ran. (Recorded by `ladd-import.relay`; the first entry back-filled the 2026-11-04 import.)
+     Earlier text: Only then `shred -u` the source files. The database is the system of record, not
      the intake files. (corrected 2026-10-15: this host's root filesystem is
      btrfs, which is copy-on-write, so `shred` cannot overwrite the old blocks in
      place and in practice works as a delete. ~~`scripts/backup/ctdi-backup.sh:81-82`~~

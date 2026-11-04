@@ -127,3 +127,26 @@ def test_stamp_only_proves_identity_and_changes_nothing(tmp_path, capsys):
     _run_import("--stamp-only", other, "--remove", rem)                # a different week's file
     out = capsys.readouterr().out
     assert "+1 / -1" in out and "identical to loaded: no" in out
+
+
+def test_source_deletion_is_its_own_chained_entry():
+    # 2026-11-04: the CUI source files' deletion is recorded as its own entry, chained after the
+    # import, carrying the same name/size/sha256 the import recorded -- never a value from the files.
+    src = [import_ledger.bytes_meta("industry.txt", b"synthetic")]
+    imp = import_ledger.stamp("ladd-import", src, {"faa_ladd_aircraft_after": 1})
+    gone = import_ledger.stamp("ladd-source-deleted", src,
+                               {"files_deleted": 1, "absent_after_delete": True, "import_seq": imp["seq"]})
+    assert gone["prev_hash"] == imp["entry_hash"] and gone["body"]["sources"] == src
+    assert import_ledger.verify() == (True, gone["entry_hash"])
+    with pytest.raises(ValueError):
+        import_ledger.stamp("ladd-source-shredded-maybe", [], {})
+
+
+def test_a_superseded_run_stays_in_the_chain():
+    old = import_ledger.stamp("ladd-import", [], {"faa_ladd_aircraft_after": 5})
+    new = import_ledger.stamp("ladd-import", [], {"faa_ladd_aircraft_after": 6})
+    sup = import_ledger.stamp("ladd-supersede", [], {"superseded_seqs": [old["seq"]], "superseded_by": new["seq"]},
+                              note="first run imported outside the crypto-erase procedure")
+    seqs = [e["seq"] for e in import_ledger.entries()]
+    assert old["seq"] in seqs and new["seq"] in seqs and sup["prev_hash"] == new["entry_hash"]
+    assert import_ledger.verify() == (True, sup["entry_hash"])
