@@ -61,7 +61,7 @@ SKILL_NAME = "ingest-feed-watch"
 
 WEB_BASE = "http://host.containers.internal:80"
 WEB_HOST_HEADER = "dispatch.example.com"
-NTFY_HEALTH_URL = "http://host.containers.internal:2586/v1/health"
+NTFY_HEALTH_URL = "http://100.x.x.x:2586/v1/health"
 
 # Re-notify at most every 6h if a degraded state persists unchanged --
 # frequent enough that a standing problem doesn't go silent for a whole

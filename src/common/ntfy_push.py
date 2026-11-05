@@ -123,9 +123,21 @@ def send(
     tags: str = "satellite",
     click_url: Optional[str] = None,
     email: bool = False,
+    kind: Optional[str] = None,
+    vertical: Optional[str] = None,
+    entity: Optional[str] = None,
+    detail: Optional[dict] = None,
+    _decision=None,
 ) -> bool:
     """
     Send a plain-text push notification via ntfy.
+
+    2026-11-04 (push parity lock): pass kind= (and entity=/detail= when the
+    push is about one thing) so common.push_policy decides priority 4 / 3 /
+    suppress at the vertical's parity; vertical= defaults from the topic. A
+    call without kind= is UNREGISTERED: it is still sent at its own priority
+    and logged once per topic as a WARNING until its caller is registered.
+    A suppressed push returns True (the policy withheld it on purpose).
 
     Args:
         topic:     ntfy topic name (e.g. "cps", "tfr-alert")
@@ -158,6 +170,15 @@ def send(
 
     Returns True on HTTP 2xx, False on any failure.
     """
+    decision = _decision if _decision is not None else _policy_decision(
+        topic, priority, kind, vertical, entity, detail)
+    if decision is not None:
+        if not decision.fire:
+            log.info("ntfy: push_policy suppressed %s/%s on topic=%s (%s)",
+                     decision.vertical, decision.kind, topic, decision.rule)
+            return True
+        priority = decision.priority
+
     base  = config.ntfy_url()
     token = config.ntfy_token().split(":")[0]   # strip "token:label" suffix
     url   = f"{base}/{topic}"
@@ -285,6 +306,23 @@ def send(
     return bool(result)
 
 
+_UNKINDED_WARNED: set = set()
+
+
+def _policy_decision(topic, priority, kind, vertical, entity, detail):
+    """The push_policy decision for one send, or None for an unregistered
+    (kind-less) call, which is logged once per topic and sent unchanged."""
+    from common import push_policy, push_policy_registry
+    v = vertical or push_policy_registry.vertical_for_topic(topic) or "unknown"
+    if not kind:
+        if topic not in _UNKINDED_WARNED:
+            _UNKINDED_WARNED.add(topic)
+            log.warning("ntfy: UNREGISTERED push on topic=%s (vertical %s): caller passed no kind= "
+                        "-- sent at priority %s; register it (push parity lock, P2)", topic, v, priority)
+        return None
+    return push_policy.decide(v, kind, entity or topic, detail or {}, priority)
+
+
 def send_dual(
     full_message: str,
     concise_message: str,
@@ -294,6 +332,10 @@ def send_dual(
     topic_brief: str = "dispatch-ops",
     priority: int = 3,
     email: bool = False,
+    kind: Optional[str] = None,
+    vertical: Optional[str] = None,
+    entity: Optional[str] = None,
+    detail: Optional[dict] = None,
 ) -> None:
     """Send the same alert to two topics — full narrative + concise one-liner.
 
@@ -301,10 +343,11 @@ def send_dual(
     -- the concise one-liner is a duplicate summary, not worth a second
     email for the same report.
     """
+    decision = _policy_decision(topic_full, priority, kind, vertical, entity, detail)
     send(topic_full,  full_message,     title=title, priority=priority,
-         tags="airplane,partly_sunny", email=email)
+         tags="airplane,partly_sunny", email=email, _decision=decision)
     send(topic_brief, concise_message,  title=title, priority=priority,
-         tags="airplane")
+         tags="airplane", _decision=decision)
 
 
 def send_run_status(

@@ -4,6 +4,10 @@ After=network-online.target corporatetraveldc-web.service
 Wants=network-online.target
 
 [Container]
+# 2026-11-04 operator rule: anything that leaves this container or goes into another one
+# uses 100.x.x.x, hard-set (ntfy runs in its own container). host.containers.internal
+# does not resolve on default pasta networking (--no-map-gw): ingest pushes were lost.
+Environment=NTFY_URL=http://100.x.x.x:2586
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
 # instead of swap-thrashing (zram) if a container leaks past Memory=.

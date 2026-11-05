@@ -48,7 +48,7 @@ DISPATCH_BASE      = os.getenv("DISPATCH_BASE_URL",        "http://127.0.0.1:800
 DEMO_MODE           = os.getenv("DEMO_MODE", "false").strip().lower() == "true"
 DEMO_SESSION_SECRET = os.getenv("DEMO_SESSION_SECRET", "")
 DEMO_SESSION_COOKIE = "ctdc_demo_session"
-NTFY_URL           = os.getenv("NTFY_URL",                  "http://host.containers.internal:2586")
+NTFY_URL           = os.getenv("NTFY_URL",                  "http://100.x.x.x:2586")
 NTFY_TOKEN         = os.getenv("NTFY_TOKEN",                "")
 ULTRAFEEDER_URL    = os.getenv("ULTRAFEEDER_URL",           "http://127.0.0.1:8080/data/aircraft.json")
 ACARSHUB_URL       = os.getenv("ACARSHUB_URL",             "http://127.0.0.1:9081")

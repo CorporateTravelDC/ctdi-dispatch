@@ -647,7 +647,17 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
         # 621), the same few fix/ETA lines cycling. Per-fix slots give the
         # docstring's "once per fix per flight" for real.
         dedup_slot = f"{entry['id']}:{fix}"
-        dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}:{(eta or '')[:10]}")
+        # 2026-11-04 (push parity lock): the key also carries the usable runway
+        # ETA, bucketed to 5 minutes, so a real ETA move at the same fix reaches
+        # common.push_policy (which decides p4 / p3 / suppress); a date-only key
+        # froze the first ETA of the day at each fix.
+        if s.get("eta_kind") == "rwy":
+            from common.flight_instance import to_epoch as _to_epoch
+            runway_epoch = _to_epoch(eta)
+        else:
+            runway_epoch = rwy_est
+        rwy_bucket = int(runway_epoch // 300) if runway_epoch else "none"
+        dedup_key = content_hash(f"tbfm:{entry['id']}:{fix}:{(eta or '')[:10]}:{rwy_bucket}")
         if not _TBFM_WATCHLIST_DEDUP.should_push(dedup_slot, dedup_key):
             continue
 
@@ -664,6 +674,7 @@ def _check_tbfm_watchlist_hits(sequences: list[dict]) -> None:
                 {"watchlist_trigger": "tbfm_sequenced", "meter_fix": fix,
                  "eta": eta, "eta_kind": s.get("eta_kind"), "eta_fix": fix,
                  "eta_label": eta_label, "eta_source": "tbfm",
+                 "runway_eta_epoch": runway_epoch,
                  "airport": apt, "facility": s.get("facility")},
                 priority=3,
             )

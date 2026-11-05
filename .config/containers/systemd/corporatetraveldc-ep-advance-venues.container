@@ -10,6 +10,10 @@
 Description=Corporate Travel DC -- daily EP-advance venue advisory (hotel/dining/extended-ops)
 
 [Container]
+# 2026-11-04 operator rule: anything that leaves this container or goes into another one
+# uses 100.x.x.x, hard-set (ntfy runs in its own container). host.containers.internal
+# does not resolve on default pasta networking (--no-map-gw): ingest pushes were lost.
+Environment=NTFY_URL=http://100.x.x.x:2586
 Memory=1536m
 PodmanArgs=--memory-swap=1536m
 Image=localhost/corporatetraveldc-poller:latest

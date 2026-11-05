@@ -3025,15 +3025,22 @@ def sweep_expired_watchlist_entries() -> list[dict]:
 
 def insert_watchlist_history(entry_id: str, entry_type: str, identifier: str,
                              event_type: str, event_summary: str | None,
-                             event_detail: dict | None, fired_at: str) -> None:
+                             event_detail: dict | None, fired_at: str,
+                             ntfy_fired: int = 1, ntfy_priority: int | None = None) -> None:
+    """ntfy_fired (2026-11-04, push parity lock): 1 = pushed, 0 = push pending
+    (the pusher's 15-minute retry sweep resends these), 2 = SUPPRESSED by
+    common.push_policy -- history only, deliberately never 0 so the retry sweep
+    cannot resend a push the policy withheld. ntfy_priority = the priority the
+    policy decided (None keeps the column default)."""
     with conn() as c:
         c.execute("""
             INSERT INTO watchlist_history
                 (entry_id, entry_type, identifier, event_type,
-                 event_summary, event_detail, fired_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 event_summary, event_detail, fired_at, ntfy_fired, ntfy_priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (entry_id, entry_type, identifier, event_type, event_summary,
-              json.dumps(event_detail) if event_detail else None, fired_at))
+              json.dumps(event_detail) if event_detail else None, fired_at,
+              int(ntfy_fired), 3 if ntfy_priority is None else int(ntfy_priority)))
 
 
 def get_watchlist_history(entry_id: str | None = None,

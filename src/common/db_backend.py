@@ -159,6 +159,8 @@ PG_TABLES: frozenset[str] = frozenset({
     # 2026-10-22: pg_schema/0084 (semantic vessel/drone geometry) created these two without registering them,
     # so queries routed by this set would miss Postgres and test_pg_migrate failed on the extra tables.
     "drone_events", "ais_sample_positions",
+    # 2026-11-04: push parity lock state (pg_schema/0087)
+    "push_policy_state",
     "watchlist_entries", "watchlist_history", "watchlist_sessions",
     "webhook_events", "wpc_discussions",
 })

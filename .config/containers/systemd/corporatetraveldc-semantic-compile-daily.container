@@ -7,6 +7,10 @@ Description=Corporate Travel DC -- daily second-brain semantic layer recompile
 OnFailure=corporatetraveldc-unit-failure-notify@%n.service
 
 [Container]
+# 2026-11-04 operator rule: anything that leaves this container or goes into another one
+# uses 100.x.x.x, hard-set (ntfy runs in its own container). host.containers.internal
+# does not resolve on default pasta networking (--no-map-gw): ingest pushes were lost.
+Environment=NTFY_URL=http://100.x.x.x:2586
 # 2026-09-22: 384m -> 768m. This unit was OOM-killed (status 137, 465.1M
 # peak) on the first run that included geometric reasoning Phase 2, and 384m
 # was already marginal before that -- the pre-Phase-2 run peaked at 379.8M

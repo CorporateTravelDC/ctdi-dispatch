@@ -33,7 +33,7 @@ from common.push_dedup import PushDedup, content_hash
 log = logging.getLogger("shared.watchlist")
 
 PERMANENT_WATCHLIST_DIR = Path("/opt/corporatetraveldc/watchlists")
-NTFY_BASE = os.environ.get("NTFY_URL", "http://host.containers.internal:2586")
+NTFY_BASE = os.environ.get("NTFY_URL", "http://100.x.x.x:2586")
 NTFY_USER = os.environ.get("NTFY_USER", "")
 NTFY_PASS = os.environ.get("NTFY_PASS", "")
 NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
@@ -719,9 +719,24 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
         return
 
     event_type = event_detail.get("watchlist_trigger", "status_change")
-    if _check_dedup(entry_id, event_type, event_detail):
+    # 2026-11-04 (push parity lock): every watch push is decided by
+    # common.push_policy at its vertical's parity (aviation is the benchmark).
+    # The legacy content-hash dedup still guards kinds the registry does not
+    # know yet (they are sent at the caller's priority and logged as
+    # unregistered); registered kinds are decided semantically instead.
+    from common import push_policy
+    decision = push_policy.decide(
+        push_policy.vertical_for_entry_type(entry.get("entry_type")), event_type, entry_id,
+        event_detail, priority, context={"phase": entry.get("oooi_phase")})
+    if not decision.registered and _check_dedup(entry_id, event_type, event_detail):
         log.debug("watchlist dedup suppressed: %s / %s", entry_id, event_type)
         return
+    if not decision.fire and decision.rule == "unchanged":
+        # an identical semantic re-send: nothing new to record (same as the old dedup)
+        log.debug("push_policy suppressed unchanged %s / %s", entry_id, event_type)
+        return
+    event_detail = {**event_detail, "push_policy": decision.as_dict()}
+    priority = decision.priority if decision.fire else priority
 
     fired_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ident = entry["identifier"]
@@ -789,7 +804,11 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
     title_summary = " ".join(event_summary.split())
     title = title_prefix + ident + ": " + title_summary[:60]
 
-    _fire_ntfy_dual(domain_topic, title, detail_body, dispatch_body, priority)
+    if decision.fire:
+        _fire_ntfy_dual(domain_topic, title, detail_body, dispatch_body, priority)
+    else:
+        log.info("push_policy: %s %s suppressed (%s) -- history only", entry_id, event_type,
+                 decision.rule)
 
     db.insert_watchlist_history(
         entry_id=entry_id,
@@ -799,8 +818,11 @@ def watchlist_event_hit(entry_id: str, event_summary: str,
         event_summary=event_summary,
         event_detail=event_detail,
         fired_at=fired_at,
+        ntfy_fired=1 if decision.fire else 2,
+        ntfy_priority=priority,
     )
-    db.update_watchlist_last_event(entry_id, event_summary, fired_at)
+    if decision.fire:
+        db.update_watchlist_last_event(entry_id, event_summary, fired_at)
 
 
 def sweep_expired_transient(db_conn=None) -> int:

@@ -45,7 +45,7 @@ def get(key: str, default: str = "") -> str:
 
 
 def ntfy_url() -> str:
-    return get("NTFY_URL", "http://localhost:8080")
+    return get("NTFY_URL", "http://100.x.x.x:2586")
 
 def ntfy_fallback_url() -> str:
     """Secondary ntfy endpoint (native fallback on :2587). Empty = disabled."""

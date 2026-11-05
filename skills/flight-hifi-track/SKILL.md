@@ -108,6 +108,52 @@ under the requested callsign is stronger than either alone. A blank external
 app search alone does not establish a platform resolution defect. On conflict,
 report it; do not repoint the watch using an aggregator as sole authority.
 
+**1h. No flight plan filed yet, but a known arrival (2026-11-03, operator).** A
+marketing flight number (e.g. a UA 4xxx regional) can exist on an airport board
+or another anchor (FIDS arrival, a booking, an operator-given ETA) hours before
+the operating carrier files its plan. That anchor proves the leg exists and gives
+origin, destination and an expected arrival; it never supplies identity, times,
+status or OOOI (1g). Do not add a callsign-only watch, and do not stop at "not
+found":
+- Anchor order (operator 2026-11-03), strongest first; anchors ENABLE a SWIM
+  monitor, they never replace SWIM identity or times:
+  1. SWIM (FDPS/TBFM/TFMS) -- authority; once present, it wins.
+  2. FlightStats "View Flight Details" (operator screenshot): operating carrier
+     ("Operated by ..."), scheduled/estimated gate and runway times, gates,
+     equipment and a tail lead. Use it to pick the operating callsign and the
+     departure window.
+  3. Airplanes.live Android app (operator screenshot): live callsign, hex,
+     registration and type are good identity LEADS; its origin/destination is
+     often stale (free-tier route lookups) -- never use it for the route.
+  4. FIDS (airport board): proves the leg exists; gate, terminal, baggage only.
+  A tail or hex from 2 or 3 is a lead: confirm it against the local registries
+  (1e), check LADD, and accept it for the watch only with a live contact under
+  the operating callsign at the anchor's origin (position, not the app's route)
+  or a matching SWIM plan.
+- **Same flight number, different day (2026-11-04).** Regional flight numbers fly
+  the same route daily, so FDPS and `swim/last-leg` can still hold YESTERDAY's
+  plan for the same callsign and route. Accept a plan only if its arrival time is
+  still ahead (or within the last 30 min) and it was updated within the last few
+  hours; never take a hex from a leg that has already arrived. An anchor's tail
+  for today (FlightStats) that differs from the SWIM leg's is the tell.
+- Record the anchor: marketing ident, origin/destination ICAO, the anchor's
+  arrival time (UTC with ET), and where it came from.
+- Estimate the departure window from the anchor arrival minus block time; plans
+  are normally filed about 1-2 h before departure.
+- Monitor, load-aware and bounded (until the anchor arrival plus a margin), for
+  the operating carrier's plan: FDPS `GET /api/v1/flightplan/<PFX><number>` for
+  each candidate regional prefix and any `swim/resolve` callsign, accepting only
+  a confirmed plan whose origin and destination match the anchor. TBFM/TFMS
+  will follow once the flight is active.
+- On a match, take the hex from SWIM `last-leg` for that callsign and route
+  (fallback contact only as corroboration), the tail from the local registries
+  (1e), check LADD status, then add the watch (Step 2) under the OPERATING
+  callsign with the verified hex. Withhold tail and hex in any report if the
+  aircraft is privacy-listed.
+- Report the anchor and that monitoring is running; when the watch is added,
+  give the one-line confirmation. If the deadline passes with no plan, report
+  that nothing was added.
+
 ## Step 2 — add the OOOI milestone watch
 
 This step requires both authorization and aircraft identity. The operator

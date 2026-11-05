@@ -2,6 +2,10 @@
 Description=Corporate Travel DC -- second-brain vault file-inventory scan (index_db --scan)
 
 [Container]
+# 2026-11-04 operator rule: anything that leaves this container or goes into another one
+# uses 100.x.x.x, hard-set (ntfy runs in its own container). host.containers.internal
+# does not resolve on default pasta networking (--no-map-gw): ingest pushes were lost.
+Environment=NTFY_URL=http://100.x.x.x:2586
 Memory=512m
 # 2026-08-06: previously unguarded -- pure WebDAV PROPFIND/index-scan (index_db.py --scan) -- no Ollama call at all, lightest tier.
 # Paired Memory=/--memory-swap= (equal values, zero extra swap) so a
