@@ -34,7 +34,7 @@ WORKDIR /app
 # block before /api/ask uses it, the same way the poller image does. gnupg is needed at runtime by
 # scripts/verify-manifest.sh. Same dated Debian snapshot pattern as Containerfile.poller; refresh with
 # scripts/build/pin-base-images.py.
-ARG APT_SNAPSHOT=20261030T010607Z
+ARG APT_SNAPSHOT=20261118T160000Z
 RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update -qq \
  && apt-get install -y --no-install-recommends gnupg \
