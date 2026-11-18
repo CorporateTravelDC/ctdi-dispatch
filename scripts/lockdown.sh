@@ -43,6 +43,14 @@ QUADLET_DIR="/home/${CTDC_USER}/.config/containers/systemd"
 CONTAINERS_CONF="/home/${CTDC_USER}/.config/containers/containers.conf"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 STATE_FILE="/run/corporatetraveldc-lockdown-active"
+# 2026-11-18 (operator): a persistent marker, so a lockdown survives a reboot. Before this, the only
+# marker lived in /run and vanished at boot: the quadlet edits stayed in place but restore-network.sh
+# then saw "not locked down" and refused to restore, and nothing re-asserted the lockdown.
+# corporatetraveldc-boot-guard.service re-runs this script at boot while the marker exists, and the
+# failover polkit rule (config/polkit/49-ctdc-net-failover.rules) refuses NetworkManager changes.
+# Root-only-writable directory: the operator account the polkit rule grants cannot remove it.
+PERSIST_DIR="${CTDC_LOCKDOWN_DIR:-/var/lib/ctdc-lockdown}"
+PERSIST_FILE="${PERSIST_DIR}/lockdown-active"
 
 PASTA_MAPGW_CONTAINERS=(
     "corporatetraveldc-pusher"
@@ -131,6 +139,17 @@ say "  Reason: ${REASON}"
 say "--------------------------------------"
 
 (( DRY_RUN )) && say "[DRY-RUN MODE -- no changes will be made]"
+
+# 2026-11-18: persistent marker FIRST, so the failover polkit guard engages before anything else runs
+# and a reboot part-way through still leaves the box locked down.
+say "Persistent lockdown marker: ${PERSIST_FILE}"
+if (( DRY_RUN )); then
+    say "  [DRY-RUN] install -d -m 0755 ${PERSIST_DIR}; write ${PERSIST_FILE}"
+else
+    install -d -m 0755 -o root -g root "${PERSIST_DIR}"
+    printf '%s UTC reason=%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "${REASON:0:200}" > "${PERSIST_FILE}.new"
+    chmod 0644 "${PERSIST_FILE}.new" && mv -f "${PERSIST_FILE}.new" "${PERSIST_FILE}"
+fi
 
 # 2026-11-02 (operator): every lockdown also freezes every withheld category (LADD
 # aircraft, privileged trains and vessels), revokes every pass and WIPES the master

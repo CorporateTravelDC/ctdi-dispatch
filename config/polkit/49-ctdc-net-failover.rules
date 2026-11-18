@@ -1,0 +1,43 @@
+// 49-ctdc-net-failover.rules -- 2026-11-17 (operator), guarded 2026-11-18 (operator).
+// The uplink failover watchdog runs as the operator's user service on a headless box (no active seat
+// session), so NetworkManager's default "auth" for these two actions refused every failover.
+// Scope: the operator account, these two actions -- and ONLY while no hold is in force:
+//   /run/corporatetraveldc-lockdown-active          lockdown.sh (volatile; gone after a reboot)
+//   /var/lib/ctdc-lockdown/lockdown-active          lockdown.sh (persistent; survives a reboot)
+//   /var/lib/ctdc-lockdown/uncommanded-reboot-hold  ctdc-boot-guard.sh, after any reboot that was not
+//                                                   made through scripts/ctdc-reboot.sh
+//   /run/ctdc-boot-guard/verified ABSENT            this boot was not (yet) verified as commanded by the
+//                                                   boot guard -- if the guard never ran, the rule holds
+// Any hold -> NO. No hold -> YES. Any error evaluating the holds -> NOT_HANDLED, i.e. NetworkManager's
+// own default ("auth") applies: it fails closed to the pre-2026-11-17 behaviour, never open to YES.
+// /var/lib/ctdc-lockdown is root-only-writable, so the account this rule grants cannot clear a hold.
+// Holds are cleared only by restore-network.sh (all) or ctdc-reboot.sh --clear-hold (the reboot hold).
+polkit.addRule(function(action, subject) {
+    if (subject.user != "corporatetraveldc" ||
+        (action.id != "org.freedesktop.NetworkManager.settings.modify.system" &&
+         action.id != "org.freedesktop.NetworkManager.network-control")) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var state;
+    try {
+        state = polkit.spawn(["/usr/bin/sh", "-c",
+            "if [ ! -e /run/ctdc-boot-guard/verified ]; then echo hold:boot-unverified; exit 0; fi; " +
+            "for f in /run/corporatetraveldc-lockdown-active " +
+            "/var/lib/ctdc-lockdown/lockdown-active " +
+            "/var/lib/ctdc-lockdown/uncommanded-reboot-hold; do " +
+            "if [ -e \"$f\" ]; then echo \"hold:${f##*/}\"; exit 0; fi; done; echo clear"]).trim();
+    } catch (e) {
+        polkit.log("ctdc-net-failover: NOT_HANDLED " + action.id + " (hold check failed)");
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (state == "clear") {
+        polkit.log("ctdc-net-failover: YES " + action.id + " (no hold)");
+        return polkit.Result.YES;
+    }
+    if (state.indexOf("hold:") == 0) {
+        polkit.log("ctdc-net-failover: NO " + action.id + " (" + state + ")");
+        return polkit.Result.NO;
+    }
+    polkit.log("ctdc-net-failover: NOT_HANDLED " + action.id + " (unexpected hold check output)");
+    return polkit.Result.NOT_HANDLED;
+});

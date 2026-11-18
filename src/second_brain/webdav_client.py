@@ -32,6 +32,7 @@ both). Now raises immediately at import if the env var isn't set, rather than
 guessing which account you meant.
 """
 import os
+import urllib.parse
 from xml.etree import ElementTree as ET
 
 import requests
@@ -143,9 +144,16 @@ def _base_url() -> str:
     return f"{WEBDAV_BASE}/{NEXTCLOUD_USER}"
 
 
+def _url(rel_path: str) -> str:
+    """Percent-encoded URL for a decoded vault path. 2026-11-12: paths were
+    sent raw, so a '#' or '?' in a note name became a fragment/query and a
+    PUT of '#CTDI ....md' landed on its parent folder (409 Conflict)."""
+    return f"{_base_url()}/{urllib.parse.quote(rel_path.strip('/'), safe='/')}"
+
+
 def mkcol(rel_path: str) -> int:
     """Create a single folder. 201 = created, 405 = already exists (both fine)."""
-    url = f"{_base_url()}/{rel_path.strip('/')}"
+    url = _url(rel_path)
     r = requests.request("MKCOL", url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=15)
     return r.status_code
 
@@ -166,7 +174,7 @@ def put(rel_path: str, content: str | bytes, content_type: str = "text/markdown"
         mkdirs(rel_path.rsplit("/", 1)[0])
     if isinstance(content, str):
         content = content.encode("utf-8")
-    url = f"{_base_url()}/{rel_path}"
+    url = _url(rel_path)
     r = requests.request(
         "PUT", url, auth=_auth(), data=content,
         headers={"Host": HOST_HEADER, "Content-Type": content_type},
@@ -189,7 +197,7 @@ def put_create_only(rel_path: str, content: str | bytes, content_type: str = "te
         mkdirs(rel_path.rsplit("/", 1)[0])
     if isinstance(content, str):
         content = content.encode("utf-8")
-    url = f"{_base_url()}/{rel_path}"
+    url = _url(rel_path)
     r = requests.request(
         "PUT", url, auth=_auth(), data=content,
         headers={"Host": HOST_HEADER, "Content-Type": content_type, "If-None-Match": "*"},
@@ -203,7 +211,7 @@ def put_create_only(rel_path: str, content: str | bytes, content_type: str = "te
 
 def get(rel_path: str) -> bytes | None:
     """Fetch a file's content. Returns None if not found (404)."""
-    url = f"{_base_url()}/{rel_path.strip('/')}"
+    url = _url(rel_path)
     r = requests.get(url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=30)
     if r.status_code == 404:
         return None
@@ -217,7 +225,7 @@ def delete(rel_path: str) -> int:
     success by the caller if desired). No move/rename verb exists in this
     module or in WebDAV itself as a single atomic op across arbitrary paths
     -- relocations are GET+PUT+DELETE at the call site, not here."""
-    url = f"{_base_url()}/{rel_path.strip('/')}"
+    url = _url(rel_path)
     r = requests.request("DELETE", url, auth=_auth(), headers={"Host": HOST_HEADER}, timeout=15)
     return r.status_code
 
@@ -228,7 +236,7 @@ def list_files(rel_path: str = "") -> list[dict]:
     # the cloud. vhost 301s a slashless collection to another host, requests
     # drops Authorization on that hop and the result is a misleading 401
     # (root cause of the silent second-brain-index-scan failure; index_db.py).
-    url = f"{_base_url()}/{rel_path.strip('/')}".rstrip("/") + "/"
+    url = _url(rel_path).rstrip("/") + "/"
     body = ('<?xml version="1.0" encoding="utf-8"?>'
             '<d:propfind xmlns:d="DAV:"><d:prop><d:getcontentlength/>'
             '<d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>')

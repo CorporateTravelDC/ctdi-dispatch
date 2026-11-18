@@ -10,6 +10,9 @@ __pycache__/
 *.egg-info/
 .eggs/
 dist/
+# 2026-11-18: vendored, patched npm packages ship their code in dist/ (deepmerge's main is dist/cjs.js);
+# the dist/ rule above silently dropped it from the 2026-11-04 commit. Track vendored packages whole.
+!src/runner/frontend/vendor/*/dist/
 # Python packaging output (setup.py/pyproject builds) anywhere in the tree.
 build/
 # 2026-10-07 (security review 05): the build-integrity policy, the tools lock and

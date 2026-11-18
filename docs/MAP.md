@@ -57,6 +57,16 @@ GHSA-gcqx-w48m-w2h4, so the repo vendors 4.3.1 with that hole closed at
 override `"$deepmerge"`; `Containerfile.runner` copies `vendor/` before `npm ci`). `npm audit` reports 0.
 Drop the vendored copy when upstream ships a fixed release. Tests: `tests/runner/test_vendored_deepmerge.py`.
 
+Build note (2026-11-18): the same build also pulls `picomatch` (vite, vite-plugin-pwa, workbox-build, the rollup
+plugins, tinyglobby, fdir). Every release through 4.0.7, the latest, has GHSA-fc5q-39xc-vjpf (CVE-2026-112366):
+single-branch repeated extglobs such as `+(*a)` backtrack exponentially (about 21 s on 29 characters here). The
+build uses a vendored 4.0.7 with that closed, `src/runner/frontend/vendor/picomatch/` (`file:./vendor/picomatch`,
+override `"$picomatch"`). A branch with a bare top-level `*` is now treated as risky whatever the branch count, so
+it takes upstream's existing safe path. `npm audit` reports 0 at every severity. The same change restores
+`vendor/deepmerge/dist/cjs.js`: the `.gitignore` `dist/` rule had dropped it from the 2026-11-04 commit, so the
+vendored deepmerge had no code (`.gitignore` now re-includes `src/runner/frontend/vendor/*/dist/`). Drop either
+copy when upstream ships a fix. Tests: `tests/runner/test_vendored_picomatch.py`.
+
 tar1090 on the receiver (`:8080`) defaults to OpenFreeMap Positron
 (`TAR1090_CONFIGJS_APPEND` in the ultrafeeder quadlet): no key, no Referer rule, commercial use
 allowed. A layer a viewer already picked stays remembered in that browser.

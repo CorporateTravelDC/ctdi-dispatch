@@ -1,0 +1,22 @@
+# corporatetraveldc-boot-guard.service -- 2026-11-18 (operator). Early at every boot, before NetworkManager:
+# was this reboot commanded (scripts/ctdc-reboot.sh)? If not, write the uncommanded-reboot hold so the
+# failover polkit rule refuses NetworkManager changes until the operator clears it. If this unit fails,
+# the boot stays unverified and the rule fails closed (NetworkManager's default "auth").
+[Unit]
+Description=Boot guard: commanded-reboot check for the failover polkit rule
+DefaultDependencies=no
+After=local-fs.target systemd-journald.service
+Before=NetworkManager.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/ctdc-boot-guard.sh
+ExecStart=/usr/local/libexec/ctdc/ctdc-boot-guard.sh --boot
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0022
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

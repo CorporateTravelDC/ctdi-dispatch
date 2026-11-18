@@ -17,6 +17,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "browserslist": "^4.29.0",
     "deepmerge": "file:./vendor/deepmerge",
+    "picomatch": "file:./vendor/picomatch",
     "vite": "^6.4.5",
     "vite-plugin-pwa": "^1.3.0"
   },
@@ -24,6 +25,7 @@
     "esbuild": "^0.28.1",
     "glob": "^14.0.3",
     "minimatch": "^11.0.3",
-    "deepmerge": "$deepmerge"
+    "deepmerge": "$deepmerge",
+    "picomatch": "$picomatch"
   }
 }

@@ -7,7 +7,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 
 
-def run_case(tmp_path, *, mode='failback', active=True, carrier='0', route='primary0', reapply=0, wrong_profile=False):
+def run_case(tmp_path, *, mode='failback', active=True, carrier='0', route='primary0', reapply=0, wrong_profile=False,
+             v6addr=False, route6=None, metric=600):
     bindir = tmp_path / 'bin'; bindir.mkdir()
     sysnet = tmp_path / 'net/backup0'; sysnet.mkdir(parents=True)
     (sysnet / 'carrier').write_text(carrier)
@@ -21,18 +22,27 @@ case "$*" in
   'device reapply backup0') exit "$REAPPLY_RC" ;;
 esac
 ''')
-    (bindir / 'ip').write_text('#!/bin/sh\nprintf "1.1.1.1 via 192.0.2.1 dev %s src 192.0.2.2\\n" "$ROUTE_IF"\n')
+    (bindir / 'ip').write_text("""#!/bin/sh
+if [ "$1" = "-6" ]; then
+  case "$2" in
+    addr) [ "$V6ADDR" = 1 ] && echo "    inet6 2001:db8::2/64 scope global dynamic"; exit 0 ;;
+    route) printf "2606:4700:4700::1111 from :: via fe80::1 dev %s\\n" "$ROUTE6_IF"; exit 0 ;;
+  esac
+fi
+printf "1.1.1.1 via 192.0.2.1 dev %s src 192.0.2.2\\n" "$ROUTE_IF"
+""")
     (bindir / 'sleep').write_text('#!/bin/sh\nexit 0\n')
     for p in bindir.iterdir(): p.chmod(0o755)
     script = '''source "$LIB"
 log() { echo "$*"; }
 BACKUP_CON=fixture-backup; BACKUP_IF=backup0; PRIMARY_IF=primary0
-apply_backup_metric 600 "$MODE"
+apply_backup_metric "$METRIC" "$MODE"
 '''
     env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
                LIB=str(REPO/'scripts/lib/net_failover_routes.sh'), CALLS=str(log),
                NM_STATE='100 (connected)' if active else '30 (disconnected)',
-               REAPPLY_RC=str(reapply), ROUTE_IF=route, MODE=mode,
+               REAPPLY_RC=str(reapply), ROUTE_IF=route, MODE=mode, METRIC=str(metric),
+               V6ADDR='1' if v6addr else '0', ROUTE6_IF=route6 or route,
                ACTIVE_UUID='other-fixture-uuid' if wrong_profile else 'fixture-uuid',
                NET_FAILOVER_SYS_NET_DIR=str(tmp_path/'net'))
     p = subprocess.run(['bash'], input=script, text=True, capture_output=True, env=env, timeout=10)
@@ -87,3 +97,31 @@ def test_watchdog_uses_verified_transition_helper():
     text = (REPO/'scripts/net-failover-watchdog.sh').read_text()
     assert '/lib/net_failover_routes.sh' in text
     assert 'if apply_backup_metric "${saved}" failback; then\n        state_set failed_over 0' in text
+
+
+# 2026-11-17 (operator: IPv6 priority): the flip moves both address families together.
+def test_failover_sets_both_families_to_the_failover_metric(tmp_path):
+    p, calls = run_case(tmp_path, mode='', route='backup0', metric=50)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert 'connection modify fixture-backup ipv4.route-metric 50 ipv6.route-metric 50' in calls
+
+
+def test_failback_restores_both_families_to_the_saved_metric(tmp_path):
+    p, calls = run_case(tmp_path, metric=600)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert 'connection modify fixture-backup ipv4.route-metric 600 ipv6.route-metric 600' in calls
+
+
+def test_v6_default_left_on_the_dead_primary_fails_verification(tmp_path):
+    p, _ = run_case(tmp_path, mode='', route='backup0', route6='primary0', v6addr=True, metric=50)
+    assert p.returncode != 0 and 'IPv6 route verification failed' in p.stdout
+
+
+def test_v6_default_following_the_flip_passes(tmp_path):
+    p, _ = run_case(tmp_path, mode='', route='backup0', route6='backup0', v6addr=True, metric=50)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_no_global_v6_on_the_uplink_skips_the_v6_check(tmp_path):
+    p, _ = run_case(tmp_path, mode='', route='backup0', route6='primary0', v6addr=False, metric=50)
+    assert p.returncode == 0, p.stdout + p.stderr

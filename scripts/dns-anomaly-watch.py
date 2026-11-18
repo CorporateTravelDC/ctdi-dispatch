@@ -138,7 +138,14 @@ KNOWN_GOOD_CNAME_TARGETS = {
 # Already investigated and denylisted -- resolve 0.0.0.0 now. Don't
 # re-alert on these every run; they're the reason this script exists.
 # Only the *.uber.com CNAME-family check uses this set.
-KNOWN_BLOCKED = {"fpfcpn2u.uber.com", "ak04a6qc.uber.com"}
+# 2026-11-12: brought to parity with every *.uber.com exact denylist entry in
+# gravity.db (was only the original two); check_denylist_gaps() logs any
+# future drift. cn-geo1 and driver.android.mobile-config are also reconnect
+# markers -- being blocked does not stop them marking a reconnect.
+KNOWN_BLOCKED = {
+    "fpfcpn2u.uber.com", "ak04a6qc.uber.com", "driver.android.mobile-config.uber.com",
+    "pusher.uber.com", "vehicles.uber.com", "cn-geo1.uber.com",
+}
 
 # Already investigated, confirmed benign despite not matching the
 # CNAME-family pattern (see module docstring).
@@ -153,6 +160,12 @@ KNOWN_SAFE_DIRECT = {"tracking.ibt.uber.com"}
 TRACKED_ANOMALY_ENDPOINTS = {
     "fpfcpn2u.uber.com": {"discovered": "2026-08-12", "kind": "cname-drift"},
     "ak04a6qc.uber.com": {"discovered": "2026-08-12", "kind": "cname-drift"},
+    # 2026-11-12: the four later Uber denylist entries, dated by their
+    # gravity.db date_added. Blocked hits are counted and logged, never alerted.
+    "driver.android.mobile-config.uber.com": {"discovered": "2026-08-15", "kind": "manual-denylist"},
+    "pusher.uber.com": {"discovered": "2026-08-19", "kind": "manual-denylist"},
+    "vehicles.uber.com": {"discovered": "2026-09-04", "kind": "novel-in-burst"},
+    "cn-geo1.uber.com": {"discovered": "2026-09-10", "kind": "cname-drift"},
     "lens.usercontent.google.com": {"discovered": "2026-08-29", "kind": "novel-in-burst"},
     # rr1---sn-p5qs7nzr.gvt1.com removed 2026-09-28: it is a rotating Google
     # download-CDN edge node, not a stable anomaly endpoint -- blocking one
@@ -290,6 +303,12 @@ def check_denylist_gaps():
     main() can alert loudly with the exact command to run."""
     rows = query_pihole("SELECT domain FROM domainlist WHERE type=1;", db=GRAVITY_DB)
     denylisted = set(rows)
+    # Reverse drift (log only, no alert): a *.uber.com denylist entry added
+    # in Pi-hole but not mirrored into KNOWN_BLOCKED / TRACKED_ANOMALY_ENDPOINTS.
+    unmirrored = sorted(d for d in denylisted if d.endswith(".uber.com")
+                        and (d not in KNOWN_BLOCKED or d not in TRACKED_ANOMALY_ENDPOINTS))
+    if unmirrored:
+        print(f"{LOG_PREFIX} denylisted but not in KNOWN_BLOCKED/TRACKED_ANOMALY_ENDPOINTS: {unmirrored}")
     return [d for d in TRACKED_ANOMALY_ENDPOINTS if d not in denylisted]
 
 

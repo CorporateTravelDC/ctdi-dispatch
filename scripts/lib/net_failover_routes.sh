@@ -16,6 +16,16 @@ current_default_iface() {
         awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}'
 }
 
+# 2026-11-17 (operator: IPv6 priority): the v6 default must follow the same failover as v4.
+current_default_iface6() {
+    ip -6 route get 2606:4700:4700::1111 2>/dev/null |
+        awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}'
+}
+
+iface_has_global_v6() {
+    [[ -n "$(ip -6 addr show dev "$1" scope global 2>/dev/null)" ]]
+}
+
 configured_metric() {
     nmcli -g ipv4.route-metric connection show "$1" 2>/dev/null
 }
@@ -28,12 +38,22 @@ backup_profile_is_active() {
 }
 
 wait_for_route() {
-    local expected="$1" attempt
+    local expected="$1" attempt ok4=0
     for attempt in 1 2 3 4 5; do
-        [[ "$(current_default_iface)" == "$expected" ]] && return 0
+        [[ "$(current_default_iface)" == "$expected" ]] && { ok4=1; break; }
         sleep 1
     done
-    log error "route verification failed: expected ${expected}, actual $(current_default_iface)"
+    if [[ $ok4 -ne 1 ]]; then
+        log error "route verification failed: expected ${expected}, actual $(current_default_iface)"
+        return 1
+    fi
+    # IPv6: only when the expected uplink actually holds a global v6 address (IPv6 may be off there).
+    iface_has_global_v6 "$expected" || return 0
+    for attempt in 1 2 3 4 5; do
+        [[ "$(current_default_iface6)" == "$expected" ]] && return 0
+        sleep 1
+    done
+    log error "IPv6 route verification failed: expected ${expected}, actual $(current_default_iface6)"
     return 1
 }
 
@@ -43,7 +63,8 @@ apply_backup_metric() {
     if iface_connected "$BACKUP_IF" && ! backup_profile_is_active; then
         log error "active backup profile differs from configured profile"; return 1
     fi
-    nmcli connection modify "$BACKUP_CON" ipv4.route-metric "$metric" >/dev/null 2>&1 || {
+    # Both families in one modify: a v4-only flip left IPv6 on the dead primary (2026-11-17).
+    nmcli connection modify "$BACKUP_CON" ipv4.route-metric "$metric" ipv6.route-metric "$metric" >/dev/null 2>&1 || {
         log error "backup profile metric update failed"; return 1;
     }
     if iface_connected "$BACKUP_IF"; then

@@ -111,15 +111,19 @@ SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 # primary is dead, fail back as soon as it recovers.
 # 2026-10-06: lowercase is the current, correct profile name (recreated after
 # the hard reset); the old capitalised default left `--status` blank.
-PRIMARY_CON_DEFAULT="jorransgateway"
+# 2026-11-18 (operator): the active WiFi profile is "jorransgateway 1" and the hotspot profile is
+# renamed "Hockey Puck" (enu1). Three tiers, IPv4 and IPv6 alike: 100 Starlink (planned), 600
+# "jorransgateway 1", 1100 "Hockey Puck", 1600 "Corporate Traveler WiFi" (the puck's own WiFi on wld0,
+# last resort). dispatch.env sets NET_FAILOVER_PRIMARY_CON / NET_FAILOVER_BACKUP_CON to match.
+PRIMARY_CON_DEFAULT="jorransgateway 1"
 PRIMARY_IF_DEFAULT="wld0"
-BACKUP_CON_DEFAULT="Verizon Hotspot"
+BACKUP_CON_DEFAULT="Hockey Puck"
 BACKUP_IF_DEFAULT="enu1"
 
 PROBE_IPS_DEFAULT="1.1.1.1 8.8.8.8 9.9.9.9"
 FAIL_STRIKES_DEFAULT=3
 RESTORE_STRIKES_DEFAULT=3
-FAILOVER_METRIC_DEFAULT=50      # must beat the primary's 100 while failed over
+FAILOVER_METRIC_DEFAULT=50      # must beat the primary's 600 (and Starlink's planned 100) while failed over
 ALERT_COOLDOWN_SECS=1800        # 30 min -- do not re-page every 60s cycle
 
 mkdir -p "${STATE_DIR}"
@@ -307,7 +311,7 @@ failed_over="$(state_get failed_over 0)"
 # again. Remove the key, or set it to false, to resume failover.
 if [[ "$(cfg NET_FAILOVER_PARKED false)" == "true" ]]; then
     if [[ "${failed_over}" -eq 1 ]]; then
-        saved="$(state_get saved_backup_metric 600)"
+        saved="$(state_get saved_backup_metric 1100)"
         log "warn" "failover parked while failed over -- restoring ${BACKUP_CON} metric ${FAILOVER_METRIC} -> ${saved}"
         if apply_backup_metric "${saved}" failback; then
             state_set failed_over 0
@@ -378,7 +382,7 @@ if [[ "${failed_over}" -eq 1 && "${primary_ok}" -eq 1 ]]; then
         log "info" "primary recovered (${ok_streak}/${RESTORE_STRIKES}) -- holding on backup"
         exit 0
     fi
-    saved="$(state_get saved_backup_metric 600)"
+    saved="$(state_get saved_backup_metric 1100)"
     log "info" "primary ${PRIMARY_IF} healthy ${ok_streak}x -- failing back (${BACKUP_CON}: ${FAILOVER_METRIC} -> ${saved})"
     if apply_backup_metric "${saved}" failback; then
         state_set failed_over 0

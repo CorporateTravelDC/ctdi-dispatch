@@ -1,0 +1,11 @@
+{
+  "name": "picomatch",
+  "version": "4.0.7-ctdc.1",
+  "description": "picomatch 4.0.7 with GHSA-fc5q-39xc-vjpf (CVE-2026-112366) closed; vendored by ctdi-dispatch-internal (see lib/parse.js analyzeRepeatedExtglob)",
+  "homepage": "https://github.com/micromatch/picomatch",
+  "license": "MIT",
+  "files": ["index.js", "posix.js", "lib"],
+  "sideEffects": false,
+  "main": "index.js",
+  "engines": { "node": ">=12" }
+}

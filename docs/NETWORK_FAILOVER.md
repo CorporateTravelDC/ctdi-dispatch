@@ -12,12 +12,106 @@ Anything that calls this setup "bonded" is wrong — that misconception is
 why the 2026-09-05 outage was expected to self-heal when it structurally
 could not.
 
+## Status 2026-11-18 -- three tiers; the failover polkit grant is guarded; lockdowns survive a reboot
+
+**Uplink tiers (operator 2026-11-18), IPv4 and IPv6 alike, every profile dual stack with IPv6 preferred:**
+
+| Metric | NM profile | Interface | Role |
+|---|---|---|---|
+| 100 | Starlink (planned) | `end0` | primary once installed (router mode, not bypass) |
+| 600 | `jorransgateway 1` | `wld0` | primary today |
+| 1100 | `Hockey Puck` (renamed from `Verizon Hotspot`) | `enu1` | backup: the metered Google Fi hotspot over USB |
+| 1600 | `Corporate Traveler WiFi` | `wld0` | last resort: the same hotspot's own WiFi, joined only when `jorransgateway 1` is out of range |
+
+The host side (profile rename, metrics, `NET_FAILOVER_BACKUP_CON=Hockey Puck`) is applied by
+`/srv/ctdc-ea/ipv6-first-local.relay`; the watchdog's defaults (`PRIMARY_CON_DEFAULT`, `BACKUP_CON_DEFAULT`,
+the saved-metric fallback 1100) match. `FAILOVER_METRIC` stays 50, below every tier.
+
+**The guard on the failover polkit rule.** `config/polkit/49-ctdc-net-failover.rules` still grants only the
+operator account the two NetworkManager actions, but only while no hold is in force. It returns NO while
+any of these exist:
+- `/run/corporatetraveldc-lockdown-active` (lockdown.sh, volatile);
+- `/var/lib/ctdc-lockdown/lockdown-active` (lockdown.sh, persistent: survives a reboot);
+- `/var/lib/ctdc-lockdown/uncommanded-reboot-hold` (written at boot after any reboot not made through
+  `scripts/ctdc-reboot.sh`);
+- and while `/run/ctdc-boot-guard/verified` is ABSENT, i.e. this boot has not been verified. If the boot
+  guard never runs, the rule holds.
+
+Any error evaluating the holds returns NOT_HANDLED, so NetworkManager's own default (`auth`) applies: it
+fails closed, never open. Every decision is logged by polkit (`ctdc-net-failover: YES|NO|NOT_HANDLED ...`).
+`/var/lib/ctdc-lockdown` is root-only-writable, so the account the rule grants cannot clear a hold.
+
+**Commanded and uncommanded reboots.**
+- Reboot with `sudo /usr/local/libexec/ctdc/ctdc-reboot.sh --reason "..."`. It records the time, the invoking
+  user and the reason in `/var/lib/ctdc-lockdown/reboot-commanded`, then runs `systemctl reboot`.
+- `corporatetraveldc-boot-guard.service` runs early at every boot, before NetworkManager. A record written
+  less than 30 minutes before this boot started is consumed and the boot is marked verified. Anything else
+  (no record, a stale record, a record dated after the boot) means an uncommanded reboot: power loss, a crash,
+  a plain `sudo reboot`, or someone else's reboot. It writes the hold (boot id, time, the previous boot's last
+  journal line) and leaves the boot unverified.
+- `corporatetraveldc-boot-guard-alert.service` runs after `network-online`. It sends one priority-5 ntfy
+  alert for a hold written this boot, through the root alert path lockdown.sh uses (it retries for up to 10
+  minutes, because ntfy is a user container), and re-asserts a lockdown by running the installed
+  lockdown.sh while the persistent lockdown marker exists.
+- **Clearing:** `sudo /usr/local/libexec/ctdc/ctdc-reboot.sh --clear-hold --reason "..."` removes only the
+  hold and marks the boot verified. `restore-network.sh` clears every marker, including the hold, and marks
+  the boot verified. `ctdc-reboot.sh --status` shows them all.
+
+**Trade-off, stated plainly.** After a power blip or any uncommanded reboot, the watchdog cannot reroute
+until the operator clears the hold. NetworkManager's own connectivity penalty would still move traffic, but
+it is OFF until Starlink (2026-11-17 decision), so on this box nothing reroutes automatically in that window.
+Clear the hold promptly after checking why the box rebooted.
+
+**Lockdown before 2026-11-18 did not survive a reboot.** Its only marker lived in `/run`. After a reboot the
+quadlet edits stayed in place, but restore-network.sh saw "not locked down" and refused to restore them, and
+nothing re-asserted the lockdown. Now lockdown.sh writes the persistent marker first, the boot guard
+re-asserts it, and restore-network.sh works whether or not the `/run` marker survived.
+
+**Other kill switches, checked 2026-11-18 (unchanged):**
+- the gateway kill-all and the withheld kill-all keep their state in Postgres
+  (`agent_gateway_settings.frozen`, `withheld_settings frozen*`), so they survive a reboot;
+- team-liveness inert locks the account (`usermod -L`, expiry) with a marker under
+  `/var/lib/corporatetraveldc/team-liveness/inert/`, which survives a reboot. Its "offline lockdown" authority
+  path still reads only the `/run` lockdown marker, so after a reboot during a lockdown it no longer sees one.
+  Follow-up: have it read the persistent marker too.
+
+## Status 2026-11-17 -- failover was blocked by polkit; IPv6 first; NM connectivity check off
+
+**Outage and root cause (watch.log, vnstat, live checks):**
+- At 14:37Z the WiFi router (10.x.x.x) stopped answering ARP. `wld0` stayed associated with a good signal (-56 dBm) the whole time, so this was upstream-dead, not a WiFi drop. Since 2026-11-01 the primary was down 52 min (11-01), 14 min (11-05), 1 min (11-09) and 187+ min (11-17), each time on the router side.
+- The watchdog saw it in 3 probes, then from 14:39:15Z logged `backup profile metric update failed` on every 60 s attempt (98+ by 16:15Z). polkit refused its `nmcli connection modify`: `settings.modify.system` and `network-control` are `auth` for a process with no active local session, and the box has had none since it went headless on 2026-11-03. Failover last worked 2026-10-29, while a desktop autologin session existed.
+- The box stayed online only because NetworkManager's connectivity check penalized `wld0` (+20000, metric 20100) at about 14:41Z.
+- Cost: the hotspot carried the full load, about 15 Mbit/s (mostly SWIM ingest; the box normally moves about 190 GB a day). That was 21.9 GB by 18:36Z.
+- Side effect: poller REST fetches (metar, NAS, TFR, FIDS, NOTAM, runsheet) failed from 14:37Z. The host could reach them over the hotspot, but `wld0`'s IPv6 default route still pointed at the dead router.
+
+**Fix:**
+- `config/polkit/49-ctdc-net-failover.rules` grants the operator account exactly those two NetworkManager actions. It's installed with the other root-installed config (ROOTCFG) and checked by `installed-check.sh`.
+- The watchdog's `apply_backup_metric` now sets `ipv4.route-metric` and `ipv6.route-metric` together, and `wait_for_route` also verifies the IPv6 default when the expected uplink holds a global IPv6 address.
+
+**Hotspot IPv6 test** (`/srv/ctdc-ea/hotspot-ipv6-test.relay`, about 3 min, automatic restore):
+- A global address and a default route came up at once. No DNS64 on the box's resolver.
+- Ping under the SWIM load: IPv6 231 ms average vs IPv4 376 ms.
+- `tailscale netcheck`: IPv6 yes, `MappingVariesByDestIP: false`, DERP nyc/iad about 222 ms (466 ms earlier the same day, IPv4 only).
+- NetworkManager's connectivity penalty turned the IPv6 default into a multipath route across the dead `wld0` next hop and `enu1`.
+- Throughput was inconclusive: Cloudflare's test endpoint returned 403 for both address families.
+
+**Decisions (operator 2026-11-17):**
+- **IPv6 first on every uplink, the hotspot included.** `config/network/gai.conf` drops the `precedence ::ffff:0:0/96 100` line, so glibc's defaults prefer IPv6. Every profile gets `ipv6.method auto` with the same metric as IPv4: `jorransgateway 1` 100; `Verizon Hotspot` and `Corporate Traveler WiFi` 600. ~~(superseded 2026-11-18: metrics 600 / 1100 / 1600 and the hotspot profile renamed `Hockey Puck`; see the 2026-11-18 status.)~~
+- **NetworkManager's connectivity check is off** (`config/network/zz-ctdc-connectivity.conf`) until Starlink is the primary. The watchdog is the only route arbiter, and it is switched off only after the watchdog has proven it can fail over.
+- **Open risk:** the 2026-09-02 "hotspot IPv6 throttling", where image builds stalled for 2+ hours over the tether's IPv6. A 3-minute test can't rule out a slow-onset throttle. Watch hotspot IPv6 throughput during the next failover. Rollback: restore the gai.conf precedence line, and set `ipv6.method disabled` on the two hotspot profiles.
+
+**Starlink, planned:**
+- Starlink becomes the primary, `wld0` the second line, `enu1` the third. The watchdog will need three tiers.
+- Run Starlink's router in router mode, not bypass. Starlink's carrier-grade NAT hands out WAN addresses in 100.64.0.0/10, Tailscale's range, and in bypass mode the Pi itself would hold one.
+- Starlink's native IPv6 is what keeps Tailscale paths direct.
+
 ## Topology (re-verified live 2026-10-06; RFC1918/tailnet addresses only)
 
 | Interface | NM connection | Address | Role |
 |---|---|---|---|
-| `wld0` (WiFi) | `jorransgateway` | 10.x.x.x via 10.x.x.x | **primary**, `ipv4.route-metric=100` |
-| `enu1` (USB Ethernet) | `Verizon Hotspot` | 192.168.x.x via 192.168.x.x | **backup**, `ipv4.route-metric=600` |
+| `wld0` (WiFi) | ~~`jorransgateway`~~ `jorransgateway 1` (2026-11-18) | 10.x.x.x via 10.x.x.x | **primary**, ~~`ipv4.route-metric=100`~~ 600, IPv4 and IPv6 (2026-11-18) |
+| `enu1` (USB Ethernet) | ~~`Verizon Hotspot`~~ `Hockey Puck` (renamed 2026-11-18) | 192.168.x.x via 192.168.x.x | **backup**, ~~`ipv4.route-metric=600`~~ 1100, IPv4 and IPv6 (2026-11-18) |
+| `wld0` (WiFi) | `Corporate Traveler WiFi` (the hotspot's own WiFi) | hotspot DHCP | **last resort**, 1600, IPv4 and IPv6 (2026-11-18) |
 | `end0` (built-in) | ~~`Wired connection 1`~~ (superseded 2026-10-25: no NM profile exists for it now; `nmcli con show` lists `jorransgateway`, `Verizon Hotspot`, `tailscale0`, `lo`, `corporatetravel`, `Corporate Traveler WiFi`, 2026-10-26 02:19Z) | — | DOWN / NO-CARRIER, unused |
 
 The WiFi address has changed since the connection was last documented

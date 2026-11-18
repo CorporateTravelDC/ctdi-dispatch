@@ -303,6 +303,12 @@ for rel in .config/systemd/user .config/containers/systemd; do
                 ok "humans.slice is an opt-in multi-human deployment template -- no operator installation required"
                 continue
             fi
+            # 2026-11-12: the header above already calls *.disabled legitimate;
+            # the code warned anyway (acarsdec, staged pending a third dongle).
+            if [[ "${src}" == *.disabled ]]; then
+                ok "${src} is staged disabled (never installed by design)"
+                continue
+            fi
             warn "tracked ${src} has no live installed copy at ${installed} -- fine if deliberately disabled/dormant, otherwise install it"
         elif ! diff -q "${src}" "${installed}" >/dev/null 2>&1; then
             drift "${installed} does not match tracked ${src} -- re-run: cp ${src} ${installed}"

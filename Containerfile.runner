@@ -8,6 +8,8 @@ WORKDIR /build
 COPY src/runner/frontend/package*.json ./
 # 2026-11-04: the vendored, patched deepmerge (package.json devDependency file:./vendor/deepmerge,
 # npm override "$deepmerge"; GHSA-gcqx-w48m-w2h4) must be present before npm ci resolves the lockfile.
+# 2026-11-18: likewise the vendored, patched picomatch (file:./vendor/picomatch, override "$picomatch";
+# GHSA-fc5q-39xc-vjpf). The same COPY carries both.
 COPY src/runner/frontend/vendor/ ./vendor/
 # 2026-10-07: npm ci installs EXACTLY the lockfile and fails if package.json and
 # the lockfile disagree. SUPERSEDED: `RUN npm install`, which could re-resolve

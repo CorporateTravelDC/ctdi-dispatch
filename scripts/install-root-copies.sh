@@ -44,6 +44,10 @@
 #     way an account other than the owner and the operator gets into a private /srv/ctdc-* folder
 #     (operator or convened-council directive, logged to /var/log/ctdc-srv-access.log)
 #
+#   scripts/ctdc-reboot.sh + scripts/ctdc-boot-guard.sh <- corporatetraveldc-boot-guard(.service,-alert.service)
+#     (2026-11-18, operator): commanded reboots vs uncommanded ones; the uncommanded-reboot hold and the
+#     persistent lockdown marker in /var/lib/ctdc-lockdown gate config/polkit/49-ctdc-net-failover.rules
+#
 #   --check   report what would be installed and whether installed copies are current
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -59,14 +63,16 @@ SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-ce
          scripts/agent-remote-control-boot.py
          scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh
          scripts/ctdc-claude-no-agent-hook.py scripts/ctdc-claude-no-registration-hook.py
-         scripts/agent-segmentation/srv-access.sh)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
+         scripts/agent-segmentation/srv-access.sh
+         scripts/ctdc-reboot.sh scripts/ctdc-boot-guard.sh)   # 2026-11-18: commanded-reboot helper + boot guard (failover polkit holds)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
      fail2ban/jail.d/nginx-honeypot-corporatetraveldc.conf fail2ban/jail.d/nginx-limit-req-corporatetraveldc.conf
      fail2ban/filter.d/nginx-honeypot.conf)
 PYLIB=(src/common/__init__.py src/common/board_sign.py)
-ROOTCFG=(config/network/zz-ctdc-connectivity.conf config/network/wifi-sdio-recovery.conf)
+ROOTCFG=(config/network/zz-ctdc-connectivity.conf config/network/wifi-sdio-recovery.conf
+         config/polkit/49-ctdc-net-failover.rules config/network/gai.conf)   # 2026-11-17: failover polkit rule; IPv6-first gai.conf
 # 2026-10-25: Claude Code managed policy (root-owned; Claude cannot edit it) and the empty,
 # read-only GNUPGHOME it hands every Claude process.
 CLAUDE_POLICY_SRC=config/claude-code/managed-settings.json
@@ -100,10 +106,12 @@ UNITS=(
   "systemd/system/corporatetraveldc-agent-leak-scan.timer"
   "systemd/system/corporatetraveldc-agent-remote-control-boot.service"
   "systemd/system/corporatetraveldc-agent-remote-control-boot.timer"
+  "systemd/system/corporatetraveldc-boot-guard.service"
+  "systemd/system/corporatetraveldc-boot-guard-alert.service"
 )
 
 manifest_hash() { awk -v p="$1" '$2==p || $2=="*"p {print $1; exit}' "${REPO}/MANIFEST.sha256"; }
-dest_of() { case "$1" in config/network/zz-ctdc-connectivity.conf) echo /etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) echo /etc/ctdc-wifi-sdio-recovery.conf ;; scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
+dest_of() { case "$1" in config/network/zz-ctdc-connectivity.conf) echo /etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) echo /etc/ctdc-wifi-sdio-recovery.conf ;; config/polkit/49-ctdc-net-failover.rules) echo /etc/polkit-1/rules.d/49-ctdc-net-failover.rules ;; config/network/gai.conf) echo /etc/gai.conf ;; scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
 
 if (( CHECK )); then
   for f in "${SCRIPTS[@]}" "${PYLIB[@]}" "${ROOTCFG[@]}"; do

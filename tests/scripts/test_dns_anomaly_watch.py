@@ -32,3 +32,21 @@ def test_state_paths_renamed_with_migration_source():
     src = (REPO / "scripts/dns-anomaly-watch.py").read_text()
     assert 'STATE_FILE = "/var/lib/corporatetraveldc/dns_anomaly_watch_state.json"' in src
     assert "OLD_STATE_FILE" in src and 'LOG_PREFIX = "dns-anomaly-watch:"' in src
+
+
+def test_known_blocked_uber_domains_are_all_tracked(monkeypatch):
+    # 2026-11-12 parity: every blocked *.uber.com name feeds blocked-hit tracking.
+    m = load(monkeypatch, "")
+    uber_tracked = {d for d in m.TRACKED_ANOMALY_ENDPOINTS if d.endswith(".uber.com")}
+    assert m.KNOWN_BLOCKED == uber_tracked
+    assert {"cn-geo1.uber.com", "pusher.uber.com", "vehicles.uber.com",
+            "driver.android.mobile-config.uber.com"} <= m.KNOWN_BLOCKED
+
+
+def test_unmirrored_uber_denylist_entry_is_logged_not_alerted(monkeypatch, capsys):
+    m = load(monkeypatch, "")
+    rows = sorted(m.TRACKED_ANOMALY_ENDPOINTS) + ["new-block.uber.com", "ads.example.com"]
+    monkeypatch.setattr(m, "query_pihole", lambda sql, db=None: rows)
+    assert m.check_denylist_gaps() == []
+    out = capsys.readouterr().out
+    assert "['new-block.uber.com']" in out and "ads.example.com" not in out

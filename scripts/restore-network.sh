@@ -34,6 +34,12 @@ QUADLET_DIR="/home/${CTDC_USER}/.config/containers/systemd"
 CONTAINERS_CONF="/home/${CTDC_USER}/.config/containers/containers.conf"
 ENV_FILE="/etc/corporatetraveldc/dispatch.env"
 STATE_FILE="/run/corporatetraveldc-lockdown-active"
+# 2026-11-18 (operator): the persistent lockdown marker and the uncommanded-reboot hold (see
+# lockdown.sh, ctdc-boot-guard.sh and config/polkit/49-ctdc-net-failover.rules). This script is the
+# sanctioned way out of a lockdown; it clears all three markers.
+PERSIST_DIR="${CTDC_LOCKDOWN_DIR:-/var/lib/ctdc-lockdown}"
+PERSIST_FILE="${PERSIST_DIR}/lockdown-active"
+HOLD_FILE="${PERSIST_DIR}/uncommanded-reboot-hold"
 
 PASTA_MAPGW_CONTAINERS=(
     "corporatetraveldc-pusher"
@@ -123,10 +129,13 @@ say "--------------------------------------"
 
 (( DRY_RUN )) && say "[DRY-RUN MODE -- no changes will be made]"
 
-if [[ ! -f "${STATE_FILE}" ]]; then
+if [[ ! -f "${STATE_FILE}" && ! -f "${PERSIST_FILE}" && ! -f "${HOLD_FILE}" ]]; then
     say "[SKIP] Not currently locked down -- idempotent no-op"
     exit 0
 fi
+for m in "${STATE_FILE}" "${PERSIST_FILE}" "${HOLD_FILE}"; do
+    [[ -f "$m" ]] && say "  marker present: ${m} ($(head -c 120 "$m" 2>/dev/null | tr -cd '[:print:] '))"
+done
 
 say "Restoring pasta-mode host-reach opt-ins..."
 for svc in "${PASTA_MAPGW_CONTAINERS[@]}"; do
@@ -161,7 +170,14 @@ else
     say "  [SKIP] containers.conf -- already restored or file not found"
 fi
 
-(( DRY_RUN )) || rm -f "${STATE_FILE}"
+if (( DRY_RUN )); then
+    say "  [DRY-RUN] rm -f ${STATE_FILE} ${PERSIST_FILE} ${HOLD_FILE}"
+else
+    rm -f "${STATE_FILE}" "${PERSIST_FILE}" "${HOLD_FILE}"
+    # the operator restoring is the verification of this boot (see ctdc-boot-guard.sh)
+    install -d -m 0755 /run/ctdc-boot-guard
+    printf 'restored %s UTC by=%s reason=%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "${SUDO_USER:-root}" "${REASON:0:200}" > /run/ctdc-boot-guard/verified
+fi
 
 say ""
 say "Restored. Host-reach opt-ins are back in place."

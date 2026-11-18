@@ -1,0 +1,18 @@
+# corporatetraveldc-boot-guard-alert.service -- 2026-11-18 (operator). After the network is up: one
+# priority-5 alert for an uncommanded-reboot hold written this boot, and the lockdown re-assert while the
+# persistent lockdown marker exists (installed lockdown.sh).
+[Unit]
+Description=Boot guard: uncommanded-reboot alert and lockdown re-assert
+Wants=network-online.target
+After=network-online.target corporatetraveldc-boot-guard.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/ctdc-boot-guard.sh scripts/lockdown.sh
+ExecStart=/usr/local/libexec/ctdc/ctdc-boot-guard.sh --alert
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0022
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
