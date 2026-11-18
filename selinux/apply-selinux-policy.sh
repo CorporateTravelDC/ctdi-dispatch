@@ -235,13 +235,23 @@ build_and_load_module "corporatetraveldc-virtqemud"
 build_and_load_module "corporatetraveldc-logind-userns"
 build_and_load_module "corporatetraveldc-fail2ban-lockdown"
 build_and_load_module "corporatetraveldc-fail2ban-cf-egress"
+build_and_load_module "corporatetraveldc-guard-markers"
+# the failover polkit rule's markers (config/polkit/49-ctdc-net-failover.rules): one private type that
+# polkitd may stat; fcontext entries keep it through restorecon (the type transitions label new ones)
+for spec in "/run/ctdc-boot-guard(/.*)?" "/run/corporatetraveldc-lockdown-active" "/var/lib/ctdc-lockdown(/.*)?"; do
+    run semanage fcontext -a -t ctdc_guard_state_t "${spec}" 2>/dev/null \
+        || run semanage fcontext -m -t ctdc_guard_state_t "${spec}"
+done
+for path in /run/ctdc-boot-guard /run/corporatetraveldc-lockdown-active /var/lib/ctdc-lockdown; do
+    if [[ -e "$path" ]]; then run restorecon -RF "$path"; fi
+done
 
 # ---------------------------------------------------------------------------
 # Step 12 -- Verify
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Step 12: Verify ---"
-for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown corporatetraveldc-fail2ban-cf-egress; do
+for mod in corporatetraveldc-sdr-usb corporatetraveldc-nginx-proxy corporatetraveldc-virtqemud corporatetraveldc-logind-userns corporatetraveldc-fail2ban-lockdown corporatetraveldc-fail2ban-cf-egress corporatetraveldc-guard-markers; do
     semodule -l 2>/dev/null | grep -q "^${mod}$" \
         && echo "[OK]  module: ${mod}" \
         || echo "[FAIL] module: ${mod}" >&2

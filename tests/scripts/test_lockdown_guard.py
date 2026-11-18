@@ -90,6 +90,50 @@ def test_errors_never_fall_open(tmp_path, mode):
 
 
 @needs_node
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+@pytest.mark.parametrize("locked,markers", [
+    ("run/ctdc-boot-guard", ["run/ctdc-boot-guard/verified"]),                        # verified unreadable
+    ("var/lib/ctdc-lockdown", ["var/lib/ctdc-lockdown/uncommanded-reboot-hold"]),     # a hold unreadable
+    ("var/lib/ctdc-lockdown", []),                                                    # cannot prove absent
+])
+def test_an_unreadable_marker_is_an_error_never_absent(tmp_path, locked, markers):
+    """2026-11-18: SELinux denied polkitd getattr on the markers and `[ -e ]` read that as absent --
+    `verified` vanished (NO) and a real hold would have vanished too (YES = fail open). A permission
+    failure must now give NOT_HANDLED (NetworkManager's own default), never YES and never a guess."""
+    _touch(tmp_path, "run/ctdc-boot-guard/verified")
+    (tmp_path / locked).mkdir(parents=True, exist_ok=True)
+    for m in markers:
+        _touch(tmp_path, m)
+    d = tmp_path / locked
+    d.chmod(0)
+    try:
+        r = _decide(tmp_path)
+    finally:
+        d.chmod(0o755)
+    assert r["result"] == "not_handled", r
+    assert any("cannot read marker" in l for l in r["logs"]), r
+
+
+def test_rule_never_tests_existence_with_dash_e():
+    body = "\n".join(l for l in RULE.read_text().splitlines() if not l.lstrip().startswith("//"))
+    assert "[ -e" not in body and "[ ! -e" not in body
+    assert "No such file or directory" in body and "LC_ALL=C" in body
+
+
+def test_selinux_module_lets_polkitd_see_the_markers_and_nothing_more():
+    te = (ROOT / "selinux/corporatetraveldc-guard-markers.te").read_text()
+    allows = [l.strip() for l in te.splitlines() if l.strip().startswith("allow policykit_t")]
+    assert allows == ["allow policykit_t ctdc_guard_state_t:dir { getattr search };",
+                      "allow policykit_t ctdc_guard_state_t:file getattr;"]
+    for name in ('"ctdc-boot-guard"', '"corporatetraveldc-lockdown-active"', '"ctdc-lockdown"'):
+        assert name in te
+    apply = (ROOT / "selinux/apply-selinux-policy.sh").read_text()
+    assert 'build_and_load_module "corporatetraveldc-guard-markers"' in apply
+    for spec in ("/run/ctdc-boot-guard(/.*)?", "/run/corporatetraveldc-lockdown-active", "/var/lib/ctdc-lockdown(/.*)?"):
+        assert spec in apply
+
+
+@needs_node
 @pytest.mark.parametrize("user,action", [("ctdc-agent-anthropic-claude-ea", MODIFY), ("root", CONTROL),
                                          ("corporatetraveldc", "org.freedesktop.NetworkManager.wifi.scan")])
 def test_other_users_and_actions_are_not_handled(tmp_path, user, action):

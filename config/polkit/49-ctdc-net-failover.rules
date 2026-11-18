@@ -12,6 +12,11 @@
 // own default ("auth") applies: it fails closed to the pre-2026-11-17 behaviour, never open to YES.
 // /var/lib/ctdc-lockdown is root-only-writable, so the account this rule grants cannot clear a hold.
 // Holds are cleared only by restore-network.sh (all) or ctdc-reboot.sh --clear-hold (the reboot hold).
+// 2026-11-18: each path is probed with stat, never `[ -e ]`. `[ -e ]` reads ANY failure -- an SELinux
+// denial included -- as "absent": polkitd (policykit_t) was denied getattr on the var_run_t markers, so
+// `verified` looked absent (NO, failover refused) and a real hold would have looked absent too (YES, fail
+// OPEN). Only "No such file or directory" now means absent; any other stat failure is error -> NOT_HANDLED.
+// The markers carry ctdc_guard_state_t, which polkitd may stat (selinux/corporatetraveldc-guard-markers.te).
 polkit.addRule(function(action, subject) {
     if (subject.user != "corporatetraveldc" ||
         (action.id != "org.freedesktop.NetworkManager.settings.modify.system" &&
@@ -21,11 +26,16 @@ polkit.addRule(function(action, subject) {
     var state;
     try {
         state = polkit.spawn(["/usr/bin/sh", "-c",
-            "if [ ! -e /run/ctdc-boot-guard/verified ]; then echo hold:boot-unverified; exit 0; fi; " +
+            "LC_ALL=C; export LC_ALL; " +
+            "probe() { if o=$(stat -c %i -- \"$1\" 2>&1); then echo present; else " +
+            "case \"$o\" in *'No such file or directory'*) echo absent ;; *) echo error ;; esac; fi; }; " +
+            "case $(probe /run/ctdc-boot-guard/verified) in " +
+            "absent) echo hold:boot-unverified; exit 0 ;; present) ;; *) echo error:verified; exit 0 ;; esac; " +
             "for f in /run/corporatetraveldc-lockdown-active " +
             "/var/lib/ctdc-lockdown/lockdown-active " +
             "/var/lib/ctdc-lockdown/uncommanded-reboot-hold; do " +
-            "if [ -e \"$f\" ]; then echo \"hold:${f##*/}\"; exit 0; fi; done; echo clear"]).trim();
+            "case $(probe \"$f\") in present) echo \"hold:${f##*/}\"; exit 0 ;; absent) ;; " +
+            "*) echo \"error:${f##*/}\"; exit 0 ;; esac; done; echo clear"]).trim();
     } catch (e) {
         polkit.log("ctdc-net-failover: NOT_HANDLED " + action.id + " (hold check failed)");
         return polkit.Result.NOT_HANDLED;
@@ -37,6 +47,10 @@ polkit.addRule(function(action, subject) {
     if (state.indexOf("hold:") == 0) {
         polkit.log("ctdc-net-failover: NO " + action.id + " (" + state + ")");
         return polkit.Result.NO;
+    }
+    if (state.indexOf("error:") == 0) {
+        polkit.log("ctdc-net-failover: NOT_HANDLED " + action.id + " (cannot read marker " + state.substring(6) + ")");
+        return polkit.Result.NOT_HANDLED;
     }
     polkit.log("ctdc-net-failover: NOT_HANDLED " + action.id + " (unexpected hold check output)");
     return polkit.Result.NOT_HANDLED;
