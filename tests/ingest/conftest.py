@@ -38,6 +38,7 @@ _CAPTURE_DIR_ATTRS = [
     ("ingest.parsers.itws_parser", "_DEBUG_SAMPLE_DIR"),
     ("ingest.parsers.smes_parser", "_DEBUG_SAMPLE_DIR"),
     ("ingest.swim_client", "_BAD_MSG_CAPTURE_DIR"),
+    ("ingest.census", "SAMPLE_DIR"),   # 2026-11-19 census sample store
 ]
 
 # Secondary capture dirs (verified present 2026-08-30; probed with the

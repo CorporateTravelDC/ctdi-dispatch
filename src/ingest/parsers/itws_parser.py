@@ -70,6 +70,8 @@ import json
 import logging
 import os
 import xml.etree.ElementTree as ET
+
+from ingest import census as _census
 from datetime import datetime, timezone
 
 from common import db
@@ -576,6 +578,8 @@ def parse_itws_message(xml_bytes: bytes) -> list[dict]:
         return []
 
     handler = _PRODUCT_HANDLERS.get(product_name)
+    _census.record("itws", product_name, handler is not None,
+                   sample=xml_bytes if handler is None else None)
     if handler is None:
         if product_name not in _KNOWN_UNHANDLED_PRODUCTS:
             log.info("itws: unrecognized product_msg_name %r at %s", product_name, airport)

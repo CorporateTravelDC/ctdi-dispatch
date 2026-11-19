@@ -125,6 +125,8 @@ import logging
 import os
 import re
 import xml.etree.ElementTree as ET
+
+from ingest import census as _census
 from datetime import datetime, timezone
 
 from common import db
@@ -689,8 +691,11 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
             if msg_type not in _KNOWN_MSG_TYPES:
                 _capture_unknown_msgtype_sample(xml_bytes, msg_type)
                 log.info("tfms: unknown fiMessage msgType=%r captured for review", msg_type)
+                _census.record("tfms", f"fi/{msg_type}", False, sample=xml_bytes)
                 continue
             handler = _MSG_TYPE_HANDLERS.get(msg_type)
+            _census.record("tfms", f"fi/{msg_type}", handler is not None,
+                           sample=xml_bytes if handler is None else None)
             if handler is None:
                 continue
             result = handler(fi_message)
@@ -717,6 +722,8 @@ def parse_tfms_message(xml_bytes: bytes) -> list[dict]:
                     log.debug("tfms: removal-activity check failed "
                               "(non-fatal): %s", e)
             handler = _FLTD_MSG_TYPE_HANDLERS.get(msg_type)
+            _census.record("tfms", f"fltd/{msg_type}", handler is not None,
+                           sample=ET.tostring(fltd_message) if handler is None else None)
             if handler is None:
                 if msg_type not in _KNOWN_UNHANDLED_FLTD_TYPES:
                     _capture_unknown_msgtype_sample(xml_bytes, msg_type)

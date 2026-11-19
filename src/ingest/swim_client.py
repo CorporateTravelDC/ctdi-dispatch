@@ -34,6 +34,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+from ingest import census as _census
 from ingest import failover
 from ingest.config import NmsConfig, NmsFeedConfig
 from common import db as _db
@@ -853,6 +854,32 @@ def _handle_tfdm_message(payload: bytes, headers: dict | None = None) -> bool:
     return handle(payload, headers)
 
 
+# 2026-11-19: AH (Flight Amendment Information) and HU (Flight Plan Update Information) carry FH's
+# fields and structure (SFDPS Data Consumer Reference Manual v2.1.4) and were parsed then thrown away
+# here; an amended or re-filed plan whose FH we missed never became a row. Every other parsed type is
+# counted by the census (ingest/census.py), so nothing is dropped silently.
+_FDPS_WRITE_SOURCES = frozenset({"FH", "AH", "HU", "TH", "CL", "HP", "OH"})
+
+
+def _census_wrap(feed: str, fn):
+    """Doc-level census for feeds whose parsers have no per-type hook: count and sample every document
+    type (root element, plus msgType when present). Counts only; never marks a type dropped."""
+    def wrapper(payload: bytes, *args, **kwargs):
+        try:
+            hdr = args[0] if args and isinstance(args[0], dict) else None
+            if hdr and (hdr.get("DATA_GROUP") or hdr.get("MESSAGE_TYPE")):
+                dt = f"ttp:{hdr.get('DATA_GROUP') or '?'}/{hdr.get('MESSAGE_TYPE') or '?'}"
+            else:
+                dt = "doc:" + _census.doc_type(payload)
+            _census.record(feed, dt, True)
+            _census.sample(feed, dt, payload)
+        except Exception:
+            pass
+        return fn(payload, *args, **kwargs)
+    wrapper.__wrapped__ = fn
+    return wrapper
+
+
 def _handle_fdps_message(payload: bytes) -> bool:
     # 2026-08-30 (SWIM audit): switched from parse_fdps_message() (first
     # message only) to the batch-aware parse_fdps_messages() -- real FIXM
@@ -867,7 +894,11 @@ def _handle_fdps_message(payload: bytes) -> bool:
     accepted = False
     for parsed in parse_fdps_messages(payload):
         source = parsed.get("source", "")
-        if source in ("FH", "TH", "CL", "HP", "OH"):
+        written = source in _FDPS_WRITE_SOURCES
+        _census.record("fdps", source, written)
+        if source in ("AH", "HU"):
+            _census.sample("fdps", source, payload)   # new mapping: keep real examples for review
+        if written:
             if write_flight_event(parsed):
                 accepted = True
         check_marine_one(parsed)
@@ -994,19 +1025,20 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
     """
     thread_stop = threading.Event()
     _start_counter_flush_thread()
+    _census.start_flush_thread()
 
     feed_sessions: list[tuple[str, _NmsFeedSession]] = []
 
     # feed_name key = heartbeat name stamped in feed_state (must match poller push_feed refs)
     # aim uses "fns" key to match the existing push:fns reference in notam REST fetcher
     _FEED_HANDLERS = {
-        "fdps":  (cfg.fdps,  _handle_fdps_message),
-        "stdds": (cfg.stdds, _handle_stdds_message),
-        "tfms":  (cfg.tfms,  _handle_tfms_message),
-        "fns":   (cfg.aim,   _handle_aim_message),   # AIM creds, fns heartbeat key
-        "tbfm":  (cfg.tbfm,  _handle_tbfm_message),
-        "itws":  (cfg.itws,  _handle_itws_message),
-        "tfdm":  (cfg.tfdm,  _handle_tfdm_message),
+        "fdps":  (cfg.fdps,  _handle_fdps_message),            # per-flight census inside
+        "stdds": (cfg.stdds, _census_wrap("stdds", _handle_stdds_message)),
+        "tfms":  (cfg.tfms,  _census_wrap("tfms", _handle_tfms_message)),
+        "fns":   (cfg.aim,   _census_wrap("fns", _handle_aim_message)),   # AIM creds, fns heartbeat key
+        "tbfm":  (cfg.tbfm,  _census_wrap("tbfm", _handle_tbfm_message)),
+        "itws":  (cfg.itws,  _census_wrap("itws", _handle_itws_message)),
+        "tfdm":  (cfg.tfdm,  _census_wrap("tfdm", _handle_tfdm_message)),
     }
 
     # Map heartbeat key → env var name for credential warnings
@@ -1076,4 +1108,5 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
     await stop.wait()
     thread_stop.set()
     _stop_counter_flush_thread()  # final flush so the last partial window isn't lost
+    _census.stop_flush_thread()
     log.info("swim_client: stop signalled to all feed threads")

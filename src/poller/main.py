@@ -501,6 +501,7 @@ class WatchlistSweep:
     TRAIN_SWEEP_INTERVAL = 300    # check active train entries via amtraker
     VESSEL_SWEEP_INTERVAL = 300   # check active vessel entries via AISHub/Kpler
     LOCAL_AC_SWEEP_INTERVAL = 60  # cross-ref local_aircraft against watchlist
+    FLIGHT_EVENTS_EXPIRY_INTERVAL = 1800  # 2026-11-19: close never-updated flight_events rows (common/flight_expiry.py)
     FAA_REGISTRY_INTERVAL = 1 * 86400  # daily — FAA actually refreshes
     # ReleasableAircraft.zip daily at 23:30 CT; the registry itself only
     # changes that once/day regardless, so this mostly buys faster recovery
@@ -524,6 +525,7 @@ class WatchlistSweep:
         self._last_train = 0.0
         self._last_vessel = 0.0
         self._last_local_ac = 0.0
+        self._last_fe_expiry = 0.0
         # Delay first FAA registry pull by 60s so startup I/O settles, then
         # check whether an import has already happened this week.
         self._last_faa_registry = self._faa_registry_last_import_epoch()
@@ -564,6 +566,9 @@ class WatchlistSweep:
         if now - self._last_expiry >= self.EXPIRY_INTERVAL:
             self._last_expiry = now
             await asyncio.get_event_loop().run_in_executor(None, self._do_expiry_sweep)
+        if now - self._last_fe_expiry >= self.FLIGHT_EVENTS_EXPIRY_INTERVAL:
+            self._last_fe_expiry = now
+            await asyncio.get_event_loop().run_in_executor(None, self._do_flight_events_expiry)
         if now - self._last_flight >= self.FLIGHT_SWEEP_INTERVAL:
             self._last_flight = now
             await asyncio.get_event_loop().run_in_executor(None, self._do_flight_sweep)
@@ -594,6 +599,14 @@ class WatchlistSweep:
                 log.info("watchlist: swept %d expired transient entries", removed)
         except Exception as e:
             log.error("watchlist expiry sweep error: %s", e)
+
+    @staticmethod
+    def _do_flight_events_expiry() -> None:
+        try:
+            from common.flight_expiry import sweep
+            sweep()
+        except Exception as e:
+            log.error("flight_events expiry sweep error: %s", e)
 
     @staticmethod
     def _do_flight_sweep() -> None:

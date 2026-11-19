@@ -2639,6 +2639,50 @@ def record_feed_bytes(feed_name: str, bytes_in: int,
         """, (feed_name, bytes_in, records_in, records_accepted))
 
 
+_SWIM_CENSUS_DDL = """
+CREATE TABLE IF NOT EXISTS swim_message_census (
+    hour_start  DOUBLE PRECISION NOT NULL,
+    feed        TEXT NOT NULL,
+    msg_type    TEXT NOT NULL,
+    handled     INTEGER NOT NULL,
+    n           INTEGER NOT NULL DEFAULT 0,
+    updated_at  DOUBLE PRECISION,
+    PRIMARY KEY (hour_start, feed, msg_type, handled)
+)"""
+
+
+def add_swim_message_census(rows: list[tuple[int, str, str, int, int]]) -> None:
+    """2026-11-19 (ingest/census.py): add per-hour message-type counts in ONE batched write.
+    rows = (hour_start, feed, msg_type, handled 0/1, n). Postgres table: pg_schema/0089."""
+    if not rows:
+        return
+    from common import db_backend
+    now = time.time()
+    with conn() as c:
+        if db_backend.backend() != "postgres":
+            c.execute(_SWIM_CENSUS_DDL)
+        for h, feed, mt, handled, n in rows:
+            c.execute("""
+                INSERT INTO swim_message_census (hour_start, feed, msg_type, handled, n, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (hour_start, feed, msg_type, handled) DO UPDATE SET
+                    n = swim_message_census.n + excluded.n, updated_at = excluded.updated_at
+            """, (h, feed, mt, int(handled), int(n), now))
+
+
+def get_swim_message_census(since: float) -> list[dict]:
+    """Counts since `since` (epoch), newest hour first."""
+    from common import db_backend
+    with conn() as c:
+        if db_backend.backend() != "postgres":
+            c.execute(_SWIM_CENSUS_DDL)
+        rows = c.execute("""
+            SELECT hour_start, feed, msg_type, handled, n FROM swim_message_census
+            WHERE hour_start >= ? ORDER BY hour_start DESC, n DESC
+        """, (since,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_feed_data_usage() -> list[dict]:
     """Return per-feed data usage snapshot."""
     with conn() as c:
@@ -5322,6 +5366,7 @@ def get_flight_plan_by_callsign(callsign: str, destination_hint: str | None = No
             row = c.execute("""
                 SELECT * FROM flight_events
                 WHERE airline = ? AND flight_num = ? AND destination = ?
+                  AND COALESCE(status, '') != 'expired'
                 ORDER BY (status != 'cancelled') DESC, updated_at DESC
                 LIMIT 1
             """, (airline, flight_num, destination_hint.upper())).fetchone()
@@ -5344,6 +5389,7 @@ def get_flight_plan_by_callsign(callsign: str, destination_hint: str | None = No
                 SELECT * FROM flight_events
                 WHERE airline = ? AND flight_num = ? AND destination IN ({placeholders})
                   AND updated_at > ?
+                  AND COALESCE(status, '') != 'expired'
                 ORDER BY (status != 'cancelled') DESC, updated_at DESC
                 LIMIT 1
             """, (airline, flight_num, *_DC_AREA_AIRPORTS, cutoff)).fetchone()
@@ -5351,6 +5397,7 @@ def get_flight_plan_by_callsign(callsign: str, destination_hint: str | None = No
             row = c.execute("""
                 SELECT * FROM flight_events
                 WHERE airline = ? AND flight_num = ?
+                  AND COALESCE(status, '') != 'expired'
                 ORDER BY (status != 'cancelled') DESC, updated_at DESC
                 LIMIT 1
             """, (airline, flight_num)).fetchone()

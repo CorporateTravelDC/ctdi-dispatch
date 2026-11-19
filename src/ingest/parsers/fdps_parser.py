@@ -53,6 +53,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from common import db
+from ingest import census as _census
 from common.push_dedup import PushDedup, content_hash
 from ingest.parsers.geo_filter import (
     passes_geo_filter,
@@ -654,7 +655,9 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
     batch fix couldn't fork two copies of it."""
     source = (flight.get("source") or "").upper().strip()
     if source not in _KNOWN_SOURCES_FIXM30:
-        log.debug("fdps: FIXM 3.0 -- unhandled source type %r", source)
+        # 2026-11-19: counted, warned once per type per hour and sampled (ingest/census.py) -- this
+        # debug-only drop hid HF/RH until 08-17, HU until 08-30, and NP/NU/DH/HV/HR until 11-19.
+        _census.record("fdps", source or "?", False, sample=ET.tostring(flight))
         return None
 
     centre = flight.get("centre")
@@ -731,7 +734,7 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
     flight_status = status_elem.get("fdpsFlightStatus") if status_elem is not None else None
     if source == "CL":
         flight_status = "CANCELLED"
-    elif flight_status is None and source in ("FH", "TH", "AH"):
+    elif flight_status is None and source in ("FH", "TH", "AH", "HU"):
         flight_status = "ACTIVE"
 
     # 2026-08-30 late-night (Detector D groundwork): the agreed NAS route
@@ -764,7 +767,8 @@ def _parse_fixm30_flight_element(flight: ET.Element, raw_xml: str) -> dict | Non
     # 2026-10-23: a newer filing now replaces it (was first-filing-wins, which
     # left days-old times on callsign-keyed rows reused across days).
     etd_estimated: str | None = None
-    if dep_elem is not None and source == "FH":
+    # 2026-11-19: AH (amendment) and HU (plan update) share FH's structure (SFDPS reference manual v2.1.4)
+    if dep_elem is not None and source in ("FH", "AH", "HU"):
         etd_el = _find_path_local30(dep_elem, "runwayPositionAndTime", "runwayTime", "estimated")
         if etd_el is not None:
             etd_estimated = (etd_el.get("time") or "").strip() or None
