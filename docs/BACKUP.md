@@ -131,6 +131,39 @@ The first full archive is about 10–14 GB before deduplication and compression:
 
 ~~Daily increments are expected to be small, mostly the dispatch dump.~~ (corrected 2026-10-15: they are not small. Borg's `deduplicated_size` was 4.5 GB, 5.0 GB and 4.2 GB for the 10-12, 10-13 and 10-14 archives (superseded 2026-10-25: 2.9, 2.5, 3.1, 2.2 and 2.1 GB for the 10-21 to 10-25 archives, `original_size` 18.0-20.0 GB; ledger `backup` entries). The compressed dispatch dump changes almost entirely every night, so it barely deduplicates, and each nightly sync uploads several GB, roughly 30 min or more at the 2.5 MB/s soft cap.) This still fits in the 2 TB Proton allotment.
 
+## Stage space guard (2026-11-18)
+
+On 2026-11-18 13:17-13:54Z the nightly run died with its stage filesystem full: the uncompressed dispatch
+dump (`-Z 0`, kept uncompressed so Borg can deduplicate it) had reached 52 GB, where October's runs
+staged about 7 GB. The dispatch database was 38 GB that day, and 27 GB of it was `demo_snapshots`, whose
+TOAST pg_dump writes out decompressed. Nothing stopped the dump before the disk ran out.
+
+Now:
+
+- **Preflight.** Before any dump, the run reads both databases' sizes and needs an estimated stage of
+  `(dispatch - compressed tables) x BACKUP_STAGE_FACTOR + compressed tables x 0.5 + Nextcloud x factor`
+  plus `BACKUP_MIN_FREE_GB` free on the stage filesystem. Otherwise it stops before writing anything,
+  says by how much it is short, and the unit fails (its OnFailure alert fires).
+- **Hard limit.** Every dump streams through `scripts/backup/stage_guard.py limit`, which stops the dump
+  and deletes the partial file once it would leave less than `BACKUP_MIN_FREE_GB` free. An estimate that
+  is wrong can fail a backup; it can no longer fill a disk.
+
+| setting (dispatch.env) | default | meaning |
+|---|---|---|
+| `BACKUP_MIN_FREE_GB` | 10 | space always left free on the stage filesystem |
+| `BACKUP_STAGE_FACTOR` | 2.0 | uncompressed stage size per byte of live database (TOAST expands) |
+| `BACKUP_COMPRESS_TABLES` | empty | tables whose data leaves the uncompressed dump for a second, compressed (`-Z 6`) dump archived alongside it |
+
+**Operator decision pending.** With the defaults, the database as it stands no longer fits the USB stage,
+so the guard stops the backup cleanly every night until one of these is chosen:
+
+1. `BACKUP_COMPRESS_TABLES=demo_snapshots`: all data is still backed up; `demo_snapshots` loses Borg
+   deduplication, so each night's compressed copy is new data for the repository and for the off-box
+   sync (size to be measured on the first run).
+2. A retention rule for `demo_snapshots` (the demo recorder table grows every 5 minutes), so the table
+   itself stays small. This changes what is kept, so it is a data-policy decision.
+3. More stage space (a larger backup disk).
+
 ## Schedule, restore test and freshness (2026-10-11)
 
 | Unit | When | What |

@@ -248,11 +248,17 @@ fp_sudo()  {
 team_accounts() {
   { [[ -r /etc/ctdc-accounts.conf ]] && awk '!/^#/ && NF{print $1}' /etc/ctdc-accounts.conf
     for g in ctdc-agents ctdc-ops; do getent group "$g" | cut -d: -f4 | tr ',' '\n'; done; } | grep -v '^$' | sort -u; }
+# 2026-11-18: one line per team account. A retired account (no passwd entry, or a nologin/false shell)
+# reads "retired", so retiring an account is ONE recorded change, not an "unreadable" line that looks
+# like a fault (11-15: the retired openai accounts' lines held the weekly external-image update).
+team_key_line() { local a="$1" pw h sh f
+  pw=$(getent passwd "$a" || true)
+  if [[ -z "$pw" ]]; then printf '%s retired\n' "$a"; return; fi
+  h=$(cut -d: -f6 <<<"$pw"); sh=$(cut -d: -f7 <<<"$pw"); f="$h/.ssh/authorized_keys"
+  case "$sh" in */nologin|*/false) printf '%s retired\n' "$a"; return ;; esac
+  if [[ -r "$f" ]]; then printf '%s %s\n' "$a" "$(sha256sum "$f" | cut -c1-16)"; else printf '%s unreadable\n' "$a"; fi; }
 fp_team_keys() {
-  { for a in $(team_accounts); do
-      h=$(getent passwd "$a" | cut -d: -f6); f="$h/.ssh/authorized_keys"
-      if [[ -r "$f" ]]; then printf '%s %s\n' "$a" "$(sha256sum "$f" | cut -c1-16)"; else printf '%s unreadable\n' "$a"; fi
-    done; } | sha256sum | cut -c1-16; }
+  { for a in $(team_accounts); do team_key_line "$a"; done; } | sha256sum | cut -c1-16; }
 # 2026-10-06: listeners in the kernel's ephemeral range are excluded --
 # tailscaled's peerapi binds a RANDOM port on each tailnet address every time
 # it starts (41661/40034 after the 06:17 ET reboot), so the fingerprint
@@ -263,10 +269,7 @@ fp_ports_raw() { local lo hi; read -r lo hi < /proc/sys/net/ipv4/ip_local_port_r
 fp_ports() { fp_ports_raw | sha256sum | cut -c1-16; }
 fp_units_raw() { ls "${HOME}/.config/containers/systemd/" "${HOME}/.config/systemd/user/" 2>/dev/null | sort; }
 fp_units() { fp_units_raw | sha256sum | cut -c1-16; }
-fp_team_keys_raw() { for a in $(team_accounts); do
-      h=$(getent passwd "$a" | cut -d: -f6); f="$h/.ssh/authorized_keys"
-      if [[ -r "$f" ]]; then printf '%s %s\n' "$a" "$(sha256sum "$f" | cut -c1-16)"; else printf '%s unreadable\n' "$a"; fi
-    done; }
+fp_team_keys_raw() { for a in $(team_accounts); do team_key_line "$a"; done; }
 # 2026-10-06: the raw input behind each hash is kept next to it (<name>.raw)
 # so a finding can say WHAT changed -- the 17:57Z run reported four hashes
 # and nothing else, and every one had to be reconstructed by hand. The hash

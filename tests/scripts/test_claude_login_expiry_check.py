@@ -50,10 +50,39 @@ def test_status_prints_utc_and_et(tmp_path):
 
 
 def test_missing_or_signed_out(tmp_path):
+    # 2026-11-18: signed out / no OAuth / changed format are reported (one alert attempt each, exit 0),
+    # not a daily unit failure; only an unreadable file exits 2.
     p = tmp_path / "credentials.json"
     p.write_text(json.dumps({"mcpOAuth": {}}))
+    r = run(tmp_path, p)
+    assert r.returncode == 0 and "no-oauth:" in r.stdout
+    r = run(tmp_path, tmp_path / "absent.json")
+    assert r.returncode == 0 and "absent:" in r.stdout and "does not exist" in r.stdout
+    p.write_text("{not json")
     assert run(tmp_path, p).returncode == 2
-    assert run(tmp_path, tmp_path / "absent.json").returncode == 2
+
+
+def test_changed_format_names_keys_never_values(tmp_path):
+    p = tmp_path / "credentials.json"
+    p.write_text(json.dumps({"claudeAiOauth": {"accessToken": "placeholder-not-a-token", "expiresAt": 1}}))
+    r = run(tmp_path, p)
+    assert r.returncode == 0 and "no-field:" in r.stdout and "accessToken,expiresAt" in r.stdout
+    assert "placeholder-not-a-token" not in r.stdout + r.stderr
+
+
+def test_condition_alert_once_after_success(tmp_path):
+    p = tmp_path / "absent.json"
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state/last-condition").write_text("absent\n")       # as if the alert had gone out
+    r = run(tmp_path, p)
+    assert r.returncode == 0 and r.stdout == ""                       # no repeat
+    r = run(tmp_path, creds(tmp_path, 400))                           # sign-in clears the condition
+    assert r.returncode == 0 and not (tmp_path / "state/last-condition").exists()
+
+
+def test_status_reports_condition(tmp_path):
+    r = run(tmp_path, tmp_path / "absent.json", "--status")
+    assert r.returncode == 0 and "absent" in r.stdout
 
 
 def test_new_sign_in_clears_alert_state(tmp_path):

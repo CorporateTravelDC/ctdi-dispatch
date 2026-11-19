@@ -57,14 +57,29 @@ def env_value(key: str, path: Path) -> str:
     return ""
 
 
-def expiry() -> dt.datetime | None:
+def read_login() -> tuple[str, dt.datetime | None, str]:
+    """(state, expiry, detail). state: ok | absent | no-oauth | no-field | unreadable.
+    2026-11-18: a missing file and a changed format were one daily exit-2 failure since 11-15;
+    they are now told apart, alerted once each, and only an unreadable file is a unit failure.
+    detail never carries a value -- at most the NAMES of the oauth object's keys."""
+    if not CREDS.exists():
+        return "absent", None, f"{CREDS} does not exist (signed out of Claude Code on this account)"
     try:
-        v = json.loads(CREDS.read_text()).get("claudeAiOauth", {}).get("refreshTokenExpiresAt")
-    except (OSError, ValueError):
-        return None
+        doc = json.loads(CREDS.read_text())
+    except (OSError, ValueError) as e:
+        return "unreadable", None, f"{CREDS} could not be read or parsed ({type(e).__name__})"
+    oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
+    if not isinstance(oauth, dict):
+        return "no-oauth", None, f"{CREDS} has no claudeAiOauth object (signed out, or an API-key login)"
+    v = oauth.get("refreshTokenExpiresAt")
     if not isinstance(v, (int, float)):
-        return None
-    return dt.datetime.fromtimestamp(v / 1000 if v > 1e12 else v, dt.timezone.utc)
+        keys = ",".join(sorted(k for k in oauth if isinstance(k, str)))[:200]
+        return "no-field", None, f"claudeAiOauth has no numeric refreshTokenExpiresAt (format changed?; keys: {keys})"
+    return "ok", dt.datetime.fromtimestamp(v / 1000 if v > 1e12 else v, dt.timezone.utc), ""
+
+
+def expiry() -> dt.datetime | None:
+    return read_login()[1]
 
 
 def label(t: dt.datetime) -> str:
@@ -88,10 +103,34 @@ def send(title: str, msg: str, priority: int) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    exp = expiry()
-    if exp is None:
-        log(f"no Claude login expiry found in {CREDS} (signed out, or the file format changed)")
+    state, exp, detail = read_login()
+    if state == "unreadable":
+        log(detail)
         return 2
+    if exp is None:
+        if argv[:1] == ["--status"]:
+            print(f"Claude login ({ACCOUNT}): {state}: {detail}")
+            return 0
+        cond_file = STATE_DIR / "last-condition"
+        try:
+            if cond_file.read_text().strip() == state:
+                return 0                                   # already alerted for this condition
+        except OSError:
+            pass
+        what = {"absent": "no Claude Code login on this account",
+                "no-oauth": "no Claude Code OAuth login on this account",
+                "no-field": "Claude Code login file format changed; the expiry can't be read"}[state]
+        log(f"{state}: {detail}")
+        if send(f"Claude login: {what} ({ACCOUNT})",
+                f"{what.capitalize()} ({detail}). Sign in with /login if this account should have one; "
+                f"agent accounts' logins are watched by team-liveness.", 4):
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            cond_file.write_text(state + "\n")
+        return 0
+    try:
+        (STATE_DIR / "last-condition").unlink()
+    except OSError:
+        pass
     left_h = (exp - dt.datetime.now(dt.timezone.utc)).total_seconds() / 3600
     if argv[:1] == ["--status"]:
         print(f"Claude login ({ACCOUNT}) expires {label(exp)}; {left_h:.1f} h left "

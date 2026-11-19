@@ -120,8 +120,8 @@ _RSS_CATALOG: dict[str, list[dict]] = {
     "trains_yachts": [
         {"name": "Railway-News",              "url": "https://railway-news.com/feed/"},
         {"name": "Railway Gazette",            "url": "https://www.railwaygazette.com/rss"},
-        {"name": "Baird Maritime (Shipbuilding)", "url": "https://www.bairdmaritime.com/feed"},
-        {"name": "Trade Only Today",           "url": "https://tradeonlytoday.com/feed"},
+        {"name": "Baird Maritime (Shipbuilding)", "url": "https://www.bairdmaritime.com/stories.rss"},
+        {"name": "Trade Only Today",           "url": "https://tradeonlytoday.com/feed/"},
     ],
     # Added 2026-08-07 per operator request -- single category, multiple
     # signal types (folds in counter-UAS, previously only an incidental

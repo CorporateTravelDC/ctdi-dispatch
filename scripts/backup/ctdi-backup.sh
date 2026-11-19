@@ -38,7 +38,7 @@
 #                            = no check. When the USB drops, its mount point is an empty directory on the
 #                            NVMe and a backup would silently fill the root filesystem (2026-11-03).
 #
-# Usage: ctdi-backup.sh [--no-sync] [--dry-run]
+# Usage: ctdi-backup.sh [--no-sync] [--dry-run] [--preflight-only]
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -79,7 +79,8 @@ NEXTCLOUD_PG=nextcloud-db
 BACKUP_EXCLUDED_INSTANCES=(corporatetraveldc-pgsql-demo)   # rebuildable by backfill, never dumped
 LADD_TABLES=(faa_ladd_aircraft faa_ladd_removals)   # CUI: identifiers of LADD-listed aircraft
 SYNC=1; DRY=0
-for a in "$@"; do case "$a" in --no-sync) SYNC=0 ;; --dry-run) DRY=1 ;; *) echo "usage: $0 [--no-sync] [--dry-run]" >&2; exit 64 ;; esac; done
+PRE=0
+for a in "$@"; do case "$a" in --no-sync) SYNC=0 ;; --dry-run) DRY=1 ;; --preflight-only) PRE=1 ;; *) echo "usage: $0 [--no-sync] [--dry-run] [--preflight-only]" >&2; exit 64 ;; esac; done
 
 log() { printf '[%s] [backup] %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; python3 "$LEDGER_PY" append note --json "{\"error\": \"$(echo "$*" | tr -d '"\\' | head -c 300)\"}" >/dev/null 2>&1 || true; exit 1; }
@@ -101,6 +102,42 @@ if [[ "$DRY" == 1 ]]; then
   log "dry run: would dump dispatch + Nextcloud Postgres, archive to $BACKUP_REPO, sync to '${BACKUP_TARGET:-<local only>}' (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
   exit 0
 fi
+# 2026-11-18: the stage-space preflight runs BEFORE waiting for the heavy-work turn, so a run that
+# cannot fit fails at once instead of after up to 2 h in the queue (and --preflight-only answers in seconds).
+STAGE_GUARD="${REPO_DIR}/scripts/backup/stage_guard.py"
+MIN_FREE=$(( $(setting BACKUP_MIN_FREE_GB 10) * 1024 * 1024 * 1024 ))
+STAGE_FACTOR="$(setting BACKUP_STAGE_FACTOR 2.0)"
+read -r -a COMPRESS_TABLES <<< "$(setting BACKUP_COMPRESS_TABLES '')"
+pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell), [level]
+  local c="$1" out="$2" extra="${3:-}" z="${4:-$DUMP_Z}" room
+  room=$(( $(python3 "$STAGE_GUARD" free "$(dirname "$out")") - MIN_FREE ))
+  (( room > 0 )) || die "stage-guard: no room for $(basename "$out") on $(dirname "$out") (reserve $(setting BACKUP_MIN_FREE_GB 10) GB)"
+  if ! podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z ${z} ${extra}" </dev/null \
+       | python3 "$STAGE_GUARD" limit "$out" "$room"; then
+    die "dump of $(basename "$out") stopped before it could fill $(dirname "$out") (see stage-guard line above); nothing archived"
+  fi
+}
+psql_in() { podman exec -i "$1" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"$2\"" </dev/null; }
+
+log "preflight: stage space"
+db_bytes=$(psql_in "$DISPATCH_PG" "SELECT pg_database_size(current_database())") || die "preflight: cannot read the dispatch database size"
+nc_bytes=$(psql_in "$NEXTCLOUD_PG" "SELECT pg_database_size(current_database())") || die "preflight: cannot read the Nextcloud database size"
+ct_bytes=0
+if (( ${#COMPRESS_TABLES[@]} > 0 )); then
+  ct_bytes=$(psql_in "$DISPATCH_PG" "SELECT coalesce(sum(pg_total_relation_size(c.oid)),0) FROM pg_class c WHERE c.relname IN ($(printf "'%s'," "${COMPRESS_TABLES[@]}" | sed 's/,$//'))") || ct_bytes=0
+fi
+need=$(python3 - "$db_bytes" "$nc_bytes" "$ct_bytes" "$STAGE_FACTOR" <<'PY'
+import sys
+db, nc, ct, f = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4])
+# uncompressed stage ~ factor x the live size (TOAST is written out decompressed); compressed tables ~0.5 x
+print(int((db - ct) * f + ct * 0.5 + nc * f))
+PY
+)
+if ! python3 "$STAGE_GUARD" preflight "$WORK" "$need" "$MIN_FREE"; then
+  die "backup NOT started: the estimated stage (dispatch $(( db_bytes / 1073741824 )) GB live, factor ${STAGE_FACTOR}) does not fit on ${WORK} with the ${MIN_FREE} byte reserve. Free space there, or set BACKUP_COMPRESS_TABLES (docs/BACKUP.md)."
+fi
+if [[ "$PRE" == 1 ]]; then log "preflight only: the stage fits; nothing dumped"; exit 0; fi
+
 # 2026-10-12: one heavy job at a time (backup, restore test, rollout, stack refresh) -- wait our turn.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/heavy_lock.sh"
 heavy_lock_acquire "nightly backup" 7200 || die "heavy-work turn still taken after 2 h (holder: $(heavy_lock_holder)); backup skipped"
@@ -134,15 +171,27 @@ trap cleanup EXIT
 # the unchanged tables and Borg's own zstd compresses what is new. The local-only LADD dump never enters
 # Borg, so it stays compressed (-Z 6). The stage lives on the USB (BACKUP_WORK_DIR).
 DUMP_Z="$(setting BACKUP_DUMP_COMPRESS 0)"
-pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell), [level]
-  local c="$1" out="$2" extra="${3:-}" z="${4:-$DUMP_Z}"
-  podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z ${z} ${extra}" > "$out" </dev/null
-}
+# 2026-11-18: the stage can no longer fill a disk. Every dump streams through stage_guard.py, which stops
+# it (and deletes the partial file) once it passes the space left above BACKUP_MIN_FREE_GB, and a
+# preflight refuses to start when the estimated stage does not fit. On 11-18 the uncompressed dispatch
+# dump hit 52 GB and filled the USB: the database is 38 GB, 27 GB of it demo_snapshots' TOAST, which
+# pg_dump writes out decompressed.
+# BACKUP_COMPRESS_TABLES (space-separated, default empty): tables whose DATA leaves the uncompressed main
+# dump and goes into a second, compressed (-Z 6) dump that is archived alongside it. The data is still
+# backed up in full; what is lost for those tables is Borg's deduplication (each night's copy is new data
+# for the repository and for the off-box sync). Operator decision -- see docs/BACKUP.md.
 
 phase "1/4 dump: dispatch Postgres"
 log "dump: dispatch Postgres (LADD data $( [[ "$INCLUDE_CUI" == 1 ]] && echo included || echo 'excluded -> local-only'))"
-if [[ "$INCLUDE_CUI" == 1 ]]; then pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump"
-else pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump" "$(printf -- '--exclude-table-data=%s ' "${LADD_TABLES[@]}")"; fi
+main_excl=""
+[[ "$INCLUDE_CUI" == 1 ]] || main_excl="$(printf -- '--exclude-table-data=%s ' "${LADD_TABLES[@]}")"
+(( ${#COMPRESS_TABLES[@]} == 0 )) || main_excl+="$(printf -- '--exclude-table-data=%s ' "${COMPRESS_TABLES[@]}")"
+pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump" "$main_excl"
+if (( ${#COMPRESS_TABLES[@]} > 0 )); then
+  phase "1/4 dump: compressed tables"
+  log "dump: ${#COMPRESS_TABLES[@]} table(s) compressed (-Z 6, BACKUP_COMPRESS_TABLES)"
+  pg_dump_in "$DISPATCH_PG" "$stage/dispatch-compressed.pgdump" "--data-only $(printf -- '--table=%s ' "${COMPRESS_TABLES[@]}")" 6
+fi
 phase "1/4 dump: Nextcloud"
 log "dump: Nextcloud database"
 pg_dump_in "$NEXTCLOUD_PG" "$stage/nextcloud.pgdump"
@@ -159,7 +208,7 @@ import_head=$(podman exec -i "$DISPATCH_PG" sh -c "PGPASSWORD=\"\$POSTGRES_PASSW
 python3 "$LEDGER_PY" append cui-stamp --json "{\"stamp\": \"#\", \"rows\": ${ladd_rows:-null}, \"off_box\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"local_dump\": ${cui_meta}, \"import_ledger_head\": ${import_head:-null}}" >/dev/null
 ls -1t "$WORK/cui-local"/ladd-*.pgdump 2>/dev/null | tail -n +$((CUI_KEEP + 1)) | while read -r old; do shred -fu "$old"; done
 
-dumps_meta=$(python3 "$LEDGER_PY" file "$stage/dispatch.pgdump" "$stage/nextcloud.pgdump")
+dumps_meta=$(python3 "$LEDGER_PY" file "$stage/dispatch.pgdump" "$stage/nextcloud.pgdump" $( [[ -f "$stage/dispatch-compressed.pgdump" ]] && echo "$stage/dispatch-compressed.pgdump" ))
 cp "${BACKUP_LEDGER:-$STATE/ledger.jsonl}" "$stage/ledger.jsonl"
 
 # 2026-10-24 (persistence audit, operator-approved): every named volume that holds state the operator would lose

@@ -39,6 +39,27 @@ SKILL_NAME = "second-brain-rss"
 # Cap per-feed, per-run item count -- avoids flooding the inbox the first
 # time a feed with years of backlog gets configured.
 _MAX_ITEMS_PER_FEED = 10
+_MAX_REDIRECTS = 3
+
+
+def _fetch(url: str) -> httpx.Response:
+    """GET a feed, following at most _MAX_REDIRECTS redirects (2026-11-18: several feeds moved
+    behind 301/302 and were silently skipped). A redirect may upgrade http->https or stay on
+    https; a downgrade to http or any other scheme is refused."""
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        resp = httpx.get(current, timeout=20, follow_redirects=False)
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            return resp
+        loc = resp.headers.get("location", "")
+        nxt = httpx.URL(current).join(loc)
+        if nxt.scheme != "https" and not (nxt.scheme == "http" == httpx.URL(current).scheme):
+            raise httpx.HTTPError(f"redirect to {nxt.scheme}:// refused ({current} -> {nxt})")
+        if httpx.URL(current).scheme == "https" and nxt.scheme != "https":
+            raise httpx.HTTPError(f"redirect downgrade refused ({current} -> {nxt})")
+        log.info("%s: %s redirects (%d) to %s", SKILL_NAME, current, resp.status_code, nxt)
+        current = str(nxt)
+    raise httpx.HTTPError(f"more than {_MAX_REDIRECTS} redirects from {url}")
 
 
 def _feed_urls() -> list[str]:
@@ -81,7 +102,7 @@ def main() -> None:
     with get_conn() as conn:
         for url in feeds:
             try:
-                resp = httpx.get(url, timeout=20)
+                resp = _fetch(url)
                 resp.raise_for_status()
                 items = _parse_rss_items(resp.content)
             except Exception as e:
