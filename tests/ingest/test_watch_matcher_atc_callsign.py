@@ -138,7 +138,7 @@ def test_resolve_flight_identity_finds_local_adsb_under_the_atc_callsign(watches
 
     monkeypatch.setattr(wl, "_local_ac_by_callsign", fake_local)
     monkeypatch.setattr(wl, "_local_registry_hex_lookup", lambda ident: None)
-    monkeypatch.setattr(wl, "_local_fdps_ac", lambda cs: None)
+    monkeypatch.setattr(wl, "_local_fdps_ac", lambda cs, entry=None: None)
     monkeypatch.setattr(wl, "_remote_ac_by_callsign", lambda cs: None)
     monkeypatch.setattr(db, "set_watchlist_identity", lambda *a, **k: None)
     monkeypatch.setattr(wl, "watchlist_event_hit", lambda *a, **k: None)

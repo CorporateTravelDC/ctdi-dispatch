@@ -79,11 +79,11 @@ export default function WatchlistBadge({ entries, onFocus }) {
       style={posStyle} onMouseDown={onMouseDown} onTouchStart={onTouchStart} title="Drag to reposition; tap a chip to focus">
       <span className="wlb-label">&#9733; WATCHING</span>
       {flights.map(e => (
-        <button key={e.id} type="button" className="wlb-chip" title={e.last_event_summary || e.identifier}
+        <button key={e.id} type="button" className="wlb-chip" title={e.identity_state === 'pending_identity' ? `Queued ${e.queued_at || ''}: awaiting tail confirmation` : (e.last_event_summary || e.identifier)}
           onMouseDown={ev => ev.stopPropagation()}
           onTouchStart={ev => ev.stopPropagation()}
           onClick={() => { if (!moved.current) onFocus?.(e.identifier) }}>
-          {e.identifier}{e.availability ? ` · ${e.availability}` : ''}
+          {e.identifier}{e.availability ? ` · ${e.availability}` : ''}{e.identity_state === 'pending_identity' ? ' · awaiting tail' : ''}
         </button>
       ))}
       <button className="wlb-collapse-btn" onClick={(e) => { e.stopPropagation(); toggle() }}

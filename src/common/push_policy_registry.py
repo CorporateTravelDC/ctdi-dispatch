@@ -117,6 +117,12 @@ KINDS: dict[tuple[str, str], Rule] = {
     ("aviation", "*_tail_change_rejected"): _S(identity=("candidate_hex",)),
     ("aviation", "fdps_tail_change_rejected"): _S(identity=("candidate_hex",)),
     ("aviation", "identity_resolved"): _S(identity=("hex_id",)),
+    # 2026-11-18 (operator, UA4006 SAV-IAD): a watch added before the day's plan exists is
+    # QUEUED for tail confirmation (shared.pending_identity). One push per state per watch
+    # (the entry id carries the ET date, so the slot is callsign + date + state).
+    ("aviation", "identity_queued"): _S(identity=("state", "occurrence")),
+    ("aviation", "identity_still_pending"): _S(first=4, identity=("state", "occurrence")),
+    ("aviation", "identity_expired_no_plan"): _S(identity=("state", "occurrence")),
     ("aviation", "identity_mismatch"): _SG(),
     ("aviation", "identity_mismatch_reg"): _SG(),
     ("aviation", "atc_callsign_relink"): _SG(),
@@ -126,6 +132,9 @@ KINDS: dict[tuple[str, str], Rule] = {
     ("aviation", "inbound_cancelled"): _M(identity=("inbound",)),
     ("aviation", "inbound_*"): _S(identity=("inbound",)),
     ("aviation", "departure_overdue"): _S(first=4, identity=("scheduled_departure",)),
+    # 2026-11-18 (ASH4006): no same-day FDPS plan by departure / airborne without one.
+    # p4 once per state; identity = the state, so the airborne step fires once more.
+    ("aviation", "fdps_plan_missing_predeparture"): _S(first=4, identity=("state",)),
     # ── aviation: ETA, release times, restrictions ───────────────────────────
     ("aviation", "tbfm_sequenced"): Rule("change", extractor="tbfm_runway_eta", threshold="eta_move_min",
                                          first=4, require_time=True, past_while_ground=True,

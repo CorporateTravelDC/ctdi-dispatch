@@ -60,8 +60,11 @@ watchlist code or load production env files just to make this lookup.
 **1c. Read FDPS through the API.**
 `GET /api/v1/flightplan/<ICAO_CALLSIGN>` is a public, privacy-filtered read. It
 returns `confirmed`, source, route, status and available departure/arrival/update
-times. This route does **not** return a tail or hex. A confirmed plan can be
-stale or belong to another occurrence: check its route and timestamps. Latest
+times, plus `occurrence_date` (America/New_York departure date) and
+`current_occurrence`. This route does **not** return a tail or hex. Only the
+current occurrence is `confirmed`; another day's row comes back with
+`confirmed: false` and `status: stale` (2026-11-18, UA4006). Still check its
+route and timestamps. Latest
 surveillance messages can carry position without aircraft identity; missing
 identity is not proof that an earlier stored identity is wrong.
 
@@ -113,8 +116,8 @@ marketing flight number (e.g. a UA 4xxx regional) can exist on an airport board
 or another anchor (FIDS arrival, a booking, an operator-given ETA) hours before
 the operating carrier files its plan. That anchor proves the leg exists and gives
 origin, destination and an expected arrival; it never supplies identity, times,
-status or OOOI (1g). Do not add a callsign-only watch, and do not stop at "not
-found":
+status or OOOI (1g). Do not stop at "not found". (2026-11-18: a dated leg with
+origin and destination may now be added QUEUED with no identity -- see Step 2.)
 - Anchor order (operator 2026-11-03), strongest first; anchors ENABLE a SWIM
   monitor, they never replace SWIM identity or times:
   1. SWIM (FDPS/TBFM/TFMS) -- authority; once present, it wins.
@@ -160,8 +163,20 @@ This step requires both authorization and aircraft identity. The operator
 requires a verified hex ID (preferred) or a verified registration/tail for every
 aircraft watch. Resolve the dated operating leg and its aircraft first. A
 callsign-only record is incomplete and must not be presented as a ready watch.
-If neither identity is verified, report **NOT ADDED — IDENTITY REQUIRED** and
-continue permitted resolution; never invent an identity to satisfy the rule.
+~~If neither identity is verified, report **NOT ADDED — IDENTITY REQUIRED** and
+continue permitted resolution.~~ (2026-11-18, operator.) If neither identity is
+verified but the leg is otherwise specified (operating or marketing callsign,
+origin, destination, and the dated occurrence: `scheduled_departure` when known,
+else today's America/New_York date), add the watch WITHOUT hex/registration. The
+platform stores it as `identity_state: pending_identity`, sends one p3 "QUEUED
+... awaiting tail confirmation" push, and runs pre-departure checks: it binds the
+airframe on first same-occurrence contact ("IDENTITY CONFIRMED", identifier
+withheld for LADD), pushes "still awaiting tail" from scheduled departure minus
+60 min, and expires the watch with "no plan filed" after its ET date. Report it
+as **QUEUED — awaiting tail confirmation**, never as a confirmed or ready watch,
+and never fill hex/registration from FIDS, an aggregator or another day's plan
+to avoid the queue. With no origin/destination/date, still report **NOT ADDED —
+IDENTITY REQUIRED**. Never invent an identity to satisfy the rule.
 If the exact watch already exists, inspect it without an unnecessary refresh;
 report a missing identity as a defect requiring reconciliation. If the action is
 not granted, report **NOT ADDED** rather than treating a read as a watch.

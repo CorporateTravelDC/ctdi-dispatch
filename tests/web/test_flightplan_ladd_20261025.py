@@ -8,6 +8,7 @@ db calls are monkeypatched.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -17,8 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 import web.main as web_main  # noqa: E402
 from common import db  # noqa: E402
 
+# 2026-11-18: times are now (the route only confirms the current occurrence; see
+# tests/web/test_flightplan_occurrence_20261118.py for the stale-row cases)
+_NOW = time.time()
 PLAN = {"origin": "KDCA", "destination": "KBOS", "aircraft_type": "C56X", "status": "active",
-        "departure_time": 1.0, "arrival_time": 2.0, "registration": "N0TEST", "hex": "a00000"}
+        "departure_time": _NOW - 600, "arrival_time": _NOW + 3600, "registration": "N0TEST", "hex": "a00000"}
 
 
 def _get(monkeypatch, listed_ids=(), listed_hex=(), fail=False):

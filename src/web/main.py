@@ -1248,18 +1248,29 @@ async def get_flight_plan(callsign: str, held=Depends(resolve_withheld)) -> JSON
             "source": "fdps",
             "reason": "No FDPS flight plan on file for this callsign",
         })
+    # 2026-11-18 (UA4006 KSAV-KIAD): with no plan yet for today's leg, this answered with
+    # YESTERDAY's row as "confirmed: true, status: active". Every answer now names its
+    # occurrence (America/New_York departure date) and says whether it is the current one;
+    # only the current occurrence is "confirmed", and an older row's status reads "stale".
+    from common.flight_instance import flight_plan_occurrence
+    occ_date, current = flight_plan_occurrence(plan)
     return JSONResponse({
         "callsign": callsign.strip().upper(),
-        "confirmed": True,
+        "confirmed": current,
         "source": "fdps",
         "origin": plan.get("origin"),
         "destination": plan.get("destination"),
         "aircraft_type": plan.get("aircraft_type"),
-        "status": plan.get("status"),
+        "status": plan.get("status") if current else "stale",
         "departure_time": plan.get("departure_time"),
         "arrival_time": plan.get("arrival_time"),
         "updated_at": plan.get("updated_at"),
+        "occurrence_date": occ_date,
+        "current_occurrence": current,
+        **({} if current else {"reason": "FDPS holds only an earlier occurrence for this callsign; "
+                                          "no plan on file yet for the current one"}),
     })
+
 
 
 @app.get("/api/v1/train-config")

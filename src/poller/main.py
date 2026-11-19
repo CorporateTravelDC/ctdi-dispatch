@@ -649,11 +649,22 @@ class WatchlistSweep:
 
                     # Independent of OOOI-phase hit/miss above.
                     _check_flight_fdps_cache(entry, ident)
+                    _check_fdps_predeparture(entry, ident)
                     _check_flight_gates(entry, ident)
                     _check_flight_inbound(entry, ident)
                     _check_flight_tdes_tail(entry, ident)
                 except Exception as e:
                     log.debug("flight sweep %s: %s", ident, e)
+
+            # 2026-11-18: pre-departure checks for watches still QUEUED for tail
+            # confirmation (shared.pending_identity): "still awaiting tail" from
+            # scheduled departure - 60 min, "no plan filed; watch expired" after the
+            # watch's ET date. Re-read: this tick's checks may have just bound some.
+            try:
+                from shared import pending_identity
+                pending_identity.sweep(get_active_entries(entry_type="flight"))
+            except Exception as e:
+                log.debug("pending-identity sweep: %s", e)
 
             # Landed/dead auto-sweep, right after status-check freshens
             # oooi_phase for this tick's entries. See sweep_landed_flights()
@@ -1506,6 +1517,39 @@ def _fdps_tail_change_decision(entry: dict, plan: dict, new_hex: str,
     except Exception as e:
         log.warning("fdps tail guard %s: %s -- change not accepted", entry.get("id"), e)
         return fi.TailChangeDecision(False, True, f"guard error: {e}", new_hex, new_reg, prior_hex)
+
+
+def _check_fdps_predeparture(entry: dict, ident: str) -> None:
+    """2026-11-18 (ASH4006 KSAV-KIAD): say so when a watched leg has no FDPS
+    plan of its own by departure time, or goes airborne without one. See
+    common.fdps_predeparture. One push per (watch, state) through the parity
+    gate (kind fdps_plan_missing_predeparture, status class); never binds an
+    identity. Errors are logged and swallowed like the other per-tick checks."""
+    from common import fdps_predeparture
+    from shared.watchlist import watchlist_event_hit
+    try:
+        if (entry.get("entry_type") or "flight") != "flight":
+            return
+        now = time.time()
+        # 2026-11-18 (fleet-wide check): every identity -- the identifier, codeshare_map in
+        # BOTH directions, and the marketing carrier's regional partners (route-confirmed
+        # same-day only) -- then the same-occurrence row, never just the first hit.
+        g = fdps_predeparture.gather(entry, ident, now,
+                                     db.get_flight_plan_by_callsign, db.get_recent_flight_ooooi)
+        verdict = fdps_predeparture.assess(entry, g["plan"], g["tfms"], now)
+        if not verdict:
+            return
+        log.warning("fdps pre-departure guard %s: %s (checked %s)", entry.get("id"),
+                    verdict["state"], ",".join(g["checked"]))
+        watchlist_event_hit(entry["id"], verdict["summary"],
+                            {"watchlist_trigger": "fdps_plan_missing_predeparture",
+                             "state": verdict["state"],
+                             "scheduled_departure": verdict.get("scheduled_departure"),
+                             "newest_plan_rejected": verdict.get("newest_plan_rejected"),
+                             "linked_identities": [f"{cs} ({rel})" for cs, rel in g["linked"]]},
+                            priority=4)
+    except Exception as e:
+        log.warning("fdps pre-departure guard %s: %s", entry.get("id"), e)
 
 
 def _check_flight_fdps_cache(entry: dict, ident: str) -> None:

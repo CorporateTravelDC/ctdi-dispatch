@@ -98,12 +98,15 @@ def test_resolution_asks_local_sources_first_and_the_api_only_when_they_are_dark
     order = []
     monkeypatch.setattr(wl, "_local_ac_by_callsign", lambda cs: order.append("local-adsb") or None)
     monkeypatch.setattr(wl, "_local_registry_hex_lookup", lambda cs: order.append("registry") or None)
-    monkeypatch.setattr(wl, "_local_fdps_ac", lambda cs: order.append("fdps") or None)
-    monkeypatch.setattr(wl.db, "set_watchlist_identity", lambda *a, **k: None)
+    monkeypatch.setattr(wl, "_local_fdps_ac", lambda cs, entry=None: order.append("fdps") or None)
+    monkeypatch.setattr(wl.db, "set_watchlist_identity", lambda *a, **k: order.append("bind"))
     monkeypatch.setattr(wl, "watchlist_event_hit", lambda *a, **k: order.append("notify"))
     ac = wl.resolve_flight_identity({"id": "wl-test", "notes": ""}, "QQQ123")
     assert order[:3] == ["local-adsb", "registry", "fdps"] and ac["_source"] == "airplanes_live"
-    assert order[-1] == "notify"
+    # 2026-11-18: an aggregator contact is position only -- it never binds the watch's
+    # airframe or fires "identity confirmed" (glossary: tails only from SWIM).
+    # SUPERSEDED: assert order[-1] == "notify"
+    assert "bind" not in order and "notify" not in order
 
 
 def test_a_local_contact_means_the_api_is_never_asked(monkeypatch, api):

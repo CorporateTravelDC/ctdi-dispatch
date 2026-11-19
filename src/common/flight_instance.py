@@ -48,7 +48,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from common.airline_codes import IATA_TO_ICAO, split_callsign
@@ -804,6 +804,36 @@ def watch_day_start(entry: dict, now_epoch: float | None = None) -> float:
     m = _WATCH_ID_DATE_RE.search(str(entry.get("id") or ""))
     d = m.group(1) if m else watch_id_date(entry.get("scheduled_departure"), now_epoch)
     return datetime.strptime(d, "%Y%m%d").replace(tzinfo=ZoneInfo(_WATCH_ID_TZ)).timestamp()
+
+
+def watch_day_end(entry: dict, now_epoch: float | None = None) -> float:
+    """Epoch of 00:00 America/New_York on the day AFTER the watch's date, computed
+    from the calendar date in that zone (never start + 24 h: a DST day is 23 or 25 h)."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(_WATCH_ID_TZ)
+    start = datetime.fromtimestamp(watch_day_start(entry, now_epoch), tz)
+    nxt = (start.date() + timedelta(days=1))
+    return datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz).timestamp()
+
+
+def flight_plan_occurrence(plan: dict, now: float | None = None) -> tuple[str | None, bool]:
+    """(occurrence_date YYYY-MM-DD, current) for an FDPS plan row (2026-11-18, UA4006: the public
+    flightplan route showed yesterday's row as current). The occurrence is the America/New_York
+    date of its departure, else arrival, else last update. It is current when that date is
+    today in New York, or when the leg is still in progress or landed within the last 3 h (an
+    evening departure that crosses midnight). No usable time -> (None, False): fail closed."""
+    from zoneinfo import ZoneInfo
+    now = time.time() if now is None else now
+    tz = ZoneInfo(_WATCH_ID_TZ)
+    dep, arr, upd = (to_epoch(plan.get(k)) for k in ("departure_time", "arrival_time", "updated_at"))
+    ref = dep if dep is not None else (arr if arr is not None else upd)
+    if ref is None:
+        return None, False
+    occ = datetime.fromtimestamp(ref, tz).date()
+    current = occ == datetime.fromtimestamp(now, tz).date()
+    if not current and arr is not None and arr >= now - 3 * 3600 and ref <= now + 24 * 3600:
+        current = True
+    return occ.isoformat(), current
 
 
 def fdps_plan_occurrence_rejection(entry: dict, plan: dict, sched=None,

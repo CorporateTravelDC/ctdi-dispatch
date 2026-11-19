@@ -365,7 +365,7 @@ def _first_hit(fn, callsigns: list[str]) -> dict | None:
     return None
 
 
-def _local_fdps_ac(callsign: str) -> dict | None:
+def _local_fdps_ac(callsign: str, entry: dict | None = None) -> dict | None:
     """FDPS-backed fallback when local ADS-B has no contact (out of local
     receiver range) -- SWIM data already ingested and stored locally, see
     common.db.get_flight_plan_by_callsign()/_find_flight_element() for the
@@ -380,6 +380,15 @@ def _local_fdps_ac(callsign: str) -> dict | None:
         return None
     if not plan or not plan.get("hex"):
         return None
+    # 2026-11-18 (UA4006 SAV-IAD): with a watch given, the plan must be THIS
+    # occurrence's -- the add route and the FDPS checker were gated on 11-04
+    # (ASH4067), but this bootstrap path still took the newest row, i.e.
+    # yesterday's leg and its airframe, whenever today's plan was not filed.
+    if entry is not None:
+        from common.flight_instance import airports_agree, fdps_plan_occurrence_rejection
+        if airports_agree(entry.get("origin"), plan.get("origin")) is False or \
+                fdps_plan_occurrence_rejection(entry, plan) is not None:
+            return None
     return {
         "hex": plan["hex"].lower(),
         "r": plan.get("registration"),
@@ -525,7 +534,8 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
         )
         if needs_corroboration:
             callsigns = _watch_callsigns(entry, ident_clean)
-            ac = _first_hit(_local_ac_by_callsign, callsigns) or _first_hit(_local_fdps_ac, callsigns)
+            ac = _first_hit(_local_ac_by_callsign, callsigns) or \
+                _first_hit(lambda cs: _local_fdps_ac(cs, entry), callsigns)
             if ac:
                 observed_hex = (ac.get("hex") or "").lower().strip()
                 if observed_hex == expected_hex:
@@ -558,7 +568,7 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
         if not ac:
             # Local ADS-B has nothing (likely out of receiver range) --
             # fall back to already-ingested FDPS SWIM data, still local.
-            ac = _first_hit(_local_fdps_ac, callsigns)
+            ac = _first_hit(lambda cs: _local_fdps_ac(cs, entry), callsigns)
             if ac:
                 callsign_live_confirmed = True
         if not ac:
@@ -566,8 +576,10 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             # (live ADS-B under this callsign; position/identity only, no OOOI
             # authority -- the sweep's confirmation gate still applies).
             ac = _first_hit(_remote_ac_by_callsign, callsigns)
-            if ac:
-                callsign_live_confirmed = True
+            # 2026-11-18: an aggregator contact is position only. It never binds the
+            # watch's airframe (glossary: a tail comes only from SWIM, never from an
+            # aggregator); the watch stays pending until local or same-occurrence SWIM
+            # contact. SUPERSEDED: callsign_live_confirmed = True here.
     ac_list = [ac] if ac else []
 
     if not ac_list:
@@ -590,21 +602,18 @@ def resolve_flight_identity(entry: dict, ident: str, source: str = "sweep") -> d
             db.set_watchlist_identity(entry["id"], hex_id=hex_id, registration=reg or None)
             log.info("%s: hex-locked to %s (%s) on first live contact (source=%s)",
                      ident, hex_id, reg or "no reg", source)
-            tracking_url = f"https://globe.airplanes.live/?icao={hex_id}"   # hex only, never a flight number
-            reg_str = f" ({reg})" if reg else ""
-            watchlist_event_hit(
-                entry["id"],
-                f"Identity resolved: hex {hex_id}{reg_str}",
-                {
-                    "watchlist_trigger": "identity_resolved",
-                    "hex_id": hex_id,
-                    "registration": reg or None,
-                    "tracking_url": tracking_url,
-                    "source": source,
-                    "lookup": ac.get("_source") or "local",
-                },
-                priority=3,
-            )
+            # 2026-11-18: "IDENTITY CONFIRMED <tail>/<hex>" -- the watch leaves the
+            # pending_identity queue (shared.pending_identity). A LADD-listed airframe (or
+            # an unverifiable LADD check) is confirmed with no identifier and no link.
+            # SUPERSEDED: "Identity resolved: hex <hex> (<reg>)" with the link always.
+            from shared.pending_identity import confirmed_summary
+            summary, withheld_id = confirmed_summary(hex_id, reg or None)
+            detail = {"watchlist_trigger": "identity_resolved", "source": source,
+                      "lookup": ac.get("_source") or "local", "withheld": withheld_id}
+            if not withheld_id:
+                detail.update({"hex_id": hex_id, "registration": reg or None,
+                               "tracking_url": f"https://globe.airplanes.live/?icao={hex_id}"})  # hex only
+            watchlist_event_hit(entry["id"], summary, detail, priority=3)
         except Exception as e:
             log.warning("%s: hex-lock/notify failed: %s", ident, e)
 

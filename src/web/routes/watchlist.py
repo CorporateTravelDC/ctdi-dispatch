@@ -188,6 +188,15 @@ async def list_watchlist_entries(
                     if k not in _WITHHELD_KEEP:
                         e[k] = None
                 e["availability"] = withheld.category(cat_name).not_available
+    # 2026-11-18: a flight watch with no verified airframe is shown as QUEUED for tail
+    # confirmation (shared.pending_identity), with when it was queued. Withheld entries
+    # keep only _WITHHELD_KEEP, so they carry neither.
+    from shared import pending_identity
+    for e in entries:
+        if (e.get("entry_type") or "") == "flight" and id(e) not in withheld_ids:
+            e["identity_state"] = pending_identity.identity_state(e)
+            if e["identity_state"] == pending_identity.PENDING:
+                e["queued_at"] = e.get("added_at")
     if not public and "eta" not in wanted:
         return JSONResponse({"entries": entries, "count": len(entries)})
     from common import watch_eta
@@ -550,16 +559,36 @@ async def add_flight_watchlist(
 
     # 2026-10-20: watch-keyed topic (shared.watch_topic). A transient add is never a
     # bellwether, so this stays flight-alerts; the helper keeps every site on one rule.
-    from shared.watch_topic import topic_for_entry
-    _fire_ntfy_dual(
-        domain_topic=topic_for_entry(entry, "flight"),
-        title=f"Watching {ident}{id_tag} {route}",
-        detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}{fdps_tag}",
-        dispatch_body=f"Watchlist: {ident}{id_tag} added (transient){fdps_tag}",
-        priority=2,
-    )
+    # 2026-11-18 (operator, UA4006 SAV-IAD): no verified airframe yet -> the one push at
+    # creation says so ("QUEUED ... awaiting tail confirmation", p3 through the parity gate)
+    # instead of a "Watching" push that looks like any other; shared.pending_identity then
+    # runs the pre-departure checks until it binds, expires or departs.
+    from shared import pending_identity
+    identity_state = pending_identity.identity_state(entry)
+    if identity_state == pending_identity.PENDING:
+        try:
+            # "plan filed" only when the plan found is this leg's (it just carried no airframe)
+            from common.flight_instance import fdps_plan_occurrence_rejection as _occ_rej
+            plan_filed = bool(fdps_plan) and _occ_rej(
+                {"id": entry_id, "scheduled_departure": body.scheduled_departure}, fdps_plan) is None
+            pending_identity.queued_push(entry, plan_filed=plan_filed)
+        except Exception as e:  # never block the add on the push
+            import logging
+            logging.getLogger(__name__).warning("watchlist add %s: queued push failed: %s", entry_id, e)
+    else:
+        from shared.watch_topic import topic_for_entry
+        _fire_ntfy_dual(
+            domain_topic=topic_for_entry(entry, "flight"),
+            title=f"Watching {ident}{id_tag} {route}",
+            detail_body=f"Flight {ident}{id_tag}{reg_tag} {route} added to watchlist{expire_str}{fdps_tag}",
+            dispatch_body=f"Watchlist: {ident}{id_tag} added (transient){fdps_tag}",
+            priority=2,
+        )
 
     response = dict(entry)
+    response["identity_state"] = identity_state
+    if identity_state == pending_identity.PENDING:
+        response["queued_at"] = entry["added_at"]
     if body.tail:
         response["ignored_fields"] = ["tail"]
     response["fdps_confirmed"] = fdps_confirmed
