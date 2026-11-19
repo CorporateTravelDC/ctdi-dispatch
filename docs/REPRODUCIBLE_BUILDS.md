@@ -97,6 +97,18 @@ Refreshing is a deliberate event: `scripts/build/pin-base-images.py --refresh [n
 
 **Mechanism:** each image runs `printf 'APT::Snapshot "%s";' "$APT_SNAPSHOT" > /etc/apt/apt.conf.d/50snapshot` before `apt-get update`, with ~~`ARG APT_SNAPSHOT=20261007T000000Z`~~ (superseded; corrected 2026-10-25: ~~`ARG APT_SNAPSHOT=20261022T051934Z`~~ in all seven Debian-based Containerfiles since the 2026-10-22 rebase, commit 7bdb1290; corrected 2026-11-18: `ARG APT_SNAPSHOT=20261118T160000Z` in all eight Debian-based Containerfiles, after the 20261030T010607Z pin's Release files expired and broke the 11-18 rollout build). apt then reads `snapshot.debian.org/archive/debian/<timestamp>` (and `debian-security`), whose signed Release files apt verifies with the base image's Debian keyring. The same base digest plus the same snapshot should yield the same package versions: a snapshot is the archive as it was at that instant, and apt verifies its signed Release files. This is a property of the snapshot service that this deployment relies on, not one it re-checks. The SBOM records what was actually installed. Versions are not pinned by hand, because the snapshot fixes them all consistently, dependencies included.
 
+**Expiry guard (2026-11-18, operator).** The pin's `trixie-updates` and `trixie-security` Release files carry a
+`Valid-Until` about 7 days out; an expired pin stopped the 2026-10-21 and 2026-11-18 rollouts mid-way.
+`scripts/build/apt-snapshot-guard.py` runs every 6 h (`corporatetraveldc-apt-snapshot-guard.timer`, user unit):
+it reads the earliest `Valid-Until` of the pinned snapshot, alerts on `ops-health` at 48 h, and at 24 h picks the
+current hour's snapshot, checks each suite's InRelease against the Debian archive keyring with `gpgv` (the
+keyring is taken from the pinned base image when the host has none; otherwise the state says `not-checked`),
+requires it to be valid for 5 days and to outlive the current pin, and drops a hash-pinned patch plus a ready
+relay in `/srv/ctdc-handoff/aptsnap-<snapshot>-from-<user>/`. It never signs, commits or pushes; the operator
+runs the relay. `serialized-rollout.sh` refuses to build (exit 4) when the pin has expired or expires within
+2 h, and prints the prepared relay; an unverifiable pin (network down, nothing cached) only warns.
+State: `/var/lib/corporatetraveldc/apt-snapshot-guard/state.json` (`--status`).
+
 **Security updates:** move the snapshot with `pin-base-images.py --apt-snapshot now`, review, sign, rebuild. Updates are therefore deliberate events. They are not slower: stack-refresh's weekly rebuild no longer picks them up implicitly, and the refresh is one command.
 
 **Limits:**

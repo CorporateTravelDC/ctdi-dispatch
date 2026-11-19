@@ -54,6 +54,13 @@ if [[ "${ALLOW_DIRTY:-0}" != 1 ]] && [[ -n "$(git -C "$(dirname "${BASH_SOURCE[0
   echo "serialized-rollout: working tree is DIRTY -- refusing to build images from unsigned files (ALLOW_DIRTY=1 to override)" >&2
   exit 3
 fi
+# 2026-11-18 (operator): an expired Debian snapshot pin stopped the rollout at ingest-notam with every
+# later unit not restarted. Refuse to start building when the pin has expired or expires within 2 h;
+# apt-snapshot-guard prints the relay it has prepared. Network trouble only warns (exit 0).
+if [[ "${FROM_REFRESH}" != 1 && "${ALLOW_EXPIRED_SNAPSHOT:-0}" != 1 ]]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/build/apt-snapshot-guard.py" --check-rollout </dev/null
+  if [[ $? -eq 2 ]]; then exit 4; fi
+fi
 REPO=/opt/corporatetraveldc/private/ctdi-dispatch-internal
 WEBSITE=/opt/corporatetraveldc/private/csexecutiveservices-website
 D=$(date -u +%Y-%m-%dT%H:%M:%SZ)

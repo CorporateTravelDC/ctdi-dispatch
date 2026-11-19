@@ -1,0 +1,92 @@
+bash <<'RELAY'
+set -euo pipefail
+# aptsnap.relay -- generated @@GENERATED@@ by scripts/build/apt-snapshot-guard.py (timer). Run as corporatetraveldc in screen claude-ea.
+# Debian snapshot pin @@OLD@@ -> @@NEW@@ in @@COUNT@@ Containerfile(s). The old pin's earliest Valid-Until is @@OLD_EXPIRY@@;
+# the new pin is valid to @@NEW_EXPIRY@@ (InRelease signature: @@SIGNATURE@@). Prepared on a clone of @@BASE@@.
+#   A  apply the hash-pinned patch (only APT_SNAPSHOT lines); Known-bad, drift, sign, commit
+#   B  dependency audit must exit 0 before any push
+#   C  push origin main + push-public
+#   D  full serialized rollout (every image rebuilds on the new snapshot); log kept and copied
+# ROLLBACK: git revert of this commit (the old pin is expiring, so a revert will not build for long).
+REPO=/opt/corporatetraveldc/private/ctdi-dispatch-internal
+PATCH=@@PATCH@@
+PATCH_SHA=@@SHA@@
+BASE=@@BASE@@
+NEW=@@NEW@@
+COUNT=@@COUNT@@
+cd "$REPO"
+
+echo "== sudo: authenticate once; kept fresh until the relay ends"
+sudo -v </dev/tty
+( while kill -0 "$$" 2>/dev/null; do
+    sleep 60
+    sudo -n -v </dev/null 2>/dev/null || printf '\a\n!!! RELAY NEEDS SUDO: run `sudo -v` in another window !!!\n\a' >&2
+  done ) &
+SUDO_KEEPALIVE=$!
+TICK="${XDG_RUNTIME_DIR:-/tmp}/relay-step.$$"; echo "start" > "$TICK"; T0=$(date +%s)
+( while kill -0 "$$" 2>/dev/null; do
+    sleep 300
+    printf '[ticker %s] still running: %s; %d min in; load %s\n' "$(date -u +%H:%MZ)" "$(cat "$TICK" 2>/dev/null)" \
+      $(( ($(date +%s) - T0) / 60 )) "$(cut -d' ' -f1 /proc/loadavg)" >&2
+  done ) &
+TICKER=$!
+step() { echo "== $*"; echo "$*" > "$TICK"; }
+trap 'kill "${SUDO_KEEPALIVE}" "${TICKER}" 2>/dev/null || true; rm -f "$TICK"' EXIT
+
+step "A. Apply the pin move, sign, commit"
+git log -1 --format='%h %s' | cut -c1-80
+[[ "$(git log --format=%H | grep -c "^${BASE}")" == 1 ]] || { echo "!! the prepared base ${BASE} is not in history; the guard re-prepares on its next run"; exit 1; }
+if grep -E "^ARG APT_SNAPSHOT=${NEW}$" Containerfile.ingest >/dev/null; then
+  echo "-- the pin is already ${NEW} in the working tree"
+else
+  [[ -z "$(git status --porcelain)" ]] || { echo "!! checkout not clean; stopping"; git status --porcelain; exit 1; }
+  echo "${PATCH_SHA}  ${PATCH}" | sha256sum -c -
+  git apply --index "$PATCH"
+fi
+OTHER="$(git status --porcelain | grep -v -E '^[ M][ M] Containerfile[A-Za-z0-9._-]*$' || true)"
+[[ -z "$OTHER" ]] || { echo "!! the checkout has changes other than Containerfiles; stopping:"; printf '   %s\n' "$OTHER"; exit 1; }
+STRAY="$(git diff -U0 HEAD -- 'Containerfile*' | grep -E '^[-+][^-+]' | grep -v -E '^[-+]ARG APT_SNAPSHOT=' || true)"
+[[ -z "$STRAY" ]] || { echo "!! a Containerfile changed beyond its APT_SNAPSHOT line; stopping:"; printf '   %s\n' "$STRAY"; exit 1; }
+N="$(git diff -U0 HEAD -- 'Containerfile*' | grep -c "^+ARG APT_SNAPSHOT=${NEW}$" || true)"
+[[ "$N" == "$COUNT" ]] || { echo "!! expected ${COUNT} Containerfiles on ${NEW}, found ${N}; stopping"; exit 1; }
+echo "-- ${N} Containerfile(s), APT_SNAPSHOT only, all on ${NEW}"
+for e in $(systemctl --user list-units 'corporatetraveldc-*' --all --plain --no-legend --state=failed,auto-restart --no-pager | awk '{print $1 ":user"}') \
+         $(systemctl list-units --all --plain --no-legend --state=failed,auto-restart --no-pager | awk '{print $1 ":system"}'); do
+  u="${e%:*}"; u="${u%.service}"; kind="${e##*:}"
+  grep -qF "$u" config/platform-context.md || echo "- \`$u\` ($kind): failed at the $(date -u +%H:%MZ) pre-sign check; cause unverified, not reset." >> config/platform-context.md
+done
+git add -A
+scripts/relay-wait-load.sh
+scripts/check-platform-drift.sh --pre-sign
+scripts/relay-wait-load.sh
+scripts/sign-manifest.sh
+git add -A
+git commit -m "Debian snapshot pin @@OLD@@ -> ${NEW} in ${COUNT} Containerfile(s), prepared by apt-snapshot-guard (old pin expires @@OLD_EXPIRY@@; new pin valid to @@NEW_EXPIRY@@)"
+git log -1 --format='%h %s' | cut -c1-90
+
+step "B. Dependency audit (must be clean before any push)"
+scripts/relay-wait-load.sh
+set +e
+python3 scripts/dependency-audit.py --repo . </dev/null
+AUDIT_RC=$?
+set -e
+if [[ $AUDIT_RC -ne 0 ]]; then
+  echo "!! dependency-audit exited $AUDIT_RC; the commit is local and signed; NOTHING was pushed or rolled out."
+  exit 1
+fi
+
+step "C. Push and mirror"
+git log origin/main..main --format='   %h %s' | cut -c1-100
+git push origin main
+scripts/push-public.sh
+
+step "D. Full serialized rollout on the new snapshot"
+RLOG="$HOME/rollout-$(date +%Y%m%d-%H%M).log"
+echo "   live output follows; also kept in $RLOG"
+scripts/relay-wait-load.sh
+bash scripts/serialized-rollout.sh 2>&1 | tee "$RLOG"
+cp "$RLOG" /srv/ctdc-ea/ 2>/dev/null || true
+python3 scripts/build/apt-snapshot-guard.py </dev/null || true
+echo "aptsnap.relay complete; log $RLOG"
+RELAY_DONE=1
+RELAY

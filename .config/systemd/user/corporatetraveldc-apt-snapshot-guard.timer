@@ -1,0 +1,13 @@
+[Unit]
+Description=Every 6 h -- check the Debian snapshot pin's Valid-Until; prepare the next pin before it lapses
+# no Requires=/Wants= on the service (docs/BOOT_STORM_TIMER_REQUIRES.md)
+
+[Timer]
+OnCalendar=*-*-* 00/6:17:00
+RandomizedDelaySec=20min
+# Persistent=true: a missed 6-hourly check after downtime is worth one catch-up run; the check is a
+# few small HTTPS requests, so it adds no meaningful boot load.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
