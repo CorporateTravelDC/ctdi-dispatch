@@ -117,8 +117,22 @@ def _sched_epoch(entry: dict) -> float | None:
 
 
 def _day_end(entry: dict, now: float) -> float:
-    from common.flight_instance import watch_day_end
-    return watch_day_end(entry, now)   # 00:00 America/New_York the next calendar day (23/25 h on DST days)
+    """00:00 America/New_York the next calendar day (23/25 h on DST days). 2026-11-19 overnight grace:
+    a watch queued 20:00-24:00 ET on its own date runs to 02:00 ET the next day instead."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from common.flight_instance import (OVERNIGHT_GRACE_END_HOUR, OVERNIGHT_GRACE_START_HOUR, to_epoch,
+                                        watch_day_end, watch_day_start)
+    end = watch_day_end(entry, now)
+    added = to_epoch(entry.get("added_at"))
+    if added is not None:
+        tz = ZoneInfo("America/New_York")
+        start = watch_day_start(entry, now)
+        a = datetime.fromtimestamp(added, tz)
+        if start <= added < end and a.hour >= OVERNIGHT_GRACE_START_HOUR:
+            nd = datetime.fromtimestamp(end, tz).date()
+            end = datetime(nd.year, nd.month, nd.day, OVERNIGHT_GRACE_END_HOUR, tzinfo=tz).timestamp()
+    return end
 
 
 def _has_occurrence_plan(entry: dict) -> bool:

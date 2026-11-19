@@ -806,6 +806,33 @@ def watch_day_start(entry: dict, now_epoch: float | None = None) -> float:
     return datetime.strptime(d, "%Y%m%d").replace(tzinfo=ZoneInfo(_WATCH_ID_TZ)).timestamp()
 
 
+# 2026-11-19 operator: the overnight grace. "Start it at 4 hours prior to midnight Eastern, and anything
+# started between 8 pm Eastern and midnight gets a grace through 2 am Eastern, as being the previous day or
+# that same day, respectively." Two instants are the same occurrence day when they share the America/New_York
+# date, OR the earlier falls in [20:00, 24:00) ET on day D and the later in [00:00, 02:00) ET on day D+1.
+# Wall-clock hours from zoneinfo, so DST days (23/25 h) need no special case. Outside this window another
+# day's plan still never binds.
+OVERNIGHT_GRACE_START_HOUR = 20
+OVERNIGHT_GRACE_END_HOUR = 2
+
+
+def same_occurrence_day(a_epoch: float, b_epoch: float) -> bool:
+    """True if the two instants belong to the same occurrence day under the ET overnight grace."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(_WATCH_ID_TZ)
+    early, late = sorted((float(a_epoch), float(b_epoch)))
+    de, dl = datetime.fromtimestamp(early, tz), datetime.fromtimestamp(late, tz)
+    if de.date() == dl.date():
+        return True
+    return ((dl.date() - de.date()).days == 1 and de.hour >= OVERNIGHT_GRACE_START_HOUR
+            and dl.hour < OVERNIGHT_GRACE_END_HOUR)
+
+
+def _local_epoch(d: date, hour: int) -> float:
+    from zoneinfo import ZoneInfo
+    return datetime(d.year, d.month, d.day, hour, tzinfo=ZoneInfo(_WATCH_ID_TZ)).timestamp()
+
+
 def watch_day_end(entry: dict, now_epoch: float | None = None) -> float:
     """Epoch of 00:00 America/New_York on the day AFTER the watch's date, computed
     from the calendar date in that zone (never start + 24 h: a DST day is 23 or 25 h)."""
@@ -831,6 +858,8 @@ def flight_plan_occurrence(plan: dict, now: float | None = None) -> tuple[str | 
         return None, False
     occ = datetime.fromtimestamp(ref, tz).date()
     current = occ == datetime.fromtimestamp(now, tz).date()
+    if not current and ref <= now and same_occurrence_day(ref, now):
+        current = True      # 2026-11-19 overnight grace: an evening (20:00-24:00 ET) plan stays current to 02:00 ET
     if not current and arr is not None and arr >= now - 3 * 3600 and ref <= now + 24 * 3600:
         current = True
     return occ.isoformat(), current
@@ -868,11 +897,23 @@ def fdps_plan_occurrence_rejection(entry: dict, plan: dict, sched=None,
             return "untimed_plan_older_than_instance"
         return None
     day0 = watch_day_start(entry, now_epoch)
-    if (dep is not None and dep < day0) or (arr is not None and arr < day0):
+    # 2026-11-19 overnight grace: while it is 00:00-02:00 ET on the watch's date, a plan whose times fall
+    # 20:00-24:00 ET the evening before counts as this occurrence (see same_occurrence_day).
+    now = time.time() if now_epoch is None else float(now_epoch)
+    wd =datetime.fromtimestamp(day0, timezone.utc).astimezone(_tz()).date()
+    grace_from = _local_epoch(wd - timedelta(days=1), OVERNIGHT_GRACE_START_HOUR)
+    in_grace = day0 <= now < _local_epoch(wd, OVERNIGHT_GRACE_END_HOUR)
+    floor = grace_from if in_grace else day0
+    if (dep is not None and dep < floor) or (arr is not None and arr < floor):
         return "prior_day_occurrence"
-    if dep is None and arr is None and upd < day0:
+    if dep is None and arr is None and upd < floor:
         return "untimed_plan_not_updated_on_watch_date"
     return None
+
+
+def _tz():
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(_WATCH_ID_TZ)
 
 
 def event_key(event: dict) -> FlightInstanceKey | None:

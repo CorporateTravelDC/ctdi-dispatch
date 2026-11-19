@@ -115,7 +115,15 @@ def test_stale_plan_four_days_old_does_not_fill_identity(route):
     assert (stored["hex_id"], stored["registration"]) == (None, None)   # stays hex-pending
 
 
-def test_fresh_plan_fills_identity(route):
+def _freeze(monkeypatch, epoch):
+    # 2026-11-19: the clock is frozen so the result never depends on the hour the suite runs (it used to fail
+    # between 00:00 and 02:00 ET, when "2 h ago" was the previous ET date).
+    import time
+    monkeypatch.setattr(time, "time", lambda: float(epoch))
+
+
+def test_fresh_plan_fills_identity(route, monkeypatch):
+    _freeze(monkeypatch, 1795021200)          # 2026-11-18 17:00Z = 12:00 ET, mid-day
     _plan("ZZQ4602", "KDCA", "KORD", age_s=2 * 3600)
     out = _add(route, identifier="ZZQ4602", origin="DCA", destination="ORD")
     stored = _stored(out["id"])

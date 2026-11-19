@@ -566,6 +566,17 @@ browser loads them directly. The server does not fetch these.
 
 ---
 
+### Occurrence day and the overnight grace (2026-11-19, operator)
+
+A watch and an FDPS plan are the same dated leg when their times share the America/New_York calendar date.
+The exception is the overnight grace: anything between 20:00 and 24:00 ET on day D still belongs to day D until
+02:00 ET on day D+1. So a plan updated at 22:39 ET binds a watch added at 00:39 ET the next morning, but a plan
+from 19:59 ET, or a check made after 02:00 ET, does not. A pending-identity watch queued between 20:00 and
+24:00 ET expires at 02:00 ET the next day, not at midnight. Wall-clock hours come from zoneinfo, so DST days
+need no special case. Code: `common/flight_instance.py` `same_occurrence_day`, `fdps_plan_occurrence_rejection`
+and `flight_plan_occurrence`, plus `shared/pending_identity.py` `_day_end`. Tests:
+`tests/common/test_overnight_grace_20261119.py`. A plan from any other day still never binds.
+
 ## 4. European and Asia-Pacific integrated (not live)
 
 ### EUROCONTROL NM B2B (`eurocontrol`)
