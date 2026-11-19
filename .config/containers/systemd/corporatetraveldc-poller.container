@@ -7,6 +7,10 @@ Description=Corporate Travel DC — poller + skill scheduler
 After=network-online.target
 
 [Container]
+# 2026-11-19: a loop cycle in flight (blocking DB calls under load) gets time to
+# finish on stop; podman's default 10 s then SIGKILL turned a load-guard shed into
+# exit 137 = a failed unit.
+StopTimeout=45
 Environment=NTFY_URL=http://100.x.x.x:2586
 Memory=1536m
 # No additional swap beyond the RAM cap -- forces a clean OOM-kill
@@ -50,6 +54,7 @@ EnvironmentFile=/etc/corporatetraveldc/svc/poller.env
 AutoUpdate=local
 
 [Service]
+TimeoutStopSec=60
 # 2026-08-06: dedicated slice, separate from app.slice (where the
 # interactive desktop session -- Brave/Claude Desktop -- lives). Lets
 # app.slice carry its own memory ceiling without also capping

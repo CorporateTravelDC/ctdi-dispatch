@@ -1082,7 +1082,13 @@ async def main() -> None:
         except Exception as e:
             log.error("Pusher loop error: %s", e)
 
-        await asyncio.sleep(PUSH_INTERVAL)
+        # 2026-11-19: wake on SIGTERM instead of sleeping out the interval. The load
+        # guard's stop on 11-19 00:22Z hit podman's 10 s StopTimeout -> SIGKILL ->
+        # exit 137, recorded as a unit failure instead of a clean stop.
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=PUSH_INTERVAL)
+        except asyncio.TimeoutError:
+            pass
 
     log.info("corporatetraveldc pusher stopped")
 

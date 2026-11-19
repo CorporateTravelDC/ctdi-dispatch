@@ -2617,7 +2617,11 @@ async def main() -> None:
         # Watchlist sweeps.
         await watchlist_sweep.run_all()
 
-        await asyncio.sleep(10)  # Tight loop with 10s tick.
+        # 10 s tick; 2026-11-19: wakes at once on SIGTERM (see pusher/main.py)
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            pass
 
     watcher_stop.set()
     log.info("corporatetraveldc poller stopped")
