@@ -1,0 +1,13 @@
+[Unit]
+Description=Agent-lapse sentinel: nudge 6 h, email 12 h, escalate 24 h -- every 30 minutes
+# no Requires=/Wants= on the service (docs/BOOT_STORM_TIMER_REQUIRES.md)
+
+[Timer]
+OnCalendar=*:0/30
+RandomizedDelaySec=5min
+# Persistent=true: a run missed during downtime is worth one catch-up. The run is a few indexed reads
+# and at most a handful of pushes, so it is not load-gated (the daily reports are).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

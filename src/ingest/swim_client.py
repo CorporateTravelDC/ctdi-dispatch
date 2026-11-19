@@ -12,6 +12,8 @@ Feeds and their REST fallback keys:
   aim   → push:fns   (NOTAMs via notam.py — key kept as "fns" for compat)
   tbfm  → push:tbfm  (arrival sequencing; no REST fallback)
   itws  → push:itws  (terminal weather alerts; no REST fallback)
+  tfdm  → push:tfdm  (TFDM Terminal Publication, 2026-11-18; opt-in per container
+                      via SWIM_NMS_TFDM_ENABLED; departure stands + counts only)
 
 Missing credentials → feeds log "pending_credentials" and idle; container
 never crashes. The poller's REST fallback remains active whenever ingest is
@@ -180,7 +182,7 @@ class _ReplayGate:
 # to force that feed back to auto-ack) -- no rebuild needed. Feed names are the
 # session feed_names, not container names: the AIM/NOTAM feed is "fns".
 _ALL_SWIM_ACK_FEEDS: frozenset[str] = frozenset(
-    {"fdps", "stdds", "tfms", "fns", "tbfm", "itws"}
+    {"fdps", "stdds", "tfms", "fns", "tbfm", "itws", "tfdm"}
 )
 _client_ack_raw = os.getenv("SWIM_CLIENT_ACK_FEEDS", "all").strip().lower()
 _CLIENT_ACK_FEEDS: frozenset[str] = (
@@ -362,7 +364,7 @@ def _stamp_down(feed_name: str, error: str) -> None:
 # separate REST fetchers in the poller container, not ingest, and aren't
 # part of ingest's contention footprint.
 _HIGH_PRIORITY_FEEDS: frozenset[str] = frozenset({"fdps", "tfms"})
-_LOW_PRIORITY_FEEDS: frozenset[str] = frozenset({"stdds", "tbfm", "itws", "fns"})
+_LOW_PRIORITY_FEEDS: frozenset[str] = frozenset({"stdds", "tbfm", "itws", "fns", "tfdm"})
 
 
 def _current_bandwidth_priority_label() -> str:
@@ -435,10 +437,13 @@ class _NmsFeedSession:
     """
 
     def __init__(self, feed_name: str, cfg: NmsFeedConfig,
-                 message_handler) -> None:
+                 message_handler, wants_headers: bool = False) -> None:
         self.feed_name = feed_name
         self.cfg = cfg
         self._handler = message_handler
+        # 2026-11-18: TTP routes by its JMS headers (DATA_GROUP, MESSAGE_TYPE);
+        # a feed that asks for them gets handler(payload, headers).
+        self._wants_headers = wants_headers
         self._stop = threading.Event()
 
     def start(self, stop_event: threading.Event) -> threading.Thread:
@@ -600,6 +605,7 @@ class _NmsFeedSession:
 
         feed_name = self.feed_name
         handler_fn = self._handler
+        wants_headers = self._wants_headers
         stop_ev = self._stop
 
         # Polling receive loop — receive_message() is the correct API for this
@@ -759,7 +765,10 @@ class _NmsFeedSession:
                                         process_this = False
 
                             if process_this:
-                                accepted = handler_fn(payload)  # True/1 = passed filter
+                                if wants_headers:
+                                    accepted = handler_fn(payload, _message_headers(msg))
+                                else:
+                                    accepted = handler_fn(payload)  # True/1 = passed filter
                                 if backlog_cutoff_ts_ms is not None:
                                     backlog_kept += 1
                             else:
@@ -817,6 +826,32 @@ class _NmsFeedSession:
 
 
 # ── Message dispatch ──────────────────────────────────────────────────────────
+
+# TTP's JMS header names (NASA ATD-2 "TTP Flight Data Messages"). Read one by one,
+# each in its own guard: a missing property or an SDK quirk yields no header,
+# never an exception into the receive loop.
+_TTP_HEADER_NAMES = ("DATA_GROUP", "MESSAGE_TYPE", "SYNC", "AERODROME", "SCHEMA_VERSION")
+
+
+def _message_headers(msg) -> dict:
+    out: dict = {}
+    getter = getattr(msg, "get_property", None)
+    if getter is None:
+        return out
+    for name in _TTP_HEADER_NAMES:
+        try:
+            v = getter(name)
+        except Exception:
+            v = None
+        if v is not None and str(v).strip():
+            out[name] = str(v).strip()
+    return out
+
+
+def _handle_tfdm_message(payload: bytes, headers: dict | None = None) -> bool:
+    from ingest.parsers.tfdm_parser import handle
+    return handle(payload, headers)
+
 
 def _handle_fdps_message(payload: bytes) -> bool:
     # 2026-08-30 (SWIM audit): switched from parse_fdps_message() (first
@@ -944,6 +979,14 @@ def _handle_itws_message(payload: bytes) -> bool:
 
 # ── Supervisor (async entry point) ────────────────────────────────────────────
 
+def tfdm_unconfigured(cfg: NmsConfig) -> bool:
+    """True when this container enables TFDM but holds no TFDM credentials or
+    queue. ingest.main then exits 0 ('not configured') instead of idling, and the
+    unit's Restart=on-failure leaves it stopped -- no restart loop."""
+    t = cfg.tfdm
+    return bool(cfg.tfdm_enabled) and not (t.username and t.password and t.queue_name)
+
+
 async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
     """
     Launch Solace NMS sessions for all configured feeds.
@@ -963,12 +1006,13 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
         "fns":   (cfg.aim,   _handle_aim_message),   # AIM creds, fns heartbeat key
         "tbfm":  (cfg.tbfm,  _handle_tbfm_message),
         "itws":  (cfg.itws,  _handle_itws_message),
+        "tfdm":  (cfg.tfdm,  _handle_tfdm_message),
     }
 
     # Map heartbeat key → env var name for credential warnings
     _ENV_KEY = {
         "fdps": "FDPS", "stdds": "STDDS", "tfms": "TFMS",
-        "fns": "AIM", "tbfm": "TBFM", "itws": "ITWS",
+        "fns": "AIM", "tbfm": "TBFM", "itws": "ITWS", "tfdm": "TFDM",
     }
 
     # SWIM_NMS_SKIP_FEEDS: comma-sep feed names to skip even if credentialed.
@@ -977,6 +1021,11 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
     _skip_feeds = {f.strip().lower() for f in _skip_raw.split(",") if f.strip()}
 
     for feed_name, (feed_cfg, handler) in _FEED_HANDLERS.items():
+        if feed_name == "tfdm" and not cfg.tfdm_enabled:
+            # Opt-in (see NmsConfig.tfdm_enabled): not this container's feed.
+            # Log only; never write shared state for a feed it does not own.
+            log.debug("swim_client tfdm: not enabled in this container")
+            continue
         if feed_name.lower() in _skip_feeds:
             # BUG FIXED 2026-08-23: this used to call
             # _db.upsert_feed_skip(f"push:{feed_name}", ..., "disabled: ...")
@@ -1013,7 +1062,8 @@ async def run(cfg: NmsConfig, stop: asyncio.Event) -> None:
             continue
 
         _db.init_feed_usage(feed_name)
-        session = _NmsFeedSession(feed_name, feed_cfg, handler)
+        session = _NmsFeedSession(feed_name, feed_cfg, handler,
+                                  wants_headers=(feed_name == "tfdm"))
         session.start(thread_stop)
         feed_sessions.append((feed_name, session))
         log.info("swim_client: started feed session for %s", feed_name)

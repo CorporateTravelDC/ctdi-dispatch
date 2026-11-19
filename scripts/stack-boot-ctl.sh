@@ -68,6 +68,7 @@ declare -A UNIT_NAME=(
   [ingest-tfms]="${UNIT_PREFIX}ingest-tfms"
   [ingest-stdds]="${UNIT_PREFIX}ingest-stdds"
   [ingest-fdps]="${UNIT_PREFIX}ingest-fdps"
+  [ingest-tfdm]="${UNIT_PREFIX}ingest-tfdm"
   [ingest-core]="${UNIT_PREFIX}ingest-core"
   [pgsql]="${UNIT_PREFIX}pgsql"
   [pgsql-demo]="${UNIT_PREFIX}pgsql-demo"
@@ -121,6 +122,8 @@ ORDER=(
   ingest-tfms
   ingest-stdds
   ingest-fdps:90
+  # 2026-11-18: TFDM (TTP). Exits 0 at once while it has no credentials.
+  ingest-tfdm
   ingest-core:90
   poller:180
   pusher

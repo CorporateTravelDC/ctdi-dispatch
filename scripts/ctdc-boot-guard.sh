@@ -15,7 +15,9 @@
 #   * if the hold belongs to this boot and has not been alerted: one priority-5 ntfy alert through the
 #     same root alert path lockdown.sh uses (publish-only root token file); journal line always;
 #   * if the persistent lockdown marker exists: re-asserts the lockdown by running the installed
-#     lockdown.sh ("re-asserted at boot").
+#     lockdown.sh ("re-asserted at boot"), which re-enters the OOB channel (scripts/ctdc-oob.sh).
+# --boot also removes a stale sshd OOB drop-in before sshd starts (it would bind tailnet addresses
+# that do not exist yet); the re-assert puts it back.
 # The failover polkit rule refuses NetworkManager changes from the operator account while a hold or a
 # lockdown marker exists, AND whenever this boot is not marked verified -- so if this guard does not run
 # at all, the rule fails closed (NetworkManager's default "auth"), never open.
@@ -66,6 +68,10 @@ case "$mode" in
     install -d -m 0755 "$LOCKDOWN_DIR" 2>/dev/null || mkdir -p "$LOCKDOWN_DIR"
     install -d -m 0755 "$VERIFIED_DIR" 2>/dev/null || mkdir -p "$VERIFIED_DIR"
     rm -f "$VERIFIED"
+    # 2026-11-18: the sshd OOB drop-in listens on tailnet addresses only; at boot those do not exist yet,
+    # so drop it before sshd starts (the --alert re-assert, via lockdown.sh, puts it back).
+    if [[ -n "$TEST_ROOT" ]]; then echo "TEST: ctdc-oob.sh boot-reset"
+    elif [[ -x "${SELF_DIR}/ctdc-oob.sh" ]]; then "${SELF_DIR}/ctdc-oob.sh" boot-reset || logit "ctdc-oob boot-reset returned non-zero"; fi
     BID="$(boot_id)"; B0="$(boot_epoch)"
     verdict=uncommanded; why="no commanded-reboot record"
     if [[ -f "$COMMANDED" ]]; then

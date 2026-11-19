@@ -2264,7 +2264,10 @@ CREATE TABLE IF NOT EXISTS flight_events (
     altitude_ft     INTEGER,
     ground_speed_kt INTEGER,
     raw_json        TEXT,
-    updated_at      REAL DEFAULT (unixepoch())
+    updated_at      REAL DEFAULT (unixepoch()),
+    first_seen_at   REAL,                -- 2026-11-18: set on insert only (pg 0088)
+    first_seen_centre TEXT,
+    first_seen_source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_flight_events_dest
     ON flight_events(destination);
@@ -3125,6 +3128,24 @@ def clear_ustrains_departures(station_id: str) -> None:
 
 # ── Flight event helpers ──────────────────────────────────────────────────────
 
+_FIRST_SEEN_RE = None
+
+
+def _first_seen_attrs(raw_json: str | None) -> tuple:
+    """(centre, source) of the FDPS message that created a flight_events row, read from the
+    flight element's attributes (centre="ZDC" source="TH"). Stored on INSERT only
+    (2026-11-18: the per-ARTCC sentinel asks which centres deliver a flight's FIRST message,
+    and whether it is a filed plan (FH) or something later). None when absent."""
+    global _FIRST_SEEN_RE
+    import re as _re
+    if _FIRST_SEEN_RE is None:
+        _FIRST_SEEN_RE = (_re.compile(r'\bcentre="([A-Z0-9]{2,5})"'), _re.compile(r'\bsource="([A-Z]{1,4})"'))
+    head = (raw_json or "")[:600]
+    c = _FIRST_SEEN_RE[0].search(head)
+    src = _FIRST_SEEN_RE[1].search(head)
+    return (c.group(1) if c else None, src.group(1) if src else None)
+
+
 def upsert_flight_event(flight_id: str, airline: str | None,
                         flight_num: str | None, origin: str | None,
                         destination: str | None, aircraft_type: str | None,
@@ -3158,8 +3179,8 @@ def upsert_flight_event(flight_id: str, airline: str | None,
                 (flight_id, airline, flight_num, origin, destination,
                  aircraft_type, departure_time, arrival_time, status,
                  position_lat, position_lon, altitude_ft, ground_speed_kt,
-                 raw_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+                 raw_json, updated_at, first_seen_at, first_seen_centre, first_seen_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), ?, ?)
             ON CONFLICT(flight_id) DO UPDATE SET
                 airline=excluded.airline,
                 flight_num=excluded.flight_num,
@@ -3182,7 +3203,7 @@ def upsert_flight_event(flight_id: str, airline: str | None,
         """, (flight_id, airline, flight_num, origin, destination,
               aircraft_type, departure_time, arrival_time, status,
               position_lat, position_lon, altitude_ft, ground_speed_kt,
-              raw_json) + extra)
+              raw_json) + _first_seen_attrs(raw_json) + extra)
 
 
 def enrich_flight_arrival_times(updates: list[tuple[float, str]]) -> int:

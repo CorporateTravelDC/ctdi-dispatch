@@ -123,6 +123,7 @@ def send(
     tags: str = "satellite",
     click_url: Optional[str] = None,
     email: bool = False,
+    actions: Optional[str] = None,
     kind: Optional[str] = None,
     vertical: Optional[str] = None,
     entity: Optional[str] = None,
@@ -194,6 +195,11 @@ def send(
     }
     if email:
         headers["X-Email"] = config.operator_email()
+    if actions:
+        # 2026-11-18 (agent-lapse sentinel): ntfy action buttons, "view" only by convention --
+        # a tap opens a page; nothing is decided by the tap itself (the page asks for the
+        # operator's own sign-in). One header line, ";"-separated actions.
+        headers["Actions"] = actions.encode("utf-8").decode("latin-1", errors="replace")
     if token:
         headers["Authorization"] = f"Bearer {token}"
 

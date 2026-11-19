@@ -1,0 +1,7 @@
+[Unit]
+Description=Fleet-wide pre-departure plan coverage report (platform-side sentinel, 2026-11-18)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/platform-sentinel.py plan-coverage

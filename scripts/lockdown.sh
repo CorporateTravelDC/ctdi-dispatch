@@ -151,6 +151,17 @@ else
     chmod 0644 "${PERSIST_FILE}.new" && mv -f "${PERSIST_FILE}.new" "${PERSIST_FILE}"
 fi
 
+# 2026-11-18 (operator): the out-of-band management channel (scripts/ctdc-oob.sh, docs/LOCKDOWN_OOB.md):
+# hotspot cap off within the data budget, tailscaled pinned to end0/enu1, sshd tailnet-only with pinned
+# keys only. Before the idempotency check, so every repeat trigger (and the boot re-assert) re-asserts it.
+say "Out-of-band management channel..."
+OOB_ARGS=(enter --reason "${REASON}"); (( DRY_RUN )) && OOB_ARGS+=(--dry-run)
+if [[ -x "${SELF_DIR}/ctdc-oob.sh" ]]; then
+    "${SELF_DIR}/ctdc-oob.sh" "${OOB_ARGS[@]}" || say "  WARN: OOB channel enter returned non-zero -- see: ctdc-oob.sh status"
+else
+    say "  WARN: ${SELF_DIR}/ctdc-oob.sh missing -- no OOB channel (root install list)"
+fi
+
 # 2026-11-02 (operator): every lockdown also freezes every withheld category (LADD
 # aircraft, privileged trains and vessels), revokes every pass and WIPES the master
 # token (common/withheld.kill_all, the SIGNED image's code inside the web container,

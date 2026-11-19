@@ -33,7 +33,7 @@ def _healthz(monkeypatch, rows):
 
 
 def test_fids_is_the_declared_optional_set():
-    assert failover.OPTIONAL_FEEDS == {"dca_fids", "iad_fids"}
+    assert failover.OPTIONAL_FEEDS == {"dca_fids", "iad_fids", "push:tfdm"}  # 2026-11-18: TFDM stands
     assert failover.is_optional("dca_fids") and not failover.is_optional("metar")
 
 

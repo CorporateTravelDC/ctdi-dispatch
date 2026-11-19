@@ -32,6 +32,21 @@ def _local_airspace_enabled() -> bool:
 
 log = logging.getLogger("ingest")
 
+_OTHER_SWIM_FEEDS = frozenset({"fdps", "stdds", "tfms", "fns", "tbfm", "itws"})
+
+
+def _only_unconfigured_tfdm(cfg) -> bool:
+    """2026-11-18: the TFDM container (SWIM_NMS_TFDM_ENABLED=true, every other SWIM
+    feed skipped, no NWWS/Amtrak/local airspace) with no TFDM credentials yet has
+    nothing to do. It exits 0 with 'not configured' rather than idling, and its
+    unit (Restart=on-failure) stays stopped until the operator adds credentials."""
+    from ingest import swim_client as _sc
+    if not cfg.nms.enabled or not _sc.tfdm_unconfigured(cfg.nms):
+        return False
+    skip = {f.strip().lower() for f in os.getenv("SWIM_NMS_SKIP_FEEDS", "").split(",") if f.strip()}
+    return (_OTHER_SWIM_FEEDS <= skip and not cfg.nwws.enabled and not cfg.amtrak.enabled
+            and not _local_airspace_enabled())
+
 
 async def _supervise(name: str, coro_factory, stop: asyncio.Event) -> None:
     """Run a source coroutine; if it returns or raises while we're still up,
@@ -59,6 +74,11 @@ async def main() -> None:
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    if _only_unconfigured_tfdm(cfg):
+        log.warning("tfdm: not configured -- SWIM_NMS_USER_TFDM / SWIM_NMS_PASS_TFDM / "
+                    "SWIM_NMS_QUEUE_TFDM are empty in the ingest env; exiting 0 "
+                    "(docs/DATA_SOURCES.md, TFDM section)")
+        return
 
     # 2026-09-18: skip the whole SQLite bootstrap chain on Postgres --
     # the schema there is already fully built by the 48 files in

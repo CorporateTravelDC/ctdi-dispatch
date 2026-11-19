@@ -12,6 +12,16 @@ Anything that calls this setup "bonded" is wrong — that misconception is
 why the 2026-09-05 outage was expected to self-heal when it structurally
 could not.
 
+## Status 2026-11-18 -- the lockdown OOB management channel
+
+A lockdown now opens an out-of-band management channel. Tailscale is pinned to the first configured
+OOB uplink that has carrier and a default route; uplinks on the `never` list are excluded. A metered
+uplink runs uncapped within a data budget, and the configured action applies when the budget is used
+up. sshd listens on the tailnet addresses only, with pinned public keys only. GPG-signed break-glass
+commands are accepted. `restore-network.sh` closes the channel and re-caps metered uplinks. The design
+and configuration are in `docs/LOCKDOWN_OOB.md`; this deployment's choices are in the private config
+and doc.
+
 ## Status 2026-11-18 -- three tiers; the failover polkit grant is guarded; lockdowns survive a reboot
 
 **Uplink tiers (operator 2026-11-18), IPv4 and IPv6 alike, every profile dual stack with IPv6 preferred:**

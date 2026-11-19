@@ -1147,13 +1147,18 @@ def min_turn_minutes(aircraft_class: str = "narrowbody") -> int:
 # (operator 2026-10-14: "strictly TDES and FDPS based" -- MWAA FIDS is gate and
 # baggage enrichment only). Anything else (FIDS, airplanes.live, OpenSky,
 # AeroAPI, any tracker) can corroborate but never repoints alone.
-AUTHORITATIVE_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms"})
+# 2026-11-19 (operator): "add TFDM into the source authority and allow it to precede SFDPS, as it
+# is actually a pre-departure clearance". "tfdm" = the TFDM Terminal Publication (TTP) Flight Data
+# record's aircraft/@registration (NASA ATD-2 TTP Flight Data Messages, AircraftRegistrationMark),
+# same occurrence only, registry cross-checked (common.tfdm_authority). It binds before departure;
+# after OFF the FDPS/TBFM/TFMS order is unchanged.
+AUTHORITATIVE_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms", "tfdm"})
 # 2026-10-13 (operator: "strict, based off an FDPS, TBFM or TFMS that shows that flight"):
 # a SWIM source showing the candidate tail ON THE WATCHED FLIGHT is itself the proof, so rule
 # (c) (show the previous leg reaches the origin) is not required for these -- FDPS coverage
 # here is DC-area only and an inbound's previous leg is usually not on file. Rule (b) still
 # applies. FIDS is never a tail source (2026-10-14), so with SWIM-only sources (c) is currently unreachable. There is no "unverified inbound" acceptance.
-SWIM_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms"})
+SWIM_TAIL_SOURCES = frozenset({"fdps", "tdes", "tbfm", "tfms", "tfdm"})
 
 
 def tdes_clearance_plan(callsigns: Iterable[str], origin: str | None, sched_dep,

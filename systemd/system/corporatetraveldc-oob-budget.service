@@ -1,0 +1,16 @@
+# corporatetraveldc-oob-budget.service -- 2026-11-18 (operator). While the lockdown OOB channel is open:
+# counts each metered candidate's bytes since the lockdown began, applies the configured on_budget action
+# (cap | cut | alert-only) with one priority-5 alert when a data budget is used up, and re-asserts the OOB
+# routing and the sshd drop-in (a tailscaled restart, a late tailnet address, a link change). A no-op
+# when no OOB channel is open. Config: /etc/ctdc-oob/oob.json (docs/LOCKDOWN_OOB.md).
+[Unit]
+Description=Lockdown OOB: data budget and re-assert
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/ctdc-oob.sh scripts/lib/ctdc_oob.py
+ExecStart=/usr/local/libexec/ctdc/ctdc-oob.sh budget-check
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0022
+TimeoutStartSec=50

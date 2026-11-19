@@ -1,0 +1,28 @@
+{
+  "_comment": "Lockdown out-of-band (OOB) channel -- documented example (docs/LOCKDOWN_OOB.md). Copy to config/network/oob.json and edit; that real file is private and never reaches the public mirror. Unknown keys are errors. hard_cap_kbit shapes WHATEVER interface carries the channel (a candidate may only lower it); floor_kbit is the rate it must stay usable at (a carrier throttle); on_budget soft (default) keeps the channel up when the budget is used, cut disconnects. other_usage_gb/_at: use of the same allowance this box cannot see (e.g. a phone on the same plan).",
+  "version": 1,
+  "candidates": [
+    {"interface": "eth1"},
+    {"connection": "Example LTE hotspot",
+     "metered": {"allowance_gb": 50, "cycle_day": 1, "timezone": "UTC",
+                 "baseline_used_gb": 0, "baseline_at": "2026-01-01T00:00:00Z",
+                 "budget_fraction": 0.5, "cap_on_leave": true,
+                 "other_usage_gb": 0, "other_usage_at": null}}
+  ],
+  "never": ["wlan0"],
+  "on_budget": "soft",
+  "cap_rate": "2mbit",
+  "hard_cap_kbit": 2048,
+  "floor_kbit": 256,
+  "vpn": {"service": "tailscaled.service", "interface": "tailscale0", "protocol": "udp", "port": 41641, "relay_tcp_port": 443,
+          "table": 3313, "rule_priority": 5200, "mark": "0xcdc", "mask": "0xfff"},
+  "ssh": {"enabled": true, "allowed_accounts": ["operator"], "fido": "auto"},
+  "pins": [
+    {"role": "primary", "source": "board_signers", "account": "operator"},
+    {"role": "approver", "source": "approval_signers", "account": "operator"},
+    {"role": "spare-login", "source": "ssh_pubkey_file", "account": "operator", "path": "/etc/ctdc-oob/spare-login.pub", "optional": true},
+    {"role": "breakglass-1", "source": "gpg_asc", "path": "security/example-breakglass-key.pub.asc", "optional": true}
+  ],
+  "breakglass": {"enabled": true, "commands": ["status", "clear-hold", "restore-network", "end-lockdown"],
+                 "max_ttl_hours": 24, "signers": ["breakglass-1"]}
+}

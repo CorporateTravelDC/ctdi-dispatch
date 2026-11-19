@@ -106,6 +106,8 @@ ROLLOUT=(
   "corporatetraveldc-ingest-tfms|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|60"
   "corporatetraveldc-ingest-stdds|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|60"
   "corporatetraveldc-ingest-fdps|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|90"
+  # 2026-11-18: TFDM (TTP); inactive (exited 0, "not configured") until its credentials exist
+  "corporatetraveldc-ingest-tfdm|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|60"
   "corporatetraveldc-ingest-core|local|localhost/corporatetraveldc-ingest:latest|$REPO|Containerfile.ingest|90"
   # --- app tier
   "corporatetraveldc-poller|local|localhost/corporatetraveldc-poller:latest|$REPO|Containerfile.poller|180"

@@ -60,7 +60,10 @@ REST_FALLBACKS: dict[str, dict] = {
 # ingest_feed_watch reads that flag. MWAA FIDS supplies gate/terminal/baggage
 # only; a stale scrape used to send healthchecks.io /fail (healthcheck-ping
 # fails on any status but "ok"), telling the dead-man the box was down.
-OPTIONAL_FEEDS: frozenset[str] = frozenset({"dca_fids", "iad_fids"})
+# 2026-11-18: push:tfdm (TFDM TTP departure stands) is the same kind of gate
+# enrichment: its silence or a disabled subscription must never turn /healthz
+# degraded or send the dead-man /fail.
+OPTIONAL_FEEDS: frozenset[str] = frozenset({"dca_fids", "iad_fids", "push:tfdm"})
 
 
 def is_optional(feed_name: str) -> bool:

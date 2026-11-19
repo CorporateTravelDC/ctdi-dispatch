@@ -511,6 +511,8 @@ def _dashboard(s: dict, csrf: str) -> HTMLResponse:
                   "<p class='empty'>Nothing pending.</p>")
                + "<p class='hint'>Signing only ever happens over SSH with your approval key.</p></section>")
 
+    out.append(_lapse_section(csrf))
+
     ev = "".join(f"<li><time>{_when(e['ts'])}</time><span>{_e(e['action'])} {_e(e['target'] or '')} "
                  f"<span class='hint'>{_e(e['detail'] or '')} &middot; {_e(e['actor'])}</span></span></li>"
                  for e in es.events(12))
@@ -518,6 +520,41 @@ def _dashboard(s: dict, csrf: str) -> HTMLResponse:
                "Recent reader activity</h2></div>"
                + (f"<ol class='log'>{ev}</ol>" if ev else "<p class='empty'>None yet.</p>") + "</section>")
     return _page("Operator console", "".join(out), right=right)
+
+
+def _lapse_section(csrf: str) -> str:
+    """2026-11-18 agent-lapse sentinel (common/agent_lapse.py): accounts the platform has seen go quiet,
+    with a dismiss form. The escalation push's "Open console" button lands here (#agent-lapse); the
+    dismissal itself is this CSRF-checked form inside a signed console session, never the push tap."""
+    from common import agent_lapse
+    try:
+        rows = [r for r in agent_lapse.current() if r.get("stage") not in ("none", None)]
+    except Exception:   # noqa: BLE001 -- the console must render even if the sentinel table is absent
+        rows = []
+    tone = {"nudge": "marg", "email": "marg", "escalate": "nogo", "dismissed": "idle", "inert": "idle"}
+    items = []
+    for r in rows:
+        d = r.get("detail") or {}
+        silent = d.get("silent_s")
+        hrs = "unknown" if silent is None else f"{float(silent) / 3600:.1f} h"
+        inner = ("<label class='sr-only' for='lf-{a}'>Dismiss for</label>"
+                 "<select id='lf-{a}' name='for'><option>6h</option><option selected>24h</option>"
+                 "<option>3d</option><option>7d</option></select>"
+                 "<label class='sr-only' for='lr-{a}'>Reason</label>"
+                 "<input id='lr-{a}' name='reason' required maxlength='200' placeholder='reason (recorded)'>"
+                 ).format(a=_e(r["account"]))
+        acts = ("" if r.get("stage") == "dismissed" else
+                _form(csrf, "lapse-dismiss", inner, "Dismiss", "ghost", label=r["account"], ref=r["account"]))
+        items.append(f"<li><div><strong>{_e(r['account'])}</strong> {_chip(str(r.get('stage')), tone.get(r.get('stage'), 'marg'))}"
+                     f"<div class='hint'>silent {_e(hrs)} &middot; last activity {_when(r.get('last_activity'))}"
+                     f"{' &middot; vendor-wide' if d.get('vendor_lapse') else ''}</div></div>"
+                     f"<div class='acts'>{acts}</div></li>")
+    return ("<section class='panel' id='agent-lapse' aria-labelledby='al-h'><div class='panel-head'><h2 id='al-h'>"
+            "Agent lapse</h2>" + _chip(f"{len(items)} quiet", "marg" if items else "idle") + "</div>"
+            + (f"<ul style='list-style:none;margin:0;padding:0'>{''.join(items)}</ul>" if items else
+               "<p class='empty'>Every agent account has been active recently.</p>")
+            + "<p class='hint'>Nudge at 6 h, email at 12 h, escalation at 24 h. A dismissal holds until it "
+              "ends or the account is active again. SSH: scripts/ctdc-agent-lapse.sh dismiss.</p></section>")
 
 
 def _kill_form(csrf: str, action: str, button: str, text: str) -> str:
@@ -806,6 +843,12 @@ async def console_act(request: Request):
         if a == "gw-thaw":
             r = gw.request_thaw(requester="console")
             return _result("Re-open requested", _approve_box(r["approval_id"], "Re-opening the agents gateway"))
+        if a == "lapse-dismiss":
+            from common import agent_lapse
+            r = agent_lapse.dismiss(ref, agent_lapse.parse_for(str(f.get("for") or "24h")),
+                                    str(f.get("reason") or ""), by=actor, via="console")
+            return _result("Lapse dismissed", f"<p>{_e(r['account'])}: no further lapse alerts until "
+                           f"{_e(r['until_fmt'])}, or until it is active again.</p>")
     except (es.InviteError, gw.GatewayError) as e:
         return _result("Not done", f"<p>{_e(e.detail)}</p>")
     except ValueError:

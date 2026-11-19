@@ -58,6 +58,7 @@ INGEST_UNITS=(
     corporatetraveldc-ingest-tbfm.service
     corporatetraveldc-ingest-itws.service
     corporatetraveldc-ingest-notam.service
+    corporatetraveldc-ingest-tfdm.service
     corporatetraveldc-ingest-feed-watch.service
 )
 # A cursor older than this is not trusted (job off for a while): fall back to

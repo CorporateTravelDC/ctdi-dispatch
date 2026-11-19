@@ -1,0 +1,7 @@
+[Unit]
+Description=Agent-lapse sentinel: nudge 6 h, email 12 h, escalate 24 h (platform-side sentinel, 2026-11-18)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/platform-sentinel.py agent-lapse run

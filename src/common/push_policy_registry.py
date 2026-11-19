@@ -135,6 +135,8 @@ KINDS: dict[tuple[str, str], Rule] = {
     # 2026-11-18 (ASH4006): no same-day FDPS plan by departure / airborne without one.
     # p4 once per state; identity = the state, so the airborne step fires once more.
     ("aviation", "fdps_plan_missing_predeparture"): _S(first=4, identity=("state",)),
+    # 2026-11-18 ground-stop tripwire: a GS/GDP in effect at a watched leg's airport, once per program
+    ("aviation", "ground_stop_watched_leg"): _S(first=4, identity=("program_id",)),
     # ── aviation: ETA, release times, restrictions ───────────────────────────
     ("aviation", "tbfm_sequenced"): Rule("change", extractor="tbfm_runway_eta", threshold="eta_move_min",
                                          first=4, require_time=True, past_while_ground=True,
@@ -144,6 +146,12 @@ KINDS: dict[tuple[str, str], Rule] = {
                                     threshold="edct_move_min", first=4),
     ("aviation", "tdls_clearance"): Rule("change", identity=("clearance_type",), times=("edct",),
                                          threshold="edct_move_min", first=3),
+    # 2026-11-19 (operator: TFDM precedes SFDPS before departure; common.tfdm_authority). The
+    # TFDM path also sends fdps_plan_missing_predeparture with the same state, so the poller
+    # guard and TFDM share one slot. EDCT stays tfms_edct (TTP documents carry no EDCT).
+    ("aviation", "tfdm_awaiting_clearance"): _S(first=4, identity=("state",)),
+    ("aviation", "tfdm_tmi"): _S(first=4, identity=("tmi",)),
+    ("aviation", "tfdm_apreq_release"): _S(first=4, identity=("release",)),
     ("aviation", "tfms_tmi"): _S(identity=("fca_id", "fca_name"), sub=("fca_id", "fca_name"),
                                  note="first assignment p3; re-sends suppressed"),
     ("aviation", "tfms_tmi_update"): _SG(sub=("tmi_id", "tmiId", "fca_id")),
@@ -183,6 +191,17 @@ KINDS: dict[tuple[str, str], Rule] = {
     ("approvals", "*"): Rule("approval"),
     # ── platform ops ─────────────────────────────────────────────────────────
     ("platform_ops", "state"): Rule("ops", identity=("state",), heartbeat=True),
+    # 2026-11-18 platform-side sentinels (common/platform_sentinels.py): they run on the box so they
+    # keep working through an agent-side lapse. One push per state; a new day / episode re-arms.
+    ("platform_ops", "plan_coverage_step"): _S(first=4, identity=("state", "day")),
+    ("platform_ops", "artcc_first_drop"): _S(first=4, identity=("state", "day")),
+    ("platform_ops", "ground_stop_wide"): Rule("ops", identity=("state",),
+                                               note="wide on / cleared; hysteresis in ground_stop_tripwire"),
+    # agent-lapse escalation: nudge (p2) at 6 h, email (p3) at 12 h, escalate (p4) at 24 h -- once each
+    # per silence episode (the episode is the account's last-activity time)
+    ("platform_ops", "agent_lapse_nudge"): _S(first=2, identity=("stage", "episode")),
+    ("platform_ops", "agent_lapse_email"): _S(first=3, identity=("stage", "episode")),
+    ("platform_ops", "agent_lapse_escalate"): _S(first=4, identity=("stage", "episode")),
 }
 
 

@@ -43,3 +43,11 @@ PUSHOVER_EXPIRE_SEC  # src/common/pushover.py:32
 PUSHOVER_RETRY_SEC  # src/common/pushover.py:31
 PUSHOVER_TOKEN  # src/common/pushover.py:28
 PUSHOVER_USER_KEY  # src/common/pushover.py:29
+# 2026-11-18: TFDM (TTP) -- the five connection values from the SWIFT portal's TFDM
+# subscription. VPN is here too (not dispatch.env): its name is read from the same
+# connection sheet as the rest, and src/ingest/config.py defaults it to "TFDM".
+SWIM_NMS_HOST_TFDM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_PASS_TFDM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_QUEUE_TFDM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_USER_TFDM  # src/ingest/config.py:_nms_feed (f-string per VPN key)
+SWIM_NMS_VPN_TFDM  # src/ingest/config.py:_nms_feed (f-string per VPN key)

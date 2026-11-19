@@ -185,11 +185,12 @@ def test_stack_boot_ctl_order_is_serial_and_load_gated(harness):
     r, calls = harness(["start", "--stagger=10"], schedule=[3], script=STACK_BOOT)
     assert r.returncode == 0, r.stdout + r.stderr
     units = [c[1] for c in calls]
-    assert units[:13] == [
+    assert units[:14] == [
         "ntfy", "corporatetraveldc-pgsql",
         "corporatetraveldc-ingest-notam", "corporatetraveldc-ingest-itws",
         "corporatetraveldc-ingest-tbfm", "corporatetraveldc-ingest-tfms",
         "corporatetraveldc-ingest-stdds", "corporatetraveldc-ingest-fdps",
+        "corporatetraveldc-ingest-tfdm",
         "corporatetraveldc-ingest-core",
         "corporatetraveldc-poller", "corporatetraveldc-pusher",
         "corporatetraveldc-web", "corporatetraveldc-runner",

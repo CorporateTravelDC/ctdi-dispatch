@@ -1,0 +1,14 @@
+# corporatetraveldc-oob-breakglass.service -- 2026-11-18 (operator). Runs each GPG-signed break-glass
+# command dropped in /var/lib/ctdc-oob/inbox/ (NAME.cmd + NAME.cmd.sig, a detached signature by a pinned
+# break-glass key; config breakglass.signers). Allowlisted commands only (config breakglass.commands);
+# nonce + expiry, replays refused; every attempt logged and alerted. Result: /var/lib/ctdc-oob/outbox/NAME.result.
+[Unit]
+Description=Lockdown OOB: signed break-glass commands
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/local/libexec/ctdc/installed-check.sh scripts/installed-check.sh scripts/ctdc-oob.sh scripts/lib/ctdc_oob.py
+ExecStart=/usr/local/libexec/ctdc/ctdc-oob.sh breakglass-inbox
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0022
+TimeoutStartSec=600

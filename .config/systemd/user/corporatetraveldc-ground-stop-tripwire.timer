@@ -1,0 +1,13 @@
+[Unit]
+Description=Ground-stop tripwire: wide ground stops and watched-leg GS/GDP -- every 5 minutes
+# no Requires=/Wants= on the service (docs/BOOT_STORM_TIMER_REQUIRES.md)
+
+[Timer]
+OnCalendar=*:0/5
+RandomizedDelaySec=60
+# Persistent=true: a run missed during downtime is worth one catch-up. The run is a few indexed reads
+# and at most a handful of pushes, so it is not load-gated (the daily reports are).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+# corporatetraveldc-oob-breakglass.path -- 2026-11-18 (operator): a signature in the drop folder starts
+# corporatetraveldc-oob-breakglass.service (docs/LOCKDOWN_OOB.md).
+[Unit]
+Description=Lockdown OOB: watch the break-glass drop folder
+
+[Path]
+PathExistsGlob=/var/lib/ctdc-oob/inbox/*.cmd.sig
+Unit=corporatetraveldc-oob-breakglass.service
+
+[Install]
+WantedBy=paths.target

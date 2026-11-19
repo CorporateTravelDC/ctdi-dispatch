@@ -1,0 +1,11 @@
+# corporatetraveldc-oob-budget.timer -- 2026-11-18 (operator): every minute (docs/LOCKDOWN_OOB.md).
+[Unit]
+Description=Lockdown OOB budget check, every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -133,7 +133,7 @@ class NmsFeedConfig:
 def _nms_feed(vpn_key: str) -> NmsFeedConfig:
     """Build a NmsFeedConfig from env vars for the given feed key (e.g. 'FDPS')."""
     host = os.getenv(f"SWIM_NMS_HOST_{vpn_key}") or os.getenv("SWIM_NMS_HOST", "tcps://ems1.swim.faa.gov:55443")
-    vpn = os.getenv(f"SWIM_NMS_VPN_{vpn_key}", vpn_key)
+    vpn = os.getenv(f"SWIM_NMS_VPN_{vpn_key}") or vpn_key   # 2026-11-18: an empty value means the default too
     username = os.getenv(f"SWIM_NMS_USER_{vpn_key}", "")
     password = os.getenv(f"SWIM_NMS_PASS_{vpn_key}", "")
     queue_name = os.getenv(f"SWIM_NMS_QUEUE_{vpn_key}", "")
@@ -152,3 +152,9 @@ class NmsConfig:
     aim:   NmsFeedConfig = field(default_factory=lambda: _nms_feed("AIM"))
     tbfm:  NmsFeedConfig = field(default_factory=lambda: _nms_feed("TBFM"))
     itws:  NmsFeedConfig = field(default_factory=lambda: _nms_feed("ITWS"))
+    # 2026-11-18: TFDM Terminal Publication (TTP). OPT-IN: only the container that
+    # sets SWIM_NMS_TFDM_ENABLED=true (corporatetraveldc-ingest-tfdm) ever starts it,
+    # so the six older per-feed containers -- whose SWIM_NMS_SKIP_FEEDS deny-lists
+    # predate this feed -- never open a second consumer on the same queue.
+    tfdm:  NmsFeedConfig = field(default_factory=lambda: _nms_feed("TFDM"))
+    tfdm_enabled: bool = field(default_factory=lambda: _b("SWIM_NMS_TFDM_ENABLED", False))

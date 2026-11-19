@@ -10,7 +10,10 @@ deduped on a hash of leg + side + field + value + status -- never a timestamp or
 source. Tables: pg_schema/0079 (Postgres), _SQLITE_DDL below (SQLite twin).
 
 Source precedence (operator 2026-10-18), highest first -- SOURCE_TIERS:
-  40 SWIM: TDES parkingGate (departure), TFDM stand later (slot 'swim_tfdm').
+  40 SWIM: TDES parkingGate (departure); TFDM TTP departure stand (source 'swim_tfdm',
+     2026-11-18, record_tfdm -- departure side only, gate only). The same TTP record is the
+     first TAIL source before departure since 2026-11-19 (common.tfdm_authority); that is
+     identity, not gate precedence, and changes nothing here.
   30 ACARS: airframes.io = ACARS Drama Jumpseat = local decoder (one tier).
   20 AeroAPI: fallback only (common.gate_aeroapi: budgeted, ledgered).
   10 MWAA FIDS: DCA/IAD only, gate / terminal / baggage only.
@@ -991,4 +994,27 @@ def record_tdes(rec: dict, *, reason: str | None = None) -> tuple[fi.FlightInsta
                       observed_at=iso_utc(rec.get("event_time")) or _iso(), leg_match=match,
                       evidence_type="clearance", confidence=0.95, parser_version="tdes-1",
                       airport=rec.get("airport"), raw_table="tdes_departure_events", raw_ref=ev, event_key=ev)
+    return key, record([obs], reason=reason)
+
+
+def record_tfdm(rec: dict, *, reason: str | None = None) -> tuple[fi.FlightInstanceKey | None, RecordResult | None]:
+    """Departure-gate evidence from one TFDM Terminal Publication (TTP) Flight Data
+    record (ingest.parsers.tfdm_parser, 2026-11-18). The departure stand at the
+    departure aerodrome is the departure gate (US usage: gate = stand). Gate only:
+    no time, status or tail is taken from TTP. The event key is the flight's own
+    stable fields (aerodrome, callsign, TFDM id or scheduled off-block), never a
+    message timestamp, so a resync that repeats the same stand stores nothing new."""
+    stand = rec.get("departure_stand")
+    airport = rec.get("departure_airport")
+    if stand is None or not airport:
+        return None, None
+    key, match = tdes_leg(rec.get("callsign"), airport, rec.get("destination_airport"),
+                          rec.get("sched_off_block") or _iso())
+    if key is None:
+        return None, None
+    ev = f"{airport}|{rec.get('callsign')}|{rec.get('tfdm_id') or rec.get('sched_off_block') or ''}"
+    obs = Observation(key=key, side="departure", field="gate", value_raw=stand, source="swim_tfdm",
+                      observed_at=_iso(), leg_match=match, evidence_type="assignment_msg",
+                      confidence=0.9, parser_version="tfdm-ttp-1", airport=airport,
+                      raw_table=None, raw_ref=ev, event_key=ev)
     return key, record([obs], reason=reason)

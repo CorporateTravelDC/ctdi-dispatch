@@ -103,7 +103,7 @@ Poller modules **not** in `FETCH_SCHEDULE`: `faa_registry.py` and
 
 ---
 
-## 2. US sources — FAA SWIM (six push feeds)
+## 2. US sources — FAA SWIM (six push feeds, plus TFDM from 2026-11-18)
 
 **What it provides:** six Solace PubSub+ sessions on FAA SWIM NMS/SCDS, one
 per feed, each with its own credentials, Message VPN and pre-provisioned
@@ -205,6 +205,73 @@ sample. A sample with 15 or more (`FAIL_THRESHOLD`) counts as degraded. After
 priority 4, repeated at most every 1800 s (`ALERT_COOLDOWN_SECS`). State is in
 `/var/lib/corporatetraveldc/swim-session-health/state.json`; `--status`
 prints it without alerting. It never restarts or touches a container.
+
+### TFDM Terminal Publication (`push:tfdm`, 2026-11-18)
+
+A seventh SCDS subscription, **TFDM** (TTP: Airport Information, Traffic
+Management Restrictions, Flight Delay, Flight Data; all message types and
+aerodromes), was provisioned but nothing ever connected to it. On 2026-11-18
+the FAA wrote that it is scheduled to be disabled for lack of connectivity
+over the past 30 days unless action is taken within 30 days, and removed 30
+days after it is disabled. A connected, draining consumer is the action.
+
+| Feed key / heartbeat | Env key suffix | Parser | Role |
+|---|---|---|---|
+| `tfdm` / `push:tfdm` | `TFDM` | `ingest/parsers/tfdm_parser.py` | departure stand -> `gate_assignments` (`swim_tfdm`, tier 40, departure gate only); everything else counted by data group and message type |
+
+- **Unit:** `corporatetraveldc-ingest-tfdm` (256m, 60%). TFDM is **opt-in**:
+  `SWIM_NMS_TFDM_ENABLED=true` is set in that quadlet only, so the six older
+  containers never open a second consumer on the queue.
+- **Not configured:** with `SWIM_NMS_USER_TFDM`, `SWIM_NMS_PASS_TFDM` or
+  `SWIM_NMS_QUEUE_TFDM` empty, the process logs `tfdm: not configured` and
+  exits 0; the unit is `Restart=on-failure`, so it stays stopped (no loop).
+- **Acks:** client-ack like every feed; the ack is in the receive loop's
+  `finally`, so a parse error never leaves a message unacknowledged. TTP's JMS
+  headers (`DATA_GROUP`, `MESSAGE_TYPE`, `SYNC`, `AERODROME`, `SCHEMA_VERSION`)
+  are read one by one, each guarded. A one-line count summary is logged every
+  5 min (`tfdm: message counts since start: ...`), counts only.
+- **What is stored:** the departure stand at the departure aerodrome for DC
+  departures (KDCA/KIAD/KBWI) and for watched flights elsewhere. ~~No time,
+  status, OOOI phase or tail is taken from TTP.~~ (corrected 2026-11-19, operator:
+  "allow it to precede SFDPS, as it is actually a pre-departure clearance") Before
+  departure, a watched leg's tail binds from the record's `aircraft/@registration`
+  when the record is the watch's own dated leg (off-block time on the watch's
+  America/New_York date, airports agree), the aircraft is not airborne, and the FAA
+  registry's hex for that registration is not contradicted by OpenSky
+  (`common.tfdm_authority`). TTP carries no ICAO 24-bit address, so the hex comes
+  from the registry. After OFF the FDPS/TBFM/TFMS order is unchanged. Still no
+  time, status or OOOI phase from TTP.
+- **Pre-departure alerts (watched legs, parity gate):** no FDPS plan yet while
+  TFDM has the flight (shares the poller guard's `fdps_plan_missing_predeparture`
+  slot, so one push); TMI identifiers on the departure (`tfdm_tmi`); an APREQ
+  release time (`tfdm_apreq_release`); awaiting clearance (`tfdm_awaiting_clearance`,
+  [VERIFY]: the clearance field's FIXM path is not in the ATD-2 table, so the alert
+  stays off until the feed has been seen to carry it). EDCT stays `tfms_edct`; TTP
+  documents no EDCT or CDR field.
+- **Fields read** (NASA ATD-2 "TTP Flight Data Messages", NTRS 20180007226, FIXM
+  table): AircraftRegistrationMark, EramGufi, Scheduled/Initial/Earliest/Actual
+  off-block, EstimatedTimeOfDeparture, ActualTakeOffTime, TOBT,
+  ApprovalRequestReleaseTime, TmiIdentifiers. Not documented, not read: ICAO24,
+  aircraft type, EDCT, CDR. LADD-listed legs are dropped
+  by `gate_assignments.record()` before storage, as for every source.
+  Arrival stands, delays, TMIs and airport information: counted, future work.
+- **Health:** `push:tfdm` is in `ingest.failover.OPTIONAL_FEEDS` (gate
+  enrichment, like FIDS): its silence never turns `/healthz` degraded.
+  Bandwidth priority `weather` pauses it (low-priority tier). The thermal
+  guard and `ingest-feed-ctl.sh` do **not** list it yet.
+- **Schema evidence:** element names from the NASA ATD-2 "TTP Flight Data
+  Messages" document (NTRS 20180007226; ATD-2 runs the TFDM schema as a
+  prototype). Lookups are namespace-agnostic by local name; the test
+  fixtures are synthetic. The production element set is unverified until
+  the first real messages arrive.
+- **Credentials:** the operator copies the five TFDM connection values
+  (host, Message VPN, username, password, queue) from the SWIFT portal's
+  TFDM subscription into `dispatch-secrets.env` with the hand-off
+  `tfdm-credentials.relay` (prompts on the terminal, keeps a backup, never
+  echoes a value), regenerates the scoped file with
+  `sudo python3 scripts/service-env/generate.py --write ingest`, then
+  starts `corporatetraveldc-ingest-tfdm`. Confirm in the SWIFT portal that
+  the subscription shows connected.
 
 Parser-level detail (which message type lands in which table) is in
 `src/ingest/README.md`.

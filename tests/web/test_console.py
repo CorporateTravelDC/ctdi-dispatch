@@ -258,3 +258,34 @@ def test_a_push_failure_never_blocks_sign_in(env, monkeypatch):
     from common import ntfy_push
     monkeypatch.setattr(ntfy_push, "send", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ntfy down")))
     _signed_in(env)
+
+
+def test_agent_lapse_dismiss_needs_a_signed_session_and_csrf(env):
+    """2026-11-18 agent-lapse sentinel: the escalation push opens the console; only a signed-in,
+    CSRF-checked form dismisses -- a bare POST (what a push tap could send) changes nothing."""
+    from common import agent_lapse as al
+    now = time.time()
+    with db.conn() as c:
+        al.ensure(c)
+        c.execute("DELETE FROM agent_lapse_state")
+        c.execute("DELETE FROM agent_lapse_dismissals")
+    al._save("ctdc-agent-anthropic-cowork", now - 30 * 3600, "escalate", "1", "escalate",
+             {"silent_s": 30 * 3600, "vendor_lapse": True}, now)
+    anon = _client()
+    r = anon.post("/console/act", data={"action": "lapse-dismiss", "ref": "ctdc-agent-anthropic-cowork",
+                                        "for": "24h", "reason": "tap"})
+    assert r.status_code == 403
+    c, csrf = _signed_in(env)
+    page = c.get("/console?lapse=ctdc-agent-anthropic-cowork").text
+    assert "id='agent-lapse'" in page and "ctdc-agent-anthropic-cowork" in page and "vendor-wide" in page
+    r = c.post("/console/act", data={"action": "lapse-dismiss", "csrf": "wrong", "ref": "ctdc-agent-anthropic-cowork",
+                                     "for": "24h", "reason": "x"})
+    assert r.status_code == 403
+    with db.conn() as cc:
+        assert cc.execute("SELECT COUNT(*) AS n FROM agent_lapse_dismissals").fetchone()["n"] == 0
+    r = c.post("/console/act", data={"action": "lapse-dismiss", "csrf": csrf, "ref": "ctdc-agent-anthropic-cowork",
+                                     "for": "24h", "reason": "Cowork plan renewing"})
+    assert "Lapse dismissed" in r.text
+    with db.conn() as cc:
+        rec = dict(cc.execute("SELECT by_who, via, reason FROM agent_lapse_dismissals").fetchone())
+    assert rec == {"by_who": "op@console", "via": "console", "reason": "Cowork plan renewing"}

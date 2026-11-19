@@ -118,7 +118,7 @@ class RolloutListAndDebt(unittest.TestCase):
     def test_image_maps_to_every_unit(self):
         out = run_bash(self.funcs() + "units_for_image localhost/corporatetraveldc-ingest:latest")
         units = out.split()
-        self.assertEqual(len(units), 7)
+        self.assertEqual(len(units), 8)  # 2026-11-18: + corporatetraveldc-ingest-tfdm
         self.assertTrue(all(u.startswith("corporatetraveldc-ingest-") for u in units))
 
     def test_pg_units_detected(self):

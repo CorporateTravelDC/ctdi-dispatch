@@ -104,7 +104,9 @@ there is no aircraft. Compare returned callsign, hex, registration, type and
 directly or bypass a refusal. Never send a protected identifier externally.
 
 **1g. Identity acceptance.** A tail comes only from SWIM (FDPS, TDES-linked plan,
-TBFM or TFMS). ADS-B/fallback contact corroborates position and association;
+TBFM or TFMS). Before departure, TFDM comes first (operator 2026-11-19): the platform binds a
+waiting watch to the TFDM record's registration when it is the same dated leg and the
+FAA and OpenSky registries agree on its hex; after OFF the order above is unchanged. ADS-B/fallback contact corroborates position and association;
 registries resolve tail↔hex. FIDS supplies gate/terminal/baggage only: never
 tail, time, status or OOOI. A pair agreeing across registries and a fresh contact
 under the requested callsign is stronger than either alone. A blank external

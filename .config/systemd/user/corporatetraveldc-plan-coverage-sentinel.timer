@@ -1,0 +1,13 @@
+[Unit]
+Description=Fleet-wide pre-departure plan coverage report -- daily, for the previous UTC day
+# no Requires=/Wants= on the service (docs/BOOT_STORM_TIMER_REQUIRES.md)
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=15min
+# Persistent=true: a run missed during downtime is worth one catch-up; each run skips itself above
+# the load line (common/platform_sentinels.py), so a catch-up never adds load during a boot storm.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,58 @@
+# corporatetraveldc-ingest-tfdm.container
+# Install to ~/.config/containers/systemd/ under corporatetraveldc
+# Manage: systemctl --user {start,stop,status,restart} corporatetraveldc-ingest-tfdm
+#
+# 2026-11-18: SWIM TFDM Terminal Publication (TTP). The SCDS subscription was
+# provisioned but never connected; the FAA warned on 2026-11-18 that it will be
+# disabled for lack of connectivity. Same image and same per-feed pattern as the
+# six other SWIM containers (see corporatetraveldc-ingest-itws.container), with
+# two differences:
+#   - TFDM is OPT-IN (SWIM_NMS_TFDM_ENABLED=true here and nowhere else), so the
+#     older containers' SWIM_NMS_SKIP_FEEDS deny-lists did not need to change.
+#   - Restart=on-failure, not always: with no TFDM credentials the process logs
+#     "tfdm: not configured" and exits 0, and the unit stays stopped instead of
+#     restart-looping. Add the credentials (docs/DATA_SOURCES.md, TFDM section),
+#     regenerate the ingest scoped env, then start this unit.
+[Unit]
+Description=Corporate Travel DC ingest -- SWIM TFDM (TTP) only
+After=network-online.target
+After=ntfy.service
+Wants=ntfy.service
+
+[Container]
+# 2026-11-04 operator rule: anything that leaves this container or goes into another one
+# uses 100.x.x.x, hard-set (ntfy runs in its own container). host.containers.internal
+# does not resolve on default pasta networking (--no-map-gw): ingest pushes were lost.
+Environment=NTFY_URL=http://100.x.x.x:2586
+Memory=256m
+PodmanArgs=--memory-swap=256m
+Image=localhost/corporatetraveldc-ingest:latest
+Environment=CORPORATETRAVELDC_UNIT=%N
+Volume=/var/lib/corporatetraveldc:/var/lib/corporatetraveldc:z
+Volume=corporatetraveldc-pgsql-sock:/var/run/postgresql
+EnvironmentFile=/etc/corporatetraveldc/dispatch.env
+# 2026-10-05 (duel M9, U7 rollout): only the secret NAMES the ingest image reads
+# (scripts/service-env/ingest.allowlist -> generate.py --write), not dispatch-secrets.env
+EnvironmentFile=/etc/corporatetraveldc/svc/ingest.env
+Environment=SWIM_NMS_ENABLED=true
+Environment=SWIM_NMS_SKIP_FEEDS=fdps,stdds,tfms,fns,tbfm,itws
+Environment=SWIM_NMS_TFDM_ENABLED=true
+Environment=NWWS_ENABLED=false
+Environment=AMTRAK_ENABLED=false
+Environment=LOCAL_AIRSPACE_ENABLED=false
+AutoUpdate=local
+
+[Service]
+# Slice, MemoryLow and CPUWeight as corporatetraveldc-ingest-itws.container (history there).
+Slice=production.slice
+MemoryLow=85M
+CPUWeight=7500
+CPUQuota=60%
+# exit 0 = 'not configured' (see header): stay stopped; a crash still restarts.
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+# No WantedBy on purpose: startup is owned by corporatetraveldc-stack-boot-stagger.service
+# (scripts/stack-boot-ctl.sh ORDER), as for every ingest unit.

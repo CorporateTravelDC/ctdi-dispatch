@@ -44,6 +44,11 @@
 #     way an account other than the owner and the operator gets into a private /srv/ctdc-* folder
 #     (operator or convened-council directive, logged to /var/log/ctdc-srv-access.log)
 #
+#   scripts/ctdc-oob.sh + scripts/lib/ctdc_oob.py <- lockdown.sh / restore-network.sh / the boot guard and
+#     corporatetraveldc-oob-budget(.service,.timer) + corporatetraveldc-oob-breakglass(.service,.path)
+#     (2026-11-18, operator): the lockdown out-of-band channel, configured by config/network/oob.json
+#     (private) -> /etc/ctdc-oob/oob.json and its pins -> /etc/ctdc-oob/pinned-fingerprints; docs/LOCKDOWN_OOB.md
+#
 #   scripts/ctdc-reboot.sh + scripts/ctdc-boot-guard.sh <- corporatetraveldc-boot-guard(.service,-alert.service)
 #     (2026-11-18, operator): commanded reboots vs uncommanded ones; the uncommanded-reboot hold and the
 #     persistent lockdown marker in /var/lib/ctdc-lockdown gate config/polkit/49-ctdc-net-failover.rules
@@ -64,7 +69,8 @@ SCRIPTS=(scripts/team-liveness.sh scripts/watchdog.sh scripts/renew-tailscale-ce
          scripts/leak-guard/transcript_leak_scan.py scripts/leak-guard/privacy_lists.py scripts/leak-guard/agent-leak-scan.sh
          scripts/ctdc-claude-no-agent-hook.py scripts/ctdc-claude-no-registration-hook.py
          scripts/agent-segmentation/srv-access.sh
-         scripts/ctdc-reboot.sh scripts/ctdc-boot-guard.sh)   # 2026-11-18: commanded-reboot helper + boot guard (failover polkit holds)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
+         scripts/ctdc-reboot.sh scripts/ctdc-boot-guard.sh
+         scripts/ctdc-oob.sh scripts/lib/ctdc_oob.py)   # 2026-11-18: lockdown OOB channel (docs/LOCKDOWN_OOB.md)   # 2026-11-18: commanded-reboot helper + boot guard (failover polkit holds)   # 2026-10-26: grants into private /srv folders (operator or council directive only)   # 2026-10-25: Claude Code managed-policy hook (no agents/keys/sign/push)   # 2026-10-23: privacy_lists.py, imported by the scanner (industry-aware lists)   # 2026-10-20: the root unit's wrapper (redact + scan, LADD piped from the DB, --require-ladd)   # 2026-10-12: hourly root redact+scan of every agent account's transcripts   # 2026-10-11: root snapshot of every agent home for the nightly backup   # 2026-10-07: root executor for signed sudo approvals
 # fail2ban runs its actions as root: action.d/jail.d are installed verbatim
 # (they already name the libexec copies) into /etc/fail2ban, root 0644.
 F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d/corporatetraveldc-lockdown.conf
@@ -73,6 +79,9 @@ F2B=(fail2ban/action.d/cloudflare-token-corporatetraveldc.conf fail2ban/action.d
 PYLIB=(src/common/__init__.py src/common/board_sign.py)
 ROOTCFG=(config/network/zz-ctdc-connectivity.conf config/network/wifi-sdio-recovery.conf
          config/polkit/49-ctdc-net-failover.rules config/network/gai.conf)   # 2026-11-17: failover polkit rule; IPv6-first gai.conf
+# 2026-11-18: the lockdown OOB config and its pins are deployment-private (never on the public mirror,
+# whose operators write their own from config/network/oob.example.json): installed when the tree has them.
+for f in config/network/oob.json config/network/oob-pinned-fingerprints; do [[ -f "${REPO}/${f}" ]] && ROOTCFG+=("$f"); done
 # 2026-10-25: Claude Code managed policy (root-owned; Claude cannot edit it) and the empty,
 # read-only GNUPGHOME it hands every Claude process.
 CLAUDE_POLICY_SRC=config/claude-code/managed-settings.json
@@ -108,10 +117,14 @@ UNITS=(
   "systemd/system/corporatetraveldc-agent-remote-control-boot.timer"
   "systemd/system/corporatetraveldc-boot-guard.service"
   "systemd/system/corporatetraveldc-boot-guard-alert.service"
+  "systemd/system/corporatetraveldc-oob-budget.service"
+  "systemd/system/corporatetraveldc-oob-budget.timer"
+  "systemd/system/corporatetraveldc-oob-breakglass.service"
+  "systemd/system/corporatetraveldc-oob-breakglass.path"
 )
 
 manifest_hash() { awk -v p="$1" '$2==p || $2=="*"p {print $1; exit}' "${REPO}/MANIFEST.sha256"; }
-dest_of() { case "$1" in config/network/zz-ctdc-connectivity.conf) echo /etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) echo /etc/ctdc-wifi-sdio-recovery.conf ;; config/polkit/49-ctdc-net-failover.rules) echo /etc/polkit-1/rules.d/49-ctdc-net-failover.rules ;; config/network/gai.conf) echo /etc/gai.conf ;; scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
+dest_of() { case "$1" in config/network/zz-ctdc-connectivity.conf) echo /etc/NetworkManager/conf.d/zz-ctdc-connectivity.conf ;; config/network/wifi-sdio-recovery.conf) echo /etc/ctdc-wifi-sdio-recovery.conf ;; config/polkit/49-ctdc-net-failover.rules) echo /etc/polkit-1/rules.d/49-ctdc-net-failover.rules ;; config/network/gai.conf) echo /etc/gai.conf ;; config/network/oob.json) echo /etc/ctdc-oob/oob.json ;; config/network/oob-pinned-fingerprints) echo /etc/ctdc-oob/pinned-fingerprints ;; scripts/*) echo "${DEST}/$(basename "$1")" ;; src/*) echo "${DEST}/lib/${1#src/}" ;; esac; }
 
 if (( CHECK )); then
   for f in "${SCRIPTS[@]}" "${PYLIB[@]}" "${ROOTCFG[@]}"; do
@@ -141,6 +154,12 @@ fi
 
 # 2+3. copy each file, then confirm its installed hash equals the signed one
 install -d -m 0755 -o root -g root "${DEST}" "${DEST}/lib" "${DEST}/lib/common"
+# 2026-11-18: lockdown OOB (scripts/ctdc-oob.sh): root-only config; state traversable but not listable;
+# the break-glass drop folder is write-only for the operator group (sticky), results readable.
+install -d -m 0755 -o root -g root /etc/ctdc-oob
+install -d -m 0711 -o root -g root /var/lib/ctdc-oob
+install -d -m 1730 -o root -g corporatetraveldc /var/lib/ctdc-oob/inbox
+install -d -m 0755 -o root -g root /var/lib/ctdc-oob/outbox
 rec=$(mktemp); trap 'rm -f "$rec"' EXIT
 for f in "${SCRIPTS[@]}" "${PYLIB[@]}" "${ROOTCFG[@]}"; do
   want=$(manifest_hash "$f"); [[ -n "$want" ]] || { echo "install-root-copies: ${f} is not in the manifest -- refusing" >&2; exit 4; }

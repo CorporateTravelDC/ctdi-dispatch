@@ -40,6 +40,9 @@ STATE_FILE="/run/corporatetraveldc-lockdown-active"
 PERSIST_DIR="${CTDC_LOCKDOWN_DIR:-/var/lib/ctdc-lockdown}"
 PERSIST_FILE="${PERSIST_DIR}/lockdown-active"
 HOLD_FILE="${PERSIST_DIR}/uncommanded-reboot-hold"
+# 2026-11-18 (operator): the lockdown OOB channel's state (scripts/ctdc-oob.sh); leaving it puts the
+# hotspot cap back on enu1 and removes the tailscaled policy routing and the sshd OOB drop-in.
+OOB_STATE="${CTDC_OOB_STATE:-/var/lib/ctdc-oob/state.json}"
 
 PASTA_MAPGW_CONTAINERS=(
     "corporatetraveldc-pusher"
@@ -129,7 +132,7 @@ say "--------------------------------------"
 
 (( DRY_RUN )) && say "[DRY-RUN MODE -- no changes will be made]"
 
-if [[ ! -f "${STATE_FILE}" && ! -f "${PERSIST_FILE}" && ! -f "${HOLD_FILE}" ]]; then
+if [[ ! -f "${STATE_FILE}" && ! -f "${PERSIST_FILE}" && ! -f "${HOLD_FILE}" && ! -f "${OOB_STATE}" ]]; then
     say "[SKIP] Not currently locked down -- idempotent no-op"
     exit 0
 fi
@@ -168,6 +171,14 @@ if [[ -f "${CONTAINERS_CONF}" ]] && grep -q '^pasta_options = \[\]' "${CONTAINER
     done
 else
     say "  [SKIP] containers.conf -- already restored or file not found"
+fi
+
+say "Closing the out-of-band management channel..."
+OOB_ARGS=(leave --reason "${REASON}"); (( DRY_RUN )) && OOB_ARGS+=(--dry-run)
+if [[ -x "${SELF_DIR}/ctdc-oob.sh" ]]; then
+    "${SELF_DIR}/ctdc-oob.sh" "${OOB_ARGS[@]}" || say "  WARN: OOB channel leave returned non-zero -- see: ctdc-oob.sh status"
+else
+    say "  WARN: ${SELF_DIR}/ctdc-oob.sh missing -- OOB channel not closed"
 fi
 
 if (( DRY_RUN )); then

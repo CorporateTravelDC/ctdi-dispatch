@@ -199,10 +199,12 @@ def assess(entry: dict, plan: dict | None, tfms: dict | None, now: float,
     day0 = fi.watch_day_start(entry, now)
     t_sched = fi.to_epoch(entry.get("scheduled_departure"))
     t_off = None
+    sched_from_tfms = False
     if tfms:
         cand = fi.to_epoch(tfms.get("original_departure")) or fi.to_epoch(tfms.get("airline_out_time"))
         if t_sched is None and _same_day(cand, day0):
             t_sched = cand
+            sched_from_tfms = True
         off = fi.to_epoch(tfms.get("airline_off_time"))
         if _same_day(off, day0):
             t_off = off
@@ -221,6 +223,8 @@ def assess(entry: dict, plan: dict | None, tfms: dict | None, now: float,
     if t_sched is not None and now >= t_sched - lead_min * 60:
         return {**base, "state": "plan_missing_predeparture",
                 "summary": (f"{entry.get('identifier')} {entry.get('origin')}-{entry.get('destination')}: "
-                            f"no FDPS plan for this leg yet, departure {_fmt(t_sched)}; "
-                            f"tail confirmation is waiting on it")}
+                            + (f"FDPS plan not yet visible (TFMS has the schedule: departure {_fmt(t_sched)}); "
+                               if sched_from_tfms or tfms else
+                               f"no FDPS plan for this leg yet, departure {_fmt(t_sched)}; ")
+                            + "tail confirmation is waiting on it")}
     return None
