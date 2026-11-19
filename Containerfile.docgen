@@ -1,7 +1,7 @@
 # Base image: the tag is for humans, the digest is the identity (multi-platform
 # index: arm64 + amd64). Refresh deliberately with scripts/build/pin-base-images.py.
 # SUPERSEDED 2026-10-07: FROM python:3.13-slim (a tag can move under us; review 05).
-FROM docker.io/library/python:3.13-slim@sha256:27b7c9d4f13ca20bb1170148f02095d50a5dfce1f7f2dabf5ca273727e43b7ea
+FROM docker.io/library/python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 LABEL org.opencontainers.image.title="corporatetraveldc-docgen" \
       org.opencontainers.image.description="Corporate Travel DC Dispatch — second_brain.doc_generation renderer (markdown -> docx/pptx/PDF)"
