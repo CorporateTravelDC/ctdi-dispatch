@@ -233,6 +233,19 @@ for _f in "${REPO_DIR}/config/dispatch.env" /etc/corporatetraveldc/dispatch.env;
 done
 ok "no quoted env values in dispatch.env (podman --env-file safe)"
 
+# -- 7b. HTTP/2 stays off (operator 2026-11-19: nginx HTTP/2 CVE; re-enable only on nginx >= 1.31.9) --
+# Tracked configs AND the live /etc/nginx tree (incl. live-only vhosts tracked nowhere). An active
+# `http2 on` or a legacy `listen ... http2` anywhere would re-open the CVE silently.
+_h2=0
+for _d in "${REPO_DIR}/nginx" "${REPO_DIR}/config" "${REPO_DIR}/scripts/templates" /etc/nginx; do
+    [[ -d "${_d}" ]] || continue
+    while IFS= read -r _hit; do
+        _h2=1; drift "HTTP/2 enabled (must stay off until nginx >= 1.31.9): ${_hit}"
+    done < <(grep -rnE '^[[:space:]]*http2[[:space:]]+on[[:space:]]*;|^[[:space:]]*listen[^;#]*[[:space:]]http2' \
+                 --include='*.conf' --include='*.tmpl' --include='nginx.conf' "${_d}" 2>/dev/null | grep -v '/retired-')
+done
+(( _h2 )) || ok "HTTP/2 off in every tracked and live nginx config"
+
 # -- 8. manifest signature freshness ----------------------------------------
 if [[ ${PRE_SIGN} -eq 1 ]]; then
     warn "check 8 (manifest vs signature) skipped -- --pre-sign, sign-manifest.sh is about to regenerate both"

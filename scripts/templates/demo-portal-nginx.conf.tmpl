@@ -48,6 +48,7 @@ http {
     }
 
     server {
+    http2 off;  # 2026-11-19 operator: HTTP/2 disabled everywhere (nginx HTTP/2 CVE); re-enable only on nginx >= 1.31.9
         listen __PORT__;
         server_name _;
 
