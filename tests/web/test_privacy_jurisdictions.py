@@ -39,3 +39,19 @@ def test_owner_names_follow_the_country():
     assert pj.owner_public("G-ABCD") and pj.owner_public("C-GABC")
     assert not pj.owner_public("VP-BXX")                                                  # unknown: hidden
     assert pj.owner_public(None, "a00001")                                                # US public register
+
+
+@pytest.mark.parametrize("cs,reg,private", [
+    # 2026-11-20: watches typed as the public IATA number read as private and were withheld.
+    # Q-registry marks stand in for real tails (they keep each country's prefix).
+    ("BA217", "G-QZBKB", False), ("LH414", "D-QAIXA", False), ("EK231", "A6-QEOA", False),
+    ("AF50", "F-QGSQA", False), ("BA7W", "G-QZBKB", False),
+    ("ZZ123", "G-QABCD", True),          # unknown 2-character prefix: still private (fail closed)
+    ("GQABCD", "G-QABCD", True)])        # flying under its own registration: private
+def test_iata_flight_numbers_read_as_operators(cs, reg, private):
+    assert pj.is_private(cs, reg) is private
+
+
+def test_iata_airliner_is_not_withheld_by_country():
+    assert pj.withheld_by_country({"identifier": "BA217", "registration": "G-QZBKB"}) is False
+    assert pj.withheld_by_country({"identifier": "GQABCD", "registration": "G-QABCD"}) is True

@@ -129,6 +129,15 @@ def is_private(callsign: Optional[str], registration: Optional[str] = None) -> b
         return True
     if cs == _norm_reg(registration).replace("-", ""):
         return True
+    # 2026-11-20: a watch typed as the public IATA flight number (BA217, LH414, EK231) failed the
+    # 3-letter operator test, read as PRIVATE, and a G-/D-/A6- airliner was withheld under its
+    # country's private-aircraft default ("No aircraft available" for wl-flight-ba217-20261120).
+    # A known IATA carrier prefix reads through the one airline-code table (BA -> BAW) first;
+    # an unknown 2-character prefix stays private (fail closed).
+    from common.airline_codes import IATA_TO_ICAO
+    m = re.match(r"^([A-Z0-9]{2})([0-9][0-9A-Z]{0,4})$", cs)
+    if m and m.group(1) in IATA_TO_ICAO:
+        cs = IATA_TO_ICAO[m.group(1)] + m.group(2)
     return not _OPERATOR_CALLSIGN.match(cs)
 
 
