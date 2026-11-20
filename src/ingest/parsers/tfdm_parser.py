@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 
 log = logging.getLogger("ingest.parsers.tfdm")
 
-PARSER_VERSION = "tfdm-ttp-2"   # 2026-11-19: registration, GUFI, off-block times, TMI, APREQ
+PARSER_VERSION = "tfdm-ttp-3"   # 2026-11-20: paths checked against live samples; runway times, tfdmId, flight/ATC state
 
 # Departure aerodromes whose stands are recorded without a watch match: the same
 # DC set the TDES path uses (smes_parser.SMES_AIRPORTS). Any other aerodrome's
@@ -111,6 +111,16 @@ def _text(el):
         return None
     t = el.text.strip()
     return t or None
+
+
+def _when(el):
+    """A time value that is either the element's own text (offBlockTime/initial) or its child
+    <time> (runwayDepartureTime/estimated, .../actual, .../earliest), as the live feed sends them
+    (2026-11-20 samples; the parser used to read only the element's own text, so every runway
+    time came back empty)."""
+    if el is None:
+        return None
+    return _text(el) or _text(_find(el, "time"))
 
 
 def _guess_data_group(root, headers: dict | None) -> str:
@@ -201,6 +211,12 @@ def _flight_record(fl) -> dict | None:
     # clearance", TFDM builds 1 and 2) but the ATD-2 FIXM table gives no path; it is looked up by local
     # name and only ever used once the feed has been seen to carry it (common.tfdm_authority).
     # Not in the TTP documents and not read: ICAO 24-bit address, aircraft type, EDCT, CDR.
+    # 2026-11-20, checked against 30 live flights (census samples, redacted): runwayDepartureTime/*
+    # and runwayArrivalTime/* carry the time in a child <time> (_when); offBlockTime carried only
+    # <initial> (no TOBT nameValue on any flight); clearanceDeliveryTime is element text (1 flight);
+    # departureDelay carried currentDelay/predictedDelay durations and no @tmiIdentifier; NO flight
+    # carried standInformation or aircraft/@registration (3 had an empty <aircraft>). The registration
+    # and stand reads stay as documented but are unconfirmed; more samples of watched flights decide.
     reg = _attr(_find(fl, "aircraft"), "registration")
     gufi = _attr(_find(fl, "flightPlan"), "identifier")
     ob = _find(dep, "offBlockTime") if dep is not None else None
@@ -208,7 +224,7 @@ def _flight_record(fl) -> dict | None:
     def _ob(name):
         if ob is None:
             return None
-        return _text(_find(ob, name)) or _attr(ob, name)
+        return _when(_find(ob, name)) or _attr(ob, name)
 
     rdt = _find(dep, "runwayDepartureTime") if dep is not None else None
     tmi = _attr(_find(dep, "departureDelay"), "tmiIdentifier") if dep is not None else None
@@ -226,15 +242,22 @@ def _flight_record(fl) -> dict | None:
         "departure_stand": dep_stand,
         "arrival_stand": arr_stand,
         "sched_off_block": sched_off,
-        "tfdm_id": tfdm_id,
+        # 2026-11-20 (live samples): the id is flightIdentification/tfdmId, not a nameValue.
+        "tfdm_id": tfdm_id or _text(_find(fl, "flightIdentification", "tfdmId")),
         "registration": reg.upper() if reg else None,
         "eram_gufi": gufi,
         "initial_off_block": _ob("initial"),
         "earliest_off_block": _ob("earliest"),
         "actual_off_block": _ob("actual"),
         "tobt": named.get("TOBT"),
-        "estimated_takeoff": _text(_find(rdt, "estimated")) if rdt is not None else None,
-        "actual_takeoff": _text(_find(rdt, "actual")) if rdt is not None else None,
+        "earliest_takeoff": _when(_find(rdt, "earliest")) if rdt is not None else None,
+        "estimated_takeoff": _when(_find(rdt, "estimated")) if rdt is not None else None,
+        "actual_takeoff": _when(_find(rdt, "actual")) if rdt is not None else None,
+        # 2026-11-20 (live samples): TFDM's own surface state, flightStatus/tfdmFlightState/@value
+        # (seen: SCHEDULED, AT_STAND, EN_ROUTE) and the ATC state (seen: GC_PENDING). Not in the
+        # ATD-2 FIXM table the first parser was written from.
+        "flight_state": (_attr(_find(fl, "flightStatus", "tfdmFlightState"), "value") or "").upper() or None,
+        "atc_state": (_attr(_find(fl, "flightStatus", "tfdmAtcFlightState"), "value") or "").upper() or None,
         "apreq_release": apreq,
         "tmi_ids": sorted({t.strip() for t in tmi.split(",") if t.strip()}) if tmi else [],
         "clearance_delivery": clearance,

@@ -206,7 +206,9 @@ def assess(entry: dict, plan: dict | None, tfms: dict | None, now: float,
             t_sched = cand
             sched_from_tfms = True
         off = fi.to_epoch(tfms.get("airline_off_time"))
-        if _same_day(off, day0):
+        # 2026-11-20: a passed airline OFF is an estimate until TFMS says ACTIVE/COMPLETED
+        # (fi.tfms_status_departed); UAL376 read airborne at the stand on a PLANNED row.
+        if _same_day(off, day0) and fi.tfms_status_departed(tfms.get("flight_status")):
             t_off = off
     phase = (entry.get("oooi_phase") or "").lower()
     stale = None

@@ -111,7 +111,10 @@ def _maybe_sample(feed: str, mt: str, payload: bytes | str, t: float) -> None:
         if n >= SAMPLES_PER_TYPE_PER_DAY:
             return
         _samples[k] = n + 1
-    text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)
+    # 2026-11-20: the TFDM consumer hands over a bytearray; str() of it wrote "bytearray(b'...')"
+    # (Python repr, escaped) instead of the XML, so no TFDM sample parsed as XML.
+    text = (bytes(payload).decode("utf-8", "replace") if isinstance(payload, (bytes, bytearray, memoryview))
+            else str(payload))
     text = redact(text[:SAMPLE_MAX_BYTES])
     d = os.path.join(SAMPLE_DIR, _SAFE.sub("_", feed), day)
     try:

@@ -976,10 +976,16 @@ def _handle_flight_times(fltd_message: ET.Element) -> None:
         # highest-order phase whose time is <= now. A future time is a schedule
         # estimate and asserts nothing (schedule/estimate is persisted elsewhere;
         # this only advances oooi_phase, which drives sweeps and notifications).
+        # 2026-11-20 FIX -- "passed" is not "achieved" either. A late flight's estimated OFF passes
+        # while it is still at the stand (UAL376 KAUS-KIAD, 11-19: OFF 23:33Z passed, flightStatus
+        # PLANNED, aircraft parked). No milestone is asserted unless TFMS's own status says the flight
+        # has departed (common.flight_instance.tfms_status_departed: ACTIVE or COMPLETED).
+        from common.flight_instance import tfms_status_departed
         _now = datetime.now(timezone.utc)
         _tfms_phase, _tfms_time = None, None
-        for _key, _phase in (("airlineInTime", "in"), ("airlineOnTime", "on"),
-                             ("airlineOffTime", "off"), ("airlineOutTime", "out")):
+        for _key, _phase in (() if not tfms_status_departed(flight_status) else
+                             (("airlineInTime", "in"), ("airlineOnTime", "on"),
+                              ("airlineOffTime", "off"), ("airlineOutTime", "out"))):
             _t = ooooi.get(_key)
             if not _t:
                 continue

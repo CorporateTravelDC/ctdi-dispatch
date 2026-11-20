@@ -28,7 +28,7 @@ What this module does, for WATCHED legs only, from one TTP Flight Data record
 2. Alerts, through the push parity gate (dedupe on stable fields, never timestamps):
      - fdps_plan_missing_predeparture, state plan_missing_predeparture: the SAME kind and state the
        poller's guard (common.fdps_predeparture) uses, so whichever source notices first sends the
-       one push and the other is suppressed. TFDM adds its off-block time to the text.
+       one push and the other is suppressed. TFDM adds its off-block time to the text, named by kind (target/scheduled/earliest/initial).
      - tfdm_awaiting_clearance: no clearance on the record by CLEARANCE_LEAD_MIN before off-block.
        [VERIFY] the clearance field's path is not in the ATD-2 FIXM table, so this alert stays off
        until the feed has been seen to carry a clearance element on any flight (self-calibrating;
@@ -71,14 +71,25 @@ def _fmt(ep: float | None) -> str:
     return f"{z:%H:%M}Z ({et:%H:%M} ET)"
 
 
-def off_block_epoch(rec: dict) -> float | None:
-    """The record's best pre-departure off-block time: TOBT, then scheduled, earliest, initial."""
+_OFF_BLOCK_FIELDS = (("tobt", "target"), ("sched_off_block", "scheduled"),
+                     ("earliest_off_block", "earliest"), ("initial_off_block", "initial"))
+
+
+def off_block_source(rec: dict) -> tuple[float | None, str | None]:
+    """(epoch, kind) of the record's best pre-departure off-block time: TOBT, then scheduled,
+    earliest, initial. kind names it in push text: on 2026-11-19 a push said "off-block 23:10Z"
+    for the airline's INITIAL time while UAL376 sat at the stand until after 23:39Z."""
     from common.flight_instance import to_epoch
-    for k in ("tobt", "sched_off_block", "earliest_off_block", "initial_off_block"):
+    for k, kind in _OFF_BLOCK_FIELDS:
         t = to_epoch(rec.get(k))
         if t is not None:
-            return t
-    return None
+            return t, kind
+    return None, None
+
+
+def off_block_epoch(rec: dict) -> float | None:
+    """The record's best pre-departure off-block time: TOBT, then scheduled, earliest, initial."""
+    return off_block_source(rec)[0]
 
 
 def same_occurrence(entry: dict, rec: dict, now: float | None = None) -> str | None:
@@ -98,8 +109,14 @@ def same_occurrence(entry: dict, rec: dict, now: float | None = None) -> str | N
     return None
 
 
+# TFDM's own surface state (flightStatus/tfdmFlightState/@value). Only states seen in live samples
+# are listed; any other value asserts nothing either way.
+AIRBORNE_TFDM_STATES = frozenset({"EN_ROUTE"})
+
+
 def airborne(entry: dict, rec: dict) -> bool:
-    return bool(rec.get("actual_takeoff")) or (entry.get("oooi_phase") or "").lower() in AIRBORNE_PHASES
+    return (bool(rec.get("actual_takeoff")) or (rec.get("flight_state") or "") in AIRBORNE_TFDM_STATES
+            or (entry.get("oooi_phase") or "").lower() in AIRBORNE_PHASES)
 
 
 def registry_hex(registration: str) -> tuple[str | None, str]:
@@ -196,7 +213,8 @@ def alerts(entry: dict, rec: dict, now: float | None = None, has_fdps_plan=None)
     sent: list[str] = []
     if same_occurrence(entry, rec, now) or airborne(entry, rec):
         return sent
-    t = off_block_epoch(rec)
+    t, kind = off_block_source(rec)
+    ob = f"{kind} off-block {_fmt(t)}"
     leg = f"{entry.get('identifier')} {entry.get('origin')}-{entry.get('destination')}"
     if has_fdps_plan is None:
         from shared.pending_identity import _has_occurrence_plan
@@ -206,7 +224,7 @@ def alerts(entry: dict, rec: dict, now: float | None = None, has_fdps_plan=None)
     except Exception:
         plan_on_file = True                      # unknown -> say nothing rather than a false alarm
     if not plan_on_file and t is not None and now >= t - LEAD_MIN * 60:
-        _hit(entry, f"{leg}: no FDPS plan for this leg yet; TFDM has the flight (off-block {_fmt(t)}); "
+        _hit(entry, f"{leg}: no FDPS plan for this leg yet; TFDM has the flight ({ob}); "
                     f"tail confirmation is waiting on it",
              {"watchlist_trigger": "fdps_plan_missing_predeparture", "state": "plan_missing_predeparture",
               "scheduled_departure": t}, 4)
@@ -214,7 +232,7 @@ def alerts(entry: dict, rec: dict, now: float | None = None, has_fdps_plan=None)
     if rec.get("clearance_delivery"):
         _clearance_field_seen = True
     elif _clearance_field_seen and t is not None and now >= t - CLEARANCE_LEAD_MIN * 60:
-        _hit(entry, f"{leg}: awaiting clearance (TFDM shows none; off-block {_fmt(t)})",
+        _hit(entry, f"{leg}: awaiting clearance (TFDM shows none; {ob})",
              {"watchlist_trigger": "tfdm_awaiting_clearance", "state": "awaiting_clearance"}, 4)
         sent.append("tfdm_awaiting_clearance")
     if rec.get("tmi_ids"):

@@ -56,7 +56,7 @@ def test_added_mid_flight_seeds_off_only_even_with_early_airline_arrival_times(s
                            airline_out_time=_iso(now - timedelta(minutes=58)),
                            airline_off_time=_iso(now - timedelta(minutes=33)),
                            airline_on_time=_iso(now - timedelta(minutes=2)),      # airline "cosplaying early"
-                           airline_in_time=_iso(now - timedelta(minutes=1)))
+                           airline_in_time=_iso(now - timedelta(minutes=1)), flight_status="ACTIVE")
     assert wl.seed_departure_phase_from_tfms(entry) == "off"
     assert _phase(entry["id"]) == "off"
     summary, detail, prio = hits[0]
@@ -78,11 +78,23 @@ def test_future_or_other_route_seeds_nothing(setup):
     assert hits == [] and (_phase(entry["id"]) or "pre_departure") == "pre_departure"
 
 
-def test_pushed_back_but_not_airborne_seeds_out(setup):
+def test_passed_out_estimate_on_a_planned_row_seeds_nothing(setup):
+    # 2026-11-20 (was test_pushed_back_but_not_airborne_seeds_out): a passed airline OUT on a PLANNED
+    # row is the 11-19 UAL376 case -- OUT 23:18Z passed while the aircraft sat at the stand. TFMS cannot
+    # tell a pushback from a late estimate before it reports ACTIVE, so nothing is seeded from it.
     entry, hits, now = setup
     db.upsert_flight_ooooi("TEST-4", callsign="JZA825", origin="CYUL", destination="DCA",
                            airline_out_time=_iso(now - timedelta(minutes=5)),
-                           airline_off_time=_iso(now + timedelta(minutes=10)))
+                           airline_off_time=_iso(now + timedelta(minutes=10)), flight_status="PLANNED")
+    assert wl.seed_departure_phase_from_tfms(entry) is None
+    assert hits == [] and (_phase(entry["id"]) or "pre_departure") == "pre_departure"
+
+
+def test_active_row_with_only_a_passed_out_seeds_out(setup):
+    entry, hits, now = setup
+    db.upsert_flight_ooooi("TEST-5", callsign="JZA825", origin="CYUL", destination="DCA",
+                           airline_out_time=_iso(now - timedelta(minutes=5)),
+                           airline_off_time=_iso(now + timedelta(minutes=10)), flight_status="ACTIVE")
     assert wl.seed_departure_phase_from_tfms(entry) == "out"
     assert "already left the gate -- OUT" in hits[0][0]
 

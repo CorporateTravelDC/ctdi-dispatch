@@ -118,6 +118,21 @@ def to_epoch(value) -> float | None:
     return None
 
 
+# 2026-11-20 (UAL376 KAUS-KIAD, 2026-11-19): TFMS flightTimeData carries the airline OUT/OFF/ON/IN
+# times as plain values, the same before departure (estimates) as after (actuals). A late flight's
+# estimated OFF passes while the aircraft is still at the stand: UAL376 read "airborne" at 23:33Z with
+# TFMS flightStatus PLANNED, still parked. TFMS's own status is the only marker in that message: a
+# 2 % sample of flight_ooooi_times held PLANNED 3,899 (1,582 with an off time), ACTIVE 12,892,
+# COMPLETED 22,549, CANCELED 7. An airline time counts as achieved only on ACTIVE or COMPLETED.
+TFMS_DEPARTED_STATUSES = frozenset({"ACTIVE", "COMPLETED"})
+
+
+def tfms_status_departed(status) -> bool:
+    """True only when TFMS's flightStatus says the flight has departed. Unknown or empty is False:
+    a passed airline time alone is a schedule estimate, never a milestone."""
+    return (str(status or "").strip().upper()) in TFMS_DEPARTED_STATUSES
+
+
 def utc_date(value) -> str | None:
     """'YYYY-MM-DD' (UTC) of a scheduled departure, or a bare date string /
     date passed straight through. None if unknown."""

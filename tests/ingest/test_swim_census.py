@@ -142,3 +142,12 @@ def test_unknown_fdps_source_is_counted_not_silent():
     db = _FakeDB()
     census.flush(db=db)
     assert any(r[1] == "fdps" and r[2] == "NP" and r[3] == 0 for r in db.rows)
+
+
+def test_bytearray_payload_is_stored_as_xml_not_its_repr():
+    # 2026-11-20: the TFDM consumer passes a bytearray; samples were written as "bytearray(b'...')".
+    xml = b'<?xml version="1.0"?><f><flightIdentification aircraftIdentification="QQQ123"/><x>keep</x></f>'
+    census.sample("tfdm", "ttp:FlightData/FlightAdd", bytearray(xml), now=HOUR)
+    d = os.path.join(census.SAMPLE_DIR, "tfdm", "2026-11-19")
+    body = open(os.path.join(d, os.listdir(d)[0])).read()
+    assert body.startswith("<?xml") and "<x>keep</x>" in body and "QQQ123" not in body

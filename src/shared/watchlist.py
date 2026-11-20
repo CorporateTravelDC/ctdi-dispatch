@@ -1430,6 +1430,9 @@ def tfms_departure_state(ident: str, origin: str | None = None, destination: str
             break
     if not row:
         return None
+    # 2026-11-20: airline times are estimates until TFMS's status says departed (UAL376, 11-19).
+    if not fi.tfms_status_departed(row.get("flight_status")):
+        return None
     for key, phase in (("airline_off_time", "off"), ("airline_out_time", "out")):
         t = row.get(key)
         if not t:

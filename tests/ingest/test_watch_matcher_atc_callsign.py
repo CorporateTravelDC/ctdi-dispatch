@@ -150,7 +150,7 @@ def test_resolve_flight_identity_finds_local_adsb_under_the_atc_callsign(watches
 def test_tfms_departure_state_reads_the_atc_callsign_row(watches):
     import shared.watchlist as wl
     db.upsert_flight_ooooi("G-SYN-OOOI", callsign="UAE9QZ", origin="OMDB", destination="KIAD",
-                           airline_off_time="2026-10-19T03:10:00Z")
+                           airline_off_time="2026-10-19T03:10:00Z", flight_status="ACTIVE")
     st = wl.tfms_departure_state("EK9871", "OMDB", "KIAD")
     assert st == ("off", "2026-10-19T03:10:00Z")
     assert wl.tfms_departure_state("EK9871", "KIAD", "OMDB") is None             # other direction

@@ -34,7 +34,7 @@ TODAY = {**YESTERDAY, "flight_id": "t", "arrival_time": ep("2026-11-18T20:06:20Z
          "updated_at": ep("2026-11-18T18:58:00Z")}
 TFMS_PLANNED = {"original_departure": "2026-11-18T18:35:00Z", "airline_out_time": "2026-11-18T18:35:00Z",
                 "airline_off_time": None}
-TFMS_OFF = {**TFMS_PLANNED, "airline_off_time": "2026-11-18T18:51:00Z"}
+TFMS_OFF = {**TFMS_PLANNED, "airline_off_time": "2026-11-18T18:51:00Z", "flight_status": "ACTIVE"}
 
 
 def test_far_from_departure_says_nothing():
@@ -56,6 +56,21 @@ def test_tfms_off_without_a_plan_is_airborne_without_plan():
     v = g.assess(ENTRY, YESTERDAY, TFMS_OFF, ep("2026-11-18T18:55:00Z"))
     assert v["state"] == "airborne_without_plan"
     assert "OFF 18:51Z (13:51 ET)" in v["summary"]
+
+
+def test_passed_off_estimate_on_a_planned_row_is_not_airborne():
+    # 2026-11-19 UAL376 KAUS-KIAD: TFMS OFF 23:33Z passed, flightStatus PLANNED, aircraft at the stand.
+    late = {**TFMS_OFF, "flight_status": "PLANNED"}
+    v = g.assess(ENTRY, YESTERDAY, late, ep("2026-11-18T18:55:00Z"))
+    assert v["state"] == "plan_missing_predeparture"
+    assert "airborne" not in v["summary"]
+    assert g.assess(ENTRY, YESTERDAY, {**late, "flight_status": None},
+                    ep("2026-11-18T18:55:00Z"))["state"] == "plan_missing_predeparture"
+
+
+def test_completed_row_still_counts_as_airborne():
+    v = g.assess(ENTRY, YESTERDAY, {**TFMS_OFF, "flight_status": "COMPLETED"}, ep("2026-11-18T18:55:00Z"))
+    assert v["state"] == "airborne_without_plan"
 
 
 def test_watch_phase_off_without_a_plan_is_airborne_without_plan():

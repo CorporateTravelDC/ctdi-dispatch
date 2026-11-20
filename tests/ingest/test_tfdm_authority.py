@@ -155,3 +155,58 @@ def test_process_never_raises_and_uses_watch_cache(world, monkeypatch):
     assert ta.process(_rec(), DAY) is True
     assert ta.process(_rec(), DAY) is False                     # cached entry now carries the tail
     assert ta.process({"callsign": None}) is False
+
+
+# 2026-11-20: SYNTHETIC values in the LIVE element shape (census samples, 30 flights): runway times in a
+# child <time>, the off-block time as <initial> text, tfdmId as an element, TFDM's own flight state.
+LIVE_SHAPE_XML = """<nas:NasMessage xmlns:nas="http://www.faa.aero/nas/4.1" xmlns:fx="http://www.fixm.aero/flight/4.0">
+ <nas:flight>
+  <fx:aircraft/>
+  <fx:departure departurePointText="KSAV">
+   <nas:offBlockTime><nas:initial timeReference="UTC">2026-11-18T18:30:00Z</nas:initial></nas:offBlockTime>
+   <nas:runwayDepartureTime>
+    <nas:estimated source="TFDM"><nas:reportedTimestamp timeReference="UTC">2026-11-18T18:00:00Z</nas:reportedTimestamp>
+     <nas:time timeReference="UTC">2026-11-18T18:47:00Z</nas:time></nas:estimated>
+   </nas:runwayDepartureTime>
+  </fx:departure>
+  <fx:arrival destinationPointText="KIAD"/>
+  <nas:flightIdentification aircraftIdentification="ZZZ4006"><nas:tfdmId codeSpace="TFDM">SYNTH.2</nas:tfdmId></nas:flightIdentification>
+  <nas:flightStatus><nas:tfdmFlightState source="TFDM" value="AT_STAND"/>
+   <nas:tfdmAtcFlightState source="TFDM" value="GC_PENDING"/></nas:flightStatus>
+ </nas:flight>
+ <nas:metadata messageType="FlightUpdate"/>
+</nas:NasMessage>"""
+
+
+def _live(**kw):
+    r = tp.parse_ttp_message(LIVE_SHAPE_XML.encode(), {"DATA_GROUP": "FlightData"})["flights"][0]
+    r.update(kw)
+    return r
+
+
+def test_parser_reads_the_live_shape():
+    r = _live()
+    assert r["estimated_takeoff"] == "2026-11-18T18:47:00Z"      # child <time>, not the element's text
+    assert r["actual_takeoff"] is None
+    assert r["initial_off_block"] == "2026-11-18T18:30:00Z"
+    assert r["tfdm_id"] == "SYNTH.2"
+    assert r["flight_state"] == "AT_STAND" and r["atc_state"] == "GC_PENDING"
+    assert tp.parse_ttp_message(bytearray(LIVE_SHAPE_XML.encode()), {"DATA_GROUP": "FlightData"})["flights"]
+
+
+def test_actual_takeoff_in_child_time_and_en_route_state_mean_airborne():
+    xml = LIVE_SHAPE_XML.replace("<nas:estimated ", "<nas:actual ").replace("</nas:estimated>", "</nas:actual>")
+    r = tp.parse_ttp_message(xml.encode(), {"DATA_GROUP": "FlightData"})["flights"][0]
+    assert r["actual_takeoff"] == "2026-11-18T18:47:00Z"
+    assert ta.airborne(_entry(), r)
+    assert ta.airborne(_entry(), _live(flight_state="EN_ROUTE"))
+    assert not ta.airborne(_entry(), _live())                   # AT_STAND
+    assert not ta.airborne(_entry(), _live(flight_state="SOMETHING_NEW"))
+
+
+def test_push_names_the_kind_of_off_block_time(world):
+    near = fi.to_epoch("2026-11-18T18:00:00Z")
+    ta.alerts(_entry(), _live(), near, has_fdps_plan=lambda e: False)
+    miss = [h for h in world["hits"] if h[2]["watchlist_trigger"] == "fdps_plan_missing_predeparture"][0]
+    assert "initial off-block 18:30Z (13:30 ET)" in miss[1]
+    assert ta.off_block_source(_rec()) == (fi.to_epoch("2026-11-18T18:30:00Z"), "scheduled")
