@@ -120,6 +120,14 @@ Install it or retire it.
   Tailscale, Podman Quadlets). See `docs/PI5-BOOT-CONFIG.md` for the NVMe
   boot recovery reference.
 
+## Enclosure and storage (documented 2026-11-19)
+
+- **Case:** GeeekPi **N07 MiniTower NVMe NAS Kit**. The model name comes from the operator's order record (ordered 2026-08-03, delivered 2026-08-05). It is the N07 case `docs/COST_STRUCTURE.md` lists.
+- **NVMe:** one M.2 slot on the kit's PCIe board, full-size **2280** (operator 2026-11-19). The Pi 5 gives it a single PCIe lane, Gen 2 by default and Gen 3 if forced, so a Gen 4 drive runs at that speed. The current drive is 238.5 GB (`nvme0n1`), with btrfs root and `/home` on `nvme0n1p2`.
+- **To check on the kit itself [VERIFY]:** that it has no SATA bays, and that the NVMe draws from the Pi 5's own supply with no separate drive power input. Both come from the product listing, not from the hardware.
+- **Upgrading the NVMe:** see the operator's 2026-11-19 drive guidance. In short: 2–4 TB TLC in 2280, low power and high TBW. Examples: SK hynix P41 or WD SN770 at 2 TB; Samsung 990 EVO Plus, Lexar NM790 or Crucial T500 at 4 TB. Avoid QLC and Gen 5. Keep the official 27 W Pi 5 power supply, and check the exact model against a current Pi 5 tested-drive list.
+- **Hard drives for a backup target:** the N07 doesn't take SATA drives. Retired laptop HDDs need a separate **powered** USB 3 enclosure or dock with its own supply. Bus-powered adapters would exceed the Pi's power budget. An underpowered USB drive drops off the bus, which is what the flash backup stick did on 2026-11-19 (device offline, 9,430 btrfs read errors).
+
 ## RAM
 
 15 GiB usable, confirmed live 2026-10-06 (`free -h`: 15Gi total). Sized
