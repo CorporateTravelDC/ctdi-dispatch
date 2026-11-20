@@ -1,0 +1,8 @@
+[Unit]
+Description=Nightly direct backup to the off-box target (03:40 UTC; replaces corporatetraveldc-backup.timer while the USB is offload-only, 2026-11-19)
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+RandomizedDelaySec=10m
+[Install]
+WantedBy=timers.target

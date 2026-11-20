@@ -30,7 +30,9 @@ import time
 from pathlib import Path
 
 LEDGER = Path(os.environ.get("BACKUP_LEDGER", str(Path.home() / ".local/state/ctdc-backup/ledger.jsonl")))
-KINDS = ("backup", "cui-stamp", "sync", "restore-test", "note")
+KINDS = ("backup", "cui-stamp", "sync", "restore-test", "note",
+         # 2026-11-19: direct-to-target backups (ctdi-backup-direct.sh) and their restore test
+         "direct-object", "direct-backup", "direct-retention", "direct-restore-test")
 
 
 def canonical(d: dict) -> bytes:

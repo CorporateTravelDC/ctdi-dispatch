@@ -1,0 +1,8 @@
+[Unit]
+Description=Corporate Travel DC -- nightly direct backup: stage, encrypt, upload, verify, delete (scripts/backup/ctdi-backup-direct.sh; docs/BACKUP.md)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/bin/bash /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/backup/ctdi-backup-direct.sh

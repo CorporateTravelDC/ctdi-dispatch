@@ -4,6 +4,108 @@
 
 **Current state, 2026-11-02 (pre-pentest docs parity):** the nightly `corporatetraveldc-backup.service` run **failed** at 03:42Z (status snapshot; the cause is in the operator's journal and was not visible to the audit). A backlog relay moves the Borg repository to the USB backup volume (`/srv/ctdc-backup-usb/borg`, `BACKUP_REPO`); re-check after it and after the next nightly run. The 2026-10-15 description below is kept for the record.
 
+## Direct backup (2026-11-19, operator): the USB is an offload, not storage
+
+**Why.** On 2026-11-19 the USB backup stick dropped off the bus. btrfs counted 9,430 read errors, the
+kernel set the device `offline`, and the Borg repository on it became unreadable. That left no current
+backup anywhere off the box. The last confirmed Proton sync was in October. The NVMe, with 49 GB free,
+cannot hold a Borg repository for a 38 GB database.
+
+**What runs now.** `scripts/backup/ctdi-backup-direct.sh` runs nightly at 03:40 UTC from
+`corporatetraveldc-backup-direct.timer`. While `BACKUP_MODE=direct`, it replaces
+`corporatetraveldc-backup.timer`. Each run produces four objects:
+
+| Object | Contents |
+|---|---|
+| `dispatch.pgdump.zst.gpg` | The dispatch database, with **LADD table data excluded**. CUI never leaves the box; the ledger records a `#` stamp with row counts. |
+| `nextcloud.pgdump.zst.gpg` | The Nextcloud database. |
+| `state.tar.zst.gpg` | `/etc/corporatetraveldc`, `/var/lib/corporatetraveldc` without models, vnstat, ntfy, Open WebUI without its cache, the operational config paths, and the private ledger. |
+| `volumes.tar.zst.gpg` | `nextcloud-html` (the vault and files) and `protonbridge-data` (the identity only; mail cache, logs and updates excluded). |
+
+Not included, and why:
+- the ultrafeeder graphs and history: receiver statistics the feeder rebuilds;
+- the demo database: rebuilt with `scrub-demo-source.py --backfill`;
+- models: pinned by digest;
+- caches.
+
+**How each object is handled.** Nothing is kept on the box after a successful run.
+1. It is dumped, compressed (`zstd -6`, the only compression pass, since pg_dump runs at `-Z 0`) and
+   encrypted to the operator's **public** key as it is written to a staging folder.
+2. Its ciphertext sha256, sha1 and size are taken as it is written (`stream_tap.py`). Writing goes
+   through `stage_guard.py limit`, so it can never fill a disk.
+3. The staged file is re-read and must match those hashes.
+4. It is uploaded with `rclone copy`: one transfer, the existing rate guard, a retry on a stall, and
+   never on the metered uplink.
+5. The remote copy is checked by size, and by sha1 where the backend reports one.
+6. Only then is the staged file deleted.
+
+A run that misses any object is PARTIAL. It is recorded `ok=false`, retention is skipped, and the unit
+fails so OnFailure alerts.
+
+**Why stage at all instead of streaming.** pg_dump holds one database snapshot open for its whole run.
+Streaming a 10–20 GB dump at the 2.5 MB/s upload cap would hold that snapshot for one to two hours. That
+blocks vacuum and bloats busy tables. Dumping to a local file takes minutes; the slow upload then reads
+the finished file.
+
+**Where it stages:**
+1. The USB (`BACKUP_DIRECT_STAGE`, default `/srv/ctdc-backup-usb/stage-direct`), but only when all of
+   these hold:
+   - its block device's sysfs state is `running`;
+   - it is mounted read-write;
+   - a 1 MiB write-and-read probe passes.
+
+   `findmnt` alone is not enough: on 2026-11-19 it still showed the dead stick as mounted.
+2. Otherwise the NVMe (`BACKUP_DIRECT_NVME_STAGE`), if `stage_guard` says the estimate fits above the
+   10 GB reserve.
+3. Otherwise objects stream straight to the remote, but only those under `BACKUP_DIRECT_STREAM_MAX_GB`
+   (2). A dispatch dump that cannot be staged is **skipped with an alert**, never streamed for hours.
+
+The old Borg repository on the stick is left untouched, read-only, until the operator decides what to do
+with it.
+
+**Encryption and restore.**
+- **Two layers:** gpg public-key encryption to `BACKUP_DIRECT_GPG_RECIPIENT`, then Proton Drive's own
+  end-to-end encryption. The recipient key must have a usable encryption (sub)key, or the run refuses
+  to start.
+- **The box never holds the private key.** It imports only `BACKUP_DIRECT_GPG_PUBKEY` into a throwaway
+  keyring with `--no-autostart`; no agent is started and nothing is cached.
+- **Manual restore, on a machine holding the operator's private key:**
+
+  ```
+  rclone copy proton:ctdi-backup-direct/<run>/ ./restore/
+  gpg --decrypt restore/dispatch.pgdump.zst.gpg | zstd -d > dispatch.pgdump
+  pg_restore --list dispatch.pgdump | head
+  pg_restore -d <db> --clean --if-exists dispatch.pgdump
+  gpg --decrypt restore/state.tar.zst.gpg | zstd -d | tar -tvf - | head
+  ```
+
+  Compare each file's sha256 with `MANIFEST.json` and the ledger before decrypting.
+- **Automated weekly check** (`backup-restore-test-direct.sh`, Sunday 05:30 UTC). The box cannot
+  decrypt, so the check:
+  - streams every object of the newest complete run back from the remote and checks its size and
+    sha256 against the write-time ledger entry, writing nothing to disk;
+  - checks with `gpg --list-packets` that the dispatch dump is encrypted to the recipient's key.
+
+**Retention on the remote.** The newest run of each of the last 7 days, 4 ISO weeks and 3 months is
+kept (`direct_retention.py`). Rules:
+- It only ever considers folders named like `20261119T034000Z` under `BACKUP_TARGET_DIRECT`.
+- It refuses to run if that path equals, or nests with, `BACKUP_TARGET`. The old Borg mirror at
+  `proton:ctdi-backup` is never touched.
+- It is skipped after a PARTIAL run.
+
+**Freshness.** With `BACKUP_MODE=direct`, `backup_freshness.py` fails when:
+- the last **complete** direct run is older than 36 h;
+- the direct restore test is older than 8 days, or failed.
+
+The Borg checks are not applied in that mode.
+
+**Expected nightly upload.** Measured live sizes on 2026-11-19: dispatch 38 GB live, of which 27 GB is
+`demo_snapshots` out-of-line (toasted) data, already pglz-compressed in place, and 4.9 GB is indexes, which a dump does not
+contain. The compressed, encrypted dispatch dump is estimated at roughly 8–20 GB. **Not yet measured:**
+the first run's ledger gives the real figure. At the 2.5 MB/s cap (about 9 GB/h), the upload takes
+about 1–2.5 h. If that proves too long, the options are a weekly upload of `demo_snapshots`, or a NAS
+target.
+
 **Storage, 2026-11-03 (operator: all backup data on the USB):** the Borg repository is
 `/srv/ctdc-backup-usb/borg` (`BACKUP_REPO`), and the bulky working files follow it through
 `BACKUP_WORK_DIR=/srv/ctdc-backup-usb/work`: the dump stage (~7 GB a run), the local-only LADD dumps

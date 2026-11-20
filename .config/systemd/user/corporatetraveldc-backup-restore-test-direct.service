@@ -1,0 +1,8 @@
+[Unit]
+Description=Corporate Travel DC -- weekly check that the newest direct backup is intact on the remote (scripts/backup/backup-restore-test-direct.sh)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/bin/bash /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/backup/backup-restore-test-direct.sh

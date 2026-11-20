@@ -65,16 +65,27 @@ def check(now_entries=None) -> list[str]:
     last = lambda kind, pred=lambda e: True: next((e for e in reversed(es) if e["kind"] == kind and pred(e)), None)
     problems = []
     max_h = float(setting("BACKUP_MAX_AGE_H", "36"))
-    if age_h(last("backup")) > max_h:
-        problems.append(f"no backup in {max_h:.0f} h")
-    if setting("BACKUP_TARGET", "") and age_h(last("sync", lambda e: e["data"].get("ok"))) > max_h:
-        problems.append(f"no successful off-box sync in {max_h:.0f} h")
-    elif not setting("BACKUP_TARGET", "") and setting("BACKUP_REQUIRE_OFFBOX", "1") == "1":
-        problems.append("no off-box target configured: backups are on-box only (set BACKUP_TARGET, "
-                        "or BACKUP_REQUIRE_OFFBOX=0 to accept that deliberately)")
-    rt = last("restore-test")
-    if age_h(rt) > 24 * float(setting("BACKUP_MAX_RESTORE_TEST_AGE_D", "8")) or (rt and not rt["data"].get("ok")):
-        problems.append("restore test stale or failed")
+    if setting("BACKUP_MODE", "borg") == "direct":
+        # 2026-11-19: direct-to-target backups (ctdi-backup-direct.sh). A run counts only when every object was
+        # uploaded and verified on the remote (ok=true); a PARTIAL run is not a backup.
+        if age_h(last("direct-backup", lambda e: e["data"].get("ok"))) > max_h:
+            problems.append(f"no complete direct backup in {max_h:.0f} h")
+        if not setting("BACKUP_TARGET_DIRECT", ""):
+            problems.append("BACKUP_MODE=direct but BACKUP_TARGET_DIRECT is not set")
+        rt = last("direct-restore-test")
+        if age_h(rt) > 24 * float(setting("BACKUP_MAX_RESTORE_TEST_AGE_D", "8")) or (rt and not rt["data"].get("ok")):
+            problems.append("direct restore test stale or failed")
+    else:
+        if age_h(last("backup")) > max_h:
+            problems.append(f"no backup in {max_h:.0f} h")
+        if setting("BACKUP_TARGET", "") and age_h(last("sync", lambda e: e["data"].get("ok"))) > max_h:
+            problems.append(f"no successful off-box sync in {max_h:.0f} h")
+        elif not setting("BACKUP_TARGET", "") and setting("BACKUP_REQUIRE_OFFBOX", "1") == "1":
+            problems.append("no off-box target configured: backups are on-box only (set BACKUP_TARGET, "
+                            "or BACKUP_REQUIRE_OFFBOX=0 to accept that deliberately)")
+        rt = last("restore-test")
+        if age_h(rt) > 24 * float(setting("BACKUP_MAX_RESTORE_TEST_AGE_D", "8")) or (rt and not rt["data"].get("ok")):
+            problems.append("restore test stale or failed")
     # 2026-10-11: agent home snapshots (root-run, 03:20 UTC) must be fresh too.
     snap = Path("/var/lib/corporatetraveldc/agent-snapshots")
     # 2026-10-12: was a one-name default (codex) -- 1 of 6 accounts checked. Now every
