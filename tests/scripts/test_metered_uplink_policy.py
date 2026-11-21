@@ -57,6 +57,16 @@ def test_backup_and_restore_test_run_on_the_hotspot(tmp_path):
     assert "GOT" in sh("heavy_lock_acquire 'restore test' 1 && echo GOT", e).stdout
 
 
+def test_operator_allow_lets_only_the_named_job_run_on_the_hotspot(tmp_path):
+    # 2026-11-20: primary down for 2 h+, a relay's rollout sat out its whole max_wait on the hotspot.
+    e = dict(env(tmp_path, "enu1"), HEAVY_METERED_ALLOW="full-load rollout")
+    r = sh("heavy_lock_acquire 'full-load rollout' 1 && echo GOT || echo DEFERRED", e)
+    assert "GOT" in r.stdout and "allowed on the metered uplink" in r.stderr
+    assert "DEFERRED" in sh("heavy_lock_acquire 'stack refresh' 1 && echo GOT || echo DEFERRED", e).stdout
+    e2 = dict(env(tmp_path, "enu1"), HEAVY_METERED_ALLOW="full-load")          # whole names only
+    assert "DEFERRED" in sh("heavy_lock_acquire 'full-load rollout' 1 && echo GOT || echo DEFERRED", e2).stdout
+
+
 def test_rollout_runs_on_the_primary(tmp_path):
     assert "GOT" in sh("heavy_lock_acquire 'full-load rollout' 1 && echo GOT", env(tmp_path, "wld0")).stdout
 

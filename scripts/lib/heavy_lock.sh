@@ -20,7 +20,19 @@ HEAVY_LOCK_DIR="${HEAVY_LOCK_DIR:-${HOME}/.local/state/ctdc-heavy}"
 HEAVY_METERED_OK=("nightly backup" "restore test")
 source "$(dirname "${BASH_SOURCE[0]}")/uplink.sh"
 
-heavy_metered_ok() { local n; for n in "${HEAVY_METERED_OK[@]}"; do [[ "$1" == "$n" ]] && return 0; done; return 1; }
+# 2026-11-20 (operator): a relay's rollout sat for its whole max_wait on the hotspot while the primary was
+# really down (wld0 could not reach its own gateway for 2 h+). HEAVY_METERED_ALLOW names, comma-separated,
+# the jobs THIS invocation may run on the metered uplink. It is an explicit, per-run choice made in the
+# operator's own shell; nothing sets it by default, and every use is logged on stderr.
+heavy_metered_ok() {
+  local n
+  for n in "${HEAVY_METERED_OK[@]}"; do [[ "$1" == "$n" ]] && return 0; done
+  if [[ -n "${HEAVY_METERED_ALLOW:-}" && ",${HEAVY_METERED_ALLOW}," == *",$1,"* ]]; then
+    echo "[heavy-lock] $1: allowed on the metered uplink ($(uplink_default_iface)) for this run by HEAVY_METERED_ALLOW" >&2
+    return 0
+  fi
+  return 1
+}
 
 heavy_lock_holder() { cat "${HEAVY_LOCK_DIR}/holder" 2>/dev/null || echo "unknown"; }
 
