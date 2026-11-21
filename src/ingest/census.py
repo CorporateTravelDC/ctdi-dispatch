@@ -35,6 +35,15 @@ SAMPLES_PER_TYPE_PER_DAY = 5
 SAMPLE_KEEP_DAYS = 14
 SAMPLE_MAX_BYTES = 64 * 1024
 DROP_ALERT_PER_HOUR = int(os.environ.get("SWIM_CENSUS_DROP_ALERT_PER_HOUR", "100"))
+# 2026-11-21 (NAS tripwire Phase 0): per-destination counts and sizes for the feeds whose next decoders
+# key on the JMS destination (STDDS ISMC codes, TBFM kind + PER/RTM, SFDPS ERGMP). Rows go to the same
+# table as feed "<feed>@dest" (messages) and "<feed>@dest-kib" (KiB), handled=1, so no schema change
+# and no drop alerts. Bounded: at most DEST_KEYS_PER_FEED_HOUR distinct destinations per feed per hour,
+# the rest fold into "~other".
+DEST_FEEDS = frozenset(f.strip() for f in os.environ.get("SWIM_CENSUS_DEST_FEEDS", "tbfm,stdds,fdps").split(",")
+                       if f.strip())
+DEST_KEYS_PER_FEED_HOUR = int(os.environ.get("SWIM_CENSUS_DEST_KEYS", "300"))
+DEST_MAX_CHARS = 160
 
 _lock = threading.Lock()
 _counts: dict[tuple[int, str, str, bool], int] = {}      # (hour, feed, type, handled) -> n
@@ -44,6 +53,8 @@ _alerted: set[tuple[str, str, str]] = set()               # (day, feed, type) al
 _samples: dict[tuple[str, str, str], int] = {}            # (day, feed, type) -> samples written
 _last_summary_hour: int | None = None
 _samples_disabled = False
+_dest_seen: dict[tuple[int, str], set[str]] = {}          # (hour, feed) -> destinations counted
+_dest_bytes: dict[tuple[int, str, str], int] = {}         # (hour, feed, dest) -> bytes not yet flushed
 
 # attribute / element names whose VALUES identify an aircraft; redacted in stored samples
 _ID_ATTRS = ("aircraftIdentification", "acid", "callsign", "callSign", "registration",
@@ -90,6 +101,58 @@ def record(feed: str, msg_type: str | None, handled: bool, sample: bytes | str |
             _maybe_sample(feed, mt, sample, t)
     except Exception as e:  # never let the census break ingest
         log.debug("census record failed: %s", e)
+
+
+_DIGITS = re.compile(r"\d+")
+
+
+def dest_kind(dest: str | None) -> str:
+    """A destination with its run-varying numbers folded ("#"), trimmed to DEST_MAX_CHARS."""
+    d = (dest or "").strip()
+    if not d:
+        return "?"
+    return "/".join("#" if _DIGITS.fullmatch(seg) else seg for seg in d.split("/"))[:DEST_MAX_CHARS]
+
+
+def record_destination(feed: str, dest: str | None, nbytes: int, now: float | None = None) -> None:
+    """Count one message and its size under its JMS destination. Cheap; never raises."""
+    if feed not in DEST_FEEDS:
+        return
+    try:
+        t = time.time() if now is None else now
+        h = _hour(t)
+        k = dest_kind(dest)
+        with _lock:
+            seen = _dest_seen.setdefault((h, feed), set())
+            if k not in seen:
+                if len(seen) >= DEST_KEYS_PER_FEED_HOUR:
+                    k = "~other"
+                seen.add(k)
+            ck = (h, f"{feed}@dest", k, True)
+            _counts[ck] = _counts.get(ck, 0) + 1
+            bk = (h, feed, k)
+            _dest_bytes[bk] = _dest_bytes.get(bk, 0) + max(0, int(nbytes))
+    except Exception as e:  # never let the census break ingest
+        log.debug("census record_destination failed: %s", e)
+
+
+def _take_dest_kib(current_hour: int) -> dict[tuple[int, str, str, bool], int]:
+    """Move whole KiB out of the byte buffer (caller holds _lock). Remainders stay for the next flush;
+    an hour that has ended is rounded and dropped so the buffer can't grow."""
+    out: dict[tuple[int, str, str, bool], int] = {}
+    for (h, feed, k), b in list(_dest_bytes.items()):
+        closed = h < current_hour
+        kib = (b + 512) // 1024 if closed else b // 1024
+        if kib:
+            out[(h, f"{feed}@dest-kib", k, True)] = kib
+        rest = b - kib * 1024
+        if closed or rest <= 0:
+            del _dest_bytes[(h, feed, k)]
+        else:
+            _dest_bytes[(h, feed, k)] = rest
+    for hk in [hk for hk in _dest_seen if hk[0] < current_hour]:
+        del _dest_seen[hk]
+    return out
 
 
 def sample(feed: str, msg_type: str, payload: bytes | str, now: float | None = None) -> None:
@@ -165,6 +228,8 @@ def flush(now: float | None = None, db=None) -> int:
     with _lock:
         snap = dict(_counts)
         _counts.clear()
+        for k, v in _take_dest_kib(_hour(t)).items():
+            snap[k] = snap.get(k, 0) + v
     if snap:
         try:
             if db is None:
@@ -240,5 +305,6 @@ def _reset_for_tests() -> None:
     global _last_summary_hour, _samples_disabled
     with _lock:
         _counts.clear(); _hour_totals.clear(); _warned.clear(); _alerted.clear(); _samples.clear()
+        _dest_seen.clear(); _dest_bytes.clear()
     _last_summary_hour = None
     _samples_disabled = False

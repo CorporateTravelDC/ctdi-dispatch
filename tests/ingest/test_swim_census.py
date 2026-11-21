@@ -151,3 +151,52 @@ def test_bytearray_payload_is_stored_as_xml_not_its_repr():
     d = os.path.join(census.SAMPLE_DIR, "tfdm", "2026-11-19")
     body = open(os.path.join(d, os.listdir(d)[0])).read()
     assert body.startswith("<?xml") and "<x>keep</x>" in body and "QQQ123" not in body
+
+
+# -- per-destination census (2026-11-21, NAS tripwire Phase 0) ---------------------------------------
+
+def test_destination_counts_and_kib_go_to_the_same_table():
+    for _ in range(3):
+        census.record_destination("tbfm", "TBFM/All/ZDC/A/oth/int/PER", 1536, now=HOUR + 10)
+    census.record_destination("stdds", "ISMC/all/false/DS/QSITE1", 130 * 1024, now=HOUR + 11)
+    db = _FakeDB()
+    census.flush(now=HOUR + 20, db=db)
+    rows = sorted(db.rows)
+    assert (int(HOUR), "tbfm@dest", "TBFM/All/ZDC/A/oth/int/PER", 1, 3) in rows
+    assert (int(HOUR), "tbfm@dest-kib", "TBFM/All/ZDC/A/oth/int/PER", 1, 4) in rows   # 4608 B: 4 whole KiB
+    assert (int(HOUR), "stdds@dest-kib", "ISMC/all/false/DS/QSITE1", 1, 130) in rows
+    # the 512-byte remainder is carried, then rounded when the hour closes
+    db2 = _FakeDB()
+    census.flush(now=HOUR + 3700, db=db2)
+    assert (int(HOUR), "tbfm@dest-kib", "TBFM/All/ZDC/A/oth/int/PER", 1, 1) in db2.rows
+    assert census._dest_bytes == {} and census._dest_seen == {}
+
+
+def test_destination_census_only_for_listed_feeds_and_never_alerts(caplog):
+    caplog.set_level(logging.WARNING, logger="ingest.census")
+    census.record_destination("tfms", "TFMS/whatever", 100, now=HOUR)
+    for _ in range(500):
+        census.record_destination("fdps", "FDPS/ERGMP", 100, now=HOUR + 1)
+    db = _FakeDB()
+    census.flush(now=HOUR + 3700, db=db)
+    assert not [r for r in db.rows if r[1].startswith("tfms")]
+    assert all(r[3] == 1 for r in db.rows)                    # handled=1: no drop alert path
+    assert not [r for r in caplog.records if "dropping" in r.getMessage() or "unhandled" in r.getMessage()]
+
+
+def test_destination_numbers_fold_and_keys_are_capped(monkeypatch):
+    assert census.dest_kind("A/12345/B") == "A/#/B"
+    assert census.dest_kind(None) == "?"
+    assert len(census.dest_kind("x/" * 200)) == census.DEST_MAX_CHARS
+    monkeypatch.setattr(census, "DEST_KEYS_PER_FEED_HOUR", 2)
+    for site in ("QA", "QB", "QC", "QD"):
+        census.record_destination("stdds", f"ISMC/all/false/LS/{site}", 10, now=HOUR)
+    db = _FakeDB()
+    census.flush(now=HOUR + 20, db=db)
+    keys = {r[2] for r in db.rows if r[1] == "stdds@dest"}
+    assert keys == {"ISMC/all/false/LS/QA", "ISMC/all/false/LS/QB", "~other"}
+    assert [r for r in db.rows if r[1] == "stdds@dest" and r[2] == "~other"][0][4] == 2
+
+
+def test_destination_census_never_raises():
+    census.record_destination("tbfm", object(), "not-a-number", now=HOUR)   # garbage in: logged, not raised

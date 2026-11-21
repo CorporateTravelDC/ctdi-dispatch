@@ -608,6 +608,8 @@ class _NmsFeedSession:
         handler_fn = self._handler
         wants_headers = self._wants_headers
         stop_ev = self._stop
+        # 2026-11-21: per-destination census (NAS tripwire Phase 0) for the feeds in census.DEST_FEEDS.
+        census_dest = feed_name in _census.DEST_FEEDS
 
         # Polling receive loop — receive_message() is the correct API for this
         # SDK version; receive_callback() does not exist on _PersistentMessageReceiver.
@@ -718,6 +720,12 @@ class _NmsFeedSession:
                         try:
                             payload = msg.get_payload_as_bytes() or b""
                             raw_bytes = len(payload)
+                            if census_dest:
+                                try:
+                                    dest = msg.get_destination_name()
+                                except Exception:
+                                    dest = None
+                                _census.record_destination(feed_name, dest, raw_bytes)
 
                             process_this = True
                             sender_ts_ms = None
