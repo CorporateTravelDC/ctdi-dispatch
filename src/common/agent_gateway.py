@@ -47,6 +47,12 @@ HOLD_MAX_S = 90 * 86400
 OPERATOR_DEADMAN_S = 14 * 86400
 PENDING_TTL_S = 15 * 60               # authorize request waits this long for a signature
 CODE_TTL_S = 10 * 60
+# 2026-11-22 (operator: Cowork's and both on-box connectors kept dying with "sign-in expired"): a refresh rotates the
+# token, so a renewal whose REPLY is lost (tunnel 530s, WiFi stall, uplink failover) left the client holding a rotated
+# token and the chain was dead. A rotated token is now accepted again only when nothing has used its successor: no
+# tool call since the rotation and the successor refresh never redeemed -- exactly the lost-reply case. The unused
+# successor pair is revoked and a fresh one issued. Any use of the successor ends this, as does LOST_REPLY_GRACE_S.
+LOST_REPLY_GRACE_S = 24 * 3600
 OPERATOR_SEEN_FILE = os.environ.get(
     "OPERATOR_SEEN_FILE", "/var/lib/corporatetraveldc/team-liveness/operator-last-login")
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
@@ -416,9 +422,14 @@ def refresh(refresh_token: str, client_id: str, now: float | None = None) -> dic
     _check_open()
     now = time.time() if now is None else now
     t = _q("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = 'refresh'", (_h(refresh_token or ""),), one=True)
-    if not t or t["revoked_at"] or t["rotated_at"]:
+    if not t or t["revoked_at"]:
         raise GatewayError(400, "invalid_grant", "unknown, revoked or already-rotated refresh token")
     cx = _connection(t["connection_id"])
+    lost_reply = False
+    if t["rotated_at"]:
+        if not (cx and _successor_unused(t, cx, now)):
+            raise GatewayError(400, "invalid_grant", "unknown, revoked or already-rotated refresh token")
+        lost_reply = True
     if not cx or cx["status"] == "revoked" or cx["client_id"] != client_id:
         raise GatewayError(400, "invalid_grant", "connection revoked")
     ok, why = account_live(cx["account"])
@@ -431,13 +442,32 @@ def refresh(refresh_token: str, client_id: str, now: float | None = None) -> dic
     held = bool(cx.get("hold_until") and cx["hold_until"] > now)
     if t["expires_at"] <= now and not held:
         raise GatewayError(400, "invalid_grant", "refresh grant idled out (no hold) -- re-link the connector")
-    _q("UPDATE oauth_tokens SET rotated_at = ? WHERE token_hash = ?", (now, t["token_hash"]))
+    if lost_reply:
+        # the client never received (or never used) the pair issued at the rotation: retire that pair, keep the
+        # original rotation time so the grace window cannot be stretched, and issue a fresh pair below
+        _q("UPDATE oauth_tokens SET revoked_at = ? WHERE connection_id = ? AND created_at >= ? AND revoked_at IS NULL",
+           (now, cx["id"], t["rotated_at"]))
+        governance.audit("agent.refresh.lost_reply", {"connection": cx["id"], "connector": cx["slug"],
+                                                      "rotated_s_ago": round(now - t["rotated_at"])})
+    else:
+        _q("UPDATE oauth_tokens SET rotated_at = ? WHERE token_hash = ?", (now, t["token_hash"]))
     resumed = cx["status"] in ("dormant", "held")
     _q("UPDATE agent_connections SET status = 'active', last_renewal_at = ?, hold_until = NULL, hold_approval_id = NULL "
        "WHERE id = ?", (now, cx["id"]))
     if resumed:
         _notify(f"{cx['account']} reconnected", f"connector {cx['slug']} renewed after being {cx['status']}; session active again.")
     return _issue(cx["id"], now, now + REFRESH_IDLE_S)
+
+
+def _successor_unused(t: dict, cx: dict, now: float) -> bool:
+    """A rotated refresh token `t` may be retried only if its successor pair was never used (see LOST_REPLY_GRACE_S)."""
+    if now - t["rotated_at"] > LOST_REPLY_GRACE_S:
+        return False
+    if cx.get("last_call_at") and cx["last_call_at"] >= t["rotated_at"]:
+        return False                                   # the successor access token made a call
+    used = _q("SELECT COUNT(*) AS n FROM oauth_tokens WHERE connection_id = ? AND kind = 'refresh' AND created_at >= ? "
+              "AND rotated_at IS NOT NULL", (cx["id"], t["rotated_at"]), one=True)
+    return not (used and used["n"])                    # the successor refresh token was redeemed
 
 
 def authenticate(access_token: str, slug: str, now: float | None = None) -> dict:

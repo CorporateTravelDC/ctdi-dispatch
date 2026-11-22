@@ -126,6 +126,9 @@ def test_vendor_refresh_rotates_and_old_refresh_dies(env):
     cid, tok = _link(env)
     new = gw.refresh(tok["refresh_token"], cid)
     assert new["refresh_token"] != tok["refresh_token"]
+    # 2026-11-22: the old token dies once the new pair is in use (a lost-reply retry before that is allowed:
+    # tests/common/test_agent_gateway_lost_reply.py)
+    gw.authenticate(new["access_token"], "cowork")
     with pytest.raises(gw.GatewayError):
         gw.refresh(tok["refresh_token"], cid)
 
