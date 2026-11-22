@@ -55,7 +55,8 @@ APPROVAL_KINDS = ("sudo", "council", "council-close", "connector-link", "connect
                   "gateway-thaw", "console-login",                                    # gateway kill switch; web/routes/console.py
                   "withheld-pass", "withheld-master", "withheld-thaw",                # common/withheld.py (2026-11-02)
                   "liveness",   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
-                  "board-gate")   # (operator 2026-10-16): Cowork board token-gate reply, poller/skills/board_sweep.py
+                  "board-gate",   # (operator 2026-10-16): Cowork board token-gate reply, poller/skills/board_sweep.py
+                  "backup-sync")  # (operator 2026-11-22): weekly signed gate on the Borg -> Proton sync, scripts/backup/sync_gate.py
 COUNCIL_MODES = ("council", "arena")
 COUNCIL_APPROVAL_TTL_S = 24 * 3600
 WORKSPACE_ROOT = "01-Sources/personal-notes/Series"
@@ -212,6 +213,10 @@ APPROVAL_TTL_POLICY = {
     # so the gate never fired. Default 1800 s (the operator is usually mobile and sees it via ntfy);
     # derived like a council: COUNCIL_TTL_FRACTION of the remaining time, clamped to the bounds.
     "board-gate": (1800, 300, 7200),
+    # (operator 2026-11-22): the weekly backup-sync gate. The request waits up to 4 h (the cap every kind keeps);
+    # an unsigned one simply expires and the next held night asks again. The 7-day validity of an ALLOWED one
+    # is sync_gate.GATE_DAYS, not this TTL.
+    "backup-sync": (14400, 3600, 14400),
 }
 COUNCIL_TTL_FRACTION = 0.10         # of the council's deadline
 COUNCIL_CLOSE_TTL_FRACTION = 0.25   # of the council's remaining time

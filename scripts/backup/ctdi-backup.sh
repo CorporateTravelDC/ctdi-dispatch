@@ -52,6 +52,13 @@ BACKUP_TARGET="$(setting BACKUP_TARGET '')"
 BACKUP_REPO="$(setting BACKUP_REPO "${STATE}/borg")"
 PASSFILE="$(setting BACKUP_PASSPHRASE_FILE /etc/corporatetraveldc/backup/borg-passphrase)"
 RCLONE_CONFIG="$(setting BACKUP_RCLONE_CONFIG "${HOME}/.config/rclone/rclone.conf")"
+# 2026-11-22 (operator): rclone's config is encrypted at rest (rclone config encryption set); its password is read
+# from this 0600 file only by the sync, so a copy of rclone.conf (in an archive, a leaked file) carries no usable
+# Proton session. And the sync itself needs the operator's weekly signed gate (scripts/backup/sync_gate.py).
+RCLONE_PASS_FILE="$(setting BACKUP_RCLONE_CONFIG_PASS_FILE /etc/corporatetraveldc/backup/rclone-config-pass)"
+SYNC_GATE="$(setting BACKUP_SYNC_GATE 1)"
+SYNC_GATE_CMD="$(setting BACKUP_SYNC_GATE_CMD "${REPO_DIR}/scripts/with-dispatch-env.sh env PYTHONPATH=${REPO_DIR}/src python3 ${REPO_DIR}/scripts/backup/sync_gate.py")"
+STAGE_STALE_MIN="$(setting BACKUP_STAGE_STALE_MIN 360)"
 INCLUDE_CUI="$(setting BACKUP_INCLUDE_CUI 0)"
 KEEP_D="$(setting BACKUP_KEEP_DAILY 30)"; KEEP_W="$(setting BACKUP_KEEP_WEEKLY 12)"; KEEP_M="$(setting BACKUP_KEEP_MONTHLY 12)"
 CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
@@ -88,6 +95,19 @@ die() { log "ERROR: $*"; python3 "$LEDGER_PY" append note --json "{\"error\": \"
 command -v borg >/dev/null || die "borg is not installed (dnf install borgbackup)"
 [[ -r "$PASSFILE" ]] || die "Borg passphrase file $PASSFILE is missing or unreadable"
 [[ "$(stat -c %a "$PASSFILE")" =~ ^[46]00$ ]] || die "$PASSFILE must be mode 0600 or 0400"
+# 2026-11-22 (operator: "lock the repo's configs"): no backup secret or its folder may be group/other-accessible
+private_dir() { [[ ! -e "$1" ]] || (( ( 8#$(stat -c %a "$1") & 8#077 ) == 0 )) || die "$1 must not be group/other-accessible (chmod 700)"; }
+private_file() { [[ ! -e "$1" ]] || [[ "$(stat -c %a "$1")" =~ ^[46]00$ ]] || die "$1 must be mode 0600 or 0400"; }
+private_dir "$(dirname "$PASSFILE")"
+private_dir "$BACKUP_REPO"
+if [[ -n "$BACKUP_TARGET" ]]; then
+  private_file "$RCLONE_CONFIG"; private_dir "$(dirname "$RCLONE_CONFIG")"; private_file "$RCLONE_PASS_FILE"
+  if [[ -r "$RCLONE_PASS_FILE" ]]; then
+    export RCLONE_PASSWORD_COMMAND="cat ${RCLONE_PASS_FILE}"
+  elif head -n 1 "$RCLONE_CONFIG" 2>/dev/null | grep -q '^# Encrypted rclone configuration'; then
+    die "$RCLONE_CONFIG is encrypted but $RCLONE_PASS_FILE is missing or unreadable"
+  fi
+fi
 if [[ -n "$REQUIRE_MOUNT" ]] && ! mountpoint -q "$REQUIRE_MOUNT"; then
   die "backup storage $REQUIRE_MOUNT is not mounted; refusing to write to the disk underneath it"
 fi
@@ -95,6 +115,12 @@ export BORG_PASSCOMMAND="cat ${PASSFILE}" BORG_REPO="$BACKUP_REPO" BORG_RELOCATE
 mkdir -p -m 0700 "$STATE" "$WORK" "$WORK/cui-local" "$WORK/borg-cache"
 export BORG_CACHE_DIR="$WORK/borg-cache"
 exec 9>"${STATE}/.lock"; flock -n 9 || die "another backup is running"
+# 2026-11-22: a run killed before its cleanup trap leaves its dump stage behind; three of them (94 GiB) filled
+# the stick and failed every run from 11-21. With the lock held no other run is using a stage, so any older
+# than BACKUP_STAGE_STALE_MIN (6 h; a run takes well under that) is removed here.
+while IFS= read -r -d '' old; do
+  rm -rf -- "$old"; log "removed stale stage $(basename "$old") (left by an interrupted run)"
+done < <(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'stage.*' -mmin +"$STAGE_STALE_MIN" -print0 2>/dev/null)
 
 # 2026-10-12: a dry run exits HERE -- before any dump, ledger write or CUI rotation. It used to run both
 # Postgres dumps (~35 min) and append a cui-stamp before exiting.
@@ -298,6 +324,18 @@ podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" b
 python3 "$LEDGER_PY" append backup --json "{\"archive\": ${arch_id}, \"dumps\": ${dumps_meta}, \"include_cui\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"borg_warnings\": $( (( borg_warn )) && echo true || echo false ), \"repo\": \"local\"}" >/dev/null
 log "archive ${archive} done"
 
+if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" && "$SYNC_GATE" == 1 ]]; then
+  # the weekly signed gate (same machinery as the liveness switch). A lapse HOLDS the sync: the archive is
+  # complete on the stick, nothing on the target is changed or deleted, and a new signature is requested.
+  if gate_out="$($SYNC_GATE_CMD check </dev/null 2>&1)"; then
+    log "sync gate: ${gate_out}"
+  else
+    SYNC=0
+    log "sync HELD: no signed backup-sync approval in the last 7 days (${gate_out:-gate check failed}); archive ${archive} is on the stick; ${BACKUP_TARGET} unchanged"
+    python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": false, \"held\": \"weekly-signature\"}" >/dev/null
+    log "$($SYNC_GATE_CMD request --target "$BACKUP_TARGET" </dev/null 2>&1 || echo 'could not request a new signature')"
+  fi
+fi
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   command -v rclone >/dev/null || die "rclone is not installed (dnf install rclone)"
   # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
