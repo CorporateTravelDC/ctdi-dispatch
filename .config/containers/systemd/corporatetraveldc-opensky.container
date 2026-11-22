@@ -13,7 +13,8 @@ PodmanArgs=--memory-swap=256m
 Image=ghcr.io/sdr-enthusiasts/docker-opensky-network:latest
 ContainerName=corporatetraveldc-opensky
 EnvironmentFile=/etc/corporatetraveldc/opensky-secrets.env
-Environment=BEASTHOST=host.containers.internal
+# 2026-11-22: ultrafeeder's Beast port is bound to the tailnet IP only; a scoped bind is reached at that IP
+Environment=BEASTHOST=100.x.x.x
 Environment=BEASTPORT=30005
 AutoUpdate=registry
 

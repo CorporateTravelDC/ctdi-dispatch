@@ -15,7 +15,8 @@ ContainerName=corporatetraveldc-fr24feed
 # the platform's settings (checked inside the running container), so it gets none of them
 # (tests/scripts/test_third_party_env_scope.py).
 EnvironmentFile=/etc/corporatetraveldc/fr24feed-secrets.env
-Environment=BEASTHOST=host.containers.internal
+# 2026-11-22: ultrafeeder's Beast port is bound to the tailnet IP only; a scoped bind is reached at that IP
+Environment=BEASTHOST=100.x.x.x
 Environment=BEASTPORT=30005
 # FR24KEY comes from fr24feed-secrets.env (EnvironmentFile= above),
 # scoped to this container only since 2026-08-26 (Opus blind review C-4)

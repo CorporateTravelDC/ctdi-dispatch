@@ -87,7 +87,10 @@ Environment=ULTRAFEEDER_CONFIG=adsb,feed.airplanes.live,30004,beast_reduce_plus_
 # corporatetraveldc-dispatch.tailxxxxxxx.ts.net:8081, tailnet-only either way.
 PublishPort=100.x.x.x:8080:80
 PublishPort=100.x.x.x:8081:80
-PublishPort=30005:30005
+# 2026-11-22 (operator): the Beast output (raw positions) is tailnet-only like the web ports; it listened on every
+# interface (firewalld blocked it off-tailnet, but the bind contradicted the Tailscale-only rule above). The five
+# feeders now reach it at 100.x.x.x (container-to-container rule, tests/containers/test_ntfy_url_hardset.py).
+PublishPort=100.x.x.x:30005:30005
 PublishPort=127.0.0.1:30003:30003
 Environment=OPENSKY_USERNAME=corporatetraveldc
 # 2026-10-03 (operator directive): all feeder/station names follow
