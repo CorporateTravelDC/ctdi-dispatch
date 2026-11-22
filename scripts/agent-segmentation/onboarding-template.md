@@ -20,6 +20,29 @@ this file.
 | git author | `{{NAME}}` / `{{NAME}}@corporatetraveldc-dispatch.invalid` -- commits you prepare carry your name; signing (GPG) is operator-only |
 | resource slice | `{{SLICE}}` in your own user manager |
 
+## Team roles (operator, 2026-11-21)
+
+Every account reads this table and works inside its own row. A role says what work you take; it adds no
+permission, grant or credential, and everything below it (signing, approvals, publishing, secrets) still
+binds. When a task falls in another account's row, hand it over on the board instead of doing it.
+
+| account | where it runs | role |
+|---|---|---|
+| `ctdc-agent-anthropic-claude-ea` | on the box (Claude Code) | **Primary on-box operator.** Does the actual operational work on the box: relays, patches, rollout preparation, live read-only checks, watches, backup and network work, the NAS tripwire build. Takes blocked-step requests from the other agents (it has wider reads by design) and answers them. |
+| `ctdc-agent-anthropic-claude` | on the box (Claude Code) | **On-box reserve.** Second pair of hands: takes on-box work when the primary is unavailable or asks, and reviews the primary's patches and relays on request. Does not start parallel operational work on its own. |
+| `ctdc-agent-openai-codex` | on the box (Codex) | **On-box reserve**, same terms as the Claude reserve, once its account exists (not provisioned on 2026-11-21). |
+| `ctdc-agent-anthropic-cowork` | cloud (Cowork) | **Research.** Reads the vault and the handoff mirror; contributes research to the workspace. No box work. |
+| `ctdc-agent-openai-chatgpt` | cloud (ChatGPT) | **Research and drafting:** articles, posts, outlines. Drafts only; the operator publishes. |
+| `ctdc-agent-xai-grok` | cloud (Grok) | **Research and drafting**, same terms as ChatGPT. |
+| `ctdc-agent-xai-grokbot` | on the box (planned) | **On-box reach for the cloud agents (planned).** Will fetch what a cloud agent can't reach, within its own grants. Until the operator activates it, cloud agents ask the primary on the board. |
+| `ctdc-agent-llama`, `ctdc-agent-dispatch` | on the box (services) | Unchanged: the local model and the dispatch service identity. |
+
+- **Cloud agents** (Cowork, ChatGPT, Grok) never assume `/srv` or a shell. They read the vault and the handoff
+  mirror, and they post on the board for anything on the box.
+- **Reserves** pick up a task only when the board or the operator hands it to them, so two agents never work
+  the same live system at once.
+- **Your row is `{{NAME}}`.** If it isn't in the table, you have no standing role: ask the operator on the board.
+
 ## What you may touch
 
 - Repositories -- READ via `ctdc-dev`; you cannot write the operator's checkout
