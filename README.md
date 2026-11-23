@@ -3,51 +3,50 @@
 Re-verified against code (the tree committed with this text, on top of `92231b1`) and live state on 2026-10-08 12:15Z / 08:15 ET. Previous full verification: HEAD `2c3f81b`, 2026-10-06 18:25Z.
 Front-door refresh 2026-10-15 00:50–01:00Z / 2026-10-14 20:50–21:00 ET: counts, status, thermal guard,
 watchlist identity, CPS, demo, rollout and the documentation index re-checked against the code at main
-`1491bf5a` plus the batch staged for the next relay, and against the live system. Corrections are dated
-"(corrected 2026-10-15 …)" in place.
+`1491bf5a` plus the batch staged for the next relay, and against the live system.
 Re-verified 2026-10-25 15:39–15:50Z / 11:39–11:50 ET against HEAD `5f7fca01` and the live system
-(docs-first revalidated sweep, stage 3); corrections are dated "(corrected 2026-10-25 …)" or
-"(superseded 2026-10-25 …)" in place.
+(docs-first revalidated sweep, stage 3).
 Opening section re-checked 2026-11-21 23:55Z / 18:55 ET against HEAD `703d8b70` (clean tree), the
 operator status snapshot `/srv/ctdc-handoff/status/status.json` (generated 23:54Z) and the public
-dispatch GETs; corrections are dated "(corrected 2026-11-21 …)" in place. Live figures that the
+dispatch GETs. Live figures that the
 status snapshot does not carry (installed Quadlet files, non-`corporatetraveldc-*` and root timers)
 were not re-measured.
 
+Earlier struck text and dated corrections were moved verbatim to
+[`docs/legacy/README-corrections-history-2026-11.md`](docs/legacy/README-corrections-history-2026-11.md) on 2026-11-23.
+
 Multi-region real-time travel intelligence platform. Monitors commercial
-aviation (~~six~~ seven (corrected 2026-11-21: TFDM added 2026-11-19, `e2fb66b0`) FAA SWIM push feeds plus REST fallbacks), rail, weather and
+aviation (seven FAA SWIM push feeds plus REST fallbacks; TFDM added 2026-11-19, `e2fb66b0`), rail, weather and
 airspace restrictions, and pushes an alert when something operationally
 relevant changes. Runs on one Raspberry Pi 5 as rootless Podman containers
 managed by systemd Quadlets under one deployment user, alongside
 timer-driven skill containers, a local SDR receive stack and one host-level
-llama.cpp (`llama-server`) inference unit. ~~All LLM inference is local; no
-cloud LLM is called from this deployment.~~ (corrected 2026-10-15: the
+llama.cpp (`llama-server`) inference unit. The
 platform's own runtime inference is local, and the `src/common/llm.py` cloud
 fallback is closed (see "Local LLM" below), but this deployment does call a
 cloud model on a schedule. `corporatetraveldc-second-brain-weekly-dump.timer`
-(enabled; ~~Sun 02:00Z~~ (corrected 2026-10-25: `OnCalendar=Sun *-*-* 02:00:00 America/New_York`,
-i.e. 06:00Z while EDT / 07:00Z while EST, `.config/systemd/user/corporatetraveldc-second-brain-weekly-dump.timer:7`)) runs `claude --model opus` over `CLAUDE.md` and Claude's
-memory files (`scripts/second-brain-weekly-dump.sh:93`, corrected 2026-11-21 from `:139`). When that run fails,
+(enabled; `OnCalendar=Sun *-*-* 02:00:00 America/New_York`,
+i.e. 06:00Z while EDT / 07:00Z while EST, `.config/systemd/user/corporatetraveldc-second-brain-weekly-dump.timer:7`) runs `claude --model opus` over the operator session's
+Claude memory files (`MEMORY_DIR`, `scripts/second-brain-weekly-dump.sh:18`, run at `:93`). When that run fails,
 a local Llama backstop takes over
-(`corporatetraveldc-claude-weekly-llama-fallback.timer`, 00/06/12/18Z; ~~it cannot
-generate as configured, see "Local LLM"~~ (superseded 2026-10-25: its persona
-`claude-weekly-fallback` now exists in `src/common/personas.py:807` and
-`persona_key_for()` maps the default model name to it, see "Local LLM")). The operator's agents (Claude Code and Codex on the box, ChatGPT and Cowork
-through the agent gateway) run on vendor-hosted models.)
+(`corporatetraveldc-claude-weekly-llama-fallback.timer`, 00/06/12/18Z; its persona
+`claude-weekly-fallback` exists in `src/common/personas.py:807` and
+`persona_key_for()` maps the default model name to it, see "Local LLM"). The operator's agents (Claude Code and Codex on the box, ChatGPT and Cowork
+through the agent gateway) run on vendor-hosted models.
 
 Counts at the verification time above (re-run the commands; they move):
 
 | Measure | Value | Command |
 |---|---|---|
-| Containers running | ~~35 long-running (36 at measurement: one oneshot skill mid-run)~~ ~~(corrected 2026-10-15 00:51Z: 38 = 37 long-running, now including the two demo portals, + 1 oneshot skill mid-run)~~ ~~(superseded 2026-10-25 15:39:55Z: 39 running; the two demo portals are **not** among them, see Status)~~ (corrected 2026-11-21 23:54Z: 38 running per `status.json`; the two demo portals are still not among them) | `podman ps --format '{{.Names}}' \| wc -l` |
-| `.container` Quadlets tracked in this repo | ~~76 (38 long-running, 38 `Type=oneshot` skills/jobs)~~ (corrected 2026-10-15: 77 = 38 long-running + 39 `Type=oneshot` skills/jobs) ~~(2026-10-20: 76 after the cleanup relay retired `corporatetraveldc-ops-brief-deferred` and `corporatetraveldc-nms-v240-check` to `retired-20261020/`, `docs/RETIRED.md`)~~ ~~(corrected 2026-10-25: 77 top-level tracked files and 77 installed live; the 2026-10-20 cleanup retired two to `retired-20261020/` and `corporatetraveldc-opensky.container` was added afterwards. 38 of them run through `verified-exec.sh`: 37 `Type=oneshot` skills/jobs + `demo-api`)~~ (corrected 2026-11-21: 78 top-level tracked: the 2026-10-25 count of 77 plus `corporatetraveldc-ingest-tfdm.container`, added 2026-11-19 in `e2fb66b0`; 38 of them run through `verified-exec.sh`: 37 `Type=oneshot` skills/jobs + `demo-api`. Installed count not re-measured) | `git ls-files ':(glob).config/containers/systemd/*.container' \| wc -l` |
-| Long-running Quadlets not installed live | ~~2: `corporatetraveldc-demo-portal-{client,personal}` (tracked, never installed). The `corporatetraveldc-client-demo@.container` template is now installed but has no instance~~ (corrected 2026-10-15: 0. Both demo portals have been installed and active since 2026-10-12 (see Status). The `corporatetraveldc-client-demo@.container` template is installed with no instance. The diff now shows only the repo-side `amtrak-tracker.container.disabled` and `corporatetraveldc-acarsdec.container.disabled` (these create no unit) and, live-only, two `corporatetraveldc-ultrafeeder.container.bak-*` files and `nextcloud-net.network`.) (2026-10-20: `amtrak-tracker.container.disabled` retired; `nextcloud-net.network` now tracked; the two `.bak-*` files removed live by the cleanup relay; the diff shows only `corporatetraveldc-acarsdec.container.disabled` and the `retired-20261020/` folder.) | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
-| Active user timers | ~~64 (59 `corporatetraveldc-*`)~~ ~~(corrected 2026-10-15: 72 listed, 67 of them `corporatetraveldc-*`; 75 `.timer` files tracked)~~ ~~(superseded 2026-10-25 15:39:55Z: 79 listed, 74 of them `corporatetraveldc-*`; 78 top-level `.timer` files tracked)~~ ~~(corrected 2026-10-26: 80 listed, 75 of them `corporatetraveldc-*`; 78 top-level `.timer` files tracked, 79 installed; `systemctl --user list-timers --all`, `git ls-files`, `ls` 22:36Z)~~ (corrected 2026-11-21 23:54Z: 84 `corporatetraveldc-*` timers active per `status.json`; 90 top-level `.timer` files tracked. The full `list-timers` total and the installed count were not re-measured) | `systemctl --user list-timers --all` |
-| Root (system) timers for this stack | ~~7 (watchdog 90 s, team-liveness, skill-grants, llama-council, NTS cert refresh, Tailscale cert renew, watchdog-tune one-shot)~~ (corrected 2026-10-15: 9. Those 7, plus `corporatetraveldc-agent-leak-scan` (hourly) and `corporatetraveldc-agent-home-snapshot` (daily 03:20Z). The watchdog-tune one-shot fired 2026-10-12 00:00Z.) (corrected 2026-11-22: 13 tracked, `git ls-files 'systemd/*.timer' 'systemd/system/*.timer'`: the 9 above plus `agent-pamphlet-install`, `agent-remote-control-boot`, `wifi-sdio-recovery` and `oob-budget`. Root units are not in `status.json`, so the installed count was not re-measured) | `systemctl list-timers --all` |
-| Failed user or system units | ~~1: `corporatetraveldc-integrity-sweep` (user), failing on the unsigned staged files of this batch; clears at the next sign~~ ~~(corrected 2026-10-15 00:51Z: 0 user, 0 system. While a batch's edited files are unsigned, the integrity sweep fails until the next sign.)~~ (corrected 2026-11-21 23:54Z: 3 user (`corporatetraveldc-backup`, `corporatetraveldc-backup-freshness`, `corporatetraveldc-brain-capacity-review`) and 1 system (`user@1001.service`, the user manager of `ctdc-agent-anthropic-claude`), per `status.json`) | `systemctl --user --failed; systemctl --failed` |
-| Feeds reported by `/api/v1/feeds` | ~~20 (12 REST + 8 `push:*` heartbeats)~~ (corrected 2026-11-21 23:55Z: 21 = 12 REST + 9 `push:*` heartbeats; `push:tfdm` is the new one) | `curl -s http://127.0.0.1:8000/api/v1/feeds` |
-| Web API routes | ~~126 (82 in `src/web/main.py`, 44 in `src/web/routes/*.py`)~~ ~~(corrected 2026-10-15: 128 = 83 in `src/web/main.py` + 45 in `src/web/routes/*.py`)~~ ~~(corrected 2026-10-25: 135 = 81 in `src/web/main.py` + 54 in `src/web/routes/*.py`, AST count 15:41:53Z)~~ (corrected 2026-11-21: 139 = 81 in `src/web/main.py` + 58 in `src/web/routes/*.py`, AST count at `703d8b70`) | AST count of route decorators |
-| Postgres migrations | ~~73 (`src/common/pg_schema/0001`–`0073`)~~ ~~(corrected 2026-10-15: 75, `0001`–`0075`; `0075_surface_event_log`)~~ ~~(corrected 2026-10-25: 83 `.sql` files, numbered up to `0084_semantic_vessel_drone_geometry`)~~ (corrected 2026-11-21: 88 `.sql` files, numbered up to `0089_swim_census_and_expiry`) | `ls src/common/pg_schema/*.sql \| wc -l` |
+| Containers running | 38 running per `status.json` (2026-11-21 23:54Z); the two demo portals are not among them | `podman ps --format '{{.Names}}' \| wc -l` |
+| `.container` Quadlets tracked in this repo | 78 top-level tracked, the newest `corporatetraveldc-ingest-tfdm.container` (added 2026-11-19 in `e2fb66b0`); 38 of them run through `verified-exec.sh`: 37 `Type=oneshot` skills/jobs + `demo-api`. Installed count not re-measured | `git ls-files ':(glob).config/containers/systemd/*.container' \| wc -l` |
+| Long-running Quadlets not installed live | 0. Both demo portals are installed (they are not running; see Status). The `corporatetraveldc-client-demo@.container` template is installed with no instance. The diff shows only `corporatetraveldc-acarsdec.container.disabled` (it creates no unit) and the `retired-20261020/` folder; the 2026-10-20 cleanup relay retired `amtrak-tracker.container.disabled`, now tracks `nextcloud-net.network` and removed the two live `corporatetraveldc-ultrafeeder.container.bak-*` files. | `diff <(ls .config/containers/systemd) <(ls ~/.config/containers/systemd)` |
+| Active user timers | 84 `corporatetraveldc-*` timers active per `status.json` (2026-11-21 23:54Z); 90 top-level `.timer` files tracked. The full `list-timers` total and the installed count were not re-measured | `systemctl --user list-timers --all` |
+| Root (system) timers for this stack | 13 tracked (`git ls-files 'systemd/*.timer' 'systemd/system/*.timer'`): watchdog 90 s, team-liveness, skill-grants, llama-council, NTS cert refresh, Tailscale cert renew, the watchdog-tune one-shot (fired 2026-10-12 00:00Z), `corporatetraveldc-agent-leak-scan` (hourly), `corporatetraveldc-agent-home-snapshot` (daily 03:20Z), `agent-pamphlet-install`, `agent-remote-control-boot`, `wifi-sdio-recovery` and `oob-budget`. Root units are not in `status.json`, so the installed count was not re-measured | `systemctl list-timers --all` |
+| Failed user or system units | 3 user (`corporatetraveldc-backup`, `corporatetraveldc-backup-freshness`, `corporatetraveldc-brain-capacity-review`) and 1 system (`user@1001.service`, the user manager of `ctdc-agent-anthropic-claude`), per `status.json` (2026-11-21 23:54Z) | `systemctl --user --failed; systemctl --failed` |
+| Feeds reported by `/api/v1/feeds` | 21 = 12 REST + 9 `push:*` heartbeats (2026-11-21 23:55Z); `push:tfdm` is the newest | `curl -s http://127.0.0.1:8000/api/v1/feeds` |
+| Web API routes | 139 = 81 in `src/web/main.py` + 58 in `src/web/routes/*.py` (AST count at `703d8b70`) | AST count of route decorators |
+| Postgres migrations | 88 `.sql` files, numbered up to `0089_swim_census_and_expiry` | `ls src/common/pg_schema/*.sql \| wc -l` |
 
 `GET /healthz` at the verification time returned
 `{"status":"ok","reason":null,"snapshot_age_seconds":1,"audit_count_24h":24,"token_count_active":6,"cps":{"score":"GREEN","label":"GO"}}`
@@ -59,7 +58,7 @@ It does not list feeds; `/api/v1/feeds` does.
 
 Container counts move in both directions by design: Quadlet-managed
 containers are removed (not just stopped) when their unit stops, so a
-thermal LOCKDOWN shrinks `podman ps -a`; and the ~~38~~ ~~39 (corrected 2026-10-15)~~ 37 (corrected 2026-10-25: two retired 2026-10-20) oneshot skill containers
+thermal LOCKDOWN shrinks `podman ps -a`; and the 37 oneshot skill containers
 exist only while they run, so overlapping timers push the count above the
 long-running baseline.
 
@@ -200,22 +199,22 @@ Security contact: developer@csexecutiveservices.com (CS Executive Services LLC).
 
 | Component | State (2026-10-06 18:25Z unless a row says otherwise) |
 |---|---|
-| Database | **Postgres** (`corporatetraveldc-pgsql`, `postgres:16-alpine`), `DISPATCH_DB_BACKEND=postgres` in `/etc/corporatetraveldc/dispatch.env`. Containers reach it over the unix socket in the shared `corporatetraveldc-pgsql-sock` volume mounted at `/var/run/postgresql`; the host reaches it on `127.0.0.1:5432`. Cutover 2026-09-18 (reference/chat/demo tables 09-19/09-20). ~~73~~ ~~75 (corrected 2026-10-15)~~ ~~83 (corrected 2026-10-25, numbered to `0084`)~~ 88 (corrected 2026-11-22, numbered to `0089`; `0080` is unused) additive migrations in `src/common/pg_schema/`. `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset; `sqlite` survives only as a rollback backend selector. See `docs/POSTGRES_MIGRATION.md`. |
+| Database | **Postgres** (`corporatetraveldc-pgsql`, `postgres:16-alpine`), `DISPATCH_DB_BACKEND=postgres` in `/etc/corporatetraveldc/dispatch.env`. Containers reach it over the unix socket in the shared `corporatetraveldc-pgsql-sock` volume mounted at `/var/run/postgresql`; the host reaches it on `127.0.0.1:5432`. Cutover 2026-09-18 (reference/chat/demo tables 09-19/09-20). 88 (numbered to `0089`; `0080` is unused) additive migrations in `src/common/pg_schema/`. `REFERENCE_TABLES` in `src/common/db_backend.py` is an empty frozenset; `sqlite` survives only as a rollback backend selector. See `docs/POSTGRES_MIGRATION.md`. |
 | Ops dashboard (runner) | Tailnet-only: `http://100.x.x.x:8001` or `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` (nginx 443 → :8001). `ops.example.com` was retired 2026-08-02 and is hard-404'd by `_RETIRED_HOSTNAMES` in `src/runner/main.py`. |
-| Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. **The data it replays is stale:** demo-api serves `/var/lib/corporatetraveldc-demo-source/demo-source.db`, last written 2026-08-14 14:21Z; the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` is `disabled` and has never fired. Re-checked 2026-10-15 00:55Z: all still true (`:8005/healthz` ok, public hostname 200, file unchanged since 2026-08-14 14:21:42Z, timer disabled). Added 2026-10-15: runner-demo and demo-api also mount the shared Postgres socket and load `dispatch.env`, because the demo password-gate profiles (`demo_profiles`, migration 0057) moved to Postgres on 2026-09-20. Playback data still comes only from `demo-source.db`. (2026-10-20: superseded. Since relay 2 (2026-10-19), playback and profiles come from the demo Postgres instance `corporatetraveldc-pgsql-demo`, and the refresh timer runs nightly at 03:17 UTC. `demo-source.db` is destroyed, and the sqlite rollback and both sovereign mounts are removed: `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` addendum 2026-10-20.) (2026-11-21 23:59Z, status.json: runner-demo, demo-api and `corporatetraveldc-pgsql-demo` running (pgsql-demo healthy); the refresh timer is enabled, last fired 2026-11-21 03:17Z, next 2026-11-22 03:17Z.) |
-| Demo portals (added 2026-10-15) | `corporatetraveldc-demo-portal-client` (:8088) and `-personal` (:8087): `nginx:alpine` containers serving `/home/corporatetraveldc/demos` read-only, bound to 127.0.0.1 and the tailnet IP. ~~Installed and active since 2026-10-12.~~ (corrected 2026-10-25 15:39:55Z: both units are `inactive (dead)` and nothing listens on :8087/:8088; `corporatetraveldc-demo-portals-boot.service` is enabled but also inactive. Whether they should be running is an operator decision; see the sweep register.) (Re-checked 2026-11-22 00:00Z: still true; neither portal container is running, nothing listens on :8087/:8088, and the boot unit is enabled but inactive.) They have no tunnel ingress (none in `cloudflared/config.yml`). Swapped with `scripts/demo-portal.sh`. Their Quadlet headers cite `docs/DEMO_PORTALS.md`, which does not exist; `docs/CLIENT_DEMO_PATTERN.md` describes the pattern. | <!-- not-a-claim -->
+| Public demo (runner-demo) | Up: `https://dispatch-runner.example.com` returns 200, `:8005/healthz` 200. Quadlet sets `DEMO_MODE=true`; `DEMO_SESSION_SECRET` comes from `/etc/corporatetraveldc/demo-secrets.env`. Since relay 2 (2026-10-19), playback and profiles come from the demo Postgres instance `corporatetraveldc-pgsql-demo`, and the scrub+promote timer `corporatetraveldc-demo-source-refresh.timer` runs nightly at 03:17 UTC. `demo-source.db` is destroyed, and the sqlite rollback and both sovereign mounts are removed: `docs/DEMO_DATA_ISOLATION_PLAN_2026-08-13.md` addendum 2026-10-20. (2026-11-21 23:59Z, status.json: runner-demo, demo-api and `corporatetraveldc-pgsql-demo` running (pgsql-demo healthy); the refresh timer is enabled, last fired 2026-11-21 03:17Z, next 2026-11-22 03:17Z.) |
+| Demo portals (added 2026-10-15) | `corporatetraveldc-demo-portal-client` (:8088) and `-personal` (:8087): `nginx:alpine` containers serving `/home/corporatetraveldc/demos` read-only, bound to 127.0.0.1 and the tailnet IP. Neither portal container is running, nothing listens on :8087/:8088, and `corporatetraveldc-demo-portals-boot.service` is enabled but inactive (re-checked 2026-11-22 00:00Z). Whether they should be running is an operator decision; see the sweep register. They have no tunnel ingress (none in `cloudflared/config.yml`). Swapped with `scripts/demo-portal.sh`. Their Quadlet headers cite `docs/DEMO_PORTALS.md`, which does not exist; `docs/CLIENT_DEMO_PATTERN.md` describes the pattern. | <!-- not-a-claim -->
 | Backups (added 2026-10-15) | `corporatetraveldc-backup.timer` (daily 03:40Z, up to 10 min randomized delay): an encrypted Borg archive, synced to the off-box Proton Drive target (live since 2026-10-12). LADD table data stays on the box. `backup-freshness` runs every 6 h (01:15, 07:15, 13:15, 19:15Z) and `backup-restore-test` Sun 05:30Z; root `agent-home-snapshot` runs 03:20Z. See `docs/BACKUP.md`. (2026-11-21 23:59Z, status.json: **failing.** `corporatetraveldc-backup.service` is `failed` (exit code 1, last run 18:57:45Z) and `corporatetraveldc-backup-freshness.service` is `failed` (exit code 1, 19:15Z). The last restore test, 2026-11-15 05:30Z, succeeded.) (Added 2026-11-22: a direct path is tracked beside Borg, written 2026-11-19 after the USB backup stick failed. `scripts/backup/ctdi-backup-direct.sh` (`corporatetraveldc-backup-direct.timer`, 03:40Z) dumps, zstd-compresses and gpg-encrypts each object to an operator public key, uploads it, checks it on the remote and then deletes the staged copy. LADD table data is excluded. `corporatetraveldc-backup-restore-test-direct.timer` (Sun 05:30Z) checks the newest set on the remote. `docs/BACKUP.md` says it "runs now" while `BACKUP_MODE=direct`, but live, on 2026-11-22 00:19Z, both direct timers are installed and **disabled**, and the Borg timer is still the active one.) |
-| Backup uplink (added 2026-10-15) | ~~The cellular backup uplink has been down since 2026-10-06, so failover has no working second path.~~ (superseded 2026-10-25 15:45:56Z: `enu1` is connected (NetworkManager profile `Verizon Hotspot`, metric 600) and the failover watchdog reports `primary=wld0:ok backup=enu1:ok`, `failed_over=0`; the second path is back.) (2026-11-18: the hotspot profile was renamed `Hockey Puck` and its metric is now 1100. On 2026-11-22 00:00Z both uplinks are up, `jorransgateway 1` on `wld0` at metric 600 and `Hockey Puck` on `enu1` at metric 1100, so `wld0` carries the default route.) (Added 2026-11-22: route tiers in `scripts/net-failover-watchdog.sh` are 600 `jorransgateway 1`, 1100 `Hockey Puck` and 1600 the puck's own WiFi as last resort, with 100 reserved for a planned Starlink. They apply to IPv4 and IPv6 alike. The watchdog runs as the operator's user service, so `config/polkit/49-ctdc-net-failover.rules` (2026-11-17) lets that account switch NetworkManager connections. It refuses while a lockdown marker or the uncommanded-reboot hold is present, and falls back to NetworkManager's default "auth" if a hold cannot be read. `config/network/gai.conf` has no precedence lines, so address selection is IPv6-first.) See `docs/NETWORK_FAILOVER.md`. |
+| Backup uplink (added 2026-10-15) | The cellular backup path works: `enu1` is connected and the failover watchdog reported `primary=wld0:ok backup=enu1:ok`, `failed_over=0` (2026-10-25 15:45:56Z). (2026-11-18: the hotspot profile, formerly `Verizon Hotspot` at metric 600, was renamed `Hockey Puck` and its metric is now 1100. On 2026-11-22 00:00Z both uplinks are up, `jorransgateway 1` on `wld0` at metric 600 and `Hockey Puck` on `enu1` at metric 1100, so `wld0` carries the default route.) (Added 2026-11-22: route tiers in `scripts/net-failover-watchdog.sh` are 600 `jorransgateway 1`, 1100 `Hockey Puck` and 1600 the puck's own WiFi as last resort, with 100 reserved for a planned Starlink. They apply to IPv4 and IPv6 alike. The watchdog runs as the operator's user service, so `config/polkit/49-ctdc-net-failover.rules` (2026-11-17) lets that account switch NetworkManager connections. It refuses while a lockdown marker or the uncommanded-reboot hold is present, and falls back to NetworkManager's default "auth" if a hold cannot be read. `config/network/gai.conf` has no precedence lines, so address selection is IPv6-first.) See `docs/NETWORK_FAILOVER.md`. |
 | Web API | Public: `https://dispatch.example.com` (Cloudflare Access; nginx stamps `X-CTDI-Public: 1`, which pins every request to Tier 0 regardless of token). Path-scoped Access bypasses reach the app without login for at least `/robots.txt`, `/api/v1/board` and `/webhooks/*` (probed: 200, 200, 405-for-GET) (2026-10-25 15:45:56Z: the same codes reproduce on the loopback nginx vhost with the `Host` header; `/robots.txt` is answered by the honeypot snippet in nginx, not the app; the Cloudflare Access policy itself is unverified from the box). Tailnet: `http://100.x.x.x:8000`. (Added 2026-11-22: HTTP/2 is off in nginx since 2026-11-19 because of an nginx HTTP/2 CVE. `nginx/conf.d/00-http2-off.conf` sets `http2 off;` at http level, each tracked server block repeats it, and `tests/scripts/test_http2_off.py` fails on any active `http2 on`. The file says to re-enable it only after nginx 1.31.9 or later is installed.) |
-| Agent gateway (OAuth 2.1 + remote MCP) | Live at `https://agents.example.com` since 2026-10-05: `/.well-known/oauth-authorization-server` 200, other paths 404. Per-agent connector slugs at `/mcp/{slug}`: `chatgpt`, `claude-code`, `codex`, `cowork` (~~all active 2026-10-08~~ (corrected 2026-10-25 15:45:56Z, `scripts/agent-gateway.sh status`: `chatgpt`, `claude-code` and `cowork` each have one active connection (cowork also one dormant and one revoked); both `codex` connections are revoked (`revoke-tokens`, the account is inert since 2026-10-22)); `POST /mcp/codex` without a token returns 401). (2026-11-22: neither `ctdc-agent-openai-*` account is in `/etc/ctdc-accounts.conf` any more; see "Team accounts". The connector list itself was not re-checked.) Consent is the operator's SSH-signed approval. Every tool call is recorded in the audit chain as `agent.tool.call` (connector, account, tool, outcome, SHA-256 of the arguments, never their content; since 2026-10-08). Global kill: `scripts/agent-gateway.sh kill-all`. Code `src/web/routes/agent_gateway.py`, migrations 0071/0073. See `docs/AGENT_SEGMENTATION.md`. |
+| Agent gateway (OAuth 2.1 + remote MCP) | Live at `https://agents.example.com` since 2026-10-05: `/.well-known/oauth-authorization-server` 200, other paths 404. Per-agent connector slugs at `/mcp/{slug}`: `chatgpt`, `claude-code`, `codex`, `cowork` (`scripts/agent-gateway.sh status`, 2026-10-25 15:45:56Z: `chatgpt`, `claude-code` and `cowork` each have one active connection (cowork also one dormant and one revoked); both `codex` connections are revoked (`revoke-tokens`, the account is inert since 2026-10-22); `POST /mcp/codex` without a token returns 401). (2026-11-22: neither `ctdc-agent-openai-*` account is in `/etc/ctdc-accounts.conf` any more; see "Team accounts". The connector list itself was not re-checked.) Consent is the operator's SSH-signed approval. Every tool call is recorded in the audit chain as `agent.tool.call` (connector, account, tool, outcome, SHA-256 of the arguments, never their content; since 2026-10-08). Global kill: `scripts/agent-gateway.sh kill-all`. Code `src/web/routes/agent_gateway.py`, migrations 0071/0073. See `docs/AGENT_SEGMENTATION.md`. |
 | Old MCP bridge (mcpo) | Retired 2026-08-18; nothing listens on 8082/8083 (re-checked 2026-11-22). `mcp.example.com` returns 404 at the tunnel edge (ingress `http_status:404`). The nginx vhost `mcp.example.com.conf` is still present in the repo and live (local request returns 502). |
 | Operator console | `/console` on the tailnet name only (nginx tailnet vhost → web :8000); the public dispatch vhost 404s it. Sign-in is an SSH-signed approval (kind `console-login`). See `docs/OPERATOR_CONSOLE.md`. |
 | Executive Standard members edition | `members.executivestandard.example.com` (gated by `auth_request` → `corporatetraveldc-execstandard-verifier` on 127.0.0.1:8787) and `invite.executivestandard.example.com` (invite host; returns 200). Logic in `src/common/es_invites.py`, migration 0072. Their nginx vhosts live in the `executivestandard-website` repo. |
 | FAA SWIM push feeds | All six (FDPS, STDDS, TFMS, TBFM, ITWS, AIM/FNS) connected: every `push:*` heartbeat was 15–29 s old at verification (2026-10-15 00:55Z: 5–31 s; 2026-10-25 15:39:58Z: 13–30 s, `push:amtrak` 32–242 s on its 300 s cycle; 2026-11-22 00:00Z, `GET /api/v1/feeds`: 3–30 s, `push:amtrak` 82 s). Added 2026-11-19: a seventh consumer, `corporatetraveldc-ingest-tfdm` (SWIM TFDM), whose `push:tfdm` heartbeat is optional for `/healthz` (14 s old on 2026-11-22 00:00Z). Load-shed by `scripts/thermal-ingest-guard.py` under pressure (see below), so "connected" is not "always running". |
-| Local LLM | One user unit, `corporatetraveldc-llama.service`: `llama-server` bound to `100.x.x.x:8093`, model `qwen3-4b-instruct-2507-q4_0.gguf`, `-np 2 --kv-unified -c 12288`, `-t 2 -tb 2`, `CPUQuota=200%`. Ollama is gone (nothing on :11434). Added 2026-10-15: `corporatetraveldc-claude-weekly-llama-fallback` (Quadlet + timer, 00/06/12/18Z) is meant to use this server to stand in for the weekly Claude dump when that run fails. ~~Its model name has no persona mapping, so it cannot generate as configured (see "Local LLM").~~ (superseded 2026-10-25: the persona `claude-weekly-fallback` exists in `src/common/personas.py:807` and `persona_key_for("corporatetraveldc-pi5-claude-weekly-fallback:latest")` resolves to it; see "Local LLM".) |
-| ADS-B / ACARS / VDL2 receive | Up: ultrafeeder, acarsrouter, acarshub, dumpvdl2, acars-watcher and ~~four~~ five (corrected 2026-10-25: `corporatetraveldc-opensky` added since 2026-10-20) aggregator feeders all running (re-checked 2026-11-21 23:59Z, status.json). |
-| Signed-manifest integrity sweep | ~~2026-10-08 12:10Z: **failing** on one unsigned staged file (this batch); clears at the next sign. The sweep now also checks build provenance of running local images: 2 verified, 16 unverified (built one commit before HEAD), 0 failed. Unverified clears when the images are rebuilt from signed HEAD.~~ ~~(corrected 2026-10-15 00:50Z: passing: "signature valid, all 1442 files match"; build provenance 18 verified, 0 unverified, 0 failed. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.)~~ ~~(superseded 2026-10-25 15:36:18Z, `scheduled-integrity-sweep.sh --status` + `sweep.log`: status ok, "signature valid, all 1712 files match"; build provenance 2 verified, 16 unverified, 0 failed, the 16 being the running local images built 08:17–08:21Z from `5f7fca0`, one commit behind the main checkout's HEAD `8017f02`; it clears at the next rollout from signed HEAD. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.)~~ ~~(2026-11-02 16:26Z, pre-pentest docs parity: **failing** live; `MANIFEST.sha256` now has 2,128 lines. Expected to clear when the 2026-11-02 release is signed and the root copies are reinstalled; if it does not, the sweep journal names the file.)~~ (superseded 2026-11-21 23:48Z, status.json: the last `corporatetraveldc-integrity-sweep.service` run (23:47:50Z) ended `success`, and the timer runs it every 15 min; `MANIFEST.sha256` has 2,264 lines. Build-provenance counts were not re-checked. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`.) |
-| Team accounts (`/etc/ctdc-accounts.conf`) | 2026-10-08: agents `ctdc-agent-anthropic-claude` (login mode claude) and `ctdc-agent-openai-codex` (codex); services `ctdc-agent-anthropic-cowork`, `ctdc-agent-openai-chatgpt`, `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded). Liveness is an AND of login, signer key, no token revocation and no kill order (`scripts/team-liveness.sh`). See `docs/AGENT_SEGMENTATION.md`, `docs/AGENT_TRUST_MODEL.md`. ~~(2026-11-02: seven accounts; `ctdc-agent-anthropic-claude-ea` (uid 1007, login mode claude, the operator's executive-assistant agent) is the one this row omitted. The two `ctdc-agent-openai-*` accounts are being retired.)~~ (superseded 2026-11-22, live registry: seven lines. Agents in claude login mode: `ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-claude-ea` (uid 1007, the operator's executive-assistant agent) and `ctdc-agent-xai-grokbot` (preloaded). Services: `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded), `ctdc-agent-anthropic-cowork` and `ctdc-agent-xai-grok`. Neither `ctdc-agent-openai-*` account is listed any more.) |
+| Local LLM | One user unit, `corporatetraveldc-llama.service`: `llama-server` bound to `100.x.x.x:8093`, model `qwen3-4b-instruct-2507-q4_0.gguf`, `-np 2 --kv-unified -c 12288`, `-t 2 -tb 2`, `CPUQuota=200%`. Ollama is gone (nothing on :11434). Added 2026-10-15: `corporatetraveldc-claude-weekly-llama-fallback` (Quadlet + timer, 00/06/12/18Z) is meant to use this server to stand in for the weekly Claude dump when that run fails. The persona `claude-weekly-fallback` exists in `src/common/personas.py:807` and `persona_key_for("corporatetraveldc-pi5-claude-weekly-fallback:latest")` resolves to it; see "Local LLM". |
+| ADS-B / ACARS / VDL2 receive | Up: ultrafeeder, acarsrouter, acarshub, dumpvdl2, acars-watcher and five aggregator feeders (including `corporatetraveldc-opensky`, added since 2026-10-20) all running (re-checked 2026-11-21 23:59Z, status.json). |
+| Signed-manifest integrity sweep | The last `corporatetraveldc-integrity-sweep.service` run (2026-11-21 23:47:50Z, status.json) ended `success`, and the timer runs it every 15 min; `MANIFEST.sha256` has 2,264 lines. The sweep also checks build provenance of running local images; those counts were not re-checked. The sweep fails while a batch's edited files are unsigned and clears at the next sign. Known verifier limits are in `SECURITY.md`. |
+| Team accounts (`/etc/ctdc-accounts.conf`) | Live registry (2026-11-22): seven lines. Agents in claude login mode: `ctdc-agent-anthropic-claude`, `ctdc-agent-anthropic-claude-ea` (uid 1007, the operator's executive-assistant agent) and `ctdc-agent-xai-grokbot` (preloaded). Services: `ctdc-agent-llama`, `ctdc-agent-dispatch` (preloaded), `ctdc-agent-anthropic-cowork` and `ctdc-agent-xai-grok`. Neither `ctdc-agent-openai-*` account is listed any more. Liveness is an AND of login, signer key, no token revocation and no kill order (`scripts/team-liveness.sh`). See `docs/AGENT_SEGMENTATION.md`, `docs/AGENT_TRUST_MODEL.md`. |
 | Build integrity | Every local image: hash-locked Python (`requirements*.in` → `requirements*.txt`), base images by digest, apt from a dated snapshot, `--platform` pinned to the host, SBOM + provenance receipt per build. Levels 1–3 of `docs/REPRODUCIBLE_BUILDS.md`; bit-for-bit (Level 4) not claimed. (Added 2026-11-22: `scripts/build/apt-snapshot-guard.py` (`corporatetraveldc-apt-snapshot-guard.timer`, every 6 h at :17) reads the apt snapshot pin's `Valid-Until`. It alerts 48 h before expiry. At 24 h it prepares the next pin, gpgv-checked, as a hash-pinned patch with a ready relay in `/srv/ctdc-handoff/`. It never signs or commits. `scripts/serialized-rollout.sh` calls it with `--check-rollout`, which refuses a pin that expires within 2 h.) |
 ## Architecture
 
@@ -249,11 +248,11 @@ its own JSON state (`user_rss_feeds.json`, `runner-layer-config.json` UI config)
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-(corrected 2026-11-21: 37 Quadlets in `.config/containers/systemd/` are `Type=oneshot` skill
+37 Quadlets in `.config/containers/systemd/` are `Type=oneshot` skill
 containers. Most start from a timer; the RSS-driven daily watches start from
 `scripts/rss-watch-trigger.sh` and `knowledge-graph-compile` from a `.path` unit. The 38th
 `verified-exec` Quadlet is the long-running `demo-api`. Ingest is eight containers since
-`ingest-tfdm` landed on 2026-11-19, commit e2fb66b0.)
+`ingest-tfdm` landed on 2026-11-19, commit e2fb66b0.
 
 Resource slices (added 2026-11-22; unit files in `.config/systemd/user/`): `production.slice` holds
 the production containers and `llama-server`. `production-brain.slice` is the shared pool for the
@@ -272,7 +271,7 @@ AI agent sessions and `humans.slice` human teammate sessions, each kept apart fr
 | `systemd-amtrak-tracker` | `localhost/corporatetraveldc-amtrak-tracker:latest` | Amtrak push writer (api.amtraker.com), stamps `push:amtrak` |
 | `systemd-corporatetraveldc-runner` | `localhost/corporatetraveldc-runner:latest` | Ops dashboard SPA + API, port 8001 on 127.0.0.1 and the tailnet IP, tailnet-only |
 | `systemd-corporatetraveldc-runner-demo` | same runner image | Demo playback, host port 8005 → container 8001, `DISPATCH_BASE_URL=http://100.x.x.x:8004` |
-| `systemd-corporatetraveldc-demo` / `systemd-corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Recorder (writes `demo_snapshots` in Postgres) / read-only playback API on :8004 over ~~the scrubbed `demo-source.db`~~ the demo Postgres instance (2026-10-20) |
+| `systemd-corporatetraveldc-demo` / `systemd-corporatetraveldc-demo-api` | `localhost/corporatetraveldc-demo:latest` | Recorder (writes `demo_snapshots` in Postgres) / read-only playback API on :8004 over the demo Postgres instance |
 | `systemd-corporatetraveldc-execstandard-verifier` | poller image | `auth_request` verifier for the members site, 127.0.0.1:8787 |
 
 ### Auxiliary containers (same host)
@@ -287,8 +286,8 @@ and :8081, Beast out on 0.0.0.0:30005, SBS on 127.0.0.1:30003),
 `corporatetraveldc-airnavradar` and (added 2026-10-25; Quadlet tracked since
 2026-10-20, active) `corporatetraveldc-opensky`. Disabled pending hardware, as
 `*.container.disabled` files that create no unit: `acarsdec`
-(`.config/containers/systemd/`), `dumphfdl`, ~~`ais`~~ `ais-catcher`
-(corrected 2026-10-25: `systemd/quadlets/`), `ais-watcher`,
+(`.config/containers/systemd/`), `dumphfdl`, `ais-catcher`
+(`systemd/quadlets/`), `ais-watcher`,
 `utm-watcher` (`systemd/`). See `docs/SDR_SERVICES.md`.
 
 Infra/comms: `ntfy` (0.0.0.0:2586), `systemd-corporatetraveldc-protonbridge`
@@ -353,15 +352,15 @@ poller interval from `FETCH_SCHEDULE` (`src/poller/main.py`):
 | `runsheet` | local file | 300 s | fresh |
 | `tfr` | `tfr.faa.gov/tfrapi/getTfrList` | 300 s | fresh; no push twin exists for TFRs |
 | `nas` | `nasstatus.faa.gov/api/airport-status-information` | 300 s | fresh |
-| `notam` | FAA NMS API (`api-nms.aim.faa.gov`); needs `NMS_API_CLIENT_ID` + `NMS_API_CLIENT_SECRET`, else `awaiting_credentials` | 300 s | REST skipped while `push:fns` is fresh (corrected 2026-11-22: REST row about 29 h old, `pull_state` `auth_gated`, one consecutive failure) |
+| `notam` | FAA NMS API (`api-nms.aim.faa.gov`); needs `NMS_API_CLIENT_ID` + `NMS_API_CLIENT_SECRET`, else `awaiting_credentials` | 300 s | REST skipped while `push:fns` is fresh (2026-11-22: REST row about 29 h old, `pull_state` `auth_gated`, one consecutive failure) |
 | `dca_fids` / `iad_fids` | MWAA JSON endpoints | 300 s | fresh (600 s staleness threshold) |
-| `amtrak` | api.amtraker.com (REST fallback for `push:amtrak`, wired 2026-09-06) | 300 s | ~~REST row 7.4 h old~~ (corrected 2026-11-22: REST row about 18 h old) because push owns the data |
-| `eurocontrol` | EUROCONTROL NM B2B | 900 s | ~~`awaiting_credentials`~~ (corrected 2026-11-02: live `pull_state` `unconfigured`, credentials not set) |
-| `jasdat` | JCAB/MLIT | 900 s | ~~`awaiting_credentials`~~ (corrected 2026-11-02: live `pull_state` `unconfigured`, credentials not set) |
-| `push:fdps` `push:stdds` `push:tfms` `push:tbfm` `push:itws` `push:fns` | FAA SWIM NMS (Solace), ingest containers | push | ~~heartbeats 15–29 s old~~ (corrected 2026-11-22: 3–32 s old) |
+| `amtrak` | api.amtraker.com (REST fallback for `push:amtrak`, wired 2026-09-06) | 300 s | REST row about 18 h old (2026-11-22) because push owns the data |
+| `eurocontrol` | EUROCONTROL NM B2B | 900 s | live `pull_state` `unconfigured` (2026-11-02), credentials not set |
+| `jasdat` | JCAB/MLIT | 900 s | live `pull_state` `unconfigured` (2026-11-02), credentials not set |
+| `push:fdps` `push:stdds` `push:tfms` `push:tbfm` `push:itws` `push:fns` | FAA SWIM NMS (Solace), ingest containers | push | heartbeats 3–32 s old (2026-11-22) |
 | `push:tfdm` | FAA SWIM NMS TFDM Terminal Publication, `ingest-tfdm` container (added 2026-11-19, `e2fb66b0`; opt-in per container with `SWIM_NMS_TFDM_ENABLED`; departure stands and counts only) | push | 27 s old (3600 s staleness threshold) |
-| `push:nws` | NWWS-OI (XMPP), ingest-core | push | ~~18 s old~~ (corrected 2026-11-22: 21 s old) |
-| `push:amtrak` | amtrak-tracker container | push | ~~41 s old~~ (corrected 2026-11-22: 245 s old, inside its 660 s window; the writer stamps once per 300 s poll) |
+| `push:nws` | NWWS-OI (XMPP), ingest-core | push | 21 s old (2026-11-22) |
+| `push:amtrak` | amtrak-tracker container | push | 245 s old (2026-11-22), inside its 660 s window; the writer stamps once per 300 s poll |
 
 Only `nws`, `notam` and `amtrak` have a push twin (`REST_FALLBACKS` in
 `src/ingest/failover.py`). FDPS, STDDS, TFMS, TBFM and ITWS have no REST
@@ -421,28 +420,16 @@ them, so whether they are installed was not checked. See `docs/LOCKDOWN_OOB.md` 
 
 `scripts/thermal-ingest-guard.py` runs every 120 s
 (`corporatetraveldc-thermal-ingest-guard.timer`) and stops and restarts
-containers under ~~CPU-load or temperature~~ CPU-load (corrected 2026-10-15) pressure. ~~Defaults from `main()`
-(only `THERMAL_GUARD_ENABLED`, `THERMAL_GUARD_RESUME_TEMP_C` and
-`THERMAL_GUARD_RESUME_DWELL_S` are set in `dispatch.env`, to the default values):~~
-
-| ~~Trip~~ | ~~Condition~~ | ~~What is shed~~ |
-|---|---|---|
-| ~~Temp tier 1~~ | ~~`temp >= 74.0 °C`~~ | ~~`tfms`, `stdds` (`THERMAL_GUARD_TIER1_FEEDS`)~~ |
-| ~~**LOCKDOWN**~~ | ~~`temp >= 79.0 °C` or `load1 >= 40.0`~~ | ~~everything except `web`: all six SWIM feeds, `ingest-core`, `poller`, `pusher`, `runner` (`LOCKDOWN_USER_UNITS`, fixed in code)~~ |
-| ~~Informational only~~ | ~~temp 70–74 °C, load1 15–40, or any count of load-attributed LLM fallbacks~~ | ~~nothing~~ |
-| ~~Restore~~ | ~~`temp < 65 °C` and `load1 < 20` (default `RESUME_LOAD` = half of the 40 trip, since 2026-10-03), held 300 s~~ | ~~tier 1 restores its two feeds; LOCKDOWN restores the stack in boot order~~ |
-| ~~Dormancy~~ | ~~within 600 s of any restore, observe only (temp ≥ 79 °C still trips)~~ | ~~—~~ |
-
-(corrected 2026-10-15: the table above was right until 2026-10-13. Since the
+containers under CPU-load pressure. Since the
 operator's 2026-10-13 directive the guard is a **load guard only**: the 74 °C
 tier-1 and 79 °C LOCKDOWN temperature trips are retired, along with the 65 °C
 resume bar. In `main()`, `temp1_trip` and `temp2_trip` are hard-coded `False`,
 and `THERMAL_GUARD_TIER1_TEMP_C`, `TIER2_TEMP_C` and `RESUME_TEMP_C` in
-`dispatch.env` are ignored. Rationale: `docs/GUARDRAILS_JUSTIFICATION.md` §4.)
+`dispatch.env` are ignored. Rationale: `docs/GUARDRAILS_JUSTIFICATION.md` §4.
 
 | Trip | Condition | What is shed |
 |---|---|---|
-| **LOCKDOWN** | `load1 >= 40.0` (`THERMAL_GUARD_LOAD_LOCKDOWN`) | ~~everything except `web`: all six SWIM feeds~~ (corrected 2026-11-22: the six feeds in `ALL_SWIM_FEEDS` -- `fdps`, `stdds`, `tfms`, `tbfm`, `itws`, `notam`), `ingest-core`, `poller`, `pusher`, `runner` (`LOCKDOWN_USER_UNITS`, fixed in code). `web` is deliberately kept. Containers not on those lists keep running, among them `ingest-tfdm` (added 2026-11-19; the guard was last changed 2026-10-14), `amtrak-tracker` and `runner-demo` |
+| **LOCKDOWN** | `load1 >= 40.0` (`THERMAL_GUARD_LOAD_LOCKDOWN`) | the six feeds in `ALL_SWIM_FEEDS` (`fdps`, `stdds`, `tfms`, `tbfm`, `itws`, `notam`), `ingest-core`, `poller`, `pusher`, `runner` (`LOCKDOWN_USER_UNITS`, fixed in code). `web` is deliberately kept. Containers not on those lists keep running, among them `ingest-tfdm` (added 2026-11-19; the guard was last changed 2026-10-14), `amtrak-tracker` and `runner-demo` |
 | Informational only | load1 15–40, CPU above 75 °C, or any count of load-attributed LLM fallbacks | nothing (temperature never sheds) |
 | Restore | after a 300 s dwell, held only while `load1 > 30` (`THERMAL_GUARD_HOLD_LOAD`) or the CPU is above 75 °C (`THERMAL_GUARD_HOLD_TEMP_C`). Once the CPU has gone above 75 °C, the temperature hold clears below 74 °C (1.0 °C hysteresis). | the stack, in boot order |
 | Dormancy | within 600 s of any restore, observe only, unless the CPU is at or above 79 °C (then the pass is evaluated; temperature still sheds nothing) | — |
@@ -502,20 +489,20 @@ Each run is fail-soft: an error is logged and the run exits 0.
 | Ops dashboard (runner) | `http://100.x.x.x:8001` / `https://corporatetraveldc-dispatch.tailxxxxxxx.ts.net` | Tailnet only |
 | API (public) | `https://dispatch.example.com` | Cloudflare Access; always Tier 0 |
 | API (tailnet) | `http://100.x.x.x:8000` | Bearer-token tier resolution |
-| Public demo | `https://dispatch-runner.example.com` | Password-gated (`DEMO_MODE=true`); ~~replays the 2026-08-14 snapshot~~ (superseded 2026-10-25: replays a 14-day loop (`LOOP_DAYS = 14`, ~~`src/demo/demo_api.py:46`~~ `src/demo/demo_api.py:78`, corrected 2026-10-25) from the demo Postgres instance refreshed nightly since 2026-10-19, see "Demo mode") |
+| Public demo | `https://dispatch-runner.example.com` | Password-gated (`DEMO_MODE=true`); replays a 14-day loop (`LOOP_DAYS = 14`, `src/demo/demo_api.py:78`) from the demo Postgres instance refreshed nightly since 2026-10-19, see "Demo mode" |
 | Agent gateway | `https://agents.example.com` | OAuth 2.1 + remote MCP, per-agent slugs |
 
 ### Route inventory
 
-~~135 route decorators (AST count 2026-10-25 15:41:53Z)~~ (corrected 2026-11-22, AST count
-at `703d8b70`: 139 route decorators: 81 in `src/web/main.py` (60 GET, 17 POST, 3 DELETE,
+139 route decorators (AST count
+at `703d8b70`): 81 in `src/web/main.py` (60 GET, 17 POST, 3 DELETE,
 1 PATCH) plus `routes/watchlist.py` 11, `agent_gateway.py` 10, `sectors.py` 8,
 `console.py` 7, `swim_positions.py` 5, `withheld.py` 4 (added 2026-11-02),
 `assignments.py` 3, `fids.py` 3, `webhooks.py` 3, `airspace.py` 2, `data_usage.py` 1,
 `remember.py` 1. Gating by dependency: 18 `require_tier` (17 Tier 1, 1 Tier 2),
 38 `require_admin(<action>)` dependencies
 (`grep -rhoE 'Depends\(require_admin\("[a-z._-]+"\)\)' src/web | wc -l`;
-`/admin/push-alert` and its alias `/admin/push-test-alert` share one handler)); the rest are anonymous
+`/admin/push-alert` and its alias `/admin/push-test-alert` share one handler); the rest are anonymous
 at the dependency layer, and several of those carry their own credential
 check in the handler (board key/signature, signed approvals, OAuth bearer,
 console session, webhook secret, withheld-category device pass).
@@ -525,7 +512,7 @@ console session, webhook secret, withheld-category device pass).
 | Method | Path | Description |
 |---|---|---|
 | GET | `/healthz` | Health + snapshot age + active token count + CPS |
-| GET | `/api/v1/feeds` | Feed freshness + error state (~~20~~ 21 feeds, live count 2026-11-22 00:04:48Z) |
+| GET | `/api/v1/feeds` | Feed freshness + error state (21 feeds, live count 2026-11-22 00:04:48Z) |
 | GET | `/api/v1/cps` | Critical Predictability State |
 | GET | `/api/v1/tfr` | Active TFRs (63 on 2026-11-22 00:04:48Z) |
 | GET | `/api/v1/weather` | METAR snapshot (`{metars:[…]}`) |
@@ -556,8 +543,7 @@ console session, webhook secret, withheld-category device pass).
 `/api/v1/runsheet`, `/api/v1/opsplan/range`, `/api/v1/radio`,
 `/api/v1/tfr-enriched`, `/api/v1/osint/feed`, `GET /api/v1/osint/scopes`,
 `/api/v1/knowledge-graph/{html,meta}`, `/api/v1/vault/file`, starting a
-watchlist session (`POST /api/v1/watchlist`; ~~`GET` and `DELETE /api/v1/watchlist/{session_id}`~~
-corrected 2026-11-22: the session `GET`/`DELETE` handlers in `main.py` were removed as dead
+watchlist session (`POST /api/v1/watchlist`; the session `GET`/`DELETE` handlers in `main.py` were removed as dead
 duplicates on 2026-10-15; `GET /api/v1/watchlist` is the router's entry list below and
 `DELETE /api/v1/watchlist/{entry_id}` is admin, `watchlist.entry.remove`),
 the watchlist entry reads in `routes/watchlist.py` (`GET /api/v1/watchlist`
@@ -581,9 +567,8 @@ in `routes/assignments.py` (added 2026-10-25), and `POST /api/v1/withheld/pair` 
 `/admin/approval-requests` (create/list/get), OSINT scope mutations
 (`POST/PATCH/DELETE /api/v1/osint/scopes`), sector silence/throttle/enable/
 sanitize posts, watchlist entry mutations
-(~~`POST /api/v1/watchlist/{flights,trains,vessels}[/batch]`~~ (corrected 2026-10-15:
-`POST /api/v1/watchlist/{flights,trains,vessels}` and `POST /api/v1/watchlist/{flights,trains}/batch`;
-there is no vessels batch route, `src/web/routes/watchlist.py`),
+(`POST /api/v1/watchlist/{flights,trains,vessels}` and `POST /api/v1/watchlist/{flights,trains}/batch`
+(there is no vessels batch route, `src/web/routes/watchlist.py`),
 `POST /api/v1/watchlist/permanent/batch`, `DELETE /api/v1/watchlist/{entry_id}`,
 `DELETE /api/v1/watchlist/batch`) and `POST /api/v1/remember`.
 `require_admin(action)` audits every allowed and denied call, and a token may
@@ -604,12 +589,8 @@ and `docs/INTEGRATION_SPEC.md`.
 
 ### Runner API (port 8001, tailnet-only)
 
-~~30 route decorators in `src/runner/main.py` (32 method+path pairs; the
-dispatch proxy takes GET/POST/DELETE).~~ ~~(corrected 2026-10-25, AST 15:41:53Z:
-33 route decorators (24 GET, 5 POST, 2 DELETE, 1 PUT, 1 `api_route`), 35
-method+path pairs; the dispatch proxy takes GET/POST/DELETE.)~~ (corrected 2026-11-21:
-37 route decorators (26 GET, 7 POST, 2 DELETE, 1 PUT, 1 `api_route`), 39
-method+path pairs; the dispatch proxy takes GET/POST/DELETE.) Sensitive surfaces (admin proxy,
+37 route decorators in `src/runner/main.py` (26 GET, 7 POST, 2 DELETE, 1 PUT, 1 `api_route`), 39
+method+path pairs; the dispatch proxy takes GET/POST/DELETE. Sensitive surfaces (admin proxy,
 non-GET `/api/v1/*` proxy, chat history, `PUT /api/v1/config`) are gated by
 `_is_trusted()` (Tailscale CGNAT 100.64.0.0/10, RFC1918, loopback;
 `CF-Connecting-IP` used exclusively when present). In demo mode an untrusted
@@ -674,7 +655,7 @@ Network origin grants no tier; the old `Tailscale-User-Login`/XFF trust was
 removed as spoofable (`src/auth/auth.py`).
 
 **One `/admin/*` route has no bearer dependency:**
-`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2889`; was ~~`:2804`~~, ~~`:2821`~~, ~~`:2823`~~, ~~`:2878`~~ (corrected 2026-11-21), line corrected 2026-10-15, 2026-10-25 and 2026-11-02).
+`GET /admin/approval-requests/{request_id}/resolve` (`src/web/main.py:2889`).
 It requires the per-action key `k` carried only in the operator's push
 (wrong or missing key = 403), and since 2026-10-04 it can only **deny**:
 `action=allow` always returns 403. Allowing takes a human SSH signature over
@@ -735,10 +716,7 @@ dual ntfy pushes (domain topic + concise `dispatch`) with forward-only
 content-hash dedup. The domain topics are `flight-alerts`, `train-alerts`,
 `vessel-alerts` and `drone-alerts`. (Added 2026-10-20: a permanent entry whose
 record sets `alert_topic`, the bellwether set, pushes to `bellwether-alerts`
-only, with no `dispatch` copy; `src/shared/watch_topic.py`.) ~~Flight position and identity resolution is local: own
-ADS-B, ingested FDPS, local FAA/OpenSky registry tables, FIDS, schedule
-inference; FlightAware AeroAPI code is dormant without a key.~~ (corrected
-2026-10-15: flight position and identity resolution is local first: own
+only, with no `dispatch` copy; `src/shared/watch_topic.py`.) Flight position and identity resolution is local first: own
 ADS-B, ingested SWIM, local FAA/OpenSky registry tables, schedule inference.
 FIDS is gate and baggage enrichment only, never an identity, tail or OOOI
 source. Tail sources are SWIM only: FDPS, the TDES departure clearance
@@ -752,15 +730,13 @@ are at least 1.1 s apart, with a 30 s cache. (Added 2026-10-23: after a 429,
 403, 5xx or connection error it stops all calls from that process for the
 Retry-After time or a backoff that starts at 60 s and doubles up to 900 s.)
 FlightAware AeroAPI code is
-dormant without a key; whether a key is configured was not checked in this
-pass. (Added 2026-10-18: AeroAPI is also the gate and baggage fallback for a
+dormant without a key; whether a key is configured was not checked. (Added 2026-10-18: AeroAPI is also the gate and baggage fallback for a
 watched flight when no SWIM or ACARS value exists, at most twice per leg and
 under a daily cap, `AEROAPI_GATE_DAILY_CAP` default 50; never baggage at
 DCA/IAD/BWI and no AeroAPI time or status is stored; `src/common/gate_aeroapi.py`.
 The key, `FLIGHTAWARE_API_KEY`, lives in `dispatch-secrets.env`; whether it is
 set was not checked.) Since 2026-10-14 watch matching goes by flight instance (the leg), not
-by flight number: `docs/FLIGHT_INSTANCE_RESOLVER.md`.) ~~(The runner's
-GLOBE map view still embeds `globe.airplanes.live` in the browser.)~~
+by flight number: `docs/FLIGHT_INSTANCE_RESOLVER.md`.
 (2026-10-24: the GLOBE iframe mode is gone; the runner draws one Leaflet
 aircraft map from the local receiver plus stored SWIM positions, with hex-only
 `?icao=<hex>` links out. `docs/MAP.md`.)
@@ -770,8 +746,8 @@ ties resolve by `_OOOI_SOURCE_PRIORITY` in `src/common/db.py`: ACARS (4) >
 SMES (3) > TFMS / TFMS-airline (2) > TBFM (1) > ADS-B (0) > FIDS (−1).
 (Added 2026-10-15: the FIDS entry only ranks a tie. The authority gate denies
 every FIDS OOOI claim, "enrichment-only, never OOOI-authoritative",
-~~`src/common/db.py:6167`~~ ~~`src/common/db.py:7051`~~ `src/common/db.py:7185`
-(line corrected 2026-11-21; `_OOOI_SOURCE_PRIORITY` at `:7063`).)
+`src/common/db.py:7185`
+(`_OOOI_SOURCE_PRIORITY` at `:7063`).)
 Separate authority rules (2026-10-05): ADS-B never asserts ON or IN, and
 airline-posted TFMS times are denied for OUT/OFF at an SMES origin and ON/IN
 at an SMES destination (KDCA/KIAD/KBWI).
@@ -801,7 +777,7 @@ private (fail closed).
 
 | Topic | Content | Priority |
 |---|---|---|
-| `tfr-alert` / `hot-alerts` | ~~VIP/POTUS TFR, Marine One/AF1, severe-ops events~~ (corrected 2026-10-15: each VIP TFR (FAA type VIP, any region) alerts once on both topics, with Pushover co-fire. The alert carries its own FAA text and active window (UTC + ET; the window comes from the FAA detail record, next relay) and fires again only if the FAA changes the TFR. A DC-area VIP set also gets route impact's ground-route hot alert, once per set. CRANE sightings are no longer labelled Marine One. Severe-ops events also use this tier. See `docs/ALERT_REFERENCE.md`.) | 5 |
+| `tfr-alert` / `hot-alerts` | Each VIP TFR (FAA type VIP, any region) alerts once on both topics, with Pushover co-fire. The alert carries its own FAA text and active window (UTC + ET; the window comes from the FAA detail record, next relay) and fires again only if the FAA changes the TFR. A DC-area VIP set also gets route impact's ground-route hot alert, once per set. CRANE sightings are no longer labelled Marine One. Severe-ops events also use this tier. See `docs/ALERT_REFERENCE.md`. | 5 |
 | `flight-alerts` / `train-alerts` / `vessel-alerts` / `drone-alerts` (added 2026-10-16: drone events used to fall through to `train-alerts`) | Watchlist events per domain | 2–5 |
 | `dispatch` | Concise bottom line for all events | mirrors source |
 | `dispatch-debriefs` / `dispatch-ops` | Full debrief tables / weekly aggregate | 2–3 |
@@ -813,7 +789,7 @@ private (fail closed).
 | `ops-health` | Freshness audit, watchdogs, thermal guard | 2–5 |
 | `osint-alerts` | OSINT scope hits | 2–3 |
 | `reservations` / `calls` | Inbound webhook events | 3 |
-| `approval-gate` | Approval notices (sudo gate, token gate, council, connector link): deny link only; allowing is a signed `scripts/approve.sh` | 3–5 (corrected 2026-11-22: sudo gate, token gate and console sign-in 4, sudo requests that auto-qualify as high-risk 5; council and connector-link requests 3) |
+| `approval-gate` | Approval notices (sudo gate, token gate, council, connector link): deny link only; allowing is a signed `scripts/approve.sh` | 3–5 (sudo gate, token gate and console sign-in 4, sudo requests that auto-qualify as high-risk 5; council and connector-link requests 3) |
 
 Full catalog: `docs/ALERT_REFERENCE.md`; rationale: `docs/ALERT_ARCHITECTURE.md`.
 
@@ -865,36 +841,30 @@ or gate it.
   not to `demo.db` any more (that file was last written 2026-09-21).
   Defaults `DEMO_RECORDER_RETENTION=364`, `DEMO_RECORDER_SEED_TARGET=14` are
   `os.environ.get` defaults in `src/demo/recorder.py:45-48`.
-- `corporatetraveldc-demo-api` (:8004) serves only ~~the scrubbed file
-  `/var/lib/corporatetraveldc-demo-source/demo-source.db` (read-only mount)~~
-  the scrubbed rows in the demo Postgres instance (2026-10-20: the file is
-  destroyed and its mount removed),
+- `corporatetraveldc-demo-api` (:8004) serves only
+  the scrubbed rows in the demo Postgres instance (2026-10-20: the former
+  `demo-source.db` file is destroyed and its mount removed),
   populated only by the host-side `scripts/scrub-demo-source.py` scrub+promote
-  pass. ~~That pass's timer, `corporatetraveldc-demo-source-refresh.timer`, is
-  disabled and has never run, so the file is still the 2026-08-14 14:21Z
-  promotion (1.8 GB).~~ (The timer has run nightly at 03:17 UTC since relay 3,
-  2026-10-19; last run 2026-11-21 03:17Z, result success.) `/healthz` reports
+  pass. That pass's timer, `corporatetraveldc-demo-source-refresh.timer`, has run nightly at 03:17 UTC since relay 3,
+  2026-10-19; last run 2026-11-21 03:17Z, result success. `/healthz` reports
   `loop_days: 14`.
 - `corporatetraveldc-runner-demo` (:8005) reads demo-api. With
   `DEMO_MODE=true` it is password-gated (`POST /api/demo/login`, HMAC-signed
   `ctdc_demo_session` cookie, `src/demo/profiles.py`, 8 h default) with
   signals sanitized server-side. (Added 2026-10-15: the session profiles live
-  in Postgres (`demo_profiles`, migration 0057, since 2026-09-20)~~, so both
-  runner-demo and demo-api mount the `corporatetraveldc-pgsql-sock` volume
-  and load `dispatch.env`~~. (corrected 2026-11-21: since relay 2,
+  in Postgres (`demo_profiles`, migration 0057, since 2026-09-20). Since relay 2,
   2026-10-19, `demo_profiles` is on the demo Postgres instance; both
   containers mount only `corporatetraveldc-pgsql-demo-sock` and load
-  `demo-secrets.env` and `demo.env`, not `dispatch.env`.) Neither mounts the
+  `demo-secrets.env` and `demo.env`, not `dispatch.env`. Neither mounts the
   live state tree `/var/lib/corporatetraveldc`; runner-demo mounts the
   demo-only `/var/lib/corporatetraveldc-demo` in its place.)
 - Demo portals (added 2026-10-15): `corporatetraveldc-demo-portal-client`
   (:8088) and `-personal` (:8087) serve static client-preview sites from
   `/home/corporatetraveldc/demos`, on 127.0.0.1 and the tailnet only, with no
-  tunnel ingress. ~~They are active since 2026-10-12.~~ (corrected 2026-10-25
-  15:39:55Z: both units `inactive (dead)`, nothing listening on :8087/:8088;
-  see Status. Still true 2026-11-22 00:04Z: no portal container is running
+  tunnel ingress. Both units are `inactive (dead)`, nothing listens on :8087/:8088,
   and `corporatetraveldc-demo-portals-boot.service`, which starts them after
-  the boot rollout, is `inactive (dead)`.) See
+  the boot rollout, is `inactive (dead)` (re-checked 2026-11-22 00:04Z);
+  see Status. See
   `docs/CLIENT_DEMO_PATTERN.md`; the `docs/DEMO_PORTALS.md` their Quadlets <!-- not-a-claim -->
   cite does not exist.
 - Public hostname `https://dispatch-runner.example.com`; no
@@ -990,8 +960,8 @@ scripts/pg-migrate.sh
 
 # Start the core stack (production boots through
 # corporatetraveldc-stack-boot-stagger, which brings up the 35 units in
-# scripts/stack-boot-ctl.sh ORDER one at a time; was 32, then 34 (2026-10-25),
-# corrected 2026-11-21: ingest-tfdm added 2026-11-19)
+# scripts/stack-boot-ctl.sh ORDER one at a time; ingest-tfdm, added
+# 2026-11-19, is the newest)
 systemctl --user start corporatetraveldc-pgsql corporatetraveldc-web corporatetraveldc-poller corporatetraveldc-pusher
 
 curl http://127.0.0.1:8000/healthz
@@ -1045,7 +1015,7 @@ bash build-images.sh [target]       # tags the outgoing image :previous
 systemctl --user restart <units>    # or scripts/serialized-rollout.sh
 ```
 
-(corrected 2026-10-15: the `systemctl --user restart <units>` line describes
+The `systemctl --user restart <units>` line describes
 a locals-only restart, which the standing rule forbids. Every rollout is a
 **full load**: `bash scripts/serialized-rollout.sh` rebuilds the local images,
 pulls every external image (an update check) and restarts every container
@@ -1053,7 +1023,7 @@ one at a time, externals included (`RESTART_EXTERNALS=1` is the default). It
 takes the heavy-job turn (`full-load rollout`, up to 2 h wait) and gates each
 restart on load. Batches are staged in the guard worktree while main stays
 frozen; see `docs/GUARDRAILS_PROVEN.md`, "Updates without downtime or drift"
-(2026-10-14).)
+(2026-10-14).
 
 Never edit tracked files while a build, rollout or stack refresh is running.
 
@@ -1078,14 +1048,14 @@ dependencies change only by editing a `*.in` intent file and re-locking with
 `scripts/build/lock-python.py`. Detail and limits: `docs/REPRODUCIBLE_BUILDS.md`.
 
 Image updates: `scripts/stack-refresh.sh --weekly` (timer
-`corporatetraveldc-weekly-external-image-update.timer`, Sun 04:15 America/New_York: 09:15Z under EST, 08:15Z under EDT; corrected 2026-11-21, was "08:15Z" only) pulls
+`corporatetraveldc-weekly-external-image-update.timer`, Sun 04:15 America/New_York: 09:15Z under EST, 08:15Z under EDT) pulls
 every external image, rebuilds every local image from signed HEAD, gates each
 image, and restarts every container one at a time. A tripwire variant
 (`corporatetraveldc-stack-refresh-tripwire.timer`, hourly with a random
 delay) fires on a randomly drawn instant 36 h to 7 d after the last run,
 audits "is what is running what was signed?" first, and holds everything on
 any finding. Rollback is `podman tag <svc>:previous <svc>:latest` + restart;
-`corporatetraveldc-podman-prune.timer` (07:15 America/New_York: 12:15Z under EST, 11:15Z under EDT; corrected 2026-11-21, was "11:15Z" only) prunes dangling images only.
+`corporatetraveldc-podman-prune.timer` (07:15 America/New_York: 12:15Z under EST, 11:15Z under EDT) prunes dangling images only.
 
 **If you run a real ADS-B receiver, set your antenna's real coordinates**
 (`ULTRAFEEDER_LAT`/`ULTRAFEEDER_LON`, plus the UltraFeeder Quadlet's
@@ -1093,15 +1063,15 @@ any finding. Rollback is `podman tag <svc>:previous <svc>:latest` + restart;
 Unset, the platform falls back to a DC placeholder and every distance,
 range ring and MLAT position is wrong. The frontend reads coordinates only
 from the runner: `/api/v1/frontend-config`, and on the map `/api/map/scope`'s
-receiver centre first (real centre for trusted callers only; corrected
-2026-11-21, `src/runner/frontend/src/components/aircraftMap/AircraftMap.jsx`)
+receiver centre first (real centre for trusted callers only;
+`src/runner/frontend/src/components/aircraftMap/AircraftMap.jsx`)
 (see `docs/GPS_COORDINATE_CONFIGURATION.md`).
 
 ### Signed-manifest coverage
 
 | Surface | Checked |
 |---|---|
-| ~~39~~ ~~40 (corrected 2026-10-15)~~ 38 (corrected 2026-10-25: `grep -l verified-exec ~/.config/containers/systemd/*.container \| wc -l` = 38 at 15:39:53Z) Quadlets whose `Exec=` goes through `scripts/verified-exec.sh` (the 37 oneshot skills and demo-api) | at every start |
+| 38 Quadlets whose `Exec=` goes through `scripts/verified-exec.sh` (the 37 oneshot skills and demo-api; `grep -l verified-exec ~/.config/containers/systemd/*.container \| wc -l` = 38 at 2026-10-25 15:39:53Z) | at every start |
 | `src/common/llm.py` (calls `scripts/verify-manifest.sh` before inference) | at inference |
 | `corporatetraveldc-integrity-sweep.timer` (every 15 min) | whole tree |
 | web, poller, pusher, ingest (all eight ingest units, ingest-tfdm included), runner, amtrak-tracker, acars-watcher, verifier, and (added 2026-11-21) demo, runner-demo, csexec-contact | **not at start** (their `CMD` launches the app directly); the image build gate and the 15-min sweep cover them |
@@ -1157,10 +1127,10 @@ On skip, `sys.exit(0)`. Support `--force`.
 
 ### Schema
 
-Postgres DDL is the ~~73~~ ~~75 (corrected 2026-10-15)~~ ~~83 (corrected 2026-10-25, numbered to `0084`)~~ 88 (corrected 2026-11-21: numbered to `0089`; there is no `0080`) numbered files in `src/common/pg_schema/`, applied by
+Postgres DDL is the 88 numbered files in `src/common/pg_schema/` (numbered to `0089`; there is no `0080`), applied by
 `scripts/pg-migrate.sh`. The legacy SQLite schema constants in
-`src/common/db.py` (`SCHEMA` … `SCHEMA_V40`, ~~`SCHEMA_V43`~~ `SCHEMA_V45` (corrected 2026-10-25)) and
-`src/common/db_swim.py` (`SCHEMA_SWIM_V41` … ~~`V46`~~ `V47` (corrected 2026-10-25)) remain for the rollback
+`src/common/db.py` (`SCHEMA` … `SCHEMA_V40`, `SCHEMA_V45`) and
+`src/common/db_swim.py` (`SCHEMA_SWIM_V41` … `V47`) remain for the rollback
 backend; `init_db_all()` does not apply the `db_swim` versions. Additive only:
 never drop or rename a column.
 
@@ -1171,13 +1141,14 @@ never drop or rename a column.
 - One host process, `corporatetraveldc-llama.service` (user unit, tracked at
   `.config/systemd/user/`): `llama-server -m qwen3-4b-instruct-2507-q4_0.gguf
   --host 100.x.x.x --port 8093 -np 2 --kv-unified -c 12288 -fa on
-  -ctk q8_0 -ctv q8_0 -t 2 -tb 2 ~~--cache-ram 0~~ --cache-ram 1024 --cache-reuse 256 (corrected 2026-10-25: changed 2026-10-19, `.config/systemd/user/corporatetraveldc-llama.service:78`) --no-webui`,
+  -ctk q8_0 -ctv q8_0 -t 2 -tb 2 --cache-ram 1024 --cache-reuse 256 --no-webui`
+  (cache flags: `.config/systemd/user/corporatetraveldc-llama.service:78`),
   `Slice=production.slice`, `CPUQuota=200%`, `MemoryLow=5120M`,
   `MemoryHigh=7168M`, `MemoryMax=8448M`, `MemorySwapMax=0`. The unit file sets
   `CPUWeight=9000`; a `systemctl set-property` drop-in under
   `~/.config/systemd/user.control/` overrides it to **10000** live (plus
   `IOWeight=10000`).
-- `corporatetraveldc-llama-restart.timer` restarts it daily at 19:45 America/New_York, ~~23:45Z~~ (corrected 2026-11-21: 00:45Z while ET is on standard time, 23:45Z in daylight time; the last fire was 2026-11-21 00:45Z).
+- `corporatetraveldc-llama-restart.timer` restarts it daily at 19:45 America/New_York: 00:45Z while ET is on standard time, 23:45Z in daylight time (the last fire was 2026-11-21 00:45Z).
 - Clients find it through `LLAMA_BASE_URL` (`http://100.x.x.x:8093` in
   `dispatch.env`); `OLLAMA_BASE_URL` is read only as a deprecated fallback
   (renamed 2026-10-05). `src/common/llama_pool.py` resolves one host/port
@@ -1186,9 +1157,9 @@ never drop or rename a column.
 - Models on disk: `qwen3-4b-instruct-2507-q4_0.gguf` (loaded, chosen
   2026-09-21, `docs/MODEL_EVALUATION_2026-09-21.md`) and
   `phi3-mini-q4_0.gguf` (kept, not loaded).
-- Per-skill behaviour is the ~~22~~ 23 (corrected 2026-10-25: `claude-weekly-fallback` added) personas in `src/common/personas.py`
+- Per-skill behaviour is the 23 personas in `src/common/personas.py`
   (`PERSONAS`); a skill's `corporatetraveldc-pi5-<task>:latest` model string
-  maps to a persona via `persona_key_for()`. The ~~21~~ 23 (corrected 2026-10-25, `git ls-files | grep -cE '^corporatetraveldc\.'`)
+  maps to a persona via `persona_key_for()`. The 23 (`git ls-files | grep -cE '^corporatetraveldc\.'`)
   `corporatetraveldc.<persona>` Modelfiles at the repo root are kept as
   manifest-covered source text; `build-models.sh` only diffs their SYSTEM
   blocks against `personas.py`.
@@ -1214,24 +1185,18 @@ is the generated hash lock since 2026-10-07).
 
 **Scheduled cloud job (added 2026-10-15).** The one job that calls a cloud
 model is outside `llm.py`. `corporatetraveldc-second-brain-weekly-dump`
-(timer enabled, ~~Sun 02:00Z~~ Sun 02:00 America/New_York, ~~= 06:00Z in EDT (corrected 2026-10-25)~~ 07:00Z while ET is on standard time, 06:00Z in daylight time (corrected 2026-11-21; next fire 2026-11-22 07:00Z)) runs `claude --model opus -p …`
-(~~`scripts/second-brain-weekly-dump.sh:139`~~ `scripts/second-brain-weekly-dump.sh:93`, corrected 2026-11-21) ~~over `CLAUDE.md` and Claude's
-memory files~~ (corrected 2026-11-21: since 2026-11-01 it reads only the operator session's Claude memory files, with `/srv/ctdc-context/PLATFORM_CONTEXT.md` and the two canonical vault rules notes as instructions; it never resets `CLAUDE.md`, the shared context or `AGENTS.md`, and it resets the memory files only after a confirmed, retrievable vault write; since 2026-11-18 an empty memory directory counts as success with no model run) and writes the result to the vault. On a failed or unconfirmed
+(timer enabled, Sun 02:00 America/New_York: 07:00Z while ET is on standard time, 06:00Z in daylight time) runs `claude --model opus -p …`
+(`scripts/second-brain-weekly-dump.sh:93`) and writes the result to the vault. Since 2026-11-01 it reads only the operator session's Claude memory files, with `/srv/ctdc-context/PLATFORM_CONTEXT.md` and the two canonical vault rules notes as instructions; it never resets `CLAUDE.md`, the shared context or `AGENTS.md`, and it resets the memory files only after a confirmed, retrievable vault write; since 2026-11-18 an empty memory directory counts as success with no model run. On a failed or unconfirmed
 run it writes a failure marker
-(`common.claude_weekly_fallback.mark_failure`, ~~`scripts/second-brain-weekly-dump.sh:162`~~ `scripts/second-brain-weekly-dump.sh:139`, corrected 2026-11-21).
+(`common.claude_weekly_fallback.mark_failure`, `scripts/second-brain-weekly-dump.sh:139`).
 `corporatetraveldc-claude-weekly-llama-fallback` (Quadlet + timer, 00/06/12/18Z)
-then tries a load-gated partial stand-in on the local llama-server. ~~**Known
-defect:** its default model name,
-`corporatetraveldc-pi5-claude-weekly-fallback:latest`, has no persona in
-`src/common/personas.py`, and neither the Quadlet nor `dispatch.env` sets
-`OLLAMA_CLAUDE_FALLBACK_MODEL` or `OLLAMA_MODEL`. `llm.py` therefore answers
-502 "no persona mapping", so the backstop cannot generate as configured.~~
-(superseded 2026-10-25: `PERSONAS` now has a `claude-weekly-fallback` entry
+then tries a load-gated partial stand-in on the local llama-server.
+`PERSONAS` has a `claude-weekly-fallback` entry
 (`src/common/personas.py:807`) and `persona_key_for()` maps the default model
 name `corporatetraveldc-pi5-claude-weekly-fallback:latest` to it; the Quadlet
-and `dispatch.env` still set neither `OLLAMA_CLAUDE_FALLBACK_MODEL` nor
+and `dispatch.env` set neither `OLLAMA_CLAUDE_FALLBACK_MODEL` nor
 `OLLAMA_MODEL`, so the code default applies and resolves. Whether a run has
-generated successfully was not checked in this pass.)
+generated successfully was not checked.
 
 ---
 ## FAA SWIM / NMS credentials
@@ -1279,12 +1244,11 @@ display of the data, so SWIM-fed positions stay on trusted (tailnet / LAN)
 origins; a public-facing deployment that wants to show them must hold a tier
 or agreement that allows it. Independently of the agreement, LADD/PIA
 blocking has a federal-law basis (FAA Reauthorization Act of 2024, sec. 803):
-~~any Tier-0 caller of those routes is LADD-filtered~~ (corrected 2026-11-21:
 since the operator's 2026-11-02 decision tier no longer decides it.
 `/positions` and `/last-leg` show a LADD-listed aircraft only to a caller
 holding an aircraft pass or the master token; every other caller, Tier 1
 included, has it withheld, and `/last-leg` answers a withheld leg exactly as
-a miss), and a filter failure is a 503, never an unfiltered list.
+a miss. A filter failure is a 503, never an unfiltered list.
 
 ---
 
@@ -1294,10 +1258,10 @@ a miss), and a filter failure is a 503, never an unfiltered list.
 |---|---|
 | `/opt/corporatetraveldc/private/ctdi-dispatch-internal/` | This repo (`/opt/corporatetraveldc/ctdi-dispatch-internal` is a symlink) |
 | `corporatetraveldc-pgsql` (volumes `corporatetraveldc-pgsql-data`, `corporatetraveldc-pgsql-sock`) | Live database |
-| ~~`/var/lib/corporatetraveldc/corporatetraveldc.db`~~ | ~~Legacy SQLite path (`DISPATCH_DB`). **Present**: a 69,632-byte file last modified 2026-10-05 23:21Z (recreated by a CLI smoke test that used the wrong env-var name; see Findings in `CHANGES-core.md`). Not the live store.~~ (2026-10-20: destroyed by the 2026-10-19 relay. `DISPATCH_DB` has no default and is removed from `config/dispatch.env`, so nothing can re-create the file: `docs/POSTGRES_MIGRATION.md` §3.7.) |
+| `/var/lib/corporatetraveldc/corporatetraveldc.db` | Former legacy SQLite path (`DISPATCH_DB`); the file was destroyed by the 2026-10-19 relay. `DISPATCH_DB` has no default and is removed from `config/dispatch.env`, so nothing can re-create the file: `docs/POSTGRES_MIGRATION.md` §3.7. |
 | `/etc/corporatetraveldc/dispatch.env` | Non-secret config |
 | `/etc/corporatetraveldc/dispatch-secrets.env` | Master secrets file (0600); source for the scoped files |
-| `/etc/corporatetraveldc/svc/<svc>.env` | Per-service scoped secrets (web, poller, pusher, ingest, runner, demo, demo-archive, amtrak-tracker, acars-watcher, execstandard-verifier); ~~53~~ ~~54 (corrected 2026-10-15)~~ ~~52 (corrected 2026-10-25)~~ 53 (corrected 2026-11-22: top-level tracked Quadlets; 52 plus `ingest-tfdm`. The two files in `retired-20261020/` are not counted) Quadlets read one |
+| `/etc/corporatetraveldc/svc/<svc>.env` | Per-service scoped secrets (web, poller, pusher, ingest, runner, demo, demo-archive, amtrak-tracker, acars-watcher, execstandard-verifier); 53 top-level tracked Quadlets read one (52 plus `ingest-tfdm`; the two files in `retired-20261020/` are not counted) |
 | `/usr/local/libexec/ctdc/` | Root-owned installed copies of root-run scripts |
 | `/var/lib/corporatetraveldc/api-usage.csv` | SR-1 usage log |
 | `/var/lib/corporatetraveldc/skill-state/` | SR-2 gate state |
@@ -1370,15 +1334,14 @@ screenshots and review records.
   Later the same day (review 07) a history scan found more: real hex codes
   in five tests and fixtures, two foreign registrations in tests, and the
   same identifiers in the git history of the public mirror and of two other
-  public repositories. ~~All were replaced and the public histories rewritten~~
-  (corrected 2026-10-15: all were replaced in the current trees, but the
+  public repositories. All were replaced in the current trees, but the
   public-history rewrite was finished on 2026-10-15 01:44Z / 21:44 ET 10-14 for
   the public mirror (6 identifiers, `scripts/leak-guard/ladd_history_scan.py` +
   git-filter-repo; 472 commits kept, tip tree unchanged, a fresh-clone rescan
   finds 0). The archived public repository `corporatetravel-dispatch-mcp`
-  still carries 2 identifiers in its history: open operator item) (unverified
-  2026-10-25: the public-mirror and archived-repo histories are off-box and
-  were not re-scanned in this pass)
+  still carries 2 identifiers in its history: open operator item. The
+  public-mirror and archived-repo histories are off-box and were not
+  re-scanned in the 2026-10-25 pass
   (`docs/security-reviews/2026-10-08-07-agents-and-adversarial-receipt.md`).
 
 ---
