@@ -122,6 +122,9 @@ KINDS: dict[tuple[str, str], Rule] = {
     # (the entry id carries the ET date, so the slot is callsign + date + state).
     ("aviation", "identity_queued"): _S(identity=("state", "occurrence")),
     ("aviation", "identity_still_pending"): _S(first=4, identity=("state", "occurrence")),
+    # 2026-11-21 (operator): this leg's plan was listed after the watch was queued; the tail is still
+    # queued. One push per watch and occurrence, carrying the proposed departure.
+    ("aviation", "identity_plan_filed"): _S(identity=("state", "occurrence")),
     ("aviation", "identity_expired_no_plan"): _S(identity=("state", "occurrence")),
     ("aviation", "identity_mismatch"): _SG(),
     ("aviation", "identity_mismatch_reg"): _SG(),

@@ -71,20 +71,28 @@ def _route(entry: dict) -> str:
     return f"{o}-{d}" if o or d else ""
 
 
-def queued_summary(entry: dict, plan_filed: bool = False) -> str:
+def _proposed_text(proposed: tuple[float, str] | None) -> str:
+    return f"; proposed departure {_utc_et(proposed[0])}, {proposed[1]}" if proposed else ""
+
+
+def queued_summary(entry: dict, plan_filed: bool = False,
+                   proposed: tuple[float, str] | None = None) -> str:
     why = ("plan filed, no aircraft assigned yet" if plan_filed
            else "no plan for this leg yet")
     return (f"QUEUED {entry.get('identifier')} {_route(entry)} {_date_label(_occurrence(entry))}: "
-            f"awaiting tail confirmation ({why})")
+            f"awaiting tail confirmation ({why}{_proposed_text(proposed)})")
 
 
-def queued_push(entry: dict, plan_filed: bool = False) -> None:
-    """One p3 'QUEUED ... awaiting tail confirmation' for a just-added pending watch."""
+def queued_push(entry: dict, plan_filed: bool = False,
+                proposed: tuple[float, str] | None = None) -> None:
+    """One p3 'QUEUED ... awaiting tail confirmation' for a just-added pending watch. 2026-11-21: with
+    the leg's proposed departure when one is known (FDPS proposed runway time, else TFMS schedule)."""
     from shared.watchlist import watchlist_event_hit
     watchlist_event_hit(
-        entry["id"], queued_summary(entry, plan_filed),
+        entry["id"], queued_summary(entry, plan_filed, proposed),
         {"watchlist_trigger": "identity_queued", "state": PENDING,
-         "occurrence": _occurrence(entry), "plan_filed": bool(plan_filed)},
+         "occurrence": _occurrence(entry), "plan_filed": bool(plan_filed),
+         "proposed_departure": proposed[0] if proposed else None},
         priority=3,
     )
 
@@ -111,6 +119,14 @@ def confirmed_summary(hex_id: str | None, registration: str | None) -> tuple[str
     return f"IDENTITY CONFIRMED {registration or '?'}/{hex_id or '?'}", False
 
 
+def to_epoch_safe(value) -> float | None:
+    from common.flight_instance import to_epoch
+    try:
+        return to_epoch(value)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _sched_epoch(entry: dict) -> float | None:
     from common.flight_instance import to_epoch
     return to_epoch(entry.get("scheduled_departure"))
@@ -135,28 +151,69 @@ def _day_end(entry: dict, now: float) -> float:
     return end
 
 
-def _has_occurrence_plan(entry: dict) -> bool:
-    """True if FDPS holds a plan for THIS occurrence (any status), via the same lookups the add
-    route uses. Another day's plan does not count."""
-    from common import db
+def plan_is_this_leg(entry: dict, plan: dict | None) -> bool:
+    """The plan is the watch's own dated leg: same occurrence AND neither airport contradicts the
+    watch's. 2026-11-21 (UA2072 KDJT-KIAD): the add route counted the same day's ORD-KDJT inbound plan
+    as "plan filed" for the DJT-IAD watch, because only the date was checked."""
+    if not plan:
+        return False
     from common.flight_instance import airports_agree, fdps_plan_occurrence_rejection
+    return (airports_agree(entry.get("origin"), plan.get("origin")) is not False
+            and airports_agree(entry.get("destination"), plan.get("destination")) is not False
+            and fdps_plan_occurrence_rejection(entry, plan) is None)
+
+
+def _occurrence_plan(entry: dict) -> dict | None:
+    """This occurrence's FDPS plan via the same lookups the add route uses, or None. Raises on a
+    failed lookup (callers decide what unknown means)."""
+    from common import db
     ident = (entry.get("identifier") or "").upper()
-    plans = []
+    p = db.get_flight_plan_by_callsign(ident)
+    if not p:
+        op = db.resolve_operating_callsign(ident)
+        if op:
+            p = db.get_flight_plan_by_callsign(op)
+    if not p:
+        p = db.get_flight_plan_by_flight_num(ident, origin=(entry.get("origin") or None))
+    return p if plan_is_this_leg(entry, p) else None
+
+
+def _has_occurrence_plan(entry: dict) -> bool:
+    """True if FDPS holds a plan for THIS occurrence and route (any status). Another day's plan, or
+    another leg of the same number, does not count."""
     try:
-        p = db.get_flight_plan_by_callsign(ident)
-        if not p:
-            op = db.resolve_operating_callsign(ident)
-            if op:
-                p = db.get_flight_plan_by_callsign(op)
-        if not p:
-            p = db.get_flight_plan_by_flight_num(ident, origin=(entry.get("origin") or None))
-        if p:
-            plans.append(p)
+        return _occurrence_plan(entry) is not None
     except Exception as e:  # noqa: BLE001
-        log.debug("pending_identity %s: plan lookup failed: %s", ident, e)
+        log.debug("pending_identity %s: plan lookup failed: %s", entry.get("identifier"), e)
         return True     # unknown -> never expire on a failed lookup
-    return any(airports_agree(entry.get("origin"), p.get("origin")) is not False
-               and fdps_plan_occurrence_rejection(entry, p) is None for p in plans)
+
+
+def proposed_departure(entry: dict, plan: dict | None = None) -> tuple[float, str] | None:
+    """(epoch, source) of the queued leg's proposed departure, or None. 2026-11-21 (operator): a watch
+    whose tail is still queued shows when the leg is proposed to leave, once a plan is listed.
+    Order: this leg's FDPS plan (its proposed runway departure), else TFMS's scheduled departure for
+    the same route on the watch's own ET date. Never raises."""
+    from common.flight_instance import airports_agree, to_epoch, watch_day_end, watch_day_start
+    try:
+        p = plan if plan_is_this_leg(entry, plan) else _occurrence_plan(entry)
+        t = to_epoch((p or {}).get("departure_time"))
+        if t is not None:
+            return t, "FDPS"
+        from common import db
+        r = db.get_recent_flight_ooooi((entry.get("identifier") or "").upper())
+        if r and airports_agree(entry.get("origin"), r.get("origin")) is not False \
+                and airports_agree(entry.get("destination"), r.get("destination")) is not False:
+            t = to_epoch(r.get("original_departure"))
+            if t is not None and watch_day_start(entry) <= t < watch_day_end(entry):
+                return t, "TFMS schedule"
+    except Exception as e:  # noqa: BLE001
+        log.debug("pending_identity %s: proposed departure: %s", entry.get("id"), e)
+    return None
+
+
+def _plan_first_seen(plan: dict) -> float | None:
+    from common.flight_instance import to_epoch
+    return to_epoch(plan.get("first_seen_at")) or to_epoch(plan.get("updated_at"))
 
 
 def sweep(entries: list[dict], now: float | None = None) -> dict:
@@ -164,7 +221,7 @@ def sweep(entries: list[dict], now: float | None = None) -> dict:
     from common import db
     from shared.watchlist import watchlist_event_hit
     now = time.time() if now is None else float(now)
-    out = {"pending": 0, "still_pending": 0, "expired": 0}
+    out = {"pending": 0, "still_pending": 0, "expired": 0, "plan_filed": 0}
     for e in entries:
         if identity_state(e) != PENDING:
             continue
@@ -185,12 +242,33 @@ def sweep(entries: list[dict], now: float | None = None) -> dict:
                     db.delete_watchlist_entry(e["id"])
                     out["expired"] += 1
                 continue
+            # 2026-11-21 (operator): the plan for this leg was listed AFTER the watch was queued ->
+            # one p3 with its proposed departure, while the tail is still queued.
+            try:
+                plan = _occurrence_plan(e)
+            except Exception:  # noqa: BLE001
+                plan = None
+            proposed = proposed_departure(e, plan)
+            seen, added = (_plan_first_seen(plan) if plan else None), to_epoch_safe(e.get("added_at"))
+            if plan and seen is not None and added is not None and seen > added:
+                watchlist_event_hit(
+                    e["id"],
+                    f"{ident} {_route(e)} {_date_label(occ)}: plan filed, still awaiting tail"
+                    f"{_proposed_text(proposed)}",
+                    {"watchlist_trigger": "identity_plan_filed", "state": "plan_filed",
+                     "occurrence": occ, "proposed_departure": proposed[0] if proposed else None},
+                    priority=3,
+                )
+                out["plan_filed"] = out.get("plan_filed", 0) + 1
             sched = _sched_epoch(e)
+            label = "scheduled departure"
+            if sched is None and proposed is not None:
+                sched, label = proposed[0], f"proposed departure, {proposed[1]}"
             if sched is not None and now >= sched - STILL_PENDING_LEAD_S:
                 watchlist_event_hit(
                     e["id"],
                     f"{ident} {_route(e)} {_date_label(occ)}: still awaiting tail "
-                    f"(scheduled departure {_utc_et(sched)})",
+                    f"({label} {_utc_et(sched)})",
                     {"watchlist_trigger": "identity_still_pending", "state": "still_pending",
                      "occurrence": occ},
                     priority=4,

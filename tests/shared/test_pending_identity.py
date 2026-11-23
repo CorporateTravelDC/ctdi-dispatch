@@ -229,3 +229,77 @@ def test_day_end_is_next_local_midnight_on_dst_days(day, hours):
     local = datetime.fromtimestamp(end, ZoneInfo("America/New_York"))
     assert (local.hour, local.minute) == (0, 0)
     assert local.strftime("%Y%m%d") > day
+
+
+# 2026-11-21 (operator): a queued tail shows the leg's proposed departure once a plan lists one;
+# "plan filed" counts only this leg's plan (UA2072: the day's ORD-KDJT inbound was taken for KDJT-KIAD).
+
+def _todays_plan(entry, fid, origin="KSAV", destination="KIAD", dep_h=20, msg=None):
+    day0 = fi.watch_day_start(entry)
+    db.upsert_flight_event(fid, "ZZZ", "4006", origin, destination, None, day0 + dep_h * 3600,
+                           day0 + (dep_h + 2) * 3600, "proposed", None, None, None, None, "<x/>",
+                           message_time=msg if msg is not None else time.time())
+    return day0 + dep_h * 3600
+
+
+def test_same_day_plan_for_another_leg_is_not_plan_filed(env):
+    wl, wl_route, sent = env
+    from shared import pending_identity as pi
+    probe = {"id": "wl-flight-zzz4006-" + fi.watch_id_date(None), "origin": "KSAV", "destination": "KIAD"}
+    _todays_plan(probe, "G-IN", origin="KORD", destination="KSAV")      # the inbound leg, same number and day
+    out = _add(wl_route, identifier="ZZZ4006", origin="KSAV", destination="KIAD")
+    q = [s for s in sent if "QUEUED" in s[1]]
+    assert q and "no plan for this leg yet" in q[0][1] and "plan filed" not in q[0][1]
+    assert pi.proposed_departure(_stored(out["id"])) is None
+
+
+def test_queued_push_carries_the_proposed_departure(env):
+    wl, wl_route, sent = env
+    probe = {"id": "wl-flight-zzz4006-" + fi.watch_id_date(None), "origin": "KSAV", "destination": "KIAD"}
+    dep = _todays_plan(probe, "G-T3")
+    _add(wl_route, identifier="ZZZ4006", origin="KSAV", destination="KIAD")
+    q = [s for s in sent if "QUEUED" in s[1]][0][1]
+    assert "plan filed, no aircraft assigned yet; proposed departure" in q and q.endswith(", FDPS)")
+    assert time.strftime("%H:%MZ", time.gmtime(dep)) in q and "ET)" in q
+
+
+def test_plan_listed_after_queueing_pushes_once_with_the_proposed_time(env):
+    wl, wl_route, sent = env
+    from shared import pending_identity as pi
+    out = _add(wl_route, identifier="ZZZ4006", origin="KSAV", destination="KIAD")
+    entry = _stored(out["id"])
+    time.sleep(1.1)                         # the plan is first seen after the watch was queued
+    dep = _todays_plan(entry, "G-T4", msg=time.time() + 5)
+    sent.clear()
+    pi.sweep([entry], now=dep - 5 * 3600)
+    pi.sweep([entry], now=dep - 4 * 3600)                        # same state: deduped by the parity gate
+    filed = [s for s in sent if "plan filed, still awaiting tail" in s[1]]
+    assert len(filed) == 1 and filed[0][2] == 3 and "proposed departure" in filed[0][1]
+
+
+def test_still_awaiting_tail_uses_the_proposed_time_when_no_schedule(env):
+    wl, wl_route, sent = env
+    from shared import pending_identity as pi
+    out = _add(wl_route, identifier="ZZZ4006", origin="KSAV", destination="KIAD")
+    entry = _stored(out["id"])
+    dep = _todays_plan(entry, "G-T5", msg=time.time() + 5)
+    sent.clear()
+    pi.sweep([entry], now=dep - 45 * 60)
+    still = [s for s in sent if "still awaiting tail (proposed departure, FDPS" in s[1]]
+    assert len(still) == 1 and still[0][2] == 4
+
+
+def test_watchlist_get_shows_the_proposed_departure(env):
+    wl, wl_route, sent = env
+    from auth.auth import Tier
+    out = _add(wl_route, identifier="ZZZ4006", origin="KSAV", destination="KIAD")
+    dep = _todays_plan(_stored(out["id"]), "G-T6")
+    resp = asyncio.run(wl_route.list_watchlist_entries(tier=Tier.ADMIN, include=None, held=None))
+    e = next(x for x in json.loads(resp.body)["entries"] if x["id"] == out["id"])
+    assert e["proposed_departure"]["source"] == "FDPS" and abs(e["proposed_departure"]["epoch"] - dep) < 1
+    assert "Z (" in e["proposed_departure"]["label"] and "ET)" in e["proposed_departure"]["label"]
+
+
+def test_plan_filed_kind_is_registered():
+    from common import push_policy_registry as reg
+    assert reg.resolve("aviation", "identity_plan_filed") is not None

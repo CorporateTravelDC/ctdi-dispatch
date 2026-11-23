@@ -197,6 +197,12 @@ async def list_watchlist_entries(
             e["identity_state"] = pending_identity.identity_state(e)
             if e["identity_state"] == pending_identity.PENDING:
                 e["queued_at"] = e.get("added_at")
+                # 2026-11-21 (operator): a queued tail shows the leg's proposed departure once a
+                # plan (or the airline schedule) lists one; UTC with ET beside it.
+                pd = pending_identity.proposed_departure(e)
+                if pd:
+                    e["proposed_departure"] = {"epoch": pd[0], "source": pd[1],
+                                               "label": pending_identity._utc_et(pd[0])}
     if not public and "eta" not in wanted:
         return JSONResponse({"entries": entries, "count": len(entries)})
     from common import watch_eta
@@ -567,11 +573,14 @@ async def add_flight_watchlist(
     identity_state = pending_identity.identity_state(entry)
     if identity_state == pending_identity.PENDING:
         try:
-            # "plan filed" only when the plan found is this leg's (it just carried no airframe)
-            from common.flight_instance import fdps_plan_occurrence_rejection as _occ_rej
-            plan_filed = bool(fdps_plan) and _occ_rej(
-                {"id": entry_id, "scheduled_departure": body.scheduled_departure}, fdps_plan) is None
-            pending_identity.queued_push(entry, plan_filed=plan_filed)
+            # "plan filed" only when the plan found is this leg's (it just carried no airframe).
+            # 2026-11-21: same occurrence AND same route -- the day's ORD-KDJT inbound plan counted as
+            # "plan filed" for a KDJT-KIAD watch of the same number (UA2072). With a plan, the push
+            # carries the leg's proposed departure.
+            plan_filed = pending_identity.plan_is_this_leg(
+                {**entry, "id": entry_id, "scheduled_departure": body.scheduled_departure}, fdps_plan)
+            proposed = pending_identity.proposed_departure(entry, fdps_plan if plan_filed else None)
+            pending_identity.queued_push(entry, plan_filed=plan_filed, proposed=proposed)
         except Exception as e:  # never block the add on the push
             import logging
             logging.getLogger(__name__).warning("watchlist add %s: queued push failed: %s", entry_id, e)
