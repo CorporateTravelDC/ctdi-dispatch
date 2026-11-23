@@ -122,3 +122,12 @@ def test_moving_bytes_is_not_a_stall():
                   setter=lambda mb: True, stopper=lambda: None, sleeper=lambda s: t.__setitem__(0, t[0] + s),
                   is_alive=alive, progress=prog, stall_s=1200, clock=lambda: t[0])
     assert not res.get("stall") and not res["stopped"]
+
+
+def test_a_guard_stopped_sync_never_counts_as_done():
+    """2026-11-22: rclone exits 0 after the guard's `rc core/quit`, so the script must also require the guard's own
+    exit code to be 0 before it records the sync ok; a stall (4) retries, a hard-cap stop (3) fails the run."""
+    src = (REPO / "scripts/backup/ctdi-backup.sh").read_text()
+    assert "if (( src == 0 && grc == 0 )) || (( grc != 4 )) || (( attempt == 2 )); then break; fi" in src
+    assert "  if (( src == 0 && grc == 0 )); then" in src
+    assert "if (( src == 0 )) ||" not in src and "  if (( src == 0 )); then" not in src

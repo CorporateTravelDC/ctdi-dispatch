@@ -362,10 +362,13 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
     guard_json=$(python3 "$(dirname "$0")/rate_guard.py" --pid "$rpid" --rc-sock "${rcdir}/rc.sock" --iface "$BW_IFACE" --soft-mb "$BW_SOFT" --hard-mb "$BW_HARD" "${metered_args[@]}" --metered-soft-mb "$BW_M_SOFT" --metered-hard-mb "$BW_M_HARD" </dev/null); grc=$?
     wait "$rpid"; src=$?; set -e; rm -rf "$rcdir"
     log "rate guard (attempt ${attempt}): ${guard_json:-<no summary>}"
-    if (( src == 0 )) || (( grc != 4 )) || (( attempt == 2 )); then break; fi
-    log "sync stalled; retrying once"
+    # 2026-11-22: the guard stops rclone with `rc core/quit`, after which rclone exits 0 -- so rclone's code alone
+    # said "done" for a sync the guard had STOPPED (11-22 20:08Z: stall after 2.85 GB, no retry, ledger ok=true,
+    # Proton incomplete). A sync counts only when rclone exited 0 AND the guard did not stop it (grc 0).
+    if (( src == 0 && grc == 0 )) || (( grc != 4 )) || (( attempt == 2 )); then break; fi
+    log "sync stalled (guard stopped rclone); retrying once"
   done
-  if (( src == 0 )); then
+  if (( src == 0 && grc == 0 )); then
     python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": true, \"rate_guard\": ${guard_json:-null}}" >/dev/null
   else
     python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": false}" >/dev/null
