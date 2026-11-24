@@ -121,6 +121,14 @@ FAKE="${LIVENESS_FAKE_ROOT:-}"
 STATE_DIR="/var/lib/corporatetraveldc/team-liveness"; [[ -n "$FAKE" ]] && STATE_DIR="${FAKE}/var/lib/corporatetraveldc/team-liveness"
 INERT_DIR="${STATE_DIR}/inert"; ORDERS_DIR="${STATE_DIR}/orders"
 REGISTRY="/etc/ctdc-accounts.conf"; [[ -n "$FAKE" ]] && REGISTRY="${FAKE}/accounts.conf"
+# 2026-11-24 (operator): accounts listed here are made inert ONLY by an explicit operator action -- a kill order, a
+# deactivated signer (board-signer-ctl.sh deactivate), or a locked/expired account (usermod -L / chage -E 0).
+# Every automatic factor (stale or expired login, the session check, a token revocation, no signer) only ALERTS for
+# them. Cause: ctdc-agent-anthropic-claude-ea went inert on 11-22 15:12Z the minute its Claude refresh token lapsed.
+# Root-owned, installed from config/liveness-explicit.conf; if it is missing or not root-owned and locked down it is
+# ignored (warning) and the normal policy applies, so tampering can never weaken a lockout.
+EXPLICIT_FILE="/etc/ctdc-liveness-explicit.conf"; [[ -n "$FAKE" ]] && EXPLICIT_FILE="${FAKE}/liveness-explicit.conf"
+EXPLICIT_ALERT_EVERY="${LIVENESS_EXPLICIT_ALERT_EVERY:-86400}"
 HOOK_SCRIPT="${REPO_ROOT}/scripts/board-signer-ctl.sh"
 ENV_FILE=/etc/corporatetraveldc/dispatch.env; SECRETS_FILE=/etc/corporatetraveldc/dispatch-secrets.env
 OPERATOR="corporatetraveldc"
@@ -429,6 +437,30 @@ evaluate() {
 }
 
 is_inert() { [[ -f "${INERT_DIR}/$1" ]]; }
+explicit_only() {   # <name> -> 0 when the account is on the explicit-lockout list
+  [[ -f "$EXPLICIT_FILE" ]] || return 1
+  if [[ -z "$FAKE" ]]; then
+    local own mode; own=$(stat -c %u "$EXPLICIT_FILE" 2>/dev/null); mode=$(stat -c %a "$EXPLICIT_FILE" 2>/dev/null)
+    if [[ "$own" != 0 || -L "$EXPLICIT_FILE" ]] || (( (8#${mode:-777}) & 8#022 )); then
+      log warn "${EXPLICIT_FILE} is not root-owned 0644 or tighter -- ignored, normal policy applies"; return 1
+    fi
+  fi
+  awk -v u="$1" '$0 !~ /^[[:space:]]*(#|$)/ && $1 == u {f=1} END {exit !f}' "$EXPLICIT_FILE"
+}
+explicit_reason() {   # <name> <reason> -> 0 when the stale verdict comes from an explicit operator action
+  [[ -n "${KILL_READY[$1]:-}" ]] && return 0
+  case "$2" in "board signer deactivated"*|"account locked"|"account expired") return 0 ;; esac
+  return 1
+}
+explicit_alert() {   # <name> <reason>: one alert per account and reason per EXPLICIT_ALERT_EVERY seconds
+  local name="$1" reason="$2" d="${STATE_DIR}/explicit-alert" key last
+  key=$(printf '%s' "$reason" | sed -E 's/[0-9]+(\.[0-9]+)?d/Nd/g' | sha256sum | cut -c1-16)
+  last=$(awk -v k="$key" '$2==k {print $1}' "${d}/${name}" 2>/dev/null | tail -n1)
+  if [[ -z "$last" ]] || (( $(date +%s) - last >= EXPLICIT_ALERT_EVERY )); then
+    ntfy_send "team-liveness: ${name} needs attention (not locked out)" "${name} would have gone inert: ${reason}. It is on the explicit-lockout list, so nothing was changed. Fix the cause, or lock it out yourself." 4
+    mkdir -p "$d" && printf '%s %s\n' "$(date +%s)" "$key" >>"${d}/${name}"
+  fi
+}
 
 act() {  # privileged commands; in FAKE mode they are recorded, not run
   if [[ -n "$FAKE" ]]; then echo "$*" >>"${FAKE}/actions.log"; return 0; fi
@@ -651,11 +683,19 @@ for row in "${ROWS[@]}"; do
   [[ -n "$ONE" && "$name" != "$ONE" ]] && continue
   evaluate "$name" "$group"
   inert=no; is_inert "$name" && inert=YES
-  if (( STATUS )); then printf '%-20s %-12s %-8s %-7s %-9s %-6s %-40s %s\n' "$name" "$group" "$rkind" "$rmode" "$VERDICT" "$inert" "$DETAIL" "$REASON"; continue; fi
+  if (( STATUS )); then
+    st="$VERDICT"; [[ "$VERDICT" == stale ]] && explicit_only "$name" && ! explicit_reason "$name" "$REASON" && st=alert
+    printf '%-20s %-12s %-8s %-7s %-9s %-6s %-40s %s\n' "$name" "$group" "$rkind" "$rmode" "$st" "$inert" "$DETAIL" "$REASON"; continue
+  fi
   if [[ "$VERDICT" == preloaded ]]; then log info "${name} (${group}): preloaded -- skipped (${REASON})"; continue; fi
   if [[ "$VERDICT" == hold ]]; then log warn "${name} (${group}): HOLD -- ${REASON}"; HELD=$((HELD+1)); continue; fi
   if [[ "$VERDICT" == live ]]; then log info "${name} (${group}): live ${DETAIL}"; continue; fi
   if [[ "$inert" == YES ]]; then continue; fi
+  if explicit_only "$name" && ! explicit_reason "$name" "$REASON"; then
+    log warn "${name} (${group}): STALE but EXPLICIT-LOCKOUT ONLY -- alert, no inert (${REASON})"
+    (( EXECUTE )) && explicit_alert "$name" "$REASON"
+    rc=1; continue
+  fi
   if (( EXECUTE )); then
     if ! authorized "$name" inert; then
       log warn "${name} (${group}): STALE but HELD -- ${AUTH_WHY} (would make inert: ${REASON})"; AUTH_HELD=$((AUTH_HELD+1)); rc=1; continue

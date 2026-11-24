@@ -661,3 +661,124 @@ class Authority(unittest.TestCase):
     def test_dry_run_needs_no_authority(self):
         self.fr.account("bot1", "ctdc-agents"); self.offline()
         rc, out = self.fr.run(); self.assertIn("dry-run: would make inert", out); self.assertEqual(self.fr.actions(), "")
+
+
+class ExplicitLockout(unittest.TestCase):
+    """2026-11-24 (operator): accounts on the explicit-lockout list are made inert ONLY by an explicit operator
+    action (kill order, deactivated signer, locked/expired account); every automatic factor only alerts.
+    Cause: ctdc-agent-anthropic-claude-ea went inert 11-22 15:12Z the minute its refresh token lapsed."""
+
+    INERT = "var/lib/corporatetraveldc/team-liveness/inert/"
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory(); self.fr = FakeRoot(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def listed(self, *names):
+        (self.fr.root / "liveness-explicit.conf").write_text("# test list\n\n" + "".join(f"{n}\n" for n in names))
+
+    def run_exec(self):
+        return self.fr.run("--execute", "--i-am-the-operator")
+
+    def assert_not_inert(self, name="bot1"):
+        acts = self.fr.actions()
+        for needle in (f"chage -E 0 {name}", f"usermod -L {name}", f"terminate-user {name}", f"deactivate {name}", f"revoke-tokens {name}"):
+            self.assertNotIn(needle, acts)
+        self.assertFalse((self.fr.root / self.INERT / name).exists())
+
+    def assert_inert(self, name="bot1"):
+        self.assertIn(f"chage -E 0 {name}", self.fr.actions())
+        self.assertTrue((self.fr.root / self.INERT / name).exists())
+
+    # -- automatic factors only alert ------------------------------------------------
+    def test_listed_expired_refresh_token_alerts_not_inert(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        rc, out = self.run_exec()
+        self.assertIn("EXPLICIT-LOCKOUT ONLY", out); self.assertIn("refresh token expired", out)
+        self.assert_not_inert()
+        self.assertIn("ntfy 4 team-liveness: bot1 needs attention (not locked out)", self.fr.actions())
+        self.assertEqual(rc, 1)
+
+    def test_listed_stale_access_token_alerts_not_inert(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - 8 * DAY, NOW + 300 * DAY)
+        self.run_exec(); self.assert_not_inert()
+
+    def test_listed_token_revocation_alerts_not_inert(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW + 20 * 3600, NOW + 300 * DAY)
+        self.fr.revoked("bot1", NOW - 3600)
+        rc, out = self.run_exec(); self.assertIn("revoked", out); self.assert_not_inert()
+
+    def test_listed_human_idle_alerts_not_inert(self):
+        self.listed("ops1"); self.fr.account("ops1", "ctdc-ops", kind="human").keys("ops1", ["ops1@laptop"])
+        self.fr.last_login("ops1", NOW - 20 * DAY)
+        rc, out = self.run_exec(); self.assertIn("no login for", out); self.assert_not_inert("ops1")
+
+    def test_alert_is_sent_once_per_reason_per_day(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        self.run_exec(); self.run_exec(); self.run_exec()
+        self.assertEqual(self.fr.actions().count("needs attention (not locked out)"), 1)
+
+    def test_status_shows_alert_state(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        rc, out = self.fr.run("--status")
+        row = next(l for l in out.splitlines() if l.startswith("bot1"))
+        self.assertIn(" alert ", row); self.assertEqual(self.fr.actions(), "")
+
+    def test_dry_run_changes_nothing(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        rc, out = self.fr.run(); self.assertIn("EXPLICIT-LOCKOUT ONLY", out); self.assertEqual(self.fr.actions(), "")
+
+    # -- explicit operator actions still lock out -------------------------------------
+    def test_listed_deactivated_signer_is_inert(self):
+        self.listed("bot1"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW + 20 * 3600, NOW + 300 * DAY)
+        self.fr.signer("bot1", "inactive")
+        rc, out = self.run_exec(); self.assertIn("board signer deactivated", out); self.assert_inert()
+
+    def test_listed_locked_human_is_inert(self):
+        self.listed("ops1"); self.fr.account("ops1", "ctdc-ops", kind="human").keys("ops1", ["ops1@laptop"])
+        self.fr.last_login("ops1", NOW - DAY); (self.fr.root / "passwd-S" / "ops1").write_text("L")
+        rc, out = self.run_exec(); self.assertIn("account locked", out); self.assert_inert("ops1")
+
+    def test_listed_expired_human_is_inert(self):
+        self.listed("ops1"); self.fr.account("ops1", "ctdc-ops", kind="human").keys("ops1", ["ops1@laptop"])
+        self.fr.last_login("ops1", NOW - DAY); (self.fr.root / "expire" / "ops1").write_text("1970-01-02")
+        rc, out = self.run_exec(); self.assertIn("account expired", out); self.assert_inert("ops1")
+
+    # -- the list is scoped ---------------------------------------------------------
+    def test_unlisted_account_keeps_the_normal_policy(self):
+        self.listed("someone-else"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        self.run_exec(); self.assert_inert()
+
+    def test_no_list_file_keeps_the_normal_policy(self):
+        self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        self.run_exec(); self.assert_inert()
+
+    def test_commented_name_is_not_listed(self):
+        (self.fr.root / "liveness-explicit.conf").write_text("# bot1\n#bot1\n")
+        self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        self.run_exec(); self.assert_inert()
+
+    def test_prefix_of_a_listed_name_is_not_listed(self):
+        self.listed("bot10"); self.fr.account("bot1", "ctdc-agents").creds("bot1", NOW - DAY, NOW - 60)
+        self.run_exec(); self.assert_inert()
+
+
+class ExplicitLockoutKillOrder(KillOrders):
+    """A kill order is an explicit operator action: it still executes against a listed account."""
+
+    def test_admin_order_executes_against_listed_account(self):
+        (self.fr.root / "liveness-explicit.conf").write_text("bot1\n")
+        self.fr.issue("alice", "bot1", "rogue")
+        rc, out = self.fr.run("--execute", "--i-am-the-operator")
+        self.assertIn("kill order executed: alice", out)
+        self.assertTrue((self.fr.root / "var/lib/corporatetraveldc/team-liveness/inert/bot1").exists())
+
+
+class ExplicitLockoutConfig(unittest.TestCase):
+    def test_tracked_list_names_the_two_operator_approved_accounts(self):
+        p = pathlib.Path(__file__).resolve().parents[2] / "config" / "liveness-explicit.conf"
+        names = [l.split()[0] for l in p.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        self.assertEqual(sorted(names), ["corporatetraveldc", "ctdc-agent-anthropic-claude-ea"])
