@@ -165,7 +165,7 @@
     },
     "corporatetraveldc-semantic-compile-daily.service": {
       "kind": "container",
-      "timeout_s": 3600,
+      "timeout_s": 1800,
       "maintenance": false,
       "held_timer": false,
       "maintenance_mode": "none"

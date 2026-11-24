@@ -70,7 +70,7 @@ def test_live_schema_dump_has_lock_wait_timeout():
 def test_compile_wait_is_bounded_and_runs_before_the_canary():
     assert "corporatetraveldc-semantic-compile-daily.service" in SRC
     assert "corporatetraveldc-knowledge-graph-compile.service" in SRC
-    assert ': "${COMPILE_WAIT_MAX:=3600}"' in SRC
+    assert ': "${COMPILE_WAIT_MAX:=1800}"' in SRC
     assert 'systemctl --user is-active --quiet "${u}"' in SRC
     body = SRC[SRC.index("cmd_test() {"):]
     assert body.index("wait_for_compiles") < body.index('podman run "${run_args[@]}"')

@@ -70,7 +70,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # now waits (bounded, polling) while either unit is active and fails cleanly
 # at the bound; the live pg_dump itself gives up after PG_DUMP_LOCK_WAIT.
 : "${COMPILE_UNITS:=corporatetraveldc-semantic-compile-daily.service corporatetraveldc-knowledge-graph-compile.service}"
-: "${COMPILE_WAIT_MAX:=3600}"
+: "${COMPILE_WAIT_MAX:=1800}"
 : "${COMPILE_WAIT_POLL:=30}"
 : "${PG_DUMP_LOCK_WAIT:=120s}"
 

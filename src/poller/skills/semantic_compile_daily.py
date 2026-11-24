@@ -82,12 +82,6 @@ def main() -> int:
     unit's verdict. The run ledger row (semantic_compile_runs, ok=false) is
     written by compile_layer() itself."""
     import json as _json
-    # 2026-11-24: nothing configured logging here, so the root logger stayed at
-    # WARNING and compile_layer()'s "semantic compile: phase=..." INFO lines never
-    # reached the journal; only errors did. Without them a timeout could not be
-    # attributed to a phase.
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     result = run()
     print(_json.dumps(result, indent=2, default=str))
     return 0 if result.get("status") == "ok" else 1

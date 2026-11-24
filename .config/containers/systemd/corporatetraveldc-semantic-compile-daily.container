@@ -74,14 +74,4 @@ Type=oneshot
 # If this starts timing out again, investigate what it is BLOCKED on before
 # raising it further -- a 48s-CPU/371s-wall ratio means waiting, and a bigger
 # number only hides that.
-#
-# 2026-11-24: raised to 3600s, with the blocking question still open. Measured
-# from semantic_compile_runs (seq 132-171, 11-13 to 11-23): the 07:52Z run takes
-# 9-12 min on 8 of the 9 days (22 min on 11-22), while the 11:02, 17:02 and 23:02Z runs grew from 15-20 min
-# to 24-31 min over the same ten days as concepts grew only 6% (145k -> 155k).
-# Runs at 1803s and 1862s committed (ok=true) and were then killed, so systemd
-# reported a failure for a compile whose result had landed. The time-of-day
-# spread says contention with the jobs around those slots, not compute; the
-# same change turns on the compile's own phase=... log lines so the next runs
-# show which phase waits. Revisit once a week of phase timings exists.
-TimeoutStartSec=3600
+TimeoutStartSec=1800
