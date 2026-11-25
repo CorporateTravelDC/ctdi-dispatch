@@ -66,6 +66,17 @@ CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
 # connections, 502/422); rclone's default 4 transfers turned a few GB into hours of whole-segment
 # retries, while the same upload one file at a time finished clean in ~20 min the same day.
 RCLONE_TRANSFERS="$(setting BACKUP_RCLONE_TRANSFERS 1)"
+# 2026-11-25 (operator): the off-box sync uses Proton's official Drive CLI through scripts/backup/proton_sync.py.
+# rclone's protondrive backend (reverse-engineered) crawled at 55-66 KiB/s and failed on Proton's drafts (404
+# Code=2501) every night from 11-22; the CLI moved the same data at 1.4-2.7 MiB/s in the 11-25 test. rclone stays
+# for the METERED hotspot (only rclone takes the live 2 Mbps cap) and as BACKUP_SYNC_TOOL=rclone. The CLI binary
+# is pinned by SHA-512 and its session is kept only as a systemd-creds --user blob (scripts/backup/proton_session.sh).
+SYNC_TOOL="$(setting BACKUP_SYNC_TOOL proton-cli)"
+PROTON_CLI="$(setting BACKUP_PROTON_CLI "${HOME}/proton-drive-cli/proton-drive")"
+PROTON_CLI_SHA512="$(setting BACKUP_PROTON_CLI_SHA512 c8d5a6b174e57f06d05cb5483400b9963faf58e743b6b33706bb73ecff718047ffce6b439994255b94b5b226b90d2e91bef7418ec96c1c3f5d8bf39b6cd01321)"
+PROTON_REMOTE="$(setting BACKUP_PROTON_REMOTE /my-files/ctdi-backup)"
+PROTON_SESSION="$(setting BACKUP_PROTON_SESSION "${STATE}/proton-session.cred")"
+PROTON_MAX_HOURS="$(setting BACKUP_PROTON_MAX_HOURS 6)"
 WORK="$(setting BACKUP_WORK_DIR "$STATE")"
 REQUIRE_MOUNT="$(setting BACKUP_REQUIRE_MOUNT '')"
 # 2026-10-12 (operator): off-box sync caps from the measured uplink ramp -- soft 2.5 MB/s (rclone's own
@@ -102,6 +113,7 @@ private_dir "$(dirname "$PASSFILE")"
 private_dir "$BACKUP_REPO"
 if [[ -n "$BACKUP_TARGET" ]]; then
   private_file "$RCLONE_CONFIG"; private_dir "$(dirname "$RCLONE_CONFIG")"; private_file "$RCLONE_PASS_FILE"
+  private_file "$PROTON_SESSION"
   if [[ -r "$RCLONE_PASS_FILE" ]]; then
     export RCLONE_PASSWORD_COMMAND="cat ${RCLONE_PASS_FILE}"
   elif head -n 1 "$RCLONE_CONFIG" 2>/dev/null | grep -q '^# Encrypted rclone configuration'; then
@@ -125,7 +137,7 @@ done < <(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'stage.*' -mmin +"$S
 # 2026-10-12: a dry run exits HERE -- before any dump, ledger write or CUI rotation. It used to run both
 # Postgres dumps (~35 min) and append a cui-stamp before exiting.
 if [[ "$DRY" == 1 ]]; then
-  log "dry run: would dump dispatch + Nextcloud Postgres, archive to $BACKUP_REPO, sync to '${BACKUP_TARGET:-<local only>}' (soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
+  log "dry run: would dump dispatch + Nextcloud Postgres, archive to $BACKUP_REPO, sync to '${BACKUP_TARGET:-<local only>}' with ${SYNC_TOOL} (${PROTON_REMOTE} for proton-cli; soft ${BW_SOFT} MB/s, hard ${BW_HARD} MB/s on ${BW_IFACE})"
   exit 0
 fi
 # 2026-11-18: the stage-space preflight runs BEFORE waiting for the heavy-work turn, so a run that
@@ -336,11 +348,50 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" && "$SYNC_GATE" == 1 ]]; then
     log "$($SYNC_GATE_CMD request --target "$BACKUP_TARGET" </dev/null 2>&1 || echo 'could not request a new signature')"
   fi
 fi
+SYNC_VIA_RCLONE=0
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
-  command -v rclone >/dev/null || die "rclone is not installed (dnf install rclone)"
   # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
   for _ in $(seq 1 90); do systemctl --user is-active -q corporatetraveldc-proton-seed.service || break; log "seed upload still running; waiting"; sleep 60; done
   systemctl --user is-active -q corporatetraveldc-proton-seed.service && die "seed upload still running after 90 min; sync skipped"
+  SYNC_VIA_RCLONE=1
+  if [[ "$SYNC_TOOL" == proton-cli ]]; then
+    if uplink_is_metered; then
+      log "uplink is METERED ($(uplink_default_iface)): the Proton CLI has no live rate cap, so this sync uses rclone at the metered cap"
+    else
+      SYNC_VIA_RCLONE=0
+      phase "4/4 sync to Proton Drive ${PROTON_REMOTE} (official CLI)"
+      stop_args=(); for m in $(uplink_metered_ifaces); do stop_args+=(--stop-if-iface "$m"); done
+      pdir="/run/user/$(id -u)/ctdc-proton.$$"
+      plog="${STATE}/proton-sync.last.log"
+      set +e
+      bash "$(dirname "$0")/proton_session.sh" open "$PROTON_SESSION" "$pdir"; prc=$?
+      if (( prc == 0 )); then
+        log "sync repository -> ${PROTON_REMOTE} (average capped at ${BW_SOFT} MB/s; up to ${PROTON_MAX_HOURS} h)"
+        podman unshare env PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file PROTON_DRIVE_CACHE_DIR="$pdir" \
+          python3 "$(dirname "$0")/proton_sync.py" --repo "$BACKUP_REPO" --remote "$PROTON_REMOTE" \
+            --cli "$PROTON_CLI" --cli-sha512 "$PROTON_CLI_SHA512" --avg-cap-mb "$BW_SOFT" \
+            --max-hours "$PROTON_MAX_HOURS" "${stop_args[@]}" </dev/null 2>&1 | tee "$plog"
+        prc=${PIPESTATUS[0]}
+        # the CLI refreshes its session while it works: always keep the refreshed one
+        bash "$(dirname "$0")/proton_session.sh" save "$PROTON_SESSION" "$pdir" \
+          || { log "WARNING: could not save the refreshed Proton session; the next run may need a new sign-in"; bash "$(dirname "$0")/proton_session.sh" wipe "$pdir"; }
+        sum_json="$(tail -n 1 "$plog")"
+      else
+        prc=3; sum_json='{"error": "no usable Proton session (sign in with the push relay)"}'
+      fi
+      set -e
+      [[ "$sum_json" == \{*\} ]] || sum_json=null
+      case "$prc" in
+        0) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": true, \"proton_sync\": ${sum_json}}" >/dev/null ;;
+        5) log "the uplink turned metered during the sync; finishing with rclone at the metered cap"; SYNC_VIA_RCLONE=1 ;;
+        *) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": false, \"exit\": ${prc}, \"proton_sync\": ${sum_json}}" >/dev/null
+           die "sync to ${PROTON_REMOTE} failed (proton_sync exit ${prc}: 4 = stall or time budget, 3 = refused; the local archive is complete, the next run resumes)" ;;
+      esac
+    fi
+  fi
+fi
+if [[ "$SYNC_VIA_RCLONE" == 1 ]]; then
+  command -v rclone >/dev/null || die "rclone is not installed (dnf install rclone)"
   phase "4/4 sync to ${BACKUP_TARGET}"
   log "sync repository -> ${BACKUP_TARGET} (primary soft ${BW_SOFT} / hard ${BW_HARD} MB/s on ${BW_IFACE}; metered soft ${BW_M_SOFT} / hard ${BW_M_HARD} MB/s)"
   # 2026-10-14: a sync the rate guard stops for a STALL (no bytes moved for 20 min) is retried

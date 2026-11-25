@@ -305,6 +305,33 @@ its profile held no sign-in.
 
 
 
+## Off-box sync with Proton's official Drive CLI (2026-11-25, operator)
+
+The nightly sync now uses Proton's official Drive CLI (0.9.0, linux-arm64, SHA-512 pinned in
+`BACKUP_PROTON_CLI_SHA512`) through `scripts/backup/proton_sync.py`, not rclone. rclone's protondrive backend is
+reverse-engineered: from 11-22 it crawled at 55-66 KiB/s and failed on Proton's drafts (`404 Code=2501`) every
+night, while the CLI moved the same data at 1.4-2.7 MiB/s in the 11-25 test and recovered cleanly from an
+interrupted upload.
+
+- **One pass, safe to rerun:** the remote copy is listed, and every local Borg file missing there or differing in
+  size is uploaded, one at a time: `data/` segments first, then `index.*`, `hints.*`, `integrity.*`, `config`,
+  `nonce` and `README`, so a pass that stops early leaves the previous consistent state plus extra segments.
+  Remote files compacted away locally go to the Proton trash only after a complete pass, capped at 200, and never
+  when the local listing is under 90% of the remote one. Lock files are never copied.
+- **Caps:** the CLI has no rate limit, so the average is held at `BACKUP_BWLIMIT_SOFT_MB` by waiting between
+  files (bursts within one file run at link speed). On the metered hotspot the sync uses rclone and its live
+  2 Mbps cap, as before; an uplink that turns metered mid-sync stops the CLI (exit 5) and rclone finishes.
+- **Session:** signed in once in a browser (an incognito tab: a Proton app session gives `ClientID and app
+  mismatch`). The session exists only as a `systemd-creds --user` blob (`BACKUP_PROTON_SESSION`, default
+  `~/.local/state/ctdc-backup/proton-session.cred`), opened into a fresh 0700 folder under `/run/user` for each
+  run and re-encrypted afterwards, because the CLI refreshes it as it works (`scripts/backup/proton_session.sh`).
+- **Exit codes:** 0 complete; 4 stall (no file finished for 20 min) or time budget (`BACKUP_PROTON_MAX_HOURS`,
+  6); 5 uplink turned metered; 3 refused (binary mismatch, no session, listing failed, remote folder missing).
+  The ledger's `sync` entry carries `tool` and the tool's summary.
+- **Settings:** `BACKUP_SYNC_TOOL` (`proton-cli` default, `rclone`), `BACKUP_PROTON_CLI`,
+  `BACKUP_PROTON_CLI_SHA512`, `BACKUP_PROTON_REMOTE` (`/my-files/ctdi-backup`, the folder rclone's
+  `proton:ctdi-backup` wrote), `BACKUP_PROTON_SESSION`, `BACKUP_PROTON_MAX_HOURS`.
+
 ## Off-box target: Proton Drive (live 2026-10-12)
 
 - `BACKUP_TARGET=proton:ctdi-backup`. Proton only ever receives Borg-encrypted chunks; LADD table data stays on
