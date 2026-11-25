@@ -69,6 +69,11 @@ class Fake:
             env["SKILL_GRANTS_FAKE_ROOT_UID"] = str(root_uid)
         buf = io.StringIO()
         with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(buf):
+            # 2026-11-25: common.config copies the live dispatch.env into os.environ (conftest imports it), and the
+            # process environment wins over the fixture's dispatch.env -- so on the operator's account the real
+            # CTDC_SKILLS_DISABLED leaked into every apply (6 failures in the 11-25 skill relay; same class as the
+            # 10-24 SWIM_STORAGE_SCOPE leak). Each run sees only the fixture's file; patch.dict restores it after.
+            os.environ.pop(sg.DISABLED_ENV, None)
             rc = sg.main(["--repo", str(self.repo), "--checkout", "/repo", *args])
         return rc, buf.getvalue()
 

@@ -39,12 +39,14 @@ the bridge back up for one-off analysis.
 ```bash
 MCP_REPO=/opt/corporatetraveldc/public/agentic-management-tooling-mcp
 cd "$MCP_REPO"
-"$MCP_REPO/.venv/bin/python3" -c "
+# a heredoc or a script file, never `python3 -c` (platform rule); a script that must read stdin goes in a file
+"$MCP_REPO/.venv/bin/python3" - <<'PY'
 import sys; sys.path.insert(0, '.')
 from gig_mobility.gig_analysis import gig_normalize_export, gig_revenue_analysis, gig_cluster_analysis, gig_availability_heatmap
+from gig_mobility import uber_driver, uber_report      # Uber driver exports: see Step 2a
 from intelligence.linkedin_analysis import linkedin_network_breakdown, linkedin_content_analysis, linkedin_engagement_patterns
 # ... call directly
-"
+PY
 ```
 
 The venv already has the toolkit's dependencies (`mcp`, `httpx`,
@@ -59,7 +61,7 @@ Raw and normalised exports are kept for longitudinal analysis at
 (operator-only 0700; `current/` is a symlink to the newest). They NEVER go to
 the vault -- Uber trip data carries pickup/drop-off addresses. After
 normalising in the scratchpad, copy the raw archive + normalised CSV there
-and repoint `current/`. Longitudinal runs read every `history/` directory.
+(for Uber also `results.json` and `census.json`, Step 2a) and repoint `current/`. Longitudinal runs read every `history/` directory.
 
 Vault gets syntheses only, same shape for each platform:
 `04-Syntheses/personal-uber-exports/CURRENT.md` (stable address Cowork reads)
@@ -125,6 +127,60 @@ not guaranteed forward-compatible.
    back silently empty `{}` despite thousands of real dated rows. Fixed
    by adding `"%Y-%m-%d %H:%M:%S"` to `_DATE_FORMATS`, kept first so a
    full timestamp matches before the bare-date fallbacks.
+
+## Step 2a -- Uber driver exports: census first, then the whole pipeline (2026-11-25)
+
+Operator 2026-11-25: every Uber export gets the SAME run, so each report is comparable with the last (the
+longitudinal archive) and a change in Uber's own formats is detected instead of silently skewing a number.
+Never hand-roll an analysis script for an Uber export. If something is missing, add it to the toolkit module
+(with a test) and run it from there.
+
+1. **One call** (toolkit `gig_mobility/uber_report.py`; the analyses are in `gig_mobility/uber_driver.py`):
+
+   ```python
+   from gig_mobility import uber_report as ur
+   res  = ur.uber_run_all(ZIP, SCRATCH + "/work", since=SINCE)   # SINCE: ISO date of the windowed view
+   note = ur.uber_synthesis_markdown(res, EXPORT_DATE, TOOLKIT_REV, previous_fingerprint=PREV)
+   ```
+
+   `uber_run_all` extracts only into the scratch `work/` folder (delete it afterwards) and runs, in order: the
+   format fingerprint and the full **census** (every file, every column: fill rate, distinct count, type, range,
+   value counts); `gig_normalize_export` plus revenue / day / hour / heatmap on the driver trip file;
+   cancellations (by pickup ETA, hour, day, product, offer type, airport, surge, upfront-fare band, month) and the
+   driver's own cancellations; re-offered jobs (a cancelled request followed by a matching one); completed trips
+   that still carry a cancellation code (likely re-dispatched); upfront fare not honoured, by month; weekly
+   statements against upfront fares; online hours and utilisation; ratings; offer events from the app analytics
+   (event columns only); tip notices and quoted ratings from Uber's messages; payment-method types. `SINCE`
+   defaults to the first day of the third month back, unless the operator names a date (11-25: "explicitly since
+   September 1"). It refuses to run `gig_normalize_export` on a trip file with coordinates unless
+   `geocode=True` is passed after the Step 3 consent question.
+2. **Format comparison.** `PREV` is the previous export's fingerprint, from the longitudinal store
+   (`history/<previous-date>/results.json`, key `fingerprint`). The note's section 2 then lists every file and
+   column Uber added or removed. With no previous entry, the note says this one is the baseline.
+3. **What is masked.** Card data only (operator 2026-11-25): `card_number`, `card_bin` (the BIN is the number's
+   first six digits) and any expiry or CVV column. Card type, brand, bank, profile type and dates stay. The
+   census file keeps every other value and lives ONLY in the operator-only longitudinal store. The vault note, a
+   transcript or a report page carries no identity value (name, email, phone, date of birth, plate, addresses,
+   coordinates, device ids, IP addresses), because each of those leaves the box and passes the scrub gate.
+   Message bodies and support-ticket text are never returned: only their length, topic counts per month, the tip
+   amounts notices state and the rating values they quote.
+4. **Facts of the 2026-11-25 export** (re-check each run; the census shows them):
+   - the toolkit's `fare_usd` is `original_fare_usd`, what the RIDER was charged; driver pay is the weekly
+     statements, which `gig_normalize_export` does not read;
+   - the driver side has no per-trip tip column; the only tip source is Uber's notices, and the message file
+     covers about the last month only;
+   - the ratings file is one undated column; the profile's `app_rating` is the current figure;
+   - cancelled requests carry no distance and most lose their upfront fare (the "no upfront fare" bucket is a
+     recording effect, not a cause);
+   - `driver_online_offline` `*_local` columns carry a literal `Z` although they are local wall-clock time;
+   - the app analytics file spans about one month and holds GPS, IMEI, IP and advertising-id columns: read only
+     its time and event columns;
+   - no card numbers were present; the payment methods were two rider-side profiles.
+5. **Outputs.** The vault note (`note`; again with `mirror=True` for CURRENT.md) and, for the longitudinal
+   store, the raw ZIP, `normalized.csv`, `results.json` (everything `uber_run_all` returns except the census and
+   the normalised records) and `census.json`.
+6. **Tests.** The toolkit venv has no pytest; run `tests/test_uber_driver.py` with the venv interpreter and the
+   system pytest on `PYTHONPATH`. The tests use synthetic exports only.
 
 ## Step 3 -- consent gates, ask every time, never assume
 
