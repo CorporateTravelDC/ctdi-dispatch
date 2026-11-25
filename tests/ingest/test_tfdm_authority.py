@@ -210,3 +210,57 @@ def test_push_names_the_kind_of_off_block_time(world):
     miss = [h for h in world["hits"] if h[2]["watchlist_trigger"] == "fdps_plan_missing_predeparture"][0]
     assert "initial off-block 18:30Z (13:30 ET)" in miss[1]
     assert ta.off_block_source(_rec()) == (fi.to_epoch("2026-11-18T18:30:00Z"), "scheduled")
+
+
+# 2026-11-24: FIXM Core aircraft/@aircraftAddress ([VERIFY]: not in the TTP documents, never seen live).
+# SYNTHETIC addresses; the registries resolve tail <-> hex, the record's own address never binds alone.
+
+def _with_address(addr, reg=True):
+    attrs = (f'registration="NQ0001" ' if reg else "") + f'aircraftAddress="{addr}"'
+    xml = SYNTH_XML.replace('<fx:aircraft registration="NQ0001"/>', f"<fx:aircraft {attrs}/>")
+    return tp.parse_ttp_message(xml.encode(), {"DATA_GROUP": "FlightData"})["flights"][0]
+
+
+@pytest.mark.parametrize("raw,want", [("ABC123", "abc123"), (format(0xABC123, "024b"), "abc123"),
+                                      ("000000", None), ("XYZ123", None), ("abc12", None), (None, None)])
+def test_aircraft_address_forms(raw, want):
+    assert tp.aircraft_address(raw) == want
+
+
+def test_parser_reads_aircraft_address():
+    assert _with_address("ABC123")["aircraft_address"] == "abc123"
+    assert _rec()["aircraft_address"] is None
+
+
+def test_address_agreeing_with_the_registry_binds(world):
+    assert ta.bind_identity(_entry(), _with_address("ABC123"), DAY) == "bound"
+    assert world["binds"] == [("wl-flight-zzz4006-20261118", "abc123", "NQ0001", "tfdm")]
+
+
+def test_address_contradicting_the_registry_blocks(world):
+    assert ta.bind_identity(_entry(), _with_address("DEF456"), DAY) == "conflicting"
+    assert world["binds"] == [] and world["hits"][0][2]["state"] == "tfdm_registry_conflict"
+
+
+@pytest.fixture
+def by_hex(world, monkeypatch):
+    from common import db
+    rev = {"faa": {"abc123": "Q0001"}, "osk": {}}          # FAA stores the N-number without its N
+    monkeypatch.setattr(db, "faa_lookup_by_hex",
+                        lambda h: {"n_number": rev["faa"][h]} if h in rev["faa"] else None)
+    monkeypatch.setattr(db, "opensky_lookup_by_hex",
+                        lambda h: {"registration": rev["osk"][h]} if h in rev["osk"] else None)
+    return rev
+
+
+def test_address_only_binds_through_the_registry(world, by_hex):
+    assert ta.bind_identity(_entry(), _with_address("ABC123", reg=False), DAY) == "bound"
+    assert world["binds"] == [("wl-flight-zzz4006-20261118", "abc123", "NQ0001", "tfdm")]
+
+
+def test_address_only_unknown_or_conflicting_registry_does_not_bind(world, by_hex):
+    by_hex["osk"]["abc123"] = "NQ0009"
+    assert ta.bind_identity(_entry(), _with_address("ABC123", reg=False), DAY) == "conflicting"
+    by_hex["faa"].clear()
+    assert ta.bind_identity(_entry(), _with_address("ABC123", reg=False), DAY) == "registry_unknown"
+    assert world["binds"] == []

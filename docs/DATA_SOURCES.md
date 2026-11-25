@@ -241,6 +241,17 @@ days after it is disabled. A connected, draining consumer is the action.
   (`common.tfdm_authority`). TTP carries no ICAO 24-bit address, so the hex comes
   from the registry. After OFF the FDPS/TBFM/TFMS order is unchanged. Still no
   time, status or OOOI phase from TTP.
+- **2026-11-24 additions (operator-approved follow-ups):** the arrival stand is
+  stored as the arrival gate (`swim_tfdm`, tier 40) for DC arrivals and watched
+  legs, but only when the destination aerodrome itself published the record (JMS
+  header `AERODROME` agrees with the destination); a far-end stand, or a message
+  without `AERODROME`, is not stored. The destination is also read from
+  `arrival/@destinationPointText` (the live shape). FIXM Core's
+  `aircraft/@aircraftAddress` ([VERIFY]: not in the TTP documents, never seen
+  live) is read as a cross-check only: an address the registry contradicts blocks
+  the bind as "conflicting"; with no registration on the record, the address binds
+  only when the FAA registry gives its registration and OpenSky does not disagree.
+  The record's registration and address now also feed the gate store's LADD check.
 - **Pre-departure alerts (watched legs, parity gate):** no FDPS plan yet while
   TFDM has the flight (shares the poller guard's `fdps_plan_missing_predeparture`
   slot, so one push); TMI identifiers on the departure (`tfdm_tmi`); an APREQ
@@ -251,10 +262,12 @@ days after it is disabled. A connected, draining consumer is the action.
 - **Fields read** (NASA ATD-2 "TTP Flight Data Messages", NTRS 20180007226, FIXM
   table): AircraftRegistrationMark, EramGufi, Scheduled/Initial/Earliest/Actual
   off-block, EstimatedTimeOfDeparture, ActualTakeOffTime, TOBT,
-  ApprovalRequestReleaseTime, TmiIdentifiers. Not documented, not read: ICAO24,
-  aircraft type, EDCT, CDR. LADD-listed legs are dropped
+  ApprovalRequestReleaseTime, TmiIdentifiers. Not documented, not read: ~~ICAO24,~~
+  (2026-11-24: read from FIXM Core as above, [VERIFY]) aircraft type, EDCT, CDR.
+  LADD-listed legs are dropped
   by `gate_assignments.record()` before storage, as for every source.
-  Arrival stands, delays, TMIs and airport information: counted, future work.
+  ~~Arrival stands,~~ (2026-11-24: stored, above) Delays, TMIs and airport
+  information: counted, future work.
 - **Health:** `push:tfdm` is in `ingest.failover.OPTIONAL_FEEDS` (gate
   enrichment, like FIDS): its silence never turns `/healthz` degraded.
   Bandwidth priority `weather` pauses it (low-priority tier). The thermal

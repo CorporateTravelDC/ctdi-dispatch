@@ -21,6 +21,10 @@ What this module does, for WATCHED legs only, from one TTP Flight Data record
        OpenSky registry, if it knows the registration, gives the same hex. A disagreement is
        "conflicting": nothing binds and one push says so.
    The TTP documents carry no ICAO 24-bit address, so the hex always comes from the registry.
+   2026-11-24: if a record does carry FIXM Core's aircraft/@aircraftAddress ([VERIFY], never seen
+   live), it is a cross-check only: an address the registry contradicts is "conflicting" (no
+   bind); a record with an address and no registration binds only when the registries give the
+   registration for that hex (registry_registration, FAA required, OpenSky must not disagree).
    A watch that already has a tail is never repointed here; after OFF the FDPS/TBFM/TFMS order is
    unchanged (flight_instance.AUTHORITATIVE_TAIL_SOURCES lists "tfdm" for this path only).
    LADD: the confirmation push withholds the identifier exactly as shared.pending_identity does.
@@ -143,6 +147,51 @@ def registry_hex(registration: str) -> tuple[str | None, str]:
     return faa, "agree"
 
 
+def _norm_reg(r: str | None) -> str:
+    return (r or "").upper().replace("-", "").strip()
+
+
+def registry_registration(hex_id: str) -> tuple[str | None, str]:
+    """(registration, verdict) for an ICAO 24-bit address, the reverse of registry_hex: the FAA
+    registry's N-number for the hex (stored without its leading N), cross-checked against
+    OpenSky's registration when OpenSky knows the hex. Same verdicts as registry_hex."""
+    from common import db
+    faa = osk = None
+    try:
+        n = ((db.faa_lookup_by_hex(hex_id) or {}).get("n_number") or "").upper().strip()
+        faa = (n if n.startswith("N") else "N" + n) if n else None
+    except Exception as e:
+        log.debug("tfdm: FAA registry by hex: %s", type(e).__name__)
+    try:
+        osk = (db.opensky_lookup_by_hex(hex_id) or {}).get("registration")
+    except Exception as e:
+        log.debug("tfdm: OpenSky registry by hex: %s", type(e).__name__)
+    if not faa:
+        return None, "unknown"
+    if osk and _norm_reg(osk) != _norm_reg(faa):
+        return None, "conflicting"
+    return faa, "agree"
+
+
+def resolve_record_identity(rec: dict) -> tuple[str | None, str | None, str]:
+    """(hex, registration, verdict) for one TTP record, through the registries only.
+    The registration is the tail (registry_hex). The record's own ICAO 24-bit address
+    (aircraft/@aircraftAddress, [VERIFY]: FIXM Core, not in the TTP documents) never binds by
+    itself: with a registration it is a cross-check (an address the registry contradicts is
+    'conflicting'); without one, the registries must give the registration for it
+    (registry_registration)."""
+    reg, addr = rec.get("registration"), rec.get("aircraft_address")
+    if reg:
+        hx, verdict = registry_hex(reg)
+        if verdict == "agree" and addr and addr != hx:
+            return None, None, "conflicting"
+        return hx, (reg if hx else None), verdict
+    if addr:
+        reg, verdict = registry_registration(addr)
+        return (addr if reg else None), reg, verdict
+    return None, None, "no_identity"
+
+
 def _watched(now: float) -> dict[str, list[dict]]:
     """callsign -> flight watch entries answering to it (identifier, codeshare both ways and the
     regional partners: common.fdps_predeparture.candidate_identities). Cached 60 s, so a feed that
@@ -176,18 +225,17 @@ def bind_identity(entry: dict, rec: dict, now: float | None = None) -> str:
     from common import db
     if entry.get("hex_id") or entry.get("registration"):
         return "already_identified"
-    reg = rec.get("registration")
-    if not reg:
+    if not rec.get("registration") and not rec.get("aircraft_address"):
         return "no_registration"
     if airborne(entry, rec):
         return "airborne"
     why = same_occurrence(entry, rec, now)
     if why:
         return why
-    hx, verdict = registry_hex(reg)
+    hx, reg, verdict = resolve_record_identity(rec)
     if verdict == "conflicting":
-        _hit(entry, f"{entry.get('identifier')}: TFDM tail does not match the registries (FAA vs OpenSky); "
-                    f"not bound, still awaiting tail",
+        _hit(entry, f"{entry.get('identifier')}: TFDM aircraft does not match the registries "
+                    f"(FAA, OpenSky, TFDM address); not bound, still awaiting tail",
              {"watchlist_trigger": "identity_mismatch_reg", "state": "tfdm_registry_conflict"}, 4)
         return "conflicting"
     if not hx:

@@ -81,7 +81,7 @@ def test_unparseable_or_header_only_messages_never_raise(payload):
 def test_other_data_groups_are_counted_not_parsed(monkeypatch):
     tp.reset_counts()
     called = []
-    monkeypatch.setattr(tp, "record_departure_stands", lambda parsed: called.append(parsed) or 0)
+    monkeypatch.setattr(tp, "record_stands", lambda parsed: called.append(parsed) or 0)
     assert tp.handle(SYNTH_DELAY, {"DATA_GROUP": "FlightDelay", "MESSAGE_TYPE": "DelayUpdate"}) is False
     assert tp.handle(b"", {"DATA_GROUP": "FlightData", "MESSAGE_TYPE": "PeriodicStart"}) is False
     assert called == []
@@ -102,6 +102,9 @@ def captured(monkeypatch):
     monkeypatch.setattr(ga, "record", fake_record)
     monkeypatch.setattr(ga, "tdes_leg",
                         lambda cs, ap, dest, t: (ga.make_key("QQQ", "123", ap, dest, time.time()), "route_date"))
+    # an arrival stand needs exactly one known instance of the route (arrival_leg); the fixture provides it
+    monkeypatch.setattr(ga, "arrival_leg",
+                        lambda cs, ap, dest, now=None: ga.make_key("QQQ", "123", ap, dest, time.time()))
     from ingest.parsers import smes_parser
     monkeypatch.setattr(smes_parser, "_match_watchlist_flight", lambda rec: None)
     return seen, smes_parser
@@ -151,6 +154,100 @@ def test_gate_store_failure_is_swallowed(monkeypatch):
 def test_swim_tfdm_is_a_tier_40_gate_source():
     from common import gate_assignments as ga
     assert ga.SOURCE_TIERS["swim_tfdm"] == 40 == ga.SOURCE_TIERS["swim_tdes"]
+
+
+# ── 2026-11-24: arrival stand -> arrival gate, destination aerodrome's own publication only ──
+
+# SYNTHETIC, the live shape (destination on <arrival>), a KCLT -> KDCA arrival published by KDCA.
+SYNTH_ARRIVAL = b"""<nas:NasMessage xmlns:nas="http://www.faa.aero/nas/4.1" xmlns:fx="http://www.fixm.aero/flight/4.0">
+ <nas:flight>
+  <fx:aircraft/>
+  <fx:arrival destinationPointText="KDCA"><nas:standInformation standName="D7"/></fx:arrival>
+  <fx:departure departurePointText="KCLT">
+   <nas:offBlockTime><nas:scheduled>2030-01-02T13:00:00.000Z</nas:scheduled></nas:offBlockTime>
+  </fx:departure>
+  <nas:flightIdentification aircraftIdentification="QQQ456"><nas:tfdmId>SYNTH.QQQ4.CLT.DCA.0002</nas:tfdmId></nas:flightIdentification>
+ </nas:flight>
+ <nas:metadata messageType="FlightUpdate"/>
+</nas:NasMessage>"""
+H_DCA = {"DATA_GROUP": "FlightData", "MESSAGE_TYPE": "FlightUpdate", "AERODROME": "KDCA"}
+
+
+def test_arrival_shape_parses_destination_from_arrival_element():
+    (f,) = tp.parse_ttp_message(SYNTH_ARRIVAL, H_DCA)["flights"]
+    assert f["destination_airport"] == "KDCA" and f["arrival_stand"] == "D7"
+    assert f["departure_stand"] is None and f["aerodrome"] == "KDCA"
+
+
+def test_dc_arrival_stand_from_the_destination_is_arrival_gate_evidence(captured):
+    seen, _ = captured
+    assert tp.handle(SYNTH_ARRIVAL, H_DCA) is True
+    (o,) = seen
+    assert (o.source, o.side, o.field, o.value_raw, o.airport) == ("swim_tfdm", "arrival", "gate", "D7", "KDCA")
+    assert o.evidence_type == "assignment_msg" and o.confidence >= 0.8
+    assert o.event_key == "KDCA|QQQ456|SYNTH.QQQ4.CLT.DCA.0002"
+
+
+@pytest.mark.parametrize("hdr", [{"AERODROME": "KCLT"}, {}])
+def test_arrival_stand_not_published_by_the_destination_is_not_recorded(captured, hdr):
+    """Another aerodrome's idea of the far-end stand, or no AERODROME header at all: fail closed
+    (tier 40 would otherwise outrank an observed ACARS arrival gate)."""
+    seen, _ = captured
+    assert tp.handle(SYNTH_ARRIVAL, {"DATA_GROUP": "FlightData", **hdr}) is False
+    assert seen == []
+
+
+def test_departure_publication_never_records_the_far_end_stand(captured):
+    seen, _ = captured
+    tp.handle(SYNTH_FLIGHT_ADD, {"DATA_GROUP": "FlightData", "AERODROME": "KDCA"})
+    assert [(o.side, o.value_raw) for o in seen] == [("departure", "C35")]      # not KORD's B9
+
+
+def test_non_dc_arrival_needs_a_watch(captured, monkeypatch):
+    seen, sp = captured
+    other = SYNTH_ARRIVAL.replace(b'destinationPointText="KDCA"', b'destinationPointText="KORD"')
+    hdr = {"DATA_GROUP": "FlightData", "AERODROME": "KORD"}
+    assert tp.handle(other, hdr) is False and seen == []
+    monkeypatch.setattr(sp, "_match_watchlist_flight", lambda rec: {"id": "wl-synth"})
+    assert tp.handle(other, hdr) is True and seen[0].side == "arrival" and seen[0].airport == "KORD"
+
+
+def test_both_stands_go_in_one_leg_record(captured):
+    seen, _ = captured
+    both = SYNTH_FLIGHT_ADD.replace(b'departurePointText="KDCA"', b'departurePointText="KBWI"') \
+                           .replace(b'destinationPointText="KORD"', b'destinationPointText="KDCA"')
+    assert tp.handle(both, {"DATA_GROUP": "FlightData", "AERODROME": "DCA"}) is True    # 3-letter header agrees
+    assert sorted((o.side, o.value_raw) for o in seen) == [("arrival", "B9"), ("departure", "C35")]
+    assert len({str(o.key) for o in seen}) == 1
+
+
+def test_record_tfdm_passes_registration_and_address_to_the_ladd_check(monkeypatch):
+    from common import gate_assignments as ga
+    got = {}
+    monkeypatch.setattr(ga, "tdes_leg",
+                        lambda cs, ap, dest, t: (ga.make_key("QQQ", "456", ap, dest, time.time()), "route_date"))
+    monkeypatch.setattr(ga, "arrival_leg",
+                        lambda cs, ap, dest, now=None: ga.make_key("QQQ", "456", ap, dest, time.time()))
+    monkeypatch.setattr(ga, "record", lambda obs, **kw: got.update(kw, obs=obs) or ga.RecordResult(stored=len(obs)))
+    rec = {"callsign": "QQQ456", "departure_airport": "KCLT", "destination_airport": "KDCA",
+           "arrival_stand": "D7", "registration": "NQ0002", "aircraft_address": "abc124"}
+    ga.record_tfdm(rec, sides=("arrival",))
+    assert got["ladd_idents"] == ["NQ0002"] and got["ladd_hexes"] == ["abc124"]
+    assert [o.side for o in got["obs"]] == ["arrival"]
+    assert ga.record_tfdm(rec) == (None, None)          # default: departure only, and there is none
+
+
+def test_arrival_gate_resolves_with_tfdm_above_acars():
+    """Precedence is the resolver's, unchanged: a TFDM arrival gate (tier 40) wins over ACARS (30)."""
+    from common import gate_assignments as ga
+    rows = [{"id": 1, "source": "acars_airframes", "value_norm": "D9", "is_placeholder": 0,
+             "observed_at": "2030-01-02T14:00:00Z", "leg_match": "route_date",
+             "evidence_type": "assignment_msg", "confidence": 0.9, "flags": None},
+            {"id": 2, "source": "swim_tfdm", "value_norm": "D7", "is_placeholder": 0,
+             "observed_at": "2030-01-02T13:50:00Z", "leg_match": "route_date",
+             "evidence_type": "assignment_msg", "confidence": 0.9, "flags": None}]
+    r = ga.resolve(rows, now=ga._ep("2030-01-02T14:01:00Z"))
+    assert (r.value, r.status, r.source) == ("D7", "observed", "swim_tfdm")
 
 
 # ── ack-always (the subscription's lifeline) ────────────────────────────────
@@ -378,3 +475,128 @@ def test_allowlist_and_template_carry_the_names_without_values():
 def test_push_tfdm_never_degrades_healthz():
     from ingest import failover
     assert failover.is_optional("push:tfdm")
+
+
+# -- 2026-11-24: an arrival stand is kept only for exactly one known instance of the route ----------------
+def test_arrival_stand_without_a_known_instance_is_dropped(monkeypatch):
+    """tdes_leg fell back to the record's date (route_date) and arrival_leg found no single instance:
+    nothing is recorded -- never the wrong day's flight around midnight."""
+    from common import gate_assignments as ga
+    seen = []
+    monkeypatch.setattr(ga, "tdes_leg",
+                        lambda cs, ap, dest, t: (ga.make_key("QQQ", "456", ap, dest, time.time()), "route_date"))
+    monkeypatch.setattr(ga, "arrival_leg", lambda cs, ap, dest, now=None: None)
+    monkeypatch.setattr(ga, "record", lambda obs, **kw: seen.extend(obs) or ga.RecordResult(stored=len(obs)))
+    rec = {"callsign": "QQQ456", "departure_airport": "KCLT", "destination_airport": "KDCA", "arrival_stand": "D7"}
+    assert ga.record_tfdm(rec, sides=("arrival",)) == (None, None) and seen == []
+
+
+def test_departure_stand_still_records_when_the_arrival_is_dropped(monkeypatch):
+    from common import gate_assignments as ga
+    seen = []
+    monkeypatch.setattr(ga, "tdes_leg",
+                        lambda cs, ap, dest, t: (ga.make_key("QQQ", "456", ap, dest, time.time()), "route_date"))
+    monkeypatch.setattr(ga, "arrival_leg", lambda cs, ap, dest, now=None: None)
+    monkeypatch.setattr(ga, "record", lambda obs, **kw: seen.extend(obs) or ga.RecordResult(stored=len(obs)))
+    rec = {"callsign": "QQQ456", "departure_airport": "KDCA", "destination_airport": "KDCA",
+           "departure_stand": "C35", "arrival_stand": "D7"}
+    ga.record_tfdm(rec, sides=("departure", "arrival"))
+    assert [(o.side, o.value_raw) for o in seen] == [("departure", "C35")]
+
+
+def test_exact_tdes_match_is_reused_for_the_arrival(monkeypatch):
+    from common import gate_assignments as ga
+    seen = []
+    k = ga.make_key("QQQ", "456", "KCLT", "KDCA", time.time())
+    monkeypatch.setattr(ga, "tdes_leg", lambda cs, ap, dest, t: (k, "exact"))
+    monkeypatch.setattr(ga, "arrival_leg", lambda *a, **kw: pytest.fail("not needed after an exact match"))
+    monkeypatch.setattr(ga, "record", lambda obs, **kw: seen.extend(obs) or ga.RecordResult(stored=len(obs)))
+    ga.record_tfdm({"callsign": "QQQ456", "departure_airport": "KCLT", "destination_airport": "KDCA",
+                    "arrival_stand": "D7"}, sides=("arrival",))
+    assert [(o.side, str(o.key), o.leg_match) for o in seen] == [("arrival", str(k), "exact")]
+
+
+class _Inst:
+    """A stand-in FlightInstance: scheduled times plus optional estimates/actuals."""
+    def __init__(self, dep, arr=None, *, est_arr=None, act_dep=None, cancelled=False):
+        from common import gate_assignments as ga
+        self.sched_dep, self.sched_arr = dep, arr
+        self.best_dep = act_dep or dep
+        self.best_arr = est_arr or arr
+        self.cancelled = cancelled
+        self.key = ga.make_key("QQQ", "456", "KCLT", "KDCA", dep)
+
+
+NOW = 1_900_000_000.0
+H, M = 3600, 60
+
+
+def _leg(monkeypatch, insts):
+    from common import gate_assignments as ga
+    monkeypatch.setattr(ga.fi, "resolve", lambda cs, o, d: insts)
+    return ga.arrival_leg("QQQ456", "KCLT", "KDCA", now=NOW)
+
+
+def test_one_airborne_flight_is_the_match(monkeypatch):
+    target = _Inst(NOW - 1 * H, NOW + 30 * M)
+    assert _leg(monkeypatch, [_Inst(NOW - 26 * H, NOW - 24 * H), target, _Inst(NOW + 22 * H, NOW + 24 * H)]) == target.key
+
+
+def test_hourly_shuttle_picks_the_leg_in_the_air(monkeypatch):
+    """45-minute legs every hour: at NOW the 13:30 departure is airborne; the 14:00 one has not left and the
+    12:30 one has landed. Only the airborne leg matches (a fixed window would have seen several)."""
+    legs = [_Inst(NOW + k * H - 30 * M, NOW + k * H + 15 * M) for k in range(-3, 4)]
+    airborne = next(l for l in legs if l.best_dep <= NOW <= l.best_arr)
+    assert _leg(monkeypatch, legs) == airborne.key
+
+
+def test_shuttle_between_legs_with_nothing_airborne_uses_proportional_slack(monkeypatch):
+    """Legs at -60..-15 min and +15..+60 min: nothing airborne at NOW; half-block slack (22.5 min) reaches
+    neither, so nothing matches -- dropped, not guessed."""
+    assert _leg(monkeypatch, [_Inst(NOW - 60 * M, NOW - 15 * M), _Inst(NOW + 15 * M, NOW + 60 * M)]) is None
+
+
+def test_just_landed_within_slack_matches(monkeypatch):
+    landed = _Inst(NOW - 3 * H, NOW - 10 * M)          # 10 min after arrival; slack is min(30 min, 85 min)
+    assert _leg(monkeypatch, [landed]) == landed.key
+
+
+def test_long_haul_is_covered_by_its_own_times(monkeypatch):
+    lh = _Inst(NOW - 12 * H, NOW + 1 * H)
+    assert _leg(monkeypatch, [lh]) == lh.key
+
+
+def test_estimated_arrival_extends_the_window(monkeypatch):
+    late = _Inst(NOW - 3 * H, NOW - 2 * H, est_arr=NOW + 20 * M)   # delayed: scheduled arrival long past
+    assert _leg(monkeypatch, [late]) == late.key
+
+
+def test_no_arrival_time_falls_back_to_the_route_median(monkeypatch):
+    history = [_Inst(NOW - d * 24 * H - 2 * H, NOW - d * 24 * H) for d in (1, 2, 3)]   # 2 h blocks
+    today = _Inst(NOW - 1 * H, None)                                                     # no arrival time
+    assert _leg(monkeypatch, history + [today]) == today.key
+
+
+def test_no_arrival_time_and_no_history_is_dropped(monkeypatch):
+    assert _leg(monkeypatch, [_Inst(NOW - 1 * H, None)]) is None
+
+
+def test_two_airborne_is_ambiguous(monkeypatch):
+    assert _leg(monkeypatch, [_Inst(NOW - 2 * H, NOW + 1 * H), _Inst(NOW - 1 * H, NOW + 2 * H)]) is None
+
+
+def test_cancelled_and_bad_block_times_are_ignored(monkeypatch):
+    good = _Inst(NOW - 1 * H, NOW + 1 * H)
+    assert _leg(monkeypatch, [_Inst(NOW - 1 * H, NOW + 1 * H, cancelled=True), _Inst(NOW - 2 * H, NOW + 30 * H), good]) == good.key
+
+
+def test_unknown_flight_is_dropped(monkeypatch):
+    assert _leg(monkeypatch, []) is None
+
+
+def test_arrival_leg_survives_a_resolver_error(monkeypatch):
+    from common import gate_assignments as ga
+    def boom(*a):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(ga.fi, "resolve", boom)
+    assert ga.arrival_leg("QQQ456", "KCLT", "KDCA") is None

@@ -11,7 +11,8 @@ source. Tables: pg_schema/0079 (Postgres), _SQLITE_DDL below (SQLite twin).
 
 Source precedence (operator 2026-10-18), highest first -- SOURCE_TIERS:
   40 SWIM: TDES parkingGate (departure); TFDM TTP departure stand (source 'swim_tfdm',
-     2026-11-18, record_tfdm -- departure side only, gate only). The same TTP record is the
+     2026-11-18, record_tfdm -- gate only) and, since 2026-11-24, the TTP arrival stand as the
+     arrival gate when the destination aerodrome itself published it. The same TTP record is the
      first TAIL source before departure since 2026-11-19 (common.tfdm_authority); that is
      identity, not gate precedence, and changes nothing here.
   30 ACARS: airframes.io = ACARS Drama Jumpseat = local decoder (one tier).
@@ -997,24 +998,104 @@ def record_tdes(rec: dict, *, reason: str | None = None) -> tuple[fi.FlightInsta
     return key, record([obs], reason=reason)
 
 
-def record_tfdm(rec: dict, *, reason: str | None = None) -> tuple[fi.FlightInstanceKey | None, RecordResult | None]:
-    """Departure-gate evidence from one TFDM Terminal Publication (TTP) Flight Data
-    record (ingest.parsers.tfdm_parser, 2026-11-18). The departure stand at the
-    departure aerodrome is the departure gate (US usage: gate = stand). Gate only:
-    no time, status or tail is taken from TTP. The event key is the flight's own
-    stable fields (aerodrome, callsign, TFDM id or scheduled off-block), never a
-    message timestamp, so a resync that repeats the same stand stores nothing new."""
-    stand = rec.get("departure_stand")
-    airport = rec.get("departure_airport")
-    if stand is None or not airport:
+def record_tfdm(rec: dict, *, reason: str | None = None,
+                sides: Iterable[str] = ("departure",)) -> tuple[fi.FlightInstanceKey | None, RecordResult | None]:
+    """Gate evidence from one TFDM Terminal Publication (TTP) Flight Data record
+    (ingest.parsers.tfdm_parser). The departure stand at the departure aerodrome is the
+    departure gate (2026-11-18); the arrival stand at the destination aerodrome is the
+    arrival gate (2026-11-24; the parser asks for "arrival" only when the destination
+    aerodrome itself published the record). US usage: gate = stand. Gate only: no time,
+    status or tail is taken from TTP; the record's registration and address feed the
+    LADD check only. The event key is the flight's own stable fields (aerodrome,
+    callsign, TFDM id or scheduled off-block), never a message timestamp, so a resync
+    that repeats the same stand stores nothing new."""
+    origin, dest = rec.get("departure_airport"), rec.get("destination_airport")
+    if not origin:
         return None, None
-    key, match = tdes_leg(rec.get("callsign"), airport, rec.get("destination_airport"),
-                          rec.get("sched_off_block") or _iso())
+    wanted = []
+    for side in sides:
+        stand = rec.get("departure_stand") if side == "departure" else rec.get("arrival_stand")
+        airport = origin if side == "departure" else dest
+        if side in SIDES and stand is not None and airport:
+            wanted.append((side, stand, airport))
+    if not wanted:
+        return None, None
+    key, match = tdes_leg(rec.get("callsign"), origin, dest, rec.get("sched_off_block") or _iso())
     if key is None:
         return None, None
-    ev = f"{airport}|{rec.get('callsign')}|{rec.get('tfdm_id') or rec.get('sched_off_block') or ''}"
-    obs = Observation(key=key, side="departure", field="gate", value_raw=stand, source="swim_tfdm",
-                      observed_at=_iso(), leg_match=match, evidence_type="assignment_msg",
-                      confidence=0.9, parser_version="tfdm-ttp-1", airport=airport,
-                      raw_table=None, raw_ref=ev, event_key=ev)
-    return key, record([obs], reason=reason)
+    # 2026-11-24: an arrival stand is published while the flight is airborne, often more than 2 h after its
+    # scheduled departure, so tdes_leg's [-2 h, +6 h] window usually misses and falls back to the record's
+    # UTC date -- the wrong day's flight around midnight. Arrival evidence is kept only when it matches
+    # exactly ONE known instance of this route that is arriving now (arrival_leg: sized to the flight's own times,
+    # else the route's median block time); otherwise it is
+    # dropped (fail closed), never guessed. Departure behaviour is unchanged.
+    arr_key = key if match == "exact" else arrival_leg(rec.get("callsign"), origin, dest)
+    obs = []
+    for side, stand, airport in wanted:
+        k, m = (key, match) if side != "arrival" else (arr_key, "exact")
+        if k is None:
+            continue
+        ev = f"{airport}|{rec.get('callsign')}|{rec.get('tfdm_id') or rec.get('sched_off_block') or ''}"
+        obs.append(Observation(key=k, side=side, field="gate", value_raw=stand, source="swim_tfdm",
+                               observed_at=_iso(), leg_match=m, evidence_type="assignment_msg",
+                               confidence=0.9, parser_version="tfdm-ttp-4", airport=airport,
+                               raw_table=None, raw_ref=ev, event_key=ev))
+    if not obs:
+        return None, None
+    return obs[0].key, record(obs, ladd_idents=[rec.get("registration")],
+                              ladd_hexes=[rec.get("aircraft_address")], reason=reason)
+
+
+ARRIVAL_EARLY_S = 3600          # a stand can be published up to 1 h before the departure we know of
+ARRIVAL_LATE_S = 1800           # ... and up to 30 min after the arrival we know of
+ARRIVAL_MAX_BLOCK_S = 20 * 3600 # a block time beyond this is bad data, not a flight
+
+
+def route_block_time(instances) -> float | None:
+    """Median scheduled block time (sched_arr - sched_dep, seconds) over the route's known instances:
+    the fallback duration for an instance that has no arrival time of its own."""
+    import statistics
+    d = [i.sched_arr - i.sched_dep for i in instances
+         if i.sched_dep is not None and i.sched_arr is not None and 0 < i.sched_arr - i.sched_dep <= ARRIVAL_MAX_BLOCK_S]
+    return statistics.median(d) if d else None
+
+
+def arrival_leg(callsign: str, origin: str | None, destination: str | None,
+                now: float | None = None) -> fi.FlightInstanceKey | None:
+    """The one known instance of this callsign on this route that is arriving NOW, or None (zero or several).
+
+    2026-11-24 (operator): sized to the flight, not a fixed window, so a shuttle's other legs never collide.
+    An instance is arriving now when it is airborne (best_dep <= now <= best_arr; best_* = actual, else
+    estimated, else scheduled) -- exactly one airborne wins outright; with none airborne, the window widens
+    by half the flight's block time (capped at 1 h before departure and 30 min after arrival). An instance
+    with no arrival time uses the route's median block time from its other known instances
+    (route_block_time); with neither, it is skipped. Used only for TFDM
+    arrival stands (record_tfdm): ambiguity or no data drops the stand, never guesses."""
+    if not fi.parse_flight_ident(callsign or ""):
+        return None
+    t = now if now is not None else time.time()
+    try:
+        insts = [i for i in fi.resolve(callsign, origin, destination) if not getattr(i, "cancelled", False)]
+    except Exception:
+        return None
+    block = route_block_time(insts)
+    airborne, near = [], []
+    for i in insts:
+        dep = i.best_dep
+        if dep is None:
+            continue
+        arr = i.best_arr if i.best_arr is not None else (dep + block if block is not None else None)
+        if arr is None or not 0 < arr - dep <= ARRIVAL_MAX_BLOCK_S:
+            continue
+        if dep <= t <= arr:
+            airborne.append(i)
+        # slack in proportion to the flight: half its block time, capped (an hourly shuttle's next
+        # departure must not overlap the leg that is landing)
+        half = (arr - dep) / 2
+        if dep - min(ARRIVAL_EARLY_S, half) <= t <= arr + min(ARRIVAL_LATE_S, half):
+            near.append(i)
+    cands = airborne if airborne else near
+    if len(cands) != 1:
+        return None
+    k = cands[0].key
+    return make_key(k.carrier, k.flight_num, k.origin or origin, k.destination or destination, k.sched_date)

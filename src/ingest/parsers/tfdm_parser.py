@@ -20,8 +20,21 @@ What is read today, and only this:
     SUPERSEDED 2026-11-19 for the tail (operator): TFDM's aircraft registration now binds a
     watched leg's tail BEFORE departure, ahead of SFDPS (common.tfdm_authority). Still no
     time, status or OOOI from this feed.
+  - 2026-11-24 (operator-approved follow-ups to e2fb66b0, freeze exception):
+      * the ARRIVAL stand, as SWIM arrival-gate evidence (same source and tier), but only
+        from the destination aerodrome's own publication (JMS header AERODROME agrees with
+        the destination); a stand another aerodrome publishes for the far end, or a message
+        with no AERODROME header, is not recorded (fail closed: tier 40 would otherwise
+        outrank an observed ACARS gate);
+      * the aircraft's ICAO 24-bit address, aircraft/@aircraftAddress, [VERIFY]: FIXM Core
+        names the attribute (Aircraft.aircraftAddress) but the TTP documents do not list
+        it and no live sample has shown it. It is used only through the registries
+        (common.tfdm_authority): a registration is still the tail, and an address the
+        registry contradicts blocks the bind;
+      * the destination aerodrome also from arrival/@destinationPointText (the live shape,
+        2026-11-20 samples, puts it there instead of on <destination>).
   - Everything else (Airport Information, Traffic Management Restrictions, Flight
-    Delay, arrival stands, Heartbeat and the periodic resync markers) is COUNTED
+    Delay, Heartbeat and the periodic resync markers) is COUNTED
     by data group and message type, nothing more. Future work, not guessed at.
 
 Schema evidence (element names are used only where a public document shows them):
@@ -47,7 +60,7 @@ import xml.etree.ElementTree as ET
 
 log = logging.getLogger("ingest.parsers.tfdm")
 
-PARSER_VERSION = "tfdm-ttp-3"   # 2026-11-20: paths checked against live samples; runway times, tfdmId, flight/ATC state
+PARSER_VERSION = "tfdm-ttp-4"   # 2026-11-24: arrival stand (destination aerodrome only), aircraftAddress [VERIFY], arrival/@destinationPointText
 
 # Departure aerodromes whose stands are recorded without a watch match: the same
 # DC set the TDES path uses (smes_parser.SMES_AIRPORTS). Any other aerodrome's
@@ -162,6 +175,18 @@ def reset_counts() -> None:
         _last_summary = time.monotonic()
 
 
+def aircraft_address(raw) -> str | None:
+    """An ICAO 24-bit address as 6 lowercase hex digits, or None. FIXM writes it either as six hex
+    digits (as FDPS's aircraftDescription/@aircraftAddress does) or as 24 binary digits (FIXM
+    AircraftAddressType); anything else, and the all-zero address, is not an address."""
+    v = (raw or "").strip().lower()
+    if len(v) == 24 and set(v) <= {"0", "1"}:
+        v = format(int(v, 2), "06x")
+    if len(v) != 6 or any(ch not in "0123456789abcdef" for ch in v) or v == "000000":
+        return None
+    return v
+
+
 def _flight_record(fl) -> dict | None:
     ident = None
     for name in ("flightIdentification", "flightIdentificationPrevious"):
@@ -173,7 +198,7 @@ def _flight_record(fl) -> dict | None:
     dest = _find(fl, "destination")
     arr = _find(fl, "arrival")
     dep_ap = _attr(dep, "departurePointText")
-    dest_ap = _attr(dest, "destinationPointText")
+    dest_ap = _attr(dest, "destinationPointText") or _attr(arr, "destinationPointText")
     dep_stand = _attr(_find(dep, "standInformation"), "standName") if dep is not None else None
     arr_stand = None
     for side in (arr, dest):
@@ -210,7 +235,8 @@ def _flight_record(fl) -> dict | None:
     # [VERIFY] ClearanceDeliveryTime: the TTP WSRD lists it ("the time at which a flight received route
     # clearance", TFDM builds 1 and 2) but the ATD-2 FIXM table gives no path; it is looked up by local
     # name and only ever used once the feed has been seen to carry it (common.tfdm_authority).
-    # Not in the TTP documents and not read: ICAO 24-bit address, aircraft type, EDCT, CDR.
+    # Not in the TTP documents and not read: aircraft type, EDCT, CDR. The ICAO 24-bit address is read
+    # since 2026-11-24 from FIXM Core's aircraft/@aircraftAddress, [VERIFY] (not in the TTP documents).
     # 2026-11-20, checked against 30 live flights (census samples, redacted): runwayDepartureTime/*
     # and runwayArrivalTime/* carry the time in a child <time> (_when); offBlockTime carried only
     # <initial> (no TOBT nameValue on any flight); clearanceDeliveryTime is element text (1 flight);
@@ -218,6 +244,7 @@ def _flight_record(fl) -> dict | None:
     # carried standInformation or aircraft/@registration (3 had an empty <aircraft>). The registration
     # and stand reads stay as documented but are unconfirmed; more samples of watched flights decide.
     reg = _attr(_find(fl, "aircraft"), "registration")
+    address = aircraft_address(_attr(_find(fl, "aircraft"), "aircraftAddress"))
     gufi = _attr(_find(fl, "flightPlan"), "identifier")
     ob = _find(dep, "offBlockTime") if dep is not None else None
 
@@ -245,6 +272,7 @@ def _flight_record(fl) -> dict | None:
         # 2026-11-20 (live samples): the id is flightIdentification/tfdmId, not a nameValue.
         "tfdm_id": tfdm_id or _text(_find(fl, "flightIdentification", "tfdmId")),
         "registration": reg.upper() if reg else None,
+        "aircraft_address": address,
         "eram_gufi": gufi,
         "initial_off_block": _ob("initial"),
         "earliest_off_block": _ob("earliest"),
@@ -285,17 +313,21 @@ def parse_ttp_message(payload: bytes, headers: dict | None = None) -> dict:
         out["message_type"] = _attr(md, "messageType") or _local(root.tag) or "unknown"
     if out["data_group"] != "FlightData":
         return out
+    # The publishing aerodrome (JMS header AERODROME). Kept on each record: an arrival stand is
+    # recorded only when it is the destination's own publication (record_stands).
+    pub = str(headers.get("AERODROME") or "").strip().upper() or None
     flights = [el for el in root.iter() if _local(el.tag) == "flight"]
     for fl in flights:
         rec = _flight_record(fl)
         if rec:
+            rec["aerodrome"] = pub
             out["flights"].append(rec)
     return out
 
 
-def _relevant(rec: dict) -> tuple[bool, dict | None]:
-    """(record it?, matching watch entry). DC departures always; elsewhere only a
-    watched flight. A matcher failure means 'not watched', never an exception."""
+def _watch_entry(rec: dict) -> dict | None:
+    """The flight watch this record's leg belongs to, or None. A matcher failure means
+    'not watched', never an exception."""
     entry = None
     try:
         from ingest.parsers.smes_parser import _match_watchlist_flight, _departure_side_record
@@ -306,22 +338,48 @@ def _relevant(rec: dict) -> tuple[bool, dict | None]:
         }))
     except Exception as e:
         log.debug("tfdm: watch match for %s: %s", rec.get("callsign"), type(e).__name__)
-    return (rec.get("departure_airport") in DC_AIRPORTS or entry is not None), entry
+    return entry
 
 
-def record_departure_stands(parsed: dict) -> int:
-    """Send each relevant flight's departure stand to common.gate_assignments.
+def _arrival_from_destination(rec: dict) -> bool:
+    """True only when the destination aerodrome published this record (AERODROME header)."""
+    from common.flight_instance import airports_agree
+    return airports_agree(rec.get("aerodrome"), rec.get("destination_airport")) is True
+
+
+def stand_sides(rec: dict) -> tuple[str, ...]:
+    """Which of the record's stands to record: the departure stand for a DC departure or a
+    watched leg; the arrival stand for a DC arrival or a watched leg, and only when the
+    destination aerodrome itself published it."""
+    dep = bool(rec.get("departure_stand") and rec.get("departure_airport"))
+    arr = bool(rec.get("arrival_stand") and rec.get("departure_airport")
+               and rec.get("destination_airport") and _arrival_from_destination(rec))
+    if not (dep or arr):
+        return ()
+    dep_dc = rec.get("departure_airport") in DC_AIRPORTS
+    arr_dc = rec.get("destination_airport") in DC_AIRPORTS
+    watched = None
+    if (dep and not dep_dc) or (arr and not arr_dc):
+        watched = _watch_entry(rec) is not None
+    sides = []
+    if dep and (dep_dc or watched):
+        sides.append("departure")
+    if arr and (arr_dc or watched):
+        sides.append("arrival")
+    return tuple(sides)
+
+
+def record_stands(parsed: dict) -> int:
+    """Send each relevant flight's departure and arrival stands to common.gate_assignments.
     Returns the number of observations stored. Never raises."""
     n = 0
     for rec in parsed.get("flights") or ():
-        if not rec.get("departure_stand") or not rec.get("departure_airport"):
-            continue
-        ok, _entry = _relevant(rec)
-        if not ok:
+        sides = stand_sides(rec)
+        if not sides:
             continue
         try:
             from common import gate_assignments as ga
-            _key, res = ga.record_tfdm(rec)
+            _key, res = ga.record_tfdm(rec, sides=sides)
             if res is not None:
                 n += res.stored
         except Exception as e:
@@ -330,14 +388,17 @@ def record_departure_stands(parsed: dict) -> int:
     return n
 
 
+record_departure_stands = record_stands     # the 2026-11-18 name
+
+
 def handle(payload: bytes, headers: dict | None = None) -> bool:
     """The swim_client handler for the tfdm feed. Counts every message; records
-    departure stands. True when anything was stored (records_accepted)."""
+    departure and arrival stands. True when anything was stored (records_accepted)."""
     parsed = parse_ttp_message(payload, headers)
     count(parsed["data_group"], parsed["message_type"])
     if parsed["data_group"] != "FlightData" or not parsed["flights"]:
         return False
-    stored = record_departure_stands(parsed) > 0
+    stored = record_stands(parsed) > 0
     # 2026-11-19: pre-departure identity authority + clearance/TMI/APREQ alerts for WATCHED legs only
     # (common.tfdm_authority). Never raises; a failure leaves stands and counts untouched.
     try:
