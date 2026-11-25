@@ -287,9 +287,8 @@ Infra/comms: `ntfy` (0.0.0.0:2586), `systemd-corporatetraveldc-protonbridge`
 (SMTP relay, 100.x.x.x:1025 → container port 25), `nextcloud-app`
 (127.0.0.1:8090) + `nextcloud-db` (Postgres 16), `openwebui` (0.0.0.0:3000),
 `rss-bridge` (100.x.x.x:3001), `csexec-contact` (website contact API,
-127.0.0.1:8002), and two client-preview nginx containers,
-`corporatetraveldc-ccw-demo` (:8085) and `corporatetraveldc-ccw-preview1`
-(:8086), both on 127.0.0.1 and the tailnet IP.
+127.0.0.1:8002). The two [chauffeur partner] preview containers (:8085,
+:8086) were retired on 2026-11-25 (`docs/RETIRED.md`).
 
 Installed, not running: five office-suite skeleton Quadlets in
 `.config/containers/systemd/office-skeletons/` (`corporatetraveldc-firefly`, `-paperless`,

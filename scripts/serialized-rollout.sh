@@ -147,8 +147,6 @@ ROLLOUT=(
   "corporatetraveldc-acarshub|ext|ghcr.io/sdr-enthusiasts/docker-acarshub:latest|||90"
   # 2026-10-04: the two password-gated static demo sites (tracked this morning; the
   # first restart-everything run left them behind because they were not listed)
-  "corporatetraveldc-ccw-demo|ext|docker.io/library/nginx:alpine|||30"
-  "corporatetraveldc-ccw-preview1|ext|docker.io/library/nginx:alpine|||30"
 )
 
 built_dirs=""   # build each local image once (7 ingest instances share one)

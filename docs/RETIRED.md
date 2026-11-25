@@ -50,6 +50,7 @@ Added 2026-10-20 (cleanup sweep). Both folders carry a README.
 | 2026-10-20 | `.config/systemd/user/retired-20261020/` | `ops-brief-rebuild-watcher.{service,timer}` | one-time poller-rebuild watcher running an untracked script in `~`; timer disabled | nothing (rollouts rebuild images) |
 | 2026-10-20 | `.config/containers/systemd/retired-20261020/` | `corporatetraveldc-ops-brief-deferred.container` | deferred rerun removed from `ops_brief.py` 2026-07-20; nothing triggers it; live timer/service were `/dev/null` masks | nothing (hourly `corporatetraveldc-ops-brief`) |
 | 2026-10-20 | `.config/containers/systemd/retired-20261020/` | `corporatetraveldc-nms-v240-check.container` | its one-shot date is past | nothing (one-shot done) |
+| 2026-11-25 | `.config/containers/systemd/retired-20261125/` (README) | `corporatetraveldc-ccw-demo` and `corporatetraveldc-ccw-preview1` Quadlets, kept as `.container.retired` so no copy of the folder can recreate a unit | operator 2026-11-25: the [chauffeur partner] password-gated previews (:8085, :8086) are no longer needed | nothing |
 | 2026-10-20 | `.config/containers/systemd/retired-20261020/` | `amtrak-tracker.container.disabled` | stale 2026-07 draft; created no unit | `amtrak-tracker.container` (live) |
 
 Live-only, removed by the same relay with no repo copy (never tracked):
