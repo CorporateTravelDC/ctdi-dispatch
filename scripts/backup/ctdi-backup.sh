@@ -60,7 +60,10 @@ SYNC_GATE="$(setting BACKUP_SYNC_GATE 1)"
 SYNC_GATE_CMD="$(setting BACKUP_SYNC_GATE_CMD "${REPO_DIR}/scripts/with-dispatch-env.sh env PYTHONPATH=${REPO_DIR}/src python3 ${REPO_DIR}/scripts/backup/sync_gate.py")"
 STAGE_STALE_MIN="$(setting BACKUP_STAGE_STALE_MIN 360)"
 INCLUDE_CUI="$(setting BACKUP_INCLUDE_CUI 0)"
-KEEP_D="$(setting BACKUP_KEEP_DAILY 30)"; KEEP_W="$(setting BACKUP_KEEP_WEEKLY 12)"; KEEP_M="$(setting BACKUP_KEEP_MONTHLY 12)"
+# 2026-11-26 (operator): the stick keeps a 7-30 night local Borg copy (dedup, network-down and portable fallback);
+# long history lives in Proton, which is append-only (old segments and index.N files are never deleted there), so
+# weekly/monthly archives are no longer kept locally. BACKUP_KEEP_DAILY must stay within 7..30.
+KEEP_D="$(setting BACKUP_KEEP_DAILY 30)"; KEEP_W="$(setting BACKUP_KEEP_WEEKLY 0)"; KEEP_M="$(setting BACKUP_KEEP_MONTHLY 0)"
 CUI_KEEP="$(setting BACKUP_CUI_LOCAL_KEEP 7)"
 # 2026-11-03: Proton drops connections under parallel uploads (2003 "Upload file empty", closed
 # connections, 502/422); rclone's default 4 transfers turned a few GB into hours of whole-segment
@@ -98,12 +101,17 @@ BACKUP_EXCLUDED_INSTANCES=(corporatetraveldc-pgsql-demo)   # rebuildable by back
 LADD_TABLES=(faa_ladd_aircraft faa_ladd_removals)   # CUI: identifiers of LADD-listed aircraft
 SYNC=1; DRY=0
 PRE=0
-for a in "$@"; do case "$a" in --no-sync) SYNC=0 ;; --dry-run) DRY=1 ;; --preflight-only) PRE=1 ;; *) echo "usage: $0 [--no-sync] [--dry-run] [--preflight-only]" >&2; exit 64 ;; esac; done
+# 2026-11-26 (operator: off-grid): --sync-only is the hourly catch-up (corporatetraveldc-backup-catchup.timer). No dump,
+# no archive: when something on the stick is not yet verified in Proton (a failed nightly push, days of network
+# down), it syncs, runs the hash run and the local release. Quiet no-op otherwise; never on the metered hotspot.
+SYNC_ONLY=0
+for a in "$@"; do case "$a" in --no-sync) SYNC=0 ;; --dry-run) DRY=1 ;; --preflight-only) PRE=1 ;; --sync-only) SYNC_ONLY=1 ;; *) echo "usage: $0 [--no-sync] [--dry-run] [--preflight-only] [--sync-only]" >&2; exit 64 ;; esac; done
 
 log() { printf '[%s] [backup] %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; python3 "$LEDGER_PY" append note --json "{\"error\": \"$(echo "$*" | tr -d '"\\' | head -c 300)\"}" >/dev/null 2>&1 || true; exit 1; }
 
 command -v borg >/dev/null || die "borg is not installed (dnf install borgbackup)"
+[[ "$KEEP_D" =~ ^[0-9]+$ ]] && (( KEEP_D >= 7 && KEEP_D <= 30 )) || die "BACKUP_KEEP_DAILY=${KEEP_D}: the local copy must keep 7 to 30 nights (operator 11-26)"
 [[ -r "$PASSFILE" ]] || die "Borg passphrase file $PASSFILE is missing or unreadable"
 [[ "$(stat -c %a "$PASSFILE")" =~ ^[46]00$ ]] || die "$PASSFILE must be mode 0600 or 0400"
 # 2026-11-22 (operator: "lock the repo's configs"): no backup secret or its folder may be group/other-accessible
@@ -126,7 +134,11 @@ fi
 export BORG_PASSCOMMAND="cat ${PASSFILE}" BORG_REPO="$BACKUP_REPO" BORG_RELOCATED_REPO_ACCESS_IS_OK=no
 mkdir -p -m 0700 "$STATE" "$WORK" "$WORK/cui-local" "$WORK/borg-cache"
 export BORG_CACHE_DIR="$WORK/borg-cache"
-exec 9>"${STATE}/.lock"; flock -n 9 || die "another backup is running"
+exec 9>"${STATE}/.lock"
+if ! flock -n 9; then
+  [[ "$SYNC_ONLY" == 1 ]] && { log "catch-up: another backup holds the lock; next hour"; exit 0; }
+  die "another backup is running"
+fi
 # 2026-11-22: a run killed before its cleanup trap leaves its dump stage behind; three of them (94 GiB) filled
 # the stick and failed every run from 11-21. With the lock held no other run is using a stage, so any older
 # than BACKUP_STAGE_STALE_MIN (6 h; a run takes well under that) is removed here.
@@ -143,13 +155,27 @@ fi
 # 2026-11-18: the stage-space preflight runs BEFORE waiting for the heavy-work turn, so a run that
 # cannot fit fails at once instead of after up to 2 h in the queue (and --preflight-only answers in seconds).
 STAGE_GUARD="${REPO_DIR}/scripts/backup/stage_guard.py"
-MIN_FREE=$(( $(setting BACKUP_MIN_FREE_GB 10) * 1024 * 1024 * 1024 ))
+# 2026-11-26 (operator): the 10 GB preflight reserve (a round number set on 11-18) is HELD OFF while the stage
+# monitor below measures what a run really needs; the preflight reserve now defaults to 0. Every dump still streams
+# through the hard limit, which never lets the stage filesystem drop under STAGE_FLOOR (2 GiB, not a setting):
+# a full btrfs is what made 11-18 hard to recover.
+MIN_FREE=$(( $(setting BACKUP_MIN_FREE_GB 0) * 1024 * 1024 * 1024 ))
+STAGE_FLOOR=$(( 2 * 1024 * 1024 * 1024 ))
 STAGE_FACTOR="$(setting BACKUP_STAGE_FACTOR 2.0)"
 read -r -a COMPRESS_TABLES <<< "$(setting BACKUP_COMPRESS_TABLES '')"
+# 2026-11-26 (operator): table DATA left out of the nightly dump entirely (the schema is still dumped). demo_snapshots,
+# the demo recorder, grew 27 -> ~36 GB in 8 days and pushed the stage past the USB; its rows stay in the live database
+# on the NVMe, they are just not in the backup. A table here is also dropped from BACKUP_COMPRESS_TABLES.
+read -r -a EXCLUDE_TABLES <<< "$(setting BACKUP_EXCLUDE_TABLE_DATA demo_snapshots)"
+if (( ${#EXCLUDE_TABLES[@]} > 0 && ${#COMPRESS_TABLES[@]} > 0 )); then
+  keep=(); for t in "${COMPRESS_TABLES[@]}"; do [[ " ${EXCLUDE_TABLES[*]} " == *" $t "* ]] || keep+=("$t"); done
+  COMPRESS_TABLES=("${keep[@]}")
+fi
 pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted inside the container shell), [level]
   local c="$1" out="$2" extra="${3:-}" z="${4:-$DUMP_Z}" room
-  room=$(( $(python3 "$STAGE_GUARD" free "$(dirname "$out")") - MIN_FREE ))
-  (( room > 0 )) || die "stage-guard: no room for $(basename "$out") on $(dirname "$out") (reserve $(setting BACKUP_MIN_FREE_GB 10) GB)"
+  local keep_free=$(( MIN_FREE > STAGE_FLOOR ? MIN_FREE : STAGE_FLOOR ))
+  room=$(( $(python3 "$STAGE_GUARD" free "$(dirname "$out")") - keep_free ))
+  (( room > 0 )) || die "stage-guard: no room for $(basename "$out") on $(dirname "$out") (keeps $(( keep_free / 1073741824 )) GiB free)"
   if ! podman exec -i "$c" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc -Z ${z} ${extra}" </dev/null \
        | python3 "$STAGE_GUARD" limit "$out" "$room"; then
     die "dump of $(basename "$out") stopped before it could fill $(dirname "$out") (see stage-guard line above); nothing archived"
@@ -157,28 +183,48 @@ pg_dump_in() {   # container, output file, extra pg_dump args (single-quoted ins
 }
 psql_in() { podman exec -i "$1" sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -At -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"$2\"" </dev/null; }
 
+if [[ "$SYNC_ONLY" == 1 ]]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/uplink.sh"
+  if uplink_is_metered; then log "catch-up: uplink is metered ($(uplink_default_iface)); waiting for the primary"; exit 0; fi
+  [[ -n "$BACKUP_TARGET" && "$SYNC_TOOL" == proton-cli ]] || { log "catch-up: needs BACKUP_TARGET and BACKUP_SYNC_TOOL=proton-cli"; exit 0; }
+  if [[ -s "${STATE}/proton-verified.json" ]] && [[ -z "$(podman unshare find "$BACKUP_REPO" -type f -newer "${STATE}/proton-verified.json" ! -name 'lock.*' -print -quit 2>/dev/null)" ]]; then
+    log "catch-up: nothing pending (every file on the stick is older than the last verified hash run)"; exit 0
+  fi
+  log "catch-up: files on the stick are newer than the last verified hash run; syncing"
+fi
+if [[ "$SYNC_ONLY" != 1 ]]; then
 log "preflight: stage space"
 db_bytes=$(psql_in "$DISPATCH_PG" "SELECT pg_database_size(current_database())") || die "preflight: cannot read the dispatch database size"
 nc_bytes=$(psql_in "$NEXTCLOUD_PG" "SELECT pg_database_size(current_database())") || die "preflight: cannot read the Nextcloud database size"
+xt_bytes=0
+if (( ${#EXCLUDE_TABLES[@]} > 0 )); then
+  xt_bytes=$(psql_in "$DISPATCH_PG" "SELECT coalesce(sum(pg_total_relation_size(c.oid)),0) FROM pg_class c WHERE c.relname IN ($(printf "'%s'," "${EXCLUDE_TABLES[@]}" | sed 's/,$//'))") || xt_bytes=0
+fi
 ct_bytes=0
 if (( ${#COMPRESS_TABLES[@]} > 0 )); then
   ct_bytes=$(psql_in "$DISPATCH_PG" "SELECT coalesce(sum(pg_total_relation_size(c.oid)),0) FROM pg_class c WHERE c.relname IN ($(printf "'%s'," "${COMPRESS_TABLES[@]}" | sed 's/,$//'))") || ct_bytes=0
 fi
-need=$(python3 - "$db_bytes" "$nc_bytes" "$ct_bytes" "$STAGE_FACTOR" <<'PY'
+need=$(python3 - "$db_bytes" "$nc_bytes" "$ct_bytes" "$STAGE_FACTOR" "$xt_bytes" <<'PY'
 import sys
-db, nc, ct, f = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4])
-# uncompressed stage ~ factor x the live size (TOAST is written out decompressed); compressed tables ~0.5 x
-print(int((db - ct) * f + ct * 0.5 + nc * f))
+db, nc, ct, f, xt = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5])
+# uncompressed stage ~ factor x the live size (TOAST is written out decompressed); compressed tables ~0.5 x;
+# tables in BACKUP_EXCLUDE_TABLE_DATA are not dumped at all
+print(int(max(db - ct - xt, 0) * f + ct * 0.5 + nc * f))
 PY
 )
 if ! python3 "$STAGE_GUARD" preflight "$WORK" "$need" "$MIN_FREE"; then
   die "backup NOT started: the estimated stage (dispatch $(( db_bytes / 1073741824 )) GB live, factor ${STAGE_FACTOR}) does not fit on ${WORK} with the ${MIN_FREE} byte reserve. Free space there, or set BACKUP_COMPRESS_TABLES (docs/BACKUP.md)."
 fi
 if [[ "$PRE" == 1 ]]; then log "preflight only: the stage fits; nothing dumped"; exit 0; fi
+fi   # SYNC_ONLY
 
 # 2026-10-12: one heavy job at a time (backup, restore test, rollout, stack refresh) -- wait our turn.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/heavy_lock.sh"
-heavy_lock_acquire "nightly backup" 7200 || die "heavy-work turn still taken after 2 h (holder: $(heavy_lock_holder)); backup skipped"
+if [[ "$SYNC_ONLY" == 1 ]]; then
+  heavy_lock_acquire "backup catch-up" 60 || { log "catch-up: heavy-work turn taken ($(heavy_lock_holder)); next hour"; exit 0; }
+else
+  heavy_lock_acquire "nightly backup" 7200 || die "heavy-work turn still taken after 2 h (holder: $(heavy_lock_holder)); backup skipped"
+fi
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 stage=$(mktemp -d "${WORK}/stage.${ts}.XXXX"); chmod 700 "$stage"
@@ -200,9 +246,26 @@ heartbeat() {
 }
 hb_pid=""
 if (( HEARTBEAT_MIN > 0 )); then heartbeat & hb_pid=$!; fi
-cleanup() { [[ -n "$hb_pid" ]] && kill "$hb_pid" 2>/dev/null; rm -rf "$stage"; }
+# 2026-11-26 (operator: "put on a monitor to see how much we actually need"): sample the stage filesystem's free
+# space every 15 s through the dumps and borg create; the run records the real peak in the ledger (stage-usage).
+minfree_file="${STATE}/.stage-minfree.$$"
+python3 "$STAGE_GUARD" free "$WORK" > "$minfree_file" 2>/dev/null || echo 0 > "$minfree_file"
+free_monitor() {
+  local f m
+  while sleep 15; do
+    f=$(python3 "$STAGE_GUARD" free "$WORK" 2>/dev/null) || continue
+    m=$(cat "$minfree_file" 2>/dev/null || echo "$f")
+    (( f < m )) && echo "$f" > "$minfree_file"
+  done
+}
+mon_pid=""
+if [[ "$SYNC_ONLY" != 1 ]]; then free_monitor & mon_pid=$!; fi
+cleanup() { [[ -n "$hb_pid" ]] && kill "$hb_pid" 2>/dev/null; [[ -n "$mon_pid" ]] && kill "$mon_pid" 2>/dev/null; rm -f "$minfree_file"; rm -rf "$stage"; }
 trap cleanup EXIT
 
+if [[ "$SYNC_ONLY" == 1 ]]; then
+  archive="catch-up-${ts}"
+else
 # 2026-11-03 (operator: dedupe in place, uncompressed): the dumps that go INTO Borg are written
 # uncompressed (-Z 0, DUMP_Z). A pg_dump -Z 6 stream changes almost entirely every night, so Borg could
 # not deduplicate it (2-5 GB a night, docs/BACKUP.md); uncompressed, Borg's content-defined chunks match
@@ -224,6 +287,10 @@ log "dump: dispatch Postgres (LADD data $( [[ "$INCLUDE_CUI" == 1 ]] && echo inc
 main_excl=""
 [[ "$INCLUDE_CUI" == 1 ]] || main_excl="$(printf -- '--exclude-table-data=%s ' "${LADD_TABLES[@]}")"
 (( ${#COMPRESS_TABLES[@]} == 0 )) || main_excl+="$(printf -- '--exclude-table-data=%s ' "${COMPRESS_TABLES[@]}")"
+if (( ${#EXCLUDE_TABLES[@]} > 0 )); then
+  main_excl+="$(printf -- '--exclude-table-data=%s ' "${EXCLUDE_TABLES[@]}")"
+  log "dump: data of ${EXCLUDE_TABLES[*]} left out (BACKUP_EXCLUDE_TABLE_DATA; the rows stay in the live database)"
+fi
 pg_dump_in "$DISPATCH_PG" "$stage/dispatch.pgdump" "$main_excl"
 if (( ${#COMPRESS_TABLES[@]} > 0 )); then
   phase "1/4 dump: compressed tables"
@@ -307,6 +374,7 @@ if [[ ! -d "$BACKUP_REPO" ]]; then
 fi
 
 archive="ctdi-${ts}"
+stage_bytes=$(du -sb "$stage" 2>/dev/null | cut -f1)
 phase "2/4 borg create (archive on ${BACKUP_REPO})"
 log "borg create ::${archive}"
 # podman unshare: the Nextcloud volume belongs to the container's mapped uids
@@ -329,6 +397,11 @@ print(json.dumps({"id": a.get("id"), "name": a.get("name"), "original_size": a.g
                   "deduplicated_size": a.get("stats", {}).get("deduplicated_size"), "nfiles": a.get("stats", {}).get("nfiles")}))
 PY
 )
+# the stage monitor's result for this run: estimate vs what the dumps really used, and the lowest free space seen
+[[ -n "$mon_pid" ]] && { kill "$mon_pid" 2>/dev/null; mon_pid=""; }
+start_free=$(head -n 1 "$minfree_file" 2>/dev/null || echo 0)
+python3 "$LEDGER_PY" append stage-usage --json "{\"archive\": \"${archive}\", \"estimate_bytes\": ${need:-0}, \"stage_bytes\": ${stage_bytes:-0}, \"min_free_bytes\": ${start_free:-0}, \"reserve_bytes\": ${MIN_FREE}, \"floor_bytes\": ${STAGE_FLOOR}, \"excluded\": \"${EXCLUDE_TABLES[*]:-}\"}" >/dev/null || true
+log "stage monitor: dumps used $(( ${stage_bytes:-0} / 1073741824 )) GiB (estimate $(( ${need:-0} / 1073741824 )) GiB); lowest free on ${WORK} during the run: $(( ${start_free:-0} / 1073741824 )) GiB"
 # 2026-11-26 (operator): `borg prune` only marks archives; `borg compact` is what deletes files on the stick. It
 # now runs AFTER the off-box sync, and only when the hash run has verified every local file in Proton by sha1
 # (local_release below). Until then the stick keeps everything: it is the network-down, portable backup.
@@ -337,6 +410,40 @@ podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" \
   borg prune --keep-daily "$KEEP_D" --keep-weekly "$KEEP_W" --keep-monthly "$KEEP_M" --glob-archives 'ctdi-*'
 python3 "$LEDGER_PY" append backup --json "{\"archive\": ${arch_id}, \"dumps\": ${dumps_meta}, \"include_cui\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"borg_warnings\": $( (( borg_warn )) && echo true || echo false ), \"repo\": \"local\"}" >/dev/null
 log "archive ${archive} done"
+
+# 2026-11-26 (operator: off-grid 7-30 days): how many nights the stick can keep archiving with the network down.
+# Offline nothing is compacted (the local release needs a verified Proton copy), so each night adds about one
+# archive's deduplicated size; each run also needs the dump stage plus the reserve free. Recorded in the ledger;
+# backup_freshness.py alerts when the estimate is under BACKUP_OFFLINE_MIN_DAYS.
+OFF_MIN="$(setting BACKUP_OFFLINE_MIN_DAYS 7)"; OFF_TARGET="$(setting BACKUP_OFFLINE_TARGET_DAYS 30)"
+free_b=$(df -B1 --output=avail "$BACKUP_REPO" 2>/dev/null | tail -n 1 | tr -d ' ')
+if hr="$(python3 - "$LEDGER_PY" "${free_b:-0}" "${need:-0}" "$MIN_FREE" "$OFF_MIN" "$OFF_TARGET" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("bl", sys.argv[1]); bl = importlib.util.module_from_spec(spec); spec.loader.exec_module(bl)
+free, need, reserve, lo, target = (int(float(x)) for x in sys.argv[2:7])
+g = [e["data"]["archive"].get("deduplicated_size") for e in bl.entries() if e.get("kind") == "backup"
+     and isinstance(e.get("data", {}).get("archive"), dict)]
+g = [x for x in g if isinstance(x, (int, float)) and x > 0][-7:]
+avg = sum(g) / len(g) if g else 0
+room = free - need - reserve
+days = int(room // avg) if avg > 0 else None
+print(json.dumps({"free_bytes": free, "stage_need_bytes": need, "reserve_bytes": reserve,
+                  "avg_nightly_growth_bytes": int(avg), "nights_sampled": len(g), "offline_days": days,
+                  "min_days": lo, "target_days": target, "ok": days is None or days >= lo}, separators=(",", ":")))
+PY
+)"; then
+  python3 "$LEDGER_PY" append offline-headroom --json "$hr" >/dev/null || true
+  log "off-grid headroom: $(python3 - "$hr" <<'PY'
+import json, sys
+h = json.loads(sys.argv[1]); d = h["offline_days"]
+print(("unknown (no growth history yet)" if d is None else f"about {d} night(s) of archives with the network down")
+      + f"; free {h['free_bytes'] / 1073741824:.1f} GiB, stage {h['stage_need_bytes'] / 1073741824:.1f} GiB,"
+      f" nightly growth {h['avg_nightly_growth_bytes'] / 1073741824:.2f} GiB; minimum {h['min_days']}, target {h['target_days']}"
+      + ("" if h["ok"] else "  ** BELOW THE MINIMUM **"))
+PY
+)"
+fi
+fi   # SYNC_ONLY (catch-up skips dump, archive, prune and headroom)
 
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" && "$SYNC_GATE" == 1 ]]; then
   # the weekly signed gate (same machinery as the liveness switch). A lapse HOLDS the sync: the archive is
@@ -432,6 +539,7 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
         5) log "the uplink turned metered during the sync; finishing with rclone at the metered cap"; SYNC_VIA_RCLONE=1 ;;
         *) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": false, \"exit\": ${prc}, \"proton_sync\": ${sum_json}}" >/dev/null
            release_skipped "sync or hash run did not pass (proton_sync exit ${prc})"
+           [[ "$SYNC_ONLY" == 1 ]] && { log "catch-up: sync did not complete (exit ${prc}); next hour"; exit 0; }
            die "sync to ${PROTON_REMOTE} failed (proton_sync exit ${prc}: 4 = stall or time budget, 6 = hash run failed, 3 = refused; the local archive is complete and nothing was deleted on the stick; the next run resumes)" ;;
       esac
     fi

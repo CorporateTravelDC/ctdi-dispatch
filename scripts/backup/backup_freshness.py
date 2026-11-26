@@ -86,6 +86,13 @@ def check(now_entries=None) -> list[str]:
         rt = last("restore-test")
         if age_h(rt) > 24 * float(setting("BACKUP_MAX_RESTORE_TEST_AGE_D", "8")) or (rt and not rt["data"].get("ok")):
             problems.append("restore test stale or failed")
+        # 2026-11-26 (operator: off-grid 7-30 days): the stick must be able to keep archiving with the network down.
+        hr = last("offline-headroom")
+        if hr and hr["data"].get("offline_days") is not None:
+            lo = int(setting("BACKUP_OFFLINE_MIN_DAYS", "7"))
+            if hr["data"]["offline_days"] < lo:
+                problems.append(f"off-grid headroom {hr['data']['offline_days']} night(s) < minimum {lo}: "
+                                "free space on the backup disk, or a larger disk (docs/BACKUP.md)")
     # 2026-10-11: agent home snapshots (root-run, 03:20 UTC) must be fresh too.
     snap = Path("/var/lib/corporatetraveldc/agent-snapshots")
     # 2026-10-12: was a one-name default (codex) -- 1 of 6 accounts checked. Now every

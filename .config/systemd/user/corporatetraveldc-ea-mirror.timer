@@ -1,0 +1,8 @@
+[Unit]
+Description=EA read mirror every 30 min (operator 2026-11-26: what the EA must read natively goes here, not into one-off relays)
+[Timer]
+OnCalendar=*:00/30
+Persistent=true
+RandomizedDelaySec=3m
+[Install]
+WantedBy=timers.target

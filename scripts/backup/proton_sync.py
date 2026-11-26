@@ -103,7 +103,9 @@ class Cli:
             return True
         timeout = max(MIN_UPLOAD_TIMEOUT_S, size / FLOOR_RATE_BPS)
         try:
-            p = self.run(["filesystem", "upload", "-f", "replace", "-d", "merge", "-t", str(local), parent],
+            # 2026-11-26: create-new-revision, never replace -- `replace` TRASHES the remote file it replaces
+            # (CLI help), which broke append-only; a new revision keeps the old bytes in the file's history.
+            p = self.run(["filesystem", "upload", "-f", "create-new-revision", "-d", "merge", "-t", str(local), parent],
                          timeout=timeout)
         except subprocess.TimeoutExpired:
             log(f"   upload timed out after {timeout:.0f} s: {local.name}")
@@ -303,9 +305,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             todo = sorted((r for r, s in local.items() if remote.get(r) != s), key=order_key)
         summary["remote_unsized"] = unsized
+        summary["remote_only"] = sum(1 for r in remote if r not in local)
         summary["skipped"] = len(local) - len(todo)
         summary["pending"] = len(todo)
-        log(f"local {len(local)} files, remote {len(remote)} files ({unsized} without a size); {len(todo)} to upload "
+        log(f"local {len(local)} files, remote {len(remote)} files ({unsized} without a size, "
+            f"{summary['remote_only']} only in Proton); {len(todo)} to upload "
             f"({sum(local[r] for r in todo) / 1073741824:.2f} GiB)")
         last_progress = time.monotonic()
         metered = False

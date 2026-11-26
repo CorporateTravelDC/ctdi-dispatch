@@ -1,0 +1,8 @@
+[Unit]
+Description=Corporate Travel DC -- backup catch-up: push and hash-verify anything on the stick not yet verified in Proton, then the local release (ctdi-backup.sh --sync-only; docs/BACKUP.md)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/bin/bash /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/backup/ctdi-backup.sh --sync-only

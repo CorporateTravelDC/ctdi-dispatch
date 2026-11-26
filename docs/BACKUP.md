@@ -215,7 +215,25 @@ rclone keeps its own config (`BACKUP_RCLONE_CONFIG`, operator-only). Its credent
 
 ## Retention
 
-`BACKUP_KEEP_DAILY` / `WEEKLY` / `MONTHLY` default to 30 / 12 / 12. Each run prunes and compacts the local repository first and then syncs, so the target mirrors the pruned state.
+~~`BACKUP_KEEP_DAILY` / `WEEKLY` / `MONTHLY` default to 30 / 12 / 12. Each run prunes and compacts the local repository first and then syncs, so the target mirrors the pruned state.~~ (superseded 2026-11-26, operator)
+
+- **On the stick: a 7-30 night local Borg copy.** `BACKUP_KEEP_DAILY` defaults to 30 and must be 7..30 (the run
+  refuses otherwise); `BACKUP_KEEP_WEEKLY` / `MONTHLY` default to 0. The stick is the deduplicating, network-down
+  and portable copy, and the off-grid staging store: with the network down it keeps archiving and deletes nothing.
+- **In Proton: the long history.** The Proton copy is append-only (segments and `index.N` files are never deleted
+  there), so states older than the stick's 30 nights stay recoverable from it.
+- **Order each night:** dump, `borg create`, `borg prune` (marks only), sync to Proton, the sha1 hash run, then
+  `borg compact` (the local release, audited in the ledger). See "Off-box sync with Proton's official Drive CLI".
+- **Catch-up:** `corporatetraveldc-backup-catchup.timer` runs `ctdi-backup.sh --sync-only` hourly. When any file on
+  the stick is newer than the last verified hash run (a failed nightly push, or days of network down), it syncs,
+  verifies and releases; otherwise it is a quiet no-op. It waits for the backup lock and the heavy-work turn, and
+  never runs on the metered hotspot. Its failures are recorded, not alerted hourly; the freshness check alerts on a
+  stale sync.
+- **Off-grid headroom:** each nightly run records an `offline-headroom` ledger entry: free space on the backup disk,
+  minus the dump stage and the reserve, divided by the average deduplicated size of the last 7 archives = the
+  nights the stick can keep archiving offline. `backup_freshness.py` reports it when under
+  `BACKUP_OFFLINE_MIN_DAYS` (7); `BACKUP_OFFLINE_TARGET_DAYS` (30) is the goal. A larger disk (or the NVMe) is the
+  fix when it stays under the minimum.
 
 ## Sizing (measured 2026-10-09)
 
@@ -252,13 +270,23 @@ Now:
 
 | setting (dispatch.env) | default | meaning |
 |---|---|---|
-| `BACKUP_MIN_FREE_GB` | 10 | space always left free on the stage filesystem |
+| `BACKUP_MIN_FREE_GB` | ~~10~~ 0 (held off 2026-11-26) | preflight reserve on top of the estimate; held off while the stage monitor measures real use. The hard limit always keeps 2 GiB free (not a setting) |
+| `BACKUP_EXCLUDE_TABLE_DATA` | `demo_snapshots` | tables whose DATA is left out of the dump entirely (schema kept; rows stay in the live database); a table here is also dropped from `BACKUP_COMPRESS_TABLES` |
 | `BACKUP_STAGE_FACTOR` | 2.0 | uncompressed stage size per byte of live database (TOAST expands) |
 | `BACKUP_COMPRESS_TABLES` | empty | tables whose data leaves the uncompressed dump for a second, compressed (`-Z 6`) dump archived alongside it |
 
 **Decided 2026-11-26 (operator): option 1**, `BACKUP_COMPRESS_TABLES=demo_snapshots` in `dispatch.env`, after the
 guard stopped the 11-25 and 11-26 runs (11-26: 47.7 GiB free, ~43.3 GiB + 10 GiB reserve needed). Borg on the
-stick keeps full history; Proton mirrors it append-only. The options were:
+stick keeps full history; Proton mirrors it append-only.
+
+**Superseded 2026-11-26 evening (operator):** compressing it was not enough (11-26 preflight: ~44.0 GiB + 10 GiB
+needed, 47.7 GiB free). `demo_snapshots` was ~34 GB of recordings back to 2026-06-27, growing ~1.1 GB/day. Its data
+is now **left out of the backup** (`BACKUP_EXCLUDE_TABLE_DATA`); the rows stay in the live database. The 10 GB
+preflight reserve is held off (0) behind a fixed 2 GiB hard floor, and each run writes a `stage-usage` ledger entry
+(estimate, what the dumps really used, the lowest free space seen during the run) to size the reserve from data.
+Keeping 30 / 21 / 14 days of `demo_snapshots` in the database would free 7.4 / 12 / 18 GB there (census hand-off 11-26).
+
+The options were:
 
 1. `BACKUP_COMPRESS_TABLES=demo_snapshots`: all data is still backed up; `demo_snapshots` loses Borg
    deduplication, so each night's compressed copy is new data for the repository and for the off-box

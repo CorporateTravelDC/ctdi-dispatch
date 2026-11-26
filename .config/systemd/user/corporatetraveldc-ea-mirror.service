@@ -1,0 +1,8 @@
+[Unit]
+Description=Corporate Travel DC -- the EA read mirror: journals, backup ledger, census, samples and DB sizes into /srv/ctdc-ea/mirror, redacted and leak-scanned first (scripts/mirror/ea-mirror.sh)
+OnFailure=corporatetraveldc-unit-failure-notify@%n.service
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/bin/bash /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/mirror/ea-mirror.sh

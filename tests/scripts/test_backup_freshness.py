@@ -63,3 +63,13 @@ def test_snapshot_agents_default_to_every_agent_account(monkeypatch):
     assert m._snapshot_agents() == ["ctdc-agent-anthropic-claude", "ctdc-agent-openai-codex"]
     monkeypatch.setenv("CTDC_SNAPSHOT_AGENTS", "ctdc-agent-x")
     assert m._snapshot_agents() == ["ctdc-agent-x"]
+
+
+def test_offline_headroom_below_minimum_is_reported(monkeypatch):
+    m = load(monkeypatch, target="proton:ctdi-backup")
+    monkeypatch.setenv("BACKUP_OFFLINE_MIN_DAYS", "7")
+    base = [e("backup", 1), e("sync", 1, ok=True), e("restore-test", 24, ok=True)]
+    low = m.check(base + [e("offline-headroom", 1, offline_days=3)])
+    assert any("off-grid headroom 3 night(s) < minimum 7" in p for p in low)
+    assert not [p for p in m.check(base + [e("offline-headroom", 1, offline_days=12)]) if "headroom" in p]
+    assert not [p for p in m.check(base + [e("offline-headroom", 1, offline_days=None)]) if "headroom" in p]

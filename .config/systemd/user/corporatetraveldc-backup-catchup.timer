@@ -1,0 +1,8 @@
+[Unit]
+Description=Hourly backup catch-up (off-grid: pushes the stick's backlog when the network is back; quiet no-op otherwise)
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=10m
+[Install]
+WantedBy=timers.target

@@ -32,7 +32,7 @@ from pathlib import Path
 LEDGER = Path(os.environ.get("BACKUP_LEDGER", str(Path.home() / ".local/state/ctdc-backup/ledger.jsonl")))
 KINDS = ("backup", "cui-stamp", "sync", "restore-test", "note",
          # 2026-11-26: what borg compact removed from the stick after the hash run verified it off-box
-         "local-release",
+         "local-release", "offline-headroom", "stage-usage",
          # 2026-11-19: direct-to-target backups (ctdi-backup-direct.sh) and their restore test
          "direct-object", "direct-backup", "direct-retention", "direct-restore-test")
 

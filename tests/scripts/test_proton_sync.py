@@ -233,3 +233,21 @@ def test_hash_cache_avoids_rereading_unchanged_files(env, tmp_path, monkeypatch)
     (repo / "index.12").write_bytes(b"q" * 33)                       # one file changed
     assert run("--verify", "--hash-cache", str(cache)) == 0
     assert [p.name for p in reads] == ["index.12"]
+
+
+def test_uploads_create_a_new_revision_never_replace(env):
+    """`-f replace` trashes the remote file it replaces (CLI help); append-only needs create-new-revision."""
+    run, tree, edit, repo = env
+    assert run() == 0
+    ups = [c for c in tree()["calls"] if c[:2] == ["filesystem", "upload"]]
+    assert ups and all(c[c.index("-f") + 1] == "create-new-revision" for c in ups)
+
+
+def test_summary_counts_files_only_in_proton(env, capsys):
+    run, tree, edit, repo = env
+    assert run() == 0
+    edit(lambda t: [t["nodes"].__setitem__(f"/my-files/ctdi-backup/data/0/{700 + i}", {"type": "file", "size": 1}) for i in range(3)])
+    capsys.readouterr()
+    assert run() == 0
+    out = capsys.readouterr().out
+    assert json.loads(out.strip().splitlines()[-1])["remote_only"] == 3 and "3 only in Proton" in out
