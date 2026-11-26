@@ -14,8 +14,12 @@ What it does (one pass, safe to rerun):
        everything else    last  (index.*, hints.*, integrity.*, config, nonce, README): so a pass that stops early
                           leaves the remote copy at the previous consistent state plus extra segments, never a
                           new index pointing at segments that are not there
-  4. only when every upload succeeded: move remote files that no longer exist locally (Borg compaction) to the
-     Proton trash -- capped (--max-deletes), and refused outright if the local listing looks truncated
+  4. Proton is APPEND-ONLY (operator 2026-11-26): nothing is ever trashed or deleted there. Segments Borg compacts
+     away locally stay in Proton, and so do the old index.N files, so any earlier repository state can be rebuilt.
+  5. --verify (the hash run): every local file's sha1 (cached by size + mtime, since Borg segments never change once
+     written) is compared with the sha1 Proton recorded for it. A file missing there, with a different sha1, or
+     with none recorded (rclone-era uploads) is uploaded once more and checked again. --manifest-out writes the
+     verified {path: sha1} map; ctdi-backup.sh lets `borg compact` delete local files only when this passes.
 Lock files (lock.exclusive, lock.roster) are never copied. Paths and sizes are logged; never a node id, an
 account name or anything from the session.
 
@@ -24,9 +28,10 @@ faster than --avg-cap-mb, the next one waits until the average is back at the ca
 run at link speed). --stop-if-iface: before each file, if the default route has moved to that interface (the
 metered hotspot), stop with exit 5 so the caller can finish on its metered path.
 
-Exit: 0 complete; 4 incomplete (a stall: no file finished for --stall-min, or the --max-hours budget ran out);
-5 stopped because the uplink became metered; 3 refused or failed hard (binary mismatch, listing failed, remote
-root missing). 4 and 3 mean what they mean for rate_guard.py, so the backup script treats them the same way.
+Exit: 0 complete (and, with --verify, every local file verified); 4 incomplete (a stall: no file finished for
+--stall-min, or the --max-hours budget ran out); 5 stopped because the uplink became metered; 6 uploads complete
+but the hash run did not verify every file; 3 refused or failed hard (binary mismatch, listing failed, remote root
+missing). 4 and 3 mean what they mean for rate_guard.py, so the backup script treats them the same way.
 
 The Proton session comes from the environment (PROTON_DRIVE_CREDENTIALS_STORE / PROTON_DRIVE_CACHE_DIR), set up
 by the caller; this script never reads or writes it.
@@ -107,12 +112,6 @@ class Cli:
             log(f"   upload failed (exit {p.returncode}): {local.name}: {(p.stderr or p.stdout).strip()[:200]}")
         return p.returncode == 0
 
-    def trash(self, remote: str) -> bool:
-        if self.dry_run:
-            return True
-        p = self.run(["filesystem", "trash", remote], timeout=120)
-        return p.returncode == 0
-
 
 def node_name(n: dict) -> str | None:
     nm = n.get("name")
@@ -142,7 +141,15 @@ def default_iface() -> str:
     return ""
 
 
-def walk_remote(cli: Cli, root: str) -> tuple[dict[str, int | None], set[str]]:
+def node_sha1(n: dict) -> str | None:
+    for holder in (n.get("activeRevision") or {}, n):
+        d = holder.get("claimedDigests")
+        if isinstance(d, dict) and isinstance(d.get("sha1"), str) and len(d["sha1"]) == 40:
+            return d["sha1"].lower()
+    return None
+
+
+def walk_remote(cli: Cli, root: str, sha1s: dict | None = None) -> tuple[dict[str, int | None], set[str]]:
     files: dict[str, int | None] = {}
     folders: set[str] = {""}
     stack = [""]
@@ -160,6 +167,8 @@ def walk_remote(cli: Cli, root: str) -> tuple[dict[str, int | None], set[str]]:
                 stack.append(child)
             elif n.get("type") == "file":
                 files[child] = node_size(n)
+                if sha1s is not None:
+                    sha1s[child] = node_sha1(n)
     return files, folders
 
 
@@ -172,6 +181,70 @@ def walk_local(repo: Path) -> dict[str, int]:
             p = Path(dirpath) / name
             out[str(p.relative_to(repo))] = p.stat().st_size
     return out
+
+
+def sha1_file(path: Path) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def local_sha1s(repo: Path, rels, cache_path: str | None) -> dict[str, str]:
+    """sha1 of each local file; cached by (size, mtime_ns), so only new or changed files are read again."""
+    cache: dict = {}
+    if cache_path and os.path.isfile(cache_path):
+        try:
+            cache = json.load(open(cache_path))
+        except ValueError:
+            cache = {}
+    out = {}
+    for rel in rels:
+        st = (repo / rel).stat()
+        c = cache.get(rel)
+        if c and c[0] == st.st_size and c[1] == st.st_mtime_ns:
+            out[rel] = c[2]
+        else:
+            out[rel] = sha1_file(repo / rel)
+            cache[rel] = [st.st_size, st.st_mtime_ns, out[rel]]
+    if cache_path:
+        keep = {r: cache[r] for r in out}           # forget files that are gone locally
+        tmp = cache_path + ".new"
+        with open(tmp, "w") as f:
+            json.dump(keep, f)
+        os.replace(tmp, cache_path)
+    return out
+
+
+def verify(cli: Cli, a, repo: Path, local: dict[str, int], folders: set[str], summary: dict) -> bool:
+    """The hash run: every local file must be in Proton with the same sha1. One re-upload round for the rest."""
+    mine = local_sha1s(repo, sorted(local), a.hash_cache)
+    for attempt in (1, 2):
+        theirs: dict[str, str | None] = {}
+        sizes, _ = walk_remote(cli, a.remote, theirs)
+        bad = [r for r in sorted(local, key=order_key) if theirs.get(r) != mine[r] or sizes.get(r) != local[r]]
+        summary["verify_unverified"] = len(bad)
+        summary["verify_no_remote_sha1"] = sum(1 for r in bad if r in theirs and theirs[r] is None)
+        if not bad:
+            break
+        if attempt == 2 or a.dry_run:
+            break
+        log(f"hash run: {len(bad)} file(s) not verified ({summary['verify_no_remote_sha1']} with no sha1 recorded "
+            "in Proton); uploading them once more")
+        for rel in bad:
+            rel_dir = os.path.dirname(rel)
+            ensure_folders(cli, a.remote, rel_dir, folders)
+            cli.upload(repo / rel, a.remote + ("/" + rel_dir if rel_dir else ""), local[rel])
+    ok = not bad
+    summary["verified"] = len(local) - len(bad)
+    if a.manifest_out and ok:
+        with open(a.manifest_out + ".new", "w") as f:
+            json.dump(mine, f, sort_keys=True)
+        os.replace(a.manifest_out + ".new", a.manifest_out)
+    log(f"hash run: {summary['verified']}/{len(local)} local files verified in Proton by sha1"
+        + ("" if ok else f"; NOT verified: {', '.join(bad[:5])}{' ...' if len(bad) > 5 else ''}"))
+    return ok
 
 
 def order_key(rel: str) -> tuple:
@@ -199,8 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cli-sha512", required=True)
     ap.add_argument("--stall-min", type=float, default=20)
     ap.add_argument("--max-hours", type=float, default=6)
-    ap.add_argument("--max-deletes", type=int, default=200)
-    ap.add_argument("--no-delete", action="store_true")
+    ap.add_argument("--no-delete", action="store_true", help="accepted for old callers; Proton is never deleted from")
+    ap.add_argument("--verify", action="store_true", help="after uploading, run the sha1 hash run (exit 6 if it fails)")
+    ap.add_argument("--hash-cache", help="JSON cache of local sha1s by size + mtime (with --verify)")
+    ap.add_argument("--manifest-out", help="write the verified {path: sha1} map here when the hash run passes")
     ap.add_argument("--avg-cap-mb", type=float, default=0, help="average upload cap in MB/s (0 = none)")
     ap.add_argument("--stop-if-iface", action="append", default=[], help="stop (exit 5) if the default route uses it")
     ap.add_argument("--unsized", choices=("upload", "skip"), default="upload",
@@ -208,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     t0 = time.monotonic()
-    summary = {"uploaded": 0, "uploaded_bytes": 0, "skipped": 0, "failed": 0, "trashed": 0,
+    summary = {"uploaded": 0, "uploaded_bytes": 0, "skipped": 0, "failed": 0,
                "pending": 0, "complete": False}
     try:
         if sha512(Path(a.cli)) != a.cli_sha512.lower():
@@ -268,23 +343,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 summary["failed"] += 1
         summary["complete"] = summary["pending"] == 0
-        if summary["complete"] and not a.no_delete:
-            stale = sorted(r for r in remote if r not in local and not os.path.basename(r).startswith(SKIP_PREFIXES))
-            if stale and len(local) < 0.9 * len(remote):
-                log(f"NOT trashing {len(stale)} remote-only files: the local listing ({len(local)}) is under 90% of "
-                    f"the remote ({len(remote)}), which looks like a truncated listing")
-            elif len(stale) > a.max_deletes:
-                log(f"NOT trashing {len(stale)} remote-only files: over the cap of {a.max_deletes}")
-            else:
-                for r in stale:
-                    if cli.trash(f"{a.remote}/{r}"):
-                        summary["trashed"] += 1
-                if stale:
-                    log(f"trashed {summary['trashed']}/{len(stale)} remote-only files (removed locally by compaction)")
+        verified = None
+        if summary["complete"] and a.verify and not metered:
+            verified = verify(cli, a, repo, local, folders, summary)
+        summary["verified_ok"] = verified
         summary["seconds"] = int(time.monotonic() - t0)
         print(json.dumps(summary, sort_keys=True), flush=True)
         summary["metered_stop"] = metered
-        return 0 if summary["complete"] else (5 if metered else 4)
+        if not summary["complete"]:
+            return 5 if metered else 4
+        return 6 if verified is False else 0
     except Hard as e:
         log(f"REFUSED: {e}")
         summary["error"] = str(e)[:300]

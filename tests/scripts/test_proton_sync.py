@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location("proton_sync", REPO / "scripts/bac
 ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
 
 FAKE = r'''#!/usr/bin/env python3
-import json, os, sys
+import hashlib, json, os, sys
 st = os.environ["FAKE_PD_STATE"]
 tree = json.load(open(st))
 a = sys.argv[1:]
@@ -35,6 +35,8 @@ if a[:2] == ["filesystem", "list"]:
              "contentAuthor": {"ok": True, "value": "someone@example.invalid"}}
         if v["type"] == "file":
             n["activeRevision"] = {"claimedSize": v["size"]} if v.get("size") is not None else {}
+            if v.get("sha1"):
+                n["activeRevision"]["claimedDigests"] = {"sha1": v["sha1"]}
         out.append(n)
     print(json.dumps(out)); save(); sys.exit(0)
 if a[:2] == ["filesystem", "create-folder"]:
@@ -47,7 +49,8 @@ if a[:2] == ["filesystem", "upload"]:
         fails[name] -= 1; save(); print("upload error", file=sys.stderr); sys.exit(2)
     if parent.rstrip("/") not in tree["nodes"]:
         save(); print("parent missing", file=sys.stderr); sys.exit(1)
-    tree["nodes"][parent.rstrip("/") + "/" + name] = {"type": "file", "size": os.path.getsize(local)}
+    tree["nodes"][parent.rstrip("/") + "/" + name] = {"type": "file", "size": os.path.getsize(local),
+        "sha1": hashlib.sha1(open(local, "rb").read()).hexdigest()}
     save(); sys.exit(0)
 if a[:2] == ["filesystem", "trash"]:
     tree["nodes"].pop(a[2], None); tree.setdefault("trashed", []).append(a[2]); save(); sys.exit(0)
@@ -133,34 +136,28 @@ def test_draft_node_does_not_count_as_copy(env):
     assert uploads(tree()) == ["data/0/2"]
 
 
-def test_one_retry_then_failure_is_incomplete_and_nothing_trashed(env):
-    run, tree, edit, _ = env
+def test_one_retry_then_failure_is_incomplete(env):
+    run, tree, edit, repo = env
     assert run() == 0
-    edit(lambda t: t["nodes"].__setitem__("/my-files/ctdi-backup/data/0/99", {"type": "file", "size": 1}))
-    (env[3] / "data/0/1").write_bytes(b"z" * 101)
+    (repo / "data/0/1").write_bytes(b"z" * 101)
     edit(lambda t: t.__setitem__("fail", {"1": 1}))                    # fails once, the retry succeeds
     assert run() == 0
-    assert "/my-files/ctdi-backup/data/0/99" in tree()["trashed"]
-    (env[3] / "data/0/1").write_bytes(b"z" * 102)
-    edit(lambda t: (t.__setitem__("fail", {"1": 2}),
-                    t["nodes"].__setitem__("/my-files/ctdi-backup/data/0/98", {"type": "file", "size": 1})))
+    (repo / "data/0/1").write_bytes(b"z" * 102)
+    edit(lambda t: t.__setitem__("fail", {"1": 2}))                    # fails twice: incomplete
     assert run() == 4
-    assert "/my-files/ctdi-backup/data/0/98" not in tree()["trashed"]  # incomplete pass never removes
 
 
-def test_delete_guards(env):
-    run, tree, edit, _ = env
+def test_proton_is_append_only(env):
+    """2026-11-26 (operator): files gone locally (Borg compaction) stay in Proton; nothing is ever trashed."""
+    run, tree, edit, repo = env
     assert run() == 0
     edit(lambda t: [t["nodes"].__setitem__(f"/my-files/ctdi-backup/data/0/{900 + i}", {"type": "file", "size": 1})
                     for i in range(5)])
-    assert run("--max-deletes", "3") == 0
-    assert not tree().get("trashed")
-    assert run("--no-delete") == 0
-    assert not tree().get("trashed")
-    edit(lambda t: [t["nodes"].__setitem__(f"/my-files/ctdi-backup/data/1/{i}", {"type": "file", "size": 1})
-                    for i in range(40)])
-    assert run("--max-deletes", "1000") == 0                           # local is under 90% of remote
-    assert not tree().get("trashed")
+    for extra in ([], ["--no-delete"]):
+        assert run(*extra) == 0
+        assert not tree().get("trashed")
+        assert all(f"/my-files/ctdi-backup/data/0/{900 + i}" in tree()["nodes"] for i in range(5))
+    assert not [c for c in tree()["calls"] if c[:2] == ["filesystem", "trash"]]
 
 
 def test_refusals(env, tmp_path):
@@ -197,3 +194,42 @@ def test_average_cap_waits_after_a_fast_file(env, monkeypatch):
     monkeypatch.setattr(ps, "_sleep", waits.append)
     assert run("--avg-cap-mb", "0.00001") == 0            # 10 B/s: every tiny file "went too fast"
     assert len(waits) == 9 and all(w > 0 for w in waits)
+
+
+def test_hash_run_verifies_every_file_and_writes_the_manifest(env, tmp_path):
+    run, tree, edit, repo = env
+    cache, man = tmp_path / "cache.json", tmp_path / "manifest.json"
+    assert run("--verify", "--hash-cache", str(cache), "--manifest-out", str(man)) == 0
+    m = json.loads(man.read_text())
+    assert m["data/0/12"] == hashlib.sha1((repo / "data/0/12").read_bytes()).hexdigest()
+    assert "lock.roster" not in m and len(m) == 9
+    assert json.loads(cache.read_text())["config"][2] == m["config"]
+
+
+def test_hash_run_reuploads_files_without_a_recorded_sha1(env, tmp_path):
+    run, tree, edit, repo = env
+    assert run() == 0
+    edit(lambda t: (t["nodes"]["/my-files/ctdi-backup/data/0/1"].pop("sha1"), t.__setitem__("calls", [])))  # rclone-era
+    assert run("--verify") == 0
+    assert uploads(tree()) == ["data/0/1"]
+
+
+def test_hash_run_fails_on_a_mismatch_it_cannot_repair(env, tmp_path):
+    run, tree, edit, repo = env
+    man = tmp_path / "manifest.json"
+    assert run() == 0
+    edit(lambda t: (t["nodes"]["/my-files/ctdi-backup/data/0/2"].__setitem__("sha1", "0" * 40), t.__setitem__("fail", {"2": 9})))
+    assert run("--verify", "--manifest-out", str(man)) == 6
+    assert not man.exists()                                          # no manifest: nothing may be released locally
+
+
+def test_hash_cache_avoids_rereading_unchanged_files(env, tmp_path, monkeypatch):
+    run, tree, edit, repo = env
+    cache = tmp_path / "cache.json"
+    assert run("--verify", "--hash-cache", str(cache)) == 0
+    reads = []
+    real = ps.sha1_file
+    monkeypatch.setattr(ps, "sha1_file", lambda p: reads.append(p) or real(p))
+    (repo / "index.12").write_bytes(b"q" * 33)                       # one file changed
+    assert run("--verify", "--hash-cache", str(cache)) == 0
+    assert [p.name for p in reads] == ["index.12"]

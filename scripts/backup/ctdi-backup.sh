@@ -329,10 +329,12 @@ print(json.dumps({"id": a.get("id"), "name": a.get("name"), "original_size": a.g
                   "deduplicated_size": a.get("stats", {}).get("deduplicated_size"), "nfiles": a.get("stats", {}).get("nfiles")}))
 PY
 )
-phase "3/4 prune + compact"
+# 2026-11-26 (operator): `borg prune` only marks archives; `borg compact` is what deletes files on the stick. It
+# now runs AFTER the off-box sync, and only when the hash run has verified every local file in Proton by sha1
+# (local_release below). Until then the stick keeps everything: it is the network-down, portable backup.
+phase "3/4 prune"
 podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" \
   borg prune --keep-daily "$KEEP_D" --keep-weekly "$KEEP_W" --keep-monthly "$KEEP_M" --glob-archives 'ctdi-*'
-podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" borg compact
 python3 "$LEDGER_PY" append backup --json "{\"archive\": ${arch_id}, \"dumps\": ${dumps_meta}, \"include_cui\": $( [[ "$INCLUDE_CUI" == 1 ]] && echo true || echo false ), \"borg_warnings\": $( (( borg_warn )) && echo true || echo false ), \"repo\": \"local\"}" >/dev/null
 log "archive ${archive} done"
 
@@ -348,6 +350,47 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" && "$SYNC_GATE" == 1 ]]; then
     log "$($SYNC_GATE_CMD request --target "$BACKUP_TARGET" </dev/null 2>&1 || echo 'could not request a new signature')"
   fi
 fi
+VERIFIED_MANIFEST="${STATE}/proton-verified.json"
+RELEASE_VERIFIED_IN=""
+release_skipped() {   # $1 = why; recorded, nothing deleted
+  log "local release skipped: $1 (the stick keeps every file)"
+  python3 "$LEDGER_PY" append local-release --json "{\"archive\": \"${archive}\", \"released\": false, \"why\": \"$(echo "$1" | tr -d '"\\' | head -c 200)\"}" >/dev/null || true
+}
+local_release() {   # $1 = where the data is verified; borg compact, then the audit entry of what it removed
+  local before after
+  before="$(mktemp "${STATE}/release.before.XXXX")"; after="$(mktemp "${STATE}/release.after.XXXX")"
+  podman unshare find "$BACKUP_REPO" -type f -printf '%P\t%s\n' | sort > "$before"
+  if ! podman unshare env BORG_PASSCOMMAND="$BORG_PASSCOMMAND" BORG_REPO="$BORG_REPO" borg compact; then
+    rm -f "$before" "$after"; release_skipped "borg compact failed"; return 0
+  fi
+  podman unshare find "$BACKUP_REPO" -type f -printf '%P\t%s\n' | sort > "$after"
+  local audit
+  audit="$(python3 - "$VERIFIED_MANIFEST" "$before" "$after" "$1" "$archive" <<'PY'
+import json, sys
+manifest, before, after, where, archive = sys.argv[1:6]
+m = json.load(open(manifest))
+rows = lambda f: dict(l.rstrip("\n").split("\t", 1) for l in open(f) if "\t" in l)
+b, a = rows(before), rows(after)
+gone = sorted(set(b) - set(a))
+files = [[f, m.get(f), int(b[f])] for f in gone]
+out = {"archive": archive, "released": True, "removed_files": len(gone), "removed_bytes": sum(int(b[f]) for f in gone),
+       "unverified_removed": [f for f in gone if f not in m],
+       "verified_in": where, "files": files[:500], "files_truncated": len(files) > 500,
+       "note": "local space preservation: removed from the stick by borg compact only after the hash run verified "
+               "every local file in " + where + " by sha1; the Proton copy is append-only and keeps them"}
+print(json.dumps(out, separators=(",", ":")))
+PY
+)" || { rm -f "$before" "$after"; release_skipped "audit of the compaction failed"; return 0; }
+  rm -f "$before" "$after"
+  python3 "$LEDGER_PY" append local-release --json "$audit" >/dev/null
+  log "local release: borg compact ran; $(python3 - "$audit" <<'PY'
+import json, sys
+a = json.loads(sys.argv[1])
+print(f"{a['removed_files']} file(s), {a['removed_bytes'] / 1073741824:.2f} GiB removed from the stick, all verified in {a['verified_in']}"
+      + (f"; WARNING {len(a['unverified_removed'])} not in the verified manifest" if a["unverified_removed"] else ""))
+PY
+)"
+}
 SYNC_VIA_RCLONE=0
 if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
   # 2026-10-12: never sync on top of the one-off seed upload (same target, same files).
@@ -363,6 +406,7 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
       stop_args=(); for m in $(uplink_metered_ifaces); do stop_args+=(--stop-if-iface "$m"); done
       pdir="/run/user/$(id -u)/ctdc-proton.$$"
       plog="${STATE}/proton-sync.last.log"
+      rm -f "$VERIFIED_MANIFEST"        # a manifest left by an earlier run never counts
       set +e
       bash "$(dirname "$0")/proton_session.sh" open "$PROTON_SESSION" "$pdir"; prc=$?
       if (( prc == 0 )); then
@@ -370,7 +414,8 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
         podman unshare env PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file PROTON_DRIVE_CACHE_DIR="$pdir" \
           python3 "$(dirname "$0")/proton_sync.py" --repo "$BACKUP_REPO" --remote "$PROTON_REMOTE" \
             --cli "$PROTON_CLI" --cli-sha512 "$PROTON_CLI_SHA512" --avg-cap-mb "$BW_SOFT" \
-            --max-hours "$PROTON_MAX_HOURS" "${stop_args[@]}" </dev/null 2>&1 | tee "$plog"
+            --max-hours "$PROTON_MAX_HOURS" --verify --hash-cache "${STATE}/proton-sha1-cache.json" \
+            --manifest-out "$VERIFIED_MANIFEST" "${stop_args[@]}" </dev/null 2>&1 | tee "$plog"
         prc=${PIPESTATUS[0]}
         # the CLI refreshes its session while it works: always keep the refreshed one
         bash "$(dirname "$0")/proton_session.sh" save "$PROTON_SESSION" "$pdir" \
@@ -382,10 +427,12 @@ if [[ "$SYNC" == 1 && -n "$BACKUP_TARGET" ]]; then
       set -e
       [[ "$sum_json" == \{*\} ]] || sum_json=null
       case "$prc" in
-        0) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": true, \"proton_sync\": ${sum_json}}" >/dev/null ;;
+        0) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": true, \"verified\": true, \"proton_sync\": ${sum_json}}" >/dev/null
+           RELEASE_VERIFIED_IN="${PROTON_REMOTE}" ;;
         5) log "the uplink turned metered during the sync; finishing with rclone at the metered cap"; SYNC_VIA_RCLONE=1 ;;
         *) python3 "$LEDGER_PY" append sync --json "{\"target\": \"${PROTON_REMOTE}\", \"tool\": \"proton-cli\", \"archive\": \"${archive}\", \"ok\": false, \"exit\": ${prc}, \"proton_sync\": ${sum_json}}" >/dev/null
-           die "sync to ${PROTON_REMOTE} failed (proton_sync exit ${prc}: 4 = stall or time budget, 3 = refused; the local archive is complete, the next run resumes)" ;;
+           release_skipped "sync or hash run did not pass (proton_sync exit ${prc})"
+           die "sync to ${PROTON_REMOTE} failed (proton_sync exit ${prc}: 4 = stall or time budget, 6 = hash run failed, 3 = refused; the local archive is complete and nothing was deleted on the stick; the next run resumes)" ;;
       esac
     fi
   fi
@@ -404,7 +451,8 @@ if [[ "$SYNC_VIA_RCLONE" == 1 ]]; then
     log "sync attempt ${attempt}: starting at ${start_soft} MB/s (${uplink_note})"
     soft_k=$(python3 -c "print(int(float('${start_soft}')*1000000/1024))")k
     rcdir=$(mktemp -d "${STATE}/rc.XXXX"); chmod 700 "$rcdir"
-    podman unshare rclone --config "$RCLONE_CONFIG" sync --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
+    # 2026-11-26: copy, never sync -- `rclone sync` deletes target files that are gone locally; Proton is append-only.
+    podman unshare rclone --config "$RCLONE_CONFIG" copy --checksum "$BACKUP_REPO" "$BACKUP_TARGET" --stats-one-line --stats 0 \
       --bwlimit "$soft_k" --rc --rc-addr "unix://${rcdir}/rc.sock" --rc-no-auth \
       --transfers "$RCLONE_TRANSFERS" --checkers 2 \
       --protondrive-replace-existing-draft </dev/null &   # 2026-10-12: an interrupted upload leaves a Proton draft that blocks the next sync
@@ -425,5 +473,13 @@ if [[ "$SYNC_VIA_RCLONE" == 1 ]]; then
     python3 "$LEDGER_PY" append sync --json "{\"target\": \"${BACKUP_TARGET}\", \"archive\": \"${archive}\", \"ok\": false}" >/dev/null
     die "sync to ${BACKUP_TARGET} failed (the local archive is complete)"
   fi
+fi
+if [[ -n "$RELEASE_VERIFIED_IN" && -s "$VERIFIED_MANIFEST" ]]; then
+  phase "5/5 local release"
+  local_release "$RELEASE_VERIFIED_IN"
+elif [[ "$SYNC_VIA_RCLONE" == 1 ]]; then
+  release_skipped "the rclone path runs no sha1 hash run"
+else
+  release_skipped "no verified off-box copy this run (sync off, held, or no target)"
 fi
 python3 "$LEDGER_PY" verify

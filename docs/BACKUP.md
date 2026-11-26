@@ -256,8 +256,9 @@ Now:
 | `BACKUP_STAGE_FACTOR` | 2.0 | uncompressed stage size per byte of live database (TOAST expands) |
 | `BACKUP_COMPRESS_TABLES` | empty | tables whose data leaves the uncompressed dump for a second, compressed (`-Z 6`) dump archived alongside it |
 
-**Operator decision pending.** With the defaults, the database as it stands no longer fits the USB stage,
-so the guard stops the backup cleanly every night until one of these is chosen:
+**Decided 2026-11-26 (operator): option 1**, `BACKUP_COMPRESS_TABLES=demo_snapshots` in `dispatch.env`, after the
+guard stopped the 11-25 and 11-26 runs (11-26: 47.7 GiB free, ~43.3 GiB + 10 GiB reserve needed). Borg on the
+stick keeps full history; Proton mirrors it append-only. The options were:
 
 1. `BACKUP_COMPRESS_TABLES=demo_snapshots`: all data is still backed up; `demo_snapshots` loses Borg
    deduplication, so each night's compressed copy is new data for the repository and for the off-box
@@ -316,8 +317,20 @@ interrupted upload.
 - **One pass, safe to rerun:** the remote copy is listed, and every local Borg file missing there or differing in
   size is uploaded, one at a time: `data/` segments first, then `index.*`, `hints.*`, `integrity.*`, `config`,
   `nonce` and `README`, so a pass that stops early leaves the previous consistent state plus extra segments.
-  Remote files compacted away locally go to the Proton trash only after a complete pass, capped at 200, and never
-  when the local listing is under 90% of the remote one. Lock files are never copied.
+  Lock files are never copied.
+- **Proton is append-only (2026-11-26, operator).** Nothing is ever trashed or deleted there, and the rclone
+  fallback uses `rclone copy`, never `sync`. Segments Borg compacts away locally, and the old `index.N` files,
+  stay in Proton, so any earlier repository state can be rebuilt from it. Proton grows by each night's new data
+  plus what compaction rewrites.
+- **The hash run, then the local release.** `borg prune` (phase 3) only marks archives. After the sync,
+  `proton_sync.py --verify` compares the sha1 of every file on the stick (cached by size and mtime, since
+  segments never change) with the sha1 Proton recorded; anything missing, different or without a sha1 (rclone-era
+  uploads) is uploaded once more and checked again. Only when every file verifies does `borg compact` run, the
+  step that deletes files on the stick, and the ledger gets a `local-release` entry: each removed file with its
+  sha1 and size, where it is verified (`verified_in`), and the note "local space preservation". When the sync or
+  the hash run fails, the network is down, the sync is held or the rclone path ran, compaction is skipped and a
+  `local-release` entry with `released: false` says why: the stick keeps everything and stays the network-down,
+  portable backup. A larger external disk can later be a second `verified_in` location.
 - **Caps:** the CLI has no rate limit, so the average is held at `BACKUP_BWLIMIT_SOFT_MB` by waiting between
   files (bursts within one file run at link speed). On the metered hotspot the sync uses rclone and its live
   2 Mbps cap, as before; an uplink that turns metered mid-sync stops the CLI (exit 5) and rclone finishes.
@@ -325,7 +338,7 @@ interrupted upload.
   mismatch`). The session exists only as a `systemd-creds --user` blob (`BACKUP_PROTON_SESSION`, default
   `~/.local/state/ctdc-backup/proton-session.cred`), opened into a fresh 0700 folder under `/run/user` for each
   run and re-encrypted afterwards, because the CLI refreshes it as it works (`scripts/backup/proton_session.sh`).
-- **Exit codes:** 0 complete; 4 stall (no file finished for 20 min) or time budget (`BACKUP_PROTON_MAX_HOURS`,
+- **Exit codes:** 0 complete and verified; 6 uploads complete but the hash run failed; 4 stall (no file finished for 20 min) or time budget (`BACKUP_PROTON_MAX_HOURS`,
   6); 5 uplink turned metered; 3 refused (binary mismatch, no session, listing failed, remote folder missing).
   The ledger's `sync` entry carries `tool` and the tool's summary.
 - **Settings:** `BACKUP_SYNC_TOOL` (`proton-cli` default, `rclone`), `BACKUP_PROTON_CLI`,
