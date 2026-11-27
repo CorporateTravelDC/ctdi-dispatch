@@ -1,0 +1,10 @@
+[Unit]
+Description=Blocklist merge: hourly existence checks
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

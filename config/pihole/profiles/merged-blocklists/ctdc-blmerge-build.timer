@@ -1,0 +1,10 @@
+[Unit]
+Description=Blocklist merge: daily build (after the nightly backup window)
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

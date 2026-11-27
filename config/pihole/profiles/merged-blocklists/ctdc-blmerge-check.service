@@ -1,0 +1,22 @@
+[Unit]
+Description=Blocklist merge: hourly existence checks (DS lookups answered by each domain's parent zone) for a budget of registrable domains
+Documentation=https://github.com/CorporateTravelDC/ctdi-dispatch/blob/main/docs/BLOCKLIST_MERGE.md
+After=network-online.target unbound.service
+Wants=network-online.target
+ConditionPathExists=/etc/ctdc-blmerge/merge.conf
+
+[Service]
+Type=oneshot
+# The unbound user: the DNS lock lets only Unbound reach outside DNS. Its own libunbound resolver and cache, so the
+# checks never touch the production Unbound's cache.
+User=unbound
+Group=unbound
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=55min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ctdc-blmerge-check
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc-blmerge/blocklist_merge.py check --conf /etc/ctdc-blmerge/merge.conf

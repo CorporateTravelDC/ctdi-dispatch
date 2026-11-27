@@ -16,6 +16,14 @@ Upstream SELinux policy module for Pi-hole, the hardened baseline for DNS filter
 Community list of Tailscale DERP relay addresses, parsed daily from Tailscale's map. DNS leak watch uses it, cross-checked against the official map, so Tailscale's own relay traffic is never mistaken for a hard-coded destination; the bundler repository carries it as a pinned submodule.
 [github.com/jmaddington/tailscale-ips](https://github.com/jmaddington/tailscale-ips) · [github.com/jmaddington](https://github.com/jmaddington) · [jmaddington.com](https://www.jmaddington.com)
 
+**HaGeZi** (Gerd)
+DNS blocklists (Pro, Threat Intelligence Feeds, Encrypted DNS) that Pi-hole here uses, and the encrypted-resolver lists behind DNS leak watch's forward defense.
+[github.com/hagezi/dns-blocklists](https://github.com/hagezi/dns-blocklists) · [github.com/hagezi](https://github.com/hagezi)
+
+**The Block List Project**
+The category blocklists merged, with dead domains pruned by evidence, into the Pi-hole list described in `docs/BLOCKLIST_MERGE.md`.
+[github.com/blocklistproject/Lists](https://github.com/blocklistproject/Lists)
+
 **Thomas Eibner**
 Considerable overall code review, plus the heavy lift of reworking the parsing logic for hold and diversion detection.
 [github.com/thomaseibner](https://github.com/thomaseibner) · [twitter.com/thomaseibner](https://twitter.com/thomaseibner)

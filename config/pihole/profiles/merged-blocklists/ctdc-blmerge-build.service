@@ -1,0 +1,18 @@
+[Unit]
+Description=Blocklist merge: daily build of the merged Blocklist Project list (minus HaGeZi, folded, dead domains pruned), archive, report, self-test
+Documentation=https://github.com/CorporateTravelDC/ctdi-dispatch/blob/main/docs/BLOCKLIST_MERGE.md
+After=network-online.target pihole-FTL.service
+Wants=network-online.target
+ConditionPathExists=/etc/ctdc-blmerge/merge.conf
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=90min
+# about 2 GB at 4.7M names (2026-11-27 measurement); a hard cap so a bad source can never starve the box
+MemoryMax=3G
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc-blmerge/blocklist_merge.py build --conf /etc/ctdc-blmerge/merge.conf
+ExecStartPost=-/usr/bin/python3 /usr/local/libexec/ctdc-blmerge/blocklist_merge.py selftest --conf /etc/ctdc-blmerge/merge.conf

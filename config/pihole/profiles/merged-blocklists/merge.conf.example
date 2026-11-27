@@ -1,0 +1,51 @@
+# /etc/ctdc-blmerge/merge.conf -- blocklist merge (docs/BLOCKLIST_MERGE.md). key=value, parsed, never sourced. 0644:
+# the unprivileged checker (User=unbound) reads it; no secrets belong here (NTFY_TOKEN_FILE is a path, root 0600).
+
+# Blocklist Project lists merged into ONE pair of Pi-hole lists (their own adlist rows are switched off by
+# `apply.sh switch` and back on by `apply.sh revert`).
+BLP_LISTS=abuse ads crypto fraud malware phishing ransomware porn gambling redirect drugs facebook tiktok piracy twitter whatsapp
+BLP_URL=https://blocklistproject.github.io/Lists/{}.txt
+
+# HaGeZi lists that are ENABLED as their own Pi-hole adlists (adblock format). The merge leaves out every BLP entry
+# these already block, so this must match what Pi-hole really has enabled, or those entries go unblocked.
+HAGEZI_LISTS=pro tif doh
+HAGEZI_URL=https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/{}.txt
+PSL_URL=https://publicsuffix.org/list/public_suffix_list.dat
+
+OUT_DIR=/var/lib/ctdc-blmerge
+LIST_DIR=/etc/pihole/ctdc-merged
+CHECK_DIR=/var/lib/ctdc-blmerge-check
+READ_GROUP=root
+
+# Folding: entries under another listed entry are written once as ||parent^, except under a shared platform (this
+# many listed subdomains under one registrable domain, e.g. a free-hosting service): those stay exact.
+PLATFORM_MIN=100
+
+# Pruning: a registrable domain whose parent zone answers NXDOMAIN for its DS record PRUNE_CONFIRM times, at least
+# PRUNE_MIN_DAYS apart, is "dead": its entries leave the merged list (they stay in the archive). Dead domains are
+# rechecked every DEAD_RECHECK_DAYS; one registered answer brings them back.
+PRUNE_CONFIRM=2
+PRUNE_MIN_DAYS=7
+DEAD_RECHECK_DAYS=30
+
+# Checker pace (hourly timer, CHECK_PER_DAY/24 per run, CHECK_QPS lookups a second). Skipped above LOAD_MAX and on
+# a metered default route (METERED_IFACES, space-separated; the build skips there too).
+CHECK_PER_DAY=100000
+CHECK_QPS=20
+LOAD_MAX=20
+METERED_IFACES=
+
+# After a build that changed the lists: run `pihole -g` if the load is at most GRAVITY_LOAD_MAX, else Pi-hole picks
+# them up at its next gravity run. A build with fewer than MIN_ENTRIES BLP entries is refused (a broken fetch).
+GRAVITY_AFTER_BUILD=yes
+GRAVITY_LOAD_MAX=12
+MIN_ENTRIES=100000
+
+PIHOLE_LOG=/var/log/pihole/pihole.log
+PIHOLE_DNS=127.0.0.1#53
+UNBOUND_DNS=127.0.0.1#5335
+
+# Optional ntfy push (selftest failures; pruned domains a device looked up). PUBLISH-ONLY token file, root 0600.
+NTFY_URL=
+NTFY_TOPIC=
+NTFY_TOKEN_FILE=
