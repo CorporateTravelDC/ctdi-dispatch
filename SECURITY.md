@@ -20,7 +20,7 @@ Email **developer@csexecutiveservices.com** -- the security contact for
 CS Executive Services LLC (or **embargo@example.com**
 for anything embargo/LADD-sensitive). Do not open public issues for security
 reports. Encrypt to a key from `docs/GPG_KEYS_PUBLISHED.md`; the public halves
-are served at `https://www.example.com/keys/`.
+are served in this repository by fingerprint.
 
 ## Keys and what each one covers
 
