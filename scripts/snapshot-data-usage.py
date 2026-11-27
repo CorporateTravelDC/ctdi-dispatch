@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 data-usage snapshot — daily logger, mirrors SR-1 (api-usage.csv) pattern.
-Reads vnstat JSON for wld0 + tailscale0, appends one row per interface to data-usage.csv.
+Reads vnstat JSON for end0, wld0, enu1 + tailscale0 (end0, enu1 added 2026-11-27), appends one row per interface to data-usage.csv.
 Schedule: daily at 00:05 ET (00:05 after midnight so vnstat 5-min window closes cleanly).
 Retroactive: if running for the first time, back-fills from boot date to yesterday with zeros
              then seeds today with the day's running total so far.
@@ -17,7 +17,7 @@ from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 
 USAGE_LOG = Path("/var/lib/corporatetraveldc/data-usage.csv")
-INTERFACES = ["wld0", "tailscale0"]
+INTERFACES = ["end0", "wld0", "enu1", "tailscale0"]
 _FIELDS = ["date", "interface", "rx_bytes", "tx_bytes", "total_bytes", "rx_gb", "tx_gb", "total_gb"]
 
 

@@ -96,7 +96,8 @@ def test_different_active_profile_cannot_modify_the_wrong_saved_profile(tmp_path
 def test_watchdog_uses_verified_transition_helper():
     text = (REPO/'scripts/net-failover-watchdog.sh').read_text()
     assert '/lib/net_failover_routes.sh' in text
-    assert 'if apply_backup_metric "${saved}" failback; then\n        state_set failed_over 0' in text
+    assert 'apply_backup_metric "$2" "${4:-}"' in text
+    assert 'if tier_metric "${boosted}" "${saved}" "${to_if}" failback; then\n        state_set boosted -1' in text
 
 
 # 2026-11-17 (operator: IPv6 priority): the flip moves both address families together.

@@ -24,7 +24,7 @@
 # echoed; dry-run prefixes the ones it would run with "would run:".
 #
 # Operator knobs (env, honoured in every mode, validated):
-#   CTDC_TAILNET_IF (tailscale0)  CTDC_METERED_IF (enu1)  CTDC_PRIMARY_IF (wld0)
+#   CTDC_TAILNET_IF (tailscale0)  CTDC_METERED_IF (enu1)  CTDC_PRIMARY_IF (end0; wld0 before 2026-11-27)
 #   CTDC_CAP_KBYTES (250 = 2 Mbps) CTDC_CAP_BURST_KBYTES (256)
 #   CTDC_TAILNET_PEERS4 (100.64.0.0/10)  CTDC_TAILNET_PEERS6 (fd7a:115c:a1e0::/48)
 # Test hooks (tests/scripts/test_exit_node_profile.py), honoured ONLY with
@@ -46,7 +46,7 @@ PROC_ROUTE_DEFAULT=/proc/net/route
 
 TAILNET_IF=${CTDC_TAILNET_IF:-tailscale0}
 METERED_IF=${CTDC_METERED_IF:-enu1}
-PRIMARY_IF=${CTDC_PRIMARY_IF:-wld0}
+PRIMARY_IF=${CTDC_PRIMARY_IF:-end0}
 CAP_KBYTES=${CTDC_CAP_KBYTES:-250}
 CAP_BURST_KBYTES=${CTDC_CAP_BURST_KBYTES:-256}
 TAILNET_PEERS4=${CTDC_TAILNET_PEERS4:-100.64.0.0/10}

@@ -22,6 +22,29 @@ commands are accepted. `restore-network.sh` closes the channel and re-caps meter
 and configuration are in `docs/LOCKDOWN_OOB.md`; this deployment's choices are in the private config
 and doc.
 
+## Status 2026-11-27 -- the wired switch is the primary; the watchdog chains three tiers
+
+**Uplink tiers (operator 2026-11-27), IPv4 and IPv6 alike:**
+
+| Metric | NM profile | Interface | Role |
+|---|---|---|---|
+| 100 | `Auto Ethernet` | `end0` | **primary**: the Netgear GS105 switch (unmanaged), cabled to the router today; Starlink joins the same switch later |
+| 600 | `jorransgateway 1` | `wld0` | second line |
+| 1100 | `Hockey Puck` | `enu1` | third: the metered Google Fi hotspot over USB |
+| 1600 | `Corporate Traveler WiFi` | `wld0` | last resort, left to NetworkManager (it shares `wld0` with `jorransgateway 1`) |
+
+Before this, `end0` and `wld0` both sat at 600 on the same 10.x.x.x/24: IPv4 left by whichever route was
+installed first and the IPv6 default was a two-way multipath route. `net-failover-watchdog.sh` now takes
+`NET_FAILOVER_CHAIN` (default `Auto Ethernet@end0,jorransgateway 1@wld0,Hockey Puck@enu1`, best first): it
+probes every tier each minute (a tier with no carrier is down without the probe timeouts), moves the default
+to the best tier that answers once the tier in use has failed `FAIL_STRIKES` probes, and moves back up once a
+better tier has passed `RESTORE_STRIKES`. A move sets the tier's metric to `FAILOVER_METRIC` (50; 40 when the
+tier it leaves still holds 50, so the two never tie) and puts the left tier's own metric back. A tier whose
+device is up on another profile (`wld0` on the hotspot's WiFi) is skipped. `NET_FAILOVER_PRIMARY_*` /
+`NET_FAILOVER_BACKUP_*` are ignored (logged). Tests: `tests/scripts/test_net_failover_chain.py`.
+
+Lockdown OOB follows the same order (`config/network/oob.json`, private; docs/LOCKDOWN_OOB_DEPLOYMENT.md).
+
 ## Status 2026-11-18 -- three tiers; the failover polkit grant is guarded; lockdowns survive a reboot
 
 **Uplink tiers (operator 2026-11-18), IPv4 and IPv6 alike, every profile dual stack with IPv6 preferred:**
@@ -111,7 +134,7 @@ re-asserts it, and restore-network.sh works whether or not the `/run` marker sur
 - **Open risk:** the 2026-09-02 "hotspot IPv6 throttling", where image builds stalled for 2+ hours over the tether's IPv6. A 3-minute test can't rule out a slow-onset throttle. Watch hotspot IPv6 throughput during the next failover. Rollback: restore the gai.conf precedence line, and set `ipv6.method disabled` on the two hotspot profiles.
 
 **Starlink, planned:**
-- Starlink becomes the primary, `wld0` the second line, `enu1` the third. The watchdog will need three tiers.
+- Starlink becomes the primary, `wld0` the second line, `enu1` the third. The watchdog will need three tiers. (done 2026-11-27 with the wired switch on `end0` as the primary; Starlink takes the same port through the switch.)
 - Run Starlink's router in router mode, not bypass. Starlink's carrier-grade NAT hands out WAN addresses in 100.64.0.0/10, Tailscale's range, and in bypass mode the Pi itself would hold one.
 - Starlink's native IPv6 is what keeps Tailscale paths direct.
 

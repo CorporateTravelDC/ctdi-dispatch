@@ -115,10 +115,17 @@ SECRETS_FILE="/etc/corporatetraveldc/dispatch-secrets.env"
 # renamed "Hockey Puck" (enu1). Three tiers, IPv4 and IPv6 alike: 100 Starlink (planned), 600
 # "jorransgateway 1", 1100 "Hockey Puck", 1600 "Corporate Traveler WiFi" (the puck's own WiFi on wld0,
 # last resort). dispatch.env sets NET_FAILOVER_PRIMARY_CON / NET_FAILOVER_BACKUP_CON to match.
-PRIMARY_CON_DEFAULT="jorransgateway 1"
-PRIMARY_IF_DEFAULT="wld0"
-BACKUP_CON_DEFAULT="Hockey Puck"
-BACKUP_IF_DEFAULT="enu1"
+# 2026-11-27 (operator): the wired switch is the primary -- end0 "Auto Ethernet" (the router today,
+# Starlink later on the same switch) at 100, then "jorransgateway 1" (wld0) 600, "Hockey Puck" (enu1)
+# 1100, "Corporate Traveler WiFi" 1600. The watchdog now CHAINS the first three: NET_FAILOVER_CHAIN
+# lists them best first as "connection@device" separated by commas, and the default route goes to the
+# best tier that is answering. Failing down needs FAIL_STRIKES bad probes on the tier in use; moving
+# back up needs RESTORE_STRIKES good probes on the better tier. A tier is moved to by setting its
+# profile metric to FAILOVER_METRIC (both families); the metric it had is saved and put back when it
+# is no longer the one in use. The fourth tier is left to NetworkManager: it shares wld0 with
+# "jorransgateway 1", so it is only ever up when that one is not, and its 1600 already puts it last.
+# The old NET_FAILOVER_PRIMARY_* / NET_FAILOVER_BACKUP_* keys are ignored (logged once per run).
+CHAIN_DEFAULT="Auto Ethernet@end0,jorransgateway 1@wld0,Hockey Puck@enu1"
 
 PROBE_IPS_DEFAULT="1.1.1.1 8.8.8.8 9.9.9.9"
 FAIL_STRIKES_DEFAULT=3
@@ -157,10 +164,27 @@ cfg() {
     echo "${fallback}"
 }
 
-PRIMARY_CON="$(cfg NET_FAILOVER_PRIMARY_CON "${PRIMARY_CON_DEFAULT}")"
-PRIMARY_IF="$(cfg NET_FAILOVER_PRIMARY_IF "${PRIMARY_IF_DEFAULT}")"
-BACKUP_CON="$(cfg NET_FAILOVER_BACKUP_CON "${BACKUP_CON_DEFAULT}")"
-BACKUP_IF="$(cfg NET_FAILOVER_BACKUP_IF "${BACKUP_IF_DEFAULT}")"
+CHAIN="$(cfg NET_FAILOVER_CHAIN "${CHAIN_DEFAULT}")"
+TIER_CON=(); TIER_IF=()
+IFS=',' read -r -a _tiers <<< "${CHAIN}"
+for _t in "${_tiers[@]}"; do
+    _t="${_t#"${_t%%[![:space:]]*}"}"; _t="${_t%"${_t##*[![:space:]]}"}"
+    [[ -n "${_t}" ]] || continue
+    if [[ "${_t}" != *@* || -z "${_t%@*}" || ! "${_t##*@}" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
+        echo "net-failover-watchdog: NET_FAILOVER_CHAIN entry '${_t}' is not 'connection@device'" >&2
+        exit 2
+    fi
+    TIER_CON+=("${_t%@*}"); TIER_IF+=("${_t##*@}")
+done
+NTIERS=${#TIER_CON[@]}
+if (( NTIERS < 2 )); then
+    echo "net-failover-watchdog: NET_FAILOVER_CHAIN needs at least two tiers" >&2
+    exit 2
+fi
+# The helpers in lib/net_failover_routes.sh act on BACKUP_CON / BACKUP_IF (the profile being changed)
+# and PRIMARY_IF (the device the default must end up on for a 'failback'); tier_metric sets them per call.
+PRIMARY_CON="${TIER_CON[0]}"; PRIMARY_IF="${TIER_IF[0]}"
+BACKUP_CON="${TIER_CON[1]}"; BACKUP_IF="${TIER_IF[1]}"
 PROBE_IPS="$(cfg NET_FAILOVER_PROBE_IPS "${PROBE_IPS_DEFAULT}")"
 FAIL_STRIKES="$(cfg NET_FAILOVER_FAIL_STRIKES "${FAIL_STRIKES_DEFAULT}")"
 RESTORE_STRIKES="$(cfg NET_FAILOVER_RESTORE_STRIKES "${RESTORE_STRIKES_DEFAULT}")"
@@ -169,11 +193,14 @@ FAILOVER_METRIC="$(cfg NET_FAILOVER_METRIC "${FAILOVER_METRIC_DEFAULT}")"
 # failover its traffic rides the metered hotspot -- capped at 2 Mbps by config/exit-node
 # (operator-applied, root). Every failover page says whether that cap is actually installed.
 EXITNODE_CAP_FILE="$(cfg NET_EXITNODE_CAP_FILE /etc/nftables.d/ctdc-exitnode.nft)"
-exitnode_note() {
+METERED_IFACES="$(cfg NET_METERED_IFACES enu1)"
+is_metered() { local m; for m in ${METERED_IFACES}; do [[ "$1" == "$m" ]] && return 0; done; return 1; }
+exitnode_note() {   # $1 = the device now carrying the default; says nothing for an unmetered one
+    is_metered "$1" || return 0
     if [[ -r "${EXITNODE_CAP_FILE}" || -e "${EXITNODE_CAP_FILE}" ]]; then
-        echo "Exit-node traffic (driver phone) is CAPPED at 2 Mbps while on ${BACKUP_IF}."
+        echo "Exit-node traffic (driver phone) is CAPPED at 2 Mbps while on $1."
     else
-        echo "WARNING: exit-node cap NOT installed (${EXITNODE_CAP_FILE} missing) -- the driver phone's exit-node traffic is UNCAPPED on the metered ${BACKUP_IF}."
+        echo "WARNING: exit-node cap NOT installed (${EXITNODE_CAP_FILE} missing) -- the driver phone's exit-node traffic is UNCAPPED on the metered $1."
     fi
 }
 # Test runs point this at a scratch path so a rehearsal never pollutes the
@@ -217,12 +244,14 @@ ntfy_send() {
 
 # --- state -------------------------------------------------------------
 # Flat key=value; same shape as the other watchdogs in this directory.
-#   fail_streak / ok_streak : consecutive primary-probe results
-#   failed_over             : 0|1
-#   saved_backup_metric     : the backup's own configured metric, captured
-#                             BEFORE we overwrite it, so restore puts back
-#                             the real value instead of a hardcoded guess
-#   last_alert_epoch        : ntfy cooldown
+#   ok_streak_N / fail_streak_N : consecutive probe results for tier N (0 = best)
+#   boosted                     : the tier moved to by metric, or -1 (tier 0 by its own metric)
+#   boost_metric                : the metric the tier in use was given (FAILOVER_METRIC, or 10 less)
+#   saved_metric_N              : tier N's own configured metric, captured
+#                                 BEFORE we overwrite it, so restore puts back
+#                                 the real value instead of a hardcoded guess
+#   last_alert_epoch            : ntfy cooldown
+#   (failed_over / saved_backup_metric: the two-tier watchdog's keys, carried over once)
 state_get() {
     local key="$1" def="$2"
     [[ -f "${STATE_FILE}" ]] || { echo "${def}"; return; }
@@ -274,13 +303,17 @@ maybe_alert() {
 }
 
 print_status() {
-    echo "primary:      ${PRIMARY_CON} (${PRIMARY_IF}) metric=$(configured_metric "${PRIMARY_CON}")"
-    echo "backup:       ${BACKUP_CON} (${BACKUP_IF}) metric=$(configured_metric "${BACKUP_CON}")"
+    local i b
+    for (( i = 0; i < NTIERS; i++ )); do
+        echo "tier $(( i + 1 )):       ${TIER_CON[$i]} (${TIER_IF[$i]}) metric=$(configured_metric "${TIER_CON[$i]}") ok_streak=$(state_get "ok_streak_${i}" 0) fail_streak=$(state_get "fail_streak_${i}" 0)"
+    done
+    b="$(state_get boosted -1)"
+    if (( b >= 0 && b < NTIERS )); then
+        echo "in use:       tier $(( b + 1 )) (${TIER_CON[$b]}), its own metric $(state_get "saved_metric_${b}" '(unset)') saved"
+    else
+        echo "in use:       tier 1 by its own metric"
+    fi
     echo "default via:  $(current_default_iface)"
-    echo "failed_over:  $(state_get failed_over 0)"
-    echo "fail_streak:  $(state_get fail_streak 0)"
-    echo "ok_streak:    $(state_get ok_streak 0)"
-    echo "saved_backup_metric: $(state_get saved_backup_metric '(unset)')"
     echo "parked:       $(cfg NET_FAILOVER_PARKED false)"
 }
 
@@ -300,101 +333,152 @@ if ! flock -n 9; then
     exit 0
 fi
 
-failed_over="$(state_get failed_over 0)"
+for _k in NET_FAILOVER_PRIMARY_CON NET_FAILOVER_PRIMARY_IF NET_FAILOVER_BACKUP_CON NET_FAILOVER_BACKUP_IF; do
+    [[ -z "$(cfg "${_k}" "")" ]] || log "info" "${_k} is set but ignored since 2026-11-27: NET_FAILOVER_CHAIN governs"
+done
+
+# tier_metric I METRIC EXPECTED_DEV [failback]: set tier I's profile to METRIC (both families) and verify
+# the default then goes via EXPECTED_DEV (the helper's checks: right profile active, live reapply, route).
+tier_metric() {
+    BACKUP_CON="${TIER_CON[$1]}"; BACKUP_IF="${TIER_IF[$1]}"; PRIMARY_IF="$3"
+    apply_backup_metric "$2" "${4:-}"
+}
+
+# A tier whose device is up on a DIFFERENT profile (wld0 on "Corporate Traveler WiFi" instead of
+# "jorransgateway 1") cannot be moved to: its configured profile is not the one carrying traffic.
+tier_eligible() {
+    BACKUP_CON="${TIER_CON[$1]}"; BACKUP_IF="${TIER_IF[$1]}"
+    ! iface_connected "${BACKUP_IF}" || backup_profile_is_active
+}
+
+# 2026-11-27: a state file from the two-tier watchdog (failed_over=1 onto the old backup) is carried over
+# as "that tier is in use", so its saved metric is still put back.
+if [[ -z "$(state_get boosted '')" ]]; then
+    boosted=-1
+    if [[ "$(state_get failed_over 0)" -eq 1 ]]; then
+        for (( i = 0; i < NTIERS; i++ )); do
+            if [[ "${TIER_CON[$i]}" == "Hockey Puck" ]]; then
+                boosted=$i; state_set "saved_metric_${i}" "$(state_get saved_backup_metric 1100)"
+            fi
+        done
+    fi
+    state_set boosted "${boosted}"
+    state_set failed_over 0
+fi
+boosted="$(state_get boosted -1)"
+[[ "${boosted}" =~ ^-?[0-9]+$ ]] && (( boosted < NTIERS )) || boosted=-1
 
 # --- parked ------------------------------------------------------------
 # 2026-11-01 (operator): the failover SIM failed, so there is no backup
 # uplink for now. NET_FAILOVER_PARKED=true in dispatch.env stops all
 # probing and route changes (a dead enu1 otherwise costs every 60s cycle
-# its full probe timeouts). A park that lands while failed over restores
-# the backup's saved metric once, so the primary carries the default route
-# again. Remove the key, or set it to false, to resume failover.
+# its full probe timeouts). A park that lands while moved off tier 1
+# restores the moved tier's saved metric once, so the tiers' own metrics
+# decide the default route again. Remove the key, or set it to false, to
+# resume failover.
 if [[ "$(cfg NET_FAILOVER_PARKED false)" == "true" ]]; then
-    if [[ "${failed_over}" -eq 1 ]]; then
-        saved="$(state_get saved_backup_metric 1100)"
-        log "warn" "failover parked while failed over -- restoring ${BACKUP_CON} metric ${FAILOVER_METRIC} -> ${saved}"
-        if apply_backup_metric "${saved}" failback; then
-            state_set failed_over 0
+    if (( boosted >= 0 )); then
+        saved="$(state_get "saved_metric_${boosted}" 1100)"
+        log "warn" "failover parked while on tier $(( boosted + 1 )) -- restoring ${TIER_CON[$boosted]} metric ${FAILOVER_METRIC} -> ${saved}"
+        if tier_metric "${boosted}" "${saved}" "${TIER_IF[0]}" failback; then
+            state_set boosted -1
         else
             maybe_alert "NET: PARK RESTORE FAILED" \
-                "Failover is parked, but restoring '${BACKUP_CON}' to metric ${saved} did not apply -- the box may still route via ${BACKUP_IF}. See ${LOG_FILE}."
+                "Failover is parked, but restoring '${TIER_CON[$boosted]}' to metric ${saved} did not apply -- the box may still route via ${TIER_IF[$boosted]}. See ${LOG_FILE}."
         fi
     fi
     exit 0
 fi
 
-primary_ok=1
-probe_iface "${PRIMARY_IF}" || primary_ok=0
-backup_ok=1
-probe_iface "${BACKUP_IF}" || backup_ok=0
-
-if [[ "${primary_ok}" -eq 1 ]]; then
-    fail_streak=0
-    ok_streak=$(( $(state_get ok_streak 0) + 1 ))
-else
-    ok_streak=0
-    fail_streak=$(( $(state_get fail_streak 0) + 1 ))
-fi
-state_set fail_streak "${fail_streak}"
-state_set ok_streak "${ok_streak}"
-
-log "info" "primary=${PRIMARY_IF}:$([[ ${primary_ok} -eq 1 ]] && echo ok || echo DOWN) \
-backup=${BACKUP_IF}:$([[ ${backup_ok} -eq 1 ]] && echo ok || echo DOWN) \
-default_via=$(current_default_iface) failed_over=${failed_over} \
-fail_streak=${fail_streak} ok_streak=${ok_streak}"
-
-# --- both down: upstream/ISP problem, not a path-selection problem -----
-# Flipping the route cannot help here, and doing it anyway would just
-# hide which link is really at fault. Alert only.
-if [[ "${primary_ok}" -eq 0 && "${backup_ok}" -eq 0 ]]; then
-    if (( fail_streak >= FAIL_STRIKES )); then
-        maybe_alert "NET: BOTH uplinks down" \
-            "Neither ${PRIMARY_IF} nor ${BACKUP_IF} can reach any of: ${PROBE_IPS}. This is an upstream/ISP-level outage, not a failover case -- no route change made. carrier: ${PRIMARY_IF}=$(iface_has_carrier "${PRIMARY_IF}" && echo up || echo down), ${BACKUP_IF}=$(iface_has_carrier "${BACKUP_IF}" && echo up || echo down)."
-    fi
-    exit 0
-fi
-
-# --- fail over ---------------------------------------------------------
-if [[ "${failed_over}" -eq 0 && "${primary_ok}" -eq 0 && "${backup_ok}" -eq 1 ]]; then
-    if (( fail_streak < FAIL_STRIKES )); then
-        log "info" "primary down (${fail_streak}/${FAIL_STRIKES}) -- not acting yet"
-        exit 0
-    fi
-    saved="$(configured_metric "${BACKUP_CON}")"
-    [[ -n "${saved}" ]] || saved="600"
-    state_set saved_backup_metric "${saved}"
-    log "warn" "primary ${PRIMARY_IF} down ${fail_streak}x and backup ${BACKUP_IF} healthy -- failing over (${BACKUP_CON}: ${saved} -> ${FAILOVER_METRIC})"
-    if apply_backup_metric "${FAILOVER_METRIC}"; then
-        state_set failed_over 1
-        sleep 3
-        maybe_alert "NET: failed over to ${BACKUP_IF}" \
-            "Primary uplink ${PRIMARY_IF} (${PRIMARY_CON}) failed ${fail_streak} consecutive upstream probes with carrier $(iface_has_carrier "${PRIMARY_IF}" && echo UP || echo down). Switched default route to ${BACKUP_IF} (${BACKUP_CON}) by setting its metric ${saved} -> ${FAILOVER_METRIC}. Default now via: $(current_default_iface). Will fail back automatically after ${RESTORE_STRIKES} consecutive good primary probes. $(exitnode_note)"
+# --- probe every tier --------------------------------------------------
+# A device with no carrier is down without spending the probe timeouts on it.
+ok=(); summary=""
+for (( i = 0; i < NTIERS; i++ )); do
+    ok[i]=0
+    if iface_has_carrier "${TIER_IF[$i]}" && probe_iface "${TIER_IF[$i]}"; then ok[i]=1; fi
+    if (( ok[i] )); then
+        state_set "ok_streak_${i}" $(( $(state_get "ok_streak_${i}" 0) + 1 )); state_set "fail_streak_${i}" 0
     else
-        maybe_alert "NET: FAILOVER FAILED" \
-            "Primary ${PRIMARY_IF} is down and backup ${BACKUP_IF} is healthy, but the nmcli metric change on '${BACKUP_CON}' did not apply. Manual intervention needed -- see ${LOG_FILE}."
+        state_set "fail_streak_${i}" $(( $(state_get "fail_streak_${i}" 0) + 1 )); state_set "ok_streak_${i}" 0
     fi
+    summary+="${TIER_IF[$i]}:$( (( ok[i] )) && echo ok || echo DOWN)($(state_get "ok_streak_${i}" 0)/$(state_get "fail_streak_${i}" 0)) "
+done
+in_use=$(( boosted >= 0 ? boosted : 0 ))
+log "info" "tiers ${summary}in_use=tier$(( in_use + 1 )) default_via=$(current_default_iface)"
+
+# --- choose the tier ---------------------------------------------------
+# Up: the best tier above the one in use with RESTORE_STRIKES good probes.
+# Down: the tier in use has failed FAIL_STRIKES probes -> the best other tier answering now.
+target=${in_use}
+for (( i = 0; i < in_use; i++ )); do
+    if (( $(state_get "ok_streak_${i}" 0) >= RESTORE_STRIKES )) && tier_eligible "$i"; then target=$i; break; fi
+done
+if (( target == in_use && $(state_get "fail_streak_${in_use}" 0) >= FAIL_STRIKES )); then
+    target=-1
+    for (( i = 0; i < NTIERS; i++ )); do
+        if (( i != in_use && ok[i] )) && tier_eligible "$i"; then target=$i; break; fi
+    done
+    if (( target < 0 )); then
+        # Every tier is down: an upstream outage, not a path choice. Moving the route cannot help and
+        # would hide which link is at fault. Alert only.
+        carriers=""
+        for (( i = 0; i < NTIERS; i++ )); do carriers+="${TIER_IF[$i]}=$(iface_has_carrier "${TIER_IF[$i]}" && echo up || echo down) "; done
+        maybe_alert "NET: ALL uplinks down" \
+            "No tier (${TIER_IF[*]}) can reach any of: ${PROBE_IPS}. Upstream outage, not a failover case -- no route change made. carrier: ${carriers}"
+        exit 0
+    fi
+fi
+if (( target == in_use )); then
+    n="$(state_get "fail_streak_${in_use}" 0)"
+    (( n == 0 )) || log "info" "tier $(( in_use + 1 )) ${TIER_IF[$in_use]} down (${n}/${FAIL_STRIKES}) -- not acting yet"
     exit 0
 fi
 
-# --- fail back ---------------------------------------------------------
-if [[ "${failed_over}" -eq 1 && "${primary_ok}" -eq 1 ]]; then
-    if (( ok_streak < RESTORE_STRIKES )); then
-        log "info" "primary recovered (${ok_streak}/${RESTORE_STRIKES}) -- holding on backup"
-        exit 0
-    fi
-    saved="$(state_get saved_backup_metric 1100)"
-    log "info" "primary ${PRIMARY_IF} healthy ${ok_streak}x -- failing back (${BACKUP_CON}: ${FAILOVER_METRIC} -> ${saved})"
-    if apply_backup_metric "${saved}" failback; then
-        state_set failed_over 0
+# --- move --------------------------------------------------------------
+from_if="${TIER_IF[$in_use]}"; to_if="${TIER_IF[$target]}"
+if (( target < in_use )); then
+    why="tier $(( target + 1 )) ${to_if} (${TIER_CON[$target]}) passed $(state_get "ok_streak_${target}" 0) consecutive probes"
+else
+    why="tier $(( in_use + 1 )) ${from_if} (${TIER_CON[$in_use]}) failed $(state_get "fail_streak_${in_use}" 0) consecutive upstream probes with carrier $(iface_has_carrier "${from_if}" && echo UP || echo down)"
+fi
+if (( target == 0 )); then
+    saved="$(state_get "saved_metric_${boosted}" 1100)"
+    log "info" "${why} -- back to tier 1 (${TIER_CON[$boosted]}: ${FAILOVER_METRIC} -> ${saved})"
+    if tier_metric "${boosted}" "${saved}" "${to_if}" failback; then
+        state_set boosted -1
         sleep 3
-        ntfy_send "NET: restored to ${PRIMARY_IF}" \
-            "Primary uplink ${PRIMARY_IF} (${PRIMARY_CON}) passed ${ok_streak} consecutive probes. Restored ${BACKUP_CON} metric to ${saved}; default now via: $(current_default_iface)." 3
+        ntfy_send "NET: restored to ${to_if}" \
+            "${why}. Restored ${TIER_CON[$boosted]} metric to ${saved}; default now via: $(current_default_iface)." 3
         state_set last_alert_epoch "$(date +%s)"
     else
         maybe_alert "NET: FAIL-BACK FAILED" \
-            "Primary ${PRIMARY_IF} recovered but restoring '${BACKUP_CON}' to metric ${saved} did not apply -- the box is still on the backup uplink. See ${LOG_FILE}."
+            "Tier 1 ${to_if} recovered but restoring '${TIER_CON[$boosted]}' to metric ${saved} did not apply -- the box is still on ${from_if}. See ${LOG_FILE}."
     fi
     exit 0
 fi
-
+saved="$(configured_metric "${TIER_CON[$target]}")"
+[[ -n "${saved}" && "${saved}" != "${FAILOVER_METRIC}" ]] || saved="$(state_get "saved_metric_${target}" 1100)"
+state_set "saved_metric_${target}" "${saved}"
+# Moving from one moved-to tier to another: the old one still holds the failover metric until it is put back,
+# and two equal defaults are an ECMP coin toss. The new tier takes 10 less, so it wins outright.
+boost_m="${FAILOVER_METRIC}"
+(( boosted >= 0 )) && [[ "$(state_get boost_metric "${FAILOVER_METRIC}")" == "${FAILOVER_METRIC}" ]] && boost_m=$(( FAILOVER_METRIC - 10 ))
+log "warn" "${why} -- moving to tier $(( target + 1 )) ${to_if} (${TIER_CON[$target]}: ${saved} -> ${boost_m})"
+if ! tier_metric "${target}" "${boost_m}" "${to_if}"; then
+    maybe_alert "NET: FAILOVER FAILED" \
+        "${why}; tier $(( target + 1 )) ${to_if} is healthy, but the nmcli metric change on '${TIER_CON[$target]}' did not apply. Manual intervention needed -- see ${LOG_FILE}."
+    exit 0
+fi
+if (( boosted >= 0 && boosted != target )); then
+    old="$(state_get "saved_metric_${boosted}" 1100)"
+    tier_metric "${boosted}" "${old}" "${to_if}" failback \
+        || log "error" "moved to ${to_if}, but restoring ${TIER_CON[$boosted]} to metric ${old} did not apply"
+fi
+state_set boosted "${target}"
+state_set boost_metric "${boost_m}"
+sleep 3
+title="NET: failed over to ${to_if}"
+(( target > in_use )) || title="NET: back up to ${to_if}"
+maybe_alert "${title}" \
+    "${why}. Default route moved to tier $(( target + 1 )) ${to_if} (${TIER_CON[$target]}) by setting its metric ${saved} -> ${boost_m}. Default now via: $(current_default_iface). Moves back up after ${RESTORE_STRIKES} consecutive good probes on a better tier. $(exitnode_note "${to_if}")"
 exit 0

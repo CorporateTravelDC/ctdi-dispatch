@@ -28,13 +28,12 @@ esac
     for p in bindir.iterdir():
         p.chmod(0o755)
     state = tmp_path / 'wd-state'
-    state.write_text(f'failed_over={failed_over}\nsaved_backup_metric=600\nlast_alert_epoch=9999999999\n')
+    state.write_text(f'boosted={1 if failed_over else -1}\nsaved_metric_1=600\nlast_alert_epoch=9999999999\n')
     (tmp_path / 'run').mkdir()
     env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'], CALLS=str(calls),
                XDG_RUNTIME_DIR=str(tmp_path / 'run'),
                NET_FAILOVER_STATE_FILE=str(state), NET_FAILOVER_LOG_FILE=str(tmp_path / 'log'),
-               NET_FAILOVER_PRIMARY_IF='primary0', NET_FAILOVER_BACKUP_IF='backup0',
-               NET_FAILOVER_BACKUP_CON='fixture-backup', NET_FAILOVER_PRIMARY_CON='fixture-primary',
+               NET_FAILOVER_CHAIN='fixture-primary@primary0,fixture-backup@backup0',
                NET_FAILOVER_SYS_NET_DIR=str(tmp_path / 'net'),
                NET_FAILOVER_PARKED='true' if parked else 'false')
     p = subprocess.run(['bash', str(SCRIPT)], text=True, capture_output=True, env=env, timeout=60)
@@ -45,7 +44,7 @@ def test_parked_watchdog_never_probes_or_touches_routes(tmp_path):
     p, calls, state = run_watchdog(tmp_path, parked=True, failed_over=0)
     assert p.returncode == 0, p.stdout + p.stderr
     assert calls == ''
-    assert 'failed_over=0' in state
+    assert 'boosted=-1' in state
 
 
 def test_park_while_failed_over_restores_the_backup_once(tmp_path):
@@ -53,7 +52,7 @@ def test_park_while_failed_over_restores_the_backup_once(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     assert 'ping' not in calls and 'curl' not in calls
     assert 'nmcli' in calls
-    assert 'failed_over=0' in state
+    assert 'boosted=-1' in state
 
 
 def test_unparked_watchdog_still_probes(tmp_path):

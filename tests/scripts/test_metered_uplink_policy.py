@@ -137,12 +137,15 @@ def test_failback_with_the_hotspot_gone_clears_failed_over(tmp_path):
     stub(b, "ip", 'echo "default via 192.0.2.1 dev wld0 metric 50"')
     stub(b, "nmcli", f'echo "$*" >> {calls}; [[ "$1 $2" == "connection up" ]] && exit 4; echo 600; exit 0')
     state = tmp_path / "wd-state"
-    state.write_text("failed_over=1\nsaved_backup_metric=600\nok_streak=5\nlast_alert_epoch=0\n")
+    state.write_text("boosted=1\nsaved_metric_1=600\nok_streak_0=5\nlast_alert_epoch=0\n")
+    (tmp_path / "net/wld0").mkdir(parents=True); (tmp_path / "net/wld0/carrier").write_text("1")
+    (tmp_path / "run").mkdir()
     e = dict(os.environ, PATH=f"{b}:{os.environ['PATH']}", NET_FAILOVER_STATE_FILE=str(state),
-             NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_BACKUP_IF="nosuchdev0",
-             NET_FAILOVER_PRIMARY_IF="wld0", NET_FAILOVER_PARKED="false", CTDC_CONFIG_FILE="/nonexistent")
+             NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_CHAIN="fixture-primary@wld0,Hockey Puck@nosuchdev0",
+             NET_FAILOVER_SYS_NET_DIR=str(tmp_path / "net"), XDG_RUNTIME_DIR=str(tmp_path / "run"),
+             NET_FAILOVER_PARKED="false", CTDC_CONFIG_FILE="/nonexistent")
     r = subprocess.run(["bash", str(WATCHDOG)], env=e, capture_output=True, text=True, timeout=60)
-    assert "failed_over=0" in state.read_text(), r.stdout + r.stderr
+    assert "boosted=-1" in state.read_text(), r.stdout + r.stderr
     made = calls.read_text()
     assert "ipv4.route-metric 600" in made and "connection up" not in made
 
@@ -158,13 +161,17 @@ def _failover_run(tmp_path, cap_present):
     stub(b, "nmcli", 'echo 600; exit 0')
     stub(b, "ip", 'echo "default via 192.0.2.1 dev enu1 metric 50"')
     state = tmp_path / "wd-state"
-    state.write_text("failed_over=0\nfail_streak=5\nok_streak=0\nlast_alert_epoch=0\n")
+    state.write_text("boosted=-1\nfail_streak_0=5\nlast_alert_epoch=0\n")
+    for dev in ("wld0", "enu1"):
+        (tmp_path / "net" / dev).mkdir(parents=True); (tmp_path / "net" / dev / "carrier").write_text("1")
+    (tmp_path / "run").mkdir()
     cap = tmp_path / "ctdc-exitnode.nft"
     if cap_present:
         cap.write_text("table inet ctdc_exitnode {}\n")
     e = dict(os.environ, PATH=f"{b}:{os.environ['PATH']}", NET_FAILOVER_STATE_FILE=str(state),
-             NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_BACKUP_IF="enu1",
-             NET_FAILOVER_PRIMARY_IF="wld0", NET_EXITNODE_CAP_FILE=str(cap), NET_FAILOVER_PARKED="false",
+             NET_FAILOVER_LOG_FILE=str(tmp_path / "watch.log"), NET_FAILOVER_CHAIN="fixture-primary@wld0,Hockey Puck@enu1",
+             NET_FAILOVER_SYS_NET_DIR=str(tmp_path / "net"), XDG_RUNTIME_DIR=str(tmp_path / "run"), NET_METERED_IFACES="enu1",
+             NET_EXITNODE_CAP_FILE=str(cap), NET_FAILOVER_PARKED="false",
              CTDC_CONFIG_FILE="/nonexistent")
     subprocess.run(["bash", str(WATCHDOG)], env=e, capture_output=True, text=True, timeout=60)
     return sent.read_text() if sent.exists() else ""
