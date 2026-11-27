@@ -39,9 +39,15 @@ install -d -m 0700 "$PRIV" "$W" "$W/journal/user" "$W/journal/system" "$W/backup
 exec 7>"${PRIV}/.lock"; flock -n 7 || { log "another mirror run is active"; exit 0; }
 
 # ---- journals (incremental through the journal cursor; each unit file keeps its newest lines) ----------------
-journalctl --user --cursor-file="${PRIV}/user.cursor" --since -26h -o json \
-  --output-fields=_SYSTEMD_USER_UNIT,MESSAGE --no-pager -q 2>/dev/null \
-  | python3 "${HERE}/ea_mirror_split.py" "$W/journal/user" 3000
+# journalctl takes ONE of --since / --cursor-file (2026-11-26: both together failed every run). The first run reads
+# the last 26 h and then records where the journal ends; every later run continues from that cursor.
+JF=(-o json --output-fields=_SYSTEMD_USER_UNIT,MESSAGE --no-pager -q)
+if [[ -s "${PRIV}/user.cursor" ]]; then
+  journalctl --user --cursor-file="${PRIV}/user.cursor" "${JF[@]}" | python3 "${HERE}/ea_mirror_split.py" "$W/journal/user" 3000
+else
+  journalctl --user --since -26h "${JF[@]}" | python3 "${HERE}/ea_mirror_split.py" "$W/journal/user" 3000
+  journalctl --user -n 1 --cursor-file="${PRIV}/user.cursor" -o cat --no-pager -q >/dev/null
+fi
 find "$W/journal/user" -name '*.log' ! -name 'corporatetraveldc-*' -delete 2>/dev/null || true
 journalctl --list-boots --no-pager > "$W/journal/system/boots.txt" 2>&1 || true
 journalctl -b -1 -n 300 -o short-iso --no-pager -q > "$W/journal/system/previous-boot-tail.log" 2>&1 || true
