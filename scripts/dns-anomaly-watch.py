@@ -86,6 +86,21 @@ if the var is absent or unparsable):
   UBER_WATCH_CLIENT_IP=100.x.x.x
   UBER_WATCH_RECONNECT_GAP_MIN=20
   UBER_WATCH_BURST_WINDOW_S=120
+
+DNS BYPASS class (2026-11-27, operator), OFF unless DNS_BYPASS_WATCH_JSON is set:
+  DNS_BYPASS_WATCH_JSON=/var/lib/ctdc-dnsleak/latest.json   the root collector's output (config/dns-leak-watch/,
+                                                            docs/DNS_LEAK_WATCH.md); schema 1, group-readable
+  DNS_BYPASS_CORRELATE_MIN=10     a bypass finding within N minutes of a reconnect / novelty / CNAME-drift event is
+                                  reported as correlated with it (priority 5 instead of 4)
+  DNS_BYPASS_MAX_AGE_MIN=30       an older latest.json is ignored (the collector is not running)
+  DNS_BYPASS_HOST=                when the collector watches the whole tailnet (TAILNET=yes), only findings from
+                                  this tailnet host name are this watch's; empty = all, each line names its host
+The collector records the watched client's NEW forwarded connections in an nft set; its "bypass_evidence" lists
+destinations the device used to resolve names outside Pi-hole: dns53 (plain DNS to another server), dot / doq
+(port 853, TCP / UDP), doh (443 to an address on the encrypted-resolver list), plus the dns-lock table's redirected
+plain-DNS count. Each finding alerts ONCE (key class|dest|proto|port); the first pass with the feature on is a silent
+baseline. Hard-coded destinations are DNS leak watch's own alerts; here they are only logged when they fall inside a
+reconnect burst, as correlation context.
 """
 import json
 import os
@@ -401,6 +416,86 @@ def ntfy_alert(cfg, message, title, priority=4):
         print(f"{LOG_PREFIX} ntfy push failed (non-fatal): {e}")
 
 
+def _latest_bypass(cfg, client_ip, now):
+    """The collector's latest.json, if the feature is on, fresh, and about this client. None otherwise (logged)."""
+    path = cfg.get("DNS_BYPASS_WATCH_JSON", "").strip()
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"{LOG_PREFIX} bypass: cannot read {path} ({type(e).__name__}); skipped")
+        return None
+    if doc.get("schema") != 1:
+        print(f"{LOG_PREFIX} bypass: {path} has schema {doc.get('schema')!r}, expected 1; skipped")
+        return None
+    max_age = _float(cfg.get("DNS_BYPASS_MAX_AGE_MIN"), 30.0) * 60
+    if now - float(doc.get("generated", 0)) > max_age:
+        print(f"{LOG_PREFIX} bypass: {path} is older than {max_age / 60:.0f} min (collector not running?); skipped")
+        return None
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(client_ip)
+        nets = [ipaddress.ip_network(n, strict=False) for n in doc.get("clients", [])]
+    except ValueError:
+        return None
+    if not any(a.version == n.version and a in n for n in nets):
+        print(f"{LOG_PREFIX} bypass: the collector does not watch this client; skipped")
+        return None
+    return doc
+
+
+def bypass_pass(cfg, state, now, client_ip, event_ts):
+    """Fold the collector's DNS bypass evidence into this watch's findings. event_ts: epoch times of this watch's own
+    events (reconnect windows, novel / anomalous domains) to correlate with. Returns the alerted findings."""
+    doc = _latest_bypass(cfg, client_ip, now)
+    if doc is None:
+        return []
+    window = _float(cfg.get("DNS_BYPASS_CORRELATE_MIN"), 10.0) * 60
+    events = sorted(set(event_ts) | {float(v) for v in state.get("last_marker_ts", {}).values()})
+    near = lambda ts: any(abs(ts - e) <= window for e in events)
+    ev = doc.get("bypass_evidence", {})
+    findings = ev.get("findings", [])
+    only = cfg.get("DNS_BYPASS_HOST", "").strip()
+    if only:
+        findings = [f for f in findings if f.get("host") == only]
+    baseline = "bypass_alerted" not in state
+    alerted = set(state.get("bypass_alerted", []))
+    new = [f for f in findings if f.get("key") and f["key"] not in alerted]
+    state["bypass_alerted"] = sorted(alerted | {f["key"] for f in findings if f.get("key")})
+    for h in doc.get("hardcoded", {}).get("findings", []):
+        if h.get("first_seen", 0) > now - 3600 and near(h["first_seen"]):
+            print(f"{LOG_PREFIX} bypass: hard-coded destination {h['dest']} {h['proto']}/{h['port']} inside a "
+                  f"reconnect/novelty window (DNS leak watch alerts on it)")
+    if baseline:
+        print(f"{LOG_PREFIX} bypass: first pass, {len(findings)} existing finding(s) recorded as baseline")
+        return []
+    red = int(ev.get("dnslock_redirect_last_delta") or 0)
+    if red:
+        print(f"{LOG_PREFIX} bypass: {red} hard-coded plain-DNS quer(ies) redirected to Pi-hole by the dns-lock table")
+    if not new:
+        return []
+    correlated = [f for f in new if near(float(f.get("first_seen", 0)))]
+    label = {"dns53": "plain DNS to another server", "dot": "DNS over TLS (853/tcp)", "doq": "DNS over QUIC (853/udp)",
+             "doh": "DNS over HTTPS to a known resolver"}
+    lines = [f"- {label.get(f['class'], f['class'])}: {f['dest']} {f['proto']}/{f['port']}"
+             + (f" ({f['rdns']})" if f.get("rdns") else "") + (f" from {f['host']}" if f.get("host") and not only else "")
+             + (" [during a reconnect/novelty window]" if f in correlated else "")
+             for f in new[:10]]
+    print(f"{LOG_PREFIX} DNS BYPASS: {len(new)} new, {len(correlated)} correlated")
+    ntfy_alert(
+        cfg,
+        f"The {cfg.get('DNS_WATCH_DEVICE_LABEL', 'monitored device')} resolved names outside Pi-hole:\n" + "\n".join(lines)
+        + (f"\n(+{len(new) - 10} more)" if len(new) > 10 else "")
+        + (f"\n{red} hard-coded plain-DNS quer(ies) were also redirected to Pi-hole this pass." if red else "")
+        + "\nSource attribution is NOT established (the connection log cannot name the app).",
+        "DNS anomaly -- DNS bypass" + (" during a reconnect burst" if correlated else ""),
+        priority=5 if correlated else 4,
+    )
+    return new
+
+
 def main():
     cfg = _cfg()
     if not _bool(cfg.get("UBER_WATCH_ENABLED"), True):
@@ -480,6 +575,7 @@ def main():
 
     if not hits:
         print(f"{LOG_PREFIX} no new queries since last check")
+        bypass_pass(cfg, state, now, client_ip, [])
         state["seen_domains"] = sorted(seen_domains)
         state["last_run_ts"] = now
         save_state(state)
@@ -501,6 +597,7 @@ def main():
     anomalies = []
     novel_in_burst = []
     novel_elsewhere = []
+    event_ts = [ts for ts, _ in reconnect_windows]       # for the DNS bypass correlation (feature off: unused)
 
     for ts, domain in hits:
         # 2026-10-03: Pi-hole's query log carries whatever a client asked
@@ -516,8 +613,10 @@ def main():
             verdict = classify_uber_domain(domain)
             if verdict.startswith("ANOMALOUS"):
                 anomalies.append((domain, verdict))
+                event_ts.append(ts)
 
         if is_new_domain and not first_run:
+            event_ts.append(ts)
             if in_burst:
                 novel_in_burst.append(domain)
             else:
@@ -577,6 +676,10 @@ def main():
         )
     if novel_elsewhere:
         print(f"{LOG_PREFIX} new domain(s) outside any burst (informational): {novel_elsewhere}")
+
+    if cfg.get("DNS_BYPASS_WATCH_JSON", "").strip():
+        bypass_pass(cfg, state, now, client_ip, event_ts)
+        save_state(state)
 
 
 if __name__ == "__main__":

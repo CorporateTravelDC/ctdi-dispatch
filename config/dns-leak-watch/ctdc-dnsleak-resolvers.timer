@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh DNS leak watch's encrypted-resolver list once a day
+# No Requires=/Wants= on the service here (docs/BOOT_STORM_TIMER_REQUIRES.md).
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

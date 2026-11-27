@@ -1,0 +1,90 @@
+# /etc/ctdc-dnsleak/dnsleak.conf -- DNS leak watch and its collector (docs/DNS_LEAK_WATCH.md). key=value, parsed,
+# never sourced. Write it with `sudo config/dns-leak-watch/apply.sh init-conf --clients ... --iface ...`.
+
+# The watched device's addresses AS THIS HOST SEES THEM, comma-separated, IPv4 and IPv6, single addresses or CIDRs.
+#   Setup A (Tailscale exit node): the phone's two Tailscale addresses (`tailscale status --json`, TailscaleIPs).
+#   Setup B (this host is the gateway): the phone's LAN address(es); a DHCP reservation keeps them stable.
+# All listed addresses are treated as ONE device (its lookups and its connections are matched together).
+CLIENTS=192.0.2.10,2001:db8::10
+
+# TAILNET=yes watches EVERY tailnet device: CLIENTS then includes Tailscale's two ranges (100.64.0.0/10 and
+# fd7a:115c:a1e0::/48), and each device is told apart by host name from `tailscale status --json`, read by the root
+# run (addresses stay in the root-only root-state.json; reports use host names). This turns on the per-device
+# CONNECTION CHECK below.
+TAILNET=no
+
+# Connection check: each device gets an evaluation window this long when it comes online or starts sending traffic
+# through this host; verdicts PASS / FAIL / NOT-ROUTED (docs/DNS_LEAK_WATCH.md).
+CHECK_WINDOW_MIN=10
+
+# Enforcement, OFF by default (no | alert-then-quarantine): a device still FAILing QUARANTINE_GRACE_MIN minutes after
+# its first FAIL has its forwarded traffic dropped (DNS to this host and Tailscale itself keep working) until its next
+# PASS or `apply.sh release HOST|--all`. Never this host, PROXY_CLIENTS, or a host listed in QUARANTINE_EXEMPT.
+QUARANTINE=no
+QUARANTINE_GRACE_MIN=5
+QUARANTINE_EXEMPT=
+
+# OFF-TUNNEL rule (empty = off): for these host names (or * = every peer; never this host or PROXY_CLIENTS), a device
+# that was routed through this box in the last ROUTED_RECENT_MIN minutes and then goes tailnet-offline, or stays online
+# without traffic through this box, triggers ONE priority-5 push per episode after OFF_TUNNEL_ALERT_MIN minutes, to
+# every topic in NTFY_P5_TOPICS (empty = NTFY_TOPIC). When it comes back it is held (the quarantine sets) until a
+# signed release (RELEASE_APPROVAL_CMD, below), or until it passes the connection check CAPTIVE_MIN_HOLD_MIN minutes
+# after its return, or `apply.sh release HOST`. QUARANTINE_EXEMPT hosts get the push but are never held.
+ALWAYS_ON_HOSTS=
+ROUTED_RECENT_MIN=30
+OFF_TUNNEL_ALERT_MIN=5
+NTFY_P5_TOPICS=
+CAPTIVE_MIN_HOLD_MIN=10
+
+# Optional signed release: a program (absolute path, no arguments) run as RELEASE_APPROVAL_USER (never root) with
+# `check --host HOST --since EPOCH`; it must verify a human signature itself and print exactly "ok <id>" when a
+# release is signed. Empty = no signed release (auto and manual release still work).
+RELEASE_APPROVAL_CMD=
+RELEASE_APPROVAL_USER=
+
+# On-device check, OFF by default: for Linux peers, run the vendored dns-lockdown-check.sh over Tailscale SSH as this
+# non-root user (60 s limit; only its PASS/FAIL lines are kept). Needs a Tailscale SSH ACL rule (see the docs).
+DEVICE_SSH_CHECK=no
+DEVICE_SSH_USER=
+
+# Addresses whose Pi-hole lookups count as the watched device's own (default empty). Needed when the device's DNS
+# reaches Pi-hole THROUGH this host -- e.g. a Tailscale exit node forwarding the phone's DNS, so Pi-hole logs this
+# host's loopback or tailnet address as the client. Run `apply.sh diagnose` to see which case you have. Limit: this
+# host's own lookups then count as the device's too, which can hide a hard-coded address this host also resolved.
+PROXY_CLIENTS=
+
+# The interface the device's traffic arrives on: tailscale0 (setup A) or the LAN interface (setup B).
+IFACE=tailscale0
+
+# Pi-hole's query log (dnsmasq style). Yesterday's rotation is expected at the same path + ".1".
+PIHOLE_LOG=/var/log/pihole/pihole.log
+
+# Reports and state (0750 dir, 0640 files, owner root, group READ_GROUP so one non-root account can read them).
+OUT_DIR=/var/lib/ctdc-dnsleak
+READ_GROUP=root
+
+# How long a destination stays in the kernel set after its last new connection, and the lookback window: an address
+# no Pi-hole answer handed out to anyone within INDEX_HOURS is "hardcoded".
+SET_TIMEOUT=6h
+INDEX_HOURS=48
+
+# Reverse-DNS hint for hard-coded and bypass destinations, through the local resolver (yes / no).
+RDNS=yes
+
+# Encrypted-resolver (DoH) address list, refreshed once a day by ctdc-dnsleak-resolvers.timer (never by the watch).
+# A fetched list with fewer than RESOLVER_MIN entries is refused and the last good list kept. The refresh is skipped
+# while the default route uses an interface in METERED_IFACES (space- or comma-separated; empty = never skip).
+RESOLVER_LIST=/etc/ctdc-dnsleak/encrypted-resolvers.txt
+RESOLVER_LIST_URL=https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/doh.txt
+RESOLVER_MIN=100
+METERED_IFACES=
+
+# Optional: a counter of plain DNS queries another table redirects to Pi-hole ("family table counter"); read as a
+# per-run delta and exported with the bypass evidence. Absent table = skipped. Empty = off.
+DNSLOCK_COUNTER=inet ctdc_dnslock dns_tailnet_redirect
+
+# Optional push (ntfy): one message per run with new hard-coded destinations, one daily digest. Empty = none.
+# The token file holds a PUBLISH-ONLY token, root 0600.
+NTFY_URL=
+NTFY_TOPIC=
+NTFY_TOKEN_FILE=

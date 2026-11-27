@@ -1,0 +1,15 @@
+[Unit]
+Description=DNS leak watch: refresh the encrypted-resolver (DoH) address list (keeps the last good list on failure)
+Documentation=https://github.com/CorporateTravelDC/ctdi-dispatch/blob/main/docs/DNS_LEAK_WATCH.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/ctdc-dnsleak/dnsleak.conf
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc-dnsleak/dns_leak_watch.py refresh-resolvers --conf /etc/ctdc-dnsleak/dnsleak.conf

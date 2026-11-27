@@ -1,0 +1,13 @@
+[Unit]
+Description=DNS leak watch: classify the device's new destinations against Pi-hole answers (docs/DNS_LEAK_WATCH.md)
+After=ctdc-dnsleak-fw.service
+ConditionPathExists=/etc/ctdc-dnsleak/dnsleak.conf
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=10min
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/python3 /usr/local/libexec/ctdc-dnsleak/dns_leak_watch.py run --conf /etc/ctdc-dnsleak/dnsleak.conf

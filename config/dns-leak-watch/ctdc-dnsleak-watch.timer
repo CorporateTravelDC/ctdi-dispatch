@@ -1,0 +1,11 @@
+[Unit]
+Description=Run DNS leak watch every 3 minutes
+# No Requires=/Wants= on the service here: that would start it the moment the timer starts (docs/BOOT_STORM_TIMER_REQUIRES.md).
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=3min
+AccuracySec=20s
+
+[Install]
+WantedBy=timers.target

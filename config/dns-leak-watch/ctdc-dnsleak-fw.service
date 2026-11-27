@@ -1,0 +1,15 @@
+[Unit]
+Description=DNS leak watch: load the nft table that records new connections from the watched device
+Documentation=https://github.com/CorporateTravelDC/ctdi-dispatch/blob/main/docs/DNS_LEAK_WATCH.md
+After=network-online.target tailscaled.service firewalld.service nftables.service
+Wants=network-online.target
+ConditionPathExists=/etc/nftables.d/ctdc-dnsleak.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/ctdc-dnsleak.nft
+ExecStop=/usr/sbin/nft delete table inet ctdc_dnsleak
+
+[Install]
+WantedBy=multi-user.target

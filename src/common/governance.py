@@ -56,7 +56,8 @@ APPROVAL_KINDS = ("sudo", "council", "council-close", "connector-link", "connect
                   "withheld-pass", "withheld-master", "withheld-thaw",                # common/withheld.py (2026-11-02)
                   "liveness",   # 2026-10-15: offline-lockdown authority for team-liveness.sh (pattern liveness-<inert|reactivate>-<account>)
                   "board-gate",   # (operator 2026-10-16): Cowork board token-gate reply, poller/skills/board_sweep.py
-                  "backup-sync")  # (operator 2026-11-22): weekly signed gate on the Borg -> Proton sync, scripts/backup/sync_gate.py
+                  "backup-sync",  # (operator 2026-11-22): weekly signed gate on the Borg -> Proton sync, scripts/backup/sync_gate.py
+                  "captive-portal-release")  # (operator 2026-11-27): release a device the DNS leak watch holds after an off-tunnel episode, scripts/captive-release-gate.py
 COUNCIL_MODES = ("council", "arena")
 COUNCIL_APPROVAL_TTL_S = 24 * 3600
 WORKSPACE_ROOT = "01-Sources/personal-notes/Series"
@@ -217,6 +218,9 @@ APPROVAL_TTL_POLICY = {
     # an unsigned one simply expires and the next held night asks again. The 7-day validity of an ALLOWED one
     # is sync_gate.GATE_DAYS, not this TTL.
     "backup-sync": (14400, 3600, 14400),
+    # (operator 2026-11-27): a captive-portal release (config/dns-leak-watch, return hold). Short like withheld-pass:
+    # the operator asks for it while looking at the device; an unsigned request expires and the hold stays.
+    "captive-portal-release": (600, 120, 1800),
 }
 COUNCIL_TTL_FRACTION = 0.10         # of the council's deadline
 COUNCIL_CLOSE_TTL_FRACTION = 0.25   # of the council's remaining time
