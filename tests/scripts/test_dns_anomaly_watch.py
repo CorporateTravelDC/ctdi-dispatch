@@ -133,3 +133,14 @@ def test_bypass_host_filter_for_a_tailnet_wide_collector(monkeypatch, tmp_path):
     sent.clear()
     m.bypass_pass(cfg, state2, NOW, CLIENT, [])
     assert "from laptop" in sent[0][2] and "from driver-phone" in sent[0][2]
+
+
+def test_a_bypass_attempt_the_forward_defense_blocked_is_priority_3_and_says_so(monkeypatch, tmp_path):
+    m, sent, cfg = _setup(monkeypatch, tmp_path, _doc([]))
+    state = {"last_marker_ts": {}, "bypass_alerted": []}
+    f = dict(_f("dot", "203.0.113.3", 853, NOW - 60), blocked=True)
+    (tmp_path / "latest.json").write_text(_json.dumps(_doc([f])))
+    m.bypass_pass(cfg, state, NOW, CLIENT, [NOW - 120])
+    title, prio, msg = sent[0]
+    assert prio == 3 and title.startswith("DNS anomaly -- blocked DNS bypass attempt")
+    assert "TRIED" in msg and "BLOCKED by the forward defense" in msg

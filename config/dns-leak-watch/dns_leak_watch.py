@@ -30,7 +30,9 @@ digest. The first run is a silent baseline.
   dns_leak_watch.py render-nft --conf FILE
   dns_leak_watch.py run --conf FILE
   dns_leak_watch.py status --conf FILE
-  dns_leak_watch.py refresh-resolvers --conf FILE     the daily resolver-list refresh (its own timer)
+  dns_leak_watch.py refresh-resolvers --conf FILE     the daily refresh (its own timer): known + learned encrypted
+                                                      resolvers, the Tailscale relay list, ECH-capable names
+  dns_leak_watch.py load-sets --conf FILE             load the blocked-resolver nft sets (BLOCK=yes; the fw unit runs it)
   dns_leak_watch.py check-resolvers --file FILE
   dns_leak_watch.py release --conf FILE --host NAME|--all     lift a connection-check quarantine
   dns_leak_watch.py diagnose --conf FILE [--seconds N]  which client addresses Pi-hole logs while the device is active
@@ -59,15 +61,26 @@ STALE_HORIZON_DAYS = 30            # answers older than this are forgotten (cach
 FINDINGS_KEEP_DAYS = 7
 BYPASS = ("dns53", "dot", "doq", "doh")
 HARD = ("hardcoded", "other-client", "cached-stale")
+CONTEXT = ("infra",)               # known infrastructure (Tailscale relays): never a finding, listed for context
 KEYS = {"CLIENTS", "TAILNET", "PROXY_CLIENTS", "IFACE", "CHECK_WINDOW_MIN", "QUARANTINE", "QUARANTINE_GRACE_MIN",
         "DEVICE_SSH_CHECK", "DEVICE_SSH_USER", "QUARANTINE_EXEMPT",
         "ALWAYS_ON_HOSTS", "ROUTED_RECENT_MIN", "OFF_TUNNEL_ALERT_MIN", "NTFY_P5_TOPICS", "CAPTIVE_MIN_HOLD_MIN",
         "RELEASE_APPROVAL_CMD", "RELEASE_APPROVAL_USER", "PIHOLE_LOG", "OUT_DIR", "READ_GROUP", "SET_TIMEOUT", "INDEX_HOURS", "RDNS",
-        "RESOLVER_LIST", "RESOLVER_LIST_URL", "RESOLVER_MIN", "METERED_IFACES", "DNSLOCK_COUNTER", "NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN_FILE"}
+        "RESOLVER_LIST", "RESOLVER_LIST_URL", "RESOLVER_EXTRA_URLS", "RESOLVER_DOMAINS_URL", "RESOLVER_MIN",
+        "INFRA_LIST", "INFRA_URL", "INFRA_CHECK_URL", "INFRA_SEED", "LEARNED_DAYS", "BLOCK", "ECH_NAMES", "ECH_PROBE_MAX", "METERED_IFACES", "DNSLOCK_COUNTER", "NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN_FILE"}
 DEFAULTS = {"PIHOLE_LOG": "/var/log/pihole/pihole.log", "OUT_DIR": "/var/lib/ctdc-dnsleak", "READ_GROUP": "root",
             "SET_TIMEOUT": "6h", "INDEX_HOURS": "48", "RDNS": "no",
             "RESOLVER_LIST": "/etc/ctdc-dnsleak/encrypted-resolvers.txt", "RESOLVER_MIN": "100", "METERED_IFACES": "",
             "RESOLVER_LIST_URL": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/doh.txt",
+            "RESOLVER_EXTRA_URLS": "https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv4.txt "
+                                   "https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv6.txt",
+            "RESOLVER_DOMAINS_URL": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-onlydomains.txt",
+            "INFRA_LIST": "/etc/ctdc-dnsleak/known-infra.txt",
+            # the community list (github.com/jmaddington/tailscale-ips, also a pinned submodule of the bundler repo:
+            # INFRA_SEED), cross-checked against Tailscale's own relay map: only addresses BOTH carry are kept
+            "INFRA_URL": "https://raw.githubusercontent.com/jmaddington/tailscale-ips/main/tailscale.all.txt",
+            "INFRA_CHECK_URL": "https://controlplane.tailscale.com/derpmap/default", "INFRA_SEED": "",
+            "LEARNED_DAYS": "90", "BLOCK": "no", "ECH_NAMES": "cloudflare-ech.com", "ECH_PROBE_MAX": "300",
             "DNSLOCK_COUNTER": "inet ctdc_dnslock dns_tailnet_redirect",
             "NTFY_URL": "", "NTFY_TOPIC": "", "NTFY_TOKEN_FILE": "",
             "TAILNET": "no", "CHECK_WINDOW_MIN": "10", "QUARANTINE": "no", "QUARANTINE_GRACE_MIN": "5", "QUARANTINE_EXEMPT": "",
@@ -140,7 +153,7 @@ def parse_conf(text: str) -> dict:
     c["PROXY_CLIENTS"] = proxies
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", c.get("IFACE", "")):
         raise ConfError("IFACE: an interface name is required (e.g. tailscale0, or the LAN interface)")
-    for k in ("PIHOLE_LOG", "OUT_DIR", "RESOLVER_LIST"):
+    for k in ("PIHOLE_LOG", "OUT_DIR", "RESOLVER_LIST", "INFRA_LIST"):
         if not c[k].startswith("/") or ".." in c[k].split("/"):
             raise ConfError(f"{k}: an absolute path is required")
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", c["READ_GROUP"]):
@@ -189,6 +202,26 @@ def parse_conf(text: str) -> dict:
         raise ConfError("RDNS: yes or no")
     if c["RESOLVER_LIST_URL"] and not re.fullmatch(r"https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/~-]*)?", c["RESOLVER_LIST_URL"]):
         raise ConfError("RESOLVER_LIST_URL: an https URL")
+    url = r"https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/~-]*)?"
+    extra = [u for u in re.split(r"[\s,]+", c["RESOLVER_EXTRA_URLS"].strip()) if u]
+    if any(not re.fullmatch(url, u) for u in extra) or len(extra) > 8:
+        raise ConfError("RESOLVER_EXTRA_URLS: up to 8 https URLs, space-separated")
+    c["RESOLVER_EXTRA_URLS"] = extra
+    for k in ("RESOLVER_DOMAINS_URL", "INFRA_URL", "INFRA_CHECK_URL"):
+        if c[k] and not re.fullmatch(url, c[k]):
+            raise ConfError(f"{k}: an https URL, or empty")
+    if c["INFRA_SEED"] and (not c["INFRA_SEED"].startswith("/") or ".." in c["INFRA_SEED"].split("/")):
+        raise ConfError("INFRA_SEED: an absolute path, or empty")
+    if c["BLOCK"] not in ("yes", "no"):
+        raise ConfError("BLOCK: yes or no")
+    for k, lo, hi in (("LEARNED_DAYS", 1, 3650), ("ECH_PROBE_MAX", 0, 5000)):
+        if not re.fullmatch(r"\d{1,4}", c[k]) or not lo <= int(c[k]) <= hi:
+            raise ConfError(f"{k}: {lo}-{hi}")
+        c[k] = int(c[k])
+    ech = [x.lower().rstrip(".") for x in re.split(r"[\s,]+", c["ECH_NAMES"].strip()) if x]
+    if any(not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,62}\.)+[a-z]{2,63}", x) for x in ech):
+        raise ConfError("ECH_NAMES: domain names, space-separated")
+    c["ECH_NAMES"] = ech
     if not re.fullmatch(r"\d{1,5}", c["RESOLVER_MIN"]) or int(c["RESOLVER_MIN"]) < 1:
         raise ConfError("RESOLVER_MIN: a positive number")
     c["RESOLVER_MIN"] = int(c["RESOLVER_MIN"])
@@ -210,6 +243,18 @@ def render_nft(c: dict) -> str:
     v6 = [str(n) for n in c["CLIENTS"] if n.version == 6]
     el = lambda xs: f" elements = {{ {', '.join(xs)} }};" if xs else ""
     t = c["SET_TIMEOUT"]
+    i = c["IFACE"]
+    block = "" if c["BLOCK"] != "yes" else f"""
+        # BLOCK=yes (forward defense): DoT/DoQ by port, DoH by address (the blocked-resolver sets, loaded by
+        # `load-sets` from the daily list plus what this watch learns), and plain DNS that was NOT redirected to this
+        # host. Rejected, not dropped, so an app falls back to its normal DNS at once, which Pi-hole answers. After
+        # record_new, so every blocked attempt is still counted and attributed.
+        iifname "{i}" ct state new meta l4proto tcp th dport {{ 53, 853 }} counter name "c_blocked" reject with tcp reset
+        iifname "{i}" ct state new meta l4proto udp th dport {{ 53, 853, 8853 }} counter name "c_blocked" reject
+        iifname "{i}" ct state new ip daddr @resolvers4 tcp dport 443 counter name "c_blocked" reject with tcp reset
+        iifname "{i}" ct state new ip daddr @resolvers4 udp dport 443 counter name "c_blocked" reject
+        iifname "{i}" ct state new ip6 daddr @resolvers6 tcp dport 443 counter name "c_blocked" reject with tcp reset
+        iifname "{i}" ct state new ip6 daddr @resolvers6 udp dport 443 counter name "c_blocked" reject"""
     return f"""# /etc/nftables.d/ctdc-dnsleak.nft -- RENDERED by dns_leak_watch.py render-nft; do not edit (docs/DNS_LEAK_WATCH.md)
 table inet {TABLE}
 delete table inet {TABLE}
@@ -218,6 +263,10 @@ table inet {TABLE} {{
     set clients6 {{ type ipv6_addr; flags interval;{el(v6)} }}
     set seen4 {{ type ipv4_addr . ipv4_addr . inet_proto . inet_service; flags dynamic, timeout; timeout {t}; size 65535; counter; }}
     set seen6 {{ type ipv6_addr . ipv6_addr . inet_proto . inet_service; flags dynamic, timeout; timeout {t}; size 65535; counter; }}
+    set dnsdst4 {{ type ipv4_addr . ipv4_addr . inet_proto . inet_service; flags dynamic, timeout; timeout {t}; size 65535; counter; }}
+    set dnsdst6 {{ type ipv6_addr . ipv6_addr . inet_proto . inet_service; flags dynamic, timeout; timeout {t}; size 65535; counter; }}
+    set resolvers4 {{ type ipv4_addr; flags interval; auto-merge; comment "blocked encrypted resolvers (load-sets)"; }}
+    set resolvers6 {{ type ipv6_addr; flags interval; auto-merge; comment "blocked encrypted resolvers (load-sets)"; }}
     set quar4 {{ type ipv4_addr; comment "quarantined devices (QUARANTINE=alert-then-quarantine)"; }}
     set quar6 {{ type ipv6_addr; comment "quarantined devices (QUARANTINE=alert-then-quarantine)"; }}
     counter c_new {{ }}
@@ -225,9 +274,19 @@ table inet {TABLE} {{
     counter c_dot {{ }}
     counter c_quic {{ }}
     counter c_tls {{ }}
+    counter c_blocked {{ }}
+    counter c_dnsdst {{ }}
+    chain pre_dns {{   # before any dstnat redirect (dns-lock), so the address an app hard-coded is still visible
+        type filter hook prerouting priority dstnat - 10; policy accept;
+        iifname "{i}" ct state new meta l4proto {{ tcp, udp }} th dport {{ 53, 853, 8853 }} fib daddr type != local jump record_dns
+    }}
+    chain record_dns {{
+        ip saddr @clients4 update @dnsdst4 {{ ip saddr . ip daddr . meta l4proto . th dport }} counter name "c_dnsdst"
+        ip6 saddr @clients6 update @dnsdst6 {{ ip6 saddr . ip6 daddr . meta l4proto . th dport }} counter name "c_dnsdst"
+    }}
     chain forward_main {{   # not 'fwd': that is an nft keyword (the fwd statement); 2026-11-27 install failed on it
         type filter hook forward priority filter - 20; policy accept;
-        iifname "{c['IFACE']}" ct state new meta l4proto {{ tcp, udp }} jump record_new
+        iifname "{c['IFACE']}" ct state new meta l4proto {{ tcp, udp }} jump record_new{block}
         # quarantine AFTER the watch records the attempt, so a quarantined device's traffic still counts toward the
         # PASS that releases it; only forwarded traffic is dropped (DNS to this host and Tailscale itself are not)
         iifname "{c['IFACE']}" ip saddr @quar4 ip daddr != {TAILNET_RANGES[0]} counter drop
@@ -277,6 +336,49 @@ def in_nets(addr: str, nets) -> bool:
     except ValueError:
         return False
     return any(a.version == n.version and a in n for n in nets or [])
+
+
+def side_file(c: dict, name: str) -> Path:
+    """Files the daily refresh keeps beside RESOLVER_LIST: blocked-resolvers.txt (what BLOCK=yes rejects) and
+    resolver-domains.txt (encrypted-resolver host names, for learning their addresses from Pi-hole's answers)."""
+    return Path(c["RESOLVER_LIST"]).with_name(name)
+
+
+def load_names(path: Path) -> set:
+    try:
+        return {l.split("#", 1)[0].strip().lower().rstrip(".") for l in path.read_text().splitlines()} - {""}
+    except OSError:
+        return set()
+
+
+def name_in(name: str, names: set) -> bool:
+    """name, or any parent of it, is in names (a wildcard domain list)."""
+    parts = (name or "").lower().rstrip(".").split(".")
+    return any(".".join(parts[i:]) in names for i in range(len(parts) - 1))
+
+
+# Never blocked: LAN (RFC 1918), shared (CGNAT / tailnet), unique-local and mapped IPv6; plus, by property below,
+# loopback, link-local, multicast, unspecified and reserved.
+NEVER_BLOCK = tuple(ipaddress.ip_network(n) for n in (
+    "10.x.x.x/8", "100.64.0.0/10", "172.x.x.x/12", "192.168.x.x/16", "::ffff:0:0/96", "fc00::/7"))
+
+
+def blockable(addr: str, infra) -> bool:
+    """Never block a local address (NEVER_BLOCK, which includes the tailnet) or known infrastructure."""
+    try:
+        a = ipaddress.ip_address(addr.split("/")[0])
+    except ValueError:
+        return False
+    if a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified or (a.version == 4 and a.is_reserved):
+        return False
+    return not any(a.version == n.version and a in n for n in NEVER_BLOCK) and not in_nets(str(a), infra)
+
+
+def shared_names(addr: str, idx, domains: set, now: float, hours: int) -> list:
+    """Names Pi-hole answered with this address (within the window) that are NOT encrypted-resolver names: an address
+    that also serves ordinary sites is never blocked (blocking it would break those sites)."""
+    cut = now - hours * 3600
+    return sorted(n for n, t in idx.answers.get(addr, {}).items() if t >= cut and not name_in(n, domains))
 
 
 # ------------------------------------------------------------------------------------------ Pi-hole index --
@@ -363,16 +465,20 @@ def update_index(idx: Index, log: Path, now: float, first: bool):
     idx.inode = st.st_ino
 
 
-def classify_destination(dest: str, proto: str, port: int, idx: Index, mine, resolvers, now: float, hours: int):
-    """(class, name). A bypass kind (dns53 / dot / doq / doh) wins over the hard-coded tiers: those destinations are
-    exported as bypass evidence for DNS anomaly watch and left out of this tool's hard-coded report."""
+def classify_destination(dest: str, proto: str, port: int, idx: Index, mine, resolvers, now: float, hours: int,
+                         infra=None):
+    """(class, name). A bypass kind (dns53 / dot / doq / doh) wins over everything: those destinations are exported
+    as bypass evidence for DNS anomaly watch and left out of this tool's hard-coded report. Then known infrastructure
+    (a Tailscale relay: reached by address by design) is context, never a finding; then the hard-coded tiers."""
     tier, name = idx.classify(dest, mine, now, hours)
     if port == 53:
         return "dns53", name
-    if port == 853:
+    if port in (853, 8853):
         return ("doq" if proto == "udp" else "dot"), name
     if port == 443 and in_nets(dest, resolvers):
         return "doh", name
+    if tier != "lookup" and in_nets(dest, infra):
+        return "infra", name or "Tailscale relay"
     return tier, name
 
 
@@ -442,7 +548,8 @@ def _mine_fn(nets, proxies=()):
     return mine
 
 
-def process(elements, idx: Index, state: dict, c: dict, resolvers, now: float, devmap=None, hostof=None):
+def process(elements, idx: Index, state: dict, c: dict, resolvers, now: float, devmap=None, hostof=None, infra=None,
+            blocked=None):
     """Fold set elements into state['seen'] (keyed destination|proto|port, aggregated over devices); classify each
     destination on first sight. With per-device data (devmap: host -> addresses, hostof: address -> host) "this device"
     is the source's own device; without it, all CLIENTS are one device. Returns new findings
@@ -460,8 +567,10 @@ def process(elements, idx: Index, state: dict, c: dict, resolvers, now: float, d
         key = f"{dest}|{proto}|{port}"
         rec = seen.get(key)
         if rec is None:
-            cls, name = classify_destination(dest, proto, port, idx, mine, resolvers, now, c["INDEX_HOURS"])
+            cls, name = classify_destination(dest, proto, port, idx, mine, resolvers, now, c["INDEX_HOURS"], infra)
             rec = seen[key] = {"first": now, "class": cls, "name": name, "conns": 0, "last_cnt": {}, "host": host}
+            if c["BLOCK"] == "yes" and cls in BYPASS and (cls != "doh" or in_nets(dest, blocked)):
+                rec["blocked"] = True                    # the forward chain rejected it (recorded first)
             new.append((cls, dest, proto, port, name))
         elif not rec.get("name"):
             tier, name = idx.classify(dest, mine, now, c["INDEX_HOURS"])
@@ -476,6 +585,100 @@ def process(elements, idx: Index, state: dict, c: dict, resolvers, now: float, d
         lc[sk] = cnt
         rec["last"] = now
     return new
+
+
+def process_dnsdst(elements, state: dict, now: float, hostof=None) -> list:
+    """The pre_dns chain's set: DNS (53 / 853 / 8853) sent to an address other than this host, recorded BEFORE the
+    dns-lock redirect rewrites it. This names the resolver an app hard-coded and the device that sent it, even when
+    the redirect neutralised it (the redirect counter alone cannot). state['dnsdst']: dest|proto|port ->
+    {first, last, conns, hosts: {host: conns}, last_cnt}. Returns the destinations seen for the first time."""
+    out = state.setdefault("dnsdst", {})
+    new = []
+    for src, dest, proto, port, cnt in elements:
+        key = f"{dest}|{proto}|{port}"
+        rec = out.get(key)
+        if rec is None:
+            rec = out[key] = {"first": now, "conns": 0, "hosts": {}, "last_cnt": {}}
+            new.append(key)
+        host = (hostof or {}).get(src, "") or "-"
+        last = rec["last_cnt"].get(host, 0)
+        delta = max(cnt - last if cnt >= last else cnt, 0)
+        rec["last_cnt"][host] = cnt
+        rec["conns"] += delta
+        rec["hosts"][host] = rec["hosts"].get(host, 0) + delta
+        rec["last"] = now
+    keep = now - STALE_HORIZON_DAYS * 86400
+    state["dnsdst"] = {k: v for k, v in out.items() if v.get("last", v["first"]) >= keep}
+    return new
+
+
+def learn(state: dict, learned: dict, now: float) -> list:
+    """Fold hard-coded resolvers into the learned list (OUT_DIR/learned-resolvers.json): every address something
+    sent DNS to directly (the pre_dns set: plain 53, DoT, DoQ), and every forwarded 853/8853 destination. Entries
+    unseen for LEARNED_DAYS are dropped by the daily refresh. Returns [(address, origin)] learned in this pass;
+    origin "direct" (the pre_dns set, which nothing else reports) or "forwarded" (DNS anomaly watch alerts on it)."""
+    new = []
+    def add(addr, via, hosts, origin="direct"):
+        e = learned.get(addr)
+        if e is None:
+            e = learned[addr] = {"first": now, "via": [], "hosts": [], "kind": "hard-coded"}
+            new.append((addr, origin))
+        elif e.get("kind") == "public-learned":
+            e["kind"] = "hard-coded"                    # seen used directly: that is the stronger fact
+        e["last"] = now
+        e["via"] = sorted(set(e["via"]) | {via})
+        e["hosts"] = sorted(set(e["hosts"]) | {h for h in hosts if h and h != "-"})[:20]
+    for key, v in state.get("dnsdst", {}).items():
+        d, p_, port = key.split("|")
+        add(d, f"{p_}/{port}", v.get("hosts", {}))
+    for key, v in state.get("seen", {}).items():
+        if v["class"] in ("dot", "doq", "dns53"):
+            d, p_, port = key.split("|")
+            add(d, f"{p_}/{port}", [v.get("host", "")], "forwarded")
+    return new
+
+
+def nft_add_blocked(addrs) -> bool:
+    """Add addresses to the live blocked-resolver sets at once (BLOCK=yes), between daily refreshes."""
+    v4 = [a for a in addrs if ":" not in a]
+    v6 = [a for a in addrs if ":" in a]
+    script = "".join(f"add element inet {TABLE} {s} {{ {', '.join(xs)} }}\n" for s, xs in (("resolvers4", v4), ("resolvers6", v6)) if xs)
+    if not script:
+        return True
+    try:
+        return subprocess.run(["nft", "-f", "-"], input=script, capture_output=True, text=True, timeout=30).returncode == 0
+    except Exception:
+        return False
+
+
+def load_sets(c: dict, runner=None) -> int:
+    """(Re)load the blocked-resolver sets from blocked-resolvers.txt, atomically (one nft transaction). Run by the
+    fw unit after it loads the table, and by the daily refresh. A missing list = empty sets (nothing blocked by
+    address; DoT/DoQ by port are still rejected)."""
+    try:
+        nets, _ = parse_resolvers(side_file(c, "blocked-resolvers.txt").read_text())
+    except OSError:
+        nets = []
+    try:                                                   # learned hard-coded resolvers marked blockable
+        lr = json.loads((Path(c["OUT_DIR"]) / "learned-resolvers.json").read_text())
+        nets += [ipaddress.ip_network(a) for a, e in lr.items() if e.get("block")]
+    except (OSError, ValueError):
+        pass
+    nets = list(dict.fromkeys(nets))
+    v4 = [str(n) for n in nets if n.version == 4]
+    v6 = [str(n) for n in nets if n.version == 6]
+    script = f"flush set inet {TABLE} resolvers4\nflush set inet {TABLE} resolvers6\n"
+    script += "".join(f"add element inet {TABLE} {s} {{ {', '.join(xs)} }}\n" for s, xs in (("resolvers4", v4), ("resolvers6", v6)) if xs)
+    if c["BLOCK"] != "yes":
+        print("dns-leak-watch: BLOCK=no: blocked-resolver sets left empty (detection only)")
+        script = f"flush set inet {TABLE} resolvers4\nflush set inet {TABLE} resolvers6\n"
+        v4, v6 = [], []
+    r = (runner or (lambda sc: subprocess.run(["nft", "-f", "-"], input=sc, capture_output=True, text=True, timeout=60)))(script)
+    if getattr(r, "returncode", 1) != 0:
+        print(f"dns-leak-watch: load-sets FAILED: {(getattr(r, 'stderr', '') or '').strip()[:200]}")
+        return 1
+    print(f"dns-leak-watch: blocked-resolver sets loaded: {len(v4)} IPv4, {len(v6)} IPv6 entries")
+    return 0
 
 
 # ------------------------------------------------------------------------------ per-device connection check --
@@ -651,7 +854,7 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
         r["addrs"] = addrs
         d["os"] = pe["os"]
         d["exempt"] = protected(h, addrs, c, self_addrs, local)
-        fwd, byp = 0, False
+        fwd, byp, blk = 0, False, 0
         for a in addrs:
             for dest, proto, port, cnt in by_src.get(a, []):
                 k = f"{a}|{dest}|{proto}|{port}"
@@ -660,8 +863,11 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
                 elast[k] = cnt
                 if delta > 0:
                     fwd += delta
-                    if classes.get(f"{dest}|{proto}|{port}") in BYPASS:
+                    cl = classes.get(f"{dest}|{proto}|{port}")
+                    if cl in BYPASS:
                         byp = True
+                    elif cl == "blocked":                  # BLOCK=yes rejected it: an attempt that got nowhere
+                        blk += delta
         q = sum(pass_q.get(a, 0) for a in addrs) + (proxy_q if fwd else 0)
         was_online, d["online"] = d.get("online", False), pe["online"]
         last_fwd = r.get("last_fwd_at", 0)
@@ -677,7 +883,7 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
             continue
         w = r.get("win")
         if w is None and (not was_online or fwd > 0 or not r.get("evaluated")):
-            w = r["win"] = {"start": now, "fwd": 0, "q": 0, "bypass": False}
+            w = r["win"] = {"start": now, "fwd": 0, "q": 0, "bypass": False, "blocked": 0}
             d["window_open"] = True
             if c["DEVICE_SSH_CHECK"] == "yes" and pe["os"] == "linux" and now - d.get("device_check_at", 0) >= 6 * 3600:
                 run_check = checker or (lambda host: device_check(c, host, Path(__file__).with_name("dns-lockdown-check.sh")))
@@ -687,6 +893,7 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
         w["fwd"] += fwd
         w["q"] += q
         w["bypass"] = w["bypass"] or byp
+        w["blocked"] = w.get("blocked", 0) + blk
         if now - w["start"] >= win:                                    # window end: the verdict
             if w["fwd"] == 0:
                 verdict, reason = "NOT-ROUTED", "online, but no traffic through this exit node"
@@ -695,9 +902,10 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
             elif w["q"] == 0:
                 verdict, reason = "FAIL", "traffic through this exit node but no Pi-hole lookups (DNS elsewhere, or broken)"
             else:
-                verdict, reason = "PASS", f"{w['fwd']} connection(s), {w['q']} lookup(s), no bypass"
+                verdict, reason = "PASS", f"{w['fwd']} connection(s), {w['q']} lookup(s), no bypass" + (
+                    f"; {w['blocked']} bypass attempt(s) BLOCKED" if w.get("blocked") else "")
             r["evaluated"] = True
-            r["win"] = {"start": now, "fwd": 0, "q": 0, "bypass": False}   # rolling: the next window starts now
+            r["win"] = {"start": now, "fwd": 0, "q": 0, "bypass": False, "blocked": 0}   # rolling: the next window starts now
             prev = d.get("verdict")
             if verdict != prev:
                 d["verdict_since"] = now
@@ -812,7 +1020,7 @@ def _ts(t: float, fmt="%m-%d %H:%MZ") -> str:
 
 
 def class_totals(state: dict) -> dict:
-    tot = {k: {"destinations": 0, "connections": 0} for k in BYPASS + HARD + ("lookup",)}
+    tot = {k: {"destinations": 0, "connections": 0} for k in BYPASS + HARD + CONTEXT + ("lookup",)}
     for v in state.get("seen", {}).values():
         t = tot.setdefault(v["class"], {"destinations": 0, "connections": 0})
         t["destinations"] += 1
@@ -831,7 +1039,8 @@ def latest_json(state: dict, c: dict, counters: dict, now: float, resolvers) -> 
         d, p, port = key.split("|")
         row = {"key": f"{v['class']}|{key}", "class": v["class"], "dest": d, "proto": p, "port": int(port),
                "first_seen": v["first"], "conns": v.get("conns", 0), "name": v.get("name", ""),
-               "later_name": v.get("later_name", ""), "rdns": v.get("rdns", ""), "host": v.get("host", "")}
+               "later_name": v.get("later_name", ""), "rdns": v.get("rdns", ""), "host": v.get("host", ""),
+               "blocked": bool(v.get("blocked"))}
         (byp if v["class"] in BYPASS else hard).append(row)
     for lst in (hard, byp):
         lst.sort(key=lambda f: -f["first_seen"])
@@ -839,6 +1048,12 @@ def latest_json(state: dict, c: dict, counters: dict, now: float, resolvers) -> 
     return {"schema": SCHEMA, "tool": "dns-leak-watch", "generated": now, "since": state.get("since"),
             "clients": [str(n) for n in c["CLIENTS"]], "index_hours": c["INDEX_HOURS"],
             "resolver_list": {"loaded": resolvers is not None, "entries": len(resolvers or [])},
+            "enforce": {"block": c["BLOCK"] == "yes", "blocked_attempts": sum(1 for v in state.get("seen", {}).values() if v.get("blocked"))},
+            "infra": {"destinations": tot["infra"]["destinations"], "connections": tot["infra"]["connections"]},
+            "learned_resolvers": state.get("learned_count", 0),
+            "dns_destinations": sorted(({"dest": k.split("|")[0], "proto": k.split("|")[1], "port": int(k.split("|")[2]),
+                                         "conns": v["conns"], "hosts": v.get("hosts", {}), "first_seen": v["first"]}
+                                        for k, v in state.get("dnsdst", {}).items()), key=lambda r: -r["conns"])[:200],
             "counters": counters, "classes": tot,
             "devices": {h: {k: v for k, v in d.items() if k in DEVICE_PUBLIC} for h, d in state.get("devices", {}).items()},
             "shared_address": sum(1 for v in state.get("seen", {}).values() if v.get("shared")),
@@ -869,20 +1084,42 @@ def summary_text(state: dict, counters: dict, now: float, resolvers) -> str:
          f"other-client: {tot['other-client']['destinations']}   cached-stale: {tot['cached-stale']['destinations']}   "
          f"normal lookups: {tot['lookup']['destinations']}   (bypass evidence: {nb}, reported by DNS anomaly watch)",
          "new connections counted: " + ", ".join(f"{k[2:] if k.startswith('c_') else k} {v if v is not None else '-'}" for k, v in counters.items()),
-         f"encrypted-resolver list: {'%d entries' % len(resolvers) if resolvers is not None else 'NOT LOADED (the resolver timer has not run yet)'}",
-         ""] + device_summary(state, now) + [
+         f"encrypted-resolver list: {'%d entries' % len(resolvers) if resolvers is not None else 'NOT LOADED (the resolver timer has not run yet)'}"
+         f"   learned hard-coded resolvers: {state.get('learned_count', 0)}",
+         f"forward defense (BLOCK): {'ON' if state.get('block') else 'off (detection only)'}"
+         + (f"   blocked attempts: {sum(1 for v in seen.values() if v.get('blocked'))} destination(s)" if state.get("block") else ""),
+         ""] + device_summary(state, now) + dnsdst_summary(state) + [
          f"== HARD-CODED IP: no DNS answer to anyone in the last {state.get('index_hours', '?')} h gave this address"]
     L += [fmt(k, v) for k, v in rows(("hardcoded",))[:80]] or ["  (none)"]
     n_shared = sum(1 for v in seen.values() if v.get("shared"))
     L += ["", f"-- context, never alerted: other-client (answered, but only for other clients' lookups; {n_shared} of them "
               "on a shared CDN/cloud address) and cached-stale (answered for this device before the window)"]
     L += [fmt(k, v) for k, v in rows(("other-client", "cached-stale"))[:60]] or ["  (none)"]
+    L += ["", "-- known infrastructure, never alerted (Tailscale relays: reached by address by design)"]
+    L += [fmt(k, v) for k, v in rows(("infra",))[:40]] or ["  (none)"]
+    if state.get("ech_names"):
+        L += ["", f"-- ECH-capable names this tailnet looked up: {len(state['ech_names'])} (their TLS hides the site name"
+                  " on the wire; Pi-hole still filtered the lookup itself)"]
+        L += [f"  {n}" for n in state["ech_names"][:20]]
     L += ["", "-- normal lookups, by name (connections)"]
     by = {}
     for k, v in rows(("lookup",)):
         by[v["name"]] = by.get(v["name"], 0) + v.get("conns", 0)
     L += [f"  {n:6d}  {name}" for name, n in sorted(by.items(), key=lambda kv: -kv[1])[:60]]
     return "\n".join(L) + "\n"
+
+
+def dnsdst_summary(state: dict) -> list:
+    d = state.get("dnsdst", {})
+    if not d:
+        return []
+    L = ["== DNS SENT STRAIGHT TO AN OUTSIDE RESOLVER (seen before the dns-lock redirect; port 53 was answered by"
+         " Pi-hole anyway, 853/8853 rejected when BLOCK=yes)"]
+    for k, v in sorted(d.items(), key=lambda kv: -kv[1]["conns"])[:40]:
+        dest, p_, port = k.split("|")
+        hosts = ", ".join(f"{h} {n}" for h, n in sorted(v.get("hosts", {}).items(), key=lambda kv: -kv[1])[:4])
+        L.append(f"  {v['conns']:6d}  {_ts(v['first'])}  {p_}/{port:<5} {dest:<40} from {hosts}")
+    return L + [""]
 
 
 def push(c: dict, title: str, msg: str, priority: int = 3, topic: str = ""):
@@ -918,13 +1155,13 @@ def _write_private(path: Path, text: str, gid: int):
 
 
 def run(c: dict, now: float | None = None, elements=None, counters=None, resolvers="load", ts_raw=None,
-        nft=nft_quarantine, checker=None, local=None, approver=None) -> dict:
+        nft=nft_quarantine, checker=None, local=None, approver=None, dnsdst=None, adder=None) -> dict:
     now = now or time.time()
     with _locked(Path(c["OUT_DIR"])):
-        return _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver)
+        return _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst, adder)
 
 
-def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver) -> dict:
+def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst=None, adder=None) -> dict:
     out = Path(c["OUT_DIR"])
     out.mkdir(parents=True, exist_ok=True)
     gid = grp.getgrnam(c["READ_GROUP"]).gr_gid
@@ -942,6 +1179,9 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
     state["index_hours"] = c["INDEX_HOURS"]
     if resolvers == "load":
         resolvers = load_resolvers(c["RESOLVER_LIST"])
+    infra = load_resolvers(c["INFRA_LIST"]) or []
+    blocked = load_resolvers(str(side_file(c, "blocked-resolvers.txt"))) or []
+    domains = load_names(side_file(c, "resolver-domains.txt"))
     idx = Index(root.get("index"))
     update_index(idx, Path(c["PIHOLE_LOG"]), now, first)
     idx.prune(now)
@@ -949,6 +1189,15 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
         elements = []
         for s in ("seen4", "seen6"):
             elements += parse_set_json(nft_json("list", "set", "inet", TABLE, s))
+        if dnsdst is None:
+            dnsdst = []
+            for s in ("dnsdst4", "dnsdst6"):
+                with contextlib.suppress(Exception):     # an older table without the pre_dns sets: skipped
+                    dnsdst += parse_set_json(nft_json("list", "set", "inet", TABLE, s))
+    dnsdst = [e if len(e) == 5 else ("",) + tuple(e) for e in (dnsdst or [])]
+    for key, v in state.get("seen", {}).items():         # a relay first seen before the infra list knew it
+        if v["class"] in HARD and in_nets(key.split("|")[0], infra):
+            v["class"], v["name"] = "infra", v.get("name") or "Tailscale relay"
     if counters is None:
         counters = read_counters(c)
     red = counters.get("dnslock_redirect")
@@ -962,9 +1211,33 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
     peers, self_addrs = tailscale_peers(c, ts_raw) if (c["TAILNET"] == "yes" or ts_raw is not None) else (None, set())
     devmap = {pe["host"]: pe["addrs"] for pe in peers or []}
     hostof = {a: h for h, al in devmap.items() for a in al}
-    new = process(elements, idx, state, c, resolvers, now, devmap, hostof)
+    new = process(elements, idx, state, c, resolvers, now, devmap, hostof, infra, blocked)
+    process_dnsdst(dnsdst, state, now, hostof)
+    lp = out / "learned-resolvers.json"
+    learned = json.loads(lp.read_text()) if lp.exists() else {}
+    learned_pairs = learn(state, learned, now)
+    new_learned = [a for a, _ in learned_pairs]
+    direct = [a for a, o in learned_pairs if o == "direct"]
+    to_block = []
+    for a in new_learned:
+        sh = shared_names(a, idx, domains, now, c["INDEX_HOURS"])
+        learned[a]["block"] = blockable(a, infra) and not sh
+        learned[a]["shared"] = sh[:5]
+        if c["BLOCK"] == "yes" and learned[a]["block"] and not in_nets(a, blocked):
+            to_block.append(a)
+    if to_block:
+        ok = (adder or nft_add_blocked)(to_block)
+        for a in to_block:
+            learned[a]["blocked_live"] = bool(ok)
+    if direct and not first:                               # forwarded ones are DNS anomaly watch's to alert on
+        push(c, f"dns-leak-watch: {len(direct)} hard-coded resolver(s) learned",
+             "; ".join(f"{a} via {','.join(learned[a]['via'])}" + (f" from {','.join(learned[a]['hosts'][:3])}" if learned[a]["hosts"] else "")
+                       + (" BLOCKED" if a in to_block else (" (shared address: not blocked)" if learned[a]["shared"] else ""))
+                       for a in direct[:6]) + f". {out}/summary.txt", 3)
+    _write_private(lp, json.dumps(learned, indent=1), gid)
+    state["learned_count"] = len(learned)
     if peers is not None:
-        classes = {k: v["class"] for k, v in state.get("seen", {}).items()}
+        classes = {k: ("blocked" if v.get("blocked") else v["class"]) for k, v in state.get("seen", {}).items()}
         evaluate_devices(c, state, root, peers, self_addrs, elements, idx.pass_q, classes, now, first,
                          lambda ti, m, pr=3, tp="": push(c, ti, m, pr, tp), nft, checker, local, approver)
     if c["RDNS"] == "yes":
@@ -1001,6 +1274,8 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
     state["digest_day"] = day
     root["index"] = idx.to_json()
     state["counters"] = counters
+    state["block"] = c["BLOCK"] == "yes"
+    state["ech_names"] = sorted(load_names(Path(c["OUT_DIR"]) / "ech-names.txt"))
     _write_private(out / "summary.txt", summary_text(state, counters, now, resolvers), gid)
     _write_private(out / "latest.json", json.dumps(latest_json(state, c, counters, now, resolvers), indent=1), gid)
     _write_private(sp, json.dumps(state), gid)
@@ -1022,41 +1297,200 @@ def default_iface() -> str:
     return parts[parts.index("dev") + 1] if "dev" in parts else ""
 
 
-def refresh_resolvers(c: dict, fetch=None, iface=None) -> int:
-    """Fetch RESOLVER_LIST_URL, validate it, replace RESOLVER_LIST atomically (0644). Offline-tolerant: on any failure
-    the last good list stays. Skips on a metered default route (METERED_IFACES). Returns 0 updated/unchanged/skipped,
-    1 refused or failed (the old list kept)."""
+def _fetch_cached(c: dict, url: str, fetch, cache_dir: Path):
+    """(text, fresh): the body of url, or the last good copy of it when the fetch fails ((None, False) if none)."""
     import hashlib
-    dest = Path(c["RESOLVER_LIST"])
-    iface = default_iface() if iface is None else iface
-    metered = {x for x in re.split(r"[ ,]+", c["METERED_IFACES"]) if x}
-    if iface and iface in metered:
-        print(f"dns-leak-watch: resolver refresh skipped: the default route ({iface}) is metered; list kept")
-        return 0
+    cp = cache_dir / (hashlib.sha256(url.encode()).hexdigest()[:16] + ".txt")
     try:
-        body = (fetch or (lambda u: urllib.request.urlopen(u, timeout=30).read()))(c["RESOLVER_LIST_URL"])
+        body = (fetch or (lambda u: urllib.request.urlopen(u, timeout=30).read()))(url)
         text = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cp.write_text(text)
+        return text, True
     except Exception as e:
-        print(f"dns-leak-watch: resolver refresh failed ({type(e).__name__}); last good list kept")
-        return 1
-    nets, bad = parse_resolvers(text)
-    if len(nets) < c["RESOLVER_MIN"]:
-        print(f"dns-leak-watch: resolver refresh REFUSED: {len(nets)} entries (< RESOLVER_MIN {c['RESOLVER_MIN']}); list kept")
-        return 1
-    clean = "".join(f"{n}\n" for n in nets)
-    sha = hashlib.sha256(clean.encode()).hexdigest()
-    if dest.exists() and dest.read_text() == clean:
-        print(f"dns-leak-watch: resolver list unchanged ({len(nets)} entries, sha256 {sha[:16]})")
+        print(f"dns-leak-watch: fetch failed ({type(e).__name__}): {url.split('/')[2]}; " + ("last good copy used" if cp.exists() else "no copy"))
+        return (cp.read_text() if cp.exists() else None), False
+
+
+def derp_addresses(text: str) -> set:
+    """Every IPv4/IPv6 node address in Tailscale's DERP map JSON (empty on anything unparsable)."""
+    try:
+        doc = json.loads(text)
+    except (TypeError, ValueError):
+        return set()
+    out = set()
+    for reg in (doc.get("Regions") or {}).values():
+        for n in (reg or {}).get("Nodes") or []:
+            for k in ("IPv4", "IPv6"):
+                v = (n or {}).get(k)
+                with contextlib.suppress(ValueError):
+                    if v:
+                        out.add(str(ipaddress.ip_address(v)))
+    return out
+
+
+def seed_infra(c: dict) -> int:
+    """First run only: no INFRA_LIST yet and an INFRA_SEED file exists -> install it as-is. Returns entries seeded."""
+    dest, seed = Path(c["INFRA_LIST"]), c["INFRA_SEED"]
+    if dest.exists() or not seed or not Path(seed).is_file():
         return 0
+    nets, _ = parse_resolvers(Path(seed).read_text())
+    _write_list(dest, [str(n.network_address) for n in nets], "pinned seed " + seed)
+    return len(nets)
+
+
+def refresh_infra(c: dict, fetch, cache: Path) -> str:
+    """INFRA_LIST = the community list (INFRA_URL) cross-checked against Tailscale's own DERP map (INFRA_CHECK_URL):
+    only addresses both carry are kept, so a stale or tampered community list can never silence an alert for an
+    address Tailscale does not run. Official map unreachable: the last good INFRA_LIST stays (or, on a first run,
+    INFRA_SEED, the bundler's pinned submodule copy, is installed as-is). Returns a one-line status."""
+    dest = Path(c["INFRA_LIST"])
+    comm, _ = _fetch_cached(c, c["INFRA_URL"], fetch, cache) if c["INFRA_URL"] else (None, False)
+    off, off_fresh = _fetch_cached(c, c["INFRA_CHECK_URL"], fetch, cache) if c["INFRA_CHECK_URL"] else (None, False)
+    official = derp_addresses(off) if off else set()
+    if not official:
+        n = seed_infra(c)
+        if n:
+            return f"infra list: official relay map unavailable; seeded {n} from {c['INFRA_SEED']}"
+        return "infra list: official relay map unavailable; last good list kept"
+    if comm:
+        cn = {str(n.network_address) for n in parse_resolvers(comm)[0] if n.num_addresses == 1}
+        keep, dropped = sorted(cn & official), sorted(cn - official)
+        src = "jmaddington/tailscale-ips, cross-checked against Tailscale's DERP map"
+    else:
+        keep, dropped, src = sorted(official), [], "Tailscale's DERP map (community list unavailable)"
+    _write_list(dest, keep, src)
+    return (f"infra list: {len(keep)} Tailscale relay addresses ({src})"
+            + (f"; {len(dropped)} community entr(ies) NOT in the official map dropped: {', '.join(dropped[:5])}" if dropped else "")
+            + (f"; {len(official - set(keep))} official-only" if comm and official - set(keep) else ""))
+
+
+def _write_list(dest: Path, addrs, source: str):
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    tmp.write_text(clean)
+    tmp.write_text(f"# written by dns_leak_watch.py refresh-resolvers; source: {source}\n" + "".join(f"{a}\n" for a in addrs))
     os.chmod(tmp, 0o644)
     if os.geteuid() == 0:
         os.chown(tmp, 0, 0)
     os.replace(tmp, dest)
-    print(f"dns-leak-watch: resolver list updated: {len(nets)} entries ({bad} skipped), sha256 {sha[:16]}")
-    return 0
+
+
+def ech_probe(names, limit: int, resolver=None) -> list:
+    """Names whose HTTPS (type 65) record carries an ECH config, asked through this host's own resolver; at most
+    `limit` names and about 120 s."""
+    out, t0 = [], time.time()
+    for n in list(names)[:limit]:
+        if time.time() - t0 > 120:
+            break
+        try:
+            r = resolver(n) if resolver else subprocess.run(["dig", "+short", "+time=1", "+tries=1", "HTTPS", n, "@127.0.0.1"],
+                                                            capture_output=True, text=True, timeout=3).stdout
+        except Exception:
+            continue
+        if "ech=" in (r or ""):
+            out.append(n)
+    return out
+
+
+def refresh_resolvers(c: dict, fetch=None, iface=None, prober=None, loader=None) -> int:
+    """The daily refresh (its own timer, root). Skips entirely on a metered default route (METERED_IFACES).
+      1 encrypted resolvers, KNOWN: RESOLVER_LIST_URL + RESOLVER_EXTRA_URLS (DoH/DoT/DoQ address lists), each with a
+        last-good copy; fewer than RESOLVER_MIN merged entries is refused and the old list kept.
+      2 encrypted resolvers, LEARNED: (a) public: the addresses Pi-hole handed out for names on RESOLVER_DOMAINS_URL
+        (resolver host names); (b) hard-coded: what the watch recorded apps sending DNS to directly (run).
+        Entries unseen for LEARNED_DAYS are dropped.
+      RESOLVER_LIST = known + learned (detection). blocked-resolvers.txt = the part BLOCK=yes may reject: never a
+      non-global, tailnet or Tailscale-relay address, nor one Pi-hole also answered for ordinary names (shared).
+      3 the infra list (refresh_infra).   4 ECH-capable names (ech_probe).   5 BLOCK=yes: reload the nft sets.
+    Returns 0 updated / unchanged / skipped, 1 a known-list source failed or was refused (last good kept)."""
+    import hashlib
+    dest = Path(c["RESOLVER_LIST"])
+    out = Path(c["OUT_DIR"])
+    cache = out / "sources"
+    iface = default_iface() if iface is None else iface
+    metered = {x for x in re.split(r"[ ,]+", c["METERED_IFACES"]) if x}
+    if iface and iface in metered:
+        print(f"dns-leak-watch: resolver refresh skipped: the default route ({iface}) is metered; lists kept")
+        seed_infra(c)                                      # local file only: no network on a metered route
+        return 0
+    rc, known, bad = 0, [], 0
+    for url in [c["RESOLVER_LIST_URL"]] + c["RESOLVER_EXTRA_URLS"]:
+        if not url:
+            continue
+        text, fresh = _fetch_cached(c, url, fetch, cache)
+        rc |= 0 if fresh else 1
+        if text:
+            nets, b = parse_resolvers(text)
+            known += nets
+            bad += b
+    known = list(dict.fromkeys(known))
+    if len(known) < c["RESOLVER_MIN"]:
+        print(f"dns-leak-watch: resolver refresh REFUSED: {len(known)} known entries (< RESOLVER_MIN {c['RESOLVER_MIN']}); list kept")
+        return 1
+    dom_text, _ = _fetch_cached(c, c["RESOLVER_DOMAINS_URL"], fetch, cache) if c["RESOLVER_DOMAINS_URL"] else (None, False)
+    domains = {l.split("#", 1)[0].strip().lower().lstrip("*.").rstrip(".") for l in (dom_text or "").splitlines()} - {""}
+    if domains:
+        dp = side_file(c, "resolver-domains.txt")
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        dp.write_text("".join(f"{d}\n" for d in sorted(domains)))
+        os.chmod(dp, 0o644)
+    else:
+        domains = load_names(side_file(c, "resolver-domains.txt"))
+    infra_msg = refresh_infra(c, fetch, cache)
+    infra = load_resolvers(c["INFRA_LIST"]) or []
+    now = time.time()
+    with _locked(out):
+        rp = out / "root-state.json"
+        idx = Index((json.loads(rp.read_text()) if rp.exists() else {}).get("index"))
+        lp = out / "learned-resolvers.json"
+        learned = json.loads(lp.read_text()) if lp.exists() else {}
+        cut = now - c["INDEX_HOURS"] * 3600
+        for addr, names in idx.answers.items():          # 2a: public resolvers, learned from Pi-hole's answers
+            hit = sorted(n for n, t in names.items() if t >= cut and name_in(n, domains))
+            if hit:
+                e = learned.setdefault(addr, {"first": now, "via": [], "hosts": [], "kind": "public-learned"})
+                e["last"] = now
+                e["via"] = sorted(set(e["via"]) | {f"pihole:{hit[0]}"})
+        learned = {a: e for a, e in learned.items() if e.get("last", e.get("first", 0)) >= now - c["LEARNED_DAYS"] * 86400}
+        lnets = []
+        for a, e in learned.items():
+            with contextlib.suppress(ValueError):
+                lnets.append(ipaddress.ip_network(a))
+            sh = shared_names(a, idx, domains, now, c["INDEX_HOURS"])
+            e["shared"], e["block"] = sh[:5], blockable(a, infra) and not sh
+        gid = grp.getgrnam(c["READ_GROUP"]).gr_gid
+        out.mkdir(parents=True, exist_ok=True)
+        _write_private(lp, json.dumps(learned, indent=1), gid)
+        merged = list(dict.fromkeys(known + lnets))
+        clean = "".join(f"{n}\n" for n in merged)
+        sha = hashlib.sha256(clean.encode()).hexdigest()
+        changed = not (dest.exists() and dest.read_text() == clean)
+        if changed:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_suffix(dest.suffix + ".tmp")
+            tmp.write_text(clean)
+            os.chmod(tmp, 0o644)
+            if os.geteuid() == 0:
+                os.chown(tmp, 0, 0)
+            os.replace(tmp, dest)
+        blockset = [n for n in known if blockable(str(n.network_address), infra)
+                    and not (n.num_addresses == 1 and shared_names(str(n.network_address), idx, domains, now, c["INDEX_HOURS"]))]
+        _write_list(side_file(c, "blocked-resolvers.txt"), [str(n) for n in blockset], "known lists minus local, tailnet, "
+                    "Tailscale relays and shared addresses (learned entries are added from learned-resolvers.json)")
+        recent = sorted(idx.queries, key=lambda n: -max(idx.queries[n].values()))[:c["ECH_PROBE_MAX"]]
+        ech = sorted(set(c["ECH_NAMES"]) | set(ech_probe(recent, c["ECH_PROBE_MAX"], prober))) if c["ECH_PROBE_MAX"] or c["ECH_NAMES"] else []
+        _write_private(out / "ech-names.txt", "".join(f"{n}\n" for n in ech), gid)
+    print(f"dns-leak-watch: resolver list {'updated' if changed else 'unchanged'}: {len(known)} known ({bad} skipped) + "
+          f"{len(learned)} learned ({sum(1 for e in learned.values() if e.get('kind') == 'hard-coded')} hard-coded), "
+          f"{len(blockset)} blockable known, sha256 {sha[:16]}")
+    print(f"dns-leak-watch: {infra_msg}")
+    print(f"dns-leak-watch: ECH-capable names: {len(ech)}")
+    if c["BLOCK"] == "yes":
+        if (loader or (lambda: counter_packets(f"inet {TABLE} c_blocked") is not None))():
+            load_sets(c)
+        else:
+            print("dns-leak-watch: BLOCK=yes but the table is not loaded; sets load with the fw unit")
+    return rc
 
 
 # ------------------------------------------------------------------------------------------------ diagnose --
@@ -1114,7 +1548,8 @@ def diagnose(c: dict, seconds: int) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["render-nft", "run", "status", "refresh-resolvers", "check-resolvers", "diagnose", "release"])
+    ap.add_argument("cmd", choices=["render-nft", "run", "status", "refresh-resolvers", "check-resolvers", "diagnose", "release",
+                                    "load-sets"])
     ap.add_argument("--conf", default="/etc/ctdc-dnsleak/dnsleak.conf")
     ap.add_argument("--file")
     ap.add_argument("--seconds", type=int, default=120)
@@ -1134,6 +1569,8 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "refresh-resolvers":
         return refresh_resolvers(c)
+    if a.cmd == "load-sets":
+        return load_sets(c)
     if a.cmd == "release":
         if not a.host or not (a.host == "--all" or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", a.host)):
             print("dns-leak-watch: release needs --host NAME, or --host --all", file=sys.stderr)

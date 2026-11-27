@@ -12,6 +12,8 @@
 #                  metered route), run one baseline pass
 #   diagnose [N]   for N seconds (default 120) count which client addresses Pi-hole logs queries from while the device
 #                  is active: the device itself, a PROXY_CLIENTS address, or this host (the exit-node DNS proxy case)
+#   set KEY=VALUE  change one key of the installed config (validated by the installed copy first; nothing else
+#                  changes); then run install to apply it
 #   release HOST|--all   lift a connection-check quarantine (manual escape)
 #   status         unit states and counts
 #   remove         stop and remove the units, the table and the installed copy (config, list and reports are kept)
@@ -86,6 +88,17 @@ install_all() {
   status
 }
 
+set_key() {
+  [[ -f "$CONF" ]] || die "$CONF is missing: run init-conf first"
+  [[ "${1:-}" =~ ^([A-Z_]{2,40})=(.*)$ && "$1" != *$'\n'* ]] || die "set needs KEY=VALUE (one line)"
+  local key="${BASH_REMATCH[1]}" tmp; tmp="$(mktemp)"
+  copy_lib
+  { grep -v -E "^${key}=" "$CONF" || true; printf '%s\n' "$1"; } > "$tmp"
+  python3 "$LIB/dns_leak_watch.py" render-nft --conf "$tmp" >/dev/null || { rm -f "$tmp"; die "$key: the new value does not validate; config unchanged"; }
+  install -m 0640 -o root -g root "$tmp" "$CONF"; rm -f "$tmp"
+  echo "dns-leak-watch: $key set (run: apply.sh install to apply it)"
+}
+
 status() {
   local u; for u in "${UNITS[@]}"; do printf '   %-32s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"; done
   [[ -x "$LIB/dns_leak_watch.py" ]] && python3 "$LIB/dns_leak_watch.py" status --conf "$CONF" || true
@@ -102,6 +115,7 @@ remove_all() {
 
 case "${1:-}" in
   init-conf) shift; init_conf "$@" ;;
+  set) shift; set_key "${1:-}" ;;
   install)   install_all ;;
   release)   [[ -x "$LIB/dns_leak_watch.py" ]] || die "not installed"
              [[ -n "${2:-}" ]] || die "release HOST, or release --all"
@@ -110,5 +124,5 @@ case "${1:-}" in
              python3 "$LIB/dns_leak_watch.py" diagnose --conf "$CONF" --seconds "${2:-120}" ;;
   status)    status ;;
   remove)    remove_all ;;
-  *) die "usage: apply.sh init-conf --clients ADDRS --iface IF [--tailnet] [--proxy ADDRS] [--group G] [--metered IFS] [--quarantine] [--exempt HOSTS] [--always-on HOSTS|*] [--p5-topics T,..] [--release-approval PROG --release-user U] [--force] | install | diagnose [SECONDS] | release HOST|--all | status | remove" ;;
+  *) die "usage: apply.sh init-conf --clients ADDRS --iface IF [--tailnet] [--proxy ADDRS] [--group G] [--metered IFS] [--quarantine] [--exempt HOSTS] [--always-on HOSTS|*] [--p5-topics T,..] [--release-approval PROG --release-user U] [--force] | set KEY=VALUE | install | diagnose [SECONDS] | release HOST|--all | status | remove" ;;
 esac

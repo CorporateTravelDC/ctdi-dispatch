@@ -23,7 +23,8 @@ ME, OTHER = "192.0.2.10", "192.0.2.99"
 def conf(tmp_path, **kw):
     base = {"CLIENTS": f"{ME},2001:db8::10", "IFACE": "tailscale0", "PIHOLE_LOG": str(tmp_path / "pihole.log"),
             "OUT_DIR": str(tmp_path / "out"), "READ_GROUP": GROUP, "RDNS": "no",
-            "RESOLVER_LIST": str(tmp_path / "resolvers.txt"), "RESOLVER_MIN": "2", "DNSLOCK_COUNTER": ""}
+            "RESOLVER_LIST": str(tmp_path / "resolvers.txt"), "RESOLVER_MIN": "2", "DNSLOCK_COUNTER": "",
+            "INFRA_LIST": str(tmp_path / "infra.txt"), "ECH_PROBE_MAX": "0", "ECH_NAMES": ""}
     base.update(kw)
     return dl.parse_conf("\n".join(f"{k}={v}" for k, v in base.items()))
 
@@ -414,7 +415,7 @@ def test_device_check_keeps_only_pass_fail_lines(tmp_path):
 def test_vendored_device_script_is_unchanged():
     import hashlib
     assert hashlib.sha256((D / "dns-lockdown-check.sh").read_bytes()).hexdigest() == \
-        "706d47940b6f80b72810884d0ad68f9f0e0370144168d77c178b26dfd555fceb"
+        "c76506949681f4dfb5651a06a7f60b27f8d478a171b5d98fb71f7bb382f380de"
 
 
 # ---- OFF-TUNNEL episodes, the captive-portal hold and its releases ------------------------------------------------
@@ -562,3 +563,175 @@ def test_chain_and_set_names_are_not_nft_keywords():
     names = re.findall(r"^\s*(?:chain|set|counter)\s+([A-Za-z0-9_]+)\s*\{", nft, re.M)
     assert names, "no chains/sets found"
     assert not (set(names) & NFT_KEYWORDS), set(names) & NFT_KEYWORDS
+
+
+# ---- 2026-11-27 (2): Tailscale relays, learned resolvers, forward defense, the daily refresh ---------------------
+RELAY = "198.51.100.200"                                # synthetic stand-in for a Tailscale DERP address
+
+
+def test_block_renders_and_never_names_a_keyword(tmp_path):
+    c = conf(tmp_path, BLOCK="yes")
+    nft = dl.render_nft(c)
+    assert "chain pre_dns" in nft and "priority dstnat - 10" in nft and "fib daddr type != local" in nft
+    assert nft.count('counter name "c_blocked" reject') == 6 and "@resolvers4 tcp dport 443" in nft
+    assert nft.index("jump record_new") < nft.index('counter name "c_blocked"') < nft.index("@quar4")
+    assert 'c_blocked" reject' not in dl.render_nft(conf(tmp_path))                  # BLOCK=no: detection only
+    names = re.findall(r"^\s*(?:chain|set|counter)\s+([A-Za-z0-9_]+)\s*\{", nft, re.M)
+    assert not (set(names) & NFT_KEYWORDS)
+    with pytest.raises(dl.ConfError):
+        conf(tmp_path, BLOCK="maybe")
+
+
+def test_relay_is_infra_not_hardcoded_and_old_findings_are_reclassified(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(dl, "push", lambda c, t, m, p=3, tp="": sent.append(t))
+    (tmp_path / "pihole.log").write_text("")
+    c = conf(tmp_path, NTFY_URL="http://127.0.0.1:2586", NTFY_TOPIC="t")
+    dl.run(c, now=NOW, elements=[("203.0.113.1", "tcp", 443, 1)], counters={})
+    dl.run(c, now=NOW + 180, elements=[(RELAY, "tcp", 80, 1)], counters={})          # before the list knew it
+    assert sent == ["dns-leak-watch: 1 new hard-coded destination(s)"]
+    (tmp_path / "infra.txt").write_text(f"# test\n{RELAY}\n")
+    dl.run(c, now=NOW + 360, elements=[(RELAY, "tcp", 80, 2), ("198.51.100.201", "udp", 3478, 1)], counters={})
+    j = json.loads((tmp_path / "out/latest.json").read_text())
+    assert RELAY not in {f["dest"] for f in j["hardcoded"]["findings"]} and j["infra"]["destinations"] == 1
+    assert "-- known infrastructure" in (tmp_path / "out/summary.txt").read_text()
+    (tmp_path / "infra.txt").write_text(f"{RELAY}\n198.51.100.202\n")
+    assert dl.classify_destination("198.51.100.202", "udp", 853, dl.Index(), mine_fn(), [], NOW, 48,
+                                   dl.load_resolvers(str(tmp_path / "infra.txt")))[0] == "doq"   # bypass still wins
+
+
+def test_direct_dns_is_attributed_learned_and_blocked_unless_local_or_shared(tmp_path, monkeypatch):
+    sent, added = [], []
+    monkeypatch.setattr(dl, "push", lambda c, t, m, p=3, tp="": sent.append((t, m)))
+    log = tmp_path / "pihole.log"
+    log.write_text(f"x query[A] www.shop.example from {OTHER}\nx reply www.shop.example is 203.0.113.99\n")
+    c = tconf(tmp_path, BLOCK="yes", NTFY_URL="http://127.0.0.1:2586", NTFY_TOPIC="t")
+    run = lambda m, dd: dl.run(c, now=NOW + m * 60, elements=[], counters={}, ts_raw=ts_raw(), nft=Nft(),
+                               local={BOX}, dnsdst=dd, adder=lambda a: added.extend(a) or True)
+    run(0, [])
+    run(3, [(PH, "203.0.113.53", "udp", 53, 40), (LAP, "192.168.x.x", "udp", 53, 3), (PH, "203.0.113.99", "udp", 53, 1)])
+    lr = json.loads((tmp_path / "out/learned-resolvers.json").read_text())
+    assert added == ["203.0.113.53"]                                                  # LAN and shared: never blocked
+    assert lr["203.0.113.53"]["block"] and lr["203.0.113.53"]["hosts"] == ["phone"] and lr["203.0.113.53"]["via"] == ["udp/53"]
+    assert not lr["192.168.x.x"]["block"] and lr["203.0.113.99"]["shared"] == ["www.shop.example"]
+    assert len(sent) == 1 and "3 hard-coded resolver(s) learned" in sent[0][0] and "203.0.113.53 via udp/53 from phone BLOCKED" in sent[0][1]
+    s = (tmp_path / "out/summary.txt").read_text()
+    assert "== DNS SENT STRAIGHT TO AN OUTSIDE RESOLVER" in s and "from phone 40" in s
+    j = json.loads((tmp_path / "out/latest.json").read_text())
+    assert j["dns_destinations"][0]["dest"] == "203.0.113.53" and j["learned_resolvers"] == 3 and j["enforce"]["block"]
+    run(6, [(PH, "203.0.113.53", "udp", 53, 55)])
+    assert len(sent) == 1 and added == ["203.0.113.53"]                               # once only
+    assert json.loads((tmp_path / "out/state.json").read_text())["dnsdst"]["203.0.113.53|udp|53"]["conns"] == 55
+
+
+def test_a_blocked_attempt_is_counted_not_failed(tmp_path):
+    c = tconf(tmp_path, BLOCK="yes")
+    look = [f"x query[A] a.example.test from {LAP}", "x reply a.example.test is 198.51.100.7"]
+    passes = [(0, [(LAP, "198.51.100.7", "tcp", 443, 1), (LAP, "203.0.113.9", "tcp", 853, 1)], []),
+              (3, [(LAP, "198.51.100.7", "tcp", 443, 3), (LAP, "203.0.113.9", "tcp", 853, 2)], look),
+              (14, [(LAP, "198.51.100.7", "tcp", 443, 5), (LAP, "203.0.113.9", "tcp", 853, 4)], look[:1])]
+    sent, st = drive(tmp_path, c, passes, Nft())
+    assert st["devices"]["laptop"]["verdict"] == "PASS" and "BLOCKED" in st["devices"]["laptop"]["reason"]
+    j = json.loads((tmp_path / "out/latest.json").read_text())
+    assert [f["blocked"] for f in j["bypass_evidence"]["findings"]] == [True]
+
+
+DERP = json.dumps({"Regions": {"1": {"Nodes": [{"IPv4": RELAY, "IPv6": "2001:db8::200"}, {"IPv4": "198.51.100.201"}]}}})
+
+
+def fetcher(table):
+    def f(u):
+        for k, v in table.items():
+            if k in u:
+                if isinstance(v, Exception):
+                    raise v
+                return v.encode()
+        raise OSError("no route")
+    return f
+
+
+def rconf(tmp_path, **kw):
+    base = {"RESOLVER_LIST_URL": "https://lists.example/doh.txt", "RESOLVER_EXTRA_URLS": "https://lists.example/extra.txt",
+            "RESOLVER_DOMAINS_URL": "https://lists.example/domains.txt", "INFRA_URL": "https://lists.example/ts.txt",
+            "INFRA_CHECK_URL": "https://control.example/derpmap", "RESOLVER_MIN": "2"}
+    base.update(kw)
+    return conf(tmp_path, **base)
+
+
+def test_infra_is_the_community_list_cross_checked_against_the_official_map(tmp_path):
+    c = rconf(tmp_path)
+    table = {"doh.txt": "203.0.113.53\n", "extra.txt": "203.0.113.54\n", "domains.txt": "",
+             "ts.txt": f"{RELAY}\n2001:db8::200\n203.0.113.66\n", "derpmap": DERP}
+    assert dl.refresh_resolvers(c, fetch=fetcher(table), iface="end0", loader=lambda: False) == 0
+    infra = [l for l in (tmp_path / "infra.txt").read_text().splitlines() if not l.startswith("#")]
+    assert infra == ["198.51.100.200", "2001:db8::200"]                               # 203.0.113.66 is not Tailscale's
+    assert "jmaddington/tailscale-ips" in (tmp_path / "infra.txt").read_text()
+    table["derpmap"] = OSError("down")
+    dl.refresh_resolvers(c, fetch=fetcher(table), iface="end0", loader=lambda: False)  # last good copy of the map
+    assert [l for l in (tmp_path / "infra.txt").read_text().splitlines() if not l.startswith("#")] == infra
+
+
+def test_first_run_without_the_official_map_uses_the_pinned_seed(tmp_path):
+    seed = tmp_path / "tailscale.all.txt"; seed.write_text(f"{RELAY}\n")
+    c = rconf(tmp_path, INFRA_SEED=str(seed))
+    table = {"doh.txt": "203.0.113.53\n203.0.113.54\n", "domains.txt": ""}
+    dl.refresh_resolvers(c, fetch=fetcher(table), iface="end0", loader=lambda: False)
+    assert "pinned seed" in (tmp_path / "infra.txt").read_text() and RELAY in (tmp_path / "infra.txt").read_text()
+    (tmp_path / "infra.txt").unlink()
+    c2 = rconf(tmp_path, INFRA_SEED=str(seed), METERED_IFACES="enu1")
+    assert dl.refresh_resolvers(c2, fetch=lambda u: (_ for _ in ()).throw(AssertionError("no fetch")), iface="enu1") == 0
+    assert RELAY in (tmp_path / "infra.txt").read_text()                             # seeded even on a metered route
+
+
+def test_refresh_merges_known_and_learned_and_keeps_the_blocklist_safe(tmp_path):
+    c = rconf(tmp_path, BLOCK="yes", ECH_PROBE_MAX="10", ECH_NAMES="cloudflare-ech.com")
+    out = tmp_path / "out"; out.mkdir()
+    (out / "root-state.json").write_text(json.dumps({"index": {"queries": {"chat.example": {ME: NOW}, "dns.resolver.example": {ME: NOW}},
+        "answers": {"203.0.113.80": {"dns.resolver.example": NOW}, "203.0.113.54": {"cdn.site.example": NOW}}}}))
+    (out / "learned-resolvers.json").write_text(json.dumps({"203.0.113.90": {"first": NOW, "last": NOW, "via": ["udp/53"],
+        "hosts": ["phone"], "kind": "hard-coded"}, "203.0.113.91": {"first": 1, "last": 1, "via": ["udp/53"], "hosts": [], "kind": "hard-coded"}}))
+    table = {"doh.txt": f"203.0.113.53\n203.0.113.54\n{RELAY}\n10.0.0.0\n", "extra.txt": "203.0.113.53\n2001:db8::53\n",
+             "domains.txt": "*.resolver.example\n", "ts.txt": f"{RELAY}\n", "derpmap": DERP}
+    loads = []
+    dl.time.time = lambda: NOW
+    try:
+        rc = dl.refresh_resolvers(c, fetch=fetcher(table), iface="end0", prober=lambda n: 'ech="AEn+DQ"' if n == "chat.example" else "",
+                                  loader=lambda: loads.append(1) or False)
+    finally:
+        import time as _t
+        dl.time.time = _t.time
+    assert rc == 0
+    lst = (tmp_path / "resolvers.txt").read_text().splitlines()
+    assert {"203.0.113.53/32", "2001:db8::53/128", "203.0.113.80/32", "203.0.113.90/32"} <= set(lst)
+    assert "203.0.113.91/32" not in lst                                               # unseen > LEARNED_DAYS: dropped
+    blk = [l for l in (tmp_path / "blocked-resolvers.txt").read_text().splitlines() if not l.startswith("#")]
+    assert "203.0.113.53/32" in blk and "2001:db8::53/128" in blk
+    assert not {f"{RELAY}/32", "10.x.x.x/32", "203.0.113.54/32"} & set(blk)        # relay, LAN, shared: never
+    assert not dl.blockable("fe80::1", []) and not dl.blockable("127.0.0.1", []) and not dl.blockable("fd7a:115c:a1e0::5", [])
+    lr = json.loads((out / "learned-resolvers.json").read_text())
+    assert lr["203.0.113.80"]["kind"] == "public-learned" and lr["203.0.113.80"]["via"] == ["pihole:dns.resolver.example"]
+    assert (out / "ech-names.txt").read_text().split() == ["chat.example", "cloudflare-ech.com"]
+    assert loads == [1]                                                               # BLOCK=yes tries to reload the sets
+
+
+def test_load_sets_is_one_transaction_and_empty_without_block(tmp_path):
+    c = conf(tmp_path, BLOCK="yes")
+    (tmp_path / "blocked-resolvers.txt").write_text("# x\n203.0.113.53/32\n2001:db8::53/128\n")
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/learned-resolvers.json").write_text(json.dumps({"203.0.113.90": {"block": True}, "192.168.x.x": {"block": False}}))
+    got = []
+    class R: returncode, stderr = 0, ""
+    assert dl.load_sets(c, runner=lambda sc: got.append(sc) or R()) == 0
+    sc = got[0]
+    assert sc.startswith("flush set inet ctdc_dnsleak resolvers4\nflush set inet ctdc_dnsleak resolvers6\n")
+    assert "203.0.113.53/32, 203.0.113.90/32" in sc and "2001:db8::53/128" in sc and "192.168.x.x" not in sc
+    got.clear()
+    dl.load_sets(conf(tmp_path), runner=lambda sc: got.append(sc) or R())
+    assert "add element" not in got[0]
+
+
+def test_lockdown_check_tries_the_bypasses():
+    s = (D / "dns-lockdown-check.sh").read_text()
+    for probe in ("/dev/tcp/1.1.1.1/853", "https://1.1.1.1/dns-query", "https://8.8.8.8/resolve", "kdig +quic"):
+        assert probe in s
+    assert "Nine checks" in s and "SKIP" in s

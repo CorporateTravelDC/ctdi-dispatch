@@ -33,6 +33,69 @@ Hard-coded IP is tiered, so context is never mistaken for a finding:
 A destination that matches a bypass kind is exported as bypass evidence and left out of the hard-coded report. An
 encrypted resolver is usually a built-in address anyway, and what matters there is that DNS went around Pi-hole.
 
+A destination on the **known-infrastructure** list (Tailscale's relay servers, below) is class `infra`: listed under
+its own heading in `summary.txt` and never alerted. Tailscale reaches its relays by address on purpose (ports 80, 443
+and 3478), so before 2026-11-27 every relay contact read as `hardcoded`; four such pushes in one afternoon
+(derp10c, 11f, 27b, 27e) were all Tailscale itself.
+
+## Known infrastructure: Tailscale relays
+
+The daily refresh writes `INFRA_LIST` (`/etc/ctdc-dnsleak/known-infra.txt`) from the community list
+[jmaddington/tailscale-ips](https://github.com/jmaddington/tailscale-ips) by
+[JM Addington](https://github.com/jmaddington) ([jmaddington.com](https://www.jmaddington.com)), which parses
+Tailscale's DERP map once a day into plain address lists. Thanks to them for publishing it.
+
+Because this list can only ever *silence* an alert, the watch does not trust it alone: every address is cross-checked
+against Tailscale's own DERP map (`INFRA_CHECK_URL`), and only addresses both carry are kept; the rest are dropped and
+named in the refresh log. When the official map is unreachable the last good list stays. On a first run with no list
+and no map, `INFRA_SEED` (here: the bundler repo's pinned submodule, `tailscale-ips/tailscale.all.txt`) is installed
+as-is. Relay addresses are never blocked.
+
+## Encrypted resolvers: known, learned, and the forward defense
+
+The daily refresh (`ctdc-dnsleak-resolvers.timer`, skipped on a metered route) builds `RESOLVER_LIST` from:
+
+| Source | What | Key |
+|---|---|---|
+| known, public | DoH/DoT/DoQ address lists: [hagezi/dns-blocklists](https://github.com/hagezi/dns-blocklists) `ips/doh.txt`, [dibdot/DoH-IP-blocklists](https://github.com/dibdot/DoH-IP-blocklists) IPv4 + IPv6 | `RESOLVER_LIST_URL`, `RESOLVER_EXTRA_URLS` |
+| learned, public | addresses Pi-hole handed out for a resolver host name (hagezi `wildcard/doh-onlydomains.txt`) | `RESOLVER_DOMAINS_URL` |
+| learned, hard-coded | addresses an app sent DNS to **directly**: port 53 (seen by the `pre_dns` chain *before* the dns-lock redirect rewrites it), 853, 8853 | recorded by every watch run |
+
+Each source keeps a last good copy; learned entries are dropped after `LEARNED_DAYS` (90) unseen. They are kept in
+`OUT_DIR/learned-resolvers.json` with how each was learned and which devices used it. A new hard-coded resolver
+learned from direct DNS is pushed once (forwarded 853/8853 ones are DNS anomaly watch's to alert on).
+
+`summary.txt` now names **which device sent DNS straight to which outside resolver**, from the `pre_dns` set. The
+dns-lock table's redirect counter alone could only count those queries.
+
+**`BLOCK=yes` (the forward defense).** After the watch records a new forwarded connection, the forward chain
+*rejects* (TCP reset / ICMP, so the app falls back at once to normal DNS, which Pi-hole answers):
+- DNS over TLS (853/tcp) and DNS over QUIC (853, 8853/udp), by port;
+- plain DNS that was not redirected to this host (on `tailscale0` the dns-lock redirect catches port 53 first);
+- 443 (TCP and UDP) to an address in `blocked-resolvers.txt` or a learned hard-coded resolver.
+
+Never blocked: LAN, tailnet, loopback, link-local and unique-local addresses, Tailscale relays, and any address
+Pi-hole also answered (in the window) for an ordinary, non-resolver name: shared hosting, where blocking would break
+sites. A newly learned resolver is added to the live set at once (`nft add element`); the full sets are reloaded by
+`load-sets` after each refresh and whenever the fw unit loads the table. A blocked attempt does **not** fail a
+device's connection check (it got nowhere); it is counted in the verdict, marked `"blocked": true` in
+`latest.json`, and DNS anomaly watch reports it as a *blocked attempt* at priority 3.
+
+What `BLOCK=yes` cannot stop: DoH to a resolver on no list and not yet learned (it looks like any HTTPS
+connection), DoH behind a shared CDN address, and DoH inside an on-device VPN.
+
+**ECH (Encrypted Client Hello)** is not a resolver: it hides the *site name* inside TLS, and the lookup still goes
+through Pi-hole, which still filters it. The refresh lists the ECH-capable names this tailnet looked up (HTTPS record
+with an `ech=` config, up to `ECH_PROBE_MAX` names, plus `ECH_NAMES`) as context in `summary.txt`. Its real risk is
+DoH carried to an ECH-fronted CDN address, which neither an address list nor the name can catch.
+
+### Offensive checks (on a Linux peer)
+
+`dns-lockdown-check.sh` now also **tries** the bypasses an app could use, through the exit node, and each must be
+refused: 7 DNS over TLS to 1.1.1.1:853, 8 DNS over HTTPS by address to 1.1.1.1 and 8.8.8.8, 9 DNS over QUIC (only
+with `kdig`; otherwise SKIP, never a pass). With `DEVICE_SSH_CHECK=yes` the watch runs it on Linux peers every 6 h,
+so the defense is tested from the outside, not only asserted.
+
 ## How classification works
 
 Pi-hole's log records which client asked for a name (`query[A] name from client`). It records the answer separately
@@ -203,8 +266,10 @@ Prerequisites:
 - **Captive portals and connectivity checks.** OS probes and portal redirects can connect without a matching lookup.
 - **Long-lived caches.** A lookup from before the window reads as `cached-stale`, or as `hardcoded` once its answer
   ages out of the 30-day index. Restart the app, or the phone, before a test session.
-- **Encrypted-resolver list gaps.** `doh` only knows the addresses on the list. A resolver that isn't listed shows up
-  as a hard-coded HTTPS destination instead.
+- **Encrypted-resolver list gaps.** `doh` only knows the addresses on the lists (known plus learned). A resolver that
+  isn't listed shows up as a hard-coded HTTPS destination instead.
+- **Tailscale relays** were the main false positive until the known-infrastructure list (above); a relay that joined
+  Tailscale's map since the last daily refresh can still read as `hardcoded` for up to a day.
 
 ## Setup A: the Pi-hole box as a Tailscale exit node (works anywhere)
 

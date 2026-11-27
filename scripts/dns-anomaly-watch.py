@@ -482,16 +482,21 @@ def bypass_pass(cfg, state, now, client_ip, event_ts):
     lines = [f"- {label.get(f['class'], f['class'])}: {f['dest']} {f['proto']}/{f['port']}"
              + (f" ({f['rdns']})" if f.get("rdns") else "") + (f" from {f['host']}" if f.get("host") and not only else "")
              + (" [during a reconnect/novelty window]" if f in correlated else "")
+             + (" -- BLOCKED by the forward defense" if f.get("blocked") else "")
              for f in new[:10]]
-    print(f"{LOG_PREFIX} DNS BYPASS: {len(new)} new, {len(correlated)} correlated")
+    open_ = [f for f in new if not f.get("blocked")]
+    print(f"{LOG_PREFIX} DNS BYPASS: {len(new)} new, {len(correlated)} correlated, {len(new) - len(open_)} blocked")
     ntfy_alert(
         cfg,
-        f"The {cfg.get('DNS_WATCH_DEVICE_LABEL', 'monitored device')} resolved names outside Pi-hole:\n" + "\n".join(lines)
+        (f"The {cfg.get('DNS_WATCH_DEVICE_LABEL', 'monitored device')} resolved names outside Pi-hole:\n" if open_ else
+         f"The {cfg.get('DNS_WATCH_DEVICE_LABEL', 'monitored device')} TRIED to resolve names outside Pi-hole; every attempt was blocked:\n")
+        + "\n".join(lines)
         + (f"\n(+{len(new) - 10} more)" if len(new) > 10 else "")
         + (f"\n{red} hard-coded plain-DNS quer(ies) were also redirected to Pi-hole this pass." if red else "")
         + "\nSource attribution is NOT established (the connection log cannot name the app).",
-        "DNS anomaly -- DNS bypass" + (" during a reconnect burst" if correlated else ""),
-        priority=5 if correlated else 4,
+        ("DNS anomaly -- DNS bypass" if open_ else "DNS anomaly -- blocked DNS bypass attempt")
+        + (" during a reconnect burst" if correlated else ""),
+        priority=(5 if correlated else 4) if open_ else 3,
     )
     return new
 

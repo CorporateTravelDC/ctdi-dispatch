@@ -9,6 +9,8 @@ ConditionPathExists=/etc/nftables.d/ctdc-dnsleak.nft
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/nftables.d/ctdc-dnsleak.nft
+# BLOCK=yes: fill the blocked-resolver sets from the last daily list ('-': a missing list never fails the table)
+ExecStartPost=-/usr/bin/python3 /usr/local/libexec/ctdc-dnsleak/dns_leak_watch.py load-sets --conf /etc/ctdc-dnsleak/dnsleak.conf
 ExecStop=/usr/sbin/nft delete table inet ctdc_dnsleak
 
 [Install]

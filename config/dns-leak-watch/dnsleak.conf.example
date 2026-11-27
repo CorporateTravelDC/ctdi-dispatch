@@ -71,13 +71,43 @@ INDEX_HOURS=48
 # Reverse-DNS hint for hard-coded and bypass destinations, through the local resolver (yes / no).
 RDNS=yes
 
-# Encrypted-resolver (DoH) address list, refreshed once a day by ctdc-dnsleak-resolvers.timer (never by the watch).
-# A fetched list with fewer than RESOLVER_MIN entries is refused and the last good list kept. The refresh is skipped
-# while the default route uses an interface in METERED_IFACES (space- or comma-separated; empty = never skip).
+# Encrypted resolvers (DoH / DoT / DoQ), refreshed once a day by ctdc-dnsleak-resolvers.timer (never by the watch):
+#   KNOWN    RESOLVER_LIST_URL plus RESOLVER_EXTRA_URLS (space-separated address lists; each keeps a last good copy).
+#            Fewer than RESOLVER_MIN merged entries is refused and the last good list kept.
+#   LEARNED  public: addresses Pi-hole handed out for a resolver host name on RESOLVER_DOMAINS_URL;
+#            hard-coded: addresses the watch saw apps send DNS to directly (port 53 before the dns-lock redirect, 853,
+#            8853). Kept LEARNED_DAYS after last seen, in OUT_DIR/learned-resolvers.json.
+# The refresh is skipped while the default route uses an interface in METERED_IFACES (empty = never skip).
 RESOLVER_LIST=/etc/ctdc-dnsleak/encrypted-resolvers.txt
 RESOLVER_LIST_URL=https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/doh.txt
+RESOLVER_EXTRA_URLS=https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv4.txt https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv6.txt
+RESOLVER_DOMAINS_URL=https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-onlydomains.txt
 RESOLVER_MIN=100
+LEARNED_DAYS=90
 METERED_IFACES=
+
+# Forward defense (yes / no). yes: forwarded DoT (853/tcp), DoQ (853, 8853/udp), plain DNS that was not redirected
+# to this host, and 443 to a blockable known or learned resolver are REJECTED (so the app falls back to normal DNS,
+# which Pi-hole answers), after the watch records the attempt. Never blocked: LAN, tailnet and Tailscale relay
+# addresses, and any address Pi-hole also answered for ordinary names (shared hosting). A blocked attempt does not
+# fail a device's connection check; it is counted in it. no: detection only.
+BLOCK=no
+
+# Known infrastructure: Tailscale's relay (DERP) servers are reached by address by design, so they are listed as
+# context, never as hard-coded findings, and never blocked. The community list by JM Addington
+# (https://github.com/jmaddington/tailscale-ips) is fetched daily and cross-checked against Tailscale's own DERP
+# map: only addresses both carry are kept. INFRA_SEED: a local copy used on a first run when the official map is
+# unreachable (for example the bundler repo's pinned submodule, tailscale-ips/tailscale.all.txt). Empty = none.
+INFRA_LIST=/etc/ctdc-dnsleak/known-infra.txt
+INFRA_URL=https://raw.githubusercontent.com/jmaddington/tailscale-ips/main/tailscale.all.txt
+INFRA_CHECK_URL=https://controlplane.tailscale.com/derpmap/default
+INFRA_SEED=
+
+# ECH (Encrypted Client Hello): not a resolver, but it hides the site name inside TLS. The daily refresh asks this
+# host's resolver for the HTTPS record of up to ECH_PROBE_MAX recently looked-up names and lists those that carry an
+# ECH config, plus ECH_NAMES (known ECH front names). Context only: Pi-hole still filtered those lookups.
+ECH_NAMES=cloudflare-ech.com
+ECH_PROBE_MAX=300
 
 # Optional: a counter of plain DNS queries another table redirects to Pi-hole ("family table counter"); read as a
 # per-run delta and exported with the bypass evidence. Absent table = skipped. Empty = off.

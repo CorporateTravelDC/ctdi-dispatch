@@ -12,6 +12,10 @@ Everyone who's helped build and keep this platform flying — `ctdi-dispatch` ex
 Upstream SELinux policy module for Pi-hole, the hardened baseline for DNS filtering and blocking. It is cloned and installed by the companion Pi-hole/Unbound SELinux repository's install script, not vendored as a git submodule.
 [github.com/georou/pihole-selinux](https://github.com/georou/pihole-selinux) · [tellmeaboot.com](https://tellmeaboot.com)
 
+**JM Addington**
+Community list of Tailscale DERP relay addresses, parsed daily from Tailscale's map. DNS leak watch uses it, cross-checked against the official map, so Tailscale's own relay traffic is never mistaken for a hard-coded destination; the bundler repository carries it as a pinned submodule.
+[github.com/jmaddington/tailscale-ips](https://github.com/jmaddington/tailscale-ips) · [github.com/jmaddington](https://github.com/jmaddington) · [jmaddington.com](https://www.jmaddington.com)
+
 **Thomas Eibner**
 Considerable overall code review, plus the heavy lift of reworking the parsing logic for hold and diversion detection.
 [github.com/thomaseibner](https://github.com/thomaseibner) · [twitter.com/thomaseibner](https://twitter.com/thomaseibner)
