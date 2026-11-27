@@ -225,19 +225,19 @@ table inet {TABLE} {{
     counter c_dot {{ }}
     counter c_quic {{ }}
     counter c_tls {{ }}
-    chain fwd {{
+    chain forward_main {{   # not 'fwd': that is an nft keyword (the fwd statement); 2026-11-27 install failed on it
         type filter hook forward priority filter - 20; policy accept;
-        iifname "{c['IFACE']}" ct state new meta l4proto {{ tcp, udp }} jump watch
+        iifname "{c['IFACE']}" ct state new meta l4proto {{ tcp, udp }} jump record_new
         # quarantine AFTER the watch records the attempt, so a quarantined device's traffic still counts toward the
         # PASS that releases it; only forwarded traffic is dropped (DNS to this host and Tailscale itself are not)
         iifname "{c['IFACE']}" ip saddr @quar4 ip daddr != {TAILNET_RANGES[0]} counter drop
         iifname "{c['IFACE']}" ip6 saddr @quar6 ip6 daddr != {TAILNET_RANGES[1]} counter drop
     }}
-    chain watch {{
-        ip saddr @clients4 update @seen4 {{ ip saddr . ip daddr . meta l4proto . th dport }} goto tally
-        ip6 saddr @clients6 update @seen6 {{ ip6 saddr . ip6 daddr . meta l4proto . th dport }} goto tally
+    chain record_new {{
+        ip saddr @clients4 update @seen4 {{ ip saddr . ip daddr . meta l4proto . th dport }} goto count_new
+        ip6 saddr @clients6 update @seen6 {{ ip6 saddr . ip6 daddr . meta l4proto . th dport }} goto count_new
     }}
-    chain tally {{
+    chain count_new {{
         counter name "c_new"
         th dport 53 counter name "c_dns53"
         th dport 853 counter name "c_dot"

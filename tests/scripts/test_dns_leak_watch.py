@@ -33,10 +33,10 @@ def test_example_config_parses_and_renders():
     c = dl.parse_conf((D / "dnsleak.conf.example").read_text())
     nft = dl.render_nft(c)
     assert "table inet ctdc_dnsleak\ndelete table inet ctdc_dnsleak\n" in nft
-    assert 'iifname "tailscale0" ct state new meta l4proto { tcp, udp } jump watch' in nft
+    assert 'iifname "tailscale0" ct state new meta l4proto { tcp, udp } jump record_new' in nft
     assert "elements = { 192.0.2.10/32 }" in nft and "update @seen4 { ip saddr . ip daddr . meta l4proto . th dport }" in nft
     assert "ip saddr @quar4 ip daddr != 100.64.0.0/10 counter drop" in nft and "ip6 saddr @quar6" in nft
-    assert nft.index("jump watch") < nft.index("ip saddr @quar4")      # attempts are recorded before the drop
+    assert nft.index("jump record_new") < nft.index("ip saddr @quar4")      # attempts are recorded before the drop
     for ctr in ("c_new", "c_dns53", "c_dot", "c_quic", "c_tls"):
         assert f'counter name "{ctr}"' in nft
     assert c["DNSLOCK_COUNTER"] == "inet ctdc_dnslock dns_tailnet_redirect" and c["RESOLVER_MIN"] == 100
@@ -548,3 +548,17 @@ def test_star_still_needs_recent_routing(tmp_path):
               (40, True, 1, True)]
     pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, ALWAYS_ON_HOSTS="*"), script)
     assert not any("off the tunnel" in p[0] or "HELD" in p[0] for p in pushes)   # never used the exit node: no page
+
+
+# 2026-11-27: the first install failed because a chain was named "fwd", an nft keyword (the fwd statement).
+NFT_KEYWORDS = {"fwd", "dup", "log", "counter", "limit", "reject", "drop", "accept", "queue", "notrack", "flow",
+                "meta", "ct", "ip", "ip6", "inet", "tcp", "udp", "set", "map", "table", "chain", "jump", "goto",
+                "return", "masquerade", "redirect", "snat", "dnat", "tproxy", "synproxy", "last", "quota", "secmark"}
+
+
+def test_chain_and_set_names_are_not_nft_keywords():
+    c = dl.parse_conf((REPO / "config/dns-leak-watch/dnsleak.conf.example").read_text())
+    nft = dl.render_nft(c)
+    names = re.findall(r"^\s*(?:chain|set|counter)\s+([A-Za-z0-9_]+)\s*\{", nft, re.M)
+    assert names, "no chains/sets found"
+    assert not (set(names) & NFT_KEYWORDS), set(names) & NFT_KEYWORDS
