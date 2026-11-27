@@ -1,0 +1,15 @@
+[Unit]
+Description=CorporateTravelDC DNS lock: only Unbound reaches outside DNS; tailnet port-53 queries go to Pi-hole
+Documentation=file:///opt/corporatetraveldc/private/ctdi-dispatch-internal/config/dns-lock/README.md
+After=network-online.target tailscaled.service firewalld.service nftables.service unbound.service pihole-FTL.service
+Wants=network-online.target
+ConditionPathExists=/etc/nftables.d/ctdc-dnslock.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/ctdc-dnslock.nft
+ExecStop=/usr/sbin/nft delete table inet ctdc_dnslock
+
+[Install]
+WantedBy=multi-user.target

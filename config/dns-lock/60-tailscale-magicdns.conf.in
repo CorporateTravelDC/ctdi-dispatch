@@ -1,0 +1,11 @@
+# /etc/unbound/conf.d/60-tailscale-magicdns.conf -- RENDERED by config/dns-lock/apply.sh (ctdi-dispatch); do not edit.
+#
+# Forward ONLY this tailnet's MagicDNS names to Tailscale's resolver (100.100.100.100), so this host's own tools can
+# resolve tailnet peer names. 2026-11-27 (operator): narrowed from all of "ts.net." to this tailnet's own suffix;
+# every other *.ts.net name now resolves by normal recursion like the rest of DNS. The suffix is filled in at install
+# from `tailscale status --json` (MagicDNSSuffix), so it is never written into a tracked (public-mirrored) file.
+# Supersedes pihole-unbound-selinux-internal/unbound/conf.d/60-tailscale-magicdns.conf.
+
+forward-zone:
+    name: "@TAILNET_SUFFIX@."
+    forward-addr: 100.100.100.100

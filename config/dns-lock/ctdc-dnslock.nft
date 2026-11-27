@@ -1,0 +1,34 @@
+# config/dns-lock/ctdc-dnslock.nft -- 2026-11-27 (operator): every DNS lookup on this box, on every uplink (end0, wld0,
+# enu1) and from every tailnet peer, goes through Pi-hole -> Unbound. Rendered by config/dns-lock/apply.sh into
+# /etc/nftables.d/ctdc-dnslock.nft (@VERDICT@ = accept in --audit, reject in --enforce); loaded by
+# corporatetraveldc-dnslock.service. Its own table, so it never touches firewalld's or the exit node's rules.
+#
+#   out  (this box's own traffic): loopback is free (Pi-hole on :53, Unbound on :5335); Unbound, the only recursive
+#        resolver, may reach outside DNS (53, and 853 for DoT); anything else sending to port 53/853 is logged with
+#        its UID (rate-limited) and counted, then @VERDICT@.
+#   pre  (tailnet peers, exit-node clients included): any port-53 query arriving on tailscale0 is redirected to
+#        this box's Pi-hole, so a client with a hard-coded resolver still gets Pi-hole. DoT/DoQ from peers is
+#        already dropped by the exit-node table.
+table inet ctdc_dnslock
+delete table inet ctdc_dnslock
+table inet ctdc_dnslock {
+    counter dns_bypass {
+        comment "outbound DNS (53/853) from anything but Unbound"
+    }
+    counter dns_tailnet_redirect {
+        comment "tailnet port-53 queries redirected to Pi-hole"
+    }
+
+    chain out {
+        type filter hook output priority filter - 5; policy accept;
+        oifname "lo" accept
+        meta skuid "unbound" meta l4proto { tcp, udp } th dport { 53, 853 } accept
+        meta l4proto { tcp, udp } th dport { 53, 853 } limit rate 6/minute log prefix "ctdc-dns-bypass " flags skuid
+        meta l4proto { tcp, udp } th dport { 53, 853 } counter name "dns_bypass" @VERDICT@
+    }
+
+    chain pre {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "tailscale0" meta l4proto { tcp, udp } th dport 53 counter name "dns_tailnet_redirect" redirect to :53
+    }
+}
