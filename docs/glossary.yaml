@@ -213,6 +213,7 @@ acronyms:
   - {term: PWA, expansion: Progressive Web App, scope: platform, definition: "A website that installs like an app on a phone.", source: null}
   - {term: PWM, expansion: Pulse-Width Modulation, scope: platform, definition: "How the edge unit drives its fan speed.", source: null}
   - {term: RAG, expansion: Retrieval-Augmented Generation, scope: agents, definition: "Feeding a model passages looked up for the question, instead of everything.", source: {cite: "NIST CSRC Glossary, retrieval-augmented generation", url: "https://csrc.nist.gov/glossary/term/retrieval_augmented_generation"}}
+  - {term: RAPT, expansion: Route Availability Planning Tool, scope: aviation, definition: "A TFMS product giving convective blockage timelines for departure routes out of a metroplex.", source: null}
   - {term: REST, expansion: Representational State Transfer, scope: platform, definition: "A plain web API style; also the name of polled feeds as opposed to pushed SWIM feeds.", source: {cite: "NIST CSRC Glossary, Representational State Transfer (REST)", url: "https://csrc.nist.gov/glossary/term/representational_state_transfer"}}
   - {term: RPM, expansion: Revolutions Per Minute (fan) or RPM Package Manager (Fedora), scope: platform, definition: "Fan speed in thermal notes; the package format in system notes.", source: {cite: "RPM Package Manager project home (package sense)", url: "https://rpm.org/"}}
   - {term: RSS, expansion: Really Simple Syndication, scope: platform, definition: "Feed format of the news and OSINT sources.", source: {cite: "RSS Advisory Board, RSS 2.0 Specification", url: "https://www.rssboard.org/rss-specification"}}
@@ -477,6 +478,8 @@ ignore:
     terms: [AKQ, CTP, LWX]
   - reason: "Audit finding number, not vocabulary."
     terms: [DP-5, NEW-3, R04-GAP, SR-1]
+  - reason: "SFDPS record code or log level quoted from the feed or the code: an identifier, not vocabulary."
+    terms: [DBRTFPI, INFO]
   - reason: "Callsign prefix quoted from a detection rule: an identifier, not vocabulary."
     terms: [CRANE]
   - reason: "ATC callsign quoted as the example of a public-number lookaside link: an identifier, not vocabulary."
