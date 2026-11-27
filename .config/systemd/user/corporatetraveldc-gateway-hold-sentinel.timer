@@ -1,0 +1,12 @@
+[Unit]
+Description=Cloud-agent link keeper -- every 6 hours (each reminder is sent once per target)
+# no Requires=/Wants= on the service (docs/BOOT_STORM_TIMER_REQUIRES.md)
+
+[Timer]
+OnCalendar=*-*-* 00/6:20:00
+RandomizedDelaySec=10min
+# a run missed during downtime is worth one catch-up; a few indexed reads, not load-gated
+Persistent=true
+
+[Install]
+WantedBy=timers.target

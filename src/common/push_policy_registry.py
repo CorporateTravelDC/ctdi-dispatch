@@ -205,6 +205,11 @@ KINDS: dict[tuple[str, str], Rule] = {
     ("platform_ops", "agent_lapse_nudge"): _S(first=2, identity=("stage", "episode")),
     ("platform_ops", "agent_lapse_email"): _S(first=3, identity=("stage", "episode")),
     ("platform_ops", "agent_lapse_escalate"): _S(first=4, identity=("stage", "episode")),
+    # cloud-agent link keeper (common.gateway_hold): once per target (hold end, grant end, week, quiet episode)
+    ("platform_ops", "gateway_hold_ending"): _S(first=3, identity=("slug", "key")),
+    ("platform_ops", "gateway_relink_due"): _S(first=4, identity=("slug", "key")),
+    ("platform_ops", "gateway_hold_missing"): _S(first=2, identity=("slug", "key")),
+    ("platform_ops", "gateway_link_quiet"): _S(first=3, identity=("slug", "key")),
 }
 
 

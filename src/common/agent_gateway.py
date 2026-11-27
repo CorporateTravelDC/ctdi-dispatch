@@ -23,6 +23,11 @@ Authority (operator, 2026-10-05): OUR side decides.
   * An operator-signed HOLD (kind ``connector-hold``) keeps our side of the
     link open -- client registration and refresh grant do not expire -- until
     ``hold_until``; the vendor's next refresh resumes the session at once.
+    2026-11-27 (operator): a hold now LASTS until hold_until. A renewal used to clear it, so a 90-day
+    hold vanished at the vendor's first hourly refresh and the next quiet week made the session
+    dormant again. Now every refresh grant issued under a hold reaches at least hold_until, and a
+    quiet session under a live hold is 'held', not 'dormant'. It ends at hold_until (then the normal
+    rules apply), by `agent-gateway.sh release`, or by any revocation (which always wins).
   * Revocation on our side always wins over a hold.
 """
 from __future__ import annotations
@@ -452,11 +457,14 @@ def refresh(refresh_token: str, client_id: str, now: float | None = None) -> dic
     else:
         _q("UPDATE oauth_tokens SET rotated_at = ? WHERE token_hash = ?", (now, t["token_hash"]))
     resumed = cx["status"] in ("dormant", "held")
-    _q("UPDATE agent_connections SET status = 'active', last_renewal_at = ?, hold_until = NULL, hold_approval_id = NULL "
-       "WHERE id = ?", (now, cx["id"]))
-    if resumed:
+    if held:                                     # an unexpired hold survives the renewal (2026-11-27)
+        _q("UPDATE agent_connections SET status = 'active', last_renewal_at = ? WHERE id = ?", (now, cx["id"]))
+    else:
+        _q("UPDATE agent_connections SET status = 'active', last_renewal_at = ?, hold_until = NULL, "
+           "hold_approval_id = NULL WHERE id = ?", (now, cx["id"]))
+    if resumed and cx["status"] == "dormant":
         _notify(f"{cx['account']} reconnected", f"connector {cx['slug']} renewed after being {cx['status']}; session active again.")
-    return _issue(cx["id"], now, now + REFRESH_IDLE_S)
+    return _issue(cx["id"], now, max(now + REFRESH_IDLE_S, cx["hold_until"] if held else 0))
 
 
 def _successor_unused(t: dict, cx: dict, now: float) -> bool:
@@ -503,6 +511,9 @@ def sweep(now: float | None = None) -> list[dict]:
             _q("UPDATE agent_connections SET status = 'dormant', hold_until = NULL WHERE id = ?", (cx["id"],))
             changed.append({**cx, "status": "dormant", "why": "hold expired"})
         elif cx["status"] == "active" and now - last > DORMANT_AFTER_S:
+            if (cx.get("hold_until") or 0) > now:  # quiet under a live hold: held, no dormant notice (2026-11-27)
+                _q("UPDATE agent_connections SET status = 'held' WHERE id = ?", (cx["id"],))
+                continue
             _q("UPDATE agent_connections SET status = 'dormant' WHERE id = ?", (cx["id"],))
             changed.append({**cx, "status": "dormant", "why": "vendor quiet"})
     return changed
@@ -550,6 +561,14 @@ def on_approval_resolved(row: dict) -> None:
        "AND rotated_at IS NULL AND expires_at < ?", (until, spec["connection"], until))
     _notify(f"{spec['account']} held", f"connector {spec['connector']} held open until "
             f"{time.strftime('%Y-%m-%d', time.gmtime(until))}; the session resumes on the vendor's next refresh.")
+
+
+def refresh_grant_until(conn_id: str) -> float | None:
+    """When the connection's live refresh grant idles out (the latest unrevoked, unrotated refresh token): the date
+    by which the vendor must renew, or the operator hold it, before a re-link is needed."""
+    r = _q("SELECT MAX(expires_at) AS until FROM oauth_tokens WHERE connection_id = ? AND kind = 'refresh' "
+           "AND revoked_at IS NULL AND rotated_at IS NULL", (conn_id,), one=True)
+    return float(r["until"]) if r and r["until"] else None
 
 
 def status(slug: str | None = None) -> list[dict]:

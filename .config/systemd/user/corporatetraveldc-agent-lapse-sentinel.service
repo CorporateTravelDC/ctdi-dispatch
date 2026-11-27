@@ -4,4 +4,7 @@ Description=Agent-lapse sentinel: nudge 6 h, email 12 h, escalate 24 h (platform
 [Service]
 Type=oneshot
 Nice=10
+# 2026-11-27 (operator): ChatGPT is used now and then; its link is kept by the 90-day hold and the gateway-hold
+# sentinel, so a quiet day is not a lapse. Cowork stays here AND has the gateway-hold daily check-in tripwire.
+Environment=AGENT_LAPSE_EXCLUDE=ctdc-agent-dispatch,ctdc-agent-llama,ctdc-agent-openai-chatgpt
 ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/platform-sentinel.py agent-lapse run

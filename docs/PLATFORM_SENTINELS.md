@@ -16,7 +16,7 @@ standing gap, not a regression, and no agent had been looking.
 So these checks run as user timers on the box. They need no agent, and they alert the operator
 directly on `ops-health` (and by email where stated).
 
-## The five
+## The six
 
 | # | sentinel | unit | when | alerts |
 |---|---|---|---|---|
@@ -24,7 +24,8 @@ directly on `ops-health` (and by email where stated).
 | 2 | plan coverage | `corporatetraveldc-plan-coverage-sentinel.timer` | daily 04:40Z + up to 15 min, previous UTC day | an operator's coverage moving 20 points or more against its trailing 14-day median |
 | 3 | ground-stop tripwire | `corporatetraveldc-ground-stop-tripwire.timer` | every 5 min | ground stops at 5 or more airports at once (off again at 3 or fewer); a GS or GDP at a watched flight's airport |
 | 4 | per-centre first messages | `corporatetraveldc-artcc-sentinel.timer` | daily 05:10Z + up to 15 min, previous UTC day | a centre's first-message count down more than 60 % against its trailing median, or at zero |
-| 5 | agent lapse | `corporatetraveldc-agent-lapse-sentinel.timer` | every 30 min | 6 h nudge, 12 h email, 24 h escalation; dismissal by SSH or the console |
+| 5 | agent lapse | `corporatetraveldc-agent-lapse-sentinel.timer` | every 30 min | 6 h nudge, 12 h email, 24 h escalation; dismissal by SSH or the console. ChatGPT is excluded since 2026-11-27 (kept by #6) |
+| 6 | cloud-agent link keeper | `corporatetraveldc-gateway-hold-sentinel.timer` | every 6 h | a week before a hold or refresh grant lapses; a watched connector with no hold (weekly); the Cowork daily check-in tripwire (30 h quiet) |
 
 Every run is fail-soft: an error is logged with its reason, the run exits 0, and the next timer run
 retries. The two daily reports skip a run while load1 is 24 or more. Times are UTC with ET beside
@@ -91,6 +92,23 @@ again, and is recorded in `agent_lapse_dismissals` (who, when, via, reason) plus
   decides nothing. The console needs its normal sign-in, a human SSH-signed `console-login`
   approval, and the dismiss form is CSRF-checked inside that session. This is the path for a held
   or stale account during a cloud-provider lapse.
+
+## The cloud-agent link keeper (2026-11-27)
+
+Cloud agents reach the platform only through their gateway link. `common/gateway_hold.py` watches the
+connectors in `GATEWAY_HOLD_SLUGS` (default `cowork,chatgpt`) and reminds the operator, once per target, as an
+ops-health push and a board coord post:
+
+| kind | when | what to run |
+|---|---|---|
+| `gateway_hold_ending` | the hold ends within 7 days | `scripts/agent-gateway.sh hold SLUG --days 90` (your signature) |
+| `gateway_relink_due` | no live hold, and the refresh grant idles out within 7 days | the same hold, or a re-link after it lapses |
+| `gateway_hold_missing` | no hold at all (weekly), or the link is revoked / never made | hold it; a revoked link needs a re-link from the vendor's settings |
+| `gateway_link_quiet` | the tripwire: no call or renewal for `GATEWAY_LINK_QUIET` hours (`cowork=30`, `chatgpt=0` = off) | check the connector in the vendor's settings; every scheduled task should end with `workspace_contribute` |
+
+Cowork runs scheduled tasks every day, so its daily call is its check-in. ChatGPT is used now and then, so it has
+no quiet tripwire: its 90-day hold keeps it linked, since 2026-11-27 a hold lasts its full term (a renewal no longer
+clears it), and the reminder comes a week before it ends. `platform-sentinel.py gateway-hold status` shows each link.
 
 ## Not verified live (2026-11-18)
 

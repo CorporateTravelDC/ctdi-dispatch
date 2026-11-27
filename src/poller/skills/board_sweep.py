@@ -378,7 +378,8 @@ def _gateway_sweep() -> None:
     from common import agent_gateway
     for ch in agent_gateway.sweep():
         body = (f"{ch['account']} ({ch['slug']}) session is now DORMANT ({ch['why']}). The account stays live. "
-                f"If this is a vendor lapse, hold the link open: scripts/agent-gateway.sh hold {ch['slug']} --days 30")
+                f"Its scheduled tasks are not reaching the connector. Hold the link open while you look: "
+                f"scripts/agent-gateway.sh hold {ch['slug']} --days 90 (a hold now lasts its full term)")
         db.board_insert(from_side="agent-gateway", to_side=_SELF, thread="coord",
                         subject=f"{ch['account']} session dormant", body=body)
         ntfy_push.send("ops-health", body, title=f"Agent session dormant: {ch['account']}", priority=3, tags="zzz")

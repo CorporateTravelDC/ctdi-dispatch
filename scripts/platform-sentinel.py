@@ -6,6 +6,7 @@ operator's user units (corporatetraveldc-*-sentinel timers); see common/platform
   platform-sentinel.py ground-stop [--replay START END]       ground-stop tripwire (replay: no pushes)
   platform-sentinel.py artcc [--day YYYY-MM-DD]               per-centre FDPS first-message sentinel
   platform-sentinel.py agent-lapse run|status                 agent-lapse sentinel
+  platform-sentinel.py gateway-hold run|status                cloud-agent link keeper (holds, grants, tripwire)
   platform-sentinel.py agent-lapse dismiss --account X [--for 24h] --reason TEXT
                                                               (use scripts/ctdc-agent-lapse.sh)
 
@@ -37,7 +38,17 @@ def main(argv=None) -> int:
     lp = sub.add_parser("agent-lapse"); lp.add_argument("action", choices=("run", "status", "dismiss"))
     lp.add_argument("--account"); lp.add_argument("--for", dest="for_", default="24h"); lp.add_argument("--reason")
     lp.add_argument("--by"); lp.add_argument("--via", default="ssh")
+    gh = sub.add_parser("gateway-hold"); gh.add_argument("action", choices=("run", "status"))
     args = ap.parse_args(argv)
+
+    if args.cmd == "gateway-hold":
+        from common import gateway_hold
+        if args.action == "run":
+            return ps.run_safely("gateway-hold", gateway_hold.run)
+        for r in gateway_hold.current():
+            print(f"{r['slug']:<10} {r['status']:<12} hold {ps.fmt(r.get('hold_until'))}  grant {ps.fmt(r.get('grant_until'))}  "
+                  f"renewed {ps.fmt(r.get('last_renewal_at'))}  call {ps.fmt(r.get('last_call_at'))}")
+        return 0
 
     if args.cmd == "plan-coverage":
         from common import plan_coverage

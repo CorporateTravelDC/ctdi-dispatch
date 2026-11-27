@@ -1,0 +1,7 @@
+[Unit]
+Description=Cloud-agent link keeper: hold and grant reminders a week ahead, Cowork daily check-in tripwire (2026-11-27)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/corporatetraveldc/private/ctdi-dispatch-internal/scripts/platform-sentinel.py gateway-hold run
