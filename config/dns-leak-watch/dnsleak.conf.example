@@ -35,6 +35,14 @@ ROUTED_RECENT_MIN=30
 OFF_TUNNEL_ALERT_MIN=5
 NTFY_P5_TOPICS=
 CAPTIVE_MIN_HOLD_MIN=10
+# After a release (signed or apply.sh release) the device is not held again for this many minutes: not on its
+# return from an off-tunnel episode, not by a FAIL quarantine (2026-11-28: a phone released while off the tailnet
+# was held again the moment it came back). 0 = no grace.
+RELEASE_GRACE_MIN=30
+# Every push, report and screen names a device only as dev-<10 hex>: an HMAC of its host name under this key (made
+# once by the root run, 0640 root:READ_GROUP). The real names stay in root-only state; the signed release carries the
+# real name, the device's Tailscale machine key and the tag. apply.sh release takes a name or a tag.
+TAG_KEY_FILE=/var/lib/ctdc-dnsleak/hold-tag.key
 
 # Optional signed release: a program (absolute path, no arguments) run as RELEASE_APPROVAL_USER (never root) with
 # `check --host HOST --since EPOCH`; it must verify a human signature itself and print exactly "ok <id>" when a

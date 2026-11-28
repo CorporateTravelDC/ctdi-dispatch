@@ -94,7 +94,8 @@ DNS BYPASS class (2026-11-27, operator), OFF unless DNS_BYPASS_WATCH_JSON is set
                                   reported as correlated with it (priority 5 instead of 4)
   DNS_BYPASS_MAX_AGE_MIN=30       an older latest.json is ignored (the collector is not running)
   DNS_BYPASS_HOST=                when the collector watches the whole tailnet (TAILNET=yes), only findings from
-                                  this tailnet host name are this watch's; empty = all, each line names its host
+                                  this device are this watch's, given as its TAG (dev-<10 hex>; the collector
+                                  never shows device names, 2026-11-28); empty = all, each line names its tag
 The collector records the watched client's NEW forwarded connections in an nft set; its "bypass_evidence" lists
 destinations the device used to resolve names outside Pi-hole: dns53 (plain DNS to another server), dot / doq
 (port 853, TCP / UDP), doh (443 to an address on the encrypted-resolver list), plus the dns-lock table's redirected
@@ -104,6 +105,7 @@ reconnect burst, as correlation context.
 """
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.request
@@ -458,6 +460,12 @@ def bypass_pass(cfg, state, now, client_ip, event_ts):
     ev = doc.get("bypass_evidence", {})
     findings = ev.get("findings", [])
     only = cfg.get("DNS_BYPASS_HOST", "").strip()
+    if only and not re.fullmatch(r"dev-[0-9a-f]{10}", only):
+        # 2026-11-28: the collector names devices only by tag; a plain name would silently match nothing. Fail open
+        # to every finding (more alerts, never fewer) and say how to fix it.
+        print(f"{LOG_PREFIX} bypass: DNS_BYPASS_HOST is a device name; set it to the device's tag "
+              f"(dev-..., from config/dns-leak-watch/apply.sh status). Checking every device meanwhile")
+        only = ""
     if only:
         findings = [f for f in findings if f.get("host") == only]
     baseline = "bypass_alerted" not in state

@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 D = REPO / "config/dns-leak-watch"
 spec = importlib.util.spec_from_file_location("dns_leak_watch", D / "dns_leak_watch.py")
 dl = importlib.util.module_from_spec(spec); spec.loader.exec_module(dl)
+T = lambda name: dl.tag_of(name)            # every push and report names a device by its tag (2026-11-28)
 GROUP = grp.getgrgid(os.getgid()).gr_name
 NOW = 1_795_000_000.0
 ME, OTHER = "192.0.2.10", "192.0.2.99"
@@ -139,8 +140,9 @@ def test_run_outputs_and_once_only(tmp_path, monkeypatch):
     assert "bypass evidence: 2, reported by DNS anomaly watch" in s
     rows = (tmp_path / "out/2026-11-18.csv").read_text().splitlines()
     assert rows[0].startswith("first_seen_utc,class,") and len(rows) == 1 + 6
-    for f in ("summary.txt", "latest.json", "state.json", "2026-11-18.csv"):
+    for f in ("summary.txt", "latest.json", "2026-11-18.csv"):
         assert oct((tmp_path / "out" / f).stat().st_mode & 0o777) == "0o640"
+    assert oct((tmp_path / "out" / "state.json").stat().st_mode & 0o777) == "0o600"     # device names: root only
 
 
 def test_missing_dnslock_table_is_skipped(tmp_path):
@@ -258,7 +260,8 @@ BOX = "100.64.0.1"
 
 
 def ts_raw(online=("phone", "laptop", "tablet")):
-    mk = lambda h, os_, ips: {"HostName": h, "OS": os_, "Online": h in online, "TailscaleIPs": ips}
+    mk = lambda h, os_, ips: {"HostName": h, "OS": os_, "Online": h in online, "TailscaleIPs": ips,
+                              "DNSName": f"{h}-tailnet-name.example.ts.net."}
     return {"Self": {"HostName": "box", "TailscaleIPs": [BOX]},
             "Peer": {"a": mk("phone", "android", [PH, PH6]), "b": mk("laptop", "linux", [LAP]), "c": mk("tablet", "android", [TAB])}}
 
@@ -313,11 +316,12 @@ def test_verdicts_pass_fail_nolookup_fail_bypass_and_not_routed(tmp_path, monkey
     assert d["phone"]["verdict"] == "PASS"
     assert d["laptop"]["verdict"] == "FAIL" and "bypass" in d["laptop"]["reason"]
     assert d["tablet"]["verdict"] == "NOT-ROUTED"
-    assert "dns-leak-watch: laptop FAIL" in sent and "dns-leak-watch: tablet NOT-ROUTED" in sent
+    assert f"dns-leak-watch: {T('laptop')} FAIL" in sent and f"dns-leak-watch: {T('tablet')} NOT-ROUTED" in sent
     assert not any("phone PASS" in s for s in sent)                                   # a first PASS is not pushed
     assert not any("QUARANTINED" in s for s in sent)                                 # QUARANTINE=no by default
     j = json.loads((tmp_path / "out/latest.json").read_text())
-    assert j["devices"]["laptop"]["verdict"] == "FAIL" and PH not in json.dumps(j["devices"])
+    assert j["devices"][T("laptop")]["verdict"] == "FAIL" and PH not in json.dumps(j["devices"])
+    assert "laptop" not in json.dumps(j) and "laptop" not in (tmp_path / "out/summary.txt").read_text()   # tags only
     assert PH not in (tmp_path / "out/state.json").read_text()                       # addresses only in root-state
     assert PH in (tmp_path / "out/root-state.json").read_text()
     assert oct((tmp_path / "out/root-state.json").stat().st_mode & 0o777) == "0o600"
@@ -355,7 +359,7 @@ def test_quarantine_after_grace_then_release_on_pass(tmp_path):
     nft = Nft()
     sent, st = drive(tmp_path, c, _fail_passes(2), nft)
     assert st["devices"]["tablet"]["quarantined"] is True
-    assert ("add", (TAB,)) in nft.ops and "dns-leak-watch: QUARANTINED tablet" in sent
+    assert ("add", (TAB,)) in nft.ops and f"dns-leak-watch: QUARANTINED {T('tablet')}" in sent
     # it recovers: traffic with lookups for a full window
     log = tmp_path / "pihole.log"
     dl.push = lambda *a, **k: sent.append(a[1])
@@ -366,7 +370,7 @@ def test_quarantine_after_grace_then_release_on_pass(tmp_path):
                nft=nft, local={BOX})
     st = json.loads((tmp_path / "out/state.json").read_text())
     assert st["devices"]["tablet"]["quarantined"] is False and ("delete", (TAB,)) in nft.ops
-    assert "dns-leak-watch: released tablet (auto)" in sent
+    assert f"dns-leak-watch: released {T('tablet')} (auto)" in sent
 
 
 def test_never_quarantines_this_host_proxies_or_exempt(tmp_path):
@@ -419,18 +423,20 @@ def test_vendored_device_script_is_unchanged():
 
 
 # ---- OFF-TUNNEL episodes, the captive-portal hold and its releases ------------------------------------------------
-def captive_run(tmp_path, c, script, approver=None):
+def captive_run(tmp_path, c, script, approver=None, whois=None, between=None):
     """script: list of (minute, phone_online, phone_cnt or None, lookups). Returns (pushes, final state)."""
     log = tmp_path / "pihole.log"; log.write_text("")
     pushes, nft = [], Nft()
     dl.push = lambda c_, t_, m_, p_=3, tp_="": pushes.append((t_, p_, tp_))
     for m, online, cnt, lookups in script:
+        if between and m in between:
+            between[m]()
         if lookups:
             with open(log, "a") as fh:
                 fh.write(f"x query[A] a.example.test from {PH}\n")
         el = [(PH, "198.51.100.7", "tcp", 443, cnt)] if cnt is not None else []
         dl.run(c, now=NOW + m * 60, elements=el, counters={}, ts_raw=ts_raw(("phone",) if online else ()),
-               nft=nft, local={BOX}, approver=approver)
+               nft=nft, local={BOX}, approver=approver, whois=whois)
     return pushes, json.loads((tmp_path / "out/state.json").read_text()), nft
 
 
@@ -448,7 +454,7 @@ def test_offline_episode_alerts_p5_once_then_holds_on_return(tmp_path):
     pushes, st, nft = captive_run(tmp_path, cconf(tmp_path), OFFLINE_5)
     p5 = [p for p in pushes if "off the tunnel" in p[0]]
     assert len(p5) == 1 and p5[0][1] == 5 and p5[0][2] == "hot-alerts" and "captive portal?" in p5[0][0]
-    held = [p for p in pushes if p[0].startswith("dns-leak-watch: HELD phone")]
+    held = [p for p in pushes if p[0].startswith(f"dns-leak-watch: HELD {T('phone')}")]
     assert len(held) == 1 and held[0][1] == 5
     assert st["devices"]["phone"]["captive_quarantine"] is True and ("add", (PH, PH6)) in nft.ops
     assert PH not in (tmp_path / "out/state.json").read_text()
@@ -477,7 +483,7 @@ def test_signed_release_lifts_the_hold_at_once(tmp_path):
                                   OFFLINE_5 + [(21, True, 8, True)], approver)
     assert st["devices"]["phone"]["captive_quarantine"] is False
     assert st["devices"]["phone"]["last_release"]["how"] == "signed" and ("delete", (PH, PH6)) in nft.ops
-    assert any(p[0] == "dns-leak-watch: released phone (signed)" for p in pushes)
+    assert any(p[0] == f"dns-leak-watch: released {T('phone')} (signed)" for p in pushes)
     assert calls[0][:5] == ["runuser", "-u", "op", "--", "/usr/local/bin/gate"] and calls[0][5:8] == ["check", "--host", "phone"]
 
 
@@ -494,7 +500,7 @@ def test_auto_release_after_pass_and_minimum_hold(tmp_path):
     pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, CAPTIVE_MIN_HOLD_MIN="10"), script)
     d = st["devices"]["phone"]
     assert d["captive_quarantine"] is False and d["last_release"]["how"] == "auto"
-    assert any(p[0] == "dns-leak-watch: released phone (auto)" for p in pushes)
+    assert any(p[0] == f"dns-leak-watch: released {T('phone')} (auto)" for p in pushes)
 
 
 def test_still_held_before_the_minimum_hold(tmp_path):
@@ -614,9 +620,9 @@ def test_direct_dns_is_attributed_learned_and_blocked_unless_local_or_shared(tmp
     assert added == ["203.0.113.53"]                                                  # LAN and shared: never blocked
     assert lr["203.0.113.53"]["block"] and lr["203.0.113.53"]["hosts"] == ["phone"] and lr["203.0.113.53"]["via"] == ["udp/53"]
     assert not lr["192.168.x.x"]["block"] and lr["203.0.113.99"]["shared"] == ["www.shop.example"]
-    assert len(sent) == 1 and "3 hard-coded resolver(s) learned" in sent[0][0] and "203.0.113.53 via udp/53 from phone BLOCKED" in sent[0][1]
+    assert len(sent) == 1 and "3 hard-coded resolver(s) learned" in sent[0][0] and f"203.0.113.53 via udp/53 from {T('phone')} BLOCKED" in sent[0][1]
     s = (tmp_path / "out/summary.txt").read_text()
-    assert "== DNS SENT STRAIGHT TO AN OUTSIDE RESOLVER" in s and "from phone 40" in s
+    assert "== DNS SENT STRAIGHT TO AN OUTSIDE RESOLVER" in s and f"from {T('phone')} 40" in s
     j = json.loads((tmp_path / "out/latest.json").read_text())
     assert j["dns_destinations"][0]["dest"] == "203.0.113.53" and j["learned_resolvers"] == 3 and j["enforce"]["block"]
     run(6, [(PH, "203.0.113.53", "udp", 53, 55)])
@@ -693,13 +699,13 @@ def test_refresh_merges_known_and_learned_and_keeps_the_blocklist_safe(tmp_path)
     table = {"doh.txt": f"203.0.113.53\n203.0.113.54\n{RELAY}\n10.0.0.0\n", "extra.txt": "203.0.113.53\n2001:db8::53\n",
              "domains.txt": "*.resolver.example\n", "ts.txt": f"{RELAY}\n", "derpmap": DERP}
     loads = []
-    dl.time.time = lambda: NOW
+    real_time = dl.time.time                    # 2026-11-28: was restored from the patched attribute, so the clock stayed
+    dl.time.time = lambda: NOW                  # frozen for every later test
     try:
         rc = dl.refresh_resolvers(c, fetch=fetcher(table), iface="end0", prober=lambda n: 'ech="AEn+DQ"' if n == "chat.example" else "",
                                   loader=lambda: loads.append(1) or False)
     finally:
-        import time as _t
-        dl.time.time = _t.time
+        dl.time.time = real_time
     assert rc == 0
     lst = (tmp_path / "resolvers.txt").read_text().splitlines()
     assert {"203.0.113.53/32", "2001:db8::53/128", "203.0.113.80/32", "203.0.113.90/32"} <= set(lst)
@@ -735,3 +741,99 @@ def test_lockdown_check_tries_the_bypasses():
     for probe in ("/dev/tcp/1.1.1.1/853", "https://1.1.1.1/dns-query", "https://8.8.8.8/resolve", "kdig +quic"):
         assert probe in s
     assert "Nine checks" in s and "SKIP" in s
+
+
+# -- 2026-11-28: the Pixel stayed held after a valid signed release filed under its tailnet name -------------------
+GATE = {"RELEASE_APPROVAL_CMD": "/usr/local/bin/gate", "RELEASE_APPROVAL_USER": "op"}
+MKEY = "mkey:" + "c3" * 32
+
+
+def test_a_signed_release_is_matched_by_the_machine_key(tmp_path):
+    calls = []
+    def approver(cmd):
+        calls.append(cmd)
+        return "ok capt0002\n" if cmd[-2:] == ["--machine", MKEY] and len(calls) > 1 else "none\n"
+    pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, **GATE), OFFLINE_5 + [(21, True, 8, True)], approver,
+                                  whois=lambda addr: MKEY if addr == PH else "")
+    assert st["devices"]["phone"]["last_release"]["how"] == "signed" and ("delete", (PH, PH6)) in nft.ops
+    assert MKEY not in (tmp_path / "out/latest.json").read_text()                  # the key stays in root state
+
+
+def test_a_release_filed_under_the_tailnet_name_counts(tmp_path):
+    def approver(cmd):
+        return "ok capt0003\n" if cmd[7] == "phone-tailnet-name" else "none\n"
+    pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, **GATE), OFFLINE_5 + [(21, True, 8, True)], approver)
+    assert st["devices"]["phone"]["captive_quarantine"] is False and ("delete", (PH, PH6)) in nft.ops
+
+
+def test_a_signed_release_lifts_a_quarantine_too_and_starts_the_grace(tmp_path):
+    sp = tmp_path / "out/state.json"
+    def quarantine():
+        st = json.loads(sp.read_text())
+        st["devices"]["phone"].update(quarantined=True, fail_since=NOW)
+        sp.write_text(json.dumps(st))
+    ok = {"n": 0}
+    def approver(cmd):
+        ok["n"] += 1
+        return "ok capt0004\n" if ok["n"] > 2 else "none\n"
+    pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, **GATE), OFFLINE_5 + [(21, True, 8, True), (24, True, 9, True)],
+                                  approver, between={21: quarantine})
+    d = st["devices"]["phone"]
+    assert not d["captive_quarantine"] and not d["quarantined"] and "fail_since" not in d
+    assert d["grace_until"] >= NOW + 21 * 60 + 30 * 60 - 1 and ("delete", (PH, PH6)) in nft.ops
+
+
+def test_released_while_off_the_tunnel_it_is_not_held_again_on_return(tmp_path):
+    c = cconf(tmp_path)
+    script = OFFLINE_5 + [(21, False, None, False), (24, False, None, False), (27, False, None, False),
+                          (30, False, None, False), (33, True, 9, True)]
+    rel = lambda: dl.release(c, "phone", nft=Nft())
+    pushes, st, _ = captive_run(tmp_path, c, script, between={24: rel})
+    held = [p for p in pushes if "HELD" in p[0]]
+    assert len(held) == 1                                                          # the first hold only
+    assert any("not held again" in p[0] or "back on the tunnel" in p[0] for p in pushes)
+    assert not st["devices"]["phone"].get("captive_quarantine")
+
+
+def test_manual_release_by_tag_or_either_name_and_a_miss_lists_tags_only(tmp_path, capsys):
+    c = cconf(tmp_path)
+    for name in ("phone", "phone-tailnet-name", T("phone"), "PHONE"):
+        captive_run(tmp_path, c, OFFLINE_5 if name == "phone" else [(30 + len(name), False, None, False)])
+        st = json.loads((tmp_path / "out/state.json").read_text())
+        st["devices"]["phone"]["captive_quarantine"] = True
+        (tmp_path / "out/state.json").write_text(json.dumps(st))
+        assert dl.release(c, name, nft=Nft()) == 0, name
+    capsys.readouterr()
+    st = json.loads((tmp_path / "out/state.json").read_text())
+    st["devices"]["phone"]["captive_quarantine"] = True
+    (tmp_path / "out/state.json").write_text(json.dumps(st))
+    assert dl.release(c, "phone-renamed-in-console", nft=Nft()) == 1
+    out = capsys.readouterr().out
+    assert "no held device by that name" in out and T("phone") in out and "phone" not in out.replace(T("phone"), "")
+
+
+def test_exempt_by_the_tailnet_name(tmp_path):
+    pushes, st, nft = captive_run(tmp_path, cconf(tmp_path, QUARANTINE_EXEMPT="phone-tailnet-name"), OFFLINE_5)
+    assert st["devices"]["phone"]["exempt"] and not st["devices"]["phone"].get("captive_quarantine") and not nft.ops
+
+
+def test_tags_are_keyed_and_stable(tmp_path):
+    k1, k2 = bytes(range(32)), bytes(range(1, 33))
+    assert dl.tag_of("Phone", k1) == dl.tag_of("phone", k1) != dl.tag_of("phone", k2)
+    assert re.fullmatch(r"dev-[0-9a-f]{10}", dl.tag_of("phone", k1))
+    c = cconf(tmp_path, TAG_KEY_FILE=str(tmp_path / "k"))
+    assert dl.load_tag_key(c) == b"" if os.geteuid() != 0 else True                # only root makes the key
+    (tmp_path / "k").write_text(k1.hex())
+    assert dl.load_tag_key(c) == k1
+
+
+def test_status_lists_held_devices_by_tag_only(tmp_path, capsys):
+    c = cconf(tmp_path)
+    captive_run(tmp_path, c, OFFLINE_5)
+    (tmp_path / "dnsleak.conf").write_text("\n".join(f"{k}={v}" for k, v in {"CLIENTS": "", "TAILNET": "yes",
+        "OUT_DIR": str(tmp_path / "out"), "PIHOLE_LOG": str(tmp_path / "pihole.log"), "IFACE": "tailscale0",
+        "ALWAYS_ON_HOSTS": "phone"}.items()) + "\n")
+    capsys.readouterr()
+    assert dl.main(["status", "--conf", str(tmp_path / "dnsleak.conf")]) == 0
+    out = capsys.readouterr().out
+    assert f"held: {T('phone')} (captive)" in out and "phone" not in out.replace(T("phone"), "")

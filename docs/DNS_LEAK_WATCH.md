@@ -233,6 +233,31 @@ governance code. To release a held device, from the operator account:
 The request waits 10 minutes for the signature. An agent can make a request, but only a human approval key can sign
 one.
 
+**Which device a release is for (2026-11-28).** A device has two names on the tailnet: its **host name** (what the
+device reports, the name the leak watch used) and its **tailnet name** (the first label of its MagicDNS name, set in
+the admin console). On 2026-11-28 a phone's release was filed under its tailnet name. It was signed and valid, but it
+lifted nothing, and the phone stayed held. Now:
+
+- **`request --host` takes either name.** The gate finds the device on the live tailnet and binds the request to its
+  **Tailscale machine key**, which stays the same through renames and re-authentication. The signed command carries
+  the host name, the machine key and the tag.
+- **`check` matches by machine key**, whatever name the release was filed under. The root run passes `--machine`.
+- **The gate refuses** a name that is no tailnet device, or a device the leak watch is not holding. The refusal names
+  the held devices by tag only.
+- **A signed release lifts every hold on that device** (a captive-portal hold and a quarantine), clears its
+  off-tunnel episode, and starts a **grace** (`RELEASE_GRACE_MIN`, default 30): no new hold on its return and no FAIL
+  quarantine for that long. A release made while the device is still off the tunnel no longer holds it again the
+  moment it comes back.
+- **`apply.sh release` takes a name, the tailnet name, or the tag.** With no match it lists the held devices by tag.
+  `apply.sh status` lists them too (`held: dev-… (captive)`).
+
+**Device tags.** Every push, `summary.txt`, `latest.json`, `apply.sh status` and the gate's replies name a device only
+as `dev-<10 hex>`: an HMAC of its host name under `TAG_KEY_FILE` (made once by the root run, 0640 root:`READ_GROUP`).
+Nobody can read a device's name off a held-devices screen, or shoulder-surf it, or guess a name by hashing likely
+ones. The real names stay in root-only files (`state.json` and `root-state.json`, both 0600). The audit trail keeps
+all three in the signed approval. The DNS anomaly watch's `DNS_BYPASS_HOST` takes the tag. Given a plain name, it
+logs a hint and checks every device rather than none.
+
 ### On-device check (`DEVICE_SSH_CHECK=yes`, Linux peers)
 
 **Off by default.** When on, each Linux peer's evaluation window also runs the vendored, unchanged

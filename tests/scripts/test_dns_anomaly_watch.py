@@ -125,14 +125,24 @@ def test_bypass_host_filter_for_a_tailnet_wide_collector(monkeypatch, tmp_path):
     m, sent, cfg = _setup(monkeypatch, tmp_path, _doc([]))
     state = {"last_marker_ts": {}, "bypass_alerted": []}
     mine, other = _f("dot", "203.0.113.4", 853, NOW - 30), _f("dot", "203.0.113.5", 853, NOW - 30)
-    mine["host"], other["host"] = "driver-phone", "laptop"
+    mine["host"], other["host"] = "dev-0123456789", "dev-abcdefabcd"      # the collector sends tags, never names
     (tmp_path / "latest.json").write_text(_json.dumps(_doc([mine, other])))
-    got = m.bypass_pass({**cfg, "DNS_BYPASS_HOST": "driver-phone"}, state, NOW, CLIENT, [])
+    got = m.bypass_pass({**cfg, "DNS_BYPASS_HOST": "dev-0123456789"}, state, NOW, CLIENT, [])
     assert [f["dest"] for f in got] == ["203.0.113.4"] and "203.0.113.5" not in sent[0][2]
     state2 = {"last_marker_ts": {}, "bypass_alerted": []}
     sent.clear()
     m.bypass_pass(cfg, state2, NOW, CLIENT, [])
-    assert "from laptop" in sent[0][2] and "from driver-phone" in sent[0][2]
+    assert "from dev-abcdefabcd" in sent[0][2] and "from dev-0123456789" in sent[0][2]
+
+
+def test_a_device_name_in_bypass_host_fails_open_to_every_device(monkeypatch, tmp_path, capsys):
+    m, sent, cfg = _setup(monkeypatch, tmp_path, _doc([]))
+    a, b = _f("dot", "203.0.113.4", 853, NOW - 30), _f("dot", "203.0.113.5", 853, NOW - 30)
+    a["host"], b["host"] = "dev-0123456789", "dev-abcdefabcd"
+    (tmp_path / "latest.json").write_text(_json.dumps(_doc([a, b])))
+    got = m.bypass_pass({**cfg, "DNS_BYPASS_HOST": "driver-phone"}, {"last_marker_ts": {}, "bypass_alerted": []},
+                        NOW, CLIENT, [])
+    assert len(got) == 2 and "set it to the device's tag" in capsys.readouterr().out   # more alerts, never fewer
 
 
 def test_a_bypass_attempt_the_forward_defense_blocked_is_priority_3_and_says_so(monkeypatch, tmp_path):

@@ -26,8 +26,33 @@ def _key(tmp_path, name):
     return str(k), (tmp_path / f"{name}.pub").read_text().strip()
 
 
+MK = "mkey:" + "a1" * 32
+MK2 = "mkey:" + "b2" * 32
+KEY = bytes(range(32))
+TAILNET = {"Peer": {
+    "n1": {"HostName": "laptop1", "DNSName": "laptop1-tailnet-name.example.ts.net.", "TailscaleIPs": ["100.64.0.11"]},
+    "n2": {"HostName": "phone2", "DNSName": "phone2.example.ts.net.", "TailscaleIPs": ["100.64.0.12"]}}}
+
+
+def fake_tailnet(cmd):
+    if cmd[:2] == ["tailscale", "status"]:
+        return json.dumps(TAILNET)
+    return json.dumps({"Node": {"Machine": MK if cmd[-1] == "100.64.0.11" else MK2}})
+
+
+def held_latest(path, *names):
+    """A leak-watch latest.json holding NAMES (by tag, as the real one does)."""
+    t = lambda n: gate_mod.tag_of(n, KEY)
+    path.write_text(json.dumps({"devices": {t(n): {"captive_quarantine": True, "match": [t(n)]} for n in names}}))
+
+
 @pytest.fixture
-def gate(tmp_path):
+def gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate_mod, "_run", fake_tailnet)
+    (tmp_path / "tag.key").write_text(KEY.hex() + "\n")
+    monkeypatch.setattr(gate_mod, "TAG_KEY", tmp_path / "tag.key")
+    monkeypatch.setattr(gate_mod, "LEAK_LATEST", tmp_path / "latest.json")
+    held_latest(tmp_path / "latest.json", "laptop1", "phone2")
     db.init_db()
     gov._ensure_approvals()
     with db.conn() as c:
@@ -151,3 +176,51 @@ def test_cli(gate, capsys):
     _resolve(gate, rid)
     assert gate_mod.main(["check", "--host", "laptop1", "--since", "0"]) == 0
     assert capsys.readouterr().out.strip() == f"ok {rid}"
+
+
+# -- 2026-11-28: either name, bound to the machine key, refused unless held, tags only -----------------------------
+def test_a_request_by_the_tailnet_name_is_bound_to_the_device_and_its_machine_key(gate):
+    r = gate_mod.request("laptop1-tailnet-name", "overnight update")
+    row = _row(r["id"])
+    cmd = json.loads(row["command"])
+    assert row["command_pattern"] == "captive-portal-release-laptop1" and cmd["host"] == "laptop1"
+    assert cmd["machine"] == MK and cmd["tag"] == r["tag"] == gate_mod.tag_of("laptop1", KEY)
+    assert "laptop1" not in row["reasoning"] and r["tag"] in row["reasoning"]       # the audit text names the tag
+
+
+def test_a_name_that_is_no_tailnet_device_or_not_held_is_refused_naming_tags_only(gate, tmp_path):
+    with pytest.raises(ValueError, match="no tailnet device by that name"):
+        gate_mod.request("phone-renamed-in-console", "x")
+    held_latest(tmp_path / "latest.json", "phone2")
+    with pytest.raises(ValueError) as e:
+        gate_mod.request("laptop1", "x")
+    assert "not held" in str(e.value) and gate_mod.tag_of("phone2", KEY) in str(e.value)
+    assert "phone2" not in str(e.value) and "laptop1" not in str(e.value)
+
+
+def test_an_unreadable_held_list_still_requests_but_says_so(gate, tmp_path):
+    (tmp_path / "latest.json").unlink()
+    r = gate_mod.request("laptop1", "x")
+    assert r["new"] and "not confirmed" in r["note"]
+
+
+def test_check_by_machine_key_matches_whatever_name_it_was_filed_under(gate):
+    since = time.time() - 60
+    rid = gate_mod.request("laptop1-tailnet-name", "portal")["id"]
+    _resolve(gate, rid)
+    assert gate_mod.check("some-other-name", since, machine=MK)[0]["id"] == rid      # the key, not the name
+    assert gate_mod.check("laptop1", since, machine=MK2)[0] is None                  # another machine
+    assert gate_mod.check("laptop1", since, machine="mkey:nothex")[1] == "bad machine key"
+
+
+def test_the_gate_and_the_leak_watch_compute_the_same_tag():
+    spec = importlib.util.spec_from_file_location("dlw_tag", ROOT / "config/dns-leak-watch/dns_leak_watch.py")
+    dl = importlib.util.module_from_spec(spec); spec.loader.exec_module(dl)
+    for n in ("office-pc", "Laptop1", "phone-2"):
+        assert dl.tag_of(n, KEY) == gate_mod.tag_of(n, KEY) and dl.tag_of(n, b"") == gate_mod.tag_of(n, None)
+
+
+def test_cli_shows_the_tag_never_the_name(gate, capsys):
+    assert gate_mod.main(["request", "--host", "laptop1-tailnet-name", "--reason", "portal"]) == 0
+    out = capsys.readouterr().out
+    assert gate_mod.tag_of("laptop1", KEY) in out and "laptop1" not in out

@@ -64,8 +64,8 @@ HARD = ("hardcoded", "other-client", "cached-stale")
 CONTEXT = ("infra",)               # known infrastructure (Tailscale relays): never a finding, listed for context
 KEYS = {"CLIENTS", "TAILNET", "PROXY_CLIENTS", "IFACE", "CHECK_WINDOW_MIN", "QUARANTINE", "QUARANTINE_GRACE_MIN",
         "DEVICE_SSH_CHECK", "DEVICE_SSH_USER", "QUARANTINE_EXEMPT",
-        "ALWAYS_ON_HOSTS", "ROUTED_RECENT_MIN", "OFF_TUNNEL_ALERT_MIN", "NTFY_P5_TOPICS", "CAPTIVE_MIN_HOLD_MIN",
-        "RELEASE_APPROVAL_CMD", "RELEASE_APPROVAL_USER", "PIHOLE_LOG", "OUT_DIR", "READ_GROUP", "SET_TIMEOUT", "INDEX_HOURS", "RDNS",
+        "ALWAYS_ON_HOSTS", "ROUTED_RECENT_MIN", "OFF_TUNNEL_ALERT_MIN", "NTFY_P5_TOPICS", "CAPTIVE_MIN_HOLD_MIN", "RELEASE_GRACE_MIN",
+        "RELEASE_APPROVAL_CMD", "RELEASE_APPROVAL_USER", "TAG_KEY_FILE", "PIHOLE_LOG", "OUT_DIR", "READ_GROUP", "SET_TIMEOUT", "INDEX_HOURS", "RDNS",
         "RESOLVER_LIST", "RESOLVER_LIST_URL", "RESOLVER_EXTRA_URLS", "RESOLVER_DOMAINS_URL", "RESOLVER_MIN",
         "INFRA_LIST", "INFRA_URL", "INFRA_CHECK_URL", "INFRA_SEED", "LEARNED_DAYS", "BLOCK", "ECH_NAMES", "ECH_PROBE_MAX", "METERED_IFACES", "DNSLOCK_COUNTER", "NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN_FILE"}
 DEFAULTS = {"PIHOLE_LOG": "/var/log/pihole/pihole.log", "OUT_DIR": "/var/lib/ctdc-dnsleak", "READ_GROUP": "root",
@@ -86,7 +86,7 @@ DEFAULTS = {"PIHOLE_LOG": "/var/log/pihole/pihole.log", "OUT_DIR": "/var/lib/ctd
             "TAILNET": "no", "CHECK_WINDOW_MIN": "10", "QUARANTINE": "no", "QUARANTINE_GRACE_MIN": "5", "QUARANTINE_EXEMPT": "",
             "DEVICE_SSH_CHECK": "no", "DEVICE_SSH_USER": "",
             "ALWAYS_ON_HOSTS": "", "ROUTED_RECENT_MIN": "30", "OFF_TUNNEL_ALERT_MIN": "5", "NTFY_P5_TOPICS": "",
-            "CAPTIVE_MIN_HOLD_MIN": "10", "RELEASE_APPROVAL_CMD": "", "RELEASE_APPROVAL_USER": ""}
+            "CAPTIVE_MIN_HOLD_MIN": "10", "RELEASE_GRACE_MIN": "30", "TAG_KEY_FILE": "/var/lib/ctdc-dnsleak/hold-tag.key", "RELEASE_APPROVAL_CMD": "", "RELEASE_APPROVAL_USER": ""}
 # Tailscale's own address ranges: the only networks wider than 65536 addresses CLIENTS accepts (TAILNET=yes = both).
 TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
 ANS = re.compile(r"\b(?:reply|cached|cached-stale)\s+(\S+)\s+is\s+(\S+)")
@@ -153,7 +153,7 @@ def parse_conf(text: str) -> dict:
     c["PROXY_CLIENTS"] = proxies
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", c.get("IFACE", "")):
         raise ConfError("IFACE: an interface name is required (e.g. tailscale0, or the LAN interface)")
-    for k in ("PIHOLE_LOG", "OUT_DIR", "RESOLVER_LIST", "INFRA_LIST"):
+    for k in ("PIHOLE_LOG", "OUT_DIR", "RESOLVER_LIST", "INFRA_LIST", "TAG_KEY_FILE"):
         if not c[k].startswith("/") or ".." in c[k].split("/"):
             raise ConfError(f"{k}: an absolute path is required")
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", c["READ_GROUP"]):
@@ -175,7 +175,8 @@ def parse_conf(text: str) -> dict:
     if ao != ["*"] and any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", x) for x in ao):
         raise ConfError("ALWAYS_ON_HOSTS: host names, comma-separated, or * for every peer")
     c["ALWAYS_ON_HOSTS"] = ao
-    for k, lo, hi in (("ROUTED_RECENT_MIN", 1, 1440), ("OFF_TUNNEL_ALERT_MIN", 1, 1440), ("CAPTIVE_MIN_HOLD_MIN", 0, 1440)):
+    for k, lo, hi in (("ROUTED_RECENT_MIN", 1, 1440), ("OFF_TUNNEL_ALERT_MIN", 1, 1440), ("CAPTIVE_MIN_HOLD_MIN", 0, 1440),
+                      ("RELEASE_GRACE_MIN", 0, 1440)):
         if not re.fullmatch(r"\d{1,4}", c[k]) or not lo <= int(c[k]) <= hi:
             raise ConfError(f"{k}: {lo}-{hi}")
         c[k] = int(c[k])
@@ -694,7 +695,47 @@ def load_sets(c: dict, runner=None) -> int:
 # `apply.sh release HOST|--all`. Never this host, a PROXY_CLIENTS address, or a QUARANTINE_EXEMPT host.
 DEVICE_PUBLIC = {"verdict", "verdict_since", "reason", "online", "window_open", "quarantined", "quarantined_at",
                  "os", "device_check", "device_check_at", "exempt", "captive_quarantine", "captive_since",
-                 "off_tunnel", "last_release"}
+                 "off_tunnel", "last_release", "names", "grace_until"}
+
+
+# Device TAGS (2026-11-28, operator): every screen, push and report names a device only as dev-<10 hex>, an HMAC of its
+# host name under a secret key (TAG_KEY_FILE, root and the release user only), so a device name cannot be read off a
+# held-devices screen, shoulder-surfed, or guessed by hashing likely names (the key: root and READ_GROUP, beside the
+# reports; the release gate runs in that group). The names stay in root-only files; the
+# signed release carries the real name, its machine key and the tag (the audit has all three).
+_TAG_KEY = {"key": b""}
+
+
+def load_tag_key(c: dict) -> bytes:
+    """The tag key; root creates it once (32 random bytes, 0640 root:READ_GROUP)."""
+    p = Path(c["TAG_KEY_FILE"])
+    try:
+        k = bytes.fromhex(p.read_text().strip())
+        if len(k) >= 16:
+            return k
+    except (OSError, ValueError):
+        pass
+    if os.geteuid() != 0:
+        return b""
+    import secrets
+    k = secrets.token_bytes(32)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(k.hex() + "\n")
+    os.chmod(tmp, 0o640)
+    os.chown(tmp, 0, grp.getgrnam(c["READ_GROUP"]).gr_gid)
+    os.replace(tmp, p)
+    return k
+
+
+def tag_of(name: str, key: bytes | None = None) -> str:
+    """dev-<10 hex> for a device name (case-insensitive). Without a key, an unkeyed hash (still no name shown)."""
+    import hashlib
+    import hmac
+    k = _TAG_KEY["key"] if key is None else key
+    n = (name or "").strip().lower().encode()
+    h = hmac.new(k, n, "sha256").hexdigest() if k else hashlib.sha256(b"ctdc-dnsleak-tag\n" + n).hexdigest()
+    return "dev-" + h[:10]
 
 
 def tailscale_peers(c: dict, raw: dict | None = None):
@@ -713,14 +754,30 @@ def tailscale_peers(c: dict, raw: dict | None = None):
     for pe in (raw.get("Peer") or {}).values():
         addrs = [a for a in pe.get("TailscaleIPs") or [] if in_nets(a, c["CLIENTS"])]
         host = re.sub(r"[^A-Za-z0-9-]", "-", (pe.get("HostName") or "").strip())[:63]
+        alias = re.sub(r"[^A-Za-z0-9-]", "-", (pe.get("DNSName") or "").split(".")[0].strip())[:63]
         if addrs and host:
-            out.append({"host": host, "os": (pe.get("OS") or "").lower(), "online": bool(pe.get("Online")), "addrs": addrs})
+            out.append({"host": host, "os": (pe.get("OS") or "").lower(), "online": bool(pe.get("Online")), "addrs": addrs,
+                        "aliases": [alias] if alias and alias.lower() != host.lower() else []})
     return out, me
 
 
-def protected(host: str, addrs, c: dict, self_addrs, local=None) -> bool:
-    """Never quarantined: a QUARANTINE_EXEMPT host, this host's own addresses, PROXY_CLIENTS, loopback."""
-    if host in c["QUARANTINE_EXEMPT"]:
+def machine_key(addr: str, runner=None) -> str:
+    """The peer's Tailscale machine key (stable across re-authentication and renames), or ''."""
+    try:
+        if runner:
+            out = runner(["tailscale", "whois", "--json", addr])
+        else:
+            r = subprocess.run(["tailscale", "whois", "--json", addr], capture_output=True, text=True, timeout=20)
+            out = r.stdout if r.returncode == 0 else ""
+        return str((json.loads(out or "{}").get("Node") or {}).get("Machine") or "")
+    except Exception:
+        return ""
+
+
+def protected(host: str, addrs, c: dict, self_addrs, local=None, names=()) -> bool:
+    """Never quarantined: a QUARANTINE_EXEMPT host (by its host name or its tailnet name), this host's own addresses,
+    PROXY_CLIENTS, loopback."""
+    if host in c["QUARANTINE_EXEMPT"] or any(a in c["QUARANTINE_EXEMPT"] for a in names):
         return True
     local = local_addresses() if local is None else local
     for a in addrs:
@@ -740,7 +797,7 @@ def nft_quarantine(op: str, addrs) -> bool:
     return ok
 
 
-def signed_release(c: dict, host: str, since: float, runner=None) -> str:
+def signed_release(c: dict, host: str, since: float, runner=None, machine: str = "") -> str:
     """The id of a SIGNED captive-portal release for HOST resolved after SINCE, or "". RELEASE_APPROVAL_CMD is run as
     RELEASE_APPROVAL_USER (runuser; never root, never a shell) with `check --host HOST --since EPOCH`; only an exact
     "ok <id>" first line counts. The program must verify the human signature itself (this deployment:
@@ -748,7 +805,7 @@ def signed_release(c: dict, host: str, since: float, runner=None) -> str:
     if not c["RELEASE_APPROVAL_CMD"]:
         return ""
     cmd = ["runuser", "-u", c["RELEASE_APPROVAL_USER"], "--", c["RELEASE_APPROVAL_CMD"], "check", "--host", host,
-           "--since", str(int(since))]
+           "--since", str(int(since))] + (["--machine", machine] if re.fullmatch(r"mkey:[0-9a-f]{64}", machine) else [])
     try:
         if runner:
             out = runner(cmd)
@@ -790,6 +847,7 @@ def off_tunnel(c: dict, h: str, d: dict, r: dict, addrs, online: bool, fwd: int,
     QUARANTINE_EXEMPT. ALWAYS_ON_HOSTS=* means every peer; this host and PROXY_CLIENTS addresses are never watched
     for this at all; a QUARANTINE_EXEMPT host still gets the push but is never held. The P5 goes to every topic in
     NTFY_P5_TOPICS, once per episode."""
+    t = tag_of(h)
     if addr_protected or (c["ALWAYS_ON_HOSTS"] != ["*"] and h not in c["ALWAYS_ON_HOSTS"]):
         r.pop("episode", None)
         return
@@ -809,8 +867,8 @@ def off_tunnel(c: dict, h: str, d: dict, r: dict, addrs, online: bool, fwd: int,
                 d["off_tunnel"]["alerted"] = True
                 mins = int((now - ep["start"]) // 60)
                 for topic in c["NTFY_P5_TOPICS"]:
-                    notify(f"dns-leak-watch: {h} off the tunnel {mins}+ min (captive portal?)",
-                           f"{h} has not routed through this box for {mins} min ({'tailnet offline' if ep['kind'] == 'offline' else 'online but not using this exit node'}). "
+                    notify(f"dns-leak-watch: {t} off the tunnel {mins}+ min (captive portal?)",
+                           f"{t} has not routed through this box for {mins} min ({'tailnet offline' if ep['kind'] == 'offline' else 'online but not using this exit node'}). "
                            f"Its traffic is NOT protected meanwhile. When it returns it is held until a signed captive-portal "
                            f"release, or until it passes the connection check after {c['CAPTIVE_MIN_HOLD_MIN']} min.", 5,
                            topic)
@@ -822,19 +880,24 @@ def off_tunnel(c: dict, h: str, d: dict, r: dict, addrs, online: bool, fwd: int,
     if not ep["alerted"]:
         return                                                         # a short blip: nothing to do
     if d.get("exempt"):
-        notify(f"dns-leak-watch: {h} back on the tunnel", f"{h} is routed through this box again (exempt: not held).", 4)
+        notify(f"dns-leak-watch: {t} back on the tunnel", f"{t} is routed through this box again (exempt: not held).", 4)
+        return
+    if now < d.get("grace_until", 0):
+        notify(f"dns-leak-watch: {t} back on the tunnel", f"{t} is routed through this box again (released "
+               f"{int((now - d.get('last_release', {}).get('at', now)) // 60)} min ago: not held again).", 4)
         return
     if nft("add", addrs):
         d["captive_quarantine"], d["captive_since"] = True, now
-        notify(f"dns-leak-watch: HELD {h} (troublesome captive portal?)",
-               f"{h} is back after {int((now - ep['start']) // 60)} min off the tunnel. Forwarded traffic held; DNS to this "
+        notify(f"dns-leak-watch: HELD {t} (troublesome captive portal?)",
+               f"{t} is back after {int((now - ep['start']) // 60)} min off the tunnel. Forwarded traffic held; DNS to this "
                f"host and Tailscale keep working. Release: a signed captive-portal release, or automatically once it "
-               f"passes the connection check after {c['CAPTIVE_MIN_HOLD_MIN']} min, or: apply.sh release {h}", 5,
+               f"passes the connection check after {c['CAPTIVE_MIN_HOLD_MIN']} min, or: apply.sh release {t}", 5,
                c["NTFY_P5_TOPICS"][0])
 
 
 def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elements, pass_q: dict, classes: dict,
-                     now: float, first: bool, notify, nft=nft_quarantine, checker=None, local=None, approver=None):
+                     now: float, first: bool, notify, nft=nft_quarantine, checker=None, local=None, approver=None,
+                     whois=None):
     """One pass of the per-device connection check. elements: (src, dest, proto, port, cnt); classes:
     dest|proto|port -> class; pass_q: Pi-hole queries per client address in this pass. state['devices'] holds host
     names only; root['devices'] and root['elem_last'] hold the addresses (root-only file)."""
@@ -853,7 +916,13 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
         r = rdev.setdefault(h, {})
         r["addrs"] = addrs
         d["os"] = pe["os"]
-        d["exempt"] = protected(h, addrs, c, self_addrs, local)
+        d["names"] = pe.get("aliases") or []
+        d["tag"] = tag_of(h)
+        if addrs and (r.get("mk_addr") != addrs[0] or now - r.get("mk_at", 0) >= 3600):
+            mk = (whois or machine_key)(addrs[0])
+            if mk:
+                r["machine"], r["mk_addr"], r["mk_at"] = mk, addrs[0], now
+        d["exempt"] = protected(h, addrs, c, self_addrs, local, d["names"])
         fwd, byp, blk = 0, False, 0
         for a in addrs:
             for dest, proto, port, cnt in by_src.get(a, []):
@@ -921,26 +990,30 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
                 if not _held(d):
                     nft("delete", addrs)
                 d["last_release"] = {"at": now, "how": "auto", "why": "passed the connection check"}
-                notify(f"dns-leak-watch: released {h} (auto)", f"{h} passed the connection check; quarantine lifted.", 4)
+                notify(f"dns-leak-watch: released {d['tag']} (auto)", f"{d['tag']} passed the connection check; quarantine lifted.", 4)
         # Grace is checked on EVERY pass: a device whose last verdict was FAIL and whose current window still shows no
         # sign of passing (traffic with lookups and no bypass) is quarantined QUARANTINE_GRACE_MIN after its first FAIL.
         w = r["win"]
         still_failing = w["bypass"] or (w["fwd"] > 0 and w["q"] == 0) or w["fwd"] == 0
         if (c["QUARANTINE"] == "alert-then-quarantine" and d.get("verdict") == "FAIL" and still_failing
-                and not d.get("quarantined") and not d["exempt"] and "fail_since" in d
+                and not d.get("quarantined") and not d["exempt"] and "fail_since" in d and now >= d.get("grace_until", 0)
                 and now - d["fail_since"] >= c["QUARANTINE_GRACE_MIN"] * 60):
             if nft("add", addrs):
                 d["quarantined"], d["quarantined_at"] = True, now
-                notify(f"dns-leak-watch: QUARANTINED {h}", f"{h} still failing {c['QUARANTINE_GRACE_MIN']} min after its "
+                notify(f"dns-leak-watch: QUARANTINED {d['tag']}", f"{d['tag']} still failing {c['QUARANTINE_GRACE_MIN']} min after its "
                        f"first FAIL ({d.get('reason', '')}). Forwarded traffic dropped; DNS to this host and Tailscale keep "
-                       f"working. Released on its next PASS, or: apply.sh release {h}", 5)
+                       f"working. Released on its next PASS, or: apply.sh release {d['tag']}", 5)
     for h, d in devs.items():                                          # captive holds: signed or auto release
         if not d.get("captive_quarantine"):
             continue
         addrs = rdev.get(h, {}).get("addrs", [])
         since = d.get("captive_since", now)
         how = why = ""
-        aid = signed_release(c, h, since, approver)
+        aid = signed_release(c, h, since, approver, machine=rdev.get(h, {}).get("machine", ""))
+        for name in list(d.get("names") or []):                 # a release filed under the tailnet name counts too
+            if aid:
+                break
+            aid = signed_release(c, name, since, approver)
         if aid:
             how, why = "signed", f"signed captive-portal release {aid}"
         elif (d.get("verdict") == "PASS" and d.get("verdict_since", 0) >= since
@@ -948,15 +1021,26 @@ def evaluate_devices(c: dict, state: dict, root: dict, peers, self_addrs, elemen
             how, why = "auto", f"passed the connection check, held {int((now - since) // 60)} min"
         if how:
             d["captive_quarantine"] = False
+            if how == "signed":                                 # a human released THIS device: every hold on it goes
+                d["quarantined"] = False
+                d.pop("fail_since", None)
+                rdev.get(h, {}).pop("episode", None)
+                d.pop("off_tunnel", None)
+                d["grace_until"] = now + c["RELEASE_GRACE_MIN"] * 60
             if not _held(d):
                 nft("delete", addrs)
             d["last_release"] = {"at": now, "how": how, "why": why}
-            notify(f"dns-leak-watch: released {h} ({how})", f"{h}: captive-portal hold lifted: {why}.", 4)
+            left = " Still QUARANTINED (failing the connection check): it is held until it passes, or apply.sh release." \
+                if _held(d) else ""
+            t = d.get("tag") or tag_of(h)
+            notify(f"dns-leak-watch: released {t} ({how})" if not left else f"dns-leak-watch: {t} STILL HELD",
+                   f"{t}: captive-portal hold lifted: {why}.{left}", 4)
     for h, d in devs.items():                                          # re-assert after a table reload
         if _held(d) and rdev.get(h, {}).get("addrs"):
             nft("add", rdev[h]["addrs"])
     for h, verdict, reason, prev in events:
-        notify(f"dns-leak-watch: {h} {verdict}", f"{h}: {verdict} (was {prev or 'unchecked'}): {reason}.",
+        t = tag_of(h)
+        notify(f"dns-leak-watch: {t} {verdict}", f"{t}: {verdict} (was {prev or 'unchecked'}): {reason}.",
                4 if verdict != "PASS" else 3)
     return events
 
@@ -968,16 +1052,31 @@ def release(c: dict, host: str, nft=nft_quarantine) -> int:
         sp, rp = out / "state.json", out / "root-state.json"
         state = json.loads(sp.read_text()) if sp.exists() else {}
         root = json.loads(rp.read_text()) if rp.exists() else {}
-        hosts = [h for h, d in state.get("devices", {}).items() if _held(d) and host in ("--all", h)]
+        devs = state.get("devices", {})
+        _TAG_KEY["key"] = load_tag_key(c)
+        want = host.lower()
+        hosts = [h for h, d in devs.items() if _held(d) and (host == "--all" or want in
+                 (h.lower(), tag_of(h), *(n.lower() for n in d.get("names") or [])))]
+        now = time.time()
         for h in hosts:
             nft("delete", root.get("devices", {}).get(h, {}).get("addrs", []))
             d = state["devices"][h]
             d["quarantined"] = d["captive_quarantine"] = False
             d.pop("fail_since", None)                      # a new grace period starts from the next FAIL
+            d.pop("off_tunnel", None)
+            root.get("devices", {}).get(h, {}).pop("episode", None)   # a release while it is off the tunnel: not re-held
+            d["grace_until"] = now + c["RELEASE_GRACE_MIN"] * 60
             d["last_release"] = {"at": time.time(), "how": "manual", "why": "apply.sh release"}
-            push(c, f"dns-leak-watch: released {h} (manual)", f"{h}: quarantine lifted by apply.sh release.", 4)
-        _write_private(sp, json.dumps(state), grp.getgrnam(c["READ_GROUP"]).gr_gid)
-    print(f"dns-leak-watch: released {len(hosts)} device(s)" + ("" if hosts else f" (no quarantined device matches {host})"))
+            push(c, f"dns-leak-watch: released {tag_of(h)} (manual)", f"{tag_of(h)}: every hold lifted by apply.sh release.", 4)
+        _write_private(sp, json.dumps(state), 0, 0o600)
+        if hosts:                                          # root-only, 0600, like the run's own save
+            tmp = rp.with_suffix(".tmp")
+            tmp.write_text(json.dumps(root))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, rp)
+        held = sorted(tag_of(h) for h, d in devs.items() if _held(d))
+    print(f"dns-leak-watch: released {len(hosts)} device(s)" + (f": {', '.join(tag_of(h) for h in hosts)}" if hosts else
+          f" (no held device by that name; held now: {', '.join(held) or 'none'})"))
     return 0 if hosts or host == "--all" else 1
 
 
@@ -992,7 +1091,7 @@ def device_summary(state: dict, now: float) -> list:
         if d.get("off_tunnel"):
             extra += f" OFF-TUNNEL since {_ts(d['off_tunnel']['since'])}"
         extra = extra or (" (exempt)" if d.get("exempt") else "")
-        L.append(f"  {h:<28} {v:<11}{extra}  {d.get('reason', '')}")
+        L.append(f"  {d.get('tag') or tag_of(h):<16} {v:<11}{extra}  {d.get('reason', '')}")
         for line in d.get("device_check", [])[:8]:
             L.append(f"      on-device: {line}")
     return L + [""]
@@ -1039,7 +1138,7 @@ def latest_json(state: dict, c: dict, counters: dict, now: float, resolvers) -> 
         d, p, port = key.split("|")
         row = {"key": f"{v['class']}|{key}", "class": v["class"], "dest": d, "proto": p, "port": int(port),
                "first_seen": v["first"], "conns": v.get("conns", 0), "name": v.get("name", ""),
-               "later_name": v.get("later_name", ""), "rdns": v.get("rdns", ""), "host": v.get("host", ""),
+               "later_name": v.get("later_name", ""), "rdns": v.get("rdns", ""), "host": tag_of(v["host"]) if v.get("host") else "",
                "blocked": bool(v.get("blocked"))}
         (byp if v["class"] in BYPASS else hard).append(row)
     for lst in (hard, byp):
@@ -1052,10 +1151,12 @@ def latest_json(state: dict, c: dict, counters: dict, now: float, resolvers) -> 
             "infra": {"destinations": tot["infra"]["destinations"], "connections": tot["infra"]["connections"]},
             "learned_resolvers": state.get("learned_count", 0),
             "dns_destinations": sorted(({"dest": k.split("|")[0], "proto": k.split("|")[1], "port": int(k.split("|")[2]),
-                                         "conns": v["conns"], "hosts": v.get("hosts", {}), "first_seen": v["first"]}
+                                         "conns": v["conns"], "hosts": {tag_of(h): n for h, n in v.get("hosts", {}).items()}, "first_seen": v["first"]}
                                         for k, v in state.get("dnsdst", {}).items()), key=lambda r: -r["conns"])[:200],
             "counters": counters, "classes": tot,
-            "devices": {h: {k: v for k, v in d.items() if k in DEVICE_PUBLIC} for h, d in state.get("devices", {}).items()},
+            "devices": {tag_of(h): {**{k: v for k, v in d.items() if k in DEVICE_PUBLIC and k not in ("names", "tag")},
+                                    "match": [tag_of(n) for n in [h, *(d.get("names") or [])]]}
+                        for h, d in state.get("devices", {}).items()},
             "shared_address": sum(1 for v in state.get("seen", {}).values() if v.get("shared")),
             "proxy_clients": [str(n) for n in c["PROXY_CLIENTS"]],
             "hardcoded": {"destinations": tot["hardcoded"]["destinations"], "connections": tot["hardcoded"]["connections"],
@@ -1117,7 +1218,7 @@ def dnsdst_summary(state: dict) -> list:
          " Pi-hole anyway, 853/8853 rejected when BLOCK=yes)"]
     for k, v in sorted(d.items(), key=lambda kv: -kv[1]["conns"])[:40]:
         dest, p_, port = k.split("|")
-        hosts = ", ".join(f"{h} {n}" for h, n in sorted(v.get("hosts", {}).items(), key=lambda kv: -kv[1])[:4])
+        hosts = ", ".join(f"{tag_of(h)} {n}" for h, n in sorted(v.get("hosts", {}).items(), key=lambda kv: -kv[1])[:4])
         L.append(f"  {v['conns']:6d}  {_ts(v['first'])}  {p_}/{port:<5} {dest:<40} from {hosts}")
     return L + [""]
 
@@ -1146,28 +1247,32 @@ def _own(path: Path, gid: int):
         os.chown(path, 0, gid)
 
 
-def _write_private(path: Path, text: str, gid: int):
+def _write_private(path: Path, text: str, gid: int, mode: int = 0o640):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text)
-    os.chmod(tmp, 0o640)
+    os.chmod(tmp, mode)
     _own(tmp, gid)
     os.replace(tmp, path)
 
 
 def run(c: dict, now: float | None = None, elements=None, counters=None, resolvers="load", ts_raw=None,
-        nft=nft_quarantine, checker=None, local=None, approver=None, dnsdst=None, adder=None) -> dict:
+        nft=nft_quarantine, checker=None, local=None, approver=None, dnsdst=None, adder=None, whois=None) -> dict:
     now = now or time.time()
     with _locked(Path(c["OUT_DIR"])):
-        return _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst, adder)
+        return _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst, adder, whois)
 
 
-def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst=None, adder=None) -> dict:
+def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, approver, dnsdst=None, adder=None,
+         whois=None) -> dict:
+    if whois is None and ts_raw is not None:               # a supplied tailnet (tests): no live whois either
+        whois = lambda addr: ""
     out = Path(c["OUT_DIR"])
     out.mkdir(parents=True, exist_ok=True)
     gid = grp.getgrnam(c["READ_GROUP"]).gr_gid
     os.chmod(out, 0o750)
     _own(out, gid)
-    sp = out / "state.json"
+    _TAG_KEY["key"] = load_tag_key(c)
+    sp = out / "state.json"                                # device names: root only, 0600 (2026-11-28)
     state = json.loads(sp.read_text()) if sp.exists() else {}
     rp = out / "root-state.json"                           # device addresses and the Pi-hole index: root only, 0600
     root = json.loads(rp.read_text()) if rp.exists() else {}
@@ -1231,7 +1336,7 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
             learned[a]["blocked_live"] = bool(ok)
     if direct and not first:                               # forwarded ones are DNS anomaly watch's to alert on
         push(c, f"dns-leak-watch: {len(direct)} hard-coded resolver(s) learned",
-             "; ".join(f"{a} via {','.join(learned[a]['via'])}" + (f" from {','.join(learned[a]['hosts'][:3])}" if learned[a]["hosts"] else "")
+             "; ".join(f"{a} via {','.join(learned[a]['via'])}" + (f" from {','.join(tag_of(h) for h in learned[a]['hosts'][:3])}" if learned[a]["hosts"] else "")
                        + (" BLOCKED" if a in to_block else (" (shared address: not blocked)" if learned[a]["shared"] else ""))
                        for a in direct[:6]) + f". {out}/summary.txt", 3)
     _write_private(lp, json.dumps(learned, indent=1), gid)
@@ -1239,7 +1344,7 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
     if peers is not None:
         classes = {k: ("blocked" if v.get("blocked") else v["class"]) for k, v in state.get("seen", {}).items()}
         evaluate_devices(c, state, root, peers, self_addrs, elements, idx.pass_q, classes, now, first,
-                         lambda ti, m, pr=3, tp="": push(c, ti, m, pr, tp), nft, checker, local, approver)
+                         lambda ti, m, pr=3, tp="": push(c, ti, m, pr, tp), nft, checker, local, approver, whois)
     if c["RDNS"] == "yes":
         for cls, d, p, port, _ in [n for n in new if n[0] in BYPASS + ("hardcoded", "other-client")][:20]:
             state["seen"][f"{d}|{p}|{port}"]["rdns"] = rdns(d)
@@ -1278,7 +1383,7 @@ def _run(c, now, elements, counters, resolvers, ts_raw, nft, checker, local, app
     state["ech_names"] = sorted(load_names(Path(c["OUT_DIR"]) / "ech-names.txt"))
     _write_private(out / "summary.txt", summary_text(state, counters, now, resolvers), gid)
     _write_private(out / "latest.json", json.dumps(latest_json(state, c, counters, now, resolvers), indent=1), gid)
-    _write_private(sp, json.dumps(state), gid)
+    _write_private(sp, json.dumps(state), 0, 0o600)
     tmp = rp.with_suffix(".tmp")
     tmp.write_text(json.dumps(root))
     os.chmod(tmp, 0o600)
@@ -1584,6 +1689,11 @@ def main(argv=None) -> int:
         t = class_totals(st)
         print(f"dns-leak-watch: {len(st.get('seen', {}))} destinations; hard-coded {t['hardcoded']['destinations']}; "
               f"bypass evidence {sum(t[k]['destinations'] for k in BYPASS)}; since {st.get('since', '-')}")
+        _TAG_KEY["key"] = load_tag_key(c)
+        held = [(tag_of(h), d) for h, d in sorted(st.get("devices", {}).items()) if _held(d)]
+        print("dns-leak-watch: held: " + (", ".join(
+            f"{t_} ({'+'.join(w for w, on in (('captive', d.get('captive_quarantine')), ('quarantine', d.get('quarantined'))) if on)})"
+            for t_, d in held) or "none") + "   release: apply.sh release <name or tag>")
         return 0
     r = run(c)
     print(f"dns-leak-watch: {r['new']} new destination(s): {r['hardcoded']} hard-coded, {r['bypass_evidence']} bypass evidence; "
